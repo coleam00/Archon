@@ -43,6 +43,12 @@ export interface WorkflowBuilderProps {
   showValidateButton?: boolean;
   /** When provided, a "Share to Marketplace" trailing link appears in the toolbar. */
   marketplaceUrl?: string;
+  /**
+   * When provided, the workflow-name title in the toolbar becomes inline-editable.
+   * Called on blur / Enter with the trimmed new name. The host is responsible for
+   * seeding workflow meta if it does not yet exist in the store.
+   */
+  onWorkflowNameChange?: (name: string) => void;
 }
 
 /**
@@ -56,6 +62,7 @@ function WorkflowBuilderInner({
   onSave,
   showValidateButton,
   marketplaceUrl,
+  onWorkflowNameChange,
 }: {
   cwd: string;
   workflowName: string;
@@ -63,12 +70,14 @@ function WorkflowBuilderInner({
   onSave?: () => void;
   showValidateButton?: boolean;
   marketplaceUrl?: string;
+  onWorkflowNameChange?: (name: string) => void;
 }): JSX.Element {
   const storeName = useBuilderStore(s => s.workflow?.name ?? workflowName);
   const isYamlOpen = useBuilderStore(s => s.isYamlPreviewOpen);
   const setYamlOpen = useBuilderStore(s => s.setYamlPreviewOpen);
   const [drawerExpanded, setDrawerExpanded] = useState(false);
-  const { issues, isValidating, focusIssue, revalidate, hasErrors, topErrors } = useValidation();
+  const { issues, isValidating, focusIssue, revalidate, hasErrors, topErrors, lastRunAt } =
+    useValidation();
 
   const copySelection = useBuilderStore(s => s.copySelection);
   const pasteClipboard = useBuilderStore(s => s.pasteClipboard);
@@ -228,6 +237,7 @@ function WorkflowBuilderInner({
           onValidate={showValidateButton ? revalidate : undefined}
           isValidating={showValidateButton ? isValidating : undefined}
           marketplaceUrl={marketplaceUrl}
+          onWorkflowNameChange={onWorkflowNameChange}
         />
       </div>
       <div className={styles.library}>
@@ -248,6 +258,7 @@ function WorkflowBuilderInner({
           onToggle={setDrawerExpanded}
           onFocusIssue={focusIssue}
           isValidating={isValidating}
+          lastRunAt={lastRunAt}
         />
       </section>
     </div>
@@ -263,6 +274,7 @@ export function WorkflowBuilder({
   onSave,
   showValidateButton,
   marketplaceUrl,
+  onWorkflowNameChange,
 }: WorkflowBuilderProps): JSX.Element {
   const queryClient = useMemo(() => new QueryClient(), []);
   const positions = usePositionPersistence(archonUrl, cwd, workflowName);
@@ -280,6 +292,7 @@ export function WorkflowBuilder({
                 onSave={onSave}
                 showValidateButton={showValidateButton}
                 marketplaceUrl={marketplaceUrl}
+                onWorkflowNameChange={onWorkflowNameChange}
               />
             </PositionProvider>
           </StudioErrorBoundary>

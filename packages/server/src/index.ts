@@ -119,16 +119,26 @@ function createMessageErrorHandler(
  * level and the process exits immediately (Fail Fast principle).
  */
 export function handleUnhandledRejection(reason: unknown): void {
-  const message = (reason instanceof Error ? reason.message : String(reason)).toLowerCase();
+  const asError =
+    reason instanceof Error ? reason : new Error(`Non-Error rejection: ${String(reason)}`);
+  const message = asError.message.toLowerCase();
+  const name = asError.name.toLowerCase();
   // SDK cleanup race: PostToolUse hook writes to a closed pipe after a DAG node
   // abort. Safe to absorb — these are transient artifacts, not application bugs.
-  if (message.includes('operation aborted')) {
-    getLog().error({ reason }, 'unhandled_rejection.sdk_cleanup_race');
+  // Match by name (AbortError, DOMException) or message substring, since the
+  // exact wording varies across Node/Bun/SDK versions.
+  const isAbortRace =
+    name === 'aborterror' ||
+    message.includes('operation aborted') ||
+    message.includes('operation was aborted') ||
+    message.includes('the operation was aborted');
+  if (isAbortRace) {
+    getLog().error({ err: asError }, 'unhandled_rejection.sdk_cleanup_race');
     return;
   }
   // All other unhandled rejections are unexpected — crash loudly so they are
   // not silently swallowed (CLAUDE.md: "Fail Fast + Explicit Errors").
-  getLog().fatal({ reason }, 'unhandled_rejection.fatal');
+  getLog().fatal({ err: asError }, 'unhandled_rejection.fatal');
   process.exit(1);
 }
 

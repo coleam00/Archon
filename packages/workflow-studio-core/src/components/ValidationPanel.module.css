@@ -63,6 +63,9 @@
 .pill_info {
   color: #60a5fa;
 }
+.pill_valid {
+  color: #4ade80;
+}
 
 /* Expanded body */
 .body {

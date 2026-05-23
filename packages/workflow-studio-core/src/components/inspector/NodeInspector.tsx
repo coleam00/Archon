@@ -139,6 +139,8 @@ const shellStyle: CSSProperties = {
   flexShrink: 0,
   display: 'flex',
   flexDirection: 'column',
+  height: '100%',
+  minHeight: 0,
   background: 'var(--studio-bg)',
   color: 'var(--studio-fg)',
   borderLeft: '1px solid var(--studio-border)',

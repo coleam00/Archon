@@ -6,7 +6,11 @@ export interface PromptNodeData {
 }
 
 export function createPromptDefault(): PromptNodeData {
-  return { prompt: '' };
+  // Non-empty placeholder so a freshly-dropped node passes server-tier
+  // validation (dagNodeSchema.superRefine rejects empty `prompt`), which
+  // would otherwise leave Save disabled until the user types something.
+  // The user is expected to overwrite this with the actual prompt body.
+  return { prompt: 'TODO: describe what this prompt should do' };
 }
 
 export const promptCapabilities: VariantCapabilities = {

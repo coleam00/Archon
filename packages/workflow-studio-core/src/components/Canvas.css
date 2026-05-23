@@ -1,33 +1,45 @@
-/* Dark-theme overrides for React Flow's built-in <Controls /> panel.
- * Default style ships light-on-light, which has near-zero contrast against
- * the studio's dark canvas. We invert: panel uses studio surface tokens,
- * buttons use studio fg, hover states bump the muted token.
+/* High-contrast overrides for React Flow's built-in <Controls /> panel.
+ * The studio's --studio-surface aliases var(--card, ...), which resolves to
+ * a near-white value when embedded in Archon's host theme — making the panel
+ * light-on-light and effectively invisible against the dark canvas. Hardcode
+ * black panel + white icons here so the buttons are legible regardless of
+ * which host theme is active.
+ *
+ * `!important` is used here because xyflow's bundled stylesheet (imported
+ * globally from `packages/web/src/index.css`) is loaded AFTER this file via
+ * Vite's CSS ordering, and would otherwise win on equal specificity. This
+ * file is the documented vendor-override layer — !important is the correct
+ * tool, not a code smell.
  *
  * Selectors are global (xyflow's own classnames, not CSS-module-scoped)
  * so this file is a plain CSS import, not a module. */
 
 .react-flow__controls {
-  background: var(--studio-surface);
-  border: 1px solid var(--studio-muted);
-  border-radius: var(--radius-sm);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  background: #000000 !important;
+  border: 1px solid #3f3f46 !important;
+  border-radius: var(--radius-sm) !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6) !important;
 }
 
 .react-flow__controls-button {
-  background: var(--studio-surface);
-  border: none;
-  border-bottom: 1px solid var(--studio-muted);
-  color: var(--studio-fg);
+  background: #000000 !important;
+  border: none !important;
+  border-bottom: 1px solid #3f3f46 !important;
+  color: #ffffff !important;
 }
 
 .react-flow__controls-button:last-child {
-  border-bottom: none;
+  border-bottom: none !important;
 }
 
 .react-flow__controls-button:hover {
-  background: var(--studio-muted);
+  background: #27272a !important;
 }
 
 .react-flow__controls-button svg {
-  fill: var(--studio-fg);
+  fill: #ffffff !important;
+}
+
+.react-flow__controls-button:disabled svg {
+  fill: #71717a !important;
 }

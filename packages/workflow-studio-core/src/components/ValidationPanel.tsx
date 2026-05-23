@@ -8,6 +8,8 @@ export interface ValidationPanelProps {
   onToggle: (next: boolean) => void;
   onFocusIssue: (issue: Issue) => void;
   isValidating?: boolean;
+  /** Timestamp of the last completed validation run; 0 means never run. */
+  lastRunAt?: number;
 }
 
 type SeverityFilter = 'all' | Severity;
@@ -19,6 +21,7 @@ export function ValidationPanel({
   onToggle,
   onFocusIssue,
   isValidating,
+  lastRunAt = 0,
 }: ValidationPanelProps): JSX.Element {
   const [sev, setSev] = useState<SeverityFilter>('all');
   const [src, setSrc] = useState<SourceFilter>('all');
@@ -51,6 +54,9 @@ export function ValidationPanel({
         <Pill severity="error" count={counts.error} />
         <Pill severity="warning" count={counts.warning} />
         <Pill severity="info" count={counts.info} />
+        {!isValidating && lastRunAt > 0 && issues.length === 0 ? (
+          <span className={`${styles.pill} ${styles.pill_valid}`}>● Valid</span>
+        ) : null}
         {isValidating ? <span className={styles.spinner} aria-hidden /> : null}
         <span className={styles.chev}>{expanded ? '▾' : '▴'}</span>
       </button>

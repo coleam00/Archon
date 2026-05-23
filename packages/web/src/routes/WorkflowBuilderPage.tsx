@@ -5,6 +5,7 @@ import { WorkflowBuilder, useBuilderStore } from '@archon/workflow-studio-core';
 
 import { useProject } from '@/contexts/ProjectContext';
 import { useWorkflowHydration } from '@/hooks/use-workflow-hydration';
+import { clearWorkflowDraft, useWorkflowDraft } from '@/hooks/use-workflow-draft';
 import { runSaveFlow } from '@/lib/save-flow';
 import { createWebWorkflowApiClient } from '@/lib/web-workflow-api-client';
 
@@ -35,6 +36,13 @@ export function WorkflowBuilderPage(): React.ReactElement {
 
   const { status, error } = useWorkflowHydration(editName, cwd, client);
   const storeWorkflowName = useBuilderStore(s => s.workflow?.name);
+
+  // Draft autosave: only for new workflows (status === 'not-found'). Restores
+  // any saved draft on mount and persists store changes to localStorage so a
+  // browser refresh during workflow authoring does not lose the in-flight
+  // nodes. Scoping to 'not-found' avoids overwriting a saved workflow with a
+  // stale draft when the user edits an existing one.
+  useWorkflowDraft(cwd, editName, status === 'not-found');
 
   const [banner, setBanner] = useState<Banner | null>(null);
   const dismissTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -70,6 +78,26 @@ export function WorkflowBuilderPage(): React.ReactElement {
     }
   }, [status, editName, error, scheduleBannerDismiss]);
 
+  const onWorkflowNameChange = useCallback((name: string): void => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const s = useBuilderStore.getState();
+    if (s.workflow) {
+      s.setWorkflowName(trimmed);
+    } else {
+      // No meta seeded yet (e.g. user navigated directly to /workflows/builder
+      // with no edit param). Seed an empty meta so subsequent saves and
+      // setWorkflowName calls have something to mutate.
+      // See use-workflow-hydration.ts: parseWorkflow rejects empty
+      // description, which would disable Save indefinitely via server-tier
+      // validation. Seed a placeholder users can edit later.
+      s.loadWorkflow({
+        meta: { name: trimmed, description: 'New workflow', base: {}, unknown: {} },
+        nodes: [],
+      });
+    }
+  }, []);
+
   const onSave = useCallback(async (): Promise<void> => {
     if (!cwd) return;
     const s = useBuilderStore.getState();
@@ -84,6 +112,10 @@ export function WorkflowBuilderPage(): React.ReactElement {
     });
 
     if (result.kind === 'saved') {
+      // Drop the localStorage draft for this workflow — the saved server copy
+      // is now authoritative, and a leftover draft would shadow it on the
+      // next refresh.
+      if (cwd) clearWorkflowDraft(cwd, result.name);
       setBanner({ kind: 'success', message: `Saved "${result.name}"` });
       scheduleBannerDismiss();
     } else if (result.kind === 'invalid') {
@@ -128,6 +160,7 @@ export function WorkflowBuilderPage(): React.ReactElement {
         }}
         showValidateButton
         marketplaceUrl={MARKETPLACE_URL}
+        onWorkflowNameChange={onWorkflowNameChange}
       />
     </div>
   );

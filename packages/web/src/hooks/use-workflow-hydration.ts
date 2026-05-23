@@ -62,8 +62,13 @@ export async function hydrateWorkflowOnce(
       // as "create new with that name". `setWorkflowName` only mutates an
       // existing meta — for the not-found path the meta is null until we
       // seed it here.
+      // `description` must be a non-empty string — the server's parseWorkflow
+      // rejects empty descriptions (loader.ts), which would silently disable
+      // the Save button via the validation engine's server tier. Seed a
+      // placeholder so the new workflow validates structurally once the user
+      // adds at least one node.
       loadWorkflow({
-        meta: { name, description: '', base: {}, unknown: {} },
+        meta: { name, description: 'New workflow', base: {}, unknown: {} },
         nodes: [],
       });
       return { status: 'not-found', error: null };

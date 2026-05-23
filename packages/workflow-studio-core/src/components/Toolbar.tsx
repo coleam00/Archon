@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from 'react';
+import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { useBuilderStore } from '../store/builder-store';
 import { useUndoStore } from '../store/undo-store';
 import { usePositionContext } from '../hooks/PositionContext';
@@ -28,6 +28,12 @@ export interface ToolbarProps {
   isValidating?: boolean;
   /** When provided, renders a "Share to Marketplace" link that opens in a new tab. */
   marketplaceUrl?: string;
+  /**
+   * When provided, the workflow name renders as an inline-editable input.
+   * Called on blur or Enter with the trimmed new name. The host is responsible
+   * for seeding the workflow meta if it does not yet exist.
+   */
+  onWorkflowNameChange?: (name: string) => void;
 }
 
 const buttonBase: CSSProperties = {
@@ -120,6 +126,7 @@ export function Toolbar({
   onValidate,
   isValidating,
   marketplaceUrl,
+  onWorkflowNameChange,
 }: ToolbarProps): JSX.Element {
   const selectedNodeIds = useBuilderStore(s => s.selectedNodeIds);
   const alignSelection = useBuilderStore(s => s.alignSelection);
@@ -156,7 +163,11 @@ export function Toolbar({
         borderBottom: '1px solid var(--studio-muted)',
       }}
     >
-      <strong style={{ flex: 1 }}>{workflowName}</strong>
+      {onWorkflowNameChange ? (
+        <WorkflowNameField name={workflowName} onChange={onWorkflowNameChange} />
+      ) : (
+        <strong style={{ flex: 1 }}>{workflowName}</strong>
+      )}
 
       <ToolButton
         label={undoLabel ? `Undo: ${undoLabel}` : 'Undo'}
@@ -294,23 +305,47 @@ export function Toolbar({
       </label>
 
       {onSave ? (
-        <button
-          type="button"
-          onClick={onSave}
-          disabled={!!hasErrors}
-          title={hasErrors ? topErrors.slice(0, 3).join('\n') : undefined}
-          style={{
-            background: 'var(--studio-accent, #7c3aed)',
-            color: '#fff',
-            border: 'none',
-            borderRadius: 'var(--radius-sm)',
-            padding: '4px 12px',
-            cursor: hasErrors ? 'not-allowed' : 'pointer',
-            opacity: hasErrors ? 0.6 : 1,
-          }}
-        >
-          Save
-        </button>
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          {hasErrors && topErrors.length > 0 ? (
+            // Inline reason next to the disabled Save button. Without this the
+            // user has no obvious link between Save being greyed out and the
+            // validation panel at the bottom of the canvas; the title-tooltip
+            // alone is too easy to miss. We show the first error verbatim plus
+            // a "+N more" suffix when there are additional issues.
+            <span
+              role="status"
+              title={topErrors.slice(0, 3).join('\n')}
+              style={{
+                fontSize: 12,
+                color: 'var(--studio-error, #ef4444)',
+                maxWidth: 360,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Cannot save: {topErrors[0]}
+              {topErrors.length > 1 ? ` (+${String(topErrors.length - 1)} more)` : ''}
+            </span>
+          ) : null}
+          <button
+            type="button"
+            onClick={onSave}
+            disabled={!!hasErrors}
+            title={hasErrors ? topErrors.slice(0, 3).join('\n') : undefined}
+            style={{
+              background: 'var(--studio-accent, #7c3aed)',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 'var(--radius-sm)',
+              padding: '4px 12px',
+              cursor: hasErrors ? 'not-allowed' : 'pointer',
+              opacity: hasErrors ? 0.6 : 1,
+            }}
+          >
+            Save
+          </button>
+        </div>
       ) : null}
 
       {marketplaceUrl ? (
@@ -332,5 +367,65 @@ export function Toolbar({
         </a>
       ) : null}
     </header>
+  );
+}
+
+function WorkflowNameField({
+  name,
+  onChange,
+}: {
+  name: string;
+  onChange: (name: string) => void;
+}): JSX.Element {
+  const [draft, setDraft] = useState(name);
+  useEffect(() => {
+    setDraft(name);
+  }, [name]);
+
+  const commit = (): void => {
+    const next = draft.trim();
+    if (next === name || next === '') {
+      setDraft(name);
+      return;
+    }
+    onChange(next);
+  };
+
+  return (
+    <input
+      aria-label="Workflow name"
+      value={draft}
+      placeholder="workflow name"
+      onChange={e => {
+        setDraft(e.target.value);
+      }}
+      onBlur={e => {
+        commit();
+        e.currentTarget.style.borderColor = 'transparent';
+        e.currentTarget.style.background = 'transparent';
+      }}
+      onFocus={e => {
+        e.currentTarget.style.borderColor = 'var(--studio-muted)';
+        e.currentTarget.style.background = 'var(--studio-bg-elevated)';
+      }}
+      onKeyDown={e => {
+        if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+        if (e.key === 'Escape') {
+          setDraft(name);
+          (e.target as HTMLInputElement).blur();
+        }
+      }}
+      style={{
+        flex: 1,
+        background: 'transparent',
+        color: 'var(--studio-fg)',
+        border: '1px solid transparent',
+        borderRadius: 'var(--radius-sm)',
+        padding: '4px 6px',
+        font: 'inherit',
+        fontWeight: 600,
+        outline: 'none',
+      }}
+    />
   );
 }
