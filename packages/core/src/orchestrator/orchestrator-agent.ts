@@ -373,7 +373,6 @@ async function dispatchOrchestratorWorkflow(
       {
         workflowName: workflow.name,
         resumableRunId: resumableRun.id,
-        workingPath: resumableRun.working_path,
       },
       'orchestrator.foreground_resume_detected'
     );
