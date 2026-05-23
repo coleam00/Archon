@@ -125,6 +125,49 @@ export async function checkPi(env: NodeJS.ProcessEnv): Promise<CheckResult> {
   };
 }
 
+// Env vars that signal explicit Gemini auth, in the SDK's precedence order
+// (ADC > GEMINI_API_KEY > GOOGLE_APPLICATION_CREDENTIALS > GOOGLE_API_KEY).
+const GEMINI_API_KEY_VARS = [
+  'GEMINI_API_KEY',
+  'GOOGLE_APPLICATION_CREDENTIALS',
+  'GOOGLE_API_KEY',
+] as const;
+
+// Credential filenames `gemini auth login` may write under ~/.gemini/. Probing
+// several avoids false-failing a logged-in user when the filename varies by
+// gemini-cli version.
+const GEMINI_CRED_FILES = ['oauth_creds.json', 'credentials.json', 'google_accounts.json'];
+
+export async function checkGemini(env: NodeJS.ProcessEnv): Promise<CheckResult> {
+  const label = 'Gemini provider';
+  const isDefault = env.DEFAULT_AI_ASSISTANT === 'gemini';
+
+  // Skip unless Gemini is the default — shared Google keys shouldn't trigger a
+  // pass for users who merely have them set for other tools.
+  if (!isDefault) {
+    return { label, status: 'skip', message: 'Gemini not configured' };
+  }
+
+  // Ambient OAuth login (`gemini auth login`) writes credentials under ~/.gemini/.
+  const geminiDir = join(homedir(), '.gemini');
+  const foundCred = GEMINI_CRED_FILES.find(f => probeAuthJsonExists(join(geminiDir, f)));
+  if (foundCred) {
+    return { label, status: 'pass', message: `~/.gemini/${foundCred} found` };
+  }
+
+  const foundKey = GEMINI_API_KEY_VARS.find(v => (env[v] ?? '').trim().length > 0);
+  if (foundKey) {
+    return { label, status: 'pass', message: `${foundKey} is set` };
+  }
+
+  return {
+    label,
+    status: 'fail',
+    message:
+      'Gemini is configured as default but no auth found. Run `gemini auth login` to sign in with Google, or set GEMINI_API_KEY.',
+  };
+}
+
 export interface DatabaseDeps {
   pool: { query: (sql: string) => Promise<unknown> };
   getDatabaseType: () => string;
@@ -279,6 +322,7 @@ export async function doctorCommand(
         checkClaudeBinary(env),
         checkGhAuth(env),
         checkPi(env),
+        checkGemini(env),
         checkDatabase(),
         checkWorkspaceWritable(),
         checkBundledDefaults(),

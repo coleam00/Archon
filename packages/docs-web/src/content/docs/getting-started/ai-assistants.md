@@ -409,6 +409,94 @@ Unsupported YAML fields trigger a visible warning from the dag-executor when the
 - [Adding a Community Provider](../contributing/adding-a-community-provider/) — the contributor-facing guide for extending Archon with your own provider.
 - [Pi on GitHub](https://github.com/badlogic/pi-mono) — upstream project.
 
+## Gemini (Community Provider)
+
+**Google's Gemini via the `gemini-cli`.** The Gemini provider (`@lrilai/gemini-cli-sdk`) wraps Google's `gemini-cli` and is registered as `builtIn: false` — a community provider alongside Pi. Use it by setting `provider: gemini` and a `model:` such as `gemini-2.5-pro`.
+
+### Install
+
+The SDK is bundled as a dependency of `@archon/providers`, but it shells out to the `gemini-cli` binary, which you install separately (≥ 0.37.1):
+
+```bash
+npm install -g @google/gemini-cli
+```
+
+In **dev/source** runs the SDK finds `gemini` on your `PATH`. In **compiled Archon binaries**, if `gemini` is not on `PATH`, point Archon at it via `GEMINI_BIN_PATH` or `assistants.gemini.geminiBinaryPath` (see below).
+
+### Authenticate (no API key needed)
+
+Gemini uses **ambient OAuth credentials** — the same login the `gemini-cli` uses. Archon injects **no** API key; the subprocess inherits your environment (including `HOME`), so `~/.gemini` resolves automatically.
+
+```bash
+# Sign in with Google — writes credentials under ~/.gemini/
+gemini auth login
+```
+
+Alternatively, set one of these env vars. The SDK's auth precedence is **ADC (your `gemini auth login`) → `GEMINI_API_KEY` → `GOOGLE_APPLICATION_CREDENTIALS` → `GOOGLE_API_KEY`**:
+
+| Env var | Use |
+|---|---|
+| `GEMINI_API_KEY` | Gemini AI Studio API key |
+| `GOOGLE_APPLICATION_CREDENTIALS` | Path to a Vertex AI service-account JSON |
+| `GOOGLE_API_KEY` | Google Cloud API key |
+
+`archon doctor` reports a Gemini check when `DEFAULT_AI_ASSISTANT=gemini`: it passes when a `~/.gemini` credential file or one of the env vars above is present.
+
+### Binary path (compiled builds)
+
+```yaml
+# ~/.archon/config.yaml
+assistants:
+  gemini:
+    geminiBinaryPath: /absolute/path/to/gemini
+```
+
+Or set `GEMINI_BIN_PATH=/absolute/path/to/gemini`. Resolution order: `GEMINI_BIN_PATH` → config `geminiBinaryPath` → `~/.archon/vendor/gemini/` → autodetected npm-global paths.
+
+### Model reference format
+
+Model strings are forwarded verbatim to `gemini-cli` (Archon does not validate them):
+
+```yaml
+assistants:
+  gemini:
+    model: gemini-2.5-pro       # or gemini-2.5-flash, gemini-3-pro, etc.
+```
+
+### Usage in workflows
+
+```yaml
+name: my-workflow
+provider: gemini
+model: gemini-2.5-pro
+
+nodes:
+  - id: explore
+    provider: gemini
+    prompt: "..."
+    allowed_tools: [read, grep]   # mapped to gemini-cli --allowed-tools
+```
+
+### Gemini capabilities (v1)
+
+| Feature | Support | Notes |
+|---|---|---|
+| Session resume | ✅ | automatic (Archon persists `sessionId`) |
+| Tool restrictions | ✅ | `allowed_tools` → `--allowed-tools` (`denied_tools` has no SDK equivalent) |
+| System prompt override | ✅ | `systemPrompt:` (string only) |
+| Codebase env vars (`envInjection`) | ✅ | forwarded to the subprocess; `HOME` is never overridden |
+| MCP servers | ❌ | SDK support is experimental; deferred to a later version |
+| Structured output | ❌ | only the SDK's buffered `queryFull()` supports it; incompatible with streaming in v1 |
+| Skills / hooks / inline sub-agents | ❌ | Claude-only features |
+| Effort / thinking / cost limits / fallback model / sandbox | ❌ | not wired in v1 |
+
+Unsupported YAML fields trigger a visible dag-executor warning when the workflow runs, so you always know what was ignored.
+
+### See also
+
+- [Adding a Community Provider](../contributing/adding-a-community-provider/) — the contributor-facing guide for extending Archon with your own provider.
+- [@lrilai/gemini-cli-sdk on npm](https://www.npmjs.com/package/@lrilai/gemini-cli-sdk) — the wrapped SDK.
+
 ## How Assistant Selection Works
 
 - Assistant type is set per codebase via the `assistant` field in `.archon/config.yaml` or the `DEFAULT_AI_ASSISTANT` env var

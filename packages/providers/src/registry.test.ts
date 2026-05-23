@@ -12,6 +12,7 @@ import {
   clearRegistry,
 } from './registry';
 import { registerPiProvider } from './community/pi/registration';
+import { registerGeminiProvider } from './community/gemini/registration';
 import { UnknownProviderError } from './errors';
 import type { ProviderRegistration, IAgentProvider, ProviderCapabilities } from './types';
 
@@ -252,9 +253,8 @@ describe('registry', () => {
   describe('registerCommunityProviders (aggregator)', () => {
     test('registers all bundled community providers', () => {
       registerCommunityProviders();
-      // Pi is currently the only community provider bundled. When more are
-      // added, they should appear here automatically.
       expect(isRegisteredProvider('pi')).toBe(true);
+      expect(isRegisteredProvider('gemini')).toBe(true);
     });
 
     test('is idempotent', () => {
@@ -262,6 +262,8 @@ describe('registry', () => {
       expect(() => registerCommunityProviders()).not.toThrow();
       const piCount = getRegisteredProviders().filter(p => p.id === 'pi').length;
       expect(piCount).toBe(1);
+      const geminiCount = getRegisteredProviders().filter(p => p.id === 'gemini').length;
+      expect(geminiCount).toBe(1);
     });
   });
 
@@ -316,6 +318,52 @@ describe('registry', () => {
         .map(p => p.id)
         .sort();
       expect(ids).toEqual(['claude', 'codex', 'pi']);
+    });
+  });
+
+  describe('registerGeminiProvider (community provider)', () => {
+    test('registers gemini with builtIn: false', () => {
+      registerGeminiProvider();
+      const reg = getRegistration('gemini');
+      expect(reg.id).toBe('gemini');
+      expect(reg.displayName).toBe('Gemini (community)');
+      expect(reg.builtIn).toBe(false);
+    });
+
+    test('is idempotent', () => {
+      registerGeminiProvider();
+      expect(() => registerGeminiProvider()).not.toThrow();
+      const geminiEntries = getRegisteredProviders().filter(p => p.id === 'gemini');
+      expect(geminiEntries).toHaveLength(1);
+    });
+
+    test('declares conservative v1 capabilities', () => {
+      registerGeminiProvider();
+      const caps = getProviderCapabilities('gemini');
+      expect(caps.sessionResume).toBe(true);
+      expect(caps.envInjection).toBe(true);
+      expect(caps.toolRestrictions).toBe(true);
+      // Out of v1 scope
+      expect(caps.mcp).toBe(false);
+      expect(caps.structuredOutput).toBe(false);
+      expect(caps.hooks).toBe(false);
+      expect(caps.skills).toBe(false);
+    });
+
+    test('appears in getProviderInfoList with builtIn: false', () => {
+      registerGeminiProvider();
+      const info = getProviderInfoList().find(p => p.id === 'gemini');
+      expect(info).toBeDefined();
+      expect(info?.builtIn).toBe(false);
+    });
+
+    test('does not collide with built-ins or Pi', () => {
+      registerGeminiProvider();
+      registerPiProvider();
+      const ids = getRegisteredProviders()
+        .map(p => p.id)
+        .sort();
+      expect(ids).toEqual(['claude', 'codex', 'gemini', 'pi']);
     });
   });
 });

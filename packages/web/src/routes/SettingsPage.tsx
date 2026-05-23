@@ -571,6 +571,28 @@ function AssistantConfigSection({ config }: { config: SafeConfigResponse }): Rea
                 );
               }
 
+              if (provider.id === 'gemini') {
+                return (
+                  <div
+                    key={provider.id}
+                    className="grid grid-cols-[140px_1fr] items-center gap-2 text-sm"
+                  >
+                    <div className="font-medium">{provider.displayName}</div>
+                    <div className="text-muted-foreground">Community provider settings</div>
+
+                    <label htmlFor="gemini-model">Model</label>
+                    <Input
+                      id="gemini-model"
+                      value={(providerSettings.model as string | undefined) ?? ''}
+                      onChange={e => {
+                        updateProviderSettings('gemini', { model: e.target.value });
+                      }}
+                      placeholder="gemini-2.5-pro"
+                    />
+                  </div>
+                );
+              }
+
               return (
                 <div key={provider.id} className="rounded-md border border-border p-3 text-sm">
                   <div className="font-medium">{provider.displayName}</div>

@@ -1,6 +1,10 @@
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
 import { OpenAPIHono } from '@hono/zod-openapi';
-import { registerBuiltinProviders, clearRegistry } from '@archon/providers';
+import {
+  registerBuiltinProviders,
+  registerCommunityProviders,
+  clearRegistry,
+} from '@archon/providers';
 import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
 import {
@@ -220,5 +224,43 @@ describe('GET /api/providers', () => {
     expect(typeof caps.mcp).toBe('boolean');
     expect(typeof caps.hooks).toBe('boolean');
     expect(typeof caps.structuredOutput).toBe('boolean');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: GET /api/providers — community providers
+// ---------------------------------------------------------------------------
+
+describe('GET /api/providers — community providers', () => {
+  let app: Hono;
+
+  beforeEach(() => {
+    clearRegistry();
+    registerBuiltinProviders();
+    registerCommunityProviders();
+    app = makeApp();
+  });
+
+  afterEach(() => {
+    // Restore the module-level registry state (built-ins only) so the other
+    // describe block's `every(p => p.builtIn)` assertion stays valid.
+    clearRegistry();
+    registerBuiltinProviders();
+  });
+
+  test('includes gemini as a community provider (builtIn: false)', async () => {
+    const response = await app.request('/api/providers');
+    const body = (await response.json()) as { providers: { id: string; builtIn: boolean }[] };
+    const gemini = body.providers.find(p => p.id === 'gemini');
+    expect(gemini).toBeDefined();
+    expect(gemini?.builtIn).toBe(false);
+  });
+
+  test('includes pi as a community provider (builtIn: false)', async () => {
+    const response = await app.request('/api/providers');
+    const body = (await response.json()) as { providers: { id: string; builtIn: boolean }[] };
+    const pi = body.providers.find(p => p.id === 'pi');
+    expect(pi).toBeDefined();
+    expect(pi?.builtIn).toBe(false);
   });
 });

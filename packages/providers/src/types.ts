@@ -98,6 +98,25 @@ export interface PiProviderDefaults {
   maxConcurrent?: number;
 }
 
+/**
+ * Community provider defaults for Gemini (@lrilai/gemini-cli-sdk).
+ *
+ * Auth is ambient: a `gemini` CLI "Sign in with Google" login writes
+ * credentials under ~/.gemini/ and the spawned subprocess picks them up
+ * automatically (SDK auth precedence: ADC → GEMINI_API_KEY →
+ * GOOGLE_APPLICATION_CREDENTIALS → GOOGLE_API_KEY). Archon injects NO key.
+ */
+export interface GeminiProviderDefaults {
+  [key: string]: unknown;
+  /** Default model string forwarded verbatim to gemini-cli (e.g. 'gemini-2.5-pro'). */
+  model?: string;
+  /**
+   * Absolute path to the gemini-cli binary. Overrides PATH resolution in
+   * compiled Archon builds (maps to the SDK's `QueryOptions.cliPath`).
+   */
+  geminiBinaryPath?: string;
+}
+
 /** Generic per-provider defaults bag used by config surfaces and UI. */
 export type ProviderDefaults = Record<string, unknown>;
 

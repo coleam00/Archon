@@ -54,3 +54,10 @@ export {
   registerPiProvider,
   type PiProviderDefaults,
 } from './community/pi';
+
+export {
+  GeminiProvider,
+  parseGeminiConfig,
+  registerGeminiProvider,
+  type GeminiProviderDefaults,
+} from './community/gemini';
