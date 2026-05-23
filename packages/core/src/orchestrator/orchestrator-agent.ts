@@ -361,65 +361,65 @@ async function dispatchOrchestratorWorkflow(
     }
   }
 
-  // Dispatch workflow
-  if (platform.getPlatformType() === 'web') {
-    // Check for a resumable run from a prior dispatch (e.g. approved approval gate).
-    // A new background dispatch would create a new worker conversation and never find
-    // the prior run's worktree. Execute in foreground to reuse the original working path.
-    const resumableRun = await workflowDb.findResumableRunByParentConversation(
-      workflow.name,
-      conversation.id
+  // Check for a resumable run from a prior dispatch (e.g. approved approval gate).
+  // All platforms need this — without it, non-web platforms start a fresh run
+  // instead of resuming where the approval/loop gate paused.
+  const resumableRun = await workflowDb.findResumableRunByParentConversation(
+    workflow.name,
+    conversation.id
+  );
+  if (resumableRun?.working_path) {
+    getLog().info(
+      {
+        workflowName: workflow.name,
+        resumableRunId: resumableRun.id,
+        workingPath: resumableRun.working_path,
+      },
+      'orchestrator.foreground_resume_detected'
     );
-    if (resumableRun?.working_path) {
-      getLog().info(
+    // Hydrate the already-found candidate. If hydration returns null the
+    // prior run had nothing worth resuming (zero completed nodes, no loop
+    // gate) — surface that to the user and fall through to a fresh run on
+    // the same worktree rather than silently restarting.
+    const deps = createWorkflowDeps();
+    const prepared = await hydrateResumableRun(deps, resumableRun);
+    if (prepared) {
+      await executeWorkflow(
+        deps,
+        platform,
+        conversationId,
+        resumableRun.working_path,
+        workflow,
+        userMessage,
+        conversation.id,
         {
-          workflowName: workflow.name,
-          resumableRunId: resumableRun.id,
-          workingPath: resumableRun.working_path,
-        },
-        'orchestrator.foreground_resume_detected'
+          codebaseId: codebase.id,
+          parentConversationId: conversation.id,
+          ...prepared,
+        }
       );
-      // Hydrate the already-found candidate. If hydration returns null the
-      // prior run had nothing worth resuming (zero completed nodes, no loop
-      // gate) — surface that to the user and fall through to a fresh run on
-      // the same worktree rather than silently restarting.
-      const deps = createWorkflowDeps();
-      const prepared = await hydrateResumableRun(deps, resumableRun);
-      if (prepared) {
-        await executeWorkflow(
-          deps,
-          platform,
-          conversationId,
-          resumableRun.working_path,
-          workflow,
-          userMessage,
-          conversation.id,
-          {
-            codebaseId: codebase.id,
-            parentConversationId: conversation.id,
-            ...prepared,
-          }
-        );
-      } else {
-        await platform.sendMessage(
-          conversationId,
-          `⚠️ Prior run for **${workflow.name}** had no completed nodes; starting fresh in the same worktree.`
-        );
-        await executeWorkflow(
-          deps,
-          platform,
-          conversationId,
-          resumableRun.working_path,
-          workflow,
-          userMessage,
-          conversation.id,
-          {
-            codebaseId: codebase.id,
-            parentConversationId: conversation.id,
-          }
-        );
-      }
-    } else if (workflow.interactive) {
+    } else {
+      await platform.sendMessage(
+        conversationId,
+        `⚠️ Prior run for **${workflow.name}** had no completed nodes; starting fresh in the same worktree.`
+      );
+      await executeWorkflow(
+        deps,
+        platform,
+        conversationId,
+        resumableRun.working_path,
+        workflow,
+        userMessage,
+        conversation.id,
+        {
+          codebaseId: codebase.id,
+          parentConversationId: conversation.id,
+        }
+      );
+    }
+  } else if (platform.getPlatformType() === 'web') {
+    // Dispatch workflow
+    if (workflow.interactive) {
       // Interactive workflows run in foreground so output stays in the user's conversation
       await executeWorkflow(
         createWorkflowDeps(),
