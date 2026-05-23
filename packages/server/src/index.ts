@@ -276,7 +276,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     );
     const hasGitLab = Boolean(process.env.GITLAB_TOKEN && process.env.GITLAB_WEBHOOK_SECRET);
     const hasJira = Boolean(
-      process.env.JIRA_BASE_URL &&
+      process.env.JIRA_DOMAIN &&
       process.env.JIRA_EMAIL &&
       process.env.JIRA_API_TOKEN &&
       process.env.JIRA_WEBHOOK_SECRET
@@ -338,14 +338,14 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
     // Initialize Jira adapter (conditional)
     if (
-      process.env.JIRA_BASE_URL &&
+      process.env.JIRA_DOMAIN &&
       process.env.JIRA_EMAIL &&
       process.env.JIRA_API_TOKEN &&
       process.env.JIRA_WEBHOOK_SECRET
     ) {
       const jiraBotMention = process.env.JIRA_BOT_MENTION || 'Archon';
       jira = new JiraAdapter(
-        process.env.JIRA_BASE_URL,
+        process.env.JIRA_DOMAIN,
         process.env.JIRA_EMAIL,
         process.env.JIRA_API_TOKEN,
         process.env.JIRA_WEBHOOK_SECRET,

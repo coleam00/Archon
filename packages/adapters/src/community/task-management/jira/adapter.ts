@@ -51,9 +51,12 @@ export class JiraAdapter implements IPlatformAdapter {
     if (!apiToken) throw new Error('JiraAdapter requires a non-empty apiToken');
     if (!webhookSecret) throw new Error('JiraAdapter requires a non-empty webhookSecret');
 
-    this.baseUrl = baseUrl.replace(/\/+$/, '');
-    this.email = email;
-    this.apiToken = apiToken;
+    this.baseUrl = (baseUrl.startsWith('http') ? baseUrl : `https://${baseUrl}`).replace(
+      /\/+$/,
+      ''
+    );
+    this.email = email.trim();
+    this.apiToken = apiToken.trim();
     this.webhookSecret = webhookSecret;
     this.lockManager = lockManager;
     this.botMention = botMention || 'Archon';
@@ -182,7 +185,8 @@ export class JiraAdapter implements IPlatformAdapter {
     return { version: 1, type: 'doc', content };
   }
 
-  private extractTextFromAdf(node: JiraAdfNode): string {
+  private extractTextFromAdf(node: JiraAdfNode | string): string {
+    if (typeof node === 'string') return node.replaceAll(SELF_TRIGGER_MARKER, '');
     if (node.type === 'text') return (node.text ?? '').replaceAll(SELF_TRIGGER_MARKER, '');
     if (node.type === 'hardBreak') return '\n';
     if (node.type === 'mention') return '';
@@ -191,8 +195,9 @@ export class JiraAdapter implements IPlatformAdapter {
 
   // Detects whether the bot is mentioned in an ADF node tree by display name (case-insensitive).
   // Matches real Jira @mention nodes (attrs.text / attrs.displayName) and plain text "@name" patterns.
-  private hasMention(node: JiraAdfNode, botName: string): boolean {
+  private hasMention(node: JiraAdfNode | string, botName: string): boolean {
     const normalized = botName.toLowerCase();
+    if (typeof node === 'string') return node.toLowerCase().includes(`@${normalized}`);
     if (node.type === 'mention') {
       const attrText = ((node.attrs?.text as string | undefined) ?? '')
         .replace(/^@/, '')
@@ -300,11 +305,13 @@ export class JiraAdapter implements IPlatformAdapter {
     const rawText = this.extractTextFromAdf(commentEvent.comment.body);
 
     const issue = commentEvent.issue;
-    const priority = issue.fields.priority?.name ?? 'None';
-    const labels = issue.fields.labels.join(', ') || 'None';
+    const priority = issue.fields?.priority?.name ?? 'None';
+    const labels = (issue.fields?.labels ?? []).join(', ') || 'None';
+    const summary = issue.fields?.summary ?? '(no summary)';
+    const status = issue.fields?.status?.name ?? 'Unknown';
     const issueContext = `[Jira Issue Context]
-Issue ${issue.key}: "${issue.fields.summary}"
-Status: ${issue.fields.status.name}
+Issue ${issue.key}: "${summary}"
+Status: ${status}
 Priority: ${priority}
 Labels: ${labels}`;
 
