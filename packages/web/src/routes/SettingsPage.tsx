@@ -620,6 +620,7 @@ function PlatformConnectionsSection({
     { name: 'GitHub', connected: active.has('GitHub') },
     { name: 'Gitea', connected: active.has('Gitea') },
     { name: 'GitLab', connected: active.has('GitLab') },
+    { name: 'Jira', connected: active.has('Jira') },
   ];
 
   return (
