@@ -30,6 +30,7 @@ Community adapters follow the same `IPlatformAdapter` interface but target platf
 | [**Discord**](/adapters/community/discord/) | WebSocket | Bot token | [Setup guide](/adapters/community/discord/) |
 | [**Gitea**](/adapters/community/gitea/) | Webhooks | Token + webhook secret | [Setup guide](/adapters/community/gitea/) |
 | [**GitLab**](/adapters/community/gitlab/) | Webhooks | Token + webhook secret | [Setup guide](/adapters/community/gitlab/) |
+| [**Jira**](/adapters/community/jira/) | Webhooks | Email + API token + webhook secret | [Setup guide](/adapters/community/jira/) |
 
 ## How Adapters Work
 
@@ -46,5 +47,6 @@ All adapters implement the `IPlatformAdapter` interface. They handle:
 - **Slack** and **Telegram** are ideal for mobile access and team collaboration.
 - **GitHub** integrates directly into your issue and PR workflow.
 - **Discord** works well for community or team servers.
+- **Jira** turns each issue into a conversation — @mention the bot in a comment to work the ticket with Archon.
 
 You can run multiple adapters simultaneously. Any adapter with the required environment variables set will start automatically when you launch the server.
