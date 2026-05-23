@@ -9,11 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`@archon/workflow-studio-core` package** — reactive workflow builder canvas with variant node renderers, validation engine, user-template library, YAML preview, canvas context menu, alignment + subgraph-extraction actions, and full undo/redo. Mounted at `/workflows/builder` as the canonical builder UI.
+- **Inline Approve / Reject affordances** on paused approval-gate nodes in the execution-viewer DAG (Graph tab). Comments are optional on approve, required on reject; the gate resolves without leaving the run view.
+- **Toolbar Validate action** in the studio builder — runs the in-memory validation engine and surfaces structural/content errors inline before save.
+- **Toolbar Share-to-Marketplace action** in the studio builder.
+- **Per-node log formatting helper** (`format-step-logs.ts`) for cleaner step-log rendering in the execution viewer.
 - MCP server support for Codex workflow nodes via the shared `loadMcpConfig` module — pass `mcp: <path>` on a Codex node and the config is translated to Codex's `mcp_servers` overrides at runtime. MCP client errors are surfaced to the workflow author as `system` chunks when MCP is explicitly configured for the node (#1459).
+
+### Changed
+
+- **`/workflows/builder` route** now mounts `@archon/workflow-studio-core`'s `WorkflowBuilder` instead of the legacy in-tree builder. Save round-trips through a new `WebWorkflowApiClient` adapter against the existing REST API; no backend or OpenAPI changes.
+- **Execution-viewer DAG pane** (Graph tab on `/workflows/runs/:id`) now renders variant-specific nodes via `AdaptedExecutionNode`, wrapping studio's per-variant node renderers with the execution-status overlay (border colour, duration pill, "Executing:" badge, status icon).
+- **Builder toolbar rebuilt** with SVG icons and the theme picker removed; canvas gains a right-click context menu, user-template library, alignment icons, and subgraph extraction.
+
+### Removed
+
+- **14 superseded legacy files** from `packages/web/src/components/workflows/` (12 components: `WorkflowBuilder`, `WorkflowCanvas`, `DagNodeComponent`, `NodeInspector`, `NodeLibrary`, `NodePalette`, `BuilderToolbar`, `CommandPicker`, `QuickAddPicker`, `ValidationPanel`, `YamlCodeView`, `ExecutionDagNode`) and 2 hooks (`useBuilderUndo`, `useBuilderValidation`). Replaced by `@archon/workflow-studio-core` internals.
 
 ### Fixed
 
 - **`workflow approve/resume/reject` no longer fail with "Workflow not found" when the run's working path is a worktree or workspace clone.** Resume, approve, and reject now use `codebase.default_cwd` for workflow YAML discovery, falling back to `working_path` when no codebase record is found. Fixes #1663 (#1743).
+- **New-workflow save flow unblocked** and canvas controls regained high-contrast styling (uncovered during workflow-studio UAT walkthrough).
+- **DAG executor edge cases** around node-output surfacing for bash/script nodes (uncovered during UAT).
 
 ## [0.3.12] - 2026-05-14
 
