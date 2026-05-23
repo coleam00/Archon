@@ -1,6 +1,6 @@
 {
   "name": "archon",
-  "version": "0.3.11",
+  "version": "0.3.12",
   "private": true,
   "workspaces": [
     "packages/*"

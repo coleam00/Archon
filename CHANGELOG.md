@@ -7,9 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.12] - 2026-05-14
+
+Orchestrator prompt-cache fix, SDK termination edge cases, marketplace expansion, and broad workflow fixes.
+
+### Added
+
+- **New marketplace workflow `archon-idea-to-wo`**: interactive 8-node workflow that turns a raw idea into BKM-format Work Orders through four AI phases with approval gates between each. Authored by @lamachine, published via the community marketplace registry (closes #1647).
+
+### Changed
+
+- `maintainer-review-pr`: dropped the direction/scope gate node. The gate used Pi/Minimax to return a structured JSON verdict that the DAG branched on, but Pi intermittently wrapped the JSON in markdown fences or preamble prose, silently skipping every downstream review. In practice the gate returned "review" on every hand-picked PR (13/13 runs over two days), adding no signal. Workflow now reviews all PRs directly (#1675).
+
 ### Fixed
 
-- **Claude `stop_sequence` terminations no longer fail as "SDK returned success"**: the Claude Agent SDK's `SDKResultSuccess` declares `is_error: boolean` (not literal `false`), and stop-sequence terminations carry `is_error: true` alongside `subtype: 'success'` — its encoding of "non-default termination, not a failure". The Claude provider now normalises this pair to a clean success at the provider boundary, with defense-in-depth guards in `dag-executor` (main + loop branches) and `orchestrator-agent` (direct chat) so a third-party `IAgentProvider` forwarding the raw SDK pair can't reintroduce the bug. Workflows using `output_format` (which implies a stop sequence) — including the `archon-fix-github-issue` `classify` → `synthesize` pipeline — now complete cleanly instead of throwing `Node 'X' failed: SDK returned success`. Closes #1425.
+- **Claude `stop_sequence` terminations no longer fail as "SDK returned success"**: the Claude Agent SDK's `SDKResultSuccess` declares `is_error: boolean` (not literal `false`), and stop-sequence terminations carry `is_error: true` alongside `subtype: 'success'` — its encoding of "non-default termination, not a failure". The Claude provider now normalises this pair to a clean success at the provider boundary, with defense-in-depth guards in `dag-executor` (main + loop branches) and `orchestrator-agent` (direct chat) so a third-party `IAgentProvider` forwarding the raw SDK pair can't reintroduce the bug. Workflows using `output_format` (which implies a stop sequence) — including the `archon-fix-github-issue` `classify` → `synthesize` pipeline — now complete cleanly instead of throwing `Node 'X' failed: SDK returned success`. Closes #1425 (#1662).
+- **Orchestrator prompt caching restored**: static system context (projects, workflows, routing rules) was embedded in the per-turn `prompt`, forcing the Anthropic API to rebuild the cache prefix on every request (high `cache_creation_input_tokens`, zero `cache_read_input_tokens`). Moved into `systemPrompt.append`, which extends the Claude Code preset and is part of the cacheable system prefix. Fixes #1591 (#1634).
+- **Native Claude tools no longer stripped when `skills:` is set without `allowed_tools:`**: the AgentDefinition wrapper previously defaulted `tools` to `['Skill']` only, removing Read/Bash/Write/etc. Now omits `tools` when not explicitly set, letting the SDK provide its full default tool set; `Skill` is still appended when `allowed_tools` is explicit (#1605, #1661).
+- **SSH repo URLs from non-GitHub hosts**: the SSH-to-HTTPS converter only matched `git@github.com:` literally, so custom SSH host aliases, GitHub Enterprise, Gitea, GitLab, and Bitbucket SSH URLs produced workspace paths containing literal `git@<host>:` segments — `ENOTDIR` on Windows, malformed owner extraction on Unix. Now uses a generic `git@([^:]+):(.+)` regex at both call sites. Closes #1614 (#1656).
+- **`$node.output.field` for Pi/Minimax structured output**: provider-parsed fence-wrapped or preamble-prefixed JSON was captured locally but never persisted onto `NodeOutput`. Downstream `substituteNodeOutputRefs` and `condition-evaluator` consumers then `JSON.parse`d the original prose-prefixed text, threw, and resolved `$node.output.field` to empty. `structuredOutput` is now persisted on `NodeOutput` (single-shot + loop-terminal-iteration success paths) and both consumers prefer the parsed object. Closes #1571 (#1654).
+- **Marketplace auto-review CI**: workflow now triggers on `ready_for_review` (was missed by default `pull_request_target` event list); `gh pr review --approve` falls back to `gh pr comment` when GitHub Actions lacks approve permission, so PR authors still receive the review even without "Allow GitHub Actions to create and approve pull requests" enabled.
 
 ## [0.3.11] - 2026-05-12
 

@@ -4,7 +4,7 @@ on:
   pull_request_target:
     paths:
       - "packages/docs-web/src/data/marketplace.ts"
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, ready_for_review]
 
 jobs:
   auto-review:
