@@ -1,5 +1,6 @@
 import type { CSSProperties } from 'react';
 import { SNIPPET_STARTERS, SNIPPET_PATTERNS, loadSnippet } from '../../snippets';
+import { CollapsibleSection } from './CollapsibleSection';
 import { LIBRARY_DRAG_MIME, encodeLibraryDrag } from './dragPayload';
 import { insertSnippet } from '../../snippets/insertSnippet';
 import { usePositionContext } from '../../hooks/PositionContext';
@@ -30,8 +31,7 @@ export function SnippetsSection(): JSX.Element {
   };
 
   return (
-    <section style={{ padding: 12 }}>
-      <h3 style={headingStyle}>Snippets</h3>
+    <CollapsibleSection id="snippets" title="Snippets" bordered={false}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         {userSnippets.length > 0 ? (
           <UserSnippetGroup
@@ -54,7 +54,7 @@ export function SnippetsSection(): JSX.Element {
           onActivate={insertAtOrigin}
         />
       </div>
-    </section>
+    </CollapsibleSection>
   );
 }
 
@@ -160,13 +160,6 @@ function UserSnippetGroup({
   );
 }
 
-const headingStyle: CSSProperties = {
-  fontSize: 11,
-  textTransform: 'uppercase',
-  letterSpacing: '0.06em',
-  color: 'var(--studio-muted)',
-  margin: '0 0 8px 0',
-};
 const subheadingStyle: CSSProperties = {
   fontSize: 11,
   fontWeight: 600,

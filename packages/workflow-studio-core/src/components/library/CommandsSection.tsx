@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import type { CSSProperties } from 'react';
 import { useWorkflowApi } from '../../api/ApiClientProvider';
 import { useBuilderStore } from '../../store/builder-store';
+import { CollapsibleSection } from './CollapsibleSection';
 import { LIBRARY_DRAG_MIME, encodeLibraryDrag } from './dragPayload';
 
 export interface CommandsSectionProps {
@@ -25,8 +26,7 @@ export function CommandsSection({ cwd }: CommandsSectionProps): JSX.Element {
   const slugify = (name: string): string => name.replace(/[^A-Za-z0-9_-]+/g, '-');
 
   return (
-    <section style={{ padding: 12, borderBottom: '1px solid var(--studio-muted)' }}>
-      <h3 style={headingStyle}>Commands</h3>
+    <CollapsibleSection id="commands" title="Commands">
       {isLoading && <div style={emptyStyle}>Loading…</div>}
       {isError && <div style={emptyStyle}>Couldn't load commands.</div>}
       {!isLoading && !isError && (data?.length ?? 0) === 0 && (
@@ -103,17 +103,10 @@ export function CommandsSection({ cwd }: CommandsSectionProps): JSX.Element {
           ))}
         </ul>
       )}
-    </section>
+    </CollapsibleSection>
   );
 }
 
-const headingStyle: CSSProperties = {
-  fontSize: 11,
-  textTransform: 'uppercase',
-  letterSpacing: '0.06em',
-  color: 'var(--studio-muted)',
-  margin: '0 0 8px 0',
-};
 const emptyStyle: CSSProperties = { fontSize: 12, color: 'var(--studio-muted)' };
 const rowStyle: CSSProperties = {
   display: 'flex',
