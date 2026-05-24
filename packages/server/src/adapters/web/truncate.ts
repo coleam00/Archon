@@ -43,12 +43,16 @@ export function boundMetadataToolOutputs(metaJson: string): string {
   ) {
     return metaJson;
   }
-  const meta = parsed as { toolCalls: Record<string, unknown>[] };
+  const meta = parsed as { toolCalls: unknown[] } & Record<string, unknown>;
   const bounded = {
     ...meta,
-    toolCalls: meta.toolCalls.map(tc =>
-      typeof tc.output === 'string' ? { ...tc, output: truncateToolOutput(tc.output) } : tc
-    ),
+    toolCalls: meta.toolCalls.map(tc => {
+      if (!tc || typeof tc !== 'object') return tc;
+      const toolCall = tc as Record<string, unknown>;
+      return typeof toolCall.output === 'string'
+        ? { ...toolCall, output: truncateToolOutput(toolCall.output) }
+        : toolCall;
+    }),
   };
   return JSON.stringify(bounded);
 }
