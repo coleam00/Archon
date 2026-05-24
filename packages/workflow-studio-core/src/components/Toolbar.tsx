@@ -225,7 +225,7 @@ export function Toolbar({
             syncAfter();
           }}
         >
-          <AlignVerticalIcon />
+          <AlignHorizontalIcon />
         </ToolButton>
         <ToolButton
           label="Align vertical centers"
@@ -236,7 +236,7 @@ export function Toolbar({
             syncAfter();
           }}
         >
-          <AlignHorizontalIcon />
+          <AlignVerticalIcon />
         </ToolButton>
         <ToolButton
           label="Distribute horizontally"
