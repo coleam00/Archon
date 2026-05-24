@@ -84,6 +84,13 @@ export interface BuilderState {
   selectedNodeIds: string[];
   /** The last id added to the selection — used by single-node consumers (Inspector, YAML preview). */
   primarySelectionId: string | null;
+  /**
+   * Currently-selected edge id (format: `${source}->${target}`). Mutually exclusive
+   * with node selection — setting one clears the other. Null when no edge is selected.
+   */
+  selectedEdgeId: string | null;
+  /** Currently-hovered edge id. Drives the inline × button on DeletableEdge. */
+  hoveredEdgeId: string | null;
   /** The validation issue path currently focused in the panel. Drives inspector tab routing. */
   focusedIssue: IssuePath | null;
   /** Id of the node currently hovered on the canvas. Null when no node is hovered. */
@@ -118,6 +125,10 @@ export interface BuilderState {
   clearSelection: () => void;
   selectAll: () => void;
   removeSelected: () => void;
+  /** Select an edge by id (`${source}->${target}`), or pass null to clear. Clears node selection. */
+  setSelectedEdge: (id: string | null) => void;
+  /** Set or clear the currently-hovered edge (used by DeletableEdge to reveal the × button). */
+  setHoveredEdge: (id: string | null) => void;
   setFocusedIssue: (path: IssuePath | null) => void;
   setHoveredNodeId: (id: string | null) => void;
   setYamlPreviewOpen: (open: boolean) => void;
@@ -206,6 +217,8 @@ export const useBuilderStore = create<BuilderState>((set, get) => {
     positions: {},
     selectedNodeIds: [],
     primarySelectionId: null,
+    selectedEdgeId: null,
+    hoveredEdgeId: null,
     focusedIssue: null,
     hoveredNodeId: null,
     isYamlPreviewOpen: false,
@@ -249,6 +262,8 @@ export const useBuilderStore = create<BuilderState>((set, get) => {
         positions: {},
         selectedNodeIds: [],
         primarySelectionId: null,
+        selectedEdgeId: null,
+        hoveredEdgeId: null,
         focusedIssue: null,
         baselineYaml: null,
         hoveredNodeId: null,
@@ -258,13 +273,17 @@ export const useBuilderStore = create<BuilderState>((set, get) => {
       useUndoStore.getState().clear();
     },
     setSelection: (ids): void => {
-      set({ selectedNodeIds: ids, primarySelectionId: ids.length ? ids[ids.length - 1] : null });
+      set({
+        selectedNodeIds: ids,
+        primarySelectionId: ids.length ? ids[ids.length - 1] : null,
+        selectedEdgeId: null,
+      });
     },
     addToSelection: (id): void => {
       set(s => {
         if (s.selectedNodeIds.includes(id)) return s;
         const next = [...s.selectedNodeIds, id];
-        return { selectedNodeIds: next, primarySelectionId: id };
+        return { selectedNodeIds: next, primarySelectionId: id, selectedEdgeId: null };
       });
     },
     removeFromSelection: (id): void => {
@@ -277,7 +296,7 @@ export const useBuilderStore = create<BuilderState>((set, get) => {
       });
     },
     clearSelection: (): void => {
-      set({ selectedNodeIds: [], primarySelectionId: null });
+      set({ selectedNodeIds: [], primarySelectionId: null, selectedEdgeId: null });
     },
     selectAll: (): void => {
       set(s => {
@@ -285,6 +304,7 @@ export const useBuilderStore = create<BuilderState>((set, get) => {
         return {
           selectedNodeIds: ids,
           primarySelectionId: ids.length ? ids[ids.length - 1] : null,
+          selectedEdgeId: null,
         };
       });
     },
@@ -293,6 +313,16 @@ export const useBuilderStore = create<BuilderState>((set, get) => {
       if (selectedNodeIds.length === 0) return;
       deleteNodes(selectedNodeIds);
       set({ selectedNodeIds: [], primarySelectionId: null });
+    },
+    setSelectedEdge: (id): void => {
+      if (id === null) {
+        set({ selectedEdgeId: null });
+        return;
+      }
+      set({ selectedEdgeId: id, selectedNodeIds: [], primarySelectionId: null });
+    },
+    setHoveredEdge: (id): void => {
+      set(s => (s.hoveredEdgeId === id ? s : { hoveredEdgeId: id }));
     },
     setHoveredNodeId: (id): void => {
       set({ hoveredNodeId: id });
@@ -449,22 +479,30 @@ export const useBuilderStore = create<BuilderState>((set, get) => {
     },
 
     connect: (source, target): void => {
+      const targetNode = get().nodes.find(n => n.id === target);
+      const dep = (targetNode?.base.depends_on as string[] | undefined) ?? [];
+      if (targetNode && dep.includes(source)) return; // no-op, no snapshot
+      withUndo('connect edge', snapshot('connect edge'));
       set(s => ({
         nodes: s.nodes.map(n => {
           if (n.id !== target) return n;
-          const dep = (n.base.depends_on as string[] | undefined) ?? [];
-          if (dep.includes(source)) return n;
-          return { ...n, base: { ...n.base, depends_on: [...dep, source] } };
+          const d = (n.base.depends_on as string[] | undefined) ?? [];
+          if (d.includes(source)) return n;
+          return { ...n, base: { ...n.base, depends_on: [...d, source] } };
         }),
       }));
     },
 
     disconnect: (source, target): void => {
+      const targetNode = get().nodes.find(n => n.id === target);
+      const dep = (targetNode?.base.depends_on as string[] | undefined) ?? [];
+      if (!dep.includes(source)) return; // no-op, no snapshot
+      withUndo('disconnect edge', snapshot('disconnect edge'));
       set(s => ({
         nodes: s.nodes.map(n => {
           if (n.id !== target) return n;
-          const dep = (n.base.depends_on as string[] | undefined) ?? [];
-          const filtered = dep.filter(d => d !== source);
+          const d = (n.base.depends_on as string[] | undefined) ?? [];
+          const filtered = d.filter(x => x !== source);
           const newBase = { ...n.base };
           if (filtered.length === 0) delete newBase.depends_on;
           else newBase.depends_on = filtered;

@@ -15,17 +15,32 @@ export interface CanvasContextMenuProps {
   x: number;
   y: number;
   onClose: () => void;
+  /**
+   * When set, the menu renders edge-mode UI (single "Remove connection" item)
+   * instead of the node-selection alignment/distribute/snippet items.
+   */
+  edgeContext?: { source: string; target: string };
 }
 
 /**
  * PowerPoint-style alignment/distribution menu for multi-selected nodes.
  * Rendered absolutely-positioned within the Canvas container, so (x, y) are
  * client coords relative to the canvas viewport, not the page.
+ *
+ * When `edgeContext` is provided, the menu switches into edge mode and shows
+ * a single "Remove connection" item that calls `disconnect(source, target)`.
  */
-export function CanvasContextMenu({ x, y, onClose }: CanvasContextMenuProps): JSX.Element {
+export function CanvasContextMenu({
+  x,
+  y,
+  onClose,
+  edgeContext,
+}: CanvasContextMenuProps): JSX.Element {
   const selectedNodeIds = useBuilderStore(s => s.selectedNodeIds);
   const alignSelection = useBuilderStore(s => s.alignSelection);
   const distributeSelection = useBuilderStore(s => s.distributeSelection);
+  const disconnect = useBuilderStore(s => s.disconnect);
+  const setSelectedEdge = useBuilderStore(s => s.setSelectedEdge);
   const addUserSnippet = useUserLibraryStore(s => s.addUserSnippet);
   const positionCtx = usePositionContext();
   const ref = useRef<HTMLDivElement | null>(null);
@@ -111,6 +126,44 @@ export function CanvasContextMenu({ x, y, onClose }: CanvasContextMenuProps): JS
     setSavePromptOpen(false);
     setSavePromptName('');
     onClose();
+  }
+
+  if (edgeContext) {
+    return (
+      <div
+        ref={ref}
+        role="menu"
+        aria-label="Edge menu"
+        data-testid="canvas-context-menu-edge"
+        onContextMenu={e => {
+          e.preventDefault();
+        }}
+        style={{
+          position: 'absolute',
+          left: pos.left,
+          top: pos.top,
+          zIndex: 50,
+          minWidth: 200,
+          background: 'var(--studio-surface)',
+          color: 'var(--studio-fg)',
+          border: '1px solid var(--studio-muted)',
+          borderRadius: 'var(--radius-sm, 4px)',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.18)',
+          padding: '4px 0',
+          userSelect: 'none',
+        }}
+      >
+        <MenuItem
+          label="Remove connection"
+          hint={`${edgeContext.source} → ${edgeContext.target}`}
+          onSelect={() => {
+            setSelectedEdge(null);
+            disconnect(edgeContext.source, edgeContext.target);
+            onClose();
+          }}
+        />
+      </div>
+    );
   }
 
   return (

@@ -9,6 +9,7 @@ import {
   type NodeChange,
   type Node as RFNode,
   type NodeProps,
+  type EdgeTypes,
 } from '@xyflow/react';
 import { useHotkeys } from 'react-hotkeys-hook';
 import '@xyflow/react/dist/style.css';
@@ -18,6 +19,7 @@ import { SHORTCUTS } from '../shortcuts';
 import { useBuilderStore } from '../store/builder-store';
 import { withUndo } from '../store/undo-store';
 import { deriveFlow, type DagNodeData } from './canvas/deriveFlow';
+import { DeletableEdge } from './canvas/DeletableEdge';
 import { layoutWithDagre } from '../hooks/useDagre';
 import { usePositionContext } from '../hooks/PositionContext';
 import { defaultRegistry } from '../nodes/default-registry';
@@ -40,6 +42,10 @@ import { CanvasContextMenu } from './CanvasContextMenu';
 // key-handling state machine.
 const MULTI_SELECTION_KEY_CODE: string[] = ['Meta', 'Shift', 'Control'];
 
+// Same stability reason for edgeTypes: a fresh object each render makes React
+// Flow re-build its edge dispatcher and triggers a noisy warning in dev.
+const EDGE_TYPES: EdgeTypes = { deletable: DeletableEdge };
+
 export function Canvas(): JSX.Element {
   const positions = usePositionContext();
   const reactFlow = useReactFlow();
@@ -55,6 +61,11 @@ export function Canvas(): JSX.Element {
   const clearSelection = useBuilderStore(s => s.clearSelection);
   const primarySelectionId = useBuilderStore(s => s.primarySelectionId);
   const selectedNodeIds = useBuilderStore(s => s.selectedNodeIds);
+  const selectedEdgeId = useBuilderStore(s => s.selectedEdgeId);
+  const setSelectedEdge = useBuilderStore(s => s.setSelectedEdge);
+  const setHoveredEdge = useBuilderStore(s => s.setHoveredEdge);
+  const applyUndo = useBuilderStore(s => s.applyUndo);
+  const applyRedo = useBuilderStore(s => s.applyRedo);
   const setHoveredNodeId = useBuilderStore(s => s.setHoveredNodeId);
   const setNodePosition = useBuilderStore(s => s.setNodePosition);
   const activeGuides = useBuilderStore(s => s.activeGuides);
@@ -110,6 +121,26 @@ export function Canvas(): JSX.Element {
     hkOpts
   );
 
+  // Undo / redo. `mod` = Ctrl on Win/Linux, Cmd on macOS (react-hotkeys-hook
+  // resolves it automatically). hkOpts keeps these from firing inside form
+  // inputs (Inspector). Zustand actions are stable refs, no deps array needed.
+  useHotkeys(
+    SHORTCUTS.undo,
+    e => {
+      e.preventDefault();
+      applyUndo();
+    },
+    hkOpts
+  );
+  useHotkeys(
+    SHORTCUTS.redo,
+    e => {
+      e.preventDefault();
+      applyRedo();
+    },
+    hkOpts
+  );
+
   // Build the React Flow nodeTypes map from the variant registry. Each per-variant
   // Renderer is registered under its own variant id; deriveFlow emits `type: variant`,
   // so React Flow dispatches to the correct component. The cast is justified at the
@@ -128,8 +159,8 @@ export function Canvas(): JSX.Element {
   // positions when rendering below.
   const selectedNodeIdsSet = useMemo(() => new Set(selectedNodeIds), [selectedNodeIds]);
   const { rfNodes: derivedNodes, rfEdges } = useMemo(
-    () => deriveFlow(storeNodes, positions.positions, selectedNodeIdsSet),
-    [storeNodes, positions.positions, selectedNodeIdsSet]
+    () => deriveFlow(storeNodes, positions.positions, selectedNodeIdsSet, selectedEdgeId),
+    [storeNodes, positions.positions, selectedNodeIdsSet, selectedEdgeId]
   );
 
   // Local in-flight node array for React Flow. We hydrate it from `derivedNodes`
@@ -261,7 +292,11 @@ export function Canvas(): JSX.Element {
   // Right-click context menu (PowerPoint-style align/distribute). The menu is
   // positioned relative to the canvas container, so we use its bounding rect
   // to convert the MouseEvent's clientX/clientY into local coords.
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    edgeContext?: { source: string; target: string };
+  } | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   // Auto-pan during marquee selection. React Flow ships autoPanOnNodeDrag and
@@ -404,21 +439,25 @@ export function Canvas(): JSX.Element {
   useEffect(() => stopAutoPan, [stopAutoPan]);
 
   const openContextMenu = useCallback(
-    (event: { clientX: number; clientY: number; preventDefault: () => void }, nodeId?: string) => {
+    (
+      event: { clientX: number; clientY: number; preventDefault: () => void },
+      nodeId?: string,
+      edgeContext?: { source: string; target: string }
+    ) => {
       event.preventDefault();
-      // If right-clicking a node not in the current selection, replace the
-      // selection with that one node so the menu state matches what the user
-      // visually targeted. Matches PowerPoint's right-click behavior.
       if (nodeId) {
         const sel = useBuilderStore.getState().selectedNodeIds;
         if (!sel.includes(nodeId)) setSelection([nodeId]);
       }
+      if (edgeContext) {
+        setSelectedEdge(`${edgeContext.source}->${edgeContext.target}`);
+      }
       const rect = containerRef.current?.getBoundingClientRect();
       const left = rect?.left ?? 0;
       const top = rect?.top ?? 0;
-      setContextMenu({ x: event.clientX - left, y: event.clientY - top });
+      setContextMenu({ x: event.clientX - left, y: event.clientY - top, edgeContext });
     },
-    [setSelection]
+    [setSelection, setSelectedEdge]
   );
 
   return (
@@ -433,6 +472,7 @@ export function Canvas(): JSX.Element {
         nodes={rfNodes}
         edges={rfEdges}
         nodeTypes={nodeTypes}
+        edgeTypes={EDGE_TYPES}
         onNodesChange={onNodesChange}
         onConnect={onConnect}
         onEdgesDelete={onEdgesDelete}
@@ -443,6 +483,18 @@ export function Canvas(): JSX.Element {
           } else {
             setSelection([node.id]);
           }
+        }}
+        onEdgeClick={(_event, edge) => {
+          setSelectedEdge(edge.id);
+        }}
+        onEdgeMouseEnter={(_event, edge) => {
+          setHoveredEdge(edge.id);
+        }}
+        onEdgeMouseLeave={() => {
+          setHoveredEdge(null);
+        }}
+        onEdgeContextMenu={(event, edge) => {
+          openContextMenu(event, undefined, { source: edge.source, target: edge.target });
         }}
         onPaneClick={() => {
           clearSelection();
@@ -539,6 +591,7 @@ export function Canvas(): JSX.Element {
         <CanvasContextMenu
           x={contextMenu.x}
           y={contextMenu.y}
+          edgeContext={contextMenu.edgeContext}
           onClose={() => {
             setContextMenu(null);
           }}

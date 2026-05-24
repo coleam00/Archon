@@ -58,7 +58,45 @@ describe('deriveFlow', () => {
       new Map()
     );
     expect(rfEdges.map(e => e.id).sort()).toEqual(['a->b', 'a->c', 'b->c']);
-    expect(rfEdges.every(e => e.type === 'smoothstep')).toBe(true);
+    // Edges use the custom 'deletable' renderer that adds hit-widening + a midpoint × button.
+    expect(rfEdges.every(e => e.type === 'deletable')).toBe(true);
+  });
+
+  it('marks the selected edge with selected:true and bumps stroke width', () => {
+    const { rfEdges } = deriveFlow(
+      [node({ id: 'a' }), node({ id: 'b', base: { depends_on: ['a'] } })],
+      new Map(),
+      new Set(),
+      'a->b'
+    );
+    const e = rfEdges.find(x => x.id === 'a->b')!;
+    expect(e.selected).toBe(true);
+    expect(e.style?.strokeWidth).toBe(2.5);
+  });
+
+  it('does not mark any edge selected when selectedEdgeId is null', () => {
+    const { rfEdges } = deriveFlow(
+      [node({ id: 'a' }), node({ id: 'b', base: { depends_on: ['a'] } })],
+      new Map(),
+      new Set(),
+      null
+    );
+    expect(rfEdges.every(e => e.selected !== true)).toBe(true);
+  });
+
+  it('propagates dashed flag on edge.data when target has a when: string', () => {
+    const { rfEdges } = deriveFlow(
+      [
+        node({ id: 'a' }),
+        node({ id: 'b', base: { depends_on: ['a'], when: "$a.output == 'go'" } }),
+        node({ id: 'c', base: { depends_on: ['a'] } }),
+      ],
+      new Map()
+    );
+    const dashedEdge = rfEdges.find(e => e.id === 'a->b')!;
+    const plainEdge = rfEdges.find(e => e.id === 'a->c')!;
+    expect((dashedEdge.data as { dashed: boolean }).dashed).toBe(true);
+    expect((plainEdge.data as { dashed: boolean }).dashed).toBe(false);
   });
 
   it('marks edges as dashed-purple when the TARGET has a when: string', () => {

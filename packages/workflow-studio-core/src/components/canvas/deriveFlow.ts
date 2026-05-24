@@ -9,10 +9,21 @@ export interface DeriveFlowResult {
   rfEdges: RFEdge[];
 }
 
+/**
+ * Edges carry a `data.dashed` flag so the custom edge component can render
+ * the dashed style for `when:`-conditional edges without re-reading the
+ * target node. Typed as a record so @xyflow/react's `Edge<TData>` constraint
+ * (`Record<string, unknown> | undefined`) accepts it.
+ */
+export type DeletableEdgeData = Record<string, unknown> & {
+  dashed: boolean;
+};
+
 export function deriveFlow(
   storeNodes: readonly BuilderNode[],
   positions: ReadonlyMap<string, { x: number; y: number }>,
-  selectedNodeIds: ReadonlySet<string> = new Set()
+  selectedNodeIds: ReadonlySet<string> = new Set(),
+  selectedEdgeId: string | null = null
 ): DeriveFlowResult {
   const knownIds = new Set(storeNodes.map(n => n.id));
 
@@ -31,14 +42,24 @@ export function deriveFlow(
     const targetHasWhen = typeof target.base.when === 'string';
     for (const source of dep) {
       if (!knownIds.has(source)) continue; // defensive
+      const id = `${source}->${target.id}`;
+      const isSelected = id === selectedEdgeId;
       rfEdges.push({
-        id: `${source}->${target.id}`,
+        id,
         source,
         target: target.id,
-        type: 'smoothstep',
-        style: targetHasWhen
-          ? { stroke: 'var(--studio-when)', strokeDasharray: '6 4' }
-          : { stroke: 'var(--studio-muted)' },
+        type: 'deletable',
+        selected: isSelected,
+        data: { dashed: targetHasWhen } satisfies DeletableEdgeData,
+        style: {
+          stroke: isSelected
+            ? 'var(--studio-accent, #3b82f6)'
+            : targetHasWhen
+              ? 'var(--studio-when)'
+              : 'var(--studio-muted)',
+          strokeWidth: isSelected ? 2.5 : 1.5,
+          ...(targetHasWhen ? { strokeDasharray: '6 4' } : {}),
+        },
       });
     }
   }
