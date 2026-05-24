@@ -8,6 +8,7 @@ import { createLogger } from '@archon/paths';
 import { MessagePersistence } from './web/persistence';
 import { SSETransport, type SSEWriter } from './web/transport';
 import { WorkflowEventBridge } from './web/workflow-bridge';
+import { truncateToolOutput } from './web/truncate';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -192,7 +193,7 @@ export class WebAdapter implements IWebPlatformAdapter {
         type: 'tool_result',
         toolCallId: matchedToolCallId,
         name: chunk.toolName,
-        output: chunk.toolOutput,
+        output: truncateToolOutput(chunk.toolOutput),
         duration,
         timestamp: now,
       });

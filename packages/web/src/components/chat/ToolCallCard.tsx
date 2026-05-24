@@ -30,10 +30,19 @@ export function ToolCallCard({ tool }: ToolCallCardProps): React.ReactElement {
   const summaryText =
     typeof summary === 'string' ? summary.slice(0, 60) + (summary.length > 60 ? '...' : '') : '';
 
-  // Limit output display
-  const outputLines = tool.output?.split('\n') ?? [];
+  // Limit output display — apply a hard char cap before splitting so a single-line
+  // multi-MB blob doesn't bypass the 20-line limit and crash the browser tab.
+  // The server already truncates at 100 KB; this is defense-in-depth.
+  const MAX_DISPLAY_CHARS = 50_000;
+  const rawOutput = tool.output ?? '';
+  const cappedOutput =
+    rawOutput.length > MAX_DISPLAY_CHARS
+      ? rawOutput.slice(0, MAX_DISPLAY_CHARS) +
+        '\n... [display capped — open run history for full output]'
+      : rawOutput;
+  const outputLines = cappedOutput.split('\n');
   const isLongOutput = outputLines.length > 20;
-  const displayOutput = showAllOutput ? tool.output : outputLines.slice(0, 20).join('\n');
+  const displayOutput = showAllOutput ? cappedOutput : outputLines.slice(0, 20).join('\n');
 
   return (
     <div

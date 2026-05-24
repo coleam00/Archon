@@ -123,6 +123,7 @@ import {
 } from './schemas/config.schemas';
 import { providerListResponseSchema } from './schemas/provider.schemas';
 import { getProviderInfoList, isRegisteredProvider } from '@archon/providers';
+import { boundMetadataToolOutputs } from '../adapters/web/truncate';
 
 // Read app version: use build-time constant in binary, package.json in dev
 let appVersion = 'unknown';
@@ -1278,11 +1279,12 @@ export function registerApiRoutes(
       const messages = await messageDb.listMessages(conv.id, limit);
       // Normalize metadata: PostgreSQL JSONB auto-deserializes to object,
       // but frontend expects JSON string. SQLite returns string already.
+      // Also bound any tool output in metadata so large payloads don't crash the browser tab.
       return c.json(
-        messages.map(m => ({
-          ...m,
-          metadata: typeof m.metadata === 'string' ? m.metadata : JSON.stringify(m.metadata),
-        }))
+        messages.map(m => {
+          const metaStr = typeof m.metadata === 'string' ? m.metadata : JSON.stringify(m.metadata);
+          return { ...m, metadata: boundMetadataToolOutputs(metaStr) };
+        })
       );
     } catch (error) {
       getLog().error({ err: error }, 'list_messages_failed');

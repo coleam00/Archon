@@ -439,6 +439,111 @@ describe('GET /api/conversations/:id/messages', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Tests: GET /api/conversations/:id/messages — tool output bounding
+// ---------------------------------------------------------------------------
+
+const MAX_TOOL_OUTPUT_CHARS = 100_000;
+
+describe('GET /api/conversations/:id/messages — tool output bounding', () => {
+  beforeEach(() => {
+    mockFindConversationByPlatformId.mockReset();
+    mockListMessages.mockReset();
+  });
+
+  test('truncates large tool output in hydration metadata without touching the DB value', async () => {
+    const largeOutput = 'y'.repeat(MAX_TOOL_OUTPUT_CHARS + 10_000);
+    const storedMetadata = JSON.stringify({
+      toolCalls: [
+        {
+          name: 'bash',
+          input: { command: 'cat file.txt' },
+          output: largeOutput,
+          duration: 500,
+        },
+      ],
+    });
+
+    mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
+    mockListMessages.mockImplementationOnce(async () => [
+      {
+        id: 'msg-tool',
+        conversation_id: MOCK_CONV.id,
+        role: 'assistant' as const,
+        content: '',
+        metadata: storedMetadata,
+        created_at: new Date().toISOString(),
+      },
+    ]);
+
+    const { app } = makeApp();
+    const response = await app.request('/api/conversations/web-test-abc/messages');
+    expect(response.status).toBe(200);
+
+    const body = (await response.json()) as Array<{ metadata: string }>;
+    const returnedMeta = JSON.parse(body[0]!.metadata) as {
+      toolCalls: Array<{ output: string }>;
+    };
+
+    // Returned tool output must be bounded
+    expect(returnedMeta.toolCalls[0]!.output.length).toBeLessThan(largeOutput.length);
+    expect(returnedMeta.toolCalls[0]!.output).toContain('[truncated');
+    expect(returnedMeta.toolCalls[0]!.output).toContain('full output preserved in run history');
+
+    // listMessages was called once (verifies the DB mock, not this endpoint, holds the full value)
+    expect(mockListMessages).toHaveBeenCalledTimes(1);
+  });
+
+  test('preserves tool output within the cap in hydration', async () => {
+    const smallOutput = 'short output from tool';
+    const metadata = JSON.stringify({
+      toolCalls: [{ name: 'bash', input: {}, output: smallOutput, duration: 10 }],
+    });
+
+    mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
+    mockListMessages.mockImplementationOnce(async () => [
+      {
+        id: 'msg-small',
+        conversation_id: MOCK_CONV.id,
+        role: 'assistant' as const,
+        content: '',
+        metadata,
+        created_at: new Date().toISOString(),
+      },
+    ]);
+
+    const { app } = makeApp();
+    const response = await app.request('/api/conversations/web-test-abc/messages');
+    const body = (await response.json()) as Array<{ metadata: string }>;
+    const returnedMeta = JSON.parse(body[0]!.metadata) as {
+      toolCalls: Array<{ output: string }>;
+    };
+
+    expect(returnedMeta.toolCalls[0]!.output).toBe(smallOutput);
+  });
+
+  test('returns messages without toolCalls unchanged', async () => {
+    const metadata = JSON.stringify({ workflowResult: { runId: 'abc' } });
+
+    mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
+    mockListMessages.mockImplementationOnce(async () => [
+      {
+        id: 'msg-no-tools',
+        conversation_id: MOCK_CONV.id,
+        role: 'assistant' as const,
+        content: 'Done.',
+        metadata,
+        created_at: new Date().toISOString(),
+      },
+    ]);
+
+    const { app } = makeApp();
+    const response = await app.request('/api/conversations/web-test-abc/messages');
+    const body = (await response.json()) as Array<{ metadata: string }>;
+    expect(body[0]!.metadata).toBe(metadata);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Tests: PATCH /api/conversations/:id
 // ---------------------------------------------------------------------------
 
