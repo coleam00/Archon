@@ -3,6 +3,7 @@ import {
   ReactFlow,
   Background,
   Controls,
+  MiniMap,
   applyNodeChanges,
   useReactFlow,
   useStoreApi,
@@ -45,6 +46,21 @@ const MULTI_SELECTION_KEY_CODE: string[] = ['Meta', 'Shift', 'Control'];
 // Same stability reason for edgeTypes: a fresh object each render makes React
 // Flow re-build its edge dispatcher and triggers a noisy warning in dev.
 const EDGE_TYPES: EdgeTypes = { deletable: DeletableEdge };
+
+// MiniMap applies nodeColor as an SVG `fill` attribute. CSS `var()` does not
+// resolve in SVG presentation attributes, so any var()-based theme colors paint
+// nothing — same trap as Controls (see Canvas.css). Hardcoded hex per variant
+// keeps the minimap legible regardless of host theme.
+const MINIMAP_VARIANT_COLORS: Record<string, string> = {
+  command: '#60a5fa',
+  prompt: '#a78bfa',
+  bash: '#fbbf24',
+  script: '#f59e0b',
+  loop: '#34d399',
+  approval: '#f472b6',
+  cancel: '#ef4444',
+};
+const MINIMAP_DEFAULT_COLOR = '#71717a';
 
 export function Canvas(): JSX.Element {
   const positions = usePositionContext();
@@ -585,6 +601,18 @@ export function Canvas(): JSX.Element {
       >
         <Background />
         <Controls position="top-left" />
+        <MiniMap
+          position="bottom-right"
+          pannable
+          zoomable
+          nodeColor={(node): string =>
+            MINIMAP_VARIANT_COLORS[node.type ?? ''] ?? MINIMAP_DEFAULT_COLOR
+          }
+          nodeStrokeColor="#18181b"
+          nodeStrokeWidth={2}
+          maskColor="rgba(0, 0, 0, 0.6)"
+          style={{ background: '#000000', border: '1px solid #3f3f46' }}
+        />
       </ReactFlow>
       <SmartGuidesLayer guides={activeGuides} width={800} height={600} />
       {contextMenu && (

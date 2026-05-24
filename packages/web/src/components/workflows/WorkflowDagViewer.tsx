@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -24,13 +24,42 @@ import '@xyflow/react/dist/style.css';
 // Defined at module scope — prevents ReactFlow from remounting nodes on every render
 const nodeTypes: NodeTypes = { adaptedExecutionNode };
 
-const STATUS_MINIMAP_COLORS: Partial<Record<WorkflowStepStatus, string>> = {
-  completed: 'var(--success)',
-  running: 'var(--accent-bright)',
-  failed: 'var(--error)',
-  skipped: 'var(--text-tertiary)',
+// MiniMap applies nodeColor as an SVG `fill` attribute, where `var()` is not
+// resolved (custom properties only work in CSS property values). We read the
+// computed values off :root so the minimap gets concrete oklch() strings.
+const MINIMAP_STATUS_VARS: Partial<Record<WorkflowStepStatus, string>> = {
+  completed: '--success',
+  running: '--accent-bright',
+  failed: '--error',
+  skipped: '--text-tertiary',
 };
-const DEFAULT_MINIMAP_COLOR = 'var(--surface-elevated)';
+// Pre-run / no-status nodes need a fallback that is visible against the
+// hardcoded black minimap background. Picking a mid-zinc so unstarted nodes
+// still register as shapes; status colors take over once execution begins.
+const MINIMAP_FALLBACK_COLOR = '#a1a1aa';
+const MINIMAP_MASK_COLOR = 'rgba(0, 0, 0, 0.6)';
+
+interface ResolvedMinimapColors {
+  byStatus: Partial<Record<WorkflowStepStatus, string>>;
+  fallback: string;
+}
+
+function readMinimapColors(): ResolvedMinimapColors {
+  if (typeof window === 'undefined') {
+    return { byStatus: {}, fallback: MINIMAP_FALLBACK_COLOR };
+  }
+  const styles = getComputedStyle(document.documentElement);
+  const resolve = (name: string): string =>
+    styles.getPropertyValue(name).trim() || MINIMAP_FALLBACK_COLOR;
+  const byStatus: Partial<Record<WorkflowStepStatus, string>> = {};
+  for (const [status, varName] of Object.entries(MINIMAP_STATUS_VARS) as [
+    WorkflowStepStatus,
+    string,
+  ][]) {
+    byStatus[status] = resolve(varName);
+  }
+  return { byStatus, fallback: MINIMAP_FALLBACK_COLOR };
+}
 
 const EDGE_STROKE_BY_STATUS: Partial<Record<WorkflowStepStatus, string>> = {
   completed: 'var(--success)',
@@ -70,6 +99,9 @@ export function WorkflowDagViewer({
   isApproving,
   isRejecting,
 }: WorkflowDagViewerProps): React.ReactElement {
+  // Read once on mount — theme is static.
+  const [minimapColors] = useState<ResolvedMinimapColors>(() => readMinimapColors());
+
   // Compute topology layout ONCE from the workflow definition.
   // Only re-layout when the definition changes (node/edge count), not on status updates.
   const { baseNodes, edges: layoutedEdges } = useMemo(() => {
@@ -189,12 +221,17 @@ export function WorkflowDagViewer({
           <Background variant={BackgroundVariant.Dots} gap={16} size={1} color="var(--border)" />
           <Controls showInteractive={false} className="!bg-surface !border-border" />
           <MiniMap
+            position="bottom-right"
+            pannable
+            zoomable
             nodeColor={(node): string => {
               const data = node.data as AdaptedNodeData;
-              return (data.status && STATUS_MINIMAP_COLORS[data.status]) ?? DEFAULT_MINIMAP_COLOR;
+              return (data.status && minimapColors.byStatus[data.status]) ?? minimapColors.fallback;
             }}
-            className="!bg-surface !border-border"
-            maskColor="rgba(0, 0, 0, 0.6)"
+            nodeStrokeColor="#e4e4e7"
+            nodeStrokeWidth={1}
+            maskColor={MINIMAP_MASK_COLOR}
+            style={{ background: '#000000', border: '1px solid #3f3f46' }}
           />
         </ReactFlow>
       </ReactFlowProvider>

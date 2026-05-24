@@ -58,6 +58,14 @@ export function dagNodesToReactFlow(dagNodes: readonly DagNode[]): {
     id: dn.id,
     type: 'dagNode',
     position: { x: 0, y: i * 100 },
+    // initialWidth/initialHeight are read by xyflow's MiniMap (and other
+    // dimension-aware widgets) BEFORE the DOM is measured. Without them,
+    // `nodeHasDimensions(node)` is false on first render and MiniMap returns
+    // null for every node — leaving the panel blank. The values mirror the
+    // constants dagre uses for layout, so the minimap rects match the actual
+    // node footprint once measurement completes.
+    initialWidth: NODE_WIDTH,
+    initialHeight: NODE_HEIGHT,
     data: {},
   }));
 
