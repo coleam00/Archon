@@ -175,11 +175,7 @@ export class ZulipAdapter implements IPlatformAdapter {
       // Post the error as a new message in place of the normal answer.
       await this.postChunk(ctx, text);
 
-      const pending = this.pendingReadIds.get(conversationId);
-      if (pending && pending.length > 0) {
-        this.pendingReadIds.delete(conversationId);
-        for (const id of pending) await this.markRead(id);
-      }
+      await this.markOldestPendingRead(conversationId);
       return;
     }
 
@@ -189,11 +185,22 @@ export class ZulipAdapter implements IPlatformAdapter {
       await this.postChunk(ctx, chunk);
     }
 
+    await this.markOldestPendingRead(conversationId);
+  }
+
+  /**
+   * Mark exactly one pending inbound message (the oldest, FIFO) read for this conversation —
+   * the message this reply answers. Each inbound message produces one terminal `sendMessage`
+   * (answer or error) and pushes one id via `handleIncomingMessage`, mirroring the status-message
+   * FIFO. Draining the whole list per reply would ack still-unanswered messages: with two queued,
+   * the first reply would mark both read, and a crash before the second reply posts would lose it.
+   */
+  private async markOldestPendingRead(conversationId: string): Promise<void> {
     const pending = this.pendingReadIds.get(conversationId);
-    if (pending && pending.length > 0) {
-      this.pendingReadIds.delete(conversationId);
-      for (const id of pending) await this.markRead(id);
-    }
+    if (!pending || pending.length === 0) return;
+    const id = pending.shift();
+    if (pending.length === 0) this.pendingReadIds.delete(conversationId);
+    if (id !== undefined) await this.markRead(id);
   }
 
   /** Post a single chunk to the correct Zulip conversation (stream or DM). */
@@ -448,8 +455,11 @@ export class ZulipAdapter implements IPlatformAdapter {
         // which would silently re-register a default queue (all event types, apply_markdown=true
         // → rendered HTML), and @**mention** detection would then never match again.
         try {
+          // Re-register with the SAME event types as start() (QUEUE_EVENT_TYPES). Dropping
+          // `update_message` here would silently lose edited-message @mention detection after
+          // any queue error — diverging from startup behavior and the adapter's contract.
           const queueResult = await this.zulipPost('register', {
-            event_types: JSON.stringify(['message']),
+            event_types: QUEUE_EVENT_TYPES,
             apply_markdown: 'false',
           });
           queueId = String(queueResult.queue_id);
