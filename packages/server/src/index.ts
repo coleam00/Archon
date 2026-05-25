@@ -55,7 +55,13 @@ registerCommunityProviders();
 
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { validationErrorHook } from './routes/openapi-defaults';
-import { TelegramAdapter, GitHubAdapter, DiscordAdapter, SlackAdapter } from '@archon/adapters';
+import {
+  TelegramAdapter,
+  GitHubAdapter,
+  DiscordAdapter,
+  SlackAdapter,
+  SlackWorkflowBridge,
+} from '@archon/adapters';
 import { GiteaAdapter } from '@archon/adapters/community/forge/gitea';
 import { GitLabAdapter } from '@archon/adapters/community/forge/gitlab';
 import { WebAdapter } from './adapters/web';
@@ -456,6 +462,12 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
           })
           .catch(createMessageErrorHandler('Slack', slackAdapter, conversationId));
       });
+
+      // Attach the workflow bridge BEFORE app.start(): Bolt's Socket Mode
+      // refuses new event-handler registrations once the connection is open,
+      // so `app.action(...)` calls inside the bridge must run first.
+      const slackBridge = new SlackWorkflowBridge(slack);
+      slackBridge.attach();
 
       await slack.start();
       activePlatforms.push('Slack');

@@ -160,6 +160,22 @@ export interface IPlatformAdapter {
 
   /** Retract previously streamed text (used when workflow routing intercepts) */
   emitRetract?(conversationId: string): Promise<void>;
+
+  /**
+   * Optional: Append a small footer summarising cost / token usage / stop reason
+   * after a direct-chat assistant turn. Implemented by adapters that surface
+   * usage info in-band (e.g. Slack posts an italic context line). No-op for
+   * adapters that don't care; orchestrator skips the call when both `cost`
+   * and `tokens` are absent.
+   */
+  sendResultFooter?(
+    conversationId: string,
+    info: {
+      cost?: number;
+      tokens?: { input: number; output: number; total?: number; cost?: number };
+      stopReason?: string;
+    }
+  ): Promise<void>;
 }
 
 /**
