@@ -30,6 +30,7 @@
     "@github/copilot-sdk": "~0.2.2",
     "@mariozechner/pi-ai": "^0.67.5",
     "@mariozechner/pi-coding-agent": "^0.67.5",
+    "@opencode-ai/sdk": "^1.14.20",
     "@openai/codex-sdk": "^0.125.0",
     "@sinclair/typebox": "^0.34.41"
   },

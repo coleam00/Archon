@@ -18,6 +18,7 @@ import { CodexProvider } from './codex/provider';
 import { CLAUDE_CAPABILITIES } from './claude/capabilities';
 import { CODEX_CAPABILITIES } from './codex/capabilities';
 import { registerCopilotProvider } from './community/copilot/registration';
+import { registerOpencodeProvider } from './community/opencode/registration';
 import { registerPiProvider } from './community/pi/registration';
 import { UnknownProviderError } from './errors';
 import { createLogger } from '@archon/paths';
@@ -153,6 +154,7 @@ export function registerBuiltinProviders(): void {
  * disappear.
  */
 export function registerCommunityProviders(): void {
+  registerOpencodeProvider();
   registerPiProvider();
   registerCopilotProvider();
 }
