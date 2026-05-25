@@ -491,20 +491,20 @@ export class SlackWorkflowBridge {
       getLog().info({ runId, actorId: maskUserId(actorId) }, 'slack.bridge_cancel_dispatched');
     } catch (error) {
       const err = error as Error;
+      // Full error stays in logs; the user-facing message is intentionally
+      // generic so internal DB / library errors don't leak into a channel.
       getLog().warn({ err, runId }, 'slack.bridge_cancel_failed');
-      // Best effort: drop a note in-thread so the user knows the click failed.
       const state = this.runs.get(runId);
       if (state) {
-        await this.adapter
-          .getApp()
-          .client.chat.postMessage({
+        try {
+          await this.adapter.getApp().client.chat.postMessage({
             channel: state.channel,
             thread_ts: state.threadTs,
-            text: `:warning: Could not cancel run \`${runId}\`: ${err.message}`,
-          })
-          .catch(() => {
-            /* already logged */
+            text: `:warning: Could not cancel run \`${runId}\`. Check the server logs or try again.`,
           });
+        } catch (notifyError) {
+          getLog().debug({ err: notifyError as Error, runId }, 'slack.bridge_cancel_notify_failed');
+        }
       }
     }
     // The eventual workflow_cancelled event will repaint the status message.

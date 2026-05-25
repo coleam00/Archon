@@ -220,7 +220,10 @@ export function buildStatusBlocks(
   if (snapshot.terminal && typeof snapshot.totalCostUsd === 'number') {
     footerParts.push(`total cost: $${snapshot.totalCostUsd.toFixed(4)}`);
   }
-  if (snapshot.terminal === 'failed' && snapshot.failureReason) {
+  if (
+    (snapshot.terminal === 'failed' || snapshot.terminal === 'cancelled') &&
+    snapshot.failureReason
+  ) {
     footerParts.push(`reason: ${truncate(snapshot.failureReason, 200)}`);
   }
   if (footerParts.length > 0) {

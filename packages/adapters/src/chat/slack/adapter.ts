@@ -420,14 +420,13 @@ export class SlackAdapter implements IPlatformAdapter {
   ): Promise<void> {
     const actorId = command.user_id;
     if (!isSlackUserAuthorized(actorId, this.allowedUserIds)) {
+      // Silent rejection with masked logging — matches the inbound event-handler
+      // policy (see app_mention / message.im handlers above). Posting a denial
+      // would tell unauthorized users a bot exists and is listening.
       getLog().info(
         { maskedUserId: `${actorId.slice(0, 4)}***`, kind },
         'slack.slash_unauthorized'
       );
-      await respond({
-        response_type: 'ephemeral',
-        text: 'Sorry — you are not on the allowed user list for this Archon instance.',
-      });
       return;
     }
 

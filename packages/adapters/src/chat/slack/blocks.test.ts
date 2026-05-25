@@ -211,6 +211,20 @@ describe('buildStatusBlocks', () => {
     };
     expect(ctx.elements[0]?.text).toContain('reason: Type error in plan node');
   });
+
+  test('terminal cancelled snapshot also surfaces reason', () => {
+    const { blocks } = buildStatusBlocks(
+      snapshot({
+        terminal: 'cancelled',
+        failureReason: 'user clicked cancel',
+      }),
+      startedAt + 1000
+    );
+    const ctx = blocks.find(b => (b as { type: string }).type === 'context') as {
+      elements: Array<{ text: string }>;
+    };
+    expect(ctx.elements[0]?.text).toContain('reason: user clicked cancel');
+  });
 });
 
 describe('reaction name constants', () => {
