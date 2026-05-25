@@ -1294,6 +1294,36 @@ describe('workflow dispatch routing — interactive flag', () => {
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 
+  test('web non-interactive workflow with resumable run resumes foreground (not background)', async () => {
+    // Pins the priority order: resume detection comes before the background-dispatch
+    // gate. If a resumable run exists, web non-interactive workflows must resume
+    // foreground rather than dispatching a fresh background run. A future refactor
+    // that accidentally moves the resume check inside the interactive guard would
+    // lose worktree state for web users with paused non-interactive runs.
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(undefined))); // non-interactive
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'web-noninteractive-resume-1',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/web-feature',
+        parent_conversation_id: 'conv-1',
+        status: 'paused',
+      })
+    );
+
+    const platform = makePlatform(); // getPlatformType returns 'web'
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+
+    // Must resume foreground even though workflow is non-interactive
+    expect(mockHydrateResumableRun).toHaveBeenCalled();
+    expect(mockExecuteWorkflow).toHaveBeenCalled();
+    expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+    const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
+    expect(callArgs[3]).toBe('/repos/test-repo/worktrees/web-feature');
+  });
+
   test('calls executeWorkflow for interactive workflow on non-web platform', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
