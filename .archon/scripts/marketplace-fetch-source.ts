@@ -34,9 +34,8 @@ mkdirSync(sourceDir, { recursive: true });
 const errors: string[] = [];
 const files: string[] = [];
 
-// Guard: sourceUrl and sha are required for fetching source files.
-// If either is missing (e.g., PR doesn't add a marketplace entry),
-// output an empty result so downstream nodes can proceed gracefully.
+// Guard: sourceUrl/sha are required. If missing, output empty result so
+// downstream nodes proceed gracefully (e.g., PR without a marketplace entry).
 if (!sourceUrl || !sha) {
   const missing: string[] = [];
   if (!sourceUrl) missing.push('sourceUrl');
