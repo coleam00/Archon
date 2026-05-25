@@ -185,6 +185,18 @@ mock.module('../services/title-generator', () => ({
   generateAndSetTitle: mockGenerateAndSetTitle,
 }));
 
+// Workflow DB mock — dispatchOrchestratorWorkflow now consults findResumableRunByParentConversation
+// for all platforms (not just web), so this module must be stubbed even when these tests don't
+// exercise the resume path. The default null return keeps execution on the "fresh run" branch.
+const mockFindResumableRunByParentConversation = mock(() => Promise.resolve(null));
+const mockGetPausedWorkflowRun = mock(() => Promise.resolve(null));
+const mockUpdateWorkflowRun = mock(() => Promise.resolve());
+mock.module('../db/workflows', () => ({
+  findResumableRunByParentConversation: mockFindResumableRunByParentConversation,
+  getPausedWorkflowRun: mockGetPausedWorkflowRun,
+  updateWorkflowRun: mockUpdateWorkflowRun,
+}));
+
 // ─── Import module under test (AFTER all mocks) ─────────────────────────────
 
 import { handleMessage, parseOrchestratorCommands } from './orchestrator-agent';

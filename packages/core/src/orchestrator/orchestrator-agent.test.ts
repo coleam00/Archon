@@ -1175,6 +1175,8 @@ describe('workflow dispatch routing — interactive flag', () => {
   beforeEach(() => {
     mockExecuteWorkflow.mockClear();
     mockDispatchBackgroundWorkflow.mockClear();
+    mockFindResumableRunByParentConversation.mockClear();
+    mockHydrateResumableRun.mockClear();
     mockHandleCommand.mockReset();
     mockHandleCommand.mockImplementation(() =>
       Promise.resolve({ success: true, message: 'ok', workflow: undefined })
@@ -1305,6 +1307,92 @@ describe('workflow dispatch routing — interactive flag', () => {
 
     expect(mockExecuteWorkflow).toHaveBeenCalled();
     expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+  });
+
+  test('chat resume: resumes a paused run on chat platform when one exists', async () => {
+    // Regression for #1741: chat platforms (slack/telegram/discord/github) used
+    // to skip the resume lookup entirely and always start a fresh run, losing
+    // the prior worktree and re-asking approval questions indefinitely. The
+    // resume lookup must now run for ALL platforms; if a prior run is paused
+    // or failed-by-approval, executeWorkflow runs on the prior worktree with
+    // hydrated state.
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'chat-resume-run-1',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/chat-feature',
+        parent_conversation_id: 'conv-1',
+        status: 'paused',
+      })
+    );
+
+    const platform = {
+      ...makePlatform(),
+      getPlatformType: mock(() => 'telegram' as const),
+    };
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+
+    expect(mockHydrateResumableRun).toHaveBeenCalled();
+    expect(mockExecuteWorkflow).toHaveBeenCalled();
+    const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
+    // cwd (position 3) is the prior run's working_path, not a fresh resolution
+    expect(callArgs[3]).toBe('/repos/test-repo/worktrees/chat-feature');
+    const opts = callArgs[callArgs.length - 1] as {
+      preCreatedRun?: { id: string };
+      priorCompletedNodes?: Map<string, string>;
+    };
+    expect(opts.preCreatedRun?.id).toBe('chat-resume-run-1');
+    expect(opts.priorCompletedNodes?.size).toBeGreaterThan(0);
+  });
+
+  test('scopes resume query to (workflow, conversation, codebase)', async () => {
+    // Persistent chat conversation IDs (Telegram chat_id, Slack thread) can
+    // accumulate runs from multiple projects. The resume lookup must include
+    // codebase_id so a fresh invocation for project A never resumes a stale
+    // run from project B.
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+
+    const platform = {
+      ...makePlatform(),
+      getPlatformType: mock(() => 'slack' as const),
+    };
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+
+    expect(mockFindResumableRunByParentConversation).toHaveBeenCalledWith(
+      'test-workflow',
+      'conv-1',
+      'codebase-1'
+    );
+  });
+
+  test('starts fresh run when no resumable run exists on chat platform', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    // Default mock returns null — no resumable run
+
+    const platform = {
+      ...makePlatform(),
+      getPlatformType: mock(() => 'discord' as const),
+    };
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+
+    expect(mockHydrateResumableRun).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).toHaveBeenCalled();
+    const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
+    // cwd comes from validateAndResolveIsolation (default '/test/cwd'), not a prior worktree
+    expect(callArgs[3]).toBe('/test/cwd');
+    const opts = callArgs[callArgs.length - 1] as {
+      preCreatedRun?: unknown;
+      priorCompletedNodes?: unknown;
+    };
+    expect(opts.preCreatedRun).toBeUndefined();
+    expect(opts.priorCompletedNodes).toBeUndefined();
   });
 });
 
