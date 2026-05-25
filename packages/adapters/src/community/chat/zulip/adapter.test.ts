@@ -251,7 +251,10 @@ describe('ZulipAdapter', () => {
       await adapter.sendMessage('stream:99:Unknown', 'Hello');
 
       expect(mockLogger.error).toHaveBeenCalled();
-      expect(mockMessagesSend).not.toHaveBeenCalled();
+      // sendMessage posts via fetch (zulipPost), not client.messages.send — assert the real
+      // transport made no message POST, so a stray send can't slip past a vacuous assertion.
+      const msgCalls = mockFetch.mock.calls.filter(c => String(c[0]).endsWith('/api/v1/messages'));
+      expect(msgCalls.length).toBe(0);
     });
   });
 
@@ -269,7 +272,10 @@ describe('ZulipAdapter', () => {
       mockEventsRetrieve.mockImplementation(() => new Promise(() => {}));
 
       const result = await Promise.race([
-        adapter.start().then(() => 'started' as const),
+        (async () => {
+          await adapter.start();
+          return 'started' as const;
+        })(),
         new Promise<'timed-out'>(resolve => setTimeout(() => resolve('timed-out'), 500)),
       ]);
 
