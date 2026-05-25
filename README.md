@@ -171,6 +171,14 @@ irm https://archon.diy/install.ps1 | iex
 brew install coleam00/archon/archon
 ```
 
+**Nix (Flakes)**
+```bash
+nix run github:coleam00/Archon
+nix profile install github:coleam00/Archon
+```
+
+The flake exposes `packages.<system>.default` and `apps.<system>.default`. Update through the same Nix workflow you used to install. For profile installs, run `nix profile list` and then `nix profile upgrade <index-or-name>`. For flake inputs, run `nix flake update Archon` in your own flake and rebuild.
+
 > **Compiled binaries need a `CLAUDE_BIN_PATH`.** The quick-install binaries
 > don't bundle Claude Code. Install it separately, then point Archon at it:
 >
