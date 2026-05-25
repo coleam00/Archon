@@ -1,0 +1,1 @@
+export { JiraAdapter } from './adapter';

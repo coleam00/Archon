@@ -8,10 +8,11 @@
     ".": "./src/index.ts",
     "./*": "./src/*",
     "./community/forge/gitea": "./src/community/forge/gitea/index.ts",
-    "./community/forge/gitlab": "./src/community/forge/gitlab/index.ts"
+    "./community/forge/gitlab": "./src/community/forge/gitlab/index.ts",
+    "./community/task-management/jira": "./src/community/task-management/jira/index.ts"
   },
   "scripts": {
-    "test": "bun test src/chat/ src/community/chat/ src/community/forge/gitlab/auth.test.ts src/forge/github/auth.test.ts src/utils/ && bun test src/forge/github/adapter.test.ts && bun test src/forge/github/context.test.ts && bun test src/community/forge/gitea/adapter.test.ts && bun test src/community/forge/gitlab/adapter.test.ts",
+    "test": "bun test src/chat/ src/community/chat/ src/community/forge/gitlab/auth.test.ts src/forge/github/auth.test.ts src/utils/ && bun test src/forge/github/adapter.test.ts && bun test src/forge/github/context.test.ts && bun test src/community/forge/gitea/adapter.test.ts && bun test src/community/forge/gitlab/adapter.test.ts && bun test src/community/task-management/jira/adapter.test.ts",
     "type-check": "bun x tsc --noEmit"
   },
   "dependencies": {
