@@ -587,6 +587,15 @@ curl http://localhost:3637/api/conversations/<conversationId>/messages
 
 ## Development Guidelines
 
+### UI and Visual Design
+
+All UI changes — production web (`packages/web/`), experiments (`packages/web/src/experiments/`), the docs site, marketing surfaces, and any future visual surface — must align with the Archon brand foundation.
+
+- **Canonical brand guide:** https://archon.diy/brand/ (source: `packages/docs-web/src/content/docs/brand/index.md` + `packages/docs-web/public/brand/foundation.html`).
+- **Use brand tokens, not ad-hoc values.** Colors, gradients, surfaces, and typography must come from the established design tokens (`packages/web/src/index.css`) or the brand guide. Don't hard-code hex values that aren't in the system.
+- **Introducing a new visual token** (color, font, radius, spacing) means updating both the token source and the brand guide. Don't fork the palette per package.
+- **When in doubt, consult the brand guide first** before inventing new visual treatments. Open a discussion if the guide doesn't cover your case.
+
 ### When Creating New Features
 
 **Quick reference:**
