@@ -68,6 +68,7 @@ import {
   DiscordAdapter,
   SlackAdapter,
   SlackWorkflowBridge,
+  ZulipAdapter,
 } from '@archon/adapters';
 import { GiteaAdapter } from '@archon/adapters/community/forge/gitea';
 import { GitLabAdapter } from '@archon/adapters/community/forge/gitlab';
@@ -179,7 +180,7 @@ function createMessageErrorHandler(
     getLog().error({ err: error, platform, conversationId }, 'message_processing_failed');
     try {
       const userMessage = classifyAndFormatError(error as Error);
-      await adapter.sendMessage(conversationId, userMessage);
+      await adapter.sendMessage(conversationId, userMessage, { isError: true });
     } catch (sendError) {
       getLog().error({ err: sendError, platform, conversationId }, 'error_message_send_failed');
     }
@@ -393,6 +394,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   let discord: DiscordAdapter | null = null;
   let slack: SlackAdapter | null = null;
   let slackBridge: SlackWorkflowBridge | null = null;
+  let zulip: ZulipAdapter | null = null;
 
   if (!opts.skipPlatformAdapters) {
     // Check that at least one platform is configured
@@ -411,8 +413,11 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       process.env.GITEA_URL && process.env.GITEA_TOKEN && process.env.GITEA_WEBHOOK_SECRET
     );
     const hasGitLab = Boolean(process.env.GITLAB_TOKEN && process.env.GITLAB_WEBHOOK_SECRET);
+    const hasZulip = Boolean(
+      process.env.ZULIP_URL && process.env.ZULIP_BOT_EMAIL && process.env.ZULIP_BOT_API_KEY
+    );
 
-    if (!hasTelegram && !hasDiscord && !hasGitHub && !hasGitea && !hasGitLab) {
+    if (!hasTelegram && !hasDiscord && !hasGitHub && !hasGitea && !hasGitLab && !hasZulip) {
       getLog().warn('no_platform_adapters_configured');
     }
 
@@ -665,6 +670,39 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       activePlatforms.push('Slack');
     } else {
       getLog().info('slack_adapter_skipped');
+    }
+
+    // Initialize Zulip adapter (conditional)
+    if (process.env.ZULIP_URL && process.env.ZULIP_BOT_EMAIL && process.env.ZULIP_BOT_API_KEY) {
+      const zulipStreamingMode = (process.env.ZULIP_STREAMING_MODE ?? 'batch') as
+        | 'stream'
+        | 'batch';
+      zulip = new ZulipAdapter(
+        process.env.ZULIP_URL,
+        process.env.ZULIP_BOT_EMAIL,
+        process.env.ZULIP_BOT_API_KEY,
+        zulipStreamingMode
+      );
+      const zulipAdapter = zulip;
+
+      zulipAdapter.onMessage(async msg => {
+        const conversationId = zulipAdapter.getConversationId(msg);
+        const content = zulipAdapter.stripBotMention(msg.content);
+        if (!content) return;
+
+        lockManager
+          .acquireLock(conversationId, async () => {
+            await handleMessage(zulipAdapter, conversationId, content, {
+              isolationHints: { workflowType: 'thread', workflowId: conversationId },
+            });
+          })
+          .catch(createMessageErrorHandler('Zulip', zulipAdapter, conversationId));
+      });
+
+      await zulip.start();
+      activePlatforms.push('Zulip');
+    } else {
+      getLog().info('zulip_adapter_skipped');
     }
   } else {
     getLog().info('platform_adapters_skipped');
@@ -982,6 +1020,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
           // pending debounced chat.update can't fire against a closed socket.
           slackBridge?.detach();
           slack?.stop();
+          zulip?.stop();
           gitea?.stop();
           gitlab?.stop();
           pgNotifyListener?.stop();
