@@ -11,7 +11,7 @@
     "./community/forge/gitlab": "./src/community/forge/gitlab/index.ts"
   },
   "scripts": {
-    "test": "bun test src/chat/slack/adapter.test.ts src/chat/slack/auth.test.ts src/chat/slack/blocks.test.ts src/chat/telegram/ src/community/chat/ src/community/forge/gitlab/auth.test.ts src/forge/github/auth.test.ts src/utils/ && bun test src/chat/slack/workflow-bridge.test.ts && bun test src/forge/github/adapter.test.ts && bun test src/forge/github/context.test.ts && bun test src/community/forge/gitea/adapter.test.ts && bun test src/community/forge/gitlab/adapter.test.ts",
+    "test": "bun test src/chat/slack/adapter.test.ts src/chat/slack/auth.test.ts src/chat/slack/blocks.test.ts src/chat/telegram/ src/community/chat/ src/community/forge/gitlab/auth.test.ts src/forge/github/auth.test.ts src/utils/ && bun test src/chat/slack/workflow-bridge.test.ts && bun test src/forge/github/adapter.test.ts && bun test src/forge/github/context.test.ts && bun test src/community/forge/gitea/adapter.test.ts && bun test src/community/forge/gitlab/adapter.test.ts && bun test src/community/chat/zulip/adapter.test.ts",
     "type-check": "bun x tsc --noEmit"
   },
   "dependencies": {
@@ -25,7 +25,8 @@
     "@slack/bolt": "^4.6.0",
     "discord.js": "^14.16.0",
     "grammy": "^1.36.0",
-    "telegramify-markdown": "^1.3.3"
+    "telegramify-markdown": "^1.3.3",
+    "zulip-js": "^1.0.0"
   },
   "peerDependencies": {
     "typescript": "^5.0.0"

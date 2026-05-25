@@ -84,6 +84,8 @@ export interface MessageMetadata {
   segment?: 'new' | 'auto';
   workflowDispatch?: { workerConversationId: string; workflowName: string };
   workflowResult?: { workflowName: string; runId: string };
+  /** True when sendMessage is carrying an error report instead of a normal answer. */
+  isError?: boolean;
 }
 
 export interface IPlatformAdapter {
