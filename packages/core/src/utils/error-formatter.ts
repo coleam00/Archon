@@ -14,9 +14,22 @@
 export function classifyAndFormatError(error: Error): string {
   const message = error.message || '';
 
-  // AI/SDK errors - rate limits
-  if (message.includes('rate limit') || message.includes('Rate limit')) {
-    return '⚠️ AI rate limit reached. Please wait a moment and try again.';
+  // AI/SDK errors - rate limits and usage caps
+  // Matches: "rate limit" (generic), "hit your limit" (Claude subscription cap),
+  // "usage limit" (Claude org-disabled-overage variant; this function only receives
+  // AI-provider errors, so false-positive risk from OS/container messages is negligible)
+  const lower = message.toLowerCase();
+  if (
+    lower.includes('rate limit') ||
+    lower.includes('hit your limit') ||
+    lower.includes('usage limit')
+  ) {
+    // Anchor on · separator when present (Claude format: "... · resets 4:50pm (UTC)");
+    // fall back to stopping at · or newline so abbreviated periods (e.g. "p.m.") don't truncate.
+    const reset =
+      /·\s*(resets[^·\n]*)/i.exec(message)?.[1]?.trim() ??
+      /resets[^·\n]*/i.exec(message)?.[0]?.trim();
+    return `⚠️ AI usage limit reached${reset ? ` (${reset})` : ''}. Please wait and try again.`;
   }
 
   // Claude-specific auth errors — OAuth token refresh failures
