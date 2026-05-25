@@ -28,6 +28,8 @@
   --node-command: oklch(0.62 0.18 250);
   --node-prompt: oklch(0.58 0.19 290);
   --node-bash: oklch(0.75 0.15 75);
+  --node-loop: oklch(0.62 0.18 170);
+  --node-approval: oklch(0.72 0.17 40);
 
   /* shadcn variables mapped to dark theme */
   --radius: 0.625rem;
@@ -86,6 +88,8 @@
   --color-node-command: var(--node-command);
   --color-node-prompt: var(--node-prompt);
   --color-node-bash: var(--node-bash);
+  --color-node-loop: var(--node-loop);
+  --color-node-approval: var(--node-approval);
   --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;
 
@@ -183,6 +187,13 @@ body {
 .chat-markdown p {
   margin-top: 0.5em;
   margin-bottom: 0.5em;
+  overflow-wrap: break-word;
+}
+
+.chat-markdown li,
+.chat-markdown td,
+.chat-markdown a {
+  overflow-wrap: break-word;
 }
 
 .chat-markdown p:first-child {

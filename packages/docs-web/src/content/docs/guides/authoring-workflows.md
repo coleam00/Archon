@@ -194,6 +194,7 @@ nodes:
 | `context` | `'fresh'` \| `'shared'` | — | `fresh` = new session; `shared` = inherit from prior node. Defaults to `fresh` for parallel layers, inherited for sequential |
 | `idle_timeout` | number | — | Kill node if idle for this many milliseconds |
 | `retry` | object | — | Per-node retry configuration. See [Retry Configuration](#retry-configuration) |
+| `always_run` | boolean | `false` | Opt out of resume caching: re-run this node on resume even if a prior run completed it. See [Opting Out of Resume Caching](#opting-out-of-resume-caching) |
 
 **AI node options** — apply to `command` and `prompt` nodes:
 
@@ -552,6 +553,27 @@ Once the row reaches a terminal status, you can resume it explicitly via the pat
 
 **Fresh start**: If zero nodes completed in the prior run, Archon starts fresh (no nodes to skip).
 
+### Opting Out of Resume Caching
+
+By default, resume skips any node that completed successfully in the prior run and feeds its cached output to downstream consumers. That's the right behavior when a node's exit code captures the validity of its output (e.g. AI prompts, scripts that produce structured stdout).
+
+It's the wrong behavior when a node's success status doesn't capture output validity — typically a producer whose exit code reports the side effect (a file written, a service called) but whose downstream consumer parses the side effect's contents on every run. If the producer succeeded but wrote garbage, resume will replay the cached "success" forever without ever re-executing the producer.
+
+Set `always_run: true` on the node to force re-execution on resume, even when the prior run marked it completed:
+
+```yaml
+nodes:
+  - id: fetch-data
+    bash: ./scripts/download.sh > $ARTIFACTS_DIR/data.json
+    always_run: true        # Re-fetch on resume; download.sh exit code doesn't validate the JSON
+
+  - id: process-data
+    prompt: "Summarize $ARTIFACTS_DIR/data.json"
+    depends_on: [fetch-data]
+```
+
+On resume, `fetch-data` re-runs regardless of prior success, so `process-data` reads a freshly produced file. Normal cached nodes in the same run are still skipped — `always_run` is per-node.
+
 ---
 
 ## The Artifact Chain
@@ -616,6 +638,7 @@ Common shapes you'll see in practice:
 - **Claude (Anthropic):** family aliases (`sonnet`, `opus`, `haiku`), full model IDs (`claude-opus-4-7`, `claude-3-5-sonnet-20241022`), context-window suffixed forms (`opus[1m]`, `claude-opus-4-7[1m]`), or `inherit` to reuse the previous session's model.
 - **Codex (OpenAI):** any OpenAI model ID — `gpt-5.3-codex`, `gpt-5.2`, `o5-pro`, etc.
 - **Pi (community):** `<backend>/<model-id>` refs — e.g. `google/gemini-2.5-pro`, `openrouter/qwen/qwen3-coder`.
+- **Copilot (community):** GitHub Copilot model names — e.g. `gpt-5`, `gpt-5-mini`, `claude-sonnet-4.5`, or `auto`.
 
 If the SDK rejects the string at request time, the node fails loudly with the SDK's error message — Archon never silently re-routes a model from one provider to another based on the string.
 
@@ -687,12 +710,12 @@ GitHub always run workflows in foreground mode regardless of this setting.
 ### Provider Validation
 
 Workflows are validated at load time for **provider identity only**:
-- Both the workflow-level `provider:` and any per-node `provider:` overrides must name a registered provider (`claude`, `codex`, `pi`).
+- Both the workflow-level `provider:` and any per-node `provider:` overrides must name a registered provider (`claude`, `codex`, `pi`, `copilot`).
 - Validation errors are shown in `/workflow list`.
 
 Example validation error:
 ```
-Unknown provider 'claud'. Registered: claude, codex, pi
+Unknown provider 'claud'. Registered: claude, codex, pi, copilot
 ```
 
 Model strings are not validated at load time — they're forwarded to the SDK as-is and validated by the upstream API at request time.

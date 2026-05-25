@@ -17,6 +17,7 @@ import { ClaudeProvider } from './claude/provider';
 import { CodexProvider } from './codex/provider';
 import { CLAUDE_CAPABILITIES } from './claude/capabilities';
 import { CODEX_CAPABILITIES } from './codex/capabilities';
+import { registerCopilotProvider } from './community/copilot/registration';
 import { registerOpencodeProvider } from './community/opencode/registration';
 import { registerPiProvider } from './community/pi/registration';
 import { UnknownProviderError } from './errors';
@@ -155,6 +156,7 @@ export function registerBuiltinProviders(): void {
 export function registerCommunityProviders(): void {
   registerOpencodeProvider();
   registerPiProvider();
+  registerCopilotProvider();
 }
 
 /** @internal Test-only — clears the registry. Not for production use. */

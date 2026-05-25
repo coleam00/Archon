@@ -828,6 +828,67 @@ describe('substituteNodeOutputRefs -- shell escaping', () => {
   });
 });
 
+describe('substituteNodeOutputRefs -- large output file substitution', () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = join(tmpdir(), `archon-test-large-output-${Date.now()}`);
+    await mkdir(tempDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it('inlines small output even when outputFileDir is provided', () => {
+    const outputs = new Map([['a', makeOutput('completed', 'small')]]);
+    const result = substituteNodeOutputRefs('echo $a.output', outputs, true, tempDir);
+    expect(result).toBe("echo 'small'");
+  });
+
+  it('writes large output (>=32KB) to file and returns $(cat ...) reference', async () => {
+    const largeOutput = 'x'.repeat(33_000);
+    const outputs = new Map([['a', makeOutput('completed', largeOutput)]]);
+    const result = substituteNodeOutputRefs('echo $a.output', outputs, true, tempDir);
+    expect(result).toContain('$(cat ');
+    expect(result).toContain('a.nodeoutput');
+    // Verify file was written with correct content
+    const { readFile: readFileAsync } = await import('fs/promises');
+    const written = await readFileAsync(join(tempDir, 'a.nodeoutput'), 'utf-8');
+    expect(written).toBe(largeOutput);
+  });
+
+  it('writes large field value to file with field name in filename', async () => {
+    const largeValue = 'y'.repeat(33_000);
+    const outputs = new Map([['a', makeOutput('completed', JSON.stringify({ data: largeValue }))]]);
+    const result = substituteNodeOutputRefs('echo $a.output.data', outputs, true, tempDir);
+    expect(result).toContain('$(cat ');
+    expect(result).toContain('a.data.nodeoutput');
+    const { readFile: readFileAsync } = await import('fs/promises');
+    const written = await readFileAsync(join(tempDir, 'a.data.nodeoutput'), 'utf-8');
+    expect(written).toBe(largeValue);
+  });
+
+  it('does not write to file when escapedForBash=false even for large output', () => {
+    const largeOutput = 'x'.repeat(33_000);
+    const outputs = new Map([['a', makeOutput('completed', largeOutput)]]);
+    const result = substituteNodeOutputRefs('echo $a.output', outputs, false, tempDir);
+    expect(result).toBe(`echo ${largeOutput}`);
+    expect(result).not.toContain('$(cat ');
+  });
+
+  it('falls back to shell-quoting when file write fails', () => {
+    const largeOutput = 'x'.repeat(33_000);
+    const outputs = new Map([['a', makeOutput('completed', largeOutput)]]);
+    // Use a non-existent directory to trigger writeFileSync failure
+    const badDir = '/nonexistent-path-that-does-not-exist';
+    const result = substituteNodeOutputRefs('echo $a.output', outputs, true, badDir);
+    // Should fall back to inline shell-quoting instead of crashing
+    expect(result).not.toContain('$(cat ');
+    expect(result).toBe(`echo '${largeOutput}'`);
+  });
+});
+
 describe('substituteNodeOutputRefs -- structuredOutput preference', () => {
   it('prefers structuredOutput.field over JSON.parse(output)', () => {
     // Pi-shape: prose output text with structuredOutput populated by tryParseStructuredOutput.
@@ -2597,6 +2658,79 @@ describe('loadMcpConfig', () => {
     await expect(loadMcpConfig('header-array.json', testDir)).rejects.toThrow(
       'MCP config figma.headers.Authorization must be a string'
     );
+  });
+
+  it('expands ${VAR_NAME} brace-form in env values', async () => {
+    process.env.TEST_MCP_TOKEN_1612 = 'braced-secret';
+    const config = { github: { command: 'npx', env: { TOKEN: '${TEST_MCP_TOKEN_1612}' } } };
+    await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
+
+    const result = await loadMcpConfig('mcp.json', testDir);
+    const server = result.servers.github as Record<string, unknown>;
+    expect(server.env).toEqual({ TOKEN: 'braced-secret' });
+
+    delete process.env.TEST_MCP_TOKEN_1612;
+  });
+
+  it('expands ${VAR_NAME} brace-form in headers values', async () => {
+    process.env.TEST_API_KEY_1612 = 'braced-key';
+    const config = {
+      api: {
+        type: 'http',
+        url: 'https://example.com',
+        headers: { Authorization: 'Bearer ${TEST_API_KEY_1612}' },
+      },
+    };
+    await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
+
+    const result = await loadMcpConfig('mcp.json', testDir);
+    const server = result.servers.api as Record<string, unknown>;
+    expect(server.headers).toEqual({ Authorization: 'Bearer braced-key' });
+
+    delete process.env.TEST_API_KEY_1612;
+  });
+
+  it('replaces undefined brace-form vars with empty string and reports them', async () => {
+    delete process.env.NONEXISTENT_VAR_1612;
+    const config = { svc: { command: 'npx', env: { KEY: '${NONEXISTENT_VAR_1612}' } } };
+    await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
+
+    const result = await loadMcpConfig('mcp.json', testDir);
+    const server = result.servers.svc as Record<string, unknown>;
+    expect(server.env).toEqual({ KEY: '' });
+    expect(result.missingVars).toContain('NONEXISTENT_VAR_1612');
+  });
+
+  it('expands mixed bare and brace-form vars in the same string', async () => {
+    process.env.TEST_HOST_1612 = 'db.example.com';
+    process.env.TEST_PORT_1612 = '5432';
+    const config = {
+      db: {
+        command: 'npx',
+        env: { DSN: 'postgres://$TEST_HOST_1612:${TEST_PORT_1612}/mydb' },
+      },
+    };
+    await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
+
+    const result = await loadMcpConfig('mcp.json', testDir);
+    const server = result.servers.db as Record<string, unknown>;
+    expect(server.env).toEqual({ DSN: 'postgres://db.example.com:5432/mydb' });
+
+    delete process.env.TEST_HOST_1612;
+    delete process.env.TEST_PORT_1612;
+  });
+
+  it('does not expand brace-form vars in command or args fields', async () => {
+    process.env.TEST_CMD_1612 = 'should-not-expand';
+    const config = { svc: { command: '${TEST_CMD_1612}', args: ['${TEST_CMD_1612}'] } };
+    await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
+
+    const result = await loadMcpConfig('mcp.json', testDir);
+    const server = result.servers.svc as Record<string, unknown>;
+    expect(server.command).toBe('${TEST_CMD_1612}');
+    expect(server.args).toEqual(['${TEST_CMD_1612}']);
+
+    delete process.env.TEST_CMD_1612;
   });
 });
 
@@ -4705,6 +4839,199 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       ).mock.calls;
       expect(pauseCalls.length).toBe(0);
     });
+  });
+});
+
+describe('executeDagWorkflow -- always_run resume opt-out', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(
+      tmpdir(),
+      `dag-always-run-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    const commandsDir = join(testDir, '.archon', 'commands');
+    await mkdir(commandsDir, { recursive: true });
+    await writeFile(join(commandsDir, 'producer.md'), 'Producer prompt');
+    await writeFile(join(commandsDir, 'consumer.md'), 'Consumer prompt $producer.output');
+
+    mockSendQueryDag.mockClear();
+    mockGetAgentProviderDag.mockClear();
+
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'fresh output' };
+      yield { type: 'result', sessionId: 'session-id' };
+    });
+  });
+
+  afterEach(async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+    try {
+      await rm(testDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  });
+
+  it('re-runs node flagged always_run even when present in priorCompletedNodes', async () => {
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    const priorCompletedNodes = new Map([['producer', 'cached stale output']]);
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-always-run',
+      testDir,
+      {
+        name: 'always-run-producer',
+        nodes: [
+          { id: 'producer', command: 'producer', always_run: true },
+          { id: 'consumer', command: 'consumer', depends_on: ['producer'] },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      priorCompletedNodes
+    );
+
+    // Producer re-runs (instead of being skipped) AND consumer runs => 2 sendQuery calls
+    expect(mockSendQueryDag.mock.calls.length).toBe(2);
+
+    // No skip event written for the always_run node — but a reset event IS written for audit
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const skippedEvent = eventCalls.find(
+      (call: unknown[]) =>
+        (call[0] as { event_type: string }).event_type === 'node_skipped_prior_success' &&
+        (call[0] as { step_name: string }).step_name === 'producer'
+    );
+    expect(skippedEvent).toBeUndefined();
+
+    const resetEvent = eventCalls.find(
+      (call: unknown[]) =>
+        (call[0] as { event_type: string }).event_type === 'node_always_run_reset' &&
+        (call[0] as { step_name: string }).step_name === 'producer'
+    );
+    expect(resetEvent).toBeDefined();
+    expect((resetEvent![0] as { data: { prior_output: string } }).data.prior_output).toBe(
+      'cached stale output'
+    );
+  });
+
+  it('still skips non-always_run nodes in the same priorCompletedNodes set', async () => {
+    await writeFile(join(testDir, '.archon', 'commands', 'cached.md'), 'Cached prompt');
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    const priorCompletedNodes = new Map([
+      ['producer', 'cached stale output'],
+      ['cached', 'cached output'],
+    ]);
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-mixed',
+      testDir,
+      {
+        name: 'mixed',
+        nodes: [
+          { id: 'producer', command: 'producer', always_run: true },
+          { id: 'cached', command: 'cached' },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      priorCompletedNodes
+    );
+
+    // Only producer re-runs; cached node stays skipped
+    expect(mockSendQueryDag.mock.calls.length).toBe(1);
+
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const cachedSkipped = eventCalls.find(
+      (call: unknown[]) =>
+        (call[0] as { event_type: string }).event_type === 'node_skipped_prior_success' &&
+        (call[0] as { step_name: string }).step_name === 'cached'
+    );
+    expect(cachedSkipped).toBeDefined();
+  });
+
+  it('downstream consumer reads fresh producer output (not the pre-populated cached value)', async () => {
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    const seenPrompts: string[] = [];
+    let queryCount = 0;
+    mockSendQueryDag.mockImplementation(function* (prompt: string) {
+      seenPrompts.push(prompt);
+      queryCount++;
+      // First call is the always_run producer; subsequent calls are consumers
+      yield {
+        type: 'assistant',
+        content: queryCount === 1 ? 'fresh producer output' : 'consumer result',
+      };
+      yield { type: 'result', sessionId: 'session-id' };
+    });
+
+    const priorCompletedNodes = new Map([['producer', 'STALE_CACHED_VALUE']]);
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-fresh-output',
+      testDir,
+      {
+        name: 'always-run-fresh',
+        nodes: [
+          { id: 'producer', command: 'producer', always_run: true },
+          { id: 'consumer', prompt: 'See: $producer.output', depends_on: ['producer'] },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      priorCompletedNodes
+    );
+
+    // Consumer's prompt should contain the fresh producer output, not the stale cached value
+    const consumerPrompt = seenPrompts[1];
+    expect(consumerPrompt).toContain('fresh producer output');
+    expect(consumerPrompt).not.toContain('STALE_CACHED_VALUE');
   });
 });
 

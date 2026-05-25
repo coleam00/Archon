@@ -90,17 +90,24 @@ function ensurePiPackageDirShim(): void {
   const shimDir = join(tmpdir(), 'archon-pi-shim');
   const shimPkgJson = join(shimDir, 'package.json');
   if (!existsSync(shimPkgJson)) {
-    mkdirSync(shimDir, { recursive: true });
     // `piConfig: {}` is explicit so Pi's defaults (`name: 'pi'`,
     // `configDir: '.pi'`) kick in — matches Pi's standalone behavior.
-    writeFileSync(
-      shimPkgJson,
-      JSON.stringify({
-        name: 'archon-pi-shim',
-        version: '0.0.0',
-        piConfig: {},
-      })
-    );
+    try {
+      mkdirSync(shimDir, { recursive: true });
+      writeFileSync(
+        shimPkgJson,
+        JSON.stringify({
+          name: 'archon-pi-shim',
+          version: '0.0.0',
+          piConfig: {},
+        })
+      );
+    } catch (error) {
+      // Surface as a classified error so the executor's catch sees a known
+      // shape instead of a raw EACCES/ENOSPC from node:fs.
+      const err = error as NodeJS.ErrnoException;
+      throw new Error(`Pi shim setup failed at ${shimDir}: ${err.message}`);
+    }
   }
   process.env.PI_PACKAGE_DIR = shimDir;
 }
@@ -133,29 +140,11 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-/**
- * Append a "respond with JSON matching this schema" instruction to the user
- * prompt so Pi-backed models produce parseable structured output. Pi's SDK
- * has no JSON-mode equivalent to Claude's outputFormat or Codex's
- * outputSchema, so this is a best-effort fallback: the event bridge parses
- * the assistant transcript on agent_end. Models that reliably follow
- * instruction (GPT-5, Claude, Gemini 2.x, recent Qwen Coder, DeepSeek V3)
- * return clean JSON; models that don't produce a parse failure, which the
- * executor surfaces via the existing dag.structured_output_missing warning.
- */
-export function augmentPromptForJsonSchema(
-  prompt: string,
-  schema: Record<string, unknown>
-): string {
-  return `${prompt}
-
----
-
-CRITICAL: Respond with ONLY a JSON object matching the schema below. No prose before or after the JSON. No markdown code fences. Just the raw JSON object as your final message.
-
-Schema:
-${JSON.stringify(schema, null, 2)}`;
-}
+// Structured-output prompt augmentation is shared across providers. Import
+// once for local use and re-export so existing callers and tests keep their
+// import path stable; new providers should import from `../../shared/structured-output`.
+import { augmentPromptForJsonSchema } from '../../shared/structured-output';
+export { augmentPromptForJsonSchema };
 
 /**
  * Pi community provider — wraps `@mariozechner/pi-coding-agent`'s full

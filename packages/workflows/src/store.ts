@@ -16,6 +16,7 @@ export const WORKFLOW_EVENT_TYPES = [
   'node_failed',
   'node_skipped',
   'node_skipped_prior_success',
+  'node_always_run_reset',
   'loop_iteration_started',
   'loop_iteration_completed',
   'loop_iteration_failed',

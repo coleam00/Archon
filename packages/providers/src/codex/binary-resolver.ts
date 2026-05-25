@@ -25,6 +25,14 @@ export function fileExists(path: string): boolean {
   return _existsSync(path);
 }
 
+// TODO(#1723): existsSync returns true for directories, so an env or config
+// path pointing at the platform-package *directory* (e.g. an npm-distributed
+// `@openai/codex-<platform>` folder containing `codex{.exe}`) currently slips
+// past validation and crashes inside the SDK's child_process.spawn as ENOENT.
+// The Claude resolver applies a pathKind() / expandDirectoryToExecutable()
+// fix; mirror the same pattern here when a Codex bug report lands or as part
+// of a deliberate parity pass.
+
 /** Lazy-initialized logger */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {

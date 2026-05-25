@@ -100,6 +100,7 @@ const SAFE_ASSISTANT_FIELDS: Record<string, readonly string[]> = {
   // show in the web UI. Unknown providers fall through with no fields.
   opencode: ['model', 'agent'],
   pi: ['model'],
+  copilot: ['model'],
 };
 
 function toSafeAssistantDefaults(assistants: AssistantDefaults): SafeConfig['assistants'] {
