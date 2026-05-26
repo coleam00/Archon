@@ -1,0 +1,486 @@
+name: pr-address-review
+description: |
+  Address claude review comments on a GitHub PR.
+
+  Fetches the latest claude review, validates every finding (including nits
+  and observations), spawns 2–4 parallel fix agents (classifier decides), runs
+  build validation in a repair loop, then pushes and posts an update comment.
+
+  Stops after push — re-run for the next review round.
+
+  Usage: pr-address-review <PR-number>
+  Example: pr-address-review 42
+
+  Requires: gh CLI authenticated, running from within the target repository.
+
+provider: claude
+model: sonnet
+
+nodes:
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 1: SETUP
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: extract-pr-number
+    bash: |
+      PR=$(echo "$ARGUMENTS" | grep -oE '[0-9]+' | head -1)
+      if [ -z "$PR" ]; then
+        echo "No PR number found in: $ARGUMENTS" >&2
+        exit 1
+      fi
+      echo "$PR"
+
+  - id: checkout-pr
+    bash: |
+      PR_NUMBER=$extract-pr-number.output
+      mkdir -p "$ARTIFACTS_DIR"
+
+      PR_HEAD_BRANCH=$(gh pr view "$PR_NUMBER" --json headRefName -q '.headRefName')
+      CURRENT_BRANCH=$(git branch --show-current)
+
+      if [ "$CURRENT_BRANCH" = "$PR_HEAD_BRANCH" ]; then
+        echo "Already on PR branch: $PR_HEAD_BRANCH"
+      elif gh pr checkout "$PR_NUMBER" 2>/dev/null; then
+        echo "Checked out: $PR_HEAD_BRANCH"
+      else
+        # Branch already checked out in another worktree — fetch and reset
+        git fetch origin "$PR_HEAD_BRANCH"
+        git reset --hard "origin/$PR_HEAD_BRANCH"
+        echo "Fetched and reset to: $PR_HEAD_BRANCH"
+      fi
+
+      gh pr view "$PR_NUMBER" \
+        --json number,headRefName,baseRefName,title,url \
+        > "$ARTIFACTS_DIR/pr-meta.json"
+      cat "$ARTIFACTS_DIR/pr-meta.json"
+    depends_on: [extract-pr-number]
+
+  # Runs in parallel with fetch-review once checkout completes
+  - id: detect-build-cmd
+    bash: |
+      if [ -f "./gradlew" ]; then
+        echo "./gradlew clean build"
+      elif [ -f "./mvnw" ]; then
+        echo "./mvnw clean verify -q"
+      elif [ -f "pom.xml" ]; then
+        echo "mvn clean verify -q"
+      elif [ -f "package.json" ]; then
+        if [ -f "yarn.lock" ]; then
+          echo "yarn test"
+        elif [ -f "bun.lock" ] || [ -f "bun.lockb" ]; then
+          echo "bun test"
+        else
+          echo "npm test"
+        fi
+      elif [ -f "go.mod" ]; then
+        echo "go test ./..."
+      elif [ -f "Cargo.toml" ]; then
+        echo "cargo test"
+      elif [ -f "Makefile" ]; then
+        echo "make test"
+      else
+        echo "echo 'No build system detected — manual validation required'"
+      fi
+    depends_on: [checkout-pr]
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 2: FETCH REVIEW
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: fetch-review
+    bash: |
+      PR_NUMBER=$extract-pr-number.output
+      REPO=$(gh repo view --json nameWithOwner -q '.nameWithOwner')
+
+      # Claude posts reviews as PR issue comments (not formal PR reviews).
+      # Match both "claude" and "claude[bot]" since gh normalizes the display name.
+      gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
+        > "$ARTIFACTS_DIR/pr-comments-all.json"
+
+      LATEST_REVIEW=$(jq \
+        '[.[] | select(.user.login == "claude" or .user.login == "claude[bot]")] | sort_by(.created_at) | last' \
+        "$ARTIFACTS_DIR/pr-comments-all.json")
+
+      if [ -z "$LATEST_REVIEW" ] || [ "$LATEST_REVIEW" = "null" ]; then
+        echo "No claude review comment found on PR #$PR_NUMBER" >&2
+        exit 1
+      fi
+
+      echo "$LATEST_REVIEW" > "$ARTIFACTS_DIR/claude-review.json"
+
+      # Fetch inline diff comments (may be empty if claude used issue comments only)
+      gh api "repos/$REPO/pulls/$PR_NUMBER/comments" \
+        > "$ARTIFACTS_DIR/pr-inline-comments-all.json"
+
+      jq '[.[] | select(.user.login == "claude" or .user.login == "claude[bot]")]' \
+        "$ARTIFACTS_DIR/pr-inline-comments-all.json" \
+        > "$ARTIFACTS_DIR/claude-inline-comments.json"
+
+      date -u +%Y-%m-%dT%H:%M:%SZ > "$ARTIFACTS_DIR/.review-fetched-at"
+
+      COMMENT_AUTHOR=$(echo "$LATEST_REVIEW" | jq -r '.user.login')
+      INLINE_COUNT=$(jq length "$ARTIFACTS_DIR/claude-inline-comments.json")
+      echo "Review comment author: $COMMENT_AUTHOR"
+      echo "Inline diff comments from claude: $INLINE_COUNT"
+    depends_on: [checkout-pr]
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 3: VALIDATE FINDINGS
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: validate-findings
+    prompt: |
+      Read the Claude review and extract every finding to address.
+
+      ## Step 1 — Read review summary
+
+      ```bash
+      jq -r '.body' "$ARTIFACTS_DIR/claude-review.json"
+      ```
+
+      ## Step 2 — Read inline comments
+
+      ```bash
+      cat "$ARTIFACTS_DIR/claude-inline-comments.json"
+      ```
+
+      ## Instructions
+
+      Extract EVERY finding from both the summary and inline comments.
+      Include ALL severities — critical, high, medium, low, nit, observation, suggestion.
+      Do NOT skip anything.
+
+      For each finding:
+      - Assign a unique ID: F1, F2, F3...
+      - Classify severity: critical | high | medium | low | nit | observation
+      - Include file path and line number (from inline comment path/position fields)
+      - Write a clear, actionable description of what needs to change
+
+      If the review mentions a concern without pinpointing a file, use file = "general".
+    depends_on: [fetch-review]
+    context: fresh
+    output_format:
+      type: object
+      properties:
+        findings:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              severity:
+                type: string
+                enum: ["critical", "high", "medium", "low", "nit", "observation"]
+              file:
+                type: string
+              line:
+                type: string
+              description:
+                type: string
+            required: [id, severity, file, description]
+        total_count:
+          type: integer
+        summary:
+          type: string
+      required: [findings, total_count, summary]
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 4: CLASSIFY AGENTS
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: classify-agents
+    prompt: |
+      Split the following findings across 2–4 parallel fix agents.
+
+      ## All Findings
+
+      $validate-findings.output
+
+      ## Agent Count Rules
+
+      - **2 agents**: ≤ 4 findings, or all findings are nits/observations
+      - **3 agents**: 5–9 findings, or mixed severity
+      - **4 agents**: 10+ findings, or many critical/high severity findings
+
+      ## Grouping Rules
+
+      - Group findings by file proximity — same file goes to the same agent
+      - Balance workload across groups
+      - Findings that touch related code → same group to avoid conflicts
+      - Unused group fields must be empty strings (e.g. group_3 = "" when agent_count = 2)
+
+      Format each group as a readable list:
+      ```
+      **F1** [high] `src/Foo.java:42` — description
+      **F2** [nit] `src/Bar.java:10` — description
+      ```
+
+      Provide your reasoning for the count and grouping decisions.
+    depends_on: [validate-findings]
+    model: haiku
+    allowed_tools: []
+    context: fresh
+    output_format:
+      type: object
+      properties:
+        agent_count:
+          type: string
+          enum: ["2", "3", "4"]
+        run_agent_3:
+          type: string
+          enum: ["true", "false"]
+        run_agent_4:
+          type: string
+          enum: ["true", "false"]
+        group_1:
+          type: string
+        group_2:
+          type: string
+        group_3:
+          type: string
+        group_4:
+          type: string
+        reasoning:
+          type: string
+      required:
+        - agent_count
+        - run_agent_3
+        - run_agent_4
+        - group_1
+        - group_2
+        - group_3
+        - group_4
+        - reasoning
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 5: PARALLEL FIX AGENTS
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: agent-1
+    prompt: |
+      You are a code review remediation agent. Fix the assigned review findings.
+
+      ## Your Findings
+
+      $classify-agents.output.group_1
+
+      ## PR Context
+
+      ```bash
+      cat "$ARTIFACTS_DIR/pr-meta.json"
+      ```
+
+      ## Instructions
+
+      For each finding in your list:
+      1. Read the file at the specified path and line
+      2. Understand the exact concern raised
+      3. Make the minimal, targeted fix that addresses it
+      4. Verify the fix is complete and correct
+
+      - Do NOT touch code outside your assigned findings
+      - Do NOT commit — leave changes uncommitted
+      - Report each finding ID and what you changed
+    depends_on: [classify-agents]
+    context: fresh
+
+  - id: agent-2
+    prompt: |
+      You are a code review remediation agent. Fix the assigned review findings.
+
+      ## Your Findings
+
+      $classify-agents.output.group_2
+
+      ## PR Context
+
+      ```bash
+      cat "$ARTIFACTS_DIR/pr-meta.json"
+      ```
+
+      ## Instructions
+
+      For each finding in your list:
+      1. Read the file at the specified path and line
+      2. Understand the exact concern raised
+      3. Make the minimal, targeted fix that addresses it
+      4. Verify the fix is complete and correct
+
+      - Do NOT touch code outside your assigned findings
+      - Do NOT commit — leave changes uncommitted
+      - Report each finding ID and what you changed
+    depends_on: [classify-agents]
+    context: fresh
+
+  - id: agent-3
+    prompt: |
+      You are a code review remediation agent. Fix the assigned review findings.
+
+      ## Your Findings
+
+      $classify-agents.output.group_3
+
+      ## PR Context
+
+      ```bash
+      cat "$ARTIFACTS_DIR/pr-meta.json"
+      ```
+
+      ## Instructions
+
+      For each finding in your list:
+      1. Read the file at the specified path and line
+      2. Understand the exact concern raised
+      3. Make the minimal, targeted fix that addresses it
+      4. Verify the fix is complete and correct
+
+      - Do NOT touch code outside your assigned findings
+      - Do NOT commit — leave changes uncommitted
+      - Report each finding ID and what you changed
+    depends_on: [classify-agents]
+    when: "$classify-agents.output.run_agent_3 == 'true'"
+    context: fresh
+
+  - id: agent-4
+    prompt: |
+      You are a code review remediation agent. Fix the assigned review findings.
+
+      ## Your Findings
+
+      $classify-agents.output.group_4
+
+      ## PR Context
+
+      ```bash
+      cat "$ARTIFACTS_DIR/pr-meta.json"
+      ```
+
+      ## Instructions
+
+      For each finding in your list:
+      1. Read the file at the specified path and line
+      2. Understand the exact concern raised
+      3. Make the minimal, targeted fix that addresses it
+      4. Verify the fix is complete and correct
+
+      - Do NOT touch code outside your assigned findings
+      - Do NOT commit — leave changes uncommitted
+      - Report each finding ID and what you changed
+    depends_on: [classify-agents]
+    when: "$classify-agents.output.run_agent_4 == 'true'"
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 6: VALIDATE & REPAIR LOOP
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: validate-and-repair
+    loop:
+      prompt: |
+        You are the build validator and repair agent. Ensure the codebase builds and all tests pass.
+
+        ## Previous iteration output
+
+        $LOOP_PREV_OUTPUT
+
+        ## Build command
+
+        $detect-build-cmd.output
+
+        ---
+
+        ## Step 1 — Run the build
+
+        ```bash
+        $detect-build-cmd.output 2>&1 | tee "$ARTIFACTS_DIR/build-output.txt"
+        echo "BUILD_EXIT:$?"
+        ```
+
+        ## Step 2 — If build FAILED
+
+        - Read `$ARTIFACTS_DIR/build-output.txt` to identify root causes
+        - Fix compilation errors, test failures, and lint violations with targeted, minimal changes
+        - Do NOT output the completion token — the loop will retry automatically
+
+        ## Step 3 — If build PASSED
+
+        Run a diff review to catch agent mistakes:
+        ```bash
+        BASE=$(jq -r '.baseRefName' "$ARTIFACTS_DIR/pr-meta.json")
+        git diff "origin/$BASE..HEAD"
+        ```
+
+        Look for: leftover debug statements, broken imports, TODO markers added by agents.
+
+        - If issues found: fix them, do NOT output the completion token
+        - If everything is clean: output the completion token below
+
+        ## Completion token
+
+        When the build passes AND the diff review is clean, output exactly:
+        VALIDATION_COMPLETE
+
+        If the build cannot be fixed after several retries, explain why and still output
+        VALIDATION_COMPLETE so the workflow can continue.
+      until: VALIDATION_COMPLETE
+      max_iterations: 5
+      fresh_context: true
+    depends_on: [agent-1, agent-2, agent-3, agent-4]
+    trigger_rule: none_failed_min_one_success
+    model: opus[1m]
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 7: PUSH & COMMENT
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: push-and-comment
+    prompt: |
+      Commit, push, and post an update comment on the PR.
+
+      ## Step 1 — Check git status
+
+      ```bash
+      git status --porcelain
+      git diff --name-only
+      ```
+
+      ## Step 2 — Stage and commit source changes
+
+      - Use `git add <file1> <file2> ...` for specific files — NEVER `git add -A` or `git add .`
+      - Exclude scratch/temp files and anything under `$ARTIFACTS_DIR`
+      - Verify with `git status --porcelain` before committing
+      - Commit message: `fix: address claude review findings (PR #<number>)`
+
+      If there is nothing new to commit (already committed in a prior step), skip to Step 3.
+
+      ## Step 3 — Push to the PR branch
+
+      ```bash
+      HEAD_REF=$(jq -r '.headRefName' "$ARTIFACTS_DIR/pr-meta.json")
+      git push origin "HEAD:$HEAD_REF"
+      ```
+
+      ## Step 4 — Build summary
+
+      ```bash
+      tail -30 "$ARTIFACTS_DIR/build-output.txt" 2>/dev/null || echo "No build output recorded"
+      ```
+
+      ## Step 5 — Post PR update comment
+
+      ```bash
+      PR_NUMBER=$(jq -r '.number' "$ARTIFACTS_DIR/pr-meta.json")
+      gh pr comment "$PR_NUMBER" --body "$(cat <<'COMMENT'
+      <your comment here>
+      COMMENT
+      )"
+      ```
+
+      The comment must:
+      - State that all claude review findings have been addressed
+      - List each finding ID with a one-line summary of what was changed
+      - Confirm the build is passing (include build tool + pass/fail)
+      - Explicitly request a re-review
+    depends_on: [validate-and-repair]
+    context: fresh
