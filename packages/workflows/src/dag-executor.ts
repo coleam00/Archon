@@ -2180,10 +2180,7 @@ async function executeLoopNode(
         // condition-not-met outcome. Surface immediately so the loop fails
         // fast instead of burning iterations against a broken binary.
         if (bashErr.code === 'ENOENT' || bashErr.code === 'EACCES') {
-          getLog().error(
-            { err: bashErr, nodeId: node.id, iteration: i },
-            'loop_node.until_bash_exec_error'
-          );
+          getLog().error({ err: bashErr, nodeId: node.id, iteration: i }, 'loop.until_bash_failed');
           throw new Error(
             `Loop node '${node.id}' until_bash failed: cannot execute bash at '${resolveBashPath()}' (${bashErr.code}). Set ARCHON_BASH_PATH if Git Bash is installed elsewhere.`
           );

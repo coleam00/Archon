@@ -130,6 +130,17 @@ tags: [GitLab, Review]           # Optional: explicit Web UI filter tags. Overri
                                  #   keyword-based tag inference. An empty list (`tags: []`)
                                  #   suppresses inference and shows no tags. Omit to fall
                                  #   back to inferred tags (the default).
+mutates_checkout: false          # Optional: when false, the executor allows CONCURRENT runs
+                                 #   on the same checkout — the path-lock guard is disabled and
+                                 #   `getActiveWorkflowRunByPath` is not consulted. Safe only when
+                                 #   every node's writes are per-run-scoped (e.g. artifacts/reports
+                                 #   inside `$artifactsDir`, never `git commit` or other writes to
+                                 #   the working tree). Default (omitted or true) keeps the lock
+                                 #   active so two concurrent runs against the same checkout fail
+                                 #   fast on the second. DISTINCT from `worktree.enabled: false`:
+                                 #   that flag controls whether a fresh worktree is created at all;
+                                 #   `mutates_checkout` controls whether the lock-guard runs ONCE
+                                 #   you have a checkout (worktree or otherwise).
 
 # Required for DAG-based
 nodes:

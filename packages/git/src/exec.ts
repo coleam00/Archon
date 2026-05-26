@@ -1,4 +1,5 @@
 import { execFile } from 'child_process';
+import { existsSync } from 'fs';
 import { mkdir as fsMkdir } from 'fs/promises';
 import { promisify } from 'util';
 
@@ -17,10 +18,27 @@ const promisifiedExecFile = promisify(execFile);
  * ARCHON_BASH_PATH for non-standard Git installs (e.g. user-scope installer
  * at %LOCALAPPDATA%\Programs\Git\bin\bash.exe).
  *
+ * When ARCHON_BASH_PATH is set we eagerly validate the path exists so a typo
+ * surfaces a clear error here instead of as an opaque ENOENT inside the first
+ * bash-node fire. The check is best-effort: a path that exists at validate
+ * time can still race-disappear before exec, but the common case (typo in
+ * the env var) is what we want to catch immediately.
+ *
  * See: coleam00/Archon#1326
  */
 export function resolveBashPath(): string {
-  if (process.env.ARCHON_BASH_PATH) return process.env.ARCHON_BASH_PATH;
+  const override = process.env.ARCHON_BASH_PATH;
+  if (override) {
+    if (!existsSync(override)) {
+      throw new Error(
+        `ARCHON_BASH_PATH points to a path that does not exist: '${override}'. ` +
+          'Either unset the env var to fall back to the platform default, or correct the path ' +
+          '(on Windows, a common user-scope Git install path is ' +
+          "'%LOCALAPPDATA%\\Programs\\Git\\bin\\bash.exe')."
+      );
+    }
+    return override;
+  }
   if (process.platform === 'win32') {
     return 'C:\\Program Files\\Git\\bin\\bash.exe';
   }

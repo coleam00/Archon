@@ -347,6 +347,33 @@ nodes:
       expect(result.errors[0].error).toContain("Unknown provider 'claud'");
     });
 
+    it('should reject unknown provider on a node at load time', async () => {
+      // Workflow-level provider is valid (omitted/inherits default), but one
+      // node sets an unknown provider — must fail load-time validation with
+      // an error that names the offending node.
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      const yamlInvalidNodeProvider = `name: node-invalid-provider
+description: Node-level invalid provider specified
+nodes:
+  - id: bad-node
+    command: test
+    provider: claud
+`;
+      await writeFile(join(workflowDir, 'test.yaml'), yamlInvalidNodeProvider);
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+
+      expect(result.workflows).toHaveLength(0);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].errorType).toBe('validation_error');
+      // Error must identify BOTH the node id and the unknown provider so the
+      // author can locate the offending node in a multi-node workflow.
+      expect(result.errors[0].error).toContain('bad-node');
+      expect(result.errors[0].error).toContain("'claud'");
+    });
+
     it('should accept any model string with a known provider (SDK validates at run time)', async () => {
       // Whatever the user wrote in `model:` passes through to the SDK; the
       // SDK is the source of truth for what model strings exist. Errors

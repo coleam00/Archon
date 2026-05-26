@@ -407,8 +407,8 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
 
     // Parse optional tags — type-narrow, trim, and dedupe so authors can't
     // ship ["GitLab", "GitLab ", "gitlab"] as three distinct values.
-    // An explicit empty array is preserved (suppresses keyword inference in the
-    // UI); an absent or invalid block leaves `tags` undefined (falls back to
+    // An explicit empty array is preserved (opt-out of any auto-inference);
+    // an absent or invalid block leaves `tags` undefined (falls back to
     // inference). Same warn-and-ignore pattern as the worktree block above.
     let tags: string[] | undefined;
     if (Array.isArray(raw.tags)) {

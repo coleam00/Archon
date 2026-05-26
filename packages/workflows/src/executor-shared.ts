@@ -356,8 +356,9 @@ export const CONTEXT_VAR_PATTERN_STR =
  *   first iteration of a resumed interactive loop; empty string on all other iterations.
  * - $REJECTION_REASON - Reviewer feedback from approval node rejection (on_reject prompts only).
  * - $LOOP_PREV_OUTPUT - Cleaned output of the previous loop iteration. Empty string on the
- *   first iteration (no prior output exists). Useful for fresh_context loops that need
- *   to reference what the previous pass produced or why it failed.
+ *   first iteration (no prior output exists). Useful for loops that need to
+ *   reference what the previous pass produced or why it failed without carrying
+ *   full session history.
  *
  * When issueContext is undefined, context variables are replaced with empty string
  * to avoid sending literal "$CONTEXT" to the AI.
