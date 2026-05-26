@@ -339,6 +339,42 @@ describe('ZulipAdapter', () => {
       adapter.stop();
     });
 
+    test('aborts the backfill cycle (does not process any messages) when the unread fetch fails', async () => {
+      // Wirasm review: `fetchUnread` returning [] on failure silently erased missed messages.
+      // After the fix it returns undefined and `backfillUnansweredMessages` bails — messages stay
+      // unread in Zulip for the next restart to retry. This test guards that contract.
+      process.env.ZULIP_BOT_FULL_NAME = 'TestBot';
+      try {
+        const adapter = new ZulipAdapter('https://test.zulipchat.com', 'bot@test.com', 'key');
+        const handled: number[] = [];
+        adapter.onMessage(m => {
+          handled.push(m.id);
+          return Promise.resolve();
+        });
+        mockEventsRetrieve.mockImplementation(() => new Promise(() => {})); // block live loop
+        mockMessagesRetrieve.mockImplementation(() =>
+          Promise.reject(new Error('zulip 503 backfill fail'))
+        );
+
+        await adapter.start();
+        await flush();
+        await flush();
+
+        expect(handled).toEqual([]); // no messages processed
+        const abortedLog = mockLogger.error.mock.calls.find(
+          args => args[args.length - 1] === 'zulip.backfill_aborted'
+        );
+        expect(abortedLog).toBeDefined();
+        const flagsCalls = mockFetch.mock.calls.filter(c =>
+          String(c[0]).endsWith('/api/v1/messages/flags')
+        );
+        expect(flagsCalls.length).toBe(0); // no spurious mark-read on a failed cycle
+        adapter.stop();
+      } finally {
+        delete process.env.ZULIP_BOT_FULL_NAME;
+      }
+    });
+
     test('answers unread mentions and DMs oldest-first; defers mark-read until a reply', async () => {
       process.env.ZULIP_BOT_FULL_NAME = 'TestBot';
       try {
