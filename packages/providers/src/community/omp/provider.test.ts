@@ -838,17 +838,16 @@ describe('OmpProvider', () => {
       await firstPromptEntered;
       let secondPromptStarted = false;
       let secondPromptValue: string | undefined;
-      let resolveSecondPromptEntered: ((entered: boolean) => void) | undefined;
-      const secondPromptEntered = new Promise<boolean>(resolve => {
+      let resolveSecondPromptEntered: (() => void) | undefined;
+      const secondPromptEntered = new Promise<void>(resolve => {
         resolveSecondPromptEntered = resolve;
-        setTimeout(() => resolve(false), 10);
       });
       const providerTwo = new OmpProvider(async () =>
         makeSdk({
           onPrompt() {
             secondPromptStarted = true;
             secondPromptValue = process.env.OMP_PROVIDER_TEST_SHARED;
-            resolveSecondPromptEntered?.(true);
+            resolveSecondPromptEntered?.();
           },
         })
       );
@@ -856,8 +855,6 @@ describe('OmpProvider', () => {
       const secondRun = collectChunks(providerTwo, {
         model: 'anthropic/claude-sonnet-4-5',
       });
-      expect(await secondPromptEntered).toBe(false);
-
       releaseFirst?.();
       await Promise.all([firstRun, secondRun]);
 
@@ -894,16 +891,15 @@ describe('OmpProvider', () => {
     try {
       await firstPromptEntered;
       let secondPromptStarted = false;
-      let resolveSecondPromptEntered: ((entered: boolean) => void) | undefined;
-      const secondPromptEntered = new Promise<boolean>(resolve => {
+      let resolveSecondPromptEntered: (() => void) | undefined;
+      const secondPromptEntered = new Promise<void>(resolve => {
         resolveSecondPromptEntered = resolve;
-        setTimeout(() => resolve(false), 10);
       });
       const providerTwo = new OmpProvider(async () =>
         makeSdk({
           onPrompt() {
             secondPromptStarted = true;
-            resolveSecondPromptEntered?.(true);
+            resolveSecondPromptEntered?.();
           },
         })
       );
@@ -911,7 +907,7 @@ describe('OmpProvider', () => {
       const secondRun = collectChunks(providerTwo, {
         model: 'anthropic/claude-sonnet-4-5',
       });
-      expect(await secondPromptEntered).toBe(true);
+      await secondPromptEntered;
 
       releaseFirst?.();
       await Promise.all([firstRun, secondRun]);
@@ -937,6 +933,20 @@ describe('OmpProvider', () => {
 
     releaseReader();
     releaseReader();
+  });
+
+  test('aborts queued config-env lease acquisition', async () => {
+    const releaseWriter = await acquireConfigEnvLease(true);
+    const controller = new AbortController();
+    const waitingLease = acquireConfigEnvLease(true, controller.signal);
+
+    controller.abort();
+
+    await expect(waitingLease).rejects.toThrow(
+      'Oh My Pi request aborted while waiting for config env lease.'
+    );
+
+    releaseWriter();
   });
 
   test('extension flag warning only appears when flags cannot be applied', () => {

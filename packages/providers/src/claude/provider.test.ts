@@ -1,4 +1,7 @@
 import { describe, test, expect, mock, beforeEach, afterEach, spyOn } from 'bun:test';
+import { mkdir, rm, writeFile } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { createMockLogger } from '../test/mocks/logger';
 
 const mockLogger = createMockLogger();
@@ -16,7 +19,7 @@ mock.module('@anthropic-ai/claude-agent-sdk', () => ({
   query: mockQuery,
 }));
 
-import { ClaudeProvider, shouldPassNoEnvFile } from './provider';
+import { ClaudeProvider, loadMcpConfig, shouldPassNoEnvFile } from './provider';
 import * as claudeModule from './provider';
 import * as binaryResolver from './binary-resolver';
 
@@ -78,6 +81,44 @@ describe('ClaudeProvider', () => {
     mockLogger.warn.mockClear();
     mockLogger.error.mockClear();
     mockLogger.debug.mockClear();
+  });
+
+  describe('loadMcpConfig', () => {
+    let testDir: string;
+
+    beforeEach(async () => {
+      testDir = join(
+        tmpdir(),
+        `claude-mcp-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      );
+      await mkdir(testDir, { recursive: true });
+    });
+
+    afterEach(async () => {
+      await rm(testDir, { recursive: true, force: true });
+    });
+
+    test('expands ${VAR} placeholders in env and headers', async () => {
+      process.env.TEST_CLAUDE_MCP_TOKEN = 'secret123';
+      const config = {
+        github: {
+          command: 'npx',
+          env: { TOKEN: '${TEST_CLAUDE_MCP_TOKEN}' },
+          headers: { Authorization: 'Bearer ${TEST_CLAUDE_MCP_TOKEN}' },
+        },
+      };
+      await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
+
+      try {
+        const result = await loadMcpConfig('mcp.json', testDir);
+        const server = result.servers.github as Record<string, unknown>;
+
+        expect(server.env).toEqual({ TOKEN: 'secret123' });
+        expect(server.headers).toEqual({ Authorization: 'Bearer secret123' });
+      } finally {
+        delete process.env.TEST_CLAUDE_MCP_TOKEN;
+      }
+    });
   });
 
   describe('constructor', () => {

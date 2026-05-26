@@ -40,17 +40,10 @@ export async function resolveOmpSession(
     const sessions = await sdk.SessionManager.list(cwd, dir);
     const match = sessions.find(s => s.id === resumeSessionId);
     if (match) {
-      try {
-        return {
-          sessionManager: await sdk.SessionManager.open(match.path, dir),
-          resumeFailed: false,
-        };
-      } catch (error) {
-        if (!isMissingSessionError(error)) {
-          const message = error instanceof Error ? error.message : String(error);
-          throw new Error(`Oh My Pi session resume failed for '${resumeSessionId}': ${message}`);
-        }
-      }
+      return {
+        sessionManager: await sdk.SessionManager.open(match.path, dir),
+        resumeFailed: false,
+      };
     }
   } catch (error) {
     if (!isMissingSessionError(error)) {

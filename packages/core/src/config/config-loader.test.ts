@@ -722,7 +722,7 @@ assistants:
     });
 
     test('toSafeConfig exposes only safe OMP defaults', async () => {
-      mockReadConfigFile.mockResolvedValue(`
+      mockFsReadFile.mockResolvedValue(`
 assistants:
   omp:
     model: anthropic/claude-sonnet-4-5

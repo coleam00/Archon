@@ -47,9 +47,14 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 type ConfigEnvLeaseRelease = () => void;
+type ConfigEnvLeaseReject = (error: Error) => void;
 interface ConfigEnvWaiter {
   exclusive: boolean;
   resolve: (release: ConfigEnvLeaseRelease) => void;
+  reject: ConfigEnvLeaseReject;
+  abortSignal?: AbortSignal;
+  onAbort?: () => void;
+  settled: boolean;
 }
 
 let configEnvReaders = 0;
@@ -83,7 +88,7 @@ function flushConfigEnvWaiters(): void {
   if (next?.exclusive) {
     configEnvWaiters.shift();
     configEnvWriterActive = true;
-    next.resolve(createWriterRelease());
+    resolveConfigEnvWaiter(next, createWriterRelease());
     return;
   }
 
@@ -91,11 +96,41 @@ function flushConfigEnvWaiters(): void {
     const waiter = configEnvWaiters.shift();
     if (!waiter) break;
     configEnvReaders += 1;
-    waiter.resolve(createReaderRelease());
+    resolveConfigEnvWaiter(waiter, createReaderRelease());
   }
 }
 
-export async function acquireConfigEnvLease(exclusive: boolean): Promise<ConfigEnvLeaseRelease> {
+function abortConfigEnvWaiter(waiter: ConfigEnvWaiter): void {
+  if (waiter.settled) return;
+  waiter.settled = true;
+  if (waiter.onAbort && waiter.abortSignal) {
+    waiter.abortSignal.removeEventListener('abort', waiter.onAbort);
+  }
+  const index = configEnvWaiters.indexOf(waiter);
+  if (index >= 0) configEnvWaiters.splice(index, 1);
+  waiter.reject(new Error('Oh My Pi request aborted while waiting for config env lease.'));
+}
+
+function resolveConfigEnvWaiter(waiter: ConfigEnvWaiter, release: ConfigEnvLeaseRelease): void {
+  if (waiter.settled) {
+    release();
+    return;
+  }
+  waiter.settled = true;
+  if (waiter.onAbort && waiter.abortSignal) {
+    waiter.abortSignal.removeEventListener('abort', waiter.onAbort);
+  }
+  waiter.resolve(release);
+}
+
+export async function acquireConfigEnvLease(
+  exclusive: boolean,
+  abortSignal?: AbortSignal
+): Promise<ConfigEnvLeaseRelease> {
+  if (abortSignal?.aborted) {
+    throw new Error('Oh My Pi request aborted while waiting for config env lease.');
+  }
+
   if (exclusive) {
     if (!configEnvWriterActive && configEnvReaders === 0 && configEnvWaiters.length === 0) {
       configEnvWriterActive = true;
@@ -106,8 +141,21 @@ export async function acquireConfigEnvLease(exclusive: boolean): Promise<ConfigE
     return createReaderRelease();
   }
 
-  return await new Promise(resolve => {
-    configEnvWaiters.push({ exclusive, resolve });
+  return await new Promise((resolve, reject) => {
+    const waiter: ConfigEnvWaiter = {
+      exclusive,
+      resolve,
+      reject,
+      ...(abortSignal ? { abortSignal } : {}),
+      settled: false,
+    };
+    if (abortSignal) {
+      waiter.onAbort = (): void => {
+        abortConfigEnvWaiter(waiter);
+      };
+      abortSignal.addEventListener('abort', waiter.onAbort, { once: true });
+    }
+    configEnvWaiters.push(waiter);
     flushConfigEnvWaiters();
   });
 }
@@ -407,7 +455,10 @@ export class OmpProvider implements IAgentProvider {
     // Env-free sessions may run together, but sessions that inject assistants.omp.env
     // need exclusive access so other prompts never observe temporary process.env state.
     const requiresExclusiveConfigEnvLease = hasConfigEnv(ompConfig.env);
-    const releaseConfigEnvLease = await acquireConfigEnvLease(requiresExclusiveConfigEnvLease);
+    const releaseConfigEnvLease = await acquireConfigEnvLease(
+      requiresExclusiveConfigEnvLease,
+      requestOptions?.abortSignal
+    );
     if (requiresExclusiveConfigEnvLease) {
       configEnvKeysApplied = applyConfigEnv(ompConfig.env);
       if (configEnvKeysApplied.length > 0) {

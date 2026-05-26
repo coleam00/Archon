@@ -19,7 +19,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Expand $VAR_NAME references in string-valued records from process.env.
+ * Expand $VAR_NAME and ${VAR_NAME} references in string-valued records from process.env.
  */
 function expandEnvVarsInRecord(
   record: Record<string, unknown>,
@@ -32,13 +32,17 @@ function expandEnvVarsInRecord(
       result[key] = String(val);
       continue;
     }
-    result[key] = val.replace(/\$([A-Z_][A-Z0-9_]*)/g, (_, varName: string) => {
-      const envVal = process.env[varName];
-      if (envVal === undefined) {
-        missingVars.push(varName);
+    result[key] = val.replace(
+      /\$\{([A-Z_][A-Z0-9_]*)\}|\$([A-Z_][A-Z0-9_]*)/g,
+      (_, braced: string | undefined, plain: string | undefined) => {
+        const varName = braced ?? plain ?? '';
+        const envVal = process.env[varName];
+        if (envVal === undefined) {
+          missingVars.push(varName);
+        }
+        return envVal ?? '';
       }
-      return envVal ?? '';
-    });
+    );
   }
   return result;
 }

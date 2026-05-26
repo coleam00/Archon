@@ -338,8 +338,8 @@ function findEnvValue(
   return undefined;
 }
 
-function envFlagEnabled(envName: string): boolean {
-  const value = process.env[envName];
+function envFlagEnabled(envName: string, env: Record<string, string> | undefined): boolean {
+  const value = env?.[envName] ?? process.env[envName];
   if (!value) return false;
   const normalized = value.trim().toLowerCase();
   return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
@@ -349,7 +349,7 @@ export function getRuntimeAuthOverride(
   provider: string,
   env: Record<string, string> | undefined
 ): string | undefined {
-  if (provider === 'anthropic' && envFlagEnabled('CLAUDE_CODE_USE_FOUNDRY')) {
+  if (provider === 'anthropic' && envFlagEnabled('CLAUDE_CODE_USE_FOUNDRY', env)) {
     return findEnvValue(['ANTHROPIC_FOUNDRY_API_KEY', ...OMP_PROVIDER_ENV_VARS.anthropic], env);
   }
 

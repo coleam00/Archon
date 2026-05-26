@@ -40,6 +40,17 @@ describe('mapOmpEvent', () => {
       { type: 'tool_result', toolName: 'read', toolOutput: 'undefined', toolCallId: '2' },
     ]);
   });
+
+  test('guards tool input to plain objects', () => {
+    expect(
+      mapOmpEvent({
+        type: 'tool_execution_start',
+        toolName: 'read',
+        args: ['unexpected'],
+        toolCallId: '3',
+      })
+    ).toEqual([{ type: 'tool', toolName: 'read', toolInput: {}, toolCallId: '3' }]);
+  });
 });
 
 test('maps retry fallback and compaction events', () => {

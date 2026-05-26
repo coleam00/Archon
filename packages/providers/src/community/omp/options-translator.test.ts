@@ -156,7 +156,7 @@ describe('getRuntimeAuthOverride', () => {
     expect(getRuntimeAuthOverride('anthropic', { ANTHROPIC_API_KEY: 'sk-test' })).toBe('sk-test');
   });
 
-  test('ignores request-scoped Foundry flag because OMP reads it from process env', () => {
+  test('honors request-scoped Foundry flag for Anthropic runtime auth', () => {
     expect(
       getRuntimeAuthOverride('anthropic', {
         ANTHROPIC_FOUNDRY_API_KEY: 'foundry-key',
@@ -170,7 +170,7 @@ describe('getRuntimeAuthOverride', () => {
         ANTHROPIC_FOUNDRY_API_KEY: 'foundry-key',
         ANTHROPIC_API_KEY: 'api-key',
       })
-    ).toBe('api-key');
+    ).toBe('foundry-key');
   });
 
   test('uses process Foundry flag for Anthropic runtime auth', () => {

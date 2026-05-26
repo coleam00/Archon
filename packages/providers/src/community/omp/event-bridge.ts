@@ -135,7 +135,9 @@ function toolCallIdField(toolCallId: unknown): ToolCallIdField {
 }
 
 function parseToolInput(args: unknown): Record<string, unknown> {
-  return typeof args === 'object' && args !== null ? (args as Record<string, unknown>) : {};
+  return typeof args === 'object' && args !== null && !Array.isArray(args)
+    ? (args as Record<string, unknown>)
+    : {};
 }
 
 function mapMessageUpdate(event: Record<string, unknown>): MessageChunk[] {

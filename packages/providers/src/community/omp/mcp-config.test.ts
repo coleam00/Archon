@@ -68,6 +68,28 @@ describe('loadMcpConfig', () => {
     }
   });
 
+  test('expands ${VAR_NAME} in env and header values', async () => {
+    process.env.TEST_OMP_BRACED_TOKEN = 'braced-secret';
+    const config = {
+      github: {
+        command: 'npx',
+        env: { TOKEN: '${TEST_OMP_BRACED_TOKEN}' },
+        headers: { Authorization: 'Bearer ${TEST_OMP_BRACED_TOKEN}' },
+      },
+    };
+    await writeFile(join(testDir, 'mcp-braced.json'), JSON.stringify(config));
+
+    try {
+      const result = await loadMcpConfig('mcp-braced.json', testDir);
+      const server = result.servers.github as Record<string, unknown>;
+
+      expect(server.env).toEqual({ TOKEN: 'braced-secret' });
+      expect(server.headers).toEqual({ Authorization: 'Bearer braced-secret' });
+    } finally {
+      delete process.env.TEST_OMP_BRACED_TOKEN;
+    }
+  });
+
   test('expands $VAR_NAME in headers values', async () => {
     process.env.TEST_OMP_API_KEY = 'key456';
     const config = {
