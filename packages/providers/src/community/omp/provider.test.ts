@@ -3,7 +3,13 @@ import { mkdir, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-import { augmentPromptForJsonSchema, OmpProvider } from './provider';
+import {
+  acquireConfigEnvLease,
+  augmentPromptForJsonSchema,
+  extensionFlagWarning,
+  mcpEnvWarning,
+  OmpProvider,
+} from './provider';
 import type {
   OmpAuthStorage,
   OmpCodingAgentSdk,
@@ -912,6 +918,40 @@ describe('OmpProvider', () => {
     } finally {
       releaseFirst?.();
     }
+  });
+
+  test('writer config-env lease blocks readers until released', async () => {
+    const releaseWriter = await acquireConfigEnvLease(true);
+    let readerAcquired = false;
+
+    const readerLease = acquireConfigEnvLease(false).then(releaseReader => {
+      readerAcquired = true;
+      return releaseReader;
+    });
+    await Promise.resolve();
+    expect(readerAcquired).toBe(false);
+
+    releaseWriter();
+    const releaseReader = await readerLease;
+    expect(readerAcquired).toBe(true);
+
+    releaseReader();
+    releaseReader();
+  });
+
+  test('extension flag warning only appears when flags cannot be applied', () => {
+    expect(extensionFlagWarning(false, false)).toBeUndefined();
+    expect(extensionFlagWarning(true, true)).toBeUndefined();
+    expect(extensionFlagWarning(true, false)).toBe(
+      '⚠️ Oh My Pi ignored extensionFlags because no OMP extension runner was loaded.'
+    );
+  });
+
+  test('MCP env warning deduplicates missing variables', () => {
+    expect(mcpEnvWarning([])).toBeUndefined();
+    expect(mcpEnvWarning(['TOKEN', 'TOKEN', 'OTHER'])).toBe(
+      '⚠️ MCP config references undefined env vars: TOKEN, OTHER. These will be empty strings — MCP servers may fail to authenticate.'
+    );
   });
 
   test('passes hasUI true by default and binds UI context', async () => {

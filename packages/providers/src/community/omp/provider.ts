@@ -95,7 +95,7 @@ function flushConfigEnvWaiters(): void {
   }
 }
 
-async function acquireConfigEnvLease(exclusive: boolean): Promise<ConfigEnvLeaseRelease> {
+export async function acquireConfigEnvLease(exclusive: boolean): Promise<ConfigEnvLeaseRelease> {
   if (exclusive) {
     if (!configEnvWriterActive && configEnvReaders === 0 && configEnvWaiters.length === 0) {
       configEnvWriterActive = true;
@@ -294,7 +294,7 @@ function logSessionStart(args: {
   );
 }
 
-function extensionFlagWarning(
+export function extensionFlagWarning(
   extensionFlagsConfigured: boolean,
   hasRunner: boolean
 ): string | undefined {
@@ -302,7 +302,7 @@ function extensionFlagWarning(
   return '⚠️ Oh My Pi ignored extensionFlags because no OMP extension runner was loaded.';
 }
 
-function mcpEnvWarning(missingVars: readonly string[]): string | undefined {
+export function mcpEnvWarning(missingVars: readonly string[]): string | undefined {
   if (missingVars.length === 0) return undefined;
   const uniqueVars = [...new Set(missingVars)];
   return `⚠️ MCP config references undefined env vars: ${uniqueVars.join(', ')}. These will be empty strings — MCP servers may fail to authenticate.`;
@@ -626,8 +626,13 @@ export class OmpProvider implements IAgentProvider {
             : sdkDisconnectError;
         }
       }
-      restoreConfigEnv(configEnvKeysApplied);
-      releaseConfigEnvLease();
+      try {
+        restoreConfigEnv(configEnvKeysApplied);
+      } catch (err) {
+        getLog().error({ err }, 'omp.config_env_restore_failed');
+      } finally {
+        releaseConfigEnvLease();
+      }
     }
 
     if (disconnectError) {
