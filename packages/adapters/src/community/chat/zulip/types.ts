@@ -10,12 +10,6 @@ export interface ZulipMessage {
   display_recipient: string | { id: number; email: string; full_name: string }[];
 }
 
-export interface ZulipEvent {
-  type: string;
-  id: number;
-  message?: ZulipMessage;
-}
-
 export type ZulipReplyContext =
   | { type: 'stream'; stream_id: number; topic: string }
   | { type: 'private'; user_ids: number[] };

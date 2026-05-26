@@ -144,11 +144,12 @@ export class ZulipAdapter implements IPlatformAdapter {
 
     const isError = metadata?.isError === true;
 
-    // Edit and dequeue the oldest status message for this conversation (FIFO).
     const statusQueue = this.statusMessageQueues.get(conversationId);
     if (statusQueue && statusQueue.length > 0) {
       const statusEntry = statusQueue.shift();
-      if (!statusEntry) return; // unreachable: length > 0 guarantees shift() succeeds
+      // `length > 0` above guarantees a value, but the codebase forbids `!` non-null assertions
+      // (eslint `no-non-null-assertion`), so we keep this defensive narrowing for the type-checker.
+      if (statusEntry === undefined) return;
       const queueNowEmpty = statusQueue.length === 0;
       if (queueNowEmpty) {
         this.statusMessageQueues.delete(conversationId);
@@ -172,14 +173,15 @@ export class ZulipAdapter implements IPlatformAdapter {
     }
 
     if (isError) {
-      // Post the error as a new message in place of the normal answer.
       await this.postChunk(ctx, text);
-
       await this.markOldestPendingRead(conversationId);
       return;
     }
 
-    // Normal path: post the answer (potentially split into chunks).
+    // Partial-delivery contract: Zulip has no atomic multi-post API and we don't retract earlier
+    // chunks if a later one fails. A throw mid-loop therefore leaves the user with a truncated
+    // answer in the topic — the throw bubbles up to the caller's logging, and the inbound message
+    // is intentionally NOT marked read (see markOldestPendingRead) so the next boot can retry.
     const chunks = text.length > MAX_LENGTH ? splitIntoParagraphChunks(text, MAX_LENGTH) : [text];
     for (const chunk of chunks) {
       await this.postChunk(ctx, chunk);
@@ -221,6 +223,18 @@ export class ZulipAdapter implements IPlatformAdapter {
     }
   }
 
+  /**
+   * Start the Zulip bot: connect, register the event queue, run backfill + poll in background.
+   *
+   * Queue registration uses `apply_markdown:false` so we receive RAW markdown — mentions arrive
+   * as `@**FullName**` literals (the default `apply_markdown:true` returns rendered HTML, in
+   * which the mention text never appears literally and so cannot be matched).
+   *
+   * The queue is registered via a direct POST (see `zulipPost`) rather than
+   * `client.queues.register`: under Bun, zulip-js@1's POST path does not serialize the body,
+   * which would silently drop `event_types`/`apply_markdown` (the server would then default to
+   * all event types + rendered HTML, breaking mention detection).
+   */
   async start(): Promise<void> {
     this.client = await zulip({
       realm: this.serverUrl,
@@ -228,11 +242,6 @@ export class ZulipAdapter implements IPlatformAdapter {
       apiKey: this.apiKey,
     });
 
-    // Register the message event queue. apply_markdown:false delivers raw markdown so
-    // `@**FullName**` mentions match (the default is rendered HTML, in which the mention
-    // text never appears literally). Registered via a direct POST (zulipPost) rather than
-    // client.queues.register: zulip-js@1's POST path does not serialize the body under Bun,
-    // so event_types/apply_markdown would be dropped (see zulipPost).
     const firstQueue = await this.zulipPost('register', {
       event_types: QUEUE_EVENT_TYPES,
       apply_markdown: 'false',
@@ -265,7 +274,11 @@ export class ZulipAdapter implements IPlatformAdapter {
     const client = this.client;
     if (!client) return;
 
-    const fetchUnread = async (kind: 'mentioned' | 'private'): Promise<ZulipMessage[]> => {
+    // Returns `undefined` on failure (vs `[]` = "fetched OK, none unread") so the caller can't
+    // mistake a downgraded API for a clean backfill cycle and silently swallow missed messages.
+    const fetchUnread = async (
+      kind: 'mentioned' | 'private'
+    ): Promise<ZulipMessage[] | undefined> => {
       try {
         const res = await client.messages.retrieve({
           anchor: 'newest',
@@ -280,11 +293,17 @@ export class ZulipAdapter implements IPlatformAdapter {
         return (res.messages as ZulipMessage[]) ?? [];
       } catch (error) {
         getLog().error({ err: error, kind }, 'zulip.backfill_fetch_failed');
-        return [];
+        return undefined;
       }
     };
 
     const [mentions, dms] = await Promise.all([fetchUnread('mentioned'), fetchUnread('private')]);
+    if (mentions === undefined || dms === undefined) {
+      // At least one fetch failed — bail on this cycle. The messages stay `unread` in Zulip, so
+      // the next restart's backfill (or the live event queue, once recovered) will retry them.
+      getLog().error('zulip.backfill_aborted');
+      return;
+    }
 
     // De-duplicate (a DM can also be a mention) and process oldest-first, capped.
     const byId = new Map<number, ZulipMessage>();
@@ -420,6 +439,15 @@ export class ZulipAdapter implements IPlatformAdapter {
     getLog().info('zulip.bot_stopped');
   }
 
+  /**
+   * Drive the Zulip event queue: pull events, dispatch messages, and re-register on errors.
+   *
+   * Re-registration on a queue error uses the same direct POST (`zulipPost`) + `QUEUE_EVENT_TYPES`
+   * as `start()` — `client.queues.register` (zulip-js) drops its body under Bun, which would
+   * silently re-register a default queue (all event types, `apply_markdown:true` → rendered HTML)
+   * and lose `@**mention**` detection. Keeping `update_message` in the event-types list is what
+   * preserves edited-message @mention pickup after a recovery.
+   */
   private async pollEventsFrom(initialQueueId: string, initialLastEventId: number): Promise<void> {
     // client is guaranteed non-null here — called only from start()
     const client = this.client;
@@ -450,14 +478,10 @@ export class ZulipAdapter implements IPlatformAdapter {
         if (!this.running) break;
         const err = error as Error;
         getLog().error({ err }, 'zulip.poll_error');
-        // Re-register queue on error (e.g., queue expired after inactivity). Use the same
-        // direct POST as start() — client.queues.register (zulip-js) drops its body under Bun,
-        // which would silently re-register a default queue (all event types, apply_markdown=true
-        // → rendered HTML), and @**mention** detection would then never match again.
+        // Re-register the queue (e.g. expired after inactivity). See the method docstring for
+        // why we go through `zulipPost` and reuse `QUEUE_EVENT_TYPES` instead of the zulip-js
+        // helper — both points are load-bearing for @mention and edited-message handling.
         try {
-          // Re-register with the SAME event types as start() (QUEUE_EVENT_TYPES). Dropping
-          // `update_message` here would silently lose edited-message @mention detection after
-          // any queue error — diverging from startup behavior and the adapter's contract.
           const queueResult = await this.zulipPost('register', {
             event_types: QUEUE_EVENT_TYPES,
             apply_markdown: 'false',
