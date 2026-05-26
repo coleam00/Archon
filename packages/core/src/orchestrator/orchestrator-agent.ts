@@ -15,7 +15,7 @@ import type {
   Codebase,
   AttachedFile,
 } from '../types';
-import type { SendQueryOptions } from '@archon/providers/types';
+import type { SendQueryOptions, TokenUsage } from '@archon/providers/types';
 import { ConversationNotFoundError } from '../types';
 import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
@@ -1052,6 +1052,7 @@ async function handleStreamMode(
   let newSessionId: string | undefined;
   let commandDetected = false;
   let commandFullyParsed = false;
+  let lastResult: { cost?: number; tokens?: TokenUsage; stopReason?: string } | undefined;
 
   for await (const msg of aiClient.sendQuery(
     fullPrompt,
@@ -1151,6 +1152,11 @@ async function handleStreamMode(
       if (!commandDetected && platform.sendStructuredEvent) {
         await platform.sendStructuredEvent(conversationId, msg);
       }
+      lastResult = {
+        cost: msg.cost,
+        tokens: msg.tokens,
+        stopReason: msg.stopReason,
+      };
     }
   }
 
@@ -1199,6 +1205,7 @@ async function handleStreamMode(
   }
 
   // Text was already streamed — nothing more to send
+  await maybeSendResultFooter(platform, conversationId, lastResult);
 }
 
 // ─── Batch Mode ─────────────────────────────────────────────────────────────
@@ -1229,6 +1236,7 @@ async function handleBatchMode(
   let newSessionId: string | undefined;
   let commandDetected = false;
   let commandFullyParsed = false;
+  let lastResult: { cost?: number; tokens?: TokenUsage; stopReason?: string } | undefined;
 
   for await (const msg of aiClient.sendQuery(
     fullPrompt,
@@ -1326,6 +1334,11 @@ async function handleBatchMode(
         }
         return;
       }
+      lastResult = {
+        cost: msg.cost,
+        tokens: msg.tokens,
+        stopReason: msg.stopReason,
+      };
     }
 
     // Always enforce the total-chunk cap regardless of commandDetected — allChunks grows
@@ -1406,6 +1419,28 @@ async function handleBatchMode(
   // No orchestrator commands — send the clean response
   getLog().debug({ messageLength: finalMessage.length }, 'sending_final_message');
   await platform.sendMessage(conversationId, finalMessage);
+  await maybeSendResultFooter(platform, conversationId, lastResult);
+}
+
+/**
+ * Call the adapter's optional `sendResultFooter` hook with the final result
+ * metadata from a direct-chat turn. Skips when the adapter doesn't implement
+ * it, when there's no metadata to surface, or when the call itself fails —
+ * cost footers are informational and must not block the conversation.
+ */
+async function maybeSendResultFooter(
+  platform: IPlatformAdapter,
+  conversationId: string,
+  info: { cost?: number; tokens?: TokenUsage; stopReason?: string } | undefined
+): Promise<void> {
+  if (!info) return;
+  if (info.cost === undefined && info.tokens === undefined) return;
+  if (!platform.sendResultFooter) return;
+  try {
+    await platform.sendResultFooter(conversationId, info);
+  } catch (error) {
+    getLog().warn({ err: toError(error), conversationId }, 'orchestrator.result_footer_failed');
+  }
 }
 
 // ─── Orchestrator Command Handlers ──────────────────────────────────────────
