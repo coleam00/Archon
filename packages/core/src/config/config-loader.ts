@@ -510,6 +510,11 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
     result.concurrency.maxConversations = global.concurrency.maxConversations;
   }
 
+  // Global env vars (repo-level env vars are merged on top later)
+  if (global.env) {
+    result.envVars = { ...result.envVars, ...global.env };
+  }
+
   return result;
 }
 

@@ -130,6 +130,12 @@ export interface GlobalConfig {
      */
     maxConversations?: number;
   };
+
+  /**
+   * Environment variables injected into all workflow node subprocesses.
+   * Merged before repo-level env vars (repo values take precedence).
+   */
+  env?: Record<string, string>;
 }
 
 /**
