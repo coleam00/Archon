@@ -387,7 +387,7 @@ describe('POST /api/codebases', () => {
 
     const body = (await response.json()) as { id: string };
     expect(body.id).toBe('codebase-uuid-1');
-    expect(mockCloneRepository).toHaveBeenCalledWith('https://github.com/user/repo');
+    expect(mockCloneRepository).toHaveBeenCalledWith('https://github.com/user/repo', undefined);
   });
 
   test('registers existing URL codebase with 200', async () => {

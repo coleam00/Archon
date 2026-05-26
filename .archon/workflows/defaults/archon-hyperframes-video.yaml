@@ -1,0 +1,226 @@
+name: archon-hyperframes-video
+description: |
+  Use when: User wants to generate or modify a HyperFrames video using HeyGen's AI pipeline.
+  Triggers: "create hyperframe video", "hyperframes video", "website to video",
+            "heygen video", "hyperframes", "website video".
+  Does: Installs HyperFrames skill if needed -> captures website assets -> runs AI pipeline
+        (Design, Script, Storyboard, VO+Timing, Build, Validate) -> previews output ->
+        renders final MP4 video -> summarizes the result.
+  Requires: Node.js / npx available in PATH.
+  Arguments: $1=URL (required), $2=creative direction (e.g. "bold cinematic dark theme"),
+             $3=video type (social-ad|product-launch|product-tour|brand-reel|feature-announcement|teaser),
+             $4=output filename without extension (default: hyperframes-output),
+             $5=project directory (optional, defaults to current directory).
+  Optional: Set GEMINI_API_KEY env var for enhanced AI vision analysis (~$0.04/capture).
+
+nodes:
+  # ── Layer 0: Validate args and set up working directory ──────────────────
+  - id: setup
+    bash: |
+      URL="${1:-}"
+      CREATIVE="${2:-bold, cinematic}"
+      VIDEO_TYPE="${3:-product-launch}"
+      OUTPUT_NAME="${4:-hyperframes-output}"
+      PROJECT_DIR="${5:-$(pwd)}"
+
+      if [ -z "$URL" ]; then
+        echo "ERROR: A URL is required as the first argument."
+        echo "Usage: archon-hyperframes-video <url> [creative-direction] [video-type] [output-name] [project-dir]"
+        exit 1
+      fi
+
+      # Validate URL format
+      if ! echo "$URL" | grep -qE '^https?://'; then
+        echo "ERROR: URL must start with http:// or https://"
+        exit 1
+      fi
+
+      echo "URL=$URL"
+      echo "CREATIVE=$CREATIVE"
+      echo "VIDEO_TYPE=$VIDEO_TYPE"
+      echo "OUTPUT_NAME=$OUTPUT_NAME"
+      echo "PROJECT_DIR=$PROJECT_DIR"
+      mkdir -p "$PROJECT_DIR"
+      echo "SETUP_OK"
+    timeout: 10000
+
+  # ── Layer 1: Check/install HyperFrames skill ──────────────────────────────
+  - id: install-skill
+    bash: |
+      if npx hyperframes --version >/dev/null 2>&1; then
+        echo "HyperFrames already installed: $(npx hyperframes --version 2>/dev/null || echo 'version unknown')"
+        echo "SKILL_READY"
+      else
+        echo "Installing HyperFrames skill..."
+        npx skills add heygen-com/hyperframes
+        RESULT=$?
+        if [ $RESULT -eq 0 ]; then
+          echo "SKILL_INSTALLED"
+        else
+          echo "ERROR: Failed to install HyperFrames skill. Check your network connection."
+          exit 1
+        fi
+      fi
+    depends_on: [setup]
+    timeout: 120000
+
+  # ── Layer 2: Capture website assets ───────────────────────────────────────
+  - id: capture
+    bash: |
+      # Extract URL from setup output
+      URL=$(echo "$setup_output" | grep '^URL=' | cut -d= -f2-)
+      PROJECT_DIR=$(echo "$setup_output" | grep '^PROJECT_DIR=' | cut -d= -f2-)
+
+      cd "$PROJECT_DIR"
+
+      echo "Capturing assets from: $URL"
+      echo "This may take up to 2 minutes for complex sites..."
+
+      if [ -n "$GEMINI_API_KEY" ]; then
+        echo "Gemini vision analysis enabled."
+      fi
+
+      npx hyperframes capture "$URL" --timeout 120000
+      RESULT=$?
+
+      if [ $RESULT -eq 0 ]; then
+        echo ""
+        echo "CAPTURE_SUCCESS"
+        ls -la 2>/dev/null | head -20
+      else
+        echo "CAPTURE_FAILED: Could not capture website. Check if the URL is accessible."
+        exit 1
+      fi
+    depends_on: [install-skill]
+    timeout: 180000
+
+  # ── Layer 3: Run AI pipeline (Design → Script → Storyboard → VO → Build → Validate) ──
+  - id: generate
+    prompt: |
+      You are working with the HyperFrames skill to create a video from a website.
+
+      Setup details:
+      $setup.output
+
+      Capture result:
+      $capture.output
+
+      Now run the complete HyperFrames AI pipeline using the captured website data.
+      Use the following creative direction and parameters:
+
+      Creative direction: Extract the creative direction from the setup output (CREATIVE= line).
+      Video type: Extract the video type from the setup output (VIDEO_TYPE= line).
+
+      Run the full 7-step pipeline:
+      1. Design — generate brand reference documentation from the captured assets
+      2. Script — create narration with hook, story, proof, and call-to-action structure
+      3. Storyboard — define per-beat creative direction with mood, assets, and transitions
+      4. VO + Timing — generate TTS audio with word-level timestamps
+      5. Build — compile animated HTML compositions for each beat
+      6. Validate — generate snapshot PNGs for visual verification
+
+      Target video duration based on video type:
+      - social-ad: 10-15 seconds
+      - product-launch: 20-30 seconds
+      - product-tour: 30-60 seconds
+      - brand-reel: 15-30 seconds
+      - feature-announcement: 15-25 seconds
+      - teaser: 8-15 seconds
+
+      After completing the pipeline, confirm which files were generated (especially STORYBOARD.md
+      and the compositions/ directory). If the storyboard was generated, read it back and
+      summarize the beats and creative direction for the user.
+    depends_on: [capture]
+    skills:
+      - heygen-com/hyperframes
+
+  # ── Layer 4: Preview compositions ─────────────────────────────────────────
+  - id: preview
+    bash: |
+      PROJECT_DIR=$(echo "$setup_output" | grep '^PROJECT_DIR=' | cut -d= -f2-)
+      cd "$PROJECT_DIR"
+
+      echo "Running preview to verify compositions..."
+      npx hyperframes preview 2>&1
+      RESULT=$?
+
+      if [ $RESULT -eq 0 ]; then
+        echo ""
+        echo "PREVIEW_SUCCESS"
+      else
+        echo "PREVIEW_WARNING: Preview had issues, but attempting render anyway."
+        echo "PREVIEW_PARTIAL"
+      fi
+    depends_on: [generate]
+    timeout: 120000
+
+  # ── Layer 5: Render final video ────────────────────────────────────────────
+  - id: render
+    bash: |
+      PROJECT_DIR=$(echo "$setup_output" | grep '^PROJECT_DIR=' | cut -d= -f2-)
+      OUTPUT_NAME=$(echo "$setup_output" | grep '^OUTPUT_NAME=' | cut -d= -f2-)
+      OUTPUT_FILE="${OUTPUT_NAME}.mp4"
+
+      cd "$PROJECT_DIR"
+
+      echo "Rendering final video to: $OUTPUT_FILE"
+      npx hyperframes render --output "$OUTPUT_FILE" 2>&1
+      RESULT=$?
+
+      if [ $RESULT -eq 0 ]; then
+        echo ""
+        echo "RENDER_SUCCESS"
+        ls -la "$OUTPUT_FILE" 2>/dev/null || echo "(output file info unavailable)"
+      else
+        echo "RENDER_FAILED: Video render did not complete. Check compositions/ for partial output."
+        exit 1
+      fi
+    depends_on: [preview]
+    timeout: 300000
+
+  # ── Layer 6: Take key-frame snapshots ─────────────────────────────────────
+  - id: snapshot
+    bash: |
+      PROJECT_DIR=$(echo "$setup_output" | grep '^PROJECT_DIR=' | cut -d= -f2-)
+      OUTPUT_NAME=$(echo "$setup_output" | grep '^OUTPUT_NAME=' | cut -d= -f2-)
+
+      cd "$PROJECT_DIR"
+
+      echo "Extracting key-frame snapshots..."
+      # Extract at 10%, 50%, and 80% through the video for a representative preview
+      npx hyperframes snapshot "$OUTPUT_NAME" --at 0.1,0.5,0.8 2>&1 || \
+        npx hyperframes snapshot . 2>&1 || \
+        echo "SNAPSHOT_SKIPPED: Snapshot extraction not available or failed (non-critical)"
+
+      ls -la snapshots/ 2>/dev/null || echo "(no snapshots directory)"
+      echo "SNAPSHOT_DONE"
+    depends_on: [render]
+    timeout: 60000
+
+  # ── Layer 7: Summary ───────────────────────────────────────────────────────
+  - id: summary
+    prompt: |
+      A HyperFrames video was generated from a website.
+
+      Original request:
+      $ARGUMENTS
+
+      Setup: $setup.output
+      Capture: $capture.output
+      Pipeline generation: $generate.output
+      Preview: $preview.output
+      Render: $render.output
+      Snapshots: $snapshot.output
+
+      Summarize the result for the user:
+      1. The source URL and creative direction used
+      2. The video type and target duration
+      3. Whether all pipeline steps completed successfully
+      4. Where the output video file is located
+      5. Any key-frame snapshots produced
+      6. How to iterate: edit STORYBOARD.md and re-run the build step for specific beats,
+         or run 'npx hyperframes capture <url>' again to refresh the source assets.
+
+      If any steps failed, explain what went wrong and suggest remediation steps.
+    depends_on: [snapshot]
+    model: haiku

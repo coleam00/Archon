@@ -72,6 +72,9 @@ describe('ClaudeProvider', () => {
   let client: ClaudeProvider;
 
   beforeEach(() => {
+    // Allow construction in environments where the test process happens to be UID 0
+    // (Docker containers, CI runners). Individual root-check tests manage IS_SANDBOX themselves.
+    process.env.IS_SANDBOX = '1';
     client = new ClaudeProvider({ retryBaseDelayMs: 1 });
     mockQuery.mockClear();
     mockLogger.info.mockClear();

@@ -58,6 +58,9 @@ function makeMockRegistration(
 
 describe('registry', () => {
   beforeEach(() => {
+    // ClaudeProvider refuses to construct as UID 0 unless IS_SANDBOX=1.
+    // Set it so the registry can instantiate Claude when tests run as root (Docker/CI).
+    process.env.IS_SANDBOX = '1';
     clearRegistry();
     registerBuiltinProviders();
   });
