@@ -27,7 +27,9 @@ import {
   registerRepository,
   ConversationNotFoundError,
   generateAndSetTitle,
+  userDb,
 } from '@archon/core';
+import type { OidcUser } from '../middleware/auth';
 import { removeWorktree, toRepoPath, toWorktreePath } from '@archon/git';
 import {
   createLogger,
@@ -1291,10 +1293,20 @@ export function registerApiRoutes(
 
       const conversationId = `web-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
+      // Resolve DB user ID from OIDC claims when multi-user mode is active
+      const oidcUser = c.get('oidcUser') as OidcUser | undefined;
+      let webUserId: string | undefined;
+      if (oidcUser) {
+        const dbUser = await userDb.getUserByKeycloakSub(oidcUser.sub);
+        webUserId = dbUser?.id;
+      }
+
       const conversation = await conversationDb.getOrCreateConversation(
         'web',
         conversationId,
-        codebaseId
+        codebaseId,
+        undefined,
+        webUserId
       );
       webAdapter.setConversationDbId(conversation.platform_conversation_id, conversation.id);
 
@@ -1729,9 +1741,21 @@ export function registerApiRoutes(
     const body = getValidatedBody(c, addCodebaseBodySchema);
 
     try {
+      // Resolve per-user GitHub token for authenticated web sessions (multi-user mode)
+      let userGithubToken: string | undefined;
+      if (body.url) {
+        const oidcUser = c.get('oidcUser') as OidcUser | undefined;
+        if (oidcUser) {
+          const dbUser = await userDb.getUserByKeycloakSub(oidcUser.sub);
+          if (dbUser) {
+            userGithubToken = (await userDb.getGithubToken(dbUser.id)) ?? undefined;
+          }
+        }
+      }
+
       // .refine() guarantees exactly one of url/path is present
       const result = body.url
-        ? await cloneRepository(body.url)
+        ? await cloneRepository(body.url, userGithubToken)
         : await registerRepository(body.path ?? '');
 
       // Fetch the full codebase record for a consistent response

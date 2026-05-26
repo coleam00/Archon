@@ -271,8 +271,14 @@ function normalizeRepoUrl(rawUrl: string): {
  * Clone a repository from a URL and register it in the database.
  * Local paths (starting with /, ~, or .) are delegated to registerRepository
  * to avoid wrong owner/repo naming. See #383 for broader rethink.
+ *
+ * @param userGithubToken - Per-user GitHub OAuth token (multi-user mode). When provided
+ *   and the URL is on github.com, takes precedence over the org-level GH_TOKEN env var.
  */
-export async function cloneRepository(repoUrl: string): Promise<RegisterResult> {
+export async function cloneRepository(
+  repoUrl: string,
+  userGithubToken?: string
+): Promise<RegisterResult> {
   // Local paths should be registered (symlink), not cloned (copied)
   if (repoUrl.startsWith('/') || repoUrl.startsWith('~') || repoUrl.startsWith('.')) {
     const resolvedPath = repoUrl.startsWith('~') ? expandTilde(repoUrl) : resolve(repoUrl);
@@ -321,17 +327,20 @@ export async function cloneRepository(repoUrl: string): Promise<RegisterResult> 
 
   getLog().info({ url: workingUrl, targetPath }, 'clone_started');
 
-  // Build clone command with authentication using forge-specific tokens
+  // Build clone command with authentication using forge-specific tokens.
+  // Per-user GitHub token takes precedence over the org-level token for github.com URLs.
   let cloneUrl = workingUrl;
+  const isGithubUrl = workingUrl.includes('github.com');
   const { token: forgeToken, scheme: authScheme } = resolveForgeAuth(workingUrl);
+  const effectiveToken = isGithubUrl && userGithubToken ? userGithubToken : forgeToken;
 
-  if (forgeToken) {
+  if (effectiveToken) {
     const parsed = safeParseUrl(workingUrl);
     if (parsed) {
-      cloneUrl = `https://${authScheme}${forgeToken}@${parsed.hostname}${parsed.pathname}`;
+      cloneUrl = `https://${authScheme}${effectiveToken}@${parsed.hostname}${parsed.pathname}`;
     } else if (!workingUrl.startsWith('http')) {
       // Bare host/path form (e.g. github.com/owner/repo)
-      cloneUrl = `https://${authScheme}${forgeToken}@${workingUrl}`;
+      cloneUrl = `https://${authScheme}${effectiveToken}@${workingUrl}`;
     }
     getLog().debug('clone_authenticated');
   }

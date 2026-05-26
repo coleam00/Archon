@@ -69,6 +69,8 @@ import { MessagePersistence } from './adapters/web/persistence';
 import { SSETransport } from './adapters/web/transport';
 import { WorkflowEventBridge } from './adapters/web/workflow-bridge';
 import { registerApiRoutes } from './routes/api';
+import { registerAuthRoutes } from './routes/auth';
+import { oidcMiddleware } from './middleware/auth';
 import {
   handleMessage,
   pool,
@@ -197,6 +199,32 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       { checked: ['CODEX_ID_TOKEN', 'CODEX_ACCESS_TOKEN'] },
       'codex_credentials_missing'
     );
+  }
+
+  // Multi-user mode gating: KEYCLOAK_URL requires PostgreSQL and TOKEN_ENCRYPTION_KEY
+  if (process.env.KEYCLOAK_URL) {
+    if (!process.env.DATABASE_URL) {
+      getLog().fatal(
+        { hint: 'Set DATABASE_URL=postgresql://... in .env' },
+        'multi_user_mode_requires_postgresql'
+      );
+      console.error(
+        'Multi-user mode requires PostgreSQL. Set DATABASE_URL when using KEYCLOAK_URL.'
+      );
+      process.exit(1);
+    }
+    if (!process.env.TOKEN_ENCRYPTION_KEY) {
+      getLog().fatal(
+        { hint: 'Generate with: openssl rand -hex 32' },
+        'multi_user_mode_requires_encryption_key'
+      );
+      console.error(
+        'TOKEN_ENCRYPTION_KEY is required when KEYCLOAK_URL is set. ' +
+          'Generate with: openssl rand -hex 32'
+      );
+      process.exit(1);
+    }
+    getLog().info({ realm: process.env.KEYCLOAK_REALM ?? 'master' }, 'multi_user_mode_enabled');
   }
 
   // Test database connection
@@ -488,6 +516,12 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     getLog().error({ err, path: c.req.path, method: c.req.method }, 'unhandled_request_error');
     return c.json({ error: 'Internal server error' }, 500);
   });
+
+  // OIDC middleware — validates Bearer tokens on /api/* (no-op when KEYCLOAK_URL not set)
+  app.use('/api/*', oidcMiddleware());
+
+  // Auth routes (/api/auth/*) — must be registered before the generic /api/* middleware
+  registerAuthRoutes(app);
 
   // Register Web UI API routes
   registerApiRoutes(app, webAdapter, lockManager, activePlatforms);

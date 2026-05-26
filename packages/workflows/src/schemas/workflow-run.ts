@@ -109,6 +109,7 @@ export const workflowRunSchema = z.object({
   completed_at: z.date().nullable(),
   last_activity_at: z.date().nullable(),
   working_path: z.string().nullable(),
+  created_by_user_id: z.string().nullable().optional(),
 });
 
 export type WorkflowRun = z.infer<typeof workflowRunSchema>;

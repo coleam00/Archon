@@ -341,6 +341,11 @@ export async function dispatchBackgroundWorkflow(
   // Without this, navigating to the execution page before executeWorkflow's
   // async setup completes would 404 (row doesn't exist yet for 1-5 seconds).
   const workflowDeps = createWorkflowDeps();
+
+  // Propagate web user attribution from the originating conversation (nullable for non-web platforms)
+  const parentConversation = await db.getConversationById(ctx.conversationDbId);
+  const createdByUserId = parentConversation?.created_by_user_id ?? undefined;
+
   let preCreatedRun: Awaited<ReturnType<typeof workflowDeps.store.createWorkflowRun>> | undefined;
   try {
     preCreatedRun = await workflowDeps.store.createWorkflowRun({
@@ -351,6 +356,7 @@ export async function dispatchBackgroundWorkflow(
       working_path: workerCwd,
       metadata: ctx.issueContext ? { github_context: ctx.issueContext } : {},
       parent_conversation_id: ctx.conversationDbId,
+      created_by_user_id: createdByUserId,
     });
   } catch (error) {
     const err = error as Error;

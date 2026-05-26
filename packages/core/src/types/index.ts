@@ -31,6 +31,7 @@ export interface Conversation {
   hidden: boolean;
   deleted_at: Date | null;
   last_activity_at: Date | null; // For staleness detection
+  created_by_user_id: string | null; // UUID FK to remote_agent_users; null for pre-auth rows
   created_at: Date;
   updated_at: Date;
 }

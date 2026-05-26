@@ -46,6 +46,8 @@ export * as sessionDb from './db/sessions';
 export * as isolationEnvDb from './db/isolation-environments';
 export * as workflowDb from './db/workflows';
 export * as messageDb from './db/messages';
+export * as userDb from './db/users';
+export type { User } from './db/users';
 
 // Re-export SessionNotFoundError for error handling
 export { SessionNotFoundError } from './db/sessions';
@@ -148,6 +150,9 @@ export { isPathWithinWorkspace, validateAndResolvePath } from './utils/path-vali
 
 // Port allocation
 export { getPort } from './utils/port-allocation';
+
+// Token encryption (multi-user mode)
+export { encryptToken, decryptToken, getEncryptionKey } from './utils/token-crypto';
 
 // Worktree sync
 export { syncArchonToWorktree } from './utils/worktree-sync';

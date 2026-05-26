@@ -1,7 +1,16 @@
 import { NavLink, Link } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
-import { LayoutDashboard, MessageSquare, Workflow, Settings } from 'lucide-react';
+import {
+  LayoutDashboard,
+  MessageSquare,
+  Workflow,
+  Settings,
+  Github,
+  LogOut,
+  User,
+} from 'lucide-react';
 import { listDashboardRuns, getUpdateCheck } from '@/lib/api';
+import { useAuth } from '@/hooks/useAuth';
 import { cn } from '@/lib/utils';
 
 const tabs = [
@@ -10,6 +19,51 @@ const tabs = [
   { to: '/workflows', end: false, icon: Workflow, label: 'Workflows' },
   { to: '/settings', end: false, icon: Settings, label: 'Settings' },
 ] as const;
+
+function UserMenu(): React.ReactElement | null {
+  const { user, isLoading } = useAuth();
+  if (isLoading || !user) return null;
+
+  const displayName = user.displayName ?? user.username ?? user.email ?? 'User';
+
+  return (
+    <details className="relative">
+      <summary className="flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1.5 text-xs text-text-secondary hover:text-text-primary hover:bg-surface-hover list-none [&::-webkit-details-marker]:hidden">
+        <User className="h-3.5 w-3.5" />
+        <span className="max-w-[120px] truncate">{displayName}</span>
+      </summary>
+      <div className="absolute right-0 top-full z-50 mt-1 w-48 rounded-md border border-border bg-surface shadow-md">
+        <div className="px-3 py-2 border-b border-border">
+          <p className="text-xs font-medium text-text-primary truncate">{displayName}</p>
+          {user.email && <p className="text-xs text-text-secondary truncate">{user.email}</p>}
+        </div>
+        <div className="p-1">
+          {user.githubConnected ? (
+            <div className="flex items-center gap-2 px-2 py-1.5 text-xs text-text-secondary">
+              <Github className="h-3.5 w-3.5" />
+              <span>GitHub: {user.githubUsername ?? 'connected'}</span>
+            </div>
+          ) : (
+            <a
+              href="/api/auth/github"
+              className="flex items-center gap-2 px-2 py-1.5 text-xs text-text-primary hover:bg-surface-hover rounded-sm"
+            >
+              <Github className="h-3.5 w-3.5" />
+              <span>Connect GitHub</span>
+            </a>
+          )}
+          <a
+            href="/api/auth/logout"
+            className="flex items-center gap-2 px-2 py-1.5 text-xs text-text-primary hover:bg-surface-hover rounded-sm"
+          >
+            <LogOut className="h-3.5 w-3.5" />
+            <span>Sign out</span>
+          </a>
+        </div>
+      </div>
+    </details>
+  );
+}
 
 export function TopNav(): React.ReactElement {
   // We only need `counts.running` — a server-side aggregate independent of
@@ -67,6 +121,7 @@ export function TopNav(): React.ReactElement {
         </NavLink>
       ))}
       <div className="ml-auto flex items-center gap-3">
+        <UserMenu />
         {/* CTA to the experimental console. Uses the brand magenta→teal
             gradient via inline style because the old UI's tokens don't
             include the brand-gradient variables. Sized to read as a

@@ -60,8 +60,15 @@ export interface HealthResponse {
 }
 
 async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(url, options);
+  const res = await fetch(url, { credentials: 'include', ...options });
   if (!res.ok) {
+    // When OIDC is enabled, redirect the browser to the login page on 401.
+    // When OIDC is not configured the server never returns 401 so this is safe.
+    if (res.status === 401 && !url.startsWith('/api/auth/')) {
+      window.location.href = '/api/auth/login';
+      // Never resolves — the browser is navigating away.
+      await new Promise(() => undefined);
+    }
     const body = await res.text();
     const truncated = body.length > 200 ? body.slice(0, 200) + '...' : body;
     const path = new URL(url, window.location.origin).pathname;
@@ -534,4 +541,30 @@ export type UpdateCheckResult = components['schemas']['UpdateCheckResponse'];
 
 export async function getUpdateCheck(): Promise<UpdateCheckResult> {
   return fetchJSON<UpdateCheckResult>('/api/update-check');
+}
+
+// ---------------------------------------------------------------------------
+// Auth (OIDC / Keycloak)
+// ---------------------------------------------------------------------------
+
+export interface AuthMeResponse {
+  id: string;
+  email: string | null;
+  username: string | null;
+  displayName: string | null;
+  githubConnected: boolean;
+  githubUsername: string | null;
+}
+
+/**
+ * Returns the current authenticated user, or null when OIDC is not enabled
+ * (server returns `{ authenticated: false }`) or when the user is not signed in (401).
+ */
+export async function getAuthMe(): Promise<AuthMeResponse | null> {
+  const res = await fetch('/api/auth/me', { credentials: 'include' });
+  if (res.status === 401 || res.status === 404) return null;
+  if (!res.ok) return null;
+  const data = (await res.json()) as { authenticated?: false } & Partial<AuthMeResponse>;
+  if (data.authenticated === false) return null;
+  return data as AuthMeResponse;
 }

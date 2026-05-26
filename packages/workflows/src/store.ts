@@ -42,6 +42,7 @@ export interface IWorkflowStore {
     metadata?: Record<string, unknown>;
     working_path?: string;
     parent_conversation_id?: string;
+    created_by_user_id?: string;
   }): Promise<WorkflowRun>;
   getWorkflowRun(id: string): Promise<WorkflowRun | null>;
   /**
