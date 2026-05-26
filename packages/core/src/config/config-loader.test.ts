@@ -388,7 +388,7 @@ worktree:
         return normalizedPath.includes(pattern);
       };
 
-      mockReadConfigFile.mockImplementation(async (path: string) => {
+      mockFsReadFile.mockImplementation(async (path: string) => {
         if (pathMatches(path, '/repo/.archon/config.yaml')) {
           return `
 worktree:
@@ -410,7 +410,7 @@ worktree:
         return normalizedPath.includes(pattern);
       };
 
-      mockReadConfigFile.mockImplementation(async (path: string) => {
+      mockFsReadFile.mockImplementation(async (path: string) => {
         if (pathMatches(path, '/repo/.archon/config.yaml')) {
           return `
 worktree:
@@ -429,7 +429,7 @@ worktree:
     test('remote is undefined when not configured', async () => {
       const error = new Error('ENOENT') as NodeJS.ErrnoException;
       error.code = 'ENOENT';
-      mockReadConfigFile.mockRejectedValue(error);
+      mockFsReadFile.mockRejectedValue(error);
 
       const config = await loadConfig('/test/repo');
       expect(config.remote).toBeUndefined();

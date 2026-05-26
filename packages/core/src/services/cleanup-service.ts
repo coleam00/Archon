@@ -309,8 +309,16 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
 
         // Check if branch is merged
         const mainRepoPath = toRepoPath(env.codebase_default_cwd);
-        const envRemote =
-          (await loadRepoConfig(env.codebase_default_cwd)).worktree?.remote?.trim() || undefined;
+        let envRemote: string | undefined;
+        try {
+          envRemote =
+            (await loadRepoConfig(env.codebase_default_cwd)).worktree?.remote?.trim() || undefined;
+        } catch (configErr) {
+          getLog().warn(
+            { err: configErr as Error, cwd: env.codebase_default_cwd },
+            'cleanup.repo_config_load_failed'
+          );
+        }
         const mainBranch = await getDefaultBranch(mainRepoPath, envRemote);
         const merged = await isBranchMerged(
           mainRepoPath,
@@ -616,6 +624,10 @@ export async function cleanupMergedWorktrees(
       openPr = decision.openPr;
     } catch (error) {
       const err = error as Error;
+      getLog().warn(
+        { err, branchName: env.branch_name, repoPath: mainRepoPath },
+        'cleanup.is_safe_to_remove_failed'
+      );
       result.skipped.push({
         branchName: env.branch_name,
         reason: `merge check failed: ${err.message}`,

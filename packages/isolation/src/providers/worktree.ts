@@ -840,6 +840,8 @@ export class WorktreeProvider implements IIsolationProvider {
         { repoPath, branch: configuredBaseBranch ?? 'auto-detect', remote },
         'workspace_sync_starting'
       );
+      // Only hard-reset for Archon-managed clones (under ~/.archon/workspaces/).
+      // Locally-registered repos get fetch-only to avoid destroying uncommitted work.
       const isManagedClone = repoPath
         .replace(/\\/g, '/')
         .startsWith(getArchonWorkspacesPath().replace(/\\/g, '/'));
@@ -962,8 +964,10 @@ export class WorktreeProvider implements IIsolationProvider {
 
     try {
       if (!request.isForkPR) {
+        // Same-repo PR: use the actual branch so changes push directly to PR
         await this.createFromSameRepoPR(repoPath, worktreePath, request.prBranch, remote);
       } else {
+        // Fork PR: use synthetic review branch since we can't push to forks
         await this.createFromForkPR(repoPath, worktreePath, prNumber, remote, request.prSha);
       }
     } catch (error) {
@@ -1003,6 +1007,7 @@ export class WorktreeProvider implements IIsolationProvider {
       }
     }
 
+    // Set up tracking for push/pull (non-fatal — worktree is usable without it)
     try {
       await execFileAsync(
         'git',
@@ -1030,6 +1035,7 @@ export class WorktreeProvider implements IIsolationProvider {
     const reviewBranch = `pr-${prNumber}-review`;
 
     if (prSha) {
+      // SHA provided: create at specific commit for reproducible reviews
       await execFileAsync('git', ['-C', repoPath, 'fetch', remote, `pull/${prNumber}/head`], {
         timeout: GIT_OPERATION_TIMEOUT_MS,
       });
@@ -1038,6 +1044,7 @@ export class WorktreeProvider implements IIsolationProvider {
         timeout: GIT_OPERATION_TIMEOUT_MS,
       });
 
+      // Create a local tracking branch so it's not detached HEAD
       await this.createBranchWithStaleRetry(
         repoPath,
         () =>
