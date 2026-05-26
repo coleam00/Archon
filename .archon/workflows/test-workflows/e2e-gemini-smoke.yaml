@@ -1,0 +1,23 @@
+# E2E smoke test — Gemini community provider
+# Verifies: Gemini connectivity (ambient gemini-cli OAuth), sendQuery streaming, and
+#   SDK→Archon chunk translation. The single prompt node completes only if gemini-cli
+#   responds; any auth/connectivity/translation error fails the node and the workflow.
+# Design notes (divergences from e2e-pi-smoke, see GEMINI_DEMO.md §5):
+#   - Single node (no bash `assert` consumer): bash-node `$nodeId.output` substitution of
+#     Gemini output misbehaved in testing, while prompt-node substitution works (used in the
+#     showcase). A single node is the robust connectivity check for this provider.
+#   - `allowed_tools: [list_directory]` exercises the toolRestrictions translation path.
+#   - Prompt is free of double-quote characters (the SDK fails to escape them; §5.1).
+#   - No effort/thinking fields — Gemini v1 does not support them (would warn-and-ignore).
+# Auth: ambient gemini-cli login (`gemini auth login`, creds in ~/.gemini/). Archon injects
+#   no API key — the subprocess inherits HOME and resolves ~/.gemini.
+name: e2e-gemini-smoke
+description: 'Smoke test for Gemini community provider. Verifies prompt response via sendQuery.'
+provider: gemini
+model: gemini-2.5-flash
+
+nodes:
+  - id: simple
+    allowed_tools: [list_directory]
+    idle_timeout: 120000
+    prompt: 'What is 2+2? Answer with just the number, nothing else. Do not use any tools.'

@@ -1,0 +1,122 @@
+name: archon-gemini-showcase
+description: |
+  Use when: Demonstrating the Gemini community provider end-to-end in Archon workflows.
+  Triggers: "showcase gemini", "gemini demo", "test gemini showcase".
+  Does: Exercises bash, script, prompt, and loop nodes under `provider: gemini`. Shows a
+        SUPPORTED capability (tool restrictions) running with no warning, an UNSUPPORTED set
+        (effort/thinking/maxBudgetUsd) warning-and-continuing, an iterative loop, and
+        cross-node `$nodeId.output` substitution ending in a self-verification verdict.
+  NOT for: Production development tasks.
+
+# Provider/model resolve via node.provider ?? workflow.provider ?? config.assistant.
+# Model strings are forwarded verbatim to gemini-cli; Archon does not validate them.
+# gemini-2.5-flash is fast and widely available — change freely.
+provider: gemini
+model: gemini-2.5-flash
+
+# IMPORTANT — two @lrilai/gemini-cli-sdk@1.0.0 gotchas this file works around (GEMINI_DEMO.md §5):
+#  1. PROMPTS MUST NOT CONTAIN DOUBLE-QUOTE (") CHARACTERS. The SDK fails to escape them when
+#     invoking gemini-cli, corrupting argv → gemini-cli prints usage → ModelAccessError. Every
+#     prompt below is intentionally quote-free.
+#  2. CROSS-NODE SESSION RESUME degrades answer fidelity (a resumed call tends to ignore its
+#     prompt and reply as if starting over). So every Gemini prompt node sets `context: fresh`
+#     to run as an INDEPENDENT session — single/first calls answer correctly. `$nodeId.output`
+#     substitution still flows between nodes (variable substitution, independent of the AI
+#     session); the loop carries state via `$LOOP_PREV_OUTPUT` with `fresh_context: true`.
+# Prompt nodes carry `allowed_tools: [list_directory]` so the tool-restricted node can do real
+# tool use and the others demonstrate that a supported restriction emits no capability warning;
+# an empty `allowed_tools: []` works for Gemini too (verified separately).
+nodes:
+  # ── bash node ─────────────────────────────────────────────────────────────
+  # No AI. stdout captured as $env-check.output. Runs in parallel with the chain.
+  - id: env-check
+    bash: |
+      echo "provider=gemini"
+      echo "gemini_cli=$(gemini --version 2>/dev/null || echo 'NOT FOUND')"
+      echo "branch=$(git branch --show-current 2>/dev/null || echo 'n/a')"
+
+  # ── script node (bun) ─────────────────────────────────────────────────────
+  # No AI. Emits JSON consumed by a Gemini prompt via $nodeId.output substitution.
+  - id: prepare-topic
+    runtime: bun
+    script: |
+      console.log(JSON.stringify({ topic: "agentic coding assistants", facts: 3 }));
+
+  # ── prompt node (Gemini) — SUPPORTED capability: real tool use ────────────
+  # toolRestrictions === true, so `allowed_tools` maps to gemini-cli --allowed-tools and
+  # NO capability warning is emitted. This node actually invokes list_directory, proving
+  # the restriction is honored end to end.
+  - id: gemini-tool-restricted
+    depends_on: [prepare-topic]
+    context: fresh
+    allowed_tools: [list_directory]
+    prompt: |
+      Using ONLY the list_directory tool, list up to five entries in the current working
+      directory and state how many you found. Answer in two sentences. Do not read files.
+
+  # ── prompt node (Gemini) — core query + output substitution ───────────────
+  # Proves ambient OAuth auth, streaming, and SDK→Archon chunk translation. Consumes the
+  # upstream script output via substitution.
+  - id: gemini-facts
+    depends_on: [prepare-topic, gemini-tool-restricted]
+    context: fresh
+    allowed_tools: [list_directory]
+    prompt: |
+      You are running inside an Archon workflow, powered by the Gemini community provider.
+      An upstream script node produced this JSON: $prepare-topic.output
+      Output exactly the requested number of concise, factual bullet points about the topic.
+      Output only the bullet points — no preamble. Do not use any tools.
+
+  # ── prompt node (Gemini) — UNSUPPORTED capabilities: graceful degradation ─
+  # effort/thinking/maxBudgetUsd map to capabilities GEMINI_CAPABILITIES marks false
+  # (effortControl, thinkingControl, costControl). The dag-executor emits a user-facing
+  # "…will be ignored" warning AND still runs the node — fail-safe, never silent, never
+  # crash. (`allowed_tools` is supported, so it is NOT named in the warning.)
+  - id: gemini-graceful-degradation
+    depends_on: [gemini-facts]
+    context: fresh
+    allowed_tools: [list_directory]
+    effort: high
+    thinking: enabled
+    maxBudgetUsd: 5
+    # NOTE: prompt intentionally avoids double-quote characters — see GEMINI_DEMO.md §5
+    # (@lrilai/gemini-cli-sdk@1.0.0 fails to escape embedded double-quotes when invoking
+    # gemini-cli, producing a ModelAccessError).
+    prompt: |
+      In one sentence, define the term graceful degradation as it applies to a software
+      provider that lacks a requested feature. Do not use any tools.
+
+  # ── loop node (Gemini) — iterative refinement ─────────────────────────────
+  # fresh_context: true → each iteration is an independent session; state is carried
+  # forward via $LOOP_PREV_OUTPUT (prompt-level), not session resume. Exits on the
+  # <promise> completion signal or after max_iterations.
+  - id: gemini-superpowers
+    depends_on: [gemini-graceful-degradation]
+    loop:
+      # Completion-signal demo: the loop runs the prompt until the AI emits the <promise>
+      # tag (or max_iterations is hit). The bar is reachable in one pass so the loop reliably
+      # terminates on the signal; if a pass omits the tag, the loop retries.
+      prompt: |
+        List exactly three distinct superpowers that the Gemini provider gives Archon, as a
+        numbered list with one item per line. Respond with text only; do not use any tools.
+        After the list, on its own line, output exactly this completion tag and nothing after it:
+        <promise>FINISHED</promise>
+      until: FINISHED
+      max_iterations: 3
+      fresh_context: true
+
+  # ── prompt node (Gemini) — self-verification verdict ──────────────────────
+  # Reads the earlier Gemini output via $nodeId.output and renders a terminal verdict,
+  # demonstrating downstream substitution and a clean final result.
+  - id: gemini-verdict
+    depends_on: [gemini-superpowers, gemini-facts]
+    context: fresh
+    allowed_tools: [list_directory]
+    prompt: |
+      Earlier in this workflow a Gemini node produced:
+      ---
+      $gemini-facts.output
+      ---
+      If that contains three distinct factual bullet points about agentic coding assistants,
+      reply with exactly this line and nothing else: GEMINI SHOWCASE VERIFIED ✅
+      Otherwise reply: GEMINI SHOWCASE INCOMPLETE ❌ followed by one sentence explaining why.
