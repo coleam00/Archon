@@ -159,6 +159,7 @@ mock.module('../db/workflow-events', () => ({
 
 mock.module('../config/config-loader', () => ({
   loadConfig: mockLoadConfig,
+  loadRepoConfig: mock(() => Promise.resolve({})),
 }));
 
 mock.module('../services/title-generator', () => ({
@@ -204,6 +205,7 @@ mock.module('../utils/worktree-sync', () => ({
 }));
 
 mock.module('@archon/git', () => ({
+  getDefaultRemote: mock(() => Promise.resolve('origin')),
   syncWorkspace: mockSyncWorkspace,
   toRepoPath: mockToRepoPath,
 }));
@@ -986,9 +988,11 @@ describe('discoverAllWorkflows — remote sync', () => {
     await handleMessage(platform, 'conv-1', 'What is the latest commit?');
 
     // /repos/test-repo is NOT under ~/.archon/workspaces/ so resetAfterFetch=false
-    expect(mockSyncWorkspace).toHaveBeenCalledWith('/repos/test-repo', undefined, {
-      resetAfterFetch: false,
-    });
+    expect(mockSyncWorkspace).toHaveBeenCalledWith(
+      '/repos/test-repo',
+      undefined,
+      expect.objectContaining({ resetAfterFetch: false })
+    );
     // Regression guard: orchestrator must resolve cwd through the ensure variant
     // so the workspaces dir is created before the AI provider spawn (issue #1528).
     expect(mockEnsureArchonWorkspacesPath).toHaveBeenCalled();
@@ -1009,7 +1013,7 @@ describe('discoverAllWorkflows — remote sync', () => {
     expect(mockSyncWorkspace).toHaveBeenCalledWith(
       '/home/test/.archon/workspaces/owner/repo/source',
       undefined,
-      { resetAfterFetch: true }
+      expect.objectContaining({ resetAfterFetch: true })
     );
   });
 
@@ -1025,9 +1029,11 @@ describe('discoverAllWorkflows — remote sync', () => {
     await expect(
       handleMessage(platform, 'conv-1', 'What is the latest commit?')
     ).resolves.toBeUndefined();
-    expect(mockSyncWorkspace).toHaveBeenCalledWith('/repos/test-repo', undefined, {
-      resetAfterFetch: false,
-    });
+    expect(mockSyncWorkspace).toHaveBeenCalledWith(
+      '/repos/test-repo',
+      undefined,
+      expect.objectContaining({ resetAfterFetch: false })
+    );
   });
 
   test('does not call syncWorkspace when conversation has no codebase_id', async () => {
