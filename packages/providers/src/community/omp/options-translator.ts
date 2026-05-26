@@ -69,7 +69,7 @@ const LEGACY_OMP_TOOL_ALIASES: Record<string, string> = {
   fetch: 'read',
 };
 
-// Mirrors @oh-my-pi/pi-ai@15.0.1 stream.ts serviceProviderMap for providers
+// Mirrors @oh-my-pi/pi-ai@15.3.2 stream.ts serviceProviderMap for providers
 // whose credentials can be represented as environment variables.
 const OMP_PROVIDER_ENV_VARS: Record<string, readonly string[]> = {
   'alibaba-coding-plan': ['ALIBABA_CODING_PLAN_API_KEY'],
@@ -82,6 +82,7 @@ const OMP_PROVIDER_ENV_VARS: Record<string, readonly string[]> = {
   deepseek: ['DEEPSEEK_API_KEY'],
   exa: ['EXA_API_KEY'],
   fireworks: ['FIREWORKS_API_KEY'],
+  firepass: ['FIREPASS_API_KEY'],
   'github-copilot': ['COPILOT_GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN'],
   'gitlab-duo': ['GITLAB_TOKEN'],
   google: ['GEMINI_API_KEY'],
@@ -337,10 +338,21 @@ function findEnvValue(
   return undefined;
 }
 
+function envFlagEnabled(envName: string): boolean {
+  const value = process.env[envName];
+  if (!value) return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+}
+
 export function getRuntimeAuthOverride(
   provider: string,
   env: Record<string, string> | undefined
 ): string | undefined {
+  if (provider === 'anthropic' && envFlagEnabled('CLAUDE_CODE_USE_FOUNDRY')) {
+    return findEnvValue(['ANTHROPIC_FOUNDRY_API_KEY', ...OMP_PROVIDER_ENV_VARS.anthropic], env);
+  }
+
   const envNames = OMP_PROVIDER_ENV_VARS[provider];
   if (!envNames) return undefined;
   return findEnvValue(envNames, env);
