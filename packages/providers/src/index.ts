@@ -54,3 +54,5 @@ export {
   registerPiProvider,
   type PiProviderDefaults,
 } from './community/pi';
+
+export { KimiProvider, registerKimiProvider } from './community/kimi';
