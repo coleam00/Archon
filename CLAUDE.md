@@ -22,7 +22,7 @@
 - Schema naming: camelCase, descriptive suffix (e.g., `workflowRunSchema`, `errorSchema`)
 - Type derivation: always use `z.infer<typeof schema>` — never write parallel hand-crafted interfaces
 - Import `z` from `@hono/zod-openapi` (not from `zod` directly)
-- All new/modified API routes must use `registerOpenApiRoute(createRoute({...}), handler)` — the local wrapper handles the TypedResponse bypass
+- All new/modified API routes must use `registerOpenApiRoute(createRoute({...}), handler)` — the local wrapper handles the TypedResponse bypass. Two narrow exceptions exist: (1) routes that serve raw non-JSON content (e.g. `/api/artifacts/:runId/*` returns `text/markdown`/`text/plain`) AND use wildcard path params that OpenAPI 3.0 can't represent, use `app.get(...)` with an explanatory comment; (2) multipart-or-JSON routes (e.g. `/api/conversations/:id/message`, `/api/workflows/:name/run`) register through `registerOpenApiRoute` but drop `request.body` from the route config so Zod doesn't validate multipart payloads against a JSON schema — the handler parses both content types manually.
 - Route schemas live in `packages/server/src/routes/schemas/` — one file per domain
 - Engine schemas live in `packages/workflows/src/schemas/` — one file per concern (dag-node, workflow, workflow-run, retry, loop, hooks); `index.ts` re-exports all
 - Engine schema naming: camelCase (e.g., `dagNodeSchema`, `workflowBaseSchema`, `nodeOutputSchema`)
@@ -358,6 +358,10 @@ packages/
         ├── lib/              # API client, types, utilities
         ├── stores/           # Zustand stores (workflow-store)
         ├── routes/           # Route pages (ChatPage, WorkflowsPage, WorkflowBuilderPage, etc.)
+        ├── experiments/      # Isolated in-repo spikes; lint-guarded against
+        │   │                 # importing production web modules. Drop-in or
+        │   │                 # delete cleanly. See experiments/README.md.
+        │   └── console/      # Run-centric console UI mounted at /console
         └── App.tsx           # Router + layout
 ```
 
@@ -815,6 +819,7 @@ Pattern: Use `classifyIsolationError()` (from `@archon/isolation`) to map git er
 - `GET /api/codebases/:id/environments` - List tracked isolation environments for a codebase
 
 **Artifact Files:**
+- `GET /api/runs/:runId/artifacts` - List artifact files for a run; walks the on-disk artifact directory (dotfiles skipped) and returns `{ files: [{ path, size, modifiedAt }] }`; 400 on invalid run id or path-escape attempt, 404 if the run does not exist
 - `GET /api/artifacts/:runId/*` - Serve a workflow artifact file by run ID and relative path; returns `text/markdown` for `.md` files, `text/plain` otherwise; 400 on path traversal (`..`), 404 if run or file not found
 
 **Command Listing:**

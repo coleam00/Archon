@@ -208,6 +208,22 @@ export const runWorkflowBodySchema = z
   })
   .openapi('RunWorkflowBody');
 
+/** A single artifact file listed by GET /api/runs/:runId/artifacts. */
+export const artifactFileSchema = z
+  .object({
+    path: z.string(),
+    size: z.number().int().nonnegative(),
+    modifiedAt: z.string(),
+  })
+  .openapi('ArtifactFile');
+
+/** GET /api/runs/:runId/artifacts response. */
+export const listArtifactsResponseSchema = z
+  .object({
+    files: z.array(artifactFileSchema),
+  })
+  .openapi('ListArtifactsResponse');
+
 /** GET /api/dashboard/runs query params. */
 export const dashboardRunsQuerySchema = z.object({
   // z.string() — handler validates the enum value and ignores invalid values

@@ -126,6 +126,9 @@ mock.module('@archon/paths', () => ({
   getDefaultCommandsPath: mock(() => '/tmp/.archon-test-nonexistent/commands/defaults'),
   getDefaultWorkflowsPath: mock(() => '/tmp/.archon-test-nonexistent/workflows/defaults'),
   getArchonWorkspacesPath: () => '/tmp/.archon/workspaces',
+  getArchonHome: () => '/tmp/.archon',
+  getRunArtifactsPath: (owner: string, repo: string, runId: string): string =>
+    `/tmp/.archon/workspaces/${owner}/${repo}/artifacts/runs/${runId}`,
 }));
 
 mockAllWorkflowModules();
@@ -155,9 +158,11 @@ mock.module('@archon/core/db/conversations', () => ({
   getConversationById: mockGetConversationById,
 }));
 
+const mockGetCodebase = mock(async (_id: string) => null as null | { name: string });
+
 mock.module('@archon/core/db/codebases', () => ({
   listCodebases: mock(async () => [{ default_cwd: '/tmp/project' }]),
-  getCodebase: mock(async () => null),
+  getCodebase: mockGetCodebase,
   deleteCodebase: mock(async () => {}),
 }));
 
@@ -1655,5 +1660,87 @@ describe('approve/reject auto-resume', () => {
     // Cancellation path doesn't auto-resume — nothing to resume to.
     expect(mockHandleMessage).not.toHaveBeenCalled();
     expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-paused-1');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: GET /api/runs/:runId/artifacts — the new artifact-listing endpoint
+// ---------------------------------------------------------------------------
+
+describe('GET /api/runs/:runId/artifacts', () => {
+  beforeEach(() => {
+    mockGetWorkflowRun.mockReset();
+    mockGetCodebase.mockReset();
+  });
+
+  test('returns 400 for invalid run ids (regex guard)', async () => {
+    const { app } = makeApp();
+    const response = await app.request('/api/runs/has..slash/artifacts');
+    expect(response.status).toBe(400);
+  });
+
+  test('returns 404 when the run does not exist', async () => {
+    mockGetWorkflowRun.mockImplementationOnce(async () => null);
+    const { app } = makeApp();
+    const response = await app.request('/api/runs/run-missing/artifacts');
+    expect(response.status).toBe(404);
+  });
+
+  test('returns empty files when run has no codebase_id', async () => {
+    mockGetWorkflowRun.mockImplementationOnce(async () => ({
+      ...MOCK_RUNNING_RUN,
+      id: 'run-orphan',
+      codebase_id: null,
+    }));
+    const { app } = makeApp();
+    const response = await app.request('/api/runs/run-orphan/artifacts');
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { files: unknown[] };
+    expect(body.files).toEqual([]);
+    expect(mockGetCodebase).not.toHaveBeenCalled();
+  });
+
+  test('returns empty files when codebase name lacks owner/repo shape', async () => {
+    mockGetWorkflowRun.mockImplementationOnce(async () => ({
+      ...MOCK_RUNNING_RUN,
+      id: 'run-no-slash',
+      codebase_id: 'cb-1',
+    }));
+    mockGetCodebase.mockImplementationOnce(async () => ({ name: 'plain-name' }));
+    const { app } = makeApp();
+    const response = await app.request('/api/runs/run-no-slash/artifacts');
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { files: unknown[] };
+    expect(body.files).toEqual([]);
+  });
+
+  test('returns 500 + logs when the codebase lookup throws', async () => {
+    mockGetWorkflowRun.mockImplementationOnce(async () => ({
+      ...MOCK_RUNNING_RUN,
+      id: 'run-db-err',
+      codebase_id: 'cb-broken',
+    }));
+    mockGetCodebase.mockImplementationOnce(async () => {
+      throw new Error('DB connection lost');
+    });
+    const { app } = makeApp();
+    const response = await app.request('/api/runs/run-db-err/artifacts');
+    expect(response.status).toBe(500);
+  });
+
+  // Path-escape guard: a maliciously crafted owner/repo with `..` segments
+  // would, after the join, resolve to a directory outside ARCHON_HOME. The
+  // mocked getRunArtifactsPath above naively joins inputs, so passing
+  // `'..'` as the owner produces a path that normalises outside /tmp/.archon.
+  test('returns 400 when the resolved artifact dir escapes ARCHON_HOME', async () => {
+    mockGetWorkflowRun.mockImplementationOnce(async () => ({
+      ...MOCK_RUNNING_RUN,
+      id: 'run-escape',
+      codebase_id: 'cb-escape',
+    }));
+    mockGetCodebase.mockImplementationOnce(async () => ({ name: '../../etc/passwd' }));
+    const { app } = makeApp();
+    const response = await app.request('/api/runs/run-escape/artifacts');
+    expect(response.status).toBe(400);
   });
 });
