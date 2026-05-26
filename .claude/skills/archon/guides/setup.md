@@ -101,12 +101,12 @@ Header: "Platforms"
 Question: "Which platforms do you want to set up? CLI is always included."
 Options:
   1. "CLI + GitHub" (Recommended) — CLI for local use, GitHub webhooks for issue/PR automation
-  2. "CLI only" — terminal-only, simplest setup
-  3. "Telegram" — chat bot via BotFather
-  4. "Slack" — Socket Mode app
+  2. "CLI + GitLab" — CLI for local use, GitLab webhooks for issue/MR automation (supports gitlab.com and self-hosted)
+  3. "CLI only" — terminal-only, simplest setup
+  4. "Chat platform" — Slack, Telegram, or Discord bot
 ```
 
-Discord is also available — mention it as the "Other" option text.
+For chat platforms (Slack/Telegram/Discord), use the "Other" freeform input or ask a follow-up to determine which one.
 
 ## Step 3: Run CLI Setup
 
@@ -197,12 +197,14 @@ The setup wizard already collected credentials for platforms selected in Step 3.
 |----------|-------------|
 | CLI only | Done — skip to Step 6 |
 | GitHub | Check `GITHUB_TOKEN` and `WEBHOOK_SECRET` are in `.env` |
+| GitLab | Check `GITLAB_TOKEN` and `GITLAB_WEBHOOK_SECRET` are in `.env` |
 | Telegram | Check `TELEGRAM_BOT_TOKEN` is in `.env` |
 | Slack | Check `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` are in `.env` |
 | Discord | Check `DISCORD_BOT_TOKEN` is in `.env` |
 
 For advanced platform configuration (webhook URLs, bot permissions, etc.), refer to the platform-specific guides:
 - `guides/github.md` — GitHub webhook setup details
+- `guides/gitlab.md` — GitLab webhook setup details (gitlab.com and self-hosted)
 - `guides/telegram.md` — BotFather commands
 - `guides/slack.md` — Slack app configuration
 - `guides/discord.md` — Discord bot permissions

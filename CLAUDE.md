@@ -272,92 +272,17 @@ bun run cli version
 
 ```
 packages/
-├── cli/                      # @archon/cli - Command-line interface
-│   └── src/
-│       ├── adapters/         # CLI adapter (stdout output)
-│       ├── commands/         # CLI command implementations
-│       └── cli.ts            # CLI entry point
-├── providers/                # @archon/providers - AI agent providers (SDK deps live here)
-│   └── src/
-│       ├── types.ts          # Contract layer (IAgentProvider, SendQueryOptions, MessageChunk — ZERO SDK deps)
-│       ├── registry.ts       # Typed provider registry (ProviderRegistration records)
-│       ├── errors.ts         # UnknownProviderError
-│       ├── claude/           # ClaudeProvider + parseClaudeConfig + MCP/hooks/skills translation
-│       ├── codex/            # CodexProvider + parseCodexConfig + binary-resolver
-│       ├── community/pi/     # PiProvider (builtIn: false) — @mariozechner/pi-coding-agent, ~20 LLM backends
-│       └── index.ts          # Package exports
-├── core/                     # @archon/core - Shared business logic
-│   └── src/
-│       ├── config/           # YAML config loading
-│       ├── db/               # Database connection, queries
-│       ├── handlers/         # Command handler (slash commands)
-│       ├── orchestrator/     # AI conversation management
-│       ├── services/         # Background services (cleanup)
-│       ├── state/            # Session state machine
-│       ├── types/            # TypeScript types and interfaces
-│       ├── utils/            # Shared utilities
-│       ├── workflows/        # Store adapter (createWorkflowStore) bridging core DB → IWorkflowStore
-│       └── index.ts          # Package exports
-├── workflows/                # @archon/workflows - Workflow engine (depends on @archon/git + @archon/paths)
-│   └── src/
-│       ├── schemas/          # Zod schemas for engine types
-│       ├── loader.ts         # YAML parsing + validation (parseWorkflow)
-│       ├── workflow-discovery.ts # Workflow filesystem discovery (discoverWorkflows, discoverWorkflowsWithConfig)
-│       ├── executor-shared.ts # Shared executor infrastructure (error classification, variable substitution)
-│       ├── router.ts         # Prompt building + invocation parsing
-│       ├── executor.ts       # Workflow execution orchestrator (executeWorkflow)
-│       ├── dag-executor.ts   # DAG-specific execution logic
-│       ├── store.ts          # IWorkflowStore interface (database abstraction)
-│       ├── deps.ts           # WorkflowDeps injection types (IWorkflowPlatform, imports from @archon/providers/types)
-│       ├── event-emitter.ts  # Workflow observability events
-│       ├── logger.ts         # JSONL file logger
-│       ├── validator.ts      # Resource validation (command files, MCP configs, skill dirs)
-│       ├── defaults/         # Bundled default commands and workflows
-│       └── utils/            # Variable substitution, tool formatting, execution utilities
-├── git/                      # @archon/git - Git operations (no @archon/core dep)
-│   └── src/
-│       ├── branch.ts         # Branch operations (checkout, merge detection, etc.)
-│       ├── exec.ts           # execFileAsync and mkdirAsync wrappers
-│       ├── repo.ts           # Repository operations (clone, sync, remote URL)
-│       ├── types.ts          # Branded types (RepoPath, BranchName, etc.)
-│       ├── worktree.ts       # Worktree operations (create, remove, list)
-│       └── index.ts          # Package exports
-├── isolation/                # @archon/isolation - Worktree isolation (depends on @archon/git + @archon/paths)
-│   └── src/
-│       ├── types.ts          # Isolation types and interfaces
-│       ├── errors.ts         # Error classifiers (classifyIsolationError, IsolationBlockedError)
-│       ├── factory.ts        # Provider factory (getIsolationProvider, configureIsolation)
-│       ├── resolver.ts       # IsolationResolver (request → environment resolution)
-│       ├── store.ts          # IIsolationStore interface
-│       ├── worktree-copy.ts  # File copy utilities for worktrees
-│       ├── providers/
-│       │   └── worktree.ts   # WorktreeProvider implementation
-│       └── index.ts          # Package exports
-├── paths/                    # @archon/paths - Path resolution and logger (zero @archon/* deps)
-│   └── src/
-│       ├── archon-paths.ts   # Archon directory path utilities
-│       ├── logger.ts         # Pino logger factory
-│       └── index.ts          # Package exports
-├── adapters/                 # @archon/adapters - Platform adapters (Slack, Telegram, GitHub, Discord)
-│   └── src/
-│       ├── chat/             # Chat platform adapters (Slack, Telegram)
-│       ├── forge/            # Forge adapters (GitHub)
-│       ├── community/        # Community adapters (Discord)
-│       ├── utils/            # Shared adapter utilities (message splitting)
-│       └── index.ts          # Package exports
-├── server/                   # @archon/server - HTTP server + Web adapter
-│   └── src/
-│       ├── adapters/         # Web platform adapter (SSE streaming)
-│       ├── routes/           # API routes (REST + SSE)
-│       └── index.ts          # Hono server entry point
-└── web/                      # @archon/web - React frontend (Web UI)
-    └── src/
-        ├── components/       # React components (chat, layout, projects, ui, workflows)
-        ├── hooks/            # Custom hooks (useSSE, etc.)
-        ├── lib/              # API client, types, utilities
-        ├── stores/           # Zustand stores (workflow-store)
-        ├── routes/           # Route pages (ChatPage, WorkflowsPage, WorkflowBuilderPage, etc.)
-        └── App.tsx           # Router + layout
+├── cli/        # @archon/cli - `archon` binary entry point; commands/, adapters/
+├── providers/  # @archon/providers - AI providers (Claude, Codex, Pi); SDK deps live here
+│               #   providers/types subpath = zero-dep contract (IAgentProvider, SendQueryOptions)
+├── core/       # @archon/core - Business logic, DB, orchestration; createWorkflowStore() adapter
+├── workflows/  # @archon/workflows - Engine: loader, router, executor, dag-executor, bundled defaults
+├── git/        # @archon/git - Git ops: worktrees, branches, repos, execFileAsync (no @archon/core dep)
+├── isolation/  # @archon/isolation - Worktree isolation; classifyIsolationError, IsolationBlockedError
+├── paths/      # @archon/paths - Path resolution, Pino logger factory, stripCwdEnv (zero @archon/* deps)
+├── adapters/   # @archon/adapters - Platform adapters: Slack, Telegram, GitHub (forge/), Discord (community/)
+├── server/     # @archon/server - Hono HTTP server, Web SSE adapter, API routes, static serving
+└── web/        # @archon/web - React frontend (Vite + Tailwind v4 + shadcn/ui + Zustand)
 ```
 
 **Import Patterns:**
@@ -417,17 +342,20 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 
 ### Architecture Layers
 
-**Package Split:**
-- **@archon/paths**: Path resolution utilities, Pino logger factory, web dist cache path (`getWebDistDir`), CWD env stripper (`stripCwdEnv`, `strip-cwd-env-boot`) (no @archon/* deps; `pino` and `dotenv` are allowed external deps)
-- **@archon/git**: Git operations - worktrees, branches, repos, exec wrappers (depends only on @archon/paths)
-- **@archon/providers**: AI agent providers (Claude, Codex, Pi community) — owns SDK deps, `IAgentProvider` interface, `sendQuery()` contract, and provider-specific option translation. `@archon/providers/types` is the contract subpath (zero SDK deps, zero runtime side effects) that `@archon/workflows` imports from. Providers receive raw `nodeConfig` + `assistantConfig` and translate to SDK-specific options internally. Core providers live under `claude/` and `codex/`; community providers live under `community/` (currently `community/pi/`, registered with `builtIn: false`).
-- **@archon/isolation**: Worktree isolation types, providers, resolver, error classifiers (depends only on @archon/git + @archon/paths)
-- **@archon/workflows**: Workflow engine - loader, router, executor, DAG, logger, bundled defaults (depends only on @archon/git + @archon/paths + @archon/providers/types + @hono/zod-openapi + zod; DB/AI/config injected via `WorkflowDeps`)
-- **@archon/cli**: Command-line interface for running workflows and starting the web UI server (depends on @archon/server + @archon/adapters for the serve command)
-- **@archon/core**: Business logic, database, orchestration (depends on @archon/providers for AI; provides `createWorkflowStore()` adapter bridging core DB → `IWorkflowStore`)
-- **@archon/adapters**: Platform adapters for Slack, Telegram, GitHub, Discord (depends on @archon/core)
-- **@archon/server**: OpenAPIHono HTTP server (Zod + OpenAPI spec generation via `@hono/zod-openapi`), Web adapter (SSE), API routes, Web UI static serving (depends on @archon/adapters)
-- **@archon/web**: React frontend (Vite + Tailwind v4 + shadcn/ui + Zustand), SSE streaming to server. `WorkflowRunStatus`, `WorkflowDefinition`, and `DagNode` are all derived from `src/lib/api.generated.d.ts` (generated from the OpenAPI spec via `bun generate:types`; never import from `@archon/workflows`)
+**Package dependency order (no cycles):**
+```
+@archon/paths → @archon/git → @archon/isolation
+@archon/providers/types (zero-dep contract) ← imported by @archon/workflows
+@archon/paths + @archon/git + @archon/providers/types → @archon/workflows
+@archon/providers → @archon/core → @archon/adapters → @archon/server
+@archon/cli (depends on server + adapters for the serve command)
+@archon/web (frontend only; never imports from @archon/workflows)
+```
+
+**Key rules:**
+- `@archon/workflows` imports `@archon/providers/types` only — zero SDK deps at the engine layer; DB/AI/config injected via `WorkflowDeps`
+- `@archon/web` types (`WorkflowRunStatus`, `WorkflowDefinition`, `DagNode`) come from `api.generated.d.ts` — run `bun generate:types` to regenerate
+- Community providers (e.g. Pi) live under `providers/src/community/`, registered with `builtIn: false`
 
 **1. Platform Adapters**
 - Implement `IPlatformAdapter` interface
@@ -712,7 +640,10 @@ async function createSession(conversationId: string, codebaseId: string) {
 2. **Workflows** (YAML-based):
    - Stored in `.archon/workflows/` (searched recursively)
    - Multi-step AI execution chains, discovered at runtime
-   - **`nodes:` (DAG format)**: Nodes with explicit `depends_on` edges; independent nodes in the same topological layer run concurrently. Node types: `command:` (named command file), `prompt:` (inline prompt), `bash:` (shell script, stdout captured as `$nodeId.output`, no AI, receives managed per-project env vars in its subprocess environment when configured), `loop:` (iterative AI prompt until completion signal), `approval:` (human gate; pauses until user approves or rejects; `capture_response: true` stores the user's comment as `$<node-id>.output` for downstream nodes, default false), `script:` (inline TypeScript/Python or named script from `.archon/scripts/`, runs via `bun` or `uv`, stdout captured as `$nodeId.output`, no AI, receives managed per-project env vars in its subprocess environment when configured, supports `deps:` for dependency installation and `timeout:` in ms, requires `runtime: bun` or `runtime: uv`) . Supports `when:` conditions, `trigger_rule` join semantics, `$nodeId.output` substitution, `output_format` for structured JSON output (Claude and Codex via SDK enforcement; Pi best-effort via prompt augmentation + JSON extraction), `allowed_tools`/`denied_tools` for per-node tool restrictions (Claude only), `hooks` for per-node SDK hook callbacks (Claude only), `mcp` for per-node MCP server config files (Claude only, env vars expanded at execution time), and `skills` for per-node skill preloading via AgentDefinition wrapping (Claude only), `agents` for inline sub-agent definitions invokable via the Task tool (Claude only), and `effort`/`thinking`/`maxBudgetUsd`/`systemPrompt`/`fallbackModel`/`betas`/`sandbox` for Claude SDK advanced options (Claude only, also settable at workflow level)
+   - **`nodes:` (DAG format)**: Nodes with explicit `depends_on` edges; independent nodes in the same topological layer run concurrently.
+     Node types (one per node): `command:` (named `.archon/commands/*.md`), `prompt:` (inline AI), `bash:` (shell script, no AI, stdout → `$nodeId.output`), `loop:` (AI until completion signal), `approval:` (human gate; `capture_response: true` stores response as `$nodeId.output`), `script:` (bun/uv, requires `runtime: bun|uv`, supports `deps:` and `timeout:`; stdout → `$nodeId.output`), `cancel:` (terminate workflow with message).
+     All node types: `when:` conditions, `trigger_rule`, `output_format` (structured JSON), `provider`, `model`, `$nodeId.output` substitution.
+     Claude-only per-node: `allowed_tools`, `denied_tools`, `hooks`, `mcp`, `skills`, `agents`, `effort`, `thinking`, `maxBudgetUsd`, `systemPrompt`, `fallbackModel`, `betas`, `sandbox` (also settable at workflow level).
    - Provider inherited from `.archon/config.yaml` unless explicitly set; per-node `provider` and `model` overrides supported
    - Model and options can be set per workflow or inherited from config defaults
    - `interactive: true` at the workflow level forces foreground execution on web (required for approval-gate workflows in the web UI)
@@ -784,52 +715,33 @@ Pattern: Use `classifyIsolationError()` (from `@archon/isolation`) to map git er
 **Web UI REST API** (`packages/server/src/routes/api.ts`):
 
 **Workflow Management:**
-- `GET /api/workflows` - List available workflows; optional `?cwd=`; returns `{ workflows: [...], errors?: [...] }`
-- `POST /api/workflows/validate` - Validate a workflow definition in-memory (no save); body: `{ definition: object }`; returns `{ valid: boolean, errors?: string[] }`
-- `GET /api/workflows/:name` - Fetch a single workflow by name; optional `?cwd=` query param; returns `{ workflow, filename, source: 'project' | 'bundled' }`
-- `PUT /api/workflows/:name` - Save (create or update) a workflow YAML; body: `{ definition: object }`; validates before writing; requires `?cwd=` or registered codebase
-- `DELETE /api/workflows/:name` - Delete a user-defined workflow; bundled defaults cannot be deleted
+- `GET /api/workflows` - List workflows; optional `?cwd=`
+- `POST /api/workflows/validate` - Validate definition in-memory (no save)
+- `GET /api/workflows/:name` - Fetch single workflow; optional `?cwd=`
+- `PUT /api/workflows/:name` - Save/update workflow YAML; requires `?cwd=` or registered codebase
+- `DELETE /api/workflows/:name` - Delete user-defined workflow (bundled defaults cannot be deleted)
 
 **Workflow Run Lifecycle:**
-- `POST /api/workflows/runs/{runId}/resume` - Mark a failed run as ready for auto-resume on next invocation
-- `POST /api/workflows/runs/{runId}/abandon` - Abandon a non-terminal run (marks as cancelled)
-- `DELETE /api/workflows/runs/{runId}` - Delete a terminal workflow run and its events
+- `POST /api/workflows/runs/{runId}/resume` - Mark failed run ready for auto-resume
+- `POST /api/workflows/runs/{runId}/abandon` - Abandon non-terminal run
+- `DELETE /api/workflows/runs/{runId}` - Delete terminal run and its events
 
 **Codebases:**
-- `GET /api/codebases` / `GET /api/codebases/:id` - List / fetch codebases
-- `POST /api/codebases` - Register a codebase (clone or local path)
-- `DELETE /api/codebases/:id` - Delete a codebase and clean up resources
-- `GET /api/codebases/:id/env` - List env var keys for a codebase (never returns values)
-- `PUT /api/codebases/:id/env` / `DELETE /api/codebases/:id/env/:key` - Upsert / delete a single codebase env var
-- `GET /api/codebases/:id/environments` - List tracked isolation environments for a codebase
+- `GET /api/codebases` / `GET /api/codebases/:id` - List / fetch
+- `POST /api/codebases` - Register (clone or local path)
+- `DELETE /api/codebases/:id` - Delete and clean up
+- `GET /api/codebases/:id/env` - List env var keys (never returns values)
+- `PUT /api/codebases/:id/env` / `DELETE /api/codebases/:id/env/:key` - Upsert / delete env var
+- `GET /api/codebases/:id/environments` - List isolation environments
 
-**Artifact Files:**
-- `GET /api/artifacts/:runId/*` - Serve a workflow artifact file by run ID and relative path; returns `text/markdown` for `.md` files, `text/plain` otherwise; 400 on path traversal (`..`), 404 if run or file not found
-
-**Command Listing:**
-- `GET /api/commands` - List available command names (bundled + project-defined); optional `?cwd=`; returns `{ commands: [{ name, source: 'bundled' | 'project' }] }`
-
-**Providers:**
-- `GET /api/providers` - List registered AI providers; returns `{ providers: [{ id, displayName, capabilities, builtIn }] }`
-
-**System:**
-- `GET /api/health` - Health check with adapter/system status
-- `GET /api/update-check` - Check for available updates; returns `{ updateAvailable, currentVersion, latestVersion, releaseUrl }`; skips GitHub API call for non-binary builds
-
-**OpenAPI Spec:**
-- `GET /api/openapi.json` - Generated OpenAPI 3.0 spec for all Zod-validated routes
+**Other:**
+- `GET /api/artifacts/:runId/*` - Serve artifact file; 400 on path traversal, 404 if missing
+- `GET /api/commands` - List command names; optional `?cwd=`
+- `GET /api/providers` - List registered AI providers
+- `GET /api/health` - Health check
+- `GET /api/update-check` - Update availability (skips GitHub call for non-binary builds)
+- `GET /api/openapi.json` - Generated OpenAPI 3.0 spec
 
 **Webhooks:**
-- `POST /webhooks/github` - GitHub webhook events
-- Signature verification required (HMAC SHA-256)
-- Return 200 immediately, process async
-
-**Security:**
-- Verify webhook signatures (GitHub: `X-Hub-Signature-256`)
-- Use `c.req.text()` for raw webhook body (signature verification)
-- Never log or expose tokens in responses
-
-**@Mention Detection:**
-- Parse `@archon` in issue/PR **comments only** (not descriptions)
-- Events: `issue_comment` only
-- Note: Descriptions often contain example commands or documentation - these are NOT command invocations (see #96)
+- `POST /webhooks/github` - GitHub webhook; verify `X-Hub-Signature-256`, use `c.req.text()` for raw body, return 200 immediately and process async
+- Parse `@archon` in issue/PR **comments only** (not descriptions) — `issue_comment` events only (see #96)
