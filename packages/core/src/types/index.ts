@@ -5,8 +5,8 @@ import type { TransitionTrigger } from '../state/session-transitions';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
 import { z } from 'zod';
 
-// MessageChunk imported for use in IPlatformAdapter/IWebPlatformAdapter below
-import type { MessageChunk } from '@archon/providers/types';
+// MessageChunk + TokenUsage are used by IPlatformAdapter below.
+import type { MessageChunk, TokenUsage } from '@archon/providers/types';
 
 /**
  * Custom error for when a conversation is not found during update operations
@@ -170,11 +170,7 @@ export interface IPlatformAdapter {
    */
   sendResultFooter?(
     conversationId: string,
-    info: {
-      cost?: number;
-      tokens?: { input: number; output: number; total?: number; cost?: number };
-      stopReason?: string;
-    }
+    info: { cost?: number; tokens?: TokenUsage; stopReason?: string }
   ): Promise<void>;
 }
 

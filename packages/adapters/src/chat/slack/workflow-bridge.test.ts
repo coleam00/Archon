@@ -327,6 +327,38 @@ describe('SlackWorkflowBridge', () => {
     expect(text).toContain('will retry');
   });
 
+  test('reject button at max attempts notes the run was cancelled', async () => {
+    const { adapter, updated, triggerMap, dispatchAction } = makeFakeAdapter();
+    triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });
+    mockGetConversationId.mockReturnValue('C1:111.0');
+    mockRejectWorkflow.mockResolvedValue({ cancelled: true, maxAttemptsReached: true });
+
+    new SlackWorkflowBridge(adapter as never).attach();
+    await dispatchEvent({
+      type: 'workflow_started',
+      runId: 'r1',
+      workflowName: 'assist',
+      conversationId: 'conv-db-uuid',
+    });
+    await dispatchEvent({
+      type: 'approval_pending',
+      runId: 'r1',
+      nodeId: 'review',
+      message: 'Approve?',
+    });
+
+    await dispatchAction('reject:r1:review', {
+      user: { id: 'U999' },
+      channel: { id: 'C1' },
+      message: { ts: '2.000' },
+    });
+
+    expect(mockRejectWorkflow).toHaveBeenCalledTimes(1);
+    const text = (updated[0]?.blocks?.[0] as { text?: { text?: string } } | undefined)?.text?.text;
+    expect(text).toContain('Rejected');
+    expect(text).toContain('max reject attempts reached');
+  });
+
   test('cancel button calls abandonWorkflow', async () => {
     const { adapter, triggerMap, dispatchAction } = makeFakeAdapter();
     triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });

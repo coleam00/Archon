@@ -391,7 +391,6 @@ export class SlackAdapter implements IPlatformAdapter {
       }
     });
 
-    // Slash commands: /archon (general) and /archon-workflow (workflow control)
     this.app.command('/archon', async ({ command, ack, respond, client }) => {
       await ack();
       await this.handleSlashCommand(command, respond, client, 'archon');

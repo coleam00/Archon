@@ -1,6 +1,3 @@
-/**
- * Unit tests for Slack Block Kit builders and cost footer formatter.
- */
 import {
   buildApprovalBlocks,
   buildApprovalResolutionBlocks,
@@ -99,7 +96,6 @@ describe('buildApprovalResolutionBlocks', () => {
       decision: 'approved',
       actorUserId: 'U123ALICE',
       originalMessage: 'Approve the migration?',
-      comment: 'looks good',
       outcomeNote: 'workflow resumed',
     });
 
@@ -108,7 +104,6 @@ describe('buildApprovalResolutionBlocks', () => {
     expect(text).toContain('Approved');
     expect(text).toContain('<@U123ALICE>');
     expect(text).toContain('Approve the migration?');
-    expect(text).toContain('> looks good');
     expect(text).toContain('workflow resumed');
   });
 

@@ -269,6 +269,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   let gitlab: GitLabAdapter | null = null;
   let discord: DiscordAdapter | null = null;
   let slack: SlackAdapter | null = null;
+  let slackBridge: SlackWorkflowBridge | null = null;
 
   if (!opts.skipPlatformAdapters) {
     // Check that at least one platform is configured
@@ -466,7 +467,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       // Attach the workflow bridge BEFORE app.start(): Bolt's Socket Mode
       // refuses new event-handler registrations once the connection is open,
       // so `app.action(...)` calls inside the bridge must run first.
-      const slackBridge = new SlackWorkflowBridge(slack);
+      slackBridge = new SlackWorkflowBridge(slack);
       slackBridge.attach();
 
       await slack.start();
@@ -672,6 +673,9 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         try {
           telegram?.stop();
           discord?.stop();
+          // Detach Slack workflow bridge BEFORE stopping the adapter so a
+          // pending debounced chat.update can't fire against a closed socket.
+          slackBridge?.detach();
           slack?.stop();
           gitea?.stop();
           gitlab?.stop();

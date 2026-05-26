@@ -10,6 +10,7 @@
  * SlackAdapter.start() so app.action handlers register before app.start()
  * fires the Socket Mode connection. Call detach() on shutdown.
  */
+import type { BlockButtonAction, ButtonAction } from '@slack/bolt';
 import { createLogger } from '@archon/paths';
 import {
   getWorkflowEventEmitter,
@@ -57,12 +58,20 @@ interface RunState {
   nodes: Map<string, NodeSnapshot>;
   /** Insertion order — preserved so the status message renders nodes in arrival order. */
   nodeOrder: string[];
-  /** Trailing-edge debounce timer for chat.update. */
+  /** Leading-edge debounce timer for chat.update: the first event in a burst
+   *  arms the timer; subsequent events arriving before it fires are coalesced
+   *  because the timer reads the current run state at fire time. */
   pendingEdit?: ReturnType<typeof setTimeout>;
   /** Active approval block in this run, keyed by nodeId. */
   approvals: Map<string, ApprovalMessage>;
 }
 
+/**
+ * Coalesce window for chat.update on the run status message. Slack's
+ * chat.update rate limit is roughly one call per channel per second, so
+ * 500ms keeps the worst-case rate under that while still feeling live for
+ * DAGs where node transitions span seconds.
+ */
 const STATUS_UPDATE_DEBOUNCE_MS = 500;
 
 export class SlackWorkflowBridge {
@@ -153,7 +162,9 @@ export class SlackWorkflowBridge {
         case 'workflow_cancelled':
           await this.onTerminal(event.runId, 'cancelled', conversationId, event.reason);
           break;
-        // Loop / tool / artifact events are surface-noisy — skipped for v1.
+        // Loop / tool / artifact events would surface as noise in-thread and
+        // aren't tied to a button or actionable state; the status message
+        // already conveys whether the run is healthy via the DAG node states.
         case 'loop_iteration_started':
         case 'loop_iteration_completed':
         case 'loop_iteration_failed':
@@ -332,7 +343,9 @@ export class SlackWorkflowBridge {
   private scheduleStatusUpdate(runId: string): void {
     const state = this.runs.get(runId);
     if (!state) return;
-    if (state.pendingEdit) return; // trailing edge — first event sets the timer
+    // Leading-edge: the first event in a burst arms the timer; later events
+    // are dropped because the timer reads current state when it fires.
+    if (state.pendingEdit) return;
     state.pendingEdit = setTimeout(() => {
       state.pendingEdit = undefined;
       void this.updateStatusMessage(state);
@@ -392,6 +405,8 @@ export class SlackWorkflowBridge {
 
   private async removeReactionSafe(ref: SlackMessageRef, name: string): Promise<void> {
     try {
+      // `no_reaction` (already removed by a teammate / manual click) and rate
+      // limits are non-fatal — the terminal-state add below still fires.
       await this.adapter.getApp().client.reactions.remove({
         channel: ref.channel,
         timestamp: ref.ts,
@@ -413,25 +428,28 @@ export class SlackWorkflowBridge {
     if (this.actionHandlersRegistered) return;
     const app = this.adapter.getApp();
 
-    app.action(/^approve:/, async ({ ack, body, action }) => {
+    // Bolt's action() callback for a regex matches only block button clicks
+    // in our case, so the body/action narrow to BlockButtonAction/ButtonAction.
+    // Telling Bolt the generic shape gets us SDK-typed body.user.id etc.
+    app.action<BlockButtonAction>(/^approve:/, async ({ ack, body, action }) => {
       await ack();
-      await this.handleApprovalDecision(body as ActionBody, action as ActionElement, 'approved');
+      await this.handleApprovalDecision(body, action, 'approved');
     });
-    app.action(/^reject:/, async ({ ack, body, action }) => {
+    app.action<BlockButtonAction>(/^reject:/, async ({ ack, body, action }) => {
       await ack();
-      await this.handleApprovalDecision(body as ActionBody, action as ActionElement, 'rejected');
+      await this.handleApprovalDecision(body, action, 'rejected');
     });
-    app.action(/^cancel:/, async ({ ack, body, action }) => {
+    app.action<BlockButtonAction>(/^cancel:/, async ({ ack, body, action }) => {
       await ack();
-      await this.handleCancelClick(body as ActionBody, action as ActionElement);
+      await this.handleCancelClick(body, action);
     });
 
     this.actionHandlersRegistered = true;
   }
 
   private async handleApprovalDecision(
-    body: ActionBody,
-    action: ActionElement,
+    body: BlockButtonAction,
+    action: ButtonAction,
     decision: 'approved' | 'rejected'
   ): Promise<void> {
     const actorId = body.user?.id;
@@ -441,42 +459,51 @@ export class SlackWorkflowBridge {
     if (!parsed) return;
     const { runId, nodeId } = parsed;
 
+    // Top-level try/catch: applyResolutionEdit must also be guarded because the
+    // block builder or chat.update can throw. Bolt has no app.error registered,
+    // so an unhandled rejection here means the user sees nothing.
     let outcomeNote: string | undefined;
-    let comment: string | undefined;
     try {
-      if (decision === 'approved') {
-        const result = await workflowOperations.approveWorkflow(runId);
-        outcomeNote =
-          result.type === 'interactive_loop'
-            ? 'recorded — loop will continue on resume'
-            : 'workflow resumed';
-      } else {
-        const result = await workflowOperations.rejectWorkflow(runId);
-        outcomeNote = result.cancelled
-          ? result.maxAttemptsReached
-            ? 'cancelled — max reject attempts reached'
-            : 'cancelled'
-          : 'recorded — workflow will retry with feedback';
+      try {
+        if (decision === 'approved') {
+          const result = await workflowOperations.approveWorkflow(runId);
+          outcomeNote =
+            result.type === 'interactive_loop'
+              ? 'recorded — loop will continue on resume'
+              : 'workflow resumed';
+        } else {
+          const result = await workflowOperations.rejectWorkflow(runId);
+          outcomeNote = result.cancelled
+            ? result.maxAttemptsReached
+              ? 'cancelled — max reject attempts reached'
+              : 'cancelled'
+            : 'recorded — workflow will retry with feedback';
+        }
+      } catch (error) {
+        const err = error as Error;
+        getLog().error({ err, runId, nodeId, decision }, 'slack.bridge_approval_action_failed');
+        // Keep the user-facing note generic — full error stays in logs.
+        outcomeNote = 'error: see server logs';
       }
-    } catch (error) {
-      const err = error as Error;
-      getLog().error({ err, runId, nodeId, decision }, 'slack.bridge_approval_action_failed');
-      outcomeNote = `error: ${err.message}`;
-    }
 
-    await this.applyResolutionEdit({
-      runId,
-      nodeId,
-      decision,
-      actorId: actorId ?? 'unknown',
-      messageTs: body.message?.ts,
-      channel: body.channel?.id,
-      comment,
-      outcomeNote,
-    });
+      await this.applyResolutionEdit({
+        runId,
+        nodeId,
+        decision,
+        actorId: actorId ?? 'unknown',
+        messageTs: body.message?.ts,
+        channel: body.channel?.id,
+        outcomeNote,
+      });
+    } catch (error) {
+      getLog().error(
+        { err: error as Error, runId, nodeId, decision },
+        'slack.bridge_approval_handler_failed'
+      );
+    }
   }
 
-  private async handleCancelClick(body: ActionBody, action: ActionElement): Promise<void> {
+  private async handleCancelClick(body: BlockButtonAction, action: ButtonAction): Promise<void> {
     const actorId = body.user?.id;
     if (!this.assertAuthorized(actorId, 'cancel')) return;
 
@@ -487,27 +514,49 @@ export class SlackWorkflowBridge {
     if (!runId) return;
 
     try {
-      await workflowOperations.abandonWorkflow(runId);
-      getLog().info({ runId, actorId: maskUserId(actorId) }, 'slack.bridge_cancel_dispatched');
-    } catch (error) {
-      const err = error as Error;
-      // Full error stays in logs; the user-facing message is intentionally
-      // generic so internal DB / library errors don't leak into a channel.
-      getLog().warn({ err, runId }, 'slack.bridge_cancel_failed');
-      const state = this.runs.get(runId);
-      if (state) {
+      try {
+        await workflowOperations.abandonWorkflow(runId);
+        getLog().info({ runId, actorId: maskUserId(actorId) }, 'slack.bridge_cancel_dispatched');
+        // The eventual workflow_cancelled event will repaint the status message.
+        return;
+      } catch (error) {
+        const err = error as Error;
+        // Full error stays in logs; the user-facing message is intentionally
+        // generic so internal DB / library errors don't leak into a channel.
+        getLog().warn({ err, runId }, 'slack.bridge_cancel_failed');
+
+        // Tell the user something. If we still have run state, drop a note in
+        // the thread. Otherwise (run already terminated) try to acknowledge in
+        // the channel/thread of the message the button was attached to.
+        const state = this.runs.get(runId);
+        const fallbackChannel = body.channel?.id;
+        const fallbackThreadTs = body.message?.ts;
+        const target = state
+          ? { channel: state.channel, thread_ts: state.threadTs }
+          : fallbackChannel
+            ? { channel: fallbackChannel, thread_ts: fallbackThreadTs }
+            : undefined;
+
+        if (!target) {
+          getLog().info({ runId }, 'slack.bridge_cancel_no_target');
+          return;
+        }
+
         try {
           await this.adapter.getApp().client.chat.postMessage({
-            channel: state.channel,
-            thread_ts: state.threadTs,
-            text: `:warning: Could not cancel run \`${runId}\`. Check the server logs or try again.`,
+            channel: target.channel,
+            thread_ts: target.thread_ts,
+            text: state
+              ? `:warning: Could not cancel run \`${runId}\`. Check the server logs or try again.`
+              : `:information_source: Run \`${runId}\` already finished — nothing to cancel.`,
           });
         } catch (notifyError) {
           getLog().debug({ err: notifyError as Error, runId }, 'slack.bridge_cancel_notify_failed');
         }
       }
+    } catch (error) {
+      getLog().error({ err: error as Error, runId }, 'slack.bridge_cancel_handler_failed');
     }
-    // The eventual workflow_cancelled event will repaint the status message.
   }
 
   private async applyResolutionEdit(args: {
@@ -517,7 +566,6 @@ export class SlackWorkflowBridge {
     actorId: string;
     messageTs?: string;
     channel?: string;
-    comment?: string;
     outcomeNote?: string;
   }): Promise<void> {
     if (!args.messageTs || !args.channel) return;
@@ -533,7 +581,6 @@ export class SlackWorkflowBridge {
       decision: args.decision,
       actorUserId: args.actorId,
       originalMessage,
-      comment: args.comment,
       outcomeNote: args.outcomeNote,
     });
     try {
@@ -591,26 +638,4 @@ function maskUserId(userId: string | undefined): string {
 
 function isDefined<T>(v: T | undefined): v is T {
   return v !== undefined;
-}
-
-// ───────────────────────────────────────────────────────────────────────────
-// Narrow type aliases for Bolt action payloads.
-// We intentionally avoid the full BlockButtonAction generic gymnastics here
-// since we only consume a tiny subset.
-// ───────────────────────────────────────────────────────────────────────────
-
-/**
- * Loose subset of @slack/bolt's `SlackAction` shape covering the fields we
- * consume. Bolt's union type forces narrow checks per action variant which
- * adds noise without giving us extra safety; this alias keeps the bridge
- * focused on the values it actually uses.
- */
-export interface ActionBody {
-  user?: { id?: string };
-  channel?: { id?: string };
-  message?: { ts?: string };
-}
-
-export interface ActionElement {
-  action_id?: string;
 }

@@ -1,9 +1,8 @@
 /**
- * Pure Block Kit builders + cost footer formatter for the Slack adapter.
- *
- * Kept side-effect-free so they can be unit-tested without touching the Bolt
- * client. The Slack adapter and workflow bridge import these and feed the
- * results into `chat.postMessage` / `chat.update`.
+ * Side-effect-free so callers can unit-test these without spinning up a
+ * Bolt client. Consumed by `adapter.ts` (`sendResultFooter`) and the
+ * workflow bridge, both of which feed the output into `chat.postMessage`
+ * / `chat.update`.
  */
 import type { types } from '@slack/bolt';
 import type { TokenUsage } from '@archon/providers/types';
@@ -148,7 +147,6 @@ export function buildApprovalResolutionBlocks(input: {
   decision: 'approved' | 'rejected';
   actorUserId: string;
   originalMessage: string;
-  comment?: string;
   outcomeNote?: string;
 }): { blocks: KnownBlock[]; fallbackText: string } {
   const icon = input.decision === 'approved' ? ':white_check_mark:' : ':x:';
@@ -158,9 +156,6 @@ export function buildApprovalResolutionBlocks(input: {
     '',
     input.originalMessage,
   ];
-  if (input.comment) {
-    lines.push('', `> ${input.comment}`);
-  }
   if (input.outcomeNote) {
     lines.push('', `_${input.outcomeNote}_`);
   }
