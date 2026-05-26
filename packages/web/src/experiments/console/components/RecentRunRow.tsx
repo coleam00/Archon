@@ -1,10 +1,11 @@
-import type { ReactElement } from 'react';
+import type { DragEvent as ReactDragEvent, ReactElement } from 'react';
 import { useNavigate } from 'react-router';
 import { OriginBadge } from './OriginBadge';
 import type { Run } from '../primitives/run';
 import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/format';
 import { useIsDocker, openInIde } from '../lib/health';
 import { statusTextClass } from '../lib/run-status';
+import { encodeDragPayload, DRAG_MIME } from '../lib/drag-payload';
 
 interface RecentRunRowProps {
   run: Run;
@@ -47,6 +48,11 @@ export function RecentRunRow({
     if (canOpen) navigate(`/console/p/${run.projectId}/r/${run.id}`);
   };
 
+  const onDragStart = (e: ReactDragEvent<HTMLDivElement>): void => {
+    e.dataTransfer.setData(DRAG_MIME, encodeDragPayload(run));
+    e.dataTransfer.effectAllowed = 'copy';
+  };
+
   const onRerun = (): void => {
     if (!canRerun || run.projectId === null) return;
     const params = new URLSearchParams({
@@ -60,6 +66,8 @@ export function RecentRunRow({
   return (
     <div
       data-run-id={run.id}
+      draggable={canOpen}
+      onDragStart={canOpen ? onDragStart : undefined}
       onClick={onClick}
       role={canOpen ? 'button' : undefined}
       className={`group flex h-9 items-center gap-3 border-b border-border/40 px-3 font-mono text-[12px] transition-colors hover:bg-surface-hover ${

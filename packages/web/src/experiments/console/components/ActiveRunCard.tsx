@@ -1,4 +1,4 @@
-import type { ReactElement } from 'react';
+import type { DragEvent as ReactDragEvent, ReactElement } from 'react';
 import { useNavigate } from 'react-router';
 import { StatusStrip } from './StatusStrip';
 import { LiveDot } from './LiveDot';
@@ -9,6 +9,7 @@ import type { Run } from '../primitives/run';
 import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/format';
 import { useIsDocker, openInIde } from '../lib/health';
 import { statusTextClass, statusLabel } from '../lib/run-status';
+import { encodeDragPayload, DRAG_MIME } from '../lib/drag-payload';
 
 interface ActiveRunCardProps {
   run: Run;
@@ -46,9 +47,16 @@ export function ActiveRunCard({
     if (canOpen) navigate(`/console/p/${run.projectId}/r/${run.id}`);
   };
 
+  const onDragStart = (e: ReactDragEvent<HTMLElement>): void => {
+    e.dataTransfer.setData(DRAG_MIME, encodeDragPayload(run));
+    e.dataTransfer.effectAllowed = 'copy';
+  };
+
   return (
     <article
       data-run-id={run.id}
+      draggable={canOpen}
+      onDragStart={canOpen ? onDragStart : undefined}
       onClick={onCardClick}
       role={canOpen ? 'button' : undefined}
       tabIndex={canOpen ? 0 : undefined}

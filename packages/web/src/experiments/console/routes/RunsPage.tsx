@@ -5,6 +5,7 @@ import { ActiveRunCard } from '../components/ActiveRunCard';
 import { RecentRunRow } from '../components/RecentRunRow';
 import { FilterChips, type Filter } from '../components/FilterChips';
 import { DraftRunCard } from '../components/DraftRunCard';
+import { ExecuteDropZone } from '../components/ExecuteDropZone';
 import { useEntity } from '../store/cache';
 import { K, type Scope } from '../store/keys';
 import { useDashboardSSE } from '../lib/sse';
@@ -481,12 +482,19 @@ export function RunsPage(): ReactElement {
             hint={scope === 'all' ? 'Start one from a project.' : undefined}
           />
         ) : (
-          <RunsFeed
-            runs={runs}
-            showProject={scope === 'all'}
-            draftProject={draftProject}
-            selectedRunId={selectedRunId}
-          />
+          <>
+            <RunsFeed
+              runs={runs}
+              showProject={scope === 'all'}
+              draftProject={draftProject}
+              selectedRunId={selectedRunId}
+            />
+            {draftProject !== null ? (
+              <div className="mt-6">
+                <ExecuteDropZone projectId={draftProject.id} projectCwd={draftProject.path} />
+              </div>
+            ) : null}
+          </>
         )}
       </div>
     </section>
