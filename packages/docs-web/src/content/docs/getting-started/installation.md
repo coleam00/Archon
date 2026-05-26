@@ -33,6 +33,17 @@ brew install coleam00/archon/archon
 docker run --rm -v "$PWD:/workspace" ghcr.io/coleam00/archon:latest workflow list
 ```
 
+### Nix (Flakes)
+
+```bash
+nix run github:coleam00/Archon
+nix profile install github:coleam00/Archon
+```
+
+To update an existing installation:
+- Profile installs: `nix profile list` then `nix profile upgrade <index-or-name>`
+- Flake inputs: `nix flake update Archon` in your own flake and rebuild
+
 ## From Source
 
 ```bash

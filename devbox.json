@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/0.12.0/.schema/devbox.schema.json",
-  "packages": ["bun", "nodejs_20"],
+  "packages": ["bun"],
   "shell": {
     "init_hook": ["echo 'Welcome to the Archon devbox environment!'"]
   }

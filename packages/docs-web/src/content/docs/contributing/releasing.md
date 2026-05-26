@@ -77,6 +77,29 @@ git push origin main
 
 If you maintain a Homebrew tap (`homebrew-archon`), copy the updated formula there.
 
+### 4. Update Nix Flake (Optional)
+
+After the release workflow completes, update `flake.nix` to use the new version:
+
+```bash
+# 1. Update the version string in flake.nix
+# 2. Prefetch the new binary hashes for all platforms
+nix-prefetch-url --type sha256 https://github.com/coleam00/Archon/releases/download/vX.Y.Z/archon-darwin-arm64
+nix-prefetch-url --type sha256 https://github.com/coleam00/Archon/releases/download/vX.Y.Z/archon-darwin-x64
+nix-prefetch-url --type sha256 https://github.com/coleam00/Archon/releases/download/vX.Y.Z/archon-linux-arm64
+nix-prefetch-url --type sha256 https://github.com/coleam00/Archon/releases/download/vX.Y.Z/archon-linux-x64
+
+# 3. Update the sha256 map in flake.nix with the new hashes
+# 4. Commit the changes
+git add flake.nix
+git commit -m "chore: update Nix flake to vX.Y.Z"
+git push origin main
+```
+
+The fields to change in `flake.nix`:
+- `version = "X.Y.Z"` (line near the top)
+- `sha256` map in the `selectBinary` block (one hash per platform)
+
 ### 4. Verify the Release
 
 ```bash
