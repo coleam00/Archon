@@ -75,6 +75,20 @@ export async function setGithubToken(
 }
 
 /**
+ * Clear a user's stored GitHub OAuth token and username. Idempotent — safe to
+ * call when no token is set.
+ */
+export async function clearGithubToken(userId: string): Promise<void> {
+  await pool.query(
+    `UPDATE remote_agent_users
+     SET github_oauth_token = NULL, github_username = NULL, updated_at = NOW()
+     WHERE id = $1`,
+    [userId]
+  );
+  getLog().info({ userId }, 'user.github_token_cleared');
+}
+
+/**
  * Returns the decrypted GitHub OAuth token for a user, or null if not set.
  */
 export async function getGithubToken(userId: string): Promise<string | null> {

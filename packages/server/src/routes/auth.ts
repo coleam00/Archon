@@ -29,7 +29,16 @@ function keycloakBase(): string {
   return `${process.env.KEYCLOAK_URL}/realms/${process.env.KEYCLOAK_REALM ?? 'master'}`;
 }
 
-function appBase(c: { req: { url: string } }): string {
+function appBase(c: {
+  req: { url: string; header: (name: string) => string | undefined };
+}): string {
+  // Honor reverse-proxy headers so the OIDC redirect_uri matches the public URL
+  // (e.g. https://archon.example.com) instead of the internal one (http://app:3000).
+  const fwdHost = c.req.header('x-forwarded-host');
+  const fwdProto = c.req.header('x-forwarded-proto');
+  if (fwdHost) {
+    return `${fwdProto ?? 'https'}://${fwdHost}`;
+  }
   const url = new URL(c.req.url);
   return `${url.protocol}//${url.host}`;
 }
@@ -311,5 +320,59 @@ export function registerAuthRoutes(app: OpenAPIHono): void {
     getLog().info({ userId: dbUser.id, githubLogin: ghUser.login }, 'auth.github_connected');
 
     return c.redirect('/?github_connected=1');
+  });
+
+  /**
+   * DELETE /api/auth/github — disconnect the current user's GitHub OAuth token.
+   * Best-effort revokes the token on GitHub (via Apps Revoke endpoint), then
+   * clears the encrypted token + username from the user row. Idempotent.
+   */
+  app.delete('/api/auth/github', async c => {
+    const oidcUser = getOidcUser(c);
+    if (!oidcUser) {
+      return c.json({ error: 'Unauthorized' }, 401);
+    }
+
+    const dbUser = await userDb.getUserByKeycloakSub(oidcUser.sub);
+    if (!dbUser) {
+      return c.json({ error: 'User record not found' }, 404);
+    }
+
+    // Best-effort: revoke the token on GitHub's side so the OAuth app installation
+    // count stays accurate and the token is invalidated server-side. Skip silently
+    // on failure — clearing our DB is the authoritative action.
+    const token = await userDb.getGithubToken(dbUser.id);
+    const ghClientId = process.env.GITHUB_OAUTH_CLIENT_ID;
+    const ghClientSecret = process.env.GITHUB_OAUTH_CLIENT_SECRET;
+    if (token && ghClientId && ghClientSecret) {
+      try {
+        const auth = Buffer.from(`${ghClientId}:${ghClientSecret}`).toString('base64');
+        const revokeRes = await fetch(`https://api.github.com/applications/${ghClientId}/grant`, {
+          method: 'DELETE',
+          headers: {
+            Authorization: `Basic ${auth}`,
+            Accept: 'application/vnd.github+json',
+            'X-GitHub-Api-Version': '2022-11-28',
+            'User-Agent': 'Archon',
+          },
+          body: JSON.stringify({ access_token: token }),
+        });
+        if (!revokeRes.ok && revokeRes.status !== 404) {
+          getLog().warn(
+            { userId: dbUser.id, status: revokeRes.status },
+            'auth.github_revoke_failed'
+          );
+        }
+      } catch (err) {
+        getLog().warn(
+          { userId: dbUser.id, err: (err as Error).message },
+          'auth.github_revoke_error'
+        );
+      }
+    }
+
+    await userDb.clearGithubToken(dbUser.id);
+    getLog().info({ userId: dbUser.id }, 'auth.github_disconnected');
+    return c.json({ ok: true });
   });
 }

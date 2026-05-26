@@ -47,39 +47,55 @@ export function oidcMiddleware(): MiddlewareHandler {
   const clientId = process.env.KEYCLOAK_CLIENT_ID;
 
   return async (c, next) => {
-    if (isPublicPath(c.req.path)) {
-      return next();
-    }
+    const publicPath = isPublicPath(c.req.path);
 
-    // Accept token from Bearer header (API clients) or HTTP-only cookie (web UI)
+    // Always attempt to validate the cookie/header so handlers like /api/auth/me
+    // (which is on a public path so unauth'd users can reach it without 401)
+    // can still see the authenticated user when the cookie is valid.
     const authHeader = c.req.header('Authorization');
     const token =
       (authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null) ??
       getCookie(c, 'archon_access_token') ??
       null;
 
-    if (!token) {
+    if (token) {
+      try {
+        // Don't constrain `audience` here — Keycloak access tokens default to
+        // aud: "account", not the client id. The client id appears in `azp`
+        // (authorized party), which we verify below. JWKS signature + issuer
+        // checks still prove the token came from our realm.
+        const { payload } = await jwtVerify(token, getJwks(keycloakUrl), {
+          issuer: `${keycloakUrl}/realms/${process.env.KEYCLOAK_REALM ?? 'master'}`,
+        });
+
+        const azp = typeof payload.azp === 'string' ? payload.azp : undefined;
+        if (clientId && azp && azp !== clientId) {
+          throw new Error(`azp mismatch: expected ${clientId}, got ${azp}`);
+        }
+
+        const user: OidcUser = {
+          // sub is always present in valid JWTs; empty string is unreachable in practice
+          sub: payload.sub ?? '',
+          email: payload.email as string | undefined,
+          preferred_username: payload.preferred_username as string | undefined,
+          name: payload.name as string | undefined,
+        };
+        // The app is created without Variables generics; cast required to store middleware vars.
+        (c as unknown as { set(k: string, v: unknown): void }).set('oidcUser', user);
+        await next();
+        return;
+      } catch {
+        // Invalid token: fall through. On public paths we let the request through
+        // (handler decides what to do); on private paths we 401 below.
+        if (!publicPath) {
+          return c.json({ error: 'Unauthorized' }, 401);
+        }
+      }
+    } else if (!publicPath) {
       return c.json({ error: 'Unauthorized' }, 401);
     }
 
-    try {
-      const { payload } = await jwtVerify(token, getJwks(keycloakUrl), {
-        ...(clientId ? { audience: clientId } : {}),
-      });
-
-      const user: OidcUser = {
-        // sub is always present in valid JWTs; empty string is unreachable in practice
-        sub: payload.sub ?? '',
-        email: payload.email as string | undefined,
-        preferred_username: payload.preferred_username as string | undefined,
-        name: payload.name as string | undefined,
-      };
-      // The app is created without Variables generics; cast required to store middleware vars.
-      (c as unknown as { set(k: string, v: unknown): void }).set('oidcUser', user);
-      await next();
-      return;
-    } catch {
-      return c.json({ error: 'Unauthorized' }, 401);
-    }
+    await next();
+    return;
   };
 }

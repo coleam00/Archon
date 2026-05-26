@@ -17,7 +17,9 @@ import {
   getCodebaseEnvVars,
   setCodebaseEnvVar,
   deleteCodebaseEnvVar,
+  disconnectGithub,
 } from '@/lib/api';
+import { useAuth } from '@/hooks/useAuth';
 import type {
   SafeConfigResponse,
   CodebaseResponse,
@@ -606,6 +608,134 @@ function AssistantConfigSection({ config }: { config: SafeConfigResponse }): Rea
   );
 }
 
+function AccountConnectionsSection(): React.ReactElement | null {
+  const { user, isAuthenticated } = useAuth();
+  const queryClient = useQueryClient();
+  const [confirming, setConfirming] = useState(false);
+
+  const disconnect = useMutation({
+    mutationFn: disconnectGithub,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['auth-me'] });
+      setConfirming(false);
+    },
+  });
+
+  // Single-user mode: no user info to show.
+  if (!isAuthenticated || !user) return null;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Account & Connections</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="space-y-1">
+          <div className="text-xs uppercase tracking-wide text-muted-foreground">Signed in as</div>
+          <div className="text-sm">
+            {user.displayName ?? user.username ?? user.email ?? user.id}
+          </div>
+          {user.email && user.displayName !== user.email && (
+            <div className="text-xs text-muted-foreground">{user.email}</div>
+          )}
+          <div className="pt-1">
+            <Button asChild variant="outline" size="sm">
+              <a href="/api/auth/logout">Sign out</a>
+            </Button>
+          </div>
+        </div>
+
+        <div className="space-y-2 border-t pt-4">
+          <div className="flex items-center justify-between">
+            <div className="text-sm font-medium">GitHub</div>
+            <Badge variant={user.githubConnected ? 'default' : 'secondary'}>
+              {user.githubConnected ? 'Connected' : 'Not connected'}
+            </Badge>
+          </div>
+          {user.githubConnected ? (
+            <>
+              <div className="text-sm text-muted-foreground">
+                Connected as{' '}
+                <span className="font-mono text-text-primary">
+                  {user.githubUsername ?? 'unknown'}
+                </span>
+                . Used to clone repos and create PRs on your behalf.
+              </div>
+              {disconnect.isError && (
+                <div className="text-xs text-destructive">
+                  {disconnect.error instanceof Error
+                    ? disconnect.error.message
+                    : 'Disconnect failed'}
+                </div>
+              )}
+              <div className="flex flex-wrap gap-2 pt-1">
+                <Button asChild variant="outline" size="sm">
+                  <a href="/api/auth/github">Reconnect (refresh scopes)</a>
+                </Button>
+                <Button asChild variant="outline" size="sm">
+                  <a
+                    href="https://github.com/settings/applications"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    Manage on GitHub →
+                  </a>
+                </Button>
+                {confirming ? (
+                  <>
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      disabled={disconnect.isPending}
+                      onClick={() => {
+                        disconnect.mutate();
+                      }}
+                    >
+                      {disconnect.isPending ? 'Disconnecting…' : 'Confirm disconnect'}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={disconnect.isPending}
+                      onClick={() => {
+                        setConfirming(false);
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                  </>
+                ) : (
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={() => {
+                      setConfirming(true);
+                    }}
+                  >
+                    Disconnect
+                  </Button>
+                )}
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="text-sm text-muted-foreground">
+                Connect your GitHub account so Archon clones and PRs are attributed to you (instead
+                of the shared org token).
+              </div>
+              <div className="pt-1">
+                <Button asChild size="sm">
+                  <a href="/api/auth/github">Connect GitHub</a>
+                </Button>
+              </div>
+            </>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function PlatformConnectionsSection({
   activePlatforms,
 }: {
@@ -717,6 +847,8 @@ export function SettingsPage(): React.ReactElement {
             <SystemHealthSection health={health} database={configData?.database} />
             <ConcurrencySection health={health} />
           </div>
+
+          <AccountConnectionsSection />
 
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
             {configData && <AssistantConfigSection config={configData.config} />}
