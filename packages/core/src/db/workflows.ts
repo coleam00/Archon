@@ -334,30 +334,33 @@ export async function findResumableRun(
 }
 
 /**
- * Find a resumable (failed/paused) run for a workflow by parent conversation ID.
- * Used by the web orchestrator to detect approved runs that need foreground resume
- * (background dispatch would create a new worktree and lose the resumable run).
+ * Find a resumable (failed/paused) run for a workflow scoped to (parent conversation, codebase).
+ * Used by the orchestrator (all platforms) to detect approved runs that need foreground resume
+ * on the prior run's worktree. Codebase scope prevents cross-project resume on persistent
+ * chat conversation IDs (Telegram chat_id, Slack thread, etc.).
  */
 export async function findResumableRunByParentConversation(
   workflowName: string,
-  parentConversationId: string
+  parentConversationId: string,
+  codebaseId: string
 ): Promise<WorkflowRun | null> {
   try {
     const result = await pool.query<WorkflowRun>(
       `SELECT * FROM remote_agent_workflow_runs
        WHERE workflow_name = $1
          AND parent_conversation_id = $2
+         AND codebase_id = $3
          AND status IN ('failed', 'paused')
        ORDER BY started_at DESC
        LIMIT 1`,
-      [workflowName, parentConversationId]
+      [workflowName, parentConversationId, codebaseId]
     );
     const row = result.rows[0];
     return row ? normalizeWorkflowRun(row) : null;
   } catch (error) {
     const err = error as Error;
     getLog().error(
-      { err, workflowName, parentConversationId },
+      { err, workflowName, parentConversationId, codebaseId },
       'db.workflow_run_find_resumable_by_parent_failed'
     );
     throw new Error(`Failed to find resumable run by parent conversation: ${err.message}`);

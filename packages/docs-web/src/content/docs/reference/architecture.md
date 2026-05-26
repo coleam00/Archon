@@ -104,6 +104,9 @@ export interface IPlatformAdapter {
 
   // Optional: Retract previously streamed text (workflow routing intercept)
   emitRetract?(conversationId: string): Promise<void>;
+
+  // Optional: Append a cost / token footer after a direct-chat reply
+  sendResultFooter?(conversationId: string, info: { cost?: number; tokens?: TokenUsage; stopReason?: string }): Promise<void>;
 }
 ```
 

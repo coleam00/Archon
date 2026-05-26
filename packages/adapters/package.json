@@ -11,7 +11,7 @@
     "./community/forge/gitlab": "./src/community/forge/gitlab/index.ts"
   },
   "scripts": {
-    "test": "bun test src/chat/ src/community/chat/ src/community/forge/gitlab/auth.test.ts src/forge/github/auth.test.ts src/utils/ && bun test src/forge/github/adapter.test.ts && bun test src/forge/github/context.test.ts && bun test src/community/forge/gitea/adapter.test.ts && bun test src/community/forge/gitlab/adapter.test.ts",
+    "test": "bun test src/chat/slack/adapter.test.ts src/chat/slack/auth.test.ts src/chat/slack/blocks.test.ts src/chat/telegram/ src/community/chat/ src/community/forge/gitlab/auth.test.ts src/forge/github/auth.test.ts src/utils/ && bun test src/chat/slack/workflow-bridge.test.ts && bun test src/forge/github/adapter.test.ts && bun test src/forge/github/context.test.ts && bun test src/community/forge/gitea/adapter.test.ts && bun test src/community/forge/gitlab/adapter.test.ts",
     "type-check": "bun x tsc --noEmit"
   },
   "dependencies": {
@@ -19,6 +19,8 @@
     "@archon/git": "workspace:*",
     "@archon/isolation": "workspace:*",
     "@archon/paths": "workspace:*",
+    "@archon/providers": "workspace:*",
+    "@archon/workflows": "workspace:*",
     "@octokit/rest": "^22.0.0",
     "@slack/bolt": "^4.6.0",
     "discord.js": "^14.16.0",

@@ -259,9 +259,10 @@ Only user-defined workflows can be deleted. Bundled defaults cannot be removed.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/workflows/{name}/run` | Run a workflow |
+| POST | `/api/workflows/{name}/run` | Run a workflow (JSON or multipart) |
 | GET | `/api/workflows/runs` | List workflow runs |
 | GET | `/api/workflows/runs/{runId}` | Get run details with events |
+| GET | `/api/runs/{runId}/artifacts` | List artifact files produced by a run |
 | GET | `/api/workflows/runs/by-worker/{platformId}` | Look up a run by worker conversation ID |
 | POST | `/api/workflows/runs/{runId}/cancel` | Cancel a running workflow |
 | POST | `/api/workflows/runs/{runId}/resume` | Resume a failed workflow |
@@ -273,10 +274,26 @@ Only user-defined workflows can be deleted. Bundled defaults cannot be removed.
 #### Run a Workflow
 
 ```bash
+# JSON (no attachments)
 curl -X POST http://localhost:3090/api/workflows/archon-assist/run \
   -H "Content-Type: application/json" \
   -d '{"message": "Explain the auth module", "conversationId": "conv-123"}'
+
+# multipart (with file attachments — max 5 files, ≤10 MB each)
+curl -X POST http://localhost:3090/api/workflows/archon-assist/run \
+  -F "conversationId=conv-123" \
+  -F "message=Investigate this trace" \
+  -F "files=@stacktrace.txt" \
+  -F "files=@screenshot.png"
 ```
+
+#### List Run Artifacts
+
+```bash
+curl http://localhost:3090/api/runs/{runId}/artifacts
+```
+
+Walks the run's on-disk artifact directory (dotfiles skipped) and returns `{ files: [{ path, size, modifiedAt }] }`. Used by the console UI's Artifacts tab. Returns `{ files: [] }` when the run has no codebase or the codebase name is not in `owner/repo` form; 400 on invalid run id or path-escape attempt, 404 if the run does not exist.
 
 #### Resume a Failed Run
 

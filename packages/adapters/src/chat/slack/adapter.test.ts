@@ -29,6 +29,8 @@ const mockReplies = mock(() => Promise.resolve({ messages: [] }));
 const mockEvent = mock(() => {});
 const mockStart = mock(() => Promise.resolve(undefined));
 const mockStop = mock(() => Promise.resolve(undefined));
+const mockCommand = mock(() => {});
+const mockAction = mock(() => {});
 
 const mockApp = {
   client: {
@@ -40,6 +42,8 @@ const mockApp = {
     },
   },
   event: mockEvent,
+  command: mockCommand,
+  action: mockAction,
   start: mockStart,
   stop: mockStop,
 };
@@ -364,6 +368,150 @@ describe('SlackAdapter', () => {
           blocks: [{ type: 'markdown', text: '' }],
         })
       );
+    });
+
+    test('single-chunk message is sent without _part footer', async () => {
+      await adapter.sendMessage('C1:111.0', 'short message');
+      expect(mockPostMessage).toHaveBeenCalledTimes(1);
+      const blocks = (mockPostMessage as Mock<typeof mockPostMessage>).mock.calls[0][0].blocks;
+      expect(blocks[0].text).toBe('short message');
+      expect(blocks[0].text).not.toContain('_part ');
+    });
+
+    test('multi-chunk message annotates each part with _part i/n_', async () => {
+      const paragraph1 = 'a'.repeat(10000);
+      const paragraph2 = 'b'.repeat(10000);
+      await adapter.sendMessage('C1:111.0', `${paragraph1}\n\n${paragraph2}`);
+      expect(mockPostMessage).toHaveBeenCalledTimes(2);
+      const calls = (mockPostMessage as Mock<typeof mockPostMessage>).mock.calls;
+      expect(calls[0][0].blocks[0].text).toContain('_part 1/2_');
+      expect(calls[1][0].blocks[0].text).toContain('_part 2/2_');
+    });
+  });
+
+  describe('triggering message tracking', () => {
+    test('FIFO evicts oldest entry past the cap', async () => {
+      // SlackAdapter caps the in-memory map at 1000 entries. To keep this
+      // test fast we exercise the eviction trigger by pumping app_mention
+      // events through the registered handler.
+      mockEvent.mockClear();
+      const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+      adapter.onMessage(async () => {
+        /* no-op handler; we only care about the trigger map side-effect */
+      });
+      await adapter.start();
+      // Find the app_mention handler we just registered.
+      const calls = (mockEvent as unknown as Mock<(t: string, h: unknown) => void>).mock.calls;
+      const mentionReg = calls.find(c => c[0] === 'app_mention');
+      expect(mentionReg).toBeDefined();
+      const handler = mentionReg![1] as (args: { event: SlackMessageEvent }) => Promise<void>;
+
+      const CAP = 1000;
+      for (let i = 0; i < CAP + 5; i++) {
+        await handler({
+          event: { text: 'hi', user: 'U1', channel: 'C1', ts: `${i}.0` },
+        });
+      }
+
+      // Oldest 5 should be evicted (channel:ts pairs 0.0 .. 4.0)
+      expect(adapter.getTriggeringMessage('C1:0.0')).toBeUndefined();
+      expect(adapter.getTriggeringMessage('C1:4.0')).toBeUndefined();
+      // Boundary: entry 5 is the new oldest and must still be tracked.
+      expect(adapter.getTriggeringMessage('C1:5.0')).toEqual({ channel: 'C1', ts: '5.0' });
+      // Newest entry must be present.
+      expect(adapter.getTriggeringMessage(`C1:${CAP + 4}.0`)).toEqual({
+        channel: 'C1',
+        ts: `${CAP + 4}.0`,
+      });
+    });
+  });
+
+  describe('slash commands', () => {
+    function findCommandHandler(name: string): (args: unknown) => Promise<void> {
+      const calls = (mockCommand as unknown as Mock<(n: string, h: unknown) => void>).mock.calls;
+      const reg = calls.find(c => c[0] === name);
+      if (!reg) throw new Error(`no handler registered for ${name}`);
+      return reg[1] as (args: unknown) => Promise<void>;
+    }
+
+    function makeSlashArgs(overrides: Record<string, unknown> = {}) {
+      const ack = mock(async () => {});
+      const respond = mock(async () => {});
+      const fakeClient = { chat: { postMessage: mockPostMessage } };
+      return {
+        ack,
+        respond,
+        client: fakeClient,
+        command: {
+          user_id: 'U123',
+          text: 'list',
+          channel_id: 'C1',
+          trigger_id: 't1',
+          ...overrides,
+        },
+      };
+    }
+
+    test('unauthorized user is silently rejected — no respond, no seed post', async () => {
+      mockPostMessage.mockClear();
+      mockCommand.mockClear();
+      const original = process.env.SLACK_ALLOWED_USER_IDS;
+      process.env.SLACK_ALLOWED_USER_IDS = 'U1ALICE';
+      try {
+        const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+        adapter.onMessage(async () => {});
+        await adapter.start();
+
+        const handler = findCommandHandler('/archon-workflow');
+        const args = makeSlashArgs({ user_id: 'U2BOB' });
+        await handler(args);
+
+        // ack always fires (Slack 3s deadline).
+        expect((args.ack as Mock<() => Promise<void>>).mock.calls.length).toBe(1);
+        // But the unauthorized branch must NOT speak back to the user
+        // (mirrors the app_mention silent-rejection policy).
+        expect((args.respond as Mock<() => Promise<void>>).mock.calls.length).toBe(0);
+        expect(mockPostMessage).not.toHaveBeenCalled();
+      } finally {
+        if (original === undefined) delete process.env.SLACK_ALLOWED_USER_IDS;
+        else process.env.SLACK_ALLOWED_USER_IDS = original;
+      }
+    });
+
+    test('seed-post failure surfaces ephemeral error and skips message handler', async () => {
+      mockPostMessage.mockClear();
+      mockCommand.mockClear();
+      const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+      const onMessage = mock(async () => {});
+      adapter.onMessage(onMessage);
+      await adapter.start();
+
+      // Reject the seed post — adapter must surface an ephemeral error and
+      // never invoke the message handler with an undefined ts.
+      const seedError = new Error('not_in_channel');
+      const failingPost = mock(async () => Promise.reject(seedError));
+      const fakeClient = { chat: { postMessage: failingPost } };
+      const ack = mock(async () => {});
+      const respond = mock(async () => {});
+
+      const handler = findCommandHandler('/archon');
+      await handler({
+        ack,
+        respond,
+        client: fakeClient,
+        command: {
+          user_id: 'U123',
+          text: 'hello',
+          channel_id: 'C_HIDDEN',
+          trigger_id: 't1',
+        },
+      });
+
+      expect(failingPost).toHaveBeenCalledTimes(1);
+      expect(onMessage).not.toHaveBeenCalled();
+      const respondCalls = (respond as Mock<() => Promise<void>>).mock.calls;
+      expect(respondCalls.length).toBe(1);
+      expect((respondCalls[0]![0] as { response_type: string }).response_type).toBe('ephemeral');
     });
   });
 });

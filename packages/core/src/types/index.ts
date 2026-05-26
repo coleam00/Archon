@@ -5,8 +5,8 @@ import type { TransitionTrigger } from '../state/session-transitions';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
 import { z } from 'zod';
 
-// MessageChunk imported for use in IPlatformAdapter/IWebPlatformAdapter below
-import type { MessageChunk } from '@archon/providers/types';
+// MessageChunk + TokenUsage are used by IPlatformAdapter below.
+import type { MessageChunk, TokenUsage } from '@archon/providers/types';
 
 /**
  * Custom error for when a conversation is not found during update operations
@@ -160,6 +160,18 @@ export interface IPlatformAdapter {
 
   /** Retract previously streamed text (used when workflow routing intercepts) */
   emitRetract?(conversationId: string): Promise<void>;
+
+  /**
+   * Optional: Append a small footer summarising cost / token usage / stop reason
+   * after a direct-chat assistant turn. Implemented by adapters that surface
+   * usage info in-band (e.g. Slack posts an italic context line). No-op for
+   * adapters that don't care; orchestrator skips the call when both `cost`
+   * and `tokens` are absent.
+   */
+  sendResultFooter?(
+    conversationId: string,
+    info: { cost?: number; tokens?: TokenUsage; stopReason?: string }
+  ): Promise<void>;
 }
 
 /**
