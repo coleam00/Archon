@@ -512,6 +512,18 @@ Unsupported YAML fields trigger a visible warning from the dag-executor when the
 
 Oh My Pi is registered as `provider: omp` with display name **Oh My Pi (community)**. It is separate from the existing `provider: pi` integration; Pi and Oh My Pi share a base lineage, but Archon treats them as distinct agents with different package families, runtime surfaces, and provider behavior. The OMP provider maps explicitly to the Oh My Pi SDK packages (`@oh-my-pi/*`).
 
+### Install and authenticate
+
+Archon bundles the OMP SDK packages through `@archon/providers`; no separate npm package install is required when running Archon from the repository or release binaries. You still need Oh My Pi credentials/configuration for the model provider you select.
+
+`archon setup` currently configures Claude, Codex, and Pi, but not Oh My Pi. Configure OMP by editing `.archon/config.yaml` and, when needed, the Archon env file (`~/.archon/.env` for user scope or `.archon/.env` for project scope).
+
+Authentication follows the OMP provider's native options:
+
+- API-key providers: set the provider env var in the shell, Archon env file, workflow/codebase `envVars`, or `assistants.omp.env`. Examples: `ANTHROPIC_API_KEY`, `ANTHROPIC_OAUTH_TOKEN`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `XAI_API_KEY`.
+- OAuth providers: complete the upstream OMP login flow so credentials are stored in the OMP agent directory (`agentDir` below, or OMP's default).
+- Local inference: configure the upstream OMP model/provider registry for local backends such as Ollama, LM Studio, llama.cpp, or custom OpenAI-compatible endpoints, and provide the env var OMP expects for that provider when it requires one (for example `OLLAMA_API_KEY`, `LM_STUDIO_API_KEY`, `LLAMA_CPP_API_KEY`, or the custom provider's configured credential).
+
 ### Configure Oh My Pi
 
 ```yaml

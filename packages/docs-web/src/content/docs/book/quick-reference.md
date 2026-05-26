@@ -144,6 +144,8 @@ All nodes share these base fields:
 | `skills` | No | string[] | Skill names to preload into this node's context (Claude, Pi, and Oh My Pi) |
 | `agents` | No | object | Inline sub-agent definitions keyed by kebab-case ID. Claude only |
 
+For OMP setup, model reference syntax, and provider-specific tool names, see [Oh My Pi (Community Provider)](/getting-started/ai-assistants/#oh-my-pi-community-provider).
+
 **Script-specific fields** (required when `script:` is set):
 
 | Field | Required | Type | Description |
