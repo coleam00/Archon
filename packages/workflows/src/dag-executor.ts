@@ -8,7 +8,7 @@
 import { writeFileSync } from 'fs';
 import { readFile } from 'fs/promises';
 import { isAbsolute, join as joinPath, resolve as resolvePath } from 'path';
-import { execFileAsync } from '@archon/git';
+import { execFileAsync, resolveBashPath } from '@archon/git';
 import { discoverScriptsForCwd } from './script-discovery';
 import type {
   IWorkflowPlatform,
@@ -2033,8 +2033,9 @@ async function executeBashNode(
     ...(envVars ?? {}),
   };
 
+  const bashPath = resolveBashPath();
   try {
-    const { stdout, stderr } = await execFileAsync('bash', ['-c', finalScript], {
+    const { stdout, stderr } = await execFileAsync(bashPath, ['-c', finalScript], {
       cwd,
       timeout,
       env: subprocessEnv,
@@ -2091,9 +2092,12 @@ async function executeBashNode(
     let errorMsg: string;
     if (isTimeout) {
       errorMsg = `${label} timed out after ${String(timeout)}ms`;
-    } else if (err.message?.includes('ENOENT')) {
-      errorMsg = `${label} failed: bash executable not found in PATH`;
-    } else if (err.message?.includes('EACCES')) {
+    } else if (err.code === 'ENOENT' || err.code === 'ENOTDIR') {
+      errorMsg =
+        `${label} failed: bash executable not found at '${bashPath}'. ` +
+        'Set ARCHON_BASH_PATH if Git Bash is installed elsewhere ' +
+        '(e.g. user-scope installer at %LOCALAPPDATA%\\Programs\\Git\\bin\\bash.exe).';
+    } else if (err.code === 'EACCES') {
       errorMsg = `${label} failed: permission denied (check cwd permissions)`;
     } else {
       errorMsg = formatted.userMessage;
@@ -3379,6 +3383,9 @@ async function executeLoopNode(
     // Check deterministic bash condition (if configured)
     let bashComplete = false;
     if (loop.until_bash) {
+      // Resolve outside the try so ARCHON_BASH_PATH validation errors bubble up
+      // to the caller instead of being swallowed by the per-iteration catch.
+      const loopBashPath = resolveBashPath();
       try {
         const { prompt: bashPrompt } = substituteWorkflowVariables(
           loop.until_bash,
@@ -3399,7 +3406,7 @@ async function executeLoopNode(
           true, // escapedForBash
           logDir
         );
-        await execFileAsync('bash', ['-c', substitutedBash], {
+        await execFileAsync(loopBashPath, ['-c', substitutedBash], {
           cwd,
           timeout: SUBPROCESS_DEFAULT_TIMEOUT,
           env: {
@@ -3422,20 +3429,28 @@ async function executeLoopNode(
         bashComplete = true; // exit 0 = complete
       } catch (e) {
         const bashErr = e as NodeJS.ErrnoException;
-        // ENOENT or other system errors are unexpected — log them
-        if (bashErr.code === 'ENOENT') {
-          getLog().warn(
-            { err: bashErr, nodeId: node.id, iteration: i },
-            'loop_node.until_bash_exec_error'
-          );
-        } else if (bashErr.code !== undefined) {
-          // Log non-ENOENT system errors (syntax errors, permission issues, etc.)
-          getLog().warn(
-            { err: bashErr, nodeId: node.id, iteration: i },
-            'loop_node.until_bash_unexpected_error'
+        // System-level errors (ENOENT/EACCES/ENOTDIR) mean the bash binary itself
+        // is unreachable — looping forever on bashComplete=false is wrong. Throw
+        // out of the loop with a clear actionable error instead.
+        if (bashErr.code === 'ENOENT' || bashErr.code === 'EACCES' || bashErr.code === 'ENOTDIR') {
+          getLog().error({ err: bashErr, nodeId: node.id, iteration: i }, 'loop.until_bash_failed');
+          throw new Error(
+            `Loop node '${node.id}' until_bash failed: cannot execute bash at ` +
+              `'${loopBashPath}' (${bashErr.code}). Set ARCHON_BASH_PATH if Git Bash ` +
+              'is installed elsewhere.'
           );
         }
-        bashComplete = false; // non-zero exit = not complete
+        // Non-exec errors (resolveBashPath validation, template substitution, etc.)
+        // have no err.code — they should halt the loop, not silently re-iterate.
+        if (typeof bashErr.code !== 'number') {
+          getLog().error(
+            { err: bashErr, nodeId: node.id, iteration: i },
+            'loop.until_bash_unexpected_error'
+          );
+          throw bashErr;
+        }
+        // Numeric exit code from the bash script = condition not met yet, keep looping.
+        bashComplete = false;
       }
     }
 

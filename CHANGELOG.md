@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`bash` nodes and loop `until_bash` now resolve the bash binary correctly on Windows.** A bare `spawn('bash', ...)` resolved to `C:\Windows\System32\bash.exe` (the WSL launcher) via CreateProcess's System32-first lookup, whose bash has broken `${VAR}` expansion in `-c` mode. New `resolveBashPath()` defaults to Git Bash on Windows and supports `ARCHON_BASH_PATH` override for non-standard installs. Loop `until_bash` now throws on bash-binary failures (ENOENT/EACCES/ENOTDIR) instead of silently re-iterating forever. Fixes #1326.
+
 ## [0.5.0] - 2026-06-26
 
 Per-user AI credentials (API keys + subscription OAuth) with a zero-config
