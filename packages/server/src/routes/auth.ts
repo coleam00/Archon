@@ -3,19 +3,29 @@
  *
  * All routes are no-ops (404) when KEYCLOAK_URL is not set.
  * The module is always imported; individual handlers check env vars at request time.
+ *
+ * Routes register through `registerOpenApiRoute(createRoute({...}), handler)` so
+ * they show up in the generated OpenAPI spec (`GET /api/openapi.json`) and follow
+ * the project-wide convention (CLAUDE.md).
  */
-import type { OpenAPIHono } from '@hono/zod-openapi';
+import { OpenAPIHono, createRoute } from '@hono/zod-openapi';
 import type { Context } from 'hono';
 import { randomBytes } from 'crypto';
 import { setCookie, getCookie, deleteCookie } from 'hono/cookie';
 import type { OidcUser } from '../middleware/auth';
 import { userDb } from '@archon/core';
 import { createLogger } from '@archon/paths';
+import { errorSchema } from './schemas/common.schemas';
+import {
+  authMeResponseSchema,
+  okResponseSchema,
+  oidcCallbackQuerySchema,
+  githubCallbackQuerySchema,
+} from './schemas/auth.schemas';
 
 /** Retrieve oidcUser set by the OIDC middleware without triggering strict Variables type checks. */
 function getOidcUser(c: Context): OidcUser | undefined {
   // The app is created without Variables generics; cast required to access middleware-set vars.
-
   return (c as unknown as { get(k: string): unknown }).get('oidcUser') as OidcUser | undefined;
 }
 
@@ -85,11 +95,130 @@ async function fetchWithTimeout(
   }
 }
 
+// ─── OpenAPI route configs ──────────────────────────────────────────────────
+
+function jsonError(description: string): {
+  content: { 'application/json': { schema: typeof errorSchema } };
+  description: string;
+} {
+  return { content: { 'application/json': { schema: errorSchema } }, description };
+}
+
+/**
+ * Mark a 302 redirect response. OpenAPI 3.0 permits empty responses; the actual
+ * Location header is set by `c.redirect(url)` at runtime.
+ */
+function redirectResponse(description: string): { description: string } {
+  return { description };
+}
+
+const loginRoute = createRoute({
+  method: 'get',
+  path: '/api/auth/login',
+  tags: ['Auth'],
+  summary: 'Start OIDC login (redirect to Keycloak with PKCE)',
+  responses: {
+    302: redirectResponse('Redirect to Keycloak authorization endpoint'),
+    404: jsonError('OIDC not configured (KEYCLOAK_URL unset)'),
+  },
+});
+
+const callbackRoute = createRoute({
+  method: 'get',
+  path: '/api/auth/callback',
+  tags: ['Auth'],
+  summary: 'OIDC code-exchange callback',
+  request: { query: oidcCallbackQuerySchema },
+  responses: {
+    302: redirectResponse('Redirect to / on success, or /?auth_error=... on IdP error'),
+    400: jsonError('Missing/invalid code or state'),
+    404: jsonError('OIDC not configured'),
+    502: jsonError('Token exchange failed or IdP unreachable'),
+  },
+});
+
+const logoutRoute = createRoute({
+  method: 'get',
+  path: '/api/auth/logout',
+  tags: ['Auth'],
+  summary: 'Clear session cookie and redirect to Keycloak logout',
+  responses: {
+    302: redirectResponse('Redirect to Keycloak logout (or / in single-user mode)'),
+  },
+});
+
+const meRoute = createRoute({
+  method: 'get',
+  path: '/api/auth/me',
+  tags: ['Auth'],
+  summary: 'Return the current authenticated user',
+  responses: {
+    200: {
+      content: { 'application/json': { schema: authMeResponseSchema } },
+      description: 'Authenticated user record, or { authenticated: false } in single-user mode',
+    },
+    401: jsonError('No valid session'),
+    404: jsonError('User session valid but no DB record exists'),
+  },
+});
+
+const githubStartRoute = createRoute({
+  method: 'get',
+  path: '/api/auth/github',
+  tags: ['Auth'],
+  summary: 'Start GitHub OAuth flow to connect a per-user token',
+  responses: {
+    302: redirectResponse('Redirect to GitHub authorize endpoint'),
+    401: jsonError('Not authenticated to Archon'),
+    404: jsonError('GitHub OAuth not configured'),
+  },
+});
+
+const githubCallbackRoute = createRoute({
+  method: 'get',
+  path: '/api/auth/github/callback',
+  tags: ['Auth'],
+  summary: 'GitHub OAuth callback — exchange code, store encrypted token per user',
+  request: { query: githubCallbackQuerySchema },
+  responses: {
+    302: redirectResponse('Redirect to /?github_connected=1 on success'),
+    400: jsonError('Invalid state or missing code'),
+    401: jsonError('Not authenticated to Archon'),
+    404: jsonError('GitHub OAuth not configured, or user record missing'),
+    502: jsonError('GitHub token exchange failed or unreachable'),
+  },
+});
+
+const githubDisconnectRoute = createRoute({
+  method: 'delete',
+  path: '/api/auth/github',
+  tags: ['Auth'],
+  summary: 'Disconnect the current user from GitHub (best-effort revoke + clear DB)',
+  responses: {
+    200: {
+      content: { 'application/json': { schema: okResponseSchema } },
+      description: 'Disconnected (idempotent)',
+    },
+    401: jsonError('Not authenticated'),
+    404: jsonError('User record missing'),
+  },
+});
+
 export function registerAuthRoutes(app: OpenAPIHono): void {
   /**
-   * GET /api/auth/login — redirect to Keycloak authorization endpoint.
+   * Local OpenAPI registration helper — matches the pattern in api.ts. The
+   * `as never` cast bypasses the TypedResponse generic constraint; response
+   * schemas are spec-only and not runtime-validated.
    */
-  app.get('/api/auth/login', async c => {
+  function registerOpenApiRoute(
+    route: ReturnType<typeof createRoute>,
+    handler: (c: Context) => Response | Promise<Response>
+  ): void {
+    app.openapi(route, handler as never);
+  }
+
+  // GET /api/auth/login — redirect to Keycloak authorization endpoint.
+  registerOpenApiRoute(loginRoute, async c => {
     if (!process.env.KEYCLOAK_URL) {
       return c.json({ error: 'OIDC not configured' }, 404);
     }
@@ -114,10 +243,8 @@ export function registerAuthRoutes(app: OpenAPIHono): void {
     return c.redirect(`${keycloakBase()}/protocol/openid-connect/auth?${params}`);
   });
 
-  /**
-   * GET /api/auth/callback — exchange authorization code for tokens and upsert user.
-   */
-  app.get('/api/auth/callback', async c => {
+  // GET /api/auth/callback — exchange authorization code for tokens and upsert user.
+  registerOpenApiRoute(callbackRoute, async c => {
     if (!process.env.KEYCLOAK_URL) {
       return c.json({ error: 'OIDC not configured' }, 404);
     }
@@ -224,10 +351,8 @@ export function registerAuthRoutes(app: OpenAPIHono): void {
     return c.redirect('/');
   });
 
-  /**
-   * GET /api/auth/logout — clear cookie and redirect to Keycloak logout.
-   */
-  app.get('/api/auth/logout', c => {
+  // GET /api/auth/logout — clear cookie and redirect to Keycloak logout.
+  registerOpenApiRoute(logoutRoute, c => {
     deleteCookie(c, 'archon_access_token', { path: '/' });
 
     if (!process.env.KEYCLOAK_URL) {
@@ -241,10 +366,8 @@ export function registerAuthRoutes(app: OpenAPIHono): void {
     return c.redirect(`${keycloakBase()}/protocol/openid-connect/logout?${params}`);
   });
 
-  /**
-   * GET /api/auth/me — return current user info from validated JWT claims.
-   */
-  app.get('/api/auth/me', async c => {
+  // GET /api/auth/me — return current user info from validated JWT claims.
+  registerOpenApiRoute(meRoute, async c => {
     if (!process.env.KEYCLOAK_URL) {
       return c.json({ authenticated: false });
     }
@@ -269,18 +392,22 @@ export function registerAuthRoutes(app: OpenAPIHono): void {
     });
   });
 
-  /**
-   * GET /api/auth/github — redirect to GitHub OAuth authorization.
-   */
-  app.get('/api/auth/github', c => {
+  // GET /api/auth/github — redirect to GitHub OAuth authorization.
+  registerOpenApiRoute(githubStartRoute, c => {
     if (!process.env.GITHUB_OAUTH_CLIENT_ID) {
       return c.json({ error: 'GitHub OAuth not configured' }, 404);
+    }
+
+    const oidcUser = getOidcUser(c);
+    if (!oidcUser) {
+      return c.json({ error: 'Not authenticated' }, 401);
     }
 
     const state = randomBytes(16).toString('hex');
     // Store state in cookie for CSRF protection
     setCookie(c, 'github_oauth_state', state, {
       httpOnly: true,
+      secure: true,
       sameSite: 'Lax',
       path: '/',
       maxAge: 10 * 60,
@@ -296,10 +423,8 @@ export function registerAuthRoutes(app: OpenAPIHono): void {
     return c.redirect(`https://github.com/login/oauth/authorize?${params}`);
   });
 
-  /**
-   * GET /api/auth/github/callback — exchange GitHub code, encrypt token, store per user.
-   */
-  app.get('/api/auth/github/callback', async c => {
+  // GET /api/auth/github/callback — exchange GitHub code, encrypt token, store per user.
+  registerOpenApiRoute(githubCallbackRoute, async c => {
     if (!process.env.GITHUB_OAUTH_CLIENT_ID || !process.env.GITHUB_OAUTH_CLIENT_SECRET) {
       return c.json({ error: 'GitHub OAuth not configured' }, 404);
     }
@@ -379,12 +504,10 @@ export function registerAuthRoutes(app: OpenAPIHono): void {
     return c.redirect('/?github_connected=1');
   });
 
-  /**
-   * DELETE /api/auth/github — disconnect the current user's GitHub OAuth token.
-   * Best-effort revokes the token on GitHub (via Apps Revoke endpoint), then
-   * clears the encrypted token + username from the user row. Idempotent.
-   */
-  app.delete('/api/auth/github', async c => {
+  // DELETE /api/auth/github — disconnect the current user's GitHub OAuth token.
+  // Best-effort revokes the token on GitHub (via Apps Revoke endpoint), then
+  // clears the encrypted token + username from the user row. Idempotent.
+  registerOpenApiRoute(githubDisconnectRoute, async c => {
     const oidcUser = getOidcUser(c);
     if (!oidcUser) {
       return c.json({ error: 'Unauthorized' }, 401);
