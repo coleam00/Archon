@@ -3530,7 +3530,11 @@ export function applyLoopPrevToBodyNode(
       ...node,
       loop: {
         ...node.loop,
-        prompt: sub(node.loop.prompt),
+        // A command-backed loop has no inline prompt to substitute — its prompt text
+        // is loaded from the command file inside executeLoopNode. Group-level
+        // $LOOP_PREV.<bodyId>.output refs are resolved only in YAML fields (this
+        // pass); they are not scanned inside command-file bodies.
+        ...(node.loop.prompt !== undefined ? { prompt: sub(node.loop.prompt) } : {}),
         ...(node.loop.until_bash !== undefined
           ? { until_bash: sub(node.loop.until_bash, true) }
           : {}),
@@ -3609,6 +3613,7 @@ async function executeLoopNode(
   nodeOutputs: Map<string, NodeOutput>,
   config: WorkflowConfig,
   issueContext?: string,
+  configuredCommandFolder?: string,
   stepNamePrefix = '',
   execContext: ExecutionContext = { kind: 'host' }
 ): Promise<NodeExecutionResult> {
@@ -3618,6 +3623,53 @@ async function executeLoopNode(
   // ('' → node.id at top level, #2090). The loop's own per-iteration number lives in
   // each event's data (`iteration`), so no separate iteration param is threaded here.
   const stepName = stepNamePrefix + node.id;
+
+  // Resolve the iteration prompt source. `loop.prompt` is used directly;
+  // `loop.command` is read once here from a command file and the loaded text
+  // is reused for every iteration — editing the file mid-run cannot change the
+  // remaining iterations of this run. The schema guarantees exactly one of the
+  // two is defined.
+  let loopPromptTemplate: string;
+  if (typeof loop.prompt === 'string') {
+    loopPromptTemplate = loop.prompt;
+  } else if (typeof loop.command === 'string') {
+    const promptResult = await loadCommandPrompt(deps, cwd, loop.command, configuredCommandFolder);
+    if (!promptResult.success) {
+      const errMsg = promptResult.message;
+      getLog().error(
+        { nodeId: node.id, command: loop.command, error: errMsg },
+        'loop_node.command_load_failed'
+      );
+      await logNodeError(logDir, workflowRun.id, node.id, errMsg);
+      deps.store
+        .createWorkflowEvent({
+          workflow_run_id: workflowRun.id,
+          event_type: 'node_failed',
+          step_name: stepName,
+          data: { error: errMsg },
+        })
+        .catch((err: Error) => {
+          getLog().error(
+            { err, workflowRunId: workflowRun.id, eventType: 'node_failed' },
+            'workflow_event_persist_failed'
+          );
+        });
+      getWorkflowEventEmitter().emit({
+        type: 'node_failed',
+        runId: workflowRun.id,
+        nodeId: node.id,
+        nodeName: node.id,
+        error: errMsg,
+      });
+      return { state: 'failed', output: '', error: errMsg };
+    }
+    loopPromptTemplate = promptResult.content;
+  } else {
+    // Unreachable: superRefine on loopNodeConfigSchema enforces exactly-one.
+    throw new Error(
+      `Loop node '${node.id}' has neither 'loop.prompt' nor 'loop.command' — schema invariant violated`
+    );
+  }
 
   // Resolve AI client — fail fast with descriptive error
   let aiClient: ReturnType<typeof deps.getAgentProvider>;
@@ -3788,7 +3840,7 @@ async function executeLoopNode(
       // executor starts a fresh `lastIterationOutput` variable, so the first iteration of
       // the resume also receives an empty $LOOP_PREV_OUTPUT.
       const { prompt: substitutedPrompt } = substituteWorkflowVariables(
-        loop.prompt,
+        loopPromptTemplate,
         workflowRun.id,
         workflowRun.user_message,
         artifactsDir,
@@ -5144,6 +5196,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               ctx.nodeOutputs,
               config,
               issueContext,
+              configuredCommandFolder,
               stepNamePrefix,
               execContext
             );

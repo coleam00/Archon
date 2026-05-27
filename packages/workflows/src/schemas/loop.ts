@@ -9,6 +9,7 @@
  * session reset, interactive gate). Each variant extends it with its body shape.
  */
 import { z } from '@hono/zod-openapi';
+import { isValidCommandName } from '../command-validation';
 
 /**
  * Shared iteration-control fields for `loop:` and `loop_group:`.
@@ -48,10 +49,48 @@ export const loopControlSchema = z
 
 export type LoopControl = z.infer<typeof loopControlSchema>;
 
-/** `loop:` node config — iteration control plus a single inline prompt. */
-export const loopNodeConfigSchema = loopControlSchema.extend({
-  /** Inline prompt text executed each iteration. */
-  prompt: z.string().min(1, "loop node requires 'loop.prompt' (non-empty string)"),
-});
+/**
+ * `loop:` node config — iteration control plus exactly one iteration-prompt source:
+ * an inline `prompt` or a named command file (`command`). `loop_group:` shares only
+ * the control surface, so the one-of refinement lives here, not on `loopControlSchema`.
+ */
+export const loopNodeConfigSchema = loopControlSchema
+  .extend({
+    /** Inline prompt text executed each iteration. Mutually exclusive with `command`. */
+    prompt: z.string().min(1, "'loop.prompt' must be a non-empty string").optional(),
+    /**
+     * Named command file (under `.archon/commands/`) whose body is loaded as the iteration
+     * prompt. Resolved with repo → home → bundled precedence, identical to `command:` nodes.
+     * Mutually exclusive with `prompt`.
+     */
+    command: z.string().min(1, "'loop.command' must be a non-empty string").optional(),
+  })
+  .superRefine((data, ctx) => {
+    const hasPrompt = typeof data.prompt === 'string' && data.prompt.length > 0;
+    const hasCommand = typeof data.command === 'string' && data.command.length > 0;
+
+    if (hasPrompt && hasCommand) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "loop node accepts exactly one of 'loop.prompt' or 'loop.command' (both were provided)",
+        path: ['command'],
+      });
+    } else if (!hasPrompt && !hasCommand) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "loop node requires either 'loop.prompt' (inline) or 'loop.command' (file)",
+        path: ['prompt'],
+      });
+    }
+
+    if (hasCommand && !isValidCommandName((data.command ?? '').trim())) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `invalid command name "${(data.command ?? '').trim()}" — must not contain path separators, '..', or start with '.'`,
+        path: ['command'],
+      });
+    }
+  });
 
 export type LoopNodeConfig = z.infer<typeof loopNodeConfigSchema>;

@@ -245,7 +245,13 @@ export function validateDagStructure(
     if (isCancelNode(node)) sources.push(node.cancel);
     if (isApprovalNode(node)) sources.push(node.approval.message);
     if (isLoopNode(node)) {
-      sources.push(stripMarkdownCode(node.loop.prompt));
+      // Only inline `loop.prompt` is scanned for `$nodeId.output` refs. A
+      // command-backed loop (`loop.command`) loads its prompt text from a file
+      // at runtime; that file's contents are the author's responsibility, the
+      // same way a `command:` node's body is not scanned at parse time.
+      if (typeof node.loop.prompt === 'string') {
+        sources.push(stripMarkdownCode(node.loop.prompt));
+      }
       if (node.loop.until_bash) sources.push(node.loop.until_bash);
     }
     if (isLoopGroupNode(node) && node.loop_group.until_bash) {
