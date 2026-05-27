@@ -77,7 +77,7 @@ git push origin main
 
 If you maintain a Homebrew tap (`homebrew-archon`), copy the updated formula there.
 
-### 4. Update Nix Flake (Optional)
+### 4. Update Nix Flake
 
 After the release workflow completes, update `flake.nix` to use the new version:
 
@@ -100,7 +100,7 @@ The fields to change in `flake.nix`:
 - `version = "X.Y.Z"` (line near the top)
 - `sha256` map in the `selectBinary` block (one hash per platform)
 
-### 4. Verify the Release
+### 5. Verify the Release
 
 ```bash
 # Test the install script (only works if repo is public)

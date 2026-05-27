@@ -34,7 +34,7 @@
         # Wrapper to make binary executable
         archon = pkgs.stdenv.mkDerivation {
           pname = "archon";
-          version = "0.3.12";
+          version = "0.3.12"; # Bump version for each release
           src = archon-bin;
 
           dontUnpack = true;
