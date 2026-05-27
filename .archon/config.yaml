@@ -1,3 +1,11 @@
+defaultAssistant: pi
+
+assistants:
+  pi:
+    model: moonshot/kimi-k2.6
+    effort: medium
+    enableExtensions: true
+
 worktree:
   baseBranch: dev
 
