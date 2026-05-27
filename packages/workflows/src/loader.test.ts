@@ -2743,6 +2743,152 @@ nodes:
       );
     });
 
+    // -----------------------------------------------------------------------
+    // loop.command — alternative to loop.prompt that loads the iteration
+    // prompt from a command file (parallel to how `command:` nodes work).
+    // The loader only enforces the schema-level "exactly one" rule and the
+    // command-name safety rule; file resolution is validator-level (Level 3)
+    // and is covered separately in validator.test.ts.
+    // -----------------------------------------------------------------------
+
+    it('should parse a loop node with loop.command (no inline prompt)', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'loop-cmd-only.yaml'),
+        `
+name: loop-cmd-only
+description: Command-backed loop
+nodes:
+  - id: my-loop
+    loop:
+      command: my-loop-cmd
+      until: COMPLETE
+      max_iterations: 5
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
+
+      const node = result.workflows[0].workflow.nodes[0];
+      expect(isLoopNode(node)).toBe(true);
+      if (isLoopNode(node)) {
+        expect(node.loop.command).toBe('my-loop-cmd');
+        expect(node.loop.prompt).toBeUndefined();
+      }
+    });
+
+    it('should reject a loop node with both loop.prompt and loop.command', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'loop-both.yaml'),
+        `
+name: loop-both
+description: Both prompt and command on loop
+nodes:
+  - id: my-loop
+    loop:
+      prompt: "Do stuff."
+      command: my-loop-cmd
+      until: DONE
+      max_iterations: 5
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors.length).toBeGreaterThan(0);
+      // Error must mention the "exactly one" rule and both candidate fields,
+      // so authors immediately understand the conflict.
+      expect(result.errors[0].error).toContain('exactly one');
+      expect(result.errors[0].error).toContain('loop.prompt');
+      expect(result.errors[0].error).toContain('loop.command');
+    });
+
+    it('should reject a loop node with neither loop.prompt nor loop.command (message mentions both options)', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'loop-neither.yaml'),
+        `
+name: loop-neither
+description: Loop with no prompt source
+nodes:
+  - id: my-loop
+    loop:
+      until: DONE
+      max_iterations: 5
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors.length).toBeGreaterThan(0);
+      // Error must offer both alternatives, not just the legacy 'loop.prompt'
+      // path, so authors discover loop.command exists.
+      expect(result.errors[0].error).toContain('loop.prompt');
+      expect(result.errors[0].error).toContain('loop.command');
+    });
+
+    it("should reject a loop node whose loop.command is an unsafe name ('../escape')", async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'loop-unsafe-cmd.yaml'),
+        `
+name: loop-unsafe-cmd
+description: Loop with unsafe command name
+nodes:
+  - id: my-loop
+    loop:
+      command: "../escape"
+      until: DONE
+      max_iterations: 5
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors.length).toBeGreaterThan(0);
+      expect(result.errors[0].error).toContain('invalid command name');
+      expect(result.errors[0].error).toContain('../escape');
+    });
+
+    it('should not false-positive the $nodeId.output ref scan on a command-backed loop with a sibling that consumes its output', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      // Regression guard for the loader change that skips the ref scan when
+      // loop.prompt is absent: the scanner must (a) not crash trying to read
+      // the missing inline prompt, and (b) still register the loop's id so a
+      // sibling can reference `$my-loop.output` like any other node output.
+      await writeFile(
+        join(workflowDir, 'loop-cmd-with-sibling.yaml'),
+        `
+name: loop-cmd-with-sibling
+description: Command-backed loop with a downstream consumer
+nodes:
+  - id: my-loop
+    loop:
+      command: my-loop-cmd
+      until: DONE
+      max_iterations: 3
+  - id: consumer
+    depends_on: [my-loop]
+    prompt: "Process the loop output: $my-loop.output"
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
+      expect(result.workflows[0].workflow.nodes).toHaveLength(2);
+    });
+
     it('should accept a loop with signal_completes (loads without errors)', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(workflowDir, { recursive: true });
