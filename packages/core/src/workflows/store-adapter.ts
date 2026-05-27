@@ -10,6 +10,7 @@ import * as workflowDb from '../db/workflows';
 import * as workflowEventDb from '../db/workflow-events';
 import * as codebaseDb from '../db/codebases';
 import * as envVarDb from '../db/env-vars';
+import * as userDb from '../db/users';
 import { getAgentProvider } from '@archon/providers';
 import { loadConfig as loadMergedConfig } from '../config/config-loader';
 import { createLogger } from '@archon/paths';
@@ -71,5 +72,9 @@ export function createWorkflowDeps(): WorkflowDeps {
     store: createWorkflowStore(),
     getAgentProvider,
     loadConfig: loadMergedConfig,
+    // Resolves the run-owner's personal GitHub OAuth token (decrypted) for
+    // the multi-user token policy. Returns null when the user hasn't
+    // connected GitHub — the policy then decides scrub vs. fall back to org.
+    getUserGithubToken: userDb.getGithubToken,
   };
 }

@@ -112,4 +112,12 @@ export interface WorkflowDeps {
   store: IWorkflowStore;
   getAgentProvider: AgentProviderFactory;
   loadConfig: (cwd: string) => Promise<WorkflowConfig>;
+  /**
+   * Resolve a user's stored personal GitHub OAuth token for multi-user
+   * GitHub token-policy enforcement (see utils/github-token-policy).
+   * Returns null when the user has no token connected. Optional so callers
+   * that don't run in multi-user mode (CLI tests, single-tenant deployments)
+   * can omit it — the policy treats `undefined` resolver as "no user token".
+   */
+  getUserGithubToken?: (userId: string) => Promise<string | null>;
 }

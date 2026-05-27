@@ -164,6 +164,10 @@ describe('cloneRepository', () => {
     delete process.env.GH_TOKEN;
     delete process.env.GITLAB_TOKEN;
     delete process.env.GITEA_TOKEN;
+    // Legacy single-user-mode tests assume no Keycloak. The 'multi-user
+    // GitHub token policy' describe block below opts in explicitly.
+    delete process.env.KEYCLOAK_URL;
+    delete process.env.ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK;
   });
 
   // ── URL normalization / happy-path cloning ─────────────────────────────
@@ -1202,5 +1206,93 @@ describe('RegisterResult shape', () => {
 
     expect(result.alreadyExisted).toBe(true);
     expect(result.commandCount).toBe(0);
+  });
+
+  // ── Multi-user GitHub token policy ───────────────────────────────────────
+  describe('multi-user GitHub token policy', () => {
+    const ORIG_KC = process.env.KEYCLOAK_URL;
+    const ORIG_ALLOW = process.env.ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK;
+
+    afterEach(() => {
+      if (ORIG_KC === undefined) delete process.env.KEYCLOAK_URL;
+      else process.env.KEYCLOAK_URL = ORIG_KC;
+      if (ORIG_ALLOW === undefined) delete process.env.ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK;
+      else process.env.ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK = ORIG_ALLOW;
+    });
+
+    test('single-user mode: org GH_TOKEN still injected (backward compat)', async () => {
+      delete process.env.KEYCLOAK_URL;
+      process.env.GH_TOKEN = 'ghp_orgtoken';
+      mockCreateCodebase.mockResolvedValueOnce(
+        makeCodebase({ name: 'owner/repo' }) as ReturnType<typeof makeCodebase>
+      );
+
+      await cloneRepository('https://github.com/owner/repo');
+
+      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
+        args => args[0] === 'git' && args[1]?.[0] === 'clone'
+      );
+      expect(cloneCall?.[1]?.[1]).toBe('https://ghp_orgtoken@github.com/owner/repo');
+      delete process.env.GH_TOKEN;
+    });
+
+    test('multi-user mode, no user token, fallback DISABLED (default): clones anonymously', async () => {
+      process.env.KEYCLOAK_URL = 'https://keycloak.example';
+      delete process.env.ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK;
+      process.env.GITLAB_TOKEN = 'glpat-orgtoken';
+      mockCreateCodebase.mockResolvedValueOnce(
+        makeCodebase({
+          name: 'owner/repo',
+          repository_url: 'https://gitlab.com/owner/repo',
+        }) as ReturnType<typeof makeCodebase>
+      );
+
+      // No userGithubToken passed → policy says don't fall back to org GITLAB_TOKEN
+      await cloneRepository('https://gitlab.com/owner/repo');
+
+      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
+        args => args[0] === 'git' && args[1]?.[0] === 'clone'
+      );
+      expect(cloneCall?.[1]?.[1]).toBe('https://gitlab.com/owner/repo');
+      expect(cloneCall?.[1]?.[1]).not.toContain('glpat-orgtoken');
+      delete process.env.GITLAB_TOKEN;
+    });
+
+    test('multi-user mode, no user token, fallback ENABLED: org token still used', async () => {
+      process.env.KEYCLOAK_URL = 'https://keycloak.example';
+      process.env.ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK = 'true';
+      process.env.GITLAB_TOKEN = 'glpat-orgtoken';
+      mockCreateCodebase.mockResolvedValueOnce(
+        makeCodebase({
+          name: 'owner/repo',
+          repository_url: 'https://gitlab.com/owner/repo',
+        }) as ReturnType<typeof makeCodebase>
+      );
+
+      await cloneRepository('https://gitlab.com/owner/repo');
+
+      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
+        args => args[0] === 'git' && args[1]?.[0] === 'clone'
+      );
+      expect(cloneCall?.[1]?.[1]).toBe('https://oauth2:glpat-orgtoken@gitlab.com/owner/repo');
+      delete process.env.GITLAB_TOKEN;
+    });
+
+    test('multi-user mode: per-user GitHub token wins over org GH_TOKEN', async () => {
+      process.env.KEYCLOAK_URL = 'https://keycloak.example';
+      process.env.GH_TOKEN = 'ghp_orgtoken';
+      mockCreateCodebase.mockResolvedValueOnce(
+        makeCodebase({ name: 'owner/repo' }) as ReturnType<typeof makeCodebase>
+      );
+
+      await cloneRepository('https://github.com/owner/repo', 'ghp_usertoken');
+
+      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
+        args => args[0] === 'git' && args[1]?.[0] === 'clone'
+      );
+      expect(cloneCall?.[1]?.[1]).toBe('https://ghp_usertoken@github.com/owner/repo');
+      expect(cloneCall?.[1]?.[1]).not.toContain('ghp_orgtoken');
+      delete process.env.GH_TOKEN;
+    });
   });
 });

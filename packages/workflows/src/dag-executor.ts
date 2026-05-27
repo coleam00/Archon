@@ -66,6 +66,10 @@ import {
 } from './logger';
 import { withIdleTimeout, STEP_IDLE_TIMEOUT_MS } from './utils/idle-timeout';
 import {
+  resolveGithubTokenOverrides,
+  applyGithubTokenOverridesToProcessEnv,
+} from './utils/github-token-policy';
+import {
   classifyError,
   detectCreditExhaustion,
   loadCommandPrompt,
@@ -358,7 +362,8 @@ async function resolveNodeProviderAndModel(
   conversationId: string,
   workflowRunId: string,
   _cwd: string,
-  workflowLevelOptions: WorkflowLevelOptions
+  workflowLevelOptions: WorkflowLevelOptions,
+  githubTokenOverrides: Record<string, string> = {}
 ): Promise<{
   provider: string;
   model: string | undefined;
@@ -449,8 +454,14 @@ async function resolveNodeProviderAndModel(
   // Build universal base options
   const baseOptions: SendQueryOptions = {};
   if (model) baseOptions.model = model;
-  if (config.envVars && Object.keys(config.envVars).length > 0) {
-    baseOptions.env = config.envVars;
+  // Merge per-codebase env vars and the multi-user GitHub token policy
+  // overrides into a single env block passed to the provider. Empty-string
+  // values in githubTokenOverrides act as scrub: the providers' merge
+  // `{ ...process.env, ...requestOptions.env }` lets the empty string win,
+  // and `gh`/`git` treat empty as unset.
+  const mergedEnv = { ...(config.envVars ?? {}), ...githubTokenOverrides };
+  if (Object.keys(mergedEnv).length > 0) {
+    baseOptions.env = mergedEnv;
   }
   if (node.systemPrompt !== undefined) baseOptions.systemPrompt = node.systemPrompt;
   if (node.maxBudgetUsd !== undefined) baseOptions.maxBudgetUsd = node.maxBudgetUsd;
@@ -1299,7 +1310,8 @@ async function executeBashNode(
   docsDir: string,
   nodeOutputs: Map<string, NodeOutput>,
   issueContext?: string,
-  envVars?: Record<string, string>
+  envVars?: Record<string, string>,
+  githubTokenOverrides: Record<string, string> = {}
 ): Promise<NodeOutput> {
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -1347,7 +1359,10 @@ async function executeBashNode(
 
   const timeout = node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT;
   const subprocessEnv: NodeJS.ProcessEnv = {
-    ...process.env,
+    // Apply multi-user GitHub token policy BEFORE workflow-related vars so
+    // a project's explicit `env:` block in .archon/config.yaml can still
+    // override (last-write-wins semantics).
+    ...applyGithubTokenOverridesToProcessEnv(process.env, githubTokenOverrides),
     ARTIFACTS_DIR: artifactsDir,
     LOG_DIR: logDir,
     BASE_BRANCH: baseBranch,
@@ -1478,7 +1493,8 @@ async function executeScriptNode(
   docsDir: string,
   nodeOutputs: Map<string, NodeOutput>,
   issueContext?: string,
-  envVars?: Record<string, string>
+  envVars?: Record<string, string>,
+  githubTokenOverrides: Record<string, string> = {}
 ): Promise<NodeOutput> {
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -1522,7 +1538,9 @@ async function executeScriptNode(
 
   const timeout = node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT;
   const subprocessEnv: NodeJS.ProcessEnv = {
-    ...process.env,
+    // Same multi-user GitHub token policy as executeBashNode — applied
+    // before workflow-related vars so codebase `env:` overrides win.
+    ...applyGithubTokenOverridesToProcessEnv(process.env, githubTokenOverrides),
     ARTIFACTS_DIR: artifactsDir,
     LOG_DIR: logDir,
     BASE_BRANCH: baseBranch,
@@ -1737,12 +1755,15 @@ function buildLoopNodeOptions(
   provider: string,
   model: string | undefined,
   config: WorkflowConfig,
-  workflowLevelOptions?: WorkflowLevelOptions
+  workflowLevelOptions?: WorkflowLevelOptions,
+  githubTokenOverrides: Record<string, string> = {}
 ): SendQueryOptions {
   const options: SendQueryOptions = {};
   if (model) options.model = model;
-  if (config.envVars && Object.keys(config.envVars).length > 0) {
-    options.env = config.envVars;
+  // See resolveNodeProviderAndModel for the merge rationale.
+  const mergedEnv = { ...(config.envVars ?? {}), ...githubTokenOverrides };
+  if (Object.keys(mergedEnv).length > 0) {
+    options.env = mergedEnv;
   }
   options.assistantConfig = config.assistants[provider] ?? {};
   // Pass workflow-level options as nodeConfig so providers can apply them
@@ -1782,7 +1803,8 @@ async function executeLoopNode(
   nodeOutputs: Map<string, NodeOutput>,
   config: WorkflowConfig,
   issueContext?: string,
-  workflowLevelOptions?: WorkflowLevelOptions
+  workflowLevelOptions?: WorkflowLevelOptions,
+  githubTokenOverrides: Record<string, string> = {}
 ): Promise<NodeExecutionResult> {
   const loop = node.loop;
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -1820,7 +1842,8 @@ async function executeLoopNode(
     workflowProvider,
     workflowModel,
     config,
-    workflowLevelOptions
+    workflowLevelOptions,
+    githubTokenOverrides
   );
 
   // Helper to log event store errors consistently
@@ -2396,7 +2419,8 @@ async function executeApprovalNode(
   config: WorkflowConfig,
   workflowLevelOptions: WorkflowLevelOptions,
   configuredCommandFolder?: string,
-  issueContext?: string
+  issueContext?: string,
+  githubTokenOverrides: Record<string, string> = {}
 ): Promise<NodeOutput> {
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
 
@@ -2486,7 +2510,8 @@ async function executeApprovalNode(
       conversationId,
       workflowRun.id,
       cwd,
-      workflowLevelOptions
+      workflowLevelOptions,
+      githubTokenOverrides
     );
 
     const output = await executeNodeInternal(
@@ -2589,6 +2614,27 @@ export async function executeDagWorkflow(
     betas: workflow.betas,
     sandbox: workflow.sandbox,
   };
+
+  // Multi-user GitHub token policy: resolve the run-owner's personal token
+  // once per run, then derive the env overrides that every node executor
+  // applies to its subprocess env (bash/script) and provider sendQuery env.
+  // No-op in single-user mode (KEYCLOAK_URL unset) or for runs without
+  // created_by_user_id (server-initiated). See utils/github-token-policy.
+  const runOwnerUserId = workflowRun.created_by_user_id ?? null;
+  let userGithubToken: string | null = null;
+  if (runOwnerUserId && deps.getUserGithubToken) {
+    try {
+      userGithubToken = await deps.getUserGithubToken(runOwnerUserId);
+    } catch (err) {
+      getLog().error(
+        { err, workflowRunId: workflowRun.id, userId: runOwnerUserId },
+        'dag.user_github_token_lookup_failed'
+      );
+      // Fail closed: leave token null so policy scrubs (no silent leak)
+    }
+  }
+  const githubTokenOverrides = resolveGithubTokenOverrides(runOwnerUserId, userGithubToken);
+
   const layers = buildTopologicalLayers(workflow.nodes);
   const nodeOutputs = new Map<string, NodeOutput>();
 
@@ -2838,7 +2884,8 @@ export async function executeDagWorkflow(
               docsDir,
               nodeOutputs,
               issueContext,
-              config.envVars
+              config.envVars,
+              githubTokenOverrides
             );
             return { nodeId: node.id, output };
           }
@@ -2881,7 +2928,8 @@ export async function executeDagWorkflow(
               nodeOutputs,
               config,
               issueContext,
-              workflowLevelOptions
+              workflowLevelOptions,
+              githubTokenOverrides
             );
             return { nodeId: node.id, output };
           }
@@ -2905,7 +2953,8 @@ export async function executeDagWorkflow(
               config,
               workflowLevelOptions,
               configuredCommandFolder,
-              issueContext
+              issueContext,
+              githubTokenOverrides
             );
             return { nodeId: node.id, output };
           }
@@ -2957,7 +3006,8 @@ export async function executeDagWorkflow(
               docsDir,
               nodeOutputs,
               issueContext,
-              config.envVars
+              config.envVars,
+              githubTokenOverrides
             );
             return { nodeId: node.id, output };
           }
@@ -2972,7 +3022,8 @@ export async function executeDagWorkflow(
             conversationId,
             workflowRun.id,
             cwd,
-            workflowLevelOptions
+            workflowLevelOptions,
+            githubTokenOverrides
           );
 
           // 5. Determine session — parallel or context:fresh → always fresh

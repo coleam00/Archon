@@ -18,6 +18,10 @@ import {
 import { findMarkdownFilesRecursive } from '../utils/commands';
 import { createLogger } from '@archon/paths';
 import { resolveDefaultAssistant } from '../config/resolve-assistant';
+import {
+  isMultiUserMode,
+  isOrgTokenFallbackAllowed,
+} from '@archon/workflows/utils/github-token-policy';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -336,7 +340,15 @@ export async function cloneRepository(
   const parsedForHost = safeParseUrl(workingUrl);
   const isGithubUrl = parsedForHost?.hostname === 'github.com';
   const { token: forgeToken, scheme: authScheme } = resolveForgeAuth(workingUrl);
-  const effectiveToken = isGithubUrl && userGithubToken ? userGithubToken : forgeToken;
+  // Multi-user token policy: if we're in multi-user mode and the user hasn't
+  // connected a personal token, only use the forge-level org token when the
+  // operator has explicitly opted in via ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK.
+  // Otherwise clone anonymously — public repos still work; private clones fail
+  // with an actionable auth error rather than silently authenticating as the
+  // shared org account.
+  const allowForgeFallback = !isMultiUserMode() || isOrgTokenFallbackAllowed();
+  const effectiveToken =
+    isGithubUrl && userGithubToken ? userGithubToken : allowForgeFallback ? forgeToken : undefined;
 
   if (effectiveToken) {
     if (parsedForHost) {
