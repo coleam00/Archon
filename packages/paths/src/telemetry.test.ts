@@ -9,12 +9,15 @@ import {
   shutdownTelemetry,
   resetTelemetryForTests,
   getOrCreateTelemetryId,
+  getTelemetryStatus,
+  resetTelemetryId,
 } from './telemetry';
 
 const ENV_VARS = [
   'ARCHON_HOME',
   'ARCHON_TELEMETRY_DISABLED',
   'DO_NOT_TRACK',
+  'CI',
   'POSTHOG_API_KEY',
   'POSTHOG_HOST',
 ];
@@ -51,7 +54,24 @@ describe('telemetry opt-out detection', () => {
   test('enabled by default when no opt-out env vars set', () => {
     delete process.env.ARCHON_TELEMETRY_DISABLED;
     delete process.env.DO_NOT_TRACK;
+    delete process.env.CI;
     delete process.env.POSTHOG_API_KEY;
+    expect(isTelemetryDisabled()).toBe(false);
+  });
+
+  test('CI=true disables telemetry', () => {
+    delete process.env.ARCHON_TELEMETRY_DISABLED;
+    delete process.env.DO_NOT_TRACK;
+    delete process.env.POSTHOG_API_KEY;
+    process.env.CI = 'true';
+    expect(isTelemetryDisabled()).toBe(true);
+  });
+
+  test('CI=1 does not disable (only CI=true is honored)', () => {
+    delete process.env.ARCHON_TELEMETRY_DISABLED;
+    delete process.env.DO_NOT_TRACK;
+    delete process.env.POSTHOG_API_KEY;
+    process.env.CI = '1';
     expect(isTelemetryDisabled()).toBe(false);
   });
 
@@ -75,7 +95,128 @@ describe('telemetry opt-out detection', () => {
     process.env.POSTHOG_API_KEY = '';
     delete process.env.ARCHON_TELEMETRY_DISABLED;
     delete process.env.DO_NOT_TRACK;
+    delete process.env.CI;
     expect(isTelemetryDisabled()).toBe(true);
+  });
+
+  test.each(['off', 'OFF', '0', 'false', 'disabled'])(
+    'POSTHOG_API_KEY=%s disables telemetry',
+    value => {
+      process.env.POSTHOG_API_KEY = value;
+      delete process.env.ARCHON_TELEMETRY_DISABLED;
+      delete process.env.DO_NOT_TRACK;
+      delete process.env.CI;
+      expect(isTelemetryDisabled()).toBe(true);
+    }
+  );
+
+  test('POSTHOG_API_KEY=phc_custom is treated as enabled (self-host)', () => {
+    process.env.POSTHOG_API_KEY = 'phc_custom_self_hosted_key';
+    delete process.env.ARCHON_TELEMETRY_DISABLED;
+    delete process.env.DO_NOT_TRACK;
+    delete process.env.CI;
+    expect(isTelemetryDisabled()).toBe(false);
+  });
+});
+
+describe('getTelemetryStatus', () => {
+  let saved: Record<string, string | undefined>;
+  let tmpHome: string;
+
+  beforeEach(() => {
+    saved = saveEnv();
+    tmpHome = mkdtempSync(join(tmpdir(), 'archon-telemetry-status-'));
+    process.env.ARCHON_HOME = tmpHome;
+    resetTelemetryForTests();
+  });
+
+  afterEach(() => {
+    restoreEnv(saved);
+    resetTelemetryForTests();
+    rmSync(tmpHome, { recursive: true, force: true });
+  });
+
+  test('reports enabled + embedded key source when no env vars set', () => {
+    delete process.env.ARCHON_TELEMETRY_DISABLED;
+    delete process.env.DO_NOT_TRACK;
+    delete process.env.CI;
+    delete process.env.POSTHOG_API_KEY;
+    const status = getTelemetryStatus();
+    expect(status.enabled).toBe(true);
+    expect(status.disabledReason).toBeNull();
+    expect(status.keySource).toBe('embedded');
+    expect(status.distinctId).toMatch(/^[0-9a-f-]+$/);
+    expect(status.host).toContain('posthog');
+  });
+
+  test('reports CI as the disabled reason', () => {
+    delete process.env.ARCHON_TELEMETRY_DISABLED;
+    delete process.env.DO_NOT_TRACK;
+    process.env.CI = 'true';
+    const status = getTelemetryStatus();
+    expect(status.enabled).toBe(false);
+    expect(status.disabledReason).toBe('CI');
+  });
+
+  test('reports POSTHOG_API_KEY when explicit "off" value is set', () => {
+    delete process.env.ARCHON_TELEMETRY_DISABLED;
+    delete process.env.DO_NOT_TRACK;
+    delete process.env.CI;
+    process.env.POSTHOG_API_KEY = 'off';
+    const status = getTelemetryStatus();
+    expect(status.enabled).toBe(false);
+    expect(status.disabledReason).toBe('POSTHOG_API_KEY');
+    expect(status.keySource).toBe('none');
+  });
+
+  test('reports env key source for non-default API key', () => {
+    delete process.env.ARCHON_TELEMETRY_DISABLED;
+    delete process.env.DO_NOT_TRACK;
+    delete process.env.CI;
+    process.env.POSTHOG_API_KEY = 'phc_self_hosted';
+    const status = getTelemetryStatus();
+    expect(status.enabled).toBe(true);
+    expect(status.keySource).toBe('env');
+  });
+
+  test('precedence: ARCHON_TELEMETRY_DISABLED wins over CI', () => {
+    process.env.ARCHON_TELEMETRY_DISABLED = '1';
+    process.env.CI = 'true';
+    expect(getTelemetryStatus().disabledReason).toBe('ARCHON_TELEMETRY_DISABLED');
+  });
+});
+
+describe('resetTelemetryId', () => {
+  let saved: Record<string, string | undefined>;
+  let tmpHome: string;
+
+  beforeEach(() => {
+    saved = saveEnv();
+    tmpHome = mkdtempSync(join(tmpdir(), 'archon-telemetry-reset-'));
+    process.env.ARCHON_HOME = tmpHome;
+    resetTelemetryForTests();
+  });
+
+  afterEach(() => {
+    restoreEnv(saved);
+    resetTelemetryForTests();
+    rmSync(tmpHome, { recursive: true, force: true });
+  });
+
+  test('writes a new UUID to telemetry-id and returns it', () => {
+    const id1 = getOrCreateTelemetryId();
+    const id2 = resetTelemetryId();
+    expect(id2).not.toBe(id1);
+    expect(id2).toMatch(/^[0-9a-f-]+$/);
+    const onDisk = readFileSync(join(tmpHome, 'telemetry-id'), 'utf8').trim();
+    expect(onDisk).toBe(id2);
+  });
+
+  test('updates the in-process cache so subsequent calls see the new ID', () => {
+    resetTelemetryId();
+    const cached = getOrCreateTelemetryId();
+    const onDisk = readFileSync(join(tmpHome, 'telemetry-id'), 'utf8').trim();
+    expect(cached).toBe(onDisk);
   });
 });
 
@@ -97,7 +238,6 @@ describe('captureWorkflowInvoked when disabled', () => {
     expect(() => {
       captureWorkflowInvoked({
         workflowName: 'test-workflow',
-        workflowDescription: 'A test',
         platform: 'cli',
         archonVersion: 'dev',
       });

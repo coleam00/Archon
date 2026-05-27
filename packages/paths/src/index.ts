@@ -55,5 +55,15 @@ export {
 export type { UpdateCheckResult } from './update-check';
 
 // Anonymous telemetry
-export { captureWorkflowInvoked, shutdownTelemetry, isTelemetryDisabled } from './telemetry';
-export type { WorkflowInvokedProperties } from './telemetry';
+export {
+  captureWorkflowInvoked,
+  shutdownTelemetry,
+  isTelemetryDisabled,
+  getTelemetryStatus,
+  resetTelemetryId,
+} from './telemetry';
+export type {
+  WorkflowInvokedProperties,
+  TelemetryStatus,
+  TelemetryDisabledReason,
+} from './telemetry';
