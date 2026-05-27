@@ -24,6 +24,9 @@ export {
   type IWebPlatformAdapter,
   isWebAdapter,
   type MessageMetadata,
+  type User,
+  type UserIdentity,
+  type IdentityPlatform,
 } from './types';
 
 // =============================================================================
@@ -46,6 +49,7 @@ export * as sessionDb from './db/sessions';
 export * as isolationEnvDb from './db/isolation-environments';
 export * as workflowDb from './db/workflows';
 export * as messageDb from './db/messages';
+export * as userDb from './db/users';
 
 // Re-export SessionNotFoundError for error handling
 export { SessionNotFoundError } from './db/sessions';

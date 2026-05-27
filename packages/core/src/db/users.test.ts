@@ -3,11 +3,11 @@ import { createQueryResult, mockPostgresDialect } from '../test/mocks/database';
 
 const mockQuery = mock(() => Promise.resolve(createQueryResult([])));
 
-// withTransaction simply forwards its callback to the mockQuery shared instance,
-// so tests can queue mockResolvedValueOnce in transactional order. Tests that
-// want to simulate a transaction rollback can mockRejectedValueOnce on the
-// INSERT inside the txn — the outer try/catch in users.ts will fall through
-// to the race-recovery path.
+// withTransaction forwards its callback to the shared mockQuery instance, so
+// tests can queue mockResolvedValueOnce in transactional order. To simulate a
+// transaction rollback, mockRejectedValueOnce on the INSERT inside the txn —
+// the outer try/catch in users.ts decides whether to recover (UNIQUE race) or
+// rethrow (any other error).
 const mockWithTransaction = mock(
   async (fn: (q: typeof mockQuery) => Promise<unknown>) => await fn(mockQuery)
 );
@@ -67,27 +67,20 @@ describe('users', () => {
   describe('findOrCreateUserByPlatformIdentity', () => {
     test('returns existing user when identity row exists', async () => {
       const u = userRow();
-      // 1) SELECT identity → found
       mockQuery.mockResolvedValueOnce(createQueryResult([identityRow()]));
-      // 2) SELECT user → found
       mockQuery.mockResolvedValueOnce(createQueryResult([u]));
 
       const result = await findOrCreateUserByPlatformIdentity('slack', 'U123');
 
       expect(result).toEqual(u);
       expect(mockQuery).toHaveBeenCalledTimes(2);
-      // No transaction needed on the fast path
       expect(mockWithTransaction).not.toHaveBeenCalled();
     });
 
-    test('backfills display_name on existing identity when previously null', async () => {
-      // 1) SELECT identity (no display_name)
+    test('backfills both identity and user display_name when both previously null', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([identityRow()]));
-      // 2) SELECT user (no display_name)
       mockQuery.mockResolvedValueOnce(createQueryResult([userRow()]));
-      // 3) UPDATE identity.platform_display_name
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
-      // 4) UPDATE user.display_name
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
 
       await findOrCreateUserByPlatformIdentity('slack', 'U123', 'Alice');
@@ -99,7 +92,25 @@ describe('users', () => {
       );
     });
 
-    test('does not backfill when displayName already present', async () => {
+    test('backfills only user.display_name when identity already has one (asymmetric)', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([identityRow({ platform_display_name: 'Stale' })])
+      );
+      mockQuery.mockResolvedValueOnce(createQueryResult([userRow({ display_name: null })]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+
+      await findOrCreateUserByPlatformIdentity('slack', 'U123', 'Alice');
+
+      // Identity already has display_name → no identity UPDATE; user row gets the backfill.
+      expect(mockQuery).toHaveBeenCalledTimes(3);
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        3,
+        expect.stringContaining('UPDATE remote_agent_users SET display_name'),
+        ['Alice', 'user-1']
+      );
+    });
+
+    test('does not backfill when both rows already have display_name', async () => {
       mockQuery.mockResolvedValueOnce(
         createQueryResult([identityRow({ platform_display_name: 'Existing' })])
       );
@@ -107,17 +118,25 @@ describe('users', () => {
 
       await findOrCreateUserByPlatformIdentity('slack', 'U123', 'Alice');
 
-      // Only the two SELECTs — no UPDATEs
       expect(mockQuery).toHaveBeenCalledTimes(2);
     });
 
+    test('backfill failure does not block user resolution', async () => {
+      const u = userRow();
+      mockQuery.mockResolvedValueOnce(createQueryResult([identityRow()]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([u]));
+      // Backfill UPDATE on the identity row fails — must be swallowed.
+      mockQuery.mockRejectedValueOnce(new Error('connection reset'));
+
+      const result = await findOrCreateUserByPlatformIdentity('slack', 'U123', 'Alice');
+
+      expect(result).toEqual(u);
+    });
+
     test('creates new user + identity when first seen', async () => {
-      // 1) SELECT identity → empty
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
-      // 2) (inside txn) INSERT user → returns row
       const newUser = userRow({ id: 'user-new', display_name: 'Bob' });
       mockQuery.mockResolvedValueOnce(createQueryResult([newUser]));
-      // 3) (inside txn) INSERT identity
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
 
       const result = await findOrCreateUserByPlatformIdentity('telegram', '7654321', 'Bob');
@@ -136,17 +155,15 @@ describe('users', () => {
       );
     });
 
-    test('recovers from race when UNIQUE constraint fires after losing write', async () => {
+    test('recovers from race on UNIQUE-constraint violation (PG sqlstate 23505)', async () => {
       const winner = userRow({ id: 'user-winner' });
-      // 1) SELECT identity (initial) → empty
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
-      // 2) (inside txn) INSERT user → returns row
       mockQuery.mockResolvedValueOnce(createQueryResult([userRow({ id: 'user-loser' })]));
-      // 3) (inside txn) INSERT identity → race: UNIQUE constraint fires
-      mockQuery.mockRejectedValueOnce(new Error('duplicate key value violates unique constraint'));
-      // 4) After catch: re-SELECT identity → winner's row
+      const pgErr = Object.assign(new Error('duplicate key value violates unique constraint'), {
+        code: '23505',
+      });
+      mockQuery.mockRejectedValueOnce(pgErr);
       mockQuery.mockResolvedValueOnce(createQueryResult([identityRow({ user_id: 'user-winner' })]));
-      // 5) SELECT user (winner) → found
       mockQuery.mockResolvedValueOnce(createQueryResult([winner]));
 
       const result = await findOrCreateUserByPlatformIdentity('github', 'alice');
@@ -154,27 +171,58 @@ describe('users', () => {
       expect(result).toEqual(winner);
     });
 
-    test('rethrows when error is not a race (no identity row exists after failure)', async () => {
+    test('recovers from race on UNIQUE-constraint violation (SQLite error message)', async () => {
+      const winner = userRow({ id: 'user-winner-sqlite' });
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([userRow({ id: 'user-loser' })]));
+      mockQuery.mockRejectedValueOnce(
+        new Error(
+          'UNIQUE constraint failed: remote_agent_user_identities.platform, remote_agent_user_identities.platform_user_id'
+        )
+      );
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([identityRow({ user_id: 'user-winner-sqlite' })])
+      );
+      mockQuery.mockResolvedValueOnce(createQueryResult([winner]));
+
+      const result = await findOrCreateUserByPlatformIdentity('discord', '321');
+
+      expect(result).toEqual(winner);
+    });
+
+    test('rethrows non-UNIQUE errors WITHOUT attempting race recovery', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
       mockQuery.mockResolvedValueOnce(createQueryResult([userRow()]));
       mockQuery.mockRejectedValueOnce(new Error('serialization failure'));
-      // No identity row appears in recovery SELECT
-      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+      // No re-SELECT should happen — if the narrowed catch is widened by a
+      // future refactor, this assertion catches it.
 
       await expect(findOrCreateUserByPlatformIdentity('slack', 'U999')).rejects.toThrow(
         'serialization failure'
       );
+      // Exactly 3 queries: initial identity SELECT + INSERT user + INSERT identity (failed).
+      // No recovery SELECT means the narrowed catch path held.
+      expect(mockQuery).toHaveBeenCalledTimes(3);
+    });
+
+    test('rethrows when UNIQUE fires but recovery SELECT returns empty', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([userRow()]));
+      mockQuery.mockRejectedValueOnce(
+        Object.assign(new Error('UNIQUE constraint failed'), { code: '23505' })
+      );
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+
+      await expect(findOrCreateUserByPlatformIdentity('slack', 'U999')).rejects.toThrow(
+        'UNIQUE constraint failed'
+      );
     });
 
     test('repairs orphaned identity (user_id points to deleted user)', async () => {
-      // 1) SELECT identity (exists)
       mockQuery.mockResolvedValueOnce(createQueryResult([identityRow()]));
-      // 2) SELECT user → null (orphan)
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
-      // 3) (inside txn) INSERT user (repair) → new user
       const repaired = userRow({ id: 'user-repaired', display_name: 'Carol' });
       mockQuery.mockResolvedValueOnce(createQueryResult([repaired]));
-      // 4) (inside txn) UPDATE identity → rebind
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
 
       const result = await findOrCreateUserByPlatformIdentity('slack', 'U123', 'Carol');

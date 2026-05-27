@@ -348,7 +348,7 @@ ALTER TABLE remote_agent_sessions
 ALTER TABLE remote_agent_codebases
   ADD COLUMN IF NOT EXISTS allow_env_keys BOOLEAN NOT NULL DEFAULT FALSE;
 
--- From PR-A (user-identity-foundation): nullable user_id on the four primary tables.
+-- User identity foreign keys (nullable on the four primary tables).
 -- All FKs use ON DELETE SET NULL so future user deletion never cascades destructively.
 ALTER TABLE remote_agent_conversations
   ADD COLUMN IF NOT EXISTS user_id UUID

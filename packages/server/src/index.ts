@@ -81,6 +81,7 @@ import {
   getPort,
 } from '@archon/core';
 import type { IPlatformAdapter } from '@archon/core';
+import type { IdentityPlatform } from '@archon/core';
 import * as userDb from '@archon/core/db/users';
 import {
   createLogger,
@@ -99,15 +100,20 @@ function getLog(): ReturnType<typeof createLogger> {
 /**
  * Resolve a platform-native user identifier (Slack U-id, Telegram chat id,
  * Discord snowflake) to an Archon user UUID via auto-create-on-first-sight.
- * Never throws — warn-log and return undefined on failure so message handling
- * proceeds even if the user table is temporarily unavailable.
+ *
+ * Contract: NEVER THROWS. On any failure, warn-log and return undefined so
+ * message handling proceeds (writes user_id = NULL on the conversation/run
+ * row). This invariant is load-bearing — message processing across three
+ * adapters depends on it. Covered by resolve-user-id.test.ts.
+ *
+ * Exported for testability.
  */
-async function resolveUserId(
-  platform: string,
+export async function resolveUserId(
+  platform: IdentityPlatform,
   platformUserId: string | number | undefined,
   displayName: string | undefined
 ): Promise<string | undefined> {
-  if (platformUserId === undefined || platformUserId === null || platformUserId === '') {
+  if (platformUserId === undefined || platformUserId === '') {
     return undefined;
   }
   try {
@@ -120,7 +126,7 @@ async function resolveUserId(
   } catch (err) {
     getLog().warn(
       { err: err as Error, platform, platformUserId: String(platformUserId) },
-      `${platform}.user_resolve_failed`
+      'server.user_resolve_failed'
     );
     return undefined;
   }
@@ -411,7 +417,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
           parentConversationId = discordAdapter.getParentChannelId(message) ?? undefined;
         }
 
-        // PR-A: resolve Discord author → Archon user UUID.
+        // Resolve Discord author → Archon user UUID.
         // message.author.username is already display-quality on Discord (no extra API call needed).
         const userId = await resolveUserId('discord', message.author.id, message.author.username);
 
@@ -488,7 +494,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
           parentConversationId = slackAdapter.getParentConversationId(event) ?? undefined;
         }
 
-        // PR-A: resolve Slack user → Archon user UUID. displayName comes from
+        // Resolve Slack user → Archon user UUID. displayName comes from
         // the adapter's users.info enrichment (cached per slackUserId).
         const userId = await resolveUserId('slack', event.user, event.displayName);
 
@@ -676,7 +682,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     // Register message handler (auth is handled internally by adapter)
     telegramAdapter.onMessage(
       async ({ conversationId, message, userId: telegramUserId, displayName }) => {
-        // PR-A: resolve Telegram user id (numeric) → Archon user UUID.
+        // Resolve Telegram user id (numeric) → Archon user UUID.
         const userId = await resolveUserId('telegram', telegramUserId, displayName);
 
         // Fire-and-forget: handler returns immediately, processing happens async

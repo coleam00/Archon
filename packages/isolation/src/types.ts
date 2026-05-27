@@ -234,7 +234,7 @@ export interface IsolationEnvironmentRow {
   status: EnvironmentStatus;
   created_at: Date;
   created_by_platform: string | null;
-  /** FK to remote_agent_users.id; populated by chat/forge adapters via the resolver (PR-A) */
+  /** FK to remote_agent_users.id; populated by chat/forge adapters via the resolver. */
   created_by_user_id: string | null;
   metadata: Record<string, unknown>;
 }
@@ -293,7 +293,7 @@ export interface CreateEnvironmentParams {
   working_path: string;
   branch_name: BranchName;
   created_by_platform?: string;
-  /** FK to remote_agent_users.id; threaded from ResolveRequest.userId (PR-A) */
+  /** FK to remote_agent_users.id; threaded from ResolveRequest.userId. */
   created_by_user_id?: string;
   metadata?: Record<string, unknown>;
 }
@@ -309,7 +309,7 @@ export interface ResolveRequest {
   } | null;
   hints?: IsolationHints;
   platformType: string;
-  /** Archon user UUID; populated by chat/forge adapter handlers (PR-A) */
+  /** Archon user UUID; populated by chat/forge adapter handlers. */
   userId?: string;
 }
 

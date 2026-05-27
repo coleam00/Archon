@@ -44,6 +44,13 @@ export class SlackAdapter implements IPlatformAdapter {
    * so a transient `missing_scope` or rate_limit doesn't permanently degrade UX.
    */
   private displayNameCache = new Map<string, string>();
+  /**
+   * Tripped the first time users.info returns `missing_scope`. Subsequent
+   * sightings of unknown users still attempt the API call (in case the operator
+   * reinstalls with the scope mid-flight), but the WARN log fires only once —
+   * `missing_scope` is a permanent misconfiguration, not a per-user incident.
+   */
+  private missingScopeLogged = false;
 
   constructor(botToken: string, appToken: string, mode: 'stream' | 'batch' = 'batch') {
     this.app = new App({
@@ -279,8 +286,9 @@ export class SlackAdapter implements IPlatformAdapter {
    * a display_name backfill.
    *
    * Requires bot token scope `users:read`. If the scope is missing, Slack
-   * returns `missing_scope`; the warn log surfaces this once per startup so
-   * operators can reinstall the app with the correct scopes.
+   * returns `missing_scope`; the WARN log fires once per adapter lifetime
+   * (gated by `missingScopeLogged`) since the misconfiguration is permanent
+   * rather than per-user. Other failures log per-occurrence.
    */
   async fetchDisplayName(slackUserId: string): Promise<string | undefined> {
     if (!slackUserId) return undefined;
@@ -290,7 +298,7 @@ export class SlackAdapter implements IPlatformAdapter {
     try {
       const result = await this.app.client.users.info({ user: slackUserId });
       const u = result.user;
-      const name = u?.real_name ?? u?.profile?.display_name ?? u?.name ?? undefined;
+      const name = u?.real_name ?? u?.profile?.display_name ?? u?.name;
       if (name) {
         this.displayNameCache.set(slackUserId, name);
       }
@@ -298,10 +306,16 @@ export class SlackAdapter implements IPlatformAdapter {
     } catch (error) {
       const err = error as Error & { data?: { error?: string } };
       const slackErrorCode = err.data?.error;
+      // Strip err.data from the log — Slack SDK error bodies can include API
+      // response metadata (workspace/user info) that's not relevant for ops.
+      const errMessage = err.message;
       if (slackErrorCode === 'missing_scope') {
-        getLog().warn({ slackUserId, scope: 'users:read' }, 'slack.users_info_missing_scope');
+        if (!this.missingScopeLogged) {
+          this.missingScopeLogged = true;
+          getLog().warn({ scope: 'users:read' }, 'slack.users_info_missing_scope');
+        }
       } else {
-        getLog().warn({ err, slackUserId, slackErrorCode }, 'slack.users_info_failed');
+        getLog().warn({ errMessage, slackUserId, slackErrorCode }, 'slack.users_info_failed');
       }
       return undefined;
     }

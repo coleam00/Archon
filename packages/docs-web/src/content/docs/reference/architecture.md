@@ -53,10 +53,12 @@ Archon is a **platform-agnostic AI coding assistant orchestrator** that connects
       └───────────────┼───────────────────┘
                       ▼
 ┌─────────────────────────────────────────────┐
-│    SQLite (default) / PostgreSQL (7 Tables)  │
+│    SQLite (default) / PostgreSQL (10 Tables) │
 │  • Codebases  • Conversations  • Sessions   │
 │  • Isolation Envs • Workflow Runs            │
 │  • Workflow Events • Messages                │
+│  • Codebase Env Vars                         │
+│  • Users  • User Identities                  │
 └─────────────────────────────────────────────┘
 ```
 
@@ -1026,7 +1028,7 @@ export function formatToolCall(toolName: string, toolInput?: Record<string, unkn
 
 ## Database Schema
 
-Archon uses a 7-table schema with `remote_agent_` prefix. SQLite is the default (zero setup); PostgreSQL is optional for cloud/advanced deployments.
+Archon uses a 10-table schema with `remote_agent_` prefix. SQLite is the default (zero setup); PostgreSQL is optional for cloud/advanced deployments.
 
 ### Schema Overview
 
@@ -1041,13 +1043,14 @@ remote_agent_codebases
 
 remote_agent_conversations
 ├── id (UUID)
-├── platform_type (VARCHAR) -- 'web' | 'telegram' | 'github' | 'slack'
+├── platform_type (VARCHAR) -- 'web' | 'telegram' | 'github' | 'slack' | 'discord' | 'cli'
 ├── platform_conversation_id (VARCHAR) -- Platform-specific ID
 ├── codebase_id (UUID -> remote_agent_codebases.id)
 ├── cwd (VARCHAR) -- Current working directory
 ├── ai_assistant_type (VARCHAR) -- LOCKED at creation
 ├── title (VARCHAR) -- User-friendly conversation title (Web UI)
 ├── deleted_at (TIMESTAMP) -- Soft-delete support
+├── user_id (UUID -> remote_agent_users.id, ON DELETE SET NULL) -- First user to create the conversation
 └── UNIQUE(platform_type, platform_conversation_id)
 
 remote_agent_sessions
@@ -1069,6 +1072,8 @@ remote_agent_isolation_environments
 ├── working_path (VARCHAR)
 ├── branch_name (VARCHAR)
 ├── status (VARCHAR) -- 'active' | 'destroyed'
+├── created_by_platform (VARCHAR) -- 'github' | 'slack' | 'web' | ...
+├── created_by_user_id (UUID -> remote_agent_users.id, ON DELETE SET NULL) -- Original creator; preserved on ON CONFLICT re-activation
 └── metadata (JSONB)
 
 remote_agent_workflow_runs
@@ -1078,6 +1083,7 @@ remote_agent_workflow_runs
 ├── workflow_name (VARCHAR)
 ├── status (VARCHAR) -- 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
 ├── parent_conversation_id (UUID) -- Parent chat that dispatched this run
+├── user_id (UUID -> remote_agent_users.id, ON DELETE SET NULL) -- User who triggered the run
 └── metadata (JSONB)
 
 remote_agent_workflow_events
@@ -1095,7 +1101,29 @@ remote_agent_messages
 ├── role (VARCHAR) -- 'user' | 'assistant'
 ├── content (TEXT)
 ├── metadata (JSONB) -- {toolCalls: [{name, input, duration}], ...}
+├── user_id (UUID -> remote_agent_users.id, ON DELETE SET NULL) -- NULL on assistant rows
 └── created_at (TIMESTAMP)
+
+remote_agent_codebase_env_vars
+├── id (UUID)
+├── codebase_id (UUID -> remote_agent_codebases.id, ON DELETE CASCADE)
+├── key (VARCHAR)
+├── value (TEXT)
+└── UNIQUE(codebase_id, key)
+
+remote_agent_users
+├── id (UUID)
+├── display_name (VARCHAR) -- Nullable; populated via platform user-info lookups (e.g. Slack users.info)
+├── email (VARCHAR) -- Nullable
+└── (timestamps)
+
+remote_agent_user_identities
+├── id (UUID)
+├── user_id (UUID -> remote_agent_users.id, ON DELETE CASCADE)
+├── platform (VARCHAR) -- 'slack' | 'telegram' | 'discord' | 'github' | 'web' | 'cli'
+├── platform_user_id (VARCHAR) -- Slack U-id, Telegram chat id, Discord snowflake, GitHub login, ...
+├── platform_display_name (VARCHAR) -- Cached per-platform display name
+└── UNIQUE(platform, platform_user_id)
 ```
 
 ### Database Operations

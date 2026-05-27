@@ -165,8 +165,8 @@ export type ExecuteWorkflowOptions = ResumePayload & {
   parentConversationId?: string;
   /**
    * Archon user UUID for attribution on the workflow_run row. Resolved by
-   * chat/forge adapters via findOrCreateUserByPlatformIdentity (PR-A). Web/CLI
-   * paths pass undefined until PR-C wires their auth surfaces.
+   * chat/forge adapters via findOrCreateUserByPlatformIdentity. Web/CLI paths
+   * pass undefined until their own auth surfaces are wired.
    * Ignored when `preCreatedRun` is set — the original creator's attribution
    * is preserved on resume.
    */

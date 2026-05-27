@@ -1301,6 +1301,9 @@ export function registerApiRoutes(
       // If message provided, dispatch it atomically (avoids ghost "Untitled" conversations)
       if (message) {
         try {
+          // TODO: thread userId once the web UI authentication PR lands
+          // (X-Archon-User header). For now the user_id column stays NULL on
+          // web-originated rows, matching every other web message-insert below.
           await messageDb.addMessage(conversation.id, 'user', message);
         } catch (e: unknown) {
           // Log only (no SSE warning) — the SSE stream isn't connected yet for new conversations.
@@ -1542,6 +1545,7 @@ export function registerApiRoutes(
           ? { files: savedFiles.map(f => ({ name: f.name, mimeType: f.mimeType, size: f.size })) }
           : undefined;
       try {
+        // TODO: thread userId once the web UI authentication PR lands.
         await messageDb.addMessage(conv.id, 'user', message, meta);
       } catch (e: unknown) {
         getLog().error({ err: e, conversationId: conv.id }, 'message_persistence_failed');
@@ -2004,6 +2008,7 @@ export function registerApiRoutes(
           // Only pass the metadata arg when files are present; keeps the
           // signature 3-arg in the (common) JSON path so test fixtures don't
           // need to know about the multipart-shaped 4th argument.
+          // TODO: thread userId once the web UI authentication PR lands.
           if (savedFiles.length > 0) {
             const meta = {
               files: savedFiles.map(f => ({ name: f.name, mimeType: f.mimeType, size: f.size })),

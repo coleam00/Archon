@@ -759,6 +759,29 @@ ${userComment}`;
 
     getLog().info({ eventType, owner, repo, number }, 'github.webhook_processing');
 
+    // 5b. Resolve GitHub login → Archon user (auto-create on first sight).
+    // Comment author may differ from event.sender for PR-review comments; prefer
+    // the comment author when present so individual reviewers get their own row.
+    // Resolution failure must not drop the webhook — warn-log and continue with
+    // archonUserId undefined so the conversation/run rows fall back to NULL.
+    const attributedLogin = event.comment?.user?.login ?? senderUsername;
+    let archonUserId: string | undefined;
+    if (attributedLogin) {
+      try {
+        const user = await userDb.findOrCreateUserByPlatformIdentity(
+          'github',
+          attributedLogin,
+          attributedLogin
+        );
+        archonUserId = user.id;
+      } catch (err) {
+        getLog().warn(
+          { err: toError(err), githubLogin: attributedLogin },
+          'github.user_resolve_failed'
+        );
+      }
+    }
+
     // 4. Build conversationId
     const conversationId = this.buildConversationId(owner, repo, number);
 
@@ -939,30 +962,7 @@ ${userComment}`;
       'github.thread_context_loaded'
     );
 
-    // 13. Resolve GitHub sender to Archon user (auto-create on first sight).
-    // Comment author may differ from event.sender for PR-review comments; prefer
-    // the comment author when present so individual reviewers get their own row.
-    // Resolution failure must not drop the message — warn and continue without
-    // attribution rather than blocking the user.
-    const attributedLogin = event.comment?.user?.login ?? senderUsername;
-    let archonUserId: string | undefined;
-    if (attributedLogin) {
-      try {
-        const user = await userDb.findOrCreateUserByPlatformIdentity(
-          'github',
-          attributedLogin,
-          attributedLogin
-        );
-        archonUserId = user.id;
-      } catch (err) {
-        getLog().warn(
-          { err: toError(err), githubLogin: attributedLogin },
-          'github.user_resolve_failed'
-        );
-      }
-    }
-
-    // 14. Route to orchestrator with isolation hints (with lock for concurrency control)
+    // 13. Route to orchestrator with isolation hints (with lock for concurrency control)
     await this.lockManager.acquireLock(conversationId, async () => {
       try {
         await handleMessage(this, conversationId, finalMessage, {

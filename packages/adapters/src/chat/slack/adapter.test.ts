@@ -542,7 +542,7 @@ describe('SlackAdapter', () => {
       expect(mockUsersInfo).toHaveBeenCalledTimes(1);
     });
 
-    test('returns undefined and warn-logs on missing_scope failure', async () => {
+    test('returns undefined and warn-logs once on missing_scope failure', async () => {
       const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
       const slackErr = Object.assign(new Error('missing_scope'), {
         data: { error: 'missing_scope' },
@@ -553,6 +553,46 @@ describe('SlackAdapter', () => {
 
       expect(name).toBeUndefined();
       expect(mockLogger.warn).toHaveBeenCalled();
+    });
+
+    test('missing_scope WARN fires only once per adapter even after many sightings', async () => {
+      mockLogger.warn.mockClear();
+      const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+      const makeErr = (): Error =>
+        Object.assign(new Error('missing_scope'), { data: { error: 'missing_scope' } });
+      mockUsersInfo.mockRejectedValueOnce(makeErr());
+      mockUsersInfo.mockRejectedValueOnce(makeErr());
+      mockUsersInfo.mockRejectedValueOnce(makeErr());
+
+      await adapter.fetchDisplayName('U_A');
+      await adapter.fetchDisplayName('U_B');
+      await adapter.fetchDisplayName('U_C');
+
+      const missingScopeCalls = (
+        mockLogger.warn as unknown as Mock<(obj: object, evt: string) => void>
+      ).mock.calls.filter(c => c[1] === 'slack.users_info_missing_scope');
+      expect(missingScopeCalls.length).toBe(1);
+    });
+
+    test('users_info_failed log strips err.data (no PII leak)', async () => {
+      mockLogger.warn.mockClear();
+      const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+      const slackErr = Object.assign(new Error('rate_limited'), {
+        data: { error: 'rate_limited', response_metadata: { workspace: 'sensitive-info' } },
+      });
+      mockUsersInfo.mockRejectedValueOnce(slackErr);
+
+      await adapter.fetchDisplayName('U_RATE');
+
+      const failedCall = (
+        mockLogger.warn as unknown as Mock<(obj: object, evt: string) => void>
+      ).mock.calls.find(c => c[1] === 'slack.users_info_failed');
+      expect(failedCall).toBeDefined();
+      const payload = failedCall![0] as Record<string, unknown>;
+      expect(payload).not.toHaveProperty('err');
+      expect(JSON.stringify(payload)).not.toContain('sensitive-info');
+      expect(payload).toHaveProperty('errMessage', 'rate_limited');
+      expect(payload).toHaveProperty('slackErrorCode', 'rate_limited');
     });
 
     test('returns undefined for empty slackUserId without calling the API', async () => {

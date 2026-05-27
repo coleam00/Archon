@@ -31,10 +31,18 @@ export interface Conversation {
   hidden: boolean;
   deleted_at: Date | null;
   last_activity_at: Date | null; // For staleness detection
-  user_id: string | null; // UUID FK to users; populated by chat/forge adapters (PR-A)
+  user_id: string | null; // UUID FK to users; populated by chat/forge adapters
   created_at: Date;
   updated_at: Date;
 }
+
+/**
+ * Identity-source platforms. Constrained to a literal union so a typo
+ * (`'Slack'` vs `'slack'`) can't silently break the UNIQUE(platform,
+ * platform_user_id) invariant. New forge/chat platforms must be added here
+ * and to the per-adapter resolver callsite.
+ */
+export type IdentityPlatform = 'slack' | 'telegram' | 'discord' | 'github' | 'web' | 'cli';
 
 /**
  * Archon-internal user identity. One row per human (or bot) across all platforms.
@@ -56,7 +64,7 @@ export interface User {
 export interface UserIdentity {
   id: string;
   user_id: string;
-  platform: string;
+  platform: IdentityPlatform;
   platform_user_id: string;
   platform_display_name: string | null;
   created_at: Date;
@@ -81,7 +89,8 @@ export interface HandleMessageContext {
   /**
    * Archon user UUID resolved from the inbound platform user identifier.
    * Chat/forge adapters resolve this via findOrCreateUserByPlatformIdentity
-   * before calling handleMessage. Undefined for web/CLI surfaces until PR-C.
+   * before calling handleMessage. Undefined for web/CLI surfaces until their
+   * own auth flows are wired.
    */
   readonly userId?: string;
 }

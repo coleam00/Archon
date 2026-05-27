@@ -195,6 +195,28 @@ describe('isolation-environments', () => {
       expect(query).toContain('working_path = EXCLUDED.working_path');
       expect(query).toContain('branch_name = EXCLUDED.branch_name');
     });
+
+    test('ON CONFLICT does NOT update created_by_user_id (first-creator-wins)', async () => {
+      // Regression guard: a copy-paste that adds
+      //   created_by_user_id = EXCLUDED.created_by_user_id
+      // to the DO UPDATE SET clause would silently transfer environment
+      // ownership every time another user reactivates the worktree. This
+      // test locks in the intended "first creator owns the env" semantic.
+      mockQuery.mockResolvedValueOnce(createQueryResult([sampleEnv]));
+
+      await create({
+        codebase_id: 'codebase-456',
+        workflow_type: 'issue',
+        workflow_id: '42',
+        working_path: '/workspace/worktrees/project/issue-42',
+        branch_name: 'issue-42',
+        created_by_user_id: 'user-bob',
+      });
+
+      const [query] = mockQuery.mock.calls[0] as [string, unknown[]];
+      const setClause = query.slice(query.indexOf('DO UPDATE SET'));
+      expect(setClause).not.toContain('created_by_user_id');
+    });
   });
 
   describe('updateStatus', () => {

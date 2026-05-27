@@ -17,7 +17,7 @@ export interface MessageRow {
   role: 'user' | 'assistant';
   content: string;
   metadata: string; // JSON string - parsed by frontend and server-side (orchestrator prompt enrichment)
-  user_id: string | null; // FK to remote_agent_users; NULL for assistant rows and pre-PR-A history
+  user_id: string | null; // FK to remote_agent_users; NULL for assistant rows and rows that predate the column
   created_at: string;
 }
 
@@ -25,7 +25,7 @@ export interface MessageRow {
  * Add a message to conversation history.
  * metadata should contain toolCalls array and/or error object if applicable.
  * userId is the Archon user UUID; pass undefined for assistant messages or
- * when the originating user is unknown (e.g. web/CLI surfaces before PR-C).
+ * when the originating user is unknown.
  */
 export async function addMessage(
   conversationId: string,

@@ -78,6 +78,22 @@ mock.module('@archon/core/db/codebases', () => ({
   updateCodebaseCommands: mock(async () => {}),
 }));
 
+// Mock the users module so adapter.handleWebhook's user-id resolution can be
+// inspected without hitting the real DB. Captures the (platform, login) args
+// so the comment.user.login ?? sender.login fallback can be asserted.
+const mockFindOrCreateUserByPlatformIdentity = mock(
+  async (_platform: string, _platformUserId: string, _displayName?: string) => ({
+    id: 'user-test-uuid',
+    display_name: 'Test',
+    email: null,
+    created_at: new Date(),
+    updated_at: new Date(),
+  })
+);
+mock.module('@archon/core/db/users', () => ({
+  findOrCreateUserByPlatformIdentity: mockFindOrCreateUserByPlatformIdentity,
+}));
+
 // Mock @archon/git for ensureRepoReady integration tests
 const mockCloneRepository = mock(async () => ({ ok: true, value: undefined }));
 const mockSyncRepository = mock(async () => ({ ok: true, value: undefined }));
@@ -263,12 +279,82 @@ describe('GitHubAdapter', () => {
       mockGetOrCreateConversation.mockClear();
       mockFindCodebaseByRepoUrl.mockClear();
       mockCreateCodebase.mockClear();
+      mockFindOrCreateUserByPlatformIdentity.mockClear();
     });
 
     afterEach(() => {
       if (originalAllowedUsers !== undefined) {
         process.env.GITHUB_ALLOWED_USERS = originalAllowedUsers;
       }
+    });
+
+    test('attribution falls back to sender.login when comment.user is absent', async () => {
+      const adapter = createSelfFilterAdapter();
+      const payload = createCommentPayload('@archon help', undefined); // no comment.user
+      // sender.login defaults to 'user123' in createCommentPayload when commentAuthor is undefined.
+
+      try {
+        await adapter.handleWebhook(payload, 'mock-signature');
+      } catch {
+        // Expected — Octokit not mocked for the message path.
+      }
+
+      // Identity resolution must run, and must have used sender.login.
+      const calls = mockFindOrCreateUserByPlatformIdentity.mock.calls;
+      expect(calls.length).toBeGreaterThan(0);
+      expect(calls[0]).toEqual(['github', 'user123', 'user123']);
+    });
+
+    test('attribution prefers comment.user.login over sender.login when both present', async () => {
+      const adapter = createSelfFilterAdapter();
+      // Simulate a PR-review-comment shape: sender (e.g. PR author who triggered the
+      // event flow) differs from the comment author (the reviewer).
+      const payload = JSON.stringify({
+        action: 'created',
+        issue: {
+          number: 42,
+          title: 'Test Issue',
+          body: 'x',
+          user: { login: 'pr-author' },
+          labels: [],
+          state: 'open',
+        },
+        comment: { body: '@archon look at this', user: { login: 'reviewer-alice' } },
+        repository: {
+          owner: { login: 'testuser' },
+          name: 'testrepo',
+          full_name: 'testuser/testrepo',
+          html_url: 'https://github.com/testuser/testrepo',
+          default_branch: 'main',
+        },
+        sender: { login: 'pr-author' },
+      });
+
+      try {
+        await adapter.handleWebhook(payload, 'mock-signature');
+      } catch {
+        // Expected — Octokit not mocked.
+      }
+
+      const calls = mockFindOrCreateUserByPlatformIdentity.mock.calls;
+      expect(calls.length).toBeGreaterThan(0);
+      // Reviewer (comment author) gets the row, not the PR author (sender).
+      expect(calls[0]).toEqual(['github', 'reviewer-alice', 'reviewer-alice']);
+    });
+
+    test('handleWebhook never throws when identity resolution fails', async () => {
+      const adapter = createSelfFilterAdapter();
+      mockFindOrCreateUserByPlatformIdentity.mockRejectedValueOnce(new Error('db down'));
+      const payload = createCommentPayload('@archon help', 'user123');
+
+      try {
+        await adapter.handleWebhook(payload, 'mock-signature');
+      } catch {
+        // Octokit not mocked downstream — that's fine.
+      }
+      // The user-resolution failure was caught and warn-logged; the webhook
+      // handler proceeded past it (DB write for the conversation still happened).
+      expect(mockGetOrCreateConversation).toHaveBeenCalled();
     });
 
     test('should ignore comments from the bot itself', async () => {

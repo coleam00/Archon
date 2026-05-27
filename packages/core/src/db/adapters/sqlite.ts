@@ -178,6 +178,11 @@ export class SqliteAdapter implements IDatabase {
       if (!colNames.has('hidden')) {
         this.db.run('ALTER TABLE remote_agent_conversations ADD COLUMN hidden INTEGER DEFAULT 0');
       }
+      if (!colNames.has('user_id')) {
+        this.db.run(
+          'ALTER TABLE remote_agent_conversations ADD COLUMN user_id TEXT REFERENCES remote_agent_users(id) ON DELETE SET NULL'
+        );
+      }
     } catch (e: unknown) {
       getLog().warn({ err: e as Error }, 'db.sqlite_migration_conversations_columns_failed');
     }
@@ -198,6 +203,12 @@ export class SqliteAdapter implements IDatabase {
       if (!wfColNames.has('working_path')) {
         this.db.run('ALTER TABLE remote_agent_workflow_runs ADD COLUMN working_path TEXT');
       }
+
+      if (!wfColNames.has('user_id')) {
+        this.db.run(
+          'ALTER TABLE remote_agent_workflow_runs ADD COLUMN user_id TEXT REFERENCES remote_agent_users(id) ON DELETE SET NULL'
+        );
+      }
     } catch (e: unknown) {
       getLog().warn({ err: e as Error }, 'db.sqlite_migration_workflow_runs_columns_failed');
     }
@@ -216,22 +227,7 @@ export class SqliteAdapter implements IDatabase {
       getLog().warn({ err: e as Error }, 'db.sqlite_migration_session_columns_failed');
     }
 
-    // PR-A: user_id on conversations
-    try {
-      const cols = this.db.prepare("PRAGMA table_info('remote_agent_conversations')").all() as {
-        name: string;
-      }[];
-      const colNames = new Set(cols.map(c => c.name));
-      if (!colNames.has('user_id')) {
-        this.db.run(
-          'ALTER TABLE remote_agent_conversations ADD COLUMN user_id TEXT REFERENCES remote_agent_users(id)'
-        );
-      }
-    } catch (e: unknown) {
-      getLog().warn({ err: e as Error }, 'db.sqlite_migration_conversations_user_id_failed');
-    }
-
-    // PR-A: user_id on messages
+    // Messages columns
     try {
       const cols = this.db.prepare("PRAGMA table_info('remote_agent_messages')").all() as {
         name: string;
@@ -239,29 +235,14 @@ export class SqliteAdapter implements IDatabase {
       const colNames = new Set(cols.map(c => c.name));
       if (!colNames.has('user_id')) {
         this.db.run(
-          'ALTER TABLE remote_agent_messages ADD COLUMN user_id TEXT REFERENCES remote_agent_users(id)'
+          'ALTER TABLE remote_agent_messages ADD COLUMN user_id TEXT REFERENCES remote_agent_users(id) ON DELETE SET NULL'
         );
       }
     } catch (e: unknown) {
-      getLog().warn({ err: e as Error }, 'db.sqlite_migration_messages_user_id_failed');
+      getLog().warn({ err: e as Error }, 'db.sqlite_migration_messages_columns_failed');
     }
 
-    // PR-A: user_id on workflow_runs
-    try {
-      const cols = this.db.prepare("PRAGMA table_info('remote_agent_workflow_runs')").all() as {
-        name: string;
-      }[];
-      const colNames = new Set(cols.map(c => c.name));
-      if (!colNames.has('user_id')) {
-        this.db.run(
-          'ALTER TABLE remote_agent_workflow_runs ADD COLUMN user_id TEXT REFERENCES remote_agent_users(id)'
-        );
-      }
-    } catch (e: unknown) {
-      getLog().warn({ err: e as Error }, 'db.sqlite_migration_workflow_runs_user_id_failed');
-    }
-
-    // PR-A: created_by_user_id on isolation_environments
+    // Isolation environments columns
     try {
       const cols = this.db
         .prepare("PRAGMA table_info('remote_agent_isolation_environments')")
@@ -271,13 +252,13 @@ export class SqliteAdapter implements IDatabase {
       const colNames = new Set(cols.map(c => c.name));
       if (!colNames.has('created_by_user_id')) {
         this.db.run(
-          'ALTER TABLE remote_agent_isolation_environments ADD COLUMN created_by_user_id TEXT REFERENCES remote_agent_users(id)'
+          'ALTER TABLE remote_agent_isolation_environments ADD COLUMN created_by_user_id TEXT REFERENCES remote_agent_users(id) ON DELETE SET NULL'
         );
       }
     } catch (e: unknown) {
       getLog().warn(
         { err: e as Error },
-        'db.sqlite_migration_isolation_environments_user_id_failed'
+        'db.sqlite_migration_isolation_environments_columns_failed'
       );
     }
   }
@@ -465,7 +446,7 @@ export class SqliteAdapter implements IDatabase {
       CREATE INDEX IF NOT EXISTS idx_sessions_conversation_started
         ON remote_agent_sessions(conversation_id, started_at DESC);
 
-      -- From PR-A (user-identity-foundation): user mapping indexes.
+      -- User identity indexes.
       CREATE INDEX IF NOT EXISTS idx_user_identities_user_id
         ON remote_agent_user_identities(user_id);
       CREATE INDEX IF NOT EXISTS idx_conversations_user_id

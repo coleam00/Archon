@@ -65,6 +65,7 @@ Archon uses **Socket Mode** for Slack integration, which means:
    - `mpim:write` -- Send group DMs
    - `reactions:write` -- Add lifecycle reactions (🔄 / ✅ / ❌) to the triggering message
    - `commands` -- Required for the `/archon` and `/archon-workflow` slash commands
+   - `users:read` -- Look up real names via `users.info` for user attribution. The adapter degrades gracefully if this scope is missing (real names won't appear in the Archon DB, but messages still flow); a one-time `slack.users_info_missing_scope` warning surfaces the misconfiguration in the server log.
 
 ## Step 4: Subscribe to Events
 
