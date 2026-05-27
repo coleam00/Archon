@@ -20,8 +20,10 @@ import { ConversationNotFoundError } from '../types';
 import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
 import * as sessionDb from '../db/sessions';
+import * as userDb from '../db/users';
 import * as commandHandler from '../handlers/command-handler';
 import { formatToolCall } from '@archon/workflows/utils/tool-formatter';
+import { resolveGithubTokenOverrides } from '@archon/workflows/utils/github-token-policy';
 import { classifyAndFormatError } from '../utils/error-formatter';
 import { toError } from '../utils/error';
 import { getAgentProvider, getProviderCapabilities } from '@archon/providers';
@@ -940,7 +942,29 @@ export async function handleMessage(
         );
       }
     }
-    const effectiveEnv = { ...(config.envVars ?? {}), ...dbEnvVars };
+    // Multi-user GitHub token policy: resolve the conversation owner's
+    // personal GitHub OAuth token (if any) and derive env overrides that
+    // either inject it as GH_TOKEN/GITHUB_TOKEN or scrub the inherited
+    // org token so chat-side `gh`/`git push` invocations can't silently
+    // act as the org. See packages/workflows/src/utils/github-token-policy.
+    const runOwnerUserId = conversation.created_by_user_id ?? null;
+    let userGithubToken: string | null = null;
+    if (runOwnerUserId) {
+      try {
+        userGithubToken = await userDb.getGithubToken(runOwnerUserId);
+      } catch (err) {
+        getLog().error(
+          { err, conversationId, userId: runOwnerUserId },
+          'orchestrator.user_github_token_lookup_failed'
+        );
+        // Fail closed — leave token null so the policy scrubs.
+      }
+    }
+    const githubTokenOverrides = resolveGithubTokenOverrides(runOwnerUserId, userGithubToken);
+
+    // Merge overrides LAST so they win over any per-codebase env vars that
+    // happen to declare GH_TOKEN/GITHUB_TOKEN.
+    const effectiveEnv = { ...(config.envVars ?? {}), ...dbEnvVars, ...githubTokenOverrides };
 
     // Warn if provider doesn't support env injection but env vars are configured
     if (Object.keys(effectiveEnv).length > 0) {
