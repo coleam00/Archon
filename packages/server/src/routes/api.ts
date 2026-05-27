@@ -1293,12 +1293,22 @@ export function registerApiRoutes(
 
       const conversationId = `web-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-      // Resolve DB user ID from OIDC claims when multi-user mode is active
+      // Resolve DB user ID from OIDC claims when multi-user mode is active.
+      // Fail fast if the OIDC user can't be matched to a DB row — silently
+      // dropping attribution would create unaudited conversations.
       const oidcUser = c.get('oidcUser') as OidcUser | undefined;
       let webUserId: string | undefined;
       if (oidcUser) {
         const dbUser = await userDb.getUserByKeycloakSub(oidcUser.sub);
-        webUserId = dbUser?.id;
+        if (!dbUser) {
+          return apiError(
+            c,
+            500,
+            'User record missing',
+            `Authenticated as sub=${oidcUser.sub} but no remote_agent_users row exists. Sign out and back in to upsert.`
+          );
+        }
+        webUserId = dbUser.id;
       }
 
       const conversation = await conversationDb.getOrCreateConversation(
@@ -1741,14 +1751,45 @@ export function registerApiRoutes(
     const body = getValidatedBody(c, addCodebaseBodySchema);
 
     try {
-      // Resolve per-user GitHub token for authenticated web sessions (multi-user mode)
+      // Resolve per-user GitHub token for authenticated web sessions (multi-user mode).
+      // Rules:
+      //   - oidcUser present + no DB user: fail fast (auth/DB mismatch)
+      //   - oidcUser present + github.com URL + no token: fail fast (user must
+      //     Connect GitHub first; otherwise we'd silently fall back to the org
+      //     token and the clone/PR would be attributed to the wrong identity)
+      //   - oidcUser present + non-GitHub URL + no token: allow org-token fallback
+      //   - No oidcUser (single-user mode): allow org-token fallback as before
       let userGithubToken: string | undefined;
       if (body.url) {
         const oidcUser = c.get('oidcUser') as OidcUser | undefined;
         if (oidcUser) {
           const dbUser = await userDb.getUserByKeycloakSub(oidcUser.sub);
-          if (dbUser) {
-            userGithubToken = (await userDb.getGithubToken(dbUser.id)) ?? undefined;
+          if (!dbUser) {
+            return apiError(
+              c,
+              500,
+              'User record missing',
+              `Authenticated as sub=${oidcUser.sub} but no remote_agent_users row exists. Sign out and back in to upsert.`
+            );
+          }
+          userGithubToken = (await userDb.getGithubToken(dbUser.id)) ?? undefined;
+          if (!userGithubToken) {
+            // Allowlist canonical github.com only; non-default ports stay covered.
+            const parsed = ((): URL | null => {
+              try {
+                return new URL(body.url);
+              } catch {
+                return null;
+              }
+            })();
+            if (parsed?.hostname === 'github.com') {
+              return apiError(
+                c,
+                400,
+                'GitHub not connected',
+                'Connect your GitHub account in Settings before adding github.com repos in multi-user mode.'
+              );
+            }
           }
         }
       }

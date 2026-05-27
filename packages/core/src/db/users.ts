@@ -65,13 +65,17 @@ export async function setGithubToken(
 ): Promise<void> {
   const key = getEncryptionKey();
   const encrypted = encryptToken(plainToken, key);
-  await pool.query(
+  const result = await pool.query(
     `UPDATE remote_agent_users
      SET github_oauth_token = $1, github_username = $2, updated_at = NOW()
      WHERE id = $3`,
     [encrypted, githubUsername, userId]
   );
-  getLog().info({ userId, githubUsername }, 'user.github_token_stored');
+  if (result.rowCount !== 1) {
+    throw new Error(`setGithubToken failed: no user found for id=${userId}`);
+  }
+  // Don't include githubUsername in the log — treat it as user-identifying data.
+  getLog().info({ userId }, 'user.github_token_stored');
 }
 
 /**

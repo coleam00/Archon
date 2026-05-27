@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, test, expect, afterEach } from 'bun:test';
 import { encryptToken, decryptToken, getEncryptionKey } from './token-crypto';
 
 const TEST_KEY = Buffer.from('a'.repeat(64), 'hex'); // 32-byte key (all zeros — test only)
@@ -36,23 +36,30 @@ describe('encryptToken / decryptToken', () => {
 describe('getEncryptionKey', () => {
   const origEnv = process.env.TOKEN_ENCRYPTION_KEY;
 
+  // afterEach restore guarantees cleanup even if a test throws partway through —
+  // avoids leaking TOKEN_ENCRYPTION_KEY state into later tests.
+  afterEach(() => {
+    if (origEnv === undefined) {
+      delete process.env.TOKEN_ENCRYPTION_KEY;
+    } else {
+      process.env.TOKEN_ENCRYPTION_KEY = origEnv;
+    }
+  });
+
   test('parses valid 64-char hex key', () => {
     process.env.TOKEN_ENCRYPTION_KEY = 'a'.repeat(64);
     const key = getEncryptionKey();
     expect(key).toBeInstanceOf(Buffer);
     expect(key.length).toBe(32);
-    process.env.TOKEN_ENCRYPTION_KEY = origEnv;
   });
 
   test('throws when key is absent', () => {
     delete process.env.TOKEN_ENCRYPTION_KEY;
     expect(() => getEncryptionKey()).toThrow('TOKEN_ENCRYPTION_KEY is required');
-    process.env.TOKEN_ENCRYPTION_KEY = origEnv;
   });
 
   test('throws when key is wrong length', () => {
     process.env.TOKEN_ENCRYPTION_KEY = 'abc123';
     expect(() => getEncryptionKey()).toThrow('64-character hex string');
-    process.env.TOKEN_ENCRYPTION_KEY = origEnv;
   });
 });

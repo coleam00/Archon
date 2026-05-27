@@ -342,9 +342,20 @@ export async function dispatchBackgroundWorkflow(
   // async setup completes would 404 (row doesn't exist yet for 1-5 seconds).
   const workflowDeps = createWorkflowDeps();
 
-  // Propagate web user attribution from the originating conversation (nullable for non-web platforms)
-  const parentConversation = await db.getConversationById(ctx.conversationDbId);
-  const createdByUserId = parentConversation?.created_by_user_id ?? undefined;
+  // Propagate web user attribution from the originating conversation (nullable for non-web platforms).
+  // Optional lookup — a failure here must not abort dispatch. Worst case we lose
+  // attribution on this workflow run.
+  let createdByUserId: string | undefined;
+  try {
+    const parentConversation = await db.getConversationById(ctx.conversationDbId);
+    createdByUserId = parentConversation?.created_by_user_id ?? undefined;
+  } catch (error) {
+    const err = error as Error;
+    getLog().warn(
+      { err: err.message, conversationDbId: ctx.conversationDbId },
+      'attribution_lookup_failed'
+    );
+  }
 
   let preCreatedRun: Awaited<ReturnType<typeof workflowDeps.store.createWorkflowRun>> | undefined;
   try {

@@ -64,6 +64,27 @@ function cleanExpiredStates(): void {
   }
 }
 
+/**
+ * Fetch with an abort-controller timeout (default 10s). Throws on timeout or
+ * network failure rather than hanging forever — important for IdP/GitHub calls
+ * where DNS/TLS stalls would otherwise wedge the request handler.
+ */
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit & { timeoutMs?: number } = {}
+): Promise<Response> {
+  const { timeoutMs = 10_000, ...rest } = init;
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    controller.abort();
+  }, timeoutMs);
+  try {
+    return await fetch(url, { ...rest, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export function registerAuthRoutes(app: OpenAPIHono): void {
   /**
    * GET /api/auth/login — redirect to Keycloak authorization endpoint.
@@ -124,25 +145,41 @@ export function registerAuthRoutes(app: OpenAPIHono): void {
     }
     pkceStateStore.delete(state);
 
-    // Exchange code for tokens
-    const tokenRes = await fetch(`${keycloakBase()}/protocol/openid-connect/token`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'authorization_code',
-        client_id: process.env.KEYCLOAK_CLIENT_ID ?? '',
-        ...(process.env.KEYCLOAK_CLIENT_SECRET
-          ? { client_secret: process.env.KEYCLOAK_CLIENT_SECRET }
-          : {}),
-        redirect_uri: `${appBase(c)}/api/auth/callback`,
-        code,
-        code_verifier: stored.codeVerifier,
-      }),
-    });
+    // Exchange code for tokens. fetch wrapped with a timeout so an unreachable
+    // Keycloak doesn't wedge the callback handler.
+    let tokenRes: Response;
+    try {
+      tokenRes = await fetchWithTimeout(`${keycloakBase()}/protocol/openid-connect/token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          grant_type: 'authorization_code',
+          client_id: process.env.KEYCLOAK_CLIENT_ID ?? '',
+          ...(process.env.KEYCLOAK_CLIENT_SECRET
+            ? { client_secret: process.env.KEYCLOAK_CLIENT_SECRET }
+            : {}),
+          redirect_uri: `${appBase(c)}/api/auth/callback`,
+          code,
+          code_verifier: stored.codeVerifier,
+        }),
+      });
+    } catch (err) {
+      getLog().error({ err: (err as Error).message }, 'auth.token_exchange_network_error');
+      return c.json({ error: 'Token exchange network error' }, 502);
+    }
 
     if (!tokenRes.ok) {
-      const body = await tokenRes.text();
-      getLog().error({ status: tokenRes.status, body }, 'auth.token_exchange_failed');
+      // Read but DON'T log the raw IdP body — it can carry sensitive error
+      // descriptions or echoed token fragments. Try to extract a safe `error`
+      // code, log status + that code only.
+      let errorCode: string | undefined;
+      try {
+        const body = (await tokenRes.json()) as { error?: unknown };
+        if (typeof body.error === 'string') errorCode = body.error;
+      } catch {
+        // body wasn't JSON; ignore
+      }
+      getLog().error({ status: tokenRes.status, errorCode }, 'auth.token_exchange_failed');
       return c.json({ error: 'Token exchange failed' }, 502);
     }
 
@@ -171,9 +208,14 @@ export function registerAuthRoutes(app: OpenAPIHono): void {
 
     getLog().info({ userId: user.id, sub: claims.sub }, 'auth.login_completed');
 
-    // Store the access token in an HTTP-only cookie for subsequent API requests
+    // Store the access token in an HTTP-only cookie for subsequent API requests.
+    // `secure: true` ensures the cookie is only sent over HTTPS — multi-user mode
+    // is expected to terminate TLS at the reverse proxy, so the browser-facing
+    // origin is always HTTPS. Without this flag a misconfigured proxy could leak
+    // the token over plaintext HTTP.
     setCookie(c, 'archon_access_token', tokens.access_token, {
       httpOnly: true,
+      secure: true,
       sameSite: 'Lax',
       path: '/',
       maxAge: 60 * 60 * 8, // 8 hours
@@ -277,20 +319,27 @@ export function registerAuthRoutes(app: OpenAPIHono): void {
       return c.json({ error: 'Not authenticated' }, 401);
     }
 
-    // Exchange code for token
-    const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        Accept: 'application/json',
-      },
-      body: new URLSearchParams({
-        client_id: process.env.GITHUB_OAUTH_CLIENT_ID,
-        client_secret: process.env.GITHUB_OAUTH_CLIENT_SECRET,
-        code,
-        redirect_uri: `${appBase(c)}/api/auth/github/callback`,
-      }),
-    });
+    // Exchange code for token (wrapped with timeout to avoid wedging on
+    // network stalls).
+    let tokenRes: Response;
+    try {
+      tokenRes = await fetchWithTimeout('https://github.com/login/oauth/access_token', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          Accept: 'application/json',
+        },
+        body: new URLSearchParams({
+          client_id: process.env.GITHUB_OAUTH_CLIENT_ID,
+          client_secret: process.env.GITHUB_OAUTH_CLIENT_SECRET,
+          code,
+          redirect_uri: `${appBase(c)}/api/auth/github/callback`,
+        }),
+      });
+    } catch (err) {
+      getLog().error({ err: (err as Error).message }, 'auth.github_token_exchange_network_error');
+      return c.json({ error: 'GitHub token exchange network error' }, 502);
+    }
 
     if (!tokenRes.ok) {
       getLog().error({ status: tokenRes.status }, 'auth.github_token_exchange_failed');
@@ -299,17 +348,25 @@ export function registerAuthRoutes(app: OpenAPIHono): void {
 
     const data = (await tokenRes.json()) as { access_token?: string; error?: string };
     if (!data.access_token) {
-      getLog().error({ error: data.error }, 'auth.github_token_missing');
+      // GitHub's `error` field is a short code (e.g. "bad_verification_code") —
+      // safe to log. Never log the token-exchange body.
+      getLog().error({ errorCode: data.error }, 'auth.github_token_missing');
       return c.json({ error: data.error ?? 'GitHub token exchange failed' }, 502);
     }
 
-    // Fetch GitHub username
-    const ghUserRes = await fetch('https://api.github.com/user', {
-      headers: { Authorization: `Bearer ${data.access_token}`, 'User-Agent': 'Archon' },
-    });
-    const ghUser = ghUserRes.ok
-      ? ((await ghUserRes.json()) as { login?: string })
-      : { login: undefined };
+    // Fetch GitHub username (also timeout-wrapped).
+    let ghUser: { login?: string } = { login: undefined };
+    try {
+      const ghUserRes = await fetchWithTimeout('https://api.github.com/user', {
+        headers: { Authorization: `Bearer ${data.access_token}`, 'User-Agent': 'Archon' },
+      });
+      if (ghUserRes.ok) {
+        ghUser = (await ghUserRes.json()) as { login?: string };
+      }
+    } catch (err) {
+      // Non-fatal: we still have a valid token; we'll just store an empty username.
+      getLog().warn({ err: (err as Error).message }, 'auth.github_user_lookup_failed');
+    }
 
     const dbUser = await userDb.getUserByKeycloakSub(oidcUser.sub);
     if (!dbUser) {
@@ -347,16 +404,19 @@ export function registerAuthRoutes(app: OpenAPIHono): void {
     if (token && ghClientId && ghClientSecret) {
       try {
         const auth = Buffer.from(`${ghClientId}:${ghClientSecret}`).toString('base64');
-        const revokeRes = await fetch(`https://api.github.com/applications/${ghClientId}/grant`, {
-          method: 'DELETE',
-          headers: {
-            Authorization: `Basic ${auth}`,
-            Accept: 'application/vnd.github+json',
-            'X-GitHub-Api-Version': '2022-11-28',
-            'User-Agent': 'Archon',
-          },
-          body: JSON.stringify({ access_token: token }),
-        });
+        const revokeRes = await fetchWithTimeout(
+          `https://api.github.com/applications/${ghClientId}/grant`,
+          {
+            method: 'DELETE',
+            headers: {
+              Authorization: `Basic ${auth}`,
+              Accept: 'application/vnd.github+json',
+              'X-GitHub-Api-Version': '2022-11-28',
+              'User-Agent': 'Archon',
+            },
+            body: JSON.stringify({ access_token: token }),
+          }
+        );
         if (!revokeRes.ok && revokeRes.status !== 404) {
           getLog().warn(
             { userId: dbUser.id, status: revokeRes.status },

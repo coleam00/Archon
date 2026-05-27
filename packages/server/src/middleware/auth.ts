@@ -9,11 +9,27 @@ export interface OidcUser {
   name?: string;
 }
 
-/** Routes that never require authentication, even when OIDC is enabled. */
-const PUBLIC_PREFIXES = ['/api/auth/', '/api/health', '/api/openapi.json', '/webhooks/'];
+/**
+ * Routes that never require authentication, even when OIDC is enabled.
+ *
+ * PUBLIC_PATHS is the explicit allowlist (login flow + health). Keeping
+ * /api/auth/me and /api/auth/github/callback OUT of this set is intentional:
+ * those endpoints need a valid session cookie to identify the caller, and
+ * the middleware populates `oidcUser` for them when the cookie is valid.
+ * (See also the always-attempt-validation logic below.)
+ */
+const PUBLIC_PATHS = new Set([
+  '/api/auth/login',
+  '/api/auth/callback',
+  '/api/auth/logout',
+  '/api/health',
+  '/api/openapi.json',
+]);
+const PUBLIC_PREFIXES = ['/webhooks/'];
 
 function isPublicPath(path: string): boolean {
-  return PUBLIC_PREFIXES.some(p => path === p.replace(/\/$/, '') || path.startsWith(p));
+  if (PUBLIC_PATHS.has(path)) return true;
+  return PUBLIC_PREFIXES.some(p => path.startsWith(p));
 }
 
 function buildJwksUrl(keycloakUrl: string): URL {

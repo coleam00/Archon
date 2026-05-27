@@ -1,4 +1,4 @@
-import { describe, test, expect, mock, beforeEach, spyOn } from 'bun:test';
+import { describe, test, expect, mock, beforeEach, afterEach, spyOn } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
 
 const mockLogger = createMockLogger();
@@ -70,6 +70,17 @@ describe('shouldPassNoEnvFile', () => {
 
 describe('ClaudeProvider', () => {
   let client: ClaudeProvider;
+  const origIsSandbox = process.env.IS_SANDBOX;
+
+  // Restore IS_SANDBOX between tests so we don't leak this override into later
+  // test files in the same process — that would mask root-check regressions.
+  afterEach(() => {
+    if (origIsSandbox === undefined) {
+      delete process.env.IS_SANDBOX;
+    } else {
+      process.env.IS_SANDBOX = origIsSandbox;
+    }
+  });
 
   beforeEach(() => {
     // Allow construction in environments where the test process happens to be UID 0
@@ -1065,8 +1076,20 @@ describe('withFirstMessageTimeout', () => {
 
 describe('sendQuery decomposition behaviors', () => {
   let client: ClaudeProvider;
+  const origIsSandbox = process.env.IS_SANDBOX;
+
+  afterEach(() => {
+    if (origIsSandbox === undefined) {
+      delete process.env.IS_SANDBOX;
+    } else {
+      process.env.IS_SANDBOX = origIsSandbox;
+    }
+  });
 
   beforeEach(() => {
+    // ClaudeProvider refuses UID 0 unless IS_SANDBOX=1 (matches the sibling
+    // ClaudeProvider describe block at the top of this file).
+    process.env.IS_SANDBOX = '1';
     client = new ClaudeProvider({ retryBaseDelayMs: 1 });
     mockQuery.mockClear();
     mockLogger.info.mockClear();

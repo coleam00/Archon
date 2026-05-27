@@ -203,13 +203,19 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
   // Multi-user mode gating: KEYCLOAK_URL requires PostgreSQL and TOKEN_ENCRYPTION_KEY
   if (process.env.KEYCLOAK_URL) {
-    if (!process.env.DATABASE_URL) {
+    const databaseUrl = process.env.DATABASE_URL;
+    // Reject empty/missing AND non-PostgreSQL URLs (e.g. sqlite:./db). The
+    // schema migration and IDataBase adapter are PostgreSQL-only in multi-user mode.
+    const isPostgres =
+      typeof databaseUrl === 'string' &&
+      (databaseUrl.startsWith('postgres://') || databaseUrl.startsWith('postgresql://'));
+    if (!isPostgres) {
       getLog().fatal(
         { hint: 'Set DATABASE_URL=postgresql://... in .env' },
         'multi_user_mode_requires_postgresql'
       );
       console.error(
-        'Multi-user mode requires PostgreSQL. Set DATABASE_URL when using KEYCLOAK_URL.'
+        'Multi-user mode requires PostgreSQL. Set DATABASE_URL=postgresql://... when using KEYCLOAK_URL.'
       );
       process.exit(1);
     }

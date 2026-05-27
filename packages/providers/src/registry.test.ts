@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach } from 'bun:test';
+import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import {
   getAgentProvider,
   getProviderCapabilities,
@@ -57,6 +57,18 @@ function makeMockRegistration(
 }
 
 describe('registry', () => {
+  const origIsSandbox = process.env.IS_SANDBOX;
+
+  // Restore between tests to avoid leaking the IS_SANDBOX override across test
+  // files in the same process — it would mask root-check regressions elsewhere.
+  afterEach(() => {
+    if (origIsSandbox === undefined) {
+      delete process.env.IS_SANDBOX;
+    } else {
+      process.env.IS_SANDBOX = origIsSandbox;
+    }
+  });
+
   beforeEach(() => {
     // ClaudeProvider refuses to construct as UID 0 unless IS_SANDBOX=1.
     // Set it so the registry can instantiate Claude when tests run as root (Docker/CI).

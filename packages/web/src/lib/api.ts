@@ -60,7 +60,9 @@ export interface HealthResponse {
 }
 
 async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(url, { credentials: 'include', ...options });
+  // Spread options FIRST, then set credentials — this helper must always send
+  // session cookies, callers shouldn't be able to opt out by accident.
+  const res = await fetch(url, { ...options, credentials: 'include' });
   if (!res.ok) {
     // When OIDC is enabled, redirect the browser to the login page on 401.
     // When OIDC is not configured the server never returns 401 so this is safe.
@@ -562,8 +564,16 @@ export interface AuthMeResponse {
  */
 export async function getAuthMe(): Promise<AuthMeResponse | null> {
   const res = await fetch('/api/auth/me', { credentials: 'include' });
+  // 401 = unauthenticated, 404 = OIDC disabled / endpoint missing.
+  // Both legitimately mean "no current user" and should NOT throw.
   if (res.status === 401 || res.status === 404) return null;
-  if (!res.ok) return null;
+  if (!res.ok) {
+    // Any other non-OK is an unexpected failure (5xx, network proxy issue, etc.)
+    // — surface it instead of silently treating the user as unauthenticated.
+    const body = await res.text();
+    const truncated = body.length > 200 ? body.slice(0, 200) + '...' : body;
+    throw new Error(`GET /api/auth/me failed (${String(res.status)}): ${truncated}`);
+  }
   const data = (await res.json()) as { authenticated?: false } & Partial<AuthMeResponse>;
   if (data.authenticated === false) return null;
   return data as AuthMeResponse;

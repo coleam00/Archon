@@ -328,16 +328,21 @@ export async function cloneRepository(
   getLog().info({ url: workingUrl, targetPath }, 'clone_started');
 
   // Build clone command with authentication using forge-specific tokens.
-  // Per-user GitHub token takes precedence over the org-level token for github.com URLs.
+  // Per-user GitHub token takes precedence over the org-level token, but ONLY
+  // for canonical github.com URLs. Substring matching ('includes') would also
+  // match attacker-controlled hosts like `github.com.example.com` and leak the
+  // user's personal token there.
   let cloneUrl = workingUrl;
-  const isGithubUrl = workingUrl.includes('github.com');
+  const parsedForHost = safeParseUrl(workingUrl);
+  const isGithubUrl = parsedForHost?.hostname === 'github.com';
   const { token: forgeToken, scheme: authScheme } = resolveForgeAuth(workingUrl);
   const effectiveToken = isGithubUrl && userGithubToken ? userGithubToken : forgeToken;
 
   if (effectiveToken) {
-    const parsed = safeParseUrl(workingUrl);
-    if (parsed) {
-      cloneUrl = `https://${authScheme}${effectiveToken}@${parsed.hostname}${parsed.pathname}`;
+    if (parsedForHost) {
+      // Use `host` (not `hostname`) to preserve any non-default port for
+      // self-hosted forges like gitea.internal:3000.
+      cloneUrl = `https://${authScheme}${effectiveToken}@${parsedForHost.host}${parsedForHost.pathname}`;
     } else if (!workingUrl.startsWith('http')) {
       // Bare host/path form (e.g. github.com/owner/repo)
       cloneUrl = `https://${authScheme}${effectiveToken}@${workingUrl}`;
