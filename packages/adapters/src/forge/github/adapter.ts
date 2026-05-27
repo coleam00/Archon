@@ -32,6 +32,7 @@ import {
 } from '@archon/git';
 import * as db from '@archon/core/db/conversations';
 import * as codebaseDb from '@archon/core/db/codebases';
+import * as userDb from '@archon/core/db/users';
 import { resolveDefaultAssistant } from '@archon/core/config/resolve-assistant';
 import { createLogger } from '@archon/paths';
 import { parseAllowedUsers as parseGitHubAllowedUsers, isGitHubUserAuthorized } from './auth';
@@ -938,13 +939,37 @@ ${userComment}`;
       'github.thread_context_loaded'
     );
 
-    // 13. Route to orchestrator with isolation hints (with lock for concurrency control)
+    // 13. Resolve GitHub sender to Archon user (auto-create on first sight).
+    // Comment author may differ from event.sender for PR-review comments; prefer
+    // the comment author when present so individual reviewers get their own row.
+    // Resolution failure must not drop the message — warn and continue without
+    // attribution rather than blocking the user.
+    const attributedLogin = event.comment?.user?.login ?? senderUsername;
+    let archonUserId: string | undefined;
+    if (attributedLogin) {
+      try {
+        const user = await userDb.findOrCreateUserByPlatformIdentity(
+          'github',
+          attributedLogin,
+          attributedLogin
+        );
+        archonUserId = user.id;
+      } catch (err) {
+        getLog().warn(
+          { err: toError(err), githubLogin: attributedLogin },
+          'github.user_resolve_failed'
+        );
+      }
+    }
+
+    // 14. Route to orchestrator with isolation hints (with lock for concurrency control)
     await this.lockManager.acquireLock(conversationId, async () => {
       try {
         await handleMessage(this, conversationId, finalMessage, {
           issueContext: contextToAppend,
           threadContext,
           isolationHints,
+          userId: archonUserId,
         });
       } catch (error) {
         const err = toError(error);

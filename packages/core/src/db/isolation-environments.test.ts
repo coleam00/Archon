@@ -40,6 +40,7 @@ describe('isolation-environments', () => {
     status: 'active',
     created_at: new Date(),
     created_by_platform: 'github',
+    created_by_user_id: null,
     metadata: {},
   };
 
@@ -154,6 +155,7 @@ describe('isolation-environments', () => {
           '/workspace/worktrees/project/issue-42',
           'issue-42',
           'slack',
+          null,
           '{"custom":true}',
         ]
       );
