@@ -3600,7 +3600,8 @@ export interface components {
         until_bash?: string;
         interactive?: boolean;
         gate_message?: string;
-        prompt: string;
+        prompt?: string;
+        command?: string;
       };
       loop_group?: {
         until: string;
