@@ -512,7 +512,7 @@ describe('evaluateCondition', () => {
     expect(parsed).toBe(false);
   });
 
-  // --- #1763: shorthand path ($nodeId.field) ---
+  // --- shorthand path ($nodeId.field) ---
 
   it('shorthand path: $node.field is equivalent to $node.output.field', () => {
     const outputs = new Map([['classify', makeOutput(JSON.stringify({ type: 'BUG' }))]]);
@@ -545,7 +545,17 @@ describe('evaluateCondition', () => {
     expect(res.parsed).toBe(false);
   });
 
-  // --- #1763: unquoted numeric/boolean RHS ---
+  it('shorthand path: absent field resolves to empty string like the canonical form', () => {
+    // An absent shorthand field is not a parse error — it resolves to '' (parsed: true),
+    // mirroring the `$node.output.field` empty-string semantics.
+    const outputs = new Map([['n', makeOutput(JSON.stringify({ type: 'BUG' }))]]);
+    const res = evaluateCondition("$n.missing == 'x'", outputs);
+    expect(res.result).toBe(false);
+    expect(res.parsed).toBe(true);
+    expect(evaluateCondition("$n.missing == ''", outputs).result).toBe(true);
+  });
+
+  // --- unquoted numeric/boolean RHS ---
 
   it('unquoted RHS: integer comparison with ==', () => {
     const outputs = new Map([['t', makeOutput(JSON.stringify({ exit_code: 0 }))]]);
