@@ -99,6 +99,7 @@ describe('ClaudeProvider', () => {
     });
 
     test('expands ${VAR} placeholders in env and headers', async () => {
+      const prevToken = process.env.TEST_CLAUDE_MCP_TOKEN;
       process.env.TEST_CLAUDE_MCP_TOKEN = 'secret123';
       const config = {
         github: {
@@ -116,7 +117,8 @@ describe('ClaudeProvider', () => {
         expect(server.env).toEqual({ TOKEN: 'secret123' });
         expect(server.headers).toEqual({ Authorization: 'Bearer secret123' });
       } finally {
-        delete process.env.TEST_CLAUDE_MCP_TOKEN;
+        if (prevToken !== undefined) process.env.TEST_CLAUDE_MCP_TOKEN = prevToken;
+        else delete process.env.TEST_CLAUDE_MCP_TOKEN;
       }
     });
   });
