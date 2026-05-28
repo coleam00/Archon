@@ -183,6 +183,13 @@ export class SqliteAdapter implements IDatabase {
           'ALTER TABLE remote_agent_conversations ADD COLUMN user_id TEXT REFERENCES remote_agent_users(id) ON DELETE SET NULL'
         );
       }
+      // Index must be created here, not in createSchema(): the column doesn't
+      // exist on pre-0.4.0 databases until the ALTER TABLE above runs, and
+      // CREATE INDEX on a missing column aborts the entire createSchema()
+      // exec block. Idempotent so it's safe to run unconditionally.
+      this.db.run(
+        'CREATE INDEX IF NOT EXISTS idx_conversations_user_id ON remote_agent_conversations(user_id) WHERE user_id IS NOT NULL'
+      );
     } catch (e: unknown) {
       getLog().warn({ err: e as Error }, 'db.sqlite_migration_conversations_columns_failed');
     }
@@ -209,6 +216,10 @@ export class SqliteAdapter implements IDatabase {
           'ALTER TABLE remote_agent_workflow_runs ADD COLUMN user_id TEXT REFERENCES remote_agent_users(id) ON DELETE SET NULL'
         );
       }
+      // Same rationale as idx_conversations_user_id above.
+      this.db.run(
+        'CREATE INDEX IF NOT EXISTS idx_workflow_runs_user_id ON remote_agent_workflow_runs(user_id) WHERE user_id IS NOT NULL'
+      );
     } catch (e: unknown) {
       getLog().warn({ err: e as Error }, 'db.sqlite_migration_workflow_runs_columns_failed');
     }
@@ -446,13 +457,13 @@ export class SqliteAdapter implements IDatabase {
       CREATE INDEX IF NOT EXISTS idx_sessions_conversation_started
         ON remote_agent_sessions(conversation_id, started_at DESC);
 
-      -- User identity indexes.
+      -- User identity index. user_identities is a new table created above
+      -- so its user_id column always exists. Indexes for the user_id columns
+      -- added by migrateColumns() onto pre-existing tables (conversations,
+      -- workflow_runs) are created there, alongside the ALTER TABLE — see
+      -- the comment in migrateColumns() for why this is order-sensitive.
       CREATE INDEX IF NOT EXISTS idx_user_identities_user_id
         ON remote_agent_user_identities(user_id);
-      CREATE INDEX IF NOT EXISTS idx_conversations_user_id
-        ON remote_agent_conversations(user_id) WHERE user_id IS NOT NULL;
-      CREATE INDEX IF NOT EXISTS idx_workflow_runs_user_id
-        ON remote_agent_workflow_runs(user_id) WHERE user_id IS NOT NULL;
     `);
     getLog().info('db.sqlite_schema_initialized');
   }
