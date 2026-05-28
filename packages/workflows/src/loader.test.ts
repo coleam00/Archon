@@ -2889,6 +2889,40 @@ nodes:
       expect(result.workflows[0].workflow.nodes).toHaveLength(2);
     });
 
+    it('should trim surrounding whitespace from loop.command so resolution sees the normalized name', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      // Regression guard: a quoted YAML value like `" my-loop-cmd "` (or one with
+      // a stray trailing newline from awkward block scalars) must not pass parse
+      // with whitespace intact, because downstream `loadCommandPrompt` resolves
+      // the literal filename and would fail at runtime with a confusing
+      // "not found" instead of failing fast at parse with a clearer error.
+      await writeFile(
+        join(workflowDir, 'loop-cmd-whitespace.yaml'),
+        `
+name: loop-cmd-whitespace
+description: Command-backed loop with stray whitespace around the name
+nodes:
+  - id: my-loop
+    loop:
+      command: "  my-loop-cmd  "
+      until: DONE
+      max_iterations: 3
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
+
+      const node = result.workflows[0].workflow.nodes[0];
+      expect(isLoopNode(node)).toBe(true);
+      if (isLoopNode(node)) {
+        expect(node.loop.command).toBe('my-loop-cmd');
+      }
+    });
+
     it('should accept a loop with signal_completes (loads without errors)', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(workflowDir, { recursive: true });

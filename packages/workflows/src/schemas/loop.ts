@@ -61,9 +61,11 @@ export const loopNodeConfigSchema = loopControlSchema
     /**
      * Named command file (under `.archon/commands/`) whose body is loaded as the iteration
      * prompt. Resolved with repo → home → bundled precedence, identical to `command:` nodes.
-     * Mutually exclusive with `prompt`.
+     * Mutually exclusive with `prompt`. Surrounding whitespace is trimmed so the stored value
+     * matches what downstream resolution sees — otherwise a value like `" my-cmd "` could pass
+     * parse-time validation and fail at runtime with a confusing "not found" error.
      */
-    command: z.string().min(1, "'loop.command' must be a non-empty string").optional(),
+    command: z.string().trim().min(1, "'loop.command' must be a non-empty string").optional(),
   })
   .superRefine((data, ctx) => {
     const hasPrompt = typeof data.prompt === 'string' && data.prompt.length > 0;
@@ -84,10 +86,10 @@ export const loopNodeConfigSchema = loopControlSchema
       });
     }
 
-    if (hasCommand && !isValidCommandName((data.command ?? '').trim())) {
+    if (hasCommand && !isValidCommandName(data.command ?? '')) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: `invalid command name "${(data.command ?? '').trim()}" — must not contain path separators, '..', or start with '.'`,
+        message: `invalid command name "${data.command ?? ''}" — must not contain path separators, '..', or start with '.'`,
         path: ['command'],
       });
     }
