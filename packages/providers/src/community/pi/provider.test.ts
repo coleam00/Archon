@@ -149,7 +149,7 @@ mock.module('@earendil-works/pi-coding-agent', () => ({
   DefaultResourceLoader: MockDefaultResourceLoader,
   // Stub for the value import added when resource-loader.ts started passing
   // an explicit `agentDir` to DefaultResourceLoader (required since
-  // pi-coding-agent 0.71+). Returns a deterministic path for tests.
+  // pi-coding-agent 0.68+). Returns a deterministic path for tests.
   getAgentDir: () => '/mock/.pi/agent',
   createReadTool: mockCreateReadTool,
   createBashTool: mockCreateBashTool,
@@ -882,7 +882,7 @@ describe('PiProvider', () => {
     );
 
     const [callArgs] = mockCreateAgentSession.mock.calls[0] as [Record<string, unknown>];
-    // Pi 0.71+: customTools holds the actual Tool objects; noTools: "builtin"
+    // Pi 0.68+: customTools holds the actual Tool objects; noTools: "builtin"
     // suppresses Pi's default built-in set so the customTools list is authoritative.
     expect(Array.isArray(callArgs.customTools)).toBe(true);
     expect(callArgs.noTools).toBe('builtin');

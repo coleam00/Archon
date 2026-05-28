@@ -477,11 +477,18 @@ export class PiProvider implements IAgentProvider {
       settingsManager,
       resourceLoader,
       ...(thinkingLevel ? { thinkingLevel } : {}),
-      // Pi 0.71+: `tools` was repurposed as a string[] allowlist of built-in
-      // tool names; the actual Tool[] payload now goes through `customTools`,
-      // and `noTools: "builtin"` suppresses the default built-in set so our
-      // filtered (and env-injected bash) list isn't doubled up. When
-      // filteredTools is undefined we keep Pi's defaults — no overrides.
+      // Pi 0.68+: `tools` was repurposed as a string[] allowlist of built-in
+      // tool names; the actual Tool[] payload now goes through `customTools`.
+      // `noTools: "builtin"` suppresses the default built-in set so our
+      // filtered (and env-injected bash) list isn't doubled up (the
+      // suppression-behavior bug was fixed in pi 0.70.0). When filteredTools
+      // is undefined we keep Pi's defaults — no overrides.
+      //
+      // `customTools` is also the only path through which we can attach a
+      // BashSpawnHook for managed-env injection: Pi's built-in bash tool is
+      // pre-constructed without a spawnHook (see resolvePiTools in
+      // options-translator.ts), so the env-aware bash MUST go through
+      // customTools, not just for tool restriction.
       ...(filteredTools !== undefined
         ? { customTools: filteredTools, noTools: 'builtin' as const }
         : {}),

@@ -491,7 +491,8 @@ Unsupported YAML fields trigger a visible warning from the dag-executor when the
 ### See also
 
 - [Adding a Community Provider](../contributing/adding-a-community-provider/) — the contributor-facing guide for extending Archon with your own provider.
-- [Pi on GitHub](https://github.com/badlogic/pi-mono) — upstream project.
+- [Pi documentation](https://pi.dev) — official Pi docs (extensions, model registry, settings).
+- [Pi on GitHub](https://github.com/earendil-works/pi) — upstream project.
 
 ## GitHub Copilot (Community Provider)
 

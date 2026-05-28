@@ -14,10 +14,10 @@ import type { ThinkingLevel } from '@earendil-works/pi-ai';
 
 /**
  * Pi's exported `Tool` type is structurally `AgentTool<TSchema>` and isn't
- * re-exported at the package root. Pi 0.71+ replaced the `codingTools`
- * aggregate with a `createCodingTools(cwd, options)` factory, so we derive
- * the element type from the factory's return type — still namespace-free,
- * still satisfies TS's portable-type requirement.
+ * re-exported at the package root. Pi 0.68+ removed the `codingTools`
+ * aggregate in favor of a `createCodingTools(cwd, options)` factory, so we
+ * derive the element type from the factory's return type — still
+ * namespace-free, still satisfies TS's portable-type requirement.
  */
 type PiTool = ReturnType<typeof createCodingTools>[number];
 
