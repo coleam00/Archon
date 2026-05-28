@@ -473,14 +473,9 @@ export async function updateWorkflowRun(
   const setClauses: string[] = [];
   const values: unknown[] = [];
 
-  // Helper to add parameterized clause
-  function addParam(clause: string, value: unknown): void {
-    values.push(value);
-    setClauses.push(clause.replace('?', `$${values.length}`));
-  }
-
   if (updates.status !== undefined) {
-    addParam('status = ?', updates.status);
+    values.push(updates.status);
+    setClauses.push(`status = $${values.length}`);
     // Auto-set completed_at for terminal-like statuses, but skip when
     // transitioning to 'failed' for approval resume (not a real completion)
     const isApprovalTransition =

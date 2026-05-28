@@ -44,9 +44,9 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
     const body = await res.text();
     const truncated = body.length > 200 ? body.slice(0, 200) + '...' : body;
     const path = new URL(url, window.location.origin).pathname;
-    const error = new Error(`API error ${String(res.status)} (${path}): ${truncated}`);
-    (error as Error & { status: number }).status = res.status;
-    throw error;
+    throw Object.assign(new Error(`API error ${res.status} (${path}): ${truncated}`), {
+      status: res.status,
+    });
   }
   return res.json() as Promise<T>;
 }
