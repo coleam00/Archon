@@ -3019,6 +3019,11 @@ export async function executeDagWorkflow(
                 );
                 if (persisted) {
                   resumeSessionId = persisted.provider_session_id;
+                  // workflow_events is broader-scoped and longer-lived than the
+                  // node-session table; never persist the raw session token here
+                  // (CLAUDE.md "Never log tokens"). 8-char prefix is enough for
+                  // observability without producing a resumable artifact.
+                  const sessionIdPreview = `${persisted.provider_session_id.slice(0, 8)}…`;
                   deps.store
                     .createWorkflowEvent({
                       workflow_run_id: workflowRun.id,
@@ -3027,7 +3032,7 @@ export async function executeDagWorkflow(
                       data: {
                         provider,
                         scope_key: persistScopeKey,
-                        provider_session_id: persisted.provider_session_id,
+                        provider_session_id_preview: sessionIdPreview,
                       },
                     })
                     .catch((err: Error) => {
@@ -3141,11 +3146,14 @@ export async function executeDagWorkflow(
                 });
               } else {
                 // Provider returned no session ID (e.g. Codex with no thread ID).
-                // Drop any stale row so the next run does not attempt a bad resume.
+                // Drop the stale row for THIS provider only — leave other providers'
+                // rows intact so switching providers between runs doesn't clobber
+                // the other side's continuity.
                 await deps.store.deleteWorkflowNodeSessions({
                   workflow_name: workflow.name,
                   scope_key: persistScopeKey,
                   node_id: node.id,
+                  provider,
                 });
               }
             } catch (err) {

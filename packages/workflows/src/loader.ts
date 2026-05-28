@@ -357,9 +357,28 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
     // load time (explicit at node or workflow level), reject the workflow if the
     // provider doesn't support session resume. When the provider is implicit (set
     // via .archon/config.yaml defaults), the check defers to runtime in
-    // dag-executor — see the `persist_session_capability_missing` error.
+    // dag-executor.
+    //
+    // Only command + prompt nodes participate in cross-run session persistence today:
+    //   - bash / script / approval / cancel nodes don't invoke a provider at all.
+    //   - loop nodes manage their own per-iteration session threading; cross-run
+    //     persistence for loops isn't wired (the schema's aiOnly spread already
+    //     drops `persist_session` on non-command/prompt node types — see
+    //     dag-node.ts — and parseDagNode warns when the field is present on a loop).
+    //   - context:'fresh' nodes explicitly bypass persistence in the executor.
+    // Skipping these here prevents false validation failures when a workflow opts
+    // in via workflow-level `persist_sessions: true` and contains, e.g., a bash node.
     const workflowPersistSessions = raw.persist_sessions === true;
     for (const node of dagNodes) {
+      const isPersistableAiNode =
+        !isLoopNode(node) &&
+        !isApprovalNode(node) &&
+        !isCancelNode(node) &&
+        !isScriptNode(node) &&
+        !('bash' in node && typeof node.bash === 'string') &&
+        !('context' in node && node.context === 'fresh');
+      if (!isPersistableAiNode) continue;
+
       const nodePersist = 'persist_session' in node ? node.persist_session : undefined;
       const effectivePersist = nodePersist ?? workflowPersistSessions;
       if (!effectivePersist) continue;

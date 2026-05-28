@@ -914,7 +914,7 @@ async function handleWorkflowCommand(
       return {
         success: false,
         message:
-          'Usage:\n  /workflow list - Show available workflows\n  /workflow reload - Reload workflow definitions\n  /workflow status - Show all active workflows\n  /workflow cancel - Cancel running workflow\n  /workflow resume <id> - Resume a failed run\n  /workflow abandon <id> - Discard a failed run\n  /workflow approve <id> [comment] - Approve a paused run\n  /workflow reject <id> [reason] - Reject a paused run\n  /workflow run <name> [args] - Run a workflow directly',
+          'Usage:\n  /workflow list - Show available workflows\n  /workflow reload - Reload workflow definitions\n  /workflow status - Show all active workflows\n  /workflow cancel - Cancel running workflow\n  /workflow resume <id> - Resume a failed run\n  /workflow abandon <id> - Discard a failed run\n  /workflow approve <id> [comment] - Approve a paused run\n  /workflow reject <id> [reason] - Reject a paused run\n  /workflow reset-sessions <name> [<node-id>] - Clear persisted AI session memory for this conversation\n  /workflow run <name> [args] - Run a workflow directly',
       };
   }
 }
@@ -949,6 +949,7 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
 - \`/workflow abandon <id>\` — Discard a failed run
 - \`/workflow approve <id>\` — Approve a paused run
 - \`/workflow reject <id>\` — Reject a paused run
+- \`/workflow reset-sessions <name> [<node-id>]\` — Clear persisted AI session memory for this conversation
 
 **Projects**
 - \`/register-project <name> <path>\` — Register a local project

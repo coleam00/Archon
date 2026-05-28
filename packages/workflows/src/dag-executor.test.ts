@@ -7988,10 +7988,13 @@ describe('executeDagWorkflow -- persist_session', () => {
       typeof store.deleteWorkflowNodeSessions
     >;
     expect(upsertMock).not.toHaveBeenCalled();
+    // Provider is included in the filter so a stale-row cleanup under provider B
+    // does not wipe provider A's saved row for the same node.
     expect(deleteMock).toHaveBeenCalledWith({
       workflow_name: 'persist-test',
       scope_key: 'conv-dag',
       node_id: 'planner',
+      provider: 'claude',
     });
   });
 

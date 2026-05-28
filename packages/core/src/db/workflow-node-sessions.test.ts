@@ -74,6 +74,20 @@ describe('workflow-node-sessions', () => {
       expect(sql).toContain('DO UPDATE SET provider_session_id = EXCLUDED.provider_session_id');
       expect(params).toEqual(['feature-dev', 'planner', 'conv-1', 'claude', 'sess-abc', 'run-1']);
     });
+
+    test('rethrows DB errors after logging (CLAUDE.md INSERT contract)', async () => {
+      mockQuery.mockRejectedValueOnce(new Error('connection refused'));
+      await expect(
+        upsertWorkflowNodeSession({
+          workflow_name: 'feature-dev',
+          node_id: 'planner',
+          scope_key: 'conv-1',
+          provider: 'claude',
+          provider_session_id: 'sess-abc',
+          last_run_id: 'run-1',
+        })
+      ).rejects.toThrow('connection refused');
+    });
   });
 
   describe('deleteWorkflowNodeSessions', () => {
@@ -122,6 +136,22 @@ describe('workflow-node-sessions', () => {
       const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(sql).toContain('AND node_id = $2');
       expect(params).toEqual(['feature-dev', 'planner']);
+    });
+
+    test('narrows by provider for cross-provider safety', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+      const result = await deleteWorkflowNodeSessions({
+        workflow_name: 'feature-dev',
+        scope_key: 'conv-1',
+        node_id: 'planner',
+        provider: 'claude',
+      });
+      expect(result).toEqual({ deleted: 1 });
+      const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(sql).toContain('AND scope_key = $2');
+      expect(sql).toContain('AND node_id = $3');
+      expect(sql).toContain('AND provider = $4');
+      expect(params).toEqual(['feature-dev', 'conv-1', 'planner', 'claude']);
     });
 
     test('rowCount of null nullish-coalesces to 0', async () => {

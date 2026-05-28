@@ -136,6 +136,13 @@ export interface IWorkflowStore {
     workflow_name: string;
     scope_key?: string;
     node_id?: string;
+    /**
+     * Optional provider filter. The executor's stale-row cleanup (run finished with
+     * no sessionId) sets this so switching providers between runs doesn't clobber
+     * the prior provider's saved row. Reset surfaces (CLI/chat/REST) leave it
+     * undefined so a reset wipes every provider for the given scope.
+     */
+    provider?: string;
   }): Promise<{ deleted: number }>;
 }
 

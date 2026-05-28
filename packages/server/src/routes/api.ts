@@ -92,6 +92,8 @@ import {
   workflowRunsQuerySchema,
   approveWorkflowRunBodySchema,
   rejectWorkflowRunBodySchema,
+  resetWorkflowNodeSessionsParamsSchema,
+  resetWorkflowNodeSessionsQuerySchema,
   resetWorkflowNodeSessionsResponseSchema,
   listArtifactsResponseSchema,
 } from './schemas/workflow.schemas';
@@ -763,11 +765,8 @@ const resetWorkflowNodeSessionsRoute = createRoute({
   summary:
     'Reset persisted per-node provider sessions for a workflow. Optional scope and node filters narrow the deletion.',
   request: {
-    params: z.object({ name: z.string() }),
-    query: z.object({
-      scope: z.string().optional(),
-      node: z.string().optional(),
-    }),
+    params: resetWorkflowNodeSessionsParamsSchema,
+    query: resetWorkflowNodeSessionsQuerySchema,
   },
   responses: {
     200: {

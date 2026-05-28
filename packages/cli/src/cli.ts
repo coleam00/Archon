@@ -496,12 +496,25 @@ async function main(): Promise<number> {
 
           case 'reset-sessions': {
             const workflowName = positionals[2];
+            const extras = positionals.slice(3);
             if (!workflowName) {
               console.error(
                 'Usage: archon workflow reset-sessions <workflow-name> [--scope <key>] [--node <id>] [--yes] [--json]'
               );
               console.error(
                 '  Without --scope: deletes persisted sessions across ALL scopes (requires --yes).'
+              );
+              return 1;
+            }
+            // Reject extra positionals — this is a destructive command and silently
+            // dropping `archon workflow reset-sessions wf planner` (likely intent: filter to
+            // node "planner") to a cross-scope wipe would be a foot-gun.
+            if (extras.length > 0) {
+              console.error(
+                'Usage: archon workflow reset-sessions <workflow-name> [--scope <key>] [--node <id>] [--yes] [--json]'
+              );
+              console.error(
+                `Error: unexpected positional argument(s): ${extras.join(' ')}. Use --node <id> to filter by node.`
               );
               return 1;
             }

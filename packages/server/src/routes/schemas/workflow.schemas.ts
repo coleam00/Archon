@@ -155,6 +155,19 @@ export const rejectWorkflowRunBodySchema = z
   .object({ reason: z.string().optional() })
   .openapi('RejectWorkflowRunBody');
 
+/** DELETE /api/workflows/:name/node-sessions path params. */
+export const resetWorkflowNodeSessionsParamsSchema = z
+  .object({ name: z.string().min(1) })
+  .openapi('ResetWorkflowNodeSessionsParams');
+
+/** DELETE /api/workflows/:name/node-sessions query params (scope + node both optional). */
+export const resetWorkflowNodeSessionsQuerySchema = z
+  .object({
+    scope: z.string().optional(),
+    node: z.string().optional(),
+  })
+  .openapi('ResetWorkflowNodeSessionsQuery');
+
 /** DELETE /api/workflows/:name/node-sessions response. */
 export const resetWorkflowNodeSessionsResponseSchema = z
   .object({

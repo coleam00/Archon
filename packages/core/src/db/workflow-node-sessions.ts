@@ -53,23 +53,37 @@ export async function upsertWorkflowNodeSession(params: {
 }): Promise<void> {
   const dialect = getDialect();
   const now = dialect.now();
-  await pool.query(
-    `INSERT INTO remote_agent_workflow_node_sessions
-       (workflow_name, node_id, scope_key, provider, provider_session_id, last_run_id, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, ${now}, ${now})
-     ON CONFLICT (workflow_name, node_id, scope_key, provider)
-     DO UPDATE SET provider_session_id = EXCLUDED.provider_session_id,
-                   last_run_id = EXCLUDED.last_run_id,
-                   updated_at = ${now}`,
-    [
-      params.workflow_name,
-      params.node_id,
-      params.scope_key,
-      params.provider,
-      params.provider_session_id,
-      params.last_run_id,
-    ]
-  );
+  try {
+    await pool.query(
+      `INSERT INTO remote_agent_workflow_node_sessions
+         (workflow_name, node_id, scope_key, provider, provider_session_id, last_run_id, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, ${now}, ${now})
+       ON CONFLICT (workflow_name, node_id, scope_key, provider)
+       DO UPDATE SET provider_session_id = EXCLUDED.provider_session_id,
+                     last_run_id = EXCLUDED.last_run_id,
+                     updated_at = ${now}`,
+      [
+        params.workflow_name,
+        params.node_id,
+        params.scope_key,
+        params.provider,
+        params.provider_session_id,
+        params.last_run_id,
+      ]
+    );
+  } catch (error) {
+    getLog().error(
+      {
+        err: error as Error,
+        workflowName: params.workflow_name,
+        nodeId: params.node_id,
+        scopeKey: params.scope_key,
+        provider: params.provider,
+      },
+      'db.workflow_node_session_upsert_failed'
+    );
+    throw error;
+  }
   getLog().debug(
     {
       workflowName: params.workflow_name,
@@ -85,6 +99,7 @@ export async function deleteWorkflowNodeSessions(filter: {
   workflow_name: string;
   scope_key?: string;
   node_id?: string;
+  provider?: string;
 }): Promise<{ deleted: number }> {
   const params: unknown[] = [filter.workflow_name];
   let sql = 'DELETE FROM remote_agent_workflow_node_sessions WHERE workflow_name = $1';
@@ -96,6 +111,10 @@ export async function deleteWorkflowNodeSessions(filter: {
     params.push(filter.node_id);
     sql += ` AND node_id = $${params.length}`;
   }
+  if (filter.provider !== undefined) {
+    params.push(filter.provider);
+    sql += ` AND provider = $${params.length}`;
+  }
   const result = await pool.query(sql, params);
   const deleted = result.rowCount ?? 0;
   getLog().info(
@@ -103,6 +122,7 @@ export async function deleteWorkflowNodeSessions(filter: {
       workflowName: filter.workflow_name,
       scopeKey: filter.scope_key,
       nodeId: filter.node_id,
+      provider: filter.provider,
       deleted,
     },
     'db.workflow_node_sessions_delete_completed'
