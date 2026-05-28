@@ -7,7 +7,7 @@
  *   to avoid process-global mock.module pollution that would break git.test.ts
  * - Lazy logger pattern means @archon/paths mock must be set up before the module import
  */
-import { describe, test, expect, mock, beforeEach, afterAll, spyOn } from 'bun:test';
+import { describe, test, expect, mock, beforeEach, afterAll, afterEach, spyOn } from 'bun:test';
 import * as fsPromises from 'fs/promises';
 import * as gitUtils from '@archon/git';
 import { createMockLogger } from '../test/mocks/logger';
@@ -60,6 +60,12 @@ mock.module('@archon/paths', () => ({
   }),
 }));
 
+// ── config-loader mock ──────────────────────────────────────────────────────
+const mockLoadConfig = mock(() => Promise.resolve({ assistant: 'claude' }));
+mock.module('../config/config-loader', () => ({
+  loadConfig: mockLoadConfig,
+}));
+
 // ── utils/commands mock ─────────────────────────────────────────────────────
 const mockFindMarkdownFilesRecursive = mock(() => Promise.resolve([]));
 mock.module('../utils/commands', () => ({
@@ -103,6 +109,8 @@ function clearMocks(): void {
   mockFindCodebaseByName.mockReset();
   mockUpdateCodebase.mockReset();
   mockFindMarkdownFilesRecursive.mockReset();
+  mockLoadConfig.mockReset();
+  mockLoadConfig.mockResolvedValue({ assistant: 'claude' });
   mockLogger.info.mockClear();
   mockLogger.debug.mockClear();
   mockLogger.warn.mockClear();
@@ -154,6 +162,8 @@ describe('cloneRepository', () => {
     restoreSpies();
     setupSpies();
     delete process.env.GH_TOKEN;
+    delete process.env.GITLAB_TOKEN;
+    delete process.env.GITEA_TOKEN;
   });
 
   // ── URL normalization / happy-path cloning ─────────────────────────────
@@ -306,7 +316,8 @@ describe('cloneRepository', () => {
       expect(cloneCall?.[1]?.[1]).toContain('ghp_testtoken123@github.com');
     });
 
-    test('does NOT inject GH_TOKEN into non-github URLs', async () => {
+    test('does NOT inject GH_TOKEN into non-github URLs when no forge token set', async () => {
+      delete process.env.GITLAB_TOKEN;
       mockCreateCodebase.mockResolvedValueOnce(
         makeCodebase({
           name: 'owner/repo',
@@ -314,7 +325,6 @@ describe('cloneRepository', () => {
         }) as ReturnType<typeof makeCodebase>
       );
 
-      // Override getProjectSourcePath for gitlab
       await cloneRepository('https://gitlab.com/owner/repo');
 
       const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
@@ -332,6 +342,209 @@ describe('cloneRepository', () => {
         args => args[0] === 'git' && args[1]?.[0] === 'clone'
       );
       expect(cloneCall?.[1]?.[1]).toContain('ghp_testtoken123@github.com');
+    });
+  });
+
+  // ── Multi-forge authentication ────────────────────────────────────────
+  describe('multi-forge authentication', () => {
+    afterEach(() => {
+      delete process.env.GITLAB_TOKEN;
+      delete process.env.GITEA_TOKEN;
+    });
+
+    test('injects GITLAB_TOKEN with oauth2: scheme for gitlab.com URLs', async () => {
+      process.env.GITLAB_TOKEN = 'glpat-testtoken456';
+      delete process.env.GH_TOKEN;
+      mockCreateCodebase.mockResolvedValueOnce(
+        makeCodebase({
+          name: 'owner/repo',
+          repository_url: 'https://gitlab.com/owner/repo',
+        }) as ReturnType<typeof makeCodebase>
+      );
+
+      await cloneRepository('https://gitlab.com/owner/repo');
+
+      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
+        args => args[0] === 'git' && args[1]?.[0] === 'clone'
+      );
+      expect(cloneCall?.[1]?.[1]).toBe('https://oauth2:glpat-testtoken456@gitlab.com/owner/repo');
+      delete process.env.GITLAB_TOKEN;
+    });
+
+    test('injects GITLAB_TOKEN for self-hosted GitLab URLs', async () => {
+      process.env.GITLAB_TOKEN = 'glpat-selfhosted';
+      delete process.env.GH_TOKEN;
+      mockCreateCodebase.mockResolvedValueOnce(
+        makeCodebase({
+          name: 'owner/repo',
+          repository_url: 'https://gitlab.mycompany.com/owner/repo',
+        }) as ReturnType<typeof makeCodebase>
+      );
+
+      await cloneRepository('https://gitlab.mycompany.com/owner/repo');
+
+      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
+        args => args[0] === 'git' && args[1]?.[0] === 'clone'
+      );
+      expect(cloneCall?.[1]?.[1]).toBe(
+        'https://oauth2:glpat-selfhosted@gitlab.mycompany.com/owner/repo'
+      );
+      delete process.env.GITLAB_TOKEN;
+    });
+
+    test('injects GITEA_TOKEN for Gitea URLs', async () => {
+      process.env.GITEA_TOKEN = 'gitea-token-789';
+      delete process.env.GH_TOKEN;
+      mockCreateCodebase.mockResolvedValueOnce(
+        makeCodebase({
+          name: 'owner/repo',
+          repository_url: 'https://gitea.myorg.com/owner/repo',
+        }) as ReturnType<typeof makeCodebase>
+      );
+
+      await cloneRepository('https://gitea.myorg.com/owner/repo');
+
+      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
+        args => args[0] === 'git' && args[1]?.[0] === 'clone'
+      );
+      expect(cloneCall?.[1]?.[1]).toBe('https://gitea-token-789@gitea.myorg.com/owner/repo');
+      delete process.env.GITEA_TOKEN;
+    });
+
+    test('injects GITEA_TOKEN for Forgejo URLs', async () => {
+      process.env.GITEA_TOKEN = 'forgejo-token';
+      delete process.env.GH_TOKEN;
+      mockCreateCodebase.mockResolvedValueOnce(
+        makeCodebase({
+          name: 'owner/repo',
+          repository_url: 'https://forgejo.example.org/owner/repo',
+        }) as ReturnType<typeof makeCodebase>
+      );
+
+      await cloneRepository('https://forgejo.example.org/owner/repo');
+
+      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
+        args => args[0] === 'git' && args[1]?.[0] === 'clone'
+      );
+      expect(cloneCall?.[1]?.[1]).toBe('https://forgejo-token@forgejo.example.org/owner/repo');
+      delete process.env.GITEA_TOKEN;
+    });
+
+    test('does not inject auth for unknown forge without token', async () => {
+      delete process.env.GH_TOKEN;
+      delete process.env.GITLAB_TOKEN;
+      delete process.env.GITEA_TOKEN;
+      mockCreateCodebase.mockResolvedValueOnce(
+        makeCodebase({
+          name: 'owner/repo',
+          repository_url: 'https://bitbucket.org/owner/repo',
+        }) as ReturnType<typeof makeCodebase>
+      );
+
+      await cloneRepository('https://bitbucket.org/owner/repo');
+
+      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
+        args => args[0] === 'git' && args[1]?.[0] === 'clone'
+      );
+      expect(cloneCall?.[1]?.[1]).toBe('https://bitbucket.org/owner/repo');
+    });
+
+    test('does not leak token when forge name appears only in URL path', async () => {
+      process.env.GITLAB_TOKEN = 'glpat-shouldnotleak';
+      delete process.env.GH_TOKEN;
+      mockCreateCodebase.mockResolvedValueOnce(
+        makeCodebase({
+          name: 'owner/repo',
+          repository_url: 'https://evil.example.com/gitlab/mirror',
+        }) as ReturnType<typeof makeCodebase>
+      );
+
+      await cloneRepository('https://evil.example.com/gitlab/mirror');
+
+      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
+        args => args[0] === 'git' && args[1]?.[0] === 'clone'
+      );
+      expect(cloneCall?.[1]?.[1]).not.toContain('glpat-shouldnotleak');
+      delete process.env.GITLAB_TOKEN;
+    });
+  });
+
+  // ── resolveForgeAuth unit tests ──────────────────────────────────────────
+  describe('resolveForgeAuth', () => {
+    const { resolveForgeAuth } = require('./clone');
+
+    test('returns GH_TOKEN for github.com', () => {
+      process.env.GH_TOKEN = 'ghp_abc';
+      const result = resolveForgeAuth('https://github.com/owner/repo');
+      expect(result).toEqual({ token: 'ghp_abc', scheme: '' });
+      delete process.env.GH_TOKEN;
+    });
+
+    test('returns GITLAB_TOKEN with oauth2: scheme for gitlab.com', () => {
+      process.env.GITLAB_TOKEN = 'glpat-xyz';
+      const result = resolveForgeAuth('https://gitlab.com/owner/repo');
+      expect(result).toEqual({ token: 'glpat-xyz', scheme: 'oauth2:' });
+      delete process.env.GITLAB_TOKEN;
+    });
+
+    test('returns undefined token when env var is not set', () => {
+      delete process.env.GH_TOKEN;
+      const result = resolveForgeAuth('https://github.com/owner/repo');
+      expect(result).toEqual({ token: undefined, scheme: '' });
+    });
+
+    test('returns empty for unknown forge', () => {
+      const result = resolveForgeAuth('https://bitbucket.org/owner/repo');
+      expect(result).toEqual({ token: undefined, scheme: '' });
+    });
+
+    test('resolves GH_TOKEN for bare host/path form without protocol', () => {
+      process.env.GH_TOKEN = 'ghp_bare';
+      const result = resolveForgeAuth('github.com/owner/repo');
+      expect(result).toEqual({ token: 'ghp_bare', scheme: '' });
+      delete process.env.GH_TOKEN;
+    });
+
+    test('does not match forge name in URL path (security)', () => {
+      process.env.GITLAB_TOKEN = 'glpat-leaked';
+      const result = resolveForgeAuth('https://evil.example.com/gitlab/mirror');
+      expect(result).toEqual({ token: undefined, scheme: '' });
+      delete process.env.GITLAB_TOKEN;
+    });
+
+    test('returns GITEA_TOKEN when GITEA_URL hostname matches clone URL', () => {
+      process.env.GITEA_URL = 'https://git.example.com';
+      process.env.GITEA_TOKEN = 'gitea_tok_123';
+      const result = resolveForgeAuth('https://git.example.com/group/app.git');
+      expect(result).toEqual({ token: 'gitea_tok_123', scheme: '' });
+      delete process.env.GITEA_URL;
+      delete process.env.GITEA_TOKEN;
+    });
+
+    test('returns GITLAB_TOKEN with oauth2: scheme when GITLAB_URL hostname matches', () => {
+      process.env.GITLAB_URL = 'https://code.mycompany.com';
+      process.env.GITLAB_TOKEN = 'glpat-corp';
+      const result = resolveForgeAuth('https://code.mycompany.com/team/project');
+      expect(result).toEqual({ token: 'glpat-corp', scheme: 'oauth2:' });
+      delete process.env.GITLAB_URL;
+      delete process.env.GITLAB_TOKEN;
+    });
+
+    test('does not leak GITEA_TOKEN when GITEA_URL is set but hostname differs', () => {
+      process.env.GITEA_URL = 'https://git.example.com';
+      process.env.GITEA_TOKEN = 'gitea_tok_secret';
+      const result = resolveForgeAuth('https://evil.example.com/repo');
+      expect(result).toEqual({ token: undefined, scheme: '' });
+      delete process.env.GITEA_URL;
+      delete process.env.GITEA_TOKEN;
+    });
+
+    test('URL fallback does not activate when token env var is unset', () => {
+      process.env.GITEA_URL = 'https://git.example.com';
+      delete process.env.GITEA_TOKEN;
+      const result = resolveForgeAuth('https://git.example.com/group/app');
+      expect(result).toEqual({ token: undefined, scheme: '' });
+      delete process.env.GITEA_URL;
     });
   });
 
@@ -564,6 +777,32 @@ describe('cloneRepository', () => {
     });
 
     test('defaults to claude when neither .codex nor .claude folder exists', async () => {
+      spyFsAccess.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+      mockCreateCodebase.mockResolvedValueOnce(
+        makeCodebase({ ai_assistant_type: 'claude' }) as ReturnType<typeof makeCodebase>
+      );
+
+      await cloneRepository('https://github.com/owner/repo');
+
+      const createCall = mockCreateCodebase.mock.calls[0] as [{ ai_assistant_type: string }];
+      expect(createCall[0].ai_assistant_type).toBe('claude');
+    });
+
+    test('uses configured provider when no .codex or .claude folder exists', async () => {
+      mockLoadConfig.mockResolvedValue({ assistant: 'pi' });
+      spyFsAccess.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+      mockCreateCodebase.mockResolvedValueOnce(
+        makeCodebase({ ai_assistant_type: 'pi' }) as ReturnType<typeof makeCodebase>
+      );
+
+      await cloneRepository('https://github.com/owner/repo');
+
+      const createCall = mockCreateCodebase.mock.calls[0] as [{ ai_assistant_type: string }];
+      expect(createCall[0].ai_assistant_type).toBe('pi');
+    });
+
+    test('falls back to claude when loadConfig fails', async () => {
+      mockLoadConfig.mockRejectedValue(new Error('config load failed'));
       spyFsAccess.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
       mockCreateCodebase.mockResolvedValueOnce(
         makeCodebase({ ai_assistant_type: 'claude' }) as ReturnType<typeof makeCodebase>

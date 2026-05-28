@@ -16,6 +16,14 @@
 import type { NodeOutput } from './schemas';
 import { createLogger } from '@archon/paths';
 
+/** Thrown when a $nodeId.output.field reference cannot parse the node's output text as JSON. */
+class OutputRefParseError extends Error {
+  constructor(nodeId: string, field: string) {
+    super(`Cannot parse output of node '${nodeId}' as JSON for field '${field}'`);
+    this.name = 'OutputRefParseError';
+  }
+}
+
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -65,8 +73,14 @@ function resolveOutputRef(
   // Fallback: parse output text. Backward-compatible path for older NodeOutput rows or
   // providers that don't emit a structured payload on the result chunk.
   if (!nodeOutput.output) return '';
+
+  // Strip common markdown fences that LLMs (Pi/Minimax) wrap around JSON.
+  let text = nodeOutput.output;
+  const fenceMatch = /^[\s\S]*?```(?:json)?\s*\n([\s\S]*?)\n\s*```[\s\S]*$/.exec(text);
+  if (fenceMatch?.[1]) text = fenceMatch[1];
+
   try {
-    const parsed = JSON.parse(nodeOutput.output) as Record<string, unknown>;
+    const parsed = JSON.parse(text) as Record<string, unknown>;
     const value = parsed[field];
     if (typeof value === 'string') return value;
     if (typeof value === 'number' || typeof value === 'boolean') return String(value);
@@ -77,7 +91,7 @@ function resolveOutputRef(
       { nodeId, field, outputPreview: nodeOutput.output.slice(0, 100) },
       'condition_json_parse_failed'
     );
-    return '';
+    throw new OutputRefParseError(nodeId, field);
   }
 }
 
@@ -132,7 +146,15 @@ function evaluateAtom(
     return { result: false, parsed: false };
   }
 
-  const actual = resolveOutputRef(nodeId, field, nodeOutputs);
+  let actual: string;
+  try {
+    actual = resolveOutputRef(nodeId, field, nodeOutputs);
+  } catch (err) {
+    if (err instanceof OutputRefParseError) {
+      return { result: false, parsed: false };
+    }
+    throw err;
+  }
 
   let result: boolean;
   if (operator === '==' || operator === '!=') {

@@ -1,5 +1,5 @@
 import { memo, useMemo, useState } from 'react';
-import { Copy, Check, Paperclip } from 'lucide-react';
+import { Copy, Check, Paperclip, X } from 'lucide-react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import remarkBreaks from 'remark-breaks';
@@ -140,6 +140,7 @@ function MessageBubbleRaw({ message }: MessageBubbleProps): React.ReactElement {
   const isUser = message.role === 'user';
   const isThinking = message.isStreaming && !message.content;
   const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState(false);
   const [artifactViewer, setArtifactViewer] = useState<{ runId: string; filename: string } | null>(
     null
   );
@@ -153,12 +154,22 @@ function MessageBubbleRaw({ message }: MessageBubbleProps): React.ReactElement {
   );
 
   const copyMessage = (): void => {
-    void navigator.clipboard.writeText(message.content).then(() => {
-      setCopied(true);
-      setTimeout(() => {
-        setCopied(false);
-      }, 1500);
-    });
+    void navigator.clipboard
+      .writeText(message.content)
+      .then(() => {
+        setCopied(true);
+        setCopyError(false);
+        setTimeout(() => {
+          setCopied(false);
+        }, 1500);
+      })
+      .catch(error => {
+        console.debug('Clipboard write failed:', error);
+        setCopyError(true);
+        setTimeout(() => {
+          setCopyError(false);
+        }, 2000);
+      });
   };
 
   return (
@@ -175,17 +186,19 @@ function MessageBubbleRaw({ message }: MessageBubbleProps): React.ReactElement {
           {isUser ? (
             <div className="flex flex-col gap-1.5">
               <div className="flex items-start gap-2">
-                <p className="text-sm text-text-primary whitespace-pre-wrap flex-1">
+                <p className="text-sm text-text-primary whitespace-pre-wrap break-words min-w-0 flex-1">
                   {message.content}
                 </p>
                 <button
                   onClick={copyMessage}
                   className="shrink-0 mt-0.5 opacity-0 group-hover:opacity-100 transition-opacity text-text-tertiary hover:text-text-primary"
-                  title="Copy message"
-                  aria-label={copied ? 'Copied' : 'Copy message'}
+                  title={copyError ? 'Failed to copy' : 'Copy message'}
+                  aria-label={copied ? 'Copied' : copyError ? 'Failed to copy' : 'Copy message'}
                 >
                   {copied ? (
                     <Check className="h-3.5 w-3.5 text-success" />
+                  ) : copyError ? (
+                    <X className="h-3.5 w-3.5 text-error" />
                   ) : (
                     <Copy className="h-3.5 w-3.5" />
                   )}
@@ -209,16 +222,20 @@ function MessageBubbleRaw({ message }: MessageBubbleProps): React.ReactElement {
           ) : (
             <div className="chat-markdown max-w-none text-sm text-text-primary">
               {isThinking && (
-                <div className="flex items-center gap-1.5 py-1">
-                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-text-tertiary" />
-                  <span
-                    className="h-1.5 w-1.5 animate-pulse rounded-full bg-text-tertiary"
-                    style={{ animationDelay: '0.2s' }}
-                  />
-                  <span
-                    className="h-1.5 w-1.5 animate-pulse rounded-full bg-text-tertiary"
-                    style={{ animationDelay: '0.4s' }}
-                  />
+                <div className="flex items-center gap-2 py-1 text-sm text-text-tertiary">
+                  <span className="sr-only">Thinking</span>
+                  <span className="font-medium">Thinking</span>
+                  <div className="flex items-center gap-1.5" aria-hidden="true">
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-text-tertiary" />
+                    <span
+                      className="h-1.5 w-1.5 animate-pulse rounded-full bg-text-tertiary"
+                      style={{ animationDelay: '0.2s' }}
+                    />
+                    <span
+                      className="h-1.5 w-1.5 animate-pulse rounded-full bg-text-tertiary"
+                      style={{ animationDelay: '0.4s' }}
+                    />
+                  </div>
                 </div>
               )}
               {isJsonString(message.content) ? (

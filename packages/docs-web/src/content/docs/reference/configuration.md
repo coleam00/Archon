@@ -67,8 +67,10 @@ assistants:
       - user          # User-level ~/.claude/ (CLAUDE.md, skills, commands, agents)
     # Optional: absolute path to the Claude Code executable.
     # Required in compiled Archon binaries when CLAUDE_BIN_PATH is not set.
-    # Accepts the native binary (~/.local/bin/claude from the curl installer)
-    # or the npm-installed cli.js. Source/dev mode auto-resolves.
+    # Accepts the native binary (~/.local/bin/claude from the curl installer),
+    # the npm-installed cli.js, or the npm platform-package directory
+    # (e.g. @anthropic-ai/claude-code-win32-x64 — auto-expanded to claude/claude.exe).
+    # Source/dev mode auto-resolves.
     # claudeBinaryPath: /absolute/path/to/claude
   codex:
     model: gpt-5.3-codex
@@ -227,7 +229,7 @@ Environment variables override all other configuration. They are organized by ca
 | `PORT` | HTTP server listen port | `3090` (auto-allocated in worktrees) |
 | `LOG_LEVEL` | Logging verbosity (`fatal`, `error`, `warn`, `info`, `debug`, `trace`) | `info` |
 | `BOT_DISPLAY_NAME` | Bot name shown in batch-mode "starting" messages | `Archon` |
-| `DEFAULT_AI_ASSISTANT` | Default AI assistant (must match a registered provider) | `claude` |
+| `DEFAULT_AI_ASSISTANT` | Default AI assistant. Must match a registered provider id — currently `claude`, `codex`, `pi`, or `copilot`. | `claude` |
 | `MAX_CONCURRENT_CONVERSATIONS` | Maximum concurrent AI conversations | `10` |
 | `SESSION_RETENTION_DAYS` | Delete inactive sessions older than N days | `30` |
 | `ARCHON_SUPPRESS_NESTED_CLAUDE_WARNING` | When set to `1`, suppresses the stderr warning emitted when `archon` is run inside a Claude Code session | -- |
@@ -253,6 +255,15 @@ When `CLAUDE_USE_GLOBAL_AUTH` is unset, Archon auto-detects: it uses explicit to
 | `CODEX_ACCESS_TOKEN` | Codex access token | -- |
 | `CODEX_REFRESH_TOKEN` | Codex refresh token | -- |
 | `CODEX_ACCOUNT_ID` | Codex account ID | -- |
+
+### AI Providers -- Copilot (community)
+
+| Variable | Description | Default |
+| --- | --- | --- |
+| `COPILOT_GITHUB_TOKEN` | Explicit GitHub PAT for the Copilot provider. Always wins over `useLoggedInUser` when set. | -- |
+| `COPILOT_BIN_PATH` | Absolute path to the Copilot CLI binary. Required in compiled Archon binaries when `assistants.copilot.copilotCliPath` is not set; auto-detected in dev mode. | -- |
+
+The Copilot provider also reads `assistants.copilot.{model, modelReasoningEffort, copilotCliPath, configDir, enableConfigDiscovery, useLoggedInUser, logLevel}` from `~/.archon/config.yaml` or `.archon/config.yaml`. See the [AI Assistants guide](/getting-started/ai-assistants/) for the full setup.
 
 ### Platform Adapters -- Slack
 

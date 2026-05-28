@@ -22,7 +22,7 @@
 - Schema naming: camelCase, descriptive suffix (e.g., `workflowRunSchema`, `errorSchema`)
 - Type derivation: always use `z.infer<typeof schema>` — never write parallel hand-crafted interfaces
 - Import `z` from `@hono/zod-openapi` (not from `zod` directly)
-- All new/modified API routes must use `registerOpenApiRoute(createRoute({...}), handler)` — the local wrapper handles the TypedResponse bypass
+- All new/modified API routes must use `registerOpenApiRoute(createRoute({...}), handler)` — the local wrapper handles the TypedResponse bypass. Two narrow exceptions exist: (1) routes that serve raw non-JSON content (e.g. `/api/artifacts/:runId/*` returns `text/markdown`/`text/plain`) AND use wildcard path params that OpenAPI 3.0 can't represent, use `app.get(...)` with an explanatory comment; (2) multipart-or-JSON routes (e.g. `/api/conversations/:id/message`, `/api/workflows/:name/run`) register through `registerOpenApiRoute` but drop `request.body` from the route config so Zod doesn't validate multipart payloads against a JSON schema — the handler parses both content types manually.
 - Route schemas live in `packages/server/src/routes/schemas/` — one file per domain
 - Engine schemas live in `packages/workflows/src/schemas/` — one file per concern (dag-node, workflow, workflow-run, retry, loop, hooks); `index.ts` re-exports all
 - Engine schema naming: camelCase (e.g., `dagNodeSchema`, `workflowBaseSchema`, `nodeOutputSchema`)
@@ -130,7 +130,7 @@ bun test --watch            # Watch mode (single package)
 bun test packages/core/src/handlers/command-handler.test.ts  # Single file
 ```
 
-**Test isolation (mock.module pollution):** Bun's `mock.module()` permanently replaces modules in the process-wide cache — `mock.restore()` does NOT undo it ([oven-sh/bun#7823](https://github.com/oven-sh/bun/issues/7823)). To prevent cross-file pollution, packages that have conflicting `mock.module()` calls split their tests into separate `bun test` invocations: `@archon/core` (7 batches), `@archon/workflows` (5), `@archon/adapters` (3), `@archon/isolation` (3). See each package's `package.json` for the exact splits.
+**Test isolation (mock.module pollution):** Bun's `mock.module()` permanently replaces modules in the process-wide cache — `mock.restore()` does NOT undo it ([oven-sh/bun#7823](https://github.com/oven-sh/bun/issues/7823)). To prevent cross-file pollution, packages that have conflicting `mock.module()` calls split their tests into separate `bun test` invocations: `@archon/core` (7 batches), `@archon/workflows` (5), `@archon/adapters` (6), `@archon/isolation` (3). See each package's `package.json` for the exact splits.
 
 **Do NOT run `bun test` from the repo root** — it discovers all test files across all packages and runs them in one process, causing ~135 mock pollution failures. Always use `bun run test` (which uses `bun --filter '*' test` for per-package isolation).
 
@@ -285,6 +285,7 @@ packages/
 │       ├── claude/           # ClaudeProvider + parseClaudeConfig + MCP/hooks/skills translation
 │       ├── codex/            # CodexProvider + parseCodexConfig + binary-resolver
 │       ├── community/pi/     # PiProvider (builtIn: false) — @mariozechner/pi-coding-agent, ~20 LLM backends
+│       ├── community/opencode/ # OpenCodeProvider (builtIn: false) — @archon/opencode SDK, local embedded runtime
 │       └── index.ts          # Package exports
 ├── core/                     # @archon/core - Shared business logic
 │   └── src/
@@ -357,6 +358,10 @@ packages/
         ├── lib/              # API client, types, utilities
         ├── stores/           # Zustand stores (workflow-store)
         ├── routes/           # Route pages (ChatPage, WorkflowsPage, WorkflowBuilderPage, etc.)
+        ├── experiments/      # Isolated in-repo spikes; lint-guarded against
+        │   │                 # importing production web modules. Drop-in or
+        │   │                 # delete cleanly. See experiments/README.md.
+        │   └── console/      # Run-centric console UI mounted at /console
         └── App.tsx           # Router + layout
 ```
 
@@ -394,15 +399,17 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 
 ### Database Schema
 
-**8 Tables (all prefixed with `remote_agent_`):**
+**10 Tables (all prefixed with `remote_agent_`):**
 1. **`codebases`** - Repository metadata and commands (JSONB)
-2. **`conversations`** - Track platform conversations with titles and soft-delete support
+2. **`conversations`** - Track platform conversations with titles and soft-delete support; nullable `user_id` records first creator
 3. **`sessions`** - Track AI SDK sessions with resume capability
-4. **`isolation_environments`** - Git worktree isolation tracking
-5. **`workflow_runs`** - Workflow execution tracking and state
+4. **`isolation_environments`** - Git worktree isolation tracking; nullable `created_by_user_id` preserves first creator
+5. **`workflow_runs`** - Workflow execution tracking and state; nullable `user_id` for per-run attribution
 6. **`workflow_events`** - Step-level workflow event log (step transitions, artifacts, errors)
-7. **`messages`** - Conversation message history with tool call metadata (JSONB)
+7. **`messages`** - Conversation message history with tool call metadata (JSONB); nullable `user_id` (NULL for assistant rows)
 8. **`codebase_env_vars`** - Per-project env vars injected into project-scoped execution surfaces (Claude, Codex, bash/script nodes, and direct chat when codebase-scoped), managed via Web UI or `env:` in config
+9. **`users`** - Archon-internal identity (one row per human/bot); created lazily on first sight by any adapter
+10. **`user_identities`** - Per-platform mapping (Slack U-id, Telegram chat id, Discord snowflake, GitHub login) → `users.id`; `UNIQUE(platform, platform_user_id)`
 
 **Key Patterns:**
 - Conversation ID format: Platform-specific (`thread_ts`, `chat_id`, `user/repo#123`)
@@ -487,7 +494,10 @@ assistants:
       - user         # User-level ~/.claude/ (included in default; omit both to restrict to project-only)
     claudeBinaryPath: /absolute/path/to/claude  # Optional: Claude Code executable.
                                                 # Native binary (curl installer at
-                                                # ~/.local/bin/claude) or npm cli.js.
+                                                # ~/.local/bin/claude), npm cli.js, or
+                                                # the npm platform-package directory
+                                                # (e.g. @anthropic-ai/claude-code-win32-x64)
+                                                # which is auto-expanded to claude/claude.exe.
                                                 # Required in compiled binaries if
                                                 # CLAUDE_BIN_PATH env var is not set.
   codex:
@@ -584,6 +594,15 @@ curl http://localhost:3637/api/conversations/<conversationId>/messages
 
 ## Development Guidelines
 
+### UI and Visual Design
+
+All UI changes — production web (`packages/web/`), experiments (`packages/web/src/experiments/`), the docs site, marketing surfaces, and any future visual surface — must align with the Archon brand foundation.
+
+- **Canonical brand guide:** https://archon.diy/brand/ (source: `packages/docs-web/src/content/docs/brand/index.md` + `packages/docs-web/public/brand/foundation.html`).
+- **Use brand tokens, not ad-hoc values.** Colors, gradients, surfaces, and typography must come from the established design tokens (`packages/web/src/index.css`) or the brand guide. Don't hard-code hex values that aren't in the system.
+- **Introducing a new visual token** (color, font, radius, spacing) means updating both the token source and the brand guide. Don't fork the palette per package.
+- **When in doubt, consult the brand guide first** before inventing new visual treatments. Open a discussion if the guide doesn't cover your case.
+
 ### When Creating New Features
 
 **Quick reference:**
@@ -591,6 +610,7 @@ curl http://localhost:3637/api/conversations/<conversationId>/messages
 - **AI Providers**: Implement `IAgentProvider`, session management, streaming
 - **Slash Commands**: Add to command-handler.ts, update database, no AI
 - **Database Operations**: Use `IDatabase` interface (supports PostgreSQL and SQLite via adapters)
+- **Plan insertion points**: Use stable text anchors (e.g., "after the `it('throws on ...')` test block"), never raw line numbers — line numbers drift on every preceding edit.
 
 ### SDK Type Patterns
 
@@ -801,6 +821,7 @@ Pattern: Use `classifyIsolationError()` (from `@archon/isolation`) to map git er
 - `GET /api/codebases/:id/environments` - List tracked isolation environments for a codebase
 
 **Artifact Files:**
+- `GET /api/runs/:runId/artifacts` - List artifact files for a run; walks the on-disk artifact directory (dotfiles skipped) and returns `{ files: [{ path, size, modifiedAt }] }`; 400 on invalid run id or path-escape attempt, 404 if the run does not exist
 - `GET /api/artifacts/:runId/*` - Serve a workflow artifact file by run ID and relative path; returns `text/markdown` for `.md` files, `text/plain` otherwise; 400 on path traversal (`..`), 404 if run or file not found
 
 **Command Listing:**
@@ -821,10 +842,14 @@ Pattern: Use `classifyIsolationError()` (from `@archon/isolation`) to map git er
 - Signature verification required (HMAC SHA-256)
 - Return 200 immediately, process async
 
+**Internal (App mode only; bind 127.0.0.1):**
+- `POST /internal/git-credential` - Git credential helper endpoint. Returns `{token}` for the installation matching the requested host/path. Used by the `git-credential-archon` script in worktree `.git/config` to refresh installation tokens for long-running workflow `git` operations. Hands out installation tokens — MUST NOT be exposed beyond loopback. Server **refuses to start** (not just WARN) if App mode is active and `hostname != 127.0.0.1/localhost`, unless `ARCHON_ALLOW_INTERNAL_ON_PUBLIC_BIND=1` is set as an opt-in escape hatch for deployments where the reverse proxy already drops `/internal/*`.
+
 **Security:**
 - Verify webhook signatures (GitHub: `X-Hub-Signature-256`)
 - Use `c.req.text()` for raw webhook body (signature verification)
 - Never log or expose tokens in responses
+- `/internal/*` paths hand out live credentials — the reverse proxy in production MUST drop them, or the server MUST bind to `127.0.0.1` only.
 
 **@Mention Detection:**
 - Parse `@archon` in issue/PR **comments only** (not descriptions)

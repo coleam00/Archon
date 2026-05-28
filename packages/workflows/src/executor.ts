@@ -14,100 +14,13 @@ import { logWorkflowStart, logWorkflowError } from './logger';
 import { formatDuration, parseDbTimestamp } from './utils/duration';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { isRegisteredProvider, getRegisteredProviders } from '@archon/providers';
-import { classifyError } from './executor-shared';
+import { classifyError, safeSendMessage, type SendMessageContext } from './executor-shared';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('workflow.executor');
   return cachedLog;
-}
-
-/** Context for platform message sending */
-interface SendMessageContext {
-  workflowId?: string;
-  stepName?: string;
-}
-
-/**
- * Log a send message failure with context
- */
-function logSendError(
-  label: string,
-  error: Error,
-  platform: IWorkflowPlatform,
-  conversationId: string,
-  message: string,
-  context?: SendMessageContext,
-  extra?: Record<string, unknown>
-): void {
-  getLog().error(
-    {
-      err: error,
-      conversationId,
-      messageLength: message.length,
-      errorType: classifyError(error),
-      platformType: platform.getPlatformType(),
-      ...context,
-      ...extra,
-    },
-    label
-  );
-}
-
-/** Threshold for consecutive UNKNOWN errors before aborting */
-const UNKNOWN_ERROR_THRESHOLD = 3;
-
-/** Mutable counter for tracking consecutive unknown errors across calls */
-interface UnknownErrorTracker {
-  count: number;
-}
-
-/**
- * Safely send a message to the platform without crashing on failure.
- * Returns true if message was sent successfully, false otherwise.
- * Only suppresses transient/unknown errors; fatal errors are rethrown.
- * When unknownErrorTracker is provided, consecutive UNKNOWN errors are tracked
- * and the workflow is aborted after UNKNOWN_ERROR_THRESHOLD consecutive failures.
- */
-async function safeSendMessage(
-  platform: IWorkflowPlatform,
-  conversationId: string,
-  message: string,
-  context?: SendMessageContext,
-  unknownErrorTracker?: UnknownErrorTracker,
-  metadata?: WorkflowMessageMetadata
-): Promise<boolean> {
-  try {
-    await platform.sendMessage(conversationId, message, metadata);
-    if (unknownErrorTracker) unknownErrorTracker.count = 0;
-    return true;
-  } catch (error) {
-    const err = error as Error;
-    const errorType = classifyError(err);
-
-    logSendError('Failed to send message', err, platform, conversationId, message, context, {
-      stack: err.stack,
-    });
-
-    // Fatal errors should not be suppressed - they indicate configuration issues
-    if (errorType === 'FATAL') {
-      throw new Error(`Platform authentication/permission error: ${err.message}`);
-    }
-
-    // Track consecutive UNKNOWN errors - abort if threshold exceeded
-    if (errorType === 'UNKNOWN' && unknownErrorTracker) {
-      unknownErrorTracker.count++;
-      if (unknownErrorTracker.count >= UNKNOWN_ERROR_THRESHOLD) {
-        throw new Error(
-          `${UNKNOWN_ERROR_THRESHOLD} consecutive unrecognized errors - aborting workflow: ${err.message}`
-        );
-      }
-    }
-
-    // Transient errors (and below-threshold unknown errors) suppressed to allow workflow to continue
-    return false;
-  }
 }
 
 /**
@@ -137,17 +50,18 @@ async function sendCriticalMessage(
       const err = error as Error;
       const errorType = classifyError(err);
 
-      logSendError(
-        'Critical message send failed',
-        err,
-        platform,
-        conversationId,
-        message,
-        context,
+      getLog().error(
         {
+          err,
+          conversationId,
+          messageLength: message.length,
+          errorType,
+          platformType: platform.getPlatformType(),
+          ...context,
           attempt,
           maxRetries,
-        }
+        },
+        'platform.critical_message_send_failed'
       );
 
       // Don't retry fatal errors
@@ -169,6 +83,59 @@ async function sendCriticalMessage(
   );
 
   return false;
+}
+
+/**
+ * Parse `owner/repo` from a github.com URL. Returns null for non-GitHub URLs
+ * so the caller can fall through to env-inheritance.
+ *
+ *   https://github.com/owner/repo.git   → { owner, repo }
+ *   https://github.com/owner/repo       → { owner, repo }
+ *   git@github.com:owner/repo.git       → { owner, repo }
+ *   <anything else>                     → null
+ */
+function parseGithubRepoUrl(url: string): { owner: string; repo: string } | null {
+  // HTTPS form
+  const https = /^https?:\/\/(?:www\.)?github\.com\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/i.exec(url);
+  if (https) return { owner: https[1], repo: https[2] };
+  // SSH form (git@github.com:owner/repo[.git])
+  const ssh = /^git@github\.com:([^/]+)\/([^/]+?)(?:\.git)?$/i.exec(url);
+  if (ssh) return { owner: ssh[1], repo: ssh[2] };
+  return null;
+}
+
+/**
+ * Resolve a fresh GH_TOKEN/GITHUB_TOKEN pair from the registered bot-token
+ * provider, if any. Used at the top of executeWorkflow to inject the token
+ * into the workflow's envVars so bash/script subprocesses pick it up.
+ *
+ * Contract: NEVER THROWS. On any failure (no codebase, non-GitHub URL,
+ * provider rejected, network blip) returns {} — the workflow continues with
+ * whatever env inheritance was already in place. This matches the
+ * resolveBotGitHubToken? contract in deps.ts.
+ */
+async function resolveBotGitHubEnvForWorkflow(
+  deps: WorkflowDeps,
+  codebaseId: string | undefined
+): Promise<Record<string, string>> {
+  if (!codebaseId || !deps.resolveBotGitHubToken) return {};
+  try {
+    const codebase = await deps.store.getCodebase(codebaseId);
+    if (!codebase?.repository_url) return {};
+    const parsed = parseGithubRepoUrl(codebase.repository_url);
+    if (!parsed) return {};
+    const token = await deps.resolveBotGitHubToken(parsed.owner, parsed.repo);
+    if (!token) return {};
+    getLog().debug(
+      { owner: parsed.owner, repo: parsed.repo },
+      'workflow.bot_github_token_injected'
+    );
+    return { GH_TOKEN: token, GITHUB_TOKEN: token };
+  } catch (err) {
+    // Resolution failure must not block the workflow — log and fall back.
+    getLog().warn({ err: err as Error, codebaseId }, 'workflow.bot_github_token_resolve_failed');
+    return {};
+  }
 }
 
 /**
@@ -249,6 +216,14 @@ export type ExecuteWorkflowOptions = ResumePayload & {
   };
   /** Parent conversation ID — enables approve/reject auto-resume from chat. */
   parentConversationId?: string;
+  /**
+   * Archon user UUID for attribution on the workflow_run row. Resolved by
+   * chat/forge adapters via findOrCreateUserByPlatformIdentity. Web/CLI paths
+   * pass undefined until their own auth surfaces are wired.
+   * Ignored when `preCreatedRun` is set — the original creator's attribution
+   * is preserved on resume.
+   */
+  userId?: string;
 };
 
 /**
@@ -312,13 +287,27 @@ export async function executeWorkflow(
     parentConversationId,
     preCreatedRun,
     priorCompletedNodes,
+    userId,
   } = opts;
   // Load config once for the entire workflow execution
   const fileConfig = await deps.loadConfig(cwd);
   const dbEnvVars = codebaseId ? await deps.store.getCodebaseEnvVars(codebaseId) : {};
+  // Resolve a fresh bot GitHub token once at workflow start when:
+  //   (a) the codebase URL is a github.com repo, and
+  //   (b) deps.resolveBotGitHubToken is registered (App mode).
+  // Injected into envVars so bash/script subprocesses authenticate `gh` and
+  // initial `git push` via inherited GH_TOKEN. Workflows that run >1h still
+  // need the credential helper for live token rotation (handled at clone
+  // time in the GitHub adapter), but the env injection is enough for the
+  // typical <1h workflow.
+  const botGitHubEnv = await resolveBotGitHubEnvForWorkflow(deps, codebaseId);
   const config: WorkflowConfig = {
     ...fileConfig,
-    envVars: { ...fileConfig.envVars, ...dbEnvVars },
+    // Order: file < db < bot-token. Per-codebase env vars are operator-set; the
+    // injected bot token is system-set and represents the live identity for
+    // workflow-driven `gh`/`git push` operations — it must win to avoid a
+    // stale or wrong token leaking from a `GH_TOKEN=` line in .archon/.env.
+    envVars: { ...fileConfig.envVars, ...dbEnvVars, ...botGitHubEnv },
   };
   const configuredCommandFolder = config.commands.folder;
 
@@ -398,6 +387,7 @@ export async function executeWorkflow(
         working_path: cwd,
         metadata: issueContext ? { github_context: issueContext } : {},
         parent_conversation_id: parentConversationId,
+        user_id: userId,
       });
     } catch (error) {
       const err = error as Error;

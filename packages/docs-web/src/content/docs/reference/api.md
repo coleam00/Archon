@@ -217,7 +217,7 @@ curl http://localhost:3090/api/workflows/archon-assist
 Query parameters:
 - `cwd` (optional) -- Working directory for project-specific lookup
 
-Returns `{ workflow, filename, source: "project" | "bundled" }`.
+Returns `{ workflow, filename, source: "project" | "global" | "bundled" }`. The endpoint auto-discovers across all three scopes in order (project → home-scoped → bundled). `source: "global"` is returned when the workflow comes from `~/.archon/workflows/`.
 
 #### Validate a Workflow
 
@@ -239,6 +239,7 @@ curl -X PUT http://localhost:3090/api/workflows/my-workflow \
 
 Query parameters:
 - `cwd` (optional) -- Target directory (must have `.archon/workflows/`)
+- `source` (optional, enum: `project` \| `global`) -- Scope to write the workflow to. Defaults to `project` (writes to `<cwd>/.archon/workflows/`). Pass `source=global` to write to the home-scoped location (`~/.archon/workflows/`). Returns `400 "Invalid workflow source"` if any other value is supplied.
 
 Validates the definition before saving. Returns the saved workflow.
 
@@ -248,15 +249,20 @@ Validates the definition before saving. Returns the saved workflow.
 curl -X DELETE http://localhost:3090/api/workflows/my-workflow
 ```
 
+Query parameters:
+- `cwd` (optional) -- Target directory (must have `.archon/workflows/`)
+- `source` (optional, enum: `project` \| `global`) -- Scope to delete from. Defaults to `project`. Pass `source=global` to delete from `~/.archon/workflows/`. Returns `400 "Invalid workflow source"` if any other value is supplied.
+
 Only user-defined workflows can be deleted. Bundled defaults cannot be removed.
 
 ### Runs
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/workflows/{name}/run` | Run a workflow |
+| POST | `/api/workflows/{name}/run` | Run a workflow (JSON or multipart) |
 | GET | `/api/workflows/runs` | List workflow runs |
 | GET | `/api/workflows/runs/{runId}` | Get run details with events |
+| GET | `/api/runs/{runId}/artifacts` | List artifact files produced by a run |
 | GET | `/api/workflows/runs/by-worker/{platformId}` | Look up a run by worker conversation ID |
 | POST | `/api/workflows/runs/{runId}/cancel` | Cancel a running workflow |
 | POST | `/api/workflows/runs/{runId}/resume` | Resume a failed workflow |
@@ -268,10 +274,26 @@ Only user-defined workflows can be deleted. Bundled defaults cannot be removed.
 #### Run a Workflow
 
 ```bash
+# JSON (no attachments)
 curl -X POST http://localhost:3090/api/workflows/archon-assist/run \
   -H "Content-Type: application/json" \
   -d '{"message": "Explain the auth module", "conversationId": "conv-123"}'
+
+# multipart (with file attachments — max 5 files, ≤10 MB each)
+curl -X POST http://localhost:3090/api/workflows/archon-assist/run \
+  -F "conversationId=conv-123" \
+  -F "message=Investigate this trace" \
+  -F "files=@stacktrace.txt" \
+  -F "files=@screenshot.png"
 ```
+
+#### List Run Artifacts
+
+```bash
+curl http://localhost:3090/api/runs/{runId}/artifacts
+```
+
+Walks the run's on-disk artifact directory (dotfiles skipped) and returns `{ files: [{ path, size, modifiedAt }] }`. Used by the console UI's Artifacts tab. Returns `{ files: [] }` when the run has no codebase or the codebase name is not in `owner/repo` form; 400 on invalid run id or path-escape attempt, 404 if the run does not exist.
 
 #### Resume a Failed Run
 

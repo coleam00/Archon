@@ -55,6 +55,7 @@ export async function createWorkflowRun(data: {
   metadata?: Record<string, unknown>;
   working_path?: string;
   parent_conversation_id?: string;
+  user_id?: string;
 }): Promise<WorkflowRun> {
   // Serialize metadata with validation to catch circular references early
   let metadataJson: string;
@@ -89,8 +90,8 @@ export async function createWorkflowRun(data: {
   try {
     const result = await pool.query<WorkflowRun>(
       `INSERT INTO remote_agent_workflow_runs
-       (workflow_name, conversation_id, codebase_id, user_message, metadata, working_path, parent_conversation_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       (workflow_name, conversation_id, codebase_id, user_message, metadata, working_path, parent_conversation_id, user_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING *`,
       [
         data.workflow_name,
@@ -100,6 +101,7 @@ export async function createWorkflowRun(data: {
         metadataJson,
         data.working_path ?? null,
         data.parent_conversation_id ?? null,
+        data.user_id ?? null,
       ]
     );
     const row = result.rows[0];
@@ -334,30 +336,33 @@ export async function findResumableRun(
 }
 
 /**
- * Find a resumable (failed/paused) run for a workflow by parent conversation ID.
- * Used by the web orchestrator to detect approved runs that need foreground resume
- * (background dispatch would create a new worktree and lose the resumable run).
+ * Find a resumable (failed/paused) run for a workflow scoped to (parent conversation, codebase).
+ * Used by the orchestrator (all platforms) to detect approved runs that need foreground resume
+ * on the prior run's worktree. Codebase scope prevents cross-project resume on persistent
+ * chat conversation IDs (Telegram chat_id, Slack thread, etc.).
  */
 export async function findResumableRunByParentConversation(
   workflowName: string,
-  parentConversationId: string
+  parentConversationId: string,
+  codebaseId: string
 ): Promise<WorkflowRun | null> {
   try {
     const result = await pool.query<WorkflowRun>(
       `SELECT * FROM remote_agent_workflow_runs
        WHERE workflow_name = $1
          AND parent_conversation_id = $2
+         AND codebase_id = $3
          AND status IN ('failed', 'paused')
        ORDER BY started_at DESC
        LIMIT 1`,
-      [workflowName, parentConversationId]
+      [workflowName, parentConversationId, codebaseId]
     );
     const row = result.rows[0];
     return row ? normalizeWorkflowRun(row) : null;
   } catch (error) {
     const err = error as Error;
     getLog().error(
-      { err, workflowName, parentConversationId },
+      { err, workflowName, parentConversationId, codebaseId },
       'db.workflow_run_find_resumable_by_parent_failed'
     );
     throw new Error(`Failed to find resumable run by parent conversation: ${err.message}`);

@@ -66,10 +66,14 @@ export async function listByCodebase(
  */
 export async function create(env: CreateEnvironmentParams): Promise<IsolationEnvironmentRow> {
   const dialect = getDialect();
+  // Note: created_by_user_id is intentionally NOT in the DO UPDATE SET — on
+  // re-creation (upsert) we preserve the original creator's attribution.
+  // The first user to spin up an environment owns it; subsequent reactivations
+  // by different users don't transfer ownership. Mirrors created_by_platform.
   const result = await pool.query<IsolationEnvironmentRow>(
     `INSERT INTO remote_agent_isolation_environments
-     (codebase_id, workflow_type, workflow_id, provider, working_path, branch_name, created_by_platform, metadata)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     (codebase_id, workflow_type, workflow_id, provider, working_path, branch_name, created_by_platform, created_by_user_id, metadata)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      ON CONFLICT (codebase_id, workflow_type, workflow_id) WHERE status = 'active'
      DO UPDATE SET
        working_path = EXCLUDED.working_path,
@@ -88,6 +92,7 @@ export async function create(env: CreateEnvironmentParams): Promise<IsolationEnv
       env.working_path,
       env.branch_name,
       env.created_by_platform ?? null,
+      env.created_by_user_id ?? null,
       JSON.stringify(env.metadata ?? {}),
     ]
   );

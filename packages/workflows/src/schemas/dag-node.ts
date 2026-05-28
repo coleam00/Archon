@@ -164,6 +164,10 @@ export const dagNodeBaseSchema = z.object({
   fallbackModel: z.string().min(1).optional(),
   betas: z.array(z.string().min(1)).nonempty("'betas' must be a non-empty array").optional(),
   sandbox: sandboxSettingsSchema.optional(),
+  // Opt out of resume caching: when true, this node re-runs on resume even if a
+  // prior run completed it successfully. Use for producers whose exit code does
+  // not capture output validity (e.g. bash that writes a file the consumer parses).
+  always_run: z.boolean().optional(),
 });
 
 export type DagNodeBase = z.infer<typeof dagNodeBaseSchema>;
@@ -539,6 +543,7 @@ export const dagNodeSchema = dagNodeBaseSchema
       ...(data.when !== undefined ? { when: data.when } : {}),
       ...(data.trigger_rule !== undefined ? { trigger_rule: data.trigger_rule } : {}),
       ...(data.idle_timeout !== undefined ? { idle_timeout: data.idle_timeout } : {}),
+      ...(data.always_run !== undefined ? { always_run: data.always_run } : {}),
     };
 
     // Shared optional fields (valid on AI and bash nodes)

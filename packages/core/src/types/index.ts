@@ -5,8 +5,8 @@ import type { TransitionTrigger } from '../state/session-transitions';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
 import { z } from 'zod';
 
-// MessageChunk imported for use in IPlatformAdapter/IWebPlatformAdapter below
-import type { MessageChunk } from '@archon/providers/types';
+// MessageChunk + TokenUsage are used by IPlatformAdapter below.
+import type { MessageChunk, TokenUsage } from '@archon/providers/types';
 
 /**
  * Custom error for when a conversation is not found during update operations
@@ -31,8 +31,43 @@ export interface Conversation {
   hidden: boolean;
   deleted_at: Date | null;
   last_activity_at: Date | null; // For staleness detection
+  user_id: string | null; // UUID FK to users; populated by chat/forge adapters
   created_at: Date;
   updated_at: Date;
+}
+
+/**
+ * Identity-source platforms. Constrained to a literal union so a typo
+ * (`'Slack'` vs `'slack'`) can't silently break the UNIQUE(platform,
+ * platform_user_id) invariant. New forge/chat platforms must be added here
+ * and to the per-adapter resolver callsite.
+ */
+export type IdentityPlatform = 'slack' | 'telegram' | 'discord' | 'github' | 'web' | 'cli';
+
+/**
+ * Archon-internal user identity. One row per human (or bot) across all platforms.
+ * Populated lazily on first sight by any adapter; display_name/email may be NULL
+ * until enrichment succeeds.
+ */
+export interface User {
+  id: string;
+  display_name: string | null;
+  email: string | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
+/**
+ * Maps a platform-native user id (Slack U-id, Telegram chat id, GitHub login,
+ * Discord snowflake) to an Archon user. UNIQUE(platform, platform_user_id).
+ */
+export interface UserIdentity {
+  id: string;
+  user_id: string;
+  platform: IdentityPlatform;
+  platform_user_id: string;
+  platform_display_name: string | null;
+  created_at: Date;
 }
 
 import type { IsolationHints } from '@archon/isolation';
@@ -51,6 +86,13 @@ export interface HandleMessageContext {
   readonly parentConversationId?: string;
   readonly isolationHints?: IsolationHints;
   readonly attachedFiles?: AttachedFile[];
+  /**
+   * Archon user UUID resolved from the inbound platform user identifier.
+   * Chat/forge adapters resolve this via findOrCreateUserByPlatformIdentity
+   * before calling handleMessage. Undefined for web/CLI surfaces until their
+   * own auth flows are wired.
+   */
+  readonly userId?: string;
 }
 
 export interface Codebase {
@@ -160,6 +202,18 @@ export interface IPlatformAdapter {
 
   /** Retract previously streamed text (used when workflow routing intercepts) */
   emitRetract?(conversationId: string): Promise<void>;
+
+  /**
+   * Optional: Append a small footer summarising cost / token usage / stop reason
+   * after a direct-chat assistant turn. Implemented by adapters that surface
+   * usage info in-band (e.g. Slack posts an italic context line). No-op for
+   * adapters that don't care; orchestrator skips the call when both `cost`
+   * and `tokens` are absent.
+   */
+  sendResultFooter?(
+    conversationId: string,
+    info: { cost?: number; tokens?: TokenUsage; stopReason?: string }
+  ): Promise<void>;
 }
 
 /**

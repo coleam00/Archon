@@ -20,7 +20,7 @@ import {
   getWorkflowEventEmitter,
   type WorkflowEmitterEvent,
 } from '@archon/workflows/event-emitter';
-import type { WorkflowLoadResult } from '@archon/workflows/schemas/workflow';
+import type { WorkflowDefinition, WorkflowLoadResult } from '@archon/workflows/schemas/workflow';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import {
   approveWorkflow,
@@ -62,7 +62,13 @@ export interface WorkflowRunOptions {
   fromBranch?: string;
   noWorktree?: boolean;
   resume?: boolean;
-  codebaseId?: string; // Passed by resume/approve to skip path-based lookup
+  codebaseId?: string; // Skips path-based codebase lookup when resume/approve/reject already resolved it
+  /**
+   * Override the directory used for workflow YAML discovery.
+   * Pass `codebase.default_cwd` here so the source repo is searched even when
+   * `working_path` is a worktree or workspace clone that lacks the file.
+   */
+  discoveryCwd?: string;
   quiet?: boolean;
   verbose?: boolean;
   /** Platform conversation ID (e.g. `cli-{ts}-{rand}`), NOT a DB UUID. */
@@ -127,6 +133,25 @@ function buildRegistrationFailureError(action: string, error: Error): Error {
   return new Error(
     `Cannot ${action}: repository registration failed.\nError: ${error.message}\n${hint}`
   );
+}
+
+/**
+ * Resolve the provider used for CLI conversation titles from the workflow itself.
+ * This keeps auxiliary title generation aligned with workflow execution instead
+ * of falling back to a stale conversation default.
+ */
+function resolveTitleAssistantType(
+  workflow: WorkflowDefinition,
+  defaultAssistant: string | undefined,
+  conversationAssistant: string | undefined
+): string {
+  // Per CLAUDE.md, provider is resolved via an explicit chain:
+  // node.provider ?? workflow.provider ?? config.assistant. Model never
+  // influences provider selection — vendor SDKs add new model names faster
+  // than we can keep a mapping in sync.
+  const fallbackAssistant = defaultAssistant ?? conversationAssistant ?? 'claude';
+  if (workflow.provider) return workflow.provider;
+  return fallbackAssistant;
 }
 
 /** Render a workflow event to stderr as a progress line. Called only when --quiet is not set. */
@@ -260,7 +285,7 @@ export async function workflowRunCommand(
   userMessage: string,
   options: WorkflowRunOptions = {}
 ): Promise<void> {
-  const { workflows: workflowEntries, errors } = await loadWorkflows(cwd);
+  const { workflows: workflowEntries, errors } = await loadWorkflows(options.discoveryCwd ?? cwd);
 
   if (workflowEntries.length === 0 && errors.length === 0) {
     throw new Error('No workflows found in .archon/workflows/');
@@ -626,7 +651,9 @@ export async function workflowRunCommand(
   // Wire adapter for assistant message persistence
   adapter.setConversationDbId(conversationId, conversation.id);
 
-  // Persist user message for Web UI history
+  // Persist user message for Web UI history.
+  // TODO: thread userId once the CLI auth path lands (`archon auth github`
+  // resolving via ~/.archon/config.yaml `user_id`).
   try {
     await messageDb.addMessage(conversation.id, 'user', userMessage);
   } catch (error) {
@@ -637,13 +664,36 @@ export async function workflowRunCommand(
   }
 
   // Auto-generate title for CLI workflow conversations (fire-and-forget)
-  void generateAndSetTitle(
-    conversation.id,
-    userMessage,
-    conversation.ai_assistant_type,
-    workingCwd,
-    workflowName
-  );
+  void (async (): Promise<void> => {
+    let workflowConfig: Awaited<ReturnType<typeof loadConfig>> | undefined;
+    try {
+      workflowConfig = await loadConfig(cwd);
+    } catch (error) {
+      getLog().warn({ err: error as Error, cwd }, 'workflow.title_config_load_failed');
+    }
+
+    try {
+      const titleAssistantType = resolveTitleAssistantType(
+        workflow,
+        workflowConfig?.assistant,
+        conversation.ai_assistant_type
+      );
+      const titleAssistantConfig = workflowConfig?.assistants?.[titleAssistantType] ?? {};
+      await generateAndSetTitle(
+        conversation.id,
+        userMessage,
+        titleAssistantType,
+        workingCwd,
+        workflowName,
+        titleAssistantConfig
+      );
+    } catch (error) {
+      getLog().warn(
+        { err: error as Error, conversationId: conversation.id },
+        'workflow.title_generation_failed'
+      );
+    }
+  })();
 
   // Register cleanup handlers for graceful termination
   let terminating = false;
@@ -972,6 +1022,31 @@ export async function workflowResumeCommand(runId: string): Promise<void> {
   console.log(`Path: ${run.working_path}`);
   console.log('');
 
+  // Use the codebase's source path for workflow YAML discovery so the file is
+  // found even when working_path is a worktree or workspace clone that does
+  // not contain the user's local (often untracked) workflow YAML.
+  let discoveryCwd: string | undefined;
+  if (run.codebase_id) {
+    try {
+      const codebase = await codebaseDb.getCodebase(run.codebase_id);
+      if (codebase) {
+        discoveryCwd = codebase.default_cwd;
+      } else {
+        getLog().warn(
+          { runId, codebaseId: run.codebase_id },
+          'cli.workflow_resume_codebase_not_found'
+        );
+      }
+    } catch (error) {
+      const err = error as Error;
+      getLog().warn(
+        { err, errorType: err.constructor.name, runId, codebaseId: run.codebase_id },
+        'cli.workflow_resume_codebase_lookup_failed'
+      );
+    }
+  }
+  if (discoveryCwd) console.log(`Discovery path: ${discoveryCwd}`);
+
   // Re-execute via workflowRunCommand with --resume.
   // The executor's implicit findResumableRun detects the prior failed run
   // and skips already-completed nodes.
@@ -979,6 +1054,7 @@ export async function workflowResumeCommand(runId: string): Promise<void> {
     await workflowRunCommand(run.working_path, run.workflow_name, run.user_message ?? '', {
       resume: true,
       codebaseId: run.codebase_id ?? undefined,
+      discoveryCwd,
     });
   } catch (error) {
     const err = error as Error;
@@ -1037,11 +1113,37 @@ export async function workflowApproveCommand(runId: string, comment?: string): P
     );
   }
 
+  // Use the codebase's source path for workflow YAML discovery so the file is
+  // found even when working_path is a worktree or workspace clone that does
+  // not contain the user's local (often untracked) workflow YAML.
+  let discoveryCwd: string | undefined;
+  if (result.codebaseId) {
+    try {
+      const codebase = await codebaseDb.getCodebase(result.codebaseId);
+      if (codebase) {
+        discoveryCwd = codebase.default_cwd;
+      } else {
+        getLog().warn(
+          { runId, codebaseId: result.codebaseId },
+          'cli.workflow_approve_codebase_not_found'
+        );
+      }
+    } catch (error) {
+      const err = error as Error;
+      getLog().warn(
+        { err, errorType: err.constructor.name, runId, codebaseId: result.codebaseId },
+        'cli.workflow_approve_codebase_lookup_failed'
+      );
+    }
+  }
+  if (discoveryCwd) console.log(`Discovery path: ${discoveryCwd}`);
+
   try {
     await workflowRunCommand(result.workingPath, result.workflowName, result.userMessage ?? '', {
       resume: true,
       codebaseId: result.codebaseId ?? undefined,
       conversationId: platformConversationId,
+      discoveryCwd,
     });
   } catch (error) {
     const err = error as Error;
@@ -1057,7 +1159,9 @@ export async function workflowApproveCommand(runId: string, comment?: string): P
 }
 
 /**
- * Reject a paused workflow run by ID (marks it as cancelled).
+ * Reject a paused workflow run by ID.
+ * If the workflow has an on_reject prompt, auto-resumes with the rejection feedback;
+ * otherwise marks the run as cancelled.
  */
 export async function workflowRejectCommand(runId: string, reason?: string): Promise<void> {
   const result = await rejectWorkflow(runId, reason);
@@ -1097,11 +1201,37 @@ export async function workflowRejectCommand(runId: string, reason?: string): Pro
     );
   }
 
+  // Use the codebase's source path for workflow YAML discovery so the file is
+  // found even when working_path is a worktree or workspace clone that does
+  // not contain the user's local (often untracked) workflow YAML.
+  let discoveryCwd: string | undefined;
+  if (result.codebaseId) {
+    try {
+      const codebase = await codebaseDb.getCodebase(result.codebaseId);
+      if (codebase) {
+        discoveryCwd = codebase.default_cwd;
+      } else {
+        getLog().warn(
+          { runId, codebaseId: result.codebaseId },
+          'cli.workflow_reject_codebase_not_found'
+        );
+      }
+    } catch (error) {
+      const err = error as Error;
+      getLog().warn(
+        { err, errorType: err.constructor.name, runId, codebaseId: result.codebaseId },
+        'cli.workflow_reject_codebase_lookup_failed'
+      );
+    }
+  }
+  if (discoveryCwd) console.log(`Discovery path: ${discoveryCwd}`);
+
   try {
     await workflowRunCommand(result.workingPath, result.workflowName, result.userMessage ?? '', {
       resume: true,
       codebaseId: result.codebaseId ?? undefined,
       conversationId: platformConversationId,
+      discoveryCwd,
     });
   } catch (error) {
     const err = error as Error;

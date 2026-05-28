@@ -2,7 +2,7 @@ import type { ProviderCapabilities } from '../types';
 
 export const CODEX_CAPABILITIES: ProviderCapabilities = {
   sessionResume: true,
-  mcp: false,
+  mcp: true,
   hooks: false,
   skills: false,
   agents: false,

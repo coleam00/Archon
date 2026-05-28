@@ -4,6 +4,8 @@
  * Must run in its own bun test invocation because it mocks @archon/paths
  * with BUNDLED_IS_BINARY=true, which conflicts with other test files.
  */
+import { homedir } from 'node:os';
+
 import { describe, test, expect, mock, beforeEach, afterAll, spyOn } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
 
@@ -89,8 +91,7 @@ describe('resolveCodexBinaryPath (binary mode)', () => {
 
   test('autodetects npm global install at ~/.npm-global/bin/codex (POSIX)', async () => {
     if (process.platform === 'win32') return; // POSIX-only probe
-    const home = process.env.HOME ?? '/Users/test';
-    const expected = `${home}/.npm-global/bin/codex`;
+    const expected = `${homedir()}/.npm-global/bin/codex`;
     fileExistsSpy = spyOn(resolver, 'fileExists').mockImplementation(
       (path: string) => path === expected
     );
@@ -101,6 +102,33 @@ describe('resolveCodexBinaryPath (binary mode)', () => {
       { binaryPath: expected, source: 'autodetect' },
       'codex.binary_resolved'
     );
+  });
+
+  test('autodetects npm global install at %APPDATA%\\npm\\codex.cmd (Windows)', async () => {
+    if (process.platform !== 'win32') return; // Windows-only probe
+    const appData = process.env.APPDATA ?? 'C:\\Users\\test\\AppData\\Roaming';
+    const expected = `${appData}\\npm\\codex.cmd`;
+    fileExistsSpy = spyOn(resolver, 'fileExists').mockImplementation(
+      (path: string) => path === expected
+    );
+
+    const result = await resolver.resolveCodexBinaryPath();
+    expect(result).toBe(expected);
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      { binaryPath: expected, source: 'autodetect' },
+      'codex.binary_resolved'
+    );
+  });
+
+  test('config codexBinaryPath takes precedence over autodetect', async () => {
+    // Both the explicit config path AND a typical autodetect path are
+    // present on disk; config must win. Mirrors the env-over-config and
+    // env-over-autodetect tests above so the four-tier precedence
+    // (env → config → vendor → autodetect) is fully covered.
+    fileExistsSpy = spyOn(resolver, 'fileExists').mockReturnValue(true);
+
+    const result = await resolver.resolveCodexBinaryPath('/explicit/config/codex');
+    expect(result).toBe('/explicit/config/codex');
   });
 
   test('autodetects homebrew install on Apple Silicon', async () => {

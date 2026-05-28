@@ -474,4 +474,41 @@ describe('evaluateCondition', () => {
     const outputs = new Map([['n', makeOutput('prose text', 'completed', { type: 'BUG' })]]);
     expect(evaluateCondition("$n.output == 'prose text'", outputs).result).toBe(true);
   });
+
+  // --- #1673: condition_json_parse_failed must surface as parsed:false ---
+
+  it('returns parsed:false when output text is not valid JSON and field is used', () => {
+    const outputs = new Map([
+      ['gate', makeOutput('Let me think...\n\nSure, here is my analysis.')],
+    ]);
+    const { result, parsed } = evaluateCondition("$gate.output.verdict == 'review'", outputs);
+    expect(result).toBe(false);
+    expect(parsed).toBe(false);
+  });
+
+  it('strips markdown fences and parses JSON inside them', () => {
+    const fenced = 'Let me analyze...\n\n```json\n{"verdict": "review"}\n```\n';
+    const outputs = new Map([['gate', makeOutput(fenced)]]);
+    expect(evaluateCondition("$gate.output.verdict == 'review'", outputs).result).toBe(true);
+    expect(evaluateCondition("$gate.output.verdict == 'review'", outputs).parsed).toBe(true);
+  });
+
+  it('strips plain ``` fences (no language tag) and parses JSON', () => {
+    const fenced = '```\n{"verdict": "approve"}\n```';
+    const outputs = new Map([['gate', makeOutput(fenced)]]);
+    expect(evaluateCondition("$gate.output.verdict == 'approve'", outputs).result).toBe(true);
+  });
+
+  it('parsed:false propagates through compound AND expressions', () => {
+    const outputs = new Map([
+      ['a', makeOutput('{"ok": "yes"}')],
+      ['b', makeOutput('not json at all')],
+    ]);
+    const { result, parsed } = evaluateCondition(
+      "$a.output.ok == 'yes' && $b.output.status == 'done'",
+      outputs
+    );
+    expect(result).toBe(false);
+    expect(parsed).toBe(false);
+  });
 });

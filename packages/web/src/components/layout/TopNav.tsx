@@ -66,21 +66,44 @@ export function TopNav(): React.ReactElement {
           )}
         </NavLink>
       ))}
-      <span className="ml-auto text-xs text-text-secondary">
-        v{import.meta.env.VITE_APP_VERSION as string}
-        {updateCheck?.updateAvailable && updateCheck.releaseUrl && (
-          <a
-            href={updateCheck.releaseUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="ml-1.5 inline-flex items-center gap-1 text-xs text-primary hover:underline"
-            title={`v${updateCheck.latestVersion} available`}
+      <div className="ml-auto flex items-center gap-3">
+        {/* CTA to the experimental console. Uses the brand magenta→teal
+            gradient via inline style because the old UI's tokens don't
+            include the brand-gradient variables. Sized to read as a
+            primary CTA without dominating the nav. */}
+        <Link
+          to="/console"
+          title="Try the redesigned console UI (early access)"
+          className="group inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold text-white shadow-sm transition-all hover:brightness-110 active:brightness-95"
+          style={{
+            background:
+              'linear-gradient(135deg, oklch(0.640 0.295 330) 0%, oklch(0.560 0.215 305) 50%, oklch(0.755 0.165 168) 100%)',
+          }}
+        >
+          <span>Try the new console UI</span>
+          <span
+            aria-hidden
+            className="inline-block transition-transform group-hover:translate-x-0.5"
           >
-            <span className="inline-block h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />v
-            {updateCheck.latestVersion}
-          </a>
-        )}
-      </span>
+            →
+          </span>
+        </Link>
+        <span className="text-xs text-text-secondary">
+          v{import.meta.env.VITE_APP_VERSION as string}
+          {updateCheck?.updateAvailable && updateCheck.releaseUrl && (
+            <a
+              href={updateCheck.releaseUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="ml-1.5 inline-flex items-center gap-1 text-xs text-primary hover:underline"
+              title={`v${updateCheck.latestVersion} available`}
+            >
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />v
+              {updateCheck.latestVersion}
+            </a>
+          )}
+        </span>
+      </div>
     </nav>
   );
 }

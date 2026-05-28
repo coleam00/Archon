@@ -183,8 +183,15 @@ export class TelegramAdapter implements IPlatformAdapter {
 
       if (this.messageHandler) {
         const conversationId = this.getConversationId(ctx);
+        // Derive a Telegram display name from inbound payload — no extra API call needed.
+        const from = ctx.from;
+        const fullName =
+          from?.first_name || from?.last_name
+            ? [from.first_name, from.last_name].filter(Boolean).join(' ')
+            : undefined;
+        const displayName = fullName ?? from?.username ?? undefined;
         // Fire-and-forget - errors handled by caller
-        void this.messageHandler({ conversationId, message, userId });
+        void this.messageHandler({ conversationId, message, userId, displayName });
       } else {
         // Intentional: message dropped silently if handler not registered yet.
         // In production the server always calls onMessage() before start(); this

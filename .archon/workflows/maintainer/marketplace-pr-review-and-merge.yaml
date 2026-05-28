@@ -143,39 +143,105 @@ nodes:
     depends_on: [fetch-source]
 
   # ═══════════════════════════════════════════════════════════════
-  # NODE 7: AI REVIEW — Haiku reads scan results + source content
+  # NODE 6.5: BUNDLE SOURCE — emit the fetched workflow files as text
+  # so the AI reviewer can actually read them. Without this step the
+  # AI only sees pass/fail summaries from the deterministic checks
+  # and ends up "reviewing" the registry diff instead of the workflow.
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: bundle-source
+    runtime: bun
+    timeout: 15000
+    depends_on: [fetch-source]
+    script: |
+      import { readdirSync, readFileSync, statSync, existsSync } from 'node:fs';
+      import { resolve, relative } from 'node:path';
+
+      const artifactsDir = process.env['ARTIFACTS_DIR'] ?? '';
+      const sourceDir = resolve(artifactsDir, 'source');
+
+      if (!existsSync(sourceDir)) {
+        console.log('(no source files were fetched)');
+        process.exit(0);
+      }
+
+      function listFiles(dir: string, base: string): string[] {
+        const out: string[] = [];
+        for (const entry of readdirSync(dir)) {
+          const full = resolve(dir, entry);
+          if (statSync(full).isDirectory()) out.push(...listFiles(full, base));
+          else out.push(relative(base, full));
+        }
+        return out;
+      }
+
+      // Cap per-file content to keep total prompt size sane. The workflow YAML
+      // and command markdowns are the substance to review — anything past 12k
+      // chars is almost certainly fixture data, examples, or generated output.
+      const PER_FILE_CHAR_CAP = 12000;
+      const files = listFiles(sourceDir, sourceDir).sort();
+      const parts: string[] = [];
+      for (const rel of files) {
+        const content = readFileSync(resolve(sourceDir, rel), 'utf8');
+        const body = content.length > PER_FILE_CHAR_CAP
+          ? content.slice(0, PER_FILE_CHAR_CAP) + `\n... (truncated, ${content.length - PER_FILE_CHAR_CAP} more chars)`
+          : content;
+        parts.push(`### \`${rel}\` (${content.length} chars)\n\n\`\`\`\n${body}\n\`\`\`\n`);
+      }
+
+      console.log(`Fetched ${files.length} file(s) from the submission's pinned SHA:\n\n` + parts.join('\n'));
+
+  # ═══════════════════════════════════════════════════════════════
+  # NODE 7: AI REVIEW — Haiku reads scan results + actual workflow source
   # ═══════════════════════════════════════════════════════════════
 
   - id: ai-review
     prompt: |
       You are reviewing a community marketplace submission for the Archon workflow platform.
-      Your job is to assess whether the submission is safe and useful enough to publish.
+      The submitter pinned their workflow to a commit SHA in an external repository; the
+      contents at that SHA have been fetched and are included below verbatim. Your job is
+      to assess whether the workflow itself is safe, useful, and well-built — not just
+      whether the one-line registry entry in marketplace.ts is well-formed.
 
       ## PR Metadata
       $fetch-pr-metadata.output
 
-      ## Schema Validation Result
+      ## Submitted Entry Details (slug / sourceUrl / pinned SHA / tags)
+      $parse-entry.output
+
+      ## Schema Validation Result (deterministic — already ran)
       $validate-schema.output
 
-      ## Security Scan Result
+      ## Security Scan Result (deterministic regex pass — already ran)
       $security-scan.output
 
-      ## Submitted Entry Details
-      $parse-entry.output
+      ## Submitted Workflow Source Files (this is what you are reviewing)
+      $bundle-source.output
 
       ## Instructions
 
-      Read all of the above carefully. Then provide a structured assessment.
+      Read the workflow YAML and every command file above carefully. The deterministic
+      scanner only catches known regex patterns — your job is to catch anything subtle
+      it would miss. In `reasoning`, explicitly name what you read and what you concluded
+      about the workflow's behavior (e.g. "the workflow runs `glab` against the user's
+      GitLab and posts review comments; no destructive ops; SHA-pinned"). Do NOT summarize
+      the registry diff — that's not the artifact under review.
 
+      Decision rules:
       - If the security scan has `severity: "critical"` or `severity: "high"`, recommendation MUST be "reject".
       - If schema validation failed (`valid: false`), recommendation MUST be "request_changes".
       - If the PR is a draft (`isDraft: true`), recommendation should be "request_changes".
-      - For clean submissions with no issues (scan severity "none", schema valid), recommend "auto_merge".
-      - For clean submissions where you have minor uncertainty but no concrete issues, recommend "auto_approve".
-      - For suspicious but not definitively malicious submissions, recommend "request_changes".
+      - If reading the workflow surfaces concrete concerns the regex scanner missed
+        (e.g. shells out to attacker-controlled paths, exfiltrates env vars, mutates user
+        repo without confirmation, prompts that try to bypass safety), recommend
+        "request_changes" or "reject" and name the concern in `concerns[]`.
+      - For clean submissions where the workflow is well-built and the regex scan + your
+        own reading both pass, recommend "auto_merge".
+      - For clean submissions where you have minor uncertainty but no concrete issues,
+        recommend "auto_approve".
 
       Be concise. Flag genuine risks only — don't nitpick style.
-    depends_on: [validate-schema, security-scan]
+    depends_on: [validate-schema, security-scan, bundle-source]
     idle_timeout: 60000
     output_format:
       type: object
@@ -210,10 +276,19 @@ nodes:
   # NODE 8: DECIDE — deterministic decision logic (inline Bun script)
   # ═══════════════════════════════════════════════════════════════
 
+  - id: persist-ai-review
+    # bash bridge: in a bash node $ai-review.output is shell-quoted, so a failed
+    # or non-JSON AI verdict (e.g. provider/API error) is written verbatim to a
+    # file instead of being injected raw into the decide script — where it would
+    # otherwise be invalid JS and crash the run at parse time.
+    depends_on: [ai-review]
+    bash: |
+      printf '%s' $ai-review.output > "$ARTIFACTS_DIR/ai-review.json"
+
   - id: decide
     runtime: bun
     timeout: 10000
-    depends_on: [ai-review, fetch-pr-metadata]
+    depends_on: [persist-ai-review, fetch-pr-metadata]
     script: |
       import { readFileSync, writeFileSync } from 'node:fs';
       import { resolve } from 'node:path';
@@ -226,8 +301,25 @@ nodes:
       const scopeResult = readFileSync(resolve(artifactsDir, '.scope-result'), 'utf8').trim();
 
       const scanResult = $security-scan.output;
-      const aiReview = $ai-review.output;
       const schemaResult = $validate-schema.output;
+
+      // ai-review verdict is read from a file (written by the persist-ai-review
+      // bash bridge) so a failed or non-JSON AI output can't crash this script.
+      let aiReview: { recommendation?: string; reasoning?: string };
+      try {
+        const aiReviewRaw = readFileSync(resolve(artifactsDir, 'ai-review.json'), 'utf8').trim();
+        aiReview = JSON.parse(aiReviewRaw) as { recommendation?: string; reasoning?: string };
+        if (typeof aiReview.recommendation !== 'string') {
+          throw new Error('missing "recommendation" field');
+        }
+      } catch (err) {
+        console.error(
+          `decide: ai-review did not produce a valid structured verdict (${(err as Error).message}). ` +
+            `The AI review step likely failed or was unavailable (e.g. provider/API quota). ` +
+            `Failing safe — not auto-merging. Re-run the marketplace auto-review once the provider is available.`,
+        );
+        process.exit(1);
+      }
 
       const author = prMeta.author.login;
       const isDraft = prMeta.isDraft;
@@ -290,7 +382,7 @@ nodes:
 
       $REASON
 
-      *Reviewed and auto-merged by Archon marketplace-pr-review-and-merge workflow.*"
+      *Reviewed the submitted workflow source at the pinned SHA (workflow YAML + command files), the deterministic schema check, and the deterministic security scan. Auto-merged by the Archon \`marketplace-pr-review-and-merge\` workflow.*"
           # Best-effort approval — GITHUB_TOKEN can't approve unless the repo
           # has "Allow GitHub Actions to create and approve pull requests"
           # enabled in Settings → Actions → General. The comment below always
