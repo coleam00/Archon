@@ -651,7 +651,9 @@ export async function workflowRunCommand(
   // Wire adapter for assistant message persistence
   adapter.setConversationDbId(conversationId, conversation.id);
 
-  // Persist user message for Web UI history
+  // Persist user message for Web UI history.
+  // TODO: thread userId once the CLI auth path lands (`archon auth github`
+  // resolving via ~/.archon/config.yaml `user_id`).
   try {
     await messageDb.addMessage(conversation.id, 'user', userMessage);
   } catch (error) {

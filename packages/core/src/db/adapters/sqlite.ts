@@ -178,6 +178,11 @@ export class SqliteAdapter implements IDatabase {
       if (!colNames.has('hidden')) {
         this.db.run('ALTER TABLE remote_agent_conversations ADD COLUMN hidden INTEGER DEFAULT 0');
       }
+      if (!colNames.has('user_id')) {
+        this.db.run(
+          'ALTER TABLE remote_agent_conversations ADD COLUMN user_id TEXT REFERENCES remote_agent_users(id) ON DELETE SET NULL'
+        );
+      }
     } catch (e: unknown) {
       getLog().warn({ err: e as Error }, 'db.sqlite_migration_conversations_columns_failed');
     }
@@ -198,6 +203,12 @@ export class SqliteAdapter implements IDatabase {
       if (!wfColNames.has('working_path')) {
         this.db.run('ALTER TABLE remote_agent_workflow_runs ADD COLUMN working_path TEXT');
       }
+
+      if (!wfColNames.has('user_id')) {
+        this.db.run(
+          'ALTER TABLE remote_agent_workflow_runs ADD COLUMN user_id TEXT REFERENCES remote_agent_users(id) ON DELETE SET NULL'
+        );
+      }
     } catch (e: unknown) {
       getLog().warn({ err: e as Error }, 'db.sqlite_migration_workflow_runs_columns_failed');
     }
@@ -215,6 +226,41 @@ export class SqliteAdapter implements IDatabase {
     } catch (e: unknown) {
       getLog().warn({ err: e as Error }, 'db.sqlite_migration_session_columns_failed');
     }
+
+    // Messages columns
+    try {
+      const cols = this.db.prepare("PRAGMA table_info('remote_agent_messages')").all() as {
+        name: string;
+      }[];
+      const colNames = new Set(cols.map(c => c.name));
+      if (!colNames.has('user_id')) {
+        this.db.run(
+          'ALTER TABLE remote_agent_messages ADD COLUMN user_id TEXT REFERENCES remote_agent_users(id) ON DELETE SET NULL'
+        );
+      }
+    } catch (e: unknown) {
+      getLog().warn({ err: e as Error }, 'db.sqlite_migration_messages_columns_failed');
+    }
+
+    // Isolation environments columns
+    try {
+      const cols = this.db
+        .prepare("PRAGMA table_info('remote_agent_isolation_environments')")
+        .all() as {
+        name: string;
+      }[];
+      const colNames = new Set(cols.map(c => c.name));
+      if (!colNames.has('created_by_user_id')) {
+        this.db.run(
+          'ALTER TABLE remote_agent_isolation_environments ADD COLUMN created_by_user_id TEXT REFERENCES remote_agent_users(id) ON DELETE SET NULL'
+        );
+      }
+    } catch (e: unknown) {
+      getLog().warn(
+        { err: e as Error },
+        'db.sqlite_migration_isolation_environments_columns_failed'
+      );
+    }
   }
 
   /**
@@ -228,6 +274,26 @@ export class SqliteAdapter implements IDatabase {
    */
   private createSchema(): void {
     this.db.run(`
+      -- Users table (Archon identity, platform-agnostic)
+      CREATE TABLE IF NOT EXISTS remote_agent_users (
+        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+        display_name TEXT,
+        email TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now'))
+      );
+
+      -- User identities table (per-platform mapping → users.id)
+      CREATE TABLE IF NOT EXISTS remote_agent_user_identities (
+        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+        user_id TEXT NOT NULL REFERENCES remote_agent_users(id) ON DELETE CASCADE,
+        platform TEXT NOT NULL,
+        platform_user_id TEXT NOT NULL,
+        platform_display_name TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        UNIQUE(platform, platform_user_id)
+      );
+
       -- Codebases table
       CREATE TABLE IF NOT EXISTS remote_agent_codebases (
         id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
@@ -264,6 +330,7 @@ export class SqliteAdapter implements IDatabase {
         title TEXT,
         deleted_at TEXT,
         hidden INTEGER DEFAULT 0,
+        user_id TEXT REFERENCES remote_agent_users(id) ON DELETE SET NULL,
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now')),
         last_activity_at TEXT DEFAULT (datetime('now')),
@@ -296,6 +363,7 @@ export class SqliteAdapter implements IDatabase {
         working_path TEXT NOT NULL,
         branch_name TEXT NOT NULL,
         created_by_platform TEXT,
+        created_by_user_id TEXT REFERENCES remote_agent_users(id) ON DELETE SET NULL,
         metadata TEXT DEFAULT '{}',
         status TEXT NOT NULL DEFAULT 'active',
         created_at TEXT DEFAULT (datetime('now')),
@@ -319,6 +387,7 @@ export class SqliteAdapter implements IDatabase {
         current_step_index INTEGER,
         metadata TEXT DEFAULT '{}',
         parent_conversation_id TEXT REFERENCES remote_agent_conversations(id) ON DELETE SET NULL,
+        user_id TEXT REFERENCES remote_agent_users(id) ON DELETE SET NULL,
         started_at TEXT DEFAULT (datetime('now')),
         completed_at TEXT,
         last_activity_at TEXT DEFAULT (datetime('now')),
@@ -343,6 +412,7 @@ export class SqliteAdapter implements IDatabase {
         role TEXT NOT NULL,
         content TEXT NOT NULL DEFAULT '',
         metadata TEXT DEFAULT '{}',
+        user_id TEXT REFERENCES remote_agent_users(id) ON DELETE SET NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
 
@@ -375,6 +445,14 @@ export class SqliteAdapter implements IDatabase {
         ON remote_agent_sessions(parent_session_id);
       CREATE INDEX IF NOT EXISTS idx_sessions_conversation_started
         ON remote_agent_sessions(conversation_id, started_at DESC);
+
+      -- User identity indexes.
+      CREATE INDEX IF NOT EXISTS idx_user_identities_user_id
+        ON remote_agent_user_identities(user_id);
+      CREATE INDEX IF NOT EXISTS idx_conversations_user_id
+        ON remote_agent_conversations(user_id) WHERE user_id IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_workflow_runs_user_id
+        ON remote_agent_workflow_runs(user_id) WHERE user_id IS NOT NULL;
     `);
     getLog().info('db.sqlite_schema_initialized');
   }

@@ -81,6 +81,8 @@ import {
   getPort,
 } from '@archon/core';
 import type { IPlatformAdapter } from '@archon/core';
+import type { IdentityPlatform } from '@archon/core';
+import * as userDb from '@archon/core/db/users';
 import {
   createLogger,
   logArchonPaths,
@@ -93,6 +95,41 @@ let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('server');
   return cachedLog;
+}
+
+/**
+ * Resolve a platform-native user identifier (Slack U-id, Telegram chat id,
+ * Discord snowflake) to an Archon user UUID via auto-create-on-first-sight.
+ *
+ * Contract: NEVER THROWS. On any failure, warn-log and return undefined so
+ * message handling proceeds (writes user_id = NULL on the conversation/run
+ * row). This invariant is load-bearing — message processing across three
+ * adapters depends on it. Covered by resolve-user-id.test.ts.
+ *
+ * Exported for testability.
+ */
+export async function resolveUserId(
+  platform: IdentityPlatform,
+  platformUserId: string | number | undefined,
+  displayName: string | undefined
+): Promise<string | undefined> {
+  if (platformUserId === undefined || platformUserId === '') {
+    return undefined;
+  }
+  try {
+    const user = await userDb.findOrCreateUserByPlatformIdentity(
+      platform,
+      String(platformUserId),
+      displayName
+    );
+    return user.id;
+  } catch (err) {
+    getLog().warn(
+      { err: err as Error, platform, platformUserId: String(platformUserId) },
+      'server.user_resolve_failed'
+    );
+    return undefined;
+  }
 }
 
 /**
@@ -380,6 +417,10 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
           parentConversationId = discordAdapter.getParentChannelId(message) ?? undefined;
         }
 
+        // Resolve Discord author → Archon user UUID.
+        // message.author.username is already display-quality on Discord (no extra API call needed).
+        const userId = await resolveUserId('discord', message.author.id, message.author.username);
+
         // Fire-and-forget: handler returns immediately, processing happens async
         lockManager
           .acquireLock(conversationId, async () => {
@@ -387,6 +428,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
               threadContext,
               parentConversationId,
               isolationHints: { workflowType: 'thread', workflowId: conversationId },
+              userId,
             });
           })
           .catch(createMessageErrorHandler('Discord', discordAdapter, conversationId));
@@ -452,6 +494,10 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
           parentConversationId = slackAdapter.getParentConversationId(event) ?? undefined;
         }
 
+        // Resolve Slack user → Archon user UUID. displayName comes from
+        // the adapter's users.info enrichment (cached per slackUserId).
+        const userId = await resolveUserId('slack', event.user, event.displayName);
+
         // Fire-and-forget: handler returns immediately, processing happens async
         lockManager
           .acquireLock(conversationId, async () => {
@@ -459,6 +505,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
               threadContext,
               parentConversationId,
               isolationHints: { workflowType: 'thread', workflowId: conversationId },
+              userId,
             });
           })
           .catch(createMessageErrorHandler('Slack', slackAdapter, conversationId));
@@ -633,16 +680,22 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     const telegramAdapter = telegram; // Capture for use in callback
 
     // Register message handler (auth is handled internally by adapter)
-    telegramAdapter.onMessage(async ({ conversationId, message }) => {
-      // Fire-and-forget: handler returns immediately, processing happens async
-      lockManager
-        .acquireLock(conversationId, async () => {
-          await handleMessage(telegramAdapter, conversationId, message, {
-            isolationHints: { workflowType: 'thread', workflowId: conversationId },
-          });
-        })
-        .catch(createMessageErrorHandler('Telegram', telegramAdapter, conversationId));
-    });
+    telegramAdapter.onMessage(
+      async ({ conversationId, message, userId: telegramUserId, displayName }) => {
+        // Resolve Telegram user id (numeric) → Archon user UUID.
+        const userId = await resolveUserId('telegram', telegramUserId, displayName);
+
+        // Fire-and-forget: handler returns immediately, processing happens async
+        lockManager
+          .acquireLock(conversationId, async () => {
+            await handleMessage(telegramAdapter, conversationId, message, {
+              isolationHints: { workflowType: 'thread', workflowId: conversationId },
+              userId,
+            });
+          })
+          .catch(createMessageErrorHandler('Telegram', telegramAdapter, conversationId));
+      }
+    );
 
     try {
       await telegramAdapter.start();

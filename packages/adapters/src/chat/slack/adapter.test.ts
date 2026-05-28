@@ -26,6 +26,15 @@ mock.module('@archon/paths', () => ({
 // Create mock functions
 const mockPostMessage = mock(() => Promise.resolve(undefined));
 const mockReplies = mock(() => Promise.resolve({ messages: [] }));
+const mockUsersInfo = mock(() =>
+  Promise.resolve({
+    user: {
+      id: 'U123',
+      real_name: 'Alice Liddell',
+      profile: { email: 'alice@example.com' },
+    },
+  })
+);
 const mockEvent = mock(() => {});
 const mockStart = mock(() => Promise.resolve(undefined));
 const mockStop = mock(() => Promise.resolve(undefined));
@@ -39,6 +48,9 @@ const mockApp = {
     },
     conversations: {
       replies: mockReplies,
+    },
+    users: {
+      info: mockUsersInfo,
     },
   },
   event: mockEvent,
@@ -512,6 +524,96 @@ describe('SlackAdapter', () => {
       const respondCalls = (respond as Mock<() => Promise<void>>).mock.calls;
       expect(respondCalls.length).toBe(1);
       expect((respondCalls[0]![0] as { response_type: string }).response_type).toBe('ephemeral');
+    });
+  });
+
+  describe('fetchDisplayName (users.info enrichment)', () => {
+    beforeEach(() => {
+      mockUsersInfo.mockClear();
+    });
+
+    test('returns real_name from users.info on first call and caches result', async () => {
+      const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+      const name1 = await adapter.fetchDisplayName('U123');
+      const name2 = await adapter.fetchDisplayName('U123');
+      expect(name1).toBe('Alice Liddell');
+      expect(name2).toBe('Alice Liddell');
+      // Second call hits the in-memory cache — no second API call.
+      expect(mockUsersInfo).toHaveBeenCalledTimes(1);
+    });
+
+    test('returns undefined and warn-logs once on missing_scope failure', async () => {
+      const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+      const slackErr = Object.assign(new Error('missing_scope'), {
+        data: { error: 'missing_scope' },
+      });
+      mockUsersInfo.mockRejectedValueOnce(slackErr);
+
+      const name = await adapter.fetchDisplayName('U_NEW');
+
+      expect(name).toBeUndefined();
+      expect(mockLogger.warn).toHaveBeenCalled();
+    });
+
+    test('missing_scope WARN fires only once per adapter even after many sightings', async () => {
+      mockLogger.warn.mockClear();
+      const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+      const makeErr = (): Error =>
+        Object.assign(new Error('missing_scope'), { data: { error: 'missing_scope' } });
+      mockUsersInfo.mockRejectedValueOnce(makeErr());
+      mockUsersInfo.mockRejectedValueOnce(makeErr());
+      mockUsersInfo.mockRejectedValueOnce(makeErr());
+
+      await adapter.fetchDisplayName('U_A');
+      await adapter.fetchDisplayName('U_B');
+      await adapter.fetchDisplayName('U_C');
+
+      const missingScopeCalls = (
+        mockLogger.warn as unknown as Mock<(obj: object, evt: string) => void>
+      ).mock.calls.filter(c => c[1] === 'slack.users_info_missing_scope');
+      expect(missingScopeCalls.length).toBe(1);
+    });
+
+    test('users_info_failed log strips err.data (no PII leak)', async () => {
+      mockLogger.warn.mockClear();
+      const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+      const slackErr = Object.assign(new Error('rate_limited'), {
+        data: { error: 'rate_limited', response_metadata: { workspace: 'sensitive-info' } },
+      });
+      mockUsersInfo.mockRejectedValueOnce(slackErr);
+
+      await adapter.fetchDisplayName('U_RATE');
+
+      const failedCall = (
+        mockLogger.warn as unknown as Mock<(obj: object, evt: string) => void>
+      ).mock.calls.find(c => c[1] === 'slack.users_info_failed');
+      expect(failedCall).toBeDefined();
+      const payload = failedCall![0] as Record<string, unknown>;
+      expect(payload).not.toHaveProperty('err');
+      expect(JSON.stringify(payload)).not.toContain('sensitive-info');
+      expect(payload).toHaveProperty('errMessage', 'rate_limited');
+      expect(payload).toHaveProperty('slackErrorCode', 'rate_limited');
+    });
+
+    test('returns undefined for empty slackUserId without calling the API', async () => {
+      const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+      const name = await adapter.fetchDisplayName('');
+      expect(name).toBeUndefined();
+      expect(mockUsersInfo).not.toHaveBeenCalled();
+    });
+
+    test('retries on next sighting after failure (negative results not cached)', async () => {
+      const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+      mockUsersInfo.mockRejectedValueOnce(new Error('rate_limited'));
+      const first = await adapter.fetchDisplayName('U_RETRY');
+      expect(first).toBeUndefined();
+
+      mockUsersInfo.mockResolvedValueOnce({
+        user: { id: 'U_RETRY', real_name: 'Eventually' },
+      });
+      const second = await adapter.fetchDisplayName('U_RETRY');
+      expect(second).toBe('Eventually');
+      expect(mockUsersInfo).toHaveBeenCalledTimes(2);
     });
   });
 });

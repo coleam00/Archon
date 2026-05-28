@@ -163,6 +163,14 @@ export type ExecuteWorkflowOptions = ResumePayload & {
   };
   /** Parent conversation ID — enables approve/reject auto-resume from chat. */
   parentConversationId?: string;
+  /**
+   * Archon user UUID for attribution on the workflow_run row. Resolved by
+   * chat/forge adapters via findOrCreateUserByPlatformIdentity. Web/CLI paths
+   * pass undefined until their own auth surfaces are wired.
+   * Ignored when `preCreatedRun` is set — the original creator's attribution
+   * is preserved on resume.
+   */
+  userId?: string;
 };
 
 /**
@@ -226,6 +234,7 @@ export async function executeWorkflow(
     parentConversationId,
     preCreatedRun,
     priorCompletedNodes,
+    userId,
   } = opts;
   // Load config once for the entire workflow execution
   const fileConfig = await deps.loadConfig(cwd);
@@ -312,6 +321,7 @@ export async function executeWorkflow(
         working_path: cwd,
         metadata: issueContext ? { github_context: issueContext } : {},
         parent_conversation_id: parentConversationId,
+        user_id: userId,
       });
     } catch (error) {
       const err = error as Error;

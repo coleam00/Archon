@@ -37,6 +37,20 @@ export class SlackAdapter implements IPlatformAdapter {
   private allowedUserIds: string[];
   /** Maps conversation ID → triggering Slack message so the bridge can react / edit. */
   private triggeringMessages = new Map<string, SlackMessageRef>();
+  /**
+   * Cache of slackUserId → displayName resolved via users.info. In-memory only;
+   * cleared on adapter restart. Avoids repeated API calls for chatty users.
+   * Negative results (lookup failed) are NOT cached — we retry on next sighting
+   * so a transient `missing_scope` or rate_limit doesn't permanently degrade UX.
+   */
+  private displayNameCache = new Map<string, string>();
+  /**
+   * Tripped the first time users.info returns `missing_scope`. Subsequent
+   * sightings of unknown users still attempt the API call (in case the operator
+   * reinstalls with the scope mid-flight), but the WARN log fires only once —
+   * `missing_scope` is a permanent misconfiguration, not a per-user incident.
+   */
+  private missingScopeLogged = false;
 
   constructor(botToken: string, appToken: string, mode: 'stream' | 'batch' = 'batch') {
     this.app = new App({
@@ -266,6 +280,48 @@ export class SlackAdapter implements IPlatformAdapter {
   }
 
   /**
+   * Resolve a Slack user id to a human-friendly display name via `users.info`.
+   * Cached in-memory per adapter lifetime. Returns undefined on any failure —
+   * the server handler still records the user identity by Slack id, just without
+   * a display_name backfill.
+   *
+   * Requires bot token scope `users:read`. If the scope is missing, Slack
+   * returns `missing_scope`; the WARN log fires once per adapter lifetime
+   * (gated by `missingScopeLogged`) since the misconfiguration is permanent
+   * rather than per-user. Other failures log per-occurrence.
+   */
+  async fetchDisplayName(slackUserId: string): Promise<string | undefined> {
+    if (!slackUserId) return undefined;
+    const cached = this.displayNameCache.get(slackUserId);
+    if (cached !== undefined) return cached;
+
+    try {
+      const result = await this.app.client.users.info({ user: slackUserId });
+      const u = result.user;
+      const name = u?.real_name ?? u?.profile?.display_name ?? u?.name;
+      if (name) {
+        this.displayNameCache.set(slackUserId, name);
+      }
+      return name;
+    } catch (error) {
+      const err = error as Error & { data?: { error?: string } };
+      const slackErrorCode = err.data?.error;
+      // Strip err.data from the log — Slack SDK error bodies can include API
+      // response metadata (workspace/user info) that's not relevant for ops.
+      const errMessage = err.message;
+      if (slackErrorCode === 'missing_scope') {
+        if (!this.missingScopeLogged) {
+          this.missingScopeLogged = true;
+          getLog().warn({ scope: 'users:read' }, 'slack.users_info_missing_scope');
+        }
+      } else {
+        getLog().warn({ errMessage, slackUserId, slackErrorCode }, 'slack.users_info_failed');
+      }
+      return undefined;
+    }
+  }
+
+  /**
    * Get conversation ID from Slack event
    * For threads: returns "channel:thread_ts" to maintain thread context
    * For non-threads: returns channel ID only
@@ -336,12 +392,14 @@ export class SlackAdapter implements IPlatformAdapter {
       }
 
       if (this.messageHandler && event.user) {
+        const displayName = await this.fetchDisplayName(event.user);
         const messageEvent: SlackMessageEvent = {
           text: event.text,
           user: event.user,
           channel: event.channel,
           ts: event.ts,
           thread_ts: event.thread_ts,
+          displayName,
         };
         this.trackTrigger(this.getConversationId(messageEvent), {
           channel: event.channel,
@@ -376,12 +434,14 @@ export class SlackAdapter implements IPlatformAdapter {
       }
 
       if (this.messageHandler && 'text' in event && event.text) {
+        const displayName = userId ? await this.fetchDisplayName(userId) : undefined;
         const messageEvent: SlackMessageEvent = {
           text: event.text,
           user: userId ?? '',
           channel: event.channel,
           ts: event.ts,
           thread_ts: 'thread_ts' in event ? event.thread_ts : undefined,
+          displayName,
         };
         this.trackTrigger(this.getConversationId(messageEvent), {
           channel: event.channel,
@@ -483,11 +543,13 @@ export class SlackAdapter implements IPlatformAdapter {
       return;
     }
 
+    const displayName = await this.fetchDisplayName(actorId);
     const messageEvent: SlackMessageEvent = {
       text: messageText,
       user: actorId,
       channel: command.channel_id,
       ts: seedTs,
+      displayName,
     };
     this.trackTrigger(this.getConversationId(messageEvent), {
       channel: command.channel_id,

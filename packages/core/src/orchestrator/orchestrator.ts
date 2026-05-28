@@ -111,7 +111,8 @@ export async function validateAndResolveIsolation(
   platform: IPlatformAdapter,
   conversationId: string,
   hints?: IsolationHints,
-  _isRetry = false
+  _isRetry = false,
+  userId?: string
 ): Promise<IsolationResolution> {
   const result = await getResolver().resolve({
     existingEnvId: conversation.isolation_env_id,
@@ -120,6 +121,7 @@ export async function validateAndResolveIsolation(
       : null,
     hints,
     platformType: platform.getPlatformType(),
+    userId,
   });
 
   switch (result.status) {
@@ -203,7 +205,8 @@ export async function validateAndResolveIsolation(
         platform,
         conversationId,
         hints,
-        true
+        true,
+        userId
       );
     }
 
@@ -246,6 +249,12 @@ export interface WorkflowRoutingContext {
    * Hints for isolation environment (PR review context, etc.)
    */
   readonly isolationHints?: IsolationHints;
+  /**
+   * Archon user UUID — populated by chat/forge adapters via
+   * findOrCreateUserByPlatformIdentity. Propagated to the worker conversation,
+   * worker isolation environment, and downstream workflow_run row.
+   */
+  readonly userId?: string;
 }
 
 /**
@@ -266,8 +275,15 @@ export async function dispatchBackgroundWorkflow(
   // 1. Generate worker conversation ID
   const workerPlatformId = `web-worker-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
 
-  // 2. Create worker conversation in DB
-  const workerConv = await db.getOrCreateConversation('web', workerPlatformId);
+  // 2. Create worker conversation in DB; propagate userId so the worker
+  // row has the same attribution as the parent (matters for "my runs" queries).
+  const workerConv = await db.getOrCreateConversation(
+    'web',
+    workerPlatformId,
+    undefined,
+    undefined,
+    ctx.userId
+  );
   await db.updateConversation(workerConv.id, {
     cwd: ctx.cwd,
     codebase_id: ctx.codebaseId ?? null,
@@ -289,7 +305,9 @@ export async function dispatchBackgroundWorkflow(
       codebase,
       ctx.platform,
       workerPlatformId,
-      { workflowType: 'thread', workflowId: workerPlatformId }
+      { workflowType: 'thread', workflowId: workerPlatformId },
+      false,
+      ctx.userId
     );
     workerCwd = result.cwd;
     await db.updateConversation(workerConv.id, { cwd: workerCwd }).catch((e: unknown) => {
@@ -351,6 +369,7 @@ export async function dispatchBackgroundWorkflow(
       working_path: workerCwd,
       metadata: ctx.issueContext ? { github_context: ctx.issueContext } : {},
       parent_conversation_id: ctx.conversationDbId,
+      user_id: ctx.userId,
     });
   } catch (error) {
     const err = error as Error;
@@ -376,6 +395,7 @@ export async function dispatchBackgroundWorkflow(
             isolationContext,
             parentConversationId: ctx.conversationDbId,
             preCreatedRun,
+            userId: ctx.userId,
           }
         );
         // Surface workflow output to parent conversation as a result card

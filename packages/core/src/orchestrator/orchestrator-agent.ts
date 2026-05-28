@@ -315,7 +315,8 @@ async function dispatchOrchestratorWorkflow(
   codebase: Codebase,
   workflow: WorkflowDefinition,
   userMessage: string,
-  isolationHints?: HandleMessageContext['isolationHints']
+  isolationHints?: HandleMessageContext['isolationHints'],
+  userId?: string
 ): Promise<void> {
   // Auto-attach project to conversation
   await db.updateConversation(conversation.id, {
@@ -341,7 +342,9 @@ async function dispatchOrchestratorWorkflow(
         codebase,
         platform,
         conversationId,
-        isolationHints
+        isolationHints,
+        false,
+        userId
       );
       cwd = result.cwd;
     } catch (error) {
@@ -399,6 +402,7 @@ async function dispatchOrchestratorWorkflow(
         {
           codebaseId: codebase.id,
           parentConversationId: conversation.id,
+          userId,
           ...prepared,
         }
       );
@@ -418,6 +422,7 @@ async function dispatchOrchestratorWorkflow(
         {
           codebaseId: codebase.id,
           parentConversationId: conversation.id,
+          userId,
         }
       );
     }
@@ -433,6 +438,7 @@ async function dispatchOrchestratorWorkflow(
         codebaseId: codebase.id,
         availableWorkflows: [workflow],
         isolationHints,
+        userId,
       },
       workflow
     );
@@ -449,6 +455,7 @@ async function dispatchOrchestratorWorkflow(
       {
         codebaseId: codebase.id,
         parentConversationId: conversation.id,
+        userId,
       }
     );
   }
@@ -634,17 +641,26 @@ export async function handleMessage(
   message: string,
   context?: HandleMessageContext
 ): Promise<void> {
-  const { issueContext, threadContext, parentConversationId, isolationHints, attachedFiles } =
-    context ?? {};
+  const {
+    issueContext,
+    threadContext,
+    parentConversationId,
+    isolationHints,
+    attachedFiles,
+    userId,
+  } = context ?? {};
   try {
-    getLog().debug({ conversationId }, 'orchestrator_message_received');
+    getLog().debug({ conversationId, userId }, 'orchestrator_message_received');
 
-    // 1. Get/create conversation and inherit thread context
+    // 1. Get/create conversation and inherit thread context.
+    // userId is recorded on the conversation row only on first creation —
+    // first-user-wins. Per-message attribution happens on workflow_runs.
     let conversation = await db.getOrCreateConversation(
       platform.getPlatformType(),
       conversationId,
       undefined,
-      parentConversationId
+      parentConversationId,
+      userId
     );
     conversation = await inheritThreadContext(
       platform,
@@ -757,7 +773,8 @@ export async function handleMessage(
             codebase,
             workflow,
             pausedRun.user_message,
-            isolationHints
+            isolationHints,
+            userId
           );
           getLog().info(
             { conversationId, workflowRunId: pausedRun.id, workflowName: pausedRun.workflow_name },
@@ -827,7 +844,8 @@ export async function handleMessage(
             conversation,
             result.workflow.definition,
             result.workflow.args ?? message,
-            isolationHints
+            isolationHints,
+            userId
           );
         }
         return;
@@ -982,7 +1000,8 @@ export async function handleMessage(
         isolationHints,
         conversation,
         issueContext,
-        requestOptions
+        requestOptions,
+        userId
       );
     } else {
       await handleBatchMode(
@@ -998,7 +1017,8 @@ export async function handleMessage(
         isolationHints,
         conversation,
         issueContext,
-        requestOptions
+        requestOptions,
+        userId
       );
     }
 
@@ -1034,7 +1054,8 @@ async function handleStreamMode(
   isolationHints: HandleMessageContext['isolationHints'],
   conversation: Conversation,
   issueContext?: string,
-  requestOptions?: SendQueryOptions
+  requestOptions?: SendQueryOptions,
+  userId?: string
 ): Promise<void> {
   const allMessages: string[] = [];
   let newSessionId: string | undefined;
@@ -1174,7 +1195,8 @@ async function handleStreamMode(
       commands.workflowInvocation,
       originalMessage,
       isolationHints,
-      issueContext
+      issueContext,
+      userId
     );
     return;
   }
@@ -1215,7 +1237,8 @@ async function handleBatchMode(
   isolationHints: HandleMessageContext['isolationHints'],
   conversation: Conversation,
   issueContext?: string,
-  requestOptions?: SendQueryOptions
+  requestOptions?: SendQueryOptions,
+  userId?: string
 ): Promise<void> {
   const allChunks: { type: string; content: string }[] = [];
   const assistantMessages: string[] = [];
@@ -1386,7 +1409,8 @@ async function handleBatchMode(
       commands.workflowInvocation,
       originalMessage,
       isolationHints,
-      issueContext
+      issueContext,
+      userId
     );
     return;
   }
@@ -1445,7 +1469,8 @@ async function handleWorkflowInvocationResult(
   invocation: WorkflowInvocation,
   originalMessage: string,
   isolationHints: HandleMessageContext['isolationHints'],
-  issueContext?: string
+  issueContext?: string,
+  userId?: string
 ): Promise<void> {
   const { workflowName, projectName, remainingMessage } = invocation;
 
@@ -1477,7 +1502,8 @@ async function handleWorkflowInvocationResult(
       codebase,
       workflow,
       workflowPrompt,
-      isolationHints
+      isolationHints,
+      userId
     );
     return;
   }
@@ -1657,7 +1683,8 @@ async function handleWorkflowRunCommand(
   conversation: Conversation,
   workflow: WorkflowDefinition,
   userMessage: string,
-  isolationHints?: HandleMessageContext['isolationHints']
+  isolationHints?: HandleMessageContext['isolationHints'],
+  userId?: string
 ): Promise<void> {
   // Check if conversation has a project
   if (conversation.codebase_id) {
@@ -1677,7 +1704,8 @@ async function handleWorkflowRunCommand(
       codebase,
       workflow,
       userMessage,
-      isolationHints
+      isolationHints,
+      userId
     );
     return;
   }
@@ -1754,7 +1782,8 @@ async function handleWorkflowRunCommand(
       codebase,
       resolvedWorkflow,
       userMessage,
-      isolationHints
+      isolationHints,
+      userId
     );
     return;
   }
