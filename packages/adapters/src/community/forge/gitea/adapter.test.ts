@@ -851,8 +851,8 @@ describe('GiteaAdapter', () => {
       }));
     });
 
-    test('calls findOrCreateUserByPlatformIdentity with gitea platform and sender login', async () => {
-      const adapter = new GiteaAdapter(
+    function createWebhookAdapter(): GiteaAdapter {
+      const a = new GiteaAdapter(
         'https://gitea.example.com',
         'fake-token-for-testing',
         'fake-webhook-secret',
@@ -861,7 +861,12 @@ describe('GiteaAdapter', () => {
         { retryDelayMs: () => 1 }
       );
       // @ts-expect-error - accessing private method for testing
-      adapter.verifySignature = mock(() => true);
+      a.verifySignature = mock(() => true);
+      return a;
+    }
+
+    test('calls findOrCreateUserByPlatformIdentity with gitea platform and sender login', async () => {
+      const adapter = createWebhookAdapter();
 
       const payload = JSON.stringify({
         action: 'created',
@@ -902,16 +907,7 @@ describe('GiteaAdapter', () => {
     });
 
     test('falls back to sender.login when comment.user is missing', async () => {
-      const adapter = new GiteaAdapter(
-        'https://gitea.example.com',
-        'fake-token-for-testing',
-        'fake-webhook-secret',
-        mockLockManager,
-        undefined,
-        { retryDelayMs: () => 1 }
-      );
-      // @ts-expect-error - accessing private method for testing
-      adapter.verifySignature = mock(() => true);
+      const adapter = createWebhookAdapter();
 
       const payload = JSON.stringify({
         action: 'created',
@@ -954,16 +950,7 @@ describe('GiteaAdapter', () => {
         throw new Error('DB connection failed');
       });
 
-      const adapter = new GiteaAdapter(
-        'https://gitea.example.com',
-        'fake-token-for-testing',
-        'fake-webhook-secret',
-        mockLockManager,
-        undefined,
-        { retryDelayMs: () => 1 }
-      );
-      // @ts-expect-error - accessing private method for testing
-      adapter.verifySignature = mock(() => true);
+      const adapter = createWebhookAdapter();
 
       const payload = JSON.stringify({
         action: 'created',
@@ -1017,16 +1004,7 @@ describe('GiteaAdapter', () => {
         name: 'testrepo',
       }));
 
-      const adapter = new GiteaAdapter(
-        'https://gitea.example.com',
-        'fake-token-for-testing',
-        'fake-webhook-secret',
-        mockLockManager,
-        undefined,
-        { retryDelayMs: () => 1 }
-      );
-      // @ts-expect-error - accessing private method for testing
-      adapter.verifySignature = mock(() => true);
+      const adapter = createWebhookAdapter();
 
       const payload = JSON.stringify({
         action: 'created',
@@ -1077,16 +1055,7 @@ describe('GiteaAdapter', () => {
         name: 'testrepo',
       }));
 
-      const adapter = new GiteaAdapter(
-        'https://gitea.example.com',
-        'fake-token-for-testing',
-        'fake-webhook-secret',
-        mockLockManager,
-        undefined,
-        { retryDelayMs: () => 1 }
-      );
-      // @ts-expect-error - accessing private method for testing
-      adapter.verifySignature = mock(() => true);
+      const adapter = createWebhookAdapter();
 
       const payload = JSON.stringify({
         action: 'created',

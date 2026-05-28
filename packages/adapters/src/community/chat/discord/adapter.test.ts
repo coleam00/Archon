@@ -201,18 +201,21 @@ describe('DiscordAdapter', () => {
   });
 
   describe('message context normalization', () => {
+    function getMessageCreateHandler(): (msg: import('discord.js').Message) => void {
+      const calls = (
+        mockClientOn as unknown as Mock<(evt: string, fn: unknown) => void>
+      ).mock.calls.filter(c => c[0] === 'messageCreate');
+      expect(calls.length).toBe(1);
+      return calls[0][1] as (msg: import('discord.js').Message) => void;
+    }
+
     test('passes platformUserId and displayName from message.author', async () => {
       const adapter = new DiscordAdapter('fake-token-for-testing');
       const mockHandler = mock(async (_ctx: DiscordMessageContext) => undefined);
       adapter.onMessage(mockHandler);
       await adapter.start();
 
-      // Find the messageCreate handler registered on the mock client
-      const messageCreateCalls = (
-        mockClientOn as unknown as Mock<(evt: string, fn: unknown) => void>
-      ).mock.calls.filter(c => c[0] === 'messageCreate');
-      expect(messageCreateCalls.length).toBe(1);
-      const handler = messageCreateCalls[0][1] as (msg: import('discord.js').Message) => void;
+      const handler = getMessageCreateHandler();
 
       const mockMessage = {
         author: { id: 'snowflake-123', username: 'Alice', bot: false },
@@ -239,10 +242,7 @@ describe('DiscordAdapter', () => {
       adapter.onMessage(mockHandler);
       await adapter.start();
 
-      const messageCreateCalls = (
-        mockClientOn as unknown as Mock<(evt: string, fn: unknown) => void>
-      ).mock.calls.filter(c => c[0] === 'messageCreate');
-      const handler = messageCreateCalls[0][1] as (msg: import('discord.js').Message) => void;
+      const handler = getMessageCreateHandler();
 
       const mockMessage = {
         author: undefined,
