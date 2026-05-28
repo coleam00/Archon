@@ -112,49 +112,9 @@ nodes:
   # PHASE 2: RESEARCH
   # ═══════════════════════════════════════════════════════════════
 
-  - id: research-classify
-    prompt: |
-      Analyze this JIRA bug ticket and decide whether web research is needed before investigating the codebase.
-
-      ## JIRA Issue
-
-      $fetch-jira-issue.output
-
-      ## Run web research when TRUE
-
-      - Bug involves an external library, SDK, framework, or third-party API behavior
-      - Error message originates from an external package
-      - Fix likely requires checking official docs, changelogs, or known upstream issues
-      - Bug is version-specific or relates to a dependency upgrade
-      - Bug involves network protocols, encoding standards, or browser behavior
-
-      ## Skip web research when FALSE
-
-      - Bug is pure internal logic or business logic in our own codebase
-      - Root cause is clearly in our own code with no external dependencies in the failure path
-      - Well-understood internal patterns with no external unknowns
-
-      Provide your reasoning concisely.
-    depends_on: [validate-and-start]
-    model: haiku
-    allowed_tools: []
-    context: fresh
-    output_format:
-      type: object
-      properties:
-        run_web_research:
-          type: string
-          enum: ["true", "false"]
-        reasoning:
-          type: string
-      required:
-        - run_web_research
-        - reasoning
-
   - id: web-research
     command: archon-web-research
-    depends_on: [research-classify]
-    when: "$research-classify.output.run_web_research == 'true'"
+    depends_on: [validate-and-start]
     context: fresh
 
   # ═══════════════════════════════════════════════════════════════
@@ -163,8 +123,7 @@ nodes:
 
   - id: investigate
     command: jira-investigate-issue
-    depends_on: [research-classify, web-research]
-    trigger_rule: all_done
+    depends_on: [validate-and-start, web-research]
     context: fresh
 
   # ═══════════════════════════════════════════════════════════════
