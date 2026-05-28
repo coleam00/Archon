@@ -10,6 +10,9 @@ import {
   BASH_NODE_AI_FIELDS,
   SCRIPT_NODE_AI_FIELDS,
   LOOP_NODE_AI_FIELDS,
+  effortLevelSchema,
+  thinkingConfigSchema,
+  sandboxSettingsSchema,
 } from './schemas/dag-node';
 import { modelReasoningEffortSchema, webSearchModeSchema } from './schemas/workflow';
 import { workflowNodeHooksSchema } from './schemas/hooks';
@@ -424,6 +427,67 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       getLog().warn({ filename, value: raw.tags }, 'invalid_tags_block_ignored');
     }
 
+    // Parse workflow-level fallback fields. Same `safeParse` + warn-and-drop
+    // pattern as `modelReasoningEffort` / `webSearchMode` above. These are
+    // declared on `workflowBaseSchema` and consumed by the DAG executor's
+    // `workflowLevelOptions` as defaults that per-node options inherit when
+    // unset (see dag-executor.ts:2585-2591 — `workflow.effort` etc.). Without
+    // this block, a workflow YAML that sets e.g. `effort: high` at the root
+    // would be silently dropped here and the executor would read undefined,
+    // so per-node overrides would not inherit the workflow-level default.
+    const effortResult = effortLevelSchema.safeParse(raw.effort);
+    const effort = effortResult.success ? effortResult.data : undefined;
+    if (raw.effort !== undefined && !effortResult.success) {
+      getLog().warn(
+        { filename, value: raw.effort, valid: effortLevelSchema.options },
+        'invalid_workflow_effort_value_ignored'
+      );
+    }
+
+    const thinkingResult = thinkingConfigSchema.safeParse(raw.thinking);
+    const thinking = thinkingResult.success ? thinkingResult.data : undefined;
+    if (raw.thinking !== undefined && !thinkingResult.success) {
+      getLog().warn({ filename, value: raw.thinking }, 'invalid_workflow_thinking_value_ignored');
+    }
+
+    // fallbackModel: non-empty trimmed string. Inline rather than safeParse so
+    // a stray trailing space is normalised rather than rejected.
+    const fallbackModelTrimmed =
+      typeof raw.fallbackModel === 'string' ? raw.fallbackModel.trim() : '';
+    const fallbackModel = fallbackModelTrimmed.length > 0 ? fallbackModelTrimmed : undefined;
+    if (raw.fallbackModel !== undefined && fallbackModel === undefined) {
+      getLog().warn(
+        { filename, value: raw.fallbackModel },
+        'invalid_workflow_fallback_model_value_ignored'
+      );
+    }
+
+    // betas: non-empty array of non-empty strings. Same trim+filter as `tags`.
+    // Unlike `tags`, an empty result drops the field entirely (the Claude SDK
+    // expects either a populated beta header or no header at all). The schema
+    // types `betas` as `[string, ...string[]]`, so the cast captures the
+    // length>=1 invariant we just verified.
+    let betas: [string, ...string[]] | undefined;
+    if (Array.isArray(raw.betas)) {
+      const filtered = raw.betas
+        .filter((b): b is string => typeof b === 'string')
+        .map(b => b.trim())
+        .filter(b => b.length > 0);
+      if (filtered.length > 0) {
+        betas = filtered as [string, ...string[]];
+      } else {
+        getLog().warn({ filename, value: raw.betas }, 'invalid_workflow_betas_value_ignored');
+      }
+    } else if (raw.betas !== undefined) {
+      getLog().warn({ filename, value: raw.betas }, 'invalid_workflow_betas_value_ignored');
+    }
+
+    const sandboxResult = sandboxSettingsSchema.safeParse(raw.sandbox);
+    const sandbox = sandboxResult.success ? sandboxResult.data : undefined;
+    if (raw.sandbox !== undefined && !sandboxResult.success) {
+      getLog().warn({ filename, value: raw.sandbox }, 'invalid_workflow_sandbox_value_ignored');
+    }
+
     return {
       workflow: {
         name: raw.name,
@@ -435,6 +499,11 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
         additionalDirectories,
         interactive,
         ...(mutatesCheckout !== undefined ? { mutates_checkout: mutatesCheckout } : {}),
+        ...(effort !== undefined ? { effort } : {}),
+        ...(thinking !== undefined ? { thinking } : {}),
+        ...(fallbackModel !== undefined ? { fallbackModel } : {}),
+        ...(betas !== undefined ? { betas } : {}),
+        ...(sandbox !== undefined ? { sandbox } : {}),
         nodes: dagNodes,
         ...(worktreePolicy ? { worktree: worktreePolicy } : {}),
         ...(tags !== undefined ? { tags } : {}),
