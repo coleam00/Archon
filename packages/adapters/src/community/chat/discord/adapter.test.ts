@@ -232,6 +232,31 @@ describe('DiscordAdapter', () => {
         })
       );
     });
+
+    test('handles message with missing author gracefully', async () => {
+      const adapter = new DiscordAdapter('fake-token-for-testing');
+      const mockHandler = mock(async (_ctx: DiscordMessageContext) => undefined);
+      adapter.onMessage(mockHandler);
+      await adapter.start();
+
+      const messageCreateCalls = (
+        mockClientOn as unknown as Mock<(evt: string, fn: unknown) => void>
+      ).mock.calls.filter(c => c[0] === 'messageCreate');
+      const handler = messageCreateCalls[0][1] as (msg: import('discord.js').Message) => void;
+
+      const mockMessage = {
+        author: undefined,
+        content: 'system message',
+        channelId: 'chan-1',
+        guild: { id: 'guild-1' },
+        mentions: { has: () => false },
+      } as unknown as import('discord.js').Message;
+
+      // Should not throw
+      expect(() => handler(mockMessage)).not.toThrow();
+      // Handler should not be called for messages without author
+      expect(mockHandler).not.toHaveBeenCalled();
+    });
   });
 
   describe('mention detection', () => {

@@ -1,10 +1,10 @@
+import type { Message } from 'discord.js';
+
 /**
  * Normalized message context passed to the Discord onMessage handler.
  * The adapter extracts platformUserId and displayName from message.author
  * so the server never needs to know discord.js internals.
  */
-import type { Message } from 'discord.js';
-
 export interface DiscordMessageContext {
   /** The raw discord.js Message (still needed for adapter-method calls) */
   message: Message;

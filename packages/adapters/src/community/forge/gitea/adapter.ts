@@ -793,6 +793,10 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
 
     getLog().info({ eventType, owner, repo, number, isPR }, 'webhook_processing');
 
+    // Comment author may differ from event.sender for PR-review comments; prefer
+    // the comment author when present so individual reviewers get their own row.
+    // Resolution failure must not drop the webhook — warn-log and continue with
+    // archonUserId undefined so the conversation/run rows fall back to NULL.
     // 6. Resolve webhook sender to Archon user UUID
     const attributedLogin = commentAuthor ?? senderUsername;
     let archonUserId: string | undefined;

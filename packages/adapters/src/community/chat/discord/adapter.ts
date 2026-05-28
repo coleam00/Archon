@@ -292,6 +292,9 @@ export class DiscordAdapter implements IPlatformAdapter {
   async start(): Promise<void> {
     // Register message handler before login
     this.client.on(Events.MessageCreate, (message: Message) => {
+      // Ignore messages without an author (system messages, partials, webhooks)
+      if (!message.author) return;
+
       // Ignore bot messages to prevent loops
       if (message.author.bot) return;
 

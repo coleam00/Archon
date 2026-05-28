@@ -32,7 +32,7 @@ mock.module('@archon/paths', () => ({
   validateAppDefaultsPaths: mock(async () => undefined),
 }));
 
-// Mock @archon/core/db/modules to throw immediately (avoid DB connection hangs in tests)
+// Mock @archon/core/db modules to throw immediately (avoid DB connection hangs in tests)
 const mockFindOrCreateUserByPlatformIdentity = mock(
   async (_platform: string, _platformUserId: string, _displayName?: string) => ({
     id: 'user-test-uuid',
@@ -45,23 +45,32 @@ const mockFindOrCreateUserByPlatformIdentity = mock(
 mock.module('@archon/core/db/users', () => ({
   findOrCreateUserByPlatformIdentity: mockFindOrCreateUserByPlatformIdentity,
 }));
+const mockGetOrCreateConversation = mock(async () => {
+  throw new Error('DB not mocked in tests');
+});
+const mockUpdateConversation = mock(async () => {
+  throw new Error('DB not mocked in tests');
+});
+const mockGetConversation = mock(async () => null);
 mock.module('@archon/core/db/conversations', () => ({
-  getOrCreateConversation: mock(async () => {
-    throw new Error('DB not mocked in tests');
-  }),
-  updateConversation: mock(async () => {
-    throw new Error('DB not mocked in tests');
-  }),
-  getConversation: mock(async () => null),
+  getOrCreateConversation: mockGetOrCreateConversation,
+  updateConversation: mockUpdateConversation,
+  getConversation: mockGetConversation,
 }));
+
+const mockFindCodebaseByRepoUrl = mock(async () => null);
+const mockCreateCodebase = mock(async () => {
+  throw new Error('DB not mocked in tests');
+});
+const mockGetCodebaseCommands = mock(async () => ({}));
+const mockUpdateCodebaseCommands = mock(async () => undefined);
+const mockUpdateCodebase = mock(async () => undefined);
 mock.module('@archon/core/db/codebases', () => ({
-  findCodebaseByRepoUrl: mock(async () => null),
-  createCodebase: mock(async () => {
-    throw new Error('DB not mocked in tests');
-  }),
-  getCodebaseCommands: mock(async () => ({})),
-  updateCodebaseCommands: mock(async () => undefined),
-  updateCodebase: mock(async () => undefined),
+  findCodebaseByRepoUrl: mockFindCodebaseByRepoUrl,
+  createCodebase: mockCreateCodebase,
+  getCodebaseCommands: mockGetCodebaseCommands,
+  updateCodebaseCommands: mockUpdateCodebaseCommands,
+  updateCodebase: mockUpdateCodebase,
 }));
 
 // Mock @archon/core
@@ -597,6 +606,14 @@ describe('GitLabAdapter', () => {
   describe('user identity resolution', () => {
     beforeEach(() => {
       mockFindOrCreateUserByPlatformIdentity.mockClear();
+      mockFindOrCreateUserByPlatformIdentity.mockImplementation(async () => ({
+        id: 'user-test-uuid',
+        display_name: 'Test',
+        email: null,
+        created_at: new Date(),
+        updated_at: new Date(),
+      }));
+      mockHandleMessage.mockClear();
     });
 
     test('calls findOrCreateUserByPlatformIdentity with gitlab platform and sender username', async () => {
@@ -633,6 +650,65 @@ describe('GitLabAdapter', () => {
       expect(mockLogger.warn).toHaveBeenCalledWith(
         expect.objectContaining({ gitlabUsername: 'testuser' }),
         'gitlab.user_resolve_failed'
+      );
+    });
+
+    test('passes resolved archonUserId to handleMessage', async () => {
+      // Seed DB mocks so handleWebhook reaches handleMessage
+      mockGetOrCreateConversation.mockImplementation(async () => ({
+        id: 'conv-test-uuid',
+        codebase_id: 'codebase-test-uuid',
+        platform_type: 'gitlab',
+        platform_conversation_id: 'mygroup/myproject#1',
+      }));
+      mockFindCodebaseByRepoUrl.mockImplementation(async () => ({
+        id: 'codebase-test-uuid',
+        repository_url: 'https://gitlab.example.com/mygroup/myproject',
+        default_cwd: '/tmp/test-workspaces/mygroup/myproject/source',
+        name: 'myproject',
+      }));
+
+      const adapter = createAdapter();
+      const payload = createNotePayload({ username: 'testuser' });
+
+      await adapter.handleWebhook(payload, 'test-secret');
+
+      expect(mockHandleMessage).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ userId: 'user-test-uuid' })
+      );
+    });
+
+    test('skips user resolution when sender username is missing', async () => {
+      // Seed DB mocks so handleWebhook reaches handleMessage
+      mockGetOrCreateConversation.mockImplementation(async () => ({
+        id: 'conv-test-uuid',
+        codebase_id: 'codebase-test-uuid',
+        platform_type: 'gitlab',
+        platform_conversation_id: 'mygroup/myproject#1',
+      }));
+      mockFindCodebaseByRepoUrl.mockImplementation(async () => ({
+        id: 'codebase-test-uuid',
+        repository_url: 'https://gitlab.example.com/mygroup/myproject',
+        default_cwd: '/tmp/test-workspaces/mygroup/myproject/source',
+        name: 'myproject',
+      }));
+
+      const adapter = createAdapter();
+      const base = JSON.parse(createNotePayload({ username: 'testuser' }));
+      delete base.user;
+      const payload = JSON.stringify(base);
+
+      await adapter.handleWebhook(payload, 'test-secret');
+
+      expect(mockFindOrCreateUserByPlatformIdentity).not.toHaveBeenCalled();
+      expect(mockHandleMessage).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ userId: undefined })
       );
     });
   });

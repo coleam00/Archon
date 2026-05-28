@@ -33,7 +33,7 @@ mock.module('@archon/paths', () => ({
   validateAppDefaultsPaths: mock(async () => undefined),
 }));
 
-// Mock @archon/core/db/modules to throw immediately (avoid DB connection hangs in tests)
+// Mock @archon/core/db modules to throw immediately (avoid DB connection hangs in tests)
 const mockFindOrCreateUserByPlatformIdentity = mock(
   async (_platform: string, _platformUserId: string, _displayName?: string) => ({
     id: 'user-test-uuid',
@@ -46,23 +46,32 @@ const mockFindOrCreateUserByPlatformIdentity = mock(
 mock.module('@archon/core/db/users', () => ({
   findOrCreateUserByPlatformIdentity: mockFindOrCreateUserByPlatformIdentity,
 }));
+const mockGetOrCreateConversation = mock(async () => {
+  throw new Error('DB not mocked in tests');
+});
+const mockUpdateConversation = mock(async () => {
+  throw new Error('DB not mocked in tests');
+});
+const mockGetConversation = mock(async () => null);
 mock.module('@archon/core/db/conversations', () => ({
-  getOrCreateConversation: mock(async () => {
-    throw new Error('DB not mocked in tests');
-  }),
-  updateConversation: mock(async () => {
-    throw new Error('DB not mocked in tests');
-  }),
-  getConversation: mock(async () => null),
+  getOrCreateConversation: mockGetOrCreateConversation,
+  updateConversation: mockUpdateConversation,
+  getConversation: mockGetConversation,
 }));
+
+const mockFindCodebaseByRepoUrl = mock(async () => null);
+const mockCreateCodebase = mock(async () => {
+  throw new Error('DB not mocked in tests');
+});
+const mockGetCodebaseCommands = mock(async () => ({}));
+const mockUpdateCodebaseCommands = mock(async () => undefined);
+const mockUpdateCodebase = mock(async () => undefined);
 mock.module('@archon/core/db/codebases', () => ({
-  findCodebaseByRepoUrl: mock(async () => null),
-  createCodebase: mock(async () => {
-    throw new Error('DB not mocked in tests');
-  }),
-  getCodebaseCommands: mock(async () => ({})),
-  updateCodebaseCommands: mock(async () => undefined),
-  updateCodebase: mock(async () => undefined),
+  findCodebaseByRepoUrl: mockFindCodebaseByRepoUrl,
+  createCodebase: mockCreateCodebase,
+  getCodebaseCommands: mockGetCodebaseCommands,
+  updateCodebaseCommands: mockUpdateCodebaseCommands,
+  updateCodebase: mockUpdateCodebase,
 }));
 
 // Mock @archon/git to avoid real git operations in tests
@@ -78,6 +87,21 @@ mock.module('@archon/git', () => ({
   isWorktreePath: mockIsWorktreePath,
   toRepoPath: (p: string) => p,
   toBranchName: (b: string) => b,
+}));
+
+// Mock @archon/core so we can assert handleMessage call args (e.g. userId propagation)
+const mockHandleMessage = mock(async () => undefined);
+const mockOnConversationClosed = mock(async () => undefined);
+mock.module('@archon/core', () => ({
+  handleMessage: mockHandleMessage,
+  classifyAndFormatError: mock((err: Error) => err.message),
+  toError: mock((e: unknown) => (e instanceof Error ? e : new Error(String(e)))),
+  onConversationClosed: mockOnConversationClosed,
+  ConversationLockManager: class {
+    async acquireLock(_id: string, fn: () => Promise<void>): Promise<void> {
+      await fn();
+    }
+  },
 }));
 
 import { GiteaAdapter } from './adapter';
@@ -105,6 +129,8 @@ describe('GiteaAdapter', () => {
     mockCloneRepository.mockClear();
     mockSyncRepository.mockClear();
     mockAddSafeDirectory.mockClear();
+    mockHandleMessage.mockClear();
+    mockOnConversationClosed.mockClear();
     originalFetch = globalThis.fetch;
     adapter = new GiteaAdapter(
       'https://gitea.example.com',
@@ -816,6 +842,13 @@ describe('GiteaAdapter', () => {
   describe('user identity resolution', () => {
     beforeEach(() => {
       mockFindOrCreateUserByPlatformIdentity.mockClear();
+      mockFindOrCreateUserByPlatformIdentity.mockImplementation(async () => ({
+        id: 'user-test-uuid',
+        display_name: 'Test',
+        email: null,
+        created_at: new Date(),
+        updated_at: new Date(),
+      }));
     });
 
     test('calls findOrCreateUserByPlatformIdentity with gitea platform and sender login', async () => {
@@ -966,6 +999,126 @@ describe('GiteaAdapter', () => {
       expect(mockLogger.warn).toHaveBeenCalledWith(
         expect.objectContaining({ giteaLogin: 'commenter' }),
         'gitea.user_resolve_failed'
+      );
+    });
+
+    test('passes resolved archonUserId to handleMessage', async () => {
+      // Seed DB mocks so handleWebhook reaches handleMessage
+      mockGetOrCreateConversation.mockImplementation(async () => ({
+        id: 'conv-test-uuid',
+        codebase_id: 'codebase-test-uuid',
+        platform_type: 'gitea',
+        platform_conversation_id: 'testuser/testrepo#42',
+      }));
+      mockFindCodebaseByRepoUrl.mockImplementation(async () => ({
+        id: 'codebase-test-uuid',
+        repository_url: 'https://gitea.example.com/testuser/testrepo',
+        default_cwd: '/tmp/test-workspaces/testuser/testrepo/source',
+        name: 'testrepo',
+      }));
+
+      const adapter = new GiteaAdapter(
+        'https://gitea.example.com',
+        'fake-token-for-testing',
+        'fake-webhook-secret',
+        mockLockManager,
+        undefined,
+        { retryDelayMs: () => 1 }
+      );
+      // @ts-expect-error - accessing private method for testing
+      adapter.verifySignature = mock(() => true);
+
+      const payload = JSON.stringify({
+        action: 'created',
+        issue: {
+          number: 42,
+          title: 'Test Issue',
+          body: 'Description',
+          user: { login: 'user123' },
+          labels: [],
+          state: 'open',
+        },
+        comment: {
+          body: '@archon fix this',
+          user: { login: 'commenter' },
+        },
+        repository: {
+          owner: { login: 'testuser' },
+          name: 'testrepo',
+          full_name: 'testuser/testrepo',
+          html_url: 'https://gitea.example.com/testuser/testrepo',
+          default_branch: 'main',
+        },
+        sender: { login: 'senderuser' },
+      });
+
+      await adapter.handleWebhook(payload, 'mock-signature');
+
+      expect(mockHandleMessage).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ userId: 'user-test-uuid' })
+      );
+    });
+
+    test('skips user resolution when both commentAuthor and sender are missing', async () => {
+      // Seed DB mocks so handleWebhook reaches handleMessage
+      mockGetOrCreateConversation.mockImplementation(async () => ({
+        id: 'conv-test-uuid',
+        codebase_id: 'codebase-test-uuid',
+        platform_type: 'gitea',
+        platform_conversation_id: 'testuser/testrepo#42',
+      }));
+      mockFindCodebaseByRepoUrl.mockImplementation(async () => ({
+        id: 'codebase-test-uuid',
+        repository_url: 'https://gitea.example.com/testuser/testrepo',
+        default_cwd: '/tmp/test-workspaces/testuser/testrepo/source',
+        name: 'testrepo',
+      }));
+
+      const adapter = new GiteaAdapter(
+        'https://gitea.example.com',
+        'fake-token-for-testing',
+        'fake-webhook-secret',
+        mockLockManager,
+        undefined,
+        { retryDelayMs: () => 1 }
+      );
+      // @ts-expect-error - accessing private method for testing
+      adapter.verifySignature = mock(() => true);
+
+      const payload = JSON.stringify({
+        action: 'created',
+        issue: {
+          number: 42,
+          title: 'Test Issue',
+          body: 'Description',
+          user: { login: 'user123' },
+          labels: [],
+          state: 'open',
+        },
+        comment: {
+          body: '@archon fix this',
+        },
+        repository: {
+          owner: { login: 'testuser' },
+          name: 'testrepo',
+          full_name: 'testuser/testrepo',
+          html_url: 'https://gitea.example.com/testuser/testrepo',
+          default_branch: 'main',
+        },
+        // sender omitted entirely
+      });
+
+      await adapter.handleWebhook(payload, 'mock-signature');
+
+      expect(mockFindOrCreateUserByPlatformIdentity).not.toHaveBeenCalled();
+      expect(mockHandleMessage).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ userId: undefined })
       );
     });
   });
