@@ -3,6 +3,9 @@
  */
 import { z } from '@hono/zod-openapi';
 import { workflowDefinitionSchema as engineWorkflowDefinitionSchema } from '@archon/workflows/schemas/workflow';
+import { workflowRunSchema as engineWorkflowRunSchema } from '@archon/workflows/schemas/workflow-run';
+import { workflowEventRowSchema } from '@archon/core/schemas/workflow-event';
+import { dashboardWorkflowRunSchema as coreDashboardWorkflowRunSchema } from '@archon/core/schemas/workflow-run';
 
 /** Workflow definition schema — derived from engine schema via direct subpath import. */
 export const workflowDefinitionSchema =
@@ -94,21 +97,12 @@ export const workflowRunStatusSchema = z
   .enum(['pending', 'running', 'completed', 'failed', 'cancelled', 'paused'])
   .openapi('WorkflowRunStatus');
 
-/** A workflow run record. */
-export const workflowRunSchema = z
-  .object({
-    id: z.string(),
-    workflow_name: z.string(),
-    conversation_id: z.string(),
-    parent_conversation_id: z.string().nullable(),
-    codebase_id: z.string().nullable(),
-    status: workflowRunStatusSchema,
-    user_message: z.string(),
-    metadata: z.record(z.unknown()),
+/** A workflow run record (wire shape with ISO string dates). */
+export const workflowRunSchema = engineWorkflowRunSchema
+  .extend({
     started_at: z.string(),
     completed_at: z.string().nullable(),
     last_activity_at: z.string().nullable(),
-    working_path: z.string().nullable(),
   })
   .openapi('WorkflowRun');
 
@@ -117,16 +111,10 @@ export const workflowRunListResponseSchema = z
   .object({ runs: z.array(workflowRunSchema) })
   .openapi('WorkflowRunListResponse');
 
-/** A workflow event record. */
-export const workflowEventSchema = z
-  .object({
-    id: z.string(),
-    workflow_run_id: z.string(),
-    event_type: z.string(),
-    step_index: z.number().nullable(),
-    step_name: z.string().nullable(),
-    data: z.record(z.unknown()),
-    created_at: z.string(),
+/** A workflow event record (wire shape). */
+export const workflowEventSchema = workflowEventRowSchema
+  .extend({
+    created_at: z.string().datetime(),
   })
   .openapi('WorkflowEvent');
 
@@ -167,19 +155,12 @@ export const rejectWorkflowRunBodySchema = z
   .object({ reason: z.string().optional() })
   .openapi('RejectWorkflowRunBody');
 
-/** Dashboard enriched workflow run (with joined codebase/conversation data). */
-export const dashboardWorkflowRunSchema = workflowRunSchema
+/** Dashboard enriched workflow run (wire shape with ISO string dates). */
+export const dashboardWorkflowRunSchema = coreDashboardWorkflowRunSchema
   .extend({
-    codebase_name: z.string().nullable(),
-    platform_type: z.string().nullable(),
-    worker_platform_id: z.string().nullable(),
-    parent_platform_id: z.string().nullable(),
-    current_step_name: z.string().nullable(),
-    total_steps: z.number().nullable(),
-    current_step_status: z.enum(['running', 'completed', 'failed']).nullable(),
-    agents_completed: z.number().nullable(),
-    agents_failed: z.number().nullable(),
-    agents_total: z.number().nullable(),
+    started_at: z.string(),
+    completed_at: z.string().nullable(),
+    last_activity_at: z.string().nullable(),
   })
   .openapi('DashboardWorkflowRun');
 

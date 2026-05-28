@@ -73,6 +73,7 @@
         "@archon/paths": "workspace:*",
         "@archon/providers": "workspace:*",
         "@archon/workflows": "workspace:*",
+        "@hono/zod-openapi": "^0.19.6",
         "@octokit/auth-app": "^8.0.0",
         "@octokit/rest": "^22.0.0",
         "pg": "^8.11.0",

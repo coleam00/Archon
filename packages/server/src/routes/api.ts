@@ -54,6 +54,8 @@ import {
   TERMINAL_WORKFLOW_STATUSES,
 } from '@archon/workflows/schemas/workflow-run';
 import type { ApprovalContext, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import type { MessageRow } from '@archon/core/schemas/message';
+import type { DashboardWorkflowRun } from '@archon/core/schemas/workflow-run';
 import { findMarkdownFilesRecursive } from '@archon/core/utils/commands';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -1242,6 +1244,87 @@ export function registerApiRoutes(
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // API transform helpers (Date → ISO string for wire shape)
+  // ---------------------------------------------------------------------------
+
+  type ApiConversation = import('zod').infer<
+    typeof import('./schemas/conversation.schemas').conversationSchema
+  >;
+  type ApiCodebase = import('zod').infer<
+    typeof import('./schemas/codebase.schemas').codebaseSchema
+  >;
+  type ApiMessage = import('zod').infer<
+    typeof import('./schemas/conversation.schemas').messageSchema
+  >;
+  type ApiWorkflowRun = import('zod').infer<
+    typeof import('./schemas/workflow.schemas').workflowRunSchema
+  >;
+  type ApiDashboardWorkflowRun = import('zod').infer<
+    typeof import('./schemas/workflow.schemas').dashboardWorkflowRunSchema
+  >;
+
+  function toISOString(val: Date | string): string;
+  function toISOString(val: Date | string | null | undefined): string | null;
+  function toISOString(val: Date | string | null | undefined): string | null {
+    if (val === null || val === undefined) return null;
+    if (typeof val === 'string') return val;
+    return val.toISOString();
+  }
+
+  function toApiConversation(row: import('@archon/core').Conversation): ApiConversation {
+    return {
+      ...row,
+      created_at: toISOString(row.created_at),
+      updated_at: toISOString(row.updated_at),
+      deleted_at: toISOString(row.deleted_at),
+      last_activity_at: toISOString(row.last_activity_at),
+    };
+  }
+
+  function toApiCodebase(row: import('@archon/core').Codebase): ApiCodebase {
+    let commands = row.commands;
+    if (typeof commands === 'string') {
+      try {
+        commands = JSON.parse(commands) as Record<string, { path: string; description: string }>;
+      } catch (parseErr) {
+        getLog().error({ err: parseErr as Error, codebaseId: row.id }, 'corrupted_commands_json');
+        commands = {};
+      }
+    }
+    return {
+      ...row,
+      commands,
+      created_at: toISOString(row.created_at),
+      updated_at: toISOString(row.updated_at),
+    };
+  }
+
+  function toApiMessage(row: MessageRow): ApiMessage {
+    return {
+      ...row,
+      metadata: typeof row.metadata === 'string' ? row.metadata : JSON.stringify(row.metadata),
+    };
+  }
+
+  function toApiWorkflowRun(row: WorkflowRun): ApiWorkflowRun {
+    return {
+      ...row,
+      started_at: toISOString(row.started_at),
+      completed_at: toISOString(row.completed_at),
+      last_activity_at: toISOString(row.last_activity_at),
+    };
+  }
+
+  function toApiDashboardWorkflowRun(row: DashboardWorkflowRun): ApiDashboardWorkflowRun {
+    return {
+      ...row,
+      started_at: toISOString(row.started_at),
+      completed_at: toISOString(row.completed_at),
+      last_activity_at: toISOString(row.last_activity_at),
+    };
+  }
+
   // GET /api/conversations - List conversations
   registerOpenApiRoute(getConversationsRoute, async c => {
     try {
@@ -1253,7 +1336,7 @@ export function registerApiRoutes(
         codebaseId,
         true
       );
-      return c.json(conversations);
+      return c.json(conversations.map(toApiConversation));
     } catch (error) {
       getLog().error({ err: error }, 'list_conversations_failed');
       return apiError(c, 500, 'Failed to list conversations');
@@ -1268,7 +1351,7 @@ export function registerApiRoutes(
       if (!conv) {
         return apiError(c, 404, 'Conversation not found');
       }
-      return c.json(conv);
+      return c.json(toApiConversation(conv));
     } catch (error) {
       getLog().error({ err: error, platformId }, 'get_conversation_failed');
       return apiError(c, 500, 'Failed to get conversation');
@@ -1393,14 +1476,7 @@ export function registerApiRoutes(
         return apiError(c, 404, 'Conversation not found');
       }
       const messages = await messageDb.listMessages(conv.id, limit);
-      // Normalize metadata: PostgreSQL JSONB auto-deserializes to object,
-      // but frontend expects JSON string. SQLite returns string already.
-      return c.json(
-        messages.map(m => ({
-          ...m,
-          metadata: typeof m.metadata === 'string' ? m.metadata : JSON.stringify(m.metadata),
-        }))
-      );
+      return c.json(messages.map(toApiMessage));
     } catch (error) {
       getLog().error({ err: error }, 'list_messages_failed');
       return apiError(c, 500, 'Failed to list messages');
@@ -1685,20 +1761,7 @@ export function registerApiRoutes(
       deduped.push(...seen.values());
       deduped.sort((a, b) => a.name.localeCompare(b.name));
 
-      return c.json(
-        deduped.map(cb => {
-          let commands = cb.commands;
-          if (typeof commands === 'string') {
-            try {
-              commands = JSON.parse(commands);
-            } catch (parseErr) {
-              getLog().error({ err: parseErr, codebaseId: cb.id }, 'corrupted_commands_json');
-              commands = {};
-            }
-          }
-          return { ...cb, commands };
-        })
-      );
+      return c.json(deduped.map(toApiCodebase));
     } catch (error) {
       getLog().error({ err: error }, 'list_codebases_failed');
       return apiError(c, 500, 'Failed to list codebases');
@@ -1712,16 +1775,7 @@ export function registerApiRoutes(
       if (!codebase) {
         return apiError(c, 404, 'Codebase not found');
       }
-      let commands = codebase.commands;
-      if (typeof commands === 'string') {
-        try {
-          commands = JSON.parse(commands);
-        } catch (parseErr) {
-          getLog().error({ err: parseErr, codebaseId: codebase.id }, 'corrupted_commands_json');
-          commands = {};
-        }
-      }
-      return c.json({ ...codebase, commands });
+      return c.json(toApiCodebase(codebase));
     } catch (error) {
       getLog().error({ err: error }, 'get_codebase_failed');
       return apiError(c, 500, 'Failed to get codebase');
@@ -1744,7 +1798,7 @@ export function registerApiRoutes(
         return apiError(c, 500, 'Codebase created but not found');
       }
 
-      return c.json(codebase, result.alreadyExisted ? 200 : 201);
+      return c.json(toApiCodebase(codebase), result.alreadyExisted ? 200 : 201);
     } catch (error) {
       getLog().error({ err: error }, 'add_codebase_failed');
       return apiError(
@@ -2084,7 +2138,10 @@ export function registerApiRoutes(
         limit,
         offset,
       });
-      return c.json(result);
+      return c.json({
+        ...result,
+        runs: result.runs.map(toApiDashboardWorkflowRun),
+      });
     } catch (error) {
       getLog().error({ err: error }, 'list_dashboard_runs_failed');
       return apiError(c, 500, 'Failed to list dashboard runs');
@@ -2358,7 +2415,7 @@ export function registerApiRoutes(
         limit,
         codebaseId,
       });
-      return c.json({ runs });
+      return c.json({ runs: runs.map(toApiWorkflowRun) });
     } catch (error) {
       getLog().error({ err: error }, 'list_workflow_runs_failed');
       return apiError(c, 500, 'Failed to list workflow runs');
@@ -2374,7 +2431,7 @@ export function registerApiRoutes(
       if (!run) {
         return apiError(c, 404, 'No workflow run found for this worker');
       }
-      return c.json({ run });
+      return c.json({ run: toApiWorkflowRun(run) });
     } catch (error) {
       getLog().error({ err: error }, 'workflow_run_by_worker_lookup_failed');
       return apiError(c, 500, 'Failed to look up workflow run');
@@ -2416,7 +2473,7 @@ export function registerApiRoutes(
 
       return c.json({
         run: {
-          ...run,
+          ...toApiWorkflowRun(run),
           worker_platform_id: workerPlatformId,
           parent_platform_id: parentPlatformId,
           conversation_platform_id: conversationPlatformId ?? null,

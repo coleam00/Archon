@@ -20,7 +20,9 @@
     "./config/resolve-assistant": "./src/config/resolve-assistant.ts",
     "./utils/*": "./src/utils/*.ts",
     "./services/*": "./src/services/*.ts",
-    "./state/*": "./src/state/*.ts"
+    "./state/*": "./src/state/*.ts",
+    "./schemas": "./src/schemas/index.ts",
+    "./schemas/*": "./src/schemas/*.ts"
   },
   "scripts": {
     "test": "bun test src/handlers/command-handler.test.ts && bun test src/handlers/clone.test.ts && bun test src/db/adapters/postgres.test.ts && bun test src/db/connection.test.ts && bun test src/db/adapters/sqlite.test.ts src/db/codebases.test.ts src/db/conversations.test.ts src/db/env-vars.test.ts src/db/isolation-environments.test.ts src/db/messages.test.ts src/db/sessions.test.ts src/db/users.test.ts src/db/workflow-events.test.ts src/db/workflows.test.ts src/utils/defaults-copy.test.ts src/utils/worktree-sync.test.ts src/utils/conversation-lock.test.ts src/utils/credential-sanitizer.test.ts src/utils/port-allocation.test.ts src/utils/error.test.ts src/utils/error-formatter.test.ts src/utils/github-graphql.test.ts src/config/ src/state/ && bun test src/utils/path-validation.test.ts && bun test src/services/cleanup-service.test.ts && bun test src/services/title-generator.test.ts && bun test src/workflows/ && bun test src/operations/workflow-operations.test.ts && bun test src/operations/isolation-operations.test.ts && bun test src/orchestrator/orchestrator.test.ts && bun test src/orchestrator/orchestrator-agent.test.ts && bun test src/orchestrator/orchestrator-isolation.test.ts && bun test src/github-auth/auth.test.ts",
@@ -33,6 +35,7 @@
     "@archon/paths": "workspace:*",
     "@archon/providers": "workspace:*",
     "@archon/workflows": "workspace:*",
+    "@hono/zod-openapi": "^0.19.6",
     "@octokit/auth-app": "^8.0.0",
     "@octokit/rest": "^22.0.0",
     "pg": "^8.11.0",
