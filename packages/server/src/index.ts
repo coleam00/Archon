@@ -79,6 +79,11 @@ import {
   loadConfig,
   logConfig,
   getPort,
+  createGitHubAppAuthProvider,
+  loadAppPrivateKey,
+  registerGitHubAppAuthProvider,
+  type GitHubAuth,
+  type IGitHubAppAuthProvider,
 } from '@archon/core';
 import type { IPlatformAdapter } from '@archon/core';
 import type { IdentityPlatform } from '@archon/core';
@@ -302,6 +307,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
   // Platform adapters (skipped in CLI serve mode or when not configured)
   let github: GitHubAdapter | null = null;
+  let githubAppAuthProvider: IGitHubAppAuthProvider | null = null;
   let gitea: GiteaAdapter | null = null;
   let gitlab: GitLabAdapter | null = null;
   let discord: DiscordAdapter | null = null;
@@ -312,7 +318,13 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     // Check that at least one platform is configured
     const hasTelegram = Boolean(process.env.TELEGRAM_BOT_TOKEN);
     const hasDiscord = Boolean(process.env.DISCORD_BOT_TOKEN);
-    const hasGitHub = Boolean(process.env.GITHUB_TOKEN && process.env.WEBHOOK_SECRET);
+    const hasGitHubApp = Boolean(
+      process.env.GITHUB_APP_ID &&
+      (process.env.GITHUB_APP_PRIVATE_KEY || process.env.GITHUB_APP_PRIVATE_KEY_PATH) &&
+      process.env.WEBHOOK_SECRET
+    );
+    const hasGitHubPat = Boolean(process.env.GITHUB_TOKEN && process.env.WEBHOOK_SECRET);
+    const hasGitHub = hasGitHubApp || hasGitHubPat;
     const hasGitea = Boolean(
       process.env.GITEA_URL && process.env.GITEA_TOKEN && process.env.GITEA_WEBHOOK_SECRET
     );
@@ -322,18 +334,62 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       getLog().warn('no_platform_adapters_configured');
     }
 
-    // Initialize GitHub adapter (conditional)
-    if (process.env.GITHUB_TOKEN && process.env.WEBHOOK_SECRET) {
+    // GitHub adapter: dual-mode (App vs PAT). Fail fast if both are configured —
+    // silently preferring one would create 3am debugging sessions for an operator
+    // who copy-pasted half a config and didn't realise the other half was already
+    // set in /etc/archon/.env. (PRD: "fail-fast on misconfig".)
+    if (hasGitHubApp && hasGitHubPat) {
+      throw new Error(
+        'GitHub adapter misconfigured: both App mode (GITHUB_APP_ID) and PAT mode ' +
+          '(GITHUB_TOKEN) are configured. Pick one — unset GITHUB_TOKEN for App mode, ' +
+          'or unset GITHUB_APP_ID for PAT mode.'
+      );
+    }
+
+    if (hasGitHubApp) {
+      // Locals avoid `!` non-null assertions: hasGitHubApp already guarantees
+      // GITHUB_APP_ID and WEBHOOK_SECRET are set, but the linter can't infer that.
+      const appId = process.env.GITHUB_APP_ID;
+      const webhookSecret = process.env.WEBHOOK_SECRET;
+      if (!appId || !webhookSecret) {
+        throw new Error('GitHub App mode misconfigured: GITHUB_APP_ID and WEBHOOK_SECRET required');
+      }
+      const privateKey = loadAppPrivateKey();
+      const defaultInstallationId = process.env.GITHUB_APP_INSTALLATION_ID
+        ? Number(process.env.GITHUB_APP_INSTALLATION_ID)
+        : undefined;
+      githubAppAuthProvider = createGitHubAppAuthProvider({
+        appId,
+        privateKey,
+        slug: process.env.GITHUB_APP_SLUG ?? 'archon',
+        defaultInstallationId,
+      });
+      // Register on the module-level singleton consumed by createWorkflowDeps()
+      // so bash/script subprocess env injection picks up the provider.
+      registerGitHubAppAuthProvider(githubAppAuthProvider);
       const botMention =
         process.env.GITHUB_BOT_MENTION || process.env.BOT_DISPLAY_NAME || config.botName;
-      github = new GitHubAdapter(
-        process.env.GITHUB_TOKEN,
-        process.env.WEBHOOK_SECRET,
-        lockManager,
-        botMention
+      const auth: GitHubAuth = { kind: 'app', provider: githubAppAuthProvider };
+      github = new GitHubAdapter(auth, webhookSecret, lockManager, botMention);
+      await github.start();
+      activePlatforms.push('GitHub (App)');
+      getLog().info(
+        { slug: githubAppAuthProvider.slug, defaultInstallationId },
+        'github.adapter_mode_app'
       );
+    } else if (hasGitHubPat) {
+      const patToken = process.env.GITHUB_TOKEN;
+      const webhookSecret = process.env.WEBHOOK_SECRET;
+      if (!patToken || !webhookSecret) {
+        throw new Error('GitHub PAT mode misconfigured: GITHUB_TOKEN and WEBHOOK_SECRET required');
+      }
+      const botMention =
+        process.env.GITHUB_BOT_MENTION || process.env.BOT_DISPLAY_NAME || config.botName;
+      const auth: GitHubAuth = { kind: 'pat', token: patToken };
+      github = new GitHubAdapter(auth, webhookSecret, lockManager, botMention);
       await github.start();
       activePlatforms.push('GitHub');
+      getLog().info('github.adapter_mode_pat');
     } else {
       getLog().info('github_adapter_skipped');
     }
@@ -570,6 +626,42 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     getLog().info('github_webhook_registered');
   }
 
+  // Internal endpoint: git credential helper.
+  //
+  // SECURITY: hands out live installation access tokens to anyone who can hit
+  // this URL. MUST be exposed on 127.0.0.1 only — the reverse proxy in front
+  // of Archon must NOT forward `/internal/*`. The startup WARN below fires when
+  // the operator binds the server to 0.0.0.0 with App mode active, making the
+  // misconfiguration obvious in logs.
+  if (github?.getAuthMode() === 'app') {
+    app.post('/internal/git-credential', async c => {
+      try {
+        const body = (await c.req.json().catch(() => null)) as {
+          host?: string;
+          path?: string;
+        } | null;
+        if (body?.host !== 'github.com') {
+          return c.json({ error: 'unsupported host' }, 400);
+        }
+        const pathStr = body.path ?? '';
+        // `owner/repo` or `owner/repo.git` — the helper sends this verbatim from
+        // the URL git is authenticating against.
+        const match = /^([^/]+)\/([^/]+?)(?:\.git)?$/.exec(pathStr);
+        if (!match) {
+          return c.json({ error: 'unparseable path' }, 400);
+        }
+        const owner = match[1];
+        const repo = match[2];
+        const token = await github.getInstallationToken(owner, repo);
+        return c.json({ token });
+      } catch (err) {
+        getLog().warn({ err }, 'internal.git_credential_resolve_failed');
+        return c.json({ error: 'resolution failed' }, 500);
+      }
+    });
+    getLog().info('internal_git_credential_endpoint_registered');
+  }
+
   // Gitea webhook endpoint
   if (gitea) {
     app.post('/webhooks/gitea', async c => {
@@ -671,6 +763,15 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     idleTimeout: 255, // Max value (seconds) - prevents SSE connections from being killed
   });
   getLog().info({ port: server.port, hostname }, 'server_listening');
+
+  // Security guardrail: /internal/git-credential hands out live installation
+  // access tokens. If App mode is active and the server is bound to a
+  // non-loopback interface, the reverse proxy in front of Archon MUST be
+  // configured to drop /internal/*. We can't enforce that here, so emit a
+  // loud warning operators will see in startup logs.
+  if (githubAppAuthProvider && hostname !== '127.0.0.1' && hostname !== 'localhost') {
+    getLog().warn({ hostname }, 'github_app.internal_endpoint_exposed_check_reverse_proxy');
+  }
 
   // Initialize Telegram adapter (conditional, skipped in CLI serve mode)
   let telegram: TelegramAdapter | null = null;

@@ -86,6 +86,59 @@ async function sendCriticalMessage(
 }
 
 /**
+ * Parse `owner/repo` from a github.com URL. Returns null for non-GitHub URLs
+ * so the caller can fall through to env-inheritance.
+ *
+ *   https://github.com/owner/repo.git   → { owner, repo }
+ *   https://github.com/owner/repo       → { owner, repo }
+ *   git@github.com:owner/repo.git       → { owner, repo }
+ *   <anything else>                     → null
+ */
+function parseGithubRepoUrl(url: string): { owner: string; repo: string } | null {
+  // HTTPS form
+  const https = /^https?:\/\/(?:www\.)?github\.com\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/i.exec(url);
+  if (https) return { owner: https[1], repo: https[2] };
+  // SSH form (git@github.com:owner/repo[.git])
+  const ssh = /^git@github\.com:([^/]+)\/([^/]+?)(?:\.git)?$/i.exec(url);
+  if (ssh) return { owner: ssh[1], repo: ssh[2] };
+  return null;
+}
+
+/**
+ * Resolve a fresh GH_TOKEN/GITHUB_TOKEN pair from the registered bot-token
+ * provider, if any. Used at the top of executeWorkflow to inject the token
+ * into the workflow's envVars so bash/script subprocesses pick it up.
+ *
+ * Contract: NEVER THROWS. On any failure (no codebase, non-GitHub URL,
+ * provider rejected, network blip) returns {} — the workflow continues with
+ * whatever env inheritance was already in place. This matches the
+ * resolveBotGitHubToken? contract in deps.ts.
+ */
+async function resolveBotGitHubEnvForWorkflow(
+  deps: WorkflowDeps,
+  codebaseId: string | undefined
+): Promise<Record<string, string>> {
+  if (!codebaseId || !deps.resolveBotGitHubToken) return {};
+  try {
+    const codebase = await deps.store.getCodebase(codebaseId);
+    if (!codebase?.repository_url) return {};
+    const parsed = parseGithubRepoUrl(codebase.repository_url);
+    if (!parsed) return {};
+    const token = await deps.resolveBotGitHubToken(parsed.owner, parsed.repo);
+    if (!token) return {};
+    getLog().debug(
+      { owner: parsed.owner, repo: parsed.repo },
+      'workflow.bot_github_token_injected'
+    );
+    return { GH_TOKEN: token, GITHUB_TOKEN: token };
+  } catch (err) {
+    // Resolution failure must not block the workflow — log and fall back.
+    getLog().warn({ err: err as Error, codebaseId }, 'workflow.bot_github_token_resolve_failed');
+    return {};
+  }
+}
+
+/**
  * Resolve the artifacts and log directories for a workflow run.
  * Looks up the codebase by ID once, parses owner/repo, and returns project-scoped paths.
  * Falls back to cwd-based paths for unregistered repos.
@@ -239,9 +292,22 @@ export async function executeWorkflow(
   // Load config once for the entire workflow execution
   const fileConfig = await deps.loadConfig(cwd);
   const dbEnvVars = codebaseId ? await deps.store.getCodebaseEnvVars(codebaseId) : {};
+  // Resolve a fresh bot GitHub token once at workflow start when:
+  //   (a) the codebase URL is a github.com repo, and
+  //   (b) deps.resolveBotGitHubToken is registered (App mode).
+  // Injected into envVars so bash/script subprocesses authenticate `gh` and
+  // initial `git push` via inherited GH_TOKEN. Workflows that run >1h still
+  // need the credential helper for live token rotation (handled at clone
+  // time in the GitHub adapter), but the env injection is enough for the
+  // typical <1h workflow.
+  const botGitHubEnv = await resolveBotGitHubEnvForWorkflow(deps, codebaseId);
   const config: WorkflowConfig = {
     ...fileConfig,
-    envVars: { ...fileConfig.envVars, ...dbEnvVars },
+    // Order: file < db < bot-token. Per-codebase env vars are operator-set; the
+    // injected bot token is system-set and represents the live identity for
+    // workflow-driven `gh`/`git push` operations — it must win to avoid a
+    // stale or wrong token leaking from a `GH_TOKEN=` line in .archon/.env.
+    envVars: { ...fileConfig.envVars, ...dbEnvVars, ...botGitHubEnv },
   };
   const configuredCommandFolder = config.commands.folder;
 
