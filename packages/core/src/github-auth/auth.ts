@@ -2,24 +2,26 @@
  * GitHub App auth provider factory.
  *
  * Two-level cache:
- *   1. lookupCache: `owner/repo → installationId` (1h TTL; refreshed on 401)
+ *   1. lookupCache: `owner/repo → installationId` (1h TTL; evicted on 401 via
+ *      invalidateRepo so an App reinstall — which assigns a NEW installation
+ *      id — doesn't lock us into the stale id for the full hour).
  *   2. tokenCache:  `installationId → CachedInstallationToken` (1h GitHub TTL,
- *      we refresh 5min before expiry on access)
+ *      we refresh 5min before expiry on access).
  *
  * No background timers — refresh-on-access only. The cache lookup itself
  * decides whether to issue a new token; no setInterval, no leaked handles,
  * survives process suspend/resume cleanly.
  *
- * 401 handling: `invalidateToken(installationId)` evicts the cached token.
- * The adapter wraps its Octokit calls in a single-retry helper that calls
- * this, refreshes, and retries — so the auth module stays purely cache-aware
+ * 401 handling: `invalidateRepo(owner, repo)` evicts BOTH caches for that
+ * repo. The adapter wraps its Octokit calls in a single-retry helper that
+ * calls this and re-resolves, so the auth module stays purely cache-aware
  * rather than retry-aware.
  */
 import { Octokit } from '@octokit/rest';
 import { createAppAuth } from '@octokit/auth-app';
 import { createLogger } from '@archon/paths';
 import type { GitHubAppConfig, IGitHubAppAuthProvider, CachedInstallationToken } from './types';
-import { AppNotInstalledError } from './errors';
+import { AppNotInstalledError, AppPrivateKeyError } from './errors';
 
 /** Refresh the cached token if it will expire within this window (ms). */
 const REFRESH_BUFFER_MS = 5 * 60 * 1000;
@@ -43,6 +45,20 @@ function lookupKey(owner: string, repo: string): string {
 }
 
 export function createGitHubAppAuthProvider(config: GitHubAppConfig): IGitHubAppAuthProvider {
+  // Validate config at the boundary so misconfiguration surfaces at server
+  // bootstrap, not at the first webhook. loadAppPrivateKey already enforces
+  // the same "fail at start" contract for the PEM.
+  if (!config.appId.trim()) {
+    throw new AppPrivateKeyError(
+      'createGitHubAppAuthProvider: appId is empty. Set GITHUB_APP_ID to the numeric App ID.'
+    );
+  }
+  if (!config.slug.trim()) {
+    throw new AppPrivateKeyError(
+      'createGitHubAppAuthProvider: slug is empty. Set GITHUB_APP_SLUG to the App slug.'
+    );
+  }
+
   // App-level Octokit (uses JWT). Used for `/repos/{owner}/{repo}/installation`
   // lookups and for issuing installation access tokens.
   const appOctokit = new Octokit({
@@ -84,19 +100,30 @@ export function createGitHubAppAuthProvider(config: GitHubAppConfig): IGitHubApp
 
   async function getInstallationTokenById(installationId: number): Promise<string> {
     const cached = tokenCache.get(installationId);
-    if (cached && Date.now() + REFRESH_BUFFER_MS < cached.expiresAt) {
+    if (cached && Date.now() + REFRESH_BUFFER_MS < cached.expiresAtMs) {
       return cached.token;
     }
     getLog().debug({ installationId }, 'github_auth.token_resolve_started');
-    const res = await appOctokit.request(
-      'POST /app/installations/{installation_id}/access_tokens',
-      { installation_id: installationId }
-    );
-    const token = res.data.token;
-    const expiresAt = new Date(res.data.expires_at).getTime();
-    tokenCache.set(installationId, { token, expiresAt });
-    getLog().info({ installationId, expiresAt }, 'github_auth.token_resolve_completed');
-    return token;
+    try {
+      const res = await appOctokit.request(
+        'POST /app/installations/{installation_id}/access_tokens',
+        { installation_id: installationId }
+      );
+      const token = res.data.token;
+      const expiresAtMs = new Date(res.data.expires_at).getTime();
+      tokenCache.set(installationId, { token, expiresAtMs });
+      getLog().info({ installationId, expiresAtMs }, 'github_auth.token_resolve_completed');
+      return token;
+    } catch (err) {
+      // Surface the installationId in logs — without this the upstream
+      // handler only sees "401 from Octokit" with no link back to which
+      // installation died.
+      getLog().error(
+        { err, installationId, status: (err as { status?: number }).status },
+        'github_auth.token_resolve_failed'
+      );
+      throw err;
+    }
   }
 
   async function getInstallationToken(owner: string, repo: string): Promise<string> {
@@ -133,7 +160,41 @@ export function createGitHubAppAuthProvider(config: GitHubAppConfig): IGitHubApp
 
   function invalidateToken(installationId: number): void {
     tokenCache.delete(installationId);
+    // Cascade: drop any owner/repo lookups pointing at this dead id so the
+    // next call re-resolves via GET /repos/.../installation instead of
+    // serving the stale id from cache. Matters when an App is uninstalled +
+    // reinstalled — the reinstall gets a NEW id, but the old lookupCache
+    // entry would map to the old (now-dead) id until 1h TTL expiry.
+    for (const [key, entry] of lookupCache) {
+      if (entry.installationId === installationId) {
+        lookupCache.delete(key);
+      }
+    }
     getLog().info({ installationId }, 'github_auth.token_cache_evicted_on_401');
+  }
+
+  function invalidateRepo(owner: string, repo: string): void {
+    const key = lookupKey(owner, repo);
+    const lookup = lookupCache.get(key);
+    if (lookup) {
+      tokenCache.delete(lookup.installationId);
+      lookupCache.delete(key);
+      getLog().info(
+        { owner, repo, installationId: lookup.installationId },
+        'github_auth.repo_cache_evicted_on_401'
+      );
+      return;
+    }
+    // No cached lookup (default-installation-id mode, or the cache TTL'd
+    // since the call that 401'd). Still evict the default-install token
+    // when applicable so the next call re-issues.
+    if (config.defaultInstallationId) {
+      tokenCache.delete(config.defaultInstallationId);
+      getLog().info(
+        { owner, repo, installationId: config.defaultInstallationId },
+        'github_auth.default_install_token_evicted_on_401'
+      );
+    }
   }
 
   return {
@@ -144,5 +205,6 @@ export function createGitHubAppAuthProvider(config: GitHubAppConfig): IGitHubApp
     resolveInstallationId,
     primeInstallationLookup,
     invalidateToken,
+    invalidateRepo,
   };
 }

@@ -28,7 +28,8 @@ export interface GitHubAppConfig {
 /** A cached installation token with its absolute expiry timestamp (ms epoch). */
 export interface CachedInstallationToken {
   token: string;
-  expiresAt: number;
+  /** Absolute expiry timestamp in milliseconds since epoch (suffix indicates unit). */
+  expiresAtMs: number;
 }
 
 /**
@@ -71,4 +72,13 @@ export interface IGitHubAppAuthProvider {
 
   /** Force-evict a cached token (called on 401 to trigger a refresh). */
   invalidateToken(installationId: number): void;
+
+  /**
+   * Force-evict the cached install + token for (owner, repo). Used on 401
+   * from a per-installation Octokit so the next call re-resolves the
+   * installation id (App uninstall + reinstall assigns a NEW id; the stale
+   * lookupCache entry would otherwise serve the dead id for up to 1h).
+   * Synchronous because the lookup entry is the one we just populated.
+   */
+  invalidateRepo(owner: string, repo: string): void;
 }

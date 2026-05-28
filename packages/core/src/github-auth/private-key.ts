@@ -18,15 +18,21 @@ import { AppPrivateKeyError } from './errors';
 export function loadAppPrivateKey(env: NodeJS.ProcessEnv = process.env): string {
   const inline = env.GITHUB_APP_PRIVATE_KEY;
   if (inline?.trim()) {
-    // Allow `KEY="...\n..."` style .env values where newlines are escape-encoded.
-    const normalized = inline.includes('\\n') ? inline.replace(/\\n/g, '\n') : inline;
+    // Allow `KEY="...\n..."` style .env values where newlines are escape-
+    // encoded. Both `\\n` (two-char escape from a quoted .env value) and
+    // `\\r\\n` (Windows-edited .env) collapse to real `\n`.
+    const normalized = inline.replace(/\\r\\n|\\n/g, '\n').replace(/\r\n/g, '\n');
     assertLooksLikePem(normalized);
     return normalized;
   }
   const path = env.GITHUB_APP_PRIVATE_KEY_PATH;
   if (path?.trim()) {
     try {
-      const contents = readFileSync(path, 'utf8');
+      const raw = readFileSync(path, 'utf8');
+      // Windows-edited .pem files arrive with CRLF; OpenSSL tolerates it but
+      // some SSH-style key parsers don't. Normalise so downstream JWT signing
+      // never has to care.
+      const contents = raw.replace(/\r\n/g, '\n');
       assertLooksLikePem(contents);
       return contents;
     } catch (err) {

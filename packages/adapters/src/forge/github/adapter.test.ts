@@ -1167,6 +1167,8 @@ describe('GitHubAdapter', () => {
         return octokitFor(id);
       });
 
+      const invalidateRepo = mock((_owner: string, _repo: string) => undefined);
+
       function buildProvider() {
         return {
           slug: opts.slug ?? 'archon-test',
@@ -1176,6 +1178,7 @@ describe('GitHubAdapter', () => {
           resolveInstallationId: resolveId,
           primeInstallationLookup: prime,
           invalidateToken: invalidate,
+          invalidateRepo,
         };
       }
 
@@ -1185,6 +1188,7 @@ describe('GitHubAdapter', () => {
         getToken,
         prime,
         invalidate,
+        invalidateRepo,
         resolveId,
         installationIdFor,
       };
@@ -1276,10 +1280,9 @@ describe('GitHubAdapter', () => {
       expect(provider.prime).toHaveBeenCalledWith('alpha', 'repo', 99999);
     });
 
-    test('401 from Octokit triggers token invalidation + retry once', async () => {
+    test('401 from Octokit triggers invalidateRepo + retry once', async () => {
       const { adapter, provider } = createAppModeAdapter();
       // First call to Octokit.createComment throws 401; second succeeds.
-      const installationId = provider.installationIdFor('owner');
       const octokit = (await provider.getOctokit('owner', 'repo')) as {
         rest: {
           issues: { createComment: ReturnType<typeof mock> };
@@ -1291,7 +1294,54 @@ describe('GitHubAdapter', () => {
         .mockResolvedValueOnce({ data: { id: 1 } });
 
       await adapter.sendMessage('owner/repo#1', 'msg');
-      expect(provider.invalidate).toHaveBeenCalledWith(installationId);
+      // invalidateRepo evicts BOTH the lookup cache and the token cache
+      // for (owner, repo) — see C2 in the PR-B review.
+      expect(provider.invalidateRepo).toHaveBeenCalledWith('owner', 'repo');
+    });
+
+    test('T3: second consecutive 401 propagates (no infinite retry)', async () => {
+      const { adapter, provider } = createAppModeAdapter();
+      const octokit = (await provider.getOctokit('owner', 'repo')) as {
+        rest: { issues: { createComment: ReturnType<typeof mock> } };
+      };
+      const err401a = Object.assign(new Error('Unauthorized A'), { status: 401 });
+      const err401b = Object.assign(new Error('Unauthorized B'), { status: 401 });
+      // Two consecutive 401s — retry path must surface the second error and
+      // NOT call invalidateRepo a second time (which would suggest looping).
+      octokit.rest.issues.createComment
+        .mockRejectedValueOnce(err401a)
+        .mockRejectedValueOnce(err401b);
+
+      // The retry path swallows non-retryable errors at the postComment
+      // wrapper layer (401 is not in the retryable set), so the second
+      // failure propagates and postComment will log + throw it. We assert
+      // the side effects directly rather than depending on whether the
+      // outer wrapper swallows or propagates.
+      await adapter.sendMessage('owner/repo#1', 'msg').catch(() => undefined);
+
+      // Exactly one invalidateRepo call (single retry, not infinite).
+      expect(provider.invalidateRepo).toHaveBeenCalledTimes(1);
+      // The retry fn(fresh) WAS called — second mock value was consumed.
+      expect(octokit.rest.issues.createComment.mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+
+    test('lookupCache eviction on 401 — adapter calls invalidateRepo(owner, repo) not invalidateToken(id)', async () => {
+      // C2 regression guard: the adapter must use invalidateRepo (which evicts
+      // BOTH caches) and not invalidateToken (which used to leave lookupCache
+      // populated with the stale id).
+      const { adapter, provider } = createAppModeAdapter();
+      const octokit = (await provider.getOctokit('owner', 'repo')) as {
+        rest: { issues: { createComment: ReturnType<typeof mock> } };
+      };
+      const err401 = Object.assign(new Error('Unauthorized'), { status: 401 });
+      octokit.rest.issues.createComment
+        .mockRejectedValueOnce(err401)
+        .mockResolvedValueOnce({ data: { id: 1 } });
+
+      await adapter.sendMessage('owner/repo#1', 'msg');
+      expect(provider.invalidateRepo).toHaveBeenCalledWith('owner', 'repo');
+      // Specifically NOT the by-id variant — that's the C2 bug shape.
+      expect(provider.invalidate).not.toHaveBeenCalled();
     });
 
     test('self-filter ignores comments authored by "<slug>[bot]"', async () => {

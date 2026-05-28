@@ -125,6 +125,32 @@ describe('loadAppPrivateKey', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test('normalizes CRLF in file-loaded PEMs (Windows-edited .pem)', () => {
+    // T5: Windows-edited .pem arrives with \r\n line endings. JWT signing
+    // libraries vary in tolerance; we normalise so downstream signing never
+    // sees CRLF.
+    const dir = mkdtempSync(join(tmpdir(), 'gh-auth-test-'));
+    const path = join(dir, 'app.pem');
+    const crlfPem = REAL_PEM.replace(/\n/g, '\r\n');
+    writeFileSync(path, crlfPem);
+    process.env.GITHUB_APP_PRIVATE_KEY_PATH = path;
+    try {
+      const loaded = loadAppPrivateKey();
+      expect(loaded.includes('\r')).toBe(false);
+      expect(loaded).toBe(REAL_PEM);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('normalizes literal \\r\\n in inline value', () => {
+    // T5: Windows-edited .env quoted PEM survives as `\\r\\n`; we collapse it.
+    process.env.GITHUB_APP_PRIVATE_KEY = REAL_PEM.replace(/\n/g, '\\r\\n');
+    const loaded = loadAppPrivateKey();
+    expect(loaded.includes('\r')).toBe(false);
+    expect(loaded).toBe(REAL_PEM);
+  });
 });
 
 describe('getInstallationToken', () => {
@@ -231,6 +257,105 @@ describe('invalidateToken', () => {
     const second = await provider.getInstallationToken('o', 'r');
     expect(second).toBe('ghs_second');
     expect(mockRequest).toHaveBeenCalledTimes(2);
+  });
+
+  test('cascades lookupCache eviction so an App reinstall picks up the new id', async () => {
+    // C2 regression: invalidateToken used to leave the lookupCache populated,
+    // so an App uninstall+reinstall (which assigns a NEW installationId)
+    // would keep resolving to the dead OLD id for up to 1h.
+    const provider = makeProvider();
+    // First sequence: install lookup → token issue (OLD id = 11)
+    mockRequest
+      .mockResolvedValueOnce({ status: 200, data: { id: 11 } })
+      .mockResolvedValueOnce(tokenResponse('ghs_pre_reinstall', 3600));
+    await provider.getInstallationToken('o', 'r');
+
+    // App is uninstalled + reinstalled — the next install lookup should
+    // return the NEW id. Without the cascade, the cached lookupCache would
+    // short-circuit and we'd serve the dead OLD id forever.
+    provider.invalidateToken(11);
+
+    mockRequest
+      .mockResolvedValueOnce({ status: 200, data: { id: 22 } }) // NEW id
+      .mockResolvedValueOnce(tokenResponse('ghs_post_reinstall', 3600));
+    const fresh = await provider.getInstallationToken('o', 'r');
+    expect(fresh).toBe('ghs_post_reinstall');
+    // 4 calls total: 2 lookups + 2 token issues (lookup re-ran post-eviction).
+    expect(mockRequest).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe('invalidateRepo', () => {
+  test('evicts both lookup and token caches for the repo', async () => {
+    const provider = makeProvider();
+    mockRequest
+      .mockResolvedValueOnce({ status: 200, data: { id: 77 } })
+      .mockResolvedValueOnce(tokenResponse('ghs_before', 3600));
+    await provider.getInstallationToken('o', 'r');
+
+    provider.invalidateRepo('o', 'r');
+
+    // Next call should re-resolve install AND re-issue token (because both
+    // caches were evicted in one call).
+    mockRequest
+      .mockResolvedValueOnce({ status: 200, data: { id: 88 } }) // potentially new id
+      .mockResolvedValueOnce(tokenResponse('ghs_after', 3600));
+    const after = await provider.getInstallationToken('o', 'r');
+    expect(after).toBe('ghs_after');
+  });
+
+  test('default-install mode: invalidateRepo evicts the singleton token', async () => {
+    const provider = makeProvider({ defaultInstallationId: 123 });
+    mockRequest
+      .mockResolvedValueOnce(tokenResponse('ghs_one', 3600))
+      .mockResolvedValueOnce(tokenResponse('ghs_two', 3600));
+    const first = await provider.getInstallationToken('o', 'r');
+    expect(first).toBe('ghs_one');
+
+    provider.invalidateRepo('o', 'r');
+
+    const second = await provider.getInstallationToken('o', 'r');
+    expect(second).toBe('ghs_two');
+  });
+});
+
+describe('cache TTL boundaries', () => {
+  test('T6: 1h lookupCache TTL — boundary just inside still serves cached, just outside re-queries', async () => {
+    const realNow = Date.now;
+    const baseTime = 1_700_000_000_000;
+    let mockedNow = baseTime;
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- swapping a method ref is the whole point
+    Date.now = () => mockedNow;
+
+    try {
+      const provider = makeProvider();
+      // First call populates lookup at t0.
+      mockRequest
+        .mockResolvedValueOnce({ status: 200, data: { id: 555 } })
+        .mockResolvedValueOnce(tokenResponse('ghs_t0', 3600));
+      await provider.getInstallationToken('o', 'r');
+      expect(mockRequest).toHaveBeenCalledTimes(2);
+
+      // Advance to t0 + 59min59s — should still hit the lookup cache.
+      mockedNow = baseTime + 60 * 60 * 1000 - 1_000;
+      mockRequest.mockResolvedValueOnce(tokenResponse('ghs_t59', 3600));
+      const within = await provider.getInstallationToken('o', 'r');
+      expect(within).toBe('ghs_t59');
+      // Only +1 call (token re-issue because the previous token would be
+      // within refresh buffer at this point). Lookup did NOT re-run.
+      expect(mockRequest).toHaveBeenCalledTimes(3);
+
+      // Advance to t0 + 1h + 1ms — must re-query the lookup endpoint. The
+      // token cached at t0+59m59s expires at t0+1h59m59s, so at t0+1h+1ms
+      // it's still fresh (5min refresh buffer doesn't trip). One new call
+      // for the lookup; no new token issue.
+      mockedNow = baseTime + 60 * 60 * 1000 + 1;
+      mockRequest.mockResolvedValueOnce({ status: 200, data: { id: 555 } });
+      await provider.getInstallationToken('o', 'r');
+      expect(mockRequest).toHaveBeenCalledTimes(4);
+    } finally {
+      Date.now = realNow;
+    }
   });
 });
 

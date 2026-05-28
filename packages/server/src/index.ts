@@ -94,6 +94,7 @@ import {
   validateAppDefaultsPaths,
   shutdownTelemetry,
 } from '@archon/paths';
+import { selectGitHubAuthMode, parseGitCredentialPath } from './github-auth-bootstrap';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -318,13 +319,15 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     // Check that at least one platform is configured
     const hasTelegram = Boolean(process.env.TELEGRAM_BOT_TOKEN);
     const hasDiscord = Boolean(process.env.DISCORD_BOT_TOKEN);
-    const hasGitHubApp = Boolean(
-      process.env.GITHUB_APP_ID &&
-      (process.env.GITHUB_APP_PRIVATE_KEY || process.env.GITHUB_APP_PRIVATE_KEY_PATH) &&
-      process.env.WEBHOOK_SECRET
-    );
-    const hasGitHubPat = Boolean(process.env.GITHUB_TOKEN && process.env.WEBHOOK_SECRET);
-    const hasGitHub = hasGitHubApp || hasGitHubPat;
+    // GitHub adapter: dual-mode (App vs PAT). Fail fast if both are configured —
+    // silently preferring one would create 3am debugging sessions for an operator
+    // who copy-pasted half a config and didn't realise the other half was already
+    // set in /etc/archon/.env. (PRD: "fail-fast on misconfig".)
+    const ghAuthMode = selectGitHubAuthMode(process.env);
+    if (ghAuthMode.kind === 'conflict') {
+      throw new Error(ghAuthMode.message);
+    }
+    const hasGitHub = ghAuthMode.kind !== 'none';
     const hasGitea = Boolean(
       process.env.GITEA_URL && process.env.GITEA_TOKEN && process.env.GITEA_WEBHOOK_SECRET
     );
@@ -334,19 +337,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       getLog().warn('no_platform_adapters_configured');
     }
 
-    // GitHub adapter: dual-mode (App vs PAT). Fail fast if both are configured —
-    // silently preferring one would create 3am debugging sessions for an operator
-    // who copy-pasted half a config and didn't realise the other half was already
-    // set in /etc/archon/.env. (PRD: "fail-fast on misconfig".)
-    if (hasGitHubApp && hasGitHubPat) {
-      throw new Error(
-        'GitHub adapter misconfigured: both App mode (GITHUB_APP_ID) and PAT mode ' +
-          '(GITHUB_TOKEN) are configured. Pick one — unset GITHUB_TOKEN for App mode, ' +
-          'or unset GITHUB_APP_ID for PAT mode.'
-      );
-    }
-
-    if (hasGitHubApp) {
+    if (ghAuthMode.kind === 'app') {
       // Locals avoid `!` non-null assertions: hasGitHubApp already guarantees
       // GITHUB_APP_ID and WEBHOOK_SECRET are set, but the linter can't infer that.
       const appId = process.env.GITHUB_APP_ID;
@@ -377,7 +368,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         { slug: githubAppAuthProvider.slug, defaultInstallationId },
         'github.adapter_mode_app'
       );
-    } else if (hasGitHubPat) {
+    } else if (ghAuthMode.kind === 'pat') {
       const patToken = process.env.GITHUB_TOKEN;
       const webhookSecret = process.env.WEBHOOK_SECRET;
       if (!patToken || !webhookSecret) {
@@ -643,19 +634,17 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         if (body?.host !== 'github.com') {
           return c.json({ error: 'unsupported host' }, 400);
         }
-        const pathStr = body.path ?? '';
-        // `owner/repo` or `owner/repo.git` — the helper sends this verbatim from
-        // the URL git is authenticating against.
-        const match = /^([^/]+)\/([^/]+?)(?:\.git)?$/.exec(pathStr);
-        if (!match) {
+        const parsed = parseGitCredentialPath(body.path ?? '');
+        if (!parsed) {
           return c.json({ error: 'unparseable path' }, 400);
         }
-        const owner = match[1];
-        const repo = match[2];
-        const token = await github.getInstallationToken(owner, repo);
+        const token = await github.getInstallationToken(parsed.owner, parsed.repo);
         return c.json({ token });
       } catch (err) {
-        getLog().warn({ err }, 'internal.git_credential_resolve_failed');
+        // ERROR (not WARN): this is a live credential-vending failure. If we
+        // can't issue a token, every workflow `git push` and `gh` call against
+        // that repo will start failing — operators need this surfaced loudly.
+        getLog().error({ err }, 'internal.git_credential_resolve_failed');
         return c.json({ error: 'resolution failed' }, 500);
       }
     });
@@ -765,12 +754,26 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   getLog().info({ port: server.port, hostname }, 'server_listening');
 
   // Security guardrail: /internal/git-credential hands out live installation
-  // access tokens. If App mode is active and the server is bound to a
-  // non-loopback interface, the reverse proxy in front of Archon MUST be
-  // configured to drop /internal/*. We can't enforce that here, so emit a
-  // loud warning operators will see in startup logs.
+  // access tokens. Fail fast (not just WARN) when App mode is active and the
+  // server is bound to a non-loopback interface — a WARN line in startup
+  // logs is too easy to scroll past, and the failure mode is "anyone on the
+  // network who can hit the port pulls a live token". Operators who deliberately
+  // firewall externally (so loopback bind would block their reverse proxy's
+  // upstream) can opt out via ARCHON_ALLOW_INTERNAL_ON_PUBLIC_BIND=1.
   if (githubAppAuthProvider && hostname !== '127.0.0.1' && hostname !== 'localhost') {
-    getLog().warn({ hostname }, 'github_app.internal_endpoint_exposed_check_reverse_proxy');
+    if (process.env.ARCHON_ALLOW_INTERNAL_ON_PUBLIC_BIND === '1') {
+      getLog().warn({ hostname }, 'github_app.internal_endpoint_exposed_acknowledged');
+    } else {
+      getLog().fatal({ hostname }, 'github_app.internal_endpoint_public_bind_rejected');
+      throw new Error(
+        'GitHub App mode is active but the server is bound to a non-loopback ' +
+          `interface (${hostname}). The /internal/git-credential endpoint hands out ` +
+          'live installation tokens — exposing it would leak credentials to the network. ' +
+          'Either bind to 127.0.0.1 (HOST=127.0.0.1), or, if your reverse proxy already ' +
+          'drops /internal/* and the upstream needs a non-loopback bind, opt out by ' +
+          'setting ARCHON_ALLOW_INTERNAL_ON_PUBLIC_BIND=1.'
+      );
+    }
   }
 
   // Initialize Telegram adapter (conditional, skipped in CLI serve mode)

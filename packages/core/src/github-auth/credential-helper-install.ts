@@ -8,9 +8,12 @@
  *   2. Register the helper on the worktree's git config:
  *      `credential.https://github.com.helper = ~/.archon/bin/git-credential-archon`
  *
- * No-op in PAT mode (the caller decides whether to invoke this — see the
- * adapter clone path). Source-builds only for this PR; binary builds will
- * ship the script via the embedded-bundle mechanism in a follow-up.
+ * The caller (the GitHub adapter clone path in App mode) decides whether to
+ * invoke this — it's a no-op for PAT-mode operators by virtue of not being
+ * called. The function requires the source script to be present on disk; in
+ * compiled binary builds that ship without `scripts/` available, the call
+ * returns `{ kind: 'skipped', reason: 'source-script-not-on-disk' }` so the
+ * caller's log line reflects the real outcome rather than false success.
  */
 import { chmodSync, copyFileSync, existsSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -30,30 +33,49 @@ function sourceScriptPath(): string {
   return resolve(import.meta.dir, '..', '..', '..', '..', 'scripts', 'git-credential-archon.sh');
 }
 
-/** Idempotent — safe to call from every clone path. */
-export async function installCredentialHelper(worktreePath: string): Promise<void> {
+/**
+ * Result of installCredentialHelper.
+ *
+ *   installed:  helper now registered on the worktree's git config
+ *   skipped:    no-op for a structural reason (e.g. binary build with no
+ *               source script on disk); caller should log accordingly
+ *   failed:     unexpected failure during copy / git-config write; the
+ *               original error is attached for the caller to forward
+ */
+export type CredentialHelperInstallResult =
+  | { kind: 'installed'; helperPath: string }
+  | { kind: 'skipped'; reason: 'source-script-not-on-disk'; sourcePath: string }
+  | { kind: 'failed'; error: Error };
+
+/** Idempotent — safe to call from every clone path. Never throws. */
+export async function installCredentialHelper(
+  worktreePath: string
+): Promise<CredentialHelperInstallResult> {
   const binDir = resolve(getArchonHome(), 'bin');
   const helperPath = resolve(binDir, 'git-credential-archon');
-  if (!existsSync(helperPath)) {
-    mkdirSync(binDir, { recursive: true });
-    const source = sourceScriptPath();
-    if (!existsSync(source)) {
-      // Compiled binary: the source script isn't on disk. Skip silently —
-      // the credential helper is an optimisation for >1h workflows; clone
-      // and short-lived `gh` operations still succeed via the URL-embedded
-      // and env-injected installation tokens.
-      getLog().warn({ source }, 'github_auth.credential_helper_source_missing_skipping_install');
-      return;
+  try {
+    if (!existsSync(helperPath)) {
+      mkdirSync(binDir, { recursive: true });
+      const source = sourceScriptPath();
+      if (!existsSync(source)) {
+        // Compiled binary build that doesn't ship scripts/ on disk. Don't
+        // pretend installation succeeded — caller logs 'skipped' instead.
+        getLog().warn({ source }, 'github_auth.credential_helper_source_missing');
+        return { kind: 'skipped', reason: 'source-script-not-on-disk', sourcePath: source };
+      }
+      copyFileSync(source, helperPath);
+      chmodSync(helperPath, 0o755);
+      getLog().info({ helperPath }, 'github_auth.credential_helper_copied');
     }
-    copyFileSync(source, helperPath);
-    chmodSync(helperPath, 0o755);
-    getLog().info({ helperPath }, 'github_auth.credential_helper_copied');
+    // Per-worktree git config write — idempotent on git's side.
+    await execFileAsync(
+      'git',
+      ['-C', worktreePath, 'config', 'credential.https://github.com.helper', helperPath],
+      { timeout: 5000 }
+    );
+    getLog().info({ worktreePath, helperPath }, 'github_auth.credential_helper_registered');
+    return { kind: 'installed', helperPath };
+  } catch (err) {
+    return { kind: 'failed', error: err as Error };
   }
-  // Per-worktree git config write — idempotent on git's side.
-  await execFileAsync(
-    'git',
-    ['-C', worktreePath, 'config', 'credential.https://github.com.helper', helperPath],
-    { timeout: 5000 }
-  );
-  getLog().info({ worktreePath, helperPath }, 'github_auth.credential_helper_registered');
 }

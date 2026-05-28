@@ -84,12 +84,14 @@ Add the following to your `.env` (or `~/.archon/.env`):
 ```dotenv
 GITHUB_APP_ID=123456                 # numeric App ID, visible on the App settings page
 GITHUB_APP_PRIVATE_KEY_PATH=/etc/archon/github-app.pem
-GITHUB_APP_SLUG=archon-bot           # the slug from the App URL; e.g. https://github.com/apps/archon-bot
 WEBHOOK_SECRET=<same value as on the GitHub side>
 
-# Optional: skip the per-(owner, repo) installation lookup when you only have
-# one installation. Saves one HTTP round trip per new repo after a restart.
-# GITHUB_APP_INSTALLATION_ID=98765
+# Optional:
+# GITHUB_APP_SLUG=archon-bot         # defaults to 'archon'; set this if you named your App
+#                                    # differently. The bot's posted-comment login is `<slug>[bot]`.
+# GITHUB_APP_INSTALLATION_ID=98765   # skip the per-(owner, repo) installation lookup when you only
+#                                    # have one installation. Saves one HTTP round trip per new
+#                                    # repo after a restart.
 ```
 
 ### Inline private key (alternative)
@@ -131,12 +133,16 @@ A 401 from any installation Octokit evicts the cached token and the call is retr
 
 Workflows that span >1h need a fresh token to push from the cloned worktree. Archon installs a git credential helper at clone time (App mode only): the worktree's `.git/config` points at `~/.archon/bin/git-credential-archon`, which talks back to Archon's internal endpoint for a fresh installation token on each operation.
 
-### Internal endpoint security — IMPORTANT
+> **Compiled binary builds:** the credential helper is installed from `scripts/git-credential-archon.sh` in the source tree. Compiled binaries that don't ship `scripts/` on disk silently skip the install — workflows up to 1h still succeed via the URL-embedded installation token and the `GH_TOKEN` env injection, but longer workflows will see `git push` fail with "Authentication failed" past the 1h mark. Track this when running App mode in a binary deployment.
 
-The credential-helper backend is exposed at `POST /internal/git-credential` and hands out live installation access tokens. **It MUST NOT be reachable from outside the Archon host.** Two equally valid postures:
+### Internal endpoint security — REQUIRED
 
-1. **Bind Archon to `127.0.0.1`** (`HOST=127.0.0.1`) and put a reverse proxy in front. The proxy MUST drop `/internal/*` paths.
-2. **Bind to `0.0.0.0`** (default) but firewall the port so only loopback reaches it. The startup log emits `github_app.internal_endpoint_exposed_check_reverse_proxy` to remind you.
+The credential-helper backend is exposed at `POST /internal/git-credential` and hands out live installation access tokens. **It MUST NOT be reachable from outside the Archon host.**
+
+Archon enforces this at startup: with App mode active and the server bound to a non-loopback interface (e.g. `0.0.0.0`), the process **refuses to start** and exits with `github_app.internal_endpoint_public_bind_rejected`. Two correct configurations:
+
+1. **Recommended — bind Archon to `127.0.0.1`** (`HOST=127.0.0.1`) and put a reverse proxy in front. Configure the proxy to drop `/internal/*` paths. Operators who use systemd / docker for upstream routing also fall into this category.
+2. **Opt-in escape hatch — `ARCHON_ALLOW_INTERNAL_ON_PUBLIC_BIND=1`** combined with `HOST=0.0.0.0` (or unset). Use ONLY when your reverse proxy already drops `/internal/*` AND your deployment topology genuinely requires the upstream to bind non-loopback (e.g. a container network where loopback isn't reachable from the proxy). Startup logs `github_app.internal_endpoint_exposed_acknowledged` so the choice is auditable.
 
 Example Caddy snippet that drops `/internal/*`:
 
@@ -175,6 +181,10 @@ example.com {
 
 - You're still in PAT mode. Check `process.env.GITHUB_TOKEN` is unset and `GITHUB_APP_ID` is set; restart.
 
-### Server log shows `github_app.internal_endpoint_exposed_check_reverse_proxy`
+### Server refused to start: `github_app.internal_endpoint_public_bind_rejected`
 
-- The server is bound to a non-loopback interface with App mode active. Either bind to `127.0.0.1` or configure your reverse proxy to drop `/internal/*` — see the security note above.
+- App mode is active but the server is bound to a non-loopback interface. This is a fail-fast guard — the `/internal/git-credential` endpoint hands out live installation access tokens and would leak credentials to the network. Either set `HOST=127.0.0.1` (recommended), or, if your reverse proxy already drops `/internal/*` and you genuinely need a non-loopback bind, set `ARCHON_ALLOW_INTERNAL_ON_PUBLIC_BIND=1`.
+
+### Server log shows `github_app.internal_endpoint_exposed_acknowledged`
+
+- You set `ARCHON_ALLOW_INTERNAL_ON_PUBLIC_BIND=1`. Double-check that your reverse proxy actually drops `/internal/*` — a `curl https://your-archon/internal/git-credential -d '{"host":"github.com","path":"any/repo"}'` from outside the host must return 404 or 403 from the proxy (NOT a token from Archon).

@@ -159,19 +159,32 @@ export class GitHubAdapter implements IPlatformAdapter {
       return await fn(octokit);
     } catch (err) {
       const status = (err as { status?: number }).status;
-      if (status === 401 && this.auth.kind === 'app') {
-        try {
-          const installationId = await this.auth.provider.resolveInstallationId(owner, repo);
-          this.auth.provider.invalidateToken(installationId);
-        } catch (refreshErr) {
-          // If we can't even resolve the installation id, fail with the original 401
-          getLog().error({ err: refreshErr, owner, repo }, 'github.token_refresh_resolve_failed');
-          throw err;
-        }
-        const fresh = await this.resolveOctokit(owner, repo);
-        return await fn(fresh);
+      if (status !== 401 || this.auth.kind !== 'app') {
+        throw err;
       }
-      throw err;
+      // Evict BOTH caches (token + lookup) so an App-reinstall scenario doesn't
+      // serve the stale installation id from the lookupCache for the full 1h.
+      this.auth.provider.invalidateRepo(owner, repo);
+      const fresh = await this.resolveOctokit(owner, repo);
+      try {
+        return await fn(fresh);
+      } catch (retryErr) {
+        // Second consecutive failure — surface a distinct ERROR log so this
+        // path is greppable in incident triage. Bound by design: no third
+        // retry, the error propagates from here.
+        const retryStatus = (retryErr as { status?: number }).status;
+        getLog().error(
+          {
+            err: retryErr,
+            owner,
+            repo,
+            firstStatus: status,
+            retryStatus,
+          },
+          'github.token_refresh_retry_failed'
+        );
+        throw retryErr;
+      }
     }
   }
 
@@ -647,16 +660,31 @@ export class GitHubAdapter implements IPlatformAdapter {
     // App mode: install the git credential helper on the newly cloned worktree
     // so workflows that outlive the 1h installation-token expiry can refresh
     // credentials in-place. Non-fatal — workflows that complete in <1h still
-    // succeed via the URL-embedded token from the clone above.
+    // succeed via the URL-embedded token from the clone above. The result
+    // discriminator tells us whether the install actually happened so we
+    // don't log a false "installed" line in builds where the helper script
+    // isn't on disk.
     if (this.auth.kind === 'app') {
-      try {
-        await installCredentialHelper(repoPath);
-        getLog().info({ repoPath, owner, repo }, 'github_auth.credential_helper_installed');
-      } catch (err) {
-        getLog().warn(
-          { err: toError(err), repoPath },
-          'github_auth.credential_helper_install_failed'
-        );
+      const result = await installCredentialHelper(repoPath);
+      switch (result.kind) {
+        case 'installed':
+          getLog().info(
+            { repoPath, owner, repo, helperPath: result.helperPath },
+            'github_auth.credential_helper_installed'
+          );
+          break;
+        case 'skipped':
+          getLog().warn(
+            { repoPath, owner, repo, reason: result.reason, sourcePath: result.sourcePath },
+            'github_auth.credential_helper_skipped'
+          );
+          break;
+        case 'failed':
+          getLog().warn(
+            { err: result.error, repoPath, owner, repo },
+            'github_auth.credential_helper_install_failed'
+          );
+          break;
       }
     }
   }
@@ -885,8 +913,9 @@ ${userComment}`;
     }
     // Secondary: Check comment author. In App mode the bot account is
     // `<slug>[bot]`; in PAT mode it's whatever the operator named via
-    // botMention. Compare against `botLogin` so PR-C's per-user tokens can
-    // still post under the user's own login without tripping this filter.
+    // botMention. Comparing against `botLogin` (not `botMention`) keeps the
+    // filter narrow — comments posted under a user's own GitHub login from a
+    // user-to-server token would otherwise be misfiltered.
     const commentAuthor = event.comment?.user?.login;
     if (commentAuthor?.toLowerCase() === this.botLogin.toLowerCase()) {
       getLog().debug({ commentAuthor }, 'github.ignoring_own_comment');
