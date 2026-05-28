@@ -198,8 +198,12 @@ Without this flag, Archon refuses to start in App mode and exits with `github_ap
 # Apply the override + Caddyfile + env changes, then restart app + caddy.
 docker compose up -d --force-recreate app caddy
 
-# From outside the host — must be 404
-curl -i https://your-archon/internal/git-credential
+# From outside the host — must be 404/403 from the proxy.
+# Use POST (the endpoint's actual method) — a GET probe can false-pass when
+# the proxy 404s unmatched GETs while still forwarding the POST upstream.
+curl -i -X POST https://your-archon/internal/git-credential \
+  -H 'Content-Type: application/json' \
+  -d '{"host":"github.com","path":"any/repo"}'
 
 # On the host — port should bind to loopback only
 ss -tlnp | grep :3000
@@ -210,7 +214,7 @@ docker compose logs app --tail 200 | grep "internal_endpoint_exposed_acknowledge
 # This event confirms the opt-out path was taken (audit trail).
 ```
 
-If `/internal/git-credential` returns anything other than `404` from outside the host, **stop and fix the proxy config** before going live — the endpoint hands out live installation tokens to whoever can reach it.
+If the external POST probe returns anything other than `404` or `403` from the proxy — i.e. anything that suggests the request reached the Archon process — **stop and fix the proxy config** before going live. The endpoint hands out live installation tokens to whoever can reach it.
 
 ## Migration from PAT mode
 
