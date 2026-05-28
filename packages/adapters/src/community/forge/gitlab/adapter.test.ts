@@ -32,7 +32,19 @@ mock.module('@archon/paths', () => ({
   validateAppDefaultsPaths: mock(async () => undefined),
 }));
 
-// Mock @archon/core/db modules to throw immediately (avoid DB connection hangs in tests)
+// Mock @archon/core/db/modules to throw immediately (avoid DB connection hangs in tests)
+const mockFindOrCreateUserByPlatformIdentity = mock(
+  async (_platform: string, _platformUserId: string, _displayName?: string) => ({
+    id: 'user-test-uuid',
+    display_name: 'Test',
+    email: null,
+    created_at: new Date(),
+    updated_at: new Date(),
+  })
+);
+mock.module('@archon/core/db/users', () => ({
+  findOrCreateUserByPlatformIdentity: mockFindOrCreateUserByPlatformIdentity,
+}));
 mock.module('@archon/core/db/conversations', () => ({
   getOrCreateConversation: mock(async () => {
     throw new Error('DB not mocked in tests');
@@ -579,6 +591,49 @@ describe('GitLabAdapter', () => {
       await adapter.handleWebhook(payload, 'test-secret');
       // The fork detection happens inside handleWebhook — if it reaches webhook_processing
       // log, the event was parsed correctly including the MR context
+    });
+  });
+
+  describe('user identity resolution', () => {
+    beforeEach(() => {
+      mockFindOrCreateUserByPlatformIdentity.mockClear();
+    });
+
+    test('calls findOrCreateUserByPlatformIdentity with gitlab platform and sender username', async () => {
+      const adapter = createAdapter();
+      const payload = createNotePayload({ username: 'testuser' });
+
+      try {
+        await adapter.handleWebhook(payload, 'test-secret');
+      } catch {
+        // Expected - database not mocked
+      }
+
+      expect(mockFindOrCreateUserByPlatformIdentity).toHaveBeenCalledWith(
+        'gitlab',
+        'testuser',
+        'testuser'
+      );
+    });
+
+    test('warn-logs and proceeds when user resolution fails', async () => {
+      mockFindOrCreateUserByPlatformIdentity.mockImplementation(async () => {
+        throw new Error('DB connection failed');
+      });
+
+      const adapter = createAdapter();
+      const payload = createNotePayload({ username: 'testuser' });
+
+      try {
+        await adapter.handleWebhook(payload, 'test-secret');
+      } catch {
+        // Expected - database not mocked, but not from user resolution
+      }
+
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ gitlabUsername: 'testuser' }),
+        'gitlab.user_resolve_failed'
+      );
     });
   });
 

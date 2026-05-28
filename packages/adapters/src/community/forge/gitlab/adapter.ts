@@ -32,6 +32,7 @@ import {
 } from '@archon/git';
 import * as db from '@archon/core/db/conversations';
 import * as codebaseDb from '@archon/core/db/codebases';
+import * as userDb from '@archon/core/db/users';
 import { resolveDefaultAssistant } from '@archon/core/config/resolve-assistant';
 import { parseAllowedUsers, isGitLabUserAuthorized, verifyWebhookToken } from './auth';
 import { splitIntoParagraphChunks } from '../../../utils/message-splitting';
@@ -687,6 +688,24 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
 
     getLog().info({ eventType, projectPath, iid, isMR }, 'gitlab.webhook_processing');
 
+    // Resolve webhook sender to Archon user UUID
+    let archonUserId: string | undefined;
+    if (senderUsername) {
+      try {
+        const user = await userDb.findOrCreateUserByPlatformIdentity(
+          'gitlab',
+          senderUsername,
+          senderUsername
+        );
+        archonUserId = user.id;
+      } catch (err) {
+        getLog().warn(
+          { err: toError(err), gitlabUsername: senderUsername },
+          'gitlab.user_resolve_failed'
+        );
+      }
+    }
+
     // Steps 7-13 wrapped in try-catch so user gets error feedback on setup failures
     try {
       // 7. Conversation + codebase setup
@@ -789,6 +808,7 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
             issueContext: contextToAppend,
             threadContext,
             isolationHints,
+            userId: archonUserId,
           });
         } catch (error) {
           const err = toError(error);

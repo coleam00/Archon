@@ -68,6 +68,7 @@ mock.module('discord.js', () => ({
 }));
 
 import { DiscordAdapter } from './adapter';
+import type { DiscordMessageContext } from './types';
 
 describe('DiscordAdapter', () => {
   beforeEach(() => {
@@ -196,6 +197,40 @@ describe('DiscordAdapter', () => {
       await adapter.start();
 
       expect(true).toBe(true);
+    });
+  });
+
+  describe('message context normalization', () => {
+    test('passes platformUserId and displayName from message.author', async () => {
+      const adapter = new DiscordAdapter('fake-token-for-testing');
+      const mockHandler = mock(async (_ctx: DiscordMessageContext) => undefined);
+      adapter.onMessage(mockHandler);
+      await adapter.start();
+
+      // Find the messageCreate handler registered on the mock client
+      const messageCreateCalls = (
+        mockClientOn as unknown as Mock<(evt: string, fn: unknown) => void>
+      ).mock.calls.filter(c => c[0] === 'messageCreate');
+      expect(messageCreateCalls.length).toBe(1);
+      const handler = messageCreateCalls[0][1] as (msg: import('discord.js').Message) => void;
+
+      const mockMessage = {
+        author: { id: 'snowflake-123', username: 'Alice', bot: false },
+        content: 'hello',
+        channelId: 'chan-1',
+        guild: { id: 'guild-1' },
+        mentions: { has: () => false },
+      } as unknown as import('discord.js').Message;
+
+      handler(mockMessage);
+
+      expect(mockHandler).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: mockMessage,
+          platformUserId: 'snowflake-123',
+          displayName: 'Alice',
+        })
+      );
     });
   });
 

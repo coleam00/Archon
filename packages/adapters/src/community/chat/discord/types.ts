@@ -1,2 +1,15 @@
-// Discord adapter uses discord.js types directly — no adapter-specific types needed yet.
-// If a DiscordMessageContext is needed in the future, define it here.
+/**
+ * Normalized message context passed to the Discord onMessage handler.
+ * The adapter extracts platformUserId and displayName from message.author
+ * so the server never needs to know discord.js internals.
+ */
+import type { Message } from 'discord.js';
+
+export interface DiscordMessageContext {
+  /** The raw discord.js Message (still needed for adapter-method calls) */
+  message: Message;
+  /** Discord snowflake (message.author.id) */
+  platformUserId: string;
+  /** message.author.username (display-quality, no extra API call needed) */
+  displayName: string;
+}

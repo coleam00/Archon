@@ -428,7 +428,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       const discordAdapter = discord; // Capture for use in callback
 
       // Register message handler
-      discordAdapter.onMessage(async message => {
+      discordAdapter.onMessage(async ({ message, platformUserId, displayName }) => {
         // Get initial conversation ID
         let conversationId = discordAdapter.getConversationId(message);
 
@@ -465,8 +465,8 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         }
 
         // Resolve Discord author → Archon user UUID.
-        // message.author.username is already display-quality on Discord (no extra API call needed).
-        const userId = await resolveUserId('discord', message.author.id, message.author.username);
+        // displayName is already display-quality on Discord (no extra API call needed).
+        const userId = await resolveUserId('discord', platformUserId, displayName);
 
         // Fire-and-forget: handler returns immediately, processing happens async
         lockManager

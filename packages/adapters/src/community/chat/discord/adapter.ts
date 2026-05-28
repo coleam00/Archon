@@ -15,6 +15,7 @@ import { createLogger } from '@archon/paths';
 import { isDiscordUserAuthorized } from './auth';
 import { parseAllowedUserIds } from './auth';
 import { splitIntoParagraphChunks } from '../../../utils/message-splitting';
+import type { DiscordMessageContext } from './types';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -29,7 +30,7 @@ export class DiscordAdapter implements IPlatformAdapter {
   private client: Client;
   private streamingMode: 'stream' | 'batch';
   private token: string;
-  private messageHandler: ((message: Message) => Promise<void>) | null = null;
+  private messageHandler: ((ctx: DiscordMessageContext) => Promise<void>) | null = null;
   private allowedUserIds: string[];
   private pendingThreads = new Map<string, Promise<string>>();
 
@@ -281,7 +282,7 @@ export class DiscordAdapter implements IPlatformAdapter {
    * Register a message handler for incoming messages
    * Must be called before start()
    */
-  onMessage(handler: (message: Message) => Promise<void>): void {
+  onMessage(handler: (ctx: DiscordMessageContext) => Promise<void>): void {
     this.messageHandler = handler;
   }
 
@@ -304,8 +305,10 @@ export class DiscordAdapter implements IPlatformAdapter {
       }
 
       if (this.messageHandler) {
+        const platformUserId = message.author.id;
+        const displayName = message.author.username;
         // Fire-and-forget - errors handled by caller
-        void this.messageHandler(message);
+        void this.messageHandler({ message, platformUserId, displayName });
       }
     });
 

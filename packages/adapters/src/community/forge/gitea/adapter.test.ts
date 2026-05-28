@@ -33,7 +33,19 @@ mock.module('@archon/paths', () => ({
   validateAppDefaultsPaths: mock(async () => undefined),
 }));
 
-// Mock @archon/core/db modules to throw immediately (avoid DB connection hangs in tests)
+// Mock @archon/core/db/modules to throw immediately (avoid DB connection hangs in tests)
+const mockFindOrCreateUserByPlatformIdentity = mock(
+  async (_platform: string, _platformUserId: string, _displayName?: string) => ({
+    id: 'user-test-uuid',
+    display_name: 'Test',
+    email: null,
+    created_at: new Date(),
+    updated_at: new Date(),
+  })
+);
+mock.module('@archon/core/db/users', () => ({
+  findOrCreateUserByPlatformIdentity: mockFindOrCreateUserByPlatformIdentity,
+}));
 mock.module('@archon/core/db/conversations', () => ({
   getOrCreateConversation: mock(async () => {
     throw new Error('DB not mocked in tests');
@@ -798,6 +810,163 @@ describe('GiteaAdapter', () => {
       expect(path1).not.toBe(path2);
       expect(path1).toBe('/workspace/alice/utils');
       expect(path2).toBe('/workspace/bob/utils');
+    });
+  });
+
+  describe('user identity resolution', () => {
+    beforeEach(() => {
+      mockFindOrCreateUserByPlatformIdentity.mockClear();
+    });
+
+    test('calls findOrCreateUserByPlatformIdentity with gitea platform and sender login', async () => {
+      const adapter = new GiteaAdapter(
+        'https://gitea.example.com',
+        'fake-token-for-testing',
+        'fake-webhook-secret',
+        mockLockManager,
+        undefined,
+        { retryDelayMs: () => 1 }
+      );
+      // @ts-expect-error - accessing private method for testing
+      adapter.verifySignature = mock(() => true);
+
+      const payload = JSON.stringify({
+        action: 'created',
+        issue: {
+          number: 42,
+          title: 'Test Issue',
+          body: 'Description',
+          user: { login: 'user123' },
+          labels: [],
+          state: 'open',
+        },
+        comment: {
+          body: '@archon fix this',
+          user: { login: 'commenter' },
+        },
+        repository: {
+          owner: { login: 'testuser' },
+          name: 'testrepo',
+          full_name: 'testuser/testrepo',
+          html_url: 'https://gitea.example.com/testuser/testrepo',
+          default_branch: 'main',
+        },
+        sender: { login: 'senderuser' },
+      });
+
+      // DB mocks throw, but user resolution runs before DB calls
+      try {
+        await adapter.handleWebhook(payload, 'mock-signature');
+      } catch {
+        // Expected - database not mocked
+      }
+
+      expect(mockFindOrCreateUserByPlatformIdentity).toHaveBeenCalledWith(
+        'gitea',
+        'commenter',
+        'commenter'
+      );
+    });
+
+    test('falls back to sender.login when comment.user is missing', async () => {
+      const adapter = new GiteaAdapter(
+        'https://gitea.example.com',
+        'fake-token-for-testing',
+        'fake-webhook-secret',
+        mockLockManager,
+        undefined,
+        { retryDelayMs: () => 1 }
+      );
+      // @ts-expect-error - accessing private method for testing
+      adapter.verifySignature = mock(() => true);
+
+      const payload = JSON.stringify({
+        action: 'created',
+        issue: {
+          number: 42,
+          title: 'Test Issue',
+          body: 'Description',
+          user: { login: 'user123' },
+          labels: [],
+          state: 'open',
+        },
+        comment: {
+          body: '@archon fix this',
+        },
+        repository: {
+          owner: { login: 'testuser' },
+          name: 'testrepo',
+          full_name: 'testuser/testrepo',
+          html_url: 'https://gitea.example.com/testuser/testrepo',
+          default_branch: 'main',
+        },
+        sender: { login: 'senderuser' },
+      });
+
+      try {
+        await adapter.handleWebhook(payload, 'mock-signature');
+      } catch {
+        // Expected
+      }
+
+      expect(mockFindOrCreateUserByPlatformIdentity).toHaveBeenCalledWith(
+        'gitea',
+        'senderuser',
+        'senderuser'
+      );
+    });
+
+    test('warn-logs and proceeds when user resolution fails', async () => {
+      mockFindOrCreateUserByPlatformIdentity.mockImplementation(async () => {
+        throw new Error('DB connection failed');
+      });
+
+      const adapter = new GiteaAdapter(
+        'https://gitea.example.com',
+        'fake-token-for-testing',
+        'fake-webhook-secret',
+        mockLockManager,
+        undefined,
+        { retryDelayMs: () => 1 }
+      );
+      // @ts-expect-error - accessing private method for testing
+      adapter.verifySignature = mock(() => true);
+
+      const payload = JSON.stringify({
+        action: 'created',
+        issue: {
+          number: 42,
+          title: 'Test Issue',
+          body: 'Description',
+          user: { login: 'user123' },
+          labels: [],
+          state: 'open',
+        },
+        comment: {
+          body: '@archon fix this',
+          user: { login: 'commenter' },
+        },
+        repository: {
+          owner: { login: 'testuser' },
+          name: 'testrepo',
+          full_name: 'testuser/testrepo',
+          html_url: 'https://gitea.example.com/testuser/testrepo',
+          default_branch: 'main',
+        },
+        sender: { login: 'senderuser' },
+      });
+
+      // Should not throw even though user resolution fails
+      try {
+        await adapter.handleWebhook(payload, 'mock-signature');
+      } catch {
+        // Expected - database not mocked, but not from user resolution
+      }
+
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ giteaLogin: 'commenter' }),
+        'gitea.user_resolve_failed'
+      );
     });
   });
 });
