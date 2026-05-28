@@ -1,21 +1,30 @@
 /**
  * GitHub App auth provider factory.
  *
- * Two-level cache:
- *   1. lookupCache: `owner/repo → installationId` (1h TTL; evicted on 401 via
+ * Three caches — two visible, one hidden inside `@octokit/auth-app`:
+ *   1. lookupCache:  `owner/repo → installationId` (1h TTL; evicted on 401 via
  *      invalidateRepo so an App reinstall — which assigns a NEW installation
  *      id — doesn't lock us into the stale id for the full hour).
- *   2. tokenCache:  `installationId → CachedInstallationToken` (1h GitHub TTL,
- *      we refresh 5min before expiry on access).
+ *   2. tokenCache:   `installationId → CachedInstallationToken` (1h GitHub TTL,
+ *      we refresh 5min before expiry on access). Used directly for clone-path
+ *      URL embedding and the /internal/git-credential endpoint.
+ *   3. octokitCache: `installationId → Octokit` (memoisation, no TTL). Each
+ *      Octokit holds its OWN private `createAppAuth` token state, opaque to
+ *      us. THIS is the load-bearing reason invalidateToken / invalidateRepo
+ *      must `octokitCache.delete(id)` — without it the "fresh" Octokit handed
+ *      to the retry path keeps serving the dead token from the SDK's hidden
+ *      cache, and our visible cache evictions are pointless. (See PR #1788
+ *      CodeRabbit comment "401 recovery doesn't invalidate the cached
+ *      installation Octokit.")
  *
  * No background timers — refresh-on-access only. The cache lookup itself
  * decides whether to issue a new token; no setInterval, no leaked handles,
  * survives process suspend/resume cleanly.
  *
- * 401 handling: `invalidateRepo(owner, repo)` evicts BOTH caches for that
- * repo. The adapter wraps its Octokit calls in a single-retry helper that
- * calls this and re-resolves, so the auth module stays purely cache-aware
- * rather than retry-aware.
+ * 401 handling: `invalidateRepo(owner, repo)` evicts ALL THREE caches for
+ * that repo. The adapter wraps its Octokit calls in a single-retry helper
+ * that calls this and re-resolves, so the auth module stays purely
+ * cache-aware rather than retry-aware.
  */
 import { Octokit } from '@octokit/rest';
 import { createAppAuth } from '@octokit/auth-app';
