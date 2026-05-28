@@ -6,7 +6,7 @@
  * in @archon/core that mocks @octokit/rest, and it's slotted as its own
  * `bun test` invocation in package.json's test script for isolation.
  */
-import { mock, describe, test, expect, beforeEach, afterEach } from 'bun:test';
+import { mock, spyOn, describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -321,11 +321,12 @@ describe('invalidateRepo', () => {
 
 describe('cache TTL boundaries', () => {
   test('T6: 1h lookupCache TTL — boundary just inside still serves cached, just outside re-queries', async () => {
-    const realNow = Date.now;
     const baseTime = 1_700_000_000_000;
     let mockedNow = baseTime;
-    // eslint-disable-next-line @typescript-eslint/unbound-method -- swapping a method ref is the whole point
-    Date.now = () => mockedNow;
+    // spyOn restores cleanly in afterEach via mockRestore; avoids direct
+    // mutation of the Date.now reference (and the eslint-disable that came
+    // with it).
+    const nowSpy = spyOn(Date, 'now').mockImplementation(() => mockedNow);
 
     try {
       const provider = makeProvider();
@@ -354,7 +355,7 @@ describe('cache TTL boundaries', () => {
       await provider.getInstallationToken('o', 'r');
       expect(mockRequest).toHaveBeenCalledTimes(4);
     } finally {
-      Date.now = realNow;
+      nowSpy.mockRestore();
     }
   });
 });
@@ -376,5 +377,26 @@ describe('getOctokitForInstallation', () => {
     const a = await provider.getOctokitForInstallation('alpha', 'r');
     const b = await provider.getOctokitForInstallation('beta', 'r');
     expect(a).not.toBe(b);
+  });
+
+  test('invalidateToken evicts the Octokit instance — next call constructs fresh', async () => {
+    // Per-installation Octokit holds its own internal createAppAuth state.
+    // After a 401 we MUST hand callers a brand-new Octokit; otherwise the
+    // SDK's internal token cache could keep serving the dead token.
+    const provider = makeProvider({ defaultInstallationId: 42 });
+    const first = await provider.getOctokitForInstallation('o', 'r');
+    provider.invalidateToken(42);
+    const second = await provider.getOctokitForInstallation('o', 'r');
+    expect(second).not.toBe(first);
+  });
+
+  test('invalidateRepo evicts the Octokit instance — next call constructs fresh', async () => {
+    const provider = makeProvider();
+    mockRequest.mockResolvedValueOnce({ status: 200, data: { id: 77 } });
+    const first = await provider.getOctokitForInstallation('o', 'r');
+    provider.invalidateRepo('o', 'r');
+    mockRequest.mockResolvedValueOnce({ status: 200, data: { id: 77 } });
+    const second = await provider.getOctokitForInstallation('o', 'r');
+    expect(second).not.toBe(first);
   });
 });

@@ -173,9 +173,20 @@ example.com {
 
 - The App is not installed on that owner's org/account. Use the install link in the error message to add it.
 
-### 401 loop in logs
+### 401 loop on GitHub API calls
 
-- The webhook secret on the App doesn't match the `WEBHOOK_SECRET` env var. Verify both sides match.
+Repeated 401s on outbound API calls (`createComment`, `listComments`, `repos.get`, `pulls.get`) point at installation / token issues, not webhook config. Walk through:
+
+- Verify the App is installed on the target `owner` and has not been suspended or uninstalled. Visit `https://github.com/settings/installations` (or the org equivalent) to confirm.
+- Verify the App's permissions still include the scopes the operation needs (Contents:Read for clone; Issues:RW + Pull requests:RW for comments and reactions). Permission scope changes require operators to **review and accept** the new permissions on every installation; Archon will 401 until that's done.
+- Verify the private key in your env (`GITHUB_APP_PRIVATE_KEY` or `_PATH`) matches the same App that `GITHUB_APP_ID` points at. Mismatched key+ID is a common cause of "401 from JWT" errors at token-issuance time.
+- Verify `GITHUB_APP_INSTALLATION_ID` (if set) still corresponds to a live installation — uninstall + reinstall assigns a new ID.
+
+### Webhook deliveries fail signature verification
+
+A webhook-secret mismatch causes `github.signature_mismatch` / `github.signature_length_mismatch` errors at the `POST /webhooks/github` endpoint — distinct from outbound API 401s. If GitHub's webhook delivery page shows red ❌ next to the delivery (rather than your bot just silently not responding), check:
+
+- `WEBHOOK_SECRET` in Archon's env matches the value entered in the GitHub App's webhook configuration page exactly.
 
 ### Bot comments still appear under your personal account
 

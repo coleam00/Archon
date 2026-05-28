@@ -53,7 +53,7 @@ import { registerBuiltinProviders, registerCommunityProviders } from '@archon/pr
 registerBuiltinProviders();
 registerCommunityProviders();
 
-import { OpenAPIHono } from '@hono/zod-openapi';
+import { OpenAPIHono, z } from '@hono/zod-openapi';
 import { validationErrorHook } from './routes/openapi-defaults';
 import {
   TelegramAdapter,
@@ -625,16 +625,23 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   // the operator binds the server to 0.0.0.0 with App mode active, making the
   // misconfiguration obvious in logs.
   if (github?.getAuthMode() === 'app') {
+    // Request schema for /internal/git-credential. Validates the small
+    // host/path payload the credential helper sends. Inline declaration
+    // because the endpoint is a one-off internal surface (not part of the
+    // OpenAPI-published API), so it doesn't belong in routes/schemas/.
+    const gitCredentialRequestSchema = z.object({
+      host: z.string().optional(),
+      path: z.string().optional(),
+    });
+
     app.post('/internal/git-credential', async c => {
       try {
-        const body = (await c.req.json().catch(() => null)) as {
-          host?: string;
-          path?: string;
-        } | null;
-        if (body?.host !== 'github.com') {
+        const raw = await c.req.json().catch(() => null);
+        const parseResult = gitCredentialRequestSchema.safeParse(raw);
+        if (!parseResult.success || parseResult.data.host !== 'github.com') {
           return c.json({ error: 'unsupported host' }, 400);
         }
-        const parsed = parseGitCredentialPath(body.path ?? '');
+        const parsed = parseGitCredentialPath(parseResult.data.path ?? '');
         if (!parsed) {
           return c.json({ error: 'unparseable path' }, 400);
         }
@@ -745,13 +752,6 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   }
 
   const hostname = process.env.HOST || '0.0.0.0';
-  const server = Bun.serve({
-    fetch: app.fetch,
-    hostname,
-    port,
-    idleTimeout: 255, // Max value (seconds) - prevents SSE connections from being killed
-  });
-  getLog().info({ port: server.port, hostname }, 'server_listening');
 
   // Security guardrail: /internal/git-credential hands out live installation
   // access tokens. Fail fast (not just WARN) when App mode is active and the
@@ -760,6 +760,9 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   // network who can hit the port pulls a live token". Operators who deliberately
   // firewall externally (so loopback bind would block their reverse proxy's
   // upstream) can opt out via ARCHON_ALLOW_INTERNAL_ON_PUBLIC_BIND=1.
+  //
+  // Runs BEFORE Bun.serve so a rejected config never opens the listening
+  // socket — even briefly — and `server_listening` is never logged.
   if (githubAppAuthProvider && hostname !== '127.0.0.1' && hostname !== 'localhost') {
     if (process.env.ARCHON_ALLOW_INTERNAL_ON_PUBLIC_BIND === '1') {
       getLog().warn({ hostname }, 'github_app.internal_endpoint_exposed_acknowledged');
@@ -775,6 +778,14 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       );
     }
   }
+
+  const server = Bun.serve({
+    fetch: app.fetch,
+    hostname,
+    port,
+    idleTimeout: 255, // Max value (seconds) - prevents SSE connections from being killed
+  });
+  getLog().info({ port: server.port, hostname }, 'server_listening');
 
   // Initialize Telegram adapter (conditional, skipped in CLI serve mode)
   let telegram: TelegramAdapter | null = null;

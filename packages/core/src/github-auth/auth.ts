@@ -160,6 +160,13 @@ export function createGitHubAppAuthProvider(config: GitHubAppConfig): IGitHubApp
 
   function invalidateToken(installationId: number): void {
     tokenCache.delete(installationId);
+    // Also drop the cached per-installation Octokit. createAppAuth maintains
+    // its OWN internal token state inside each Octokit; if we kept the same
+    // Octokit instance after a 401 it could keep serving the dead token from
+    // its private cache even though our tokenCache is empty. Forcing a
+    // fresh Octokit on the next call rebuilds the auth strategy from
+    // scratch and lets it issue a new installation access token.
+    octokitCache.delete(installationId);
     // Cascade: drop any owner/repo lookups pointing at this dead id so the
     // next call re-resolves via GET /repos/.../installation instead of
     // serving the stale id from cache. Matters when an App is uninstalled +
@@ -178,6 +185,7 @@ export function createGitHubAppAuthProvider(config: GitHubAppConfig): IGitHubApp
     const lookup = lookupCache.get(key);
     if (lookup) {
       tokenCache.delete(lookup.installationId);
+      octokitCache.delete(lookup.installationId);
       lookupCache.delete(key);
       getLog().info(
         { owner, repo, installationId: lookup.installationId },
@@ -186,10 +194,11 @@ export function createGitHubAppAuthProvider(config: GitHubAppConfig): IGitHubApp
       return;
     }
     // No cached lookup (default-installation-id mode, or the cache TTL'd
-    // since the call that 401'd). Still evict the default-install token
-    // when applicable so the next call re-issues.
+    // since the call that 401'd). Still evict the default-install token +
+    // Octokit when applicable so the next call re-issues.
     if (config.defaultInstallationId) {
       tokenCache.delete(config.defaultInstallationId);
+      octokitCache.delete(config.defaultInstallationId);
       getLog().info(
         { owner, repo, installationId: config.defaultInstallationId },
         'github_auth.default_install_token_evicted_on_401'

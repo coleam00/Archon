@@ -56,8 +56,10 @@ url="http://127.0.0.1:$port/internal/git-credential"
 
 # Capture stderr separately so a curl failure (server unreachable, 5xx) can
 # be surfaced to the workflow without leaking through git's interactive
-# prompt path.
-resp=$(curl -fsS -X POST -H 'Content-Type: application/json' \
+# prompt path. --connect-timeout / --max-time keep git from blocking
+# indefinitely when Archon isn't listening on the expected port.
+resp=$(curl -fsS --connect-timeout 2 --max-time 5 -X POST \
+  -H 'Content-Type: application/json' \
   -d "{\"host\":\"$host\",\"path\":\"$path\"}" "$url" 2>/tmp/git-credential-archon.curlerr)
 curl_status=$?
 if [ "$curl_status" -ne 0 ]; then
