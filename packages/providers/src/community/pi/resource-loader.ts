@@ -1,4 +1,4 @@
-import { DefaultResourceLoader, getAgentDir } from '@mariozechner/pi-coding-agent';
+import { DefaultResourceLoader, getAgentDir } from '@earendil-works/pi-coding-agent';
 
 /**
  * In pi-coding-agent <= 0.67.x, DefaultResourceLoader and PackageManager
