@@ -4,7 +4,11 @@
 import type { WorkflowDefinition, WorkflowLoadError, DagNode, WorkflowNodeHooks } from './schemas';
 import { isLoopNode, isApprovalNode, isCancelNode, isScriptNode } from './schemas';
 import { createLogger } from '@archon/paths';
-import { isRegisteredProvider, getRegisteredProviders } from '@archon/providers';
+import {
+  isRegisteredProvider,
+  getRegisteredProviders,
+  getProviderCapabilities,
+} from '@archon/providers';
 import {
   dagNodeSchema,
   BASH_NODE_AI_FIELDS,
@@ -349,6 +353,33 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       }
     }
 
+    // persist_session capability gating: when the effective provider is known at
+    // load time (explicit at node or workflow level), reject the workflow if the
+    // provider doesn't support session resume. When the provider is implicit (set
+    // via .archon/config.yaml defaults), the check defers to runtime in
+    // dag-executor — see the `persist_session_capability_missing` error.
+    const workflowPersistSessions = raw.persist_sessions === true;
+    for (const node of dagNodes) {
+      const nodePersist = 'persist_session' in node ? node.persist_session : undefined;
+      const effectivePersist = nodePersist ?? workflowPersistSessions;
+      if (!effectivePersist) continue;
+
+      const explicitProvider = ('provider' in node ? node.provider : undefined) ?? provider;
+      if (explicitProvider && isRegisteredProvider(explicitProvider)) {
+        const caps = getProviderCapabilities(explicitProvider);
+        if (!caps.sessionResume) {
+          return {
+            workflow: null,
+            error: {
+              filename,
+              error: `Node '${node.id}' has persist_session: true but provider '${explicitProvider}' does not support sessionResume. Remove persist_session, or use a provider with sessionResume capability.`,
+              errorType: 'validation_error',
+            },
+          };
+        }
+      }
+    }
+
     // Validate modelReasoningEffort / webSearchMode — warn and ignore invalid values.
     const modelReasoningEffort = parseOptionalField(
       raw.modelReasoningEffort,
@@ -524,6 +555,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
         ...(fallbackModel !== undefined ? { fallbackModel } : {}),
         ...(betas !== undefined ? { betas } : {}),
         ...(sandbox !== undefined ? { sandbox } : {}),
+        ...(workflowPersistSessions ? { persist_sessions: true } : {}),
         nodes: dagNodes,
         ...(worktreePolicy ? { worktree: worktreePolicy } : {}),
         ...(tags !== undefined ? { tags } : {}),

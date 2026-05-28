@@ -2748,4 +2748,91 @@ nodes:
       expect(mockLoadConfig).not.toHaveBeenCalled();
     });
   });
+
+  describe('persist_session capability gating', () => {
+    it('parses persist_session: true on a node', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = `name: t\ndescription: t\nprovider: claude\nnodes:\n  - id: planner\n    prompt: p\n    persist_session: true\n`;
+      await writeFile(join(workflowDir, 't.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toEqual([]);
+      const node = result.workflows[0].workflow.nodes[0];
+      expect('persist_session' in node ? node.persist_session : undefined).toBe(true);
+    });
+
+    it('parses persist_sessions: true at workflow root', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = `name: t\ndescription: t\nprovider: claude\npersist_sessions: true\nnodes:\n  - id: planner\n    prompt: p\n`;
+      await writeFile(join(workflowDir, 't.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toEqual([]);
+      expect(
+        (result.workflows[0].workflow as { persist_sessions?: boolean }).persist_sessions
+      ).toBe(true);
+    });
+
+    it('rejects persist_session: true on a provider without sessionResume', async () => {
+      // Register an ephemeral provider with sessionResume: false to drive the capability gate.
+      // No unregister API exists; restore via clearRegistry + registerBuiltinProviders in finally.
+      const { registerProvider } = await import('@archon/providers');
+      registerProvider({
+        id: 'no-resume-test',
+        displayName: 'No Resume Test',
+        builtIn: false,
+        capabilities: {
+          sessionResume: false,
+          mcp: false,
+          hooks: false,
+          skills: false,
+          agents: false,
+          toolRestrictions: false,
+          structuredOutput: false,
+          envInjection: false,
+          costControl: false,
+          effortControl: false,
+          thinkingControl: false,
+          fallbackModel: false,
+          sandbox: false,
+        },
+        factory: () => ({
+          getType: () => 'no-resume-test',
+          getCapabilities: () => ({
+            sessionResume: false,
+            mcp: false,
+            hooks: false,
+            skills: false,
+            agents: false,
+            toolRestrictions: false,
+            structuredOutput: false,
+            envInjection: false,
+            costControl: false,
+            effortControl: false,
+            thinkingControl: false,
+            fallbackModel: false,
+            sandbox: false,
+          }),
+          // eslint-disable-next-line require-yield
+          async *sendQuery() {
+            return;
+          },
+        }),
+      });
+      try {
+        const workflowDir = join(testDir, '.archon', 'workflows');
+        await mkdir(workflowDir, { recursive: true });
+        const yaml = `name: t\ndescription: t\nprovider: no-resume-test\nnodes:\n  - id: planner\n    prompt: p\n    persist_session: true\n`;
+        await writeFile(join(workflowDir, 't.yaml'), yaml);
+        const result = await discoverWorkflows(testDir, { loadDefaults: false });
+        expect(result.workflows).toEqual([]);
+        expect(result.errors.length).toBeGreaterThan(0);
+        expect(result.errors[0].error).toContain('persist_session');
+        expect(result.errors[0].error).toContain('sessionResume');
+      } finally {
+        clearRegistry();
+        registerBuiltinProviders();
+      }
+    });
+  });
 });

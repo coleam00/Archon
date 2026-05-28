@@ -49,6 +49,7 @@ import {
   workflowApproveCommand,
   workflowRejectCommand,
   workflowCleanupCommand,
+  workflowResetSessionsCommand,
   workflowEventEmitCommand,
   workflowSearchCommand,
   workflowInstallCommand,
@@ -244,6 +245,8 @@ async function main(): Promise<number> {
         port: { type: 'string' },
         'download-only': { type: 'boolean' },
         scope: { type: 'string' },
+        node: { type: 'string' },
+        yes: { type: 'boolean' },
         force: { type: 'boolean' },
       },
       allowPositionals: true,
@@ -488,6 +491,26 @@ async function main(): Promise<number> {
               return 1;
             }
             await workflowCleanupCommand(days);
+            break;
+          }
+
+          case 'reset-sessions': {
+            const workflowName = positionals[2];
+            if (!workflowName) {
+              console.error(
+                'Usage: archon workflow reset-sessions <workflow-name> [--scope <key>] [--node <id>] [--yes] [--json]'
+              );
+              console.error(
+                '  Without --scope: deletes persisted sessions across ALL scopes (requires --yes).'
+              );
+              return 1;
+            }
+            await workflowResetSessionsCommand(workflowName, {
+              scope: values.scope as string | undefined,
+              node: values.node as string | undefined,
+              yes: values.yes as boolean | undefined,
+              json: jsonFlag,
+            });
             break;
           }
 

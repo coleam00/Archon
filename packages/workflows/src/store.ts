@@ -28,6 +28,7 @@ export const WORKFLOW_EVENT_TYPES = [
   'approval_received',
   'workflow_cancelled',
   'workflow_artifact',
+  'node_session_resumed',
 ] as const;
 
 export type WorkflowEventType = (typeof WORKFLOW_EVENT_TYPES)[number];
@@ -113,4 +114,38 @@ export interface IWorkflowStore {
     repository_url: string | null;
     default_cwd: string;
   } | null>;
+
+  // Per-node provider sessions persisted across workflow re-runs (opt-in via
+  // `persist_session: true` on a node, or `persist_sessions: true` at workflow root).
+  // Distinct from `AgentRequestOptions.persistSession` (Claude SDK on-disk transcript).
+  getWorkflowNodeSession(
+    workflow_name: string,
+    node_id: string,
+    scope_key: string,
+    provider: string
+  ): Promise<WorkflowNodeSession | null>;
+  upsertWorkflowNodeSession(params: {
+    workflow_name: string;
+    node_id: string;
+    scope_key: string;
+    provider: string;
+    provider_session_id: string;
+    last_run_id: string;
+  }): Promise<void>;
+  deleteWorkflowNodeSessions(filter: {
+    workflow_name: string;
+    scope_key?: string;
+    node_id?: string;
+  }): Promise<{ deleted: number }>;
+}
+
+export interface WorkflowNodeSession {
+  workflow_name: string;
+  node_id: string;
+  scope_key: string;
+  provider: string;
+  provider_session_id: string;
+  last_run_id: string | null;
+  created_at: string;
+  updated_at: string;
 }

@@ -32,6 +32,7 @@ import {
   getWorkflowStatus,
   resumeWorkflow,
   abandonWorkflow,
+  resetWorkflowNodeSessions,
 } from '../operations/workflow-operations';
 import { getTriggerForCommand, type DeactivatingCommand } from '../state/session-transitions';
 import { SessionNotFoundError } from '../db/sessions';
@@ -724,6 +725,37 @@ async function handleWorkflowCommand(
         const err = error as Error;
         getLog().error({ err, runId }, 'cmd.workflow_abandon_failed');
         return { success: false, message: `Failed to abandon workflow run: ${err.message}` };
+      }
+    }
+
+    case 'reset-sessions': {
+      const workflowName = args[1];
+      const nodeId = args[2];
+      if (!workflowName) {
+        return {
+          success: false,
+          message:
+            'Usage: /workflow reset-sessions <workflow-name> [<node-id>]\n\nClears persisted AI session memory for this workflow in this conversation.',
+        };
+      }
+      try {
+        const { deleted } = await resetWorkflowNodeSessions({
+          workflow_name: workflowName,
+          scope_key: conversation.id,
+          ...(nodeId !== undefined ? { node_id: nodeId } : {}),
+        });
+        const nodeSuffix = nodeId ? ` node \`${nodeId}\` of` : '';
+        return {
+          success: true,
+          message: `Cleared ${deleted} persisted session(s) for${nodeSuffix} workflow \`${workflowName}\` in this conversation.`,
+        };
+      } catch (error) {
+        const err = error as Error;
+        getLog().error({ err, workflowName, nodeId }, 'cmd.workflow_reset_sessions_failed');
+        return {
+          success: false,
+          message: `Failed to reset workflow sessions: ${err.message}`,
+        };
       }
     }
 

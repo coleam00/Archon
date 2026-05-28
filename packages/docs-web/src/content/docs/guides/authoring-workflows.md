@@ -576,6 +576,73 @@ On resume, `fetch-data` re-runs regardless of prior success, so `process-data` r
 
 ---
 
+## Persistent Sessions Across Re-Runs
+
+Different from resume: when you invoke the same workflow *again* with a follow-up prompt, every AI node normally starts fresh and pays to re-establish context. Set `persist_session: true` on a node to make its provider session ID stick across runs, so subsequent invocations continue the prior conversation for that role.
+
+```yaml
+name: feature-dev
+description: plan → implement → review with cross-run memory
+provider: claude
+nodes:
+  - id: planner
+    prompt: "Plan the implementation for: $ARGUMENTS"
+    persist_session: true
+
+  - id: implementer
+    depends_on: [planner]
+    prompt: "Implement: $planner.output"
+    persist_session: true
+
+  - id: reviewer
+    depends_on: [implementer]
+    prompt: "Review the implementation against the plan."
+    persist_session: true
+```
+
+Run it once with `"add OAuth login"`, again with `"now add MFA"` — each role continues its prior conversation. The reviewer remembers what it already flagged; the planner remembers it chose Google OAuth.
+
+### Scope
+
+Sessions are keyed by `(workflow_name, node_id, scope_key, provider)`. The default scope is the current conversation's UUID — so each chat thread has its own per-node memory.
+
+### Workflow-level default
+
+```yaml
+persist_sessions: true   # All AI nodes default to persist_session: true
+nodes:
+  - id: validator
+    persist_session: false   # Opt this node back out
+```
+
+### Capability requirement
+
+The resolved provider must declare `sessionResume: true` in its capabilities. The loader rejects workflows that set `persist_session: true` against a non-resume-capable provider at the explicit-provider level; the executor catches the implicit-default-provider case at runtime.
+
+### `context: fresh` overrides
+
+A node with `context: fresh` skips persistence (and in-run threading). The explicit "always fresh" intent wins over `persist_session`.
+
+### Clearing memory
+
+| Surface | Command |
+| --- | --- |
+| Chat | `/workflow reset-sessions <workflow-name> [<node-id>]` (scoped to current conversation) |
+| CLI | `archon workflow reset-sessions <workflow-name> [--scope <key>] [--node <id>] [--yes]` |
+| REST | `DELETE /api/workflows/{name}/node-sessions?scope=<key>&node=<id>` |
+
+Without `--scope`, the CLI deletes across every scope (requires `--yes`); chat scopes automatically to the current conversation.
+
+### Cost caveat
+
+Persistent sessions on Codex/Pi replay the full rollout on each turn, so token cost grows with iteration depth. Claude auto-compacts. If a workflow's persistent sessions get expensive, reset them and start fresh.
+
+### Distinct from `AgentRequestOptions.persistSession`
+
+The Claude Agent SDK also has a `persistSession` flag controlling whether the SDK writes its session transcript to disk. That is a *different* concept — local file persistence inside the SDK. This `persist_session:` field is about Archon's database-stored cross-run session ID for workflow nodes. The two operate at different layers and don't conflict.
+
+---
+
 ## The Artifact Chain
 
 Workflows work because **artifacts pass data between nodes**:

@@ -8,6 +8,7 @@ import type { WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import type { MergedConfig } from '../config/config-types';
 import * as workflowDb from '../db/workflows';
 import * as workflowEventDb from '../db/workflow-events';
+import * as workflowNodeSessionDb from '../db/workflow-node-sessions';
 import * as codebaseDb from '../db/codebases';
 import * as envVarDb from '../db/env-vars';
 import { getAgentProvider } from '@archon/providers';
@@ -60,6 +61,9 @@ export function createWorkflowStore(): IWorkflowStore {
     getCompletedDagNodeOutputs: workflowEventDb.getCompletedDagNodeOutputs,
     getCodebase: codebaseDb.getCodebase,
     getCodebaseEnvVars: envVarDb.getCodebaseEnvVars,
+    getWorkflowNodeSession: workflowNodeSessionDb.getWorkflowNodeSession,
+    upsertWorkflowNodeSession: workflowNodeSessionDb.upsertWorkflowNodeSession,
+    deleteWorkflowNodeSessions: workflowNodeSessionDb.deleteWorkflowNodeSessions,
   };
 }
 

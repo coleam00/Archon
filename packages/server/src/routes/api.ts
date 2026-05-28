@@ -71,6 +71,7 @@ import * as isolationEnvDb from '@archon/core/db/isolation-environments';
 import * as workflowDb from '@archon/core/db/workflows';
 import * as workflowEventDb from '@archon/core/db/workflow-events';
 import * as messageDb from '@archon/core/db/messages';
+import { resetWorkflowNodeSessions } from '@archon/core/operations/workflow-operations';
 import { errorSchema } from './schemas/common.schemas';
 import { updateCheckResponseSchema } from './schemas/system.schemas';
 import {
@@ -91,6 +92,7 @@ import {
   workflowRunsQuerySchema,
   approveWorkflowRunBodySchema,
   rejectWorkflowRunBodySchema,
+  resetWorkflowNodeSessionsResponseSchema,
   listArtifactsResponseSchema,
 } from './schemas/workflow.schemas';
 import {
@@ -750,6 +752,29 @@ const deleteWorkflowRunRoute = createRoute({
     },
     400: jsonError('Bad request'),
     404: jsonError('Not found'),
+    500: jsonError('Server error'),
+  },
+});
+
+const resetWorkflowNodeSessionsRoute = createRoute({
+  method: 'delete',
+  path: '/api/workflows/{name}/node-sessions',
+  tags: ['Workflows'],
+  summary:
+    'Reset persisted per-node provider sessions for a workflow. Optional scope and node filters narrow the deletion.',
+  request: {
+    params: z.object({ name: z.string() }),
+    query: z.object({
+      scope: z.string().optional(),
+      node: z.string().optional(),
+    }),
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: resetWorkflowNodeSessionsResponseSchema } },
+      description: 'Sessions deleted (deleted count may be 0)',
+    },
+    400: jsonError('Bad request'),
     500: jsonError('Server error'),
   },
 });
@@ -2335,6 +2360,30 @@ export function registerApiRoutes(
     } catch (error) {
       getLog().error({ err: error, runId }, 'api.workflow_run_delete_failed');
       return apiError(c, 500, 'Failed to delete workflow run');
+    }
+  });
+
+  // DELETE /api/workflows/:name/node-sessions - Reset persisted per-node provider sessions
+  registerOpenApiRoute(resetWorkflowNodeSessionsRoute, async c => {
+    const workflowName = c.req.param('name') ?? '';
+    if (!workflowName) {
+      return apiError(c, 400, 'Workflow name is required');
+    }
+    const scope = c.req.query('scope') ?? undefined;
+    const node = c.req.query('node') ?? undefined;
+    try {
+      const { deleted } = await resetWorkflowNodeSessions({
+        workflow_name: workflowName,
+        ...(scope !== undefined ? { scope_key: scope } : {}),
+        ...(node !== undefined ? { node_id: node } : {}),
+      });
+      return c.json({ success: true, deleted });
+    } catch (error) {
+      getLog().error(
+        { err: error, workflowName, scope, node },
+        'api.workflow_reset_node_sessions_failed'
+      );
+      return apiError(c, 500, 'Failed to reset workflow node sessions');
     }
   });
 
