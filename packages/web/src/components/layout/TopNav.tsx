@@ -66,20 +66,32 @@ export function TopNav(): React.ReactElement {
           )}
         </NavLink>
       ))}
-      <span className="ml-auto text-xs text-[#666666]">
-        v{import.meta.env.VITE_APP_VERSION as string}
-        {updateCheck?.updateAvailable && updateCheck.releaseUrl && (
-          <a
-            href={updateCheck.releaseUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="ml-1.5 inline-flex items-center gap-1 text-xs text-[#0000FF] hover:underline"
-            title={`v${updateCheck.latestVersion} available`}
-          >
-            <span className="inline-block h-1.5 w-1.5 bg-black" />v{updateCheck.latestVersion}
-          </a>
-        )}
-      </span>
+      <div className="ml-auto flex items-center gap-3">
+        <Link
+          to="/console"
+          title="Try the redesigned console UI (early access)"
+          className="inline-flex items-center gap-1.5 border-[3px] border-black bg-black px-2.5 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-[#333333]"
+        >
+          <span>Try the new console UI</span>
+          <span aria-hidden className="inline-block">
+            →
+          </span>
+        </Link>
+        <span className="text-xs text-[#666666]">
+          v{import.meta.env.VITE_APP_VERSION as string}
+          {updateCheck?.updateAvailable && updateCheck.releaseUrl && (
+            <a
+              href={updateCheck.releaseUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="ml-1.5 inline-flex items-center gap-1 text-xs text-[#0000FF] hover:underline"
+              title={`v${updateCheck.latestVersion} available`}
+            >
+              <span className="inline-block h-1.5 w-1.5 bg-black" />v{updateCheck.latestVersion}
+            </a>
+          )}
+        </span>
+      </div>
     </nav>
   );
 }

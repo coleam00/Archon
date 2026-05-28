@@ -4,7 +4,7 @@ import type { NodeProps, Node } from '@xyflow/react';
 import type { DagNode } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
-export type NodeType = 'command' | 'prompt' | 'bash' | 'loop';
+export type NodeType = 'command' | 'prompt' | 'bash' | 'loop' | 'approval';
 
 export interface DagNodeData extends DagNode {
   /** For command nodes: the command name. For prompt nodes: display label ("Prompt"). For bash: display label ("Shell"). */
@@ -44,18 +44,25 @@ const TYPE_CONFIG = {
     badgeBg: 'bg-node-loop/20',
     badgeText: 'text-node-loop',
   },
+  approval: {
+    badge: 'APPROVAL',
+    stripeColor: 'bg-node-approval',
+    badgeBg: 'bg-node-approval/20',
+    badgeText: 'text-node-approval',
+  },
 } as const;
 
-function getContentPreview(data: DagNodeData): string {
+export function getContentPreview(data: DagNodeData): string {
   switch (data.nodeType) {
     case 'command':
       return data.label;
     case 'prompt':
+    case 'loop':
       return data.promptText?.split('\n')[0] ?? '';
     case 'bash':
       return data.bashScript?.split('\n')[0] ?? '';
-    case 'loop':
-      return data.loop?.prompt.split('\n')[0] ?? '';
+    case 'approval':
+      return '';
   }
 }
 

@@ -45,6 +45,7 @@
   --node-prompt: #000000;
   --node-bash: #ffa500;
   --node-loop: #008000;
+  --node-approval: #ff6600;
 
   /* shadcn variables mapped to RawBlock theme */
   --radius: 0px;
@@ -106,6 +107,7 @@
   --color-node-prompt: var(--node-prompt);
   --color-node-bash: var(--node-bash);
   --color-node-loop: var(--node-loop);
+  --color-node-approval: var(--node-approval);
 
   /* Typography - RawBlock fonts */
   --font-sans: 'Work Sans', ui-sans-serif, system-ui, sans-serif;
@@ -212,6 +214,13 @@ body {
 .chat-markdown p {
   margin-top: 0.5em;
   margin-bottom: 0.5em;
+  overflow-wrap: break-word;
+}
+
+.chat-markdown li,
+.chat-markdown td,
+.chat-markdown a {
+  overflow-wrap: break-word;
 }
 
 .chat-markdown p:first-child {

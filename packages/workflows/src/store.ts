@@ -16,6 +16,7 @@ export const WORKFLOW_EVENT_TYPES = [
   'node_failed',
   'node_skipped',
   'node_skipped_prior_success',
+  'node_always_run_reset',
   'loop_iteration_started',
   'loop_iteration_completed',
   'loop_iteration_failed',
@@ -41,6 +42,8 @@ export interface IWorkflowStore {
     metadata?: Record<string, unknown>;
     working_path?: string;
     parent_conversation_id?: string;
+    /** Archon user UUID; populated via ExecuteWorkflowOptions.userId. */
+    user_id?: string;
   }): Promise<WorkflowRun>;
   getWorkflowRun(id: string): Promise<WorkflowRun | null>;
   /**

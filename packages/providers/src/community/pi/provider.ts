@@ -15,10 +15,10 @@ import { PI_CAPABILITIES } from './capabilities';
 import { parsePiConfig } from './config';
 import { parsePiModelRef } from './model-ref';
 
-// IMPORTANT: Do NOT add static `import { ... } from '@mariozechner/*'` here,
+// IMPORTANT: Do NOT add static `import { ... } from '@earendil-works/*'` here,
 // and do NOT statically import sibling modules that themselves import runtime
 // values from Pi (options-translator, resource-loader, session-resolver,
-// ui-context-stub, event-bridge). Pi's `@mariozechner/pi-coding-agent/dist/config.js`
+// ui-context-stub, event-bridge). Pi's `@earendil-works/pi-coding-agent/dist/config.js`
 // runs `readFileSync(getPackageJsonPath(), "utf-8")` at module load; inside a
 // compiled Archon binary `getPackageJsonPath()` resolves to
 // `dirname(process.execPath) + "/package.json"` — a path that doesn't exist —
@@ -90,17 +90,24 @@ function ensurePiPackageDirShim(): void {
   const shimDir = join(tmpdir(), 'archon-pi-shim');
   const shimPkgJson = join(shimDir, 'package.json');
   if (!existsSync(shimPkgJson)) {
-    mkdirSync(shimDir, { recursive: true });
     // `piConfig: {}` is explicit so Pi's defaults (`name: 'pi'`,
     // `configDir: '.pi'`) kick in — matches Pi's standalone behavior.
-    writeFileSync(
-      shimPkgJson,
-      JSON.stringify({
-        name: 'archon-pi-shim',
-        version: '0.0.0',
-        piConfig: {},
-      })
-    );
+    try {
+      mkdirSync(shimDir, { recursive: true });
+      writeFileSync(
+        shimPkgJson,
+        JSON.stringify({
+          name: 'archon-pi-shim',
+          version: '0.0.0',
+          piConfig: {},
+        })
+      );
+    } catch (error) {
+      // Surface as a classified error so the executor's catch sees a known
+      // shape instead of a raw EACCES/ENOSPC from node:fs.
+      const err = error as NodeJS.ErrnoException;
+      throw new Error(`Pi shim setup failed at ${shimDir}: ${err.message}`);
+    }
   }
   process.env.PI_PACKAGE_DIR = shimDir;
 }
@@ -133,32 +140,14 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-/**
- * Append a "respond with JSON matching this schema" instruction to the user
- * prompt so Pi-backed models produce parseable structured output. Pi's SDK
- * has no JSON-mode equivalent to Claude's outputFormat or Codex's
- * outputSchema, so this is a best-effort fallback: the event bridge parses
- * the assistant transcript on agent_end. Models that reliably follow
- * instruction (GPT-5, Claude, Gemini 2.x, recent Qwen Coder, DeepSeek V3)
- * return clean JSON; models that don't produce a parse failure, which the
- * executor surfaces via the existing dag.structured_output_missing warning.
- */
-export function augmentPromptForJsonSchema(
-  prompt: string,
-  schema: Record<string, unknown>
-): string {
-  return `${prompt}
-
----
-
-CRITICAL: Respond with ONLY a JSON object matching the schema below. No prose before or after the JSON. No markdown code fences. Just the raw JSON object as your final message.
-
-Schema:
-${JSON.stringify(schema, null, 2)}`;
-}
+// Structured-output prompt augmentation is shared across providers. Import
+// once for local use and re-export so existing callers and tests keep their
+// import path stable; new providers should import from `../../shared/structured-output`.
+import { augmentPromptForJsonSchema } from '../../shared/structured-output';
+export { augmentPromptForJsonSchema };
 
 /**
- * Pi community provider — wraps `@mariozechner/pi-coding-agent`'s full
+ * Pi community provider — wraps `@earendil-works/pi-coding-agent`'s full
  * coding-agent harness. Each `sendQuery()` call creates a fresh session
  * (no reuse) so concurrent calls don't collide.
  */
@@ -192,7 +181,7 @@ export class PiProvider implements IAgentProvider {
       { resolvePiSession },
       { createArchonUIBridge, createArchonUIContext },
     ] = await Promise.all([
-      import('@mariozechner/pi-coding-agent'),
+      import('@earendil-works/pi-coding-agent'),
       import('./event-bridge'),
       import('./options-translator'),
       import('./resource-loader'),
@@ -488,7 +477,21 @@ export class PiProvider implements IAgentProvider {
       settingsManager,
       resourceLoader,
       ...(thinkingLevel ? { thinkingLevel } : {}),
-      ...(filteredTools !== undefined ? { tools: filteredTools } : {}),
+      // Pi 0.68+: `tools` was repurposed as a string[] allowlist of built-in
+      // tool names; the actual Tool[] payload now goes through `customTools`.
+      // `noTools: "builtin"` suppresses the default built-in set so our
+      // filtered (and env-injected bash) list isn't doubled up (the
+      // suppression-behavior bug was fixed in pi 0.70.0). When filteredTools
+      // is undefined we keep Pi's defaults — no overrides.
+      //
+      // `customTools` is also the only path through which we can attach a
+      // BashSpawnHook for managed-env injection: Pi's built-in bash tool is
+      // pre-constructed without a spawnHook (see resolvePiTools in
+      // options-translator.ts), so the env-aware bash MUST go through
+      // customTools, not just for tool restriction.
+      ...(filteredTools !== undefined
+        ? { customTools: filteredTools, noTools: 'builtin' as const }
+        : {}),
     });
 
     // Extension models aren't in the static catalog — skip the fallback warning.

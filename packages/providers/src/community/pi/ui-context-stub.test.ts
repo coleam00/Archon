@@ -107,10 +107,24 @@ describe('createArchonUIContext', () => {
     expect(result.error).toBeDefined();
   });
 
-  test('theme getter returns a proxy that throws on property access', () => {
+  test('theme getter returns identity-decorator passthroughs', () => {
+    // The themeProxy returns `lastStringArg` for unknown style methods so
+    // extensions that decorate text (`theme.fg(color, text)`, `theme.bold(text)`,
+    // etc.) get an unstyled string back rather than crashing — see the
+    // docstring on createArchonUIContext for why plannotator depends on this.
     const { ui } = mk();
     const themeRef = ui.theme;
-    expect(() => themeRef.fg('accent', 'text')).toThrow(/Archon's remote UI stub/);
+    // ExtensionUIContext['theme'] is opaque to TS; we exercise the runtime
+    // proxy contract directly.
+    const themeAny = themeRef as unknown as Record<string, (...args: unknown[]) => unknown>;
+    expect(themeAny.fg('accent', 'text')).toBe('text');
+    expect(themeAny.bold('hello')).toBe('hello');
+    // Known shape returns from the explicit `if` arms in the proxy:
+    expect(themeAny.getColorMode()).toBe('truecolor');
+    expect(themeAny.getFgAnsi('accent')).toBe('');
+    // Border-color decorators are factories returning passthrough functions.
+    const thinkingBorder = themeAny.getThinkingBorderColor() as (s: string) => string;
+    expect(thinkingBorder('border')).toBe('border');
   });
 
   test('onTerminalInput returns a disposer that is safe to call', () => {

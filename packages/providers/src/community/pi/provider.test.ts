@@ -1,5 +1,9 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
-import type { AgentSessionEvent } from '@mariozechner/pi-coding-agent';
+import type { AgentSessionEvent } from '@earendil-works/pi-coding-agent';
 
 import { createMockLogger } from '../../test/mocks/logger';
 
@@ -129,7 +133,7 @@ const mockCreateGrepTool = mock((_cwd: string) => ({ __piTool: 'grep' }));
 const mockCreateFindTool = mock((_cwd: string) => ({ __piTool: 'find' }));
 const mockCreateLsTool = mock((_cwd: string) => ({ __piTool: 'ls' }));
 
-mock.module('@mariozechner/pi-coding-agent', () => ({
+mock.module('@earendil-works/pi-coding-agent', () => ({
   createAgentSession: mockCreateAgentSession,
   AuthStorage: { create: mockAuthCreate },
   ModelRegistry: { create: mockModelRegistryCreate },
@@ -143,6 +147,10 @@ mock.module('@mariozechner/pi-coding-agent', () => ({
     inMemory: mockSettingsManagerInMemory,
   },
   DefaultResourceLoader: MockDefaultResourceLoader,
+  // Stub for the value import added when resource-loader.ts started passing
+  // an explicit `agentDir` to DefaultResourceLoader (required since
+  // pi-coding-agent 0.68+). Returns a deterministic path for tests.
+  getAgentDir: () => '/mock/.pi/agent',
   createReadTool: mockCreateReadTool,
   createBashTool: mockCreateBashTool,
   createEditTool: mockCreateEditTool,
@@ -248,6 +256,21 @@ describe('PiProvider', () => {
     await consume(new PiProvider().sendQuery('hi', '/tmp'));
     expect(process.env.PI_PACKAGE_DIR).toBeDefined();
     expect(process.env.PI_PACKAGE_DIR).toContain('archon-pi-shim');
+
+    // Stub contents are load-bearing: Pi reads `version` to populate its
+    // user-agent and `piConfig` (even when empty) to opt into the defaults
+    // path instead of erroring on missing config. Asserting on shape so a
+    // regression here surfaces in the test suite, not in a Pi runtime crash.
+    const shimDir = process.env.PI_PACKAGE_DIR;
+    expect(shimDir).toBe(join(tmpdir(), 'archon-pi-shim'));
+    const stub = JSON.parse(readFileSync(join(shimDir!, 'package.json'), 'utf8')) as {
+      name: string;
+      version: string;
+      piConfig: Record<string, unknown>;
+    };
+    expect(stub.name).toBe('archon-pi-shim');
+    expect(stub.version).toBe('0.0.0');
+    expect(stub.piConfig).toEqual({});
   });
 
   test('throws when no model is configured', async () => {
@@ -859,8 +882,11 @@ describe('PiProvider', () => {
     );
 
     const [callArgs] = mockCreateAgentSession.mock.calls[0] as [Record<string, unknown>];
-    expect(Array.isArray(callArgs.tools)).toBe(true);
-    const tools = callArgs.tools as Array<{ __piTool: string }>;
+    // Pi 0.68+: customTools holds the actual Tool objects; noTools: "builtin"
+    // suppresses Pi's default built-in set so the customTools list is authoritative.
+    expect(Array.isArray(callArgs.customTools)).toBe(true);
+    expect(callArgs.noTools).toBe('builtin');
+    const tools = callArgs.customTools as Array<{ __piTool: string }>;
     expect(tools.map(t => t.__piTool).sort()).toEqual(['grep', 'read']);
   });
 
@@ -876,7 +902,9 @@ describe('PiProvider', () => {
     );
 
     const [callArgs] = mockCreateAgentSession.mock.calls[0] as [Record<string, unknown>];
-    expect(callArgs.tools).toEqual([]);
+    // Empty customTools + noTools: "builtin" == "no tools at all".
+    expect(callArgs.customTools).toEqual([]);
+    expect(callArgs.noTools).toBe('builtin');
   });
 
   test('unknown tool names yield system warning', async () => {
@@ -909,7 +937,8 @@ describe('PiProvider', () => {
     );
 
     const [callArgs] = mockCreateAgentSession.mock.calls[0] as [Record<string, unknown>];
-    const tools = callArgs.tools as Array<{ __piTool: string }>;
+    const tools = callArgs.customTools as Array<{ __piTool: string }>;
+    expect(callArgs.noTools).toBe('builtin');
     // Pi has 7 built-ins, 2 denied → 5 remain
     expect(tools).toHaveLength(5);
     expect(tools.find(t => t.__piTool === 'bash')).toBeUndefined();
@@ -927,8 +956,10 @@ describe('PiProvider', () => {
     );
 
     const [callArgs] = mockCreateAgentSession.mock.calls[0] as [Record<string, unknown>];
-    // tools key should be absent — Pi uses its default codingTools
-    expect('tools' in callArgs).toBe(false);
+    // No overrides → neither customTools nor noTools should be set; Pi uses
+    // its default built-in tools.
+    expect('customTools' in callArgs).toBe(false);
+    expect('noTools' in callArgs).toBe(false);
   });
 
   test('requestOptions.env with no tool restrictions overrides Pi defaults with env-aware bash', async () => {
@@ -943,9 +974,10 @@ describe('PiProvider', () => {
     );
 
     const [callArgs] = mockCreateAgentSession.mock.calls[0] as [Record<string, unknown>];
-    // Env present → we override Pi's built-in codingTools so bash sees the env.
-    const tools = callArgs.tools as Array<{ __piTool: string }>;
+    // Env present → we override Pi's built-in defaults so bash sees the env.
+    const tools = callArgs.customTools as Array<{ __piTool: string }>;
     expect(Array.isArray(tools)).toBe(true);
+    expect(callArgs.noTools).toBe('builtin');
     expect(tools.map(t => t.__piTool).sort()).toEqual(['bash', 'edit', 'read', 'write']);
 
     const bashCall = mockCreateBashTool.mock.calls.find(call => call[1] !== undefined);

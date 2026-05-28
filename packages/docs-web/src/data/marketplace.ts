@@ -143,4 +143,16 @@ export const marketplaceEntries: MarketplaceEntry[] = [
     tags: ['review', 'automation'],
     archonVersionCompat: '>=0.3.0',
   },
+  {
+    slug: 'piv-system-evolution',
+    name: 'PIV Loop + System Evolution',
+    author: 'coleam00',
+    description:
+      "Runs the PIV loop (Plan-Implement-Validate) on a feature or bug behind four human-in-the-loop gates, then evolves the codebase's own AI Layer from what the run learned. Eight phases are adapted from the agentic-coding-course AI Layer. Ends in a draft PR.",
+    sourceUrl:
+      'https://github.com/coleam00/piv-system-evolution/tree/de8a0e94f9bab1a81a152c62d5d5e4a2023874b3/.archon',
+    sha: 'de8a0e94f9bab1a81a152c62d5d5e4a2023874b3',
+    tags: ['development', 'planning', 'review'],
+    archonVersionCompat: '>=0.3.0',
+  },
 ];

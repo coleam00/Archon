@@ -29,6 +29,7 @@ import type {
   WorkflowDispatchEvent,
 } from '@/lib/types';
 import { applyOnText } from '@/lib/chat-message-reducer';
+import { applySystemStatus } from '@/lib/system-status-reducer';
 import {
   getCachedMessages,
   setCachedMessages,
@@ -563,15 +564,7 @@ export function ChatInterface({ conversationId }: ChatInterfaceProps): React.Rea
   );
 
   const onSystemStatus = useCallback((content: string): void => {
-    setMessages(prev => [
-      ...prev,
-      {
-        id: nextId(),
-        role: 'system' as const,
-        content,
-        timestamp: Date.now(),
-      },
-    ]);
+    setMessages(prev => applySystemStatus(prev, content, nextId));
   }, []);
 
   const { connected } = useSSE(isNewChat ? null : conversationId, {

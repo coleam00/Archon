@@ -41,7 +41,7 @@ DATABASE_URL=postgresql://user:password@host:5432/dbname
 psql $DATABASE_URL < migrations/000_combined.sql
 ```
 
-**For updates to existing installations**, run only the migrations you haven't applied yet:
+**For updates to existing installations**, `000_combined.sql` is idempotent — re-running it picks up any new tables and `ADD COLUMN IF NOT EXISTS` statements (e.g., the `users` / `user_identities` tables and the `user_id` columns added with user identity support) without disturbing existing rows. Alternatively, run only the migrations you haven't applied yet:
 
 ```bash
 # Check which migrations you've already run, then apply new ones:
@@ -119,7 +119,7 @@ psql $DATABASE_URL -c "\dt"
 
 ## Schema Overview
 
-The database has 8 tables, all prefixed with `remote_agent_`:
+The database has 10 tables, all prefixed with `remote_agent_`:
 
 1. **`remote_agent_codebases`** - Repository metadata
    - Commands stored as JSONB: `{command_name: {path, description}}`
@@ -130,6 +130,7 @@ The database has 8 tables, all prefixed with `remote_agent_`:
    - Platform type + conversation ID (unique constraint)
    - Linked to codebase via foreign key
    - AI assistant type locked at creation
+   - Nullable `user_id` records the first user who created the conversation (first-user-wins; later replies in the same thread are attributed on the workflow_run, not here)
 
 3. **`remote_agent_sessions`** - AI session management
    - Active session flag (one per conversation)
@@ -139,11 +140,13 @@ The database has 8 tables, all prefixed with `remote_agent_`:
 4. **`remote_agent_isolation_environments`** - Worktree isolation
    - Tracks git worktrees per issue/PR
    - Enables worktree sharing between linked issues and PRs
+   - Nullable `created_by_user_id` preserves the original creator across re-activation (the `ON CONFLICT DO UPDATE` clause intentionally omits this column)
 
 5. **`remote_agent_workflow_runs`** - Workflow execution tracking
    - Tracks active workflows per conversation
    - Locks concurrent execution per `working_path`: a second dispatch on a path with an active run (status `pending`/`running`/`paused`) is auto-cancelled with an actionable message. Stale `pending` rows older than 5 minutes are treated as orphaned and ignored.
    - Stores workflow state, step progress, and parent conversation linkage
+   - Nullable `user_id` records which user triggered the run
 
 6. **`remote_agent_workflow_events`** - Step-level workflow event log
    - Records step transitions, artifacts, and errors per workflow run
@@ -154,11 +157,23 @@ The database has 8 tables, all prefixed with `remote_agent_`:
    - Persists user and assistant messages with timestamps
    - Stores tool call metadata (name, input, duration) in JSONB
    - Enables message history in Web UI across page refreshes
+   - Nullable `user_id` on user-role rows (NULL on assistant rows since the AI isn't a user)
 
 8. **`remote_agent_codebase_env_vars`** - Per-project env vars for workflow execution
    - Key-value pairs scoped to a codebase
    - Injected into Claude SDK subprocess environment at execution time
    - Managed via Web UI Settings panel; `env:` in `.archon/config.yaml` for CLI users
+
+9. **`remote_agent_users`** - Archon-internal user identity
+   - One row per human (or bot) across all platforms
+   - Created lazily on first sight by any chat/forge adapter
+   - `display_name` and `email` are nullable until enrichment succeeds
+
+10. **`remote_agent_user_identities`** - Platform-to-Archon user mapping
+    - One row per `(platform, platform_user_id)` pair — Slack U-id, Telegram chat id, Discord snowflake, GitHub login, etc.
+    - `UNIQUE(platform, platform_user_id)` enforces deduplication at the DB level
+    - References `users.id` with `ON DELETE CASCADE` (deleting a user removes their identity mappings)
+    - All user_id FKs on the four tables above use `ON DELETE SET NULL` so future user deletion never destructively cascades
 
 ## Migration List
 

@@ -112,4 +112,20 @@ export interface WorkflowDeps {
   store: IWorkflowStore;
   getAgentProvider: AgentProviderFactory;
   loadConfig: (cwd: string) => Promise<WorkflowConfig>;
+  /**
+   * Optional: resolve a fresh GitHub bot token for the given (owner, repo).
+   * Used to inject GH_TOKEN/GITHUB_TOKEN into bash/script subprocess env so
+   * AI-driven `gh` and `git push` operations inside worktrees authenticate
+   * correctly.
+   *
+   *  - App mode (server bootstrap registered a provider): returns a fresh
+   *    installation access token, refreshed transparently from the cache.
+   *  - PAT mode / not configured: returns undefined. The subprocess inherits
+   *    whatever GITHUB_TOKEN already lives on `process.env` (the legacy
+   *    behaviour), so solo installs see zero functional change.
+   *
+   * Implementations must not throw — return undefined on any failure so the
+   * workflow execution falls back to env inheritance rather than aborting.
+   */
+  resolveBotGitHubToken?: (owner: string, repo: string) => Promise<string | undefined>;
 }

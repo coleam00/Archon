@@ -2,12 +2,14 @@
  * Slack platform adapter using @slack/bolt with Socket Mode
  * Handles message sending with markdown block formatting for AI responses
  */
-import { App, LogLevel } from '@slack/bolt';
+import { App, LogLevel, type SlashCommand } from '@slack/bolt';
 import type { IPlatformAdapter, MessageMetadata } from '@archon/core';
+import type { TokenUsage } from '@archon/providers/types';
 import { createLogger } from '@archon/paths';
 import { isSlackUserAuthorized } from './auth';
 import { parseAllowedUserIds } from './auth';
 import { splitIntoParagraphChunks } from '../../utils/message-splitting';
+import { formatCostFooter } from './blocks';
 import type { SlackMessageEvent } from './types';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -19,11 +21,36 @@ function getLog(): ReturnType<typeof createLogger> {
 
 const MAX_MARKDOWN_BLOCK_LENGTH = 12000; // Slack markdown block limit
 
+/** Slack channel + message ts pair used for reactions and edits. */
+export interface SlackMessageRef {
+  channel: string;
+  ts: string;
+}
+
+/** Cap on the in-memory triggering-message map to prevent unbounded growth. */
+const MAX_TRACKED_TRIGGERS = 1000;
+
 export class SlackAdapter implements IPlatformAdapter {
   private app: App;
   private streamingMode: 'stream' | 'batch';
   private messageHandler: ((event: SlackMessageEvent) => Promise<void>) | null = null;
   private allowedUserIds: string[];
+  /** Maps conversation ID → triggering Slack message so the bridge can react / edit. */
+  private triggeringMessages = new Map<string, SlackMessageRef>();
+  /**
+   * Cache of slackUserId → displayName resolved via users.info. In-memory only;
+   * cleared on adapter restart. Avoids repeated API calls for chatty users.
+   * Negative results (lookup failed) are NOT cached — we retry on next sighting
+   * so a transient `missing_scope` or rate_limit doesn't permanently degrade UX.
+   */
+  private displayNameCache = new Map<string, string>();
+  /**
+   * Tripped the first time users.info returns `missing_scope`. Subsequent
+   * sightings of unknown users still attempt the API call (in case the operator
+   * reinstalls with the scope mid-flight), but the WARN log fires only once —
+   * `missing_scope` is a permanent misconfiguration, not a per-user incident.
+   */
+  private missingScopeLogged = false;
 
   constructor(botToken: string, appToken: string, mode: 'stream' | 'batch' = 'batch') {
     this.app = new App({
@@ -48,7 +75,8 @@ export class SlackAdapter implements IPlatformAdapter {
   /**
    * Send a message to a Slack channel/thread
    * Uses markdown block for proper formatting of AI responses
-   * Automatically splits messages longer than 12000 characters
+   * Automatically splits messages longer than 12000 characters and footers each
+   * chunk with `_part i/n_` so users know the output was wrapped.
    */
   async sendMessage(
     channelId: string,
@@ -63,16 +91,20 @@ export class SlackAdapter implements IPlatformAdapter {
       : [channelId, undefined];
 
     if (message.length <= MAX_MARKDOWN_BLOCK_LENGTH) {
-      // Use markdown block for proper formatting
       await this.sendWithMarkdownBlock(channel, message, threadTs);
-    } else {
-      // Long message: split by paragraphs
-      getLog().debug({ messageLength: message.length }, 'slack.message_splitting');
-      const chunks = splitIntoParagraphChunks(message, MAX_MARKDOWN_BLOCK_LENGTH - 500);
+      return;
+    }
 
-      for (const chunk of chunks) {
-        await this.sendWithMarkdownBlock(channel, chunk, threadTs);
-      }
+    getLog().debug({ messageLength: message.length }, 'slack.message_splitting');
+    // Reserve headroom for the trailing "_part i/n_" footer. The longest footer
+    // appears on the largest split (e.g. 7 chunks → "_part 7/7_") and is well
+    // under 32 chars, so a 64-char reserve is comfortable.
+    const chunks = splitIntoParagraphChunks(message, MAX_MARKDOWN_BLOCK_LENGTH - 500 - 64);
+    const total = chunks.length;
+    for (let i = 0; i < total; i++) {
+      const body = chunks[i] ?? '';
+      const annotated = total > 1 ? `${body}\n\n_part ${i + 1}/${total}_` : body;
+      await this.sendWithMarkdownBlock(channel, annotated, threadTs);
     }
   }
 
@@ -112,6 +144,40 @@ export class SlackAdapter implements IPlatformAdapter {
   }
 
   /**
+   * Append a small italic cost / token footer after a direct-chat assistant
+   * turn. Posted as a context block so it visually de-emphasises vs the
+   * assistant reply. No-op when there's nothing meaningful to surface.
+   */
+  async sendResultFooter(
+    conversationId: string,
+    info: { cost?: number; tokens?: TokenUsage; stopReason?: string }
+  ): Promise<void> {
+    const text = formatCostFooter(info);
+    if (!text) return;
+
+    const [channel, threadTs] = conversationId.includes(':')
+      ? conversationId.split(':')
+      : [conversationId, undefined];
+
+    try {
+      await this.app.client.chat.postMessage({
+        channel,
+        thread_ts: threadTs,
+        text,
+        blocks: [
+          {
+            type: 'context',
+            elements: [{ type: 'mrkdwn', text }],
+          },
+        ],
+      });
+    } catch (error) {
+      // Cost footer is informational only — never let it fail the conversation.
+      getLog().warn({ err: error as Error, channel }, 'slack.result_footer_failed');
+    }
+  }
+
+  /**
    * Get the Bolt App instance
    */
   getApp(): App {
@@ -130,6 +196,37 @@ export class SlackAdapter implements IPlatformAdapter {
    */
   getPlatformType(): string {
     return 'slack';
+  }
+
+  /**
+   * Returns the channel/ts of the inbound user message that triggered the
+   * given conversation, if we have it. Workflow bridge uses this to add
+   * lifecycle reactions to the user's mention/DM.
+   */
+  getTriggeringMessage(conversationId: string): SlackMessageRef | undefined {
+    return this.triggeringMessages.get(conversationId);
+  }
+
+  /** Drop the cached triggering message for a conversation (e.g. on workflow terminal). */
+  clearTriggeringMessage(conversationId: string): void {
+    this.triggeringMessages.delete(conversationId);
+  }
+
+  /** Test seam: expose the configured whitelist to the workflow bridge. */
+  getAllowedUserIds(): string[] {
+    return this.allowedUserIds;
+  }
+
+  private trackTrigger(conversationId: string, ref: SlackMessageRef): void {
+    // Defensive cap so chat-only conversations that never run a workflow
+    // can't grow the map without bound.
+    if (this.triggeringMessages.size >= MAX_TRACKED_TRIGGERS) {
+      const oldest = this.triggeringMessages.keys().next().value;
+      if (oldest !== undefined) {
+        this.triggeringMessages.delete(oldest);
+      }
+    }
+    this.triggeringMessages.set(conversationId, ref);
   }
 
   /**
@@ -179,6 +276,48 @@ export class SlackAdapter implements IPlatformAdapter {
     } catch (error) {
       getLog().error({ err: error }, 'slack.thread_history_fetch_failed');
       return [];
+    }
+  }
+
+  /**
+   * Resolve a Slack user id to a human-friendly display name via `users.info`.
+   * Cached in-memory per adapter lifetime. Returns undefined on any failure —
+   * the server handler still records the user identity by Slack id, just without
+   * a display_name backfill.
+   *
+   * Requires bot token scope `users:read`. If the scope is missing, Slack
+   * returns `missing_scope`; the WARN log fires once per adapter lifetime
+   * (gated by `missingScopeLogged`) since the misconfiguration is permanent
+   * rather than per-user. Other failures log per-occurrence.
+   */
+  async fetchDisplayName(slackUserId: string): Promise<string | undefined> {
+    if (!slackUserId) return undefined;
+    const cached = this.displayNameCache.get(slackUserId);
+    if (cached !== undefined) return cached;
+
+    try {
+      const result = await this.app.client.users.info({ user: slackUserId });
+      const u = result.user;
+      const name = u?.real_name ?? u?.profile?.display_name ?? u?.name;
+      if (name) {
+        this.displayNameCache.set(slackUserId, name);
+      }
+      return name;
+    } catch (error) {
+      const err = error as Error & { data?: { error?: string } };
+      const slackErrorCode = err.data?.error;
+      // Strip err.data from the log — Slack SDK error bodies can include API
+      // response metadata (workspace/user info) that's not relevant for ops.
+      const errMessage = err.message;
+      if (slackErrorCode === 'missing_scope') {
+        if (!this.missingScopeLogged) {
+          this.missingScopeLogged = true;
+          getLog().warn({ scope: 'users:read' }, 'slack.users_info_missing_scope');
+        }
+      } else {
+        getLog().warn({ errMessage, slackUserId, slackErrorCode }, 'slack.users_info_failed');
+      }
+      return undefined;
     }
   }
 
@@ -253,13 +392,19 @@ export class SlackAdapter implements IPlatformAdapter {
       }
 
       if (this.messageHandler && event.user) {
+        const displayName = await this.fetchDisplayName(event.user);
         const messageEvent: SlackMessageEvent = {
           text: event.text,
           user: event.user,
           channel: event.channel,
           ts: event.ts,
           thread_ts: event.thread_ts,
+          displayName,
         };
+        this.trackTrigger(this.getConversationId(messageEvent), {
+          channel: event.channel,
+          ts: event.ts,
+        });
         // Fire-and-forget - errors handled by caller
         void this.messageHandler(messageEvent);
       }
@@ -289,19 +434,137 @@ export class SlackAdapter implements IPlatformAdapter {
       }
 
       if (this.messageHandler && 'text' in event && event.text) {
+        const displayName = userId ? await this.fetchDisplayName(userId) : undefined;
         const messageEvent: SlackMessageEvent = {
           text: event.text,
           user: userId ?? '',
           channel: event.channel,
           ts: event.ts,
           thread_ts: 'thread_ts' in event ? event.thread_ts : undefined,
+          displayName,
         };
+        this.trackTrigger(this.getConversationId(messageEvent), {
+          channel: event.channel,
+          ts: event.ts,
+        });
         void this.messageHandler(messageEvent);
       }
     });
 
+    this.app.command('/archon', async ({ command, ack, respond, client }) => {
+      await ack();
+      await this.handleSlashCommand(command, respond, client, 'archon');
+    });
+    this.app.command('/archon-workflow', async ({ command, ack, respond, client }) => {
+      await ack();
+      await this.handleSlashCommand(command, respond, client, 'archon-workflow');
+    });
+
     await this.app.start();
     getLog().info('slack.bot_started');
+  }
+
+  /**
+   * Forward a slash command into the same message-handling flow used by
+   * @mention. Slash commands carry no message ts of their own, so we first
+   * post a visible "seed" message in the channel — its ts becomes the thread
+   * root for everything that follows, giving slash-driven runs the same
+   * threading model as @mention runs.
+   */
+  private async handleSlashCommand(
+    command: SlashCommand,
+    respond: (msg: { response_type: 'ephemeral' | 'in_channel'; text: string }) => Promise<unknown>,
+    client: App['client'],
+    kind: 'archon' | 'archon-workflow'
+  ): Promise<void> {
+    const actorId = command.user_id;
+    if (!isSlackUserAuthorized(actorId, this.allowedUserIds)) {
+      // Silent rejection with masked logging — matches the inbound event-handler
+      // policy (see app_mention / message.im handlers above). Posting a denial
+      // would tell unauthorized users a bot exists and is listening.
+      getLog().info(
+        { maskedUserId: `${actorId.slice(0, 4)}***`, kind },
+        'slack.slash_unauthorized'
+      );
+      return;
+    }
+
+    if (!this.messageHandler) {
+      await respond({
+        response_type: 'ephemeral',
+        text: 'Archon is starting up — try again in a moment.',
+      });
+      return;
+    }
+
+    const raw = (command.text ?? '').trim();
+    if (!raw) {
+      const help =
+        kind === 'archon-workflow'
+          ? 'Usage: `/archon-workflow <subcommand>` — e.g. `list`, `status`, `run <name> <args>`, `approve <id>`, `reject <id> <reason>`, `abandon <id>`.'
+          : 'Usage: `/archon <message>` — talk to Archon in this channel.';
+      await respond({ response_type: 'ephemeral', text: help });
+      return;
+    }
+
+    const messageText = kind === 'archon-workflow' ? `/workflow ${raw}` : raw;
+
+    // Post a visible seed message so the bot's responses thread cleanly under
+    // a parent. The seed quotes the invoking user and the command they ran,
+    // mirroring how @mention surfaces the original message in the thread.
+    let seedTs: string | undefined;
+    try {
+      const seedText =
+        kind === 'archon-workflow'
+          ? `<@${actorId}> ran \`/archon-workflow ${raw}\``
+          : `<@${actorId}> via /archon: ${raw}`;
+      const posted = await client.chat.postMessage({
+        channel: command.channel_id,
+        text: seedText,
+      });
+      seedTs = posted.ts ?? undefined;
+    } catch (error) {
+      getLog().warn(
+        { err: error as Error, channel: command.channel_id, kind },
+        'slack.slash_seed_post_failed'
+      );
+      await respond({
+        response_type: 'ephemeral',
+        text: 'Could not post in this channel — is the bot invited here?',
+      });
+      return;
+    }
+
+    if (!seedTs) {
+      await respond({
+        response_type: 'ephemeral',
+        text: 'Could not start the conversation (Slack returned no message id).',
+      });
+      return;
+    }
+
+    const displayName = await this.fetchDisplayName(actorId);
+    const messageEvent: SlackMessageEvent = {
+      text: messageText,
+      user: actorId,
+      channel: command.channel_id,
+      ts: seedTs,
+      displayName,
+    };
+    this.trackTrigger(this.getConversationId(messageEvent), {
+      channel: command.channel_id,
+      ts: seedTs,
+    });
+
+    await respond({
+      response_type: 'ephemeral',
+      text:
+        kind === 'archon-workflow'
+          ? `Running \`/workflow ${raw}\` — see thread for output.`
+          : `Running \`${raw}\` — see thread for output.`,
+    });
+
+    void this.messageHandler(messageEvent);
   }
 
   /**

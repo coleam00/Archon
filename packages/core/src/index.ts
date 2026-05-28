@@ -24,6 +24,9 @@ export {
   type IWebPlatformAdapter,
   isWebAdapter,
   type MessageMetadata,
+  type User,
+  type UserIdentity,
+  type IdentityPlatform,
 } from './types';
 
 // =============================================================================
@@ -46,6 +49,7 @@ export * as sessionDb from './db/sessions';
 export * as isolationEnvDb from './db/isolation-environments';
 export * as workflowDb from './db/workflows';
 export * as messageDb from './db/messages';
+export * as userDb from './db/users';
 
 // Re-export SessionNotFoundError for error handling
 export { SessionNotFoundError } from './db/sessions';
@@ -55,7 +59,11 @@ export { SessionNotFoundError } from './db/sessions';
 // =============================================================================
 
 // Store adapter (bridges core DB to @archon/workflows IWorkflowStore)
-export { createWorkflowStore } from './workflows/store-adapter';
+export {
+  createWorkflowStore,
+  createWorkflowDeps,
+  registerGitHubAppAuthProvider,
+} from './workflows/store-adapter';
 
 // Workflow Events DB
 export * as workflowEventDb from './db/workflow-events';
@@ -142,6 +150,18 @@ export { sanitizeCredentials, sanitizeError } from './utils/credential-sanitizer
 
 // GitHub GraphQL
 export { getLinkedIssueNumbers } from './utils/github-graphql';
+
+// GitHub App auth
+export {
+  createGitHubAppAuthProvider,
+  loadAppPrivateKey,
+  installCredentialHelper,
+  AppNotInstalledError,
+  AppPrivateKeyError,
+  type GitHubAppConfig,
+  type IGitHubAppAuthProvider,
+  type GitHubAuth,
+} from './github-auth';
 
 // Path validation
 export { isPathWithinWorkspace, validateAndResolvePath } from './utils/path-validation';

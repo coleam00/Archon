@@ -32,4 +32,11 @@ export interface WebhookEvent {
     default_branch: string;
   };
   sender: { login: string };
+  /**
+   * GitHub App webhook deliveries include the installation id on every event.
+   * Used to short-circuit the per-(owner, repo) installation lookup in App
+   * mode — saves one HTTP round trip per inbound event. Absent on PAT-mode
+   * "manual webhook" deliveries; the adapter falls back to the lookup path.
+   */
+  installation?: { id: number };
 }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { AgentSession, AgentSessionEvent } from '@mariozechner/pi-coding-agent';
+import type { AgentSession, AgentSessionEvent } from '@earendil-works/pi-coding-agent';
 
 import type { MessageChunk } from '../../types';
 import {
@@ -422,6 +422,15 @@ describe('tryParseStructuredOutput', () => {
   test('returns undefined on empty string', () => {
     expect(tryParseStructuredOutput('')).toBeUndefined();
     expect(tryParseStructuredOutput('   ')).toBeUndefined();
+  });
+
+  test('returns undefined for valid JSON that is not an object', () => {
+    // Schema augmentation always asks for an object — bare primitives are
+    // valid JSON but not "structured output".
+    expect(tryParseStructuredOutput('null')).toBeUndefined();
+    expect(tryParseStructuredOutput('42')).toBeUndefined();
+    expect(tryParseStructuredOutput('"answer"')).toBeUndefined();
+    expect(tryParseStructuredOutput('true')).toBeUndefined();
   });
 
   test('returns undefined when model wraps JSON in prose with trailing text', () => {

@@ -16,8 +16,8 @@ function describeJsonType(value: unknown): string {
 }
 
 /**
- * Expand $VAR_NAME references in string-valued records from the supplied
- * environment source.
+ * Expand $VAR_NAME and ${VAR_NAME} references in string-valued records from
+ * the supplied environment source.
  */
 function expandEnvVarsInRecord(
   record: Record<string, unknown>,
@@ -32,13 +32,17 @@ function expandEnvVarsInRecord(
         `MCP config ${fieldPath}.${key} must be a string (got ${describeJsonType(val)})`
       );
     }
-    result[key] = val.replace(/\$([A-Z_][A-Z0-9_]*)/g, (_, varName: string) => {
-      const envVal = envSource[varName];
-      if (envVal === undefined) {
-        missingVars.push(varName);
+    result[key] = val.replace(
+      /\$(?:\{([A-Z_][A-Z0-9_]*)\}|([A-Z_][A-Z0-9_]*))/g,
+      (_, braced: string | undefined, bare: string | undefined) => {
+        const varName = braced ?? bare ?? '';
+        const envVal = envSource[varName];
+        if (envVal === undefined) {
+          missingVars.push(varName);
+        }
+        return envVal ?? '';
       }
-      return envVal ?? '';
-    });
+    );
   }
   return result;
 }

@@ -18,7 +18,7 @@
  * undefined so the caller omits `pathToClaudeCodeExecutable` entirely and
  * the SDK resolves via its normal node_modules lookup.
  */
-import { existsSync as _existsSync } from 'node:fs';
+import { existsSync as _existsSync, statSync as _statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { BUNDLED_IS_BINARY, createLogger } from '@archon/paths';
@@ -26,6 +26,64 @@ import { BUNDLED_IS_BINARY, createLogger } from '@archon/paths';
 /** Wrapper for existsSync — enables spyOn in tests (direct imports can't be spied on). */
 export function fileExists(path: string): boolean {
   return _existsSync(path);
+}
+
+/** Platform-specific Claude Code binary filename: `claude.exe` on Windows, `claude` elsewhere. */
+export const CLAUDE_BINARY_NAME = process.platform === 'win32' ? 'claude.exe' : 'claude';
+
+export type PathKind = 'file' | 'directory' | 'missing';
+
+/**
+ * Classify a configured path. The Claude Agent SDK requires a spawnable file:
+ * a directory passes `existsSync` but fails downstream as ENOENT inside the
+ * SDK's `child_process.spawn`, surfaced as the misleading "native binary not
+ * found" error.
+ *
+ * Non-file, non-directory entries (sockets, FIFOs, etc.) report as 'missing'
+ * so the caller's "set to X but unusable" error path fires. Stat errors other
+ * than ENOENT/ENOTDIR (e.g. EACCES) are logged before being collapsed to
+ * 'missing' so operators have a triage breadcrumb for permission issues that
+ * would otherwise surface as a misleading "file does not exist".
+ */
+export function pathKind(path: string): PathKind {
+  try {
+    const stat = _statSync(path);
+    if (stat.isFile()) return 'file';
+    if (stat.isDirectory()) return 'directory';
+    return 'missing';
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+      getLog().warn({ err, path, code }, 'claude.path_stat_failed');
+    }
+    return 'missing';
+  }
+}
+
+/**
+ * Distinguishes missing paths from directories-without-the-expected-binary so
+ * the error message tells the user what to fix. Users commonly point at the
+ * npm platform-package directory (`@anthropic-ai/claude-code-<platform>`),
+ * which contains the binary inside — expand to the contained executable
+ * transparently in that case.
+ */
+function validateAndExpand(rawPath: string, sourceLabel: string): string {
+  const kind = pathKind(rawPath);
+  if (kind === 'file') return rawPath;
+  if (kind === 'directory') {
+    const candidate = join(rawPath, CLAUDE_BINARY_NAME);
+    if (pathKind(candidate) === 'file') return candidate;
+    throw new Error(
+      `${sourceLabel} is set to "${rawPath}", which is a directory, but it does not contain ${CLAUDE_BINARY_NAME}.\n` +
+        'Please point this setting at the Claude Code executable itself (native binary\n' +
+        'from the curl/PowerShell installer, or cli.js from an npm global install).'
+    );
+  }
+  throw new Error(
+    `${sourceLabel} is set to "${rawPath}" but the file does not exist.\n` +
+      'Please verify the path points to the Claude Code executable (native binary\n' +
+      'from the curl/PowerShell installer, or cli.js from an npm global install).'
+  );
 }
 
 /** Lazy-initialized logger */
@@ -73,32 +131,21 @@ export async function resolveClaudeBinaryPath(
   // its resolution order) can pin a known-good binary without a compiled build.
   const envPath = process.env.CLAUDE_BIN_PATH;
   if (envPath) {
-    if (!fileExists(envPath)) {
-      throw new Error(
-        `CLAUDE_BIN_PATH is set to "${envPath}" but the file does not exist.\n` +
-          'Please verify the path points to the Claude Code executable (native binary\n' +
-          'from the curl/PowerShell installer, or cli.js from an npm global install).'
-      );
-    }
-    getLog().info({ binaryPath: envPath, source: 'env' }, 'claude.binary_resolved');
-    return envPath;
+    const resolvedEnv = validateAndExpand(envPath, 'CLAUDE_BIN_PATH');
+    getLog().info({ binaryPath: resolvedEnv, source: 'env' }, 'claude.binary_resolved');
+    return resolvedEnv;
   }
 
   if (!BUNDLED_IS_BINARY) return undefined;
 
   // 2. Config file override
   if (configClaudeBinaryPath) {
-    if (!fileExists(configClaudeBinaryPath)) {
-      throw new Error(
-        `assistants.claude.claudeBinaryPath is set to "${configClaudeBinaryPath}" but the file does not exist.\n` +
-          'Please verify the path in .archon/config.yaml points to the Claude Code executable.'
-      );
-    }
-    getLog().info(
-      { binaryPath: configClaudeBinaryPath, source: 'config' },
-      'claude.binary_resolved'
+    const resolvedConfig = validateAndExpand(
+      configClaudeBinaryPath,
+      'assistants.claude.claudeBinaryPath'
     );
-    return configClaudeBinaryPath;
+    getLog().info({ binaryPath: resolvedConfig, source: 'config' }, 'claude.binary_resolved');
+    return resolvedConfig;
   }
 
   // 3. Autodetect — the Anthropic native installer
@@ -108,11 +155,8 @@ export async function resolveClaudeBinaryPath(
   // the recommended install path don't need any env var or config entry;
   // users who deviate (npm global, custom path, etc.) still set one of
   // the higher-priority sources above.
-  const nativeInstallerPath =
-    process.platform === 'win32'
-      ? join(homedir(), '.local', 'bin', 'claude.exe')
-      : join(homedir(), '.local', 'bin', 'claude');
-  if (fileExists(nativeInstallerPath)) {
+  const nativeInstallerPath = join(homedir(), '.local', 'bin', CLAUDE_BINARY_NAME);
+  if (pathKind(nativeInstallerPath) === 'file') {
     getLog().info(
       { binaryPath: nativeInstallerPath, source: 'autodetect' },
       'claude.binary_resolved'

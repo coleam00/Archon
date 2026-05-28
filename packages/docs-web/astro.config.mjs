@@ -25,6 +25,7 @@ export default defineConfig({
       sidebar: [
         { label: '✦  Marketplace', link: '/workflows/' },
         { label: '🗺️  Roadmap', link: '/roadmap/' },
+        { label: '🎨  Brand', link: '/brand/' },
         {
           label: 'The Book of Archon',
           autogenerate: { directory: 'book' },

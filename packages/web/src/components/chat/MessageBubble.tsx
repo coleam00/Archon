@@ -186,7 +186,9 @@ function MessageBubbleRaw({ message }: MessageBubbleProps): React.ReactElement {
           {isUser ? (
             <div className="flex flex-col gap-1.5">
               <div className="flex items-start gap-2">
-                <p className="text-sm text-white whitespace-pre-wrap flex-1">{message.content}</p>
+                <p className="text-sm text-white whitespace-pre-wrap break-words min-w-0 flex-1">
+                  {message.content}
+                </p>
                 <button
                   onClick={copyMessage}
                   className="shrink-0 mt-0.5 opacity-0 group-hover:opacity-100 transition-opacity text-text-tertiary hover:text-text-primary"
@@ -220,16 +222,19 @@ function MessageBubbleRaw({ message }: MessageBubbleProps): React.ReactElement {
           ) : (
             <div className="chat-markdown max-w-none text-sm text-black">
               {isThinking && (
-                <div className="flex items-center gap-1.5 py-1">
-                  <span className="h-1.5 w-1.5 animate-pulse rounded-none bg-[#666666]" />
-                  <span
-                    className="h-1.5 w-1.5 animate-pulse rounded-none bg-[#666666]"
-                    style={{ animationDelay: '0.2s' }}
-                  />
-                  <span
-                    className="h-1.5 w-1.5 animate-pulse rounded-none bg-[#666666]"
-                    style={{ animationDelay: '0.4s' }}
-                  />
+                <div className="flex items-center gap-2 py-1 text-sm text-[#666666]">
+                  <span className="sr-only">Thinking</span>
+                  <div className="flex items-center gap-1.5" aria-hidden="true">
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-none bg-[#666666]" />
+                    <span
+                      className="h-1.5 w-1.5 animate-pulse rounded-none bg-[#666666]"
+                      style={{ animationDelay: '0.2s' }}
+                    />
+                    <span
+                      className="h-1.5 w-1.5 animate-pulse rounded-none bg-[#666666]"
+                      style={{ animationDelay: '0.4s' }}
+                    />
+                  </div>
                 </div>
               )}
               {isJsonString(message.content) ? (

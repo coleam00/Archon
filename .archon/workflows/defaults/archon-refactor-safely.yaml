@@ -117,7 +117,7 @@ nodes:
       - Rationale for each grouping (cohesion, shared dependencies)
     depends_on: [scan-scope]
     context: fresh
-    denied_tools: [Write, Edit, Bash]
+    denied_tools: [Edit, Bash]
 
   # ═══════════════════════════════════════════════════════════════
   # PHASE 3: PLAN REFACTOR — Ordered task list with rollback strategy
@@ -199,7 +199,7 @@ nodes:
       - Format: `bun run format:check`
     depends_on: [analyze-impact]
     context: fresh
-    denied_tools: [Write, Edit, Bash]
+    denied_tools: [Edit, Bash]
 
   # ═══════════════════════════════════════════════════════════════
   # PHASE 4: EXECUTE REFACTOR — Implements the plan with guardrails
