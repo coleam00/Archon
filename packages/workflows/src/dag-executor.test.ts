@@ -6800,6 +6800,9 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(failed).toBeDefined();
       const data = (failed![0] as Record<string, unknown>).data as Record<string, unknown>;
       expect(String(data.error)).toContain('not found');
+      // The failing command name must travel with the event so consumers of the
+      // event stream see the same context as the structured log.
+      expect(data.command).toBe('does-not-exist-anywhere');
     });
 
     it('fails fast with node_failed when loop.command target file is empty', async () => {
@@ -6851,6 +6854,7 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(failed).toBeDefined();
       const data = (failed![0] as Record<string, unknown>).data as Record<string, unknown>;
       expect(String(data.error)).toContain('empty');
+      expect(data.command).toBe('empty-loop');
     });
 
     it('fails fast with node_failed when loop.command is an unsafe name', async () => {
@@ -6901,6 +6905,7 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(failed).toBeDefined();
       const data = (failed![0] as Record<string, unknown>).data as Record<string, unknown>;
       expect(String(data.error)).toContain('Invalid command name');
+      expect(data.command).toBe('../escape');
     });
 
     it('applies $LOOP_PREV_OUTPUT and $LOOP_USER_INPUT substitution to command-loaded text', async () => {
