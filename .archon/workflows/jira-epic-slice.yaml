@@ -1,0 +1,316 @@
+name: jira-epic-slice
+description: |
+  Use when: User wants to plan and create JIRA tasks from an epic.
+  Triggers: "slice epic", "break down epic", "plan epic tasks", "jira epic tasks",
+            "epic task planning", "create tasks from epic", "epic slice".
+  Input: JIRA epic key (e.g., PROJ-123)
+
+  Workflow:
+  1. Fetch epic details from JIRA (haiku)
+  2. Ask for an optional spec/PRD file for extra context (haiku)
+  3. Discuss and clarify scope with you until approved (sonnet, interactive loop)
+  4. Ask for your expected task count
+  5. Iteratively slice into vertical deliverable tasks until approved (opus, interactive loop)
+  6. Create approved tasks in JIRA with description, implementation notes, and AC (sonnet)
+
+  Requires: .archon/mcp/atlassian.json — configured Atlassian MCP server
+
+provider: claude
+model: sonnet
+interactive: true
+
+nodes:
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 1: FETCH — Get epic details from JIRA
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: fetch-epic
+    model: haiku
+    mcp: .archon/mcp/atlassian.json
+    prompt: |
+      Fetch the full details of JIRA epic $ARGUMENTS.
+
+      Retrieve:
+      - Epic summary and full description
+      - Current status, labels, and priority
+      - Project key and project name
+      - Any existing child issues (stories/tasks already created under this epic)
+      - Sprint, fix version, or target dates if set
+      - Parent initiative or portfolio link if present
+
+      Present a structured summary:
+
+      ## Epic: $ARGUMENTS
+
+      **Summary**: {title}
+      **Project**: {project key} — {project name}
+      **Status**: {status}
+      **Priority**: {priority}
+
+      **Description**:
+      {full description verbatim — do not summarize}
+
+      **Labels**: {labels or "none"}
+      **Existing child issues**: {list with key + title, or "none yet"}
+      **Additional context**: {sprint, fix version, parent links — if set, otherwise omit}
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 2: CONTEXT — Ask for spec/PRD file, read if provided
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: ask-spec-file
+    depends_on: [fetch-epic]
+    approval:
+      message: |
+        Epic fetched. Is there a spec or PRD file with additional context for this epic?
+
+        - If yes, reply with the file path (e.g., /path/to/spec.md or ./docs/prd.md)
+        - If no, type "no"
+      capture_response: true
+
+  - id: fetch-spec-file
+    model: haiku
+    depends_on: [ask-spec-file]
+    prompt: |
+      The user was asked whether a spec or PRD file exists for JIRA epic $ARGUMENTS.
+      Their response: "$ask-spec-file.output"
+
+      If the response is clearly negative ("no", "n", "none", "skip", "nope", or similar):
+      Output exactly: NO_EXTRA_CONTEXT
+
+      Otherwise, treat the response as a file path. Read the file at that path and output
+      its full content:
+
+      ## Spec: {filename}
+      {full file content — do not summarize}
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 3: CLARIFY — Interactive scope discussion
+  # Loops until user signals the scope is clear and approved.
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: clarify-scope
+    model: sonnet
+    depends_on: [fetch-spec-file]
+    loop:
+      prompt: |
+        You are a senior product engineer helping clarify an epic's implementation scope
+        before task planning begins.
+
+        **Epic details**:
+        $fetch-epic.output
+
+        **Additional context (spec/PRD file)**:
+        $fetch-spec-file.output
+
+        **User's latest input**: $LOOP_USER_INPUT
+
+        ---
+
+        ## First iteration (no user input yet):
+
+        1. Synthesize the epic into a clear outcome statement
+        2. Identify any ambiguities or gaps in the description
+        3. Present your understanding:
+
+           ```
+           ## My Understanding
+
+           **Outcome**: {what this epic delivers when complete — one precise sentence}
+           **Business value**: {why it matters and for whom}
+           **Scope boundary**: {initial read on what's in vs out}
+           ```
+
+        4. Ask 3-5 targeted clarifying questions about:
+           - The expected user-facing or system-observable outcome
+           - What "done" looks like for this epic
+           - Any technical constraints or approach preferences
+           - Dependencies on other epics, teams, or systems
+           - Anything important that's absent from the description
+
+        ## Subsequent iterations (user provided input):
+
+        1. Acknowledge and integrate their answers
+        2. If important ambiguities remain, ask max 3 follow-up questions
+        3. When scope is sufficiently clear, present the final scope summary:
+
+           ```
+           ## Scope Summary
+
+           **Outcome**: {precise outcome statement — one sentence}
+           **Key capabilities**:
+           - {capability 1}
+           - {capability 2}
+           **Explicitly out of scope**: {what we are NOT building}
+           **Definition of done**: {how we know the epic is complete}
+           **Key constraints**: {technical, timeline, or dependency constraints}
+           ```
+
+           Then say: "I have a clear picture of the scope. Say **approved** when you're ready to plan the tasks."
+
+        **CRITICAL**: Only emit <promise>SCOPE_APPROVED</promise> when the user's message
+        EXPLICITLY contains "approved", "looks good", "proceed", "yes", or similar unambiguous
+        approval. Questions, feedback, and partial acknowledgements are NOT approval.
+      until: SCOPE_APPROVED
+      max_iterations: 10
+      interactive: true
+      gate_message: |
+        Answer the questions above, add any context I'm missing, or say "approved" when the scope is clear.
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 4: CALIBRATE — Ask for expected task count
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: ask-task-count
+    depends_on: [clarify-scope]
+    approval:
+      message: |
+        Scope approved!
+
+        Before I slice the work, how many tasks are you expecting for this epic?
+        I'll target ±2 of that number.
+
+        Just reply with a number (e.g., "5", "around 6", "7 or 8").
+      capture_response: true
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 5: SLICE — Iterative task planning with opus
+  # Loops until user approves the task breakdown.
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: slice-tasks
+    model: claude-opus-4-7
+    depends_on: [ask-task-count]
+    loop:
+      prompt: |
+        You are a senior engineer designing the task breakdown for a JIRA epic.
+        Think carefully about vertical slices — each task should deliver end-to-end value.
+
+        **Epic**: $ARGUMENTS
+        **Scope**:
+        $clarify-scope.output
+
+        **Target task count**: $ask-task-count.output
+        **User's latest input**: $LOOP_USER_INPUT
+
+        ---
+
+        ## VERTICAL SLICE PRINCIPLES
+
+        Each task must be a **vertical deliverable slice**:
+        - Delivers a user-facing or system-observable outcome end-to-end
+        - Can be tested or reviewed independently
+        - Fits in a single PR
+        - Has a clear definition of done
+
+        Avoid purely horizontal slices (e.g., "all DB migrations", "all UI components",
+        "set up infrastructure"). Only use horizontal slices when there is a genuine
+        technical prerequisite that cannot be avoided.
+
+        ---
+
+        ## First iteration (no user input yet):
+
+        Design the initial breakdown targeting the specified count (±2).
+
+        For EACH task, use this format:
+
+        ```
+        ### Task N: {Verb + Noun — what it delivers}
+
+        **Type**: Story | Task
+
+        **Description**:
+        {What is being built from the user/system perspective. 2-4 sentences.
+        Focus on the outcome, not the implementation steps.}
+
+        **Implementation notes**:
+        {High-level technical approach. Key files, components, or services involved.
+        Important design decisions. Not exhaustive — just enough to guide the implementer.}
+
+        **Acceptance criteria**:
+        - [ ] {Specific, testable criterion}
+        - [ ] {Specific, testable criterion}
+        - [ ] {Specific, testable criterion}
+
+        **Depends on**: None | Task N, Task M
+        **Effort**: XS | S | M | L
+        ```
+
+        After the full list, briefly explain your slicing rationale (2-3 sentences).
+
+        ## Subsequent iterations:
+
+        Process the user's feedback. Show what changed (added/removed/split/merged tasks)
+        and why. Present the full updated task list.
+
+        When the user EXPLICITLY approves (says "approved", "looks good", "create them",
+        "ship it", or similar unambiguous approval):
+        1. Output the final clean task list under a `## FINAL TASKS` header (same format)
+        2. Emit: <promise>TASKS_APPROVED</promise>
+
+        **CRITICAL**: Never emit <promise>TASKS_APPROVED</promise> without EXPLICIT user
+        approval. Positive but ambiguous feedback ("that's reasonable") is NOT approval.
+      until: TASKS_APPROVED
+      max_iterations: 15
+      interactive: true
+      gate_message: |
+        Review the tasks above. Request changes (split, merge, add, remove, adjust AC),
+        or say "approved" to create them in JIRA.
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 6: CREATE — Create approved tasks in JIRA
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: create-tasks
+    model: sonnet
+    depends_on: [slice-tasks]
+    mcp: .archon/mcp/atlassian.json
+    prompt: |
+      Create the approved JIRA tasks from the planning session.
+
+      **Epic key**: $ARGUMENTS
+      **Approved task plan** (use only the FINAL TASKS section):
+      $slice-tasks.output
+
+      Steps:
+
+      1. Look up the current authenticated user's JIRA account ID using your email
+      2. Confirm the epic's project key from $ARGUMENTS
+
+      3. Create tasks in dependency order (tasks that others depend on first).
+         For each task in the FINAL TASKS section:
+
+         a. Create as a Story or Task in the project
+         b. Set the parent/epic link field to $ARGUMENTS
+         c. Assign to the current user (the account ID you looked up in step 1)
+         d. Set the description using this exact Jira markup structure:
+
+            h2. Overview
+            {Description from the plan}
+
+            h2. Implementation Notes
+            {Implementation notes from the plan}
+
+            h2. Acceptance Criteria
+            {Each AC item as a bullet: * [ ] criterion}
+
+         e. Note the newly created issue key for dependency linking
+
+      4. After all tasks are created, set issue links for declared dependencies:
+         - For "Task B depends on Task A": set "Task B is blocked by Task A"
+         Use the "Blocks" / "is blocked by" link type.
+
+      5. Output a completion table:
+
+         ```
+         ## Tasks Created for $ARGUMENTS
+
+         | Key | Title | Type | Depends On |
+         |-----|-------|------|-----------|
+         | {key} | {title} | {Story/Task} | {dep-key or —} |
+
+         Assigned to: {your display name}
+         Epic: {$ARGUMENTS}
+         Total: {N} tasks created
+         ```
