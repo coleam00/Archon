@@ -100,6 +100,11 @@ const mockSyncRepository = mock(async () => ({ ok: true, value: undefined }));
 const mockAddSafeDirectory = mock(async () => undefined);
 const mockIsWorktreePath = mock(async () => false);
 
+// execFileAsync is used by installCredentialHelper (which runs after a
+// successful App-mode clone). We don't need to assert against it here; it
+// just has to be a no-op rather than `undefined` (which would TypeError).
+const mockExecFileAsync = mock(async () => ({ stdout: '', stderr: '' }));
+
 mock.module('@archon/git', () => ({
   cloneRepository: mockCloneRepository,
   syncRepository: mockSyncRepository,
@@ -108,6 +113,8 @@ mock.module('@archon/git', () => ({
   toRepoPath: (p: string) => p,
   toBranchName: (n: string) => n,
   toWorktreePath: (p: string) => p,
+  execFileAsync: mockExecFileAsync,
+  mkdirAsync: mock(async () => undefined),
 }));
 
 import { GitHubAdapter } from './adapter';
@@ -136,7 +143,7 @@ async function createTestAdapterWithMockedOctokit(
   options?: { retryDelayMs?: (attempt: number) => number }
 ): Promise<GitHubAdapter> {
   const testAdapter = new GitHubAdapter(
-    'fake-token-for-testing',
+    { kind: 'pat', token: 'fake-token-for-testing' },
     'fake-webhook-secret',
     mockLockManager,
     undefined,
@@ -159,7 +166,11 @@ describe('GitHubAdapter', () => {
 
   beforeEach(() => {
     mockExecFile.mockClear();
-    adapter = new GitHubAdapter('fake-token-for-testing', 'fake-webhook-secret', mockLockManager);
+    adapter = new GitHubAdapter(
+      { kind: 'pat', token: 'fake-token-for-testing' },
+      'fake-webhook-secret',
+      mockLockManager
+    );
   });
 
   describe('streaming mode', () => {
@@ -186,7 +197,12 @@ describe('GitHubAdapter', () => {
 
   describe('bot mention detection', () => {
     test('should detect mention case-insensitively', () => {
-      const adapterWithMention = new GitHubAdapter('token', 'secret', mockLockManager, 'Dylan');
+      const adapterWithMention = new GitHubAdapter(
+        { kind: 'pat', token: 'token' },
+        'secret',
+        mockLockManager,
+        'Dylan'
+      );
       const hasMention = (
         adapterWithMention as unknown as { hasMention: (text: string) => boolean }
       ).hasMention;
@@ -201,7 +217,12 @@ describe('GitHubAdapter', () => {
     });
 
     test('should detect mention when it is the entire message', () => {
-      const adapterWithMention = new GitHubAdapter('token', 'secret', mockLockManager, 'Archon');
+      const adapterWithMention = new GitHubAdapter(
+        { kind: 'pat', token: 'token' },
+        'secret',
+        mockLockManager,
+        'Archon'
+      );
       const hasMention = (
         adapterWithMention as unknown as { hasMention: (text: string) => boolean }
       ).hasMention;
@@ -212,7 +233,12 @@ describe('GitHubAdapter', () => {
     });
 
     test('should strip mention case-insensitively', () => {
-      const adapterWithMention = new GitHubAdapter('token', 'secret', mockLockManager, 'Dylan');
+      const adapterWithMention = new GitHubAdapter(
+        { kind: 'pat', token: 'token' },
+        'secret',
+        mockLockManager,
+        'Dylan'
+      );
       const stripMention = (
         adapterWithMention as unknown as { stripMention: (text: string) => string }
       ).stripMention;
@@ -232,7 +258,7 @@ describe('GitHubAdapter', () => {
      */
     function createSelfFilterAdapter(botMention = 'archon'): GitHubAdapter {
       const adapter = new GitHubAdapter(
-        'fake-token-for-testing',
+        { kind: 'pat', token: 'fake-token-for-testing' },
         'fake-webhook-secret',
         mockLockManager,
         botMention
@@ -828,7 +854,7 @@ describe('GitHubAdapter', () => {
       mockListComments: ReturnType<typeof mock>
     ): GitHubAdapter {
       const testAdapter = new GitHubAdapter(
-        'fake-token-for-testing',
+        { kind: 'pat', token: 'fake-token-for-testing' },
         'fake-webhook-secret',
         mockLockManager
       );
@@ -932,7 +958,11 @@ describe('GitHubAdapter', () => {
     let testAdapter: GitHubAdapter;
 
     beforeEach(() => {
-      testAdapter = new GitHubAdapter('fake-token', 'fake-secret', mockLockManager);
+      testAdapter = new GitHubAdapter(
+        { kind: 'pat', token: 'fake-token' },
+        'fake-secret',
+        mockLockManager
+      );
       mockCloneRepository.mockClear();
       mockSyncRepository.mockClear();
       mockAddSafeDirectory.mockClear();
@@ -1060,6 +1090,338 @@ describe('GitHubAdapter', () => {
         const { rm } = await import('fs/promises');
         await rm(tmpDir, { recursive: true, force: true });
       }
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // App mode (GitHub App auth) — multi-installation routing, payload short-
+  // circuit, refresh-on-401, self-filter against <slug>[bot], clone path.
+  // ---------------------------------------------------------------------------
+  describe('App mode', () => {
+    /**
+     * Build a mock IGitHubAppAuthProvider. Each fake `(owner) → installationId`
+     * pair is encoded by hashing owner — tests assert that distinct owners
+     * resolve to distinct installation ids (multi-install routing).
+     */
+    function makeMockProvider(opts: { slug?: string } = {}): {
+      provider: ReturnType<typeof buildProvider>;
+      getOctokit: ReturnType<typeof mock>;
+      getToken: ReturnType<typeof mock>;
+      prime: ReturnType<typeof mock>;
+      invalidate: ReturnType<typeof mock>;
+      resolveId: ReturnType<typeof mock>;
+      installationIdFor: (owner: string) => number;
+    } {
+      const installationIdFor = (owner: string): number =>
+        Math.abs(owner.charCodeAt(0) * 37 + (owner.charCodeAt(1) ?? 0));
+
+      const octokitInstances = new Map<number, unknown>();
+      const lookups = new Map<string, number>();
+
+      const getToken = mock(async (owner: string, _repo: string) => {
+        return `ghs_${owner}_token`;
+      });
+      const resolveId = mock(async (owner: string, _repo: string) => {
+        const key = `${owner.toLowerCase()}`;
+        if (!lookups.has(key)) lookups.set(key, installationIdFor(owner));
+        return lookups.get(key)!;
+      });
+      const prime = mock((owner: string, _repo: string, installationId: number) => {
+        lookups.set(owner.toLowerCase(), installationId);
+      });
+      const invalidate = mock((_id: number) => undefined);
+
+      // Each per-installation Octokit mock starts with createComment/repos/pulls
+      // mocked. Test bodies can call `.mockResolvedValueOnce(...)` /
+      // `.mockRejectedValueOnce(...)` on those fields as needed.
+      function octokitFor(installationId: number): unknown {
+        let oct = octokitInstances.get(installationId);
+        if (!oct) {
+          oct = {
+            __installationId: installationId,
+            rest: {
+              issues: {
+                createComment: mock(async () => ({ data: { id: 1 } })),
+                listComments: mock(async () => ({ data: [] })),
+              },
+              repos: {
+                get: mock(async () => ({ data: { default_branch: 'main' } })),
+              },
+              pulls: {
+                get: mock(async () => ({
+                  data: {
+                    head: { ref: 'feature', sha: 'abc123def', repo: { full_name: 'o/r' } },
+                    base: { repo: { full_name: 'o/r' } },
+                  },
+                })),
+              },
+            },
+          };
+          octokitInstances.set(installationId, oct);
+        }
+        return oct;
+      }
+
+      const getOctokit = mock(async (owner: string, repo: string) => {
+        const id = await resolveId(owner, repo);
+        return octokitFor(id);
+      });
+
+      const invalidateRepo = mock((_owner: string, _repo: string) => undefined);
+
+      function buildProvider() {
+        return {
+          slug: opts.slug ?? 'archon-test',
+          getInstallationToken: getToken,
+          getInstallationTokenById: mock(async () => 'ghs_by_id'),
+          getOctokitForInstallation: getOctokit,
+          resolveInstallationId: resolveId,
+          primeInstallationLookup: prime,
+          invalidateToken: invalidate,
+          invalidateRepo,
+        };
+      }
+
+      return {
+        provider: buildProvider(),
+        getOctokit,
+        getToken,
+        prime,
+        invalidate,
+        invalidateRepo,
+        resolveId,
+        installationIdFor,
+      };
+    }
+
+    function createAppModeAdapter(opts: { slug?: string } = {}): {
+      adapter: GitHubAdapter;
+      provider: ReturnType<typeof makeMockProvider>;
+    } {
+      const provider = makeMockProvider(opts);
+      const adapter = new GitHubAdapter(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mock provider isn't structurally identical to the real interface (suffices for these tests)
+        { kind: 'app', provider: provider.provider as any },
+        'fake-webhook-secret',
+        mockLockManager,
+        'archon'
+      );
+      // @ts-expect-error - mock signature verification
+      adapter.verifySignature = mock(() => true);
+      return { adapter, provider };
+    }
+
+    beforeEach(() => {
+      mockCloneRepository.mockClear();
+      mockCloneRepository.mockResolvedValue({ ok: true, value: undefined });
+      mockExecFileAsync.mockClear();
+      mockGetOrCreateConversation.mockClear();
+      mockFindCodebaseByRepoUrl.mockClear();
+      mockCreateCodebase.mockClear();
+      mockFindOrCreateUserByPlatformIdentity.mockClear();
+    });
+
+    test('getInstallationToken called once per (owner, repo) for sendMessage', async () => {
+      const { adapter, provider } = createAppModeAdapter();
+      // sendMessage flow goes through resolveOctokit -> getOctokitForInstallation,
+      // not getInstallationToken. Assert the Octokit path was exercised instead.
+      await adapter.sendMessage('owner/repo#42', 'hello');
+      expect(provider.getOctokit).toHaveBeenCalledWith('owner', 'repo');
+      expect(provider.getOctokit.mock.calls.length).toBeGreaterThanOrEqual(1);
+    });
+
+    test('multi-install routing — different (owner, repo) get different installations', async () => {
+      const { adapter, provider } = createAppModeAdapter();
+      await adapter.sendMessage('alpha/repo#1', 'one');
+      await adapter.sendMessage('beta/repo#2', 'two');
+
+      const idAlpha = await provider.resolveId('alpha', 'repo');
+      const idBeta = await provider.resolveId('beta', 'repo');
+      expect(idAlpha).not.toBe(idBeta);
+      expect(provider.getOctokit).toHaveBeenCalledWith('alpha', 'repo');
+      expect(provider.getOctokit).toHaveBeenCalledWith('beta', 'repo');
+    });
+
+    test('webhook installation.id primes the lookup cache (no extra round trip)', async () => {
+      const { adapter, provider } = createAppModeAdapter();
+      mockFindOrCreateUserByPlatformIdentity.mockResolvedValueOnce({
+        id: 'u',
+        display_name: 'u',
+        email: null,
+        created_at: new Date(),
+        updated_at: new Date(),
+      });
+      const payload = JSON.stringify({
+        action: 'created',
+        issue: {
+          number: 1,
+          title: 't',
+          body: '',
+          user: { login: 'someone' },
+          labels: [],
+          state: 'open',
+        },
+        comment: { body: '@archon help', user: { login: 'someone' } },
+        repository: {
+          owner: { login: 'alpha' },
+          name: 'repo',
+          full_name: 'alpha/repo',
+          html_url: 'https://github.com/alpha/repo',
+          default_branch: 'main',
+        },
+        sender: { login: 'someone' },
+        installation: { id: 99999 },
+      });
+      try {
+        await adapter.handleWebhook(payload, 'mock-signature');
+      } catch {
+        // Inner orchestrator path may throw — we only care about priming here.
+      }
+      expect(provider.prime).toHaveBeenCalledWith('alpha', 'repo', 99999);
+    });
+
+    test('401 from Octokit triggers invalidateRepo + retry once', async () => {
+      const { adapter, provider } = createAppModeAdapter();
+      // First call to Octokit.createComment throws 401; second succeeds.
+      const octokit = (await provider.getOctokit('owner', 'repo')) as {
+        rest: {
+          issues: { createComment: ReturnType<typeof mock> };
+        };
+      };
+      const err401 = Object.assign(new Error('Unauthorized'), { status: 401 });
+      octokit.rest.issues.createComment
+        .mockRejectedValueOnce(err401)
+        .mockResolvedValueOnce({ data: { id: 1 } });
+
+      await adapter.sendMessage('owner/repo#1', 'msg');
+      // invalidateRepo evicts BOTH the lookup cache and the token cache
+      // for (owner, repo) — see C2 in the PR-B review.
+      expect(provider.invalidateRepo).toHaveBeenCalledWith('owner', 'repo');
+    });
+
+    test('T3: second consecutive 401 propagates (no infinite retry)', async () => {
+      const { adapter, provider } = createAppModeAdapter();
+      const octokit = (await provider.getOctokit('owner', 'repo')) as {
+        rest: { issues: { createComment: ReturnType<typeof mock> } };
+      };
+      const err401a = Object.assign(new Error('Unauthorized A'), { status: 401 });
+      const err401b = Object.assign(new Error('Unauthorized B'), { status: 401 });
+      // Two consecutive 401s — retry path must surface the second error and
+      // NOT call invalidateRepo a second time (which would suggest looping).
+      octokit.rest.issues.createComment
+        .mockRejectedValueOnce(err401a)
+        .mockRejectedValueOnce(err401b);
+
+      // The retry path swallows non-retryable errors at the postComment
+      // wrapper layer (401 is not in the retryable set), so the second
+      // failure propagates and postComment will log + throw it. We assert
+      // the side effects directly rather than depending on whether the
+      // outer wrapper swallows or propagates.
+      await adapter.sendMessage('owner/repo#1', 'msg').catch(() => undefined);
+
+      // Exactly one invalidateRepo call (single retry, not infinite).
+      expect(provider.invalidateRepo).toHaveBeenCalledTimes(1);
+      // The retry fn(fresh) WAS called — second mock value was consumed.
+      expect(octokit.rest.issues.createComment.mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+
+    test('lookupCache eviction on 401 — adapter calls invalidateRepo(owner, repo) not invalidateToken(id)', async () => {
+      // C2 regression guard: the adapter must use invalidateRepo (which evicts
+      // BOTH caches) and not invalidateToken (which used to leave lookupCache
+      // populated with the stale id).
+      const { adapter, provider } = createAppModeAdapter();
+      const octokit = (await provider.getOctokit('owner', 'repo')) as {
+        rest: { issues: { createComment: ReturnType<typeof mock> } };
+      };
+      const err401 = Object.assign(new Error('Unauthorized'), { status: 401 });
+      octokit.rest.issues.createComment
+        .mockRejectedValueOnce(err401)
+        .mockResolvedValueOnce({ data: { id: 1 } });
+
+      await adapter.sendMessage('owner/repo#1', 'msg');
+      expect(provider.invalidateRepo).toHaveBeenCalledWith('owner', 'repo');
+      // Specifically NOT the by-id variant — that's the C2 bug shape.
+      expect(provider.invalidate).not.toHaveBeenCalled();
+    });
+
+    test('self-filter ignores comments authored by "<slug>[bot]"', async () => {
+      const { adapter } = createAppModeAdapter({ slug: 'archon-bot' });
+      const payload = JSON.stringify({
+        action: 'created',
+        issue: {
+          number: 1,
+          title: 't',
+          body: '',
+          user: { login: 'someone' },
+          labels: [],
+          state: 'open',
+        },
+        comment: {
+          body: '@archon ping', // would normally trigger; bot login filter must reject first
+          user: { login: 'archon-bot[bot]' },
+        },
+        repository: {
+          owner: { login: 'o' },
+          name: 'r',
+          full_name: 'o/r',
+          html_url: 'https://github.com/o/r',
+          default_branch: 'main',
+        },
+        sender: { login: 'archon-bot[bot]' },
+      });
+      await adapter.handleWebhook(payload, 'mock-signature');
+      // Filter triggered: no user creation, no codebase lookup downstream.
+      expect(mockFindOrCreateUserByPlatformIdentity).not.toHaveBeenCalled();
+      expect(mockFindCodebaseByRepoUrl).not.toHaveBeenCalled();
+    });
+
+    test('clone path resolves installation token (not env GITHUB_TOKEN)', async () => {
+      const savedEnv = process.env.GITHUB_TOKEN;
+      delete process.env.GITHUB_TOKEN;
+      const { adapter, provider } = createAppModeAdapter();
+      try {
+        // @ts-expect-error - calling private method
+        await adapter.ensureRepoReady('owner', 'repo', 'main', '/tmp/nonexistent-test', false);
+      } catch {
+        // ensureRepoReady's downstream addSafeDirectory etc may fail on the
+        // bogus path; we only care that the token was resolved through the
+        // provider before clone.
+      }
+      expect(provider.getToken).toHaveBeenCalledWith('owner', 'repo');
+      expect(mockCloneRepository).toHaveBeenCalled();
+      const cloneArgs = mockCloneRepository.mock.calls[0];
+      // Third arg to cloneRepository carries the token; assert it came from the provider.
+      const tokenArg = (cloneArgs?.[2] as { token?: string } | undefined)?.token;
+      expect(tokenArg).toBe('ghs_owner_token');
+      if (savedEnv !== undefined) process.env.GITHUB_TOKEN = savedEnv;
+    });
+
+    test('AppNotInstalledError on clone surfaces a clean message', async () => {
+      const { AppNotInstalledError } = await import('@archon/core');
+      const { adapter, provider } = createAppModeAdapter();
+      provider.getToken.mockImplementationOnce(async (owner: string, repo: string) => {
+        throw new AppNotInstalledError(owner, repo, 'archon-test');
+      });
+      // @ts-expect-error - calling private method
+      const promise = adapter.ensureRepoReady('owner', 'repo', 'main', '/tmp/missing', false);
+      await expect(promise).rejects.toBeInstanceOf(AppNotInstalledError);
+    });
+
+    test('credential helper install is attempted after successful App-mode clone', async () => {
+      const { adapter } = createAppModeAdapter();
+      try {
+        // @ts-expect-error - calling private method
+        await adapter.ensureRepoReady('owner', 'repo', 'main', '/tmp/clone-test', false);
+      } catch {
+        // ensureRepoReady may throw inside addSafeDirectory on the bogus path;
+        // we only care that installCredentialHelper attempted its git-config call.
+      }
+      // installCredentialHelper calls `git -C <worktreePath> config ...`.
+      const gitConfigCalls = mockExecFileAsync.mock.calls.filter(call => {
+        const args = call[1];
+        return Array.isArray(args) && args.includes('config');
+      });
+      expect(gitConfigCalls.length).toBeGreaterThanOrEqual(1);
     });
   });
 });

@@ -842,10 +842,14 @@ Pattern: Use `classifyIsolationError()` (from `@archon/isolation`) to map git er
 - Signature verification required (HMAC SHA-256)
 - Return 200 immediately, process async
 
+**Internal (App mode only; bind 127.0.0.1):**
+- `POST /internal/git-credential` - Git credential helper endpoint. Returns `{token}` for the installation matching the requested host/path. Used by the `git-credential-archon` script in worktree `.git/config` to refresh installation tokens for long-running workflow `git` operations. Hands out installation tokens — MUST NOT be exposed beyond loopback. Server **refuses to start** (not just WARN) if App mode is active and `hostname != 127.0.0.1/localhost`, unless `ARCHON_ALLOW_INTERNAL_ON_PUBLIC_BIND=1` is set as an opt-in escape hatch for deployments where the reverse proxy already drops `/internal/*`.
+
 **Security:**
 - Verify webhook signatures (GitHub: `X-Hub-Signature-256`)
 - Use `c.req.text()` for raw webhook body (signature verification)
 - Never log or expose tokens in responses
+- `/internal/*` paths hand out live credentials — the reverse proxy in production MUST drop them, or the server MUST bind to `127.0.0.1` only.
 
 **@Mention Detection:**
 - Parse `@archon` in issue/PR **comments only** (not descriptions)
