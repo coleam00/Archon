@@ -147,6 +147,10 @@ mock.module('@mariozechner/pi-coding-agent', () => ({
     inMemory: mockSettingsManagerInMemory,
   },
   DefaultResourceLoader: MockDefaultResourceLoader,
+  // Stub for the value import added when resource-loader.ts started passing
+  // an explicit `agentDir` to DefaultResourceLoader (required since
+  // pi-coding-agent 0.71+). Returns a deterministic path for tests.
+  getAgentDir: () => '/mock/.pi/agent',
   createReadTool: mockCreateReadTool,
   createBashTool: mockCreateBashTool,
   createEditTool: mockCreateEditTool,

@@ -1,4 +1,17 @@
-import { DefaultResourceLoader } from '@mariozechner/pi-coding-agent';
+import { DefaultResourceLoader, getAgentDir } from '@mariozechner/pi-coding-agent';
+
+/**
+ * In pi-coding-agent <= 0.67.x, DefaultResourceLoader and PackageManager
+ * fell back to `getAgentDir()` when `options.agentDir` was undefined. In
+ * 0.71.x+, that fallback was removed — callers MUST pass an agentDir or
+ * any `join(agentDir, ...)` call throws `TypeError: paths[0] must be of
+ * type string, got undefined`. This is the symptom that originally pinned
+ * Archon to pi-ai ^0.67.5.
+ *
+ * Call Pi's own `getAgentDir()` so we honor `PI_CODING_AGENT_DIR` (and any
+ * future env-var overrides Pi adds) instead of hardcoding `~/.pi/agent`.
+ * This matches the exact behavior of the pre-0.71 fallback.
+ */
 
 export interface NoopResourceLoaderOptions {
   /**
@@ -68,6 +81,10 @@ export function createNoopResourceLoader(
 ): DefaultResourceLoader {
   return new DefaultResourceLoader({
     cwd,
+    // Required since pi-coding-agent 0.71 dropped the implicit fallback.
+    // Calling Pi's own `getAgentDir()` honors `PI_CODING_AGENT_DIR` and
+    // matches the behavior of the pre-0.71 default exactly.
+    agentDir: getAgentDir(),
     noExtensions: options.enableExtensions !== true,
     noSkills: true,
     noPromptTemplates: true,
