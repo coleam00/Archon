@@ -2,7 +2,7 @@
  * Zod schemas for dashboard workflow run types (enriched JOIN results).
  */
 import { z } from '@hono/zod-openapi';
-import { workflowRunSchema } from '@archon/workflows/schemas/workflow-run';
+import { workflowRunSchema, workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
 
 // ---------------------------------------------------------------------------
 // DashboardWorkflowRun
@@ -28,7 +28,7 @@ export type DashboardWorkflowRun = z.infer<typeof dashboardWorkflowRunSchema>;
 // ---------------------------------------------------------------------------
 
 export const listDashboardRunsOptionsSchema = z.object({
-  status: z.enum(['pending', 'running', 'completed', 'failed', 'cancelled', 'paused']).optional(),
+  status: workflowRunStatusSchema.optional(),
   codebaseId: z.string().optional(),
   search: z.string().optional(),
   after: z.string().optional(),

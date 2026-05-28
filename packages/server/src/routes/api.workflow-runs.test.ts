@@ -629,6 +629,29 @@ describe('GET /api/workflows/runs', () => {
     expect(body.runs[0]?.id).toBe('run-uuid-1');
   });
 
+  test('converts Date objects to ISO strings in response', async () => {
+    const now = new Date('2025-06-01T12:00:00.000Z');
+    mockListWorkflowRuns.mockImplementationOnce(async () => [
+      {
+        ...MOCK_RUNNING_RUN,
+        started_at: now,
+        completed_at: null,
+        last_activity_at: undefined as unknown as string,
+      },
+    ]);
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs');
+    expect(response.status).toBe(200);
+
+    const body = (await response.json()) as {
+      runs: Array<{ started_at: string; completed_at: null; last_activity_at: null }>;
+    };
+    expect(body.runs[0]?.started_at).toBe('2025-06-01T12:00:00.000Z');
+    expect(body.runs[0]?.completed_at).toBeNull();
+    expect(body.runs[0]?.last_activity_at).toBeNull();
+  });
+
   test('filters by status query param', async () => {
     mockListWorkflowRuns.mockImplementationOnce(async () => [MOCK_RUNNING_RUN]);
 

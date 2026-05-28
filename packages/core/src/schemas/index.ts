@@ -15,7 +15,7 @@ export type { MessageRow } from './message';
 
 // User
 export { userRowSchema, userIdentityRowSchema } from './user';
-export type { User, UserIdentity, IdentityPlatform as UserIdentityPlatform } from './user';
+export type { User, UserIdentity } from './user';
 
 // Codebase
 export { codebaseRowSchema } from './codebase';

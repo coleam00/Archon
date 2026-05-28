@@ -125,6 +125,8 @@ import {
 } from './schemas/config.schemas';
 import { providerListResponseSchema } from './schemas/provider.schemas';
 import { getProviderInfoList, isRegisteredProvider } from '@archon/providers';
+import { messageSchema } from './schemas/conversation.schemas';
+import { workflowRunSchema, dashboardWorkflowRunSchema } from './schemas/workflow.schemas';
 
 // Read app version: use build-time constant in binary, package.json in dev
 let appVersion = 'unknown';
@@ -1248,28 +1250,23 @@ export function registerApiRoutes(
   // API transform helpers (Date → ISO string for wire shape)
   // ---------------------------------------------------------------------------
 
-  type ApiConversation = import('zod').infer<
-    typeof import('./schemas/conversation.schemas').conversationSchema
-  >;
-  type ApiCodebase = import('zod').infer<
-    typeof import('./schemas/codebase.schemas').codebaseSchema
-  >;
-  type ApiMessage = import('zod').infer<
-    typeof import('./schemas/conversation.schemas').messageSchema
-  >;
-  type ApiWorkflowRun = import('zod').infer<
-    typeof import('./schemas/workflow.schemas').workflowRunSchema
-  >;
-  type ApiDashboardWorkflowRun = import('zod').infer<
-    typeof import('./schemas/workflow.schemas').dashboardWorkflowRunSchema
-  >;
+  type ApiConversation = z.infer<typeof conversationSchema>;
+  type ApiCodebase = z.infer<typeof codebaseSchema>;
+  type ApiMessage = z.infer<typeof messageSchema>;
+  type ApiWorkflowRun = z.infer<typeof workflowRunSchema>;
+  type ApiDashboardWorkflowRun = z.infer<typeof dashboardWorkflowRunSchema>;
 
   function toISOString(val: Date | string): string;
   function toISOString(val: Date | string | null | undefined): string | null;
   function toISOString(val: Date | string | null | undefined): string | null {
     if (val === null || val === undefined) return null;
     if (typeof val === 'string') return val;
-    return val.toISOString();
+    try {
+      return val.toISOString();
+    } catch (e) {
+      getLog().error({ err: e as Error, invalidDate: val }, 'api.invalid_date_transform');
+      return null;
+    }
   }
 
   function toApiConversation(row: import('@archon/core').Conversation): ApiConversation {
@@ -1289,6 +1286,8 @@ export function registerApiRoutes(
         commands = JSON.parse(commands) as Record<string, { path: string; description: string }>;
       } catch (parseErr) {
         getLog().error({ err: parseErr as Error, codebaseId: row.id }, 'corrupted_commands_json');
+        // Fallback: empty map keeps the API response valid and prevents the endpoint
+        // from crashing. The corruption is already logged above for operator attention.
         commands = {};
       }
     }
@@ -1301,10 +1300,19 @@ export function registerApiRoutes(
   }
 
   function toApiMessage(row: MessageRow): ApiMessage {
-    return {
-      ...row,
-      metadata: typeof row.metadata === 'string' ? row.metadata : JSON.stringify(row.metadata),
-    };
+    let metadata = row.metadata;
+    if (typeof metadata !== 'string') {
+      try {
+        metadata = JSON.stringify(metadata);
+      } catch (e) {
+        getLog().error(
+          { err: e as Error, messageId: row.id },
+          'api.message_metadata_serialize_failed'
+        );
+        metadata = '{}';
+      }
+    }
+    return { ...row, metadata };
   }
 
   function toApiWorkflowRun(row: WorkflowRun): ApiWorkflowRun {

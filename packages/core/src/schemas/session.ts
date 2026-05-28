@@ -31,6 +31,9 @@ export const sessionRowSchema = z.object({
   started_at: z.date(),
   ended_at: z.date().nullable(),
   parent_session_id: z.string().nullable(),
+  // TODO(#1787-followup): TransitionTrigger is a type-only union.
+  // z.custom() provides no runtime validation. When DB parsing is enabled,
+  // replace with a refinement or const array exported from session-transitions.ts.
   transition_reason: z.custom<TransitionTrigger>().nullable(),
   ended_reason: z.custom<TransitionTrigger>().nullable(),
 });
