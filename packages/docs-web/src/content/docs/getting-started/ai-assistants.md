@@ -318,7 +318,7 @@ nodes:
 
 ## Pi (Community Provider)
 
-**One adapter, ~20 LLM backends.** Pi (`@mariozechner/pi-coding-agent`) is a community-maintained coding-agent harness that Archon integrates as the first community provider. It unlocks Anthropic, OpenAI, Google (Gemini + Vertex), Groq, Mistral, Cerebras, xAI, OpenRouter, Hugging Face, and local inference (LM Studio, ollama, llamacpp, custom OpenAI-compatible endpoints registered in `~/.pi/agent/models.json`) under a single `provider: pi` entry.
+**One adapter, ~20 LLM backends.** Pi (`@earendil-works/pi-coding-agent`) is a community-maintained coding-agent harness that Archon integrates as the first community provider. It unlocks Anthropic, OpenAI, Google (Gemini + Vertex), Groq, Mistral, Cerebras, xAI, OpenRouter, Hugging Face, and local inference (LM Studio, ollama, llamacpp, custom OpenAI-compatible endpoints registered in `~/.pi/agent/models.json`) under a single `provider: pi` entry.
 
 Pi is registered as `builtIn: false` — it validates the community-provider seam rather than being a core-team-maintained option. If it proves stable and valuable it may be promoted to `builtIn: true` later.
 
@@ -491,7 +491,8 @@ Unsupported YAML fields trigger a visible warning from the dag-executor when the
 ### See also
 
 - [Adding a Community Provider](../contributing/adding-a-community-provider/) — the contributor-facing guide for extending Archon with your own provider.
-- [Pi on GitHub](https://github.com/badlogic/pi-mono) — upstream project.
+- [Pi documentation](https://pi.dev) — official Pi docs (extensions, model registry, settings).
+- [Pi on GitHub](https://github.com/earendil-works/pi) — upstream project.
 
 ## GitHub Copilot (Community Provider)
 

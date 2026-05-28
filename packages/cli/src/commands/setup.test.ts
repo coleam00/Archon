@@ -882,7 +882,7 @@ describe('checkPiModule', () => {
 
   it('returns ok:false when loader throws (Pi binary missing)', async () => {
     const result = await checkPiModule(async () => {
-      throw new Error('Cannot find module @mariozechner/pi-coding-agent');
+      throw new Error('Cannot find module @earendil-works/pi-coding-agent');
     });
     expect(result.ok).toBe(false);
     expect(result.error).toContain('pi-coding-agent');

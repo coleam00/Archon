@@ -284,7 +284,7 @@ packages/
 │       ├── errors.ts         # UnknownProviderError
 │       ├── claude/           # ClaudeProvider + parseClaudeConfig + MCP/hooks/skills translation
 │       ├── codex/            # CodexProvider + parseCodexConfig + binary-resolver
-│       ├── community/pi/     # PiProvider (builtIn: false) — @mariozechner/pi-coding-agent, ~20 LLM backends
+│       ├── community/pi/     # PiProvider (builtIn: false) — @earendil-works/pi-coding-agent, ~20 LLM backends
 │       ├── community/opencode/ # OpenCodeProvider (builtIn: false) — @archon/opencode SDK, local embedded runtime
 │       └── index.ts          # Package exports
 ├── core/                     # @archon/core - Shared business logic
@@ -471,7 +471,7 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 - Implement `IAgentProvider` interface
 - **ClaudeProvider**: `@anthropic-ai/claude-agent-sdk`
 - **CodexProvider**: `@openai/codex-sdk`
-- **PiProvider** (community, `builtIn: false`): `@mariozechner/pi-coding-agent` — one harness for ~20 LLM backends via `<provider>/<model>` refs (e.g. `anthropic/claude-haiku-4-5`, `openrouter/qwen/qwen3-coder`); supports extensions, skills, tool restrictions, thinking level, best-effort structured output. See `packages/docs-web/src/content/docs/getting-started/ai-assistants.md` for setup, capability matrix, and extension config.
+- **PiProvider** (community, `builtIn: false`): `@earendil-works/pi-coding-agent` — one harness for ~20 LLM backends via `<provider>/<model>` refs (e.g. `anthropic/claude-haiku-4-5`, `openrouter/qwen/qwen3-coder`); supports extensions, skills, tool restrictions, thinking level, best-effort structured output. See `packages/docs-web/src/content/docs/getting-started/ai-assistants.md` for setup, capability matrix, and extension config.
 - Streaming: `for await (const event of events) { await platform.send(event) }`
 
 ### Configuration
