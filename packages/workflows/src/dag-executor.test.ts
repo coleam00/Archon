@@ -6803,6 +6803,15 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       // The failing command name must travel with the event so consumers of the
       // event stream see the same context as the structured log.
       expect(data.command).toBe('does-not-exist-anywhere');
+
+      // node_started must be paired with node_failed even when the failure is
+      // pre-iteration — same lifecycle contract as bash and script nodes.
+      const started = eventCalls.find(
+        (call: unknown[]) =>
+          (call[0] as Record<string, unknown>).event_type === 'node_started' &&
+          (call[0] as Record<string, unknown>).step_name === 'missing-loop'
+      );
+      expect(started).toBeDefined();
     });
 
     it('fails fast with node_failed when loop.command target file is empty', async () => {
