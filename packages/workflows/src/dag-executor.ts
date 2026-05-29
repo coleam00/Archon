@@ -1039,8 +1039,8 @@ async function executeNodeInternal(
       }
     }
 
-    // If the node completed via idle timeout, log it
-    if (nodeIdleTimedOut) {
+    // Only post "completed via idle timeout" when output exists — zero-output timeout falls through to the empty-output guard below.
+    if (nodeIdleTimedOut && (nodeOutputText.trim() !== '' || structuredOutput !== undefined)) {
       getLog().warn(
         { nodeId: node.id, timeoutMs: effectiveIdleTimeout },
         'dag_node_completed_via_idle_timeout'
@@ -1134,18 +1134,12 @@ async function executeNodeInternal(
       return { state: 'failed', output: nodeOutputText, error: creditError };
     }
 
-    // Empty assistant output is a failure for AI nodes — a provider stream
-    // that closed cleanly with zero content typically means a silent
-    // rejection or interruption that didn't produce a result.isError chunk.
-    // Bash/script/approval nodes don't reach this path; they have their
-    // own dispatch and never stream through this loop.
-    //
-    // Idle-timeout exits are exempt: the timeout warning at line 1017 has
-    // already told the user the node "completed via idle timeout"; flipping
-    // that to a failure here would directly contradict the on-screen message.
-    if (nodeOutputText.trim() === '' && structuredOutput === undefined && !nodeIdleTimedOut) {
+    // Fail for zero output: covers both silent non-timeout exits AND idle-timeout before first token (time-to-first-token exceeded the window).
+    if (nodeOutputText.trim() === '' && structuredOutput === undefined) {
       const duration = Date.now() - nodeStartTime;
-      const emptyError = `Node '${node.id}' produced no assistant output. The provider stream closed without yielding content — likely a silent provider rejection or stream interruption.`;
+      const emptyError = nodeIdleTimedOut
+        ? `Node '${node.id}' timed out with no output (idle for ${String(effectiveIdleTimeout / 60000)} min). The provider did not emit any content before the watchdog fired — likely time-to-first-token exceeded the timeout. Consider increasing idle_timeout or reducing prompt size.`
+        : `Node '${node.id}' produced no assistant output. The provider stream closed without yielding content — likely a silent provider rejection or stream interruption.`;
       getLog().error({ nodeId: node.id, durationMs: duration }, 'dag.node_empty_output');
       await logNodeError(logDir, workflowRun.id, node.id, emptyError);
 
