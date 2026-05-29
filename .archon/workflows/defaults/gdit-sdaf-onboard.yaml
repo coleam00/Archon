@@ -36,59 +36,222 @@ nodes:
       fi
 
       ARCHON_VERSION=$(archon version 2>/dev/null || echo "unknown")
-      echo "✓ Archon CLI: $ARCHON_VERSION"
+      echo "[OK] Archon CLI: $ARCHON_VERSION"
 
-  - id: detect-forge
+  - id: check-existing-forge
     bash: |
       set -euo pipefail
       echo ""
-      echo "=== Detecting Git Forge Provider ==="
+      echo "=== Checking Forge Configuration ==="
       echo ""
 
-      # Check if forge.provider is already set in .archon/config.yaml
+      # Check if forge.provider is already set
       CONFIG_PATH=".archon/config.yaml"
       if [ -f "$CONFIG_PATH" ]; then
         if grep -q "^forge:" "$CONFIG_PATH" 2>/dev/null; then
-          EXISTING_PROVIDER=$(grep -A1 "^forge:" "$CONFIG_PATH" | grep "provider:" | sed 's/.*provider: *//' | tr -d '"'"'"')
+          EXISTING_PROVIDER=$(grep -A1 "^forge:" "$CONFIG_PATH" | grep "provider:" | sed 's/.*provider: *//' | tr -d '"' | tr -d "'")
           if [ -n "$EXISTING_PROVIDER" ]; then
-            echo "✓ Forge provider already configured: $EXISTING_PROVIDER"
-            echo "$EXISTING_PROVIDER" > "$ARTIFACTS_DIR/forge-provider.txt"
+            echo "[OK] Forge provider already configured: $EXISTING_PROVIDER"
+            echo "configured:$EXISTING_PROVIDER" > "$ARTIFACTS_DIR/forge-status.txt"
             exit 0
           fi
         fi
       fi
 
-      # Auto-detect from git remote URL
+      # Try to auto-detect from git remote
       REMOTE_URL=$(git remote get-url origin 2>/dev/null || echo "")
 
-      if [ -z "$REMOTE_URL" ]; then
-        echo "ERROR: No git remote 'origin' found."
-        echo ""
-        echo "Add a remote to enable forge detection:"
-        echo "  git remote add origin https://github.com/user/repo.git"
-        echo "  # or"
-        echo "  git remote add origin https://gitlab.com/user/repo.git"
+      if [ -n "$REMOTE_URL" ]; then
+        echo "Git remote found: $REMOTE_URL"
+
+        if echo "$REMOTE_URL" | grep -qi "gitlab"; then
+          DETECTED="gitlab"
+        else
+          DETECTED="github"
+        fi
+
+        echo "Auto-detected: $DETECTED"
+        echo "detected:$DETECTED" > "$ARTIFACTS_DIR/forge-status.txt"
+      else
+        echo "No git remote found - will prompt for selection"
+        echo "prompt" > "$ARTIFACTS_DIR/forge-status.txt"
+      fi
+    depends_on: [check-archon-cli]
+
+  - id: select-forge-provider
+    prompt: |
+      Please confirm or select your Git forge provider for this project.
+
+      **Status**: $check-existing-forge.output
+
+      **Which Git forge are you using?**
+
+      - **GitHub** - Uses `gh` CLI for automation
+      - **GitLab** - Uses `glab` CLI for automation
+
+      Your selection will be saved to `.archon/config.yaml` and all GDIT-SDAF workflows will use the correct CLI commands automatically.
+
+      **If auto-detection is shown above and is correct, type that provider name to confirm.**
+      **If auto-detection is wrong or missing, type the correct provider.**
+
+      **Respond with ONE word: "github" or "gitlab" (lowercase, no punctuation)**
+    depends_on: [check-existing-forge]
+    context: fresh
+    allowed_tools: []
+    output_format:
+      type: object
+      properties:
+        provider:
+          type: string
+          enum: [github, gitlab]
+          description: The selected git forge provider
+      required: [provider]
+
+  - id: resolve-forge-provider
+    bash: |
+      set -euo pipefail
+      echo ""
+      echo "=== Resolving Forge Provider ==="
+      echo ""
+
+      STATUS=$(cat "$ARTIFACTS_DIR/forge-status.txt")
+
+      case "$STATUS" in
+        configured:*)
+          PROVIDER="${STATUS#configured:}"
+          echo "[OK] Using existing configuration: $PROVIDER"
+          ;;
+        detected:*)
+          PROVIDER="${STATUS#detected:}"
+          echo "[OK] Using auto-detected provider: $PROVIDER"
+          echo ""
+          echo "If this is incorrect, you can:"
+          echo "  1. Cancel this workflow (Ctrl+C)"
+          echo "  2. Manually edit .archon/config.yaml"
+          echo "  3. Re-run the onboarding workflow"
+          ;;
+        prompt)
+          echo "Using user selection"
+          # Extract from AI structured output
+          PROVIDER=$(echo '$select-forge-provider.output' | grep -oE '\{[^}]*"provider"[^}]*\}' | grep -oE '"provider"[[:space:]]*:[[:space:]]*"[^"]*"' | cut -d'"' -f4 || echo "")
+
+          # Fallback: try to extract from text
+          if [ -z "$PROVIDER" ]; then
+            PROVIDER=$(echo "$select-forge-provider.output" | tr '[:upper:]' '[:lower:]' | grep -oE '\b(github|gitlab)\b' | head -1)
+          fi
+
+          if [ -z "$PROVIDER" ]; then
+            echo "ERROR: Could not determine provider from selection"
+            exit 1
+          fi
+
+          if [ "$PROVIDER" != "github" ] && [ "$PROVIDER" != "gitlab" ]; then
+            echo "ERROR: Invalid provider: $PROVIDER"
+            exit 1
+          fi
+
+          echo "[OK] User selected: $PROVIDER"
+          ;;
+        *)
+          echo "ERROR: Invalid status: $STATUS"
+          exit 1
+          ;;
+      esac
+
+      echo "$PROVIDER" > "$ARTIFACTS_DIR/forge-provider.txt"
+      echo ""
+      echo "Forge provider: $PROVIDER"
+    depends_on: [select-forge-provider]
+    trigger_rule: all_done
+
+  - id: write-forge-config
+    bash: |
+      set -euo pipefail
+      echo ""
+      echo "=== Writing Forge Configuration ==="
+      echo ""
+
+      # Read detected provider from artifacts
+      if [ ! -f "$ARTIFACTS_DIR/forge-provider.txt" ]; then
+        echo "ERROR: Provider file not found"
+        echo "Forge detection step may have failed"
         exit 1
       fi
 
-      echo "Git remote: $REMOTE_URL"
+      PROVIDER=$(cat "$ARTIFACTS_DIR/forge-provider.txt")
 
-      # Detect provider from URL
-      if echo "$REMOTE_URL" | grep -qi "gitlab"; then
-        DETECTED_PROVIDER="gitlab"
-      else
-        DETECTED_PROVIDER="github"
+      if [ -z "$PROVIDER" ]; then
+        echo "ERROR: Provider file is empty"
+        exit 1
       fi
 
-      echo "✓ Detected forge provider: $DETECTED_PROVIDER"
-      echo "$DETECTED_PROVIDER" > "$ARTIFACTS_DIR/forge-provider.txt"
-    depends_on: [check-archon-cli]
+      if [ "$PROVIDER" != "github" ] && [ "$PROVIDER" != "gitlab" ]; then
+        echo "ERROR: Invalid provider: $PROVIDER"
+        echo "Expected 'github' or 'gitlab'"
+        exit 1
+      fi
 
-  - id: write-forge-config
-    script: write-forge-config
-    runtime: uv
-    deps: [pyyaml]
-    depends_on: [detect-forge]
+      echo "Provider to write: $PROVIDER"
+
+      # Create .archon directory if needed
+      mkdir -p .archon
+
+      if [ ! -d .archon ]; then
+        echo "ERROR: Failed to create .archon directory"
+        exit 1
+      fi
+
+      CONFIG_PATH=".archon/config.yaml"
+
+      # Handle config file creation/update
+      if [ ! -f "$CONFIG_PATH" ]; then
+        echo "Creating new config: $CONFIG_PATH"
+        {
+          echo "# Archon Project Configuration"
+          echo "# Generated by gdit-sdaf-onboard"
+          echo ""
+          echo "forge:"
+          echo "  provider: $PROVIDER"
+          echo ""
+          echo "worktree:"
+          echo "  baseBranch: dev"
+          echo ""
+          echo "docs:"
+          echo "  path: docs/"
+        } > "$CONFIG_PATH"
+        echo "[OK] Created new config with forge.provider=$PROVIDER"
+      else
+        echo "Updating existing config: $CONFIG_PATH"
+
+        # Check if forge section exists
+        if grep -q "^forge:" "$CONFIG_PATH"; then
+          # forge: section exists - update provider line
+          if grep -A1 "^forge:" "$CONFIG_PATH" | grep -q "provider:"; then
+            # provider: line exists - update it using awk
+            awk -v provider="$PROVIDER" '
+              /^forge:/ { in_forge=1; print; next }
+              in_forge && /^  provider:/ { print "  provider: " provider; in_forge=0; next }
+              in_forge && /^[^ ]/ { in_forge=0 }
+              { print }
+            ' "$CONFIG_PATH" > "$CONFIG_PATH.tmp" && mv "$CONFIG_PATH.tmp" "$CONFIG_PATH"
+            echo "[OK] Updated existing forge.provider=$PROVIDER"
+          else
+            # forge: exists but no provider: line - add it
+            awk '/^forge:/ { print; print "  provider: '"$PROVIDER"'"; next } { print }' "$CONFIG_PATH" > "$CONFIG_PATH.tmp" && mv "$CONFIG_PATH.tmp" "$CONFIG_PATH"
+            echo "[OK] Added provider to existing forge section"
+          fi
+        else
+          # No forge: section - append it
+          echo "" >> "$CONFIG_PATH"
+          echo "forge:" >> "$CONFIG_PATH"
+          echo "  provider: $PROVIDER" >> "$CONFIG_PATH"
+          echo "[OK] Added forge section to config"
+        fi
+      fi
+
+      echo ""
+      echo "Configuration updated successfully"
+    depends_on: [resolve-forge-provider]
 
   - id: check-forge-cli
     bash: |
@@ -119,7 +282,7 @@ nodes:
 
       # Check if CLI is installed
       if ! command -v "$CLI_NAME" >/dev/null 2>&1; then
-        echo "⚠  WARNING: $CLI_NAME CLI is not installed"
+        echo "[WARNING]  WARNING: $CLI_NAME CLI is not installed"
         echo ""
         echo "GDIT workflows require the $CLI_NAME CLI for forge operations:"
         echo "  - Creating issues and pull requests"
@@ -135,16 +298,16 @@ nodes:
         exit 0
       fi
 
-      echo "✓ $CLI_NAME CLI is installed"
+      echo "[OK] $CLI_NAME CLI is installed"
       echo ""
 
       # Check authentication
       echo "Checking $CLI_NAME authentication..."
       if "$CLI_NAME" auth status >/dev/null 2>&1; then
-        echo "✓ $CLI_NAME is authenticated"
+        echo "[OK] $CLI_NAME is authenticated"
       else
         echo ""
-        echo "⚠  WARNING: $CLI_NAME is not authenticated"
+        echo "[WARNING]  WARNING: $CLI_NAME is not authenticated"
         echo ""
         echo "Authenticate with:"
         echo "  $AUTH_CMD"
@@ -189,7 +352,7 @@ nodes:
         exit 1
       fi
 
-      echo "✓ Python version OK"
+      echo "[OK] Python version OK"
     depends_on: [check-archon-cli]
 
   - id: install-scanners
@@ -209,9 +372,9 @@ nodes:
       echo "Checking installed scanners:"
       for tool in gitleaks semgrep trivy checkov ruff pyright; do
         if command -v "$tool" >/dev/null 2>&1; then
-          echo "  ✓ $tool"
+          echo "  [OK] $tool"
         else
-          echo "  ✗ $tool (install: pip install $tool)"
+          echo "  [X] $tool (install: pip install $tool)"
         fi
       done
     depends_on: [check-python]
@@ -227,24 +390,44 @@ nodes:
       GDIT_SCRIPTS_DST="$ARCHON_HOME/scripts/gdit-sdaf"
       mkdir -p "$GDIT_SCRIPTS_DST"
 
-      # Find repo root (support running from subdirectories)
-      REPO_ROOT=$(git rev-parse --show-toplevel)
-      ARCHON_GDIT_SCRIPTS="$REPO_ROOT/.archon/scripts/gdit-sdaf"
+      # Try to find GDIT scripts in current repo
+      REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
 
-      if [ ! -d "$ARCHON_GDIT_SCRIPTS" ]; then
-        echo "ERROR: $ARCHON_GDIT_SCRIPTS not found"
-        echo "This command must be run from within the Archon repository."
-        exit 1
+      if [ -n "$REPO_ROOT" ]; then
+        GDIT_SCRIPTS_SRC="$REPO_ROOT/.archon/scripts/gdit-sdaf"
+
+        if [ -d "$GDIT_SCRIPTS_SRC" ]; then
+          # Copy from current repo
+          if ls "$GDIT_SCRIPTS_SRC"/*.py 1>/dev/null 2>&1; then
+            cp "$GDIT_SCRIPTS_SRC"/*.py "$GDIT_SCRIPTS_DST/"
+            SCRIPT_COUNT=$(ls "$GDIT_SCRIPTS_SRC"/*.py | wc -l | tr -d ' ')
+            echo "[OK] Copied $SCRIPT_COUNT scripts from project to $GDIT_SCRIPTS_DST"
+            exit 0
+          fi
+        fi
       fi
 
-      # Copy Python scripts
-      if ls "$ARCHON_GDIT_SCRIPTS"/*.py 1>/dev/null 2>&1; then
-        cp "$ARCHON_GDIT_SCRIPTS"/*.py "$GDIT_SCRIPTS_DST/"
-        SCRIPT_COUNT=$(ls "$ARCHON_GDIT_SCRIPTS"/*.py | wc -l | tr -d ' ')
-        echo "✓ Copied $SCRIPT_COUNT scripts to $GDIT_SCRIPTS_DST"
-      else
-        echo "⚠  No Python scripts found in $ARCHON_GDIT_SCRIPTS"
+      # If not found locally, check if already installed globally
+      if [ -d "$GDIT_SCRIPTS_DST" ] && ls "$GDIT_SCRIPTS_DST"/*.py 1>/dev/null 2>&1; then
+        EXISTING_COUNT=$(ls "$GDIT_SCRIPTS_DST"/*.py | wc -l | tr -d ' ')
+        echo "[OK] Using existing GDIT scripts: $EXISTING_COUNT scripts already in $GDIT_SCRIPTS_DST"
+        exit 0
       fi
+
+      echo ""
+      echo "[WARNING] GDIT scripts not found in current project or globally installed"
+      echo ""
+      echo "To install GDIT scripts, you have two options:"
+      echo ""
+      echo "1. Run this workflow from the Archon repository:"
+      echo "   cd /path/to/Archon"
+      echo "   archon workflow run gdit-sdaf-onboard"
+      echo ""
+      echo "2. Manually copy scripts from Archon repository:"
+      echo "   mkdir -p $GDIT_SCRIPTS_DST"
+      echo "   cp /path/to/Archon/.archon/scripts/gdit-sdaf/*.py $GDIT_SCRIPTS_DST/"
+      echo ""
+      echo "Continuing with other setup steps..."
     depends_on: [check-python]
 
   - id: install-gdit-skills
@@ -256,32 +439,56 @@ nodes:
 
       ARCHON_HOME="${ARCHON_HOME:-$HOME/.archon}"
       GDIT_SKILLS="$ARCHON_HOME/skills"
-      REPO_ROOT=$(git rev-parse --show-toplevel)
       mkdir -p "$GDIT_SKILLS"
 
       INSTALLED_COUNT=0
       SKIPPED_COUNT=0
 
-      # Find and install skills
-      for skill_dir in "$REPO_ROOT/.claude/skills/gdit-sdaf-"*/; do
-        [ -d "$skill_dir" ] || continue
+      # Try to find skills in current repo
+      REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
 
-        # Strip gdit-sdaf- prefix from directory name
-        skill_name=$(basename "$skill_dir" | sed 's/^gdit-sdaf-//')
-        target="$GDIT_SKILLS/$skill_name"
+      if [ -n "$REPO_ROOT" ] && [ -d "$REPO_ROOT/.claude/skills" ]; then
+        # Find and install skills from current repo
+        for skill_dir in "$REPO_ROOT/.claude/skills/gdit-sdaf-"*/; do
+          [ -d "$skill_dir" ] || continue
 
-        if [ -d "$target" ]; then
-          echo "  ○ $skill_name (already exists)"
+          # Strip gdit-sdaf- prefix
+          skill_name=$(basename "$skill_dir" | sed 's/^gdit-sdaf-//')
+          target="$GDIT_SKILLS/$skill_name"
+
+          if [ -d "$target" ]; then
+            echo "  ○ $skill_name (already exists)"
+            SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+          else
+            cp -r "$skill_dir" "$target"
+            echo "  [OK] $skill_name → $target"
+            INSTALLED_COUNT=$((INSTALLED_COUNT + 1))
+          fi
+        done
+      fi
+
+      # Count existing skills if none found in repo
+      if [ $INSTALLED_COUNT -eq 0 ] && [ $SKIPPED_COUNT -eq 0 ]; then
+        for skill_dir in "$GDIT_SKILLS/"*/; do
+          [ -d "$skill_dir" ] || continue
           SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
-        else
-          cp -r "$skill_dir" "$target"
-          echo "  ✓ $skill_name → $target"
-          INSTALLED_COUNT=$((INSTALLED_COUNT + 1))
-        fi
-      done
+        done
 
-      echo ""
-      echo "Installed: $INSTALLED_COUNT, Skipped: $SKIPPED_COUNT"
+        if [ $SKIPPED_COUNT -gt 0 ]; then
+          echo "[OK] Using existing GDIT skills: $SKIPPED_COUNT skills in $GDIT_SKILLS"
+        else
+          echo ""
+          echo "[WARNING] GDIT skills not found"
+          echo ""
+          echo "To install, run from Archon repository:"
+          echo "  cd /path/to/Archon && archon workflow run gdit-sdaf-onboard"
+          echo ""
+          echo "Continuing..."
+        fi
+      else
+        echo ""
+        echo "Installed: $INSTALLED_COUNT, Skipped: $SKIPPED_COUNT"
+      fi
     depends_on: [copy-gdit-scripts]
 
   - id: init-project-config
@@ -383,8 +590,8 @@ nodes:
       === GDIT-SDAF Onboarding Complete ===
 
       Forge Configuration:
-        ✓ Provider: [github/gitlab]
-        ✓ Location: .archon/config.yaml
+        [OK] Provider: [github/gitlab]
+        [OK] Location: .archon/config.yaml
 
       GDIT Scripts: [count] installed
         [list script names]
@@ -393,11 +600,11 @@ nodes:
         [list skill names without gdit-sdaf- prefix]
 
       Project Config:
-        ✓ .archon/config/project.yaml
+        [OK] .archon/config/project.yaml
 
       Security Scanners:
-        ✓ [tool] - installed
-        ✗ [tool] - not found (install: pip install [tool])
+        [OK] [tool] - installed
+        [X] [tool] - not found (install: pip install [tool])
 
       Next Steps:
         • View workflows: archon workflow list | grep gdit-sdaf
