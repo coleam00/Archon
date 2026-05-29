@@ -42,7 +42,15 @@ export interface Conversation {
  * platform_user_id) invariant. New forge/chat platforms must be added here
  * and to the per-adapter resolver callsite.
  */
-export type IdentityPlatform = 'slack' | 'telegram' | 'discord' | 'github' | 'web' | 'cli';
+export type IdentityPlatform =
+  | 'slack'
+  | 'telegram'
+  | 'discord'
+  | 'github'
+  | 'gitea'
+  | 'gitlab'
+  | 'web'
+  | 'cli';
 
 /**
  * Archon-internal user identity. One row per human (or bot) across all platforms.
