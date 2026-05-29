@@ -4,6 +4,7 @@ import { EmptyState } from '../components/EmptyState';
 import { ActiveRunCard } from '../components/ActiveRunCard';
 import { RecentRunRow } from '../components/RecentRunRow';
 import { FilterChips, type Filter } from '../components/FilterChips';
+import { ProjectViewTabs } from '../components/ProjectViewTabs';
 import { DraftRunCard } from '../components/DraftRunCard';
 import { PendingInputBanner } from '../components/PendingInputBanner';
 import { useEntity } from '../store/cache';
@@ -504,7 +505,9 @@ export function RunsPage(): ReactElement {
           <div className="rounded border border-dashed border-border bg-surface-inset/60 px-3 py-2 text-[12px] text-text-tertiary">
             Pick a project on the left to start a run.
           </div>
-        ) : null}
+        ) : (
+          <ProjectViewTabs projectId={scope} active="runs" />
+        )}
 
         <FilterChips value={filter} onChange={setFilter} counts={counts} />
       </header>

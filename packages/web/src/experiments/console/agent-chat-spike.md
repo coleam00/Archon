@@ -355,21 +355,32 @@ project-scoped), `Header` (console has its own).
    Codex/OpenCode in Wave 2** (§6.1/§6.1a). Pi is _not_ deferred — it's the
    ~June-2026 primary runner and has no MCP, so its in-process path is first-class.
    `mcp__` prefix accepted as cosmetic for the MCP backends.
-2. Do agent **write** actions (approve/cancel/reject/resume) require explicit
-   in-chat user confirmation?
+2. ~~Do agent **write** actions require in-chat confirmation?~~ → **resolved:
+   TIERED.** Reads + low-risk recoverable writes (`start`, `resume`) execute
+   directly; destructive / human-gate writes (`cancel`, `abandon`, `approve`,
+   `reject`) emit a confirm card and block until the user clicks. `approve`/
+   `reject` always confirm (a human gate stays human). Matches CLAUDE.md's
+   "no autonomous lifecycle mutation" rule. Cost: the tool emits a confirm card,
+   blocks, resumes on click — extra plumbing on the destructive path only.
 3. Conversation lifecycle in the chat tab: one persistent conversation per
-   project, or a list of past conversations with a "new chat"?
+   project, or a list of past conversations with a "new chat"? (MVP chat view:
+   single most-recent web conversation per project, created lazily on first send
+   — see `console-agent-chat.plan.md`. Multi-conversation sidebar deferred.)
 4. Where the manage-run tool dispatches — confirm `operations/workflow-operations`
    is the single shared home and the tool handlers call it directly (in-process
    for Claude; the served-MCP variant for Codex/OpenCode runs in the Archon
    server process and calls the same ops / existing REST endpoints).
-5. **Canonical params-schema form + adapters.** Pick the source of truth
-   (recommend JSON Schema as the pivot) and build the two converters: → Zod raw
-   shape for Claude `tool()`, → TypeBox for Pi `customTools`. Served MCP uses JSON
-   Schema directly. This is the main net-new plumbing for the neutral spec.
-6. Served-MCP transport for Codex/OpenCode: confirm Codex's `mcp_servers` config
-   accepts the chosen transport (likely a stdio launcher) and OpenCode's `mcp.*`
-   target shape. (Claude + Pi need none of this — in-process.)
+5. ~~Canonical params-schema form + adapters.~~ → **resolved: JSON Schema is
+   canonical + hand-written Zod for Claude.** Pi (TypeBox ≈ JSON Schema) and
+   served MCP consume the JSON Schema near-directly; Claude's `tool()` gets a
+   small hand-written matching Zod raw shape (the schema is tiny — `action` enum
+   - ~5 optional strings — so NO conversion library). The handler re-validates,
+     so the Claude hand-mirror carries no safety risk. Add a parity test if desired.
+6. ~~Served-MCP transport for Codex/OpenCode.~~ → **deferred to Wave 2 (not a
+   Wave-1 blocker).** Wave 1 (Claude + Pi) is in-process — no transport. Decide
+   at Wave 2 after verifying whether Codex's CLI supports streamable-HTTP MCP:
+   if yes → HTTP/SSE endpoint (in-process handler, cleanest); if no → stdio shim
+   over the existing REST endpoints (matches Codex's native `mcp_servers` shape).
 7. Add a YAML-string ingestion path + wire L3 validation for the authoring tool.
 
 ## 11. Spike plan (when greenlit)

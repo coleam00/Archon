@@ -6,6 +6,7 @@ import { ProjectPalette } from './components/ProjectPalette';
 import { KeymapHelp } from './components/KeymapHelp';
 import { RunsPage } from './routes/RunsPage';
 import { RunDetailPage } from './routes/RunDetailPage';
+import { ChatPage } from './routes/ChatPage';
 import { PreviewPage } from './routes/PreviewPage';
 import { invalidate } from './store/cache';
 import { K } from './store/keys';
@@ -93,6 +94,7 @@ export function ConsoleApp(): ReactElement {
             <Route index element={<RunsPage />} />
             <Route path="_preview" element={<PreviewPage />} />
             <Route path="p/:projectId" element={<RunsPage />} />
+            <Route path="p/:projectId/chat" element={<ChatPage />} />
             <Route path="p/:projectId/r/:runId" element={<RunDetailPage />} />
           </Routes>
         </main>

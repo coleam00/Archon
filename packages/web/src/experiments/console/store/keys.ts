@@ -15,6 +15,7 @@ export const K = {
   runs: (scope: Scope): string => `runs:${scopeKey(scope)}`,
   run: (id: string): string => `run:${id}`,
   messages: (conversationId: string): string => `messages:${conversationId}`,
+  conversations: (projectId: string): string => `conversations:${projectId}`,
   countsGlobal: 'counts:global' as const,
   pendingRuns: 'pendingRuns' as const,
   envVars: (projectId: string): string => `envVars:${projectId}`,
