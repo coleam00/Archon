@@ -470,3 +470,31 @@ describe('GET /api/commands', () => {
     expect(Array.isArray(body.commands)).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Tests: GET /api/openapi.json — guards @hono/zod-openapi spec generation
+// (the v0 -> v1 / zod v4 upgrade is a major bump; this confirms every
+// registered route's schema still serializes without throwing).
+// ---------------------------------------------------------------------------
+
+describe('GET /api/openapi.json', () => {
+  test('generates a valid OpenAPI 3 document for all registered routes', async () => {
+    const app = makeApp();
+    const response = await app.request('/api/openapi.json');
+    expect(response.status).toBe(200);
+
+    const doc = (await response.json()) as {
+      openapi: string;
+      info: { title: string; version: string };
+      paths: Record<string, unknown>;
+    };
+    expect(doc.openapi).toMatch(/^3\./);
+    expect(typeof doc.info.title).toBe('string');
+    // A representative sample of registered routes must be present, including
+    // ones whose schemas use the patterns touched by the zod v4 migration
+    // (z.record key types, z.string().datetime(), the node-sessions route).
+    expect(Object.keys(doc.paths).length).toBeGreaterThan(0);
+    expect(doc.paths['/api/health']).toBeDefined();
+    expect(doc.paths['/api/workflows/{name}/node-sessions']).toBeDefined();
+  });
+});

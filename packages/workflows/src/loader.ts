@@ -44,16 +44,16 @@ function getLog(): ReturnType<typeof createLogger> {
  * `interactive`. `extra` merges into the warning payload (e.g. the list of
  * valid enum options).
  */
-function parseOptionalField<T>(
+function parseOptionalField<S extends z.ZodType>(
   raw: unknown,
-  // Output is `T`; the input param stays `unknown` (decoupled from `T`) so
-  // preprocess-based schemas (e.g. `thinkingConfigSchema`, whose input is
-  // `unknown`) infer `T` from their output rather than their input.
-  schema: z.ZodType<T, z.ZodTypeDef, unknown>,
+  // Inferred from the schema (`z.output<S>`), so preprocess-based schemas
+  // (e.g. `thinkingConfigSchema`, whose input is `unknown`) still resolve to
+  // their parsed output type. zod v4 dropped the 3-arg `ZodType<O, Def, I>`.
+  schema: S,
   filename: string,
   event: string,
   extra?: Record<string, unknown>
-): T | undefined {
+): z.output<S> | undefined {
   const result = schema.safeParse(raw);
   if (result.success) return result.data;
   if (raw !== undefined) {
@@ -542,7 +542,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
     // drops the field entirely — the Claude SDK expects a populated beta header
     // or none at all. Validating via the schema yields the `[string, ...string[]]`
     // type without an unchecked cast.
-    let betas: [string, ...string[]] | undefined;
+    let betas: string[] | undefined;
     if (raw.betas !== undefined) {
       const cleaned = Array.isArray(raw.betas)
         ? raw.betas

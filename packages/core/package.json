@@ -35,11 +35,11 @@
     "@archon/paths": "workspace:*",
     "@archon/providers": "workspace:*",
     "@archon/workflows": "workspace:*",
-    "@hono/zod-openapi": "^0.19.6",
+    "@hono/zod-openapi": "^1.4.0",
     "@octokit/auth-app": "^8.0.0",
     "@octokit/rest": "^22.0.0",
     "pg": "^8.11.0",
-    "zod": "^3"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/pg": "^8.11.0",

@@ -1736,7 +1736,9 @@ nodes:
 
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       expect(result.errors).toHaveLength(1);
-      expect(result.errors[0].error).toMatch(/idle_timeout.*finite.*positive/i);
+      // zod v4's base `z.number()` rejects Infinity before the custom finite/positive
+      // refinement runs, so the message is the base "expected number" form; either is fine.
+      expect(result.errors[0].error).toMatch(/idle_timeout.*(finite.*positive|expected number)/i);
     });
 
     it('should ignore AI-specific fields on bash nodes (parses successfully, fields stripped)', async () => {
@@ -2186,7 +2188,9 @@ nodes:
 
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       expect(result.errors).toHaveLength(1);
-      expect(result.errors[0].error).toMatch(/max_attempts.*required/i);
+      // zod v4 reports a missing required field as "expected number, received undefined"
+      // (v3 said "Required"); the field path is the stable part.
+      expect(result.errors[0].error).toMatch(/max_attempts.*(required|expected number)/i);
     });
 
     it('should reject retry with max_attempts out of range', async () => {
