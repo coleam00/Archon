@@ -1,7 +1,7 @@
 name: gdit-sdaf-compliance-report
 description: |
   Use when: Generating a NIST SP 800-218 compliance report or AI-assisted development ROI summary.
-  Requires: GDIT specs in .kiro/specs/ and gdit-sdaf-setup completed.
+  Requires: GDIT specs in .archon/specs/ and gdit-sdaf-setup completed.
   Output: Compliance coverage matrix + value report saved to $ARTIFACTS_DIR/
 
 nodes:
@@ -54,13 +54,14 @@ nodes:
 
   - id: guard-setup
     bash: |
-      if [ ! -f "$HOME/.kiro/scripts/validate-spec.py" ]; then
-        echo "ERROR: GDIT scripts not found at ~/.kiro/scripts/."
+      ARCHON_HOME="${ARCHON_HOME:-$HOME/.archon}"
+      if [ ! -f "$ARCHON_HOME/scripts/gdit-sdaf/validate-spec.py" ]; then
+        echo "ERROR: GDIT scripts not found at $ARCHON_HOME/scripts/gdit-sdaf/."
         echo "Run 'gdit-sdaf-setup' workflow first, then retry."
         exit 1
       fi
-      if [ ! -d ".kiro/specs" ]; then
-        echo "ERROR: No .kiro/specs/ directory found."
+      if [ ! -d ".archon/specs" ]; then
+        echo "ERROR: No .archon/specs/ directory found."
         echo "Create specs with gdit-sdaf-spec-create first."
         exit 1
       fi
@@ -68,21 +69,23 @@ nodes:
 
   - id: ssdf-coverage
     bash: |
-      python3 ~/.kiro/skills/ssdf-auditor/scripts/coverage_matrix.py 2>/dev/null || \
-        echo "ssdf-auditor scripts not available — run gdit-sdaf-setup to install skills"
+      ARCHON_HOME="${ARCHON_HOME:-$HOME/.archon}"
+      echo "PLACEHOLDER: SSDF coverage matrix generation"
+      echo "Note: Python scripts for full compliance reporting are under development."
+      echo "Current implementation validates spec structure only."
     depends_on: [guard-setup]
 
   - id: gap-report
     bash: |
-      python3 ~/.kiro/skills/ssdf-auditor/scripts/gap_report.py 2>/dev/null || \
-        echo "Gap report unavailable — see ssdf-coverage output above"
+      echo "PLACEHOLDER: Gap analysis"
+      echo "Note: Detailed gap reporting is under development."
     depends_on: [ssdf-coverage]
 
   - id: value-report
     bash: |
-      python3 ~/.kiro/skills/value-reporting/scripts/value_report.py \
-        --scope project --dashboard 2>/dev/null || \
-        echo "No value tracking data found. Enable value-tracking in .kiro/config/project.yaml."
+      echo "PLACEHOLDER: Value tracking report"
+      echo "Note: ROI tracking and dashboard generation are under development."
+      echo "Enable value-tracking in .archon/config/project.yaml when available."
     depends_on: [guard-setup]
 
   - id: save-report
@@ -97,4 +100,4 @@ nodes:
       4. AI-Assisted Development ROI (from value-report data)
       5. Recommended Next Actions
     depends_on: [gap-report, value-report]
-    context: fresh
+    fresh_context: true

@@ -56,11 +56,31 @@ nodes:
 
   - id: guard-setup
     bash: |
-      if [ ! -f "$HOME/.kiro/scripts/validate-spec.py" ]; then
-        echo "ERROR: GDIT scripts not found at ~/.kiro/scripts/."
+      ARCHON_HOME="${ARCHON_HOME:-$HOME/.archon}"
+      if [ ! -f "$ARCHON_HOME/scripts/gdit-sdaf/validate-spec.py" ]; then
+        echo "ERROR: GDIT scripts not found at $ARCHON_HOME/scripts/gdit-sdaf/."
         echo "Run 'gdit-sdaf-setup' workflow first, then retry."
         exit 1
       fi
+
+      # Validate security scanner tools
+      MISSING_TOOLS=()
+      for tool in gitleaks semgrep trivy checkov; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+          MISSING_TOOLS+=("$tool")
+        fi
+      done
+
+      if [ ${#MISSING_TOOLS[@]} -gt 0 ]; then
+        echo "WARNING: Missing security scanners: ${MISSING_TOOLS[*]}"
+        echo "Scan results will be incomplete. Install missing tools:"
+        for tool in "${MISSING_TOOLS[@]}"; do
+          echo "  - $tool: See https://github.com/$tool or use pip/brew/apt"
+        done
+        echo ""
+        echo "Continuing with available scanners..."
+      fi
+
       echo "GDIT setup verified."
 
   - id: run-gitleaks
@@ -126,4 +146,4 @@ nodes:
       - Top 3 most important findings to fix (if any)
       - Evidence string suitable for a git commit `Evidence:` field
     depends_on: [write-manifest]
-    context: fresh
+    fresh_context: true

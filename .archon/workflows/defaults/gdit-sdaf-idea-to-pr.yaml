@@ -76,8 +76,9 @@ nodes:
   # ═══════════════════════════════════════════════════════════════════
   - id: guard-setup
     bash: |
-      if [ ! -f "$HOME/.kiro/scripts/validate-spec.py" ]; then
-        echo "ERROR: GDIT scripts not found at ~/.kiro/scripts/."
+      ARCHON_HOME="${ARCHON_HOME:-$HOME/.archon}"
+      if [ ! -f "$ARCHON_HOME/scripts/gdit-sdaf/validate-spec.py" ]; then
+        echo "ERROR: GDIT scripts not found at $ARCHON_HOME/scripts/gdit-sdaf/."
         echo "Run 'gdit-sdaf-setup' workflow first, then retry."
         exit 1
       fi
@@ -89,7 +90,7 @@ nodes:
   - id: create-spec
     command: gdit-sdaf-spec-create
     depends_on: [guard-setup]
-    context: fresh
+    fresh_context: true
 
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 2: VALIDATE SPEC
@@ -97,7 +98,7 @@ nodes:
   - id: validate-spec
     command: gdit-sdaf-spec-validate
     depends_on: [create-spec]
-    context: fresh
+    fresh_context: true
 
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 3: BRANCH SETUP
@@ -105,7 +106,7 @@ nodes:
   - id: plan-setup
     command: archon-plan-setup
     depends_on: [validate-spec]
-    context: fresh
+    fresh_context: true
 
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 4: IMPLEMENT
@@ -113,7 +114,7 @@ nodes:
   - id: implement-tasks
     command: gdit-sdaf-implement
     depends_on: [plan-setup]
-    context: fresh
+    fresh_context: true
     model: opus
 
   # ═══════════════════════════════════════════════════════════════════
@@ -122,7 +123,7 @@ nodes:
   - id: security-scan
     command: gdit-sdaf-validate
     depends_on: [implement-tasks]
-    context: fresh
+    fresh_context: true
 
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 6: GIT CHECKPOINT
@@ -130,7 +131,7 @@ nodes:
   - id: checkpoint
     command: gdit-sdaf-checkpoint
     depends_on: [security-scan]
-    context: fresh
+    fresh_context: true
 
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 7: FINALIZE PR
@@ -138,7 +139,7 @@ nodes:
   - id: finalize-pr
     command: archon-finalize-pr
     depends_on: [checkpoint]
-    context: fresh
+    fresh_context: true
 
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 8: VERIFY PR BASE
@@ -167,12 +168,12 @@ nodes:
   - id: review-scope
     command: archon-pr-review-scope
     depends_on: [verify-pr-base]
-    context: fresh
+    fresh_context: true
 
   - id: sync
     command: archon-sync-pr-with-main
     depends_on: [review-scope]
-    context: fresh
+    fresh_context: true
 
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 9: 6-AGENT PARALLEL REVIEW
@@ -180,32 +181,32 @@ nodes:
   - id: code-review
     command: archon-code-review-agent
     depends_on: [sync]
-    context: fresh
+    fresh_context: true
 
   - id: error-handling
     command: archon-error-handling-agent
     depends_on: [sync]
-    context: fresh
+    fresh_context: true
 
   - id: test-coverage
     command: archon-test-coverage-agent
     depends_on: [sync]
-    context: fresh
+    fresh_context: true
 
   - id: comment-quality
     command: archon-comment-quality-agent
     depends_on: [sync]
-    context: fresh
+    fresh_context: true
 
   - id: docs-impact
     command: archon-docs-impact-agent
     depends_on: [sync]
-    context: fresh
+    fresh_context: true
 
   - id: gdit-audit
     command: gdit-sdaf-audit
     depends_on: [sync]
-    context: fresh
+    fresh_context: true
 
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 10: SYNTHESIZE + FIX
@@ -215,14 +216,14 @@ nodes:
     depends_on:
       [code-review, error-handling, test-coverage, comment-quality, docs-impact, gdit-audit]
     trigger_rule: one_success
-    context: fresh
+    fresh_context: true
 
   - id: implement-fixes
     command: archon-implement-review-fixes
     depends_on: [synthesize]
-    context: fresh
+    fresh_context: true
 
   - id: workflow-summary
     command: archon-workflow-summary
     depends_on: [implement-fixes]
-    context: fresh
+    fresh_context: true

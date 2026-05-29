@@ -1,8 +1,8 @@
 name: gdit-sdaf-setup
 description: |
   Use when: Setting up GDIT-SDAF capabilities for a project for the first time.
-  Does: Installs Python security scanners, copies GDIT core scripts to ~/.kiro/scripts/,
-        installs GDIT skills to ~/.kiro/skills/, and creates .kiro/config/project.yaml.
+  Does: Installs Python security scanners, copies GDIT core scripts to $ARCHON_HOME/scripts/gdit-sdaf/,
+        installs GDIT skills to $ARCHON_HOME/skills/, and creates .archon/config/project.yaml.
   Run once per machine per project. Re-running is safe (idempotent).
   Requires: Python 3.12+, git repository.
 
@@ -28,40 +28,50 @@ nodes:
       done
     depends_on: [check-python]
 
-  - id: copy-kiro-scripts
+  - id: copy-gdit-scripts
     bash: |
       set -euo pipefail
-      KIRO_SCRIPTS="$HOME/.kiro/scripts"
-      mkdir -p "$KIRO_SCRIPTS"
+      ARCHON_HOME="${ARCHON_HOME:-$HOME/.archon}"
+      GDIT_SCRIPTS_DST="$ARCHON_HOME/scripts/gdit-sdaf"
+      mkdir -p "$GDIT_SCRIPTS_DST"
       ARCHON_GDIT_SCRIPTS="$(git rev-parse --show-toplevel)/.archon/scripts/gdit-sdaf"
       if [ ! -d "$ARCHON_GDIT_SCRIPTS" ]; then
         echo "ERROR: .archon/scripts/gdit-sdaf/ not found in repo root."
         exit 1
       fi
-      cp "$ARCHON_GDIT_SCRIPTS"/*.py "$KIRO_SCRIPTS/"
-      echo "Copied $(ls "$ARCHON_GDIT_SCRIPTS"/*.py | wc -l | tr -d ' ') GDIT scripts to $KIRO_SCRIPTS"
+      if ls "$ARCHON_GDIT_SCRIPTS"/*.py 1>/dev/null 2>&1; then
+        cp "$ARCHON_GDIT_SCRIPTS"/*.py "$GDIT_SCRIPTS_DST/"
+        echo "Copied $(ls "$ARCHON_GDIT_SCRIPTS"/*.py | wc -l | tr -d ' ') GDIT scripts to $GDIT_SCRIPTS_DST"
+      else
+        echo "No Python scripts found in $ARCHON_GDIT_SCRIPTS"
+      fi
     depends_on: [check-python]
 
   - id: copy-hooks
     bash: |
       set -euo pipefail
       HOOKS_SRC="$(git rev-parse --show-toplevel)/reference_material/gdit-sdaf-hooks"
-      HOOKS_DST="$HOME/.kiro/claude-code/hooks"
+      ARCHON_HOME="${ARCHON_HOME:-$HOME/.archon}"
+      HOOKS_DST="$ARCHON_HOME/claude-code/hooks"
       mkdir -p "$HOOKS_DST"
       if [ ! -d "$HOOKS_SRC" ]; then
         echo "WARNING: reference_material/gdit-sdaf-hooks/ not found — skipping hook installation."
         exit 0
       fi
-      cp "$HOOKS_SRC"/*.sh "$HOOKS_DST/"
-      chmod +x "$HOOKS_DST"/*.sh
-      echo "Installed hooks to $HOOKS_DST"
+      if ls "$HOOKS_SRC"/*.sh 1>/dev/null 2>&1; then
+        cp "$HOOKS_SRC"/*.sh "$HOOKS_DST/"
+        chmod +x "$HOOKS_DST"/*.sh
+        echo "Installed hooks to $HOOKS_DST"
+      else
+        echo "No hooks found in $HOOKS_SRC"
+      fi
     depends_on: [check-python]
 
   - id: init-project-config
     prompt: |
-      Create or update the GDIT project configuration file at `.kiro/config/project.yaml`.
+      Create or update the GDIT project configuration file at `.archon/config/project.yaml`.
 
-      1. Check if `.kiro/config/project.yaml` already exists. If it does, read it silently and report "Config already exists — skipping creation." then stop.
+      1. Check if `.archon/config/project.yaml` already exists. If it does, read it silently and report "Config already exists — skipping creation." then stop.
       2. If missing:
          a. Scan the project root for tech stack indicators:
             - Python: requirements.txt, pyproject.toml, setup.py, *.py
@@ -69,8 +79,8 @@ nodes:
             - Java: pom.xml, build.gradle
             - .NET: *.csproj, *.sln
             - IaC: *.tf, *.yaml with AWSTemplateFormatVersion
-         b. Create `.kiro/config/` directory if missing.
-         c. Write `.kiro/config/project.yaml` with this exact template, filling in detected values:
+         b. Create `.archon/config/` directory if missing.
+         c. Write `.archon/config/project.yaml` with this exact template, filling in detected values:
 
       ```yaml
       workflow:
@@ -109,23 +119,24 @@ nodes:
         enabled: true
 
       shared:
-        registry-path: .kiro/registry/shared-registry.yaml
+        registry-path: .archon/registry/shared-registry.yaml
       ```
 
-         d. Report: "Created .kiro/config/project.yaml — detected: [stack list]."
-    depends_on: [copy-kiro-scripts]
-    context: fresh
+         d. Report: "Created .archon/config/project.yaml — detected: [stack list]."
+    depends_on: [copy-gdit-scripts]
+    fresh_context: true
 
-  - id: install-kiro-skills
+  - id: install-gdit-skills
     bash: |
       set -euo pipefail
-      KIRO_SKILLS="$HOME/.kiro/skills"
+      ARCHON_HOME="${ARCHON_HOME:-$HOME/.archon}"
+      GDIT_SKILLS="$ARCHON_HOME/skills"
       REPO_ROOT="$(git rev-parse --show-toplevel)"
-      mkdir -p "$KIRO_SKILLS"
+      mkdir -p "$GDIT_SKILLS"
       for skill_dir in "$REPO_ROOT/.claude/skills/gdit-sdaf-"*/; do
         [ -d "$skill_dir" ] || continue
         skill_name=$(basename "$skill_dir" | sed 's/^gdit-sdaf-//')
-        target="$KIRO_SKILLS/$skill_name"
+        target="$GDIT_SKILLS/$skill_name"
         if [ -d "$target" ]; then
           echo "SKIP $skill_name (already installed at $target)"
         else
@@ -133,19 +144,20 @@ nodes:
           echo "INSTALL $skill_name → $target"
         fi
       done
-    depends_on: [copy-kiro-scripts]
+    depends_on: [copy-gdit-scripts]
 
   - id: verify
     bash: |
       set -euo pipefail
+      ARCHON_HOME="${ARCHON_HOME:-$HOME/.archon}"
       echo "=== GDIT-SDAF Setup Verification ==="
       echo ""
       echo "Scripts:"
-      if [ -d "$HOME/.kiro/scripts" ]; then
-        count=$(ls "$HOME/.kiro/scripts"/*.py 2>/dev/null | wc -l | tr -d ' ')
+      if [ -d "$ARCHON_HOME/scripts/gdit-sdaf" ]; then
+        count=$(ls "$ARCHON_HOME/scripts/gdit-sdaf"/*.py 2>/dev/null | wc -l | tr -d ' ')
         echo "  Python scripts installed: $count"
       else
-        echo "  ERROR: ~/.kiro/scripts/ not found"
+        echo "  ERROR: $ARCHON_HOME/scripts/gdit-sdaf/ not found"
       fi
       echo ""
       echo "Scanners:"
@@ -154,8 +166,8 @@ nodes:
       done
       echo ""
       echo "Config:"
-      test -f ".kiro/config/project.yaml" && echo "  ✓ .kiro/config/project.yaml" || echo "  ✗ .kiro/config/project.yaml (missing)"
+      test -f ".archon/config/project.yaml" && echo "  ✓ .archon/config/project.yaml" || echo "  ✗ .archon/config/project.yaml (missing)"
       echo ""
       echo "Setup complete. You can now use gdit-sdaf-* workflows."
-    depends_on: [install-kiro-skills, init-project-config, install-scanners, copy-hooks]
+    depends_on: [install-gdit-skills, init-project-config, install-scanners, copy-hooks]
     trigger_rule: all_done

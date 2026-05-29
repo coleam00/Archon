@@ -70,8 +70,9 @@ nodes:
 
   - id: guard-setup
     bash: |
-      if [ ! -f "$HOME/.kiro/scripts/validate-spec.py" ]; then
-        echo "ERROR: GDIT scripts not found at ~/.kiro/scripts/."
+      ARCHON_HOME="${ARCHON_HOME:-$HOME/.archon}"
+      if [ ! -f "$ARCHON_HOME/scripts/gdit-sdaf/validate-spec.py" ]; then
+        echo "ERROR: GDIT scripts not found at $ARCHON_HOME/scripts/gdit-sdaf/."
         echo "Run 'gdit-sdaf-setup' workflow first, then retry."
         exit 1
       fi
@@ -89,40 +90,40 @@ nodes:
 
       Output ONLY one of: gdit-spec OR archon-plan OR unknown
     depends_on: [guard-setup]
-    context: fresh
+    fresh_context: true
 
   - id: validate-spec
     command: gdit-sdaf-spec-validate
     depends_on: [detect-input]
-    context: fresh
+    fresh_context: true
     when: "$detect-input.output == 'gdit-spec'"
 
   - id: plan-setup
     command: archon-plan-setup
     depends_on: [validate-spec, detect-input]
     trigger_rule: one_success
-    context: fresh
+    fresh_context: true
 
   - id: implement-tasks
     command: gdit-sdaf-implement
     depends_on: [plan-setup]
-    context: fresh
+    fresh_context: true
     model: opus
 
   - id: security-scan
     command: gdit-sdaf-validate
     depends_on: [implement-tasks]
-    context: fresh
+    fresh_context: true
 
   - id: checkpoint
     command: gdit-sdaf-checkpoint
     depends_on: [security-scan]
-    context: fresh
+    fresh_context: true
 
   - id: finalize-pr
     command: archon-finalize-pr
     depends_on: [checkpoint]
-    context: fresh
+    fresh_context: true
 
   - id: verify-pr-base
     bash: |
@@ -148,56 +149,56 @@ nodes:
   - id: review-scope
     command: archon-pr-review-scope
     depends_on: [verify-pr-base]
-    context: fresh
+    fresh_context: true
 
   - id: sync
     command: archon-sync-pr-with-main
     depends_on: [review-scope]
-    context: fresh
+    fresh_context: true
 
   - id: code-review
     command: archon-code-review-agent
     depends_on: [sync]
-    context: fresh
+    fresh_context: true
 
   - id: error-handling
     command: archon-error-handling-agent
     depends_on: [sync]
-    context: fresh
+    fresh_context: true
 
   - id: test-coverage
     command: archon-test-coverage-agent
     depends_on: [sync]
-    context: fresh
+    fresh_context: true
 
   - id: comment-quality
     command: archon-comment-quality-agent
     depends_on: [sync]
-    context: fresh
+    fresh_context: true
 
   - id: docs-impact
     command: archon-docs-impact-agent
     depends_on: [sync]
-    context: fresh
+    fresh_context: true
 
   - id: gdit-audit
     command: gdit-sdaf-audit
     depends_on: [sync]
-    context: fresh
+    fresh_context: true
 
   - id: synthesize
     command: archon-synthesize-review
     depends_on:
       [code-review, error-handling, test-coverage, comment-quality, docs-impact, gdit-audit]
     trigger_rule: one_success
-    context: fresh
+    fresh_context: true
 
   - id: implement-fixes
     command: archon-implement-review-fixes
     depends_on: [synthesize]
-    context: fresh
+    fresh_context: true
 
   - id: workflow-summary
     command: archon-workflow-summary
     depends_on: [implement-fixes]
-    context: fresh
+    fresh_context: true

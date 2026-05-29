@@ -1,0 +1,411 @@
+name: gdit-sdaf-onboard
+description: |
+  Complete GDIT-SDAF onboarding workflow for new developers.
+
+  Run once per project setup. Re-running is safe (idempotent).
+
+  Orchestrates:
+  - Forge provider detection (GitHub vs GitLab) from git remote
+  - Forge CLI authentication verification (gh/glab)
+  - Python and security scanner prerequisites
+  - GDIT scripts and skills installation
+  - Project configuration setup
+  - Final verification report
+
+  Prerequisites:
+  - Git repository with a remote URL
+  - Python 3.12+ (checked by workflow)
+  - Archon CLI installed
+
+nodes:
+  - id: check-archon-cli
+    bash: |
+      set -euo pipefail
+      echo "=== Checking Prerequisites ==="
+      echo ""
+
+      # Verify archon CLI is available
+      if ! command -v archon >/dev/null 2>&1; then
+        echo "ERROR: archon CLI not found in PATH"
+        echo ""
+        echo "Install Archon first:"
+        echo "  npm install -g @archon/cli"
+        echo "  # or for development:"
+        echo "  bun install && bun run cli --help"
+        exit 1
+      fi
+
+      ARCHON_VERSION=$(archon version 2>/dev/null || echo "unknown")
+      echo "✓ Archon CLI: $ARCHON_VERSION"
+
+  - id: detect-forge
+    bash: |
+      set -euo pipefail
+      echo ""
+      echo "=== Detecting Git Forge Provider ==="
+      echo ""
+
+      # Check if forge.provider is already set in .archon/config.yaml
+      CONFIG_PATH=".archon/config.yaml"
+      if [ -f "$CONFIG_PATH" ]; then
+        if grep -q "^forge:" "$CONFIG_PATH" 2>/dev/null; then
+          EXISTING_PROVIDER=$(grep -A1 "^forge:" "$CONFIG_PATH" | grep "provider:" | sed 's/.*provider: *//' | tr -d '"'"'"')
+          if [ -n "$EXISTING_PROVIDER" ]; then
+            echo "✓ Forge provider already configured: $EXISTING_PROVIDER"
+            echo "$EXISTING_PROVIDER" > "$ARTIFACTS_DIR/forge-provider.txt"
+            exit 0
+          fi
+        fi
+      fi
+
+      # Auto-detect from git remote URL
+      REMOTE_URL=$(git remote get-url origin 2>/dev/null || echo "")
+
+      if [ -z "$REMOTE_URL" ]; then
+        echo "ERROR: No git remote 'origin' found."
+        echo ""
+        echo "Add a remote to enable forge detection:"
+        echo "  git remote add origin https://github.com/user/repo.git"
+        echo "  # or"
+        echo "  git remote add origin https://gitlab.com/user/repo.git"
+        exit 1
+      fi
+
+      echo "Git remote: $REMOTE_URL"
+
+      # Detect provider from URL
+      if echo "$REMOTE_URL" | grep -qi "gitlab"; then
+        DETECTED_PROVIDER="gitlab"
+      else
+        DETECTED_PROVIDER="github"
+      fi
+
+      echo "✓ Detected forge provider: $DETECTED_PROVIDER"
+      echo "$DETECTED_PROVIDER" > "$ARTIFACTS_DIR/forge-provider.txt"
+    depends_on: [check-archon-cli]
+
+  - id: write-forge-config
+    script: write-forge-config
+    runtime: uv
+    deps: [pyyaml]
+    depends_on: [detect-forge]
+
+  - id: check-forge-cli
+    bash: |
+      set -euo pipefail
+      echo ""
+      echo "=== Checking Forge CLI Authentication ==="
+      echo ""
+
+      # Read the provider from artifacts
+      PROVIDER=$(cat "$ARTIFACTS_DIR/forge-provider.txt")
+
+      if [ "$PROVIDER" = "github" ]; then
+        CLI_NAME="gh"
+        AUTH_CMD="gh auth login"
+        INSTALL_URL="https://cli.github.com"
+      elif [ "$PROVIDER" = "gitlab" ]; then
+        CLI_NAME="glab"
+        AUTH_CMD="glab auth login"
+        INSTALL_URL="https://gitlab.com/gitlab-org/cli"
+      else
+        echo "ERROR: Unknown provider: $PROVIDER"
+        exit 1
+      fi
+
+      echo "Forge provider: $PROVIDER"
+      echo "CLI tool: $CLI_NAME"
+      echo ""
+
+      # Check if CLI is installed
+      if ! command -v "$CLI_NAME" >/dev/null 2>&1; then
+        echo "⚠  WARNING: $CLI_NAME CLI is not installed"
+        echo ""
+        echo "GDIT workflows require the $CLI_NAME CLI for forge operations:"
+        echo "  - Creating issues and pull requests"
+        echo "  - Posting comments and updates"
+        echo "  - Reading repository metadata"
+        echo ""
+        echo "Install from: $INSTALL_URL"
+        echo ""
+        echo "After installation, authenticate with:"
+        echo "  $AUTH_CMD"
+        echo ""
+        echo "Continuing setup (CLI check will fail in workflows)..."
+        exit 0
+      fi
+
+      echo "✓ $CLI_NAME CLI is installed"
+      echo ""
+
+      # Check authentication
+      echo "Checking $CLI_NAME authentication..."
+      if "$CLI_NAME" auth status >/dev/null 2>&1; then
+        echo "✓ $CLI_NAME is authenticated"
+      else
+        echo ""
+        echo "⚠  WARNING: $CLI_NAME is not authenticated"
+        echo ""
+        echo "Authenticate with:"
+        echo "  $AUTH_CMD"
+        echo ""
+        echo "Required for workflows to:"
+        echo "  - Create issues and PRs"
+        echo "  - Post comments"
+        echo "  - Update statuses"
+        echo ""
+        echo "Continuing setup (auth check will fail in workflows)..."
+      fi
+    depends_on: [write-forge-config]
+
+  - id: check-python
+    bash: |
+      set -euo pipefail
+      echo ""
+      echo "=== Checking Python Version ==="
+      echo ""
+
+      if ! command -v python3 >/dev/null 2>&1; then
+        echo "ERROR: python3 not found in PATH"
+        echo ""
+        echo "Install Python 3.12+:"
+        echo "  macOS: brew install python@3.12"
+        echo "  Ubuntu: sudo apt install python3.12"
+        echo "  Windows: https://python.org"
+        exit 1
+      fi
+
+      PYTHON_VERSION=$(python3 --version 2>&1)
+      echo "Found: $PYTHON_VERSION"
+
+      # Check version is 3.12+
+      if ! python3 --version 2>&1 | grep -qE "Python 3\.(1[2-9]|[2-9][0-9])"; then
+        echo ""
+        echo "ERROR: Python 3.12+ required"
+        echo "Current: $PYTHON_VERSION"
+        echo ""
+        echo "Install Python 3.12 or later from:"
+        echo "  https://python.org"
+        exit 1
+      fi
+
+      echo "✓ Python version OK"
+    depends_on: [check-archon-cli]
+
+  - id: install-scanners
+    bash: |
+      set -euo pipefail
+      echo ""
+      echo "=== Installing Security Scanners ==="
+      echo ""
+
+      # Try pip installation (best-effort, non-blocking)
+      if command -v pip3 >/dev/null 2>&1; then
+        echo "Installing scanners via pip3..."
+        pip3 install --quiet semgrep checkov ruff pyright 2>/dev/null || true
+      fi
+
+      echo ""
+      echo "Checking installed scanners:"
+      for tool in gitleaks semgrep trivy checkov ruff pyright; do
+        if command -v "$tool" >/dev/null 2>&1; then
+          echo "  ✓ $tool"
+        else
+          echo "  ✗ $tool (install: pip install $tool)"
+        fi
+      done
+    depends_on: [check-python]
+
+  - id: copy-gdit-scripts
+    bash: |
+      set -euo pipefail
+      echo ""
+      echo "=== Copying GDIT Scripts ==="
+      echo ""
+
+      ARCHON_HOME="${ARCHON_HOME:-$HOME/.archon}"
+      GDIT_SCRIPTS_DST="$ARCHON_HOME/scripts/gdit-sdaf"
+      mkdir -p "$GDIT_SCRIPTS_DST"
+
+      # Find repo root (support running from subdirectories)
+      REPO_ROOT=$(git rev-parse --show-toplevel)
+      ARCHON_GDIT_SCRIPTS="$REPO_ROOT/.archon/scripts/gdit-sdaf"
+
+      if [ ! -d "$ARCHON_GDIT_SCRIPTS" ]; then
+        echo "ERROR: $ARCHON_GDIT_SCRIPTS not found"
+        echo "This command must be run from within the Archon repository."
+        exit 1
+      fi
+
+      # Copy Python scripts
+      if ls "$ARCHON_GDIT_SCRIPTS"/*.py 1>/dev/null 2>&1; then
+        cp "$ARCHON_GDIT_SCRIPTS"/*.py "$GDIT_SCRIPTS_DST/"
+        SCRIPT_COUNT=$(ls "$ARCHON_GDIT_SCRIPTS"/*.py | wc -l | tr -d ' ')
+        echo "✓ Copied $SCRIPT_COUNT scripts to $GDIT_SCRIPTS_DST"
+      else
+        echo "⚠  No Python scripts found in $ARCHON_GDIT_SCRIPTS"
+      fi
+    depends_on: [check-python]
+
+  - id: install-gdit-skills
+    bash: |
+      set -euo pipefail
+      echo ""
+      echo "=== Installing GDIT Skills ==="
+      echo ""
+
+      ARCHON_HOME="${ARCHON_HOME:-$HOME/.archon}"
+      GDIT_SKILLS="$ARCHON_HOME/skills"
+      REPO_ROOT=$(git rev-parse --show-toplevel)
+      mkdir -p "$GDIT_SKILLS"
+
+      INSTALLED_COUNT=0
+      SKIPPED_COUNT=0
+
+      # Find and install skills
+      for skill_dir in "$REPO_ROOT/.claude/skills/gdit-sdaf-"*/; do
+        [ -d "$skill_dir" ] || continue
+
+        # Strip gdit-sdaf- prefix from directory name
+        skill_name=$(basename "$skill_dir" | sed 's/^gdit-sdaf-//')
+        target="$GDIT_SKILLS/$skill_name"
+
+        if [ -d "$target" ]; then
+          echo "  ○ $skill_name (already exists)"
+          SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+        else
+          cp -r "$skill_dir" "$target"
+          echo "  ✓ $skill_name → $target"
+          INSTALLED_COUNT=$((INSTALLED_COUNT + 1))
+        fi
+      done
+
+      echo ""
+      echo "Installed: $INSTALLED_COUNT, Skipped: $SKIPPED_COUNT"
+    depends_on: [copy-gdit-scripts]
+
+  - id: init-project-config
+    prompt: |
+      Create or update the GDIT project configuration file.
+
+      **Target file**: `.archon/config/project.yaml` (NOT `.archon/config.yaml`)
+
+      Steps:
+      1. Check if `.archon/config/project.yaml` exists
+      2. If it exists: report "Config already exists — skipping" and STOP
+      3. If missing:
+         a. Scan project for tech stack indicators:
+            - Python: requirements.txt, pyproject.toml, *.py files
+            - JavaScript/TypeScript: package.json, tsconfig.json
+            - Java: pom.xml, build.gradle
+            - .NET: *.csproj, *.sln
+            - IaC: *.tf, CloudFormation templates
+         b. Create `.archon/config/` directory if missing
+         c. Write `.archon/config/project.yaml` with this template:
+
+      ```yaml
+      workflow:
+        spec-source: gdit-sdaf
+        testing: disable
+        frameworks: []
+        value-tracking: true
+        commit-types: [fix, feat, docs, refactor, test, chore]
+        audit:
+          git-checkpoint: true
+          spec-validation: true
+          security-scans: true
+          test-execution: false
+          value-tracking: true
+          language-validation: true
+          scan-recency-seconds: 1800
+
+      security:
+        enabled-scanners: [gitleaks, semgrep, trivy, checkov, ruff]
+        semgrep:
+          severity-levels: [ERROR, WARNING]
+        trivy:
+          severity-levels: [HIGH, CRITICAL]
+        log-retention:
+          application-days: 90
+          security-days: 365
+
+      sysml:
+        enabled: true
+        scope: both
+
+      well-architected:
+        enabled: true
+
+      finops:
+        enabled: true
+
+      shared:
+        registry-path: .archon/registry/shared-registry.yaml
+      ```
+
+         d. Report: "Created .archon/config/project.yaml — detected: [list tech stack]"
+    depends_on: [install-gdit-skills]
+    context: fresh
+
+  - id: verify-setup
+    prompt: |
+      Verify the complete GDIT-SDAF onboarding and generate a status report.
+
+      Check and report on:
+
+      1. **Forge Configuration**: Read `.archon/config.yaml`
+         - Confirm `forge.provider` is set (github or gitlab)
+         - Show the configured value
+
+      2. **GDIT Scripts**: Check `~/.archon/scripts/gdit-sdaf/`
+         - List Python scripts found
+         - Count total scripts
+
+      3. **GDIT Skills**: Check `~/.archon/skills/`
+         - List directories WITHOUT the gdit-sdaf- prefix
+         - Example: aws-security-remediation, gitlab-security-scanning
+
+      4. **Project Config**: Check `.archon/config/project.yaml`
+         - Confirm it exists
+         - Show the path
+
+      5. **Security Scanners**: Test each tool
+         - gitleaks
+         - semgrep
+         - trivy
+         - checkov
+         - ruff
+         - pyright
+
+      Format your report as:
+
+      ```
+      === GDIT-SDAF Onboarding Complete ===
+
+      Forge Configuration:
+        ✓ Provider: [github/gitlab]
+        ✓ Location: .archon/config.yaml
+
+      GDIT Scripts: [count] installed
+        [list script names]
+
+      GDIT Skills: [count] installed
+        [list skill names without gdit-sdaf- prefix]
+
+      Project Config:
+        ✓ .archon/config/project.yaml
+
+      Security Scanners:
+        ✓ [tool] - installed
+        ✗ [tool] - not found (install: pip install [tool])
+
+      Next Steps:
+        • View workflows: archon workflow list | grep gdit-sdaf
+        • Run security scan: archon workflow run gdit-sdaf-security-scan
+        • Run doctor: archon doctor
+        • Full lifecycle: archon workflow run gdit-sdaf-idea-to-pr "feature description"
+      ```
+
+      Be specific about what's installed vs missing.
+    depends_on: [init-project-config]
+    context: fresh
