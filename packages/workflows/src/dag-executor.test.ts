@@ -408,6 +408,26 @@ describe('checkTriggerRule', () => {
   });
 });
 
+describe('checkTriggerRule -- classify-gated pipeline behavior on failure', () => {
+  it('all_success aspect skips when classify failed', () => {
+    const aspect = node('code-review', ['review-classify']);
+    const outputs = new Map([['review-classify', makeOutput('failed', '')]]);
+    expect(checkTriggerRule(aspect, outputs)).toBe('skip');
+  });
+
+  it('one_success synthesize skips when all aspects skipped (classify failed)', () => {
+    const synth = node('synthesize-review', ['code-review', 'error-handling', 'test-coverage'], {
+      trigger_rule: 'one_success',
+    });
+    const outputs = new Map([
+      ['code-review', makeOutput('skipped')],
+      ['error-handling', makeOutput('skipped')],
+      ['test-coverage', makeOutput('skipped')],
+    ]);
+    expect(checkTriggerRule(synth, outputs)).toBe('skip');
+  });
+});
+
 describe('DAG Loader -- cycle detection', () => {
   let testDir: string;
 
