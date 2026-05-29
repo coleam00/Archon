@@ -9,6 +9,11 @@ import type {
   ApprovalContext,
 } from '@archon/workflows/schemas/workflow-run';
 import { TERMINAL_WORKFLOW_STATUSES } from '@archon/workflows/schemas/workflow-run';
+import type {
+  DashboardWorkflowRun,
+  ListDashboardRunsOptions,
+  DashboardRunsResult,
+} from '../schemas/workflow-run';
 import { createLogger } from '@archon/paths';
 
 /** Best-effort ROLLBACK — log but swallow errors since we're already in an error path. */
@@ -468,14 +473,9 @@ export async function updateWorkflowRun(
   const setClauses: string[] = [];
   const values: unknown[] = [];
 
-  // Helper to add parameterized clause
-  function addParam(clause: string, value: unknown): void {
-    values.push(value);
-    setClauses.push(clause.replace('?', `$${values.length}`));
-  }
-
   if (updates.status !== undefined) {
-    addParam('status = ?', updates.status);
+    values.push(updates.status);
+    setClauses.push(`status = $${values.length}`);
     // Auto-set completed_at for terminal-like statuses, but skip when
     // transitioning to 'failed' for approval resume (not a real completion)
     const isApprovalTransition =
@@ -619,49 +619,11 @@ export async function pauseWorkflowRun(
   }
 }
 
-/**
- * Enriched workflow run with joined data for the dashboard Command Center.
- */
-export interface DashboardWorkflowRun extends WorkflowRun {
-  codebase_name: string | null;
-  platform_type: string | null;
-  worker_platform_id: string | null;
-  parent_platform_id: string | null;
-  // Step-level progress (from latest step_started/step_completed event)
-  current_step_name: string | null;
-  total_steps: number | null;
-  current_step_status: 'running' | 'completed' | 'failed' | null;
-  // Parallel agent progress (from parallel_agent_* events)
-  agents_completed: number | null;
-  agents_failed: number | null;
-  agents_total: number | null;
-}
-
-/** Options for listing dashboard runs with server-side search, filtering, and pagination. */
-export interface ListDashboardRunsOptions {
-  status?: WorkflowRunStatus;
-  codebaseId?: string;
-  search?: string;
-  after?: string;
-  before?: string;
-  limit?: number;
-  offset?: number;
-}
-
-/** Response envelope for paginated dashboard runs. */
-export interface DashboardRunsResult {
-  runs: DashboardWorkflowRun[];
-  total: number;
-  counts: {
-    all: number;
-    running: number;
-    completed: number;
-    failed: number;
-    cancelled: number;
-    pending: number;
-    paused: number;
-  };
-}
+export type {
+  DashboardWorkflowRun,
+  ListDashboardRunsOptions,
+  DashboardRunsResult,
+} from '../schemas/workflow-run';
 
 /**
  * Build WHERE clauses shared between the list and count queries.

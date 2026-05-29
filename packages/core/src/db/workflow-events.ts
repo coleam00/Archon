@@ -9,6 +9,7 @@
  * Read operations also throw on error — callers own the degradation policy.
  */
 import { pool, getDialect } from './connection';
+import type { WorkflowEventRow } from '../schemas/workflow-event';
 import { createLogger } from '@archon/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -18,16 +19,7 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-export interface WorkflowEventRow {
-  id: string;
-  workflow_run_id: string;
-  event_type: string;
-  step_index: number | null;
-  step_name: string | null;
-  /** Normalized to object — SQLite returns JSON as string, PG returns object. */
-  data: Record<string, unknown>;
-  created_at: string;
-}
+export type { WorkflowEventRow } from '../schemas/workflow-event';
 
 /**
  * Create a workflow event. Fire-and-forget - never throws.

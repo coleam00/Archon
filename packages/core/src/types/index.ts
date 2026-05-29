@@ -1,12 +1,22 @@
 /**
  * Core type definitions for the Remote Coding Agent platform
  */
-import type { TransitionTrigger } from '../state/session-transitions';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
-import { z } from 'zod';
 
 // MessageChunk + TokenUsage are used by IPlatformAdapter below.
 import type { MessageChunk, TokenUsage } from '@archon/providers/types';
+
+// Re-export schema-derived types so existing imports from '@archon/core/types' keep working.
+export type {
+  Conversation,
+  IdentityPlatform,
+  User,
+  UserIdentity,
+  Codebase,
+  Session,
+  SessionMetadata,
+} from '../schemas';
+export { sessionMetadataSchema, identityPlatformSchema } from '../schemas';
 
 /**
  * Custom error for when a conversation is not found during update operations
@@ -17,65 +27,6 @@ export class ConversationNotFoundError extends Error {
     super(`Conversation not found: ${conversationId}`);
     this.name = 'ConversationNotFoundError';
   }
-}
-
-export interface Conversation {
-  id: string;
-  platform_type: string;
-  platform_conversation_id: string;
-  codebase_id: string | null;
-  cwd: string | null;
-  isolation_env_id: string | null; // UUID FK to isolation_environments
-  ai_assistant_type: string;
-  title: string | null;
-  hidden: boolean;
-  deleted_at: Date | null;
-  last_activity_at: Date | null; // For staleness detection
-  user_id: string | null; // UUID FK to users; populated by chat/forge adapters
-  created_at: Date;
-  updated_at: Date;
-}
-
-/**
- * Identity-source platforms. Constrained to a literal union so a typo
- * (`'Slack'` vs `'slack'`) can't silently break the UNIQUE(platform,
- * platform_user_id) invariant. New forge/chat platforms must be added here
- * and to the per-adapter resolver callsite.
- */
-export type IdentityPlatform =
-  | 'slack'
-  | 'telegram'
-  | 'discord'
-  | 'github'
-  | 'gitea'
-  | 'gitlab'
-  | 'web'
-  | 'cli';
-
-/**
- * Archon-internal user identity. One row per human (or bot) across all platforms.
- * Populated lazily on first sight by any adapter; display_name/email may be NULL
- * until enrichment succeeds.
- */
-export interface User {
-  id: string;
-  display_name: string | null;
-  email: string | null;
-  created_at: Date;
-  updated_at: Date;
-}
-
-/**
- * Maps a platform-native user id (Slack U-id, Telegram chat id, GitHub login,
- * Discord snowflake) to an Archon user. UNIQUE(platform, platform_user_id).
- */
-export interface UserIdentity {
-  id: string;
-  user_id: string;
-  platform: IdentityPlatform;
-  platform_user_id: string;
-  platform_display_name: string | null;
-  created_at: Date;
 }
 
 import type { IsolationHints } from '@archon/isolation';
@@ -101,41 +52,6 @@ export interface HandleMessageContext {
    * own auth flows are wired.
    */
   readonly userId?: string;
-}
-
-export interface Codebase {
-  id: string;
-  name: string;
-  repository_url: string | null;
-  default_cwd: string;
-  ai_assistant_type: string;
-  commands: Record<string, { path: string; description: string }>;
-  created_at: Date;
-  updated_at: Date;
-}
-
-export const sessionMetadataSchema = z
-  .object({
-    lastCommand: z.string().optional(),
-  })
-  .passthrough();
-
-export type SessionMetadata = z.infer<typeof sessionMetadataSchema>;
-
-export interface Session {
-  id: string;
-  conversation_id: string;
-  codebase_id: string | null;
-  ai_assistant_type: string;
-  assistant_session_id: string | null;
-  active: boolean;
-  metadata: SessionMetadata;
-  started_at: Date;
-  ended_at: Date | null;
-  // Audit trail fields (added in migration 010)
-  parent_session_id: string | null;
-  transition_reason: TransitionTrigger | null;
-  ended_reason: TransitionTrigger | null;
 }
 
 export interface CommandResult {

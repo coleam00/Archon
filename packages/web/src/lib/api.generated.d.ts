@@ -2023,9 +2023,14 @@ export interface components {
       ai_assistant_type: string;
       title: string | null;
       hidden: boolean;
+      /** Format: date-time */
       deleted_at: string | null;
+      /** Format: date-time */
       last_activity_at: string | null;
+      user_id: string | null;
+      /** Format: date-time */
       created_at: string;
+      /** Format: date-time */
       updated_at: string;
     };
     ConversationListResponse: components['schemas']['Conversation'][];
@@ -2054,16 +2059,14 @@ export interface components {
       role: 'user' | 'assistant';
       content: string;
       metadata: string;
+      user_id: string | null;
+      /** Format: date-time */
       created_at: string;
     };
     MessageListResponse: components['schemas']['Message'][];
     DispatchResponse: {
       accepted: boolean;
       status: string;
-    };
-    CodebaseCommand: {
-      path: string;
-      description: string;
     };
     Codebase: {
       id: string;
@@ -2072,9 +2075,14 @@ export interface components {
       default_cwd: string;
       ai_assistant_type: string;
       commands: {
-        [key: string]: components['schemas']['CodebaseCommand'];
+        [key: string]: {
+          path: string;
+          description: string;
+        };
       };
+      /** Format: date-time */
       created_at: string;
+      /** Format: date-time */
       updated_at: string;
     };
     CodebaseListResponse: components['schemas']['Codebase'][];
@@ -2438,15 +2446,14 @@ export interface components {
       workflows: components['schemas']['WorkflowListEntry'][];
       errors?: components['schemas']['WorkflowLoadError'][];
     };
-    /** @enum {string} */
-    WorkflowRunStatus: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
-    WorkflowRun: {
+    DashboardWorkflowRun: {
       id: string;
       workflow_name: string;
       conversation_id: string;
       parent_conversation_id: string | null;
       codebase_id: string | null;
-      status: components['schemas']['WorkflowRunStatus'];
+      /** @enum {string} */
+      status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
       user_message: string;
       metadata: {
         [key: string]: unknown;
@@ -2455,8 +2462,7 @@ export interface components {
       completed_at: string | null;
       last_activity_at: string | null;
       working_path: string | null;
-    };
-    DashboardWorkflowRun: components['schemas']['WorkflowRun'] & {
+      user_id: string | null;
       codebase_name: string | null;
       platform_type: string | null;
       worker_platform_id: string | null;
@@ -2496,6 +2502,24 @@ export interface components {
     RejectWorkflowRunBody: {
       reason?: string;
     };
+    WorkflowRun: {
+      id: string;
+      workflow_name: string;
+      conversation_id: string;
+      parent_conversation_id: string | null;
+      codebase_id: string | null;
+      /** @enum {string} */
+      status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+      user_message: string;
+      metadata: {
+        [key: string]: unknown;
+      };
+      started_at: string;
+      completed_at: string | null;
+      last_activity_at: string | null;
+      working_path: string | null;
+      user_id: string | null;
+    };
     WorkflowRunListResponse: {
       runs: components['schemas']['WorkflowRun'][];
     };
@@ -2511,6 +2535,7 @@ export interface components {
       data: {
         [key: string]: unknown;
       };
+      /** Format: date-time */
       created_at: string;
     };
     WorkflowRunDetail: {

@@ -54,6 +54,8 @@ import {
   TERMINAL_WORKFLOW_STATUSES,
 } from '@archon/workflows/schemas/workflow-run';
 import type { ApprovalContext, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import type { MessageRow } from '@archon/core/schemas/message';
+import type { DashboardWorkflowRun } from '@archon/core/schemas/workflow-run';
 import { findMarkdownFilesRecursive } from '@archon/core/utils/commands';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -123,6 +125,12 @@ import {
 } from './schemas/config.schemas';
 import { providerListResponseSchema } from './schemas/provider.schemas';
 import { getProviderInfoList, isRegisteredProvider } from '@archon/providers';
+import { messageSchema } from './schemas/conversation.schemas';
+import {
+  workflowRunSchema,
+  dashboardWorkflowRunSchema,
+  workflowRunStatusSchema,
+} from './schemas/workflow.schemas';
 
 // Read app version: use build-time constant in binary, package.json in dev
 let appVersion = 'unknown';
@@ -1242,6 +1250,93 @@ export function registerApiRoutes(
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // API transform helpers (Date → ISO string for wire shape)
+  // ---------------------------------------------------------------------------
+
+  type ApiConversation = z.infer<typeof conversationSchema>;
+  type ApiCodebase = z.infer<typeof codebaseSchema>;
+  type ApiMessage = z.infer<typeof messageSchema>;
+  type ApiWorkflowRun = z.infer<typeof workflowRunSchema>;
+  type ApiDashboardWorkflowRun = z.infer<typeof dashboardWorkflowRunSchema>;
+
+  function toISOString(val: Date | string): string;
+  function toISOString(val: Date | string | null | undefined): string | null;
+  function toISOString(val: Date | string | null | undefined): string | null {
+    if (val === null || val === undefined) return null;
+    if (typeof val === 'string') return val;
+    try {
+      return val.toISOString();
+    } catch (e) {
+      getLog().error({ err: e as Error, invalidDate: val }, 'api.invalid_date_transform');
+      return null;
+    }
+  }
+
+  function toApiConversation(row: import('@archon/core').Conversation): ApiConversation {
+    return {
+      ...row,
+      created_at: toISOString(row.created_at),
+      updated_at: toISOString(row.updated_at),
+      deleted_at: toISOString(row.deleted_at),
+      last_activity_at: toISOString(row.last_activity_at),
+    };
+  }
+
+  function toApiCodebase(row: import('@archon/core').Codebase): ApiCodebase {
+    let commands = row.commands;
+    if (typeof commands === 'string') {
+      try {
+        commands = JSON.parse(commands) as Record<string, { path: string; description: string }>;
+      } catch (parseErr) {
+        getLog().error({ err: parseErr as Error, codebaseId: row.id }, 'corrupted_commands_json');
+        // Fallback: empty map keeps the API response valid and prevents the endpoint
+        // from crashing. The corruption is already logged above for operator attention.
+        commands = {};
+      }
+    }
+    return {
+      ...row,
+      commands,
+      created_at: toISOString(row.created_at),
+      updated_at: toISOString(row.updated_at),
+    };
+  }
+
+  function toApiMessage(row: MessageRow): ApiMessage {
+    let metadata = row.metadata;
+    if (typeof metadata !== 'string') {
+      try {
+        metadata = JSON.stringify(metadata);
+      } catch (e) {
+        getLog().error(
+          { err: e as Error, messageId: row.id },
+          'api.message_metadata_serialize_failed'
+        );
+        metadata = '{}';
+      }
+    }
+    return { ...row, metadata };
+  }
+
+  function toApiWorkflowRun(row: WorkflowRun): ApiWorkflowRun {
+    return {
+      ...row,
+      started_at: toISOString(row.started_at),
+      completed_at: toISOString(row.completed_at),
+      last_activity_at: toISOString(row.last_activity_at),
+    };
+  }
+
+  function toApiDashboardWorkflowRun(row: DashboardWorkflowRun): ApiDashboardWorkflowRun {
+    return {
+      ...row,
+      started_at: toISOString(row.started_at),
+      completed_at: toISOString(row.completed_at),
+      last_activity_at: toISOString(row.last_activity_at),
+    };
+  }
+
   // GET /api/conversations - List conversations
   registerOpenApiRoute(getConversationsRoute, async c => {
     try {
@@ -1253,7 +1348,7 @@ export function registerApiRoutes(
         codebaseId,
         true
       );
-      return c.json(conversations);
+      return c.json(conversations.map(toApiConversation));
     } catch (error) {
       getLog().error({ err: error }, 'list_conversations_failed');
       return apiError(c, 500, 'Failed to list conversations');
@@ -1268,7 +1363,7 @@ export function registerApiRoutes(
       if (!conv) {
         return apiError(c, 404, 'Conversation not found');
       }
-      return c.json(conv);
+      return c.json(toApiConversation(conv));
     } catch (error) {
       getLog().error({ err: error, platformId }, 'get_conversation_failed');
       return apiError(c, 500, 'Failed to get conversation');
@@ -1393,14 +1488,7 @@ export function registerApiRoutes(
         return apiError(c, 404, 'Conversation not found');
       }
       const messages = await messageDb.listMessages(conv.id, limit);
-      // Normalize metadata: PostgreSQL JSONB auto-deserializes to object,
-      // but frontend expects JSON string. SQLite returns string already.
-      return c.json(
-        messages.map(m => ({
-          ...m,
-          metadata: typeof m.metadata === 'string' ? m.metadata : JSON.stringify(m.metadata),
-        }))
-      );
+      return c.json(messages.map(toApiMessage));
     } catch (error) {
       getLog().error({ err: error }, 'list_messages_failed');
       return apiError(c, 500, 'Failed to list messages');
@@ -1419,7 +1507,7 @@ export function registerApiRoutes(
     }
 
     let message: string;
-    const savedFiles: AttachedFile[] = [];
+    let savedFiles: AttachedFile[] = [];
     let uploadDir = '';
 
     const contentType = c.req.header('content-type') ?? '';
@@ -1449,70 +1537,16 @@ export function registerApiRoutes(
         fileList = [];
       }
 
-      // Enforce server-side file count limit
       const fileEntries = fileList.filter((e): e is File => e instanceof File);
-      if (fileEntries.length > MAX_FILES_PER_MESSAGE) {
-        return c.json({ error: `Maximum ${String(MAX_FILES_PER_MESSAGE)} files per message` }, 400);
-      }
-
-      const archonHome = getArchonHome();
-      uploadDir = join(archonHome, 'artifacts', 'uploads', conversationId);
-
-      // Guard against path traversal in conversationId (belt-and-suspenders after regex above)
-      if (!uploadDir.startsWith(archonHome + sep)) {
-        return c.json({ error: 'Invalid conversation ID' }, 400);
-      }
-
-      // Validate all files before writing any to disk
-      for (const entry of fileEntries) {
-        const displayName = basename(entry.name).replace(/[^a-zA-Z0-9._-]/g, '_');
-        // Server-side MIME type allowlist (client-side accept= is not a security boundary;
-        // entry.type is the Content-Type supplied by the client and is not verified against
-        // actual file contents — suitable for a single-developer self-hosted tool)
-        if (!isAllowedUploadType(entry.type, entry.name)) {
-          return c.json(
-            { error: `File "${displayName}" has an unsupported type: ${entry.type}` },
-            400
-          );
+      if (fileEntries.length > 0) {
+        const result = await persistUploadedFiles(conversationId, fileEntries);
+        if (!result.ok) {
+          return c.json({ error: result.error }, result.status);
         }
-        if (entry.size > MAX_UPLOAD_BYTES) {
-          return c.json({ error: `File "${displayName}" exceeds the 10 MB size limit` }, 400);
-        }
+        savedFiles = result.savedFiles;
+        uploadDir = result.uploadDir;
+        getLog().info({ conversationId, fileCount: savedFiles.length }, 'message.files_uploaded');
       }
-
-      // Write files; on any failure clean up already-written files and surface the error
-      try {
-        await mkdir(uploadDir, { recursive: true });
-        for (const entry of fileEntries) {
-          const fileId = randomUUID();
-          const safeName = basename(entry.name).replace(/[^a-zA-Z0-9._-]/g, '_');
-          const filePath = join(uploadDir, `${fileId}_${safeName}`);
-          await writeFile(filePath, Buffer.from(await entry.arrayBuffer()));
-          // Normalise MIME: strip parameters to prevent prompt injection via crafted Content-Type
-          const normalizedMime =
-            entry.type.split(';')[0].trim().toLowerCase() || 'application/octet-stream';
-          savedFiles.push({
-            path: filePath,
-            // Use safeName for display to avoid prompt injection via crafted filenames
-            name: safeName || fileId,
-            mimeType: normalizedMime,
-            size: entry.size,
-          });
-        }
-      } catch (writeErr: unknown) {
-        // Roll back any files written before the failure
-        for (const f of savedFiles) {
-          await unlink(f.path).catch((err: NodeJS.ErrnoException) => {
-            if (err.code !== 'ENOENT') {
-              getLog().warn({ err, filePath: f.path, conversationId }, 'upload.rollback_failed');
-            }
-          });
-        }
-        getLog().error({ err: writeErr, conversationId }, 'upload.write_failed');
-        return c.json({ error: 'Failed to save uploaded file. Check available disk space.' }, 500);
-      }
-
-      getLog().info({ conversationId, fileCount: savedFiles.length }, 'message.files_uploaded');
     } else {
       let body: { message?: unknown };
       try {
@@ -1685,20 +1719,7 @@ export function registerApiRoutes(
       deduped.push(...seen.values());
       deduped.sort((a, b) => a.name.localeCompare(b.name));
 
-      return c.json(
-        deduped.map(cb => {
-          let commands = cb.commands;
-          if (typeof commands === 'string') {
-            try {
-              commands = JSON.parse(commands);
-            } catch (parseErr) {
-              getLog().error({ err: parseErr, codebaseId: cb.id }, 'corrupted_commands_json');
-              commands = {};
-            }
-          }
-          return { ...cb, commands };
-        })
-      );
+      return c.json(deduped.map(toApiCodebase));
     } catch (error) {
       getLog().error({ err: error }, 'list_codebases_failed');
       return apiError(c, 500, 'Failed to list codebases');
@@ -1712,16 +1733,7 @@ export function registerApiRoutes(
       if (!codebase) {
         return apiError(c, 404, 'Codebase not found');
       }
-      let commands = codebase.commands;
-      if (typeof commands === 'string') {
-        try {
-          commands = JSON.parse(commands);
-        } catch (parseErr) {
-          getLog().error({ err: parseErr, codebaseId: codebase.id }, 'corrupted_commands_json');
-          commands = {};
-        }
-      }
-      return c.json({ ...codebase, commands });
+      return c.json(toApiCodebase(codebase));
     } catch (error) {
       getLog().error({ err: error }, 'get_codebase_failed');
       return apiError(c, 500, 'Failed to get codebase');
@@ -1744,7 +1756,7 @@ export function registerApiRoutes(
         return apiError(c, 500, 'Codebase created but not found');
       }
 
-      return c.json(codebase, result.alreadyExisted ? 200 : 201);
+      return c.json(toApiCodebase(codebase), result.alreadyExisted ? 200 : 201);
     } catch (error) {
       getLog().error({ err: error }, 'add_codebase_failed');
       return apiError(
@@ -2053,17 +2065,10 @@ export function registerApiRoutes(
   registerOpenApiRoute(getDashboardRunsRoute, async c => {
     try {
       const rawStatus = c.req.query('status');
-      const dashboardValidStatuses = [
-        'pending',
-        'running',
-        'completed',
-        'failed',
-        'cancelled',
-        'paused',
-      ] as const;
-      type DashboardRunStatus = (typeof dashboardValidStatuses)[number];
+      const validStatuses = workflowRunStatusSchema.options;
+      type DashboardRunStatus = (typeof validStatuses)[number];
       const status: DashboardRunStatus | undefined =
-        rawStatus && (dashboardValidStatuses as readonly string[]).includes(rawStatus)
+        rawStatus && (validStatuses as readonly string[]).includes(rawStatus)
           ? (rawStatus as DashboardRunStatus)
           : undefined;
       const codebaseId = c.req.query('codebaseId') ?? undefined;
@@ -2084,7 +2089,10 @@ export function registerApiRoutes(
         limit,
         offset,
       });
-      return c.json(result);
+      return c.json({
+        ...result,
+        runs: result.runs.map(toApiDashboardWorkflowRun),
+      });
     } catch (error) {
       getLog().error({ err: error }, 'list_dashboard_runs_failed');
       return apiError(c, 500, 'Failed to list dashboard runs');
@@ -2335,14 +2343,7 @@ export function registerApiRoutes(
     try {
       const conversationId = c.req.query('conversationId') ?? undefined;
       const rawStatus = c.req.query('status');
-      const validStatuses = [
-        'pending',
-        'running',
-        'completed',
-        'failed',
-        'cancelled',
-        'paused',
-      ] as const;
+      const validStatuses = workflowRunStatusSchema.options;
       type WorkflowRunStatus = (typeof validStatuses)[number];
       const status: WorkflowRunStatus | undefined =
         rawStatus && (validStatuses as readonly string[]).includes(rawStatus)
@@ -2358,7 +2359,7 @@ export function registerApiRoutes(
         limit,
         codebaseId,
       });
-      return c.json({ runs });
+      return c.json({ runs: runs.map(toApiWorkflowRun) });
     } catch (error) {
       getLog().error({ err: error }, 'list_workflow_runs_failed');
       return apiError(c, 500, 'Failed to list workflow runs');
@@ -2374,7 +2375,7 @@ export function registerApiRoutes(
       if (!run) {
         return apiError(c, 404, 'No workflow run found for this worker');
       }
-      return c.json({ run });
+      return c.json({ run: toApiWorkflowRun(run) });
     } catch (error) {
       getLog().error({ err: error }, 'workflow_run_by_worker_lookup_failed');
       return apiError(c, 500, 'Failed to look up workflow run');
@@ -2416,7 +2417,7 @@ export function registerApiRoutes(
 
       return c.json({
         run: {
-          ...run,
+          ...toApiWorkflowRun(run),
           worker_platform_id: workerPlatformId,
           parent_platform_id: parentPlatformId,
           conversation_platform_id: conversationPlatformId ?? null,
