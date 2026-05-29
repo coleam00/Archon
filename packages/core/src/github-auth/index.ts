@@ -7,6 +7,20 @@ export { AppNotInstalledError, AppPrivateKeyError } from './errors';
 export { installCredentialHelper } from './credential-helper-install';
 export type { GitHubAppConfig, IGitHubAppAuthProvider, CachedInstallationToken } from './types';
 
+// Per-user device flow (PR-C)
+export { isPerUserGitHubEnabled, loadDeviceFlowConfig, assertEncryptionKeyAtBoot } from './config';
+export type { DeviceFlowConfig } from './config';
+export { connectGithubForUser } from './connect-service';
+export type { ConnectGithubResult, ConnectGithubOptions } from './connect-service';
+export {
+  startDeviceFlow,
+  pollDeviceFlow,
+  refreshUserToken,
+  fetchGithubUser,
+  DeviceFlowError,
+} from './device-flow';
+export type { DeviceCodeResponse, DeviceAccessToken, GithubUserProfile } from './device-flow';
+
 import type { IGitHubAppAuthProvider } from './types';
 
 /**
