@@ -214,16 +214,15 @@ export async function checkTelemetry(): Promise<CheckResult> {
       message: `anonymous, ${status.keySource} key (opt out: DO_NOT_TRACK=1)`,
     };
   }
-  const reasonText: Record<NonNullable<typeof status.disabledReason>, string> = {
+  // `status` is narrowed to the disabled arm here, so `disabledReason` is
+  // guaranteed non-null — no fallback branch needed.
+  const reasonText: Record<typeof status.disabledReason, string> = {
     ARCHON_TELEMETRY_DISABLED: 'ARCHON_TELEMETRY_DISABLED=1',
     DO_NOT_TRACK: 'DO_NOT_TRACK=1',
     CI: 'CI=true (auto-disabled)',
-    POSTHOG_API_KEY: 'POSTHOG_API_KEY set to off',
+    POSTHOG_API_KEY: 'POSTHOG_API_KEY set to an opt-out value',
   };
-  // disabledReason is always non-null when enabled is false; the fallback
-  // satisfies the type checker without changing observable behavior.
-  const reason = status.disabledReason ? reasonText[status.disabledReason] : 'disabled';
-  return { label, status: 'skip', message: `disabled (${reason})` };
+  return { label, status: 'skip', message: `disabled (${reasonText[status.disabledReason]})` };
 }
 
 export async function checkSlack(env: NodeJS.ProcessEnv): Promise<CheckResult> {

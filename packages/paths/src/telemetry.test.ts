@@ -1,7 +1,7 @@
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
+import { describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 
 import {
   isTelemetryDisabled,
@@ -67,13 +67,24 @@ describe('telemetry opt-out detection', () => {
     expect(isTelemetryDisabled()).toBe(true);
   });
 
-  test('CI=1 does not disable (only CI=true is honored)', () => {
+  test('CI=1 does not disable (only "true" is honored, not "1")', () => {
     delete process.env.ARCHON_TELEMETRY_DISABLED;
     delete process.env.DO_NOT_TRACK;
     delete process.env.POSTHOG_API_KEY;
     process.env.CI = '1';
     expect(isTelemetryDisabled()).toBe(false);
   });
+
+  test.each(['true', 'True', 'TRUE'])(
+    'CI=%s disables (case-insensitive, AppVeyor sets True)',
+    value => {
+      delete process.env.ARCHON_TELEMETRY_DISABLED;
+      delete process.env.DO_NOT_TRACK;
+      delete process.env.POSTHOG_API_KEY;
+      process.env.CI = value;
+      expect(isTelemetryDisabled()).toBe(true);
+    }
+  );
 
   test('ARCHON_TELEMETRY_DISABLED=1 disables telemetry', () => {
     process.env.ARCHON_TELEMETRY_DISABLED = '1';
@@ -143,12 +154,25 @@ describe('getTelemetryStatus', () => {
     delete process.env.DO_NOT_TRACK;
     delete process.env.CI;
     delete process.env.POSTHOG_API_KEY;
+    delete process.env.POSTHOG_HOST;
     const status = getTelemetryStatus();
     expect(status.enabled).toBe(true);
     expect(status.disabledReason).toBeNull();
     expect(status.keySource).toBe('embedded');
     expect(status.distinctId).toMatch(/^[0-9a-f-]+$/);
     expect(status.host).toContain('posthog');
+  });
+
+  test('does not create a telemetry-id file when inspected while disabled', () => {
+    delete process.env.DO_NOT_TRACK;
+    delete process.env.CI;
+    delete process.env.POSTHOG_API_KEY;
+    process.env.ARCHON_TELEMETRY_DISABLED = '1';
+    const status = getTelemetryStatus();
+    expect(status.enabled).toBe(false);
+    expect(status.distinctId).toMatch(/^[0-9a-f-]+$/);
+    // Opted-out users inspecting status must not have a UUID materialized for them.
+    expect(existsSync(join(tmpHome, 'telemetry-id'))).toBe(false);
   });
 
   test('reports CI as the disabled reason', () => {
@@ -219,6 +243,86 @@ describe('resetTelemetryId', () => {
     const cached = getOrCreateTelemetryId();
     const onDisk = readFileSync(join(tmpHome, 'telemetry-id'), 'utf8').trim();
     expect(cached).toBe(onDisk);
+  });
+});
+
+describe('first-run notice (via captureWorkflowInvoked)', () => {
+  let saved: Record<string, string | undefined>;
+  let tmpHome: string;
+  let originalIsTTY: boolean | undefined;
+  const stampPath = (): string => join(tmpHome, 'telemetry-notice-shown');
+
+  beforeEach(() => {
+    saved = saveEnv();
+    tmpHome = mkdtempSync(join(tmpdir(), 'archon-telemetry-notice-'));
+    process.env.ARCHON_HOME = tmpHome;
+    // Telemetry must be enabled for the notice path to be reachable.
+    delete process.env.ARCHON_TELEMETRY_DISABLED;
+    delete process.env.DO_NOT_TRACK;
+    delete process.env.CI;
+    delete process.env.POSTHOG_API_KEY;
+    originalIsTTY = process.stderr.isTTY;
+    resetTelemetryForTests();
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process.stderr, 'isTTY', { value: originalIsTTY, configurable: true });
+    restoreEnv(saved);
+    resetTelemetryForTests();
+    rmSync(tmpHome, { recursive: true, force: true });
+  });
+
+  function setTTY(value: boolean): void {
+    Object.defineProperty(process.stderr, 'isTTY', { value, configurable: true });
+  }
+
+  test('does not write the notice when stderr is not a TTY', () => {
+    setTTY(false);
+    const writeSpy = spyOn(process.stderr, 'write').mockImplementation(() => true);
+    captureWorkflowInvoked({ workflowName: 'w' });
+    expect(writeSpy).not.toHaveBeenCalled();
+    expect(existsSync(stampPath())).toBe(false);
+    writeSpy.mockRestore();
+  });
+
+  test('writes the notice once on first invocation (TTY, no stamp) and stamps it', () => {
+    setTTY(true);
+    const writeSpy = spyOn(process.stderr, 'write').mockImplementation(() => true);
+    captureWorkflowInvoked({ workflowName: 'w' });
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    expect(String(writeSpy.mock.calls[0]?.[0])).toContain('anonymous usage telemetry');
+    expect(existsSync(stampPath())).toBe(true);
+    writeSpy.mockRestore();
+  });
+
+  test('does not write again in the same process (noticeChecked guard)', () => {
+    setTTY(true);
+    const writeSpy = spyOn(process.stderr, 'write').mockImplementation(() => true);
+    captureWorkflowInvoked({ workflowName: 'w' });
+    captureWorkflowInvoked({ workflowName: 'w2' });
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    writeSpy.mockRestore();
+  });
+
+  test('skips the notice when the stamp file already exists (cross-run idempotency)', () => {
+    mkdirSync(tmpHome, { recursive: true });
+    writeFileSync(stampPath(), '2026-01-01T00:00:00.000Z', 'utf8');
+    setTTY(true);
+    const writeSpy = spyOn(process.stderr, 'write').mockImplementation(() => true);
+    captureWorkflowInvoked({ workflowName: 'w' });
+    expect(writeSpy).not.toHaveBeenCalled();
+    writeSpy.mockRestore();
+  });
+
+  test('does not write the notice when telemetry is disabled', () => {
+    setTTY(true);
+    process.env.DO_NOT_TRACK = '1';
+    resetTelemetryForTests();
+    const writeSpy = spyOn(process.stderr, 'write').mockImplementation(() => true);
+    captureWorkflowInvoked({ workflowName: 'w' });
+    expect(writeSpy).not.toHaveBeenCalled();
+    expect(existsSync(stampPath())).toBe(false);
+    writeSpy.mockRestore();
   });
 });
 

@@ -408,6 +408,26 @@ describe('checkTelemetry', () => {
     expect(result.status).toBe('skip');
     expect(result.message).toContain('DO_NOT_TRACK');
   });
+
+  it('returns skip with POSTHOG_API_KEY reason when key set to an off value', async () => {
+    delete process.env.ARCHON_TELEMETRY_DISABLED;
+    delete process.env.DO_NOT_TRACK;
+    delete process.env.CI;
+    process.env.POSTHOG_API_KEY = 'off';
+    const result = await checkTelemetry();
+    expect(result.status).toBe('skip');
+    expect(result.message).toContain('POSTHOG_API_KEY');
+  });
+
+  it('returns skip with ARCHON_TELEMETRY_DISABLED reason when set', async () => {
+    delete process.env.DO_NOT_TRACK;
+    delete process.env.CI;
+    delete process.env.POSTHOG_API_KEY;
+    process.env.ARCHON_TELEMETRY_DISABLED = '1';
+    const result = await checkTelemetry();
+    expect(result.status).toBe('skip');
+    expect(result.message).toContain('ARCHON_TELEMETRY_DISABLED');
+  });
 });
 
 describe('doctorCommand', () => {

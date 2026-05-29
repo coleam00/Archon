@@ -14,12 +14,13 @@ import { getTelemetryStatus, resetTelemetryId, type TelemetryStatus } from '@arc
 function formatStatus(status: TelemetryStatus): string {
   const lines: string[] = [];
   lines.push(`Telemetry:   ${status.enabled ? 'enabled' : 'disabled'}`);
-  if (!status.enabled && status.disabledReason) {
-    const explanation: Record<NonNullable<typeof status.disabledReason>, string> = {
+  if (!status.enabled) {
+    // Narrowed to the disabled arm: `disabledReason` is guaranteed non-null.
+    const explanation: Record<typeof status.disabledReason, string> = {
       ARCHON_TELEMETRY_DISABLED: 'ARCHON_TELEMETRY_DISABLED=1 is set',
       DO_NOT_TRACK: 'DO_NOT_TRACK=1 is set',
       CI: 'CI=true detected (auto-disabled in CI environments)',
-      POSTHOG_API_KEY: 'POSTHOG_API_KEY is set to an "off" value',
+      POSTHOG_API_KEY: 'POSTHOG_API_KEY is set to an opt-out value (off/0/false/disabled/empty)',
     };
     lines.push(`Reason:      ${explanation[status.disabledReason]}`);
   }

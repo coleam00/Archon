@@ -291,8 +291,9 @@ async function main(): Promise<number> {
   const requiresGitRepo = !noGitCommands.includes(command ?? '');
 
   try {
-    // setup/doctor default to warn to avoid Pino info JSON interleaving with ○/✓ output; lazy loggers pick up this level at first creation
-    const isInteractiveCommand = command === 'setup' || command === 'doctor';
+    // setup/doctor/telemetry default to warn to avoid Pino info JSON interleaving with their human-readable output; lazy loggers pick up this level at first creation
+    const isInteractiveCommand =
+      command === 'setup' || command === 'doctor' || command === 'telemetry';
     const suppressByDefault = isInteractiveCommand && !values.verbose && !isVerboseBoot();
     if (values.quiet || suppressByDefault) {
       setLogLevel('warn');

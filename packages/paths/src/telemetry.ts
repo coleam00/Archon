@@ -11,11 +11,12 @@
  *   - ARCHON_TELEMETRY_DISABLED=1
  *   - DO_NOT_TRACK=1                          (de facto standard)
  *   - CI=true                                 (auto-disabled in CI environments)
- *   - POSTHOG_API_KEY=off | 0 | false | disabled | ''
+ *   - POSTHOG_API_KEY=off | 0 | false | disabled | '' (or whitespace-only)
  *
  * All capture functions are fire-and-forget: telemetry errors are swallowed
- * (logged at `debug`, with the first network failure also logged at `warn`
- * so self-hosters notice typo'd hosts). Capture must never crash Archon.
+ * (logged at `debug`, with the first network failure on a custom POSTHOG_HOST
+ * also logged at `warn` so self-hosters notice typo'd hosts). Capture must
+ * never crash Archon.
  */
 import { randomUUID } from 'crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
@@ -91,17 +92,31 @@ export type TelemetryDisabledReason =
   | 'CI'
   | 'POSTHOG_API_KEY';
 
-export interface TelemetryStatus {
-  enabled: boolean;
-  /** Populated only when `enabled` is `false`. */
-  disabledReason: TelemetryDisabledReason | null;
+interface TelemetryStatusBase {
   /** Stable anonymous install UUID (always populated, even when disabled). */
   distinctId: string;
   /** PostHog ingest host. */
   host: string;
-  /** Whether the active API key is the embedded default or a user override. */
-  keySource: 'embedded' | 'env' | 'none';
 }
+
+/**
+ * Full current telemetry state. Discriminated on `enabled` so an enabled status
+ * can never carry a `disabledReason` (and vice versa), and so `keySource: 'none'`
+ * is only representable in the disabled arm.
+ */
+export type TelemetryStatus =
+  | (TelemetryStatusBase & {
+      enabled: true;
+      disabledReason: null;
+      /** Whether the active API key is the embedded default or a user override. */
+      keySource: 'embedded' | 'env';
+    })
+  | (TelemetryStatusBase & {
+      enabled: false;
+      disabledReason: TelemetryDisabledReason;
+      /** `'none'` means POSTHOG_API_KEY was set to an opt-out value. */
+      keySource: 'embedded' | 'env' | 'none';
+    });
 
 /**
  * Decide whether telemetry is disabled, and if so, why. The order here is
@@ -112,7 +127,9 @@ function resolveDisabledReason(): TelemetryDisabledReason | null {
   if (process.env.DO_NOT_TRACK === '1') return 'DO_NOT_TRACK';
   // Standard CI env var set by GitHub Actions, CircleCI, GitLab CI, Travis,
   // Buildkite, etc. Forks running fixtures in CI shouldn't pollute telemetry.
-  if (process.env.CI === 'true') return 'CI';
+  // Matched case-insensitively because AppVeyor sets `CI=True`; `CI=1` is left
+  // alone (rare, and we keep the match narrow to "true").
+  if (process.env.CI?.toLowerCase() === 'true') return 'CI';
   if (getApiKey() === null) return 'POSTHOG_API_KEY';
   return null;
 }
@@ -133,14 +150,27 @@ export function isTelemetryDisabled(): boolean {
  */
 export function getTelemetryStatus(): TelemetryStatus {
   const reason = resolveDisabledReason();
-  const apiKey = getApiKey();
+  const host = getHost();
+  const envKeySet = process.env.POSTHOG_API_KEY !== undefined;
+  if (reason === null) {
+    // Enabled: a usable key exists, so keySource is embedded or env (never none).
+    return {
+      enabled: true,
+      disabledReason: null,
+      distinctId: getTelemetryId(),
+      host,
+      keySource: envKeySet ? 'env' : 'embedded',
+    };
+  }
+  // Disabled: read the install UUID without creating it, so inspecting status
+  // while opted out never materializes a telemetry-id file the user didn't ask for.
   const keySource: 'embedded' | 'env' | 'none' =
-    apiKey === null ? 'none' : process.env.POSTHOG_API_KEY !== undefined ? 'env' : 'embedded';
+    getApiKey() === null ? 'none' : envKeySet ? 'env' : 'embedded';
   return {
-    enabled: reason === null,
+    enabled: false,
     disabledReason: reason,
-    distinctId: getTelemetryId(),
-    host: getHost(),
+    distinctId: peekTelemetryId(),
+    host,
     keySource,
   };
 }
@@ -183,8 +213,33 @@ function getTelemetryId(): string {
 }
 
 /**
+ * Read the persisted install UUID without creating it. Returns a fresh,
+ * unpersisted UUID when none exists yet. Used for status display while
+ * telemetry is disabled, so inspecting state (`telemetry status` / `doctor`)
+ * never writes a `telemetry-id` file for an opted-out user.
+ */
+function peekTelemetryId(): string {
+  const idPath = join(getArchonHome(), 'telemetry-id');
+  try {
+    if (existsSync(idPath)) {
+      const existing = readFileSync(idPath, 'utf8').trim();
+      if (existing) return existing;
+    }
+  } catch (error) {
+    getLog().debug({ err: error as Error, idPath }, 'telemetry.id_read_failed');
+  }
+  return randomUUID();
+}
+
+/**
  * Force-rotate the persisted install UUID. Returns the new ID. Used by
  * `archon telemetry reset`. Caller is responsible for any UX around it.
+ *
+ * Unlike the other functions here, this is NOT fire-and-forget: it is a
+ * deliberate, user-initiated write, so filesystem errors propagate.
+ * @throws {NodeJS.ErrnoException} if ARCHON_HOME can't be created or the id
+ *   file can't be written (e.g. EACCES, ENOSPC). The CLI caller
+ *   (`telemetryResetCommand`) catches this and exits non-zero.
  */
 export function resetTelemetryId(): string {
   const idPath = join(getArchonHome(), 'telemetry-id');
@@ -210,6 +265,10 @@ function maybeShowFirstRunNotice(): void {
   if (noticeChecked) return;
   noticeChecked = true;
 
+  // Self-contained guards so the function is safe for any caller, not just
+  // captureWorkflowInvoked: never notify about telemetry that won't be sent,
+  // and never pollute scripted / piped output.
+  if (isTelemetryDisabled()) return;
   if (!process.stderr.isTTY) return;
 
   const stampPath = join(getArchonHome(), NOTICE_STAMP_FILENAME);
@@ -234,8 +293,9 @@ function maybeShowFirstRunNotice(): void {
     mkdirSync(getArchonHome(), { recursive: true });
     writeFileSync(stampPath, new Date().toISOString(), 'utf8');
   } catch (error) {
-    // Failure here means we'll re-show the notice on the next run; annoying
-    // but not broken. Log so repeat failures leave a diagnostic trace.
+    // Failure here means we'll re-show the notice on the next process run (the
+    // in-process `noticeChecked` guard still prevents a repeat this run);
+    // annoying but not broken. Log so repeat failures leave a diagnostic trace.
     getLog().debug({ err: error as Error, stampPath }, 'telemetry.notice_stamp_failed');
   }
 }
@@ -258,13 +318,14 @@ async function getClient(): Promise<PostHog | null> {
  * internal `logFlushError` writes to stderr via `console.error` on any network
  * or HTTP error, bypassing logger configuration (see `@posthog/core`
  * `posthog-core-stateless.mjs` `logFlushError`). For a fire-and-forget
- * telemetry path we want zero user-visible noise when PostHog is unreachable
- * (offline, firewalled, DNS broken, rate-limited), so we intercept failures
- * before the SDK sees them.
+ * telemetry path we want no user-visible noise on the default host when
+ * PostHog is unreachable (offline, firewalled, DNS broken, rate-limited), so
+ * we intercept failures before the SDK sees them.
  *
- * Self-hosters using POSTHOG_HOST need *some* feedback when they typo a URL,
- * so the first failure in a process is logged at `warn` (visible at default
- * log levels). Subsequent failures drop to `debug` to stay quiet.
+ * Self-hosters who override POSTHOG_HOST need *some* feedback when they typo a
+ * URL, so on a custom host the first failure in a process is logged at `warn`
+ * (visible at default log levels) and subsequent failures drop to `debug`.
+ * On the default host every failure stays at `debug`.
  */
 const FAKE_OK_RESPONSE: PostHogFetchResponse = {
   status: 200,
@@ -275,7 +336,10 @@ const FAKE_OK_RESPONSE: PostHogFetchResponse = {
 
 let firstFailureLogged = false;
 function logFetchFailure(ctx: { status?: number; err?: Error }, event: string): void {
-  if (!firstFailureLogged) {
+  // Only self-hosters (POSTHOG_HOST overridden) get a visible warning about a
+  // typo'd host. Default-host users who are simply offline/firewalled stay at
+  // `debug`, per the "no user-visible noise on the default host" goal above.
+  if (process.env.POSTHOG_HOST !== undefined && !firstFailureLogged) {
     firstFailureLogged = true;
     getLog().warn(
       { ...ctx, host: getHost() },
@@ -361,6 +425,8 @@ export function captureWorkflowInvoked(props: WorkflowInvokedProperties): void {
         },
       });
     } catch (error) {
+      // Fire-and-forget: telemetry must never crash Archon, so swallow every
+      // error here (network, SDK, malformed props) and record it at debug.
       getLog().debug({ err: error as Error }, 'telemetry.capture_failed');
     }
   })();
