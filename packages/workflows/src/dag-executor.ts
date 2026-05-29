@@ -5,7 +5,7 @@
  * Independent nodes within the same layer run concurrently via Promise.allSettled.
  * Captures all assistant output regardless of streaming mode for $node_id.output substitution.
  */
-import { writeFileSync } from 'fs';
+import { existsSync, writeFileSync } from 'fs';
 import { readFile } from 'fs/promises';
 import { isAbsolute, join as joinPath, resolve as resolvePath } from 'path';
 import { execFileAsync } from '@archon/git';
@@ -1286,6 +1286,32 @@ const NODE_OUTPUT_FILE_THRESHOLD = 32_768;
  * Runs the script via `bash -c`, captures stdout as node output.
  * No AI session is created — bash nodes are free/deterministic.
  */
+/**
+ * Resolve the bash executable for bash/script nodes.
+ *
+ * On Windows a bare `bash` resolves via PATH to `C:\Windows\System32\bash.exe`
+ * (the WSL launcher) when WSL is installed. Passing a complex multi-line script as a
+ * `bash -c` argument through the Node->WSL interop layer mangles quotes/newlines
+ * (producing "syntax error" / "-c requires an argument"), and WSL can't see Windows
+ * tools (bun/tsc/gh). Prefer Git Bash (MINGW), which runs natively. Override with the
+ * ARCHON_BASH_PATH env var.
+ */
+function resolveBashPath(): string {
+  const override = process.env.ARCHON_BASH_PATH;
+  if (override) return override;
+  if (process.platform === 'win32') {
+    const candidates = [
+      'C:\\Program Files\\Git\\bin\\bash.exe',
+      'C:\\Program Files\\Git\\usr\\bin\\bash.exe',
+      'C:\\Program Files (x86)\\Git\\bin\\bash.exe',
+    ];
+    for (const candidate of candidates) {
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+  return 'bash';
+}
+
 async function executeBashNode(
   deps: WorkflowDeps,
   platform: IWorkflowPlatform,
@@ -1363,7 +1389,7 @@ async function executeBashNode(
   };
 
   try {
-    const { stdout, stderr } = await execFileAsync('bash', ['-c', finalScript], {
+    const { stdout, stderr } = await execFileAsync(resolveBashPath(), ['-c', finalScript], {
       cwd,
       timeout,
       env: subprocessEnv,
@@ -2186,7 +2212,7 @@ async function executeLoopNode(
           true, // escapedForBash
           logDir
         );
-        await execFileAsync('bash', ['-c', substitutedBash], {
+        await execFileAsync(resolveBashPath(), ['-c', substitutedBash], {
           cwd,
           timeout: SUBPROCESS_DEFAULT_TIMEOUT,
           env: {
