@@ -30,6 +30,7 @@ import {
   logValidation,
   logWorkflowError,
   logWorkflowComplete,
+  logNodeComplete,
   type WorkflowEvent,
 } from './logger';
 
@@ -206,6 +207,20 @@ Line 3`;
       const events = await readLogFile('complete-test');
       expect(events).toHaveLength(1);
       expect(events[0].type).toBe('workflow_complete');
+    });
+  });
+
+  describe('logNodeComplete', () => {
+    it('should preserve provider cache token fields', async () => {
+      await logNodeComplete(testDir, 'token-test', 'review', 'archon-code-review-agent', {
+        durationMs: 123,
+        tokens: { input: 100, output: 25, cacheRead: 80 },
+      });
+
+      const events = await readLogFile('token-test');
+      expect(events).toHaveLength(1);
+      expect(events[0].type).toBe('node_complete');
+      expect(events[0].tokens).toEqual({ input: 100, output: 25, cacheRead: 80 });
     });
   });
 
