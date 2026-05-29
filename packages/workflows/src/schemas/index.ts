@@ -44,6 +44,7 @@ export {
   isApprovalNode,
   isCancelNode,
   isScriptNode,
+  isPersistableNode,
   isTriggerRule,
   BASH_NODE_AI_FIELDS,
   SCRIPT_NODE_AI_FIELDS,
@@ -106,6 +107,10 @@ export type {
   ArtifactType,
   ApprovalContext,
 } from './workflow-run';
+
+// Per-node persisted provider sessions
+export { workflowNodeSessionSchema } from './workflow-node-session';
+export type { WorkflowNodeSession } from './workflow-node-session';
 
 // Result types (non-schema hand-written types)
 export type {

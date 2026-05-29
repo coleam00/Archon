@@ -427,6 +427,19 @@ export class SqliteAdapter implements IDatabase {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
 
+      -- Per-node provider session IDs persisted across workflow re-runs
+      CREATE TABLE IF NOT EXISTS remote_agent_workflow_node_sessions (
+        workflow_name TEXT NOT NULL,
+        node_id TEXT NOT NULL,
+        scope_key TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        provider_session_id TEXT NOT NULL,
+        last_run_id TEXT REFERENCES remote_agent_workflow_runs(id) ON DELETE SET NULL,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now')),
+        PRIMARY KEY (workflow_name, node_id, scope_key, provider)
+      );
+
       -- Indexes
       CREATE INDEX IF NOT EXISTS idx_codebase_env_vars_codebase_id ON remote_agent_codebase_env_vars(codebase_id);
       CREATE INDEX IF NOT EXISTS idx_conversations_platform ON remote_agent_conversations(platform_type, platform_conversation_id);
@@ -439,6 +452,8 @@ export class SqliteAdapter implements IDatabase {
       CREATE INDEX IF NOT EXISTS idx_workflow_events_run_id ON remote_agent_workflow_events(workflow_run_id);
       CREATE INDEX IF NOT EXISTS idx_workflow_events_type ON remote_agent_workflow_events(event_type);
       CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON remote_agent_messages(conversation_id, created_at ASC);
+      CREATE INDEX IF NOT EXISTS idx_workflow_node_sessions_scope ON remote_agent_workflow_node_sessions(scope_key);
+      CREATE INDEX IF NOT EXISTS idx_workflow_node_sessions_workflow ON remote_agent_workflow_node_sessions(workflow_name);
       CREATE INDEX IF NOT EXISTS idx_workflow_runs_parent_conv ON remote_agent_workflow_runs(parent_conversation_id);
       CREATE INDEX IF NOT EXISTS idx_conversations_hidden ON remote_agent_conversations(hidden);
       DROP INDEX IF EXISTS idx_conversations_codebase;

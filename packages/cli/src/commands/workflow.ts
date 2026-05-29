@@ -28,6 +28,7 @@ import {
   resumeWorkflow as resumeWorkflowOp,
   abandonWorkflow,
   getWorkflowStatus,
+  resetWorkflowNodeSessions,
 } from '@archon/core/operations/workflow-operations';
 import * as conversationDb from '@archon/core/db/conversations';
 import * as codebaseDb from '@archon/core/db/codebases';
@@ -1243,6 +1244,57 @@ export async function workflowRejectCommand(runId: string, reason?: string): Pro
       `Rejected but failed to resume workflow '${result.workflowName}': ${err.message}\n` +
         `The rejection was recorded. Run 'bun run cli workflow resume ${runId}' to retry.`
     );
+  }
+}
+
+/**
+ * Reset persisted per-node provider sessions for a workflow.
+ *
+ * Filter rules:
+ *   - workflow-name required (positional)
+ *   - --scope <key>: restrict to one scope (e.g. a conversation UUID); when
+ *     omitted, deletes across ALL scopes (use --yes to skip the confirmation)
+ *   - --node <id>: restrict to one node within the scope
+ *   - --json: machine-readable output
+ */
+export async function workflowResetSessionsCommand(
+  workflowName: string,
+  options: { scope?: string; node?: string; yes?: boolean; json?: boolean }
+): Promise<void> {
+  if (!options.scope && !options.yes) {
+    throw new Error(
+      `Refusing to delete every persisted session for workflow '${workflowName}' across all scopes without confirmation.\n` +
+        'Pass --scope <key> to narrow, or --yes to confirm cross-scope reset.'
+    );
+  }
+  try {
+    const { deleted } = await resetWorkflowNodeSessions({
+      workflow_name: workflowName,
+      scope_key: options.scope,
+      node_id: options.node,
+    });
+    if (options.json) {
+      console.log(
+        JSON.stringify({
+          workflow: workflowName,
+          deleted,
+          scope: options.scope ?? null,
+          node: options.node ?? null,
+        })
+      );
+    } else if (deleted === 0) {
+      console.log(`No persisted sessions matched for workflow '${workflowName}'.`);
+    } else {
+      const scope = options.scope ? ` in scope '${options.scope}'` : ' across all scopes';
+      const node = options.node ? ` for node '${options.node}'` : '';
+      console.log(
+        `Deleted ${deleted} persisted session(s) for workflow '${workflowName}'${node}${scope}.`
+      );
+    }
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, workflowName, ...options }, 'cli.workflow_reset_sessions_failed');
+    throw new Error(`Failed to reset workflow sessions: ${err.message}`);
   }
 }
 

@@ -272,6 +272,30 @@ COMMENT ON TABLE remote_agent_workflow_events IS
   'Lean UI-relevant workflow events for observability (step transitions, artifacts, errors)';
 
 -- ============================================================================
+-- Workflow node sessions (persist_session opt-in across re-runs)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS remote_agent_workflow_node_sessions (
+  workflow_name VARCHAR(255) NOT NULL,
+  node_id VARCHAR(255) NOT NULL,
+  scope_key TEXT NOT NULL,
+  provider VARCHAR(50) NOT NULL,
+  provider_session_id TEXT NOT NULL,
+  last_run_id UUID REFERENCES remote_agent_workflow_runs(id) ON DELETE SET NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  PRIMARY KEY (workflow_name, node_id, scope_key, provider)
+);
+
+CREATE INDEX IF NOT EXISTS idx_workflow_node_sessions_scope
+  ON remote_agent_workflow_node_sessions(scope_key);
+CREATE INDEX IF NOT EXISTS idx_workflow_node_sessions_workflow
+  ON remote_agent_workflow_node_sessions(workflow_name);
+
+COMMENT ON TABLE remote_agent_workflow_node_sessions IS
+  'Per-node provider session IDs persisted across workflow re-runs. Keyed by (workflow, node, scope, provider). Scope is typically conversation UUID. No cascade on conversation delete (soft delete + never-reused UUID = harmless orphans); a future hard-delete path must delete by scope_key.';
+
+-- ============================================================================
 -- Table 7: Messages
 -- ============================================================================
 

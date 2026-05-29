@@ -176,6 +176,12 @@ export const dagNodeBaseSchema = z.object({
   // prior run completed it successfully. Use for producers whose exit code does
   // not capture output validity (e.g. bash that writes a file the consumer parses).
   always_run: z.boolean().optional(),
+  // Persist this node's provider session ID across workflow re-runs in the same
+  // scope (typically the conversation). On the next run with the same scope, the
+  // executor loads the stored session and passes it as resumeSessionId. Requires
+  // a provider with sessionResume capability. Distinct from the Claude SDK's
+  // AgentRequestOptions.persistSession (on-disk transcript persistence).
+  persist_session: z.boolean().optional(),
 });
 
 export type DagNodeBase = z.infer<typeof dagNodeBaseSchema>;
@@ -353,6 +359,7 @@ export const BASH_NODE_AI_FIELDS: readonly string[] = [
   'fallbackModel',
   'betas',
   'sandbox',
+  'persist_session',
 ];
 
 /** AI-specific fields that are meaningless on script nodes — same as bash nodes */
@@ -578,6 +585,7 @@ export const dagNodeSchema = dagNodeBaseSchema
       ...(data.fallbackModel !== undefined ? { fallbackModel: data.fallbackModel } : {}),
       ...(data.betas !== undefined ? { betas: data.betas } : {}),
       ...(data.sandbox !== undefined ? { sandbox: data.sandbox } : {}),
+      ...(data.persist_session !== undefined ? { persist_session: data.persist_session } : {}),
     };
 
     if (data.command !== undefined && data.command.trim().length > 0) {
@@ -650,4 +658,22 @@ export function isScriptNode(node: DagNode): node is ScriptNode {
 /** Type guard: validates a value is a known TriggerRule */
 export function isTriggerRule(value: unknown): value is TriggerRule {
   return typeof value === 'string' && (TRIGGER_RULES as readonly string[]).includes(value);
+}
+
+/**
+ * True for node types that invoke a provider and therefore participate in cross-run
+ * session persistence (`persist_session`). bash, script, approval, cancel, and loop
+ * nodes are excluded — they either make no provider call or manage their own per-
+ * iteration sessions. Shared by the loader's load-time capability gate and any other
+ * caller that needs to reason about persistence eligibility, so the exclusion list
+ * lives in one place.
+ */
+export function isPersistableNode(node: DagNode): boolean {
+  return (
+    !isLoopNode(node) &&
+    !isApprovalNode(node) &&
+    !isCancelNode(node) &&
+    !isScriptNode(node) &&
+    !isBashNode(node)
+  );
 }

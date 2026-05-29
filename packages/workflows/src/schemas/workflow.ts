@@ -76,6 +76,12 @@ export const workflowBaseSchema = z.object({
    * Defaults to `true` (safe: serialize runs on the same path).
    */
   mutates_checkout: z.boolean().optional(),
+  /**
+   * Default for `persist_session` on every AI node in this workflow.
+   * Individual nodes can override with `persist_session: false`.
+   * Requires the resolved provider to declare `sessionResume: true`.
+   */
+  persist_sessions: z.boolean().optional(),
   tags: z.array(z.string().min(1)).optional(),
 });
 
