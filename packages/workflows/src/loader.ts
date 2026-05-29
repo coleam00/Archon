@@ -10,6 +10,10 @@ import {
   BASH_NODE_AI_FIELDS,
   SCRIPT_NODE_AI_FIELDS,
   LOOP_NODE_AI_FIELDS,
+  effortLevelSchema,
+  thinkingConfigSchema,
+  sandboxSettingsSchema,
+  betasSchema,
 } from './schemas/dag-node';
 import { modelReasoningEffortSchema, webSearchModeSchema } from './schemas/workflow';
 import { workflowNodeHooksSchema } from './schemas/hooks';
@@ -20,6 +24,32 @@ let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('workflow.loader');
   return cachedLog;
+}
+
+/**
+ * Parse an optional, schema-validated workflow field with warn-and-drop
+ * semantics: a present-but-invalid value is logged and dropped (returns
+ * undefined) rather than rejecting the whole workflow, so a typo in one field
+ * doesn't abort the discovery pass. Mirrors the policy used for `tags` /
+ * `interactive`. `extra` merges into the warning payload (e.g. the list of
+ * valid enum options).
+ */
+function parseOptionalField<T>(
+  raw: unknown,
+  // Output is `T`; the input param stays `unknown` (decoupled from `T`) so
+  // preprocess-based schemas (e.g. `thinkingConfigSchema`, whose input is
+  // `unknown`) infer `T` from their output rather than their input.
+  schema: z.ZodType<T, z.ZodTypeDef, unknown>,
+  filename: string,
+  event: string,
+  extra?: Record<string, unknown>
+): T | undefined {
+  const result = schema.safeParse(raw);
+  if (result.success) return result.data;
+  if (raw !== undefined) {
+    getLog().warn({ filename, value: raw, ...extra }, event);
+  }
+  return undefined;
 }
 
 /**
@@ -319,29 +349,21 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       }
     }
 
-    // Validate modelReasoningEffort — warn and ignore invalid values (preserve original behavior)
-    const modelReasoningEffortResult = modelReasoningEffortSchema.safeParse(
-      raw.modelReasoningEffort
+    // Validate modelReasoningEffort / webSearchMode — warn and ignore invalid values.
+    const modelReasoningEffort = parseOptionalField(
+      raw.modelReasoningEffort,
+      modelReasoningEffortSchema,
+      filename,
+      'invalid_model_reasoning_effort',
+      { valid: modelReasoningEffortSchema.options }
     );
-    const modelReasoningEffort = modelReasoningEffortResult.success
-      ? modelReasoningEffortResult.data
-      : undefined;
-    if (raw.modelReasoningEffort !== undefined && !modelReasoningEffortResult.success) {
-      getLog().warn(
-        { filename, value: raw.modelReasoningEffort, valid: modelReasoningEffortSchema.options },
-        'invalid_model_reasoning_effort'
-      );
-    }
-
-    // Validate webSearchMode — warn and ignore invalid values (preserve original behavior)
-    const webSearchModeResult = webSearchModeSchema.safeParse(raw.webSearchMode);
-    const webSearchMode = webSearchModeResult.success ? webSearchModeResult.data : undefined;
-    if (raw.webSearchMode !== undefined && !webSearchModeResult.success) {
-      getLog().warn(
-        { filename, value: raw.webSearchMode, valid: webSearchModeSchema.options },
-        'invalid_web_search_mode'
-      );
-    }
+    const webSearchMode = parseOptionalField(
+      raw.webSearchMode,
+      webSearchModeSchema,
+      filename,
+      'invalid_web_search_mode',
+      { valid: webSearchModeSchema.options }
+    );
 
     // Filter additionalDirectories — warn on non-strings (preserve original behavior)
     const additionalDirectories = Array.isArray(raw.additionalDirectories)
@@ -424,6 +446,68 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       getLog().warn({ filename, value: raw.tags }, 'invalid_tags_block_ignored');
     }
 
+    // Parse workflow-level fallback fields. Same warn-and-drop pattern as
+    // `modelReasoningEffort` / `webSearchMode` above. These are declared on
+    // `workflowBaseSchema` and consumed by the DAG executor's
+    // `workflowLevelOptions` (the object literal at the top of
+    // `executeDagWorkflow`, reading `workflow.effort` etc.) as defaults that
+    // per-node options inherit when unset. Without this block, a workflow YAML
+    // that sets e.g. `effort: high` at the root would be dropped here and the
+    // executor would read undefined, so a node without its own `effort` would
+    // never inherit the workflow-level default.
+    const effort = parseOptionalField(
+      raw.effort,
+      effortLevelSchema,
+      filename,
+      'invalid_workflow_effort_value_ignored',
+      { valid: effortLevelSchema.options }
+    );
+    const thinking = parseOptionalField(
+      raw.thinking,
+      thinkingConfigSchema,
+      filename,
+      'invalid_workflow_thinking_value_ignored'
+    );
+    const sandbox = parseOptionalField(
+      raw.sandbox,
+      sandboxSettingsSchema,
+      filename,
+      'invalid_workflow_sandbox_value_ignored'
+    );
+
+    // fallbackModel: non-empty trimmed string. Inline trim rather than
+    // `safeParse` so a stray surrounding space is normalised rather than rejected.
+    const fallbackModelTrimmed =
+      typeof raw.fallbackModel === 'string' ? raw.fallbackModel.trim() : '';
+    const fallbackModel = fallbackModelTrimmed.length > 0 ? fallbackModelTrimmed : undefined;
+    if (raw.fallbackModel !== undefined && fallbackModel === undefined) {
+      getLog().warn(
+        { filename, value: raw.fallbackModel, expected: 'non-empty string' },
+        'invalid_workflow_fallback_model_value_ignored'
+      );
+    }
+
+    // betas: trim, drop empties, then validate the cleaned list through
+    // `betasSchema` (non-empty array of non-empty strings). An empty result
+    // drops the field entirely — the Claude SDK expects a populated beta header
+    // or none at all. Validating via the schema yields the `[string, ...string[]]`
+    // type without an unchecked cast.
+    let betas: [string, ...string[]] | undefined;
+    if (raw.betas !== undefined) {
+      const cleaned = Array.isArray(raw.betas)
+        ? raw.betas
+            .filter((b): b is string => typeof b === 'string')
+            .map(b => b.trim())
+            .filter(b => b.length > 0)
+        : [];
+      const betasResult = betasSchema.safeParse(cleaned);
+      if (betasResult.success) {
+        betas = betasResult.data;
+      } else {
+        getLog().warn({ filename, value: raw.betas }, 'invalid_workflow_betas_value_ignored');
+      }
+    }
+
     return {
       workflow: {
         name: raw.name,
@@ -435,6 +519,11 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
         additionalDirectories,
         interactive,
         ...(mutatesCheckout !== undefined ? { mutates_checkout: mutatesCheckout } : {}),
+        ...(effort !== undefined ? { effort } : {}),
+        ...(thinking !== undefined ? { thinking } : {}),
+        ...(fallbackModel !== undefined ? { fallbackModel } : {}),
+        ...(betas !== undefined ? { betas } : {}),
+        ...(sandbox !== undefined ? { sandbox } : {}),
         nodes: dagNodes,
         ...(worktreePolicy ? { worktree: worktreePolicy } : {}),
         ...(tags !== undefined ? { tags } : {}),

@@ -42,6 +42,14 @@ export const effortLevelSchema = z.enum(['low', 'medium', 'high', 'max']);
 export type EffortLevel = z.infer<typeof effortLevelSchema>;
 
 /**
+ * Claude Agent SDK beta header list. Non-empty array of non-empty strings —
+ * the SDK expects either a populated beta header or none at all. The
+ * `.nonempty()` constraint makes the inferred type `[string, ...string[]]`,
+ * which the loader relies on to validate cleaned input without an unchecked cast.
+ */
+export const betasSchema = z.array(z.string().min(1)).nonempty("'betas' must be a non-empty array");
+
+/**
  * Claude Agent SDK ThinkingConfig — string shorthand or full object form.
  * Shorthand: 'adaptive' → { type: 'adaptive' }, 'enabled' → { type: 'enabled' }, 'disabled' → { type: 'disabled' }.
  */
@@ -162,7 +170,7 @@ export const dagNodeBaseSchema = z.object({
   // programmatically by the orchestrator for prompt caching; Zod intentionally stays narrow.
   systemPrompt: z.string().min(1).optional(),
   fallbackModel: z.string().min(1).optional(),
-  betas: z.array(z.string().min(1)).nonempty("'betas' must be a non-empty array").optional(),
+  betas: betasSchema.optional(),
   sandbox: sandboxSettingsSchema.optional(),
   // Opt out of resume caching: when true, this node re-runs on resume even if a
   // prior run completed it successfully. Use for producers whose exit code does

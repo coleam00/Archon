@@ -623,6 +623,8 @@ Model and options are resolved in this order:
 2. **Config defaults** - `assistants.*` in `.archon/config.yaml`
 3. **SDK defaults** - Built-in defaults from Claude/Codex SDKs
 
+For the Claude SDK advanced options (`effort`, `thinking`, `fallbackModel`, `betas`, `sandbox`) a per-node value sits above the workflow level: a node uses its own value if set, otherwise it inherits the workflow-level default. See [Claude SDK Advanced Options](#claude-sdk-advanced-options).
+
 ### Provider and Model
 
 ```yaml
