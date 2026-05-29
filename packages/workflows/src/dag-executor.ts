@@ -1278,6 +1278,16 @@ async function executeNodeInternal(
       ...(structuredOutput !== undefined ? { structuredOutput } : {}),
     };
   } catch (error) {
+    // Flush any buffered stream content so partial output reaches the user
+    // even when the node fails mid-stream.
+    if (streamingMode === 'stream' && streamBuffer.length > 0) {
+      await safeSendMessage(platform, conversationId, streamBuffer, nodeContext).catch(
+        () => {
+          // Best-effort: don't let flush failure mask the original error
+        }
+      );
+      streamBuffer = '';
+    }
     const err = error as Error;
 
     // Clean up throttle entries on failure
@@ -2137,6 +2147,16 @@ async function executeLoopNode(
         loopStreamBuffer = '';
       }
     } catch (error) {
+      // Flush any buffered stream content so partial output reaches the user
+      // even when the iteration fails mid-stream.
+      if (platform.getStreamingMode() === 'stream' && loopStreamBuffer.length > 0) {
+        await safeSendMessage(platform, conversationId, loopStreamBuffer, msgContext).catch(
+          () => {
+            // Best-effort: don't let flush failure mask the original error
+          }
+        );
+        loopStreamBuffer = '';
+      }
       const err = error as Error;
       const duration = Date.now() - iterationStart;
       getLog().error({ err, nodeId: node.id, iteration: i }, 'loop_node.iteration_failed');
