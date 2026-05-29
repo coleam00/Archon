@@ -50,26 +50,18 @@ archon workflow run plan --cwd /path/to/repo --branch feature-auth "Add OAuth su
 archon workflow run assist --cwd /path/to/repo --no-worktree "Quick question"
 ```
 
-**Note:** `workflow run`/`status`/`resume` and the `isolation` commands require running from within a git repository (subdirectories resolve to the repo root). The `version`, `help`, `chat`, `setup`, `serve`, `doctor`, `providers`, `config`, `health`, `update-check`, `codebase`, `conversation`, and the read-only `workflow` subcommands (`get`, `runs`, `inspect`, `artifacts`) work anywhere.
+**Note:** `workflow run`/`status`/`resume` and the `isolation` commands require running from within a git repository (subdirectories resolve to the repo root). The `version`, `help`, `setup`, `serve`, `doctor`, `providers`, `config`, `health`, `update-check`, `codebase`, `conversation`, and the read-only `workflow` subcommands (`get`, `runs`, `inspect`, `artifacts`) work anywhere.
 
 ## Reads vs. mutations (two-layer transport)
 
 Management commands follow a two-layer model:
 
 - **Reads** (`list`, `get`, `inspect`, `messages`, `show`, `runs`, `artifacts`, `providers list`) read the database / filesystem **directly** and work **without a running server**.
-- **Mutations** (`register`, `delete`, `env set/delete`, `create`, `update`, `cancel`, `send`, `title`, `config assistant --model`) go through the REST API, so they **require a running server**. Start one with `archon serve` (or `bun run dev:server`). If the server is unreachable, the command fails with exit code 1 and a clear message.
+- **Mutations** (`register`, `delete`, `env set/delete`, `create`, `update`, `cancel`, `title`, `config assistant --model`) go through the REST API, so they **require a running server**. Start one with `archon serve` (or `bun run dev:server`). If the server is unreachable, the command fails with exit code 1 and a clear message.
 
 The server URL defaults to `http://localhost:3090`; override with the `--server-url <url>` flag or the `ARCHON_SERVER_URL` environment variable.
 
 ## Commands
-
-### `chat <message>`
-
-Send a message to the orchestrator for a one-off AI interaction.
-
-```bash
-archon chat "What does the orchestrator do?"
-```
 
 ### `setup`
 

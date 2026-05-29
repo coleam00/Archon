@@ -340,9 +340,9 @@ export async function workflowArtifactsGetCommand(
     throw new Error('Resolved path escapes the run artifact directory.');
   }
 
-  let content: string;
+  let content: Buffer;
   try {
-    content = await readFile(filePath, 'utf-8');
+    content = await readFile(filePath);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
       throw new Error(`Artifact not found: ${relPath}`);

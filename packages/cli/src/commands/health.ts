@@ -9,11 +9,11 @@ import { createApiClient } from '../api-client';
 
 interface HealthResponse {
   status: string;
-  adapter?: string;
-  concurrency?: { active?: number };
-  runningWorkflows?: number;
+  adapter: string;
+  concurrency: Record<string, unknown>;
+  runningWorkflows: number;
   version?: string;
-  is_docker?: boolean;
+  is_docker: boolean;
   activePlatforms?: string[];
 }
 
@@ -26,19 +26,15 @@ export async function healthCommand(json?: boolean, serverUrl?: string): Promise
   } else {
     console.log(`Status:            ${health.status}`);
     if (health.version) console.log(`Version:           ${health.version}`);
-    if (health.adapter) console.log(`Adapter:           ${health.adapter}`);
-    if (typeof health.concurrency?.active === 'number') {
+    console.log(`Adapter:           ${health.adapter}`);
+    if (typeof health.concurrency.active === 'number') {
       console.log(`Active convos:     ${String(health.concurrency.active)}`);
     }
-    if (typeof health.runningWorkflows === 'number') {
-      console.log(`Running workflows: ${String(health.runningWorkflows)}`);
-    }
+    console.log(`Running workflows: ${String(health.runningWorkflows)}`);
     if (health.activePlatforms) {
       console.log(`Active platforms:  ${health.activePlatforms.join(', ') || '(none)'}`);
     }
-    if (typeof health.is_docker === 'boolean') {
-      console.log(`Docker:            ${String(health.is_docker)}`);
-    }
+    console.log(`Docker:            ${String(health.is_docker)}`);
   }
 
   // Reachable + ok → 0; any other status → 1. (Unreachable throws upstream → exit 1.)

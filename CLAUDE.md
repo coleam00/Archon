@@ -268,7 +268,7 @@ bun run cli telemetry reset
 # --- Full system management (CLI parity) ---
 # Two-layer transport: reads = direct DB/filesystem (no server); mutations = REST API
 # (require a running server; override URL with --server-url or ARCHON_SERVER_URL).
-# All read commands accept --json.
+# Most read commands accept --json (exceptions: workflow artifacts get — outputs raw bytes to stdout or --output).
 
 # Codebases (reads direct; register/delete/env mutations via server)
 bun run cli codebase list

@@ -53,7 +53,8 @@ export async function configAssistantCommand(
   if (!hasMutation) {
     // Read mode: print the assistant's current config block.
     const config = await loadConfig(opts.cwd);
-    const block = (config.assistants as Record<string, unknown>)[provider];
+    const assistants = config.assistants as Record<string, unknown> | undefined;
+    const block = assistants?.[provider];
     if (block === undefined) {
       console.error(`No config found for assistant "${provider}".`);
       return;
