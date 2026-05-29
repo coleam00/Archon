@@ -153,7 +153,7 @@ bun run format:check
 bun run validate
 ```
 
-This runs `check:bundled`, `check:bundled-skill`, type-check, lint, format check, and tests. All six must pass for CI to succeed.
+This runs `check:bundled`, `check:bundled-skill`, `check:bundled-schema`, type-check, lint, format check, and tests. All seven must pass for CI to succeed.
 
 ### ESLint Guidelines
 
@@ -174,12 +174,7 @@ This runs `check:bundled`, `check:bundled-skill`, type-check, lint, format check
 
 **Auto-Detection (SQLite is the default — zero setup):**
 - **Without `DATABASE_URL`**: Uses SQLite at `~/.archon/archon.db` (auto-initialized, recommended for most users)
-- **With `DATABASE_URL` set**: Uses PostgreSQL (optional, for cloud/advanced deployments)
-
-```bash
-# PostgreSQL only: Run SQL migrations (manual)
-psql $DATABASE_URL < migrations/000_combined.sql
-```
+- **With `DATABASE_URL` set**: Uses PostgreSQL (schema auto-applied on startup; no manual `psql` needed). The Postgres adapter runs the idempotent `migrations/000_combined.sql` inside an advisory-lock transaction on first connection, so upgrades that add tables or columns converge automatically.
 
 ### CLI (Command Line)
 
@@ -757,7 +752,7 @@ async function createSession(conversationId: string, codebaseId: string) {
 - Source builds: Loaded from filesystem at runtime
 - Merged with repo-specific commands/workflows (repo overrides defaults by name)
 - Opt-out: Set `defaults.loadDefaultCommands: false` or `defaults.loadDefaultWorkflows: false` in `.archon/config.yaml`
-- **After adding, removing, or editing a default file, run `bun run generate:bundled`** to refresh the embedded bundle. `bun run validate` (and CI) run `check:bundled` and `check:bundled-skill` and will fail loudly if either generated file is stale.
+- **After adding, removing, or editing a default file, run `bun run generate:bundled`** to refresh the embedded bundle. After editing `migrations/000_combined.sql`, run `bun run generate:bundled-schema` to keep the embedded schema in sync. `bun run validate` (and CI) run `check:bundled`, `check:bundled-skill`, and `check:bundled-schema` and will fail loudly if any generated file is stale.
 
 **Home-scoped ("global") workflows, commands, and scripts** (user-level, applies to every project):
 - Workflows: `~/.archon/workflows/` (or `$ARCHON_HOME/workflows/`)
