@@ -556,12 +556,12 @@ export async function executeWorkflow(
       conversationId: conversationDbId,
     });
 
-    // Fire-and-forget anonymous usage telemetry. No PII: only workflow name +
-    // description (authored by the user in their YAML) + platform + version.
-    // Opt out via ARCHON_TELEMETRY_DISABLED=1 or DO_NOT_TRACK=1.
+    // Fire-and-forget anonymous usage telemetry. No PII: workflow name +
+    // platform + version only. Workflow descriptions are user-authored YAML
+    // and may contain private context ("Deploy ACME prod"), so they are not
+    // included. Opt out via ARCHON_TELEMETRY_DISABLED=1 / DO_NOT_TRACK=1.
     captureWorkflowInvoked({
       workflowName: workflow.name,
-      workflowDescription: workflow.description,
       platform: platform.getPlatformType(),
       archonVersion: BUNDLED_VERSION,
     });

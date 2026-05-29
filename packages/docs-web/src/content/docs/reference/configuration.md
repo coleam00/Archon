@@ -345,6 +345,18 @@ The Copilot provider also reads `assistants.copilot.{model, modelReasoningEffort
 | `AUTH_SERVICE_PORT` | Port for the auth service container | `9000` |
 | `COOKIE_MAX_AGE` | Auth cookie lifetime in seconds | `86400` |
 
+### Telemetry
+
+Archon sends a single anonymous `workflow_invoked` event per workflow start (workflow name, platform, version, random install UUID). Any one of these disables it. See `archon telemetry status` to inspect the live state.
+
+| Variable | Description | Default |
+| --- | --- | --- |
+| `ARCHON_TELEMETRY_DISABLED` | Set to `1` to disable anonymous telemetry | -- |
+| `DO_NOT_TRACK` | Set to `1` to disable telemetry (de facto standard honored by Astro, Bun, Prisma, etc.) | -- |
+| `CI` | When set to `true` (case-insensitive), telemetry is auto-disabled so fork CI runs don't send events | -- |
+| `POSTHOG_API_KEY` | Set to `off` / `0` / `false` / `disabled` / empty to disable; set to a `phc_*` key to use a custom PostHog project | Built-in key |
+| `POSTHOG_HOST` | Custom PostHog instance URL (first failure on a custom host logs at `warn`) | `https://us.i.posthog.com` |
+
 ### `.env` File Locations
 
 Archon keys env loading on **directory ownership, not filename**. `.archon/` (at `~/` or `<cwd>/`) is archon-owned. Anything else is yours.

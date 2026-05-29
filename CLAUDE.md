@@ -261,6 +261,10 @@ bun run cli skill install /path/to/project
 # Verify your Archon setup (Claude binary, gh auth, DB, adapters)
 bun run cli doctor
 
+# Inspect or rotate the anonymous telemetry install UUID
+bun run cli telemetry status
+bun run cli telemetry reset
+
 # Show version
 bun run cli version
 ```

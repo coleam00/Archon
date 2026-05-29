@@ -68,6 +68,7 @@ import { skillInstallCommand } from './commands/skill';
 import { validateWorkflowsCommand, validateCommandsCommand } from './commands/validate';
 import { serveCommand } from './commands/serve';
 import { doctorCommand } from './commands/doctor';
+import { telemetryStatusCommand, telemetryResetCommand } from './commands/telemetry';
 import { closeDatabase } from '@archon/core';
 import {
   setLogLevel,
@@ -113,6 +114,8 @@ Commands:
   serve                      Start the web UI server (downloads web UI on first run)
   skill install [path]       Install the bundled Archon skill into .claude/skills/archon
   doctor                     Verify your Archon setup (Claude binary, gh auth, DB, adapters)
+  telemetry status           Show anonymous telemetry state (enabled, reason, ID, host)
+  telemetry reset            Rotate the anonymous install UUID
   validate workflows [name]  Validate workflow definitions and their references
   validate commands [name]   Validate command files
   version, --version, -V     Show version info (also -v when used alone)
@@ -283,12 +286,14 @@ async function main(): Promise<number> {
     'serve',
     'skill',
     'doctor',
+    'telemetry',
   ];
   const requiresGitRepo = !noGitCommands.includes(command ?? '');
 
   try {
-    // setup/doctor default to warn to avoid Pino info JSON interleaving with ○/✓ output; lazy loggers pick up this level at first creation
-    const isInteractiveCommand = command === 'setup' || command === 'doctor';
+    // setup/doctor/telemetry default to warn to avoid Pino info JSON interleaving with their human-readable output; lazy loggers pick up this level at first creation
+    const isInteractiveCommand =
+      command === 'setup' || command === 'doctor' || command === 'telemetry';
     const suppressByDefault = isInteractiveCommand && !values.verbose && !isVerboseBoot();
     if (values.quiet || suppressByDefault) {
       setLogLevel('warn');
@@ -644,6 +649,23 @@ async function main(): Promise<number> {
 
       case 'doctor': {
         return await doctorCommand();
+      }
+
+      case 'telemetry': {
+        switch (subcommand) {
+          case 'status':
+            return telemetryStatusCommand();
+          case 'reset':
+            return telemetryResetCommand();
+          default:
+            if (subcommand === undefined) {
+              console.error('Missing telemetry subcommand');
+            } else {
+              console.error(`Unknown telemetry subcommand: ${subcommand}`);
+            }
+            console.error('Available: status, reset');
+            return 1;
+        }
       }
 
       case 'skill': {
