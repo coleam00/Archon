@@ -88,6 +88,8 @@ describe('telemetry opt-out detection', () => {
   test('ARCHON_TELEMETRY_DISABLED=0 does not disable (strict "1" match)', () => {
     process.env.ARCHON_TELEMETRY_DISABLED = '0';
     delete process.env.DO_NOT_TRACK;
+    delete process.env.CI;
+    delete process.env.POSTHOG_API_KEY;
     expect(isTelemetryDisabled()).toBe(false);
   });
 
