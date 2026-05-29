@@ -174,12 +174,7 @@ This runs `check:bundled`, `check:bundled-skill`, type-check, lint, format check
 
 **Auto-Detection (SQLite is the default — zero setup):**
 - **Without `DATABASE_URL`**: Uses SQLite at `~/.archon/archon.db` (auto-initialized, recommended for most users)
-- **With `DATABASE_URL` set**: Uses PostgreSQL (optional, for cloud/advanced deployments)
-
-```bash
-# PostgreSQL only: Run SQL migrations (manual)
-psql $DATABASE_URL < migrations/000_combined.sql
-```
+- **With `DATABASE_URL` set**: Uses PostgreSQL (schema auto-applied on startup; no manual `psql` needed). The Postgres adapter runs the idempotent `migrations/000_combined.sql` inside an advisory-lock transaction on first connection, so upgrades that add tables or columns converge automatically.
 
 ### CLI (Command Line)
 
