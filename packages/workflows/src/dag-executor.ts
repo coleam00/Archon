@@ -2568,7 +2568,12 @@ export async function executeDagWorkflow(
   platform: IWorkflowPlatform,
   conversationId: string,
   cwd: string,
-  workflow: { name: string; nodes: readonly DagNode[] } & WorkflowLevelOptions,
+  workflow: {
+    name: string;
+    nodes: readonly DagNode[];
+    /** Workflow-level default for per-node `persist_session` (read directly here). */
+    persist_sessions?: boolean;
+  } & WorkflowLevelOptions,
   workflowRun: WorkflowRun,
   workflowProvider: string,
   workflowModel: string | undefined,
@@ -2632,6 +2637,13 @@ export async function executeDagWorkflow(
   // Note: accumulates cost for this invocation only. If this is a resume, nodes skipped
   // from the prior run are not included — total_cost_usd will reflect resumed-portion cost only.
   let totalCostUsd = 0;
+
+  // Per-node session persistence across workflow re-runs. Scope = the DB conversation
+  // UUID. The `?? undefined` guard keeps an empty/missing conversation_id from keying
+  // every invocation to the same blank scope — persistence is simply skipped in that case.
+  // Distinct from AgentRequestOptions.persistSession (Claude SDK on-disk transcript flag).
+  const persistScopeKey: string | undefined = workflowRun.conversation_id ?? undefined;
+  const workflowPersistSessions = workflow.persist_sessions === true;
 
   for (let layerIdx = 0; layerIdx < layers.length; layerIdx++) {
     const layer = layers[layerIdx];
@@ -2978,8 +2990,88 @@ export async function executeDagWorkflow(
           // 5. Determine session — parallel or context:fresh → always fresh
           // Parallel layers always get fresh sessions; explicit 'fresh' context also forces it.
           // 'shared' forces continuation. Default: fresh for parallel, inherited for sequential.
-          const isFresh = isParallelLayer || node.context === 'fresh';
-          const resumeSessionId = isFresh ? undefined : lastSequentialSessionId;
+          // isFreshSequential controls in-run threading (lastSequentialSessionId).
+          // bypassesPersistence (context:'fresh' only) also disables cross-run persist_session;
+          // a parallel-layer node CAN still use persist_session — it just doesn't share with siblings.
+          const isFreshSequential = isParallelLayer || node.context === 'fresh';
+          const bypassesPersistence = node.context === 'fresh';
+          let resumeSessionId: string | undefined = isFreshSequential
+            ? undefined
+            : lastSequentialSessionId;
+
+          const nodePersistFlag = 'persist_session' in node ? node.persist_session : undefined;
+          // Strictly opt-in: off unless the node sets persist_session, or the workflow
+          // sets persist_sessions and the node doesn't override it to false.
+          const effectivePersist: boolean = nodePersistFlag ?? workflowPersistSessions;
+
+          if (effectivePersist && !bypassesPersistence) {
+            // Runtime capability guard via the resolved provider instance (catches the
+            // case where provider was resolved from .archon/config.yaml defaults).
+            // Uses the instance's getCapabilities() rather than the static registry so
+            // tests can substitute mock providers with different caps without registering.
+            const caps = deps.getAgentProvider(provider).getCapabilities();
+            if (!caps.sessionResume) {
+              throw new Error(
+                `Node '${node.id}' has persist_session: true but resolved provider '${provider}' does not support sessionResume. Remove persist_session, or use a provider with sessionResume capability.`
+              );
+            }
+            if (persistScopeKey) {
+              try {
+                const persisted = await deps.store.getWorkflowNodeSession({
+                  workflow_name: workflow.name,
+                  node_id: node.id,
+                  scope_key: persistScopeKey,
+                  provider,
+                });
+                if (persisted) {
+                  resumeSessionId = persisted.provider_session_id;
+                  // workflow_events is broader-scoped and longer-lived than the
+                  // node-session table. A session ID can resume a conversation, so we
+                  // store only an 8-char prefix here — enough for observability without
+                  // leaving a resumable artifact in the event log.
+                  const sessionIdPreview = `${persisted.provider_session_id.slice(0, 8)}…`;
+                  deps.store
+                    .createWorkflowEvent({
+                      workflow_run_id: workflowRun.id,
+                      event_type: 'node_session_resumed',
+                      step_name: node.id,
+                      data: {
+                        provider,
+                        scope_key: persistScopeKey,
+                        provider_session_id_preview: sessionIdPreview,
+                      },
+                    })
+                    .catch((err: Error) => {
+                      getLog().warn(
+                        { err, nodeId: node.id },
+                        'persist_session_resumed_event_persist_failed'
+                      );
+                    });
+                }
+              } catch (err) {
+                // Non-fatal: the node still runs (fresh, no resume), but the user opted
+                // into persistence — a DB error here silently breaks continuity, so warn
+                // them as well as the logs. (A "no row" result is not an error: it returns
+                // null above and this catch never fires for it.)
+                getLog().warn(
+                  {
+                    err: err as Error,
+                    nodeId: node.id,
+                    workflow: workflow.name,
+                    scopeKey: persistScopeKey,
+                    provider,
+                  },
+                  'persist_session_lookup_failed'
+                );
+                await safeSendMessage(
+                  platform,
+                  conversationId,
+                  `⚠️ Could not load the persisted session for node \`${node.id}\` — it will run without prior context. Session continuity may be broken; if this recurs, check server logs or run \`/workflow reset-sessions ${workflow.name}\`.`,
+                  { workflowId: workflowRun.id, nodeName: node.id }
+                );
+              }
+            }
+          }
 
           // 6. Execute with retry for transient failures
           const retryConfig = getEffectiveNodeRetryConfig(node);
@@ -3047,6 +3139,59 @@ export async function executeDagWorkflow(
             );
 
             await new Promise(resolve => setTimeout(resolve, delayMs));
+          }
+
+          // Persist (or drop) the node's provider session ID for the next run in this scope.
+          // context:'fresh' nodes are excluded (the author opted out of any cross-run memory).
+          if (
+            effectivePersist &&
+            !bypassesPersistence &&
+            persistScopeKey &&
+            output.state === 'completed'
+          ) {
+            try {
+              if (output.sessionId !== undefined) {
+                await deps.store.upsertWorkflowNodeSession({
+                  workflow_name: workflow.name,
+                  node_id: node.id,
+                  scope_key: persistScopeKey,
+                  provider,
+                  provider_session_id: output.sessionId,
+                  last_run_id: workflowRun.id,
+                });
+              } else {
+                // Provider returned no session ID (e.g. Codex with no thread ID).
+                // Drop the stale row for THIS provider only — leave other providers'
+                // rows intact so switching providers between runs doesn't clobber
+                // the other side's continuity.
+                await deps.store.deleteWorkflowNodeSessions({
+                  workflow_name: workflow.name,
+                  scope_key: persistScopeKey,
+                  node_id: node.id,
+                  provider,
+                });
+              }
+            } catch (err) {
+              // Non-fatal: persistence failure does not undo a successful node execution.
+              // But the user opted into persistence — the next run will start fresh for
+              // this node, so warn them as well as the logs.
+              getLog().warn(
+                {
+                  err: err as Error,
+                  nodeId: node.id,
+                  workflow: workflow.name,
+                  scopeKey: persistScopeKey,
+                  provider,
+                },
+                'persist_session_upsert_failed'
+              );
+              await safeSendMessage(
+                platform,
+                conversationId,
+                `⚠️ Could not persist the session for node \`${node.id}\` (${provider}). The next run will start this node fresh.`,
+                { workflowId: workflowRun.id, nodeName: node.id }
+              );
+            }
           }
 
           return { nodeId: node.id, output };

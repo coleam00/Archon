@@ -155,6 +155,34 @@ export const rejectWorkflowRunBodySchema = z
   .object({ reason: z.string().optional() })
   .openapi('RejectWorkflowRunBody');
 
+/** DELETE /api/workflows/:name/node-sessions path params. */
+export const resetWorkflowNodeSessionsParamsSchema = z
+  .object({ name: z.string().min(1) })
+  .openapi('ResetWorkflowNodeSessionsParams');
+
+/**
+ * DELETE /api/workflows/:name/node-sessions query params.
+ *
+ * `scope` and `node` narrow the deletion. Omitting `scope` wipes every scope for the
+ * workflow — a destructive cross-scope reset that requires `confirm=all-scopes`
+ * (mirrors the CLI's `--yes` guard) so it can't happen by an accidentally-dropped param.
+ */
+export const resetWorkflowNodeSessionsQuerySchema = z
+  .object({
+    scope: z.string().optional(),
+    node: z.string().optional(),
+    confirm: z.enum(['all-scopes']).optional(),
+  })
+  .openapi('ResetWorkflowNodeSessionsQuery');
+
+/** DELETE /api/workflows/:name/node-sessions response. */
+export const resetWorkflowNodeSessionsResponseSchema = z
+  .object({
+    success: z.boolean(),
+    deleted: z.number().int().nonnegative(),
+  })
+  .openapi('ResetWorkflowNodeSessionsResponse');
+
 /** Dashboard enriched workflow run (wire shape with ISO string dates). */
 export const dashboardWorkflowRunSchema = coreDashboardWorkflowRunSchema
   .extend({
