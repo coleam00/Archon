@@ -14,6 +14,12 @@ interface ActiveRunCardProps {
   run: Run;
   showProject?: boolean;
   selected?: boolean;
+  /**
+   * True when this run's approval is currently surfaced in the pending-input
+   * banner at the top of the feed. The card then shows a pointer instead of a
+   * second live ApprovalPanel; dismissing the banner restores the inline panel.
+   */
+  inputPromoted?: boolean;
 }
 
 /**
@@ -27,13 +33,15 @@ interface ActiveRunCardProps {
  *
  * Paused:
  *   - Amber pulsing dot
- *   - Inline ApprovalPanel with context input + Approve/Reject
+ *   - Inline ApprovalPanel with context input + Approve/Reject (unless the
+ *     approval is promoted to the banner, in which case a pointer shows)
  *   - User can resolve without leaving the feed
  */
 export function ActiveRunCard({
   run,
   showProject = false,
   selected = false,
+  inputPromoted = false,
 }: ActiveRunCardProps): ReactElement {
   const navigate = useNavigate();
   const isDocker = useIsDocker();
@@ -147,10 +155,19 @@ export function ActiveRunCard({
             from the last text event), because the approval node's own
             `message` is usually just a pointer ("answer the questions above"). */}
         {run.status === 'paused' && run.approval !== null && run.approval !== undefined ? (
-          <>
-            <ApprovalContext run={run} />
-            <ApprovalPanel run={run} />
-          </>
+          inputPromoted ? (
+            <div className="mt-2 flex items-center gap-2 rounded border border-warning/25 bg-warning/[0.05] px-3 py-2 text-[12px] text-warning">
+              <span aria-hidden className="leading-none">
+                ⚠
+              </span>
+              <span>Waiting for your input — see the banner at the top.</span>
+            </div>
+          ) : (
+            <>
+              <ApprovalContext run={run} />
+              <ApprovalPanel run={run} />
+            </>
+          )
         ) : null}
       </div>
     </article>
