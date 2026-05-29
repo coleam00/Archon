@@ -4,8 +4,8 @@
  * migrations/000_combined.sql.
  *
  * Why: PostgresAdapter applies this SQL on startup so the schema converges
- * automatically (issue #1796). The SQL must be embedded at build time so the
- * compiled binary can run it without filesystem access to migrations/.
+ * automatically. The SQL must be embedded at build time so the compiled binary
+ * can run it without filesystem access to migrations/.
  *
  * Usage:
  *   bun run scripts/generate-bundled-schema.ts          # write

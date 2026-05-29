@@ -361,7 +361,7 @@ describe('PostgresAdapter', () => {
   });
 
   // -------------------------------------------------------------------------
-  // initSchema() — auto-converging Postgres schema on startup (#1796)
+  // initSchema() — auto-converging Postgres schema on startup
   // -------------------------------------------------------------------------
 
   describe('initSchema()', () => {
@@ -377,7 +377,7 @@ describe('PostgresAdapter', () => {
       mockSchemaSQL = '-- schema sql';
 
       const a = new PostgresAdapter('postgresql://localhost:5432/testdb');
-      // First query awaits schemaInitPromise implicitly
+      // Triggers schema init as a side-effect — callers don't call initSchema() directly
       await a.query('SELECT 1');
 
       // Init issues BEGIN, advisory lock, schema SQL, COMMIT — then SELECT 1
@@ -410,6 +410,7 @@ describe('PostgresAdapter', () => {
     test('DDL failure: rolls back and causes all subsequent queries to reject', async () => {
       const boom = new Error('column already exists');
       const issued: string[] = [];
+      let released = false;
 
       mockClient = {
         query: async (sql: string) => {
@@ -417,7 +418,9 @@ describe('PostgresAdapter', () => {
           if (sql === '-- bad sql') throw boom;
           return { rows: [], rowCount: 0 };
         },
-        release: () => {},
+        release: () => {
+          released = true;
+        },
       };
       mockSchemaSQL = '-- bad sql';
 
@@ -432,6 +435,8 @@ describe('PostgresAdapter', () => {
 
       // ROLLBACK was issued after the failure
       expect(issued).toContain('ROLLBACK');
+      // client.release() must be called in the finally block to avoid connection leaks
+      expect(released).toBe(true);
     });
 
     test('withTransaction() awaits schema init before opening a tx', async () => {

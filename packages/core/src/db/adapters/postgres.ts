@@ -2,6 +2,7 @@
  * PostgreSQL adapter using pg Pool
  */
 import { Pool } from 'pg';
+import type { PoolClient } from 'pg';
 import type { IDatabase, QueryResult, SqlDialect } from './types';
 import { createLogger } from '@archon/paths';
 import { getSchemaSQL } from '../bundled-schema';
@@ -44,9 +45,10 @@ export class PostgresAdapter implements IDatabase {
   }
 
   private async initSchema(): Promise<void> {
-    const sql = getSchemaSQL();
-    const client = await this.pool.connect();
+    let client: PoolClient | undefined;
     try {
+      const sql = getSchemaSQL();
+      client = await this.pool.connect();
       // Advisory lock serializes schema convergence across concurrent boots
       // (e.g. two app containers starting at once against a fresh DB).
       // Key 1796 is arbitrary — just needs to be stable across processes.
@@ -56,18 +58,26 @@ export class PostgresAdapter implements IDatabase {
       // ADD COLUMN IF NOT EXISTS, CREATE INDEX IF NOT EXISTS).
       await client.query(sql);
       await client.query('COMMIT');
-      getLog().info('db.pg_schema_init_completed');
+      getLog().info('db.postgres_schema_init_completed');
     } catch (e) {
-      try {
-        await client.query('ROLLBACK');
-      } catch (rollbackError) {
-        getLog().error({ err: rollbackError as Error }, 'db.pg_schema_init_rollback_failed');
+      if (client) {
+        try {
+          await client.query('ROLLBACK');
+        } catch (rollbackError) {
+          getLog().error(
+            {
+              err:
+                rollbackError instanceof Error ? rollbackError : new Error(String(rollbackError)),
+            },
+            'db.postgres_schema_init_rollback_failed'
+          );
+        }
       }
-      const err = e as Error;
-      getLog().fatal({ err }, 'db.pg_schema_init_failed');
+      const err = e instanceof Error ? e : new Error(String(e));
+      getLog().fatal({ err }, 'db.postgres_schema_init_failed');
       throw err;
     } finally {
-      client.release();
+      client?.release();
     }
   }
 
