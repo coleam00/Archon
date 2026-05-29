@@ -4,6 +4,7 @@
  */
 import {
   Codex,
+  type CodexOptions,
   type ThreadOptions,
   type TurnOptions,
   type TurnCompletedEvent,
@@ -19,12 +20,21 @@ import { parseCodexConfig } from './config';
 import { CODEX_CAPABILITIES } from './capabilities';
 import { resolveCodexBinaryPath } from './binary-resolver';
 import { createLogger } from '@archon/paths';
+import { loadMcpConfig } from '../mcp/config';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('provider.codex');
   return cachedLog;
+}
+
+type CodexConfigOverrides = NonNullable<CodexOptions['config']>;
+type CodexConfigValue = CodexConfigOverrides[string];
+
+interface ProviderWarning {
+  code: string;
+  message: string;
 }
 
 // Singleton Codex instance (async because binary path resolution is async)
@@ -85,6 +95,113 @@ function buildCodexEnv(requestEnv: Record<string, string>): Record<string, strin
   );
   // Managed project env intentionally overrides inherited process env for project-scoped execution.
   return { ...baseEnv, ...requestEnv };
+}
+
+function buildMcpEnvSource(
+  requestEnv?: Record<string, string>
+): Record<string, string | undefined> {
+  return requestEnv ? { ...process.env, ...requestEnv } : process.env;
+}
+
+const CODEX_MCP_PASSTHROUGH_KEYS = [
+  'command',
+  'args',
+  'env',
+  'url',
+  'enabled',
+  'required',
+  'startup_timeout_sec',
+  'startup_timeout_ms',
+  'tool_timeout_sec',
+  'enabled_tools',
+  'disabled_tools',
+  'supports_parallel_tool_calls',
+  'cwd',
+  'env_vars',
+  'experimental_environment',
+  'http_headers',
+  'env_http_headers',
+  'oauth_resource',
+  'scopes',
+  'bearer_token_env_var',
+  'default_tools_approval_mode',
+  'tools',
+] as const;
+
+function toCodexConfigValue(value: unknown): CodexConfigValue | undefined {
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    const result: CodexConfigValue[] = [];
+    for (const item of value) {
+      const converted = toCodexConfigValue(item);
+      if (converted !== undefined) result.push(converted);
+    }
+    return result;
+  }
+
+  if (typeof value === 'object' && value !== null) {
+    const result: CodexConfigOverrides = {};
+    for (const [key, nestedValue] of Object.entries(value)) {
+      const converted = toCodexConfigValue(nestedValue);
+      if (converted !== undefined) result[key] = converted;
+    }
+    return result;
+  }
+
+  return undefined;
+}
+
+function setCodexConfigValue(target: CodexConfigOverrides, key: string, value: unknown): void {
+  const converted = toCodexConfigValue(value);
+  if (converted !== undefined) {
+    target[key] = converted;
+  }
+}
+
+function convertMcpServerConfigForCodex(
+  serverConfig: Record<string, unknown>
+): CodexConfigOverrides {
+  const result: CodexConfigOverrides = {};
+
+  for (const key of CODEX_MCP_PASSTHROUGH_KEYS) {
+    if (key in serverConfig) {
+      setCodexConfigValue(result, key, serverConfig[key]);
+    }
+  }
+
+  // Archon's MCP JSON format uses `headers`; Codex config uses `http_headers`.
+  if ('headers' in serverConfig && !('http_headers' in result)) {
+    setCodexConfigValue(result, 'http_headers', serverConfig.headers);
+  }
+
+  return result;
+}
+
+function buildCodexMcpConfigOverrides(
+  servers: Record<string, unknown>
+): CodexConfigOverrides | undefined {
+  const mcpServers: CodexConfigOverrides = {};
+
+  for (const [serverName, serverConfig] of Object.entries(servers)) {
+    if (typeof serverConfig !== 'object' || serverConfig === null || Array.isArray(serverConfig)) {
+      getLog().warn(
+        { serverName, valueType: typeof serverConfig },
+        'codex.mcp_server_config_not_object'
+      );
+      continue;
+    }
+
+    const converted = convertMcpServerConfigForCodex(serverConfig as Record<string, unknown>);
+    if (Object.keys(converted).length > 0) {
+      mcpServers[serverName] = converted;
+    }
+  }
+
+  if (Object.keys(mcpServers).length === 0) return undefined;
+  return { mcp_servers: mcpServers };
 }
 
 const CODEX_MODEL_FALLBACKS: Record<string, string> = {
@@ -170,9 +287,10 @@ function buildTurnOptions(requestOptions?: SendQueryOptions): {
   if (requestOptions?.nodeConfig?.output_format && !requestOptions?.outputFormat) {
     turnOptions.outputSchema = requestOptions.nodeConfig.output_format;
   }
-  if (requestOptions?.abortSignal) {
-    turnOptions.signal = requestOptions.abortSignal;
-  }
+  // Signal assignment is intentionally per-attempt (in sendQuery's retry
+  // loop), not here. Reusing a single AbortSignal across retries can poison
+  // later attempts once any earlier attempt's subprocess is SIGTERM'd.
+  // See issue #1266.
   return { turnOptions, hasOutputFormat };
 }
 
@@ -191,10 +309,16 @@ async function* streamCodexEvents(
   events: AsyncIterable<Record<string, unknown>>,
   hasOutputFormat: boolean,
   threadId: string | null | undefined,
-  abortSignal?: AbortSignal
+  abortSignal?: AbortSignal,
+  surfaceMcpClientErrors = false
 ): AsyncGenerator<MessageChunk> {
   const state: CodexStreamState = {};
   let accumulatedText = '';
+
+  if (abortSignal?.aborted) {
+    getLog().info('query_aborted_before_stream');
+    throw new Error('Query aborted');
+  }
 
   // If the iterator closes without a terminal event (e.g. the model was
   // rejected before the turn even started), we synthesize a fail-stop result
@@ -226,8 +350,13 @@ async function* streamCodexEvents(
       // means the SDK recovered, so the captured error is dropped; loop
       // closure without a terminal means the captured error caused the
       // stream to abort and is surfaced as the failure cause.
-      if (!errorEvent.message.includes('MCP client')) {
+      const isMcpClientError = errorEvent.message.toLowerCase().includes('mcp client');
+      if (!isMcpClientError) {
         lastNonMcpError = errorEvent.message;
+      } else if (surfaceMcpClientErrors) {
+        // MCP was explicitly configured for this node — surface MCP client
+        // errors as system warnings so the workflow author can diagnose.
+        yield { type: 'system', content: `⚠️ ${errorEvent.message}` };
       }
       continue;
     }
@@ -513,17 +642,22 @@ export class CodexProvider implements IAgentProvider {
 
   private async createCodexClient(
     configCodexBinaryPath: string | undefined,
-    requestEnv?: Record<string, string>
+    requestEnv?: Record<string, string>,
+    codexConfigOverrides?: CodexConfigOverrides
   ): Promise<Codex> {
-    if (!requestEnv || Object.keys(requestEnv).length === 0) {
+    if ((!requestEnv || Object.keys(requestEnv).length === 0) && !codexConfigOverrides) {
       return getCodex(configCodexBinaryPath);
     }
 
     try {
-      return new Codex({
+      const codexOptions: CodexOptions = {
         codexPathOverride: await resolveCodexBinaryPath(configCodexBinaryPath),
-        env: buildCodexEnv(requestEnv),
-      });
+        ...(requestEnv && Object.keys(requestEnv).length > 0
+          ? { env: buildCodexEnv(requestEnv) }
+          : {}),
+        ...(codexConfigOverrides ? { config: codexConfigOverrides } : {}),
+      };
+      return new Codex(codexOptions);
     } catch (error) {
       const err = error as Error;
       if (isModelAccessError(err.message)) {
@@ -545,9 +679,38 @@ export class CodexProvider implements IAgentProvider {
   ): AsyncGenerator<MessageChunk> {
     const assistantConfig = requestOptions?.assistantConfig ?? {};
     const codexConfig = parseCodexConfig(assistantConfig);
+    const providerWarnings: ProviderWarning[] = [];
+    let codexConfigOverrides: CodexConfigOverrides | undefined;
+
+    if (requestOptions?.nodeConfig?.mcp) {
+      const mcpPath = requestOptions.nodeConfig.mcp;
+      const { servers, serverNames, missingVars } = await loadMcpConfig(
+        mcpPath,
+        cwd,
+        buildMcpEnvSource(requestOptions.env)
+      );
+      codexConfigOverrides = buildCodexMcpConfigOverrides(servers);
+      getLog().info({ serverNames, mcpPath }, 'codex.mcp_config_loaded');
+      if (missingVars.length > 0) {
+        const uniqueVars = [...new Set(missingVars)];
+        getLog().warn({ missingVars: uniqueVars }, 'codex.mcp_env_vars_missing');
+        providerWarnings.push({
+          code: 'mcp_env_vars_missing',
+          message: `MCP config references undefined env vars: ${uniqueVars.join(', ')}. These will be empty strings - MCP servers may fail to authenticate.`,
+        });
+      }
+    }
+
+    for (const warning of providerWarnings) {
+      yield { type: 'system', content: `⚠️ ${warning.message}` };
+    }
 
     // 1. Initialize SDK and build thread options
-    const codex = await this.createCodexClient(codexConfig.codexBinaryPath, requestOptions?.env);
+    const codex = await this.createCodexClient(
+      codexConfig.codexBinaryPath,
+      requestOptions?.env,
+      codexConfigOverrides
+    );
     const threadOptions = buildThreadOptions(cwd, requestOptions?.model, assistantConfig);
 
     if (requestOptions?.abortSignal?.aborted) {
@@ -603,56 +766,88 @@ export class CodexProvider implements IAgentProvider {
         throw new Error('Query aborted');
       }
 
-      if (attempt > 0) {
-        getLog().debug({ cwd, attempt }, 'starting_new_thread');
-        try {
-          thread = codex.startThread(threadOptions);
-        } catch (startError) {
-          const err = startError as Error;
-          if (isModelAccessError(err.message)) {
-            throw new Error(buildModelAccessMessage(requestOptions?.model));
-          }
-          throw new Error(`Codex query failed: ${err.message}`);
-        }
+      // Fresh AbortController per attempt. Caller's abortSignal, if any, is
+      // chained in via a once-listener so cancellation still propagates.
+      // Without this, a signal aborted during attempt N (e.g. when the
+      // Codex subprocess crashes and Node.js reacts to the `spawn({ signal })`
+      // linkage) would wire an already-aborted signal into attempt N+1's
+      // `spawn`, SIGTERMing the freshly spawned child before it reads any
+      // input. The "Reading prompt from stdin..." in the resulting error is
+      // Codex CLI's startup banner, not an indicator of crash location.
+      // See issue #1266.
+      const attemptController = new AbortController();
+      const onCallerAbort = (): void => {
+        attemptController.abort();
+      };
+      if (requestOptions?.abortSignal) {
+        requestOptions.abortSignal.addEventListener('abort', onCallerAbort, { once: true });
       }
+      turnOptions.signal = attemptController.signal;
 
       try {
-        // 4. Run streamed turn
-        const result = await thread.runStreamed(prompt, turnOptions);
-
-        // 5. Stream normalized events (fresh state per attempt to avoid dedup leaks)
-        yield* streamCodexEvents(
-          result.events as AsyncIterable<Record<string, unknown>>,
-          hasOutputFormat,
-          thread.id,
-          requestOptions?.abortSignal
-        );
-        return;
-      } catch (error) {
-        const err = error as Error;
-
-        if (requestOptions?.abortSignal?.aborted) {
-          throw new Error('Query aborted');
+        if (attempt > 0) {
+          getLog().debug({ cwd, attempt }, 'starting_new_thread');
+          try {
+            thread = codex.startThread(threadOptions);
+          } catch (startError) {
+            const err = startError as Error;
+            if (isModelAccessError(err.message)) {
+              getLog().debug({ attempt, errorClass: 'model_access' }, 'query_error_pre_retry');
+              throw new Error(buildModelAccessMessage(requestOptions?.model));
+            }
+            throw new Error(`Codex query failed: ${err.message}`);
+          }
         }
 
-        const { enrichedError, errorClass, shouldRetry } = classifyAndEnrichCodexError(
-          err,
-          requestOptions?.model
-        );
+        try {
+          // 4. Run streamed turn
+          const result = await thread.runStreamed(prompt, turnOptions);
 
-        getLog().error(
-          { err, errorClass, attempt, maxRetries: MAX_SUBPROCESS_RETRIES },
-          'query_error'
-        );
+          // 5. Stream normalized events (fresh state per attempt to avoid dedup leaks)
+          yield* streamCodexEvents(
+            result.events as AsyncIterable<Record<string, unknown>>,
+            hasOutputFormat,
+            thread.id,
+            attemptController.signal,
+            Boolean(requestOptions?.nodeConfig?.mcp)
+          );
+          return;
+        } catch (error) {
+          const err = error as Error;
 
-        if (!shouldRetry || attempt >= MAX_SUBPROCESS_RETRIES) {
-          throw enrichedError;
+          if (requestOptions?.abortSignal?.aborted) {
+            throw new Error('Query aborted');
+          }
+
+          const { enrichedError, errorClass, shouldRetry } = classifyAndEnrichCodexError(
+            err,
+            requestOptions?.model
+          );
+
+          getLog().error(
+            { err, errorClass, attempt, maxRetries: MAX_SUBPROCESS_RETRIES },
+            'query_error'
+          );
+
+          if (!shouldRetry || attempt >= MAX_SUBPROCESS_RETRIES) {
+            throw enrichedError;
+          }
+
+          const delayMs = this.retryBaseDelayMs * Math.pow(2, attempt);
+          getLog().info({ attempt, delayMs, errorClass }, 'retrying_query');
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+          lastError = enrichedError;
         }
-
-        const delayMs = this.retryBaseDelayMs * Math.pow(2, attempt);
-        getLog().info({ attempt, delayMs, errorClass }, 'retrying_query');
-        await new Promise(resolve => setTimeout(resolve, delayMs));
-        lastError = enrichedError;
+      } finally {
+        if (requestOptions?.abortSignal) {
+          requestOptions.abortSignal.removeEventListener('abort', onCallerAbort);
+        }
+        // The per-attempt AbortController is short-lived and goes out of
+        // scope at iteration end — no explicit abort() cleanup needed.
+        // Calling abort() here would race with the codex-sdk's own finally
+        // (which calls child.removeAllListeners() + child.kill()), firing
+        // Node's internal spawn-signal abort listener on a listenerless
+        // child and surfacing an uncaught AbortError.  See #1735.
       }
     }
 

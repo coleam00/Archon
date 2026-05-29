@@ -1,26 +1,24 @@
 name: maintainer-review-pr
 description: |
-  Use when: Maintainer wants to review a SINGLE PR with direction-and-scope
-  gating before any deep review. Skips deep review entirely when the PR is
-  off-direction, too broad, or has multiple concerns; instead drafts a polite-
-  decline comment for human approval.
-  Triggers: "maintainer review", "maintainer review pr <n>", "review and gate",
-            "should i review this PR", "gate this PR", "review pr as maintainer".
-  Does: Loads maintainer direction + profile + state -> gates the PR on
-        direction alignment, scope focus, and PR-template fill -> if review-
-        worthy, runs comprehensive review (5 parallel review aspects); if
-        decline-worthy, drafts a polite-decline comment that you approve before
-        it posts.
+  Use when: Maintainer wants a deep review on a SINGLE PR they've already
+  decided is worth reviewing (e.g. picked from the standup brief).
+  Triggers: "maintainer review", "maintainer review pr <n>",
+            "review pr as maintainer".
+  Does: Fetches the PR + diff, classifies which review aspects apply,
+        runs the relevant aspects (code-review, error-handling, test-coverage,
+        comment-quality, docs-impact) in parallel, synthesizes findings, posts
+        a draft comment to the PR, and records the review in shared state so
+        the next maintainer-standup can mark "✓ reviewed Nd ago".
   Provider: Pi (Minimax M2.7) — runs cheaper than Claude. Each review aspect
   is its own Archon node, so Pi handles them as independent calls.
   NOT for: Comprehensive review of a PR you've already decided to merge
            (use archon-comprehensive-pr-review). Quick triage of all open PRs
-           (use maintainer-standup).
+           (use maintainer-standup). Direction/scope gating on
+           unfiltered PRs — that path was removed; the maintainer is expected
+           to have done that filtering when picking the PR.
 
 provider: pi
 model: minimax/MiniMax-M2.7
-
-interactive: true # Required for the decline-approval gate
 
 worktree:
   enabled: false # Live checkout — needs to read .archon/maintainer-standup/
@@ -48,7 +46,7 @@ nodes:
     idle_timeout: 30000
 
   # ═══════════════════════════════════════════════════════════════
-  # PHASE 2: GATHER PR DATA + MAINTAINER CONTEXT (parallel)
+  # PHASE 2: GATHER PR DATA (parallel)
   # ═══════════════════════════════════════════════════════════════
 
   - id: fetch-pr
@@ -66,14 +64,14 @@ nodes:
   - id: fetch-diff
     bash: |
       PR_NUM=$(cat "$ARTIFACTS_DIR/.pr-number")
-      # Don't redirect stderr — let auth / network / deleted-PR failures surface
-      # as a node failure rather than feeding an empty diff to the gate (which
-      # would produce a confident verdict on no evidence).
+      # Let auth / network / deleted-PR failures surface as a node failure
+      # rather than feeding an empty diff to review-classify (which would
+      # produce a confident "skip everything" decision on no evidence).
       if ! diff_output=$(gh pr diff "$PR_NUM"); then
         echo "ERROR: gh pr diff failed for PR #$PR_NUM" >&2
         exit 1
       fi
-      # Cap at 2500 lines to keep prompt size bounded; gate cares about shape, not every line.
+      # Cap at 2500 lines to keep prompt size bounded; classifier cares about shape, not every line.
       if [ -z "$diff_output" ]; then
         echo "(empty diff — PR has no changes)"
       else
@@ -82,68 +80,8 @@ nodes:
     depends_on: [fetch-pr]
     timeout: 30000
 
-  - id: read-context
-    # Reuses the maintainer-standup script — same direction.md / profile.md /
-    # state.json / recent briefs we want for gate decisions.
-    script: maintainer-standup-read-context
-    runtime: bun
-    timeout: 10000
-    depends_on: [extract-pr-number]
-
   # ═══════════════════════════════════════════════════════════════
-  # PHASE 3: GATE — direction + scope + template check
-  # ═══════════════════════════════════════════════════════════════
-
-  - id: gate
-    command: maintainer-review-gate
-    depends_on: [fetch-pr, fetch-diff, read-context]
-    context: fresh
-    output_format:
-      type: object
-      properties:
-        verdict:
-          type: string
-          enum: [review, decline, needs_split, unclear]
-          description: |
-            'review' = passes gates, proceed to deep review.
-            'decline' = wrong direction; draft polite-decline comment.
-            'needs_split' = scope is multiple concerns; draft split-up request.
-            'unclear' = gate cannot decide confidently; ask maintainer manually.
-        direction_alignment:
-          type: string
-          enum: [aligned, conflict, unclear]
-        scope_assessment:
-          type: string
-          enum: [focused, multiple_concerns, too_broad]
-        template_quality:
-          type: string
-          enum: [good, partial, empty]
-        decline_categories:
-          type: array
-          items:
-            type: string
-          description: e.g. ['direction', 'scope', 'template']. Empty when verdict == 'review'.
-        cited_direction_clauses:
-          type: array
-          items:
-            type: string
-          description: |
-            Specific direction.md clauses cited (e.g., 'direction.md §single-developer-tool').
-            Empty when verdict == 'review'.
-        reasoning:
-          type: string
-          description: 1-3 sentences summarizing why this verdict.
-      required:
-        - verdict
-        - direction_alignment
-        - scope_assessment
-        - template_quality
-        - decline_categories
-        - cited_direction_clauses
-        - reasoning
-
-  # ═══════════════════════════════════════════════════════════════
-  # PHASE 4a: REVIEW BRANCH (verdict == 'review')
+  # PHASE 3: CLASSIFY WHICH ASPECTS APPLY
   # ═══════════════════════════════════════════════════════════════
 
   - id: review-classify
@@ -164,8 +102,7 @@ nodes:
       - **Docs impact**: Run if diff adds/removes/renames public APIs, CLI flags, env vars, or user-facing features.
 
       Provide reasoning for each decision. Output JSON only.
-    depends_on: [gate]
-    when: "$gate.output.verdict == 'review'"
+    depends_on: [fetch-pr, fetch-diff]
     allowed_tools: []
     context: fresh
     idle_timeout: 60000
@@ -196,6 +133,10 @@ nodes:
         - run_comment_quality
         - run_docs_impact
         - reasoning
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 4: RUN ASPECTS (parallel, gated by classifier)
+  # ═══════════════════════════════════════════════════════════════
 
   - id: code-review
     command: maintainer-review-code-review
@@ -233,10 +174,9 @@ nodes:
     trigger_rule: one_success
     context: fresh
 
-  # Auto-post — once the gate said 'review', the deep review is feedback worth
-  # delivering. No approval required; the maintainer can always edit/delete on
-  # GitHub. (Approval gates are reserved for the higher-stakes decline branch
-  # where the comment closes the door on the contribution.)
+  # Auto-post — once the deep review is drafted, the feedback is worth
+  # delivering. No approval required; the maintainer can always edit/delete
+  # on GitHub.
   - id: post-review
     bash: |
       PR_NUM=$(cat "$ARTIFACTS_DIR/.pr-number")
@@ -250,103 +190,27 @@ nodes:
     timeout: 30000
 
   # ═══════════════════════════════════════════════════════════════
-  # PHASE 4b: DECLINE BRANCH (verdict in ['decline', 'needs_split'])
-  # ═══════════════════════════════════════════════════════════════
-
-  - id: approve-decline
-    approval:
-      message: |
-        Gate flagged this PR for polite-decline. Review the gate decision and the
-        drafted decline comment in the workflow output above (and in
-        $ARTIFACTS_DIR/gate-decision.md).
-
-        Approve to post the drafted comment to the PR.
-        Reject with a reason to redraft (max 3 attempts).
-      capture_response: true
-      on_reject:
-        prompt: |
-          Reviewer feedback on the previous decline draft:
-          $REJECTION_REASON
-
-          Re-read the gate decision at `$ARTIFACTS_DIR/gate-decision.md` and the
-          current drafted comment at `$ARTIFACTS_DIR/decline-comment.md`. Revise
-          the decline comment based on the feedback, then OVERWRITE
-          `$ARTIFACTS_DIR/decline-comment.md` with the new version.
-
-          Output the revised decline comment as raw markdown — no JSON wrapper.
-        max_attempts: 3
-    depends_on: [gate]
-    when: "$gate.output.verdict == 'decline' || $gate.output.verdict == 'needs_split'"
-
-  - id: post-decline
-    bash: |
-      PR_NUM=$(cat "$ARTIFACTS_DIR/.pr-number")
-      if [ ! -f "$ARTIFACTS_DIR/decline-comment.md" ]; then
-        echo "ERROR: decline-comment.md missing — gate command did not write it" >&2
-        exit 1
-      fi
-      gh pr comment "$PR_NUM" --body-file "$ARTIFACTS_DIR/decline-comment.md"
-
-      # Tag the PR so the morning brief can surface "awaiting author".
-      # Failure (label not present in repo, permissions, etc.) is non-fatal,
-      # but record the actual outcome so the report node doesn't claim the
-      # label was applied when it wasn't.
-      if gh pr edit "$PR_NUM" --add-label awaiting-author 2>"$ARTIFACTS_DIR/.label-error"; then
-        echo "applied" > "$ARTIFACTS_DIR/.label-applied"
-        rm -f "$ARTIFACTS_DIR/.label-error"
-      else
-        echo "skipped" > "$ARTIFACTS_DIR/.label-applied"
-        echo "WARN: gh pr edit --add-label failed; see $ARTIFACTS_DIR/.label-error" >&2
-      fi
-
-      echo "Posted decline comment to PR #$PR_NUM"
-    depends_on: [approve-decline]
-    timeout: 30000
-
-  # ═══════════════════════════════════════════════════════════════
-  # PHASE 4c: UNCLEAR BRANCH (verdict == 'unclear')
-  # ═══════════════════════════════════════════════════════════════
-
-  - id: approve-unclear
-    approval:
-      message: |
-        Gate could not classify this PR confidently. Read the raw gate output
-        and any artifacts in $ARTIFACTS_DIR/, then decide manually.
-
-        Approve (with optional comment) = workflow ends here (no comment posted,
-        no review run). Your comment is captured as $approve-unclear.output and
-        the report node will include it.
-        Reject (with reason) = workflow is cancelled; reasoning is recorded in
-        the run.
-      capture_response: true
-    depends_on: [gate]
-    when: "$gate.output.verdict == 'unclear'"
-
-  # ═══════════════════════════════════════════════════════════════
   # PHASE 5: RECORD REVIEW IN SHARED STATE
   # ═══════════════════════════════════════════════════════════════
 
-  # Append this run's PR number + verdict + timestamp to
+  # Append this run's PR number + timestamp to
   # .archon/maintainer-standup/reviewed-prs.json so the morning standup
   # brief can mark "✓ reviewed Nd ago" next to PRs that have already
   # been triaged. Cross-workflow memory; gitignored, per-maintainer.
   #
-  # Runs deterministically (no AI) after whichever branch fired. Inline
-  # script for the same reason persist is inline in maintainer-standup:
-  # JSON is valid JS expression syntax so $gate.output substitutes
-  # directly without a String.raw template literal. Records the gate
-  # verdict (review / decline / needs_split / unclear), not the
-  # synthesis verdict — keeps the contract narrow.
+  # `gate_verdict` is kept in the record as the literal string "review"
+  # for backward compatibility with the standup synthesis prompt, which
+  # branches the brief marker on it (review/declined/triaged). Older
+  # entries written before the gate was removed may still carry
+  # `decline` / `needs_split` / `unclear` — the standup keeps reading
+  # them correctly.
   - id: record-review
     runtime: bun
     timeout: 10000
-    depends_on: [post-review, post-decline, approve-unclear]
-    trigger_rule: one_success
+    depends_on: [post-review]
     script: |
       import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
       import { resolve } from 'node:path';
-
-      const gate = $gate.output;
 
       const baseDir = resolve(process.cwd(), '.archon/maintainer-standup');
       if (!existsSync(baseDir)) mkdirSync(baseDir, { recursive: true });
@@ -366,15 +230,15 @@ nodes:
 
       reviewed[prNumber] = {
         reviewed_at: new Date().toISOString(),
-        gate_verdict: gate.verdict,
+        gate_verdict: 'review',
         run_id: '$WORKFLOW_ID',
       };
 
       writeFileSync(reviewedPath, JSON.stringify(reviewed, null, 2) + '\n');
-      console.log(`Recorded review of PR #${prNumber} (gate: ${gate.verdict})`);
+      console.log(`Recorded review of PR #${prNumber}`);
 
   # ═══════════════════════════════════════════════════════════════
-  # PHASE 6: FINAL REPORT (whichever branch ran)
+  # PHASE 6: FINAL REPORT
   # ═══════════════════════════════════════════════════════════════
 
   - id: report

@@ -31,19 +31,43 @@ let state: State | null = null;
 let source: 'delimiter' | 'json-wrapper' | null = null;
 
 // ── Tier 1: delimiter-based extraction ──
-const BEGIN = 'ARCHON_STATE_JSON_BEGIN';
-const END = 'ARCHON_STATE_JSON_END';
-const beginIdx = raw.indexOf(BEGIN);
-const endIdx = raw.indexOf(END);
-if (beginIdx !== -1 && endIdx !== -1 && endIdx > beginIdx) {
-  const stateText = raw.slice(beginIdx + BEGIN.length, endIdx).trim();
-  try {
-    state = JSON.parse(stateText) as State;
-    brief = raw.slice(0, beginIdx).trim();
-    source = 'delimiter';
-  } catch (err) {
+// Line-anchored (^...$, gm) to prevent false matches when marker text appears in prose.
+const BEGIN_RE = /^ARCHON_STATE_JSON_BEGIN$/gm;
+const END_RE = /^ARCHON_STATE_JSON_END$/gm;
+
+const beginMatches = [...raw.matchAll(BEGIN_RE)];
+const endMatches = [...raw.matchAll(END_RE)];
+
+if (beginMatches.length > 0 && endMatches.length > 0) {
+  // Strategy: last END, then last BEGIN before it — the complete final block.
+  const lastEnd = endMatches[endMatches.length - 1];
+  const lastEndIdx = lastEnd.index!;
+
+  const beginsBeforeEnd = beginMatches.filter((m) => m.index! < lastEndIdx);
+  if (beginsBeforeEnd.length > 0) {
+    const lastBegin = beginsBeforeEnd[beginsBeforeEnd.length - 1];
+    const afterBeginIdx = lastBegin.index! + lastBegin[0].length;
+
+    const stateText = raw.slice(afterBeginIdx, lastEndIdx).trim();
+    try {
+      state = JSON.parse(stateText) as State;
+      // Brief = everything before the first BEGIN; preserves prose intact even if state was emitted multiple times.
+      brief = raw.slice(0, beginMatches[0].index!).trim();
+      source = 'delimiter';
+      if (beginMatches.length > 1) {
+        process.stderr.write(
+          `WARN: ${beginMatches.length} ARCHON_STATE_JSON_BEGIN markers found; used the last complete pair.\n`,
+        );
+      }
+    } catch (err) {
+      const preview = stateText.length > 200 ? stateText.slice(0, 200) + '…' : stateText;
+      process.stderr.write(
+        `Delimiter found but state JSON parse failed: ${(err as Error).message}\nFailed candidate (first 200 chars): ${preview}\n`,
+      );
+    }
+  } else {
     process.stderr.write(
-      `Delimiter found but state JSON parse failed: ${(err as Error).message}\n`,
+      `WARN: ARCHON_STATE_JSON_BEGIN/END markers found but all BEGIN markers appear after the last END; skipping delimiter extraction.\n`,
     );
   }
 }
@@ -96,13 +120,19 @@ brief = brief.trim();
 const date = new Date().toLocaleDateString('sv-SE'); // local YYYY-MM-DD
 const baseDir = resolve(process.cwd(), '.archon/maintainer-standup');
 const briefsDir = resolve(baseDir, 'briefs');
-mkdirSync(briefsDir, { recursive: true });
-
 const statePath = resolve(baseDir, 'state.json');
 const briefPath = resolve(briefsDir, `${date}.md`);
 
-writeFileSync(statePath, JSON.stringify(state, null, 2) + '\n');
-writeFileSync(briefPath, brief + '\n');
+try {
+  mkdirSync(briefsDir, { recursive: true });
+  writeFileSync(statePath, JSON.stringify(state, null, 2) + '\n');
+  writeFileSync(briefPath, brief + '\n');
+} catch (err) {
+  process.stderr.write(
+    `PERSIST FAILED: could not write output files: ${(err as Error).message}\n`,
+  );
+  process.exit(1);
+}
 
 process.stdout.write(
   JSON.stringify({

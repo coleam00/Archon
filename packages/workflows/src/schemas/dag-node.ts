@@ -42,6 +42,14 @@ export const effortLevelSchema = z.enum(['low', 'medium', 'high', 'max']);
 export type EffortLevel = z.infer<typeof effortLevelSchema>;
 
 /**
+ * Claude Agent SDK beta header list. Non-empty array of non-empty strings —
+ * the SDK expects either a populated beta header or none at all. The
+ * `.nonempty()` constraint makes the inferred type `[string, ...string[]]`,
+ * which the loader relies on to validate cleaned input without an unchecked cast.
+ */
+export const betasSchema = z.array(z.string().min(1)).nonempty("'betas' must be a non-empty array");
+
+/**
  * Claude Agent SDK ThinkingConfig — string shorthand or full object form.
  * Shorthand: 'adaptive' → { type: 'adaptive' }, 'enabled' → { type: 'enabled' }, 'disabled' → { type: 'disabled' }.
  */
@@ -158,10 +166,22 @@ export const dagNodeBaseSchema = z.object({
   effort: effortLevelSchema.optional(),
   thinking: thinkingConfigSchema.optional(),
   maxBudgetUsd: z.number().positive().optional(),
+  // YAML workflows: string-only. The wider SystemPromptInput (preset object) is used
+  // programmatically by the orchestrator for prompt caching; Zod intentionally stays narrow.
   systemPrompt: z.string().min(1).optional(),
   fallbackModel: z.string().min(1).optional(),
-  betas: z.array(z.string().min(1)).nonempty("'betas' must be a non-empty array").optional(),
+  betas: betasSchema.optional(),
   sandbox: sandboxSettingsSchema.optional(),
+  // Opt out of resume caching: when true, this node re-runs on resume even if a
+  // prior run completed it successfully. Use for producers whose exit code does
+  // not capture output validity (e.g. bash that writes a file the consumer parses).
+  always_run: z.boolean().optional(),
+  // Persist this node's provider session ID across workflow re-runs in the same
+  // scope (typically the conversation). On the next run with the same scope, the
+  // executor loads the stored session and passes it as resumeSessionId. Requires
+  // a provider with sessionResume capability. Distinct from the Claude SDK's
+  // AgentRequestOptions.persistSession (on-disk transcript persistence).
+  persist_session: z.boolean().optional(),
 });
 
 export type DagNodeBase = z.infer<typeof dagNodeBaseSchema>;
@@ -339,6 +359,7 @@ export const BASH_NODE_AI_FIELDS: readonly string[] = [
   'fallbackModel',
   'betas',
   'sandbox',
+  'persist_session',
 ];
 
 /** AI-specific fields that are meaningless on script nodes — same as bash nodes */
@@ -537,6 +558,7 @@ export const dagNodeSchema = dagNodeBaseSchema
       ...(data.when !== undefined ? { when: data.when } : {}),
       ...(data.trigger_rule !== undefined ? { trigger_rule: data.trigger_rule } : {}),
       ...(data.idle_timeout !== undefined ? { idle_timeout: data.idle_timeout } : {}),
+      ...(data.always_run !== undefined ? { always_run: data.always_run } : {}),
     };
 
     // Shared optional fields (valid on AI and bash nodes)
@@ -563,6 +585,7 @@ export const dagNodeSchema = dagNodeBaseSchema
       ...(data.fallbackModel !== undefined ? { fallbackModel: data.fallbackModel } : {}),
       ...(data.betas !== undefined ? { betas: data.betas } : {}),
       ...(data.sandbox !== undefined ? { sandbox: data.sandbox } : {}),
+      ...(data.persist_session !== undefined ? { persist_session: data.persist_session } : {}),
     };
 
     if (data.command !== undefined && data.command.trim().length > 0) {
@@ -635,4 +658,22 @@ export function isScriptNode(node: DagNode): node is ScriptNode {
 /** Type guard: validates a value is a known TriggerRule */
 export function isTriggerRule(value: unknown): value is TriggerRule {
   return typeof value === 'string' && (TRIGGER_RULES as readonly string[]).includes(value);
+}
+
+/**
+ * True for node types that invoke a provider and therefore participate in cross-run
+ * session persistence (`persist_session`). bash, script, approval, cancel, and loop
+ * nodes are excluded — they either make no provider call or manage their own per-
+ * iteration sessions. Shared by the loader's load-time capability gate and any other
+ * caller that needs to reason about persistence eligibility, so the exclusion list
+ * lives in one place.
+ */
+export function isPersistableNode(node: DagNode): boolean {
+  return (
+    !isLoopNode(node) &&
+    !isApprovalNode(node) &&
+    !isCancelNode(node) &&
+    !isScriptNode(node) &&
+    !isBashNode(node)
+  );
 }

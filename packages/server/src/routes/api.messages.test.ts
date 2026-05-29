@@ -391,6 +391,31 @@ describe('GET /api/conversations/:id/messages', () => {
     expect(Array.isArray(parsed.toolCalls)).toBe(true);
   });
 
+  test('falls back to empty JSON object when metadata serialization fails', async () => {
+    const circular: Record<string, unknown> = { self: null };
+    circular.self = circular;
+
+    mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
+    mockListMessages.mockImplementationOnce(async () => [
+      {
+        id: 'msg-1',
+        conversation_id: MOCK_CONV.id,
+        role: 'assistant' as const,
+        content: 'Response',
+        // Simulate unserializable metadata from PostgreSQL JSONB
+        metadata: circular as unknown as string,
+        created_at: new Date().toISOString(),
+      },
+    ]);
+
+    const { app } = makeApp();
+    const response = await app.request('/api/conversations/web-test-abc/messages');
+    expect(response.status).toBe(200);
+
+    const body = (await response.json()) as Array<{ metadata: string }>;
+    expect(body[0]?.metadata).toBe('{}');
+  });
+
   test('returns 404 when conversation not found', async () => {
     mockFindConversationByPlatformId.mockImplementationOnce(async () => null);
 

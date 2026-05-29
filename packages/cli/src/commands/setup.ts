@@ -46,11 +46,76 @@ import { getRegisteredProviders } from '@archon/providers';
 import {
   getArchonEnvPath as pathsGetArchonEnvPath,
   getRepoArchonEnvPath as pathsGetRepoArchonEnvPath,
+  getArchonHome as pathsGetArchonHome,
+  createLogger,
 } from '@archon/paths';
+
+let cachedLog: ReturnType<typeof createLogger> | undefined;
+function getLog(): ReturnType<typeof createLogger> {
+  if (!cachedLog) cachedLog = createLogger('cli.setup');
+  return cachedLog;
+}
 
 // =============================================================================
 // Types
 // =============================================================================
+
+// Pi backends offered by the setup wizard. Keep `envVar` names in sync with
+// `PI_API_KEY_VARS` in doctor.ts — the doctor check uses them to detect
+// configured Pi auth.
+const PI_BACKENDS = [
+  {
+    id: 'anthropic',
+    envVar: 'ANTHROPIC_API_KEY',
+    label: 'Anthropic',
+    hint: 'claude-haiku-4-5, claude-opus-4-7, etc.',
+  },
+  { id: 'openai', envVar: 'OPENAI_API_KEY', label: 'OpenAI', hint: 'gpt-4o, gpt-5.3, etc.' },
+  {
+    id: 'google',
+    envVar: 'GEMINI_API_KEY',
+    label: 'Google (Gemini)',
+    hint: 'gemini-2.0-flash, etc.',
+  },
+  {
+    id: 'openrouter',
+    envVar: 'OPENROUTER_API_KEY',
+    label: 'OpenRouter',
+    hint: 'qwen/qwen3-coder, many others',
+  },
+  {
+    id: 'groq',
+    envVar: 'GROQ_API_KEY',
+    label: 'Groq',
+    hint: 'llama-3.3-70b-versatile, etc.',
+  },
+  { id: 'mistral', envVar: 'MISTRAL_API_KEY', label: 'Mistral', hint: 'mistral-large, etc.' },
+  { id: 'xai', envVar: 'XAI_API_KEY', label: 'xAI (Grok)', hint: 'grok-3, etc.' },
+  {
+    id: 'cerebras',
+    envVar: 'CEREBRAS_API_KEY',
+    label: 'Cerebras',
+    hint: 'llama3.1-70b, etc.',
+  },
+  {
+    id: 'huggingface',
+    envVar: 'HUGGINGFACE_API_KEY',
+    label: 'Hugging Face',
+    hint: 'inference API',
+  },
+] as const;
+
+const PI_DEFAULT_MODELS: Record<string, string> = {
+  anthropic: 'anthropic/claude-haiku-4-5',
+  openai: 'openai/gpt-4o',
+  google: 'google/gemini-2.0-flash',
+  openrouter: 'openrouter/qwen/qwen3-coder',
+  groq: 'groq/llama-3.3-70b-versatile',
+  mistral: 'mistral/mistral-large-latest',
+  xai: 'xai/grok-3',
+  cerebras: 'cerebras/llama3.1-70b',
+  huggingface: 'huggingface/Qwen/Qwen2.5-72B-Instruct',
+};
 
 interface SetupConfig {
   ai: {
@@ -63,6 +128,13 @@ interface SetupConfig {
     claudeBinaryPath?: string;
     codex: boolean;
     codexTokens?: CodexTokens;
+    pi: boolean;
+    /** e.g. 'anthropic/claude-haiku-4-5' — written to ~/.archon/config.yaml */
+    piModel?: string;
+    /** API key value for the chosen Pi backend */
+    piApiKey?: string;
+    /** Canonical env var name for the chosen Pi backend, e.g. 'ANTHROPIC_API_KEY' */
+    piApiKeyEnvVar?: string;
     defaultAssistant: string;
   };
   platforms: {
@@ -104,6 +176,7 @@ interface CodexTokens {
 interface ExistingConfig {
   hasClaude: boolean;
   hasCodex: boolean;
+  hasPi: boolean;
   platforms: {
     github: boolean;
     telegram: boolean;
@@ -342,6 +415,11 @@ export function checkExistingConfig(envPath?: string): ExistingConfig | null {
       hasEnvValue(content, 'CODEX_ACCESS_TOKEN') &&
       hasEnvValue(content, 'CODEX_REFRESH_TOKEN') &&
       hasEnvValue(content, 'CODEX_ACCOUNT_ID'),
+    // Detection is intentionally API-key-only (no DEFAULT_AI_ASSISTANT=pi check)
+    // so that re-runs after partial configs still surface Pi. Doctor's checkPi
+    // uses the stricter DEFAULT_AI_ASSISTANT=pi gate to avoid false passes for
+    // Claude users who share the same key env vars.
+    hasPi: PI_BACKENDS.some(b => hasEnvValue(content, b.envVar)),
     platforms: {
       github: hasEnvValue(content, 'GITHUB_TOKEN') || hasEnvValue(content, 'GH_TOKEN'),
       telegram: hasEnvValue(content, 'TELEGRAM_BOT_TOKEN'),
@@ -393,6 +471,76 @@ function tryReadCodexAuth(): CodexTokens | null {
   }
 
   return null;
+}
+
+/**
+ * Collect Pi backend selection and optional API key.
+ *
+ * The wizard configures one Pi backend per run; users with multiple backends
+ * can re-run setup or hand-edit `.env` and `~/.archon/config.yaml`.
+ */
+async function collectPiConfig(): Promise<{
+  model: string;
+  apiKey?: string;
+  apiKeyEnvVar?: string;
+}> {
+  const backendChoice = await select({
+    message: 'Which Pi backend will you use as the default?',
+    options: PI_BACKENDS.map(b => ({ value: b.id, label: b.label, hint: b.hint })),
+  });
+
+  if (isCancel(backendChoice)) {
+    cancel('Setup cancelled.');
+    process.exit(0);
+  }
+
+  const backend = PI_BACKENDS.find(b => b.id === backendChoice);
+  if (!backend) {
+    // Unreachable: select() can only return one of the option values, but
+    // narrow defensively so we never index PI_DEFAULT_MODELS with undefined.
+    cancel('Unknown Pi backend selected.');
+    process.exit(1);
+  }
+  const model = PI_DEFAULT_MODELS[backendChoice] ?? `${backendChoice}/default`;
+
+  const apiKey = await password({
+    message: `Enter ${backend.envVar} (press Enter to skip — you can set it later):`,
+    // Empty input is allowed; users can configure the key later by hand.
+    validate: () => undefined,
+  });
+
+  if (isCancel(apiKey)) {
+    cancel('Setup cancelled.');
+    process.exit(0);
+  }
+
+  const key = apiKey.trim();
+
+  return {
+    model,
+    ...(key.length > 0 ? { apiKey: key, apiKeyEnvVar: backend.envVar } : {}),
+  };
+}
+
+/**
+ * Verify the Pi npm module is loadable. Pi is bundled as a transitive dep of
+ * `@archon/providers` so this should always pass, but catching broken compiled
+ * builds at setup time is preferable to a silent runtime failure.
+ *
+ * The `loader` parameter is injected in tests so we don't need
+ * `mock.module()` on `@archon/providers` (which would pollute other tests).
+ */
+export async function checkPiModule(
+  loader: () => Promise<unknown> = () => import('@archon/providers')
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    await loader();
+    return { ok: true };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    getLog().warn({ err }, 'setup.pi_module_load_failed');
+    return { ok: false, error: message };
+  }
 }
 
 /**
@@ -663,11 +811,15 @@ async function collectCodexAuth(): Promise<CodexTokens | null> {
  */
 async function collectAIConfig(): Promise<SetupConfig['ai']> {
   const assistants = await multiselect({
-    message:
-      'Which built-in AI assistant(s) will you use? (↑↓ navigate, space select, enter confirm)',
+    message: 'Which AI assistant(s) will you use? (↑↓ navigate, space select, enter confirm)',
     options: [
       { value: 'claude', label: 'Claude (Recommended)', hint: 'Anthropic Claude Code SDK' },
       { value: 'codex', label: 'Codex', hint: 'OpenAI Codex SDK' },
+      {
+        value: 'pi',
+        label: 'Pi (community)',
+        hint: '~20 LLM backends via provider/model refs',
+      },
     ],
     required: false,
   });
@@ -679,6 +831,7 @@ async function collectAIConfig(): Promise<SetupConfig['ai']> {
 
   let hasClaude = assistants.includes('claude');
   let hasCodex = assistants.includes('codex');
+  let hasPi = assistants.includes('pi');
 
   // Check if selected CLI tools are installed
   if (hasClaude && !isCommandAvailable('claude')) {
@@ -778,11 +931,12 @@ After upgrading, run 'archon setup' again.`,
     }
   }
 
-  if (!hasClaude && !hasCodex) {
+  if (!hasClaude && !hasCodex && !hasPi) {
     log.warning('No AI assistant selected. You can add one later by running `archon setup` again.');
     return {
       claude: false,
       codex: false,
+      pi: false,
       defaultAssistant: getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude',
     };
   }
@@ -792,6 +946,9 @@ After upgrading, run 'archon setup' again.`,
   let claudeOauthToken: string | undefined;
   let claudeBinaryPath: string | undefined;
   let codexTokens: CodexTokens | undefined;
+  let piModel: string | undefined;
+  let piApiKey: string | undefined;
+  let piApiKeyEnvVar: string | undefined;
 
   // Collect Claude auth if selected
   if (hasClaude) {
@@ -808,17 +965,62 @@ After upgrading, run 'archon setup' again.`,
     codexTokens = tokens ?? undefined;
   }
 
+  // Collect Pi config if selected. Pi is bundled, so there's no PATH check —
+  // instead we module-load test it to catch broken compiled builds.
+  if (hasPi) {
+    const piConfig = await collectPiConfig();
+    piModel = piConfig.model;
+    piApiKey = piConfig.apiKey;
+    piApiKeyEnvVar = piConfig.apiKeyEnvVar;
+
+    const piSpin = spinner();
+    piSpin.start('Verifying Pi provider...');
+    const piCheck = await checkPiModule();
+    if (!piCheck.ok) {
+      piSpin.stop('Pi provider check failed (non-fatal)');
+      log.warning(`Pi: ${piCheck.error ?? 'module load failed'}`);
+      const continueWithoutPi = await confirm({
+        message: 'Continue setup without Pi?',
+        initialValue: true,
+      });
+      if (isCancel(continueWithoutPi)) {
+        cancel('Setup cancelled.');
+        process.exit(0);
+      }
+      if (!continueWithoutPi) {
+        cancel('Please check your Archon installation and run setup again.');
+        process.exit(0);
+      }
+      hasPi = false;
+      piModel = undefined;
+      piApiKey = undefined;
+      piApiKeyEnvVar = undefined;
+    } else {
+      piSpin.stop('Pi provider available');
+    }
+  }
+
   // Determine default assistant — use the registry, but keep setup/auth flows built-in only.
   // Default to first registered built-in provider rather than hardcoding 'claude'.
   let defaultAssistant = getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude';
 
-  if (hasClaude && hasCodex) {
-    const providerChoices = getRegisteredProviders()
-      .filter(p => p.builtIn)
-      .map(p => ({
-        value: p.id,
-        label: p.id === 'claude' ? `${p.displayName} (Recommended)` : p.displayName,
-      }));
+  // `hasPi` may have been cleared above by a failed module check, so build the
+  // selectedProviders list AFTER the Pi block.
+  const selectedProviders = [
+    ...(hasClaude ? ['claude'] : []),
+    ...(hasCodex ? ['codex'] : []),
+    ...(hasPi ? ['pi'] : []),
+  ];
+
+  if (selectedProviders.length > 1) {
+    const providerChoices = selectedProviders.map(id => {
+      const reg = getRegisteredProviders().find(p => p.id === id);
+      const displayName = reg?.displayName ?? id;
+      return {
+        value: id,
+        label: id === 'claude' ? `${displayName} (Recommended)` : displayName,
+      };
+    });
 
     const defaultChoice = await select({
       message: 'Which should be the default AI assistant?',
@@ -831,8 +1033,8 @@ After upgrading, run 'archon setup' again.`,
     }
 
     defaultAssistant = defaultChoice;
-  } else if (hasCodex && !hasClaude) {
-    defaultAssistant = 'codex';
+  } else if (selectedProviders.length === 1) {
+    defaultAssistant = selectedProviders[0];
   }
 
   return {
@@ -843,6 +1045,10 @@ After upgrading, run 'archon setup' again.`,
     ...(claudeBinaryPath !== undefined ? { claudeBinaryPath } : {}),
     codex: hasCodex,
     codexTokens,
+    pi: hasPi,
+    piModel,
+    piApiKey,
+    piApiKeyEnvVar,
     defaultAssistant,
   };
 }
@@ -1229,6 +1435,19 @@ export function generateEnvContent(config: SetupConfig): string {
     lines.push('');
   }
 
+  if (config.ai.pi && config.ai.piApiKey && config.ai.piApiKeyEnvVar) {
+    lines.push('# Pi Authentication');
+    lines.push(`${config.ai.piApiKeyEnvVar}=${config.ai.piApiKey}`);
+    lines.push('');
+  } else if (config.ai.pi) {
+    lines.push('# Pi configured — set the backend API key manually');
+    lines.push('# e.g. ANTHROPIC_API_KEY=sk-ant-...');
+    lines.push('');
+  } else {
+    lines.push('# Pi not configured');
+    lines.push('');
+  }
+
   // Default AI Assistant
   lines.push('# Default AI Assistant');
   lines.push(`DEFAULT_AI_ASSISTANT=${config.ai.defaultAssistant}`);
@@ -1364,14 +1583,54 @@ export function bootstrapProjectConfig(projectPath: string): BootstrapProjectCon
 }
 
 /**
+ * Write the Pi model ref to `~/.archon/config.yaml` so Pi knows which backend
+ * to use by default. Three branches:
+ *   1. File already contains `pi:` — skip (idempotent; avoids duplicate blocks
+ *      on re-runs or when the user has already configured this manually).
+ *   2. File contains `assistants:` but no `pi:` — show a manual `note()`
+ *      because we can't safely splice into existing YAML indentation.
+ *   3. Otherwise — append a fresh `assistants: pi: model:` block.
+ */
+export function writeHomePiModelConfig(model: string): void {
+  // Use the paths-package version of getArchonHome so Docker (/.archon) is
+  // handled correctly — the local getArchonHome() always returns ~/.archon.
+  const home = pathsGetArchonHome();
+  mkdirSync(home, { recursive: true });
+  const configPath = join(home, 'config.yaml');
+  const existing = existsSync(configPath) ? readFileSync(configPath, 'utf-8') : '';
+
+  // Use a regex to avoid false positives from substrings like `api:`.
+  if (/^\s*pi\s*:/m.test(existing)) {
+    log.info(
+      `Pi model already present in ${configPath} — edit assistants.pi.model manually to change.`
+    );
+    return;
+  }
+
+  const escaped = model.replace(/"/g, '\\"');
+
+  if (existing.includes('assistants:')) {
+    // Don't risk splicing into the user's existing assistants: block — show
+    // them the YAML to paste in by hand instead of corrupting indentation.
+    note(
+      `Add to ${configPath} under assistants:\n\n  pi:\n    model: "${escaped}"`,
+      'Pi model config'
+    );
+    return;
+  }
+
+  writeFileSync(configPath, existing + `\nassistants:\n  pi:\n    model: "${escaped}"\n`);
+  log.info(`Pi model written to ${configPath}`);
+}
+
+/**
  * Serialize a key/value map back to `KEY=value` lines. Values with whitespace,
  * `#`, `"`, `'`, `\n`, or `\r` are double-quoted with `\\`, `"`, `\n`, `\r`
  * escaped so round-tripping through dotenv.parse is stable.
  */
 export function serializeEnv(entries: Record<string, string>): string {
   const lines: string[] = [];
-  for (const [key, rawValue] of Object.entries(entries)) {
-    const value = rawValue;
+  for (const [key, value] of Object.entries(entries)) {
     const needsQuoting = /[\s#"'\n\r]/.test(value) || value === '';
     if (needsQuoting) {
       const escaped = value
@@ -1677,6 +1936,7 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
     const summary = [
       `Claude: ${existing.hasClaude ? 'Configured' : 'Not configured'}`,
       `Codex: ${existing.hasCodex ? 'Configured' : 'Not configured'}`,
+      `Pi: ${existing.hasPi ? 'Configured' : 'Not configured'}`,
       `Platforms: ${configuredPlatforms.length > 0 ? configuredPlatforms.join(', ') : 'None'}`,
     ].join('\n');
 
@@ -1713,6 +1973,7 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
       ai: {
         claude: existing?.hasClaude ?? false,
         codex: existing?.hasCodex ?? false,
+        pi: existing?.hasPi ?? false,
         defaultAssistant: getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude',
       },
       platforms: {
@@ -1795,6 +2056,21 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
 
   s.stop('Configuration written');
 
+  // Pi model ref lives in ~/.archon/config.yaml, not the .env file, because
+  // it's a structured user preference rather than a secret.
+  if (config.ai.pi && config.ai.piModel) {
+    try {
+      writeHomePiModelConfig(config.ai.piModel);
+    } catch (err) {
+      // Non-fatal: env write already succeeded, so the user can hand-edit
+      // ~/.archon/config.yaml later. Surface the error so it's not silent.
+      const e = err as NodeJS.ErrnoException;
+      const code = e.code ? ` (${e.code})` : '';
+      log.warning(`Could not write Pi model config: ${e.message}${code}`);
+      getLog().warn({ err: e }, 'setup.pi_model_config_write_failed');
+    }
+  }
+
   // Tell the operator exactly what happened — especially that <repo>/.env was
   // NOT touched, because prior versions wrote there and this is the biggest
   // behavior change for returning users.
@@ -1833,19 +2109,18 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
       process.exit(0);
     }
 
-    const skillTarget = skillTargetRaw;
     s.start('Installing Archon skill...');
     try {
-      await copyArchonSkill(skillTarget);
+      await copyArchonSkill(skillTargetRaw);
     } catch (err) {
       s.stop('Archon skill installation failed');
       cancel(`Could not install skill: ${(err as NodeJS.ErrnoException).message}`);
       process.exit(1);
     }
     s.stop('Archon skill installed');
-    skillInstalledPath = join(skillTarget, '.claude', 'skills', 'archon');
+    skillInstalledPath = join(skillTargetRaw, '.claude', 'skills', 'archon');
 
-    const bootstrapResult = bootstrapProjectConfig(skillTarget);
+    const bootstrapResult = bootstrapProjectConfig(skillTargetRaw);
     if (bootstrapResult.state === 'created') {
       log.info(`Created project config: ${bootstrapResult.path}`);
       projectConfigCreatedPath = bootstrapResult.path;
@@ -1908,6 +2183,9 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
   }
   if (config.ai.codex && config.ai.codexTokens) {
     aiConfigured.push('Codex');
+  }
+  if (config.ai.pi) {
+    aiConfigured.push(config.ai.piApiKey ? `Pi (${config.ai.piApiKeyEnvVar})` : 'Pi');
   }
 
   const summaryLines = [

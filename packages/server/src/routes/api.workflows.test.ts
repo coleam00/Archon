@@ -1,8 +1,8 @@
-import { describe, test, expect, mock } from 'bun:test';
+import { describe, test, expect, mock, spyOn } from 'bun:test';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
-import { mkdir, rm, writeFile } from 'fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { validationErrorHook } from './openapi-defaults';
@@ -13,7 +13,7 @@ function createTestApp(): OpenAPIHono {
   return new OpenAPIHono({ defaultHook: validationErrorHook });
 }
 
-const mockDiscoverWorkflows = mock(async (_cwd: string) => ({
+const mockDiscoverWorkflows = mock(async (_cwd: string | null) => ({
   workflows: [makeTestWorkflowWithSource({ name: 'deploy', description: 'Deploy app' }, 'bundled')],
   errors: [
     { filename: '/tmp/.archon/workflows/bad.md', error: 'invalid', errorType: 'parse_error' },
@@ -119,6 +119,30 @@ describe('GET /api/workflows', () => {
     expect(mockDiscoverWorkflows).toHaveBeenCalledWith('/tmp/project', expect.any(Function));
     expect(body.errors).toBeDefined();
     expect(Array.isArray(body.errors)).toBe(true);
+  });
+
+  test('falls back to null cwd when no cwd query and no codebases registered', async () => {
+    const app = createTestApp();
+    registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+    // No registered codebases → handler should call discovery with null cwd
+    // so bundled + home-scoped workflows still surface.
+    mockListCodebases.mockImplementationOnce(async () => []);
+
+    const response = await app.request('/api/workflows');
+    expect(response.status).toBe(200);
+
+    const body = (await response.json()) as {
+      workflows: Array<{ workflow: { name: string }; source: string }>;
+    };
+
+    // Discovery is invoked with null (not skipped), so bundled defaults can surface.
+    expect(mockDiscoverWorkflows).toHaveBeenLastCalledWith(null, expect.any(Function));
+    // The mocked discovery returns one bundled workflow regardless of cwd, so the
+    // response is non-empty — proving the handler no longer short-circuits on no-cwd.
+    expect(Array.isArray(body.workflows)).toBe(true);
+    expect(body.workflows.length).toBeGreaterThan(0);
+    expect(body.workflows[0]?.source).toBe('bundled');
   });
 });
 
@@ -249,6 +273,126 @@ describe('GET /api/workflows/:name', () => {
       expect(body.filename).toBe('custom.yaml');
       expect(body.workflow).toBeDefined();
     } finally {
+      await rm(testDir, { recursive: true, force: true });
+    }
+  });
+
+  test('returns home-scoped workflow with source:global when project/bundled miss', async () => {
+    const tmpHome = join(tmpdir(), `wf-home-test-${Date.now()}`);
+    const homeWorkflowsDir = join(tmpHome, 'workflows');
+    await mkdir(homeWorkflowsDir, { recursive: true });
+    await writeFile(
+      join(homeWorkflowsDir, 'home-only.yaml'),
+      'name: home-only\ndescription: Home-scoped workflow\nnodes:\n  - id: plan\n    command: plan\n'
+    );
+
+    const prevArchonHome = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = tmpHome;
+    try {
+      const app = createTestApp();
+      registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+      // No registered codebase → skips project-scope, falls through to home-scope
+      mockListCodebases.mockImplementationOnce(async () => []);
+      const response = await app.request('/api/workflows/home-only');
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        source: string;
+        filename: string;
+        workflow: unknown;
+      };
+      expect(body.source).toBe('global');
+      expect(body.filename).toBe('home-only.yaml');
+      expect(body.workflow).toBeDefined();
+    } finally {
+      if (prevArchonHome === undefined) {
+        delete process.env.ARCHON_HOME;
+      } else {
+        process.env.ARCHON_HOME = prevArchonHome;
+      }
+      await rm(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  test('returns 500 when home-scoped workflow file is malformed YAML', async () => {
+    const tmpHome = join(tmpdir(), `wf-home-invalid-test-${Date.now()}`);
+    const homeWorkflowsDir = join(tmpHome, 'workflows');
+    await mkdir(homeWorkflowsDir, { recursive: true });
+    await writeFile(join(homeWorkflowsDir, 'broken.yaml'), 'invalid: [yaml');
+
+    const prevArchonHome = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = tmpHome;
+    try {
+      const app = createTestApp();
+      registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+      // No registered codebase → project scope skipped → home scope attempted.
+      mockListCodebases.mockImplementationOnce(async () => []);
+      // Force parseWorkflow to surface a parse error for the home file.
+      mockParseWorkflow.mockReturnValueOnce({
+        workflow: null,
+        error: { filename: 'broken.yaml', error: 'unexpected token', errorType: 'parse_error' },
+      });
+
+      const response = await app.request('/api/workflows/broken');
+      expect(response.status).toBe(500);
+      const body = (await response.json()) as { error: string };
+      expect(body.error).toContain('Home workflow file is invalid');
+    } finally {
+      if (prevArchonHome === undefined) {
+        delete process.env.ARCHON_HOME;
+      } else {
+        process.env.ARCHON_HOME = prevArchonHome;
+      }
+      await rm(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  test('project-scope shadows home-scope when same filename exists in both', async () => {
+    const testDir = join(tmpdir(), `wf-shadow-test-${Date.now()}`);
+    const projectDir = join(testDir, '.archon', 'workflows');
+    const tmpHome = join(testDir, 'home');
+    const homeWorkflowsDir = join(tmpHome, 'workflows');
+    await mkdir(projectDir, { recursive: true });
+    await mkdir(homeWorkflowsDir, { recursive: true });
+    await writeFile(
+      join(projectDir, 'shared.yaml'),
+      'name: shared\ndescription: project version\nnodes:\n  - id: plan\n    command: plan\n'
+    );
+    await writeFile(
+      join(homeWorkflowsDir, 'shared.yaml'),
+      'name: shared\ndescription: home version\nnodes:\n  - id: plan\n    command: plan\n'
+    );
+
+    // Spy on readFile to prove home-scope is not even attempted when project
+    // hit succeeds. `parseWorkflow` is globally mocked, so asserting on
+    // `body.source` alone can't catch a regression that opens both files.
+    const fsPromises = await import('fs/promises');
+    const readFileSpy = spyOn(fsPromises, 'readFile');
+
+    const prevArchonHome = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = tmpHome;
+    try {
+      const app = createTestApp();
+      registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+      mockListCodebases.mockImplementationOnce(async () => [{ default_cwd: testDir }]);
+      const response = await app.request(`/api/workflows/shared?cwd=${testDir}`);
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { source: string };
+      // Project must shadow home — home lookup should not even be attempted.
+      expect(body.source).toBe('project');
+
+      const homePath = join(homeWorkflowsDir, 'shared.yaml');
+      const homeWasRead = readFileSpy.mock.calls.some(args => String(args[0]) === homePath);
+      expect(homeWasRead).toBe(false);
+    } finally {
+      readFileSpy.mockRestore();
+      if (prevArchonHome === undefined) {
+        delete process.env.ARCHON_HOME;
+      } else {
+        process.env.ARCHON_HOME = prevArchonHome;
+      }
       await rm(testDir, { recursive: true, force: true });
     }
   });
@@ -405,6 +549,65 @@ describe('PUT /api/workflows/:name', () => {
       await rm(testDir, { recursive: true, force: true });
     }
   });
+
+  test('saves valid workflow to ARCHON_HOME workflows when source=global', async () => {
+    const testArchonHome = join(tmpdir(), `archon-home-put-global-${Date.now()}`);
+    process.env.ARCHON_HOME = testArchonHome;
+
+    try {
+      const app = createTestApp();
+      registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+      const response = await app.request('/api/workflows/global-workflow?source=global', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          definition: {
+            name: 'global-workflow',
+            description: 'Global workflow',
+            nodes: [{ id: 'plan', command: 'plan' }],
+          },
+        }),
+      });
+
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        workflow: { name: string };
+        filename: string;
+        source: string;
+      };
+      expect(body.workflow).toBeDefined();
+      expect(body.filename).toBe('global-workflow.yaml');
+      expect(body.source).toBe('global');
+
+      const saved = await readFile(
+        join(testArchonHome, 'workflows', 'global-workflow.yaml'),
+        'utf-8'
+      );
+      expect(saved).toContain('name: global-workflow');
+    } finally {
+      delete process.env.ARCHON_HOME;
+      await rm(testArchonHome, { recursive: true, force: true });
+    }
+  });
+
+  test('returns 400 when source is not project or global', async () => {
+    const app = createTestApp();
+    registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+    const response = await app.request('/api/workflows/some-workflow?source=bundled', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        definition: {
+          name: 'some-workflow',
+          description: 'x',
+          nodes: [{ id: 'a', command: 'a' }],
+        },
+      }),
+    });
+    expect(response.status).toBe(400);
+  });
 });
 
 describe('DELETE /api/workflows/:name', () => {
@@ -470,6 +673,52 @@ describe('DELETE /api/workflows/:name', () => {
     } finally {
       await rm(testDir, { recursive: true, force: true });
     }
+  });
+
+  test('removes home-scoped workflow file when source=global', async () => {
+    const testArchonHome = join(tmpdir(), `archon-home-del-global-${Date.now()}`);
+    const workflowDir = join(testArchonHome, 'workflows');
+    await mkdir(workflowDir, { recursive: true });
+    await writeFile(
+      join(workflowDir, 'home-to-delete.yaml'),
+      'name: home-to-delete\ndescription: y\nnodes:\n  - id: z\n    command: z\n'
+    );
+
+    const prevArchonHome = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = testArchonHome;
+    try {
+      const app = createTestApp();
+      registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+      const response = await app.request('/api/workflows/home-to-delete?source=global', {
+        method: 'DELETE',
+      });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { deleted: boolean; name: string };
+      expect(body.deleted).toBe(true);
+      expect(body.name).toBe('home-to-delete');
+
+      // Confirm the file is gone from the home-scoped location.
+      const fsPromises = await import('fs/promises');
+      await expect(fsPromises.access(join(workflowDir, 'home-to-delete.yaml'))).rejects.toThrow();
+    } finally {
+      if (prevArchonHome === undefined) {
+        delete process.env.ARCHON_HOME;
+      } else {
+        process.env.ARCHON_HOME = prevArchonHome;
+      }
+      await rm(testArchonHome, { recursive: true, force: true });
+    }
+  });
+
+  test('returns 400 when source is not project or global', async () => {
+    const app = createTestApp();
+    registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+    const response = await app.request('/api/workflows/some-workflow?source=bundled', {
+      method: 'DELETE',
+    });
+    expect(response.status).toBe(400);
   });
 });
 

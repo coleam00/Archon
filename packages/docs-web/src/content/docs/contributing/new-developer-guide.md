@@ -652,7 +652,7 @@ Each conversation gets its own isolated copy of the repo:
 
 ## Next Steps
 
-1. **Read**: [Getting Started](/getting-started/) - Set up your first instance
+1. **Read**: [Getting Started](/getting-started/overview/) - Set up your first instance
 2. **Explore**: `.archon/workflows/` - See example workflows
 3. **Customize**: `.archon/commands/` - Create your own prompts
 4. **Configure**: `.archon/config.yaml` - Tweak settings

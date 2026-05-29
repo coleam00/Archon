@@ -21,12 +21,23 @@ mock.module('@archon/paths', () => ({
 import { evaluateCondition } from './condition-evaluator';
 import type { NodeOutput } from './schemas';
 
+/**
+ * Build a NodeOutput fixture for condition tests.
+ * Omits `structuredOutput` when undefined so the field's `'structuredOutput' in nodeOutput`
+ * presence check in resolveOutputRef matches real producer behavior (only Pi/Codex/Claude
+ * paths populate it; older providers leave it off).
+ */
 function makeOutput(
   output: string,
-  state: 'completed' | 'failed' | 'skipped' = 'completed'
+  state: 'completed' | 'failed' | 'skipped' = 'completed',
+  structuredOutput?: unknown
 ): NodeOutput {
-  if (state === 'failed') return { state, output, error: 'error' };
-  return { state, output };
+  if (state === 'failed')
+    return structuredOutput !== undefined
+      ? { state, output, error: 'error', structuredOutput }
+      : { state, output, error: 'error' };
+  if (state === 'skipped') return { state, output };
+  return structuredOutput !== undefined ? { state, output, structuredOutput } : { state, output };
 }
 
 describe('evaluateCondition', () => {
@@ -357,5 +368,259 @@ describe('evaluateCondition', () => {
     const res = evaluateCondition("$n.output == 'A||B'", outputs);
     expect(res.result).toBe(true);
     expect(res.parsed).toBe(true);
+  });
+
+  // --- structuredOutput preference (Pi/Minimax fence-wrapped JSON, Codex/Claude output_format) ---
+
+  it('structuredOutput: prefers structuredOutput.field over JSON.parse(output)', () => {
+    // Pi-shape: prose output with structuredOutput populated by tryParseStructuredOutput.
+    // If we fell back to JSON.parse(output) we would read 'WRONG'; structuredOutput says 'BUG'.
+    const outputs = new Map([
+      [
+        'classify',
+        makeOutput('Here is the classification: {"type":"WRONG"}', 'completed', {
+          type: 'BUG',
+          confidence: 0.9,
+        }),
+      ],
+    ]);
+    expect(evaluateCondition("$classify.output.type == 'BUG'", outputs).result).toBe(true);
+    expect(evaluateCondition("$classify.output.type == 'WRONG'", outputs).result).toBe(false);
+  });
+
+  it('structuredOutput: falls back to JSON.parse(output) when structuredOutput is absent', () => {
+    // Claude/Codex backward-compat: no structuredOutput on the NodeOutput, JSON in `output`.
+    const outputs = new Map([['classify', makeOutput(JSON.stringify({ type: 'BUG' }))]]);
+    expect(evaluateCondition("$classify.output.type == 'BUG'", outputs).result).toBe(true);
+  });
+
+  it('structuredOutput: coerces numeric field to string', () => {
+    const outputs = new Map([['score', makeOutput('', 'completed', { confidence: 0.95 })]]);
+    expect(evaluateCondition("$score.output.confidence == '0.95'", outputs).result).toBe(true);
+    expect(evaluateCondition("$score.output.confidence >= '0.9'", outputs).result).toBe(true);
+  });
+
+  it('structuredOutput: coerces boolean field to string', () => {
+    const outputs = new Map([['n', makeOutput('', 'completed', { valid: true })]]);
+    expect(evaluateCondition("$n.output.valid == 'true'", outputs).result).toBe(true);
+  });
+
+  it('structuredOutput: JSON-stringifies object/array fields', () => {
+    const outputs = new Map([
+      ['n', makeOutput('', 'completed', { items: ['a', 'b'], nested: { x: 1 } })],
+    ]);
+    const expectedItems = JSON.stringify(['a', 'b']);
+    expect(evaluateCondition("$n.output.items == '" + expectedItems + "'", outputs).result).toBe(
+      true
+    );
+    const expectedNested = JSON.stringify({ x: 1 });
+    expect(evaluateCondition("$n.output.nested == '" + expectedNested + "'", outputs).result).toBe(
+      true
+    );
+  });
+
+  it('structuredOutput: null field value JSON-stringifies to "null"', () => {
+    // Matches existing JSON.parse-path behavior: typeof null === 'object' so null → "null".
+    const outputs = new Map([['n', makeOutput('', 'completed', { type: null })]]);
+    expect(evaluateCondition("$n.output.type == 'null'", outputs).result).toBe(true);
+  });
+
+  it('structuredOutput: works with empty output text (Pi-only-structured case)', () => {
+    // structuredOutput populated, output text empty — dot-access should still work.
+    const outputs = new Map([['classify', makeOutput('', 'completed', { type: 'BUG' })]]);
+    expect(evaluateCondition("$classify.output.type == 'BUG'", outputs).result).toBe(true);
+  });
+
+  it('structuredOutput: null at top level falls through to JSON.parse fallback', () => {
+    // structuredOutput === null is not an object → must skip the preference branch and use output.
+    const outputs = new Map([
+      ['n', makeOutput(JSON.stringify({ type: 'BUG' }), 'completed', null)],
+    ]);
+    expect(evaluateCondition("$n.output.type == 'BUG'", outputs).result).toBe(true);
+  });
+
+  it('structuredOutput: top-level array falls through to JSON.parse fallback', () => {
+    // structuredOutput is array → ambiguous semantics for `.field` access, fall through.
+    const outputs = new Map([
+      ['n', makeOutput(JSON.stringify({ type: 'BUG' }), 'completed', [1, 2, 3])],
+    ]);
+    expect(evaluateCondition("$n.output.type == 'BUG'", outputs).result).toBe(true);
+  });
+
+  it('structuredOutput: primitive at top level falls through to JSON.parse fallback', () => {
+    const outputs = new Map([
+      ['n', makeOutput(JSON.stringify({ type: 'BUG' }), 'completed', 'just-a-string')],
+    ]);
+    expect(evaluateCondition("$n.output.type == 'BUG'", outputs).result).toBe(true);
+  });
+
+  it('structuredOutput: missing field resolves to empty string (no JSON.parse retry)', () => {
+    // When structuredOutput is a usable object but the field is missing, we do NOT retry
+    // JSON.parse(output) — the structuredOutput is authoritative.
+    const outputs = new Map([
+      [
+        'classify',
+        makeOutput(JSON.stringify({ type: 'BUG' }), 'completed', {
+          /* no `type` key */ confidence: 0.9,
+        }),
+      ],
+    ]);
+    expect(evaluateCondition("$classify.output.type == ''", outputs).result).toBe(true);
+    expect(evaluateCondition("$classify.output.type == 'BUG'", outputs).result).toBe(false);
+  });
+
+  it('structuredOutput: unfielded $node.output reference still uses output text', () => {
+    // The preference applies to dot-notation only. Bare `$n.output` falls back to output text.
+    const outputs = new Map([['n', makeOutput('prose text', 'completed', { type: 'BUG' })]]);
+    expect(evaluateCondition("$n.output == 'prose text'", outputs).result).toBe(true);
+  });
+
+  // --- #1673: condition_json_parse_failed must surface as parsed:false ---
+
+  it('returns parsed:false when output text is not valid JSON and field is used', () => {
+    const outputs = new Map([
+      ['gate', makeOutput('Let me think...\n\nSure, here is my analysis.')],
+    ]);
+    const { result, parsed } = evaluateCondition("$gate.output.verdict == 'review'", outputs);
+    expect(result).toBe(false);
+    expect(parsed).toBe(false);
+  });
+
+  it('strips markdown fences and parses JSON inside them', () => {
+    const fenced = 'Let me analyze...\n\n```json\n{"verdict": "review"}\n```\n';
+    const outputs = new Map([['gate', makeOutput(fenced)]]);
+    expect(evaluateCondition("$gate.output.verdict == 'review'", outputs).result).toBe(true);
+    expect(evaluateCondition("$gate.output.verdict == 'review'", outputs).parsed).toBe(true);
+  });
+
+  it('strips plain ``` fences (no language tag) and parses JSON', () => {
+    const fenced = '```\n{"verdict": "approve"}\n```';
+    const outputs = new Map([['gate', makeOutput(fenced)]]);
+    expect(evaluateCondition("$gate.output.verdict == 'approve'", outputs).result).toBe(true);
+  });
+
+  it('parsed:false propagates through compound AND expressions', () => {
+    const outputs = new Map([
+      ['a', makeOutput('{"ok": "yes"}')],
+      ['b', makeOutput('not json at all')],
+    ]);
+    const { result, parsed } = evaluateCondition(
+      "$a.output.ok == 'yes' && $b.output.status == 'done'",
+      outputs
+    );
+    expect(result).toBe(false);
+    expect(parsed).toBe(false);
+  });
+
+  // --- shorthand path ($nodeId.field) ---
+
+  it('shorthand path: $node.field is equivalent to $node.output.field', () => {
+    const outputs = new Map([['classify', makeOutput(JSON.stringify({ type: 'BUG' }))]]);
+    expect(evaluateCondition("$classify.type == 'BUG'", outputs).result).toBe(true);
+    expect(evaluateCondition("$classify.type == 'FEATURE'", outputs).result).toBe(false);
+  });
+
+  it('shorthand path: matches the canonical .output.field form exactly', () => {
+    const outputs = new Map([['classify', makeOutput(JSON.stringify({ type: 'BUG' }))]]);
+    expect(evaluateCondition("$classify.type == 'BUG'", outputs)).toEqual(
+      evaluateCondition("$classify.output.type == 'BUG'", outputs)
+    );
+  });
+
+  it('shorthand path: resolves structuredOutput like the canonical form', () => {
+    const outputs = new Map([['classify', makeOutput('prose', 'completed', { type: 'BUG' })]]);
+    expect(evaluateCondition("$classify.type == 'BUG'", outputs).result).toBe(true);
+  });
+
+  it('shorthand path: works with numeric operators', () => {
+    const outputs = new Map([['score', makeOutput(JSON.stringify({ confidence: 0.95 }))]]);
+    expect(evaluateCondition("$score.confidence >= '0.9'", outputs).result).toBe(true);
+    expect(evaluateCondition("$score.confidence >= '0.99'", outputs).result).toBe(false);
+  });
+
+  it('shorthand path: rejects a sub-field ($node.field.subfield) fail-closed', () => {
+    const outputs = new Map([['n', makeOutput(JSON.stringify({ a: { b: 'x' } }))]]);
+    const res = evaluateCondition("$n.a.b == 'x'", outputs);
+    expect(res.result).toBe(false);
+    expect(res.parsed).toBe(false);
+  });
+
+  it('shorthand path: absent field resolves to empty string like the canonical form', () => {
+    // An absent shorthand field is not a parse error — it resolves to '' (parsed: true),
+    // mirroring the `$node.output.field` empty-string semantics.
+    const outputs = new Map([['n', makeOutput(JSON.stringify({ type: 'BUG' }))]]);
+    const res = evaluateCondition("$n.missing == 'x'", outputs);
+    expect(res.result).toBe(false);
+    expect(res.parsed).toBe(true);
+    expect(evaluateCondition("$n.missing == ''", outputs).result).toBe(true);
+  });
+
+  // --- unquoted numeric/boolean RHS ---
+
+  it('unquoted RHS: integer comparison with ==', () => {
+    const outputs = new Map([['t', makeOutput(JSON.stringify({ exit_code: 0 }))]]);
+    expect(evaluateCondition('$t.exit_code == 0', outputs).result).toBe(true);
+    expect(evaluateCondition('$t.exit_code == 1', outputs).result).toBe(false);
+  });
+
+  it('unquoted RHS: negative integer comparison', () => {
+    const outputs = new Map([['t', makeOutput(JSON.stringify({ delta: -3 }))]]);
+    expect(evaluateCondition('$t.delta == -3', outputs).result).toBe(true);
+  });
+
+  it('unquoted RHS: integer with numeric operators', () => {
+    const outputs = new Map([['t', makeOutput(JSON.stringify({ exit_code: 0 }))]]);
+    expect(evaluateCondition('$t.exit_code > 0', outputs).result).toBe(false);
+    expect(evaluateCondition('$t.exit_code >= 0', outputs).result).toBe(true);
+    expect(evaluateCondition('$t.exit_code < 1', outputs).result).toBe(true);
+  });
+
+  it('unquoted RHS: decimal comparison', () => {
+    const outputs = new Map([['score', makeOutput(JSON.stringify({ confidence: 0.95 }))]]);
+    expect(evaluateCondition('$score.confidence >= 0.9', outputs).result).toBe(true);
+    expect(evaluateCondition('$score.confidence == 0.95', outputs).result).toBe(true);
+  });
+
+  it('unquoted RHS: boolean true/false', () => {
+    const outputs = new Map([['n', makeOutput(JSON.stringify({ passed: true }))]]);
+    expect(evaluateCondition('$n.passed == true', outputs).result).toBe(true);
+    expect(evaluateCondition('$n.passed == false', outputs).result).toBe(false);
+    expect(evaluateCondition('$n.passed != false', outputs).result).toBe(true);
+  });
+
+  it('unquoted RHS: works on the canonical .output.field form too', () => {
+    const outputs = new Map([['t', makeOutput(JSON.stringify({ exit_code: 0 }))]]);
+    expect(evaluateCondition('$t.output.exit_code == 0', outputs).result).toBe(true);
+  });
+
+  it('unquoted RHS: parsed:true for a valid unquoted expression', () => {
+    const outputs = new Map([['t', makeOutput(JSON.stringify({ exit_code: 0 }))]]);
+    expect(evaluateCondition('$t.exit_code == 0', outputs).parsed).toBe(true);
+  });
+
+  it('mixed quoted + unquoted inside an AND compound', () => {
+    const outputs = new Map([
+      ['classify', makeOutput(JSON.stringify({ type: 'BUG' }))],
+      ['test', makeOutput(JSON.stringify({ exit_code: 0 }))],
+    ]);
+    expect(
+      evaluateCondition("$classify.type == 'BUG' && $test.exit_code == 0", outputs).result
+    ).toBe(true);
+    expect(
+      evaluateCondition("$classify.type == 'BUG' && $test.exit_code == 1", outputs).result
+    ).toBe(false);
+  });
+
+  it('mixed quoted + unquoted inside an OR compound', () => {
+    const outputs = new Map([
+      ['classify', makeOutput(JSON.stringify({ type: 'FEATURE' }))],
+      ['test', makeOutput(JSON.stringify({ passed: true }))],
+    ]);
+    expect(
+      evaluateCondition("$classify.type == 'BUG' || $test.passed == true", outputs).result
+    ).toBe(true);
+    expect(
+      evaluateCondition("$classify.type == 'BUG' || $test.passed == false", outputs).result
+    ).toBe(false);
   });
 });

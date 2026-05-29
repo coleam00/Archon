@@ -35,6 +35,9 @@ export {
   getWebDistDir,
 } from './archon-paths';
 
+// Env loader
+export { loadArchonEnv, isVerboseBoot } from './env-loader';
+
 // Logger
 export { createLogger, setLogLevel, getLogLevel, rootLogger } from './logger';
 export type { Logger } from './logger';
@@ -52,5 +55,15 @@ export {
 export type { UpdateCheckResult } from './update-check';
 
 // Anonymous telemetry
-export { captureWorkflowInvoked, shutdownTelemetry, isTelemetryDisabled } from './telemetry';
-export type { WorkflowInvokedProperties } from './telemetry';
+export {
+  captureWorkflowInvoked,
+  shutdownTelemetry,
+  isTelemetryDisabled,
+  getTelemetryStatus,
+  resetTelemetryId,
+} from './telemetry';
+export type {
+  WorkflowInvokedProperties,
+  TelemetryStatus,
+  TelemetryDisabledReason,
+} from './telemetry';

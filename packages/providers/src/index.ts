@@ -43,13 +43,32 @@ export { parseCodexConfig, type CodexProviderDefaults } from './codex/config';
 
 // Utilities (needed by consumers)
 export { resetCodexSingleton } from './codex/provider';
+export { loadMcpConfig, type LoadedMcpConfig } from './mcp/config';
 export { resolveCodexBinaryPath, fileExists as codexFileExists } from './codex/binary-resolver';
 export { resolveClaudeBinaryPath, fileExists as claudeFileExists } from './claude/binary-resolver';
 
 // Community providers
+export {
+  OpencodeProvider,
+  parseOpencodeConfig,
+  registerOpencodeProvider,
+  type OpencodeProviderDefaults,
+} from './community/opencode';
 export {
   PiProvider,
   parsePiConfig,
   registerPiProvider,
   type PiProviderDefaults,
 } from './community/pi';
+
+export {
+  CopilotProvider,
+  parseCopilotConfig,
+  registerCopilotProvider,
+  resetCopilotSingleton,
+  type CopilotProviderDefaults,
+} from './community/copilot';
+export {
+  resolveCopilotBinaryPath,
+  fileExists as copilotFileExists,
+} from './community/copilot/binary-resolver';

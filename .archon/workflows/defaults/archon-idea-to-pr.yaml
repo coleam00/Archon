@@ -52,6 +52,7 @@ nodes:
     command: archon-implement-tasks
     depends_on: [confirm-plan]
     context: fresh
+    provider: claude
     model: opus[1m]
 
   # ═══════════════════════════════════════════════════════════════════

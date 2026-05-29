@@ -1,6 +1,6 @@
 import { createLogger } from '@archon/paths';
-import type { AgentSession, AgentSessionEvent } from '@mariozechner/pi-coding-agent';
-import type { AssistantMessage, Usage } from '@mariozechner/pi-ai';
+import type { AgentSession, AgentSessionEvent } from '@earendil-works/pi-coding-agent';
+import type { AssistantMessage, Usage } from '@earendil-works/pi-ai';
 
 import type { MessageChunk, TokenUsage } from '../../types';
 
@@ -124,6 +124,27 @@ function isAssistantMessage(m: unknown): m is AssistantMessage {
 }
 
 /**
+ * Extract the concatenated text content of the last assistant message from a
+ * Pi session transcript (the fully-assembled version from agent_end.messages).
+ * Used by bridgeSession to detect streaming truncation: if the assembled text
+ * is longer than what was delivered via text_delta events, the gap is emitted
+ * as a corrective assistant chunk before the result chunk.
+ * Returns undefined when no assistant message is present.
+ */
+function extractLastAssistantText(messages: readonly unknown[]): string | undefined {
+  const last = [...messages].reverse().find(isAssistantMessage);
+  if (!last) return undefined;
+  // AssistantMessage.content is (TextContent | ThinkingContent | ToolCall)[].
+  // Filter to text blocks only; thinking and tool-call blocks are not streamed
+  // as assistant chunks so they are excluded from the gap calculation.
+  const blocks = last.content as { type: string; text?: string }[];
+  return blocks
+    .filter(b => b.type === 'text')
+    .map(b => b.text ?? '')
+    .join('');
+}
+
+/**
  * Build the terminal `result` chunk from the final `agent_end` event. Pulls
  * usage/stopReason/error from the last assistant message in the returned
  * transcript. When the agent ended in error, surfaces it as `isError: true`.
@@ -158,58 +179,23 @@ export function buildResultChunk(messages: readonly unknown[]): MessageChunk {
         }
       : {}),
   };
+  if (isError) {
+    // Intentional design: error chunks are yielded, not thrown. isError:true in the chunk
+    // is the signal — callers (bridgeSession, dag-executor) check result.isError to classify
+    // failures and still receive full token/stopReason context from the same chunk.
+    getLog().error(
+      { stopReason: last.stopReason, errorMessage: last.errorMessage },
+      'pi.result_chunk_error'
+    );
+  }
   return chunk;
 }
 
-/**
- * Attempt to parse a Pi assistant transcript as the structured-output JSON
- * requested via `outputFormat`. Handles three common model failure modes:
- *  - trailing/leading whitespace (always stripped)
- *  - markdown code fences (```json ... ``` or bare ``` ... ```) that models
- *    emit despite the "no code fences" instruction in the prompt
- *  - prose preamble followed by a single trailing JSON object — pattern
- *    observed on Minimax M2.7 ("Now I have all the inputs. Let me evaluate
- *    the three gates: ... {...}"). Reasoning models tend to "think out loud"
- *    before emitting structured output despite explicit JSON-only prompts.
- *
- * Returns the parsed value on success, `undefined` on any failure. Callers
- * treat `undefined` as "structured output unavailable" and degrade via the
- * dag-executor's existing missing-structured-output warning.
- */
-export function tryParseStructuredOutput(text: string): unknown {
-  const trimmed = text.trim();
-  if (trimmed.length === 0) return undefined;
-  // Strip ```json / ``` fences if present. Match only at boundaries so we
-  // don't mangle JSON strings that legitimately contain backticks.
-  const cleaned = trimmed
-    .replace(/^```(?:json)?\s*\n?/i, '')
-    .replace(/\n?\s*```\s*$/, '')
-    .trim();
-
-  // Tier 1: clean parse — fast path for fully compliant outputs.
-  try {
-    return JSON.parse(cleaned);
-  } catch {
-    // fall through
-  }
-
-  // Tier 2: scan forward to the FIRST `{` and parse from there. Recovers the
-  // preamble-then-JSON pattern reasoning models emit. A backward scan from
-  // the last `{` was considered but rejected: it silently returns the wrong
-  // object when the prose contains a brace-bearing example after the real
-  // payload (e.g. `{"actual":1}\nFor example: {"x":2}` would yield `{x:2}`),
-  // breaking the conservative-failure contract callers rely on.
-  const firstBrace = cleaned.indexOf('{');
-  if (firstBrace > 0) {
-    try {
-      return JSON.parse(cleaned.slice(firstBrace));
-    } catch {
-      // fall through
-    }
-  }
-
-  return undefined;
-}
+// Structured-output parsing is shared across providers. Import once for local
+// use and re-export so existing callers and tests keep their import path
+// stable; new providers should import from `../../shared/structured-output`.
+import { tryParseStructuredOutput } from '../../shared/structured-output';
+export { tryParseStructuredOutput };
 
 /**
  * Pure mapper from Pi's `AgentSessionEvent` → zero-or-more Archon `MessageChunk`s.
@@ -321,10 +307,28 @@ export async function* bridgeSession(
   // passes through untouched.
   const wantsStructured = jsonSchema !== undefined;
   let assistantBuffer = '';
+  // Track text streamed via text_delta for the current assistant turn.
+  // Reset at each turn_start so only the final turn's text is compared
+  // against finalAssembledText (see streaming-tail completion below).
+  let currentTurnText = '';
+  // Assembled text of the final assistant message from agent_end.messages.
+  // Set synchronously inside the subscribe callback before the result chunk
+  // is pushed to the queue, so it is always ready when the yield loop
+  // processes the result.
+  let finalAssembledText: string | undefined;
 
   const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
     try {
+      if (event.type === 'turn_start') {
+        currentTurnText = '';
+      }
+      if (event.type === 'agent_end') {
+        finalAssembledText = extractLastAssistantText(event.messages);
+      }
       for (const chunk of mapPiEvent(event)) {
+        if (chunk.type === 'assistant') {
+          currentTurnText += chunk.content;
+        }
         if (wantsStructured && chunk.type === 'assistant') {
           assistantBuffer += chunk.content;
         }
@@ -370,6 +374,33 @@ export async function* bridgeSession(
       // it unconditionally and let the caller decide whether resume is
       // meaningful (capability-gated at the registry level).
       if (item.chunk.type === 'result') {
+        // Streaming tail completion: Pi occasionally fails to flush the last
+        // characters of an assistant turn as text_delta events, leaving them
+        // present only in agent_end.messages. Detect the gap and emit the
+        // missing suffix as a corrective assistant chunk so the orchestrator's
+        // allMessages accumulator receives the full command text.
+        // Condition: assembled text is strictly longer, starts with what was
+        // streamed (ensuring we emit an extension, not a replacement), and is
+        // not undefined (no assistant message in transcript — treated as clean).
+        if (
+          finalAssembledText !== undefined &&
+          finalAssembledText.length > currentTurnText.length &&
+          finalAssembledText.startsWith(currentTurnText)
+        ) {
+          const tail = finalAssembledText.slice(currentTurnText.length);
+          yield { type: 'assistant', content: tail };
+          if (wantsStructured) {
+            assistantBuffer += tail;
+          }
+          getLog().warn(
+            {
+              streamedLen: currentTurnText.length,
+              assembledLen: finalAssembledText.length,
+              tailLen: tail.length,
+            },
+            'pi.event-bridge.streaming_tail_completed'
+          );
+        }
         let terminal: MessageChunk = item.chunk;
         if (session.sessionId) {
           terminal = { ...terminal, sessionId: session.sessionId };

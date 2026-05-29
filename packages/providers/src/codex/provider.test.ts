@@ -1,4 +1,7 @@
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { mkdtemp, rm, writeFile } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { createMockLogger } from '../test/mocks/logger';
 
 const mockLogger = createMockLogger();
@@ -72,7 +75,7 @@ describe('CodexProvider', () => {
       const caps = client.getCapabilities();
       expect(caps).toEqual({
         sessionResume: true,
-        mcp: false,
+        mcp: true,
         hooks: false,
         skills: false,
         agents: false,
@@ -683,7 +686,7 @@ describe('CodexProvider', () => {
       );
     });
 
-    test('passes abortSignal as signal in TurnOptions', async () => {
+    test('passes a per-attempt AbortSignal in TurnOptions when caller provides one', async () => {
       mockRunStreamed.mockResolvedValue({
         events: (async function* () {
           yield { type: 'turn.completed', usage: defaultUsage };
@@ -699,13 +702,16 @@ describe('CodexProvider', () => {
         chunks.push(chunk);
       }
 
-      expect(mockRunStreamed).toHaveBeenCalledWith(
-        'test prompt',
-        expect.objectContaining({ signal: controller.signal })
-      );
+      // Signal passed to runStreamed is the per-attempt signal, not the
+      // caller's signal directly. Aborting the caller still propagates via
+      // the forwarding once-listener (covered by separate tests below).
+      const call = mockRunStreamed.mock.calls[0];
+      expect(call[0]).toBe('test prompt');
+      expect(call[1].signal).toBeInstanceOf(AbortSignal);
+      expect(call[1].signal).not.toBe(controller.signal);
     });
 
-    test('passes empty TurnOptions when no outputFormat or abortSignal', async () => {
+    test('passes a per-attempt AbortSignal in TurnOptions even when caller provides none', async () => {
       mockRunStreamed.mockResolvedValue({
         events: (async function* () {
           yield { type: 'turn.completed', usage: defaultUsage };
@@ -717,7 +723,10 @@ describe('CodexProvider', () => {
         chunks.push(chunk);
       }
 
-      expect(mockRunStreamed).toHaveBeenCalledWith('test prompt', {});
+      expect(mockRunStreamed).toHaveBeenCalledWith(
+        'test prompt',
+        expect.objectContaining({ signal: expect.any(AbortSignal) })
+      );
     });
 
     test('creates a per-call Codex instance when env is provided', async () => {
@@ -780,6 +789,155 @@ describe('CodexProvider', () => {
         } else {
           process.env.ARCHON_CODEX_TEST_ENV = originalArchonEnv;
         }
+      }
+    });
+
+    test('passes workflow MCP config as Codex mcp_servers overrides', async () => {
+      const testDir = await mkdtemp(join(tmpdir(), 'codex-provider-mcp-'));
+      const originalToken = process.env.ARCHON_CODEX_MCP_TOKEN;
+      process.env.ARCHON_CODEX_MCP_TOKEN = 'token-from-process';
+
+      try {
+        await writeFile(
+          join(testDir, 'mcp.json'),
+          JSON.stringify({
+            figma: {
+              type: 'http',
+              url: 'http://127.0.0.1:3845/mcp',
+              headers: { Authorization: 'Bearer $ARCHON_CODEX_MCP_TOKEN' },
+              startup_timeout_sec: 20,
+            },
+            local: {
+              type: 'stdio',
+              command: 'npx',
+              args: ['-y', 'figma-mcp'],
+              env: { TOKEN: '$ARCHON_CODEX_MCP_TOKEN' },
+            },
+          })
+        );
+
+        mockRunStreamed.mockResolvedValue({
+          events: (async function* () {
+            yield { type: 'turn.completed', usage: defaultUsage };
+          })(),
+        });
+
+        for await (const _ of client.sendQuery('test prompt', testDir, undefined, {
+          nodeConfig: { mcp: 'mcp.json' },
+        })) {
+          // consume
+        }
+
+        expect(MockCodex).toHaveBeenCalledWith(
+          expect.objectContaining({
+            config: expect.objectContaining({
+              mcp_servers: expect.objectContaining({
+                figma: expect.objectContaining({
+                  url: 'http://127.0.0.1:3845/mcp',
+                  http_headers: { Authorization: 'Bearer token-from-process' },
+                  startup_timeout_sec: 20,
+                }),
+                local: expect.objectContaining({
+                  command: 'npx',
+                  args: ['-y', 'figma-mcp'],
+                  env: { TOKEN: 'token-from-process' },
+                }),
+              }),
+            }),
+          })
+        );
+        expect(mockLogger.info).toHaveBeenCalledWith(
+          { serverNames: ['figma', 'local'], mcpPath: 'mcp.json' },
+          'codex.mcp_config_loaded'
+        );
+      } finally {
+        if (originalToken === undefined) {
+          delete process.env.ARCHON_CODEX_MCP_TOKEN;
+        } else {
+          process.env.ARCHON_CODEX_MCP_TOKEN = originalToken;
+        }
+        await rm(testDir, { recursive: true, force: true });
+      }
+    });
+
+    test('uses request env when expanding workflow MCP config variables', async () => {
+      const testDir = await mkdtemp(join(tmpdir(), 'codex-provider-mcp-env-'));
+
+      try {
+        await writeFile(
+          join(testDir, 'mcp.json'),
+          JSON.stringify({
+            figma: {
+              command: 'figma-mcp',
+              env: { TOKEN: '$FIGMA_TOKEN' },
+            },
+          })
+        );
+
+        mockRunStreamed.mockResolvedValue({
+          events: (async function* () {
+            yield { type: 'turn.completed', usage: defaultUsage };
+          })(),
+        });
+
+        for await (const _ of client.sendQuery('test prompt', testDir, undefined, {
+          env: { FIGMA_TOKEN: 'from-codebase-env' },
+          nodeConfig: { mcp: 'mcp.json' },
+        })) {
+          // consume
+        }
+
+        expect(MockCodex).toHaveBeenCalledWith(
+          expect.objectContaining({
+            config: expect.objectContaining({
+              mcp_servers: expect.objectContaining({
+                figma: expect.objectContaining({
+                  command: 'figma-mcp',
+                  env: { TOKEN: 'from-codebase-env' },
+                }),
+              }),
+            }),
+          })
+        );
+      } finally {
+        await rm(testDir, { recursive: true, force: true });
+      }
+    });
+
+    test('prefixes workflow MCP warnings for workflow forwarding', async () => {
+      const testDir = await mkdtemp(join(tmpdir(), 'codex-provider-mcp-warning-'));
+      delete process.env.ARCHON_CODEX_MISSING_TOKEN;
+
+      try {
+        await writeFile(
+          join(testDir, 'mcp.json'),
+          JSON.stringify({
+            figma: {
+              command: 'figma-mcp',
+              env: { TOKEN: '$ARCHON_CODEX_MISSING_TOKEN' },
+            },
+          })
+        );
+        mockRunStreamed.mockResolvedValue({
+          events: (async function* () {
+            yield { type: 'turn.completed', usage: defaultUsage };
+          })(),
+        });
+
+        const chunks = [];
+        for await (const chunk of client.sendQuery('test prompt', testDir, undefined, {
+          nodeConfig: { mcp: 'mcp.json' },
+        })) {
+          chunks.push(chunk);
+        }
+
+        expect(chunks[0]).toEqual({
+          type: 'system',
+          content:
+            '⚠️ MCP config references undefined env vars: ARCHON_CODEX_MISSING_TOKEN. These will be empty strings - MCP servers may fail to authenticate.',
+        });
+      } finally {
+        await rm(testDir, { recursive: true, force: true });
       }
     });
 
@@ -926,7 +1084,7 @@ describe('CodexProvider', () => {
       // Only after turn.completed do we know the SDK recovered.
       mockRunStreamed.mockResolvedValue({
         events: (async function* () {
-          yield { type: 'error', message: 'MCP client connection timeout' };
+          yield { type: 'error', message: 'mcp client connection timeout' };
           yield { type: 'turn.completed', usage: defaultUsage };
         })(),
       });
@@ -944,7 +1102,7 @@ describe('CodexProvider', () => {
       });
       // Logged but not surfaced as failure
       expect(mockLogger.error).toHaveBeenCalledWith(
-        { message: 'MCP client connection timeout' },
+        { message: 'mcp client connection timeout' },
         'stream_error'
       );
     });
@@ -973,6 +1131,42 @@ describe('CodexProvider', () => {
       });
       const errors = (chunks[0] as { errors?: string[] }).errors;
       expect(errors?.[0]).not.toContain('MCP client');
+    });
+
+    test('surfaces MCP client errors when workflow MCP is configured', async () => {
+      const testDir = await mkdtemp(join(tmpdir(), 'codex-provider-mcp-error-'));
+
+      try {
+        await writeFile(
+          join(testDir, 'mcp.json'),
+          JSON.stringify({ figma: { command: 'figma-mcp' } })
+        );
+        mockRunStreamed.mockResolvedValue({
+          events: (async function* () {
+            yield { type: 'error', message: 'MCP client connection timeout' };
+            yield { type: 'turn.completed', usage: defaultUsage };
+          })(),
+        });
+
+        const chunks = [];
+        for await (const chunk of client.sendQuery('test', testDir, undefined, {
+          nodeConfig: { mcp: 'mcp.json' },
+        })) {
+          chunks.push(chunk);
+        }
+
+        expect(chunks[0]).toEqual({
+          type: 'system',
+          content: '\u26A0\uFE0F MCP client connection timeout',
+        });
+        expect(chunks[1]).toEqual({
+          type: 'result',
+          sessionId: 'new-thread-id',
+          tokens: { input: 10, output: 5 },
+        });
+      } finally {
+        await rm(testDir, { recursive: true, force: true });
+      }
     });
 
     test('turn.failed yields result.isError with codex_turn_failed subtype', async () => {
@@ -1416,5 +1610,140 @@ describe('sendQuery decomposition behaviors', () => {
     const systemChunks = chunks.filter(c => c.type === 'system');
     expect(systemChunks.length).toBeGreaterThanOrEqual(1);
     expect(systemChunks.some(c => c.type === 'system' && c.content.includes('Task 1'))).toBe(true);
+  }, 5_000);
+
+  // Regression for issue #1266 (crash class A).
+  // Before the fix, buildTurnOptions captured the caller's abortSignal once
+  // before the retry loop, and the same signal object was passed to every
+  // runStreamed attempt. Node.js aborts the spawn-linked signal when a
+  // subprocess crashes, so attempt N's crash left `turnOptions.signal`
+  // already aborted, and attempt N+1 was SIGTERM'd before it could read the
+  // prompt. The fix creates a fresh AbortController per attempt and chains
+  // the caller's signal through a once-listener.
+  test('retry after crash receives a fresh (non-aborted) AbortSignal', async () => {
+    // Capture signals at call-time. Inspecting mockRunStreamed.mock.calls
+    // after the fact reads from a shared turnOptions reference whose .signal
+    // has since been rewritten; that's fine for the implementation (each
+    // spawn() captures the signal at its own call) but misleading here.
+    const signalsAtCallTime: Array<{ signal: AbortSignal; aborted: boolean }> = [];
+    let callCount = 0;
+    mockRunStreamed.mockImplementation((_prompt: unknown, opts: { signal?: AbortSignal }) => {
+      const s = opts.signal!;
+      signalsAtCallTime.push({ signal: s, aborted: s.aborted });
+      callCount++;
+      if (callCount === 1) {
+        return Promise.reject(new Error('codex exec crashed'));
+      }
+      return Promise.resolve({
+        events: (async function* () {
+          yield {
+            type: 'item.completed',
+            item: { type: 'agent_message', text: 'recovered', id: 'r' },
+          };
+          yield { type: 'turn.completed', usage: defaultUsage };
+        })(),
+      });
+    });
+
+    const callerController = new AbortController();
+
+    const chunks = [];
+    for await (const chunk of client.sendQuery('test', '/workspace', undefined, {
+      abortSignal: callerController.signal,
+    })) {
+      chunks.push(chunk);
+    }
+
+    expect(mockRunStreamed).toHaveBeenCalledTimes(2);
+    expect(signalsAtCallTime).toHaveLength(2);
+    // Distinct signal objects per attempt.
+    expect(signalsAtCallTime[1].signal).not.toBe(signalsAtCallTime[0].signal);
+    // Attempt 1's signal was NOT aborted at the moment of spawn, even
+    // though attempt 0 crashed. This is the exact property that was
+    // broken in the old implementation.
+    expect(signalsAtCallTime[1].aborted).toBe(false);
+    // Caller signal was never aborted.
+    expect(callerController.signal.aborted).toBe(false);
+  }, 5_000);
+
+  test('caller abort forwards into the active per-attempt signal', async () => {
+    const callerController = new AbortController();
+
+    let capturedSignal: AbortSignal | undefined;
+    mockRunStreamed.mockImplementation((_prompt, opts: { signal?: AbortSignal }) => {
+      capturedSignal = opts.signal;
+      return Promise.resolve({
+        events: (async function* () {
+          yield {
+            type: 'item.completed',
+            item: { type: 'agent_message', text: 'partial', id: '1' },
+          };
+          // Caller aborts mid-stream; this must surface on the per-attempt signal.
+          callerController.abort();
+          yield {
+            type: 'item.completed',
+            item: { type: 'agent_message', text: 'should not appear', id: '2' },
+          };
+          yield { type: 'turn.completed', usage: defaultUsage };
+        })(),
+      });
+    });
+
+    const consumeGenerator = async (): Promise<void> => {
+      for await (const _ of client.sendQuery('test', '/workspace', undefined, {
+        abortSignal: callerController.signal,
+      })) {
+        // consume
+      }
+    };
+
+    await expect(consumeGenerator()).rejects.toThrow('Query aborted');
+    // The signal observed by runStreamed is the per-attempt one, and it
+    // reflects the caller's abort via the forwarding listener.
+    expect(capturedSignal).toBeDefined();
+    expect(capturedSignal).not.toBe(callerController.signal);
+    expect(capturedSignal?.aborted).toBe(true);
+  }, 5_000);
+
+  // Regression for issue #1735.
+  // After the codex-sdk's finally calls child.removeAllListeners() + child.kill(),
+  // calling attemptController.abort() would fire Node's internal spawn-signal
+  // abort listener on the now-listenerless child, surfacing an uncaught AbortError.
+  // The fix removes the explicit abort() — the per-attempt controller is short-lived
+  // and goes out of scope naturally.
+  test('successful attempt does not throw from stale abort cleanup (#1735)', async () => {
+    mockRunStreamed.mockImplementation((_prompt, opts: { signal?: AbortSignal }) => {
+      return Promise.resolve({
+        events: (async function* () {
+          yield {
+            type: 'item.completed',
+            item: { type: 'agent_message', text: 'done', id: '1' },
+          };
+          yield { type: 'turn.completed', usage: defaultUsage };
+        })(),
+      });
+    });
+
+    // Listen for uncaught errors that would surface from the stale abort.
+    const uncaughtErrors: Error[] = [];
+    const handler = (err: Error): void => {
+      uncaughtErrors.push(err);
+    };
+    process.on('uncaughtException', handler);
+
+    try {
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test', '/workspace')) {
+        chunks.push(chunk);
+      }
+
+      // Give the event loop a tick for any deferred error events.
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      expect(chunks.length).toBeGreaterThan(0);
+      expect(uncaughtErrors).toHaveLength(0);
+    } finally {
+      process.removeListener('uncaughtException', handler);
+    }
   }, 5_000);
 });

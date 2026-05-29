@@ -212,7 +212,7 @@ describe('validateWorkflowResources — MCP validation', () => {
     expect(mcpErrors).toHaveLength(0);
   });
 
-  test('warns when MCP used with codex provider', async () => {
+  test('does not warn when MCP is used with codex provider', async () => {
     const mcpPath = join(tmpDir, 'good.json');
     await writeFile(mcpPath, '{"server": {"command": "npx"}}');
     const workflow = makeWorkflow(
@@ -222,8 +222,7 @@ describe('validateWorkflowResources — MCP validation', () => {
     );
     const issues = await validateWorkflowResources(workflow, tmpDir);
     const mcpWarnings = issues.filter(i => i.field === 'mcp' && i.level === 'warning');
-    expect(mcpWarnings).toHaveLength(1);
-    expect(mcpWarnings[0].message).toContain('not supported by provider');
+    expect(mcpWarnings).toHaveLength(0);
   });
 });
 

@@ -13,6 +13,7 @@ import {
 import type { WorkflowRun, ApprovalContext } from '@archon/workflows/schemas/workflow-run';
 import * as workflowDb from '../db/workflows';
 import * as workflowEventDb from '../db/workflow-events';
+import * as workflowNodeSessionDb from '../db/workflow-node-sessions';
 
 // Lazy logger — NEVER at module scope
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -292,4 +293,30 @@ export async function rejectWorkflow(
     cancelled: true,
     maxAttemptsReached: false,
   };
+}
+
+/**
+ * Reset persisted per-node provider sessions for a workflow.
+ *
+ * Filter: workflow_name is required; scope_key narrows to one conversation (or
+ * other scope), node_id narrows to one node within that scope. Omitting both
+ * scope_key and node_id deletes every row for the workflow across all scopes.
+ *
+ * Returns the row count deleted.
+ */
+export async function resetWorkflowNodeSessions(filter: {
+  workflow_name: string;
+  scope_key?: string;
+  node_id?: string;
+}): Promise<{ deleted: number }> {
+  try {
+    return await workflowNodeSessionDb.deleteWorkflowNodeSessions(filter);
+  } catch (error) {
+    const err = error as Error;
+    getLog().error(
+      { err, errorType: err.constructor.name, ...filter },
+      'operations.workflow_reset_node_sessions_failed'
+    );
+    throw new Error(`Failed to reset workflow node sessions: ${err.message}`);
+  }
 }

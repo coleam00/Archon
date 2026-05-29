@@ -25,6 +25,9 @@ export default defineConfig({
         baseUrl: 'https://github.com/coleam00/Archon/edit/main/packages/docs-web/',
       },
       sidebar: [
+        { label: '✦  Marketplace', link: '/workflows/' },
+        { label: '🗺️  Roadmap', link: '/roadmap/' },
+        { label: '🎨  Brand', link: '/brand/' },
         {
           label: 'The Book of Archon',
           autogenerate: { directory: 'book' },

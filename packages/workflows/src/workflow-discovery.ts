@@ -192,6 +192,8 @@ function loadBundledWorkflows(): DirLoadResult {
  *   2. Home-scoped `~/.archon/workflows/` — classified as `source: 'global'`.
  *      No caller option: every caller gets home-scoped discovery for free.
  *   3. Repo-scoped `<cwd>/.archon/workflows/` — classified as `source: 'project'`.
+ *      Skipped when `cwd` is `null` (no project context — e.g. fresh deployment
+ *      where no codebase has been registered yet).
  *
  * When running as a compiled binary, bundled defaults are loaded from embedded
  * content. In source/dev mode they're loaded from the filesystem.
@@ -201,7 +203,7 @@ function loadBundledWorkflows(): DirLoadResult {
  * location is not read — users must migrate manually.
  */
 export async function discoverWorkflows(
-  cwd: string,
+  cwd: string | null,
   options?: { loadDefaults?: boolean }
 ): Promise<WorkflowLoadResult> {
   // Map of filename -> workflow+source for deduplication
@@ -274,7 +276,18 @@ export async function discoverWorkflows(
     }
   }
 
-  // 3. Load from repo's workflow folder (overrides app defaults AND home scope by exact filename)
+  // 3. Load from repo's workflow folder (overrides app defaults AND home scope by exact filename).
+  // Skipped when cwd is null — surfaces bundled + home scopes only, which is the right answer
+  // for callers without a project context (e.g. UI listing workflows before any codebase is registered).
+  if (cwd === null) {
+    const workflows = Array.from(workflowsByFile.values());
+    getLog().info(
+      { count: workflows.length, errorCount: allErrors.length, scope: 'no_project_context' },
+      'workflows_discovery_completed'
+    );
+    return { workflows, errors: allErrors };
+  }
+
   const [workflowFolder] = archonPaths.getWorkflowFolderSearchPaths();
   const workflowPath = join(cwd, workflowFolder);
 
@@ -353,20 +366,26 @@ export async function discoverWorkflows(
  * Wraps discoverWorkflows with the standard pattern: try loadConfig to read
  * defaults.loadDefaultWorkflows, fall back to true on config load failure.
  * Logs config failures at warn level for observability.
+ *
+ * When `cwd` is `null` (no project context), `loadConfig` is not invoked and
+ * `loadDefaults` keeps its initial value of `true`. The per-project opt-out
+ * is a project-scoped setting; without a project there is no config to read.
  */
 export async function discoverWorkflowsWithConfig(
-  cwd: string,
+  cwd: string | null,
   loadConfig: (cwd: string) => Promise<{ defaults?: { loadDefaultWorkflows?: boolean } }>
 ): Promise<WorkflowLoadResult> {
   let loadDefaults = true;
-  try {
-    const cfg = await loadConfig(cwd);
-    loadDefaults = cfg.defaults?.loadDefaultWorkflows ?? true;
-  } catch (error) {
-    getLog().warn(
-      { err: error as Error, cwd },
-      'config_load_failed_using_default_workflow_discovery'
-    );
+  if (cwd !== null) {
+    try {
+      const cfg = await loadConfig(cwd);
+      loadDefaults = cfg.defaults?.loadDefaultWorkflows ?? true;
+    } catch (error) {
+      getLog().warn(
+        { err: error as Error, cwd },
+        'config_load_failed_using_default_workflow_discovery'
+      );
+    }
   }
   return discoverWorkflows(cwd, { loadDefaults });
 }

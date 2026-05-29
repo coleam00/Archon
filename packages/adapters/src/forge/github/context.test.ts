@@ -191,7 +191,7 @@ function createIssueCommentPayload(
  * Create an adapter with mocked internals for testing handleWebhook.
  */
 function createTestAdapter(): GitHubAdapter {
-  const adapter = new GitHubAdapter('fake-token', WEBHOOK_SECRET, {
+  const adapter = new GitHubAdapter({ kind: 'pat', token: 'fake-token' }, WEBHOOK_SECRET, {
     acquireLock: mock(async (_id: string, handler: () => Promise<void>) => {
       await handler();
     }),

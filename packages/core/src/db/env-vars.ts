@@ -2,6 +2,7 @@
  * Database operations for per-codebase environment variables.
  */
 import { pool, getDialect } from './connection';
+import type { CodebaseEnvVar } from '../schemas/env-var';
 import { createLogger } from '@archon/paths';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -10,14 +11,7 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-export interface CodebaseEnvVar {
-  id: string;
-  codebase_id: string;
-  key: string;
-  value: string;
-  created_at: string;
-  updated_at: string;
-}
+export type { CodebaseEnvVar } from '../schemas/env-var';
 
 /** Get all env vars for a codebase as a flat Record. */
 export async function getCodebaseEnvVars(codebaseId: string): Promise<Record<string, string>> {

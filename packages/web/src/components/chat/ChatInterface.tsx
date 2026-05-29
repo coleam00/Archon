@@ -29,6 +29,7 @@ import type {
   WorkflowDispatchEvent,
 } from '@/lib/types';
 import { applyOnText } from '@/lib/chat-message-reducer';
+import { applySystemStatus } from '@/lib/system-status-reducer';
 import {
   getCachedMessages,
   setCachedMessages,
@@ -446,16 +447,31 @@ export function ChatInterface({ conversationId }: ChatInterfaceProps): React.Rea
           .then((rows: MessageResponse[]) => {
             if (rows.length === 0) return;
             const hydrated = rows.map(mapMessageRow);
-            // Preserve client-only system messages (e.g., sync status) when rehydrating
+            // Merge hydrated DB messages with client-only state (system, live SSE) to
+            // avoid losing messages that exist only on the client.
             setMessages(prev => {
-              const systemMessages = prev.filter(m => m.role === 'system');
-              if (systemMessages.length === 0) return hydrated;
-              // Interleave system messages at their original positions by timestamp
+              const hydratedIds = new Set(hydrated.map(m => m.id));
+              // Keep only meaningful client-only messages not present in hydrated set.
+              // Exclude optimistic user rows and empty thinking placeholders.
+              const clientOnly = prev.filter(m => {
+                if (hydratedIds.has(m.id)) return false;
+                if (m.role === 'system') return true;
+                if (m.role !== 'assistant') return false;
+                return (
+                  Boolean(m.content) ||
+                  Boolean(m.error) ||
+                  Boolean(m.workflowDispatch) ||
+                  Boolean(m.workflowResult) ||
+                  Boolean(m.toolCalls?.length)
+                );
+              });
+              if (clientOnly.length === 0) return hydrated;
+              // Interleave client-only messages at their original positions by timestamp
               const merged = [...hydrated];
-              for (const sys of systemMessages) {
-                const insertIdx = merged.findIndex(m => m.timestamp > sys.timestamp);
-                if (insertIdx === -1) merged.push(sys);
-                else merged.splice(insertIdx, 0, sys);
+              for (const msg of clientOnly) {
+                const insertIdx = merged.findIndex(m => m.timestamp > msg.timestamp);
+                if (insertIdx === -1) merged.push(msg);
+                else merged.splice(insertIdx, 0, msg);
               }
               return merged;
             });
@@ -548,15 +564,7 @@ export function ChatInterface({ conversationId }: ChatInterfaceProps): React.Rea
   );
 
   const onSystemStatus = useCallback((content: string): void => {
-    setMessages(prev => [
-      ...prev,
-      {
-        id: nextId(),
-        role: 'system' as const,
-        content,
-        timestamp: Date.now(),
-      },
-    ]);
+    setMessages(prev => applySystemStatus(prev, content, nextId));
   }, []);
 
   const { connected } = useSSE(isNewChat ? null : conversationId, {

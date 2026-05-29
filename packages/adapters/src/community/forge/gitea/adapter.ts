@@ -17,7 +17,13 @@ import {
   onConversationClosed,
   ConversationLockManager,
 } from '@archon/core';
-import { getArchonWorkspacesPath, getCommandFolderSearchPaths, createLogger } from '@archon/paths';
+import * as userDb from '@archon/core/db/users';
+import {
+  ensureProjectStructure,
+  getCommandFolderSearchPaths,
+  getProjectSourcePath,
+  createLogger,
+} from '@archon/paths';
 import {
   cloneRepository,
   syncRepository,
@@ -28,6 +34,7 @@ import {
 } from '@archon/git';
 import * as db from '@archon/core/db/conversations';
 import * as codebaseDb from '@archon/core/db/codebases';
+import { resolveDefaultAssistant } from '@archon/core/config/resolve-assistant';
 import { parseAllowedUsers, isGiteaUserAuthorized } from './auth';
 import { splitIntoParagraphChunks } from '../../../utils/message-splitting';
 import type { WebhookEvent } from './types';
@@ -520,6 +527,10 @@ export class GiteaAdapter implements IPlatformAdapter {
     // Directory doesn't exist - clone the repository
     getLog().info({ owner, repo, repoPath }, 'repo_cloning');
 
+    // Create project structure (source/, worktrees/, artifacts/, logs/) before
+    // cloning so worktree paths resolve correctly on first webhook clone.
+    await ensureProjectStructure(owner, repo);
+
     // Parse URL to get host for authenticated clone
     const urlObj = new URL(this.baseUrl);
     const repoUrl = `${urlObj.protocol}//${urlObj.host}/${owner}/${repo}.git`;
@@ -607,8 +618,10 @@ export class GiteaAdapter implements IPlatformAdapter {
     let existing = await codebaseDb.findCodebaseByRepoUrl(repoUrlNoGit);
     existing ??= await codebaseDb.findCodebaseByRepoUrl(repoUrlWithGit);
 
-    // Canonical path includes owner to prevent collisions between repos with same name
-    const canonicalPath = join(getArchonWorkspacesPath(), owner, repo);
+    // Canonical path uses the project source/ subdirectory so that worktrees/,
+    // artifacts/, and logs/ live as siblings of the cloned repo (not nested
+    // inside it). Mirrors the CLI /clone path; see issue #1547.
+    const canonicalPath = getProjectSourcePath(owner, repo);
 
     if (existing) {
       // Check if existing codebase points to a worktree path - fix it if so
@@ -631,6 +644,7 @@ export class GiteaAdapter implements IPlatformAdapter {
       name: `${owner}/${repo}`,
       repository_url: repoUrlNoGit,
       default_cwd: canonicalPath,
+      ai_assistant_type: await resolveDefaultAssistant(canonicalPath),
     });
 
     getLog().info({ codebaseName: codebase.name, path: canonicalPath }, 'codebase_created');
@@ -779,21 +793,44 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
 
     getLog().info({ eventType, owner, repo, number, isPR }, 'webhook_processing');
 
-    // 6. Build conversationId
+    // Comment author may differ from event.sender for PR-review comments; prefer
+    // the comment author when present so individual reviewers get their own row.
+    // Resolution failure must not drop the webhook — warn-log and continue with
+    // archonUserId undefined so the conversation/run rows fall back to NULL.
+    // 6. Resolve webhook sender to Archon user UUID
+    const attributedLogin = commentAuthor ?? senderUsername;
+    let archonUserId: string | undefined;
+    if (attributedLogin) {
+      try {
+        const user = await userDb.findOrCreateUserByPlatformIdentity(
+          'gitea',
+          attributedLogin,
+          attributedLogin
+        );
+        archonUserId = user.id;
+      } catch (err) {
+        getLog().warn(
+          { err: toError(err), giteaLogin: attributedLogin },
+          'gitea.user_resolve_failed'
+        );
+      }
+    }
+
+    // 7. Build conversationId
     const conversationId = this.buildConversationId(owner, repo, number, isPR);
 
-    // 7. Check if new conversation
+    // 8. Check if new conversation
     const existingConv = await db.getOrCreateConversation('gitea', conversationId);
     const isNewConversation = !existingConv.codebase_id;
 
-    // 8. Get/create codebase (checks for existing first!)
+    // 9. Get/create codebase (checks for existing first!)
     const {
       codebase,
       repoPath,
       isNew: isNewCodebase,
     } = await this.getOrCreateCodebaseForRepo(owner, repo);
 
-    // 8b. Link conversation to codebase
+    // 9b. Link conversation to codebase
     if (isNewConversation) {
       try {
         await db.updateConversation(existingConv.id, {
@@ -813,18 +850,18 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
       }
     }
 
-    // 9. Get default branch from repository info
+    // 10. Get default branch from repository info
     const defaultBranch = event.repository.default_branch;
 
-    // 10. Ensure repo ready (clone if needed, sync if new conversation)
+    // 11. Ensure repo ready (clone if needed, sync if new conversation)
     await this.ensureRepoReady(owner, repo, defaultBranch, repoPath, isNewCodebase);
 
-    // 11. Auto-load commands if new codebase
+    // 12. Auto-load commands if new codebase
     if (isNewCodebase) {
       await this.autoDetectAndLoadCommands(repoPath, codebase.id);
     }
 
-    // 12. Gather isolation hints for orchestrator
+    // 13. Gather isolation hints for orchestrator
     const isolationHints: IsolationHints = {
       workflowType: isPR ? 'pr' : 'issue',
       workflowId: String(number),
@@ -851,7 +888,7 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
       );
     }
 
-    // 13. Build message with context
+    // 14. Build message with context
     const strippedComment = this.stripMention(comment);
     let finalMessage = strippedComment;
     let contextToAppend: string | undefined;
@@ -881,7 +918,7 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
       }
     }
 
-    // 14. Fetch comment history for thread context
+    // 15. Fetch comment history for thread context
     const commentHistory = await this.fetchCommentHistory(owner, repo, number);
     const threadContext = commentHistory.length > 0 ? commentHistory.join('\n') : undefined;
     getLog().debug(
@@ -889,13 +926,14 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
       'thread_context_loaded'
     );
 
-    // 15. Route to orchestrator with isolation hints (with lock for concurrency control)
+    // 16. Route to orchestrator with isolation hints (with lock for concurrency control)
     await this.lockManager.acquireLock(conversationId, async () => {
       try {
         await handleMessage(this, conversationId, finalMessage, {
           issueContext: contextToAppend,
           threadContext,
           isolationHints,
+          userId: archonUserId,
         });
       } catch (error) {
         const err = toError(error);

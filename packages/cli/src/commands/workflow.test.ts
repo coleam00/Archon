@@ -13,6 +13,7 @@ import {
   workflowApproveCommand,
   workflowRejectCommand,
   workflowCleanupCommand,
+  workflowResetSessionsCommand,
 } from './workflow';
 
 const mockLogger = {
@@ -75,6 +76,7 @@ mock.module('@archon/workflows/workflow-discovery', () => ({
 }));
 mock.module('@archon/workflows/executor', () => ({
   executeWorkflow: mock(() => Promise.resolve({ success: true, workflowRunId: 'test-run-id' })),
+  hydrateResumableRun: mock(() => Promise.resolve(null)),
 }));
 
 // Capture the subscription handler so tests can trigger events
@@ -140,6 +142,16 @@ mock.module('@archon/core/db/workflows', () => ({
 mock.module('@archon/core/db/workflow-events', () => ({
   listWorkflowEvents: mock(() => Promise.resolve([])),
   createWorkflowEvent: mock(() => Promise.resolve()),
+}));
+
+// Reset-sessions runs the real resetWorkflowNodeSessions operation over this mocked
+// DB layer (same pattern as the other workflow commands in this file). Safe from
+// mock.module pollution: workflow.test.ts is its own isolated `bun test` invocation.
+const mockDeleteNodeSessions = mock(() => Promise.resolve({ deleted: 0 }));
+mock.module('@archon/core/db/workflow-node-sessions', () => ({
+  deleteWorkflowNodeSessions: mockDeleteNodeSessions,
+  getWorkflowNodeSession: mock(() => Promise.resolve(null)),
+  upsertWorkflowNodeSession: mock(() => Promise.resolve()),
 }));
 
 describe('workflowListCommand', () => {
@@ -691,7 +703,54 @@ describe('workflowRunCommand', () => {
       'hello world',
       'claude',
       '/test/path',
-      'assist'
+      'assist',
+      {}
+    );
+  });
+
+  it('uses the workflow provider for title generation', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const conversationDb = await import('@archon/core/db/conversations');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const core = await import('@archon/core');
+
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [
+        makeTestWorkflowWithSource({
+          name: 'figma-mcp-smoke',
+          description: 'Smoke test Figma MCP',
+          provider: 'codex',
+        }),
+      ],
+      errors: [],
+    });
+    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'conv-123',
+      ai_assistant_type: 'claude',
+    });
+    (core.loadConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      assistant: 'claude',
+      assistants: { codex: { model: 'gpt-5.4' } },
+      defaults: {},
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+    (conversationDb.updateConversation as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-123',
+    });
+    (core.generateAndSetTitle as ReturnType<typeof mock>).mockClear();
+
+    await workflowRunCommand('/test/path', 'figma-mcp-smoke', 'check figma', { noWorktree: true });
+
+    expect(core.generateAndSetTitle).toHaveBeenCalledWith(
+      'conv-123',
+      'check figma',
+      'codex',
+      '/test/path',
+      'figma-mcp-smoke',
+      { model: 'gpt-5.4' }
     );
   });
 
@@ -1770,7 +1829,7 @@ describe('workflowResumeCommand', () => {
     expect(codebaseDb.getCodebase).toHaveBeenCalledWith('cb-existing');
   });
 
-  it('should fall through to auto-registration when getCodebase throws', async () => {
+  it('should warn and fall back to working_path when getCodebase throws during resume', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const codebaseDb = await import('@archon/core/db/codebases');
     const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
@@ -1802,11 +1861,80 @@ describe('workflowResumeCommand', () => {
       // downstream failure is acceptable
     }
 
-    // Verify warn was called (not error — it's a soft fallback)
+    // Verify warn was called (not error — it's a soft fallback). The resume
+    // layer now does its own codebase lookup for `discoveryCwd`, so the warn
+    // is emitted with the resume-specific event name.
     expect(mockLogger.warn).toHaveBeenCalledWith(
       expect.objectContaining({ codebaseId: 'cb-bad' }),
-      'cli.codebase_id_lookup_failed'
+      'cli.workflow_resume_codebase_lookup_failed'
     );
+  });
+
+  it('should discover workflows from codebase.default_cwd, not working_path', async () => {
+    // Regression test for #1663: when working_path is a worktree or workspace
+    // clone that lacks the user's local workflow YAML, discovery must fall back
+    // to codebase.default_cwd so the file is still found.
+    const workflowDb = await import('@archon/core/db/workflows');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
+
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-1663',
+      workflow_name: 'my-approval-workflow',
+      status: 'failed',
+      user_message: 'go',
+      working_path: '/tmp/worktree-without-yaml',
+      codebase_id: 'cb-with-yaml',
+    });
+
+    (codebaseDb.getCodebase as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-with-yaml',
+      name: 'owner/repo',
+      default_cwd: '/users/me/source-repo-with-yaml',
+    });
+
+    const discoverSpy = workflowDiscovery.discoverWorkflowsWithConfig as ReturnType<typeof mock>;
+    discoverSpy.mockClear();
+    discoverSpy.mockResolvedValueOnce({ workflows: [], errors: [] });
+
+    try {
+      await workflowResumeCommand('run-1663');
+    } catch {
+      // downstream failure is acceptable — we only need to assert the discovery cwd
+    }
+
+    // Discovery must use the codebase source path, NOT working_path
+    expect(discoverSpy).toHaveBeenCalledWith(
+      '/users/me/source-repo-with-yaml',
+      expect.any(Function)
+    );
+  });
+
+  it('should fall back to working_path for discovery when codebase_id is missing', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
+
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-no-codebase',
+      workflow_name: 'legacy',
+      status: 'failed',
+      user_message: 'go',
+      working_path: '/tmp/old-worktree',
+      codebase_id: null,
+    });
+
+    const discoverSpy = workflowDiscovery.discoverWorkflowsWithConfig as ReturnType<typeof mock>;
+    discoverSpy.mockClear();
+    discoverSpy.mockResolvedValueOnce({ workflows: [], errors: [] });
+
+    try {
+      await workflowResumeCommand('run-no-codebase');
+    } catch {
+      // downstream failure is acceptable
+    }
+
+    // No codebase → falls back to working_path (preserves existing behavior)
+    expect(discoverSpy).toHaveBeenCalledWith('/tmp/old-worktree', expect.any(Function));
   });
 });
 
@@ -1922,6 +2050,51 @@ describe('workflowApproveCommand', () => {
     // Verify the original platform conversation ID was passed through
     expect(conversationsDb.getConversationById).toHaveBeenCalledWith('db-uuid-original');
     expect(conversationsDb.getOrCreateConversation).toHaveBeenCalledWith('cli', 'cli-original-123');
+  });
+
+  it('should discover workflows from codebase.default_cwd, not working_path', async () => {
+    // Regression test for #1663: auto-resume after approve must look up the
+    // workflow YAML in the source repo (codebase.default_cwd), not the
+    // worktree/workspace working_path that may lack the file.
+    const workflowDb = await import('@archon/core/db/workflows');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
+    const core = await import('@archon/core');
+
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-approve-1663',
+      workflow_name: 'my-approval-workflow',
+      status: 'paused',
+      user_message: 'go',
+      working_path: '/tmp/worktree-without-yaml',
+      codebase_id: 'cb-with-yaml',
+      metadata: { approval: { nodeId: 'gate', message: 'Approve?' } },
+    });
+
+    (core.createWorkflowStore as ReturnType<typeof mock>).mockReturnValueOnce({
+      createWorkflowEvent: mock(() => Promise.resolve()),
+    });
+
+    (codebaseDb.getCodebase as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-with-yaml',
+      name: 'owner/repo',
+      default_cwd: '/users/me/source-repo-with-yaml',
+    });
+
+    const discoverSpy = workflowDiscovery.discoverWorkflowsWithConfig as ReturnType<typeof mock>;
+    discoverSpy.mockClear();
+    discoverSpy.mockResolvedValueOnce({ workflows: [], errors: [] });
+
+    try {
+      await workflowApproveCommand('run-approve-1663');
+    } catch {
+      // downstream failure is acceptable
+    }
+
+    expect(discoverSpy).toHaveBeenCalledWith(
+      '/users/me/source-repo-with-yaml',
+      expect.any(Function)
+    );
   });
 });
 
@@ -2216,13 +2389,100 @@ describe('workflowRejectCommand', () => {
         rejection_count: 0,
       },
     };
-    // First call: rejectWorkflow (operations layer), second call: CLI re-fetch
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>)
-      .mockResolvedValueOnce(runData)
-      .mockResolvedValueOnce(runData);
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(runData);
     (workflowDb.updateWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
 
     await expect(workflowRejectCommand('run-no-path', 'bad')).rejects.toThrow('no working path');
+  });
+
+  it('should discover workflows from codebase.default_cwd on reject-resume, not working_path', async () => {
+    // Regression for #1663: reject with on_reject configured re-invokes
+    // workflowRunCommand. Discovery must use the source repo, not the worktree.
+    const workflowDb = await import('@archon/core/db/workflows');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
+
+    const runData = {
+      id: 'run-reject-1663',
+      workflow_name: 'my-approval-workflow',
+      status: 'paused',
+      user_message: 'go',
+      working_path: '/tmp/worktree-without-yaml',
+      codebase_id: 'cb-with-yaml',
+      metadata: {
+        approval: {
+          type: 'approval',
+          nodeId: 'gate',
+          message: 'Approve?',
+          onRejectPrompt: 'Fix: $REJECTION_REASON',
+          onRejectMaxAttempts: 3,
+        },
+        rejection_count: 0,
+      },
+    };
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(runData);
+    (workflowDb.updateWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
+
+    (codebaseDb.getCodebase as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-with-yaml',
+      name: 'owner/repo',
+      default_cwd: '/users/me/source-repo-with-yaml',
+    });
+
+    const discoverSpy = workflowDiscovery.discoverWorkflowsWithConfig as ReturnType<typeof mock>;
+    discoverSpy.mockClear();
+    discoverSpy.mockResolvedValueOnce({ workflows: [], errors: [] });
+
+    try {
+      await workflowRejectCommand('run-reject-1663', 'needs work');
+    } catch {
+      // downstream failure is acceptable
+    }
+
+    // Discovery must use the codebase source path, NOT working_path
+    expect(discoverSpy).toHaveBeenCalledWith(
+      '/users/me/source-repo-with-yaml',
+      expect.any(Function)
+    );
+  });
+
+  it('should fall back to working_path for discovery on reject when codebase_id is missing', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
+
+    const runData = {
+      id: 'run-reject-no-codebase',
+      workflow_name: 'legacy',
+      status: 'paused',
+      user_message: 'go',
+      working_path: '/tmp/old-worktree',
+      codebase_id: null,
+      metadata: {
+        approval: {
+          type: 'approval',
+          nodeId: 'gate',
+          message: 'Approve?',
+          onRejectPrompt: 'Fix: $REJECTION_REASON',
+          onRejectMaxAttempts: 3,
+        },
+        rejection_count: 0,
+      },
+    };
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(runData);
+    (workflowDb.updateWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
+
+    const discoverSpy = workflowDiscovery.discoverWorkflowsWithConfig as ReturnType<typeof mock>;
+    discoverSpy.mockClear();
+    discoverSpy.mockResolvedValueOnce({ workflows: [], errors: [] });
+
+    try {
+      await workflowRejectCommand('run-reject-no-codebase', 'bad');
+    } catch {
+      // downstream failure is acceptable
+    }
+
+    // No codebase → falls back to working_path (preserves existing behavior)
+    expect(discoverSpy).toHaveBeenCalledWith('/tmp/old-worktree', expect.any(Function));
   });
 });
 
@@ -2564,5 +2824,60 @@ describe('extractStaleWorkspaceEntry', () => {
   it('returns null on an empty input', async () => {
     const { extractStaleWorkspaceEntry } = await import('./workflow');
     expect(extractStaleWorkspaceEntry('')).toBeNull();
+  });
+});
+
+describe('workflowResetSessionsCommand', () => {
+  let consoleSpy: ReturnType<typeof spyOn>;
+
+  beforeEach(() => {
+    consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    mockDeleteNodeSessions.mockClear();
+    mockDeleteNodeSessions.mockResolvedValue({ deleted: 0 });
+  });
+
+  afterEach(() => {
+    consoleSpy.mockRestore();
+  });
+
+  it('refuses a cross-scope reset without --scope and without --yes', async () => {
+    await expect(workflowResetSessionsCommand('feature-dev', {})).rejects.toThrow(/Refusing/);
+    expect(mockDeleteNodeSessions).not.toHaveBeenCalled();
+  });
+
+  it('proceeds across all scopes when --yes is given (no scope filter)', async () => {
+    mockDeleteNodeSessions.mockResolvedValueOnce({ deleted: 4 });
+
+    await workflowResetSessionsCommand('feature-dev', { yes: true });
+
+    expect(mockDeleteNodeSessions).toHaveBeenCalledWith({
+      workflow_name: 'feature-dev',
+      scope_key: undefined,
+      node_id: undefined,
+    });
+    const calls = consoleSpy.mock.calls.map((c: unknown[]) => String(c[0]));
+    expect(calls.some(c => c.includes('4') && c.includes('across all scopes'))).toBe(true);
+  });
+
+  it('proceeds with --scope and no --yes, narrowing to that scope', async () => {
+    mockDeleteNodeSessions.mockResolvedValueOnce({ deleted: 1 });
+
+    await workflowResetSessionsCommand('feature-dev', { scope: 'conv-1', node: 'planner' });
+
+    expect(mockDeleteNodeSessions).toHaveBeenCalledWith({
+      workflow_name: 'feature-dev',
+      scope_key: 'conv-1',
+      node_id: 'planner',
+    });
+  });
+
+  it('emits machine-readable JSON when --json is set', async () => {
+    mockDeleteNodeSessions.mockResolvedValueOnce({ deleted: 2 });
+
+    await workflowResetSessionsCommand('feature-dev', { scope: 'conv-1', json: true });
+
+    expect(consoleSpy).toHaveBeenCalledWith(
+      JSON.stringify({ workflow: 'feature-dev', deleted: 2, scope: 'conv-1', node: null })
+    );
   });
 });

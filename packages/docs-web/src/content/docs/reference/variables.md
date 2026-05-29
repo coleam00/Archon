@@ -114,3 +114,13 @@ Positional arguments (`$1` through `$9`) are substituted separately by the comma
 | `$REJECTION_REASON` | Yes (`on_reject` only) | No | No |
 | `$LOOP_PREV_OUTPUT` | Yes (loop nodes) | No | No |
 | `$nodeId.output` | Yes (DAG nodes) | No | Yes |
+
+## Authentication Environment Variables
+
+These are standard environment variables read from `process.env` at clone time. They are **not** workflow-substituted variables — they must be set in your shell environment or `.env` file before Archon starts.
+
+| Variable | Description |
+|----------|-------------|
+| `GH_TOKEN` | GitHub personal access token for authenticated clone operations |
+| `GITLAB_TOKEN` | GitLab personal or project access token (`glpat-*`) for authenticated GitLab clones |
+| `GITEA_TOKEN` | Gitea API token for authenticated Gitea/Forgejo clones |

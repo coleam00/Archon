@@ -16,10 +16,14 @@ Connect Archon to a self-hosted Gitea instance so you can interact with your AI 
 
 ## Prerequisites
 
-- Archon server running (see [Getting Started](/getting-started/))
+- Archon server running (see [Getting Started](/getting-started/overview/))
 - A Gitea instance with API access enabled
 - A Gitea personal access token (or dedicated bot account token)
 - Public endpoint for webhooks (or a tunnel for local development)
+
+:::tip
+`GITEA_TOKEN` also enables authenticated cloning of private Gitea and Forgejo repositories. If you set it for the adapter, clone authentication works automatically — no extra configuration needed.
+:::
 
 ## Step 1: Create a Gitea Token
 

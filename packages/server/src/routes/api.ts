@@ -6,7 +6,7 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { streamSSE } from 'hono/streaming';
 import { cors } from 'hono/cors';
 import type { WebAdapter } from '../adapters/web';
-import { rm, readFile, writeFile, unlink, mkdir } from 'fs/promises';
+import { rm, readFile, writeFile, unlink, mkdir, readdir, stat } from 'fs/promises';
 import { readFileSync } from 'fs';
 import { normalize, join, sep, basename } from 'path';
 import { randomUUID } from 'crypto';
@@ -37,6 +37,7 @@ import {
   getDefaultWorkflowsPath,
   getArchonWorkspacesPath,
   getHomeCommandsPath,
+  getHomeWorkflowsPath,
   getRunArtifactsPath,
   getArchonHome,
   isDocker,
@@ -53,6 +54,8 @@ import {
   TERMINAL_WORKFLOW_STATUSES,
 } from '@archon/workflows/schemas/workflow-run';
 import type { ApprovalContext, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import type { MessageRow } from '@archon/core/schemas/message';
+import type { DashboardWorkflowRun } from '@archon/core/schemas/workflow-run';
 import { findMarkdownFilesRecursive } from '@archon/core/utils/commands';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -68,6 +71,7 @@ import * as isolationEnvDb from '@archon/core/db/isolation-environments';
 import * as workflowDb from '@archon/core/db/workflows';
 import * as workflowEventDb from '@archon/core/db/workflow-events';
 import * as messageDb from '@archon/core/db/messages';
+import { resetWorkflowNodeSessions } from '@archon/core/operations/workflow-operations';
 import { errorSchema } from './schemas/common.schemas';
 import { updateCheckResponseSchema } from './schemas/system.schemas';
 import {
@@ -84,11 +88,14 @@ import {
   cancelWorkflowRunResponseSchema,
   workflowRunActionResponseSchema,
   dashboardRunsResponseSchema,
-  runWorkflowBodySchema,
   dashboardRunsQuerySchema,
   workflowRunsQuerySchema,
   approveWorkflowRunBodySchema,
   rejectWorkflowRunBodySchema,
+  resetWorkflowNodeSessionsParamsSchema,
+  resetWorkflowNodeSessionsQuerySchema,
+  resetWorkflowNodeSessionsResponseSchema,
+  listArtifactsResponseSchema,
 } from './schemas/workflow.schemas';
 import {
   conversationListResponseSchema,
@@ -122,6 +129,12 @@ import {
 } from './schemas/config.schemas';
 import { providerListResponseSchema } from './schemas/provider.schemas';
 import { getProviderInfoList, isRegisteredProvider } from '@archon/providers';
+import { messageSchema } from './schemas/conversation.schemas';
+import {
+  workflowRunSchema,
+  dashboardWorkflowRunSchema,
+  workflowRunStatusSchema,
+} from './schemas/workflow.schemas';
 
 // Read app version: use build-time constant in binary, package.json in dev
 let appVersion = 'unknown';
@@ -155,6 +168,9 @@ function jsonError(description: string): {
 }
 
 const cwdQuerySchema = z.object({ cwd: z.string().optional() });
+const workflowTargetQuerySchema = cwdQuerySchema.extend({
+  source: z.enum(['project', 'global']).optional(),
+});
 
 const getWorkflowsRoute = createRoute({
   method: 'get',
@@ -220,7 +236,7 @@ const saveWorkflowRoute = createRoute({
   summary: 'Save (create or update) a workflow',
   request: {
     params: z.object({ name: z.string() }),
-    query: cwdQuerySchema,
+    query: workflowTargetQuerySchema,
     body: { content: { 'application/json': { schema: saveWorkflowBodySchema } }, required: true },
   },
   responses: {
@@ -240,7 +256,7 @@ const deleteWorkflowRoute = createRoute({
   summary: 'Delete a user-defined workflow',
   request: {
     params: z.object({ name: z.string() }),
-    query: cwdQuerySchema,
+    query: workflowTargetQuerySchema,
   },
   responses: {
     200: {
@@ -539,17 +555,21 @@ const deleteEnvVarRoute = createRoute({
 // Workflow run route configs
 // =========================================================================
 
+// Body validation is handled manually in the handler (multipart vs JSON
+// branching), mirroring sendMessageRoute. The OpenAPI spec describes the
+// shapes via the description; declaring `request.body` would force JSON
+// validation to run on multipart payloads and reject them.
 const runWorkflowRoute = createRoute({
   method: 'post',
   path: '/api/workflows/{name}/run',
   tags: ['Workflows'],
-  summary: 'Run a workflow via the orchestrator',
+  summary: 'Run a workflow via the orchestrator (JSON or multipart with file uploads)',
+  description:
+    'Accepts `application/json` with `{ conversationId, message }` or ' +
+    '`multipart/form-data` with `conversationId`, `message`, and optional file ' +
+    'attachments (max 5 files, 10 MB each).',
   request: {
     params: z.object({ name: z.string() }),
-    body: {
-      content: { 'application/json': { schema: runWorkflowBodySchema } },
-      required: true,
-    },
   },
   responses: {
     200: {
@@ -557,6 +577,29 @@ const runWorkflowRoute = createRoute({
       description: 'Accepted',
     },
     400: jsonError('Bad request'),
+    500: jsonError('Server error'),
+  },
+});
+
+const listRunArtifactsRoute = createRoute({
+  method: 'get',
+  path: '/api/runs/{runId}/artifacts',
+  tags: ['Workflows'],
+  summary: "List a run's artifact files",
+  description:
+    "Walks the run's artifact directory and returns relative file paths with size + " +
+    'mtime. Drives the console Artifacts tab. Returns `{ files: [] }` when the run ' +
+    'has no codebase or the codebase name is not in `owner/repo` form.',
+  request: {
+    params: z.object({ runId: z.string() }),
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: listArtifactsResponseSchema } },
+      description: 'OK',
+    },
+    400: jsonError('Bad request'),
+    404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
 });
@@ -628,7 +671,7 @@ const resumeWorkflowRunRoute = createRoute({
   method: 'post',
   path: '/api/workflows/runs/{runId}/resume',
   tags: ['Workflows'],
-  summary: 'Resume a failed workflow run (re-run auto-resumes from completed nodes)',
+  summary: 'Resume a failed workflow run (dispatches resume on the parent web conversation)',
   request: { params: z.object({ runId: z.string() }) },
   responses: {
     200: {
@@ -711,6 +754,26 @@ const deleteWorkflowRunRoute = createRoute({
     },
     400: jsonError('Bad request'),
     404: jsonError('Not found'),
+    500: jsonError('Server error'),
+  },
+});
+
+const resetWorkflowNodeSessionsRoute = createRoute({
+  method: 'delete',
+  path: '/api/workflows/{name}/node-sessions',
+  tags: ['Workflows'],
+  summary:
+    'Reset persisted per-node provider sessions for a workflow. Optional scope and node filters narrow the deletion.',
+  request: {
+    params: resetWorkflowNodeSessionsParamsSchema,
+    query: resetWorkflowNodeSessionsQuerySchema,
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: resetWorkflowNodeSessionsResponseSchema } },
+      description: 'Sessions deleted (deleted count may be 0)',
+    },
+    400: jsonError('Bad request'),
     500: jsonError('Server error'),
   },
 });
@@ -964,6 +1027,93 @@ export function registerApiRoutes(
     return false;
   }
 
+  /**
+   * Persist multipart-uploaded files to the conversation's upload directory.
+   * Called from /api/workflows/:name/run; /api/conversations/:id/message still
+   * inlines the same validate-write-rollback logic and could migrate to this
+   * helper as a separate hygiene pass.
+   *
+   * Returns either { ok: true, savedFiles, uploadDir } or a structured error
+   * the caller forwards via apiError; on the success path the caller passes
+   * savedFiles + uploadDir to dispatchToOrchestrator so cleanup happens
+   * inside the lock handler.
+   */
+  async function persistUploadedFiles(
+    conversationId: string,
+    fileEntries: File[]
+  ): Promise<
+    | { ok: true; savedFiles: AttachedFile[]; uploadDir: string }
+    | { ok: false; status: 400 | 500; error: string }
+  > {
+    if (fileEntries.length > MAX_FILES_PER_MESSAGE) {
+      return {
+        ok: false,
+        status: 400,
+        error: `Maximum ${MAX_FILES_PER_MESSAGE.toString()} files per message`,
+      };
+    }
+
+    const archonHome = getArchonHome();
+    const uploadDir = join(archonHome, 'artifacts', 'uploads', conversationId);
+    if (!uploadDir.startsWith(archonHome + sep)) {
+      return { ok: false, status: 400, error: 'Invalid conversation ID' };
+    }
+
+    // Validate all files before writing any to disk.
+    for (const entry of fileEntries) {
+      const displayName = basename(entry.name).replace(/[^a-zA-Z0-9._-]/g, '_');
+      if (!isAllowedUploadType(entry.type, entry.name)) {
+        return {
+          ok: false,
+          status: 400,
+          error: `File "${displayName}" has an unsupported type: ${entry.type}`,
+        };
+      }
+      if (entry.size > MAX_UPLOAD_BYTES) {
+        return {
+          ok: false,
+          status: 400,
+          error: `File "${displayName}" exceeds the 10 MB size limit`,
+        };
+      }
+    }
+
+    const savedFiles: AttachedFile[] = [];
+    try {
+      await mkdir(uploadDir, { recursive: true });
+      for (const entry of fileEntries) {
+        const fileId = randomUUID();
+        const safeName = basename(entry.name).replace(/[^a-zA-Z0-9._-]/g, '_');
+        const filePath = join(uploadDir, `${fileId}_${safeName}`);
+        await writeFile(filePath, Buffer.from(await entry.arrayBuffer()));
+        const normalizedMime =
+          entry.type.split(';')[0].trim().toLowerCase() || 'application/octet-stream';
+        savedFiles.push({
+          path: filePath,
+          name: safeName || fileId,
+          mimeType: normalizedMime,
+          size: entry.size,
+        });
+      }
+    } catch (writeErr: unknown) {
+      for (const f of savedFiles) {
+        await unlink(f.path).catch((err: NodeJS.ErrnoException) => {
+          if (err.code !== 'ENOENT') {
+            getLog().warn({ err, filePath: f.path, conversationId }, 'upload.rollback_failed');
+          }
+        });
+      }
+      getLog().error({ err: writeErr, conversationId }, 'upload.write_failed');
+      return {
+        ok: false,
+        status: 500,
+        error: 'Failed to save uploaded file. Check available disk space.',
+      };
+    }
+
+    return { ok: true, savedFiles, uploadDir };
+  }
+
   async function dispatchToOrchestrator(
     conversationId: string,
     message: string,
@@ -1124,6 +1274,93 @@ export function registerApiRoutes(
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // API transform helpers (Date → ISO string for wire shape)
+  // ---------------------------------------------------------------------------
+
+  type ApiConversation = z.infer<typeof conversationSchema>;
+  type ApiCodebase = z.infer<typeof codebaseSchema>;
+  type ApiMessage = z.infer<typeof messageSchema>;
+  type ApiWorkflowRun = z.infer<typeof workflowRunSchema>;
+  type ApiDashboardWorkflowRun = z.infer<typeof dashboardWorkflowRunSchema>;
+
+  function toISOString(val: Date | string): string;
+  function toISOString(val: Date | string | null | undefined): string | null;
+  function toISOString(val: Date | string | null | undefined): string | null {
+    if (val === null || val === undefined) return null;
+    if (typeof val === 'string') return val;
+    try {
+      return val.toISOString();
+    } catch (e) {
+      getLog().error({ err: e as Error, invalidDate: val }, 'api.invalid_date_transform');
+      return null;
+    }
+  }
+
+  function toApiConversation(row: import('@archon/core').Conversation): ApiConversation {
+    return {
+      ...row,
+      created_at: toISOString(row.created_at),
+      updated_at: toISOString(row.updated_at),
+      deleted_at: toISOString(row.deleted_at),
+      last_activity_at: toISOString(row.last_activity_at),
+    };
+  }
+
+  function toApiCodebase(row: import('@archon/core').Codebase): ApiCodebase {
+    let commands = row.commands;
+    if (typeof commands === 'string') {
+      try {
+        commands = JSON.parse(commands) as Record<string, { path: string; description: string }>;
+      } catch (parseErr) {
+        getLog().error({ err: parseErr as Error, codebaseId: row.id }, 'corrupted_commands_json');
+        // Fallback: empty map keeps the API response valid and prevents the endpoint
+        // from crashing. The corruption is already logged above for operator attention.
+        commands = {};
+      }
+    }
+    return {
+      ...row,
+      commands,
+      created_at: toISOString(row.created_at),
+      updated_at: toISOString(row.updated_at),
+    };
+  }
+
+  function toApiMessage(row: MessageRow): ApiMessage {
+    let metadata = row.metadata;
+    if (typeof metadata !== 'string') {
+      try {
+        metadata = JSON.stringify(metadata);
+      } catch (e) {
+        getLog().error(
+          { err: e as Error, messageId: row.id },
+          'api.message_metadata_serialize_failed'
+        );
+        metadata = '{}';
+      }
+    }
+    return { ...row, metadata };
+  }
+
+  function toApiWorkflowRun(row: WorkflowRun): ApiWorkflowRun {
+    return {
+      ...row,
+      started_at: toISOString(row.started_at),
+      completed_at: toISOString(row.completed_at),
+      last_activity_at: toISOString(row.last_activity_at),
+    };
+  }
+
+  function toApiDashboardWorkflowRun(row: DashboardWorkflowRun): ApiDashboardWorkflowRun {
+    return {
+      ...row,
+      started_at: toISOString(row.started_at),
+      completed_at: toISOString(row.completed_at),
+      last_activity_at: toISOString(row.last_activity_at),
+    };
+  }
+
   // GET /api/conversations - List conversations
   registerOpenApiRoute(getConversationsRoute, async c => {
     try {
@@ -1135,7 +1372,7 @@ export function registerApiRoutes(
         codebaseId,
         true
       );
-      return c.json(conversations);
+      return c.json(conversations.map(toApiConversation));
     } catch (error) {
       getLog().error({ err: error }, 'list_conversations_failed');
       return apiError(c, 500, 'Failed to list conversations');
@@ -1150,7 +1387,7 @@ export function registerApiRoutes(
       if (!conv) {
         return apiError(c, 404, 'Conversation not found');
       }
-      return c.json(conv);
+      return c.json(toApiConversation(conv));
     } catch (error) {
       getLog().error({ err: error, platformId }, 'get_conversation_failed');
       return apiError(c, 500, 'Failed to get conversation');
@@ -1183,6 +1420,9 @@ export function registerApiRoutes(
       // If message provided, dispatch it atomically (avoids ghost "Untitled" conversations)
       if (message) {
         try {
+          // TODO: thread userId once the web UI authentication PR lands
+          // (X-Archon-User header). For now the user_id column stays NULL on
+          // web-originated rows, matching every other web message-insert below.
           await messageDb.addMessage(conversation.id, 'user', message);
         } catch (e: unknown) {
           // Log only (no SSE warning) — the SSE stream isn't connected yet for new conversations.
@@ -1272,14 +1512,7 @@ export function registerApiRoutes(
         return apiError(c, 404, 'Conversation not found');
       }
       const messages = await messageDb.listMessages(conv.id, limit);
-      // Normalize metadata: PostgreSQL JSONB auto-deserializes to object,
-      // but frontend expects JSON string. SQLite returns string already.
-      return c.json(
-        messages.map(m => ({
-          ...m,
-          metadata: typeof m.metadata === 'string' ? m.metadata : JSON.stringify(m.metadata),
-        }))
-      );
+      return c.json(messages.map(toApiMessage));
     } catch (error) {
       getLog().error({ err: error }, 'list_messages_failed');
       return apiError(c, 500, 'Failed to list messages');
@@ -1298,7 +1531,7 @@ export function registerApiRoutes(
     }
 
     let message: string;
-    const savedFiles: AttachedFile[] = [];
+    let savedFiles: AttachedFile[] = [];
     let uploadDir = '';
 
     const contentType = c.req.header('content-type') ?? '';
@@ -1328,70 +1561,16 @@ export function registerApiRoutes(
         fileList = [];
       }
 
-      // Enforce server-side file count limit
       const fileEntries = fileList.filter((e): e is File => e instanceof File);
-      if (fileEntries.length > MAX_FILES_PER_MESSAGE) {
-        return c.json({ error: `Maximum ${String(MAX_FILES_PER_MESSAGE)} files per message` }, 400);
-      }
-
-      const archonHome = getArchonHome();
-      uploadDir = join(archonHome, 'artifacts', 'uploads', conversationId);
-
-      // Guard against path traversal in conversationId (belt-and-suspenders after regex above)
-      if (!uploadDir.startsWith(archonHome + sep)) {
-        return c.json({ error: 'Invalid conversation ID' }, 400);
-      }
-
-      // Validate all files before writing any to disk
-      for (const entry of fileEntries) {
-        const displayName = basename(entry.name).replace(/[^a-zA-Z0-9._-]/g, '_');
-        // Server-side MIME type allowlist (client-side accept= is not a security boundary;
-        // entry.type is the Content-Type supplied by the client and is not verified against
-        // actual file contents — suitable for a single-developer self-hosted tool)
-        if (!isAllowedUploadType(entry.type, entry.name)) {
-          return c.json(
-            { error: `File "${displayName}" has an unsupported type: ${entry.type}` },
-            400
-          );
+      if (fileEntries.length > 0) {
+        const result = await persistUploadedFiles(conversationId, fileEntries);
+        if (!result.ok) {
+          return c.json({ error: result.error }, result.status);
         }
-        if (entry.size > MAX_UPLOAD_BYTES) {
-          return c.json({ error: `File "${displayName}" exceeds the 10 MB size limit` }, 400);
-        }
+        savedFiles = result.savedFiles;
+        uploadDir = result.uploadDir;
+        getLog().info({ conversationId, fileCount: savedFiles.length }, 'message.files_uploaded');
       }
-
-      // Write files; on any failure clean up already-written files and surface the error
-      try {
-        await mkdir(uploadDir, { recursive: true });
-        for (const entry of fileEntries) {
-          const fileId = randomUUID();
-          const safeName = basename(entry.name).replace(/[^a-zA-Z0-9._-]/g, '_');
-          const filePath = join(uploadDir, `${fileId}_${safeName}`);
-          await writeFile(filePath, Buffer.from(await entry.arrayBuffer()));
-          // Normalise MIME: strip parameters to prevent prompt injection via crafted Content-Type
-          const normalizedMime =
-            entry.type.split(';')[0].trim().toLowerCase() || 'application/octet-stream';
-          savedFiles.push({
-            path: filePath,
-            // Use safeName for display to avoid prompt injection via crafted filenames
-            name: safeName || fileId,
-            mimeType: normalizedMime,
-            size: entry.size,
-          });
-        }
-      } catch (writeErr: unknown) {
-        // Roll back any files written before the failure
-        for (const f of savedFiles) {
-          await unlink(f.path).catch((err: NodeJS.ErrnoException) => {
-            if (err.code !== 'ENOENT') {
-              getLog().warn({ err, filePath: f.path, conversationId }, 'upload.rollback_failed');
-            }
-          });
-        }
-        getLog().error({ err: writeErr, conversationId }, 'upload.write_failed');
-        return c.json({ error: 'Failed to save uploaded file. Check available disk space.' }, 500);
-      }
-
-      getLog().info({ conversationId, fileCount: savedFiles.length }, 'message.files_uploaded');
     } else {
       let body: { message?: unknown };
       try {
@@ -1424,6 +1603,7 @@ export function registerApiRoutes(
           ? { files: savedFiles.map(f => ({ name: f.name, mimeType: f.mimeType, size: f.size })) }
           : undefined;
       try {
+        // TODO: thread userId once the web UI authentication PR lands.
         await messageDb.addMessage(conv.id, 'user', message, meta);
       } catch (e: unknown) {
         getLog().error({ err: e, conversationId: conv.id }, 'message_persistence_failed');
@@ -1563,20 +1743,7 @@ export function registerApiRoutes(
       deduped.push(...seen.values());
       deduped.sort((a, b) => a.name.localeCompare(b.name));
 
-      return c.json(
-        deduped.map(cb => {
-          let commands = cb.commands;
-          if (typeof commands === 'string') {
-            try {
-              commands = JSON.parse(commands);
-            } catch (parseErr) {
-              getLog().error({ err: parseErr, codebaseId: cb.id }, 'corrupted_commands_json');
-              commands = {};
-            }
-          }
-          return { ...cb, commands };
-        })
-      );
+      return c.json(deduped.map(toApiCodebase));
     } catch (error) {
       getLog().error({ err: error }, 'list_codebases_failed');
       return apiError(c, 500, 'Failed to list codebases');
@@ -1590,16 +1757,7 @@ export function registerApiRoutes(
       if (!codebase) {
         return apiError(c, 404, 'Codebase not found');
       }
-      let commands = codebase.commands;
-      if (typeof commands === 'string') {
-        try {
-          commands = JSON.parse(commands);
-        } catch (parseErr) {
-          getLog().error({ err: parseErr, codebaseId: codebase.id }, 'corrupted_commands_json');
-          commands = {};
-        }
-      }
-      return c.json({ ...codebase, commands });
+      return c.json(toApiCodebase(codebase));
     } catch (error) {
       getLog().error({ err: error }, 'get_codebase_failed');
       return apiError(c, 500, 'Failed to get codebase');
@@ -1622,7 +1780,7 @@ export function registerApiRoutes(
         return apiError(c, 500, 'Codebase created but not found');
       }
 
-      return c.json(codebase, result.alreadyExisted ? 200 : 201);
+      return c.json(toApiCodebase(codebase), result.alreadyExisted ? 200 : 201);
     } catch (error) {
       getLog().error({ err: error }, 'add_codebase_failed');
       return apiError(
@@ -1759,7 +1917,7 @@ export function registerApiRoutes(
   registerOpenApiRoute(getWorkflowsRoute, async c => {
     try {
       const cwd = c.req.query('cwd');
-      let workingDir = cwd;
+      let workingDir: string | undefined = cwd;
 
       // Validate caller-supplied cwd against registered codebase paths
       if (cwd) {
@@ -1774,11 +1932,11 @@ export function registerApiRoutes(
         }
       }
 
-      if (!workingDir) {
-        return c.json({ workflows: [] });
-      }
-
-      const result = await discoverWorkflowsWithConfig(workingDir, loadConfig);
+      // No project context (no cwd query param and no registered codebases) —
+      // pass null to discovery so it returns bundled + home-scoped workflows.
+      // This avoids a misleading empty state on first run, before any project
+      // is registered, when bundled defaults are present
+      const result = await discoverWorkflowsWithConfig(workingDir ?? null, loadConfig);
       return c.json({
         workflows: result.workflows.map(ws => ({ workflow: ws.workflow, source: ws.source })),
         errors: result.errors.length > 0 ? result.errors : undefined,
@@ -1792,14 +1950,89 @@ export function registerApiRoutes(
   });
 
   // POST /api/workflows/:name/run - Run a workflow via the orchestrator
+  //
+  // Accepts either:
+  //   - application/json: { conversationId, message }
+  //   - multipart/form-data: conversationId + message + files[] (≤5, ≤10MB each)
+  //
+  // Multipart matches /api/conversations/:id/message so the console's draft
+  // run input can attach screenshots / stack traces / paste-blobs the same
+  // way a freeform chat message can.
   registerOpenApiRoute(runWorkflowRoute, async c => {
     const workflowName = c.req.param('name') ?? '';
     if (!isValidCommandName(workflowName)) {
       return apiError(c, 400, 'Invalid workflow name');
     }
+
+    let message: string;
+    let conversationId: string;
+    let savedFiles: AttachedFile[] = [];
+    let uploadDir = '';
+
+    const contentType = c.req.header('content-type') ?? '';
+
+    if (contentType.includes('multipart/form-data')) {
+      let body: Record<string, string | File | (string | File)[]>;
+      try {
+        body = await c.req.parseBody({ all: true });
+      } catch (parseErr: unknown) {
+        getLog().warn({ err: parseErr }, 'run_workflow.multipart_parse_failed');
+        return apiError(c, 400, 'Invalid multipart form data');
+      }
+
+      const rawMessage = body.message;
+      const rawConv = body.conversationId;
+      if (typeof rawMessage !== 'string' || !rawMessage) {
+        return apiError(c, 400, 'message must be a non-empty string');
+      }
+      if (typeof rawConv !== 'string' || !rawConv || !/^[\w-]+$/.test(rawConv)) {
+        return apiError(c, 400, 'conversationId must be a non-empty alphanumeric string');
+      }
+      message = rawMessage;
+      conversationId = rawConv;
+
+      const rawFiles = body.files;
+      const fileList: (string | File)[] = Array.isArray(rawFiles)
+        ? rawFiles
+        : rawFiles !== undefined
+          ? [rawFiles]
+          : [];
+      const fileEntries = fileList.filter((e): e is File => e instanceof File);
+
+      if (fileEntries.length > 0) {
+        const result = await persistUploadedFiles(conversationId, fileEntries);
+        if (!result.ok) {
+          return apiError(c, result.status, result.error);
+        }
+        savedFiles = result.savedFiles;
+        uploadDir = result.uploadDir;
+        getLog().info(
+          { conversationId, fileCount: savedFiles.length, workflowName },
+          'run_workflow.files_uploaded'
+        );
+      }
+    } else {
+      let body: { conversationId?: unknown; message?: unknown };
+      try {
+        body = await c.req.json();
+      } catch (parseErr: unknown) {
+        getLog().warn({ err: parseErr }, 'run_workflow.json_parse_failed');
+        return apiError(c, 400, 'Invalid JSON in request body');
+      }
+      if (typeof body.conversationId !== 'string' || !body.conversationId) {
+        return apiError(c, 400, 'conversationId must be a non-empty string');
+      }
+      if (typeof body.message !== 'string' || !body.message) {
+        return apiError(c, 400, 'message must be a non-empty string');
+      }
+      conversationId = body.conversationId;
+      message = body.message;
+    }
+
     try {
-      const { conversationId, message } = getValidatedBody(c, runWorkflowBodySchema);
-      // Persist user message and register DB ID (same as message endpoint)
+      // Persist user message and register DB ID (same as message endpoint).
+      // File metadata (name/mime/size — no path, since the on-disk file is
+      // ephemeral) goes into message metadata when present.
       let conv: Awaited<ReturnType<typeof conversationDb.findConversationByPlatformId>> = null;
       try {
         conv = await conversationDb.findConversationByPlatformId(conversationId);
@@ -1808,12 +2041,22 @@ export function registerApiRoutes(
       }
       if (conv) {
         try {
-          await messageDb.addMessage(conv.id, 'user', message);
+          // Only pass the metadata arg when files are present; keeps the
+          // signature 3-arg in the (common) JSON path so test fixtures don't
+          // need to know about the multipart-shaped 4th argument.
+          // TODO: thread userId once the web UI authentication PR lands.
+          if (savedFiles.length > 0) {
+            const meta = {
+              files: savedFiles.map(f => ({ name: f.name, mimeType: f.mimeType, size: f.size })),
+            };
+            await messageDb.addMessage(conv.id, 'user', message, meta);
+          } else {
+            await messageDb.addMessage(conv.id, 'user', message);
+          }
         } catch (e: unknown) {
           getLog().error({ err: e, conversationId: conv.id }, 'message_persistence_failed');
         }
         webAdapter.setConversationDbId(conversationId, conv.id);
-        // Generate title for sidebar (fire-and-forget)
         if (!conv.title) {
           void generateAndSetTitle(
             conv.id,
@@ -1826,7 +2069,14 @@ export function registerApiRoutes(
       }
 
       const fullMessage = `/workflow run ${workflowName} ${message}`;
-      const result = await dispatchToOrchestrator(conversationId, fullMessage);
+      const extraContext = savedFiles.length > 0 ? { attachedFiles: savedFiles } : undefined;
+      const filesToCleanup = savedFiles.length > 0 ? { files: savedFiles, uploadDir } : undefined;
+      const result = await dispatchToOrchestrator(
+        conversationId,
+        fullMessage,
+        extraContext,
+        filesToCleanup
+      );
       return c.json(result);
     } catch (error) {
       getLog().error({ err: error }, 'run_workflow_failed');
@@ -1839,17 +2089,10 @@ export function registerApiRoutes(
   registerOpenApiRoute(getDashboardRunsRoute, async c => {
     try {
       const rawStatus = c.req.query('status');
-      const dashboardValidStatuses = [
-        'pending',
-        'running',
-        'completed',
-        'failed',
-        'cancelled',
-        'paused',
-      ] as const;
-      type DashboardRunStatus = (typeof dashboardValidStatuses)[number];
+      const validStatuses = workflowRunStatusSchema.options;
+      type DashboardRunStatus = (typeof validStatuses)[number];
       const status: DashboardRunStatus | undefined =
-        rawStatus && (dashboardValidStatuses as readonly string[]).includes(rawStatus)
+        rawStatus && (validStatuses as readonly string[]).includes(rawStatus)
           ? (rawStatus as DashboardRunStatus)
           : undefined;
       const codebaseId = c.req.query('codebaseId') ?? undefined;
@@ -1870,7 +2113,10 @@ export function registerApiRoutes(
         limit,
         offset,
       });
-      return c.json(result);
+      return c.json({
+        ...result,
+        runs: result.runs.map(toApiDashboardWorkflowRun),
+      });
     } catch (error) {
       getLog().error({ err: error }, 'list_dashboard_runs_failed');
       return apiError(c, 500, 'Failed to list dashboard runs');
@@ -1907,11 +2153,38 @@ export function registerApiRoutes(
       if (!RESUMABLE_WORKFLOW_STATUSES.includes(run.status)) {
         return apiError(c, 400, `Cannot resume workflow in '${run.status}' status`);
       }
-      // Run is already failed — the next invocation on the same path auto-resumes
-      const pathInfo = run.working_path ? ` at \`${run.working_path}\`` : '';
+      // Dispatch resume by sending `/workflow run <name>` to the parent web
+      // conversation; the orchestrator's foreground-resume detection (via
+      // findResumableRunByParentConversation) picks up the failed run and
+      // hydrates it. Mirrors the approve/reject auto-resume path.
+      if (!run.parent_conversation_id) {
+        return apiError(
+          c,
+          400,
+          `This run was created outside the web UI. Use \`archon workflow resume ${runId}\` from the CLI to resume it.`
+        );
+      }
+      const parentConv = await conversationDb.getConversationById(run.parent_conversation_id);
+      if (!parentConv?.platform_conversation_id || parentConv.platform_type !== 'web') {
+        return apiError(
+          c,
+          400,
+          `Cannot resume from web UI: the run's parent conversation is not a web conversation. Use \`archon workflow resume ${runId}\` from the CLI.`
+        );
+      }
+      const resumeMessage = `/workflow run ${run.workflow_name} ${run.user_message ?? ''}`.trim();
+      await dispatchToOrchestrator(parentConv.platform_conversation_id, resumeMessage);
+      getLog().info(
+        {
+          runId,
+          workflowName: run.workflow_name,
+          platformConvId: parentConv.platform_conversation_id,
+        },
+        'api.workflow_run_resume_dispatched'
+      );
       return c.json({
         success: true,
-        message: `Workflow run ready to resume: ${run.workflow_name}${pathInfo}. Re-run the workflow to auto-resume from completed nodes.`,
+        message: `Resuming workflow: ${run.workflow_name}`,
       });
     } catch (error) {
       getLog().error({ err: error, runId }, 'api.workflow_run_resume_failed');
@@ -1996,7 +2269,7 @@ export function registerApiRoutes(
         success: true,
         message: autoResumed
           ? `Workflow approved: ${run.workflow_name}. Resuming workflow.`
-          : `Workflow approved: ${run.workflow_name}. Send a message to continue.`,
+          : `Workflow approved: ${run.workflow_name}. Run \`archon workflow resume ${runId}\` from the CLI to continue, or send a new message in the originating conversation.`,
       });
     } catch (error) {
       getLog().error({ err: error, runId }, 'api.workflow_run_approve_failed');
@@ -2051,7 +2324,7 @@ export function registerApiRoutes(
           success: true,
           message: autoResumed
             ? `Workflow rejected: ${run.workflow_name}. Running on-reject prompt.`
-            : `Workflow rejected: ${run.workflow_name}. On-reject prompt will run on resume.`,
+            : `Workflow rejected: ${run.workflow_name}. On-reject prompt will run when the run resumes — run \`archon workflow resume ${runId}\` from the CLI to trigger it.`,
         });
       }
 
@@ -2089,19 +2362,47 @@ export function registerApiRoutes(
     }
   });
 
+  // DELETE /api/workflows/:name/node-sessions - Reset persisted per-node provider sessions
+  registerOpenApiRoute(resetWorkflowNodeSessionsRoute, async c => {
+    const workflowName = c.req.param('name') ?? '';
+    if (!workflowName) {
+      return apiError(c, 400, 'Workflow name is required');
+    }
+    const scope = c.req.query('scope') ?? undefined;
+    const node = c.req.query('node') ?? undefined;
+    const confirm = c.req.query('confirm') ?? undefined;
+    // Cross-scope reset (no scope) is destructive — require explicit confirmation so a
+    // dropped `scope` param can't silently wipe every conversation's sessions. Mirrors
+    // the CLI `--yes` guard.
+    if (scope === undefined && confirm !== 'all-scopes') {
+      return apiError(
+        c,
+        400,
+        'Refusing to reset sessions across all scopes without confirmation. Pass ?scope=<key> to narrow, or ?confirm=all-scopes to confirm.'
+      );
+    }
+    try {
+      const { deleted } = await resetWorkflowNodeSessions({
+        workflow_name: workflowName,
+        scope_key: scope,
+        node_id: node,
+      });
+      return c.json({ success: true, deleted });
+    } catch (error) {
+      getLog().error(
+        { err: error, workflowName, scope, node },
+        'api.workflow_reset_node_sessions_failed'
+      );
+      return apiError(c, 500, 'Failed to reset workflow node sessions');
+    }
+  });
+
   // GET /api/workflows/runs - List workflow runs
   registerOpenApiRoute(listWorkflowRunsRoute, async c => {
     try {
       const conversationId = c.req.query('conversationId') ?? undefined;
       const rawStatus = c.req.query('status');
-      const validStatuses = [
-        'pending',
-        'running',
-        'completed',
-        'failed',
-        'cancelled',
-        'paused',
-      ] as const;
+      const validStatuses = workflowRunStatusSchema.options;
       type WorkflowRunStatus = (typeof validStatuses)[number];
       const status: WorkflowRunStatus | undefined =
         rawStatus && (validStatuses as readonly string[]).includes(rawStatus)
@@ -2117,7 +2418,7 @@ export function registerApiRoutes(
         limit,
         codebaseId,
       });
-      return c.json({ runs });
+      return c.json({ runs: runs.map(toApiWorkflowRun) });
     } catch (error) {
       getLog().error({ err: error }, 'list_workflow_runs_failed');
       return apiError(c, 500, 'Failed to list workflow runs');
@@ -2133,7 +2434,7 @@ export function registerApiRoutes(
       if (!run) {
         return apiError(c, 404, 'No workflow run found for this worker');
       }
-      return c.json({ run });
+      return c.json({ run: toApiWorkflowRun(run) });
     } catch (error) {
       getLog().error({ err: error }, 'workflow_run_by_worker_lookup_failed');
       return apiError(c, 500, 'Failed to look up workflow run');
@@ -2175,7 +2476,7 @@ export function registerApiRoutes(
 
       return c.json({
         run: {
-          ...run,
+          ...toApiWorkflowRun(run),
           worker_platform_id: workerPlatformId,
           parent_platform_id: parentPlatformId,
           conversation_platform_id: conversationPlatformId ?? null,
@@ -2237,7 +2538,7 @@ export function registerApiRoutes(
 
       const filename = `${name}.yaml`;
 
-      // 1. Try user-defined workflow in cwd
+      // 1. Try user-defined workflow in cwd.
       if (workingDir) {
         const [workflowFolder] = getWorkflowFolderSearchPaths();
         const filePath = join(workingDir, workflowFolder, filename);
@@ -2260,7 +2561,30 @@ export function registerApiRoutes(
         }
       }
 
-      // 2. Fall back to bundled defaults (binary: embedded map; dev: also check filesystem)
+      // 2. Fall back to home-scoped workflow (`~/.archon/workflows/`).
+      // Mirrors the discovery order in `discoverWorkflowsWithConfig`.
+      {
+        const homeFilePath = join(getHomeWorkflowsPath(), filename);
+        try {
+          const content = await readFile(homeFilePath, 'utf-8');
+          const result = parseWorkflow(content, filename);
+          if (result.error) {
+            return apiError(c, 500, `Home workflow file is invalid: ${result.error.error}`);
+          }
+          return c.json({
+            workflow: result.workflow,
+            filename,
+            source: 'global' as WorkflowSource,
+          });
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+            getLog().error({ err, name }, 'workflow.fetch_home_failed');
+            return apiError(c, 500, 'Failed to read home-scoped workflow');
+          }
+        }
+      }
+
+      // 3. Fall back to bundled defaults.
       if (Object.hasOwn(BUNDLED_WORKFLOWS, name)) {
         const bundledContent = BUNDLED_WORKFLOWS[name];
         const result = parseWorkflow(bundledContent, filename);
@@ -2306,9 +2630,16 @@ export function registerApiRoutes(
       return apiError(c, 400, 'Invalid workflow name');
     }
 
+    const targetSource = c.req.query('source');
+    if (targetSource && targetSource !== 'project' && targetSource !== 'global') {
+      return apiError(c, 400, 'Invalid workflow source');
+    }
+
     const cwd = c.req.query('cwd');
     let workingDir = cwd;
-    if (cwd) {
+    if (targetSource === 'global') {
+      workingDir = undefined;
+    } else if (cwd) {
       if (!(await validateCwd(cwd))) {
         return apiError(c, 400, 'Invalid cwd: must match a registered codebase path');
       }
@@ -2338,15 +2669,18 @@ export function registerApiRoutes(
     }
 
     try {
-      const [workflowFolder] = getWorkflowFolderSearchPaths();
-      const dirPath = join(workingDir, workflowFolder);
+      const source: WorkflowSource = targetSource === 'global' ? 'global' : 'project';
+      const dirPath =
+        source === 'global'
+          ? getHomeWorkflowsPath()
+          : join(workingDir, getWorkflowFolderSearchPaths()[0]);
       await mkdir(dirPath, { recursive: true });
       const filePath = join(dirPath, `${name}.yaml`);
       await writeFile(filePath, yamlContent, 'utf-8');
       return c.json({
         workflow: parsed.workflow,
         filename: `${name}.yaml`,
-        source: 'project' as WorkflowSource,
+        source,
       });
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
@@ -2362,14 +2696,21 @@ export function registerApiRoutes(
       return apiError(c, 400, 'Invalid workflow name');
     }
 
+    const targetSource = c.req.query('source');
+    if (targetSource && targetSource !== 'project' && targetSource !== 'global') {
+      return apiError(c, 400, 'Invalid workflow source');
+    }
+
     // Refuse to delete bundled defaults
-    if (Object.hasOwn(BUNDLED_WORKFLOWS, name)) {
+    if (targetSource !== 'global' && Object.hasOwn(BUNDLED_WORKFLOWS, name)) {
       return apiError(c, 400, `Cannot delete bundled default workflow: ${name}`);
     }
 
     const cwd = c.req.query('cwd');
     let workingDir = cwd;
-    if (cwd) {
+    if (targetSource === 'global') {
+      workingDir = undefined;
+    } else if (cwd) {
       if (!(await validateCwd(cwd))) {
         return apiError(c, 400, 'Invalid cwd: must match a registered codebase path');
       }
@@ -2381,8 +2722,10 @@ export function registerApiRoutes(
       workingDir = getArchonHome();
     }
 
-    const [workflowFolder] = getWorkflowFolderSearchPaths();
-    const filePath = join(workingDir, workflowFolder, `${name}.yaml`);
+    const filePath =
+      targetSource === 'global'
+        ? join(getHomeWorkflowsPath(), `${name}.yaml`)
+        : join(workingDir, getWorkflowFolderSearchPaths()[0], `${name}.yaml`);
 
     try {
       await unlink(filePath);
@@ -2480,6 +2823,113 @@ export function registerApiRoutes(
       getLog().error({ err }, 'commands.list_failed');
       return apiError(c, 500, 'Failed to list commands');
     }
+  });
+
+  // GET /api/runs/:runId/artifacts - List artifact files for a run.
+  // Walks the run's artifact directory and returns relative file paths with
+  // size + mtime. Used by the console's Artifacts tab; the existing
+  // `workflow_artifact` event stream is too sparse (bash/script nodes write
+  // straight to $ARTIFACTS_DIR without emitting an event) to drive a file
+  // browser on its own.
+  registerOpenApiRoute(listRunArtifactsRoute, async c => {
+    const runId = c.req.param('runId') ?? '';
+    if (!/^[A-Za-z0-9_-]+$/.test(runId)) {
+      return apiError(c, 400, 'Invalid run id');
+    }
+
+    let run: Awaited<ReturnType<typeof workflowDb.getWorkflowRun>>;
+    try {
+      run = await workflowDb.getWorkflowRun(runId);
+    } catch (error) {
+      getLog().error({ err: error, runId }, 'artifacts.run_lookup_failed');
+      return apiError(c, 500, 'Failed to look up workflow run');
+    }
+    if (!run) return apiError(c, 404, 'Workflow run not found');
+
+    let codebase: Awaited<ReturnType<typeof codebaseDb.getCodebase>> | null = null;
+    if (run.codebase_id) {
+      try {
+        codebase = await codebaseDb.getCodebase(run.codebase_id);
+      } catch (error) {
+        getLog().error(
+          { err: error, runId, codebaseId: run.codebase_id },
+          'artifacts.codebase_lookup_failed'
+        );
+        return apiError(c, 500, 'Failed to look up codebase');
+      }
+    }
+    if (!codebase?.name) return c.json({ files: [] });
+    const nameParts = codebase.name.split('/');
+    if (nameParts.length < 2) return c.json({ files: [] });
+    const owner = nameParts[0];
+    const repo = nameParts[1];
+    if (!owner || !repo) return c.json({ files: [] });
+
+    const artifactDir = getRunArtifactsPath(owner, repo, runId);
+    // Defense-in-depth: even though registration sanitises codebase names,
+    // ensure the resolved dir stays inside ARCHON_HOME — a maliciously
+    // crafted owner/repo containing `..` would otherwise escape the tree.
+    const archonHome = getArchonHome();
+    const normalisedDir = normalize(artifactDir);
+    if (
+      !normalisedDir.startsWith(normalize(archonHome) + sep) &&
+      normalisedDir !== normalize(archonHome)
+    ) {
+      getLog().warn({ runId, artifactDir, archonHome }, 'artifacts.path_escape_blocked');
+      return apiError(c, 400, 'Invalid artifact path');
+    }
+
+    interface FileEntry {
+      path: string;
+      size: number;
+      modifiedAt: string;
+    }
+    const files: FileEntry[] = [];
+
+    async function walk(dir: string, rel: string): Promise<void> {
+      let entries: { name: string; isDirectory: () => boolean; isFile: () => boolean }[];
+      try {
+        entries = await readdir(dir, { withFileTypes: true });
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+        throw err;
+      }
+      for (const entry of entries) {
+        // Skip dotfiles — they're workflow-internal scratch (.pr-number, etc.)
+        if (entry.name.startsWith('.')) continue;
+        const child = join(dir, entry.name);
+        const childRel = rel === '' ? entry.name : `${rel}/${entry.name}`;
+        if (entry.isDirectory()) {
+          await walk(child, childRel);
+        } else if (entry.isFile()) {
+          try {
+            const s = await stat(child);
+            files.push({
+              path: childRel,
+              size: s.size,
+              modifiedAt: s.mtime.toISOString(),
+            });
+          } catch (err) {
+            // Race with deletion / permission flips: skip ENOENT / EACCES
+            // silently, surface anything else so we don't return a half-list
+            // with no diagnostic.
+            const code = (err as NodeJS.ErrnoException).code;
+            if (code === 'ENOENT' || code === 'EACCES') continue;
+            throw err;
+          }
+        }
+      }
+    }
+
+    try {
+      await walk(artifactDir, '');
+    } catch (error) {
+      getLog().error({ err: error, runId, artifactDir }, 'artifacts.walk_failed');
+      return apiError(c, 500, 'Failed to list artifacts');
+    }
+
+    files.sort((a, b) => a.path.localeCompare(b.path));
+    return c.json({ files });
   });
 
   // GET /api/artifacts/:runId/* - Serve workflow artifact file contents

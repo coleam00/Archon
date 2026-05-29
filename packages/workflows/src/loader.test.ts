@@ -33,17 +33,23 @@ import { registerBuiltinProviders, clearRegistry } from '@archon/providers';
 clearRegistry();
 registerBuiltinProviders();
 
-import { discoverWorkflows } from './workflow-discovery';
+import { discoverWorkflows, discoverWorkflowsWithConfig } from './workflow-discovery';
 import { isBashNode, isCancelNode, isLoopNode } from './schemas';
 import * as bundledDefaults from './defaults/bundled-defaults';
 
 describe('Workflow Loader', () => {
   let testDir: string;
+  const originalArchonHome = process.env.ARCHON_HOME;
+  const originalArchonDocker = process.env.ARCHON_DOCKER;
 
   beforeEach(async () => {
     // Create unique temp directory for each test
     testDir = join(tmpdir(), `workflow-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     await mkdir(testDir, { recursive: true });
+    process.env.ARCHON_HOME = join(testDir, 'home');
+    delete process.env.ARCHON_DOCKER;
+    const { resetLegacyHomeWarningForTests } = await import('./workflow-discovery');
+    resetLegacyHomeWarningForTests();
   });
 
   afterEach(async () => {
@@ -52,6 +58,16 @@ describe('Workflow Loader', () => {
       await rm(testDir, { recursive: true, force: true });
     } catch {
       // Ignore cleanup errors
+    }
+    if (originalArchonHome === undefined) {
+      delete process.env.ARCHON_HOME;
+    } else {
+      process.env.ARCHON_HOME = originalArchonHome;
+    }
+    if (originalArchonDocker === undefined) {
+      delete process.env.ARCHON_DOCKER;
+    } else {
+      process.env.ARCHON_DOCKER = originalArchonDocker;
     }
   });
 
@@ -400,6 +416,158 @@ nodes:
       expect(workflows[0].webSearchMode).toBe('live');
       expect(workflows[0].additionalDirectories).toEqual(['/repo/a']);
     });
+
+    it('should round-trip workflow-level effort/thinking/fallbackModel/betas/sandbox', async () => {
+      // Regression: these 5 workflow-level fields are declared on
+      // workflowBaseSchema and consumed by the DAG executor's workflowLevelOptions
+      // (the object literal at the top of executeDagWorkflow), but the loader's
+      // manual workflow constructor used to silently drop them. YAML → loader →
+      // executor would lose the workflow-level defaults, so a node without its own
+      // value never inherited them. See `dag-executor.test.ts`
+      // "forwards workflow-level effort to node when no per-node override" — that
+      // test passes because it bypasses the loader.
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = `name: defaults
+description: workflow-level fallback options
+provider: claude
+effort: high
+thinking:
+  type: enabled
+  budgetTokens: 4000
+fallbackModel: claude-haiku-4-5
+betas:
+  - foo
+  - bar
+sandbox:
+  enabled: true
+nodes:
+  - id: only
+    prompt: p
+`;
+      await writeFile(join(workflowDir, 'defaults.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      const wf = result.workflows[0].workflow as {
+        effort?: unknown;
+        thinking?: unknown;
+        fallbackModel?: unknown;
+        betas?: unknown;
+        sandbox?: unknown;
+      };
+      expect(wf.effort).toBe('high');
+      expect(wf.thinking).toEqual({ type: 'enabled', budgetTokens: 4000 });
+      expect(wf.fallbackModel).toBe('claude-haiku-4-5');
+      expect(wf.betas).toEqual(['foo', 'bar']);
+      expect(wf.sandbox).toEqual({ enabled: true });
+    });
+
+    it('should omit workflow-level fallback fields when not present', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = `name: bare\ndescription: no fallbacks\nnodes:\n  - id: only\n    prompt: p\n`;
+      await writeFile(join(workflowDir, 'bare.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      const wf = result.workflows[0].workflow as Record<string, unknown>;
+      expect(wf.effort).toBeUndefined();
+      expect(wf.thinking).toBeUndefined();
+      expect(wf.fallbackModel).toBeUndefined();
+      expect(wf.betas).toBeUndefined();
+      expect(wf.sandbox).toBeUndefined();
+    });
+
+    it('should warn-and-drop invalid workflow-level fallback fields without rejecting the workflow', async () => {
+      // Same warn-and-ignore policy as `interactive` / `modelReasoningEffort`:
+      // a typo in one workflow-level field must not nuke the whole discovery pass.
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = `name: bad
+description: invalid fallback fields are dropped
+provider: claude
+effort: nuclear
+thinking:
+  type: enhanced
+fallbackModel: ''
+betas: []
+sandbox: 'yes'
+nodes:
+  - id: only
+    prompt: p
+`;
+      await writeFile(join(workflowDir, 'bad.yaml'), yaml);
+      mockLogger.warn.mockClear();
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toEqual([]);
+      expect(result.workflows).toHaveLength(1);
+      const wf = result.workflows[0].workflow as Record<string, unknown>;
+      expect(wf.effort).toBeUndefined();
+      expect(wf.thinking).toBeUndefined();
+      expect(wf.fallbackModel).toBeUndefined();
+      expect(wf.betas).toBeUndefined();
+      expect(wf.sandbox).toBeUndefined();
+
+      // The structured warn events are the operator-facing surface — assert each fired.
+      const events = mockLogger.warn.mock.calls.map(call => call[1]);
+      expect(events).toContain('invalid_workflow_effort_value_ignored');
+      expect(events).toContain('invalid_workflow_thinking_value_ignored');
+      expect(events).toContain('invalid_workflow_fallback_model_value_ignored');
+      expect(events).toContain('invalid_workflow_betas_value_ignored');
+      expect(events).toContain('invalid_workflow_sandbox_value_ignored');
+    });
+
+    it('should accept the thinking string shorthand at the workflow level', async () => {
+      // thinkingConfigSchema preprocesses 'enabled' → { type: 'enabled' }. The
+      // round-trip test covers the object form; this covers the shorthand path.
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = `name: thinking-shorthand
+description: thinking as a bare string
+thinking: enabled
+nodes:
+  - id: only
+    prompt: p
+`;
+      await writeFile(join(workflowDir, 'ts.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      const wf = result.workflows[0].workflow as { thinking?: unknown };
+      expect(wf.thinking).toEqual({ type: 'enabled' });
+    });
+
+    it('should trim surrounding whitespace from workflow-level fallbackModel', async () => {
+      // The inline trim (rather than safeParse) exists specifically so a stray
+      // surrounding space is normalised rather than rejected.
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = `name: fm-trim
+description: fallbackModel with whitespace
+fallbackModel: '  claude-haiku-4-5  '
+nodes:
+  - id: only
+    prompt: p
+`;
+      await writeFile(join(workflowDir, 'fm.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      const wf = result.workflows[0].workflow as { fallbackModel?: unknown };
+      expect(wf.fallbackModel).toBe('claude-haiku-4-5');
+    });
+
+    it('should trim and filter empty strings out of workflow-level betas', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = `name: beta-trim
+description: betas with whitespace
+betas:
+  - '  alpha  '
+  - ''
+  - 'beta'
+nodes:
+  - id: only
+    prompt: p
+`;
+      await writeFile(join(workflowDir, 't.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      const wf = result.workflows[0].workflow as { betas?: unknown };
+      expect(wf.betas).toEqual(['alpha', 'beta']);
+    });
   });
 
   describe('discoverWorkflows', () => {
@@ -659,6 +827,31 @@ nodes:
 
       // Should fail validation due to null description
       expect(workflows).toHaveLength(0);
+    });
+
+    it('parses always_run: true on a node', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      const yaml = `name: always-run-test
+description: Producer opts out of resume caching
+nodes:
+  - id: persist
+    bash: 'echo hi'
+    always_run: true
+  - id: consumer
+    command: consume
+    depends_on: [persist]
+`;
+      await writeFile(join(workflowDir, 'always-run.yaml'), yaml);
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      const workflows = result.workflows.map(ws => ws.workflow);
+
+      expect(workflows).toHaveLength(1);
+      expect(workflows[0].nodes[0].id).toBe('persist');
+      expect(workflows[0].nodes[0].always_run).toBe(true);
+      expect(workflows[0].nodes[1].always_run).toBeUndefined();
     });
   });
 
@@ -2510,6 +2703,200 @@ nodes:
       expect(result.errors).toHaveLength(0);
       // AI fields should produce a warning log
       expect(mockLogger.warn).toHaveBeenCalled();
+    });
+  });
+
+  describe('discoverWorkflows with null cwd (no project context)', () => {
+    it('skips project scope and returns no project-source workflows', async () => {
+      // When no codebase is registered the LIST endpoint passes null so bundled
+      // + home scopes can still surface. Discovery must not attempt to read a
+      // cwd-derived path and must not produce project-source entries.
+      const result = await discoverWorkflows(null, { loadDefaults: false });
+
+      // loadDefaults:false skips bundled and a clean test env has no home-
+      // scoped workflows, so the full result must be empty — without this the
+      // test would pass even if a stray project-path read were silently injected.
+      expect(result.workflows).toHaveLength(0);
+
+      const projectSourced = result.workflows.filter(w => w.source === 'project');
+      expect(projectSourced).toHaveLength(0);
+
+      // No project-step file/dir read errors — we never tried to access a project path.
+      const readErrors = result.errors.filter(e => e.errorType === 'read_error');
+      expect(readErrors).toHaveLength(0);
+    });
+
+    it('still loads bundled defaults when loadDefaults:true and cwd is null', async () => {
+      const result = await discoverWorkflows(null, { loadDefaults: true });
+
+      // No project-source entries (project step skipped).
+      const projectSourced = result.workflows.filter(w => w.source === 'project');
+      expect(projectSourced).toHaveLength(0);
+
+      // Bundled-source entries must surface — without this assertion the test
+      // would silently pass even if the bundled-defaults loader regressed.
+      const bundledSourced = result.workflows.filter(w => w.source === 'bundled');
+      expect(bundledSourced.length).toBeGreaterThan(0);
+    });
+
+    it('discoverWorkflowsWithConfig does not call loadConfig when cwd is null', async () => {
+      // The per-project config opt-out must not be evaluated when there is no
+      // project context — running loadConfig with no cwd would silently apply
+      // home-dir or working-dir defaults to a request that has neither.
+      const mockLoadConfig = mock(async () => ({ defaults: { loadDefaultWorkflows: true } }));
+      await discoverWorkflowsWithConfig(null, mockLoadConfig);
+      expect(mockLoadConfig).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('persist_session capability gating', () => {
+    it('parses persist_session: true on a node', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = `name: t\ndescription: t\nprovider: claude\nnodes:\n  - id: planner\n    prompt: p\n    persist_session: true\n`;
+      await writeFile(join(workflowDir, 't.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toEqual([]);
+      const node = result.workflows[0].workflow.nodes[0];
+      expect('persist_session' in node ? node.persist_session : undefined).toBe(true);
+    });
+
+    it('parses persist_sessions: true at workflow root', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = `name: t\ndescription: t\nprovider: claude\npersist_sessions: true\nnodes:\n  - id: planner\n    prompt: p\n`;
+      await writeFile(join(workflowDir, 't.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toEqual([]);
+      expect(
+        (result.workflows[0].workflow as { persist_sessions?: boolean }).persist_sessions
+      ).toBe(true);
+    });
+
+    it('does NOT capability-check non-AI nodes when persist_sessions is workflow-level', async () => {
+      // Regression for CodeRabbit #7: workflow-level persist_sessions: true with a bash
+      // node would falsely trigger the capability check on a provider that can't even
+      // be invoked from a bash node. Bash/script/approval/cancel/loop and context:'fresh'
+      // nodes must skip the capability gate.
+      const { registerProvider } = await import('@archon/providers');
+      registerProvider({
+        id: 'no-resume-skip-test',
+        displayName: 'No Resume Skip Test',
+        builtIn: false,
+        capabilities: {
+          sessionResume: false,
+          mcp: false,
+          hooks: false,
+          skills: false,
+          agents: false,
+          toolRestrictions: false,
+          structuredOutput: false,
+          envInjection: false,
+          costControl: false,
+          effortControl: false,
+          thinkingControl: false,
+          fallbackModel: false,
+          sandbox: false,
+        },
+        factory: () => ({
+          getType: () => 'no-resume-skip-test',
+          getCapabilities: () => ({
+            sessionResume: false,
+            mcp: false,
+            hooks: false,
+            skills: false,
+            agents: false,
+            toolRestrictions: false,
+            structuredOutput: false,
+            envInjection: false,
+            costControl: false,
+            effortControl: false,
+            thinkingControl: false,
+            fallbackModel: false,
+            sandbox: false,
+          }),
+          // eslint-disable-next-line require-yield
+          async *sendQuery() {
+            return;
+          },
+        }),
+      });
+      try {
+        const workflowDir = join(testDir, '.archon', 'workflows');
+        await mkdir(workflowDir, { recursive: true });
+        // Workflow opts in at root; the only node is bash. Should LOAD CLEAN because
+        // bash never invokes a provider session.
+        const yaml = `name: t\ndescription: t\nprovider: no-resume-skip-test\npersist_sessions: true\nnodes:\n  - id: build\n    bash: 'echo hello'\n`;
+        await writeFile(join(workflowDir, 't.yaml'), yaml);
+        const result = await discoverWorkflows(testDir, { loadDefaults: false });
+        expect(result.errors).toEqual([]);
+        expect(result.workflows.length).toBe(1);
+      } finally {
+        clearRegistry();
+        registerBuiltinProviders();
+      }
+    });
+
+    it('rejects persist_session: true on a provider without sessionResume', async () => {
+      // Register an ephemeral provider with sessionResume: false to drive the capability gate.
+      // No unregister API exists; restore via clearRegistry + registerBuiltinProviders in finally.
+      const { registerProvider } = await import('@archon/providers');
+      registerProvider({
+        id: 'no-resume-test',
+        displayName: 'No Resume Test',
+        builtIn: false,
+        capabilities: {
+          sessionResume: false,
+          mcp: false,
+          hooks: false,
+          skills: false,
+          agents: false,
+          toolRestrictions: false,
+          structuredOutput: false,
+          envInjection: false,
+          costControl: false,
+          effortControl: false,
+          thinkingControl: false,
+          fallbackModel: false,
+          sandbox: false,
+        },
+        factory: () => ({
+          getType: () => 'no-resume-test',
+          getCapabilities: () => ({
+            sessionResume: false,
+            mcp: false,
+            hooks: false,
+            skills: false,
+            agents: false,
+            toolRestrictions: false,
+            structuredOutput: false,
+            envInjection: false,
+            costControl: false,
+            effortControl: false,
+            thinkingControl: false,
+            fallbackModel: false,
+            sandbox: false,
+          }),
+          // eslint-disable-next-line require-yield
+          async *sendQuery() {
+            return;
+          },
+        }),
+      });
+      try {
+        const workflowDir = join(testDir, '.archon', 'workflows');
+        await mkdir(workflowDir, { recursive: true });
+        const yaml = `name: t\ndescription: t\nprovider: no-resume-test\nnodes:\n  - id: planner\n    prompt: p\n    persist_session: true\n`;
+        await writeFile(join(workflowDir, 't.yaml'), yaml);
+        const result = await discoverWorkflows(testDir, { loadDefaults: false });
+        expect(result.workflows).toEqual([]);
+        expect(result.errors.length).toBeGreaterThan(0);
+        expect(result.errors[0].error).toContain('persist_session');
+        expect(result.errors[0].error).toContain('sessionResume');
+      } finally {
+        clearRegistry();
+        registerBuiltinProviders();
+      }
     });
   });
 });

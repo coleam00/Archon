@@ -11,11 +11,13 @@ sidebar:
 
 Connect Archon to GitHub so you can interact with your AI coding assistant from issues and pull requests.
 
+> **Teams sharing one Archon instance:** prefer the [GitHub App setup](./github-app-setup.md). The PAT-mode setup on this page is the legacy path — it still works for solo installs, but bot comments all post under the PAT owner's avatar and tokens never auto-rotate. App mode gives you `<slug>[bot]` attribution, 1h token rotation, multi-org support, and one webhook URL.
+
 ## Prerequisites
 
-- Archon server running (see [Getting Started](/getting-started/))
+- Archon server running (see [Getting Started](/getting-started/overview/))
 - GitHub repository with issues enabled
-- `GITHUB_TOKEN` set in your environment (see [Getting Started](/getting-started/))
+- `GITHUB_TOKEN` set in your environment (see [Getting Started](/getting-started/overview/))
 - Public endpoint for webhooks (see ngrok setup below for local development)
 
 ## Step 1: Generate Webhook Secret

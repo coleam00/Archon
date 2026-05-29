@@ -8,11 +8,13 @@ import type { WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import type { MergedConfig } from '../config/config-types';
 import * as workflowDb from '../db/workflows';
 import * as workflowEventDb from '../db/workflow-events';
+import * as workflowNodeSessionDb from '../db/workflow-node-sessions';
 import * as codebaseDb from '../db/codebases';
 import * as envVarDb from '../db/env-vars';
 import { getAgentProvider } from '@archon/providers';
 import { loadConfig as loadMergedConfig } from '../config/config-loader';
 import { createLogger } from '@archon/paths';
+import type { IGitHubAppAuthProvider } from '../github-auth';
 
 // Compile-time assertion: MergedConfig must remain a structural subtype of WorkflowConfig.
 // If MergedConfig drifts from WorkflowConfig, this line becomes a type error.
@@ -59,7 +61,28 @@ export function createWorkflowStore(): IWorkflowStore {
     getCompletedDagNodeOutputs: workflowEventDb.getCompletedDagNodeOutputs,
     getCodebase: codebaseDb.getCodebase,
     getCodebaseEnvVars: envVarDb.getCodebaseEnvVars,
+    getWorkflowNodeSession: workflowNodeSessionDb.getWorkflowNodeSession,
+    upsertWorkflowNodeSession: workflowNodeSessionDb.upsertWorkflowNodeSession,
+    deleteWorkflowNodeSessions: workflowNodeSessionDb.deleteWorkflowNodeSessions,
   };
+}
+
+/**
+ * Module-singleton registration for the GitHub App auth provider. Set by the
+ * server bootstrap (`registerGitHubAppAuthProvider(provider)`) when App mode
+ * is active; remains null in PAT mode and during CLI execution. The
+ * workflow-deps factory reads this to decide whether to expose
+ * `resolveBotGitHubToken` to the engine.
+ *
+ * Singleton because the provider is itself a process-singleton (one cache
+ * shared by the GitHub adapter, the workflow executor, and the internal
+ * credential-helper endpoint). Threading it through every createWorkflowDeps
+ * caller would just smuggle a singleton through more arguments.
+ */
+let registeredGitHubAppAuthProvider: IGitHubAppAuthProvider | null = null;
+
+export function registerGitHubAppAuthProvider(provider: IGitHubAppAuthProvider | null): void {
+  registeredGitHubAppAuthProvider = provider;
 }
 
 /**
@@ -67,9 +90,26 @@ export function createWorkflowStore(): IWorkflowStore {
  * Single construction point — avoids duplicating the wiring across callers.
  */
 export function createWorkflowDeps(): WorkflowDeps {
+  const provider = registeredGitHubAppAuthProvider;
   return {
     store: createWorkflowStore(),
     getAgentProvider,
     loadConfig: loadMergedConfig,
+    // App mode: resolve fresh installation tokens for subprocess env. PAT mode:
+    // undefined → engine falls back to env inheritance, preserving legacy
+    // behaviour for solo installs.
+    resolveBotGitHubToken: provider
+      ? async (owner: string, repo: string): Promise<string | undefined> => {
+          try {
+            return await provider.getInstallationToken(owner, repo);
+          } catch (err) {
+            getLog().warn(
+              { err: err as Error, owner, repo },
+              'workflow_deps.bot_token_resolve_failed'
+            );
+            return undefined;
+          }
+        }
+      : undefined,
   };
 }

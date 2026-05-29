@@ -6,7 +6,7 @@ import { Octokit } from '@octokit/rest';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { readdir, access } from 'fs/promises';
 import { join } from 'path';
-import type { IPlatformAdapter, MessageMetadata } from '@archon/core';
+import type { IPlatformAdapter, MessageMetadata, GitHubAuth } from '@archon/core';
 import type { IsolationHints } from '@archon/isolation';
 import {
   ConversationNotFoundError,
@@ -16,8 +16,14 @@ import {
   getLinkedIssueNumbers,
   onConversationClosed,
   ConversationLockManager,
+  AppNotInstalledError,
+  installCredentialHelper,
 } from '@archon/core';
-import { getArchonWorkspacesPath, getCommandFolderSearchPaths } from '@archon/paths';
+import {
+  ensureProjectStructure,
+  getCommandFolderSearchPaths,
+  getProjectSourcePath,
+} from '@archon/paths';
 import {
   isWorktreePath,
   cloneRepository,
@@ -28,6 +34,8 @@ import {
 } from '@archon/git';
 import * as db from '@archon/core/db/conversations';
 import * as codebaseDb from '@archon/core/db/codebases';
+import * as userDb from '@archon/core/db/users';
+import { resolveDefaultAssistant } from '@archon/core/config/resolve-assistant';
 import { createLogger } from '@archon/paths';
 import { parseAllowedUsers as parseGitHubAllowedUsers, isGitHubUserAuthorized } from './auth';
 import { splitIntoParagraphChunks } from '../../utils/message-splitting';
@@ -46,7 +54,14 @@ const MAX_LENGTH = 65000; // GitHub comment limit (~65,536, leave buffer for saf
 const BOT_RESPONSE_MARKER = '<!-- archon-bot-response -->';
 
 export class GitHubAdapter implements IPlatformAdapter {
-  private octokit: Octokit;
+  /**
+   * PAT-mode Octokit: a singleton constructed at startup. Null in App mode —
+   * App-mode callers use `resolveOctokit(owner, repo)` to get a per-installation
+   * Octokit from the auth provider. Tests reach in via `@ts-expect-error` and
+   * assign a mock object to this field.
+   */
+  private octokit: Octokit | null;
+  private readonly auth: GitHubAuth;
   private webhookSecret: string;
   private allowedUsers: string[];
   private botMention: string;
@@ -54,13 +69,14 @@ export class GitHubAdapter implements IPlatformAdapter {
   private readonly retryDelayFn: (attempt: number) => number;
 
   constructor(
-    token: string,
+    auth: GitHubAuth,
     webhookSecret: string,
     lockManager: ConversationLockManager,
     botMention?: string,
     options?: { retryDelayMs?: (attempt: number) => number }
   ) {
-    this.octokit = new Octokit({ auth: token });
+    this.auth = auth;
+    this.octokit = auth.kind === 'pat' ? new Octokit({ auth: auth.token }) : null;
     this.webhookSecret = webhookSecret;
     this.lockManager = lockManager;
     this.botMention = botMention ?? 'Archon';
@@ -75,7 +91,101 @@ export class GitHubAdapter implements IPlatformAdapter {
 
     this.retryDelayFn = options?.retryDelayMs ?? ((attempt: number): number => 1000 * attempt);
 
-    getLog().info({ botMention: this.botMention }, 'github.adapter_initialized');
+    getLog().info(
+      { botMention: this.botMention, authMode: auth.kind },
+      'github.adapter_initialized'
+    );
+  }
+
+  /**
+   * Auth mode discriminator exposed for the server bootstrap so that the
+   * internal /git-credential endpoint can be conditionally registered.
+   */
+  getAuthMode(): 'pat' | 'app' {
+    return this.auth.kind;
+  }
+
+  /**
+   * Resolve a fresh installation token for the (owner, repo). App mode only —
+   * throws in PAT mode so the server's internal endpoint surface fails fast if
+   * mis-registered.
+   */
+  async getInstallationToken(owner: string, repo: string): Promise<string> {
+    if (this.auth.kind !== 'app') {
+      throw new Error('getInstallationToken is only available in App mode');
+    }
+    return this.auth.provider.getInstallationToken(owner, repo);
+  }
+
+  /**
+   * Resolve the right Octokit for an outbound API call. In PAT mode this is
+   * the constructor-created singleton; in App mode it's a per-installation
+   * Octokit fetched from the auth provider (which caches by installation id).
+   */
+  private async resolveOctokit(owner: string, repo: string): Promise<Octokit> {
+    if (this.auth.kind === 'pat') {
+      // Non-null in PAT mode by construction; tests overwrite this field directly.
+      if (!this.octokit) {
+        throw new Error('Octokit unavailable in PAT mode — adapter not initialized');
+      }
+      return this.octokit;
+    }
+    return this.auth.provider.getOctokitForInstallation(owner, repo);
+  }
+
+  /**
+   * In App mode the bot account is `<slug>[bot]`; in PAT mode it's whatever the
+   * operator configured as `botMention` (defaults to the PAT-owner's GitHub
+   * username when the operator names it accordingly). Used for the secondary
+   * self-filter — distinct from @mention parsing which always uses botMention.
+   */
+  private get botLogin(): string {
+    return this.auth.kind === 'app' ? `${this.auth.provider.slug}[bot]` : this.botMention;
+  }
+
+  /**
+   * Wrap an Octokit call with a single retry on 401. In App mode a stale cached
+   * token (e.g. revoked mid-session) surfaces as 401; we evict + retry once.
+   * In PAT mode 401 is unrecoverable (operator must rotate the PAT), so we
+   * surface immediately.
+   */
+  private async withTokenRefresh<T>(
+    owner: string,
+    repo: string,
+    fn: (octokit: Octokit) => Promise<T>
+  ): Promise<T> {
+    const octokit = await this.resolveOctokit(owner, repo);
+    try {
+      return await fn(octokit);
+    } catch (err) {
+      const status = (err as { status?: number }).status;
+      if (status !== 401 || this.auth.kind !== 'app') {
+        throw err;
+      }
+      // Evict BOTH caches (token + lookup) so an App-reinstall scenario doesn't
+      // serve the stale installation id from the lookupCache for the full 1h.
+      this.auth.provider.invalidateRepo(owner, repo);
+      const fresh = await this.resolveOctokit(owner, repo);
+      try {
+        return await fn(fresh);
+      } catch (retryErr) {
+        // Second consecutive failure — surface a distinct ERROR log so this
+        // path is greppable in incident triage. Bound by design: no third
+        // retry, the error propagates from here.
+        const retryStatus = (retryErr as { status?: number }).status;
+        getLog().error(
+          {
+            err: retryErr,
+            owner,
+            repo,
+            firstStatus: status,
+            retryStatus,
+          },
+          'github.token_refresh_retry_failed'
+        );
+        throw retryErr;
+      }
+    }
   }
 
   /**
@@ -182,12 +292,14 @@ export class GitHubAdapter implements IPlatformAdapter {
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        await this.octokit.rest.issues.createComment({
-          owner: parsed.owner,
-          repo: parsed.repo,
-          issue_number: parsed.number,
-          body: markedMessage,
-        });
+        await this.withTokenRefresh(parsed.owner, parsed.repo, octokit =>
+          octokit.rest.issues.createComment({
+            owner: parsed.owner,
+            repo: parsed.repo,
+            issue_number: parsed.number,
+            body: markedMessage,
+          })
+        );
         getLog().debug({ conversationId }, 'github.comment_posted');
         return;
       } catch (error) {
@@ -396,14 +508,16 @@ export class GitHubAdapter implements IPlatformAdapter {
     number: number
   ): Promise<string[]> {
     try {
-      const { data: comments } = await this.octokit.rest.issues.listComments({
-        owner,
-        repo,
-        issue_number: number,
-        per_page: 20, // Last 20 comments for context
-        sort: 'created',
-        direction: 'desc',
-      });
+      const { data: comments } = await this.withTokenRefresh(owner, repo, octokit =>
+        octokit.rest.issues.listComments({
+          owner,
+          repo,
+          issue_number: number,
+          per_page: 20, // Last 20 comments for context
+          sort: 'created',
+          direction: 'desc',
+        })
+      );
 
       // Reverse to get chronological order (oldest first)
       return [...comments].reverse().map(comment => {
@@ -490,7 +604,27 @@ export class GitHubAdapter implements IPlatformAdapter {
 
     // Directory doesn't exist - clone the repository
     getLog().info({ owner, repo, repoPath }, 'github.repo_cloning');
-    const ghToken = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;
+
+    // Create project structure (source/, worktrees/, artifacts/, logs/) before
+    // cloning so worktree paths resolve correctly on first webhook clone.
+    await ensureProjectStructure(owner, repo);
+
+    // Resolve the right auth token per mode. App mode talks to the auth
+    // provider (installation token, ~1h validity); PAT mode reads env directly.
+    let ghToken: string | undefined;
+    if (this.auth.kind === 'app') {
+      try {
+        ghToken = await this.auth.provider.getInstallationToken(owner, repo);
+      } catch (err) {
+        if (err instanceof AppNotInstalledError) {
+          getLog().error({ err, owner, repo }, 'github.repo_clone_app_not_installed');
+          throw err;
+        }
+        throw err;
+      }
+    } else {
+      ghToken = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;
+    }
     const repoUrl = `https://github.com/${owner}/${repo}.git`;
 
     const cloneResult = await cloneRepository(
@@ -510,9 +644,11 @@ export class GitHubAdapter implements IPlatformAdapter {
           `Repository ${owner}/${repo} not found or is private. Check repository access.`
         );
       } else if (cloneResult.error.code === 'permission_denied') {
-        throw new Error(
-          `Authentication failed for ${owner}/${repo}. Check GITHUB_TOKEN permissions.`
-        );
+        const authHint =
+          this.auth.kind === 'app'
+            ? 'Check that the Archon GitHub App is installed on the org and has the Contents:Read permission.'
+            : 'Check GITHUB_TOKEN permissions.';
+        throw new Error(`Authentication failed for ${owner}/${repo}. ${authHint}`);
       }
       throw new Error(
         `Failed to clone ${owner}/${repo}: ${'message' in cloneResult.error ? cloneResult.error.message : cloneResult.error.code}`
@@ -520,6 +656,37 @@ export class GitHubAdapter implements IPlatformAdapter {
     }
 
     await addSafeDirectory(toRepoPath(repoPath));
+
+    // App mode: install the git credential helper on the newly cloned worktree
+    // so workflows that outlive the 1h installation-token expiry can refresh
+    // credentials in-place. Non-fatal — workflows that complete in <1h still
+    // succeed via the URL-embedded token from the clone above. The result
+    // discriminator tells us whether the install actually happened so we
+    // don't log a false "installed" line in builds where the helper script
+    // isn't on disk.
+    if (this.auth.kind === 'app') {
+      const result = await installCredentialHelper(repoPath);
+      switch (result.kind) {
+        case 'installed':
+          getLog().info(
+            { repoPath, owner, repo, helperPath: result.helperPath },
+            'github_auth.credential_helper_installed'
+          );
+          break;
+        case 'skipped':
+          getLog().warn(
+            { repoPath, owner, repo, reason: result.reason, sourcePath: result.sourcePath },
+            'github_auth.credential_helper_skipped'
+          );
+          break;
+        case 'failed':
+          getLog().warn(
+            { err: result.error, repoPath, owner, repo },
+            'github_auth.credential_helper_install_failed'
+          );
+          break;
+      }
+    }
   }
 
   /**
@@ -580,9 +747,10 @@ export class GitHubAdapter implements IPlatformAdapter {
     let existing = await codebaseDb.findCodebaseByRepoUrl(repoUrlNoGit);
     existing ??= await codebaseDb.findCodebaseByRepoUrl(repoUrlWithGit);
 
-    // Canonical path includes owner to prevent collisions between repos with same name
-    // e.g., alice/utils and bob/utils get separate directories
-    const canonicalPath = join(getArchonWorkspacesPath(), owner, repo);
+    // Canonical path uses the project source/ subdirectory so that worktrees/,
+    // artifacts/, and logs/ live as siblings of the cloned repo (not nested
+    // inside it). Mirrors the CLI /clone path; see issue #1547.
+    const canonicalPath = getProjectSourcePath(owner, repo);
 
     if (existing) {
       // Check if existing codebase points to a worktree path - fix it if so
@@ -610,6 +778,7 @@ export class GitHubAdapter implements IPlatformAdapter {
       name: `${owner}/${repo}`,
       repository_url: repoUrlNoGit, // Store without .git for consistency
       default_cwd: canonicalPath,
+      ai_assistant_type: await resolveDefaultAssistant(canonicalPath),
     });
 
     getLog().info({ codebaseName: codebase.name, path: canonicalPath }, 'github.codebase_created');
@@ -716,6 +885,14 @@ ${userComment}`;
     const { owner, repo, number, comment, eventType, issue, pullRequest, isCloseEvent, isMerged } =
       parsed;
 
+    // App-mode optimisation: the webhook payload already includes the
+    // installation id. Priming the lookup cache skips one HTTP round trip
+    // (`GET /repos/{owner}/{repo}/installation`) before the first outbound API
+    // call to this repo after a restart. No-op when payload lacks installation.
+    if (this.auth.kind === 'app' && event.installation?.id !== undefined) {
+      this.auth.provider.primeInstallationLookup(owner, repo, event.installation.id);
+    }
+
     // 3. Handle close/merge events (cleanup worktree)
     if (isCloseEvent) {
       const mergeLabel = isMerged ? 'merge' : 'close';
@@ -734,9 +911,13 @@ ${userComment}`;
       );
       return;
     }
-    // Secondary: Check comment author (works with dedicated bot account)
+    // Secondary: Check comment author. In App mode the bot account is
+    // `<slug>[bot]`; in PAT mode it's whatever the operator named via
+    // botMention. Comparing against `botLogin` (not `botMention`) keeps the
+    // filter narrow — comments posted under a user's own GitHub login from a
+    // user-to-server token would otherwise be misfiltered.
     const commentAuthor = event.comment?.user?.login;
-    if (commentAuthor?.toLowerCase() === this.botMention.toLowerCase()) {
+    if (commentAuthor?.toLowerCase() === this.botLogin.toLowerCase()) {
       getLog().debug({ commentAuthor }, 'github.ignoring_own_comment');
       return;
     }
@@ -745,6 +926,29 @@ ${userComment}`;
     if (!this.hasMention(comment)) return;
 
     getLog().info({ eventType, owner, repo, number }, 'github.webhook_processing');
+
+    // 5b. Resolve GitHub login → Archon user (auto-create on first sight).
+    // Comment author may differ from event.sender for PR-review comments; prefer
+    // the comment author when present so individual reviewers get their own row.
+    // Resolution failure must not drop the webhook — warn-log and continue with
+    // archonUserId undefined so the conversation/run rows fall back to NULL.
+    const attributedLogin = event.comment?.user?.login ?? senderUsername;
+    let archonUserId: string | undefined;
+    if (attributedLogin) {
+      try {
+        const user = await userDb.findOrCreateUserByPlatformIdentity(
+          'github',
+          attributedLogin,
+          attributedLogin
+        );
+        archonUserId = user.id;
+      } catch (err) {
+        getLog().warn(
+          { err: toError(err), githubLogin: attributedLogin },
+          'github.user_resolve_failed'
+        );
+      }
+    }
 
     // 4. Build conversationId
     const conversationId = this.buildConversationId(owner, repo, number);
@@ -783,7 +987,9 @@ ${userComment}`;
     // 7. Get default branch
     let defaultBranch: string;
     try {
-      const { data: repoData } = await this.octokit.rest.repos.get({ owner, repo });
+      const { data: repoData } = await this.withTokenRefresh(owner, repo, octokit =>
+        octokit.rest.repos.get({ owner, repo })
+      );
       defaultBranch = repoData.default_branch;
     } catch (error) {
       const err = toError(error);
@@ -829,11 +1035,13 @@ ${userComment}`;
 
       // Fetch PR head branch, SHA, and fork status for isolation
       try {
-        const { data: prData } = await this.octokit.rest.pulls.get({
-          owner,
-          repo,
-          pull_number: number,
-        });
+        const { data: prData } = await this.withTokenRefresh(owner, repo, octokit =>
+          octokit.rest.pulls.get({
+            owner,
+            repo,
+            pull_number: number,
+          })
+        );
         isolationHints.prBranch = toBranchName(prData.head.ref);
         isolationHints.prSha = prData.head.sha;
 
@@ -933,6 +1141,7 @@ ${userComment}`;
           issueContext: contextToAppend,
           threadContext,
           isolationHints,
+          userId: archonUserId,
         });
       } catch (error) {
         const err = toError(error);
