@@ -13,7 +13,7 @@ export const workflowEventRowSchema = z.object({
   event_type: z.string(),
   step_index: z.number().nullable(),
   step_name: z.string().nullable(),
-  data: z.record(z.unknown()),
+  data: z.record(z.string(), z.unknown()),
   created_at: z.string(),
 });
 

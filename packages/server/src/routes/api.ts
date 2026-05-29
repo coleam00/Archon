@@ -879,7 +879,7 @@ const getHealthRoute = createRoute({
             .object({
               status: z.string(),
               adapter: z.string(),
-              concurrency: z.record(z.unknown()),
+              concurrency: z.record(z.string(), z.unknown()),
               runningWorkflows: z.number(),
               version: z.string().optional(),
               is_docker: z.boolean(),

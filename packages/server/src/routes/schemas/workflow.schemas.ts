@@ -54,7 +54,7 @@ export const getWorkflowResponseSchema = z
   .openapi('GetWorkflowResponse');
 
 /** Request body for workflow definition endpoints (PUT and POST /validate). */
-const definitionBodySchema = z.object({ definition: z.record(z.unknown()) });
+const definitionBodySchema = z.object({ definition: z.record(z.string(), z.unknown()) });
 
 /** PUT /api/workflows/:name request body. */
 export const saveWorkflowBodySchema = definitionBodySchema.openapi('SaveWorkflowBody');

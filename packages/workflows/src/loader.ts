@@ -43,17 +43,20 @@ function getLog(): ReturnType<typeof createLogger> {
  * doesn't abort the discovery pass. Mirrors the policy used for `tags` /
  * `interactive`. `extra` merges into the warning payload (e.g. the list of
  * valid enum options).
+ *
+ * The return type is inferred from the schema (`z.output<S>`), so
+ * preprocess-based schemas (e.g. `thinkingConfigSchema`, whose input is
+ * `unknown`) still resolve to their parsed output type rather than their
+ * input type. zod v4 removed `ZodTypeDef` as the middle type parameter, so the
+ * old `z.ZodType<T, z.ZodTypeDef, unknown>` form no longer compiles.
  */
-function parseOptionalField<T>(
+function parseOptionalField<S extends z.ZodType>(
   raw: unknown,
-  // Output is `T`; the input param stays `unknown` (decoupled from `T`) so
-  // preprocess-based schemas (e.g. `thinkingConfigSchema`, whose input is
-  // `unknown`) infer `T` from their output rather than their input.
-  schema: z.ZodType<T, z.ZodTypeDef, unknown>,
+  schema: S,
   filename: string,
   event: string,
   extra?: Record<string, unknown>
-): T | undefined {
+): z.output<S> | undefined {
   const result = schema.safeParse(raw);
   if (result.success) return result.data;
   if (raw !== undefined) {
@@ -540,9 +543,9 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
     // betas: trim, drop empties, then validate the cleaned list through
     // `betasSchema` (non-empty array of non-empty strings). An empty result
     // drops the field entirely — the Claude SDK expects a populated beta header
-    // or none at all. Validating via the schema yields the `[string, ...string[]]`
-    // type without an unchecked cast.
-    let betas: [string, ...string[]] | undefined;
+    // or none at all. The schema's `.nonempty()` enforces non-emptiness at
+    // runtime, so the cleaned list reaches the SDK validated without a cast.
+    let betas: string[] | undefined;
     if (raw.betas !== undefined) {
       const cleaned = Array.isArray(raw.betas)
         ? raw.betas

@@ -27,8 +27,8 @@
     "@archon/git": "workspace:*",
     "@archon/paths": "workspace:*",
     "@archon/providers": "workspace:*",
-    "@hono/zod-openapi": "^0.19.6",
-    "zod": "^3.25.28"
+    "@hono/zod-openapi": "^1.4.0",
+    "zod": "^4.4.3"
   },
   "peerDependencies": {
     "typescript": "^5.0.0"

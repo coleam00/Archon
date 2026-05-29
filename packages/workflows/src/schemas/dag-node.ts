@@ -43,9 +43,9 @@ export type EffortLevel = z.infer<typeof effortLevelSchema>;
 
 /**
  * Claude Agent SDK beta header list. Non-empty array of non-empty strings —
- * the SDK expects either a populated beta header or none at all. The
- * `.nonempty()` constraint makes the inferred type `[string, ...string[]]`,
- * which the loader relies on to validate cleaned input without an unchecked cast.
+ * the SDK expects either a populated beta header or none at all. `.nonempty()`
+ * enforces the min-length-1 rule at runtime; it does not narrow the inferred
+ * TypeScript type to a non-empty tuple (the type stays `string[]`).
  */
 export const betasSchema = z.array(z.string().min(1)).nonempty("'betas' must be a non-empty array");
 
@@ -98,7 +98,7 @@ export const sandboxSettingsSchema = z
         denyRead: z.array(z.string()).optional(),
       })
       .optional(),
-    ignoreViolations: z.record(z.array(z.string())).optional(),
+    ignoreViolations: z.record(z.string(), z.array(z.string())).optional(),
     enableWeakerNestedSandbox: z.boolean().optional(),
     enableWeakerNetworkIsolation: z.boolean().optional(),
     excludedCommands: z.array(z.string()).optional(),
@@ -145,7 +145,7 @@ export const dagNodeBaseSchema = z.object({
   model: z.string().optional(),
   provider: z.string().trim().min(1).optional(),
   context: z.enum(['fresh', 'shared']).optional(),
-  output_format: z.record(z.unknown()).optional(),
+  output_format: z.record(z.string(), z.unknown()).optional(),
   allowed_tools: z.array(z.string()).optional(),
   denied_tools: z.array(z.string()).optional(),
   idle_timeout: z.number().optional(),
@@ -157,10 +157,22 @@ export const dagNodeBaseSchema = z.object({
     .nonempty("'skills' must be a non-empty array")
     .optional(),
   agents: z
-    .record(
-      z.string().regex(AGENT_ID_REGEX, 'agent IDs must be kebab-case (a-z, 0-9, hyphen)'),
-      agentDefinitionSchema
-    )
+    .record(z.string(), agentDefinitionSchema)
+    // Validate agent-id keys in a superRefine rather than via a regex on the
+    // record key schema: zod v4 collapses a failing key-schema into a generic
+    // "Invalid key in record" message and drops the custom text, so the
+    // kebab-case guidance is emitted here (with the offending key in the path).
+    .superRefine((map, ctx) => {
+      for (const key of Object.keys(map)) {
+        if (!AGENT_ID_REGEX.test(key)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `agent IDs must be kebab-case (a-z, 0-9, hyphen): '${key}'`,
+            path: [key],
+          });
+        }
+      }
+    })
     .refine(map => Object.keys(map).length > 0, "'agents' must have at least one entry")
     .optional(),
   effort: effortLevelSchema.optional(),
