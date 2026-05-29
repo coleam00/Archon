@@ -1039,22 +1039,18 @@ async function executeNodeInternal(
       }
     }
 
-    // Only post "completed via idle timeout" when the node produced output — zero-output timeout falls through to the empty-output guard below.
-    if (nodeIdleTimedOut) {
-      // Invariant: providers only set structuredOutput when the AI produced parseable content.
-      const hasAnyOutput = nodeOutputText.trim() !== '' || structuredOutput !== undefined;
-      if (hasAnyOutput) {
-        getLog().warn(
-          { nodeId: node.id, timeoutMs: effectiveIdleTimeout },
-          'dag_node_completed_via_idle_timeout'
-        );
-        await safeSendMessage(
-          platform,
-          conversationId,
-          `⚠️ Node \`${node.id}\` completed via idle timeout (no output for ${String(effectiveIdleTimeout / 60000)} min). The AI likely finished but the subprocess didn't exit cleanly.`,
-          nodeContext
-        );
-      }
+    // Only post "completed via idle timeout" when output exists — zero-output timeout falls through to the empty-output guard below.
+    if (nodeIdleTimedOut && (nodeOutputText.trim() !== '' || structuredOutput !== undefined)) {
+      getLog().warn(
+        { nodeId: node.id, timeoutMs: effectiveIdleTimeout },
+        'dag_node_completed_via_idle_timeout'
+      );
+      await safeSendMessage(
+        platform,
+        conversationId,
+        `⚠️ Node \`${node.id}\` completed via idle timeout (no output for ${String(effectiveIdleTimeout / 60000)} min). The AI likely finished but the subprocess didn't exit cleanly.`,
+        nodeContext
+      );
     }
 
     // If cancelled during streaming (not idle timeout), return as failed with cancel reason

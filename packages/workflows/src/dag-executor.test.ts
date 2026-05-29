@@ -5359,13 +5359,12 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
       _resumeSessionId?: string,
       options?: { abortSignal?: AbortSignal }
     ) {
-      // Wait for abort (idle timeout fires abort). Use AbortSignal so no dangling timers remain.
+      // Wait for abort (idle timeout fires abort).
       await new Promise<void>(resolve => {
-        const onAbort = (): void => resolve();
         if (options?.abortSignal?.aborted) {
           resolve();
         } else {
-          options?.abortSignal?.addEventListener('abort', onAbort, { once: true });
+          options?.abortSignal?.addEventListener('abort', () => resolve(), { once: true });
         }
       });
     });
