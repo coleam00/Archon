@@ -181,6 +181,8 @@ export function handleUnhandledRejection(reason: unknown): void {
   process.exit(1);
 }
 
+export type { HealthResponse } from './routes/schemas/system.schemas';
+
 export interface ServerOptions {
   /**
    * Override the web dist path (for CLI binary with downloaded web-dist).

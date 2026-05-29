@@ -73,7 +73,7 @@ import * as workflowEventDb from '@archon/core/db/workflow-events';
 import * as messageDb from '@archon/core/db/messages';
 import { resetWorkflowNodeSessions } from '@archon/core/operations/workflow-operations';
 import { errorSchema } from './schemas/common.schemas';
-import { updateCheckResponseSchema } from './schemas/system.schemas';
+import { healthResponseSchema, updateCheckResponseSchema } from './schemas/system.schemas';
 import {
   workflowListResponseSchema,
   validateWorkflowBodySchema,
@@ -875,17 +875,7 @@ const getHealthRoute = createRoute({
     200: {
       content: {
         'application/json': {
-          schema: z
-            .object({
-              status: z.string(),
-              adapter: z.string(),
-              concurrency: z.record(z.string(), z.unknown()),
-              runningWorkflows: z.number(),
-              version: z.string().optional(),
-              is_docker: z.boolean(),
-              activePlatforms: z.array(z.string()).optional(),
-            })
-            .openapi('HealthResponse'),
+          schema: healthResponseSchema,
         },
       },
       description: 'Health status',
