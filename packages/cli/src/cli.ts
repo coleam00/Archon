@@ -78,6 +78,7 @@ import {
   BUNDLED_IS_BINARY,
   BUNDLED_VERSION,
   shutdownTelemetry,
+  captureArchonStarted,
   isVerboseBoot,
 } from '@archon/paths';
 import * as git from '@archon/git';
@@ -306,6 +307,10 @@ async function main(): Promise<number> {
     } else if (values.verbose) {
       setLogLevel('debug');
     }
+
+    // Anonymous once-per-invocation startup event (self-gates on opt-out).
+    // Flushed by the shutdownTelemetry() call in main()'s finally block.
+    captureArchonStarted({ surface: 'cli' });
 
     // Note: orphaned run cleanup moved to `workflow cleanup` command only.
     // Running it on every CLI startup killed parallel workflow runs (all

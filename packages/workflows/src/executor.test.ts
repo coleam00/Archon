@@ -24,6 +24,9 @@ mock.module('@archon/paths', () => ({
   parseOwnerRepo: mock(() => null),
   getRunArtifactsPath: mock(() => '/tmp/artifacts'),
   getProjectLogsPath: mock(() => '/tmp/logs'),
+  // Telemetry is fire-and-forget; mock as no-ops so the executor can call them.
+  captureWorkflowInvoked: mock(() => {}),
+  captureWorkflowCompleted: mock(() => {}),
 }));
 
 // --- Mock git ---

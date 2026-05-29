@@ -6,6 +6,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import {
   isTelemetryDisabled,
   captureWorkflowInvoked,
+  captureArchonStarted,
+  captureWorkflowCompleted,
+  classifyWorkflowForTelemetry,
   shutdownTelemetry,
   resetTelemetryForTests,
   getOrCreateTelemetryId,
@@ -250,7 +253,7 @@ describe('first-run notice (via captureWorkflowInvoked)', () => {
   let saved: Record<string, string | undefined>;
   let tmpHome: string;
   let originalIsTTY: boolean | undefined;
-  const stampPath = (): string => join(tmpHome, 'telemetry-notice-shown');
+  const stampPath = (): string => join(tmpHome, 'telemetry-notice-shown-v2');
 
   beforeEach(() => {
     saved = saveEnv();
@@ -393,5 +396,91 @@ describe('telemetry ID persistence', () => {
     expect(resolved).toBe(existingId);
     const stored = readFileSync(join(tmpHome, 'telemetry-id'), 'utf8').trim();
     expect(stored).toBe(existingId);
+  });
+});
+
+describe('classifyWorkflowForTelemetry', () => {
+  test('bundled workflows report their real name and is_builtin true', () => {
+    expect(classifyWorkflowForTelemetry('implement', 'bundled')).toEqual({
+      is_builtin: true,
+      workflow_name: 'implement',
+      workflow_source: 'bundled',
+    });
+  });
+
+  test('project workflows are redacted to "custom" and report their source', () => {
+    expect(classifyWorkflowForTelemetry('deploy-acme-prod', 'project')).toEqual({
+      is_builtin: false,
+      workflow_name: 'custom',
+      workflow_source: 'project',
+    });
+  });
+
+  test('global workflows are also redacted to "custom"', () => {
+    expect(classifyWorkflowForTelemetry('my-global', 'global')).toEqual({
+      is_builtin: false,
+      workflow_name: 'custom',
+      workflow_source: 'global',
+    });
+  });
+
+  test('undefined source defaults to the privacy-safe custom/project treatment', () => {
+    expect(classifyWorkflowForTelemetry('anything', undefined)).toEqual({
+      is_builtin: false,
+      workflow_name: 'custom',
+      workflow_source: 'project',
+    });
+  });
+});
+
+describe('new capture functions are fire-and-forget no-throw', () => {
+  let saved: Record<string, string | undefined>;
+  let tmpHome: string;
+
+  beforeEach(() => {
+    saved = saveEnv();
+    tmpHome = mkdtempSync(join(tmpdir(), 'archon-telemetry-capture-'));
+    process.env.ARCHON_HOME = tmpHome;
+    resetTelemetryForTests();
+  });
+
+  afterEach(() => {
+    restoreEnv(saved);
+    resetTelemetryForTests();
+    rmSync(tmpHome, { recursive: true, force: true });
+  });
+
+  test('captureArchonStarted does not throw (disabled)', () => {
+    process.env.ARCHON_TELEMETRY_DISABLED = '1';
+    expect(() => captureArchonStarted({ surface: 'cli' })).not.toThrow();
+  });
+
+  test('captureArchonStarted does not throw (enabled)', () => {
+    delete process.env.ARCHON_TELEMETRY_DISABLED;
+    delete process.env.DO_NOT_TRACK;
+    delete process.env.CI;
+    delete process.env.POSTHOG_API_KEY;
+    expect(() => captureArchonStarted({ surface: 'server' })).not.toThrow();
+  });
+
+  test('captureWorkflowCompleted does not throw for completed/failed/cancelled', () => {
+    process.env.ARCHON_TELEMETRY_DISABLED = '1';
+    expect(() =>
+      captureWorkflowCompleted({
+        outcome: 'completed',
+        workflowName: 'implement',
+        workflowSource: 'bundled',
+        durationMs: 1234,
+        nodesCompleted: 3,
+        nodesTotal: 3,
+      })
+    ).not.toThrow();
+    expect(() =>
+      captureWorkflowCompleted({
+        outcome: 'failed',
+        workflowName: 'x',
+        exitReason: 'node_error',
+      })
+    ).not.toThrow();
   });
 });

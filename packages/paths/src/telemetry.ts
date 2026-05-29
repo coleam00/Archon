@@ -1,11 +1,21 @@
 /**
  * Anonymous PostHog telemetry for Archon.
  *
- * Emits one event — `workflow_invoked` — each time a workflow starts. No PII,
- * no user identity. A random UUID is persisted to `${ARCHON_HOME}/telemetry-id`
- * so we can count distinct installs; `$process_person_profile: false` keeps
- * events in PostHog's anonymous tier (no person profile ever created); `$ip: ''`
- * prevents PostHog from retaining the source IP at ingest.
+ * Emits a small set of anonymous events — `archon_started` (once per process),
+ * `workflow_invoked` (each workflow start), and `workflow_completed` /
+ * `workflow_failed` (each terminal run) — so maintainers can see active
+ * installs, which workflows run, and run outcomes. No PII, no user identity.
+ * A random UUID is persisted to `${ARCHON_HOME}/telemetry-id` so we can count
+ * distinct installs.
+ *
+ * Every event carries the privacy invariants `$process_person_profile: false`
+ * (anonymous tier — no person profile ever created) and `$ip: ''` (PostHog
+ * drops the source IP at ingest). Machine context (os, arch, version,
+ * is_binary, runtime, is_ci, is_tty) rides along on every event via PostHog
+ * super-properties. What is collected is categorical only: workflow name (real
+ * for bundled workflows, `"custom"` for user-authored), platform, provider,
+ * model, node shape, and run outcome/duration. Never sent: code, prompts, file
+ * paths, IP, geo, error text, or custom workflow names/descriptions.
  *
  * Opt-out (any one disables telemetry):
  *   - ARCHON_TELEMETRY_DISABLED=1
@@ -23,7 +33,11 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import type { PostHog } from 'posthog-node';
 import { getArchonHome } from './archon-paths';
+import { BUNDLED_IS_BINARY, BUNDLED_VERSION } from './bundled-build';
 import { createLogger } from './logger';
+
+/** Bumped when the captured property set changes (documented in README). */
+export const TELEMETRY_SCHEMA_VERSION = 2;
 
 // Minimal shape of posthog-node's `fetch` option — copied from @posthog/core
 // (a transitive dep) to avoid pulling it in as a direct dependency.
@@ -55,7 +69,10 @@ const DEFAULT_POSTHOG_HOST = 'https://us.i.posthog.com';
  * Filename for the one-time notice stamp written to ARCHON_HOME. Presence
  * means the first-run notice has been shown; absence means it hasn't.
  */
-const NOTICE_STAMP_FILENAME = 'telemetry-notice-shown';
+// Bumped to `-v2` when the captured property set expanded (machine context +
+// run outcomes). Bumping re-shows the updated first-run notice once per install
+// so existing users re-consent rather than silently getting broader capture.
+const NOTICE_STAMP_FILENAME = 'telemetry-notice-shown-v2';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -83,6 +100,63 @@ function getApiKey(): string | null {
 
 function getHost(): string {
   return process.env.POSTHOG_HOST ?? DEFAULT_POSTHOG_HOST;
+}
+
+/**
+ * Privacy invariants attached to EVERY telemetry event. Kept per-event (not
+ * relying solely on super-properties) so each capture site is visibly correct
+ * and a super-property regression can never silently leak the source IP or
+ * create a person profile.
+ */
+const PRIVACY_INVARIANTS = {
+  $process_person_profile: false,
+  // Strip source IP at ingest. `disableGeoip: true` only prevents geo
+  // enrichment; `$ip: ''` drops the IP from the event entirely.
+  $ip: '',
+} as const;
+
+/**
+ * Stable machine/runtime context registered once as PostHog super-properties
+ * (attached to every event from this client). Categorical only — no
+ * identifiers, no paths. `install_method` is intentionally omitted until a
+ * build-time channel constant exists (never derive it from a filesystem path).
+ */
+function collectMachineProperties(): Record<string, string | boolean> {
+  const bunVersion = typeof Bun !== 'undefined' ? Bun.version : undefined;
+  return {
+    os: process.platform,
+    arch: process.arch,
+    archon_version: BUNDLED_VERSION,
+    is_binary: BUNDLED_IS_BINARY,
+    runtime_version: bunVersion ? `bun-${bunVersion}` : process.version,
+    // Mirrors the CI auto-disable check; when telemetry is enabled this is
+    // effectively always false, but it's cheap and future-proof.
+    is_ci: process.env.CI?.toLowerCase() === 'true',
+    is_tty: process.stderr.isTTY,
+  };
+}
+
+/** Discovery source of a workflow, mirrored from `@archon/workflows` as a
+ * plain string union so `@archon/paths` keeps zero `@archon/*` dependencies. */
+export type WorkflowTelemetrySource = 'bundled' | 'global' | 'project';
+
+/**
+ * Apply the workflow-name privacy rule: bundled (Archon-authored) workflows
+ * report their real name so maintainers can see which defaults are popular;
+ * user-authored (global/project) workflows report `"custom"` so private names
+ * (e.g. "deploy-acme-prod") never leave the machine. `workflow_source` is
+ * always reported for the custom-vs-default split.
+ */
+export function classifyWorkflowForTelemetry(
+  name: string,
+  source: WorkflowTelemetrySource | undefined
+): { workflow_name: string; is_builtin: boolean; workflow_source: string } {
+  const isBuiltin = source === 'bundled';
+  return {
+    is_builtin: isBuiltin,
+    workflow_name: isBuiltin ? name : 'custom',
+    workflow_source: source ?? 'project',
+  };
 }
 
 /** Why telemetry is currently disabled. `null` means it's enabled. */
@@ -280,8 +354,9 @@ function maybeShowFirstRunNotice(): void {
   }
 
   const message =
-    'Archon collects anonymous usage telemetry (workflow name, platform, version).\n' +
-    'No code, prompts, file paths, or personal data — see README "Telemetry" for details.\n' +
+    'Archon collects anonymous usage telemetry — now also OS/arch and run\n' +
+    'outcome (success/failure), alongside workflow name, platform, and version.\n' +
+    'Still no code, prompts, file paths, IP, or personal data — see README "Telemetry".\n' +
     'Opt out anytime: DO_NOT_TRACK=1 or ARCHON_TELEMETRY_DISABLED=1\n';
   try {
     process.stderr.write(`\n${message}\n`);
@@ -386,6 +461,14 @@ async function initClient(): Promise<PostHog | null> {
     client.on('error', (err: Error) => {
       getLog().debug({ err }, 'telemetry.client_error');
     });
+    // Attach machine context to every event as super-properties. The privacy
+    // invariants are NOT registered here — they stay per-event (see
+    // PRIVACY_INVARIANTS) so a register() regression can't silently drop them.
+    try {
+      await client.register(collectMachineProperties());
+    } catch (error) {
+      getLog().debug({ err: error as Error }, 'telemetry.register_failed');
+    }
     return client;
   } catch (error) {
     getLog().debug({ err: error as Error }, 'telemetry.init_failed');
@@ -395,8 +478,39 @@ async function initClient(): Promise<PostHog | null> {
 
 export interface WorkflowInvokedProperties {
   workflowName: string;
+  /** Discovery source — drives the custom-vs-default split and name redaction. */
+  workflowSource?: WorkflowTelemetrySource;
   platform?: string;
-  archonVersion?: string;
+  provider?: string;
+  model?: string;
+  nodeCount?: number;
+  usesLoop?: boolean;
+  usesApproval?: boolean;
+  usesScript?: boolean;
+  usesBash?: boolean;
+  interactive?: boolean;
+  usedIsolation?: boolean;
+  isResume?: boolean;
+}
+
+/** Once-per-process startup event — the basis for active-install counting. */
+export interface ArchonStartedProperties {
+  surface: 'cli' | 'server';
+}
+
+/** Terminal workflow-run event (`workflow_completed` / `workflow_failed`). */
+export interface WorkflowCompletedProperties {
+  outcome: 'completed' | 'failed' | 'cancelled';
+  workflowName: string;
+  workflowSource?: WorkflowTelemetrySource;
+  provider?: string;
+  durationMs?: number;
+  nodesCompleted?: number;
+  nodesFailed?: number;
+  nodesSkipped?: number;
+  nodesTotal?: number;
+  /** Categorical reason enum — never raw error text. */
+  exitReason?: string;
 }
 
 /**
@@ -415,18 +529,89 @@ export function captureWorkflowInvoked(props: WorkflowInvokedProperties): void {
         distinctId: getTelemetryId(),
         event: 'workflow_invoked',
         properties: {
-          $process_person_profile: false,
-          // Strip source IP at ingest. `disableGeoip: true` only prevents geo
-          // enrichment; `$ip: ''` drops the IP from the event entirely.
-          $ip: '',
-          workflow_name: props.workflowName,
+          ...PRIVACY_INVARIANTS,
+          ...classifyWorkflowForTelemetry(props.workflowName, props.workflowSource),
+          schema_version: TELEMETRY_SCHEMA_VERSION,
           ...(props.platform ? { platform: props.platform } : {}),
-          ...(props.archonVersion ? { archon_version: props.archonVersion } : {}),
+          ...(props.provider ? { provider: props.provider } : {}),
+          ...(props.model ? { model: props.model } : {}),
+          ...(props.nodeCount !== undefined ? { node_count: props.nodeCount } : {}),
+          uses_loop: Boolean(props.usesLoop),
+          uses_approval: Boolean(props.usesApproval),
+          uses_script: Boolean(props.usesScript),
+          uses_bash: Boolean(props.usesBash),
+          interactive: Boolean(props.interactive),
+          used_isolation: Boolean(props.usedIsolation),
+          is_resume: Boolean(props.isResume),
         },
       });
     } catch (error) {
       // Fire-and-forget: telemetry must never crash Archon, so swallow every
       // error here (network, SDK, malformed props) and record it at debug.
+      getLog().debug({ err: error as Error }, 'telemetry.capture_failed');
+    }
+  })();
+}
+
+/**
+ * Fire-and-forget capture of an `archon_started` event — emitted once per CLI
+ * invocation and per server boot. This (not just `workflow_invoked`) is what
+ * makes active-install / DAU metrics honest, since users who only run
+ * `doctor`/`serve`/chat would otherwise be invisible. Machine context rides
+ * along via the registered super-properties. Also shows the first-run notice.
+ */
+export function captureArchonStarted(props: ArchonStartedProperties): void {
+  if (isTelemetryDisabled()) return;
+  maybeShowFirstRunNotice();
+  void (async (): Promise<void> => {
+    try {
+      const client = await getClient();
+      if (!client) return;
+      client.capture({
+        distinctId: getTelemetryId(),
+        event: 'archon_started',
+        properties: {
+          ...PRIVACY_INVARIANTS,
+          surface: props.surface,
+          schema_version: TELEMETRY_SCHEMA_VERSION,
+        },
+      });
+    } catch (error) {
+      getLog().debug({ err: error as Error }, 'telemetry.capture_failed');
+    }
+  })();
+}
+
+/**
+ * Fire-and-forget capture of a terminal workflow run. Emits `workflow_completed`
+ * when `outcome === 'completed'`, otherwise `workflow_failed`. Carries run
+ * outcome, duration, node counts, and a categorical exit reason so maintainers
+ * can measure success rates and funnels — not just intent.
+ */
+export function captureWorkflowCompleted(props: WorkflowCompletedProperties): void {
+  if (isTelemetryDisabled()) return;
+  void (async (): Promise<void> => {
+    try {
+      const client = await getClient();
+      if (!client) return;
+      client.capture({
+        distinctId: getTelemetryId(),
+        event: props.outcome === 'completed' ? 'workflow_completed' : 'workflow_failed',
+        properties: {
+          ...PRIVACY_INVARIANTS,
+          ...classifyWorkflowForTelemetry(props.workflowName, props.workflowSource),
+          outcome: props.outcome,
+          schema_version: TELEMETRY_SCHEMA_VERSION,
+          ...(props.provider ? { provider: props.provider } : {}),
+          ...(props.durationMs !== undefined ? { duration_ms: props.durationMs } : {}),
+          ...(props.nodesCompleted !== undefined ? { nodes_completed: props.nodesCompleted } : {}),
+          ...(props.nodesFailed !== undefined ? { nodes_failed: props.nodesFailed } : {}),
+          ...(props.nodesSkipped !== undefined ? { nodes_skipped: props.nodesSkipped } : {}),
+          ...(props.nodesTotal !== undefined ? { nodes_total: props.nodesTotal } : {}),
+          ...(props.exitReason ? { exit_reason: props.exitReason } : {}),
+        },
+      });
+    } catch (error) {
       getLog().debug({ err: error as Error }, 'telemetry.capture_failed');
     }
   })();

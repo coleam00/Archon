@@ -295,6 +295,11 @@ export async function workflowRunCommand(
   const workflows = workflowEntries.map(ws => ws.workflow);
 
   const workflow = resolveWorkflowName(workflowName, workflows);
+  // Recover the discovery source (dropped by the .map above) for telemetry —
+  // bundled workflows report their real name, custom ones report "custom".
+  const workflowSource = workflow
+    ? workflowEntries.find(ws => ws.workflow === workflow)?.source
+    : undefined;
 
   if (!workflow) {
     // Check if the requested workflow had a load error
@@ -786,8 +791,8 @@ export async function workflowRunCommand(
   let result: Awaited<ReturnType<typeof executeWorkflow>>;
   try {
     const opts = prepared
-      ? { codebaseId: codebase?.id, ...prepared }
-      : { codebaseId: codebase?.id };
+      ? { codebaseId: codebase?.id, source: workflowSource, ...prepared }
+      : { codebaseId: codebase?.id, source: workflowSource };
     result = await executeWorkflow(
       deps,
       adapter,

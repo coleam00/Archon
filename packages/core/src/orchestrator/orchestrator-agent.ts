@@ -36,6 +36,7 @@ import type {
   WorkflowDefinition,
   WorkflowWithSource,
   WorkflowLoadError,
+  WorkflowSource,
 } from '@archon/workflows/schemas/workflow';
 import { createWorkflowDeps } from '../workflows/store-adapter';
 import { loadConfig } from '../config/config-loader';
@@ -316,7 +317,13 @@ async function dispatchOrchestratorWorkflow(
   workflow: WorkflowDefinition,
   userMessage: string,
   isolationHints?: HandleMessageContext['isolationHints'],
-  userId?: string
+  userId?: string,
+  /**
+   * Discovery source of the workflow — telemetry only (bundled workflows
+   * report their real name, custom ones report "custom"). Optional: callers
+   * that don't have it readily in scope omit it and the run reports "custom".
+   */
+  source?: WorkflowSource
 ): Promise<void> {
   // Auto-attach project to conversation
   await db.updateConversation(conversation.id, {
@@ -403,6 +410,7 @@ async function dispatchOrchestratorWorkflow(
           codebaseId: codebase.id,
           parentConversationId: conversation.id,
           userId,
+          source,
           ...prepared,
         }
       );
@@ -423,6 +431,7 @@ async function dispatchOrchestratorWorkflow(
           codebaseId: codebase.id,
           parentConversationId: conversation.id,
           userId,
+          source,
         }
       );
     }
@@ -439,6 +448,7 @@ async function dispatchOrchestratorWorkflow(
         availableWorkflows: [workflow],
         isolationHints,
         userId,
+        source,
       },
       workflow
     );
@@ -456,6 +466,7 @@ async function dispatchOrchestratorWorkflow(
         codebaseId: codebase.id,
         parentConversationId: conversation.id,
         userId,
+        source,
       }
     );
   }
@@ -746,6 +757,9 @@ export async function handleMessage(
           const { workflows: discoveredWorkflows } = await discoverAllWorkflows(conversation);
           const allWorkflows: WorkflowDefinition[] = discoveredWorkflows.map(w => w.workflow);
           const workflow = findWorkflow(pausedRun.workflow_name, allWorkflows);
+          const workflowSource = workflow
+            ? discoveredWorkflows.find(w => w.workflow === workflow)?.source
+            : undefined;
           if (!workflow) {
             await platform.sendMessage(
               conversationId,
@@ -774,7 +788,8 @@ export async function handleMessage(
             workflow,
             pausedRun.user_message,
             isolationHints,
-            userId
+            userId,
+            workflowSource
           );
           getLog().info(
             { conversationId, workflowRunId: pausedRun.id, workflowName: pausedRun.workflow_name },
@@ -1783,7 +1798,8 @@ async function handleWorkflowRunCommand(
       resolvedWorkflow,
       userMessage,
       isolationHints,
-      userId
+      userId,
+      resolvedEntry?.source
     );
     return;
   }

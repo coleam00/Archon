@@ -29,6 +29,8 @@ mock.module('@archon/paths', () => ({
   getHomeWorkflowsPath: () => '/nonexistent/home/workflows',
   getLegacyHomeWorkflowsPath: () => '/nonexistent/home/.archon/workflows',
   getArchonHome: () => '/nonexistent/home',
+  // Telemetry is fire-and-forget; mock as a no-op so terminal sites can call it.
+  captureWorkflowCompleted: mock(() => {}),
 }));
 
 // --- Bootstrap provider registry (after path mocks, before dag-executor import) ---

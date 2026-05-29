@@ -57,6 +57,10 @@ export type { UpdateCheckResult } from './update-check';
 // Anonymous telemetry
 export {
   captureWorkflowInvoked,
+  captureArchonStarted,
+  captureWorkflowCompleted,
+  classifyWorkflowForTelemetry,
+  TELEMETRY_SCHEMA_VERSION,
   shutdownTelemetry,
   isTelemetryDisabled,
   getTelemetryStatus,
@@ -64,6 +68,9 @@ export {
 } from './telemetry';
 export type {
   WorkflowInvokedProperties,
+  ArchonStartedProperties,
+  WorkflowCompletedProperties,
+  WorkflowTelemetrySource,
   TelemetryStatus,
   TelemetryDisabledReason,
 } from './telemetry';
