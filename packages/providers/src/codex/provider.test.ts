@@ -79,6 +79,7 @@ describe('CodexProvider', () => {
         hooks: false,
         skills: false,
         agents: false,
+        packages: false,
         toolRestrictions: false,
         structuredOutput: true,
         envInjection: true,

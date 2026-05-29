@@ -124,6 +124,7 @@ describe('ClaudeProvider', () => {
         hooks: true,
         skills: true,
         agents: true,
+        packages: false,
         toolRestrictions: true,
         structuredOutput: true,
         envInjection: true,

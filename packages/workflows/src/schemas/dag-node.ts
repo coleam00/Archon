@@ -601,7 +601,7 @@ export const dagNodeSchema = dagNodeBaseSchema
       ...(data.hooks !== undefined ? { hooks: data.hooks } : {}),
       ...(data.mcp !== undefined ? { mcp: data.mcp.trim() } : {}),
       ...(data.skills !== undefined ? { skills: data.skills.map(s => s.trim()) } : {}),
-      ...(data.packages !== undefined ? { packages: data.packages } : {}),
+      ...(data.packages !== undefined ? { packages: data.packages.map(p => p.trim()) } : {}),
       ...(data.agents !== undefined ? { agents: data.agents } : {}),
       ...(data.effort !== undefined ? { effort: data.effort } : {}),
       ...(data.thinking !== undefined ? { thinking: data.thinking } : {}),
