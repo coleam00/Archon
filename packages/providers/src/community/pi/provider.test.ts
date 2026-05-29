@@ -1752,4 +1752,166 @@ describe('PiProvider', () => {
       'pi.settings_load_error'
     );
   });
+
+  // ─── Per-node packages: pre-install warning ──────────────────────────────
+
+  test('nodeConfig.packages: protocol source not in settings emits pre-install warning', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+    mockSettingsManagerGetGlobalSettings.mockImplementation(() => ({ packages: [] }));
+
+    const { chunks } = await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        nodeConfig: { packages: ['npm:pi-mcp-adapter'] },
+      })
+    );
+
+    const systemChunks = chunks.filter(
+      (c): c is { type: 'system'; content: string } =>
+        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'system'
+    );
+    expect(systemChunks.some(c => c.content.includes('npm:pi-mcp-adapter'))).toBe(true);
+    expect(systemChunks.some(c => c.content.includes('pi install'))).toBe(true);
+  });
+
+  test('nodeConfig.packages: protocol source already in global settings suppresses warning', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+    mockSettingsManagerGetGlobalSettings.mockImplementation(() => ({
+      packages: [{ source: 'npm:pi-mcp-adapter' }],
+    }));
+
+    const { chunks } = await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        nodeConfig: { packages: ['npm:pi-mcp-adapter'] },
+      })
+    );
+
+    const systemChunks = chunks.filter(
+      (c): c is { type: 'system'; content: string } =>
+        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'system'
+    );
+    expect(systemChunks.some(c => c.content.includes('pi install'))).toBe(false);
+  });
+
+  test('nodeConfig.packages: string-format package in settings suppresses warning', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+    mockSettingsManagerGetGlobalSettings.mockImplementation(() => ({
+      packages: ['npm:pi-mcp-adapter'],
+    }));
+
+    const { chunks } = await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        nodeConfig: { packages: ['npm:pi-mcp-adapter'] },
+      })
+    );
+
+    const systemChunks = chunks.filter(
+      (c): c is { type: 'system'; content: string } =>
+        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'system'
+    );
+    expect(systemChunks.some(c => c.content.includes('pi install'))).toBe(false);
+  });
+
+  test('nodeConfig.packages: local path does not trigger pre-install warning', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    const { chunks } = await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        nodeConfig: { packages: ['./my-local-pkg'] },
+      })
+    );
+
+    const systemChunks = chunks.filter(
+      (c): c is { type: 'system'; content: string } =>
+        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'system'
+    );
+    expect(systemChunks.some(c => c.content.includes('pi install'))).toBe(false);
+  });
+
+  test('nodeConfig.packages with enableExtensions:false: noExtensions stays true, reload and bindExtensions still run', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        assistantConfig: { enableExtensions: false },
+        nodeConfig: { packages: ['npm:pi-mcp-adapter'] },
+      })
+    );
+
+    const loaderArgs = MockDefaultResourceLoader.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
+    // Global discovery stays off
+    expect(loaderArgs?.noExtensions).toBe(true);
+    // Per-node package path is passed regardless
+    expect(loaderArgs?.additionalExtensionPaths).toEqual([
+      expect.stringContaining('pi-mcp-adapter'),
+    ]);
+    // reload() and bindExtensions() still run (packageSources.length > 0 → extensionRunnerActive)
+    expect(mockResourceLoaderReload).toHaveBeenCalledTimes(1);
+    expect(mockBindExtensions).toHaveBeenCalledTimes(1);
+  });
+
+  test('reload() failure yields system warning chunk and re-throws', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    const reloadError = new Error('npm registry timeout');
+    mockResourceLoaderReload.mockImplementation(async () => {
+      throw reloadError;
+    });
+
+    const { chunks, error } = await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        nodeConfig: { packages: ['npm:pi-mcp-adapter'] },
+      })
+    );
+
+    expect(error).toBe(reloadError);
+    const systemChunks = chunks.filter(
+      (c): c is { type: 'system'; content: string } =>
+        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'system'
+    );
+    expect(systemChunks.some(c => c.content.includes('package reload failed'))).toBe(true);
+    expect(mockLogger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ err: reloadError }),
+      'pi.package_reload_failed'
+    );
+  });
+
+  test('bindExtensions() failure disposes session, yields system warning, and re-throws', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    mockResourceLoaderReload.mockReset();
+    const bindError = new Error('session_start hook threw');
+    mockBindExtensions.mockImplementation(async () => {
+      throw bindError;
+    });
+
+    const { chunks, error } = await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        nodeConfig: { packages: ['npm:pi-mcp-adapter'] },
+      })
+    );
+
+    expect(error).toBe(bindError);
+    expect(mockDispose).toHaveBeenCalledTimes(1);
+    const systemChunks = chunks.filter(
+      (c): c is { type: 'system'; content: string } =>
+        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'system'
+    );
+    expect(systemChunks.some(c => c.content.includes('extension binding failed'))).toBe(true);
+    expect(mockLogger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ err: bindError }),
+      'pi.bind_extensions_failed'
+    );
+  });
 });

@@ -397,6 +397,7 @@ async function resolveNodeProviderAndModel(
     ['mcp', 'mcp', node.mcp !== undefined],
     ['skills', 'skills', node.skills !== undefined && node.skills.length > 0],
     ['agents', 'agents', node.agents !== undefined],
+    ['packages', 'packages', node.packages !== undefined && node.packages.length > 0],
     ['effort', 'effortControl', (node.effort ?? workflowLevelOptions.effort) !== undefined],
     ['thinking', 'thinkingControl', (node.thinking ?? workflowLevelOptions.thinking) !== undefined],
     ['maxBudgetUsd', 'costControl', node.maxBudgetUsd !== undefined],

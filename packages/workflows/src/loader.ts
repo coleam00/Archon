@@ -58,7 +58,10 @@ function parseOptionalField<S extends z.ZodType>(
   extra?: Record<string, unknown>
 ): z.output<S> | undefined {
   const result = schema.safeParse(raw);
-  if (result.success) return result.data;
+  // z.ZodType's default Output = any in zod v4 makes result.data type `any`; cast is safe
+  // because success=true guarantees data matches the schema's output type.
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-return
+  if (result.success) return result.data as z.output<S>;
   if (raw !== undefined) {
     getLog().warn({ filename, value: raw, ...extra }, event);
   }
@@ -545,7 +548,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
     // drops the field entirely — the Claude SDK expects a populated beta header
     // or none at all. The schema's `.nonempty()` enforces non-emptiness at
     // runtime, so the cleaned list reaches the SDK validated without a cast.
-    let betas: string[] | undefined;
+    let betas: z.infer<typeof betasSchema> | undefined;
     if (raw.betas !== undefined) {
       const cleaned = Array.isArray(raw.betas)
         ? raw.betas

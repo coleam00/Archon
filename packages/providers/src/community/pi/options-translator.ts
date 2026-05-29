@@ -256,6 +256,9 @@ export type { ResolvedSkills } from '../../shared/skills';
 
 // ─── Packages ──────────────────────────────────────────────────────────────
 
+/** Protocol prefix regex for Pi package sources (npm:, git:, https:, ssh:). */
+export const PI_PROTOCOL_SOURCE_RE = /^(npm:|git:|https?:|ssh:)/;
+
 /**
  * Resolve per-node Pi package sources from the workflow node's `packages:` field
  * into the string array accepted by `DefaultResourceLoaderOptions.additionalExtensionPaths`.
@@ -266,8 +269,8 @@ export type { ResolvedSkills } from '../../shared/skills';
  *   - `npm:pi-mcp-adapter`           passes through (Pi installs/resolves)
  *   - `git:github.com/user/repo`     passes through (Pi clones/resolves)
  *   - `/absolute/path/to/pkg/`       passes through unchanged
- *   - `./relative/path/pkg/`         resolved from `cwd` to absolute (Pi's temporary-
- *                                    scope base dir is not `cwd`, so we resolve here)
+ *   - `./relative/path/pkg/`         resolved from `cwd` to absolute; using absolute
+ *                                    paths makes behaviour independent of future Pi scope changes
  *
  * Returns an empty array when `packages` is undefined or empty.
  */
@@ -275,7 +278,7 @@ export function resolvePiPackages(cwd: string, packages?: string[]): string[] {
   if (!packages?.length) return [];
   return packages.map(src => {
     // Protocol-prefixed refs and absolute paths pass through for Pi SDK routing.
-    if (/^(npm:|git:|https?:|ssh:)/.test(src) || path.isAbsolute(src)) return src;
+    if (PI_PROTOCOL_SOURCE_RE.test(src) || path.isAbsolute(src)) return src;
     // Relative path — resolve against cwd so Pi receives an absolute path.
     return path.resolve(cwd, src);
   });

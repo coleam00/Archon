@@ -176,7 +176,13 @@ export class PiProvider implements IAgentProvider {
     const [
       piCodingAgent,
       { bridgeSession },
-      { resolvePiPackages, resolvePiSkills, resolvePiThinkingLevel, resolvePiTools },
+      {
+        resolvePiPackages,
+        PI_PROTOCOL_SOURCE_RE,
+        resolvePiSkills,
+        resolvePiThinkingLevel,
+        resolvePiTools,
+      },
       { createNoopResourceLoader },
       { resolvePiSession },
       { createArchonUIBridge, createArchonUIContext },
@@ -362,8 +368,8 @@ export class PiProvider implements IAgentProvider {
 
     //    4e. packages: per-node Pi packages (npm:, git:, local paths) to load for
     //        this session. resolvePiPackages resolves relative paths from cwd to
-    //        absolute — Pi's temporary-scope base dir is not cwd, so we must do this.
-    const packageSources = resolvePiPackages(cwd, nodeConfig?.packages as string[] | undefined);
+    //        absolute so behaviour is independent of future Pi SDK scope changes.
+    const packageSources = resolvePiPackages(cwd, nodeConfig?.packages);
 
     // 5. Session management. Pi stores each session as a JSONL file under
     //    ~/.pi/agent/sessions/<encoded-cwd>/<uuid>.jsonl. `resolvePiSession`
@@ -459,16 +465,16 @@ export class PiProvider implements IAgentProvider {
     if (packageSources.length > 0) {
       const installedSources = new Set<string>();
       for (const settings of [globalSettings, projectSettings] as Record<string, unknown>[]) {
-        const pkgs = settings['packages'];
+        const pkgs = settings.packages;
         if (Array.isArray(pkgs)) {
           for (const p of pkgs) {
-            const src = typeof p === 'string' ? p : (p as Record<string, unknown>)['source'];
+            const src = typeof p === 'string' ? p : (p as Record<string, unknown>).source;
             if (typeof src === 'string') installedSources.add(src);
           }
         }
       }
       const notInstalled = packageSources.filter(
-        src => /^(npm:|git:|https?:|ssh:)/.test(src) && !installedSources.has(src)
+        src => PI_PROTOCOL_SOURCE_RE.test(src) && !installedSources.has(src)
       );
       if (notInstalled.length > 0) {
         yield {
@@ -481,7 +487,16 @@ export class PiProvider implements IAgentProvider {
     }
 
     if (extensionRunnerActive) {
-      await resourceLoader.reload();
+      try {
+        await resourceLoader.reload();
+      } catch (err) {
+        getLog().error({ err, packageSources, cwd }, 'pi.package_reload_failed');
+        yield {
+          type: 'system',
+          content: `⚠️ Pi: package reload failed — ${(err as Error).message}. Pre-install packages with: pi install <source>`,
+        };
+        throw err;
+      }
     }
 
     getLog().info(
@@ -544,6 +559,11 @@ export class PiProvider implements IAgentProvider {
         for (const [name, value] of Object.entries(piConfig.extensionFlags)) {
           runner.setFlagValue(name, value);
         }
+      } else {
+        getLog().warn(
+          { extensionFlags: Object.keys(piConfig.extensionFlags) },
+          'pi.extension_runner_unavailable_flags_ignored'
+        );
       }
     }
 
@@ -552,11 +572,21 @@ export class PiProvider implements IAgentProvider {
     //     for LOOKUP-2: they call registerProvider() on our modelRegistry during session_start.
     //     extensionRunnerActive: true when global extension discovery is on or per-node packages are loaded.
     const uiBridge = interactive ? createArchonUIBridge() : undefined;
-    if (uiBridge) {
-      const uiContext = createArchonUIContext(uiBridge);
-      await session.bindExtensions({ uiContext });
-    } else if (extensionRunnerActive) {
-      await session.bindExtensions({});
+    try {
+      if (uiBridge) {
+        const uiContext = createArchonUIContext(uiBridge);
+        await session.bindExtensions({ uiContext });
+      } else if (extensionRunnerActive) {
+        await session.bindExtensions({});
+      }
+    } catch (err) {
+      session.dispose();
+      getLog().error({ err, packageSources, cwd }, 'pi.bind_extensions_failed');
+      yield {
+        type: 'system',
+        content: `⚠️ Pi: extension binding failed — ${(err as Error).message}. A package's session_start hook threw. Check per-node packages and installed extensions.`,
+      };
+      throw err;
     }
 
     // 4h. [LOOKUP-2] Re-check the registry after bindExtensions() for extension-registered models.
