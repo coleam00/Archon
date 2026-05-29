@@ -831,7 +831,7 @@ export async function workflowRunCommand(
 /**
  * Format age of a run from started_at to now.
  */
-function formatAge(startedAt: Date | string): string {
+export function formatAge(startedAt: Date | string): string {
   // SQLite returns UTC strings without Z suffix — append it so Date parses as UTC
   const date =
     startedAt instanceof Date
@@ -852,7 +852,7 @@ function formatAge(startedAt: Date | string): string {
 /**
  * Format a duration in milliseconds as a compact string.
  */
-function formatDuration(ms: number): string {
+export function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   const secs = Math.round(ms / 100) / 10;
   if (secs < 60) return `${secs}s`;
@@ -861,7 +861,7 @@ function formatDuration(ms: number): string {
   return `${mins}m${remSecs}s`;
 }
 
-interface NodeSummary {
+export interface NodeSummary {
   nodeId: string;
   state: 'running' | 'completed' | 'failed' | 'skipped';
   durationMs?: number;
@@ -873,7 +873,7 @@ interface NodeSummary {
  * Derive per-node summaries from a run's workflow events.
  * Processes node_started / node_completed / node_failed / node_skipped* events.
  */
-function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
+export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
   const startTimes = new Map<string, number>();
   const summaries = new Map<string, NodeSummary>();
 

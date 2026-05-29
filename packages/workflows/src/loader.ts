@@ -545,7 +545,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
     // drops the field entirely — the Claude SDK expects a populated beta header
     // or none at all. The schema's `.nonempty()` enforces non-emptiness at
     // runtime, so the cleaned list reaches the SDK validated without a cast.
-    let betas: string[] | undefined;
+    let betas: z.infer<typeof betasSchema> | undefined;
     if (raw.betas !== undefined) {
       const cleaned = Array.isArray(raw.betas)
         ? raw.betas

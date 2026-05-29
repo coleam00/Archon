@@ -793,6 +793,7 @@ export async function listWorkflowRuns(options?: {
   status?: WorkflowRunStatus | WorkflowRunStatus[];
   limit?: number;
   codebaseId?: string;
+  workflowName?: string;
 }): Promise<WorkflowRun[]> {
   const whereClauses: string[] = [];
   const values: unknown[] = [];
@@ -815,6 +816,10 @@ export async function listWorkflowRuns(options?: {
     whereClauses.push(
       `conversation_id IN (SELECT id FROM remote_agent_conversations WHERE codebase_id = $${String(values.length)})`
     );
+  }
+  if (options?.workflowName) {
+    values.push(options.workflowName);
+    whereClauses.push(`workflow_name = $${String(values.length)}`);
   }
 
   const limit = options?.limit ?? 50;

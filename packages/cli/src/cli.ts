@@ -63,13 +63,45 @@ import {
   isolationCompleteCommand,
 } from './commands/isolation';
 import { continueCommand } from './commands/continue';
-import { chatCommand } from './commands/chat';
 import { setupCommand } from './commands/setup';
 import { skillInstallCommand } from './commands/skill';
 import { validateWorkflowsCommand, validateCommandsCommand } from './commands/validate';
 import { serveCommand } from './commands/serve';
 import { doctorCommand } from './commands/doctor';
 import { telemetryStatusCommand, telemetryResetCommand } from './commands/telemetry';
+import {
+  codebaseListCommand,
+  codebaseGetCommand,
+  codebaseRegisterCommand,
+  codebaseDeleteCommand,
+  codebaseEnvListCommand,
+  codebaseEnvSetCommand,
+  codebaseEnvDeleteCommand,
+  codebaseEnvironmentsCommand,
+} from './commands/codebase';
+import {
+  conversationListCommand,
+  conversationGetCommand,
+  conversationMessagesCommand,
+  conversationCreateCommand,
+  conversationTitleCommand,
+  conversationDeleteCommand,
+} from './commands/conversation';
+import { providersListCommand } from './commands/providers';
+import { configShowCommand, configAssistantCommand, configPathCommand } from './commands/config';
+import { healthCommand } from './commands/health';
+import { updateCheckCommand } from './commands/update-check';
+import {
+  workflowGetCommand,
+  workflowCreateCommand,
+  workflowUpdateCommand,
+  workflowDeleteCommand,
+  workflowCancelCommand,
+  workflowRunsCommand,
+  workflowInspectCommand,
+  workflowArtifactsListCommand,
+  workflowArtifactsGetCommand,
+} from './commands/workflow-manage';
 import { closeDatabase } from '@archon/core';
 import {
   setLogLevel,
@@ -100,7 +132,6 @@ Usage:
   archon <command> [subcommand] [options] [arguments]
 
 Commands:
-  chat <message>             Send a message to the orchestrator
   setup                      Interactive setup wizard for credentials and config
   workflow list              List available workflows in current directory
   workflow run <name> [msg]  Run a workflow with optional message
@@ -119,6 +150,18 @@ Commands:
   telemetry reset            Rotate the anonymous install UUID
   validate workflows [name]  Validate workflow definitions and their references
   validate commands [name]   Validate command files
+  codebase list|get|register|delete            Manage codebases
+  codebase env list|set|delete <id|name>       Manage codebase env vars (values hidden)
+  codebase environments <id|name>              List isolation environments
+  conversation list|get|messages <id>          Inspect conversations
+  conversation create|title|delete             Manage conversations
+  workflow get|create|update|delete <name>     Manage workflow definitions
+  workflow runs|inspect|cancel                 Inspect & control workflow runs
+  workflow artifacts list|get <run-id>         Read run artifacts
+  config show|assistant|path                   Inspect & update configuration
+  providers list                               List registered AI providers
+  health                                       Server runtime health check
+  update-check                                 Check for a newer Archon release
   version, --version, -V     Show version info (also -v when used alone)
   help                       Show this help message
 
@@ -138,10 +181,18 @@ Options:
                              persist_session resume between separate CLI invocations)
   --port <port>              Override server port for 'serve' (default: 3090)
   --download-only            Download web UI without starting the server
-  --force                    Overwrite existing file (for workflow install)
+  --force                    Overwrite existing file / skip delete confirmation
+  --server-url <url>         Archon server URL for mutations (default: http://localhost:3090, or ARCHON_SERVER_URL)
+  --limit <n>                Max rows for list commands
+  --status <status>          Filter workflow runs by status
+  --name <name>              Workflow name override (workflow create)
+  --title <title>            Conversation title (conversation create/title)
+  --model <model>            Set model (config assistant)
+  --setting-sources <a,b>    Set Claude settingSources (config assistant)
+  --source <project|global>  Workflow source filter (workflow delete)
+  --output <file>            Write artifact to file (workflow artifacts get)
 
 Examples:
-  archon chat "What does the orchestrator do?"
   archon workflow list
   archon workflow run investigate-issue "Fix the login bug"
   archon workflow run plan --cwd /path/to/repo "Add dark mode"
@@ -251,6 +302,15 @@ async function main(): Promise<number> {
         yes: { type: 'boolean' },
         force: { type: 'boolean' },
         'conversation-id': { type: 'string' },
+        'server-url': { type: 'string' },
+        limit: { type: 'string' },
+        name: { type: 'string' },
+        status: { type: 'string' },
+        title: { type: 'string' },
+        model: { type: 'string' },
+        'setting-sources': { type: 'string' },
+        source: { type: 'string' },
+        output: { type: 'string' },
       },
       allowPositionals: true,
       strict: false, // Allow unknown flags to pass through
@@ -272,6 +332,21 @@ async function main(): Promise<number> {
   const resumeFlag = values.resume as boolean | undefined;
   const spawnFlag = values.spawn as boolean | undefined;
   const jsonFlag = values.json as boolean | undefined;
+  const serverUrl = values['server-url'] as string | undefined;
+  const nameFlag = values.name as string | undefined;
+  const statusFlag = values.status as string | undefined;
+  const titleFlag = values.title as string | undefined;
+  const modelFlag = values.model as string | undefined;
+  const settingSourcesFlag = values['setting-sources'] as string | undefined;
+  // `--source` is a string flag (workflow delete), but parseArgs sets it to
+  // `true` when passed without a value — coerce non-strings to undefined.
+  const sourceFlag = typeof values.source === 'string' ? values.source : undefined;
+  const outputFlag = values.output as string | undefined;
+  const rawLimit = values.limit;
+  const limitFlag =
+    rawLimit !== undefined && Number.isFinite(Number(rawLimit)) && Number(rawLimit) > 0
+      ? Number(rawLimit)
+      : undefined;
   // Handle help flag
   if (values.help) {
     printUsage();
@@ -287,20 +362,44 @@ async function main(): Promise<number> {
     'version',
     'help',
     'setup',
-    'chat',
     'continue',
     'serve',
     'skill',
     'doctor',
     'telemetry',
+    'codebase',
+    'conversation',
+    'providers',
+    'config',
+    'health',
+    'update-check',
   ];
-  const requiresGitRepo = !noGitCommands.includes(command ?? '');
+  // New workflow subcommands operate on the global DB / REST API / cwd and do
+  // not resolve a repo root, so (unlike `run`, `resume`, etc.) they don't
+  // require a git repository.
+  const workflowNoGitSubcommands = new Set([
+    'get',
+    'create',
+    'update',
+    'delete',
+    'cancel',
+    'runs',
+    'inspect',
+    'artifacts',
+  ]);
+  const requiresGitRepo =
+    !noGitCommands.includes(command ?? '') &&
+    !(command === 'workflow' && workflowNoGitSubcommands.has(subcommand ?? ''));
 
   try {
-    // setup/doctor/telemetry default to warn to avoid Pino info JSON interleaving with their human-readable output; lazy loggers pick up this level at first creation
+    // setup/doctor/telemetry default to warn to avoid Pino info JSON interleaving with their human-readable output.
+    // --json commands also suppress info logs so stdout stays clean, parseable JSON
+    // (e.g. `archon codebase list --json | jq`); --verbose overrides. Lazy loggers
+    // pick up this level at first creation.
     const isInteractiveCommand =
       command === 'setup' || command === 'doctor' || command === 'telemetry';
-    const suppressByDefault = isInteractiveCommand && !values.verbose && !isVerboseBoot();
+    const suppressByDefault =
+      (isInteractiveCommand || jsonFlag === true) && !values.verbose && !isVerboseBoot();
     if (values.quiet || suppressByDefault) {
       setLogLevel('warn');
     } else if (values.verbose) {
@@ -352,16 +451,6 @@ async function main(): Promise<number> {
       case 'help':
         printUsage();
         break;
-
-      case 'chat': {
-        const chatMessage = positionals.slice(1).join(' ');
-        if (!chatMessage) {
-          console.error('Usage: archon chat <message>');
-          return 1;
-        }
-        await chatCommand(chatMessage);
-        break;
-      }
 
       case 'setup': {
         const rawScope = values.scope as string | undefined;
@@ -593,6 +682,109 @@ async function main(): Promise<number> {
             break;
           }
 
+          case 'get': {
+            const getName = positionals[2];
+            if (!getName) {
+              console.error('Usage: archon workflow get <name> [--json]');
+              return 1;
+            }
+            await workflowGetCommand(getName, effectiveCwd, { json: jsonFlag });
+            break;
+          }
+
+          case 'create': {
+            const createFile = positionals[2];
+            if (!createFile) {
+              console.error('Usage: archon workflow create <file> [--name <name>] [--cwd <path>]');
+              return 1;
+            }
+            await workflowCreateCommand(createFile, effectiveCwd, { name: nameFlag }, serverUrl);
+            break;
+          }
+
+          case 'update': {
+            const updateName = positionals[2];
+            const updateFile = positionals[3];
+            if (!updateName || !updateFile) {
+              console.error('Usage: archon workflow update <name> <file> [--cwd <path>]');
+              return 1;
+            }
+            await workflowUpdateCommand(updateName, updateFile, effectiveCwd, serverUrl);
+            break;
+          }
+
+          case 'delete': {
+            const deleteName = positionals[2];
+            if (!deleteName) {
+              console.error(
+                'Usage: archon workflow delete <name> [--force] [--source project|global]'
+              );
+              return 1;
+            }
+            await workflowDeleteCommand(
+              deleteName,
+              effectiveCwd,
+              { force: values.force as boolean | undefined, source: sourceFlag },
+              serverUrl
+            );
+            break;
+          }
+
+          case 'cancel': {
+            const cancelRunId = positionals[2];
+            if (!cancelRunId) {
+              console.error('Usage: archon workflow cancel <run-id>');
+              return 1;
+            }
+            await workflowCancelCommand(cancelRunId, serverUrl);
+            break;
+          }
+
+          case 'runs':
+            await workflowRunsCommand({
+              status: statusFlag,
+              limit: limitFlag,
+              workflow: values.workflow as string | undefined,
+              json: jsonFlag,
+            });
+            break;
+
+          case 'inspect': {
+            const inspectRunId = positionals[2];
+            if (!inspectRunId) {
+              console.error('Usage: archon workflow inspect <run-id> [--json]');
+              return 1;
+            }
+            await workflowInspectCommand(inspectRunId, jsonFlag);
+            break;
+          }
+
+          case 'artifacts': {
+            const artifactsAction = positionals[2];
+            if (artifactsAction === 'list') {
+              const listRunId = positionals[3];
+              if (!listRunId) {
+                console.error('Usage: archon workflow artifacts list <run-id> [--json]');
+                return 1;
+              }
+              await workflowArtifactsListCommand(listRunId, jsonFlag);
+            } else if (artifactsAction === 'get') {
+              const getRunId = positionals[3];
+              const getPath = positionals[4];
+              if (!getRunId || !getPath) {
+                console.error(
+                  'Usage: archon workflow artifacts get <run-id> <path> [--output <file>]'
+                );
+                return 1;
+              }
+              await workflowArtifactsGetCommand(getRunId, getPath, { output: outputFlag });
+            } else {
+              console.error('Usage: archon workflow artifacts <list|get> ...');
+              return 1;
+            }
+            break;
+          }
+
           default:
             if (subcommand === undefined) {
               console.error('Missing workflow subcommand');
@@ -600,7 +792,8 @@ async function main(): Promise<number> {
               console.error(`Unknown workflow subcommand: ${subcommand}`);
             }
             console.error(
-              'Available: list, run, status, resume, abandon, approve, reject, cleanup, event, search, install'
+              'Available: list, run, status, resume, abandon, approve, reject, cleanup, event, ' +
+                'search, install, get, create, update, delete, cancel, runs, inspect, artifacts'
             );
             return 1;
         }
@@ -731,6 +924,204 @@ async function main(): Promise<number> {
             return 1;
         }
       }
+
+      case 'codebase':
+        switch (subcommand) {
+          case 'list':
+            await codebaseListCommand(jsonFlag);
+            break;
+
+          case 'get': {
+            const cbId = positionals[2];
+            if (!cbId) {
+              console.error('Usage: archon codebase get <id|name> [--json]');
+              return 1;
+            }
+            await codebaseGetCommand(cbId, jsonFlag);
+            break;
+          }
+
+          case 'register': {
+            const target = positionals[2];
+            if (!target) {
+              console.error('Usage: archon codebase register <path|url>');
+              return 1;
+            }
+            await codebaseRegisterCommand(target, serverUrl);
+            break;
+          }
+
+          case 'delete': {
+            const cbId = positionals[2];
+            if (!cbId) {
+              console.error('Usage: archon codebase delete <id|name> [--force]');
+              return 1;
+            }
+            await codebaseDeleteCommand(cbId, values.force as boolean | undefined, serverUrl);
+            break;
+          }
+
+          case 'env': {
+            const envAction = positionals[2];
+            const cbId = positionals[3];
+            if (envAction === 'list') {
+              if (!cbId) {
+                console.error('Usage: archon codebase env list <id|name> [--json]');
+                return 1;
+              }
+              await codebaseEnvListCommand(cbId, jsonFlag);
+            } else if (envAction === 'set') {
+              const key = positionals[4];
+              if (!cbId || !key || positionals.length < 6) {
+                console.error('Usage: archon codebase env set <id|name> <key> <value>');
+                return 1;
+              }
+              await codebaseEnvSetCommand(cbId, key, positionals.slice(5).join(' '), serverUrl);
+            } else if (envAction === 'delete') {
+              const key = positionals[4];
+              if (!cbId || !key) {
+                console.error('Usage: archon codebase env delete <id|name> <key>');
+                return 1;
+              }
+              await codebaseEnvDeleteCommand(cbId, key, serverUrl);
+            } else {
+              console.error('Usage: archon codebase env <list|set|delete> <id|name> ...');
+              return 1;
+            }
+            break;
+          }
+
+          case 'environments': {
+            const cbId = positionals[2];
+            if (!cbId) {
+              console.error('Usage: archon codebase environments <id|name> [--json]');
+              return 1;
+            }
+            await codebaseEnvironmentsCommand(cbId, jsonFlag);
+            break;
+          }
+
+          default:
+            if (subcommand === undefined) console.error('Missing codebase subcommand');
+            else console.error(`Unknown codebase subcommand: ${subcommand}`);
+            console.error('Available: list, get, register, delete, env, environments');
+            return 1;
+        }
+        break;
+
+      case 'conversation':
+        switch (subcommand) {
+          case 'list':
+            await conversationListCommand({ limit: limitFlag, json: jsonFlag });
+            break;
+
+          case 'get': {
+            const convId = positionals[2];
+            if (!convId) {
+              console.error('Usage: archon conversation get <id> [--json]');
+              return 1;
+            }
+            await conversationGetCommand(convId, jsonFlag);
+            break;
+          }
+
+          case 'messages': {
+            const convId = positionals[2];
+            if (!convId) {
+              console.error('Usage: archon conversation messages <id> [--limit <n>] [--json]');
+              return 1;
+            }
+            await conversationMessagesCommand(convId, { limit: limitFlag, json: jsonFlag });
+            break;
+          }
+
+          case 'create':
+            await conversationCreateCommand({ title: titleFlag, json: jsonFlag }, serverUrl);
+            break;
+
+          case 'title': {
+            const convId = positionals[2];
+            const newTitle = titleFlag ?? positionals.slice(3).join(' ');
+            if (!convId || !newTitle) {
+              console.error('Usage: archon conversation title <id> <title>');
+              return 1;
+            }
+            await conversationTitleCommand(convId, newTitle, serverUrl);
+            break;
+          }
+
+          case 'delete': {
+            const convId = positionals[2];
+            if (!convId) {
+              console.error('Usage: archon conversation delete <id> [--force]');
+              return 1;
+            }
+            await conversationDeleteCommand(convId, values.force as boolean | undefined, serverUrl);
+            break;
+          }
+
+          default:
+            if (subcommand === undefined) console.error('Missing conversation subcommand');
+            else console.error(`Unknown conversation subcommand: ${subcommand}`);
+            console.error('Available: list, get, messages, create, title, delete');
+            return 1;
+        }
+        break;
+
+      case 'providers':
+        switch (subcommand) {
+          case 'list':
+            providersListCommand(jsonFlag);
+            break;
+
+          default:
+            if (subcommand === undefined) console.error('Missing providers subcommand');
+            else console.error(`Unknown providers subcommand: ${subcommand}`);
+            console.error('Available: list');
+            return 1;
+        }
+        break;
+
+      case 'config':
+        switch (subcommand) {
+          case 'show':
+            await configShowCommand(cwd, jsonFlag);
+            break;
+
+          case 'assistant': {
+            const provider = positionals[2];
+            if (!provider) {
+              console.error(
+                'Usage: archon config assistant <provider> [--model <m>] [--setting-sources <a,b>] [--json]'
+              );
+              return 1;
+            }
+            await configAssistantCommand(
+              provider,
+              { model: modelFlag, settingSources: settingSourcesFlag, json: jsonFlag, cwd },
+              serverUrl
+            );
+            break;
+          }
+
+          case 'path':
+            configPathCommand(jsonFlag);
+            break;
+
+          default:
+            if (subcommand === undefined) console.error('Missing config subcommand');
+            else console.error(`Unknown config subcommand: ${subcommand}`);
+            console.error('Available: show, assistant, path');
+            return 1;
+        }
+        break;
+
+      case 'health':
+        return await healthCommand(jsonFlag, serverUrl);
+
+      case 'update-check':
+        await updateCheckCommand(jsonFlag);
+        break;
 
       default:
         if (command === undefined) {

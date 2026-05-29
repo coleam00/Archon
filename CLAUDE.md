@@ -265,6 +265,49 @@ bun run cli doctor
 bun run cli telemetry status
 bun run cli telemetry reset
 
+# --- Full system management (CLI parity) ---
+# Two-layer transport: reads = direct DB/filesystem (no server); mutations = REST API
+# (require a running server; override URL with --server-url or ARCHON_SERVER_URL).
+# All read commands accept --json.
+
+# Codebases (reads direct; register/delete/env mutations via server)
+bun run cli codebase list
+bun run cli codebase get <id|name>
+bun run cli codebase register <path|url>
+bun run cli codebase delete <id|name> --force
+bun run cli codebase env list <id|name>            # key names only — values never shown
+bun run cli codebase env set <id|name> <key> <value>
+bun run cli codebase env delete <id|name> <key>
+bun run cli codebase environments <id|name>
+
+# Workflow definitions + run history (get/runs/inspect/artifacts read direct;
+# create/update/delete/cancel via server)
+bun run cli workflow get <name>                    # raw YAML (--json for parsed)
+bun run cli workflow create <file> [--name <name>]
+bun run cli workflow update <name> <file>
+bun run cli workflow delete <name> [--source project|global]
+bun run cli workflow cancel <run-id>
+bun run cli workflow runs [--status <s>] [--limit <n>] [--workflow <name>]
+bun run cli workflow inspect <run-id>
+bun run cli workflow artifacts list <run-id>
+bun run cli workflow artifacts get <run-id> <path> [--output <file>]
+
+# Conversations (list/get/messages read direct; create/title/delete via server)
+bun run cli conversation list [--limit <n>]
+bun run cli conversation get <id>
+bun run cli conversation messages <id> [--limit <n>]
+bun run cli conversation create [--title <title>]
+bun run cli conversation title <id> <title>
+bun run cli conversation delete <id> --force
+
+# Config / providers / health / update check
+bun run cli config show                            # env var values redacted
+bun run cli config assistant <provider> [--model <m>] [--setting-sources <a,b>]
+bun run cli config path
+bun run cli providers list
+bun run cli health                                 # runtime check (requires server)
+bun run cli update-check
+
 # Show version
 bun run cli version
 ```

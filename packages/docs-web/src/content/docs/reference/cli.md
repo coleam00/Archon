@@ -50,7 +50,16 @@ archon workflow run plan --cwd /path/to/repo --branch feature-auth "Add OAuth su
 archon workflow run assist --cwd /path/to/repo --no-worktree "Quick question"
 ```
 
-**Note:** Workflow and isolation commands require running from within a git repository. Running from subdirectories automatically resolves to the repo root. The `version`, `help`, `chat`, `setup`, `serve`, and `doctor` commands work anywhere.
+**Note:** `workflow run`/`status`/`resume` and the `isolation` commands require running from within a git repository (subdirectories resolve to the repo root). The `version`, `help`, `chat`, `setup`, `serve`, `doctor`, `providers`, `config`, `health`, `update-check`, `codebase`, `conversation`, and the read-only `workflow` subcommands (`get`, `runs`, `inspect`, `artifacts`) work anywhere.
+
+## Reads vs. mutations (two-layer transport)
+
+Management commands follow a two-layer model:
+
+- **Reads** (`list`, `get`, `inspect`, `messages`, `show`, `runs`, `artifacts`, `providers list`) read the database / filesystem **directly** and work **without a running server**.
+- **Mutations** (`register`, `delete`, `env set/delete`, `create`, `update`, `cancel`, `send`, `title`, `config assistant --model`) go through the REST API, so they **require a running server**. Start one with `archon serve` (or `bun run dev:server`). If the server is unreachable, the command fails with exit code 1 and a clear message.
+
+The server URL defaults to `http://localhost:3090`; override with the `--server-url <url>` flag or the `ARCHON_SERVER_URL` environment variable.
 
 ## Commands
 
@@ -262,6 +271,79 @@ archon workflow event emit --run-id <uuid> --type <event-type> [--data <json>]
 
 Exit code: 0 on success, 1 when `--run-id`, `--type` is missing, or `--type` is not a valid event type. Event persistence is best-effort (non-throwing) -- check server logs if events appear missing.
 
+### `workflow get <name>`
+
+Print a workflow's definition. Reads from `.archon/workflows/`, `~/.archon/workflows/`, and bundled defaults — no server required.
+
+```bash
+archon workflow get archon-fix-github-issue          # raw YAML (prefixed with a `# source:` comment)
+archon workflow get archon-fix-github-issue --json   # parsed JSON
+```
+
+Pipe to a file to edit, then re-submit with `workflow update`: `archon workflow get my-flow > my-flow.yaml`. (Bundled workflows with no on-disk file in a binary build fall back to JSON.)
+
+### `workflow create <file>` / `workflow update <name> <file>`
+
+Create or replace a workflow definition from a YAML file. The server validates the definition before writing. **Requires a running server.**
+
+```bash
+archon workflow create ./my-flow.yaml                # name derived from the filename
+archon workflow create ./my-flow.yaml --name my-flow # explicit name override
+archon workflow update my-flow ./my-flow.yaml
+```
+
+**Flags:** `--name <name>` (create only; defaults to the filename without extension), `--cwd <path>` (target project).
+
+### `workflow delete <name>`
+
+Delete a user-defined workflow (bundled defaults cannot be deleted). Prompts for confirmation unless `--force`. **Requires a running server.**
+
+```bash
+archon workflow delete my-flow
+archon workflow delete my-flow --force
+archon workflow delete my-flow --source project      # disambiguate project vs global
+```
+
+### `workflow cancel <run-id>`
+
+Cancel an in-progress (running / pending / paused) workflow run via the server. **Requires a running server.** To discard a run and release a worktree lock without the server, use `workflow abandon`.
+
+```bash
+archon workflow cancel <run-id>
+```
+
+### `workflow runs`
+
+List workflow runs (full history). Reads the database directly — no server required. `workflow status` remains the active-only view; `workflow runs` is the complete history with filters.
+
+```bash
+archon workflow runs
+archon workflow runs --status failed --limit 50
+archon workflow runs --workflow archon-fix-github-issue --json
+```
+
+**Flags:** `--status <running|completed|failed|cancelled|pending|paused>`, `--limit <n>` (default 20), `--workflow <name>`, `--json`.
+
+### `workflow inspect <run-id>`
+
+Show full run detail — metadata plus per-node step summaries derived from the event log. Reads the database directly.
+
+```bash
+archon workflow inspect <run-id>
+archon workflow inspect <run-id> --json
+```
+
+### `workflow artifacts list <run-id>` / `workflow artifacts get <run-id> <path>`
+
+List or print artifact files produced by a run. Reads the on-disk artifact directory directly. Path traversal (`..`) is rejected.
+
+```bash
+archon workflow artifacts list <run-id>
+archon workflow artifacts list <run-id> --json
+archon workflow artifacts get <run-id> report.md             # prints to stdout
+archon workflow artifacts get <run-id> report.md --output ./report.md
+```
+
 ### `isolation list`
 
 Show all active worktree environments.
@@ -389,6 +471,80 @@ Show version, build type, and database info.
 archon version
 ```
 
+### `codebase`
+
+Manage registered codebases. Reads (`list`, `get`, `env list`, `environments`) hit the database directly; mutations (`register`, `delete`, `env set`, `env delete`) go through the server. `<id|name>` accepts the codebase UUID or its name (case-insensitive; an ambiguous name errors).
+
+```bash
+archon codebase list                                   # list all (--json for machine output)
+archon codebase get <id|name>                          # show details
+archon codebase register .                             # register a local path (server)
+archon codebase register https://github.com/owner/repo # clone a remote (server)
+archon codebase delete <id|name>                       # prompts; --force to skip (server)
+archon codebase env list <id|name>                     # key names only — values never shown
+archon codebase env set <id|name> KEY value            # upsert an env var (server)
+archon codebase env delete <id|name> KEY               # remove an env var (server)
+archon codebase environments <id|name>                 # isolation environments for the codebase
+```
+
+### `conversation`
+
+Manage conversations. Reads (`list`, `get`, `messages`) hit the database directly; mutations (`send`, `create`, `title`, `delete`) go through the server. IDs accept the conversation UUID or the platform conversation id.
+
+```bash
+archon conversation list --limit 20 --json
+archon conversation get <id>
+archon conversation messages <id> --limit 50
+archon conversation send <id> "What changed?"          # posts, then polls for the reply (server)
+archon conversation create --title "Investigation"     # (server)
+archon conversation title <id> "New title"             # (server)
+archon conversation delete <id> --force                # soft-delete (server)
+```
+
+`conversation send` posts through the orchestrator and polls for the assistant's reply (up to 2 minutes). Real-time streaming into the terminal is not yet supported.
+
+### `config`
+
+Inspect and update configuration.
+
+```bash
+archon config show                                     # effective merged config (env values redacted)
+archon config show --json --cwd /path/to/repo
+archon config assistant claude                         # show the claude assistant block
+archon config assistant claude --model opus            # update model (server)
+archon config assistant claude --setting-sources project,user
+archon config path                                     # print config file, DB, and home paths
+```
+
+`config show` and `config assistant` (read mode) read the merged config directly (no server). `config assistant` with a mutation flag (`--model` / `--setting-sources`) updates via the server, preserving merge semantics. Env var **values** are never printed.
+
+### `providers list`
+
+List registered AI providers and their capabilities. Reads the provider registry directly — no server required.
+
+```bash
+archon providers list
+archon providers list --json
+```
+
+### `health`
+
+Runtime health check against the running server. Distinct from `doctor` (which verifies the local environment). **Requires a running server**; exits non-zero if the server is unreachable or reports a non-ok status.
+
+```bash
+archon health
+archon health --json
+```
+
+### `update-check`
+
+Check for a newer Archon release (queries the GitHub Releases API directly — no server required).
+
+```bash
+archon update-check
+archon update-check --json
+```
+
 ## Global Options
 
 | Option | Effect |
@@ -396,7 +552,17 @@ archon version
 | `--cwd <path>` | Override working directory (default: current directory) |
 | `--quiet`, `-q` | Reduce log verbosity to warnings and errors only |
 | `--verbose`, `-v` | Show debug-level output |
-| `--json` | Output machine-readable JSON (for workflow list, workflow status) |
+| `--json` | Output machine-readable JSON. Also suppresses info logs so stdout stays clean for piping (e.g. `... --json \| jq`). |
+| `--server-url <url>` | Archon server URL for mutation commands (default: `http://localhost:3090`; or set `ARCHON_SERVER_URL`) |
+| `--limit <n>` | Max rows for list commands (`conversation list`, `workflow runs`) |
+| `--status <status>` | Filter `workflow runs` by status |
+| `--name <name>` | Workflow name override for `workflow create` |
+| `--title <title>` | Conversation title for `conversation create` / `conversation title` |
+| `--model <model>` | Model to set for `config assistant <provider>` |
+| `--setting-sources <a,b>` | Claude `settingSources` for `config assistant` (comma-separated) |
+| `--source <project\|global>` | Workflow source filter for `workflow delete` |
+| `--output <file>` | Write artifact contents to a file for `workflow artifacts get` |
+| `--force` | Skip confirmation for destructive commands (`delete`); overwrite for `workflow install` |
 | `--help`, `-h` | Show help message |
 
 ## Working Directory
