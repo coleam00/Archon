@@ -88,6 +88,13 @@ function getLog(): ReturnType<typeof createLogger> {
 
 const MCP_FAILURE_PREFIX = 'MCP server connection failed: ';
 
+/**
+ * Minimum accumulated characters before flushing the streaming buffer.
+ * Providers like Pi may emit very small text_delta chunks (single characters
+ * with newlines). Aggregating them before sending prevents fragmented output.
+ */
+const MIN_STREAM_FLUSH_SIZE = 100;
+
 /** A failed MCP server entry parsed from the SDK message. `segment` is the
  *  original substring (e.g. `"telegram (disconnected)"`) so callers can
  *  reconstruct a filtered message without losing the status detail. */
@@ -704,6 +711,9 @@ async function executeNodeInternal(
   let nodeNumTurns: number | undefined;
   let nodeModelUsage: Record<string, unknown> | undefined;
   const batchMessages: string[] = [];
+  // Stream-mode buffer: aggregates small assistant chunks (e.g. Pi text_delta)
+  // before flushing, preventing fragmented character-by-character output.
+  let streamBuffer = '';
 
   // Create per-node abort controller for idle timeout cleanup
   const nodeAbortController = new AbortController();
@@ -777,11 +787,14 @@ async function executeNodeInternal(
 
       if (msg.type === 'assistant' && msg.content) {
         nodeOutputText += msg.content; // ALWAYS capture for $node_id.output
-        if (streamingMode === 'stream' || msg.flush) {
+        if (msg.flush) {
           // `flush` chunks (e.g. Pi notify() emitting a plannotator review URL)
           // must reach the user before the node blocks. Drain any queued batch
-          // content first so order is preserved.
-          if (streamingMode === 'batch' && batchMessages.length > 0) {
+          // or stream buffer content first so order is preserved.
+          if (streamingMode === 'stream' && streamBuffer.length > 0) {
+            await safeSendMessage(platform, conversationId, streamBuffer, nodeContext);
+            streamBuffer = '';
+          } else if (streamingMode === 'batch' && batchMessages.length > 0) {
             await safeSendMessage(
               platform,
               conversationId,
@@ -791,11 +804,27 @@ async function executeNodeInternal(
             batchMessages.length = 0;
           }
           await safeSendMessage(platform, conversationId, msg.content, nodeContext);
+        } else if (streamingMode === 'stream') {
+          // Buffered streaming: accumulate chunks until MIN_STREAM_FLUSH_SIZE
+          // to avoid fragmented output from providers that emit small deltas
+          // (e.g. Pi SDK text_delta events). Flush on non-assistant chunks
+          // and at end-of-stream.
+          streamBuffer += msg.content;
+          if (streamBuffer.length >= MIN_STREAM_FLUSH_SIZE) {
+            await safeSendMessage(platform, conversationId, streamBuffer, nodeContext);
+            streamBuffer = '';
+          }
         } else {
           batchMessages.push(msg.content);
         }
         await logAssistant(logDir, workflowRun.id, msg.content);
       } else if (msg.type === 'tool' && msg.toolName) {
+        // Flush any pending stream buffer so the user sees the AI's text
+        // before it starts using a tool.
+        if (streamingMode === 'stream' && streamBuffer.length > 0) {
+          await safeSendMessage(platform, conversationId, streamBuffer, nodeContext);
+          streamBuffer = '';
+        }
         const now = Date.now();
 
         // Emit tool_completed for the previous tool (fire-and-forget)
@@ -870,6 +899,13 @@ async function executeNodeInternal(
           await platform.sendStructuredEvent(conversationId, msg);
         }
       } else if (msg.type === 'result') {
+        // Flush any remaining stream buffer before processing the result.
+        // The result chunk signals end-of-stream; all accumulated text must
+        // be delivered to the user before the node result is processed.
+        if (streamingMode === 'stream' && streamBuffer.length > 0) {
+          await safeSendMessage(platform, conversationId, streamBuffer, nodeContext);
+          streamBuffer = '';
+        }
         // Emit tool_completed for the last tool in the node
         if (lastToolStartedAt) {
           const prevTool = lastToolStartedAt;
@@ -942,6 +978,12 @@ async function executeNodeInternal(
         }
         break; // Result is the "I'm done" signal — don't wait for subprocess to exit
       } else if (msg.type === 'system' && msg.content) {
+        // Flush any pending stream buffer so system warnings don't get
+        // interleaved with buffered assistant text.
+        if (streamingMode === 'stream' && streamBuffer.length > 0) {
+          await safeSendMessage(platform, conversationId, streamBuffer, nodeContext);
+          streamBuffer = '';
+        }
         // Providers yield system chunks for user-actionable issues (missing env
         // vars, Haiku+MCP, structured output failures, etc.). MCP-failure
         // chunks need filtering: user-level plugin MCPs inherited from
@@ -1003,6 +1045,14 @@ async function executeNodeInternal(
         }
       }
       // rate_limit chunks: already log.warn'd in claude.ts; not surfaced to SSE per design
+    }
+
+    // Flush any remaining stream buffer after the for-await loop completes.
+    // This ensures the last chunk of accumulated text reaches the user even if
+    // it never reached MIN_STREAM_FLUSH_SIZE (end of node output is short).
+    if (streamingMode === 'stream' && streamBuffer.length > 0) {
+      await safeSendMessage(platform, conversationId, streamBuffer, nodeContext);
+      streamBuffer = '';
     }
 
     // When output_format is set and the provider returned structured_output,
@@ -1878,6 +1928,7 @@ async function executeLoopNode(
     // Stream AI response for this iteration
     let fullOutput = ''; // raw, for signal detection
     let cleanOutput = ''; // stripped, for platform display
+    let loopStreamBuffer = ''; // buffers small assistant chunks in stream mode
     let iterationIdleTimedOut = false;
     const iterationAbortController = new AbortController();
 
@@ -1926,10 +1977,19 @@ async function executeLoopNode(
           const cleaned = stripCompletionTags(msg.content, loop.until);
           cleanOutput += cleaned;
           if (platform.getStreamingMode() === 'stream' && cleaned) {
-            await safeSendMessage(platform, conversationId, cleaned, msgContext);
+            loopStreamBuffer += cleaned;
+            if (loopStreamBuffer.length >= MIN_STREAM_FLUSH_SIZE) {
+              await safeSendMessage(platform, conversationId, loopStreamBuffer, msgContext);
+              loopStreamBuffer = '';
+            }
           }
           await logAssistant(logDir, workflowRun.id, msg.content);
         } else if (msg.type === 'result') {
+          // Flush any pending stream buffer before the result.
+          if (platform.getStreamingMode() === 'stream' && loopStreamBuffer.length > 0) {
+            await safeSendMessage(platform, conversationId, loopStreamBuffer, msgContext);
+            loopStreamBuffer = '';
+          }
           // Emit tool_completed for the last tool in the iteration
           if (lastToolStartedAt) {
             const prevTool = lastToolStartedAt;
@@ -1995,6 +2055,11 @@ async function executeLoopNode(
           }
           break; // Result is the "I'm done" signal — don't wait for subprocess to exit
         } else if (msg.type === 'tool' && msg.toolName) {
+          // Flush pending stream buffer so the user sees AI text before the tool call.
+          if (platform.getStreamingMode() === 'stream' && loopStreamBuffer.length > 0) {
+            await safeSendMessage(platform, conversationId, loopStreamBuffer, msgContext);
+            loopStreamBuffer = '';
+          }
           const now = Date.now();
 
           // Emit tool_completed for the previous tool
@@ -2064,6 +2129,12 @@ async function executeLoopNode(
           await platform.sendStructuredEvent(conversationId, msg);
         }
         // rate_limit chunks: already log.warn'd in claude.ts; not surfaced to SSE per design
+      }
+
+      // Flush any remaining stream buffer after the iteration's for-await loop.
+      if (platform.getStreamingMode() === 'stream' && loopStreamBuffer.length > 0) {
+        await safeSendMessage(platform, conversationId, loopStreamBuffer, msgContext);
+        loopStreamBuffer = '';
       }
     } catch (error) {
       const err = error as Error;
