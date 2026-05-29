@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **DAG nodes no longer silently complete when `idle_timeout` fires before any output is produced.**
+  Previously, an idle timeout with zero output was incorrectly recorded as `completed`. Now it fails
+  with a clear error: `"Node '<id>' timed out with no output … Consider increasing idle_timeout or
+  reducing prompt size."` Nodes that do produce output before the subprocess hangs still complete
+  with a warning, unchanged (#1807).
+
 ## [0.4.1] - 2026-05-28
 
 Hotfix for the v0.4.0 upgrade path.

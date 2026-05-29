@@ -1039,10 +1039,9 @@ async function executeNodeInternal(
       }
     }
 
-    // Idle timeout with some output captured = subprocess hung after finishing. Surface as
-    // a completion warning. Idle timeout with no output is handled by the empty-output guard
-    // below so we don't post a contradictory "completed" message.
+    // Only post "completed via idle timeout" when the node produced output — zero-output timeout falls through to the empty-output guard below.
     if (nodeIdleTimedOut) {
+      // Invariant: providers only set structuredOutput when the AI produced parseable content.
       const hasAnyOutput = nodeOutputText.trim() !== '' || structuredOutput !== undefined;
       if (hasAnyOutput) {
         getLog().warn(
@@ -1139,18 +1138,11 @@ async function executeNodeInternal(
       return { state: 'failed', output: nodeOutputText, error: creditError };
     }
 
-    // Fail when the node produced no output at all (no text, no structured output).
-    // Covers two cases:
-    //  1. Non-timeout: provider stream closed silently (rejection, interruption).
-    //  2. Idle-timeout with zero output: the AI never emitted anything before the
-    //     watchdog fired (e.g. time-to-first-token exceeded the idle window on a
-    //     large prompt). This is NOT the "subprocess hung after completion" case —
-    //     that requires some output to have been captured first, which is handled
-    //     by the conditional "completed via idle timeout" message above.
+    // Fail for zero output: covers both silent non-timeout exits AND idle-timeout before first token (time-to-first-token exceeded the window).
     if (nodeOutputText.trim() === '' && structuredOutput === undefined) {
       const duration = Date.now() - nodeStartTime;
       const emptyError = nodeIdleTimedOut
-        ? `Node '${node.id}' timed out with no output (idle for ${String(effectiveIdleTimeout / 1000)}s). The provider did not emit any content before the watchdog fired — likely time-to-first-token exceeded the timeout. Consider increasing idle_timeout or reducing prompt size.`
+        ? `Node '${node.id}' timed out with no output (idle for ${String(effectiveIdleTimeout / 60000)} min). The provider did not emit any content before the watchdog fired — likely time-to-first-token exceeded the timeout. Consider increasing idle_timeout or reducing prompt size.`
         : `Node '${node.id}' produced no assistant output. The provider stream closed without yielding content — likely a silent provider rejection or stream interruption.`;
       getLog().error({ nodeId: node.id, durationMs: duration }, 'dag.node_empty_output');
       await logNodeError(logDir, workflowRun.id, node.id, emptyError);
