@@ -176,7 +176,7 @@ export class PiProvider implements IAgentProvider {
     const [
       piCodingAgent,
       { bridgeSession },
-      { resolvePiSkills, resolvePiThinkingLevel, resolvePiTools },
+      { resolvePiPackages, resolvePiSkills, resolvePiThinkingLevel, resolvePiTools },
       { createNoopResourceLoader },
       { resolvePiSession },
       { createArchonUIBridge, createArchonUIContext },
@@ -360,6 +360,11 @@ export class PiProvider implements IAgentProvider {
       };
     }
 
+    //    4e. packages: per-node Pi packages (npm:, git:, local paths) to load for
+    //        this session. resolvePiPackages resolves relative paths from cwd to
+    //        absolute — Pi's temporary-scope base dir is not cwd, so we must do this.
+    const packageSources = resolvePiPackages(cwd, nodeConfig?.packages as string[] | undefined);
+
     // 5. Session management. Pi stores each session as a JSONL file under
     //    ~/.pi/agent/sessions/<encoded-cwd>/<uuid>.jsonl. `resolvePiSession`
     //    returns a SessionManager bound to either a new session (no resume
@@ -439,12 +444,43 @@ export class PiProvider implements IAgentProvider {
       ...(systemPrompt !== undefined ? { systemPrompt } : {}),
       ...(skillPaths.length > 0 ? { additionalSkillPaths: skillPaths } : {}),
       ...(enableExtensions ? { enableExtensions: true } : {}),
+      ...(packageSources.length > 0 ? { additionalExtensionPaths: packageSources } : {}),
     });
 
     // Required: without reload(), session.extensionRunner is undefined and
     // setFlagValue silently no-ops. createAgentSession skips this when a
     // custom resource loader is supplied.
-    if (enableExtensions) {
+    const extensionRunnerActive = enableExtensions || packageSources.length > 0;
+
+    // Warn when per-node packages include protocol sources (npm:, git:, https:) that are
+    // not already in the user's installed package list. Pi auto-installs missing packages
+    // during reload() — a network call that can fail or stall in server environments.
+    // Pre-install with: pi install npm:pkg  (or pi install git:host/user/repo)
+    if (packageSources.length > 0) {
+      const installedSources = new Set<string>();
+      for (const settings of [globalSettings, projectSettings] as Record<string, unknown>[]) {
+        const pkgs = settings['packages'];
+        if (Array.isArray(pkgs)) {
+          for (const p of pkgs) {
+            const src = typeof p === 'string' ? p : (p as Record<string, unknown>)['source'];
+            if (typeof src === 'string') installedSources.add(src);
+          }
+        }
+      }
+      const notInstalled = packageSources.filter(
+        src => /^(npm:|git:|https?:|ssh:)/.test(src) && !installedSources.has(src)
+      );
+      if (notInstalled.length > 0) {
+        yield {
+          type: 'system',
+          content:
+            `⚠️ Pi: packages not pre-installed — will auto-install during this run (network call): ${notInstalled.join(', ')}. ` +
+            `Pre-install for faster startup: ${notInstalled.map(s => `pi install ${s}`).join(', ')}`,
+        };
+      }
+    }
+
+    if (extensionRunnerActive) {
       await resourceLoader.reload();
     }
 
@@ -459,6 +495,7 @@ export class PiProvider implements IAgentProvider {
         skillCount: skillPaths.length,
         missingSkillCount: missingSkills.length,
         extensionsEnabled: enableExtensions,
+        perNodePackageCount: packageSources.length,
         interactive,
         resumed: resumeSessionId !== undefined && !resumeFailed,
       },
@@ -499,9 +536,9 @@ export class PiProvider implements IAgentProvider {
       yield { type: 'system', content: `⚠️ ${modelFallbackMessage}` };
     }
 
-    // 4e. Extension flag pass-through. Must happen before bindExtensions
-    //     below — extensions read flags inside their session_start handler.
-    if (enableExtensions && piConfig.extensionFlags) {
+    // 4f. Extension flag pass-through. Must happen before bindExtensions below —
+    //     extensions read flags inside their session_start handler.
+    if (extensionRunnerActive && piConfig.extensionFlags) {
       const runner = session.extensionRunner;
       if (runner) {
         for (const [name, value] of Object.entries(piConfig.extensionFlags)) {
@@ -510,18 +547,19 @@ export class PiProvider implements IAgentProvider {
       }
     }
 
-    // 4f. Bind UI context or fire session_start with no UI. Must run after flag pass-through above.
+    // 4g. Bind UI context or fire session_start with no UI. Must run after flag pass-through above.
     //     Extension providers register their models during bindExtensions() — this is the trigger
     //     for LOOKUP-2: they call registerProvider() on our modelRegistry during session_start.
+    //     extensionRunnerActive: true when global extension discovery is on or per-node packages are loaded.
     const uiBridge = interactive ? createArchonUIBridge() : undefined;
     if (uiBridge) {
       const uiContext = createArchonUIContext(uiBridge);
       await session.bindExtensions({ uiContext });
-    } else if (enableExtensions) {
+    } else if (extensionRunnerActive) {
       await session.bindExtensions({});
     }
 
-    // 4g. [LOOKUP-2] Re-check the registry after bindExtensions() for extension-registered models.
+    // 4h. [LOOKUP-2] Re-check the registry after bindExtensions() for extension-registered models.
     //     Safe to call session.setModel() here — no prompt has been sent yet.
     if (!model) {
       model = modelRegistry.find(parsed.provider, parsed.modelId);

@@ -14,4 +14,6 @@ export const CLAUDE_CAPABILITIES: ProviderCapabilities = {
   thinkingControl: true,
   fallbackModel: true,
   sandbox: true,
+  // packages: is Pi-specific (Pi package ecosystem). Claude uses mcp:, hooks:, agents: instead.
+  packages: false,
 };

@@ -1,10 +1,15 @@
 import { describe, expect, test, beforeAll, afterAll } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import type { NodeConfig } from '../../types';
-import { resolvePiSkills, resolvePiThinkingLevel, resolvePiTools } from './options-translator';
+import {
+  resolvePiPackages,
+  resolvePiSkills,
+  resolvePiThinkingLevel,
+  resolvePiTools,
+} from './options-translator';
 
 // ─── resolvePiThinkingLevel ─────────────────────────────────────────────
 
@@ -267,5 +272,68 @@ describe('resolvePiSkills', () => {
   test('ignores empty-string and non-string names', () => {
     const result = resolvePiSkills(cwd, ['', 'alpha']);
     expect(result.paths).toHaveLength(1);
+  });
+});
+
+// ─── resolvePiPackages ────────────────────────────────────────────────────
+
+describe('resolvePiPackages', () => {
+  const cwd = '/workspace/my-project';
+
+  test('returns [] for undefined', () => {
+    expect(resolvePiPackages(cwd, undefined)).toEqual([]);
+  });
+
+  test('returns [] for empty array', () => {
+    expect(resolvePiPackages(cwd, [])).toEqual([]);
+  });
+
+  test('npm: refs pass through unchanged', () => {
+    expect(resolvePiPackages(cwd, ['npm:pi-mcp-adapter'])).toEqual(['npm:pi-mcp-adapter']);
+    expect(resolvePiPackages(cwd, ['npm:@aliou/pi-guardrails'])).toEqual([
+      'npm:@aliou/pi-guardrails',
+    ]);
+  });
+
+  test('git: refs pass through unchanged', () => {
+    expect(resolvePiPackages(cwd, ['git:github.com/user/repo'])).toEqual([
+      'git:github.com/user/repo',
+    ]);
+  });
+
+  test('https: refs pass through unchanged', () => {
+    expect(resolvePiPackages(cwd, ['https://github.com/user/repo'])).toEqual([
+      'https://github.com/user/repo',
+    ]);
+  });
+
+  test('absolute paths pass through unchanged', () => {
+    expect(resolvePiPackages(cwd, ['/abs/path/to/ext.ts'])).toEqual(['/abs/path/to/ext.ts']);
+    expect(resolvePiPackages(cwd, ['/abs/path/to/pkg/'])).toEqual(['/abs/path/to/pkg/']);
+  });
+
+  test('relative paths are resolved from cwd to absolute', () => {
+    const result = resolvePiPackages(cwd, ['./pi-extensions/audit.ts']);
+    expect(result).toEqual([resolve(cwd, './pi-extensions/audit.ts')]);
+  });
+
+  test('relative paths without leading ./ are resolved from cwd', () => {
+    const result = resolvePiPackages(cwd, ['../../other/pkg']);
+    expect(result).toEqual([resolve(cwd, '../../other/pkg')]);
+  });
+
+  test('mixed sources: each format handled correctly', () => {
+    const result = resolvePiPackages(cwd, [
+      'npm:pi-mcp-adapter',
+      '/abs/local-pkg/',
+      './relative/ext.ts',
+      'git:github.com/user/repo',
+    ]);
+    expect(result).toEqual([
+      'npm:pi-mcp-adapter',
+      '/abs/local-pkg/',
+      resolve(cwd, './relative/ext.ts'),
+      'git:github.com/user/repo',
+    ]);
   });
 });

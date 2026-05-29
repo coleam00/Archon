@@ -300,6 +300,23 @@ export interface NodeConfig {
   systemPrompt?: SystemPromptInput;
   fallbackModel?: string;
   idle_timeout?: number;
+  /**
+   * Pi only: Pi packages to load for this node, on top of globally-installed packages.
+   * Accepts the same source strings as `pi install` / settings.json:
+   *   - `npm:pi-mcp-adapter`            — npm package (pre-install recommended for servers)
+   *   - `npm:@scope/pkg`                — scoped npm package
+   *   - `git:github.com/user/repo`      — git repository
+   *   - `/absolute/path/to/pkg/`        — local package directory (needs package.json + pi field)
+   *   - `./relative/to/cwd/pkg/`        — relative path, resolved from cwd by Archon
+   *
+   * A Pi package bundles any combination of extensions (tools + hooks), skills,
+   * prompt templates, and themes. Relative paths are resolved to absolute from `cwd`.
+   * npm/git packages not yet installed will be auto-installed on first use
+   * (network call) — pre-install via `pi install npm:pkg` for server deployments.
+   *
+   * Trust: any loaded package runs arbitrary JS with the Archon server's permissions.
+   */
+  packages?: string[];
   [key: string]: unknown;
 }
 
@@ -334,6 +351,8 @@ export interface ProviderCapabilities {
   thinkingControl: boolean;
   fallbackModel: boolean;
   sandbox: boolean;
+  /** Whether the provider supports per-node Pi package loading (Pi's `packages:` field). */
+  packages: boolean;
 }
 
 /**

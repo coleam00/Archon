@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 import {
   createBashTool,
   createCodingTools,
@@ -251,3 +253,30 @@ export function resolvePiTools(
 // tests keep their import path stable.
 export { resolveSkillDirectories as resolvePiSkills } from '../../shared/skills';
 export type { ResolvedSkills } from '../../shared/skills';
+
+// ─── Packages ──────────────────────────────────────────────────────────────
+
+/**
+ * Resolve per-node Pi package sources from the workflow node's `packages:` field
+ * into the string array accepted by `DefaultResourceLoaderOptions.additionalExtensionPaths`.
+ *
+ * Pi's PackageManager routes these strings through `parseSource()` —
+ * the same pipeline as `settings.json` entries — so all formats work
+ * identically to `pi install`:
+ *   - `npm:pi-mcp-adapter`           passes through (Pi installs/resolves)
+ *   - `git:github.com/user/repo`     passes through (Pi clones/resolves)
+ *   - `/absolute/path/to/pkg/`       passes through unchanged
+ *   - `./relative/path/pkg/`         resolved from `cwd` to absolute (Pi's temporary-
+ *                                    scope base dir is not `cwd`, so we resolve here)
+ *
+ * Returns an empty array when `packages` is undefined or empty.
+ */
+export function resolvePiPackages(cwd: string, packages?: string[]): string[] {
+  if (!packages?.length) return [];
+  return packages.map(src => {
+    // Protocol-prefixed refs and absolute paths pass through for Pi SDK routing.
+    if (/^(npm:|git:|https?:|ssh:)/.test(src) || path.isAbsolute(src)) return src;
+    // Relative path — resolve against cwd so Pi receives an absolute path.
+    return path.resolve(cwd, src);
+  });
+}

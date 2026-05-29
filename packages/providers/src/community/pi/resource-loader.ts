@@ -57,23 +57,51 @@ export interface NoopResourceLoaderOptions {
    * @default false
    */
   enableExtensions?: boolean;
+
+  /**
+   * Per-node Pi packages to load for this session, on top of whatever
+   * `enableExtensions` discovers. Sourced from the workflow node's `packages:` field
+   * after relative paths are resolved to absolute by the caller (provider.ts).
+   * Pi's PackageManager processes them identically to entries in `settings.json`.
+   *
+   * Accepted formats (same as `pi install`):
+   *   - `npm:pi-mcp-adapter`         — npm package
+   *   - `git:github.com/user/repo`   — git repository
+   *   - `/absolute/path/to/pkg/`     — local package directory
+   *   - `/absolute/path/to/ext.ts`   — local single extension file
+   *
+   * Works regardless of `noExtensions` — Pi resolves these via its CLI extension
+   * path (same as `pi -e`), which runs unconditionally before the noExtensions gate.
+   * The ExtensionRunner initialises as long as reload() is called and any paths resolve.
+   *
+   * Trust: any loaded package runs arbitrary JS with the Archon server's OS permissions.
+   */
+  additionalExtensionPaths?: string[];
 }
 
 /**
  * Build a Pi ResourceLoader. By default performs no filesystem discovery —
  * Archon is the source of truth for skills, prompts, themes, and context
  * files, and Pi should not walk cwd or read `~/.pi/agent/` during server-side
- * workflow execution. When `enableExtensions: true`, the `noExtensions` gate
- * is lifted so Pi discovers and loads tools + hooks from the community
- * ecosystem (see `NoopResourceLoaderOptions.enableExtensions`). Skills and
- * prompts/themes remain suppressed even when extensions are enabled — skills
- * are still driven by Archon's explicit `additionalSkillPaths` plumbing.
+ * workflow execution.
  *
- * Implementation note: we delegate to `DefaultResourceLoader` with the
- * relevant `no*` flags set, rather than implementing `ResourceLoader`
- * ourselves. The interface's `getExtensions()` returns a `LoadExtensionsResult`
- * requiring a real `ExtensionRuntime`, which we can't meaningfully stub.
- * DefaultResourceLoader honors the flags and returns empty-but-valid results.
+ * `enableExtensions: true` lifts `noExtensions` so Pi discovers packages from
+ * ~/.pi/agent/settings.json and <cwd>/.pi/settings.json (global + project installs).
+ *
+ * `additionalExtensionPaths` (per-node `packages:` field) is independent of `noExtensions`.
+ * Pi resolves it via its CLI extension path — the same mechanism as `pi -e npm:pkg` —
+ * which runs unconditionally. So per-node packages load whether or not global discovery
+ * is on, and they never pull in settings.json packages when `enableExtensions: false`.
+ *
+ * The ExtensionRunner initialises whenever reload() is called and there are extension
+ * paths to load (either global or per-node). Skills and prompts/themes remain suppressed
+ * in all modes — skills are driven exclusively by additionalSkillPaths.
+ *
+ * Implementation note: we delegate to `DefaultResourceLoader` with the relevant
+ * `no*` flags set, rather than implementing `ResourceLoader` ourselves. The
+ * interface's `getExtensions()` returns a `LoadExtensionsResult` requiring a real
+ * `ExtensionRuntime`, which we can't meaningfully stub. DefaultResourceLoader
+ * honors the flags and returns empty-but-valid results.
  */
 export function createNoopResourceLoader(
   cwd: string,
@@ -85,6 +113,11 @@ export function createNoopResourceLoader(
     // Calling Pi's own `getAgentDir()` honors `PI_CODING_AGENT_DIR` and
     // matches the behavior of the pre-0.71 default exactly.
     agentDir: getAgentDir(),
+    // noExtensions controls global discovery from ~/.pi/agent/settings.json only.
+    // additionalExtensionPaths (per-node packages:) resolves via cliExtensionPaths
+    // unconditionally — it works regardless of noExtensions, so per-node packages
+    // load even when global discovery is off. This keeps enableExtensions and
+    // packages: orthogonal: false + packages:[x] loads only x, not global settings.
     noExtensions: options.enableExtensions !== true,
     noSkills: true,
     noPromptTemplates: true,
@@ -93,6 +126,9 @@ export function createNoopResourceLoader(
     ...(options.systemPrompt !== undefined ? { systemPrompt: options.systemPrompt } : {}),
     ...(options.additionalSkillPaths && options.additionalSkillPaths.length > 0
       ? { additionalSkillPaths: options.additionalSkillPaths }
+      : {}),
+    ...(options.additionalExtensionPaths && options.additionalExtensionPaths.length > 0
+      ? { additionalExtensionPaths: options.additionalExtensionPaths }
       : {}),
   });
 }

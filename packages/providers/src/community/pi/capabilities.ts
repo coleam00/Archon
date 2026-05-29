@@ -18,7 +18,10 @@ import type { ProviderCapabilities } from '../../types';
  */
 export const PI_CAPABILITIES: ProviderCapabilities = {
   sessionResume: true,
+  // mcp: false — Pi has no native MCP layer; the `mcp:` YAML field is Claude-only.
   mcp: false,
+  // hooks: false — Pi hooks are delivered via Pi packages (the node-level `packages:` field),
+  // not via the YAML `hooks:` config (which maps to the Claude Agent SDK hook callback API).
   hooks: false,
   skills: true,
   agents: false,
@@ -30,4 +33,8 @@ export const PI_CAPABILITIES: ProviderCapabilities = {
   thinkingControl: true,
   fallbackModel: false,
   sandbox: false,
+  // packages: true — per-node Pi package loading via `packages: [npm:..., ./local/pkg/]`.
+  // Sources are passed as additionalExtensionPaths to DefaultResourceLoader.
+  // A Pi package bundles extensions (tools + hooks), skills, prompts, and themes.
+  packages: true,
 };

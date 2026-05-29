@@ -156,6 +156,17 @@ export const dagNodeBaseSchema = z.object({
     .array(z.string().min(1, 'each skill must be a non-empty string'))
     .nonempty("'skills' must be a non-empty array")
     .optional(),
+  /**
+   * Pi only: Pi packages to load for this node, on top of globally-installed packages.
+   * A package bundles extensions (tools + hooks), skills, prompt templates, and themes.
+   * Accepts: `npm:pi-mcp-adapter`, `git:github.com/user/repo`, `/abs/path/`, `./rel/path/`.
+   * Relative paths are resolved from cwd. npm/git packages auto-install on first use
+   * (pre-install via `pi install npm:pkg` for server deployments).
+   */
+  packages: z
+    .array(z.string().min(1, 'each package source must be a non-empty string'))
+    .nonempty("'packages' must be a non-empty array")
+    .optional(),
   agents: z
     .record(z.string(), agentDefinitionSchema)
     // Validate agent-id keys in a superRefine rather than via a regex on the
@@ -363,6 +374,7 @@ export const BASH_NODE_AI_FIELDS: readonly string[] = [
   'hooks',
   'mcp',
   'skills',
+  'packages',
   'agents',
   'effort',
   'thinking',
@@ -589,6 +601,7 @@ export const dagNodeSchema = dagNodeBaseSchema
       ...(data.hooks !== undefined ? { hooks: data.hooks } : {}),
       ...(data.mcp !== undefined ? { mcp: data.mcp.trim() } : {}),
       ...(data.skills !== undefined ? { skills: data.skills.map(s => s.trim()) } : {}),
+      ...(data.packages !== undefined ? { packages: data.packages } : {}),
       ...(data.agents !== undefined ? { agents: data.agents } : {}),
       ...(data.effort !== undefined ? { effort: data.effort } : {}),
       ...(data.thinking !== undefined ? { thinking: data.thinking } : {}),
