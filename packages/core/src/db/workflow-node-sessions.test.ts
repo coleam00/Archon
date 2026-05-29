@@ -23,7 +23,6 @@ import {
   getWorkflowNodeSession,
   upsertWorkflowNodeSession,
   deleteWorkflowNodeSessions,
-  deleteWorkflowNodeSessionsByScope,
 } from './workflow-node-sessions';
 
 describe('workflow-node-sessions', () => {
@@ -34,7 +33,12 @@ describe('workflow-node-sessions', () => {
 
   describe('getWorkflowNodeSession', () => {
     test('returns null when no row matches', async () => {
-      const result = await getWorkflowNodeSession('feature-dev', 'planner', 'conv-1', 'claude');
+      const result = await getWorkflowNodeSession({
+        workflow_name: 'feature-dev',
+        node_id: 'planner',
+        scope_key: 'conv-1',
+        provider: 'claude',
+      });
       expect(result).toBeNull();
       const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(sql).toContain('SELECT * FROM remote_agent_workflow_node_sessions');
@@ -53,7 +57,12 @@ describe('workflow-node-sessions', () => {
         updated_at: '2026-05-28T00:00:00Z',
       };
       mockQuery.mockResolvedValueOnce(createQueryResult([row]));
-      const result = await getWorkflowNodeSession('feature-dev', 'planner', 'conv-1', 'claude');
+      const result = await getWorkflowNodeSession({
+        workflow_name: 'feature-dev',
+        node_id: 'planner',
+        scope_key: 'conv-1',
+        provider: 'claude',
+      });
       expect(result).toEqual(row);
     });
   });
@@ -73,6 +82,19 @@ describe('workflow-node-sessions', () => {
       expect(sql).toContain('ON CONFLICT (workflow_name, node_id, scope_key, provider)');
       expect(sql).toContain('DO UPDATE SET provider_session_id = EXCLUDED.provider_session_id');
       expect(params).toEqual(['feature-dev', 'planner', 'conv-1', 'claude', 'sess-abc', 'run-1']);
+    });
+
+    test('accepts a null last_run_id (FK is ON DELETE SET NULL)', async () => {
+      await upsertWorkflowNodeSession({
+        workflow_name: 'feature-dev',
+        node_id: 'planner',
+        scope_key: 'conv-1',
+        provider: 'claude',
+        provider_session_id: 'sess-abc',
+        last_run_id: null,
+      });
+      const [, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(params).toEqual(['feature-dev', 'planner', 'conv-1', 'claude', 'sess-abc', null]);
     });
 
     test('rethrows DB errors after logging (CLAUDE.md INSERT contract)', async () => {
@@ -161,17 +183,6 @@ describe('workflow-node-sessions', () => {
       });
       const result = await deleteWorkflowNodeSessions({ workflow_name: 'feature-dev' });
       expect(result).toEqual({ deleted: 0 });
-    });
-  });
-
-  describe('deleteWorkflowNodeSessionsByScope', () => {
-    test('deletes all rows for a scope_key', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 5));
-      const result = await deleteWorkflowNodeSessionsByScope('conv-1');
-      expect(result).toEqual({ deleted: 5 });
-      const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
-      expect(sql).toBe('DELETE FROM remote_agent_workflow_node_sessions WHERE scope_key = $1');
-      expect(params).toEqual(['conv-1']);
     });
   });
 });

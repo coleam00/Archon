@@ -5,8 +5,9 @@
 --   On the next run with the same scope_key (typically conversation_id), the executor passes
 --   the stored ID back as `resumeSessionId` so each node continues its prior conversation.
 --   scope_key is polymorphic TEXT — usually a conversation UUID, but kept FK-free for future
---   alternative scopes. Cascade-on-conversation-delete is handled by the conversation deletion
---   path (explicit, not FK), since scope_key is not constrained to one referent table.
+--   alternative scopes. There is no cascade on conversation delete: conversation deletion is a
+--   soft delete and the conversation UUID is never reused, so leftover rows are unreachable and
+--   harmless. A future hard-delete path should delete rows for the affected scope_key itself.
 
 CREATE TABLE IF NOT EXISTS remote_agent_workflow_node_sessions (
   workflow_name VARCHAR(255) NOT NULL,

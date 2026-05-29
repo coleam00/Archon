@@ -7892,7 +7892,12 @@ describe('executeDagWorkflow -- persist_session', () => {
     const upsertMock = store.upsertWorkflowNodeSession as Mock<
       typeof store.upsertWorkflowNodeSession
     >;
-    expect(getMock).toHaveBeenCalledWith('persist-test', 'planner', 'conv-dag', 'claude');
+    expect(getMock).toHaveBeenCalledWith({
+      workflow_name: 'persist-test',
+      node_id: 'planner',
+      scope_key: 'conv-dag',
+      provider: 'claude',
+    });
 
     const resumeSessionArg = mockSendQueryDag.mock.calls[0][2];
     expect(resumeSessionArg).toBeUndefined();
@@ -8132,5 +8137,124 @@ describe('executeDagWorkflow -- persist_session', () => {
     const errMsg = messages.find(m => m.includes('persist_session') && m.includes('sessionResume'));
     expect(errMsg).toBeDefined();
     expect(store.upsertWorkflowNodeSession).not.toHaveBeenCalled();
+  });
+
+  it('workflow.persist_sessions: true + node unset → node inherits persistence', async () => {
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+
+    await executeDagWorkflow(
+      mockDeps,
+      createMockPlatform(),
+      'conv-dag',
+      testDir,
+      {
+        name: 'wf-inherit',
+        nodes: [{ id: 'planner', command: 'my-cmd' }],
+        persist_sessions: true,
+      },
+      makeWorkflowRun(),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(store.getWorkflowNodeSession).toHaveBeenCalledWith({
+      workflow_name: 'wf-inherit',
+      node_id: 'planner',
+      scope_key: 'conv-dag',
+      provider: 'claude',
+    });
+    const upsertMock = store.upsertWorkflowNodeSession as Mock<
+      typeof store.upsertWorkflowNodeSession
+    >;
+    expect(upsertMock).toHaveBeenCalledWith({
+      workflow_name: 'wf-inherit',
+      node_id: 'planner',
+      scope_key: 'conv-dag',
+      provider: 'claude',
+      provider_session_id: 'new-session-id',
+      last_run_id: 'dag-test-run-id',
+    });
+  });
+
+  it('persist_session lookup failure → node runs fresh and upserts (non-fatal)', async () => {
+    const store = createMockStore();
+    (store.getWorkflowNodeSession as Mock<typeof store.getWorkflowNodeSession>).mockRejectedValue(
+      new Error('DB timeout')
+    );
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'persist-test',
+        nodes: [{ id: 'planner', command: 'my-cmd', persist_session: true }],
+      },
+      makeWorkflowRun(),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    // Lookup threw → node still runs, with no resume session.
+    expect(mockSendQueryDag.mock.calls[0][2]).toBeUndefined();
+    // The successful node still persists its new session id.
+    expect(store.upsertWorkflowNodeSession).toHaveBeenCalled();
+    // The user is warned the session could not be loaded.
+    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
+    const warned = sendMessage.mock.calls
+      .map((call: unknown[]) => call[1] as string)
+      .some(m => m.includes('persisted session') && m.includes('planner'));
+    expect(warned).toBe(true);
+  });
+
+  it('persist_session upsert failure → node still completes and user is warned (non-fatal)', async () => {
+    const store = createMockStore();
+    (
+      store.upsertWorkflowNodeSession as Mock<typeof store.upsertWorkflowNodeSession>
+    ).mockRejectedValue(new Error('write error'));
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'persist-test',
+        nodes: [{ id: 'planner', command: 'my-cmd', persist_session: true }],
+      },
+      makeWorkflowRun(),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    // Upsert threw, but the node executed (sendQuery ran) and the user was warned —
+    // the failure did not abort the node.
+    expect(mockSendQueryDag).toHaveBeenCalled();
+    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
+    const warned = sendMessage.mock.calls
+      .map((call: unknown[]) => call[1] as string)
+      .some(m => m.includes('Could not persist') && m.includes('planner'));
+    expect(warned).toBe(true);
   });
 });

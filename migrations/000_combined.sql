@@ -293,7 +293,7 @@ CREATE INDEX IF NOT EXISTS idx_workflow_node_sessions_workflow
   ON remote_agent_workflow_node_sessions(workflow_name);
 
 COMMENT ON TABLE remote_agent_workflow_node_sessions IS
-  'Per-node provider session IDs persisted across workflow re-runs. Keyed by (workflow, node, scope, provider). Scope is typically conversation UUID; cascade-on-conversation-delete handled by app code.';
+  'Per-node provider session IDs persisted across workflow re-runs. Keyed by (workflow, node, scope, provider). Scope is typically conversation UUID. No cascade on conversation delete (soft delete + never-reused UUID = harmless orphans); a future hard-delete path must delete by scope_key.';
 
 -- ============================================================================
 -- Table 7: Messages

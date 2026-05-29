@@ -2,7 +2,13 @@
  * Workflow loader - discovers and parses workflow YAML files
  */
 import type { WorkflowDefinition, WorkflowLoadError, DagNode, WorkflowNodeHooks } from './schemas';
-import { isLoopNode, isApprovalNode, isCancelNode, isScriptNode } from './schemas';
+import {
+  isLoopNode,
+  isApprovalNode,
+  isCancelNode,
+  isScriptNode,
+  isPersistableNode,
+} from './schemas';
 import { createLogger } from '@archon/paths';
 import {
   isRegisteredProvider,
@@ -359,25 +365,19 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
     // via .archon/config.yaml defaults), the check defers to runtime in
     // dag-executor.
     //
-    // Only command + prompt nodes participate in cross-run session persistence today:
+    // Only command + prompt nodes participate in cross-run session persistence today
+    // (see `isPersistableNode` for the exclusion list):
     //   - bash / script / approval / cancel nodes don't invoke a provider at all.
     //   - loop nodes manage their own per-iteration session threading; cross-run
-    //     persistence for loops isn't wired (the schema's aiOnly spread already
-    //     drops `persist_session` on non-command/prompt node types — see
-    //     dag-node.ts — and parseDagNode warns when the field is present on a loop).
+    //     persistence for loops isn't wired. `parseDagNode` emits a
+    //     `loop_node_ai_fields_ignored` warning when `persist_session` appears on one.
     //   - context:'fresh' nodes explicitly bypass persistence in the executor.
     // Skipping these here prevents false validation failures when a workflow opts
     // in via workflow-level `persist_sessions: true` and contains, e.g., a bash node.
     const workflowPersistSessions = raw.persist_sessions === true;
     for (const node of dagNodes) {
-      const isPersistableAiNode =
-        !isLoopNode(node) &&
-        !isApprovalNode(node) &&
-        !isCancelNode(node) &&
-        !isScriptNode(node) &&
-        !('bash' in node && typeof node.bash === 'string') &&
-        !('context' in node && node.context === 'fresh');
-      if (!isPersistableAiNode) continue;
+      if (!isPersistableNode(node)) continue;
+      if ('context' in node && node.context === 'fresh') continue;
 
       const nodePersist = 'persist_session' in node ? node.persist_session : undefined;
       const effectivePersist = nodePersist ?? workflowPersistSessions;

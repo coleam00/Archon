@@ -156,8 +156,6 @@ interface WorkflowLevelOptions {
   fallbackModel?: string;
   betas?: string[];
   sandbox?: SandboxSettings;
-  /** Default for per-node `persist_session` across this workflow's AI nodes. */
-  persist_sessions?: boolean;
 }
 
 /** Internal node execution result — extends NodeOutput with cost data for aggregation. */
@@ -2570,7 +2568,12 @@ export async function executeDagWorkflow(
   platform: IWorkflowPlatform,
   conversationId: string,
   cwd: string,
-  workflow: { name: string; nodes: readonly DagNode[] } & WorkflowLevelOptions,
+  workflow: {
+    name: string;
+    nodes: readonly DagNode[];
+    /** Workflow-level default for per-node `persist_session` (read directly here). */
+    persist_sessions?: boolean;
+  } & WorkflowLevelOptions,
   workflowRun: WorkflowRun,
   workflowProvider: string,
   workflowModel: string | undefined,
@@ -2636,7 +2639,8 @@ export async function executeDagWorkflow(
   let totalCostUsd = 0;
 
   // Per-node session persistence across workflow re-runs. Scope = the DB conversation
-  // UUID (always populated; chat adapters + CLI both go through getOrCreateConversation).
+  // UUID. The `?? undefined` guard keeps an empty/missing conversation_id from keying
+  // every invocation to the same blank scope — persistence is simply skipped in that case.
   // Distinct from AgentRequestOptions.persistSession (Claude SDK on-disk transcript flag).
   const persistScopeKey: string | undefined = workflowRun.conversation_id ?? undefined;
   const workflowPersistSessions = workflow.persist_sessions === true;
@@ -2996,6 +3000,8 @@ export async function executeDagWorkflow(
             : lastSequentialSessionId;
 
           const nodePersistFlag = 'persist_session' in node ? node.persist_session : undefined;
+          // Strictly opt-in: off unless the node sets persist_session, or the workflow
+          // sets persist_sessions and the node doesn't override it to false.
           const effectivePersist: boolean = nodePersistFlag ?? workflowPersistSessions;
 
           if (effectivePersist && !bypassesPersistence) {
@@ -3011,18 +3017,18 @@ export async function executeDagWorkflow(
             }
             if (persistScopeKey) {
               try {
-                const persisted = await deps.store.getWorkflowNodeSession(
-                  workflow.name,
-                  node.id,
-                  persistScopeKey,
-                  provider
-                );
+                const persisted = await deps.store.getWorkflowNodeSession({
+                  workflow_name: workflow.name,
+                  node_id: node.id,
+                  scope_key: persistScopeKey,
+                  provider,
+                });
                 if (persisted) {
                   resumeSessionId = persisted.provider_session_id;
                   // workflow_events is broader-scoped and longer-lived than the
-                  // node-session table; never persist the raw session token here
-                  // (CLAUDE.md "Never log tokens"). 8-char prefix is enough for
-                  // observability without producing a resumable artifact.
+                  // node-session table. A session ID can resume a conversation, so we
+                  // store only an 8-char prefix here — enough for observability without
+                  // leaving a resumable artifact in the event log.
                   const sessionIdPreview = `${persisted.provider_session_id.slice(0, 8)}…`;
                   deps.store
                     .createWorkflowEvent({
@@ -3043,7 +3049,10 @@ export async function executeDagWorkflow(
                     });
                 }
               } catch (err) {
-                // Non-fatal: missing lookup means the node runs fresh. Surface and continue.
+                // Non-fatal: the node still runs (fresh, no resume), but the user opted
+                // into persistence — a DB error here silently breaks continuity, so warn
+                // them as well as the logs. (A "no row" result is not an error: it returns
+                // null above and this catch never fires for it.)
                 getLog().warn(
                   {
                     err: err as Error,
@@ -3053,6 +3062,12 @@ export async function executeDagWorkflow(
                     provider,
                   },
                   'persist_session_lookup_failed'
+                );
+                await safeSendMessage(
+                  platform,
+                  conversationId,
+                  `⚠️ Could not load the persisted session for node \`${node.id}\` — it will run without prior context. Session continuity may be broken; if this recurs, check server logs or run \`/workflow reset-sessions ${workflow.name}\`.`,
+                  { workflowId: workflowRun.id, nodeName: node.id }
                 );
               }
             }
@@ -3158,14 +3173,23 @@ export async function executeDagWorkflow(
               }
             } catch (err) {
               // Non-fatal: persistence failure does not undo a successful node execution.
+              // But the user opted into persistence — the next run will start fresh for
+              // this node, so warn them as well as the logs.
               getLog().warn(
                 {
                   err: err as Error,
                   nodeId: node.id,
                   workflow: workflow.name,
                   scopeKey: persistScopeKey,
+                  provider,
                 },
                 'persist_session_upsert_failed'
+              );
+              await safeSendMessage(
+                platform,
+                conversationId,
+                `⚠️ Could not persist the session for node \`${node.id}\` (${provider}). The next run will start this node fresh.`,
+                { workflowId: workflowRun.id, nodeName: node.id }
               );
             }
           }

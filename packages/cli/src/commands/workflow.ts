@@ -1270,8 +1270,8 @@ export async function workflowResetSessionsCommand(
   try {
     const { deleted } = await resetWorkflowNodeSessions({
       workflow_name: workflowName,
-      ...(options.scope !== undefined ? { scope_key: options.scope } : {}),
-      ...(options.node !== undefined ? { node_id: options.node } : {}),
+      scope_key: options.scope,
+      node_id: options.node,
     });
     if (options.json) {
       console.log(

@@ -606,6 +606,8 @@ Run it once with `"add OAuth login"`, again with `"now add MFA"` — each role c
 
 Sessions are keyed by `(workflow_name, node_id, scope_key, provider)`. The default scope is the current conversation's UUID — so each chat thread has its own per-node memory.
 
+Chat and REST reuse a stable conversation across turns, so resume works automatically. The **CLI is different**: each `archon workflow run` mints a fresh conversation UUID, so persisted sessions won't resume between separate invocations unless you pass the same `--conversation-id <id>` on each run.
+
 ### Workflow-level default
 
 ```yaml
@@ -641,7 +643,7 @@ A node with `context: fresh` skips persistence (and in-run threading). The expli
 | CLI | `archon workflow reset-sessions <workflow-name> [--scope <key>] [--node <id>] [--yes]` |
 | REST | `DELETE /api/workflows/{name}/node-sessions?scope=<key>&node=<id>` |
 
-Without `--scope`, the CLI deletes across every scope (requires `--yes`); chat scopes automatically to the current conversation.
+Cross-scope resets are guarded so a dropped scope can't silently wipe every conversation's memory: the CLI requires `--yes` when `--scope` is omitted, and REST requires `?confirm=all-scopes`. Chat always scopes automatically to the current conversation.
 
 ### Cost caveat
 

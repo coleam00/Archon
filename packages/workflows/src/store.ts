@@ -5,7 +5,22 @@
  * Implementations live in @archon/core (backed by the real DB);
  * the workflow engine depends only on this narrow interface.
  */
-import type { WorkflowRun, WorkflowRunStatus, ApprovalContext } from './schemas';
+import type {
+  WorkflowRun,
+  WorkflowRunStatus,
+  ApprovalContext,
+  WorkflowNodeSession,
+} from './schemas';
+
+export type { WorkflowNodeSession } from './schemas';
+
+/** Composite primary key identifying a single persisted node session row. */
+export interface WorkflowNodeSessionKey {
+  workflow_name: string;
+  node_id: string;
+  scope_key: string;
+  provider: string;
+}
 
 export const WORKFLOW_EVENT_TYPES = [
   'workflow_started',
@@ -118,20 +133,13 @@ export interface IWorkflowStore {
   // Per-node provider sessions persisted across workflow re-runs (opt-in via
   // `persist_session: true` on a node, or `persist_sessions: true` at workflow root).
   // Distinct from `AgentRequestOptions.persistSession` (Claude SDK on-disk transcript).
-  getWorkflowNodeSession(
-    workflow_name: string,
-    node_id: string,
-    scope_key: string,
-    provider: string
-  ): Promise<WorkflowNodeSession | null>;
-  upsertWorkflowNodeSession(params: {
-    workflow_name: string;
-    node_id: string;
-    scope_key: string;
-    provider: string;
-    provider_session_id: string;
-    last_run_id: string;
-  }): Promise<void>;
+  getWorkflowNodeSession(key: WorkflowNodeSessionKey): Promise<WorkflowNodeSession | null>;
+  upsertWorkflowNodeSession(
+    params: WorkflowNodeSessionKey & {
+      provider_session_id: string;
+      last_run_id: string | null;
+    }
+  ): Promise<void>;
   deleteWorkflowNodeSessions(filter: {
     workflow_name: string;
     scope_key?: string;
@@ -144,15 +152,4 @@ export interface IWorkflowStore {
      */
     provider?: string;
   }): Promise<{ deleted: number }>;
-}
-
-export interface WorkflowNodeSession {
-  workflow_name: string;
-  node_id: string;
-  scope_key: string;
-  provider: string;
-  provider_session_id: string;
-  last_run_id: string | null;
-  created_at: string;
-  updated_at: string;
 }

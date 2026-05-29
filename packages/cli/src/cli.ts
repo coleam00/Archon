@@ -134,6 +134,8 @@ Options:
   --json                     Output machine-readable JSON (for workflow list)
   --workflow <name>          Workflow to run for 'continue' (default: archon-assist)
   --no-context               Skip context injection for 'continue'
+  --conversation-id <id>     Reuse a stable conversation scope across runs (enables
+                             persist_session resume between separate CLI invocations)
   --port <port>              Override server port for 'serve' (default: 3090)
   --download-only            Download web UI without starting the server
   --force                    Overwrite existing file (for workflow install)
@@ -248,6 +250,7 @@ async function main(): Promise<number> {
         node: { type: 'string' },
         yes: { type: 'boolean' },
         force: { type: 'boolean' },
+        'conversation-id': { type: 'string' },
       },
       allowPositionals: true,
       strict: false, // Allow unknown flags to pass through
@@ -429,6 +432,11 @@ async function main(): Promise<number> {
               resume: resumeFlag,
               quiet: values.quiet as boolean | undefined,
               verbose: values.verbose as boolean | undefined,
+              // Stable scope for persist_session across separate CLI invocations. Without
+              // it each run gets a fresh conversation UUID, so persisted sessions never
+              // resume between runs (they only resume within chat/REST, which reuse a
+              // conversation). Pass the same id on each run to opt into cross-run resume.
+              conversationId: values['conversation-id'] as string | undefined,
             };
             await workflowRunCommand(effectiveCwd, workflowName, userMessage, options);
             break;

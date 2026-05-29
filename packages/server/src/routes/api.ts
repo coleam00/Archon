@@ -2370,11 +2370,22 @@ export function registerApiRoutes(
     }
     const scope = c.req.query('scope') ?? undefined;
     const node = c.req.query('node') ?? undefined;
+    const confirm = c.req.query('confirm') ?? undefined;
+    // Cross-scope reset (no scope) is destructive — require explicit confirmation so a
+    // dropped `scope` param can't silently wipe every conversation's sessions. Mirrors
+    // the CLI `--yes` guard.
+    if (scope === undefined && confirm !== 'all-scopes') {
+      return apiError(
+        c,
+        400,
+        'Refusing to reset sessions across all scopes without confirmation. Pass ?scope=<key> to narrow, or ?confirm=all-scopes to confirm.'
+      );
+    }
     try {
       const { deleted } = await resetWorkflowNodeSessions({
         workflow_name: workflowName,
-        ...(scope !== undefined ? { scope_key: scope } : {}),
-        ...(node !== undefined ? { node_id: node } : {}),
+        scope_key: scope,
+        node_id: node,
       });
       return c.json({ success: true, deleted });
     } catch (error) {

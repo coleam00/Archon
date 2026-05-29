@@ -659,3 +659,21 @@ export function isScriptNode(node: DagNode): node is ScriptNode {
 export function isTriggerRule(value: unknown): value is TriggerRule {
   return typeof value === 'string' && (TRIGGER_RULES as readonly string[]).includes(value);
 }
+
+/**
+ * True for node types that invoke a provider and therefore participate in cross-run
+ * session persistence (`persist_session`). bash, script, approval, cancel, and loop
+ * nodes are excluded — they either make no provider call or manage their own per-
+ * iteration sessions. Shared by the loader's load-time capability gate and any other
+ * caller that needs to reason about persistence eligibility, so the exclusion list
+ * lives in one place.
+ */
+export function isPersistableNode(node: DagNode): boolean {
+  return (
+    !isLoopNode(node) &&
+    !isApprovalNode(node) &&
+    !isCancelNode(node) &&
+    !isScriptNode(node) &&
+    !isBashNode(node)
+  );
+}

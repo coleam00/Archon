@@ -2,15 +2,21 @@
  * Database operations for per-node provider sessions persisted across workflow re-runs.
  *
  * Distinct from `AgentRequestOptions.persistSession` (Claude SDK on-disk transcript flag).
- * This table stores the provider's session ID returned in the result MessageChunk so the
- * DAG executor can pass it back as `resumeSessionId` on a subsequent workflow run with
- * the same scope (typically conversation_id).
+ * This table stores the provider's session ID returned in the result `MessageChunk`
+ * (see `@archon/providers/types`) so the DAG executor can pass it back as
+ * `resumeSessionId` on a subsequent workflow run with the same scope (typically
+ * `conversation_id`).
  *
- * Cascade-on-conversation-delete is handled by the conversation deletion handler
- * (explicit, not FK) since scope_key is polymorphic TEXT.
+ * No cascade is wired into conversation deletion: conversation deletion is a soft
+ * delete and `scope_key` is the conversation UUID (never reused), so any rows left
+ * behind are unreachable and harmless. If a hard-delete path is ever introduced, it
+ * should delete rows for the affected `scope_key` there (scope_key is FK-free
+ * polymorphic TEXT, so the DB will not cascade on its own).
  */
 import { pool, getDialect } from './connection';
 import { createLogger } from '@archon/paths';
+import type { WorkflowNodeSession } from '@archon/workflows/schemas/workflow-node-session';
+import type { WorkflowNodeSessionKey } from '@archon/workflows/store';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -18,39 +24,23 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-export interface WorkflowNodeSessionRow {
-  workflow_name: string;
-  node_id: string;
-  scope_key: string;
-  provider: string;
-  provider_session_id: string;
-  last_run_id: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
 export async function getWorkflowNodeSession(
-  workflow_name: string,
-  node_id: string,
-  scope_key: string,
-  provider: string
-): Promise<WorkflowNodeSessionRow | null> {
-  const result = await pool.query<WorkflowNodeSessionRow>(
+  key: WorkflowNodeSessionKey
+): Promise<WorkflowNodeSession | null> {
+  const result = await pool.query<WorkflowNodeSession>(
     `SELECT * FROM remote_agent_workflow_node_sessions
      WHERE workflow_name = $1 AND node_id = $2 AND scope_key = $3 AND provider = $4`,
-    [workflow_name, node_id, scope_key, provider]
+    [key.workflow_name, key.node_id, key.scope_key, key.provider]
   );
   return result.rows[0] ?? null;
 }
 
-export async function upsertWorkflowNodeSession(params: {
-  workflow_name: string;
-  node_id: string;
-  scope_key: string;
-  provider: string;
-  provider_session_id: string;
-  last_run_id: string;
-}): Promise<void> {
+export async function upsertWorkflowNodeSession(
+  params: WorkflowNodeSessionKey & {
+    provider_session_id: string;
+    last_run_id: string | null;
+  }
+): Promise<void> {
   const dialect = getDialect();
   const now = dialect.now();
   try {
@@ -71,6 +61,15 @@ export async function upsertWorkflowNodeSession(params: {
         params.last_run_id,
       ]
     );
+    getLog().debug(
+      {
+        workflowName: params.workflow_name,
+        nodeId: params.node_id,
+        scopeKey: params.scope_key,
+        provider: params.provider,
+      },
+      'db.workflow_node_session_upsert_completed'
+    );
   } catch (error) {
     getLog().error(
       {
@@ -84,15 +83,6 @@ export async function upsertWorkflowNodeSession(params: {
     );
     throw error;
   }
-  getLog().debug(
-    {
-      workflowName: params.workflow_name,
-      nodeId: params.node_id,
-      scopeKey: params.scope_key,
-      provider: params.provider,
-    },
-    'db.workflow_node_session_upsert_completed'
-  );
 }
 
 export async function deleteWorkflowNodeSessions(filter: {
@@ -126,25 +116,6 @@ export async function deleteWorkflowNodeSessions(filter: {
       deleted,
     },
     'db.workflow_node_sessions_delete_completed'
-  );
-  return { deleted };
-}
-
-/**
- * Delete every row tied to a scope_key. Called from the conversation deletion path
- * because scope_key is FK-free (polymorphic TEXT).
- */
-export async function deleteWorkflowNodeSessionsByScope(
-  scope_key: string
-): Promise<{ deleted: number }> {
-  const result = await pool.query(
-    'DELETE FROM remote_agent_workflow_node_sessions WHERE scope_key = $1',
-    [scope_key]
-  );
-  const deleted = result.rowCount ?? 0;
-  getLog().info(
-    { scopeKey: scope_key, deleted },
-    'db.workflow_node_sessions_scope_cascade_completed'
   );
   return { deleted };
 }

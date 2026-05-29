@@ -742,7 +742,7 @@ async function handleWorkflowCommand(
         const { deleted } = await resetWorkflowNodeSessions({
           workflow_name: workflowName,
           scope_key: conversation.id,
-          ...(nodeId !== undefined ? { node_id: nodeId } : {}),
+          node_id: nodeId,
         });
         const nodeSuffix = nodeId ? ` node \`${nodeId}\` of` : '';
         return {

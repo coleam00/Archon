@@ -160,11 +160,18 @@ export const resetWorkflowNodeSessionsParamsSchema = z
   .object({ name: z.string().min(1) })
   .openapi('ResetWorkflowNodeSessionsParams');
 
-/** DELETE /api/workflows/:name/node-sessions query params (scope + node both optional). */
+/**
+ * DELETE /api/workflows/:name/node-sessions query params.
+ *
+ * `scope` and `node` narrow the deletion. Omitting `scope` wipes every scope for the
+ * workflow — a destructive cross-scope reset that requires `confirm=all-scopes`
+ * (mirrors the CLI's `--yes` guard) so it can't happen by an accidentally-dropped param.
+ */
 export const resetWorkflowNodeSessionsQuerySchema = z
   .object({
     scope: z.string().optional(),
     node: z.string().optional(),
+    confirm: z.enum(['all-scopes']).optional(),
   })
   .openapi('ResetWorkflowNodeSessionsQuery');
 
