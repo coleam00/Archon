@@ -487,6 +487,7 @@ describe('GET /api/openapi.json', () => {
       openapi: string;
       info: { title: string; version: string };
       paths: Record<string, unknown>;
+      components?: { schemas?: Record<string, unknown> };
     };
     expect(doc.openapi).toMatch(/^3\./);
     expect(typeof doc.info.title).toBe('string');
@@ -496,5 +497,17 @@ describe('GET /api/openapi.json', () => {
     expect(Object.keys(doc.paths).length).toBeGreaterThan(0);
     expect(doc.paths['/api/health']).toBeDefined();
     expect(doc.paths['/api/workflows/{name}/node-sessions']).toBeDefined();
+    // The datetime-heavy, highest-traffic routes are the ones the zod-to-openapi
+    // v7 -> v8 serialization change most threatens (z.string().datetime() fields
+    // on conversation/codebase schemas). A route can register in `paths` while
+    // its schema silently fails to serialize, so also assert the component
+    // schemas those routes reference actually made it into the document.
+    expect(doc.paths['/api/conversations']).toBeDefined();
+    expect(doc.paths['/api/codebases']).toBeDefined();
+    const schemas = doc.components?.schemas ?? {};
+    expect(Object.keys(schemas).length).toBeGreaterThan(10);
+    expect(schemas['Conversation']).toBeDefined();
+    expect(schemas['Codebase']).toBeDefined();
+    expect(schemas['WorkflowEvent']).toBeDefined();
   });
 });

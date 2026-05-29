@@ -44,8 +44,8 @@ export type EffortLevel = z.infer<typeof effortLevelSchema>;
 /**
  * Claude Agent SDK beta header list. Non-empty array of non-empty strings —
  * the SDK expects either a populated beta header or none at all. `.nonempty()`
- * enforces the min-length-1 rule at runtime (in zod v4 the inferred type is
- * `string[]`, not a `[string, ...string[]]` tuple).
+ * enforces the min-length-1 rule at runtime; it does not narrow the inferred
+ * TypeScript type to a non-empty tuple (the type stays `string[]`).
  */
 export const betasSchema = z.array(z.string().min(1)).nonempty("'betas' must be a non-empty array");
 
