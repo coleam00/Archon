@@ -711,6 +711,9 @@ async function executeNodeInternal(
   let nodeNumTurns: number | undefined;
   let nodeModelUsage: Record<string, unknown> | undefined;
   const batchMessages: string[] = [];
+  // Batch-mode accumulator: buffers tiny chunks (e.g. Pi char-by-char text_delta)
+  // before pushing into batchMessages, preventing fragmented `X\n\nY\n\nZ` output.
+  let batchBuffer = '';
   // Stream-mode buffer: aggregates small assistant chunks (e.g. Pi text_delta)
   // before flushing, preventing fragmented character-by-character output.
   let streamBuffer = '';
@@ -794,7 +797,11 @@ async function executeNodeInternal(
           if (streamingMode === 'stream' && streamBuffer.length > 0) {
             await safeSendMessage(platform, conversationId, streamBuffer, nodeContext);
             streamBuffer = '';
-          } else if (streamingMode === 'batch' && batchMessages.length > 0) {
+          } else if (streamingMode === 'batch' && batchBuffer.length > 0) {
+            batchMessages.push(batchBuffer);
+            batchBuffer = '';
+          }
+          if (streamingMode === 'batch' && batchMessages.length > 0) {
             await safeSendMessage(
               platform,
               conversationId,
@@ -815,7 +822,14 @@ async function executeNodeInternal(
             streamBuffer = '';
           }
         } else {
-          batchMessages.push(msg.content);
+          // Buffered batch: accumulate chunks until MIN_STREAM_FLUSH_SIZE
+          // before pushing to batchMessages, preventing fragmented output
+          // from providers that emit small deltas (e.g. Pi char-by-char).
+          batchBuffer += msg.content;
+          if (batchBuffer.length >= MIN_STREAM_FLUSH_SIZE) {
+            batchMessages.push(batchBuffer);
+            batchBuffer = '';
+          }
         }
         await logAssistant(logDir, workflowRun.id, msg.content);
       } else if (msg.type === 'tool' && msg.toolName) {
@@ -824,6 +838,10 @@ async function executeNodeInternal(
         if (streamingMode === 'stream' && streamBuffer.length > 0) {
           await safeSendMessage(platform, conversationId, streamBuffer, nodeContext);
           streamBuffer = '';
+        }
+        if (streamingMode === 'batch' && batchBuffer.length > 0) {
+          batchMessages.push(batchBuffer);
+          batchBuffer = '';
         }
         const now = Date.now();
 
@@ -905,6 +923,10 @@ async function executeNodeInternal(
         if (streamingMode === 'stream' && streamBuffer.length > 0) {
           await safeSendMessage(platform, conversationId, streamBuffer, nodeContext);
           streamBuffer = '';
+        }
+        if (streamingMode === 'batch' && batchBuffer.length > 0) {
+          batchMessages.push(batchBuffer);
+          batchBuffer = '';
         }
         // Emit tool_completed for the last tool in the node
         if (lastToolStartedAt) {
@@ -1140,6 +1162,12 @@ async function executeNodeInternal(
       return { state: 'failed', output: nodeOutputText, error: 'Cancelled by user' };
     }
 
+    // Drain any remaining batch buffer into batchMessages before final flush.
+    if (streamingMode === 'batch' && batchBuffer.length > 0) {
+      batchMessages.push(batchBuffer);
+      batchBuffer = '';
+    }
+
     if (streamingMode === 'batch' && batchMessages.length > 0) {
       const batchContent =
         structuredOutput !== undefined && nodeOptions?.outputFormat
@@ -1281,12 +1309,25 @@ async function executeNodeInternal(
     // Flush any buffered stream content so partial output reaches the user
     // even when the node fails mid-stream.
     if (streamingMode === 'stream' && streamBuffer.length > 0) {
-      await safeSendMessage(platform, conversationId, streamBuffer, nodeContext).catch(
-        () => {
-          // Best-effort: don't let flush failure mask the original error
-        }
-      );
+      await safeSendMessage(platform, conversationId, streamBuffer, nodeContext).catch(() => {
+        // Best-effort: don't let flush failure mask the original error
+      });
       streamBuffer = '';
+    }
+    if (streamingMode === 'batch' && batchBuffer.length > 0) {
+      batchMessages.push(batchBuffer);
+      batchBuffer = '';
+    }
+    if (streamingMode === 'batch' && batchMessages.length > 0) {
+      await safeSendMessage(
+        platform,
+        conversationId,
+        batchMessages.join('\n\n'),
+        nodeContext
+      ).catch(() => {
+        // Best-effort: don't let flush failure mask the original error
+      });
+      batchMessages.length = 0;
     }
     const err = error as Error;
 
@@ -2150,11 +2191,9 @@ async function executeLoopNode(
       // Flush any buffered stream content so partial output reaches the user
       // even when the iteration fails mid-stream.
       if (platform.getStreamingMode() === 'stream' && loopStreamBuffer.length > 0) {
-        await safeSendMessage(platform, conversationId, loopStreamBuffer, msgContext).catch(
-          () => {
-            // Best-effort: don't let flush failure mask the original error
-          }
-        );
+        await safeSendMessage(platform, conversationId, loopStreamBuffer, msgContext).catch(() => {
+          // Best-effort: don't let flush failure mask the original error
+        });
         loopStreamBuffer = '';
       }
       const err = error as Error;
