@@ -8,6 +8,7 @@ import {
   effortLevelSchema,
   thinkingConfigSchema,
   sandboxSettingsSchema,
+  betasSchema,
 } from './dag-node';
 
 // ---------------------------------------------------------------------------
@@ -65,7 +66,7 @@ export const workflowBaseSchema = z.object({
   effort: effortLevelSchema.optional(),
   thinking: thinkingConfigSchema.optional(),
   fallbackModel: z.string().min(1).optional(),
-  betas: z.array(z.string().min(1)).nonempty("'betas' must be a non-empty array").optional(),
+  betas: betasSchema.optional(),
   sandbox: sandboxSettingsSchema.optional(),
   worktree: workflowWorktreePolicySchema.optional(),
   /**

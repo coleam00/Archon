@@ -418,13 +418,14 @@ nodes:
     });
 
     it('should round-trip workflow-level effort/thinking/fallbackModel/betas/sandbox', async () => {
-      // Regression: these 5 workflow-level fields used to be declared on
+      // Regression: these 5 workflow-level fields are declared on
       // workflowBaseSchema and consumed by the DAG executor's workflowLevelOptions
-      // (dag-executor.ts:2585-2591), but the loader's manual workflow constructor
-      // silently dropped them. YAML → loader → executor would lose the workflow-level
-      // defaults, so per-node options never inherited them. See `dag-executor.test.ts`
-      // "forwards workflow-level effort to node when no per-node override" — that test
-      // passes because it bypasses the loader.
+      // (the object literal at the top of executeDagWorkflow), but the loader's
+      // manual workflow constructor used to silently drop them. YAML → loader →
+      // executor would lose the workflow-level defaults, so a node without its own
+      // value never inherited them. See `dag-executor.test.ts`
+      // "forwards workflow-level effort to node when no per-node override" — that
+      // test passes because it bypasses the loader.
       const workflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(workflowDir, { recursive: true });
       const yaml = `name: defaults
@@ -483,20 +484,70 @@ nodes:
 description: invalid fallback fields are dropped
 provider: claude
 effort: nuclear
+thinking:
+  type: enhanced
 fallbackModel: ''
 betas: []
+sandbox: 'yes'
 nodes:
   - id: only
     prompt: p
 `;
       await writeFile(join(workflowDir, 'bad.yaml'), yaml);
+      mockLogger.warn.mockClear();
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       expect(result.errors).toEqual([]);
       expect(result.workflows).toHaveLength(1);
       const wf = result.workflows[0].workflow as Record<string, unknown>;
       expect(wf.effort).toBeUndefined();
+      expect(wf.thinking).toBeUndefined();
       expect(wf.fallbackModel).toBeUndefined();
       expect(wf.betas).toBeUndefined();
+      expect(wf.sandbox).toBeUndefined();
+
+      // The structured warn events are the operator-facing surface — assert each fired.
+      const events = mockLogger.warn.mock.calls.map(call => call[1]);
+      expect(events).toContain('invalid_workflow_effort_value_ignored');
+      expect(events).toContain('invalid_workflow_thinking_value_ignored');
+      expect(events).toContain('invalid_workflow_fallback_model_value_ignored');
+      expect(events).toContain('invalid_workflow_betas_value_ignored');
+      expect(events).toContain('invalid_workflow_sandbox_value_ignored');
+    });
+
+    it('should accept the thinking string shorthand at the workflow level', async () => {
+      // thinkingConfigSchema preprocesses 'enabled' → { type: 'enabled' }. The
+      // round-trip test covers the object form; this covers the shorthand path.
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = `name: thinking-shorthand
+description: thinking as a bare string
+thinking: enabled
+nodes:
+  - id: only
+    prompt: p
+`;
+      await writeFile(join(workflowDir, 'ts.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      const wf = result.workflows[0].workflow as { thinking?: unknown };
+      expect(wf.thinking).toEqual({ type: 'enabled' });
+    });
+
+    it('should trim surrounding whitespace from workflow-level fallbackModel', async () => {
+      // The inline trim (rather than safeParse) exists specifically so a stray
+      // surrounding space is normalised rather than rejected.
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = `name: fm-trim
+description: fallbackModel with whitespace
+fallbackModel: '  claude-haiku-4-5  '
+nodes:
+  - id: only
+    prompt: p
+`;
+      await writeFile(join(workflowDir, 'fm.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      const wf = result.workflows[0].workflow as { fallbackModel?: unknown };
+      expect(wf.fallbackModel).toBe('claude-haiku-4-5');
     });
 
     it('should trim and filter empty strings out of workflow-level betas', async () => {
