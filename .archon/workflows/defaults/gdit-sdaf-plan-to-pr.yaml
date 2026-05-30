@@ -90,40 +90,40 @@ nodes:
 
       Output ONLY one of: gdit-spec OR archon-plan OR unknown
     depends_on: [guard-setup]
-    fresh_context: true
+    context: fresh
 
   - id: validate-spec
     command: gdit-sdaf-spec-validate
     depends_on: [detect-input]
-    fresh_context: true
+    context: fresh
     when: "$detect-input.output == 'gdit-spec'"
 
   - id: plan-setup
     command: archon-plan-setup
     depends_on: [validate-spec, detect-input]
     trigger_rule: one_success
-    fresh_context: true
+    context: fresh
 
   - id: implement-tasks
     command: gdit-sdaf-implement
     depends_on: [plan-setup]
-    fresh_context: true
+    context: fresh
     model: opus
 
   - id: security-scan
     command: gdit-sdaf-validate
     depends_on: [implement-tasks]
-    fresh_context: true
+    context: fresh
 
   - id: checkpoint
     command: gdit-sdaf-checkpoint
     depends_on: [security-scan]
-    fresh_context: true
+    context: fresh
 
   - id: finalize-pr
     command: archon-finalize-pr
     depends_on: [checkpoint]
-    fresh_context: true
+    context: fresh
 
   - id: verify-pr-base
     bash: |
@@ -132,16 +132,22 @@ nodes:
       BRANCH=$(git branch --show-current)
       if [ "$FORGE_PROVIDER" = "gitlab" ]; then
         MR_DATA=$(glab mr list --source-branch "$BRANCH" --output json --limit 1 2>/dev/null || echo "[]")
-        ACTUAL=$(echo "$MR_DATA" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d[0]['target_branch'] if d else '')" 2>/dev/null || echo "")
+        ACTUAL=$(echo "$MR_DATA" | jq -r '.[0].target_branch // empty')
         if [ -n "$ACTUAL" ] && [ "$ACTUAL" != "$EXPECTED" ]; then
-          MR_IID=$(echo "$MR_DATA" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d[0]['iid'] if d else '')")
+          MR_IID=$(echo "$MR_DATA" | jq -r '.[0].iid')
+          echo "Base mismatch on MR !$MR_IID: expected=$EXPECTED actual=$ACTUAL — re-targeting" >&2
           glab mr update "$MR_IID" --target-branch "$EXPECTED"
+        else
+          echo "MR base verified: ${ACTUAL:-$EXPECTED}"
         fi
       else
         ACTUAL=$(gh pr view --json baseRefName -q '.baseRefName' 2>/dev/null || echo "")
         if [ -n "$ACTUAL" ] && [ "$ACTUAL" != "$EXPECTED" ]; then
           PR_NUMBER=$(gh pr view --json number -q '.number')
+          echo "Base mismatch on PR #$PR_NUMBER: expected=$EXPECTED actual=$ACTUAL — re-targeting" >&2
           gh pr edit "$PR_NUMBER" --base "$EXPECTED"
+        else
+          echo "PR base verified: ${ACTUAL:-$EXPECTED}"
         fi
       fi
     depends_on: [finalize-pr]
@@ -149,56 +155,56 @@ nodes:
   - id: review-scope
     command: archon-pr-review-scope
     depends_on: [verify-pr-base]
-    fresh_context: true
+    context: fresh
 
   - id: sync
     command: archon-sync-pr-with-main
     depends_on: [review-scope]
-    fresh_context: true
+    context: fresh
 
   - id: code-review
     command: archon-code-review-agent
     depends_on: [sync]
-    fresh_context: true
+    context: fresh
 
   - id: error-handling
     command: archon-error-handling-agent
     depends_on: [sync]
-    fresh_context: true
+    context: fresh
 
   - id: test-coverage
     command: archon-test-coverage-agent
     depends_on: [sync]
-    fresh_context: true
+    context: fresh
 
   - id: comment-quality
     command: archon-comment-quality-agent
     depends_on: [sync]
-    fresh_context: true
+    context: fresh
 
   - id: docs-impact
     command: archon-docs-impact-agent
     depends_on: [sync]
-    fresh_context: true
+    context: fresh
 
   - id: gdit-audit
     command: gdit-sdaf-audit
     depends_on: [sync]
-    fresh_context: true
+    context: fresh
 
   - id: synthesize
     command: archon-synthesize-review
     depends_on:
       [code-review, error-handling, test-coverage, comment-quality, docs-impact, gdit-audit]
     trigger_rule: one_success
-    fresh_context: true
+    context: fresh
 
   - id: implement-fixes
     command: archon-implement-review-fixes
     depends_on: [synthesize]
-    fresh_context: true
+    context: fresh
 
   - id: workflow-summary
     command: archon-workflow-summary
     depends_on: [implement-fixes]
-    fresh_context: true
+    context: fresh

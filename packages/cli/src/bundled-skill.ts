@@ -9,7 +9,7 @@
  */
 
 // =============================================================================
-// Skill Files (21 total)
+// Skill Files (22 total)
 // =============================================================================
 
 import skillMd from '../../../.claude/skills/archon/SKILL.md' with { type: 'text' };
@@ -19,6 +19,7 @@ import cliGuide from '../../../.claude/skills/archon/guides/cli.md' with { type:
 import configGuide from '../../../.claude/skills/archon/guides/config.md' with { type: 'text' };
 import discordGuide from '../../../.claude/skills/archon/guides/discord.md' with { type: 'text' };
 import githubGuide from '../../../.claude/skills/archon/guides/github.md' with { type: 'text' };
+import gitlabGuide from '../../../.claude/skills/archon/guides/gitlab.md' with { type: 'text' };
 import serverGuide from '../../../.claude/skills/archon/guides/server.md' with { type: 'text' };
 import setupGuide from '../../../.claude/skills/archon/guides/setup.md' with { type: 'text' };
 import slackGuide from '../../../.claude/skills/archon/guides/slack.md' with { type: 'text' };
@@ -49,6 +50,7 @@ export const BUNDLED_SKILL_FILES: Record<string, string> = {
   'guides/config.md': configGuide,
   'guides/discord.md': discordGuide,
   'guides/github.md': githubGuide,
+  'guides/gitlab.md': gitlabGuide,
   'guides/server.md': serverGuide,
   'guides/setup.md': setupGuide,
   'guides/slack.md': slackGuide,
