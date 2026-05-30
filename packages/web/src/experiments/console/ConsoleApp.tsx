@@ -57,7 +57,7 @@ export function ConsoleApp(): ReactElement {
       <header className="flex h-12 shrink-0 items-center justify-between border-b border-border px-4">
         <div className="flex items-center gap-2.5">
           <img
-            src="/favicon.png"
+            src={`${(import.meta.env.BASE_URL ?? '/').replace(/\/$/, '')}/favicon.png`}
             alt=""
             aria-hidden="true"
             width={22}

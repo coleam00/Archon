@@ -14,6 +14,17 @@ export const SSE_BASE_URL = import.meta.env.DEV
   ? `http://${window.location.hostname}:${API_PORT}`
   : '';
 
+/**
+ * API path prefix for subpath deployments (e.g. /agent-chat).
+ * In dev, Vite proxy handles /api → backend, so no prefix needed.
+ * In production behind a reverse proxy, requests must include the base path
+ * so the auth-gateway can route /agent-chat/api/* → backend /api/*.
+ * Mirrors API_PREFIX in packages/web/src/lib/api.ts.
+ */
+export const API_PREFIX = import.meta.env.DEV
+  ? ''
+  : (import.meta.env.BASE_URL ?? '/').replace(/\/$/, '');
+
 export class HttpError extends Error {
   readonly status: number;
   readonly path: string;
@@ -51,7 +62,7 @@ export async function requestJson<T>(url: string, options?: RequestInit): Promis
     needsJson ? { 'Content-Type': 'application/json' } : {},
     options?.headers
   );
-  const res = await fetch(url, {
+  const res = await fetch(`${API_PREFIX}${url}`, {
     credentials: 'same-origin',
     ...options,
     headers,

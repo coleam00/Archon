@@ -1,4 +1,4 @@
-import { requestJson } from '../lib/http';
+import { API_PREFIX, requestJson } from '../lib/http';
 import { toRun, type Run } from '../primitives/run';
 import { toRunEvent, type RunEvent } from '../primitives/event';
 import type { RunStatus } from '../lib/run-status';
@@ -126,7 +126,9 @@ export async function listRunArtifacts(runId: string): Promise<ArtifactFile[]> {
 /** Fetch a single artifact file as text (markdown or plain). */
 export async function fetchArtifact(runId: string, path: string): Promise<string> {
   const encodedPath = path.split('/').map(encodeURIComponent).join('/');
-  const res = await fetch(`/api/artifacts/${encodeURIComponent(runId)}/${encodedPath}`);
+  const res = await fetch(
+    `${API_PREFIX}/api/artifacts/${encodeURIComponent(runId)}/${encodedPath}`
+  );
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as { error?: string };
     throw new Error(body.error ?? `Failed to fetch artifact: ${res.status.toString()}`);
