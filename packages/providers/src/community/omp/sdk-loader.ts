@@ -112,6 +112,7 @@ export interface OmpCodingAgentSdk {
     create(cwd: string, sessionDir?: string): OmpSessionManager;
     list(cwd: string, sessionDir?: string): Promise<OmpSessionInfo[]>;
     open(filePath: string, sessionDir?: string): Promise<OmpSessionManager>;
+    forkFrom?(filePath: string, cwd: string, sessionDir?: string): Promise<OmpSessionManager>;
   };
   discoverSkills(cwd?: string, agentDir?: string): Promise<{ skills: OmpSkill[] }>;
 }

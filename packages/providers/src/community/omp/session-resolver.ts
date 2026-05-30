@@ -23,12 +23,16 @@ function isMissingSessionError(error: unknown): boolean {
 /**
  * Resolve an OMP SessionManager for a sendQuery call.
  * Missing resume ids fall back to a fresh session with an explicit warning flag.
+ * When forkSession is requested, copy the source transcript into a new session
+ * file before prompting so retries never mutate the session they are retrying
+ * from.
  */
 export async function resolveOmpSession(
   sdk: Pick<OmpCodingAgentSdk, 'SessionManager'>,
   cwd: string,
   resumeSessionId: string | undefined,
-  agentDir?: string
+  agentDir?: string,
+  forkSession = false
 ): Promise<ResolvedOmpSession> {
   const dir = sessionsDir(sdk, agentDir, cwd);
 
@@ -40,6 +44,15 @@ export async function resolveOmpSession(
     const sessions = await sdk.SessionManager.list(cwd, dir);
     const match = sessions.find(s => s.id === resumeSessionId);
     if (match) {
+      if (forkSession) {
+        if (!sdk.SessionManager.forkFrom) {
+          return { sessionManager: sdk.SessionManager.create(cwd, dir), resumeFailed: true };
+        }
+        return {
+          sessionManager: await sdk.SessionManager.forkFrom(match.path, cwd, dir),
+          resumeFailed: false,
+        };
+      }
       return {
         sessionManager: await sdk.SessionManager.open(match.path, dir),
         resumeFailed: false,
@@ -48,7 +61,9 @@ export async function resolveOmpSession(
   } catch (error) {
     if (!isMissingSessionError(error)) {
       const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`Oh My Pi session resume failed for '${resumeSessionId}': ${message}`);
+      throw new Error(
+        `Oh My Pi session ${forkSession ? 'fork' : 'resume'} failed for '${resumeSessionId}': ${message}`
+      );
     }
     return { sessionManager: sdk.SessionManager.create(cwd, dir), resumeFailed: true };
   }

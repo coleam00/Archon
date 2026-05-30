@@ -433,7 +433,8 @@ export class OmpProvider implements IAgentProvider {
       sdk,
       cwd,
       resumeSessionId,
-      ompConfig.agentDir
+      ompConfig.agentDir,
+      requestOptions?.forkSession === true
     );
     if (resumeFailed) {
       yield {

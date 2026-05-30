@@ -53,6 +53,9 @@ interface FakeSdkOptions {
   disconnectMcpError?: Error;
   onSetMcpAuthStorage?: (authStorage: OmpAuthStorage) => void;
   returnSdkManagedMcpManager?: boolean;
+  sessions?: Array<{ id: string; path: string }>;
+  onForkSession?: (filePath: string, cwd: string, sessionDir?: string) => void;
+  onOpenSession?: (filePath: string, sessionDir?: string) => void;
 }
 
 type OmpToolCallHandler = (event: OmpToolCallEvent) => void | Promise<void>;
@@ -230,9 +233,14 @@ function makeSdk(options: FakeSdkOptions = {}): OmpCodingAgentSdk {
         return {};
       },
       async list() {
-        return [];
+        return options.sessions ?? [];
       },
-      async open() {
+      async open(filePath: string, sessionDir?: string) {
+        options.onOpenSession?.(filePath, sessionDir);
+        return {};
+      },
+      async forkFrom(filePath: string, cwd: string, sessionDir?: string) {
+        options.onForkSession?.(filePath, cwd, sessionDir);
         return {};
       },
     },
@@ -293,6 +301,40 @@ describe('OmpProvider', () => {
       sessionId: 'sess-1',
       structuredOutput: { ok: true },
     });
+  });
+
+  test('forks resumed sessions when executor requests forkSession', async () => {
+    const forkCalls: Array<{ filePath: string; cwd: string; sessionDir?: string }> = [];
+    const openCalls: Array<{ filePath: string; sessionDir?: string }> = [];
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        sessions: [{ id: 'sess-prev', path: '/sessions/sess-prev.jsonl' }],
+        onForkSession(filePath, cwd, sessionDir) {
+          forkCalls.push({ filePath, cwd, sessionDir });
+        },
+        onOpenSession(filePath, sessionDir) {
+          openCalls.push({ filePath, sessionDir });
+        },
+      })
+    );
+
+    const chunks: MessageChunk[] = [];
+    for await (const chunk of provider.sendQuery('hi', '/repo', 'sess-prev', {
+      model: 'anthropic/claude-sonnet-4-5',
+      forkSession: true,
+    })) {
+      chunks.push(chunk);
+    }
+
+    expect(forkCalls).toEqual([
+      {
+        filePath: '/sessions/sess-prev.jsonl',
+        cwd: '/repo',
+        sessionDir: undefined,
+      },
+    ]);
+    expect(openCalls).toEqual([]);
+    expect(chunks.at(-1)?.type).toBe('result');
   });
 
   test('passes verified settings overrides to isolated OMP settings', async () => {
