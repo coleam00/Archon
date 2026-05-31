@@ -142,6 +142,40 @@ export interface PiProviderDefaults {
 }
 
 /**
+ * Community provider defaults for Cursor (@cursor/sdk).
+ */
+export interface CursorProviderDefaults {
+  [key: string]: unknown;
+  /** Default model id, e.g. 'auto'. */
+  model?: string;
+  /**
+   * Per-model parameter values keyed by parameter id (e.g. `{ thinking: 'high' }`).
+   * Translated to Cursor SDK `ModelSelection.params`.
+   */
+  modelParams?: Record<string, string>;
+  /**
+   * Cursor API key. Prefer `CURSOR_API_KEY` env var; this field is a config fallback.
+   */
+  apiKey?: string;
+  /** Initial conversation mode. @default 'agent' */
+  mode?: 'agent' | 'plan';
+  /**
+   * Agent runtime. Archon workflows default to `local` (runs against workflow cwd).
+   * Set `cloud` to run on Cursor-hosted VMs (requires `cloudRepos`).
+   */
+  runtime?: 'local' | 'cloud';
+  /** Cloud-only: repositories to clone into the agent VM. */
+  cloudRepos?: { url: string; startingRef?: string }[];
+  /**
+   * Local-only: Cursor settings layers to load from disk (`.cursor/`, MCP, hooks).
+   * @default [] — SDK inline-only; opt into `project`/`user`/`all` explicitly.
+   */
+  settingSources?: ('project' | 'user' | 'team' | 'mdm' | 'plugins' | 'all')[];
+  /** Local-only: enable Cursor sandbox for tool execution. */
+  enableSandbox?: boolean;
+}
+
+/**
  * Community provider defaults for OpenCode (opencode-ai).
  * Minimal shape — extend as capabilities are wired in.
  */

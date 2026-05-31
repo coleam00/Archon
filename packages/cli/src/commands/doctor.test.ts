@@ -17,6 +17,7 @@ import {
   checkDatabase,
   checkGhAuth,
   checkPi,
+  checkCursor,
   checkWorkspaceWritable,
   checkBundledDefaults,
   checkSlack,
@@ -169,6 +170,34 @@ describe('checkPi', () => {
     const result = await checkPi({ OPENROUTER_API_KEY: 'or-key' });
     expect(result.status).toBe('skip');
     expect(result.message).toContain('not configured');
+  });
+});
+
+describe('checkCursor', () => {
+  const emptyHome = join(tmpdir(), `archon-doctor-cursor-${Date.now()}`);
+
+  it('returns skip when Cursor is not the default assistant', async () => {
+    const result = await checkCursor({}, emptyHome);
+    expect(result.status).toBe('skip');
+    expect(result.label).toBe('Cursor provider');
+  });
+
+  it('returns pass when DEFAULT_AI_ASSISTANT=cursor and CURSOR_API_KEY is set', async () => {
+    const result = await checkCursor(
+      {
+        DEFAULT_AI_ASSISTANT: 'cursor',
+        CURSOR_API_KEY: 'crsr_test',
+      },
+      emptyHome
+    );
+    expect(result.status).toBe('pass');
+    expect(result.message).toContain('CURSOR_API_KEY');
+  });
+
+  it('returns fail when DEFAULT_AI_ASSISTANT=cursor but no key configured', async () => {
+    const result = await checkCursor({ DEFAULT_AI_ASSISTANT: 'cursor' }, emptyHome);
+    expect(result.status).toBe('fail');
+    expect(result.message).toContain('CURSOR_API_KEY');
   });
 });
 

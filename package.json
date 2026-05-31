@@ -31,6 +31,7 @@
     "dev:docs": "bun --filter @archon/docs-web dev",
     "build:docs": "bun --filter @archon/docs-web build",
     "validate": "bun run check:bundled && bun run check:bundled-skill && bun run check:bundled-schema && bun run type-check && bun run lint --max-warnings 0 && bun run format:check && bun run test",
+    "e2e:cursor:live": "bash scripts/e2e-cursor-live.sh",
     "prepare": "husky",
     "setup-auth": "bun --filter @archon/server setup-auth"
   },

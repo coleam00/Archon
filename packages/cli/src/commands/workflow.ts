@@ -679,6 +679,16 @@ export async function workflowRunCommand(
         workflowConfig?.assistant,
         conversation.ai_assistant_type
       );
+      // Cursor local agents are heavyweight; running one for title generation in
+      // parallel with the workflow's own Cursor node causes duplicate SDK streams
+      // and unhandled HTTP/2 errors. Fall back to the user message as title.
+      if (titleAssistantType === 'cursor') {
+        getLog().debug(
+          { conversationId: conversation.id },
+          'workflow.title_skipped_cursor_provider'
+        );
+        return;
+      }
       const titleAssistantConfig = workflowConfig?.assistants?.[titleAssistantType] ?? {};
       await generateAndSetTitle(
         conversation.id,

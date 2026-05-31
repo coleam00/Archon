@@ -5,7 +5,7 @@
  * return value so a doctor failure does not abort setup (the env file was
  * already written successfully).
  */
-import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
+import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { execFileAsync } from '@archon/git';
@@ -122,6 +122,58 @@ export async function checkPi(env: NodeJS.ProcessEnv): Promise<CheckResult> {
     status: 'fail',
     message:
       'Pi is configured as default but no auth found. Run `pi /login` or set an API key env var (e.g. ANTHROPIC_API_KEY).',
+  };
+}
+
+function isCursorDefaultAssistant(
+  env: NodeJS.ProcessEnv,
+  archonHome: string = getArchonHome()
+): boolean {
+  if (env.DEFAULT_AI_ASSISTANT === 'cursor') {
+    return true;
+  }
+  const configPath = join(archonHome, 'config.yaml');
+  if (!existsSync(configPath)) {
+    return false;
+  }
+  try {
+    const raw = readFileSync(configPath, 'utf8');
+    return /^defaultAssistant:\s*cursor\s*$/m.test(raw);
+  } catch {
+    return false;
+  }
+}
+
+export async function checkCursor(
+  env: NodeJS.ProcessEnv,
+  archonHome: string = getArchonHome()
+): Promise<CheckResult> {
+  const label = 'Cursor provider';
+  if (!isCursorDefaultAssistant(env, archonHome)) {
+    return { label, status: 'skip', message: 'Cursor not configured as default assistant' };
+  }
+
+  const fromEnv = (env.CURSOR_API_KEY ?? '').trim();
+  if (fromEnv.length > 0) {
+    return { label, status: 'pass', message: 'CURSOR_API_KEY is set' };
+  }
+
+  const archonEnvPath = join(archonHome, '.env');
+  if (existsSync(archonEnvPath)) {
+    try {
+      const raw = readFileSync(archonEnvPath, 'utf8');
+      if (/^CURSOR_API_KEY=.+$/m.test(raw)) {
+        return { label, status: 'pass', message: `CURSOR_API_KEY found in ${archonEnvPath}` };
+      }
+    } catch {
+      // fall through
+    }
+  }
+
+  return {
+    label,
+    status: 'fail',
+    message: `CURSOR_API_KEY not set. Add it to ${archonEnvPath} (required for CLI workflow runs).`,
   };
 }
 
@@ -300,6 +352,7 @@ export async function doctorCommand(
         checkClaudeBinary(env),
         checkGhAuth(env),
         checkPi(env),
+        checkCursor(env),
         checkDatabase(),
         checkWorkspaceWritable(),
         checkBundledDefaults(),

@@ -670,12 +670,26 @@ export async function handleMessage(
     );
 
     // 1c. Auto-generate title for untitled conversations (fire-and-forget)
-    if (!conversation.title && !message.startsWith('/')) {
+    // Cursor local agents are heavyweight; skip parallel title generation (see workflow.ts).
+    if (
+      !conversation.title &&
+      !message.startsWith('/') &&
+      conversation.ai_assistant_type !== 'cursor'
+    ) {
       void generateAndSetTitle(
         conversation.id,
         message,
         conversation.ai_assistant_type,
         getArchonWorkspacesPath()
+      );
+    } else if (
+      !conversation.title &&
+      !message.startsWith('/') &&
+      conversation.ai_assistant_type === 'cursor'
+    ) {
+      getLog().debug(
+        { conversationId: conversation.id },
+        'orchestrator.title_skipped_cursor_provider'
       );
     }
 
@@ -939,13 +953,14 @@ export async function handleMessage(
       });
     }
 
+    // Reuse the config already loaded during workflow discovery (avoids a second disk read).
+    // Fall back to loadConfig only when no codebase is scoped (discoveredConfig is undefined).
+    const config = discoveredConfig ?? (await loadConfig());
+
     // 5. Send to AI provider
     const aiClient = getAgentProvider(conversation.ai_assistant_type);
     getLog().debug({ assistantType: conversation.ai_assistant_type }, 'sending_to_ai');
 
-    // Reuse the config already loaded during workflow discovery (avoids a second disk read).
-    // Fall back to loadConfig only when no codebase is scoped (discoveredConfig is undefined).
-    const config = discoveredConfig ?? (await loadConfig());
     const providerKey = conversation.ai_assistant_type;
     let dbEnvVars: Record<string, string> = {};
     if (conversation.codebase_id) {

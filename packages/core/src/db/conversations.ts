@@ -5,6 +5,7 @@ import { pool, getDialect } from './connection';
 import type { Conversation } from '../types';
 import { ConversationNotFoundError } from '../types';
 import { createLogger } from '@archon/paths';
+import { loadConfig } from '../config/config-loader';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -76,7 +77,7 @@ export async function getOrCreateConversation(
   // Check if we should inherit from a parent conversation (e.g., Discord thread inheriting from parent channel)
   let inheritedCodebaseId: string | null = null;
   let inheritedCwd: string | null = null;
-  let assistantType = process.env.DEFAULT_AI_ASSISTANT ?? 'claude';
+  let assistantType: string | undefined;
 
   if (parentConversationId) {
     const parent = await pool.query<Conversation>(
@@ -107,6 +108,15 @@ export async function getOrCreateConversation(
       assistantType = codebase.rows[0].ai_assistant_type;
     }
   }
+
+  if (assistantType === undefined) {
+    assistantType = process.env.DEFAULT_AI_ASSISTANT;
+  }
+  if (assistantType === undefined) {
+    const config = await loadConfig();
+    assistantType = config.assistant;
+  }
+  assistantType ??= 'claude';
 
   const created = await pool.query<Conversation>(
     'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',

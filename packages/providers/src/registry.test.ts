@@ -13,6 +13,7 @@ import {
 } from './registry';
 import { registerPiProvider } from './community/pi/registration';
 import { registerCopilotProvider } from './community/copilot/registration';
+import { registerCursorProvider } from './community/cursor/registration';
 import { registerOpencodeProvider } from './community/opencode/registration';
 import { UnknownProviderError } from './errors';
 import type { ProviderRegistration, IAgentProvider, ProviderCapabilities } from './types';
@@ -257,6 +258,7 @@ describe('registry', () => {
       expect(isRegisteredProvider('opencode')).toBe(true);
       expect(isRegisteredProvider('pi')).toBe(true);
       expect(isRegisteredProvider('copilot')).toBe(true);
+      expect(isRegisteredProvider('cursor')).toBe(true);
     });
 
     test('is idempotent', () => {
@@ -265,9 +267,11 @@ describe('registry', () => {
       const opencodeCount = getRegisteredProviders().filter(p => p.id === 'opencode').length;
       const piCount = getRegisteredProviders().filter(p => p.id === 'pi').length;
       const copilotCount = getRegisteredProviders().filter(p => p.id === 'copilot').length;
+      const cursorCount = getRegisteredProviders().filter(p => p.id === 'cursor').length;
       expect(opencodeCount).toBe(1);
       expect(piCount).toBe(1);
       expect(copilotCount).toBe(1);
+      expect(cursorCount).toBe(1);
     });
   });
 
@@ -422,6 +426,33 @@ describe('registry', () => {
         .map(p => p.id)
         .sort();
       expect(ids).toEqual(['claude', 'codex', 'copilot']);
+    });
+  });
+
+  describe('registerCursorProvider (community provider)', () => {
+    test('registers cursor with builtIn: false', () => {
+      registerCursorProvider();
+      const reg = getRegistration('cursor');
+      expect(reg.id).toBe('cursor');
+      expect(reg.displayName).toBe('Cursor (community)');
+      expect(reg.builtIn).toBe(false);
+    });
+
+    test('is idempotent', () => {
+      registerCursorProvider();
+      expect(() => registerCursorProvider()).not.toThrow();
+      const entries = getRegisteredProviders().filter(p => p.id === 'cursor');
+      expect(entries).toHaveLength(1);
+    });
+
+    test('declares wired capabilities', () => {
+      registerCursorProvider();
+      const caps = getProviderCapabilities('cursor');
+      expect(caps.sessionResume).toBe(true);
+      expect(caps.mcp).toBe(true);
+      expect(caps.structuredOutput).toBe(true);
+      expect(caps.envInjection).toBe(true);
+      expect(caps.hooks).toBe(false);
     });
   });
 });

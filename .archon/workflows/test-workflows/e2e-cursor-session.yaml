@@ -1,0 +1,20 @@
+# Live E2E — Cursor session resume via persist_session + stable --conversation-id
+# Run twice with the same --conversation-id: seed then recall.
+# Auth: CURSOR_API_KEY in ~/.archon/.env
+name: e2e-cursor-session
+description: |
+  Live E2E — Cursor persist_session cross-run resume.
+  Seed: "Remember the codeword ARCHON_LIVE. Reply with exactly: stored."
+  Recall: "What codeword did I ask you to remember? Reply with only that word."
+provider: cursor
+model: auto
+
+worktree:
+  enabled: false
+
+nodes:
+  - id: remember
+    prompt: '$ARGUMENTS'
+    persist_session: true
+    effort: low
+    idle_timeout: 180000

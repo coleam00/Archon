@@ -1,0 +1,25 @@
+# E2E smoke test — Cursor community provider (@cursor/sdk)
+# Verifies: provider selection, sendQuery, auto model, $nodeId.output refs.
+# Auth: CURSOR_API_KEY in ~/.archon/.env (or assistants.cursor.apiKey).
+name: e2e-cursor-smoke
+description: |
+  E2E smoke — Cursor community provider (@cursor/sdk).
+  Verifies: provider selection, sendQuery, auto model, $nodeId.output, DAG assert.
+provider: cursor
+model: auto
+
+nodes:
+  - id: simple
+    prompt: 'What is 2+2? Answer with just the number, nothing else.'
+    effort: low
+    idle_timeout: 120000
+
+  - id: assert
+    bash: |
+      output="$simple.output"
+      if [ -z "$output" ]; then
+        echo "FAIL: simple node returned empty output"
+        exit 1
+      fi
+      echo "PASS: simple=$output"
+    depends_on: [simple]

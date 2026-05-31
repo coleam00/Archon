@@ -1,0 +1,143 @@
+# Live E2E — Cursor community provider (@cursor/sdk local runtime)
+# Verifies: local cwd + tool read, prompt/command/loop/structured output,
+#   bash/script nodes, DAG features ($nodeId.output, when, trigger_rule).
+# Auth: CURSOR_API_KEY in ~/.archon/.env (or assistants.cursor.apiKey).
+# Expected runtime: several minutes (multiple live Cursor agent round-trips).
+name: e2e-cursor-live
+description: |
+  Live E2E — Cursor local runtime, repo file read, all CI-compatible node types.
+  Run via: bun run e2e:cursor:live
+provider: cursor
+model: auto
+
+worktree:
+  enabled: false
+
+nodes:
+  # ─── Live local runtime proof ───────────────────────────────────────────
+
+  # 1. Write a unique marker into the repo; local-read must read it back via tools.
+  - id: markersetup
+    bash: |
+      path=".archon/test-fixtures/cursor-live-runtime.txt"
+      marker="CURSOR_LIVE_MARKER=archon-e2e-$(date +%s)"
+      mkdir -p .archon/test-fixtures
+      printf '%s\n' "$marker" > "$path"
+      echo "$marker"
+
+  - id: local-read
+    prompt: |
+      You are an agent with full tool access in the repository cwd.
+      Read the file `.archon/test-fixtures/cursor-live-runtime.txt`.
+      The file contains exactly this one line: $markersetup.output
+      Reply with ONLY that line — no quotes, no explanation, no other text.
+    effort: low
+    idle_timeout: 180000
+    depends_on: [markersetup]
+
+  # ─── AI node types ──────────────────────────────────────────────────────
+
+  - id: prompt-node
+    prompt: "Reply with exactly the single word 'ok' and nothing else."
+    effort: low
+    idle_timeout: 120000
+
+  - id: command-node
+    command: e2e-echo-command
+    idle_timeout: 120000
+
+  - id: loop-node
+    loop:
+      prompt: "Reply with exactly 'DONE' and nothing else."
+      until: 'DONE'
+      max_iterations: 2
+    effort: low
+    idle_timeout: 120000
+
+  - id: structured-node
+    prompt: |
+      Return a JSON object with two fields, no fences and no prose:
+        - "status": always "ok" (string)
+        - "value":  always 42 (number)
+    effort: low
+    idle_timeout: 120000
+    output_format:
+      type: object
+      properties:
+        status:
+          type: string
+        value:
+          type: number
+      required: [status, value]
+
+  # ─── Deterministic node types (no AI) ───────────────────────────────────
+
+  - id: bash-json-node
+    bash: 'echo ''{"status":"ok"}'''
+
+  - id: script-bun-node
+    script: echo-args
+    runtime: bun
+    timeout: 30000
+
+  - id: script-python-node
+    script: echo-py
+    runtime: uv
+    timeout: 30000
+
+  # ─── DAG features ───────────────────────────────────────────────────────
+
+  - id: downstream
+    bash: "echo 'downstream got: $prompt-node.output'"
+    depends_on: [prompt-node]
+
+  - id: gated
+    bash: "echo 'gated-ok'"
+    depends_on: [bash-json-node]
+    when: "$bash-json-node.output.status == 'ok'"
+
+  - id: structured-check
+    bash: "echo \"structured.status=$structured-node.output.status\""
+    depends_on: [structured-node]
+    when: "$structured-node.output.status == 'ok'"
+
+  - id: merge
+    bash: "echo 'merge-ok'"
+    depends_on:
+      [downstream, gated, structured-check, script-bun-node, script-python-node]
+    trigger_rule: all_success
+
+  # ─── Final assertion ────────────────────────────────────────────────────
+
+  - id: assert
+    bash: |
+      fail=0
+      check() {
+        local name="$1"
+        local value="$2"
+        if [ -z "$value" ]; then
+          echo "FAIL: $name produced empty output"
+          fail=1
+        fi
+      }
+      if ! echo "$local-read.output" | grep -qF "CURSOR_LIVE_MARKER=archon-e2e"; then
+        echo "FAIL: local-read did not return runtime marker (got: $local-read.output)"
+        fail=1
+      fi
+      check markersetup      "$markersetup.output"
+      check prompt-node        "$prompt-node.output"
+      check command-node       "$command-node.output"
+      check loop-node          "$loop-node.output"
+      check bash-json-node     "$bash-json-node.output"
+      check script-bun-node    "$script-bun-node.output"
+      check script-python-node "$script-python-node.output"
+      check downstream         "$downstream.output"
+      check gated              "$gated.output"
+      check merge              "$merge.output"
+      check structured.status  "$structured-node.output.status"
+      check structured.value   "$structured-node.output.value"
+
+      if [ "$fail" -eq 1 ]; then exit 1; fi
+      echo "PASS: all node types + local runtime verified"
+    depends_on: [merge, loop-node, command-node, local-read, markersetup]
+    trigger_rule: all_success

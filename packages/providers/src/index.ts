@@ -72,3 +72,10 @@ export {
   resolveCopilotBinaryPath,
   fileExists as copilotFileExists,
 } from './community/copilot/binary-resolver';
+
+export {
+  CursorProvider,
+  parseCursorConfig,
+  registerCursorProvider,
+  type CursorProviderDefaults,
+} from './community/cursor';

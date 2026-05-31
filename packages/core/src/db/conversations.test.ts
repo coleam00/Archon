@@ -2,6 +2,7 @@ import { mock, describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { createQueryResult, mockPostgresDialect } from '../test/mocks/database';
 
 const mockQuery = mock(() => Promise.resolve(createQueryResult([])));
+const mockLoadConfig = mock(() => Promise.resolve({ assistant: 'claude' }));
 
 // Mock the connection module before importing the module under test
 mock.module('./connection', () => ({
@@ -9,6 +10,10 @@ mock.module('./connection', () => ({
     query: mockQuery,
   },
   getDialect: () => mockPostgresDialect,
+}));
+
+mock.module('../config/config-loader', () => ({
+  loadConfig: mockLoadConfig,
 }));
 
 import {
@@ -22,6 +27,8 @@ import { ConversationNotFoundError } from '../types';
 describe('conversations', () => {
   beforeEach(() => {
     mockQuery.mockClear();
+    mockLoadConfig.mockClear();
+    mockLoadConfig.mockResolvedValue({ assistant: 'claude' });
   });
 
   describe('getOrCreateConversation', () => {
@@ -137,10 +144,34 @@ describe('conversations', () => {
       const result = await getOrCreateConversation('telegram', 'chat-789');
 
       expect(result).toEqual(newConversation);
+      expect(mockLoadConfig).not.toHaveBeenCalled();
       expect(mockQuery).toHaveBeenNthCalledWith(
         2,
         'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
         ['telegram', 'chat-789', 'codex', null, null, null]
+      );
+    });
+
+    test('uses config.assistant when env var unset', async () => {
+      mockLoadConfig.mockResolvedValueOnce({ assistant: 'cursor' });
+
+      const newConversation: Conversation = {
+        ...existingConversation,
+        id: 'conv-new',
+        ai_assistant_type: 'cursor',
+      };
+
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([newConversation]));
+
+      const result = await getOrCreateConversation('web', 'web-new-chat');
+
+      expect(result).toEqual(newConversation);
+      expect(mockLoadConfig).toHaveBeenCalledTimes(1);
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        2,
+        'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+        ['web', 'web-new-chat', 'cursor', null, null, null]
       );
     });
 

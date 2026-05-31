@@ -1,0 +1,80 @@
+name: E2E Cursor Live
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e-cursor-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Rebuild sqlite3 for @cursor/sdk
+        run: npm rebuild sqlite3
+
+      - name: Run Cursor smoke test
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: bun run cli workflow run e2e-cursor-smoke --no-worktree "smoke test"
+
+  # Full local-runtime live gate (repo read, session resume, all node types) requires
+  # a machine with the Cursor local executor. Run manually: bun run e2e:cursor:live
+  e2e-cursor-live-cloud:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [e2e-cursor-smoke]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Rebuild sqlite3 for @cursor/sdk
+        run: npm rebuild sqlite3
+
+      - name: Write CI Cursor cloud config
+        run: |
+          mkdir -p ~/.archon
+          cat > ~/.archon/config.yaml <<EOF
+          defaultAssistant: cursor
+          assistants:
+            cursor:
+              model: auto
+              runtime: cloud
+              cloudRepos:
+                - url: ${{ github.server_url }}/${{ github.repository }}
+                  startingRef: ${{ github.ref_name }}
+          EOF
+
+      - name: Run Cursor live workflow (cloud runtime)
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: bun run cli workflow run e2e-cursor-live --no-worktree "live ci"
