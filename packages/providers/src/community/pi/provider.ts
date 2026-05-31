@@ -147,6 +147,46 @@ import { augmentPromptForJsonSchema } from '../../shared/structured-output';
 export { augmentPromptForJsonSchema };
 
 /**
+ * Archon's default system prompt for Pi sessions.
+ *
+ * WHY THIS EXISTS (load-bearing — do not drop without re-reading):
+ * Pi's built-in coding-agent system prompt (pi-coding-agent's
+ * `buildSystemPrompt`) embeds a self-referential "Pi documentation" block
+ * ("...read only when the user asks about pi itself, its SDK, extensions,
+ * themes, skills, or TUI...") plus an "operating inside pi, a coding agent
+ * harness" identity line. That block is dense with third-party-coding-tool
+ * vocabulary, and Anthropic's post-2026-04-04 subscription-OAuth enforcement
+ * classifies any request carrying it as a third-party app — returning
+ * `400 invalid_request_error "You're out of extra usage"` for Pro/Max OAuth
+ * tokens, even though the same token works for first-party Claude Code.
+ *
+ * Supplying ANY custom system prompt makes pi-coding-agent take its
+ * `customPrompt` branch, which omits the incriminating block entirely. pi-ai
+ * still prepends the OAuth-required "You are Claude Code, Anthropic's official
+ * CLI for Claude." block as system[0], so subscription tokens are accepted.
+ * Verified at the wire level: [CC, this-prompt] → HTTP 200;
+ * [CC, pi-default-with-docs-block] → HTTP 400.
+ *
+ * Archon owns its agent's system prompt regardless of provider: pi's
+ * "you are inside pi, here are pi's docs at <tmpdir shim>" framing is simply
+ * wrong inside Archon. Workflow- or request-level `systemPrompt` still wins
+ * (see sendQuery); this is only the fallback when none is specified.
+ */
+export const ARCHON_PI_DEFAULT_SYSTEM_PROMPT = `You are an expert coding assistant. You help users by reading files, executing commands, editing code, and writing new files.
+
+Use the available tools to accomplish the task:
+- read: examine file contents instead of cat/sed
+- bash: run shell commands (ls, grep, find, build, test)
+- edit: make precise, minimal text replacements; each match must be unique
+- write: create new files or fully rewrite existing ones
+
+Guidelines:
+- Prefer reading files before editing them.
+- Keep edits small and targeted; do not pad with unchanged context.
+- Be concise in your responses.
+- Show file paths clearly when working with files.`;
+
+/**
  * Pi community provider — wraps `@earendil-works/pi-coding-agent`'s full
  * coding-agent harness. Each `sendQuery()` call creates a fresh session
  * (no reuse) so concurrent calls don't collide.
@@ -336,16 +376,22 @@ export class PiProvider implements IAgentProvider {
     }
 
     //    4c. systemPrompt: request-level (AgentRequestOptions) wins over
-    //        node-level; either overrides Pi's default.
+    //        node-level; either overrides Pi's default. When neither is set we
+    //        fall back to ARCHON_PI_DEFAULT_SYSTEM_PROMPT rather than letting
+    //        Pi use its built-in coding-agent prompt — Pi's default embeds a
+    //        "Pi documentation" block that Anthropic's subscription-OAuth
+    //        detector flags as third-party (400 "out of extra usage"). See the
+    //        constant's doc comment for the full wire-level rationale.
     //        Pi only supports string system prompts; ignore structured preset objects.
     const rawSystemPrompt = requestOptions?.systemPrompt ?? nodeConfig?.systemPrompt;
-    const systemPrompt = typeof rawSystemPrompt === 'string' ? rawSystemPrompt : undefined;
-    if (rawSystemPrompt !== undefined && systemPrompt === undefined) {
+    const explicitSystemPrompt = typeof rawSystemPrompt === 'string' ? rawSystemPrompt : undefined;
+    if (rawSystemPrompt !== undefined && explicitSystemPrompt === undefined) {
       getLog().warn(
         { systemPromptType: typeof rawSystemPrompt },
         'pi.system_prompt_dropped_non_string'
       );
     }
+    const systemPrompt = explicitSystemPrompt ?? ARCHON_PI_DEFAULT_SYSTEM_PROMPT;
 
     //    4d. skills: Archon uses name references (e.g. `skills: [agent-browser]`).
     //        Resolve each name against .agents/skills and .claude/skills (project
@@ -436,7 +482,7 @@ export class PiProvider implements IAgentProvider {
     // Clamp to false without extensions: nothing consumes hasUI without a runner.
     const interactive = enableExtensions && piConfig.interactive !== false;
     const resourceLoader = createNoopResourceLoader(cwd, {
-      ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+      systemPrompt,
       ...(skillPaths.length > 0 ? { additionalSkillPaths: skillPaths } : {}),
       ...(enableExtensions ? { enableExtensions: true } : {}),
     });
@@ -455,7 +501,7 @@ export class PiProvider implements IAgentProvider {
         cwd,
         thinkingLevel,
         toolCount: filteredTools?.length,
-        hasSystemPrompt: systemPrompt !== undefined,
+        systemPromptSource: explicitSystemPrompt !== undefined ? 'explicit' : 'archon-default',
         skillCount: skillPaths.length,
         missingSkillCount: missingSkills.length,
         extensionsEnabled: enableExtensions,

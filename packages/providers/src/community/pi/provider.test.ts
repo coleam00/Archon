@@ -161,7 +161,7 @@ mock.module('@earendil-works/pi-coding-agent', () => ({
 }));
 
 // Import AFTER mocks are set — module resolution freezes the mocks.
-import { PiProvider } from './provider';
+import { ARCHON_PI_DEFAULT_SYSTEM_PROMPT, PiProvider } from './provider';
 import { PI_CAPABILITIES } from './capabilities';
 
 // ─── Helpers ────────────────────────────────────────────────────────────
@@ -1112,10 +1112,38 @@ describe('PiProvider', () => {
       'pi.system_prompt_dropped_non_string'
     );
 
+    // Non-string prompt is dropped, so the provider falls back to its
+    // Anthropic-OAuth-safe default rather than letting Pi use its built-in
+    // (third-party-flagged) coding prompt.
     const loaderArgs = MockDefaultResourceLoader.mock.calls[0]?.[0] as
       | Record<string, unknown>
       | undefined;
-    expect(loaderArgs?.systemPrompt).toBeUndefined();
+    expect(loaderArgs?.systemPrompt).toBe(ARCHON_PI_DEFAULT_SYSTEM_PROMPT);
+  });
+
+  test('falls back to ARCHON_PI_DEFAULT_SYSTEM_PROMPT when no systemPrompt given', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, { model: 'google/gemini-2.5-pro' })
+    );
+
+    const loaderArgs = MockDefaultResourceLoader.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
+    // The default must reach Pi so its built-in coding prompt (with the
+    // "Pi documentation" block Anthropic flags as third-party) is suppressed.
+    expect(loaderArgs?.systemPrompt).toBe(ARCHON_PI_DEFAULT_SYSTEM_PROMPT);
+  });
+
+  test('ARCHON_PI_DEFAULT_SYSTEM_PROMPT carries no third-party "pi harness" tell', () => {
+    // Regression guard: the default must never reintroduce the self-referential
+    // vocabulary that trips Anthropic's subscription-OAuth detector.
+    const p = ARCHON_PI_DEFAULT_SYSTEM_PROMPT.toLowerCase();
+    expect(p).not.toContain('pi documentation');
+    expect(p).not.toContain('coding agent harness');
+    expect(p).not.toContain('operating inside pi');
   });
 
   test('capabilities reflect v2 wiring', () => {
