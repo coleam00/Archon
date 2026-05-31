@@ -6,8 +6,22 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-function isCursorHttp2TailError(reason: unknown): boolean {
-  const msg = reason instanceof Error ? reason.message : String(reason);
+function rejectionText(reason: unknown): string {
+  if (reason instanceof Error) {
+    return [reason.message, reason.name, (reason as Error & { rawMessage?: string }).rawMessage]
+      .filter(Boolean)
+      .join(' ');
+  }
+  if (reason !== null && typeof reason === 'object') {
+    const record = reason as { message?: unknown; rawMessage?: unknown; name?: unknown };
+    return [record.message, record.rawMessage, record.name].filter(Boolean).join(' ');
+  }
+  return String(reason);
+}
+
+/** Known-safe @cursor/sdk HTTP/2 tail rejection under Bun after successful runs. */
+export function isCursorHttp2TailError(reason: unknown): boolean {
+  const msg = rejectionText(reason);
   return msg.includes('NGHTTP2_FRAME_SIZE_ERROR') || msg.includes('ERR_HTTP2_STREAM_ERROR');
 }
 

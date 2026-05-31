@@ -795,6 +795,10 @@ async function executeNodeInternal(
           batchMessages.push(msg.content);
         }
         await logAssistant(logDir, workflowRun.id, msg.content);
+      } else if (msg.type === 'thinking' && msg.content && streamingMode === 'stream') {
+        // Cursor (and other providers) emit thinking chunks before assistant text.
+        // Stream to the UI for live workflow logs; omit from $node_id.output capture.
+        await safeSendMessage(platform, conversationId, msg.content, nodeContext);
       } else if (msg.type === 'tool' && msg.toolName) {
         const now = Date.now();
 
@@ -1923,6 +1927,12 @@ async function executeLoopNode(
             await safeSendMessage(platform, conversationId, cleaned, msgContext);
           }
           await logAssistant(logDir, workflowRun.id, msg.content);
+        } else if (
+          msg.type === 'thinking' &&
+          msg.content &&
+          platform.getStreamingMode() === 'stream'
+        ) {
+          await safeSendMessage(platform, conversationId, msg.content, msgContext);
         } else if (msg.type === 'result') {
           // Emit tool_completed for the last tool in the iteration
           if (lastToolStartedAt) {

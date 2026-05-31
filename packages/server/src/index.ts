@@ -48,6 +48,7 @@ if (
 }
 
 import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
+import { isCursorHttp2TailError } from '@archon/providers/community/cursor';
 
 // Bootstrap provider registry before any provider lookups
 registerBuiltinProviders();
@@ -173,6 +174,13 @@ export function handleUnhandledRejection(reason: unknown): void {
   // abort. Safe to absorb — these are transient artifacts, not application bugs.
   if (message.includes('operation aborted')) {
     getLog().error({ reason }, 'unhandled_rejection.sdk_cleanup_race');
+    return;
+  }
+  // Cursor SDK + connect-node emit a late HTTP/2 tail rejection under Bun after
+  // successful runs. The provider guard swallows it per-query; this catches any
+  // that escape after the guard is removed.
+  if (isCursorHttp2TailError(reason)) {
+    getLog().error({ reason }, 'unhandled_rejection.cursor_http2_tail');
     return;
   }
   // All other unhandled rejections are unexpected — crash loudly so they are
