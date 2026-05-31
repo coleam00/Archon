@@ -41,6 +41,8 @@ export const WORKFLOW_EVENT_TYPES = [
   'ralph_story_completed',
   'approval_requested',
   'approval_received',
+  'classifier_emitted',
+  'size_proxy_emitted',
   'workflow_cancelled',
   'workflow_artifact',
   'node_session_resumed',

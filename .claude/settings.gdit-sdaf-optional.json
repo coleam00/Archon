@@ -1,0 +1,12 @@
+{
+  "_description": "GDIT SDAF opt-in blocking pre-commit hook. To enable, add the entry in 'hook_to_add' to the 'hooks.PreToolUse' array in .claude/settings.json",
+  "hook_to_add": {
+    "matcher": "Bash",
+    "hooks": [
+      {
+        "type": "command",
+        "command": "~/.kiro/claude-code/hooks/pre-commit-check.sh"
+      }
+    ]
+  }
+}

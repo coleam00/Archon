@@ -1,26 +1,80 @@
 name: archon-fix-github-issue
 description: |
-  Use when: User wants to FIX, RESOLVE, or IMPLEMENT a solution for a GitHub issue.
+  Use when: User wants to FIX, RESOLVE, or IMPLEMENT a solution for a forge issue (GitHub or GitLab).
   Triggers: "fix this issue", "implement issue #123", "resolve this bug", "fix it",
             "fix issue", "resolve issue", "fix #123".
   NOT for: Comprehensive multi-agent reviews (use archon-issue-review-full),
            questions about issues, CI failures, PR reviews, general exploration.
+
+  Works with both GitHub (uses gh CLI) and GitLab (uses glab CLI).
+  Forge is auto-detected from the git remote URL, or set forge.provider in .archon/config.yaml.
 
   DAG workflow that:
   1. Classifies the issue (bug/feature/enhancement/etc)
   2. Researches context (web research + codebase exploration via investigate/plan)
   3. Routes to investigate (bugs) or plan (features) based on classification
   4. Implements the fix/feature with validation
-  5. Creates a draft PR using the repo's PR template
+  5. Creates a draft PR/MR using the repo's PR/MR template
   6. Runs smart review (always code review + CLAUDE.md check, conditional additional agents)
   7. Aggressively self-fixes all findings (tests, docs, error handling)
   8. Simplifies changed code (implements fixes directly, not just reports)
-  9. Reports results back to the GitHub issue with follow-up suggestions
+  9. Reports results back to the issue with follow-up suggestions
 
 provider: claude
 model: sonnet
 
 nodes:
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 0: EFFORT ESTIMATE (runs in parallel with issue fetch)
+  # Informational only — no downstream node depends on this.
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: estimate
+    bash: |
+      set -euo pipefail
+      METRICS_DIR="$HOME/.archon/metrics"
+
+      if ! command -v jq &>/dev/null; then
+        exit 0
+      fi
+
+      JSONL_FILES=()
+      while IFS= read -r -d '' f; do
+        JSONL_FILES+=("$f")
+      done < <(find "$METRICS_DIR" -maxdepth 1 -name 'runs-*.jsonl' -print0 2>/dev/null | sort -z)
+
+      if [ ${#JSONL_FILES[@]} -eq 0 ]; then
+        exit 0
+      fi
+
+      FILTERED=$(cat "${JSONL_FILES[@]}" | jq -c --arg w "$WORKFLOW_NAME" 'select(.workflow == $w)')
+
+      if [ -z "$FILTERED" ]; then
+        exit 0
+      fi
+
+      RUN_COUNT=$(echo "$FILTERED" | wc -l | tr -d ' ')
+
+      echo "$FILTERED" | jq -sc --arg n "$RUN_COUNT" '
+        def percentile(arr; p):
+          (arr | sort) as $s | ($s | length) as $len |
+          if $len == 0 then null else $s[($len * p / 100 | floor | if . >= $len then $len - 1 else . end)] end;
+        . as $runs |
+        ($runs | length) as $count |
+        ($runs | map(select(.outcome == "success")) | length) as $ok |
+        ($runs | map(.wall_clock_ms | select(. != null))) as $clocks |
+        ($runs | map(.total_usd | select(. != null and . > 0))) as $costs |
+        {
+          workflow: $runs[0].workflow,
+          run_count: $count,
+          success_rate_pct: (if $count > 0 then ($ok / $count * 100 | round) else 0 end),
+          wall_clock_p50_ms: (percentile($clocks; 50)),
+          wall_clock_p90_ms: (percentile($clocks; 90)),
+          cost_p50_usd: (percentile($costs; 50)),
+          cost_p90_usd: (percentile($costs; 90))
+        }
+      '
+
   # ═══════════════════════════════════════════════════════════════
   # PHASE 1: FETCH & CLASSIFY
   # ═══════════════════════════════════════════════════════════════
@@ -33,7 +87,9 @@ nodes:
 
       Rules:
       - If the message contains an explicit issue number (e.g., "#709", "issue 709", "709"), extract that number.
-      - If the message is ambiguous (e.g., "fix the SQLite timestamp bug"), use `gh issue list` to search for matching issues and pick the best match.
+      - If the message is ambiguous (e.g., "fix the SQLite timestamp bug"):
+          - GitHub: use `gh issue list` to search for matching issues and pick the best match.
+          - GitLab: use `glab issue list --search "..."` to search for matching issues.
 
       CRITICAL: Your final output must be ONLY the bare number with no quotes, no markdown, no explanation. Example correct output: 709
 
@@ -45,7 +101,11 @@ nodes:
         echo "Failed to extract issue number from: $extract-issue-number.output" >&2
         exit 1
       fi
-      gh issue view "$ISSUE_NUM" --json title,body,labels,comments,state,url,author
+      if [ "$FORGE_PROVIDER" = "gitlab" ]; then
+        glab issue view "$ISSUE_NUM" --output json
+      else
+        gh issue view "$ISSUE_NUM" --json title,body,labels,comments,state,url,author
+      fi
     depends_on: [extract-issue-number]
 
   - id: classify
@@ -173,20 +233,33 @@ nodes:
          - `$ARTIFACTS_DIR/investigation.md` or `$ARTIFACTS_DIR/plan.md`
          - `$ARTIFACTS_DIR/implementation.md`
          - `$ARTIFACTS_DIR/validation.md`
-      4. Check if a PR already exists for this branch: `gh pr list --head $(git branch --show-current)`
-         - If PR exists, skip creation and capture its number
-      5. Look for the project's PR template at `.github/pull_request_template.md`, `.github/PULL_REQUEST_TEMPLATE.md`, or `docs/PULL_REQUEST_TEMPLATE.md`. Read whichever one exists.
-      6. Create a DRAFT PR: `gh pr create --draft --base $BASE_BRANCH`
+      4. Check if a PR/MR already exists for this branch:
+         - GitHub: `gh pr list --head $(git branch --show-current)`
+         - GitLab: `glab mr list --source-branch $(git branch --show-current)`
+         - If a PR/MR exists, skip creation and capture its identifier
+      5. Look for the project's PR/MR template:
+         - GitHub: `.github/pull_request_template.md`, `.github/PULL_REQUEST_TEMPLATE.md`, or `docs/PULL_REQUEST_TEMPLATE.md`
+         - GitLab: `.gitlab/merge_request_templates/Default.md` or similar
+         Read whichever one exists.
+      6. Create a DRAFT PR/MR:
+         - GitHub: `gh pr create --draft --base $BASE_BRANCH`
+         - GitLab: `glab mr create --draft --target-branch $BASE_BRANCH`
          - Title: concise, imperative mood, under 70 chars
-         - Body: if a PR template was found, fill in **every section** with details from the artifacts. Don't skip sections or leave placeholders. If no template, write a body with summary, changes, validation evidence, and `Fixes #...`.
-         - **PR body file location**: if you write the body to a file (e.g. for `--body-file`), the file MUST live at `$ARTIFACTS_DIR/pr-body.md` or under `/tmp/` — NEVER inside the worktree. Files like `.pr-body.md` at the repo root will be picked up by later commits.
-         - Link to issue: include `Fixes #...` or `Closes #...`
-      7. Capture PR identifiers:
+         - Body/description: if a template was found, fill in **every section** with details from the artifacts. Don't skip sections or leave placeholders. If no template, write a body with summary, changes, validation evidence, and `Fixes #...` / `Closes #...`.
+         - **Body file location**: if you write the body to a file, the file MUST live at `$ARTIFACTS_DIR/pr-body.md` or under `/tmp/` — NEVER inside the worktree.
+         - Link to issue: include `Fixes #<N>` or `Closes #<N>`
+      7. Capture PR/MR identifiers:
          ```bash
+         # GitHub
          PR_NUMBER=$(gh pr view --json number -q '.number')
          echo "$PR_NUMBER" > "$ARTIFACTS_DIR/.pr-number"
          PR_URL=$(gh pr view --json url -q '.url')
          echo "$PR_URL" > "$ARTIFACTS_DIR/.pr-url"
+         # GitLab
+         MR_IID=$(glab mr list --source-branch $(git branch --show-current) --output json | jq -r '.[0].iid')
+         echo "$MR_IID" > "$ARTIFACTS_DIR/.pr-number"
+         MR_URL=$(glab mr list --source-branch $(git branch --show-current) --output json | jq -r '.[0].web_url')
+         echo "$MR_URL" > "$ARTIFACTS_DIR/.pr-url"
          ```
     depends_on: [validate]
     context: fresh
@@ -199,13 +272,26 @@ nodes:
     bash: |
       set -euo pipefail
       EXPECTED="$BASE_BRANCH"
-      ACTUAL=$(gh pr view --json baseRefName -q '.baseRefName')
-      if [ "$ACTUAL" != "$EXPECTED" ]; then
-        PR_NUMBER=$(gh pr view --json number -q '.number')
-        echo "Base mismatch on PR #$PR_NUMBER: expected=$EXPECTED actual=$ACTUAL — re-targeting" >&2
-        gh pr edit "$PR_NUMBER" --base "$EXPECTED"
+      BRANCH=$(git branch --show-current)
+      if [ "$FORGE_PROVIDER" = "gitlab" ]; then
+        MR_DATA=$(glab mr list --source-branch "$BRANCH" --output json --limit 1 2>/dev/null || echo "[]")
+        ACTUAL=$(echo "$MR_DATA" | jq -r '.[0].target_branch // empty')
+        if [ -n "$ACTUAL" ] && [ "$ACTUAL" != "$EXPECTED" ]; then
+          MR_IID=$(echo "$MR_DATA" | jq -r '.[0].iid')
+          echo "Base mismatch on MR !$MR_IID: expected=$EXPECTED actual=$ACTUAL — re-targeting" >&2
+          glab mr update "$MR_IID" --target-branch "$EXPECTED"
+        else
+          echo "MR base verified: ${ACTUAL:-$EXPECTED}"
+        fi
       else
-        echo "PR base verified: $EXPECTED"
+        ACTUAL=$(gh pr view --json baseRefName -q '.baseRefName' 2>/dev/null || echo "")
+        if [ -n "$ACTUAL" ] && [ "$ACTUAL" != "$EXPECTED" ]; then
+          PR_NUMBER=$(gh pr view --json number -q '.number')
+          echo "Base mismatch on PR #$PR_NUMBER: expected=$EXPECTED actual=$ACTUAL — re-targeting" >&2
+          gh pr edit "$PR_NUMBER" --base "$EXPECTED"
+        else
+          echo "PR base verified: ${ACTUAL:-$EXPECTED}"
+        fi
       fi
     depends_on: [create-pr]
 

@@ -215,6 +215,20 @@ export interface RepoConfig {
   };
 
   /**
+   * Forge (git hosting) settings for this repository.
+   * Controls which CLI tool ($FORGE_CLI) is injected into workflow execution.
+   * Auto-detected from the git remote URL when not set.
+   */
+  forge?: {
+    /**
+     * Git forge provider. Determines whether workflows use `gh` (GitHub) or
+     * `glab` (GitLab) CLI commands via $FORGE_CLI / $FORGE_PROVIDER variables.
+     * @default auto-detected from git remote URL
+     */
+    provider?: 'github' | 'gitlab';
+  };
+
+  /**
    * Per-project environment variables injected into Claude SDK subprocess env.
    * Values here override process.env for workflow node execution.
    * Sensitive — do not commit actual secrets to version-controlled repos.
@@ -294,6 +308,12 @@ export interface MergedConfig {
    * @default 'docs/'
    */
   docsPath?: string;
+  /**
+   * Forge provider from repo config (forge.provider) or auto-detected from
+   * git remote URL. Used for $FORGE_PROVIDER and $FORGE_CLI substitution in
+   * workflow commands. When undefined, workflows auto-detect at execution time.
+   */
+  forgeProvider?: 'github' | 'gitlab';
   /**
    * Merged per-project env vars from .archon/config.yaml env: section.
    * DB env vars (from Web UI) are merged on top by executeWorkflow.

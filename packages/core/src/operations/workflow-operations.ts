@@ -11,6 +11,7 @@ import {
   isApprovalContext,
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun, ApprovalContext } from '@archon/workflows/schemas/workflow-run';
+import { getWorkflowEventEmitter } from '@archon/workflows/event-emitter';
 import * as workflowDb from '../db/workflows';
 import * as workflowEventDb from '../db/workflow-events';
 import * as workflowNodeSessionDb from '../db/workflow-node-sessions';
@@ -148,6 +149,9 @@ export async function approveWorkflow(
   }
 
   const approvalComment = comment ?? 'Approved';
+  // last_activity_at is updated when the run is paused — use it to compute gate wait time.
+  const approvalPostedAt =
+    run.last_activity_at?.getTime() ?? run.started_at?.getTime() ?? Date.now();
 
   try {
     // Interactive loop gate — store user input in metadata for the next iteration.
@@ -167,6 +171,14 @@ export async function approveWorkflow(
       await workflowDb.updateWorkflowRun(runId, {
         status: 'failed',
         metadata: { loop_user_input: approvalComment },
+      });
+      getWorkflowEventEmitter().emit({
+        type: 'approval_resolved',
+        runId,
+        nodeId: approval.nodeId,
+        decision: 'approved',
+        reason: approvalComment,
+        waitMs: Date.now() - approvalPostedAt,
       });
       return {
         workflowName: run.workflow_name,
@@ -196,6 +208,14 @@ export async function approveWorkflow(
     await workflowDb.updateWorkflowRun(runId, {
       status: 'failed',
       metadata: { approval_response: 'approved', rejection_reason: '', rejection_count: 0 },
+    });
+    getWorkflowEventEmitter().emit({
+      type: 'approval_resolved',
+      runId,
+      nodeId: approval.nodeId,
+      decision: 'approved',
+      reason: approvalComment,
+      waitMs: Date.now() - approvalPostedAt,
     });
   } catch (error) {
     const err = error as Error;
@@ -238,6 +258,8 @@ export async function rejectWorkflow(
   const rejectReason = reason ?? 'Rejected';
   const currentCount = (run.metadata.rejection_count as number | undefined) ?? 0;
   const maxAttempts = approval?.onRejectMaxAttempts ?? 3;
+  const approvalPostedAt =
+    run.last_activity_at?.getTime() ?? run.started_at?.getTime() ?? Date.now();
 
   try {
     await workflowEventDb.createWorkflowEvent({
@@ -245,6 +267,14 @@ export async function rejectWorkflow(
       event_type: 'approval_received',
       step_name: approval?.nodeId ?? 'unknown',
       data: { decision: 'rejected', reason: rejectReason },
+    });
+    getWorkflowEventEmitter().emit({
+      type: 'approval_resolved',
+      runId,
+      nodeId: approval?.nodeId ?? 'unknown',
+      decision: 'rejected',
+      reason: rejectReason,
+      waitMs: Date.now() - approvalPostedAt,
     });
 
     if (approval?.onRejectPrompt !== undefined) {

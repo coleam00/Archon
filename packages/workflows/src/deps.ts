@@ -74,6 +74,8 @@ export interface WorkflowConfig {
   assistant: string;
   baseBranch?: string;
   docsPath?: string;
+  /** Forge provider, resolved from config or auto-detected from git remote URL */
+  forgeProvider?: 'github' | 'gitlab';
   envVars?: Record<string, string>;
   commands: { folder?: string };
   defaults?: {

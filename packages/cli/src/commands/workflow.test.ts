@@ -91,6 +91,7 @@ mock.module('@archon/workflows/event-emitter', () => ({
         return mockUnsubscribe;
       }
     ),
+    emit: mock(() => {}),
   })),
 }));
 

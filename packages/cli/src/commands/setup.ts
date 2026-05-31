@@ -139,16 +139,26 @@ interface SetupConfig {
   };
   platforms: {
     github: boolean;
+    gitlab: boolean;
     telegram: boolean;
     slack: boolean;
   };
   github?: GitHubConfig;
+  gitlab?: GitLabConfig;
   telegram?: TelegramConfig;
   slack?: SlackConfig;
   botDisplayName: string;
 }
 
 interface GitHubConfig {
+  token: string;
+  webhookSecret: string;
+  allowedUsers: string;
+  botMention?: string;
+}
+
+interface GitLabConfig {
+  url: string;
   token: string;
   webhookSecret: string;
   allowedUsers: string;
@@ -179,6 +189,7 @@ interface ExistingConfig {
   hasPi: boolean;
   platforms: {
     github: boolean;
+    gitlab: boolean;
     telegram: boolean;
     slack: boolean;
   };
@@ -422,6 +433,7 @@ export function checkExistingConfig(envPath?: string): ExistingConfig | null {
     hasPi: PI_BACKENDS.some(b => hasEnvValue(content, b.envVar)),
     platforms: {
       github: hasEnvValue(content, 'GITHUB_TOKEN') || hasEnvValue(content, 'GH_TOKEN'),
+      gitlab: hasEnvValue(content, 'GITLAB_TOKEN'),
       telegram: hasEnvValue(content, 'TELEGRAM_BOT_TOKEN'),
       slack: hasEnvValue(content, 'SLACK_BOT_TOKEN') && hasEnvValue(content, 'SLACK_APP_TOKEN'),
     },
@@ -1062,6 +1074,7 @@ async function collectPlatforms(): Promise<SetupConfig['platforms']> {
       'Which chat adapters do you want to connect? (all optional — Archon works as CLI + skill without any)\n(↑↓ navigate, space select, enter confirm)',
     options: [
       { value: 'github', label: 'GitHub', hint: 'Respond to issues/PRs via webhooks' },
+      { value: 'gitlab', label: 'GitLab', hint: 'Respond to issues/MRs via webhooks' },
       { value: 'telegram', label: 'Telegram', hint: 'Chat bot via BotFather' },
       { value: 'slack', label: 'Slack', hint: 'Workspace app with Socket Mode' },
     ],
@@ -1075,6 +1088,7 @@ async function collectPlatforms(): Promise<SetupConfig['platforms']> {
 
   return {
     github: platforms.includes('github'),
+    gitlab: platforms.includes('gitlab'),
     telegram: platforms.includes('telegram'),
     slack: platforms.includes('slack'),
   };
@@ -1208,6 +1222,141 @@ async function collectGitHubConfig(): Promise<GitHubConfig> {
   log.success('Generated webhook secret (save this for GitHub webhook config)');
 
   return {
+    token,
+    webhookSecret,
+    allowedUsers: allowedUsers || '',
+    botMention,
+  };
+}
+
+/**
+ * Collect GitLab credentials
+ */
+async function collectGitLabConfig(): Promise<GitLabConfig> {
+  note(
+    'GitLab Personal Access Token Setup\n\n' +
+      '1. Go to GitLab → User Settings → Access Tokens\n' +
+      '2. Create a token with:\n' +
+      '   - Name: archon\n' +
+      '   - Scopes: api\n' +
+      '3. Copy the token (starts with glpat-)\n\n' +
+      'For self-hosted GitLab, you will be prompted for your instance URL.',
+    'GitLab Setup'
+  );
+
+  const gitlabUrl = await text({
+    message: 'GitLab instance URL (leave blank for gitlab.com):',
+    placeholder: 'https://gitlab.com',
+    defaultValue: 'https://gitlab.com',
+  });
+
+  if (isCancel(gitlabUrl)) {
+    cancel('Setup cancelled.');
+    process.exit(0);
+  }
+
+  const token = await password({
+    message: 'Enter your GitLab Personal Access Token (glpat-...):',
+    validate: value => {
+      if (!value || value.length < 10) return 'Please enter a valid token';
+      return undefined;
+    },
+  });
+
+  if (isCancel(token)) {
+    cancel('Setup cancelled.');
+    process.exit(0);
+  }
+
+  // Probe glab CLI auth — workflows that shell out to glab need this.
+  const glabSpin = spinner();
+  glabSpin.start('Checking glab CLI authentication...');
+  let glabAuthOk = false;
+  let glabAuthError: string | undefined;
+  try {
+    await execFileAsync('glab', ['auth', 'status'], { timeout: 10_000 });
+    glabAuthOk = true;
+    glabSpin.stop('glab CLI is authenticated');
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException;
+    glabAuthError =
+      e.code === 'ENOENT'
+        ? 'glab not found in PATH — install it first (https://gitlab.com/gitlab-org/cli)'
+        : (e.message ?? 'unknown error');
+    glabSpin.stop('glab CLI check failed');
+  }
+
+  if (!glabAuthOk) {
+    log.warning(
+      `glab auth check failed: ${glabAuthError}\n` +
+        (glabAuthError?.includes('not found') ? '' : 'Run: glab auth login')
+    );
+    if (process.stdout.isTTY) {
+      const runGlabLogin = await confirm({
+        message: 'Run `glab auth login` now?',
+        initialValue: true,
+      });
+      if (!isCancel(runGlabLogin) && runGlabLogin) {
+        const glabLoginResult = spawnSync('glab', ['auth', 'login'], { stdio: 'inherit' });
+        if (glabLoginResult.error) {
+          log.warning(
+            `Could not run glab auth login: ${glabLoginResult.error.message}. ` +
+              'Install glab from https://gitlab.com/gitlab-org/cli and run it manually.'
+          );
+        } else if (glabLoginResult.status !== 0) {
+          log.warning(
+            `glab auth login exited with code ${glabLoginResult.status ?? 'null'}. ` +
+              'Authentication may not have completed — re-run `glab auth login` manually if needed.'
+          );
+        }
+      }
+    }
+  }
+
+  const allowedUsers = await text({
+    message: 'Enter allowed GitLab usernames (comma-separated, or leave empty for all):',
+    placeholder: 'username1,username2',
+  });
+
+  if (isCancel(allowedUsers)) {
+    cancel('Setup cancelled.');
+    process.exit(0);
+  }
+
+  const customMention = await confirm({
+    message: 'Do you want to set a custom @mention name? (Default: archon)',
+  });
+
+  if (isCancel(customMention)) {
+    cancel('Setup cancelled.');
+    process.exit(0);
+  }
+
+  let botMention: string | undefined;
+  if (customMention) {
+    const mention = await text({
+      message: 'Enter the @mention name (without @):',
+      placeholder: 'archon',
+      validate: value => {
+        if (!value) return 'Mention name is required';
+        if (value.includes('@')) return 'Do not include @ symbol';
+        return undefined;
+      },
+    });
+
+    if (isCancel(mention)) {
+      cancel('Setup cancelled.');
+      process.exit(0);
+    }
+
+    botMention = mention;
+  }
+
+  const webhookSecret = generateWebhookSecret();
+  log.success('Generated webhook secret (save this for GitLab webhook config)');
+
+  return {
+    url: gitlabUrl || 'https://gitlab.com',
     token,
     webhookSecret,
     allowedUsers: allowedUsers || '',
@@ -1453,6 +1602,14 @@ export function generateEnvContent(config: SetupConfig): string {
   lines.push(`DEFAULT_AI_ASSISTANT=${config.ai.defaultAssistant}`);
   lines.push('');
 
+  // Forge provider — written when either GitHub or GitLab is configured
+  if (config.platforms.github || config.platforms.gitlab) {
+    const forgeProvider = config.platforms.gitlab ? 'gitlab' : 'github';
+    lines.push('# Forge Provider');
+    lines.push(`FORGE_PROVIDER=${forgeProvider}`);
+    lines.push('');
+  }
+
   // GitHub
   if (config.platforms.github && config.github) {
     lines.push('# GitHub');
@@ -1464,6 +1621,23 @@ export function generateEnvContent(config: SetupConfig): string {
     }
     if (config.github.botMention) {
       lines.push(`GITHUB_BOT_MENTION=${config.github.botMention}`);
+    }
+    lines.push('');
+  }
+
+  // GitLab
+  if (config.platforms.gitlab && config.gitlab) {
+    lines.push('# GitLab');
+    if (config.gitlab.url && config.gitlab.url !== 'https://gitlab.com') {
+      lines.push(`GITLAB_URL=${config.gitlab.url}`);
+    }
+    lines.push(`GITLAB_TOKEN=${config.gitlab.token}`);
+    lines.push(`GITLAB_WEBHOOK_SECRET=${config.gitlab.webhookSecret}`);
+    if (config.gitlab.allowedUsers) {
+      lines.push(`GITLAB_ALLOWED_USERS=${config.gitlab.allowedUsers}`);
+    }
+    if (config.gitlab.botMention) {
+      lines.push(`GITLAB_BOT_MENTION=${config.gitlab.botMention}`);
     }
     lines.push('');
   }
@@ -1930,6 +2104,7 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
   if (existing) {
     const configuredPlatforms: string[] = [];
     if (existing.platforms.github) configuredPlatforms.push('GitHub');
+    if (existing.platforms.gitlab) configuredPlatforms.push('GitLab');
     if (existing.platforms.telegram) configuredPlatforms.push('Telegram');
     if (existing.platforms.slack) configuredPlatforms.push('Slack');
 
@@ -1978,6 +2153,7 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
       },
       platforms: {
         github: existing?.platforms.github ?? false,
+        gitlab: existing?.platforms.gitlab ?? false,
         telegram: existing?.platforms.telegram ?? false,
         slack: existing?.platforms.slack ?? false,
       },
@@ -1993,6 +2169,7 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
     // Merge with existing
     config.platforms = {
       github: config.platforms.github || newPlatforms.github,
+      gitlab: config.platforms.gitlab || newPlatforms.gitlab,
       telegram: config.platforms.telegram || newPlatforms.telegram,
       slack: config.platforms.slack || newPlatforms.slack,
     };
@@ -2000,6 +2177,9 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
     // Collect credentials for new platforms only
     if (newPlatforms.github && !existing?.platforms.github) {
       config.github = await collectGitHubConfig();
+    }
+    if (newPlatforms.gitlab && !existing?.platforms.gitlab) {
+      config.gitlab = await collectGitLabConfig();
     }
     if (newPlatforms.telegram && !existing?.platforms.telegram) {
       config.telegram = await collectTelegramConfig();
@@ -2020,6 +2200,9 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
     // Collect platform credentials
     if (platforms.github) {
       config.github = await collectGitHubConfig();
+    }
+    if (platforms.gitlab) {
+      config.gitlab = await collectGitLabConfig();
     }
     if (platforms.telegram) {
       config.telegram = await collectTelegramConfig();

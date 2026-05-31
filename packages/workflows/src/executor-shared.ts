@@ -7,12 +7,14 @@
  */
 import { readFile } from 'fs/promises';
 import { join } from 'path';
-import type { IWorkflowPlatform, WorkflowDeps, WorkflowMessageMetadata } from './deps';
+import type { WorkflowDeps } from './deps';
+import type { WorkflowConfig } from './deps';
 import * as archonPaths from '@archon/paths';
 import { BUNDLED_COMMANDS, isBinaryBuild } from './defaults/bundled-defaults';
 import { createLogger } from '@archon/paths';
 import { isValidCommandName } from './command-validation';
 import type { LoadCommandResult } from './schemas';
+import { execFileAsync } from '@archon/git';
 
 /** Lazy-initialized logger */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -80,6 +82,70 @@ export function classifyError(error: Error): ErrorType {
     return 'TRANSIENT';
   }
   return 'UNKNOWN';
+}
+
+// ─── Failure Mode Classification ────────────────────────────────────────────
+
+/**
+ * Structured failure taxonomy for workflow runs.
+ * Used in metrics to distinguish failure causes for regression analysis.
+ */
+export type FailureMode =
+  | 'timeout'
+  | 'idle_timeout'
+  | 'model_error'
+  | 'max_budget'
+  | 'type_check_failure'
+  | 'test_failure'
+  | 'lint_failure'
+  | 'approval_rejected'
+  | 'merge_conflict'
+  | 'human_abort'
+  | 'unknown';
+
+/**
+ * Classify a workflow-level failure into a structured failure mode.
+ * Matches against known error message patterns. Returns 'unknown' for unrecognized errors.
+ */
+export function classifyFailureMode(error: Error): FailureMode {
+  const msg = error.message.toLowerCase();
+  // Check idle timeout before generic timeout so it gets the more specific tag
+  if (msg.includes('idle_timeout') || msg.includes('idle timeout')) return 'idle_timeout';
+  if (msg.includes('timed out') || msg.includes('timeout')) return 'timeout';
+  if (msg.includes('error_max_budget_usd') || msg.includes('max_budget')) return 'max_budget';
+  if (msg.includes('type-check') || msg.includes('type check') || msg.includes('tsc')) {
+    return 'type_check_failure';
+  }
+  if (msg.includes('eslint') || (msg.includes('lint') && !msg.includes('type'))) {
+    return 'lint_failure';
+  }
+  if (
+    (msg.includes('test') || msg.includes('bun test') || msg.includes('jest')) &&
+    (msg.includes('fail') || msg.includes('error') || msg.includes('exit'))
+  ) {
+    return 'test_failure';
+  }
+  if (msg.includes('approval_rejected') || msg.includes('rejected by reviewer')) {
+    return 'approval_rejected';
+  }
+  if (msg.includes('merge conflict') || msg.includes('conflict')) return 'merge_conflict';
+  if (
+    msg.includes('cancelled') ||
+    msg.includes('canceled') ||
+    msg.includes('human_abort') ||
+    msg.includes('user cancelled')
+  ) {
+    return 'human_abort';
+  }
+  if (
+    msg.includes('model') ||
+    msg.includes('claude') ||
+    msg.includes('provider') ||
+    msg.includes('sdk')
+  ) {
+    return 'model_error';
+  }
+  return 'unknown';
 }
 
 // ─── Subprocess Failure Formatting ───────────────────────────────────────────
@@ -343,6 +409,30 @@ export const CONTEXT_VAR_PATTERN_STR =
   '\\$(?:CONTEXT|EXTERNAL_CONTEXT|ISSUE_CONTEXT)(?![A-Za-z0-9_])';
 
 /**
+ * Resolve the forge provider for $FORGE_PROVIDER / $FORGE_CLI substitution.
+ *
+ * Resolution order:
+ * 1. `config.forgeProvider` (from .archon/config.yaml `forge.provider`)
+ * 2. Auto-detect from git remote URL (contains 'gitlab' → gitlab, else github)
+ * 3. Hard default: 'github'
+ */
+export async function resolveForgeProvider(
+  config: WorkflowConfig,
+  cwd: string
+): Promise<'github' | 'gitlab'> {
+  if (config.forgeProvider) return config.forgeProvider;
+  try {
+    const { stdout } = await execFileAsync('git', ['-C', cwd, 'remote', 'get-url', 'origin'], {
+      timeout: 5000,
+    });
+    if (stdout.toLowerCase().includes('gitlab')) return 'gitlab';
+  } catch {
+    // Auto-detection failure is non-fatal — default to github
+  }
+  return 'github';
+}
+
+/**
  * Substitute workflow variables in a prompt.
  *
  * Supported variables:
@@ -352,12 +442,16 @@ export const CONTEXT_VAR_PATTERN_STR =
  * - $BASE_BRANCH - The base branch (from config or auto-detected)
  * - $CONTEXT, $EXTERNAL_CONTEXT, $ISSUE_CONTEXT - GitHub issue/PR context (if available)
  * - $DOCS_DIR - Documentation directory path (configured or default 'docs/')
+ * - $FORGE_PROVIDER - Git forge provider: 'github' or 'gitlab'
+ * - $FORGE_CLI - Forge CLI binary: 'gh' (GitHub) or 'glab' (GitLab)
  * - $LOOP_USER_INPUT - User feedback from interactive loop approval. Only populated on the
  *   first iteration of a resumed interactive loop; empty string on all other iterations.
  * - $REJECTION_REASON - Reviewer feedback from approval node rejection (on_reject prompts only).
  * - $LOOP_PREV_OUTPUT - Cleaned output of the previous loop iteration. Empty string on the
  *   first iteration (no prior output exists). Useful for fresh_context loops that need
  *   to reference what the previous pass produced or why it failed.
+ * - $WORKFLOW_NAME - The human-readable name of the current workflow (e.g., "archon-fix-github-issue").
+ *   Available in bash/script nodes so estimation and analytics nodes can self-reference their workflow.
  *
  * When issueContext is undefined, context variables are replaced with empty string
  * to avoid sending literal "$CONTEXT" to the AI.
@@ -373,7 +467,8 @@ export function substituteWorkflowVariables(
   loopUserInput?: string,
   rejectionReason?: string,
   loopPrevOutput?: string,
-  options?: { shellSafe?: boolean }
+  forgeProvider?: 'github' | 'gitlab',
+  workflowName?: string
 ): { prompt: string; contextSubstituted: boolean } {
   // Fail fast if the prompt references $BASE_BRANCH but no base branch could be resolved
   if (!baseBranch && prompt.includes('$BASE_BRANCH')) {
@@ -386,40 +481,38 @@ export function substituteWorkflowVariables(
   // Defensive: ensure docsDir always has a value (callers should resolve, but guard here)
   const resolvedDocsDir = docsDir || 'docs/';
 
+  const resolvedForgeProvider = forgeProvider ?? 'github';
+  const resolvedForgeCli = resolvedForgeProvider === 'gitlab' ? 'glab' : 'gh';
+
   // Substitute basic variables
-  // When shellSafe is true, skip user-controlled variables — they will be passed
-  // via subprocess environment variables instead to prevent shell injection.
   let result = prompt
     .replace(/\$WORKFLOW_ID/g, workflowId)
+    .replace(/\$WORKFLOW_NAME/g, workflowName ?? '')
+    .replace(/\$USER_MESSAGE/g, userMessage)
+    .replace(/\$ARGUMENTS/g, userMessage)
     .replace(/\$ARTIFACTS_DIR/g, artifactsDir)
     .replace(/\$BASE_BRANCH/g, baseBranch)
-    .replace(/\$DOCS_DIR/g, resolvedDocsDir);
-
-  if (!options?.shellSafe) {
-    result = result
-      .replace(/\$USER_MESSAGE/g, userMessage)
-      .replace(/\$ARGUMENTS/g, userMessage)
-      .replace(/\$LOOP_USER_INPUT/g, loopUserInput ?? '')
-      .replace(/\$REJECTION_REASON/g, rejectionReason ?? '')
-      .replace(/\$LOOP_PREV_OUTPUT/g, loopPrevOutput ?? '');
-  }
+    .replace(/\$DOCS_DIR/g, resolvedDocsDir)
+    .replace(/\$FORGE_PROVIDER/g, resolvedForgeProvider)
+    .replace(/\$FORGE_CLI/g, resolvedForgeCli)
+    .replace(/\$LOOP_USER_INPUT/g, loopUserInput ?? '')
+    .replace(/\$REJECTION_REASON/g, rejectionReason ?? '')
+    .replace(/\$LOOP_PREV_OUTPUT/g, loopPrevOutput ?? '');
 
   // Check if context variables exist (use fresh regex to avoid lastIndex issues)
   const hasContextVariables = new RegExp(CONTEXT_VAR_PATTERN_STR).test(result);
 
   // Substitute or clear context variables (use fresh global regex for replace)
-  if (!options?.shellSafe) {
-    if (!issueContext && hasContextVariables) {
-      getLog().debug(
-        {
-          action: 'clearing variables',
-          variables: ['$CONTEXT', '$EXTERNAL_CONTEXT', '$ISSUE_CONTEXT'],
-        },
-        'context_variables_cleared'
-      );
-    }
-    result = result.replace(new RegExp(CONTEXT_VAR_PATTERN_STR, 'g'), issueContext ?? '');
+  if (!issueContext && hasContextVariables) {
+    getLog().debug(
+      {
+        action: 'clearing variables',
+        variables: ['$CONTEXT', '$EXTERNAL_CONTEXT', '$ISSUE_CONTEXT'],
+      },
+      'context_variables_cleared'
+    );
   }
+  result = result.replace(new RegExp(CONTEXT_VAR_PATTERN_STR, 'g'), issueContext ?? '');
 
   return {
     prompt: result,
@@ -450,7 +543,9 @@ export function buildPromptWithContext(
   baseBranch: string,
   docsDir: string,
   issueContext: string | undefined,
-  logLabel: string
+  logLabel: string,
+  forgeProvider?: 'github' | 'gitlab',
+  workflowName?: string
 ): string {
   const { prompt, contextSubstituted } = substituteWorkflowVariables(
     template,
@@ -459,7 +554,12 @@ export function buildPromptWithContext(
     artifactsDir,
     baseBranch,
     docsDir,
-    issueContext
+    issueContext,
+    undefined,
+    undefined,
+    undefined,
+    forgeProvider,
+    workflowName
   );
 
   if (issueContext && !contextSubstituted) {
@@ -540,83 +640,4 @@ export function stripCompletionTags(content: string, until?: string): string {
  */
 export function isInlineScript(script: string): boolean {
   return script.includes('\n') || /[;(){}&|<>$`"' ]/.test(script);
-}
-
-// ─── Platform Message Sending ────────────────────────────────────────────────
-
-/** Context for platform message sending */
-export interface SendMessageContext {
-  workflowId?: string;
-  nodeName?: string;
-}
-
-/** Threshold for consecutive UNKNOWN errors before aborting */
-const UNKNOWN_ERROR_THRESHOLD = 3;
-
-/** Mutable counter for tracking consecutive unknown errors across calls */
-export interface UnknownErrorTracker {
-  count: number;
-}
-
-/**
- * Safely send a message to the platform without crashing on failure.
- * Returns true if message was sent successfully, false otherwise.
- * Only suppresses transient/unknown errors; fatal errors are rethrown.
- * When unknownErrorTracker is provided, consecutive UNKNOWN errors are tracked
- * and the workflow is aborted after UNKNOWN_ERROR_THRESHOLD consecutive failures.
- */
-export async function safeSendMessage(
-  platform: IWorkflowPlatform,
-  conversationId: string,
-  message: string,
-  context?: SendMessageContext,
-  metadata?: WorkflowMessageMetadata,
-  unknownErrorTracker?: UnknownErrorTracker
-): Promise<boolean> {
-  try {
-    await platform.sendMessage(conversationId, message, metadata);
-    if (unknownErrorTracker) unknownErrorTracker.count = 0;
-    return true;
-  } catch (error) {
-    const err = error as Error;
-    const errorType = classifyError(err);
-
-    getLog().error(
-      {
-        err,
-        conversationId,
-        messageLength: message.length,
-        errorType,
-        platformType: platform.getPlatformType(),
-        ...context,
-        stack: err.stack,
-      },
-      'platform_message_send_failed'
-    );
-
-    // Reset tracker on any non-UNKNOWN outcome — only *consecutive* UNKNOWN
-    // errors should trip the threshold (e.g. UNKNOWN→TRANSIENT→UNKNOWN→UNKNOWN
-    // is two separate runs, not three in a row).
-    if (unknownErrorTracker && errorType !== 'UNKNOWN') {
-      unknownErrorTracker.count = 0;
-    }
-
-    // Fatal errors should not be suppressed - they indicate configuration issues
-    if (errorType === 'FATAL') {
-      throw new Error(`Platform authentication/permission error: ${err.message}`);
-    }
-
-    // Track consecutive UNKNOWN errors - abort if threshold exceeded
-    if (errorType === 'UNKNOWN' && unknownErrorTracker) {
-      unknownErrorTracker.count++;
-      if (unknownErrorTracker.count >= UNKNOWN_ERROR_THRESHOLD) {
-        throw new Error(
-          `${String(UNKNOWN_ERROR_THRESHOLD)} consecutive unrecognized errors - aborting workflow: ${err.message}`
-        );
-      }
-    }
-
-    // Transient errors (and below-threshold unknown errors) suppressed to allow workflow to continue
-    return false;
-  }
 }

@@ -49,6 +49,8 @@ const mockEmitter = {
   registerRun: mock(() => {}),
   unregisterRun: mock(() => {}),
   emit: mock(() => {}),
+  // attachMetricsWriter() registers a subscriber; return a no-op unsubscribe.
+  subscribe: mock(() => (): void => {}),
 };
 mock.module('./event-emitter', () => ({
   getWorkflowEventEmitter: mock(() => mockEmitter),

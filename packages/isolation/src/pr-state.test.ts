@@ -45,6 +45,18 @@ function setupGhResponse(remoteUrl: string, ghStdout: string | Error): void {
   });
 }
 
+function setupGlabResponse(remoteUrl: string, glabStdout: string | Error): void {
+  mockExecFileAsync.mockReset();
+  mockExecFileAsync.mockImplementation((cmd: string, _args: string[]) => {
+    if (cmd === 'git') return Promise.resolve({ stdout: remoteUrl, stderr: '' });
+    if (cmd === 'glab') {
+      if (glabStdout instanceof Error) return Promise.reject(glabStdout);
+      return Promise.resolve({ stdout: glabStdout, stderr: '' });
+    }
+    return Promise.resolve({ stdout: '', stderr: '' });
+  });
+}
+
 describe('getPrState', () => {
   test('returns MERGED when gh reports MERGED', async () => {
     setupGhResponse('https://github.com/owner/repo.git', '[{"state":"MERGED"}]');
@@ -77,8 +89,8 @@ describe('getPrState', () => {
     expect(result).toBe('NONE');
   });
 
-  test('returns NONE for non-GitHub remote URL', async () => {
-    setupGhResponse('https://gitlab.com/owner/repo.git', '[{"state":"MERGED"}]');
+  test('returns NONE for unsupported remote URL (e.g. Bitbucket)', async () => {
+    setupGhResponse('https://bitbucket.org/owner/repo.git', '[{"state":"MERGED"}]');
     const result = await getPrState(BRANCH, REPO);
     expect(result).toBe('NONE');
   });
@@ -108,5 +120,70 @@ describe('getPrState', () => {
     setupGhResponse('https://github.com/owner/repo.git', 'error: not logged into github.com\n[]');
     const result = await getPrState(BRANCH, REPO);
     expect(result).toBe('NONE');
+  });
+});
+
+describe('getPrState — GitLab (glab)', () => {
+  beforeEach(() => {
+    mockLogger.warn.mockReset();
+    mockLogger.debug.mockReset();
+  });
+
+  test('returns MERGED when glab reports merged', async () => {
+    setupGlabResponse('https://gitlab.com/owner/repo.git', '[{"state":"merged"}]');
+    const result = await getPrState(BRANCH, REPO);
+    expect(result).toBe('MERGED');
+  });
+
+  test('returns OPEN when glab reports opened', async () => {
+    setupGlabResponse('https://gitlab.com/owner/repo.git', '[{"state":"opened"}]');
+    const result = await getPrState(BRANCH, REPO);
+    expect(result).toBe('OPEN');
+  });
+
+  test('returns CLOSED when glab reports closed', async () => {
+    setupGlabResponse('https://gitlab.com/owner/repo.git', '[{"state":"closed"}]');
+    const result = await getPrState(BRANCH, REPO);
+    expect(result).toBe('CLOSED');
+  });
+
+  test('returns NONE when glab returns empty array (no MR)', async () => {
+    setupGlabResponse('https://gitlab.com/owner/repo.git', '[]');
+    const result = await getPrState(BRANCH, REPO);
+    expect(result).toBe('NONE');
+  });
+
+  test('returns NONE when glab CLI is not installed (ENOENT)', async () => {
+    const enoent = Object.assign(new Error('spawn glab ENOENT'), { code: 'ENOENT' });
+    setupGlabResponse('https://gitlab.com/owner/repo.git', enoent);
+    const result = await getPrState(BRANCH, REPO);
+    expect(result).toBe('NONE');
+  });
+
+  test('returns NONE and warns on non-ENOENT glab error', async () => {
+    const authError = Object.assign(new Error('glab: authentication required'), {
+      code: 'ERR_CMD_FAILED',
+    });
+    setupGlabResponse('https://gitlab.com/owner/repo.git', authError);
+    const result = await getPrState(BRANCH, REPO);
+    expect(result).toBe('NONE');
+    expect(mockLogger.warn).toHaveBeenCalled();
+  });
+
+  test('works for self-hosted GitLab remote URLs', async () => {
+    setupGlabResponse('https://gitlab.mycompany.com/owner/repo.git', '[{"state":"merged"}]');
+    const result = await getPrState(BRANCH, REPO);
+    expect(result).toBe('MERGED');
+  });
+
+  test('uses cache for GitLab MR lookups', async () => {
+    setupGlabResponse('https://gitlab.com/owner/repo.git', '[{"state":"merged"}]');
+    const cache = new Map<string, PrState>();
+    const first = await getPrState(BRANCH, REPO, cache);
+    const callsAfterFirst = mockExecFileAsync.mock.calls.length;
+    const second = await getPrState(BRANCH, REPO, cache);
+    expect(first).toBe('MERGED');
+    expect(second).toBe('MERGED');
+    expect(mockExecFileAsync.mock.calls.length).toBe(callsAfterFirst);
   });
 });
