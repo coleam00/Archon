@@ -389,14 +389,11 @@ export async function dispatchBackgroundWorkflow(
           workflow,
           ctx.originalMessage,
           workerConv.id,
-          {
-            codebaseId: ctx.codebaseId,
-            issueContext: ctx.issueContext,
-            isolationContext,
-            parentConversationId: ctx.conversationDbId,
-            preCreatedRun,
-            userId: ctx.userId,
-          }
+          ctx.codebaseId,
+          ctx.issueContext,
+          isolationContext,
+          ctx.conversationDbId, // parentConversationId
+          preCreatedRun
         );
         // Surface workflow output to parent conversation as a result card
         if ('paused' in result) {

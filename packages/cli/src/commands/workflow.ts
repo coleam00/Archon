@@ -15,7 +15,7 @@ import { join } from 'node:path';
 import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { resolveWorkflowName } from '@archon/workflows/router';
-import { executeWorkflow, hydrateResumableRun } from '@archon/workflows/executor';
+import { executeWorkflow } from '@archon/workflows/executor';
 import {
   getWorkflowEventEmitter,
   type WorkflowEmitterEvent,
@@ -756,38 +756,16 @@ export async function workflowRunCommand(
     );
   }
 
-  // When --resume, hand the already-found run (and its completed-node outputs)
-  // to executeWorkflow. Otherwise this is a fresh run and prepared stays null.
+  // When --resume, pass the resumable run directly to executeWorkflow.
+  // Hydration is handled internally by the executor.
   // The lookup-by-(workflowName, cwd) was already done above for worktree-path
   // resolution; reuse that result rather than querying twice.
   const deps = createWorkflowDeps();
-  let prepared: Awaited<ReturnType<typeof hydrateResumableRun>> = null;
-  if (options.resume && resumable) {
-    try {
-      prepared = await hydrateResumableRun(deps, resumable);
-    } catch (error) {
-      const err = error as Error;
-      getLog().error(
-        { err, workflowName, runId: resumable.id },
-        'cli.workflow_hydrate_resume_failed'
-      );
-      throw new Error(
-        `Cannot resume workflow '${workflowName}': failed to load prior run state — ${err.message}`
-      );
-    }
-    if (!prepared) {
-      throw new Error(
-        `Cannot resume: the prior run for '${workflowName}' has no completed nodes and no interactive-loop state.`
-      );
-    }
-  }
+  const preCreatedRun = options.resume && resumable ? resumable : undefined;
 
   // Execute workflow with workingCwd (may be worktree path)
   let result: Awaited<ReturnType<typeof executeWorkflow>>;
   try {
-    const opts = prepared
-      ? { codebaseId: codebase?.id, ...prepared }
-      : { codebaseId: codebase?.id };
     result = await executeWorkflow(
       deps,
       adapter,
@@ -796,7 +774,11 @@ export async function workflowRunCommand(
       workflow,
       userMessage,
       conversation.id,
-      opts
+      codebase?.id,
+      undefined, // issueContext
+      undefined, // isolationContext
+      undefined, // parentConversationId
+      preCreatedRun // preCreatedRun
     );
   } finally {
     unsubscribe?.();

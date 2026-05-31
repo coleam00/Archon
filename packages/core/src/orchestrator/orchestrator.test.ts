@@ -1093,8 +1093,7 @@ describe('orchestrator-agent handleMessage', () => {
 
       await handleMessage(platform, 'chat-456', 'do that analysis thing');
 
-      // userMessage (position 5) carries the synthesized prompt; the opts bag
-      // (trailing arg) carries parentConversationId for approve/reject resume.
+      // userMessage (position 5) carries the synthesized prompt
       expect(mockExecuteWorkflow).toHaveBeenCalledWith(
         expect.anything(), // deps
         expect.anything(), // platform
@@ -1103,9 +1102,10 @@ describe('orchestrator-agent handleMessage', () => {
         expect.anything(), // workflow
         synthesized, // synthesizedPrompt, not original message
         expect.anything(), // conversation.id
-        expect.objectContaining({
-          parentConversationId: expect.anything() as unknown, // web approval auto-resume
-        })
+        expect.anything(), // codebaseId
+        undefined, // issueContext
+        undefined, // isolationContext
+        expect.anything() // parentConversationId for web approval auto-resume
       );
     });
 
@@ -1130,9 +1130,10 @@ describe('orchestrator-agent handleMessage', () => {
         expect.anything(), // workflow
         'fix the login bug', // original message used as fallback
         expect.anything(), // conversation.id
-        expect.objectContaining({
-          parentConversationId: expect.anything() as unknown, // web approval auto-resume
-        })
+        expect.anything(), // codebaseId
+        undefined, // issueContext
+        undefined, // isolationContext
+        expect.anything() // parentConversationId for web approval auto-resume
       );
     });
 
