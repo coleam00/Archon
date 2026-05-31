@@ -22,10 +22,12 @@ import * as resolver from './binary-resolver';
 
 describe('resolveCodexBinaryPath (binary mode)', () => {
   const originalEnv = process.env.CODEX_BIN_PATH;
+  const originalPath = process.env.PATH;
   let fileExistsSpy: ReturnType<typeof spyOn>;
 
   beforeEach(() => {
     delete process.env.CODEX_BIN_PATH;
+    process.env.PATH = originalPath;
     fileExistsSpy?.mockRestore();
     mockLogger.info.mockClear();
   });
@@ -35,6 +37,11 @@ describe('resolveCodexBinaryPath (binary mode)', () => {
       process.env.CODEX_BIN_PATH = originalEnv;
     } else {
       delete process.env.CODEX_BIN_PATH;
+    }
+    if (originalPath !== undefined) {
+      process.env.PATH = originalPath;
+    } else {
+      delete process.env.PATH;
     }
     fileExistsSpy?.mockRestore();
   });
@@ -100,6 +107,21 @@ describe('resolveCodexBinaryPath (binary mode)', () => {
     expect(result).toBe(expected);
     expect(mockLogger.info).toHaveBeenCalledWith(
       { binaryPath: expected, source: 'autodetect' },
+      'codex.binary_resolved'
+    );
+  });
+
+  test('autodetects codex on PATH before canonical install paths', async () => {
+    if (process.platform === 'win32') return; // POSIX-only path shape
+    process.env.PATH = '/usr/bin:/custom/bin';
+    fileExistsSpy = spyOn(resolver, 'fileExists').mockImplementation(
+      (path: string) => path === '/usr/bin/codex'
+    );
+
+    const result = await resolver.resolveCodexBinaryPath();
+    expect(result).toBe('/usr/bin/codex');
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      { binaryPath: '/usr/bin/codex', source: 'autodetect' },
       'codex.binary_resolved'
     );
   });

@@ -9,7 +9,7 @@
  * 1. `CODEX_BIN_PATH` environment variable
  * 2. `assistants.codex.codexBinaryPath` in config
  * 3. `~/.archon/vendor/codex/<platform-binary>` (user-placed)
- * 4. Autodetect canonical install paths (npm prefix defaults per platform)
+ * 4. Autodetect PATH and canonical install paths (npm prefix defaults per platform)
  * 5. Throw with install instructions
  *
  * In dev mode (BUNDLED_IS_BINARY=false), returns undefined so the SDK
@@ -17,7 +17,7 @@
  */
 import { existsSync as _existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { BUNDLED_IS_BINARY, getArchonHome, createLogger } from '@archon/paths';
 
 /** Wrapper for existsSync — enables spyOn in tests (direct imports can't be spied on). */
@@ -99,10 +99,10 @@ export async function resolveCodexBinaryPath(
     }
   }
 
-  // 4. Autodetect — probe the handful of paths Codex typically lands at
-  // when installed via the documented package managers. Users who install
-  // somewhere else (custom npm prefix, etc.) still set one of the higher-
-  // priority sources above. Order: most specific → least specific.
+  // 4. Autodetect — first honor PATH, then probe the handful of paths Codex
+  // typically lands at when installed via the documented package managers.
+  // Users who install somewhere else can still set one of the higher-priority
+  // sources above. Order: most specific → least specific.
   const autodetectPaths = getAutodetectPaths();
   for (const probePath of autodetectPaths) {
     if (fileExists(probePath)) {
@@ -144,14 +144,14 @@ export async function resolveCodexBinaryPath(
  *  - `%AppData%\npm\codex.cmd` — Windows npm global default
  *
  * Not covered (explicit override required via CODEX_BIN_PATH or config):
- *   - users with other custom npm prefixes — `npm root -g` would spawn
- *     a subprocess per resolve, too heavy for a probe helper
+ *   - users with custom npm prefixes that are not on PATH — `npm root -g`
+ *     would spawn a subprocess per resolve, too heavy for a probe helper
  *   - Homebrew cask install (`brew install --cask codex`) — cask layout
  *     isn't a PATH binary; users should symlink or set the path
  *   - manual GitHub Releases extract — placement is user-determined
  */
 function getAutodetectPaths(): string[] {
-  const paths: string[] = [];
+  const paths: string[] = getPathCandidates();
 
   if (process.platform === 'win32') {
     const appData = process.env.APPDATA;
@@ -170,4 +170,20 @@ function getAutodetectPaths(): string[] {
   paths.push('/usr/local/bin/codex');
 
   return paths;
+}
+
+function getPathCandidates(): string[] {
+  const pathEnv = process.env.PATH;
+  if (!pathEnv) return [];
+
+  const names = process.platform === 'win32' ? ['codex.cmd', 'codex.exe', 'codex.bat'] : ['codex'];
+
+  const candidates: string[] = [];
+  for (const dir of pathEnv.split(delimiter)) {
+    if (!dir) continue;
+    for (const name of names) {
+      candidates.push(join(dir, name));
+    }
+  }
+  return candidates;
 }
