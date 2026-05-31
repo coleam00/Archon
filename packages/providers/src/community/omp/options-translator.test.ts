@@ -16,6 +16,11 @@ describe('resolveOmpThinkingLevel', () => {
     expect(resolveOmpThinkingLevel({ effort: 'low', thinking: 'high' }).level).toBe('high');
   });
 
+  test('passes through OMP auto thinking selector', () => {
+    expect(resolveOmpThinkingLevel({ effort: 'auto' }).level).toBe('auto');
+    expect(resolveOmpThinkingLevel({ effort: 'low', thinking: 'auto' }).level).toBe('auto');
+  });
+
   test('warns on unsupported object thinking', () => {
     const result = resolveOmpThinkingLevel({ thinking: { type: 'enabled' } });
     expect(result.level).toBeUndefined();
@@ -32,6 +37,13 @@ describe('resolveOmpToolNames', () => {
     expect(resolveOmpToolNames({ allowed_tools: ['eval', 'search', 'read', 'job'] })).toEqual({
       toolNames: ['eval', 'search', 'read', 'job'],
       unknownTools: [],
+    });
+  });
+
+  test('reports tools removed from current OMP SDK', () => {
+    expect(resolveOmpToolNames({ allowed_tools: ['read', 'calc', 'recipe'] })).toEqual({
+      toolNames: ['read'],
+      unknownTools: ['calc', 'recipe'],
     });
   });
 
@@ -192,6 +204,15 @@ describe('getRuntimeAuthOverride', () => {
     );
     expect(getRuntimeAuthOverride('qwen-portal', { QWEN_PORTAL_API_KEY: 'qwen-key' })).toBe(
       'qwen-key'
+    );
+    expect(getRuntimeAuthOverride('xai-oauth', { XAI_OAUTH_TOKEN: 'xai-oauth-token' })).toBe(
+      'xai-oauth-token'
+    );
+    expect(getRuntimeAuthOverride('wafer-pass', { WAFER_PASS_API_KEY: 'wafer-key' })).toBe(
+      'wafer-key'
+    );
+    expect(getRuntimeAuthOverride('zhipu-coding-plan', { ZHIPU_API_KEY: 'zhipu-key' })).toBe(
+      'zhipu-key'
     );
   });
 

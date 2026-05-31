@@ -3,11 +3,12 @@ import type { OmpCodingAgentSdk } from './sdk-loader';
 import type { NodeConfig } from '../../types';
 import type { OmpProviderDefaults } from './config';
 
-export type OmpThinkingLevel = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+export type OmpThinkingLevel = 'auto' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
 type OmpSkill = Awaited<ReturnType<OmpCodingAgentSdk['discoverSkills']>>['skills'][number];
 
 const OMP_NATIVE_LEVELS: ReadonlySet<OmpThinkingLevel> = new Set<OmpThinkingLevel>([
+  'auto',
   'minimal',
   'low',
   'medium',
@@ -21,7 +22,6 @@ export const DEFAULT_OMP_TOOL_NAMES = [
   'ask',
   'bash',
   'eval',
-  'calc',
   'ssh',
   'edit',
   'find',
@@ -48,7 +48,6 @@ const KNOWN_OMP_TOOL_NAMES = new Set<string>([
   'github',
   'checkpoint',
   'rewind',
-  'recipe',
   'irc',
   'yield',
   'resolve',
@@ -69,7 +68,7 @@ const LEGACY_OMP_TOOL_ALIASES: Record<string, string> = {
   fetch: 'read',
 };
 
-// Mirrors @oh-my-pi/pi-ai@15.3.2 stream.ts serviceProviderMap for providers
+// Mirrors @oh-my-pi/pi-ai@15.7.2 stream.ts serviceProviderMap for providers
 // whose credentials can be represented as environment variables.
 const OMP_PROVIDER_ENV_VARS: Record<string, readonly string[]> = {
   'alibaba-coding-plan': ['ALIBABA_CODING_PLAN_API_KEY'],
@@ -119,10 +118,14 @@ const OMP_PROVIDER_ENV_VARS: Record<string, readonly string[]> = {
   'vercel-ai-gateway': ['AI_GATEWAY_API_KEY'],
   venice: ['VENICE_API_KEY'],
   vllm: ['VLLM_API_KEY'],
+  'wafer-pass': ['WAFER_PASS_API_KEY'],
+  'wafer-serverless': ['WAFER_SERVERLESS_API_KEY'],
   xai: ['XAI_API_KEY'],
+  'xai-oauth': ['XAI_OAUTH_TOKEN', 'XAI_API_KEY'],
   xiaomi: ['XIAOMI_API_KEY'],
   zai: ['ZAI_API_KEY'],
   zenmux: ['ZENMUX_API_KEY'],
+  'zhipu-coding-plan': ['ZHIPU_API_KEY'],
 };
 
 export interface ResolvedThinkingLevel {
@@ -136,16 +139,15 @@ function normalizeToThinkingLevel(value: unknown): OmpThinkingLevel | undefined 
   if (OMP_NATIVE_LEVELS.has(value as OmpThinkingLevel)) return value as OmpThinkingLevel;
   return undefined;
 }
-
 function unknownThinkingWarning(thinking: unknown, effort: unknown): string | undefined {
   if (thinking !== undefined && thinking !== null && typeof thinking === 'object') {
-    return 'Oh My Pi ignored `thinking` (object form is Claude-specific). Use `effort: low|medium|high|max` in YAML.';
+    return 'Oh My Pi ignored `thinking` (object form is Claude-specific). Use a string thinking/effort value: auto|low|medium|high|max.';
   }
 
   const offender =
     typeof thinking === 'string' ? thinking : typeof effort === 'string' ? effort : undefined;
   if (offender === undefined) return undefined;
-  return `Oh My Pi ignored unknown thinking level '${offender}'. Valid: minimal, low, medium, high, xhigh, max, off.`;
+  return `Oh My Pi ignored unknown thinking level '${offender}'. Valid: auto, minimal, low, medium, high, xhigh, max, off.`;
 }
 
 export function resolveOmpThinkingLevel(nodeConfig?: NodeConfig): ResolvedThinkingLevel {
