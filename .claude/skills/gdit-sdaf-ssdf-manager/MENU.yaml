@@ -1,0 +1,117 @@
+---
+skill_name: ssdf-manager
+menu_version: "2.0"
+description: SSDF pipeline finding override management with AI review (Python 3.12+)
+python_version: ">=3.12"
+
+workflows:
+  - id: select-profile
+    label: "⚙️ Select AWS Profile & Pipeline"
+    description: "Set AWS CLI profile and discover target pipeline instance"
+    script: scripts/select-profile.py
+    interactive: true
+
+  - id: scan-report
+    label: "📊 Scan Report"
+    description: "Paginated findings with override status, detail view, AI review, source download"
+    instructions: |
+      Run the consolidated scan report with rich terminal output:
+
+      python3 scripts/scan-report.py
+
+      The script:
+      1. Lists scan runs, user selects one
+      2. Downloads source ZIP to temp/ for AI analysis (auto-cleanup on exit)
+      3. Loads all scanner reports and overrides from S3
+      4. Displays paginated table with color-coded severity and override status
+
+      Interactive commands in the paginated view:
+        n / p     — next / previous page
+        d N       — detail view for finding N (full rule, file, line, source context)
+        a N       — AI review: show finding detail, then AI analyzes source and recommends classification
+        o N,N     — select findings for override (outputs JSON for manage-overrides.py)
+        q         — quit
+
+      AI Review workflow (when user selects 'a N'):
+      1. Script shows finding detail with source code context
+      2. AI reads the source file from temp/source/ at the flagged line
+      3. AI reads .ssdf-context.json for architecture and compensating controls
+      4. AI recommends: false_positive, accepted_risk, or needs_remediation
+      5. AI provides draft justification text
+      6. Manager accepts, edits, or rejects
+      7. On accept, pipe finding to manage-overrides.py add
+
+      After first source download, run generate-context.py to create project context:
+      python3 scripts/generate-context.py --source-dir temp/source/
+
+      Options: --page-size N (default 25), --no-cleanup (keep temp/), --select "1,3" (non-interactive)
+    parameters:
+      - name: profile
+        required: false
+        prompt: "AWS Profile (or use session default)"
+
+  - id: manage-overrides
+    label: "📋 Manage Overrides"
+    description: "CRUD operations on finding-overrides.json with Security Hub suppression"
+    instructions: |
+      Manage the finding-overrides.json file in S3.
+
+      Subcommands:
+        list    — Display current overrides with expiration status
+        add     — Add new overrides from staged findings (stdin JSON)
+        update  — Modify an existing override by index
+        remove  — Delete an override by index
+
+      Examples:
+        python3 scripts/manage-overrides.py list
+        python3 scripts/scan-report.py --select '1,3' | python3 scripts/manage-overrides.py add
+        python3 scripts/manage-overrides.py update --index 3
+        python3 scripts/manage-overrides.py remove --index 1
+
+      All write operations:
+      - Prompt for confirmation before writing
+      - Suppress matching findings in Security Hub
+      - Log structured audit event to CloudWatch
+      - Support --dry-run to preview without writing
+    parameters:
+      - name: profile
+        required: false
+        prompt: "AWS Profile (or use session default)"
+      - name: subcommand
+        required: true
+        prompt: "Operation: list, add, update, or remove"
+
+  - id: view-changelog
+    label: "📜 View Change Log"
+    description: "Query CloudWatch audit log for override change history"
+    instructions: |
+      Query the CloudWatch Logs Insights audit trail for override changes.
+
+      python3 scripts/view-changelog.py
+
+      Shows: timestamp, event_type, tool, rule, file, disposition, approved_by.
+      Use --days N to control query window (default: 30 days).
+    parameters:
+      - name: profile
+        required: false
+        prompt: "AWS Profile (or use session default)"
+      - name: days
+        required: false
+        prompt: "Number of days to query (default: 30)"
+
+# AI Usage Instructions:
+# When user says "load ssdf-manager skill":
+# 1. Present 4 workflows as numbered menu
+# 2. Workflow 1 (select-profile) must run first to establish pipeline context
+# 3. Workflow 2 (scan-report) is the primary flow — browse, review, AI analyze, override
+# 4. Workflow 3 (manage-overrides) is standalone CRUD
+# 5. Workflow 4 (view-changelog) is read-only audit query
+#
+# AI Review flow (within scan-report):
+# When user selects 'a N', the script outputs finding detail.
+# The AI then:
+# 1. Reads temp/source/{file} at the flagged line (use file-reading tools)
+# 2. Reads ~/.kiro/skills/ssdf-manager/.ssdf-context.json for architecture context
+# 3. Analyzes whether the finding is false_positive, accepted_risk, or needs_remediation
+# 4. Presents recommendation with evidence and draft justification
+# 5. Manager accepts/edits/rejects before writing override

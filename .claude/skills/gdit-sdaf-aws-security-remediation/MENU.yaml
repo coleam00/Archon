@@ -1,0 +1,152 @@
+---
+# Skill Menu Manifest
+# All scripts use Python 3.12+ with PEP 723 inline metadata
+
+skill_name: aws-security-remediation
+menu_version: "2.0"
+description: Security compliance automation and remediation (Python 3.12+)
+python_version: ">=3.12"
+
+workflows:
+  - id: select-profile
+    label: "⚙️ Select AWS Profile"
+    description: "Set AWS CLI profile for security operations"
+    script: scripts/select-aws-profile.py
+    interactive: true
+
+  - id: select-scope
+    label: "🔍 Select Finding Scope"
+    description: "Choose which finding sources to analyze: All, AWS Services, Pipelines, or specific source"
+    instructions: |
+      Discover finding sources and select scope:
+
+      python3 scripts/discover-and-report.py --profile $PROFILE discover
+
+      This shows all active finding sources classified as AWS Service, Pipeline, or Integration.
+      User selects a scope which persists for the session.
+
+      Scopes:
+      - all: All sources (no filter)
+      - aws: AWS service findings only (Inspector, Security Hub, Firewall Manager, etc.)
+      - pipelines: Custom pipeline findings only (grouped by pipeline ProductName)
+      - <ProductName>: Specific source by name (e.g., "HCOM Release Pipeline")
+    parameters:
+      - name: profile
+        required: true
+        prompt: "AWS Profile"
+
+  - id: analyze
+    label: "📊 Analyze Findings"
+    description: "Severity-grouped findings report with source sub-grouping"
+    instructions: |
+      Generate severity-first grouped report:
+
+      python3 scripts/discover-and-report.py --profile $PROFILE report --scope $SCOPE
+
+      Report groups findings: Severity (CRITICAL→HIGH→MEDIUM→LOW→INFORMATIONAL) → Source (ProductName) → Individual findings.
+      Default filter: NEW + NOTIFIED workflow status (excludes SUPPRESSED, RESOLVED).
+      Query AWS Security Hub for active findings:
+      
+      aws securityhub get-findings \
+        --filters '{"WorkflowStatus": [{"Value": "NEW", "Comparison": "EQUALS"}]}' \
+        --profile $PROFILE
+      
+      Or use the AI security orchestrator:
+      python3 scripts/ai-security-orchestrator.py --profile $PROFILE
+    parameters:
+      - name: profile
+        required: true
+        prompt: "AWS Profile"
+    
+  - id: remediate
+    label: "🔧 Bulk Remediation"
+    description: "Execute bulk remediation scripts"
+    submenu:
+      - id: iam-bulk
+        label: "IAM Policy Remediation"
+        script: scripts/iam/bulk-remediate-iam-policies.py
+        parameters:
+          - name: profile
+            required: true
+            prompt: "AWS Profile"
+            
+      - id: s3-versioning
+        label: "Enable S3 Versioning"
+        script: scripts/s3/enable-versioning.py
+        parameters:
+          - name: bucket
+            required: true
+            prompt: "Bucket name"
+          - name: profile
+            required: true
+            prompt: "AWS Profile"
+            
+      - id: config-enable
+        label: "Enable AWS Config"
+        script: scripts/config/enable-config.py
+        parameters:
+          - name: profile
+            required: true
+            prompt: "AWS Profile"
+    
+  - id: report
+    label: "📋 Compliance Report"
+    description: "Generate compliance status report"
+    instructions: |
+      Generate audit report with masked credentials:
+      
+      python3 scripts/generate-audit-report.py --profile $PROFILE
+      
+      Report will be saved to temp/ directory with:
+      - Findings summary by severity
+      - Access key audit (masked)
+      - Compliance status
+    parameters:
+      - name: profile
+        required: true
+        prompt: "AWS Profile"
+    
+  - id: validate
+    label: "✅ Validate Security"
+    description: "Validate security controls"
+    instructions: |
+      Validate remediation and update Security Hub:
+      
+      python3 scripts/validate-remediation.py --finding-id $FINDING_ID --profile $PROFILE
+      
+      This will:
+      1. Verify control compliance
+      2. Update Security Hub finding status
+      3. Generate validation evidence
+    parameters:
+      - name: finding_id
+        required: true
+        prompt: "Security Hub Finding ID"
+      - name: profile
+        required: true
+        prompt: "AWS Profile"
+
+# Quick access to common scripts
+quick_actions:
+  - id: audit-keys
+    label: "Audit IAM Access Keys"
+    script: scripts/iam/audit-access-keys.py
+    
+  - id: audit-mfa
+    label: "Audit MFA Status"
+    script: scripts/iam/audit-mfa-status.py
+    
+  - id: view-controls
+    label: "View AWS Controls"
+    reference: references/AWS-CONTROLS.md
+    
+  - id: view-compliance
+    label: "View Compliance Frameworks"
+    reference: references/COMPLIANCE-FRAMEWORKS.md
+
+# AI Usage Instructions:
+# When user says "load aws remediation skill":
+# 1. Present main workflows (select-profile, analyze, remediate, report, validate)
+# 2. When user selects workflow, show description and prompt for parameters
+# 3. Execute script or show instructions
+# 4. For remediate workflow, show submenu of specific remediations

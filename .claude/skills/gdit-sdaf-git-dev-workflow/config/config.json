@@ -1,0 +1,4 @@
+{
+  "default_branch": "main",
+  "sync_strategy": "rebase"
+}

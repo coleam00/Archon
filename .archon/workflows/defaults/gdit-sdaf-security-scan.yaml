@@ -1,0 +1,149 @@
+name: gdit-sdaf-security-scan
+description: |
+  Use when: Running a security scan sweep before committing or as a standalone audit.
+  Does: Runs gitleaks, semgrep, trivy, checkov on the project.
+        Writes .scan-manifest.json (required by opt-in pre-commit-check hook).
+  Output: Findings summary + .scan-manifest.json artifact.
+  Requires: gdit-sdaf-setup completed.
+
+nodes:
+  # Pre-run estimate (informational, runs in parallel)
+  - id: estimate
+    bash: |
+      set -euo pipefail
+      METRICS_DIR="$HOME/.archon/metrics"
+
+      if ! command -v jq &>/dev/null; then
+        exit 0
+      fi
+
+      JSONL_FILES=()
+      while IFS= read -r -d '' f; do
+        JSONL_FILES+=("$f")
+      done < <(find "$METRICS_DIR" -maxdepth 1 -name 'runs-*.jsonl' -print0 2>/dev/null | sort -z)
+
+      if [ ${#JSONL_FILES[@]} -eq 0 ]; then
+        exit 0
+      fi
+
+      FILTERED=$(cat "${JSONL_FILES[@]}" | jq -c --arg w "$WORKFLOW_NAME" 'select(.workflow == $w)')
+
+      if [ -z "$FILTERED" ]; then
+        exit 0
+      fi
+
+      RUN_COUNT=$(echo "$FILTERED" | wc -l | tr -d ' ')
+
+      echo "$FILTERED" | jq -sc --arg n "$RUN_COUNT" '
+        def percentile(arr; p):
+          (arr | sort) as $s | ($s | length) as $len |
+          if $len == 0 then null else $s[($len * p / 100 | floor | if . >= $len then $len - 1 else . end)] end;
+        . as $runs |
+        ($runs | length) as $count |
+        ($runs | map(select(.outcome == "success")) | length) as $ok |
+        ($runs | map(.wall_clock_ms | select(. != null))) as $clocks |
+        ($runs | map(.total_usd | select(. != null and . > 0))) as $costs |
+        {
+          workflow: $runs[0].workflow,
+          run_count: $count,
+          success_rate_pct: (if $count > 0 then ($ok / $count * 100 | round) else 0 end),
+          wall_clock_p50_ms: (percentile($clocks; 50)),
+          wall_clock_p90_ms: (percentile($clocks; 90)),
+          cost_p50_usd: (percentile($costs; 50)),
+          cost_p90_usd: (percentile($costs; 90))
+        }
+      '
+
+  - id: guard-setup
+    bash: |
+      ARCHON_HOME="${ARCHON_HOME:-$HOME/.archon}"
+      if [ ! -f "$ARCHON_HOME/scripts/gdit-sdaf/validate-spec.py" ]; then
+        echo "ERROR: GDIT scripts not found at $ARCHON_HOME/scripts/gdit-sdaf/."
+        echo "Run 'gdit-sdaf-setup' workflow first, then retry."
+        exit 1
+      fi
+
+      # Validate security scanner tools
+      MISSING_TOOLS=()
+      for tool in gitleaks semgrep trivy checkov; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+          MISSING_TOOLS+=("$tool")
+        fi
+      done
+
+      if [ ${#MISSING_TOOLS[@]} -gt 0 ]; then
+        echo "WARNING: Missing security scanners: ${MISSING_TOOLS[*]}"
+        echo "Scan results will be incomplete. Install missing tools:"
+        for tool in "${MISSING_TOOLS[@]}"; do
+          echo "  - $tool: See https://github.com/$tool or use pip/brew/apt"
+        done
+        echo ""
+        echo "Continuing with available scanners..."
+      fi
+
+      echo "GDIT setup verified."
+
+  - id: run-gitleaks
+    bash: |
+      set -uo pipefail
+      mkdir -p .security-scans
+      gitleaks detect --source . --report-format json \
+        --report-path .security-scans/gitleaks-report.json 2>&1 || true
+      SECRETS=$(python3 -c "import json; r=json.load(open('.security-scans/gitleaks-report.json')); print(len(r) if isinstance(r, list) else 0)" 2>/dev/null || echo "0")
+      echo "gitleaks: $SECRETS secrets found"
+      echo "$SECRETS" > .security-scans/gitleaks-count.txt
+    depends_on: [guard-setup]
+
+  - id: run-semgrep
+    bash: |
+      set -uo pipefail
+      mkdir -p .security-scans
+      semgrep --config auto --json --output .security-scans/semgrep-report.json . 2>/dev/null || true
+      FINDINGS=$(python3 -c "import json; r=json.load(open('.security-scans/semgrep-report.json')); print(len(r.get('results', [])))" 2>/dev/null || echo "0")
+      echo "semgrep: $FINDINGS findings"
+      echo "$FINDINGS" > .security-scans/semgrep-count.txt
+    depends_on: [guard-setup]
+
+  - id: run-trivy
+    bash: |
+      set -uo pipefail
+      mkdir -p .security-scans
+      trivy fs --format json --output .security-scans/trivy-report.json . 2>/dev/null || true
+      VULNS=$(python3 -c "import json; r=json.load(open('.security-scans/trivy-report.json')); print(sum(len(res.get('Vulnerabilities',[]) or []) for res in (r.get('Results') or [])))" 2>/dev/null || echo "0")
+      echo "trivy: $VULNS vulnerabilities found"
+      echo "$VULNS" > .security-scans/trivy-count.txt
+    depends_on: [guard-setup]
+
+  - id: run-checkov
+    bash: |
+      set -uo pipefail
+      mkdir -p .security-scans
+      IAC_FILES=$(find . \( -name "*.tf" -o -name "*.yaml" -o -name "*.yml" \) 2>/dev/null | grep -v ".git" | wc -l | tr -d ' ')
+      if [ "$IAC_FILES" -gt 0 ]; then
+        checkov -d . --output json --output-file-path .security-scans/ 2>/dev/null || true
+        echo "checkov: scanned $IAC_FILES IaC files"
+      else
+        echo "checkov: no IaC files found, skipping"
+      fi
+    depends_on: [guard-setup]
+
+  - id: write-manifest
+    bash: |
+      set -euo pipefail
+      GITLEAKS=$(cat .security-scans/gitleaks-count.txt 2>/dev/null || echo "0")
+      SEMGREP=$(cat .security-scans/semgrep-count.txt 2>/dev/null || echo "0")
+      TRIVY=$(cat .security-scans/trivy-count.txt 2>/dev/null || echo "0")
+      python3 -c "import json,datetime; m={'timestamp':datetime.datetime.now(datetime.timezone.utc).isoformat(),'scanners':{'gitleaks':{'findings':int('$GITLEAKS')},'semgrep':{'findings':int('$SEMGREP')},'trivy':{'findings':int('$TRIVY')}}}; json.dump(m,open('.scan-manifest.json','w'),indent=2); print('.scan-manifest.json written')"
+    depends_on: [run-gitleaks, run-semgrep, run-trivy, run-checkov]
+    trigger_rule: all_done
+
+  - id: report
+    prompt: |
+      Read the scanner output files in `.security-scans/` and `.scan-manifest.json`.
+      Generate a concise security scan summary with:
+      - Overall pass/fail status (fail = any secrets found OR CRITICAL/HIGH severity vulns)
+      - Per-scanner finding counts
+      - Top 3 most important findings to fix (if any)
+      - Evidence string suitable for a git commit `Evidence:` field
+    depends_on: [write-manifest]
+    fresh_context: true

@@ -1,0 +1,210 @@
+name: gdit-sdaf-plan-to-pr
+description: |
+  Use when: You have an existing GDIT spec (.kiro/specs/<feature>/) OR an Archon plan.md.
+  Input: Path to GDIT spec directory OR path to plan.md
+  Output: PR with compliance-tagged commits, security scan evidence, full review
+
+  Full workflow:
+  1. Verify GDIT setup (guard node)
+  2. Detect input type: GDIT spec dir vs Archon plan.md
+  3. If GDIT spec: validate spec with validate-spec.py
+  4. Plan setup (branch)
+  5. Implement with GDIT protocol + Archon validation loops
+  6. Security scan + Archon validation
+  7. Compliance-tagged git checkpoint
+  8. Finalize PR
+  9. 6-agent parallel review
+  10. Synthesize and fix
+
+  NOT for: Creating specs from scratch (use gdit-sdaf-idea-to-pr).
+provider: claude
+model: sonnet
+
+nodes:
+  # Pre-run estimate (informational, runs in parallel)
+  - id: estimate
+    bash: |
+      set -euo pipefail
+      METRICS_DIR="$HOME/.archon/metrics"
+
+      if ! command -v jq &>/dev/null; then
+        exit 0
+      fi
+
+      JSONL_FILES=()
+      while IFS= read -r -d '' f; do
+        JSONL_FILES+=("$f")
+      done < <(find "$METRICS_DIR" -maxdepth 1 -name 'runs-*.jsonl' -print0 2>/dev/null | sort -z)
+
+      if [ ${#JSONL_FILES[@]} -eq 0 ]; then
+        exit 0
+      fi
+
+      FILTERED=$(cat "${JSONL_FILES[@]}" | jq -c --arg w "$WORKFLOW_NAME" 'select(.workflow == $w)')
+
+      if [ -z "$FILTERED" ]; then
+        exit 0
+      fi
+
+      RUN_COUNT=$(echo "$FILTERED" | wc -l | tr -d ' ')
+
+      echo "$FILTERED" | jq -sc --arg n "$RUN_COUNT" '
+        def percentile(arr; p):
+          (arr | sort) as $s | ($s | length) as $len |
+          if $len == 0 then null else $s[($len * p / 100 | floor | if . >= $len then $len - 1 else . end)] end;
+        . as $runs |
+        ($runs | length) as $count |
+        ($runs | map(select(.outcome == "success")) | length) as $ok |
+        ($runs | map(.wall_clock_ms | select(. != null))) as $clocks |
+        ($runs | map(.total_usd | select(. != null and . > 0))) as $costs |
+        {
+          workflow: $runs[0].workflow,
+          run_count: $count,
+          success_rate_pct: (if $count > 0 then ($ok / $count * 100 | round) else 0 end),
+          wall_clock_p50_ms: (percentile($clocks; 50)),
+          wall_clock_p90_ms: (percentile($clocks; 90)),
+          cost_p50_usd: (percentile($costs; 50)),
+          cost_p90_usd: (percentile($costs; 90))
+        }
+      '
+
+  - id: guard-setup
+    bash: |
+      ARCHON_HOME="${ARCHON_HOME:-$HOME/.archon}"
+      if [ ! -f "$ARCHON_HOME/scripts/gdit-sdaf/validate-spec.py" ]; then
+        echo "ERROR: GDIT scripts not found at $ARCHON_HOME/scripts/gdit-sdaf/."
+        echo "Run 'gdit-sdaf-setup' workflow first, then retry."
+        exit 1
+      fi
+      echo "GDIT setup verified."
+
+  - id: detect-input
+    prompt: |
+      Determine the input type from: $ARGUMENTS
+
+      Rules:
+      - If $ARGUMENTS points to a directory containing tasks.md → output exactly: gdit-spec
+      - If $ARGUMENTS points to a .md file containing "## Tasks" or "## Step-by-Step Tasks" → output exactly: archon-plan
+      - If $ARGUMENTS is empty → check $ARTIFACTS_DIR/plan.md; if found, output: archon-plan
+      - If nothing matches → output: unknown
+
+      Output ONLY one of: gdit-spec OR archon-plan OR unknown
+    depends_on: [guard-setup]
+    context: fresh
+
+  - id: validate-spec
+    command: gdit-sdaf-spec-validate
+    depends_on: [detect-input]
+    context: fresh
+    when: "$detect-input.output == 'gdit-spec'"
+
+  - id: plan-setup
+    command: archon-plan-setup
+    depends_on: [validate-spec, detect-input]
+    trigger_rule: one_success
+    context: fresh
+
+  - id: implement-tasks
+    command: gdit-sdaf-implement
+    depends_on: [plan-setup]
+    context: fresh
+    model: opus
+
+  - id: security-scan
+    command: gdit-sdaf-validate
+    depends_on: [implement-tasks]
+    context: fresh
+
+  - id: checkpoint
+    command: gdit-sdaf-checkpoint
+    depends_on: [security-scan]
+    context: fresh
+
+  - id: finalize-pr
+    command: archon-finalize-pr
+    depends_on: [checkpoint]
+    context: fresh
+
+  - id: verify-pr-base
+    bash: |
+      set -euo pipefail
+      EXPECTED="$BASE_BRANCH"
+      BRANCH=$(git branch --show-current)
+      if [ "$FORGE_PROVIDER" = "gitlab" ]; then
+        MR_DATA=$(glab mr list --source-branch "$BRANCH" --output json --limit 1 2>/dev/null || echo "[]")
+        ACTUAL=$(echo "$MR_DATA" | jq -r '.[0].target_branch // empty')
+        if [ -n "$ACTUAL" ] && [ "$ACTUAL" != "$EXPECTED" ]; then
+          MR_IID=$(echo "$MR_DATA" | jq -r '.[0].iid')
+          echo "Base mismatch on MR !$MR_IID: expected=$EXPECTED actual=$ACTUAL — re-targeting" >&2
+          glab mr update "$MR_IID" --target-branch "$EXPECTED"
+        else
+          echo "MR base verified: ${ACTUAL:-$EXPECTED}"
+        fi
+      else
+        ACTUAL=$(gh pr view --json baseRefName -q '.baseRefName' 2>/dev/null || echo "")
+        if [ -n "$ACTUAL" ] && [ "$ACTUAL" != "$EXPECTED" ]; then
+          PR_NUMBER=$(gh pr view --json number -q '.number')
+          echo "Base mismatch on PR #$PR_NUMBER: expected=$EXPECTED actual=$ACTUAL — re-targeting" >&2
+          gh pr edit "$PR_NUMBER" --base "$EXPECTED"
+        else
+          echo "PR base verified: ${ACTUAL:-$EXPECTED}"
+        fi
+      fi
+    depends_on: [finalize-pr]
+
+  - id: review-scope
+    command: archon-pr-review-scope
+    depends_on: [verify-pr-base]
+    context: fresh
+
+  - id: sync
+    command: archon-sync-pr-with-main
+    depends_on: [review-scope]
+    context: fresh
+
+  - id: code-review
+    command: archon-code-review-agent
+    depends_on: [sync]
+    context: fresh
+
+  - id: error-handling
+    command: archon-error-handling-agent
+    depends_on: [sync]
+    context: fresh
+
+  - id: test-coverage
+    command: archon-test-coverage-agent
+    depends_on: [sync]
+    context: fresh
+
+  - id: comment-quality
+    command: archon-comment-quality-agent
+    depends_on: [sync]
+    context: fresh
+
+  - id: docs-impact
+    command: archon-docs-impact-agent
+    depends_on: [sync]
+    context: fresh
+
+  - id: gdit-audit
+    command: gdit-sdaf-audit
+    depends_on: [sync]
+    context: fresh
+
+  - id: synthesize
+    command: archon-synthesize-review
+    depends_on:
+      [code-review, error-handling, test-coverage, comment-quality, docs-impact, gdit-audit]
+    trigger_rule: one_success
+    context: fresh
+
+  - id: implement-fixes
+    command: archon-implement-review-fixes
+    depends_on: [synthesize]
+    context: fresh
+
+  - id: workflow-summary
+    command: archon-workflow-summary
+    depends_on: [implement-fixes]
+    context: fresh

@@ -1,0 +1,501 @@
+name: Getting Started
+description: Interactive onboarding for the GDIT Spec-Driven AI Framework
+version: "2.1"
+
+steps:
+  - id: overview
+    title: "1. Framework Overview & End-to-End Walkthrough"
+    variations:
+      - label: Concise
+        prompt: |
+          Walk me through the GDIT Spec-Driven AI Framework end-to-end. Use a "user-greeting"
+          example to show all 7 workflow stages, the ~/.kiro/ architecture, and
+          where the GDIT framework fits with SAFe.
+      - label: Minimal
+        prompt: |
+          Explain the GDIT framework — architecture, workflow stages, and measured results.
+          Use a "user-greeting" example.
+    prompt: |
+      Give me a concise overview of the GDIT Spec-Driven AI Framework, then walk me through
+      the COMPLETE end-to-end workflow for a single feature using a concrete example.
+
+      First, explain the architecture — the framework lives in ~/.kiro/:
+      - agents/ — Agent configs that define AI identity and behavior
+      - steering/ — Standards files (security, naming, workflow, IaC, etc.) that act as guardrails
+      - hooks/ — Automated validators that fire on file events (IDE only; CLI runs them manually)
+      - skills/ — Pluggable workflow modules with interactive menus
+      - config/ — Tool-specific configs (e.g., CloudFormation Guard rules) and project.yaml for per-project settings
+
+      Then explain that the framework's OUTPUT lives in each project's .kiro/ directory:
+      - .kiro/config/project.yaml — per-project settings (testing strategy, etc.), created
+        automatically on first use — the agent asks you to choose settings in conversation
+      - .kiro/specs/ — feature specifications generated through the workflow
+      The AI creates these through conversation with you. They're artifacts, not part of
+      the framework itself.
+
+      Then walk through the full Kiro workflow for a feature called "user-greeting"
+      as a narrative — don't create any files yet, just describe each stage and make clear
+      the interaction model: the USER describes what they want in plain language, the AI
+      generates the spec files with proper structure and common/expected acceptance criteria,
+      and the user reviews and iterates — either by continuing the conversation with the AI
+      ("add a timeout requirement", "change the fallback behavior") or by editing the files
+      directly. Both approaches work; conversation with the AI is the primary path.
+
+      Before Stage 1, explain that the agent first checks for .kiro/config/project.yaml.
+      If missing, it creates the file and asks the user to choose settings:
+      - Testing strategy (off, test-after, test-driven)
+      - Language settings (version, linter, type-checker) when a lang-*.md steering file is loaded
+      - Security scanner selection (which scanners the agent runs)
+      - Value tracking toggle (effort tables in tasks.md)
+      - FinOps enforcement (finops.enabled, default: true) — requires Cost Profile
+        and cost correctness properties in designs that include infrastructure
+      - Well-Architected assessment (well-architected.enabled, default: true) —
+        requires WAF six-pillar assessment table in infrastructure designs and
+        runs cfn-guard WAF rules on IaC files
+      - Design system integration (design-system.enabled, default: false) —
+        opt-in for UI projects; reads DESIGN.md tokens and enforces them in
+        generated frontend code
+      This determines how the workflow behaves for this project.
+
+      After project configuration, the agent auto-indexes project directories into
+      searchable knowledge bases (using kiro-cli's `knowledge` tool). This enables
+      semantic search over specs, source code, infrastructure templates, and docs
+      without loading entire files into context. The agent searches relevant KBs
+      before generating code that references infrastructure, APIs, or shared utilities.
+
+      Stage 1: REQUIREMENTS — User describes the feature in plain language. AI generates
+        requirements.md with user stories and acceptance criteria (including common/expected
+        criteria the developer might not think to list). User reviews and refines through
+        conversation or direct edits.
+      Stage 2: DESIGN — AI reads the requirements and generates design.md with technical
+        approach, traceability to requirements, and correctness properties. User reviews
+        and iterates through conversation ("use a different pattern", "add error handling").
+      Stage 3: TASKS — AI reads requirements + design and generates tasks.md with
+        implementable steps, effort estimates, and traceability. User reviews and adjusts
+        estimates or task scope through conversation.
+      Stage 4: VALIDATE SPEC — AI runs the spec validator to check quality gates
+        (traceability, acceptance criteria, correctness properties). Must pass before proceeding.
+      Stage 5: TESTS — If testing is enabled (test-driven or test-after), AI generates
+        tests from acceptance criteria and correctness properties. Test-driven: tests
+        written here, expected to fail. Test-after: tests generated after implementation.
+      Stage 6: IMPLEMENT — AI discovers specs, generates protocol header, writes code
+        matching the task exactly, runs validation, creates git checkpoint,
+        runs steering compliance audit, assesses documentation impact.
+      Stage 7: VERIFY — AI runs `--verify` to produce a two-layer verification
+        (deterministic script + AI semantic analysis) confirming every acceptance
+        criterion and correctness property is implemented, generating VERIFICATION.md.
+
+      For each stage, show a short example of what the AI-generated output looks like
+      (a few lines, not full files). Explain how each stage feeds into the next and
+      how the user guides the process through conversation.
+
+      End with: "This is the flow you'll practice hands-on in steps 2-8."
+
+      Before moving to SAFe, share why this workflow exists — ground it in
+      measured results:
+      - Across 129 completed tasks in 7 projects, the spec-driven workflow
+        delivers 91.3% time savings compared to traditional manual development
+      - Without specs, roughly half of AI requests go toward correcting
+        misunderstandings. With specs, ~85% of requests advance the work.
+      - Without the GDIT framework, quality depends on the user remembering to enforce
+        standards. With the GDIT framework, standards are enforced automatically —
+        every session, every developer, every time.
+      - The total cost: a 2-minute one-time setup, a few seconds of script
+        execution per task, and writing specs before coding.
+      Keep this brief — 3-4 sentences, not a data dump. The point is motivation:
+      the workflow has overhead, and the overhead pays for itself immediately.
+
+      Finally, briefly explain where the GDIT framework fits for teams using SAFe:
+      - The GDIT framework operates at the Story and Task level of the SAFe hierarchy
+      - SAFe manages the what and when (PI planning, backlogs, coordination)
+      - The GDIT framework manages the how (spec-driven implementation, compliance, verification)
+      - REQ-N = SAFe Story, Task N = SAFe Task, validate-spec = Definition of Ready,
+        VERIFICATION.md = Story acceptance with evidence
+      - They complement each other — use SAFe for coordination, the GDIT framework for execution
+
+  - id: requirements
+    title: "2. Write Requirements"
+    variations:
+      - label: Concise
+        prompt: |
+          Create a spec for a "hello-world" greeting function. Generate
+          requirements.md with a user story and acceptance criteria including
+          the no-name default.
+      - label: Minimal
+        prompt: |
+          Create requirements for a hello-world feature — greeting function,
+          accepts a name, returns "Hello, {name}!"
+    prompt: |
+      Let's start building a real spec. This step demonstrates the primary way
+      developers create requirements: describe what you want in plain language,
+      and the AI generates the structured spec file for you.
+
+      You have two options at every stage:
+      1. CONVERSATION (primary): Describe your feature to the AI. It generates
+         requirements.md with proper structure, user stories, and common/expected
+         acceptance criteria — including ones you might not think to list.
+         Then iterate: "add an error case", "make the output configurable", etc.
+      2. DIRECT EDIT: Open the generated file and edit it yourself. The AI will
+         pick up your changes on the next interaction.
+
+      Both work. Conversation is faster for most developers because the AI handles
+      formatting, structure, and suggests criteria you'd otherwise miss.
+
+      For this exercise, generate requirements for a simple "hello-world" feature.
+
+      Create .kiro/specs/hello-world/requirements.md with:
+      - One user story with 2-3 acceptance criteria
+      - Keep it minimal — this is a learning exercise
+
+      As you generate it, explain:
+      - What makes a good user story vs a bad one
+      - Why acceptance criteria matter (they become your test cases)
+      - How the AI suggests common/expected criteria beyond what the developer stated
+      - How these requirements will drive the next stage (design)
+      - Briefly note: each specification layer reduces AI misinterpretation risk
+        by roughly an order of magnitude — from ~50% error rate with no spec, to
+        ~12% with structured Markdown specs. The requirements you're writing now
+        are the foundation that makes the AI's implementation accurate.
+      - Ask me if I want to adjust anything before moving on — demonstrate that
+        the developer iterates by talking to the AI ("add X", "change Y")
+
+  - id: design
+    title: "3. Design the Solution"
+    variations:
+      - label: Concise
+        prompt: |
+          Generate design.md for the hello-world spec. Include correctness
+          properties and traceability to the requirements.
+      - label: Minimal
+        prompt: |
+          Design the hello-world feature from the requirements we just created.
+    prompt: |
+      Now read the requirements.md we just created and generate the design.
+
+      Emphasize: the developer doesn't need to write this file manually. The AI
+      reads the requirements, proposes a technical approach, and generates the
+      design document. The developer reviews and steers through conversation:
+      "use a different pattern", "add error handling", "what about edge cases?"
+
+      Create .kiro/specs/hello-world/design.md that:
+      - References specific requirement numbers it addresses
+      - Describes the technical approach (keep it simple)
+      - Includes correctness properties (how we know it works)
+
+      As you generate it, explain:
+      - How you derived the design from the requirements (traceability)
+      - What correctness properties are and why they matter
+      - How this design will feed into the task breakdown
+      - Note: when a design includes infrastructure resources (DynamoDB, Lambda,
+        S3, etc.), the agent also generates three additional sections automatically:
+        * **Cost Profile** table — resource tier, estimated monthly cost, cost
+          driver, and right-sizing rationale for each resource (requires
+          finops.enabled: true in project.yaml)
+        * **Cost Correctness Properties** — assertions the implementation must
+          satisfy (e.g., "Lambda concurrency capped at 50", "S3 lifecycle policy
+          transitions to IA after 30 days")
+        * **Well-Architected Assessment** table — maps each resource to the six
+          WAF pillars (Operational Excellence, Security, Reliability, Performance
+          Efficiency, Cost Optimization, Sustainability) with Aligned/Review/Gap
+          status (requires well-architected.enabled: true in project.yaml)
+        These are advisory — gaps don't block implementation but are captured in
+        the spec for traceability and audit. Our hello-world example is pure code,
+        so they won't appear here, but any feature with cloud resources gets them.
+      - Ask me if the approach looks right — demonstrate that the developer
+        iterates by talking to the AI or editing the file directly
+
+  - id: tasks
+    title: "4. Break Down into Tasks"
+    variations:
+      - label: Concise
+        prompt: |
+          Generate tasks.md for the hello-world spec with effort estimates
+          and traceability.
+      - label: Minimal
+        prompt: |
+          Break down the hello-world spec into tasks.
+    prompt: |
+      Now read requirements.md and design.md, then generate the task breakdown.
+
+      Emphasize: the AI reads both prior spec files and generates the task
+      breakdown automatically — including effort estimates based on the scope.
+      The developer reviews and adjusts through conversation: "that estimate
+      seems high", "split task 2 into two smaller tasks", "add a task for docs".
+
+      Create .kiro/specs/hello-world/tasks.md with:
+      - 2-3 implementation tasks derived from the design
+      - Effort estimate tables (story points, human LOE, AI-assisted LOE)
+      - Requirement and design traceability for each task
+
+      As you generate it, explain:
+      - How you derived each task from the design and requirements
+      - What the effort table fields mean (this is value tracking):
+        * Story Points (estimate/actual) — sprint planning and velocity calibration
+        * Traditional Human LOE — how long this would take without AI assistance
+        * AI-Assisted Estimate/Actual — how long it takes with AI
+        * Start/Complete timestamps — recorded automatically during implementation
+      - The savings calculation: Traditional Human LOE minus AI-Assisted Actual =
+        time saved per task. This is the core ROI metric.
+      - How story points feed sprint planning: sum points for capacity,
+        compare estimate vs actual for velocity calibration
+      - How the Value Summary table (generated at spec completion) shows
+        per-task savings and feeds sprint retrospectives
+      - Mention: "Once you have completed tasks with actuals, the value-reporting
+        skill can generate dashboards, sprint reports, and stakeholder exports
+        from this effort data — for your manager, team wiki, or CI pipeline."
+      - Briefly note: medium-complexity tasks (1–4h traditional LOE) are the
+        sweet spot — they show 94% savings and 16x speed because the specs give
+        the AI exactly what it needs to execute without guessing. The bigger the
+        task, the more the spec discipline pays off.
+      - Ask me if the task breakdown and estimates look reasonable —
+        demonstrate that the developer iterates through conversation
+
+  - id: validate-spec
+    title: "5. Validate Spec Readiness"
+    variations:
+      - label: Concise
+        prompt: |
+          Validate the hello-world spec and walk me through the results.
+      - label: Minimal
+        prompt: |
+          Run validate-spec.py on hello-world.
+    prompt: |
+      Now that we've created all three spec files (requirements, design, tasks),
+      let's validate them before implementing.
+
+      Note: the AI generated all three files through conversation with you.
+      This validation step confirms the AI produced structurally correct,
+      traceable specs. If anything fails, tell the AI what to fix — it will
+      update the files and re-validate.
+
+      Run: python3 ~/.kiro/scripts/validate-spec.py .kiro/specs/hello-world/
+
+      Walk me through the output line by line:
+      - What each quality gate checks and why it matters
+      - What pass/fail/warning means for each check
+      - If anything fails, help me fix it and re-run
+
+      Then explain:
+      - This is the gate between spec authoring and implementation
+      - You can run this on any spec, or use --all to check everything
+      - The script also supports --verify for post-implementation verification
+        (we'll use that in step 7 after implementing)
+      - When finops.enabled is true in project.yaml, the validator also checks
+        that designs with infrastructure resources include a Cost Profile table
+        and cost correctness properties. Missing these emits a WARN for existing
+        specs (advisory) or FAIL for new specs.
+      - When well-architected.enabled is true, the validator checks for a
+        Well-Architected Assessment table in infrastructure designs. Same
+        WARN/FAIL behavior — existing specs get advisory warnings, new specs
+        must include it.
+      - These checks only fire when the design references infrastructure
+        resources. Pure code specs (like our hello-world) skip them.
+      - In a real workflow, you'd run this before starting any implementation task
+
+      End with: "Your spec passes all quality gates — let's generate tests."
+
+  - id: generate-tests
+    title: "6. Generate Tests from Spec"
+    variations:
+      - label: Concise
+        prompt: |
+          Generate test-driven tests for the hello-world spec and run them.
+          They should fail — no implementation yet.
+      - label: Minimal
+        prompt: |
+          Generate tests for hello-world from the spec.
+    prompt: |
+      Now that our spec is validated, let's generate tests before implementing.
+
+      Emphasize: the AI reads the spec and generates tests automatically. The
+      developer doesn't write test boilerplate — the AI derives test cases from
+      acceptance criteria and correctness properties. The developer reviews and
+      can adjust through conversation: "add an edge case test", "use a different
+      fixture approach", etc.
+
+      First, read .kiro/config/project.yaml and check the testing mode.
+
+      Explain the three testing modes:
+      - off: No automated tests. Security scans only.
+      - test-after: Tests generated AFTER implementation. Must pass before checkpoint.
+      - test-driven: Tests generated BEFORE implementation (this step). Code is
+        written to make them pass.
+
+      Then demonstrate test derivation from the hello-world spec:
+      - Read acceptance criteria from requirements.md → these become functional tests
+      - Read correctness properties from design.md → these become unit tests
+      - One test function per acceptance criterion
+
+      Generate a test file following the project's test-config conventions:
+      - Use the framework, directory, and naming from project.yaml test-config
+      - Show where the file goes and why (directory, naming pattern)
+      - If layers are configured, explain which layer this test belongs to
+
+      Run the tests — they should FAIL because there's no implementation yet.
+      Explain that this is expected in test-driven mode: we write tests first,
+      then write code to make them pass.
+
+      End with: "Tests are ready and failing as expected. Now let's implement
+      the code to make them pass."
+
+  - id: implement
+    title: "7. Implement, Validate & Ship"
+    variations:
+      - label: Concise
+        prompt: |
+          Implement Task 1 from the hello-world spec. Full protocol — scans,
+          checkpoint, audit.
+      - label: Minimal
+        prompt: |
+          Implement Task 1 for hello-world.
+    prompt: |
+      Now implement Task 1 from the hello-world spec, following the full protocol.
+
+      Emphasize: the AI reads the spec and writes the implementation code. The
+      developer reviews the code, and can steer through conversation: "use a
+      different approach", "handle that edge case differently". The AI also
+      handles all the validation, git checkpoint, and compliance steps automatically.
+
+      Show every step of the implementation stage:
+      1. Spec discovery — grep for tasks.md, read the full spec
+      2. Knowledge base search — search relevant KBs before generating code
+         that references infrastructure, APIs, shared utilities, or schemas
+      3. Protocol header — the mandatory format that starts every implementation
+      4. Write the code — minimal implementation matching the task exactly
+      4. Validate — run security scans (semgrep, gitleaks, etc.)
+         For IaC files, the agent also runs:
+         - cfn-lint and cfn-guard (NIST/CIS compliance rules)
+         - cfn-guard with cfn-guard-waf-rules.guard (Well-Architected rules —
+           checks reliability, operational excellence, cost optimization, and
+           security alignment; ADVISORY severity, surfaces gaps without blocking)
+         - checkov for policy-as-code security scanning
+         - Cost tag validation — all IaC resources must include CostCenter,
+           Environment, and Project tags (BLOCKING if missing)
+         - For frontend tasks when design-system.enabled is true, the agent reads
+           DESIGN.md and maps design tokens to CSS variables in generated code
+         Run the tests from step 6 — they should now PASS with the implementation
+      5. Git checkpoint — structured commit with compliance evidence and test results
+      6. Steering compliance audit — run audit-steering-compliance.py to verify
+         all steering rules were followed (git checkpoint format, spec validation,
+         security scans, test evidence, value tracking, language validation).
+         If any check fails, remediate before proceeding.
+      7. Documentation impact assessment — evaluate whether the changes should
+         trigger updates to docs/, user guides, or skills. This is advisory,
+         not blocking.
+      8. Value tracking — record timestamps, calculate savings, update tasks.md.
+         Show the effort table row before and after: the Start/Complete timestamps
+         and AI-Assisted Actual are now filled in. Briefly show the savings:
+         "Traditional Human LOE was 2h, AI-Assisted Actual was 25m — that's a
+         79% time savings on this task." This data accumulates across tasks and
+         specs, feeding the value-reporting skill for project-wide metrics.
+
+      Explain each step as you do it. This is where all the previous stages pay off.
+      Note: with the GDIT framework, compliance evidence is a byproduct of development — not a
+      separate effort. The security scans, structured commits, and audit trail are
+      produced automatically as part of the implementation workflow. When audit time
+      comes, the artifacts already exist in git history. Without this, teams spend
+      weeks reconstructing evidence after the fact.
+
+      End with a summary: "You've now completed implementation. Next, let's
+      verify it against the spec to prove every requirement is satisfied."
+
+  - id: verify-implementation
+    title: "8. Verify Implementation Against Spec"
+    variations:
+      - label: Concise
+        prompt: |
+          Verify the hello-world implementation against the spec and generate
+          VERIFICATION.md.
+      - label: Minimal
+        prompt: |
+          Verify hello-world.
+    prompt: |
+      Now that we've implemented Task 1, let's verify the implementation
+      against the spec using the --verify flag.
+
+      Emphasize: In the normal workflow, this verification happens automatically.
+      When the steering compliance audit detects that all tasks in a spec are
+      complete (all subtask checkboxes checked), it emits a SPEC COMPLETE trigger
+      and the agent runs the two-layer verification without being asked. You can
+      also trigger it manually anytime for partial verification or re-verification.
+
+      The AI performs the verification automatically — both the
+      deterministic script checks and the semantic analysis. The developer
+      reviews the results. If gaps are found, tell the AI what to fix and
+      it will update the implementation and re-verify.
+
+      Run: python3 ~/.kiro/scripts/validate-spec.py --verify .kiro/specs/hello-world/
+
+      Walk me through the output — it runs two layers:
+
+      Layer 1: Deterministic (script)
+      - Spec quality gates (same as step 5)
+      - Task completion status (parses checkboxes)
+      - Referenced file existence on disk
+      - Effort tracking completeness
+      - Compliance tag coverage in git commits
+
+      Layer 2: Semantic (AI)
+      After the script output, perform the semantic verification:
+      - Read every acceptance criterion from completed REQs
+      - Read every correctness property from design.md
+      - Read the implementation files referenced in completed tasks
+      - For each criterion/property, verify the code implements it with file:line evidence
+      - Produce per-requirement verdict: IMPLEMENTED / PARTIAL / NOT IMPLEMENTED
+
+      Then generate .kiro/specs/hello-world/VERIFICATION.md containing:
+      - Script Results section
+      - Criterion Checklist table (one row per acceptance criterion)
+      - Coverage Summary (total checked vs total in spec — must match)
+
+      Explain as you go:
+      - Why two layers (deterministic catches structural issues, semantic catches logic gaps)
+      - Why every criterion must appear in the checklist (no omissions allowed)
+      - Why verdicts require file:line evidence (anti-theater — no unsupported claims)
+      - How this closes the loop: requirements → implementation → proof
+
+      End with: "You've now completed the full Kiro workflow:
+      Requirements → Design → Tasks → Validate → Tests → Implement → Verify.
+      Every requirement has traced evidence of implementation."
+
+  - id: next-steps
+    title: "9. Next Steps"
+    variations:
+      - label: Concise
+        prompt: |
+          What skills are available and how do I customize the GDIT framework for my team?
+      - label: Minimal
+        prompt: |
+          What's next after completing the workflow?
+    prompt: |
+      Now that I've completed the full workflow, tell me:
+      - What skills are available and what each one does
+      - Specifically highlight the value-reporting skill: it turns the effort
+        data you've been collecting in tasks.md into actionable reports.
+        Mention the key workflows: Quick Status (daily dashboard), Sprint Report
+        (savings over a date range), Estimation Review (are your estimates
+        accurate?), and Stakeholder Export (reports for your manager, team wiki,
+        or CI pipeline). Say "load value-reporting skill" to explore it.
+      - How to create my own skills (reference skill-creator)
+      - How to customize steering files and hooks for my team
+      - Specifically mention the FinOps and Well-Architected steering files as
+        examples of customizable standards:
+        * cost-optimization.md — defines Cost Profile requirements, cost
+          anti-patterns, environment-appropriate sizing rules. Teams can adjust
+          anti-pattern thresholds, add org-specific cost tags, or disable entirely
+          with finops.enabled: false in project.yaml.
+        * well-architected.md — defines the six-pillar WAF assessment and
+          cfn-guard WAF rules. Teams can customize pillar checks, adjust
+          advisory vs blocking severity, or disable with
+          well-architected.enabled: false in project.yaml.
+        * design-system integration (in development-workflow.md) — defines
+          DESIGN.md token enforcement for frontend tasks. Enable with
+          design-system.enabled: true in project.yaml for UI projects.
+        * All steering files in ~/.kiro/steering/ follow the same pattern —
+          edit them to match your team's standards.
+      - Tips for getting the most out of the GDIT framework
+      - Where to go for more info (CONTRIBUTING.md, steering files in ~/.kiro/steering/)
+      - Mention that The GDIT framework also runs on OpenCode CLI with Bedrock models
+        (testing with early success, local models planned). The workflow
+        and specs are identical — only the platform integration differs.
+        See docs/guides/framework-on-opencode.md for setup.

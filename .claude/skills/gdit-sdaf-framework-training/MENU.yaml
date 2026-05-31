@@ -1,0 +1,40 @@
+name: GDIT Spec-Driven AI Framework Training
+description: Modular training platform for the GDIT Spec-Driven AI Framework
+version: "1.0"
+
+preamble: |
+  You are in the GDIT Spec-Driven AI Framework Training hub. Track your context:
+  - HUB: You are at the top-level module list (this menu).
+  - MODULE:<name>: You are inside a training module's steps.
+
+  Navigation commands (case-insensitive):
+  - Number: In HUB selects a module. In MODULE selects a step.
+  - "back" / "menu" / "exit module": In MODULE returns to HUB. In HUB is a no-op.
+  - "exit skill" / "exit training": Exits completely from any context.
+  - "exit": In MODULE returns to HUB. In HUB exits completely.
+
+  On module completion: return to HUB, show module list, suggest next module.
+
+steps:
+  - id: 01-getting-started
+    title: "1. getting-started"
+    description: "Interactive onboarding walkthrough for the GDIT Spec-Driven AI Framework. Guides new users through the complete Kiro workflow — requirements, design, tasks, testing, implementation, and verification — including FinOps cost optimization and Well-Architected Framework alignment. (9 steps)"
+    prompt: |
+      You are now in MODULE:01-getting-started. Read the module menu at:
+      /home/tom.moore/.kiro/skills/framework-training/modules/01-getting-started/MENU.yaml
+      Present its steps to the user as a numbered list.
+
+      Remind the user: type a step number to begin, "back" to return to the
+      training hub module list, or "exit" to leave training.
+
+  - id: 02-expense-tracker-workshop
+    title: "2. expense-tracker-workshop"
+    description: "90-minute hands-on workshop building a Python CLI expense tracker using the full GDIT spec-driven workflow. Covers spec review, validation, test-driven development, implementation with security scans, and two-layer verification. Can be taken independently or after the Kiro IDE workshop. (7 steps)"
+    prompt: |
+      You are now in MODULE:02-expense-tracker-workshop. Read the module menu at:
+      /home/tom.moore/.kiro/skills/framework-training/modules/02-expense-tracker-workshop/MENU.yaml
+      Present its steps to the user as a numbered list.
+
+      Remind the user: type a step number to begin, "back" to return to the
+      training hub module list, or "exit" to leave training.
+

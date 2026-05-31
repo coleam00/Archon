@@ -1,0 +1,103 @@
+name: gdit-sdaf-compliance-report
+description: |
+  Use when: Generating a NIST SP 800-218 compliance report or AI-assisted development ROI summary.
+  Requires: GDIT specs in .archon/specs/ and gdit-sdaf-setup completed.
+  Output: Compliance coverage matrix + value report saved to $ARTIFACTS_DIR/
+
+nodes:
+  # Pre-run estimate (informational, runs in parallel)
+  - id: estimate
+    bash: |
+      set -euo pipefail
+      METRICS_DIR="$HOME/.archon/metrics"
+
+      if ! command -v jq &>/dev/null; then
+        exit 0
+      fi
+
+      JSONL_FILES=()
+      while IFS= read -r -d '' f; do
+        JSONL_FILES+=("$f")
+      done < <(find "$METRICS_DIR" -maxdepth 1 -name 'runs-*.jsonl' -print0 2>/dev/null | sort -z)
+
+      if [ ${#JSONL_FILES[@]} -eq 0 ]; then
+        exit 0
+      fi
+
+      FILTERED=$(cat "${JSONL_FILES[@]}" | jq -c --arg w "$WORKFLOW_NAME" 'select(.workflow == $w)')
+
+      if [ -z "$FILTERED" ]; then
+        exit 0
+      fi
+
+      RUN_COUNT=$(echo "$FILTERED" | wc -l | tr -d ' ')
+
+      echo "$FILTERED" | jq -sc --arg n "$RUN_COUNT" '
+        def percentile(arr; p):
+          (arr | sort) as $s | ($s | length) as $len |
+          if $len == 0 then null else $s[($len * p / 100 | floor | if . >= $len then $len - 1 else . end)] end;
+        . as $runs |
+        ($runs | length) as $count |
+        ($runs | map(select(.outcome == "success")) | length) as $ok |
+        ($runs | map(.wall_clock_ms | select(. != null))) as $clocks |
+        ($runs | map(.total_usd | select(. != null and . > 0))) as $costs |
+        {
+          workflow: $runs[0].workflow,
+          run_count: $count,
+          success_rate_pct: (if $count > 0 then ($ok / $count * 100 | round) else 0 end),
+          wall_clock_p50_ms: (percentile($clocks; 50)),
+          wall_clock_p90_ms: (percentile($clocks; 90)),
+          cost_p50_usd: (percentile($costs; 50)),
+          cost_p90_usd: (percentile($costs; 90))
+        }
+      '
+
+  - id: guard-setup
+    bash: |
+      ARCHON_HOME="${ARCHON_HOME:-$HOME/.archon}"
+      if [ ! -f "$ARCHON_HOME/scripts/gdit-sdaf/validate-spec.py" ]; then
+        echo "ERROR: GDIT scripts not found at $ARCHON_HOME/scripts/gdit-sdaf/."
+        echo "Run 'gdit-sdaf-setup' workflow first, then retry."
+        exit 1
+      fi
+      if [ ! -d ".archon/specs" ]; then
+        echo "ERROR: No .archon/specs/ directory found."
+        echo "Create specs with gdit-sdaf-spec-create first."
+        exit 1
+      fi
+      echo "Guard checks passed."
+
+  - id: ssdf-coverage
+    bash: |
+      ARCHON_HOME="${ARCHON_HOME:-$HOME/.archon}"
+      echo "PLACEHOLDER: SSDF coverage matrix generation"
+      echo "Note: Python scripts for full compliance reporting are under development."
+      echo "Current implementation validates spec structure only."
+    depends_on: [guard-setup]
+
+  - id: gap-report
+    bash: |
+      echo "PLACEHOLDER: Gap analysis"
+      echo "Note: Detailed gap reporting is under development."
+    depends_on: [ssdf-coverage]
+
+  - id: value-report
+    bash: |
+      echo "PLACEHOLDER: Value tracking report"
+      echo "Note: ROI tracking and dashboard generation are under development."
+      echo "Enable value-tracking in .archon/config/project.yaml when available."
+    depends_on: [guard-setup]
+
+  - id: save-report
+    prompt: |
+      Synthesize the outputs from ssdf-coverage, gap-report, and value-report into a
+      single compliance and ROI report. Save it to $ARTIFACTS_DIR/compliance-report.md.
+
+      Report sections:
+      1. Executive Summary (3 bullets)
+      2. NIST SP 800-218 Coverage Matrix (T1 practices, PASS/PARTIAL/GAP)
+      3. Top 5 Gaps with Remediation Priority
+      4. AI-Assisted Development ROI (from value-report data)
+      5. Recommended Next Actions
+    depends_on: [gap-report, value-report]
+    fresh_context: true

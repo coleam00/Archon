@@ -1,0 +1,42 @@
+# Checkov Configuration
+# IaC security and compliance scanning
+
+# Frameworks to scan
+framework:
+  - cloudformation
+  - terraform
+  - kubernetes
+  - dockerfile
+  - github_actions
+
+# Checks to skip (with justification)
+skip-check:
+  # Add specific checks to skip with reason
+  # - CKV_AWS_1  # Reason: Not applicable to our use case
+
+# Directories to skip
+skip-path:
+  - node_modules
+  - .git
+  - .terraform
+  - dist
+  - build
+
+# Output format
+output: cli
+
+# Compact output
+compact: true
+
+# Download external modules
+download-external-modules: true
+
+# Severity threshold
+# soft-fail: true  # Don't fail build, just warn
+
+# Enable specific check categories
+check:
+  - CKV_AWS_*     # AWS checks
+  - CKV_K8S_*     # Kubernetes checks
+  - CKV_DOCKER_*  # Docker checks
+  - CKV_GIT_*     # Git/GitHub checks

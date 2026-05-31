@@ -1,0 +1,123 @@
+---
+skill_name: ssdf-development
+menu_version: "1.0"
+description: Development-time SSDF evidence collection, SBOM generation, dashboards, and attestation readiness
+
+workflows:
+  - id: collect-evidence
+    label: "Collect SSDF Evidence"
+    description: "Scrape git history for SSDF compliance tags and generate evidence report"
+    instructions: |
+      Collect SSDF compliance evidence from git commit history.
+
+      Steps:
+      1. Ask user for time period (default: 365 days)
+      2. Ask where to save: docs/compliance-by-family/EVIDENCE-REPORT.md (persistent) or temp/ (ephemeral)
+      3. Run: python3 ~/.kiro/skills/ssdf-development/scripts/collect_evidence.py --days {days} --output {path}
+      4. Display the coverage summary table
+      5. Highlight any gaps (practices with zero evidence)
+      6. If gaps found, suggest development activities that would generate evidence for those practices
+         (reference SSDF-COMMIT-TAGS.md for the activity-to-practice mapping)
+
+      If user requests SysML cross-referencing, add --sysml flag:
+        python3 ~/.kiro/skills/ssdf-development/scripts/collect_evidence.py --days {days} --output {path} --sysml
+      This enables ComplianceGraph cross-reference and adds a 'SysML Graph Coverage' section
+      to the report showing satisfy/verify/org-policy/commit-evidence status per practice.
+
+      Does NOT read or modify mapping documents from ssdf-compliance-mapping skill.
+    parameters:
+      - name: days
+        required: false
+        prompt: "Time period in days (default: 365)"
+        default: "365"
+      - name: output
+        required: false
+        prompt: "Output path (default: docs/compliance-by-family/EVIDENCE-REPORT.md)"
+        default: "docs/compliance-by-family/EVIDENCE-REPORT.md"
+
+  - id: generate-sbom
+    label: "Generate SBOM"
+    description: "Generate Software Bill of Materials from project dependencies"
+    instructions: |
+      Generate a CycloneDX SBOM from project dependencies.
+
+      Steps:
+      1. Confirm project root directory (default: current directory)
+      2. Read references/SBOM-REQUIREMENTS.md for format and tool details
+      3. Run: python3 ~/.kiro/skills/ssdf-development/scripts/generate_sbom.py --project {project} --output {output}
+      4. Report: component count, generation method (tool vs fallback), any warnings
+      5. If fallback was used, note that transitive dependencies are not included
+         and recommend installing syft or cyclonedx-py for full coverage
+
+      Default output: docs/compliance-by-family/PS/SBOM-{project-name}-{date}.json
+    parameters:
+      - name: format
+        required: false
+        prompt: "SBOM format: cyclonedx (default) or spdx"
+        default: "cyclonedx"
+      - name: output
+        required: false
+        prompt: "Output path (default: docs/compliance-by-family/PS/SBOM-{project}-{date}.json)"
+
+  - id: evidence-dashboard
+    label: "Evidence Dashboard"
+    description: "Generate consolidated SSDF compliance evidence dashboard"
+    instructions: |
+      Generate a consolidated evidence dashboard. This is agent-driven (no script).
+
+      Steps:
+      1. Run collect-evidence workflow (or read existing EVIDENCE-REPORT.md)
+      2. Read steering files to determine which SSDF practices are always-on enforced:
+         - security-compliance.md → PW.1, PW.4, PW.7
+         - supply-chain-security.md → PS.1, PS.2, PS.3
+         - gdit-sdaf-base.md behavior #10 → RV.1, RV.2
+      3. Build dashboard with per-practice status:
+         - ✅ Active Evidence: commit evidence exists within reporting period
+         - 📋 Steering Enforced: practice enforced by steering (evidence expected in future commits)
+         - ❌ No Evidence: no commit evidence in reporting period
+         When SysML graph data is available (model.sysml files with ComplianceGraph blocks),
+         add a fourth evidence dimension:
+         - 🔗 Graph Coverage: satisfy/verify relationships from ComplianceGraph blocks
+         Show four columns: graph satisfy, graph verify, steering enforcement, commit evidence.
+         Corporate policy references from doc strings shown for practices with org backing.
+      4. Calculate coverage percentages by family and overall (based on commit evidence only)
+      5. Calculate evidence freshness (days since last commit per practice)
+      6. List gaps: practices with no commit evidence
+      7. Write to docs/compliance-by-family/DASHBOARD.md
+
+      If mapping docs from ssdf-compliance-mapping exist, note their presence
+      (e.g., "PW mapping document exists") but do NOT parse their internal
+      status or validate their completeness. That is the mapping skill's job.
+    parameters: []
+
+  - id: attestation-check
+    label: "Attestation Readiness Check"
+    description: "Validate readiness for CISA attestation form submission"
+    instructions: |
+      Check attestation readiness against CISA form statements.
+
+      Steps:
+      1. Read references/CISA-ATTESTATION-FORM.md for statement-to-practice mapping
+      2. Ask user for attestation period (default: 365 days)
+      3. Run: python3 ~/.kiro/skills/ssdf-development/scripts/validate_attestation.py --project {project} --days {days} --output {output}
+         If user requests SysML enrichment, add --sysml flag. With --sysml, verdicts are
+         enriched: READY requires satisfy + verify + commit evidence + artifacts.
+         PARTIAL = any dimension missing.
+      4. Display the summary table (per-statement READY/PARTIAL/NOT READY)
+      5. For any NOT READY or PARTIAL statements, show the remediation guidance
+      6. When remediation requires the ssdf-compliance-mapping skill, clearly state:
+         "Run `load ssdf-compliance-mapping skill` → {specific workflow}"
+      7. Offer to help with remediation actions that are within this skill's scope
+         (e.g., generate-sbom, collect-evidence)
+
+      Mapping doc checks are presence-only (does the file exist?).
+      Does NOT parse mapping doc internal status (that's the mapping skill's domain).
+    parameters:
+      - name: days
+        required: false
+        prompt: "Attestation period in days (default: 365)"
+        default: "365"
+      - name: output
+        required: false
+        prompt: "Output path (default: docs/compliance-by-family/ATTESTATION-READINESS.md)"
+        default: "docs/compliance-by-family/ATTESTATION-READINESS.md"

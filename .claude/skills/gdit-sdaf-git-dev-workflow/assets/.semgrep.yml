@@ -1,0 +1,47 @@
+# Semgrep Configuration
+# Comprehensive security, OWASP, and code quality rules
+
+rules:
+  - id: semgrep-registry-security
+    patterns:
+      - pattern: $X
+    message: "Using Semgrep Registry security rules"
+    severity: ERROR
+    languages: [python, javascript, typescript, go, java, ruby, php, bash]
+
+# Rule sources (applied via --config flag)
+# Use multiple configs for comprehensive coverage:
+#
+# Security:
+#   --config p/security-audit
+#   --config p/owasp-top-ten
+#   --config p/cwe-top-25
+#
+# Language-specific security:
+#   --config p/python
+#   --config p/javascript
+#   --config p/typescript
+#   --config p/golang
+#   --config p/java
+#   --config p/bash
+#
+# Best practices:
+#   --config p/code-quality
+#   --config p/performance
+#
+# Cloud security:
+#   --config p/terraform
+#   --config p/kubernetes
+#   --config p/docker
+#
+# Secrets:
+#   --config p/secrets
+
+# Recommended command for comprehensive scanning:
+# semgrep --config p/security-audit \
+#         --config p/owasp-top-ten \
+#         --config p/cwe-top-25 \
+#         --config p/secrets \
+#         --config p/code-quality \
+#         --severity ERROR --severity WARNING \
+#         .

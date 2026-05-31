@@ -1,0 +1,92 @@
+---
+skill_name: bmad-bridge
+menu_version: "2.0"
+description: Use the BMAD Method alongside the GDIT framework
+
+workflows:
+  - id: install
+    label: "Install BMAD"
+    description: "Guide BMAD Method installation in your project"
+    instructions: |
+      Help the user install the BMAD Method in their project.
+
+      Check prerequisites: Node.js 20+, Python 3.10+, uv.
+      Run: npx bmad-method install
+      Guide through the installer prompts.
+      Recommend selecting the BMM (core) module.
+      Confirm BMAD installed to .bmad/ and the GDIT framework remains in .kiro/.
+
+  - id: capabilities
+    label: "Capability Mapping"
+    description: "Show which BMAD capabilities complement vs overlap with the GDIT framework"
+    instructions: |
+      Show the user which BMAD capabilities complement the GDIT framework and which overlap.
+
+      Read the SKILL.md capability mapping table and present it.
+      For each "Use BMAD" capability, briefly explain what it does and
+      how it helps alongside the GDIT framework.
+      For each "Either" capability, explain both options.
+      For each "Use the GDIT framework" capability, explain why The GDIT framework is preferred.
+
+  - id: direct
+    label: "Direct Mode (recommended)"
+    description: "Use BMAD artifacts directly — no conversion needed"
+    instructions: |
+      Explain and set up direct consumption of BMAD artifacts.
+
+      1. Ask the user where their BMAD artifacts live (default: .bmad/docs/)
+      2. Scan for PRD, architecture doc, and stories
+      3. Show what was found and how The GDIT framework will map each artifact:
+         - PRD user stories → REQ-N (numbered in document order)
+         - Architecture sections → design guidance
+         - Stories → tasks with subtask checkboxes
+      4. Explain that The GDIT framework reads these directly at implementation time
+      5. Explain that the user keeps authoring in BMAD — no duplication
+      6. Note: validate-spec.py is not used in direct mode
+      7. Show the protocol header format The GDIT framework will use
+
+      If artifacts have gaps (missing acceptance criteria, vague architecture),
+      flag them and suggest the user address them in BMAD before implementation.
+
+  - id: convert
+    label: "Convert BMAD Artifacts (optional)"
+    description: "Convert BMAD artifacts to the GDIT framework spec format for structural validation"
+    instructions: |
+      Help the user convert BMAD planning artifacts to the GDIT framework spec format.
+      Emphasize this is OPTIONAL — direct mode is the default.
+
+      Ask why they want conversion. Good reasons:
+      - Federal/compliance projects needing auditable traceability artifacts
+      - Want validate-spec.py quality gates
+      - BMAD planning is complete and won't change
+
+      If they confirm, ask which BMAD artifacts they have (PRD, architecture doc, stories).
+      For each one, read the BMAD artifact and convert it:
+      - PRD → .kiro/specs/<feature>/requirements.md (REQ sections + acceptance criteria)
+      - Architecture → design.md (add correctness properties, Implemented by, REQ headers)
+      - Stories → tasks.md (add Addresses, Design refs, checkboxes)
+
+      After conversion, run: python3 ~/.kiro/scripts/validate-spec.py .kiro/specs/<feature>/
+      Fix any failures before proceeding.
+
+      Warn: after conversion, GDIT framework specs become the source of truth.
+      Changes should be made in GDIT framework specs, not BMAD artifacts.
+
+  - id: workflow
+    label: "Combined Workflow"
+    description: "Explain the recommended BMAD + GDIT framework combined workflow"
+    instructions: |
+      Explain the recommended BMAD + GDIT framework combined workflow.
+
+      Phase 1 (BMAD — ongoing): Brainstorm → Elicit requirements → PRD → Architecture → Stories
+      Phase 2 (GDIT framework — implementation): Read BMAD artifacts → Map → Implement → Verify
+
+      Key points:
+      - BMAD artifacts are the source of truth (in direct mode)
+      - No conversion step needed — The GDIT framework reads BMAD directly
+      - User can return to BMAD anytime to refine planning
+      - The GDIT framework re-reads artifacts on each new task
+      - Conversion is optional for teams wanting validate-spec.py gates
+
+      Explain when to use BMAD (ideation/planning/iteration) vs the GDIT framework (implementation/compliance).
+      The boundary is fluid — not a one-way handoff.
