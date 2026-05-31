@@ -98,14 +98,30 @@ export async function getOrCreateConversation(
   // Use provided codebase or inherited codebase
   const finalCodebaseId = codebaseId ?? inheritedCodebaseId;
 
-  // Determine assistant type from codebase if provided (overrides inherited)
+  // Resolve assistant from merged config for the project cwd when a codebase is
+  // linked. The codebase row's ai_assistant_type is set once at registration
+  // (often via .claude/.codex folder heuristics) and can lag behind Settings.
   if (codebaseId) {
-    const codebase = await pool.query<{ ai_assistant_type: string }>(
-      'SELECT ai_assistant_type FROM remote_agent_codebases WHERE id = $1',
+    const codebase = await pool.query<{ ai_assistant_type: string; default_cwd: string | null }>(
+      'SELECT ai_assistant_type, default_cwd FROM remote_agent_codebases WHERE id = $1',
       [codebaseId]
     );
-    if (codebase.rows[0]) {
-      assistantType = codebase.rows[0].ai_assistant_type;
+    const row = codebase.rows[0];
+    if (row) {
+      if (row.default_cwd) {
+        try {
+          const projectConfig = await loadConfig(row.default_cwd);
+          assistantType = projectConfig.assistant;
+        } catch (err) {
+          getLog().warn(
+            { codebaseId, err: err instanceof Error ? err.message : String(err) },
+            'db.conversation_project_config_load_failed'
+          );
+          assistantType = row.ai_assistant_type;
+        }
+      } else {
+        assistantType = row.ai_assistant_type;
+      }
     }
   }
 

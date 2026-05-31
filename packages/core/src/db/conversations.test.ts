@@ -97,7 +97,42 @@ describe('conversations', () => {
       );
     });
 
-    test('uses codebase assistant type when codebaseId provided', async () => {
+    test('uses merged project config assistant when codebaseId provided', async () => {
+      mockLoadConfig.mockResolvedValueOnce({ assistant: 'cursor' });
+
+      const newConversation: Conversation = {
+        ...existingConversation,
+        id: 'conv-new',
+        ai_assistant_type: 'cursor',
+        codebase_id: 'codebase-123',
+      };
+
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([{ ai_assistant_type: 'claude', default_cwd: '/path/to/repo' }])
+      );
+      mockQuery.mockResolvedValueOnce(createQueryResult([newConversation]));
+
+      const result = await getOrCreateConversation('telegram', 'chat-789', 'codebase-123');
+
+      expect(result).toEqual(newConversation);
+      expect(mockLoadConfig).toHaveBeenCalledWith('/path/to/repo');
+      expect(mockQuery).toHaveBeenCalledTimes(3);
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        2,
+        'SELECT ai_assistant_type, default_cwd FROM remote_agent_codebases WHERE id = $1',
+        ['codebase-123']
+      );
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        3,
+        'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+        ['telegram', 'chat-789', 'cursor', 'codebase-123', null, null]
+      );
+    });
+
+    test('falls back to codebase assistant when project config load fails', async () => {
+      mockLoadConfig.mockRejectedValueOnce(new Error('config unavailable'));
+
       const newConversation: Conversation = {
         ...existingConversation,
         id: 'conv-new',
@@ -105,22 +140,15 @@ describe('conversations', () => {
         codebase_id: 'codebase-123',
       };
 
-      // First query returns empty (no existing)
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
-      // Second query fetches codebase
-      mockQuery.mockResolvedValueOnce(createQueryResult([{ ai_assistant_type: 'codex' }]));
-      // Third query creates new
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([{ ai_assistant_type: 'codex', default_cwd: '/path/to/repo' }])
+      );
       mockQuery.mockResolvedValueOnce(createQueryResult([newConversation]));
 
       const result = await getOrCreateConversation('telegram', 'chat-789', 'codebase-123');
 
       expect(result).toEqual(newConversation);
-      expect(mockQuery).toHaveBeenCalledTimes(3);
-      expect(mockQuery).toHaveBeenNthCalledWith(
-        2,
-        'SELECT ai_assistant_type FROM remote_agent_codebases WHERE id = $1',
-        ['codebase-123']
-      );
       expect(mockQuery).toHaveBeenNthCalledWith(
         3,
         'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
