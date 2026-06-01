@@ -82,6 +82,8 @@ import {
   createGitHubAppAuthProvider,
   loadAppPrivateKey,
   registerGitHubAppAuthProvider,
+  isPerUserGitHubEnabled,
+  getDecryptedAccessToken,
   type GitHubAuth,
   type IGitHubAppAuthProvider,
 } from '@archon/core';
@@ -361,7 +363,14 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       const botMention =
         process.env.GITHUB_BOT_MENTION || process.env.BOT_DISPLAY_NAME || config.botName;
       const auth: GitHubAuth = { kind: 'app', provider: githubAppAuthProvider };
-      github = new GitHubAdapter(auth, webhookSecret, lockManager, botMention);
+      // Per-user comment attribution: when enabled, let the adapter author PR/
+      // issue comments under the originating user's GitHub identity. Resolver
+      // returns undefined for unconnected users → bot identity fallback.
+      const getUserToken = isPerUserGitHubEnabled()
+        ? async (userId: string): Promise<string | undefined> =>
+            (await getDecryptedAccessToken(userId)) ?? undefined
+        : undefined;
+      github = new GitHubAdapter(auth, webhookSecret, lockManager, botMention, { getUserToken });
       await github.start();
       activePlatforms.push('GitHub (App)');
       getLog().info(
