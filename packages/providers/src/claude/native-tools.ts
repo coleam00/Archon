@@ -14,8 +14,8 @@ type ZodRawShape = Record<string, ZodTypeAny>;
 /**
  * Convert a NativeTool's canonical JSON Schema into the Zod raw shape the Claude
  * SDK's `tool()` expects. Deliberately narrow — only the subset our tools use
- * (a flat object of strings / string-enums, with `required`). Anything else
- * throws (fail-fast) rather than silently mis-converting.
+ * (a flat object of strings / string-enums / booleans, with `required`).
+ * Anything else throws (fail-fast) rather than silently mis-converting.
  */
 function jsonSchemaToZodShape(schema: Record<string, unknown>): ZodRawShape {
   if (
@@ -41,9 +41,11 @@ function jsonSchemaToZodShape(schema: Record<string, unknown>): ZodRawShape {
       field = z.enum(values as [string, ...string[]]);
     } else if (prop.type === 'string') {
       field = z.string();
+    } else if (prop.type === 'boolean') {
+      field = z.boolean();
     } else {
       throw new Error(
-        `native tool schema: unsupported type for '${key}' (only string / string-enum)`
+        `native tool schema: unsupported type for '${key}' (only string / string-enum / boolean)`
       );
     }
     if (typeof prop.description === 'string') field = field.describe(prop.description);

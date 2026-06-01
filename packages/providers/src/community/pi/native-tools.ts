@@ -9,7 +9,8 @@ function isString(v: unknown): v is string {
 /**
  * Convert a NativeTool's canonical JSON Schema into the TypeBox schema Pi's
  * `defineTool` expects. Same narrow subset as the Claude converter (flat object
- * of strings / string-enums with `required`); anything else throws (fail-fast).
+ * of strings / string-enums / booleans with `required`); anything else throws
+ * (fail-fast).
  */
 function jsonSchemaToTypeBox(schema: Record<string, unknown>): TObject {
   if (
@@ -35,9 +36,11 @@ function jsonSchemaToTypeBox(schema: Record<string, unknown>): TObject {
       field = Type.Union(values.map(v => Type.Literal(v)));
     } else if (prop.type === 'string') {
       field = Type.String();
+    } else if (prop.type === 'boolean') {
+      field = Type.Boolean();
     } else {
       throw new Error(
-        `native tool schema: unsupported type for '${key}' (only string / string-enum)`
+        `native tool schema: unsupported type for '${key}' (only string / string-enum / boolean)`
       );
     }
     if (typeof prop.description === 'string') {
