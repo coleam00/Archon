@@ -93,6 +93,7 @@ import {
   logArchonPaths,
   validateAppDefaultsPaths,
   shutdownTelemetry,
+  captureArchonStarted,
 } from '@archon/paths';
 import { selectGitHubAuthMode, parseGitCredentialPath } from './github-auth-bootstrap';
 
@@ -195,6 +196,9 @@ export interface ServerOptions {
 
 export async function startServer(opts: ServerOptions = {}): Promise<void> {
   getLog().info('server_starting');
+  // Anonymous once-per-boot startup event (self-gates on opt-out). Flushed by
+  // the shutdownTelemetry() call in the SIGINT/SIGTERM shutdown handler.
+  captureArchonStarted({ surface: 'server' });
 
   // Database auto-detected: SQLite (default) or PostgreSQL (if DATABASE_URL set)
   // No required environment variables - SQLite works out of the box

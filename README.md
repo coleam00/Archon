@@ -317,11 +317,15 @@ Full documentation is available at **[archon.diy](https://archon.diy)**.
 
 ## Telemetry
 
-Archon sends a single anonymous event — `workflow_invoked` — each time a workflow starts, so maintainers can see which workflows get real usage and prioritize accordingly. **No PII, ever.**
+Archon sends a few anonymous events so maintainers can see which workflows get real usage, on what platforms, and whether runs succeed — and prioritize accordingly. **No PII, ever.** Events: `archon_started` (once per CLI invocation / server boot), `workflow_invoked` (each workflow start), and `workflow_completed` / `workflow_failed` (each run outcome).
 
-**What's collected:** the workflow name, the platform that triggered it (`cli`, `web`, `slack`, etc.), the Archon version, and a random install UUID stored at `~/.archon/telemetry-id`. Nothing else.
+**What's collected (categorical only):**
+- **Workflow name** — the real name for *bundled* (Archon-authored) workflows; `"custom"` for your own workflows, so private names never leave your machine.
+- **Run shape & outcome** — platform (`cli`/`web`/`slack`/…), provider id (plus the model id on `workflow_invoked`), node count, which node types are used, success/failure, duration, and a categorical failure reason (never raw error text).
+- **Machine context** — OS, architecture, Archon version, runtime, whether it's a binary build, and a CI flag.
+- A random install UUID stored at `~/.archon/telemetry-id`. Nothing else.
 
-**What's *not* collected:** your code, prompts, messages, workflow descriptions, git remotes, file paths, usernames, tokens, AI output, workflow node details, your IP address — none of it.
+**What's *not* collected:** your code, prompts, messages, custom workflow names, workflow descriptions, git remotes, file paths, usernames, tokens, AI output, error message text, your IP address, your geographic location — none of it.
 
 **Opt out:** set any of these in your environment:
 

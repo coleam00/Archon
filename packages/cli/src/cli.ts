@@ -78,6 +78,7 @@ import {
   BUNDLED_IS_BINARY,
   BUNDLED_VERSION,
   shutdownTelemetry,
+  captureArchonStarted,
   isVerboseBoot,
 } from '@archon/paths';
 import * as git from '@archon/git';
@@ -201,9 +202,17 @@ function isVersionRequest(args: string[]): boolean {
 async function main(): Promise<number> {
   const args = process.argv.slice(2);
 
+  // Anonymous once-per-invocation startup event (self-gates on opt-out).
+  // Emitted before any early return so EVERY invocation — including bare
+  // `archon`, `--help`, and `--version` — is counted, matching the
+  // "once per CLI invocation" contract. Each early-return path below flushes
+  // via shutdownTelemetry(); the main command path flushes in its finally.
+  captureArchonStarted({ surface: 'cli' });
+
   // Handle no arguments - show help and exit successfully
   if (args.length === 0) {
     printUsage();
+    await shutdownTelemetry();
     return 0;
   }
 
@@ -259,6 +268,7 @@ async function main(): Promise<number> {
     const err = error as Error;
     console.error(`Error parsing arguments: ${err.message}`);
     printUsage();
+    await shutdownTelemetry();
     return 1;
   }
 
@@ -275,6 +285,7 @@ async function main(): Promise<number> {
   // Handle help flag
   if (values.help) {
     printUsage();
+    await shutdownTelemetry();
     return 0;
   }
 

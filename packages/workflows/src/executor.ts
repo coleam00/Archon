@@ -6,9 +6,15 @@ import { join } from 'path';
 import type { IWorkflowPlatform, WorkflowMessageMetadata } from './deps';
 import type { WorkflowDeps, WorkflowConfig } from './deps';
 import * as archonPaths from '@archon/paths';
-import { createLogger, captureWorkflowInvoked, BUNDLED_VERSION } from '@archon/paths';
+import { createLogger, captureWorkflowInvoked, captureWorkflowCompleted } from '@archon/paths';
 import { getDefaultBranch, toRepoPath } from '@archon/git';
-import type { WorkflowDefinition, WorkflowRun, WorkflowExecutionResult } from './schemas';
+import type {
+  WorkflowDefinition,
+  WorkflowRun,
+  WorkflowExecutionResult,
+  WorkflowSource,
+} from './schemas';
+import { isLoopNode, isApprovalNode, isScriptNode, isBashNode } from './schemas';
 import { executeDagWorkflow } from './dag-executor';
 import { logWorkflowStart, logWorkflowError } from './logger';
 import { formatDuration, parseDbTimestamp } from './utils/duration';
@@ -214,6 +220,13 @@ export type ExecuteWorkflowOptions = ResumePayload & {
     prSha?: string;
     prBranch?: string;
   };
+  /**
+   * Discovery source of the workflow (bundled / global / project). Used only
+   * for anonymous telemetry — bundled workflows report their real name, custom
+   * ones report `"custom"`. Optional: defaults to the `"custom"`/project
+   * treatment when a caller doesn't thread it through.
+   */
+  source?: WorkflowSource;
   /** Parent conversation ID — enables approve/reject auto-resume from chat. */
   parentConversationId?: string;
   /**
@@ -288,6 +301,7 @@ export async function executeWorkflow(
     preCreatedRun,
     priorCompletedNodes,
     userId,
+    source,
   } = opts;
   // Load config once for the entire workflow execution
   const fileConfig = await deps.loadConfig(cwd);
@@ -556,14 +570,24 @@ export async function executeWorkflow(
       conversationId: conversationDbId,
     });
 
-    // Fire-and-forget anonymous usage telemetry. No PII: workflow name +
-    // platform + version only. Workflow descriptions are user-authored YAML
-    // and may contain private context ("Deploy ACME prod"), so they are not
-    // included. Opt out via ARCHON_TELEMETRY_DISABLED=1 / DO_NOT_TRACK=1.
+    // Fire-and-forget anonymous usage telemetry. Categorical only: bundled
+    // workflows report their real name, custom ones report "custom". No PII —
+    // descriptions/prompts/paths are never sent. Machine context + version ride
+    // along as super-properties. Opt out: ARCHON_TELEMETRY_DISABLED=1 / DO_NOT_TRACK=1.
     captureWorkflowInvoked({
       workflowName: workflow.name,
+      workflowSource: source,
       platform: platform.getPlatformType(),
-      archonVersion: BUNDLED_VERSION,
+      provider: resolvedProvider,
+      model: resolvedModel,
+      nodeCount: workflow.nodes.length,
+      usesLoop: workflow.nodes.some(isLoopNode),
+      usesApproval: workflow.nodes.some(isApprovalNode),
+      usesScript: workflow.nodes.some(isScriptNode),
+      usesBash: workflow.nodes.some(isBashNode),
+      interactive: workflow.interactive ?? false,
+      usedIsolation: isolationContext !== undefined,
+      isResume: dagPriorCompletedNodes !== undefined,
     });
     deps.store
       .createWorkflowEvent({
@@ -684,7 +708,8 @@ export async function executeWorkflow(
       config,
       configuredCommandFolder,
       issueContext,
-      dagPriorCompletedNodes
+      dagPriorCompletedNodes,
+      source
     );
 
     // executeDagWorkflow throws on fatal errors; check DB status for result
@@ -735,6 +760,17 @@ export async function executeWorkflow(
       runId: workflowRun.id,
       workflowName: workflow.name,
       error: err.message,
+    });
+    // Anonymous telemetry for the unhandled-throw failure path. The DAG-internal
+    // failure paths (no/partial completion) fire their own captureWorkflowCompleted
+    // and return without throwing, so this only covers genuine unhandled errors —
+    // no double-count. Duration/node-counts are not in scope here.
+    captureWorkflowCompleted({
+      outcome: 'failed',
+      workflowName: workflow.name,
+      workflowSource: source,
+      provider: resolvedProvider,
+      exitReason: 'unhandled_error',
     });
     deps.store
       .createWorkflowEvent({
