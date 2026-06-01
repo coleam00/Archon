@@ -31,7 +31,7 @@ import { syncArchonToWorktree } from '../utils/worktree-sync';
 import { syncWorkspace, toRepoPath } from '@archon/git';
 import type { WorkspaceSyncResult } from '@archon/git';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
-import { findWorkflow } from '@archon/workflows/router';
+import { findWorkflow, resolveWorkflowName } from '@archon/workflows/router';
 import { executeWorkflow, hydrateResumableRun } from '@archon/workflows/executor';
 import {
   assertWorkflowRequirementsMet,
@@ -1049,11 +1049,42 @@ export async function handleMessage(
       systemPrompt,
     };
 
-    // Project-scoped chats get the read-only `manage_run` tool so the agent can
-    // see this project's workflow runs. Only when a codebase is scoped and the
-    // provider supports in-process native tools (Claude, Pi).
+    // Project-scoped chats get the `manage_run` tool so the agent can see and
+    // launch this project's workflow runs. Only when a codebase is scoped and
+    // the provider supports in-process native tools (Claude, Pi).
     if (conversation.codebase_id !== null && getProviderCapabilities(providerKey).nativeTools) {
-      requestOptions.nativeTools = [buildManageRunTool({ codebaseId: conversation.codebase_id })];
+      const scopedCodebaseId = conversation.codebase_id;
+      requestOptions.nativeTools = [
+        buildManageRunTool({
+          codebaseId: scopedCodebaseId,
+          startWorkflow: async (workflowName, msg): Promise<string> => {
+            let wf: WorkflowDefinition | undefined;
+            try {
+              wf = resolveWorkflowName(workflowName, workflows);
+            } catch (e: unknown) {
+              return toError(e).message; // ambiguous-name error is user-facing
+            }
+            if (wf === undefined) {
+              const names = workflows.map(w => w.name).join(', ');
+              return `No workflow named "${workflowName}". Available: ${names}`;
+            }
+            await dispatchBackgroundWorkflow(
+              {
+                platform,
+                conversationId,
+                cwd,
+                originalMessage: msg.length > 0 ? msg : `Run ${wf.name}`,
+                conversationDbId: conversation.id,
+                codebaseId: scopedCodebaseId,
+                availableWorkflows: workflows,
+                userId,
+              },
+              wf
+            );
+            return `Started workflow "${wf.name}" in the background — it'll appear in the runs list and the workflow dock shortly.`;
+          },
+        }),
+      ];
     }
 
     const mode = platform.getStreamingMode();

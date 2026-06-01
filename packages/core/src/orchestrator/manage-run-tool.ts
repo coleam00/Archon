@@ -7,6 +7,12 @@ const log = createLogger('orchestrator.manage_run');
 export interface ManageRunContext {
   /** The project (codebase) this chat is scoped to. */
   codebaseId: string;
+  /**
+   * Launch a workflow in the background and return a user-facing result line
+   * (including a friendly error for an unknown name). Omitted when the dispatch
+   * context isn't available — `start` is then rejected.
+   */
+  startWorkflow?: (workflowName: string, message: string) => Promise<string>;
 }
 
 const INPUT_SCHEMA: Record<string, unknown> = {
@@ -14,13 +20,21 @@ const INPUT_SCHEMA: Record<string, unknown> = {
   properties: {
     action: {
       type: 'string',
-      enum: ['list', 'get'],
+      enum: ['list', 'get', 'start'],
       description:
-        "What to do: 'list' = recent workflow runs for this project and their status; 'get' = one run's detail.",
+        "What to do: 'list' = recent workflow runs and their status; 'get' = one run's detail (needs runId); 'start' = launch a workflow (needs workflow, and usually message).",
     },
     runId: {
       type: 'string',
       description: 'Run id — required for action=get. Accepts the short (8-char) or full id.',
+    },
+    workflow: {
+      type: 'string',
+      description: 'Workflow name to launch — required for action=start.',
+    },
+    message: {
+      type: 'string',
+      description: 'The prompt/instructions the workflow should act on — used with action=start.',
     },
   },
   required: ['action'],
@@ -43,7 +57,7 @@ export function buildManageRunTool(ctx: ManageRunContext): NativeTool {
   return {
     name: 'manage_run',
     description:
-      "Inspect this project's workflow runs. action=list shows recent runs (id, workflow, status, current step); action=get shows one run's detail (requires runId).",
+      "Inspect and launch this project's workflow runs. action=list shows recent runs (id, workflow, status, current step); action=get shows one run's detail (requires runId); action=start launches a workflow in the background (requires workflow, plus message for what it should do).",
     inputSchema: INPUT_SCHEMA,
     handler: async (input): Promise<string> => {
       const action = typeof input.action === 'string' ? input.action : '';
@@ -54,7 +68,17 @@ export function buildManageRunTool(ctx: ManageRunContext): NativeTool {
           if (runId === '') return 'manage_run: action=get requires a runId.';
           return await handleGet(runId);
         }
-        return `manage_run: unknown action '${action}'. Valid actions: list, get.`;
+        if (action === 'start') {
+          if (ctx.startWorkflow === undefined) {
+            return 'manage_run: launching workflows is not available in this context.';
+          }
+          const workflow = typeof input.workflow === 'string' ? input.workflow.trim() : '';
+          if (workflow === '') return 'manage_run: action=start requires a workflow name.';
+          const message = typeof input.message === 'string' ? input.message.trim() : '';
+          log.info({ codebaseId: ctx.codebaseId, workflow }, 'manage_run.start_requested');
+          return await ctx.startWorkflow(workflow, message);
+        }
+        return `manage_run: unknown action '${action}'. Valid actions: list, get, start.`;
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
         log.error({ err: e, action, codebaseId: ctx.codebaseId }, 'manage_run.failed');
