@@ -176,10 +176,11 @@ export class PiProvider implements IAgentProvider {
     const [
       piCodingAgent,
       { bridgeSession },
-      { resolvePiSkills, resolvePiThinkingLevel, resolvePiTools },
+      { resolvePiSkills, resolvePiThinkingLevel, resolvePiTools, buildDefaultPiTools },
       { createNoopResourceLoader },
       { resolvePiSession },
       { createArchonUIBridge, createArchonUIContext },
+      { buildPiNativeToolDefinitions },
     ] = await Promise.all([
       import('@earendil-works/pi-coding-agent'),
       import('./event-bridge'),
@@ -187,6 +188,7 @@ export class PiProvider implements IAgentProvider {
       import('./resource-loader'),
       import('./session-resolver'),
       import('./ui-context-stub'),
+      import('./native-tools'),
     ]);
     const { createAgentSession } = piCodingAgent;
 
@@ -465,6 +467,19 @@ export class PiProvider implements IAgentProvider {
       'pi.session_started'
     );
 
+    // In-process native tools (e.g. manage_run) via Pi customTools. Because
+    // setting customTools forces noTools:'builtin' (dropping Pi's defaults), the
+    // base tool set must be re-supplied alongside the native defs.
+    const nativeToolDefs =
+      requestOptions?.nativeTools && requestOptions.nativeTools.length > 0
+        ? buildPiNativeToolDefinitions(requestOptions.nativeTools)
+        : [];
+    const baseTools =
+      filteredTools ??
+      (nativeToolDefs.length > 0 ? buildDefaultPiTools(cwd, requestOptions?.env) : undefined);
+    const piCustomTools =
+      nativeToolDefs.length > 0 ? [...(baseTools ?? []), ...nativeToolDefs] : filteredTools;
+
     const { session, modelFallbackMessage } = await createAgentSession({
       cwd,
       // model is omitted when not yet resolved (extension provider path).
@@ -489,8 +504,8 @@ export class PiProvider implements IAgentProvider {
       // pre-constructed without a spawnHook (see resolvePiTools in
       // options-translator.ts), so the env-aware bash MUST go through
       // customTools, not just for tool restriction.
-      ...(filteredTools !== undefined
-        ? { customTools: filteredTools, noTools: 'builtin' as const }
+      ...(piCustomTools !== undefined
+        ? { customTools: piCustomTools, noTools: 'builtin' as const }
         : {}),
     });
 
