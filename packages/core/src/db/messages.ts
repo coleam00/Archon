@@ -2,6 +2,7 @@
  * Database operations for conversation messages (Web UI history and orchestrator prompt enrichment)
  */
 import { pool, getDialect, getDatabaseType } from './connection';
+import type { MessageRow } from '../schemas/message';
 import { createLogger } from '@archon/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -11,31 +12,27 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-export interface MessageRow {
-  id: string;
-  conversation_id: string;
-  role: 'user' | 'assistant';
-  content: string;
-  metadata: string; // JSON string - parsed by frontend and server-side (orchestrator prompt enrichment)
-  created_at: string;
-}
+export type { MessageRow } from '../schemas/message';
 
 /**
  * Add a message to conversation history.
  * metadata should contain toolCalls array and/or error object if applicable.
+ * userId is the Archon user UUID; pass undefined for assistant messages or
+ * when the originating user is unknown.
  */
 export async function addMessage(
   conversationId: string,
   role: 'user' | 'assistant',
   content: string,
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown>,
+  userId?: string
 ): Promise<MessageRow> {
   const dialect = getDialect();
   const result = await pool.query<MessageRow>(
-    `INSERT INTO remote_agent_messages (conversation_id, role, content, metadata, created_at)
-     VALUES ($1, $2, $3, $4, ${dialect.now()})
+    `INSERT INTO remote_agent_messages (conversation_id, role, content, metadata, user_id, created_at)
+     VALUES ($1, $2, $3, $4, $5, ${dialect.now()})
      RETURNING *`,
-    [conversationId, role, content, JSON.stringify(metadata ?? {})]
+    [conversationId, role, content, JSON.stringify(metadata ?? {}), userId ?? null]
   );
   const row = result.rows[0];
   if (!row) {

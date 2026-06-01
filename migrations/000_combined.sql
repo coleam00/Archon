@@ -2,15 +2,19 @@
 -- Version: Combined (final state after migrations 001-020)
 -- Description: Complete database schema (idempotent - safe to run multiple times)
 --
--- 8 Tables:
+-- 12 Tables:
 --   1. remote_agent_codebases
 --   1b. remote_agent_codebase_env_vars
+--   1c. remote_agent_users
+--   1d. remote_agent_user_identities
 --   2. remote_agent_conversations
 --   3. remote_agent_sessions
 --   4. remote_agent_isolation_environments
 --   5. remote_agent_workflow_runs
 --   6. remote_agent_workflow_events
+--   6b. remote_agent_workflow_node_sessions
 --   7. remote_agent_messages
+--   8. remote_agent_user_github_tokens
 --
 -- Dropped tables (via migrations):
 --   - remote_agent_command_templates (017)
@@ -58,6 +62,41 @@ CREATE INDEX IF NOT EXISTS idx_codebase_env_vars_codebase_id
 
 COMMENT ON TABLE remote_agent_codebase_env_vars IS
   'Per-project env vars merged into Options.env on Claude SDK calls. Managed via Web UI or config.';
+
+-- ============================================================================
+-- Table 1c: Users (Archon identity, platform-agnostic)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS remote_agent_users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  display_name VARCHAR(255),
+  email VARCHAR(255),
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+COMMENT ON TABLE remote_agent_users IS
+  'Archon-internal user identity. Created on first sight by any adapter; populated via per-platform user-info lookups.';
+
+-- ============================================================================
+-- Table 1d: User Identities (per-platform mapping → users.id)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS remote_agent_user_identities (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES remote_agent_users(id) ON DELETE CASCADE,
+  platform VARCHAR(32) NOT NULL,
+  platform_user_id VARCHAR(255) NOT NULL,
+  platform_display_name VARCHAR(255),
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  UNIQUE(platform, platform_user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_identities_user_id
+  ON remote_agent_user_identities(user_id);
+
+COMMENT ON TABLE remote_agent_user_identities IS
+  'Maps platform-native user IDs (Slack U-ids, Telegram chat ids, GitHub logins, Discord snowflakes) to Archon user UUIDs.';
 
 -- ============================================================================
 -- Table 2: Conversations
@@ -237,6 +276,30 @@ COMMENT ON TABLE remote_agent_workflow_events IS
   'Lean UI-relevant workflow events for observability (step transitions, artifacts, errors)';
 
 -- ============================================================================
+-- Workflow node sessions (persist_session opt-in across re-runs)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS remote_agent_workflow_node_sessions (
+  workflow_name VARCHAR(255) NOT NULL,
+  node_id VARCHAR(255) NOT NULL,
+  scope_key TEXT NOT NULL,
+  provider VARCHAR(50) NOT NULL,
+  provider_session_id TEXT NOT NULL,
+  last_run_id UUID REFERENCES remote_agent_workflow_runs(id) ON DELETE SET NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  PRIMARY KEY (workflow_name, node_id, scope_key, provider)
+);
+
+CREATE INDEX IF NOT EXISTS idx_workflow_node_sessions_scope
+  ON remote_agent_workflow_node_sessions(scope_key);
+CREATE INDEX IF NOT EXISTS idx_workflow_node_sessions_workflow
+  ON remote_agent_workflow_node_sessions(workflow_name);
+
+COMMENT ON TABLE remote_agent_workflow_node_sessions IS
+  'Per-node provider session IDs persisted across workflow re-runs. Keyed by (workflow, node, scope, provider). Scope is typically conversation UUID. No cascade on conversation delete (soft delete + never-reused UUID = harmless orphans); a future hard-delete path must delete by scope_key.';
+
+-- ============================================================================
 -- Table 7: Messages
 -- ============================================================================
 
@@ -312,3 +375,40 @@ ALTER TABLE remote_agent_sessions
 -- From migration 021: allow_env_keys on codebases
 ALTER TABLE remote_agent_codebases
   ADD COLUMN IF NOT EXISTS allow_env_keys BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- User identity foreign keys (nullable on the four primary tables).
+-- All FKs use ON DELETE SET NULL so future user deletion never cascades destructively.
+ALTER TABLE remote_agent_conversations
+  ADD COLUMN IF NOT EXISTS user_id UUID
+    REFERENCES remote_agent_users(id) ON DELETE SET NULL;
+ALTER TABLE remote_agent_messages
+  ADD COLUMN IF NOT EXISTS user_id UUID
+    REFERENCES remote_agent_users(id) ON DELETE SET NULL;
+ALTER TABLE remote_agent_workflow_runs
+  ADD COLUMN IF NOT EXISTS user_id UUID
+    REFERENCES remote_agent_users(id) ON DELETE SET NULL;
+ALTER TABLE remote_agent_isolation_environments
+  ADD COLUMN IF NOT EXISTS created_by_user_id UUID
+    REFERENCES remote_agent_users(id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS idx_conversations_user_id
+  ON remote_agent_conversations(user_id) WHERE user_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_workflow_runs_user_id
+  ON remote_agent_workflow_runs(user_id) WHERE user_id IS NOT NULL;
+
+-- From PR-C: per-user GitHub user-to-server tokens (device flow), encrypted at rest.
+-- One row per Archon user; cascades on user deletion. github_user_id is the
+-- numeric anchor for the commit no-reply email (survives username changes).
+CREATE TABLE IF NOT EXISTS remote_agent_user_github_tokens (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES remote_agent_users(id) ON DELETE CASCADE,
+  github_user_id BIGINT NOT NULL,
+  github_login VARCHAR(255) NOT NULL,
+  access_token_encrypted TEXT NOT NULL,
+  refresh_token_encrypted TEXT,
+  access_token_expires_at TIMESTAMP WITH TIME ZONE,
+  refresh_token_expires_at TIMESTAMP WITH TIME ZONE,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  UNIQUE(user_id)
+);

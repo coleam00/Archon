@@ -4,7 +4,7 @@ import type {
   ExtensionWidgetOptions,
   TerminalInputHandler,
   Theme,
-} from '@mariozechner/pi-coding-agent';
+} from '@earendil-works/pi-coding-agent';
 
 import type { MessageChunk } from '../../types';
 
@@ -105,6 +105,15 @@ export function createArchonUIContext(bridge: ArchonUIBridge): ExtensionUIContex
     setWorkingMessage(_message?: string): void {
       noop();
     },
+    setWorkingVisible(_visible: boolean): void {
+      // No-op: Archon has no built-in working-loader row. Added in pi 0.70.3.
+      noop();
+    },
+    setWorkingIndicator(_options?: Parameters<ExtensionUIContext['setWorkingIndicator']>[0]): void {
+      // No-op: spinner frames have no rendering target in a headless session.
+      // Added in pi 0.68.
+      noop();
+    },
     setHiddenThinkingLabel(_label?: string): void {
       noop();
     },
@@ -135,8 +144,18 @@ export function createArchonUIContext(bridge: ArchonUIBridge): ExtensionUIContex
     editor(_title: string, _prefill?: string): Promise<string | undefined> {
       return Promise.resolve(undefined);
     },
+    addAutocompleteProvider(
+      _factory: Parameters<ExtensionUIContext['addAutocompleteProvider']>[0]
+    ): void {
+      // No-op: no terminal editor to stack autocomplete onto. Added in pi 0.69.
+      noop();
+    },
     setEditorComponent(_factory: Parameters<ExtensionUIContext['setEditorComponent']>[0]): void {
       noop();
+    },
+    getEditorComponent(): ReturnType<ExtensionUIContext['getEditorComponent']> {
+      // Always undefined: we never set a custom editor component. Added in pi 0.71.
+      return undefined;
     },
     get theme(): Theme {
       return themeProxy;

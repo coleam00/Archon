@@ -113,11 +113,33 @@ export interface WorkflowDeps {
   getAgentProvider: AgentProviderFactory;
   loadConfig: (cwd: string) => Promise<WorkflowConfig>;
   /**
-   * Resolve a user's stored personal GitHub OAuth token for multi-user
-   * GitHub token-policy enforcement (see utils/github-token-policy).
-   * Returns null when the user has no token connected. Optional so callers
-   * that don't run in multi-user mode (CLI tests, single-tenant deployments)
-   * can omit it — the policy treats `undefined` resolver as "no user token".
+   * Optional: resolve a fresh GitHub bot token for the given (owner, repo).
+   * Used to inject GH_TOKEN/GITHUB_TOKEN into bash/script subprocess env so
+   * AI-driven `gh` and `git push` operations inside worktrees authenticate
+   * correctly.
+   *
+   *  - App mode (server bootstrap registered a provider): returns a fresh
+   *    installation access token, refreshed transparently from the cache.
+   *  - PAT mode / not configured: returns undefined. The subprocess inherits
+   *    whatever GITHUB_TOKEN already lives on `process.env` (the legacy
+   *    behaviour), so solo installs see zero functional change.
+   *
+   * Implementations must not throw — return undefined on any failure so the
+   * workflow execution falls back to env inheritance rather than aborting.
    */
-  getUserGithubToken?: (userId: string) => Promise<string | null>;
+  resolveBotGitHubToken?: (owner: string, repo: string) => Promise<string | undefined>;
+  /**
+   * Optional: resolve the originating user's personal GitHub token (decrypted,
+   * refreshed on read). Used by the per-user token policy to route a run's
+   * `gh`/`git push` through the human who triggered it rather than the shared
+   * org/bot token. Returns undefined when the user hasn't connected. Must not
+   * throw — return undefined on any failure.
+   */
+  getUserGithubToken?: (userId: string) => Promise<string | undefined>;
+  /**
+   * Optional: whether per-user GitHub attribution is active for this install
+   * (GitHub App configured + TOKEN_ENCRYPTION_KEY set). When false/absent, the
+   * token policy is a no-op and subprocesses keep inheriting `process.env`.
+   */
+  isPerUserGitHubEnabled?: () => boolean;
 }

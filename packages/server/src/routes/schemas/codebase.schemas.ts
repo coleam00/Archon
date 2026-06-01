@@ -2,23 +2,13 @@
  * Zod schemas for codebase API endpoints.
  */
 import { z } from '@hono/zod-openapi';
+import { codebaseRowSchema } from '@archon/core/schemas/codebase';
 
-/** A single command entry within a codebase. */
-const codebaseCommandSchema = z
-  .object({ path: z.string(), description: z.string() })
-  .openapi('CodebaseCommand');
-
-/** A codebase record. */
-export const codebaseSchema = z
-  .object({
-    id: z.string(),
-    name: z.string(),
-    repository_url: z.string().nullable(),
-    default_cwd: z.string(),
-    ai_assistant_type: z.string(),
-    commands: z.record(codebaseCommandSchema),
-    created_at: z.string(),
-    updated_at: z.string(),
+/** A codebase record (wire shape with ISO string dates). */
+export const codebaseSchema = codebaseRowSchema
+  .extend({
+    created_at: z.string().datetime(),
+    updated_at: z.string().datetime(),
   })
   .openapi('Codebase');
 

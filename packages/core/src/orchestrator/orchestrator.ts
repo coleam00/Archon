@@ -49,7 +49,7 @@ import { createIsolationStore } from '../db/isolation-environments';
 import { toError } from '../utils/error';
 import { getCodebase } from '../db/codebases';
 import { executeWorkflow } from '@archon/workflows/executor';
-import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
+import type { WorkflowDefinition, WorkflowSource } from '@archon/workflows/schemas/workflow';
 import { createWorkflowDeps } from '../workflows/store-adapter';
 import {
   cleanupToMakeRoom,
@@ -57,6 +57,8 @@ import {
   STALE_THRESHOLD_DAYS,
 } from '../services/cleanup-service';
 import { loadRepoConfig } from '../config/config-loader';
+import { isPerUserGitHubEnabled } from '../github-auth/config';
+import { getUserGithubNoreplyEmail } from '../db/user-github-token-store';
 
 type IsolationResolution =
   | { status: 'existing'; cwd: string; env: IsolationEnvironmentRow }
@@ -111,8 +113,19 @@ export async function validateAndResolveIsolation(
   platform: IPlatformAdapter,
   conversationId: string,
   hints?: IsolationHints,
-  _isRetry = false
+  _isRetry = false,
+  userId?: string
 ): Promise<IsolationResolution> {
+  // Resolve the originating user's git identity (no-reply email) so a freshly
+  // created worktree stamps commits with the human. Only when per-user GitHub is
+  // enabled and the user is connected; otherwise the worktree uses the ambient
+  // git identity (unchanged behavior).
+  let gitIdentity: { email: string; name?: string } | undefined;
+  if (userId && isPerUserGitHubEnabled()) {
+    const email = await getUserGithubNoreplyEmail(userId);
+    if (email) gitIdentity = { email };
+  }
+
   const result = await getResolver().resolve({
     existingEnvId: conversation.isolation_env_id,
     codebase: codebase
@@ -120,6 +133,8 @@ export async function validateAndResolveIsolation(
       : null,
     hints,
     platformType: platform.getPlatformType(),
+    userId,
+    gitIdentity,
   });
 
   switch (result.status) {
@@ -203,7 +218,8 @@ export async function validateAndResolveIsolation(
         platform,
         conversationId,
         hints,
-        true
+        true,
+        userId
       );
     }
 
@@ -246,6 +262,18 @@ export interface WorkflowRoutingContext {
    * Hints for isolation environment (PR review context, etc.)
    */
   readonly isolationHints?: IsolationHints;
+  /**
+   * Archon user UUID — populated by chat/forge adapters via
+   * findOrCreateUserByPlatformIdentity. Propagated to the worker conversation,
+   * worker isolation environment, and downstream workflow_run row.
+   */
+  readonly userId?: string;
+  /**
+   * Discovery source of the workflow — telemetry only (bundled workflows
+   * report their real name, custom ones report "custom"). Optional; defaults
+   * to the privacy-safe "custom" treatment when not provided.
+   */
+  readonly source?: WorkflowSource;
 }
 
 /**
@@ -266,8 +294,15 @@ export async function dispatchBackgroundWorkflow(
   // 1. Generate worker conversation ID
   const workerPlatformId = `web-worker-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
 
-  // 2. Create worker conversation in DB
-  const workerConv = await db.getOrCreateConversation('web', workerPlatformId);
+  // 2. Create worker conversation in DB; propagate userId so the worker
+  // row has the same attribution as the parent (matters for "my runs" queries).
+  const workerConv = await db.getOrCreateConversation(
+    'web',
+    workerPlatformId,
+    undefined,
+    undefined,
+    ctx.userId
+  );
   await db.updateConversation(workerConv.id, {
     cwd: ctx.cwd,
     codebase_id: ctx.codebaseId ?? null,
@@ -289,7 +324,9 @@ export async function dispatchBackgroundWorkflow(
       codebase,
       ctx.platform,
       workerPlatformId,
-      { workflowType: 'thread', workflowId: workerPlatformId }
+      { workflowType: 'thread', workflowId: workerPlatformId },
+      false,
+      ctx.userId
     );
     workerCwd = result.cwd;
     await db.updateConversation(workerConv.id, { cwd: workerCwd }).catch((e: unknown) => {
@@ -367,7 +404,7 @@ export async function dispatchBackgroundWorkflow(
       working_path: workerCwd,
       metadata: ctx.issueContext ? { github_context: ctx.issueContext } : {},
       parent_conversation_id: ctx.conversationDbId,
-      created_by_user_id: createdByUserId,
+      user_id: ctx.userId,
     });
   } catch (error) {
     const err = error as Error;
@@ -393,6 +430,8 @@ export async function dispatchBackgroundWorkflow(
             isolationContext,
             parentConversationId: ctx.conversationDbId,
             preCreatedRun,
+            userId: ctx.userId,
+            source: ctx.source,
           }
         );
         // Surface workflow output to parent conversation as a result card

@@ -1,6 +1,6 @@
 import {
-  codingTools,
   createBashTool,
+  createCodingTools,
   createEditTool,
   createFindTool,
   createGrepTool,
@@ -9,16 +9,17 @@ import {
   createWriteTool,
   type BashSpawnContext,
   type BashSpawnHook,
-} from '@mariozechner/pi-coding-agent';
-import type { ThinkingLevel } from '@mariozechner/pi-ai';
+} from '@earendil-works/pi-coding-agent';
+import type { ThinkingLevel } from '@earendil-works/pi-ai';
 
 /**
  * Pi's exported `Tool` type is structurally `AgentTool<TSchema>` and isn't
- * re-exported at the package root. Deriving it from the `codingTools` aggregate
- * (which IS re-exported and typed as `Tool[]`) gives us a namespace-free alias
- * that satisfies TS's portable-type requirement.
+ * re-exported at the package root. Pi 0.68+ removed the `codingTools`
+ * aggregate in favor of a `createCodingTools(cwd, options)` factory, so we
+ * derive the element type from the factory's return type — still
+ * namespace-free, still satisfies TS's portable-type requirement.
  */
-type PiTool = (typeof codingTools)[number];
+type PiTool = ReturnType<typeof createCodingTools>[number];
 
 import type { NodeConfig } from '../../types';
 

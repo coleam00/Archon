@@ -105,7 +105,6 @@ nodes:
     depends_on: [fetch-pr, fetch-diff]
     allowed_tools: []
     context: fresh
-    idle_timeout: 60000
     output_format:
       type: object
       properties:

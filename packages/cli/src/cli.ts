@@ -49,6 +49,7 @@ import {
   workflowApproveCommand,
   workflowRejectCommand,
   workflowCleanupCommand,
+  workflowResetSessionsCommand,
   workflowEventEmitCommand,
   workflowSearchCommand,
   workflowInstallCommand,
@@ -68,6 +69,8 @@ import { skillInstallCommand } from './commands/skill';
 import { validateWorkflowsCommand, validateCommandsCommand } from './commands/validate';
 import { serveCommand } from './commands/serve';
 import { doctorCommand } from './commands/doctor';
+import { authGithubCommand } from './commands/auth';
+import { telemetryStatusCommand, telemetryResetCommand } from './commands/telemetry';
 import { closeDatabase } from '@archon/core';
 import {
   setLogLevel,
@@ -76,6 +79,7 @@ import {
   BUNDLED_IS_BINARY,
   BUNDLED_VERSION,
   shutdownTelemetry,
+  captureArchonStarted,
   isVerboseBoot,
 } from '@archon/paths';
 import * as git from '@archon/git';
@@ -113,6 +117,9 @@ Commands:
   serve                      Start the web UI server (downloads web UI on first run)
   skill install [path]       Install the bundled Archon skill into .claude/skills/archon
   doctor                     Verify your Archon setup (Claude binary, gh auth, DB, adapters)
+  auth github                Connect your GitHub identity via device flow (multi-user installs)
+  telemetry status           Show anonymous telemetry state (enabled, reason, ID, host)
+  telemetry reset            Rotate the anonymous install UUID
   validate workflows [name]  Validate workflow definitions and their references
   validate commands [name]   Validate command files
   version, --version, -V     Show version info (also -v when used alone)
@@ -130,6 +137,8 @@ Options:
   --json                     Output machine-readable JSON (for workflow list)
   --workflow <name>          Workflow to run for 'continue' (default: archon-assist)
   --no-context               Skip context injection for 'continue'
+  --conversation-id <id>     Reuse a stable conversation scope across runs (enables
+                             persist_session resume between separate CLI invocations)
   --port <port>              Override server port for 'serve' (default: 3090)
   --download-only            Download web UI without starting the server
   --force                    Overwrite existing file (for workflow install)
@@ -195,9 +204,17 @@ function isVersionRequest(args: string[]): boolean {
 async function main(): Promise<number> {
   const args = process.argv.slice(2);
 
+  // Anonymous once-per-invocation startup event (self-gates on opt-out).
+  // Emitted before any early return so EVERY invocation — including bare
+  // `archon`, `--help`, and `--version` — is counted, matching the
+  // "once per CLI invocation" contract. Each early-return path below flushes
+  // via shutdownTelemetry(); the main command path flushes in its finally.
+  captureArchonStarted({ surface: 'cli' });
+
   // Handle no arguments - show help and exit successfully
   if (args.length === 0) {
     printUsage();
+    await shutdownTelemetry();
     return 0;
   }
 
@@ -241,7 +258,10 @@ async function main(): Promise<number> {
         port: { type: 'string' },
         'download-only': { type: 'boolean' },
         scope: { type: 'string' },
+        node: { type: 'string' },
+        yes: { type: 'boolean' },
         force: { type: 'boolean' },
+        'conversation-id': { type: 'string' },
       },
       allowPositionals: true,
       strict: false, // Allow unknown flags to pass through
@@ -250,6 +270,7 @@ async function main(): Promise<number> {
     const err = error as Error;
     console.error(`Error parsing arguments: ${err.message}`);
     printUsage();
+    await shutdownTelemetry();
     return 1;
   }
 
@@ -266,6 +287,7 @@ async function main(): Promise<number> {
   // Handle help flag
   if (values.help) {
     printUsage();
+    await shutdownTelemetry();
     return 0;
   }
 
@@ -283,12 +305,15 @@ async function main(): Promise<number> {
     'serve',
     'skill',
     'doctor',
+    'telemetry',
+    'auth',
   ];
   const requiresGitRepo = !noGitCommands.includes(command ?? '');
 
   try {
-    // setup/doctor default to warn to avoid Pino info JSON interleaving with ○/✓ output; lazy loggers pick up this level at first creation
-    const isInteractiveCommand = command === 'setup' || command === 'doctor';
+    // setup/doctor/telemetry default to warn to avoid Pino info JSON interleaving with their human-readable output; lazy loggers pick up this level at first creation
+    const isInteractiveCommand =
+      command === 'setup' || command === 'doctor' || command === 'telemetry';
     const suppressByDefault = isInteractiveCommand && !values.verbose && !isVerboseBoot();
     if (values.quiet || suppressByDefault) {
       setLogLevel('warn');
@@ -421,6 +446,11 @@ async function main(): Promise<number> {
               resume: resumeFlag,
               quiet: values.quiet as boolean | undefined,
               verbose: values.verbose as boolean | undefined,
+              // Stable scope for persist_session across separate CLI invocations. Without
+              // it each run gets a fresh conversation UUID, so persisted sessions never
+              // resume between runs (they only resume within chat/REST, which reuse a
+              // conversation). Pass the same id on each run to opt into cross-run resume.
+              conversationId: values['conversation-id'] as string | undefined,
             };
             await workflowRunCommand(effectiveCwd, workflowName, userMessage, options);
             break;
@@ -483,6 +513,39 @@ async function main(): Promise<number> {
               return 1;
             }
             await workflowCleanupCommand(days);
+            break;
+          }
+
+          case 'reset-sessions': {
+            const workflowName = positionals[2];
+            const extras = positionals.slice(3);
+            if (!workflowName) {
+              console.error(
+                'Usage: archon workflow reset-sessions <workflow-name> [--scope <key>] [--node <id>] [--yes] [--json]'
+              );
+              console.error(
+                '  Without --scope: deletes persisted sessions across ALL scopes (requires --yes).'
+              );
+              return 1;
+            }
+            // Reject extra positionals — this is a destructive command and silently
+            // dropping `archon workflow reset-sessions wf planner` (likely intent: filter to
+            // node "planner") to a cross-scope wipe would be a foot-gun.
+            if (extras.length > 0) {
+              console.error(
+                'Usage: archon workflow reset-sessions <workflow-name> [--scope <key>] [--node <id>] [--yes] [--json]'
+              );
+              console.error(
+                `Error: unexpected positional argument(s): ${extras.join(' ')}. Use --node <id> to filter by node.`
+              );
+              return 1;
+            }
+            await workflowResetSessionsCommand(workflowName, {
+              scope: values.scope as string | undefined,
+              node: values.node as string | undefined,
+              yes: values.yes as boolean | undefined,
+              json: jsonFlag,
+            });
             break;
           }
 
@@ -644,6 +707,38 @@ async function main(): Promise<number> {
 
       case 'doctor': {
         return await doctorCommand();
+      }
+
+      case 'auth': {
+        switch (subcommand) {
+          case 'github':
+            return await authGithubCommand();
+          default:
+            if (subcommand === undefined) {
+              console.error('Missing auth subcommand');
+            } else {
+              console.error(`Unknown auth subcommand: ${subcommand}`);
+            }
+            console.error('Available: github');
+            return 1;
+        }
+      }
+
+      case 'telemetry': {
+        switch (subcommand) {
+          case 'status':
+            return telemetryStatusCommand();
+          case 'reset':
+            return telemetryResetCommand();
+          default:
+            if (subcommand === undefined) {
+              console.error('Missing telemetry subcommand');
+            } else {
+              console.error(`Unknown telemetry subcommand: ${subcommand}`);
+            }
+            console.error('Available: status, reset');
+            return 1;
+        }
       }
 
       case 'skill': {

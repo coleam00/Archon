@@ -4,6 +4,13 @@
  */
 import { App, LogLevel, type SlashCommand } from '@slack/bolt';
 import type { IPlatformAdapter, MessageMetadata } from '@archon/core';
+import {
+  isPerUserGitHubEnabled,
+  connectGithubForUser,
+  DeviceFlowError,
+  GithubIdentityConflictError,
+} from '@archon/core';
+import * as userDb from '@archon/core/db/users';
 import type { TokenUsage } from '@archon/providers/types';
 import { createLogger } from '@archon/paths';
 import { isSlackUserAuthorized } from './auth';
@@ -37,6 +44,20 @@ export class SlackAdapter implements IPlatformAdapter {
   private allowedUserIds: string[];
   /** Maps conversation ID → triggering Slack message so the bridge can react / edit. */
   private triggeringMessages = new Map<string, SlackMessageRef>();
+  /**
+   * Cache of slackUserId → displayName resolved via users.info. In-memory only;
+   * cleared on adapter restart. Avoids repeated API calls for chatty users.
+   * Negative results (lookup failed) are NOT cached — we retry on next sighting
+   * so a transient `missing_scope` or rate_limit doesn't permanently degrade UX.
+   */
+  private displayNameCache = new Map<string, string>();
+  /**
+   * Tripped the first time users.info returns `missing_scope`. Subsequent
+   * sightings of unknown users still attempt the API call (in case the operator
+   * reinstalls with the scope mid-flight), but the WARN log fires only once —
+   * `missing_scope` is a permanent misconfiguration, not a per-user incident.
+   */
+  private missingScopeLogged = false;
 
   constructor(botToken: string, appToken: string, mode: 'stream' | 'batch' = 'batch') {
     this.app = new App({
@@ -266,6 +287,48 @@ export class SlackAdapter implements IPlatformAdapter {
   }
 
   /**
+   * Resolve a Slack user id to a human-friendly display name via `users.info`.
+   * Cached in-memory per adapter lifetime. Returns undefined on any failure —
+   * the server handler still records the user identity by Slack id, just without
+   * a display_name backfill.
+   *
+   * Requires bot token scope `users:read`. If the scope is missing, Slack
+   * returns `missing_scope`; the WARN log fires once per adapter lifetime
+   * (gated by `missingScopeLogged`) since the misconfiguration is permanent
+   * rather than per-user. Other failures log per-occurrence.
+   */
+  async fetchDisplayName(slackUserId: string): Promise<string | undefined> {
+    if (!slackUserId) return undefined;
+    const cached = this.displayNameCache.get(slackUserId);
+    if (cached !== undefined) return cached;
+
+    try {
+      const result = await this.app.client.users.info({ user: slackUserId });
+      const u = result.user;
+      const name = u?.real_name ?? u?.profile?.display_name ?? u?.name;
+      if (name) {
+        this.displayNameCache.set(slackUserId, name);
+      }
+      return name;
+    } catch (error) {
+      const err = error as Error & { data?: { error?: string } };
+      const slackErrorCode = err.data?.error;
+      // Strip err.data from the log — Slack SDK error bodies can include API
+      // response metadata (workspace/user info) that's not relevant for ops.
+      const errMessage = err.message;
+      if (slackErrorCode === 'missing_scope') {
+        if (!this.missingScopeLogged) {
+          this.missingScopeLogged = true;
+          getLog().warn({ scope: 'users:read' }, 'slack.users_info_missing_scope');
+        }
+      } else {
+        getLog().warn({ errMessage, slackUserId, slackErrorCode }, 'slack.users_info_failed');
+      }
+      return undefined;
+    }
+  }
+
+  /**
    * Get conversation ID from Slack event
    * For threads: returns "channel:thread_ts" to maintain thread context
    * For non-threads: returns channel ID only
@@ -336,12 +399,14 @@ export class SlackAdapter implements IPlatformAdapter {
       }
 
       if (this.messageHandler && event.user) {
+        const displayName = await this.fetchDisplayName(event.user);
         const messageEvent: SlackMessageEvent = {
           text: event.text,
           user: event.user,
           channel: event.channel,
           ts: event.ts,
           thread_ts: event.thread_ts,
+          displayName,
         };
         this.trackTrigger(this.getConversationId(messageEvent), {
           channel: event.channel,
@@ -376,12 +441,14 @@ export class SlackAdapter implements IPlatformAdapter {
       }
 
       if (this.messageHandler && 'text' in event && event.text) {
+        const displayName = userId ? await this.fetchDisplayName(userId) : undefined;
         const messageEvent: SlackMessageEvent = {
           text: event.text,
           user: userId ?? '',
           channel: event.channel,
           ts: event.ts,
           thread_ts: 'thread_ts' in event ? event.thread_ts : undefined,
+          displayName,
         };
         this.trackTrigger(this.getConversationId(messageEvent), {
           channel: event.channel,
@@ -447,6 +514,13 @@ export class SlackAdapter implements IPlatformAdapter {
       return;
     }
 
+    // `/archon connect github` — device-flow GitHub connect, handled inline
+    // (no orchestrator dispatch / seed message).
+    if (kind === 'archon' && /^connect\s+github\b/i.test(raw)) {
+      await this.handleConnectGithub(command, respond);
+      return;
+    }
+
     const messageText = kind === 'archon-workflow' ? `/workflow ${raw}` : raw;
 
     // Post a visible seed message so the bot's responses thread cleanly under
@@ -483,11 +557,13 @@ export class SlackAdapter implements IPlatformAdapter {
       return;
     }
 
+    const displayName = await this.fetchDisplayName(actorId);
     const messageEvent: SlackMessageEvent = {
       text: messageText,
       user: actorId,
       channel: command.channel_id,
       ts: seedTs,
+      displayName,
     };
     this.trackTrigger(this.getConversationId(messageEvent), {
       channel: command.channel_id,
@@ -503,6 +579,67 @@ export class SlackAdapter implements IPlatformAdapter {
     });
 
     void this.messageHandler(messageEvent);
+  }
+
+  /**
+   * Handle `/archon connect github`: resolve the invoking Slack user to an
+   * Archon user, then drive the device flow. The device code and final result
+   * are delivered as ephemeral follow-ups via `respond` (response_url is valid
+   * ~30 min / 5 uses — enough for the code + result within the 15-min device
+   * code lifetime). Polling runs detached so we don't block the slash ack.
+   */
+  private async handleConnectGithub(
+    command: SlashCommand,
+    respond: (msg: { response_type: 'ephemeral' | 'in_channel'; text: string }) => Promise<unknown>
+  ): Promise<void> {
+    if (!isPerUserGitHubEnabled()) {
+      await respond({
+        response_type: 'ephemeral',
+        text: 'GitHub connect is not enabled on this Archon install (requires the GitHub App + token encryption).',
+      });
+      return;
+    }
+
+    const actorId = command.user_id;
+    let archonUserId: string;
+    try {
+      const displayName = await this.fetchDisplayName(actorId);
+      const user = await userDb.findOrCreateUserByPlatformIdentity('slack', actorId, displayName);
+      archonUserId = user.id;
+    } catch (err) {
+      getLog().warn({ err: err as Error }, 'slack.connect_github_identity_failed');
+      await respond({
+        response_type: 'ephemeral',
+        text: 'Could not resolve your Archon identity — try again in a moment.',
+      });
+      return;
+    }
+
+    await respond({ response_type: 'ephemeral', text: 'Starting GitHub device flow…' });
+
+    // Detached: device flow can take minutes; the slash command must return now.
+    void connectGithubForUser(archonUserId, async info => {
+      await respond({
+        response_type: 'ephemeral',
+        text: `Visit ${info.verification_uri} and enter code: *${info.user_code}*`,
+      });
+    })
+      .then(async result => {
+        await respond({
+          response_type: 'ephemeral',
+          text: `✓ Connected as @${result.githubLogin} — PR comments will now appear as you.`,
+        });
+      })
+      .catch(async (err: unknown) => {
+        const text =
+          err instanceof GithubIdentityConflictError
+            ? `✗ ${err.message}`
+            : err instanceof DeviceFlowError
+              ? `✗ Device flow failed (${err.code}).`
+              : '✗ GitHub connect failed — try again.';
+        getLog().warn({ err: err as Error }, 'slack.connect_github_failed');
+        await respond({ response_type: 'ephemeral', text });
+      });
   }
 
   /**

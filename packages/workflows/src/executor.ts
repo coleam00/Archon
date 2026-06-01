@@ -6,15 +6,22 @@ import { join } from 'path';
 import type { IWorkflowPlatform, WorkflowMessageMetadata } from './deps';
 import type { WorkflowDeps, WorkflowConfig } from './deps';
 import * as archonPaths from '@archon/paths';
-import { createLogger, captureWorkflowInvoked, BUNDLED_VERSION } from '@archon/paths';
+import { createLogger, captureWorkflowInvoked, captureWorkflowCompleted } from '@archon/paths';
 import { getDefaultBranch, toRepoPath } from '@archon/git';
-import type { WorkflowDefinition, WorkflowRun, WorkflowExecutionResult } from './schemas';
+import type {
+  WorkflowDefinition,
+  WorkflowRun,
+  WorkflowExecutionResult,
+  WorkflowSource,
+} from './schemas';
+import { isLoopNode, isApprovalNode, isScriptNode, isBashNode } from './schemas';
 import { executeDagWorkflow } from './dag-executor';
 import { logWorkflowStart, logWorkflowError } from './logger';
 import { formatDuration, parseDbTimestamp } from './utils/duration';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { isRegisteredProvider, getRegisteredProviders } from '@archon/providers';
 import { classifyError, safeSendMessage, type SendMessageContext } from './executor-shared';
+import { resolveGithubTokenOverrides } from './utils/github-token-policy';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -83,6 +90,83 @@ async function sendCriticalMessage(
   );
 
   return false;
+}
+
+/**
+ * Parse `owner/repo` from a github.com URL. Returns null for non-GitHub URLs
+ * so the caller can fall through to env-inheritance.
+ *
+ *   https://github.com/owner/repo.git   → { owner, repo }
+ *   https://github.com/owner/repo       → { owner, repo }
+ *   git@github.com:owner/repo.git       → { owner, repo }
+ *   <anything else>                     → null
+ */
+function parseGithubRepoUrl(url: string): { owner: string; repo: string } | null {
+  // HTTPS form
+  const https = /^https?:\/\/(?:www\.)?github\.com\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/i.exec(url);
+  if (https) return { owner: https[1], repo: https[2] };
+  // SSH form (git@github.com:owner/repo[.git])
+  const ssh = /^git@github\.com:([^/]+)\/([^/]+?)(?:\.git)?$/i.exec(url);
+  if (ssh) return { owner: ssh[1], repo: ssh[2] };
+  return null;
+}
+
+/**
+ * Resolve a fresh GH_TOKEN/GITHUB_TOKEN pair from the registered bot-token
+ * provider, if any. Used at the top of executeWorkflow to inject the token
+ * into the workflow's envVars so bash/script subprocesses pick it up.
+ *
+ * Contract: NEVER THROWS. On any failure (no codebase, non-GitHub URL,
+ * provider rejected, network blip) returns {} — the workflow continues with
+ * whatever env inheritance was already in place. This matches the
+ * resolveBotGitHubToken? contract in deps.ts.
+ */
+async function resolveBotGitHubEnvForWorkflow(
+  deps: WorkflowDeps,
+  codebaseId: string | undefined
+): Promise<Record<string, string>> {
+  if (!codebaseId || !deps.resolveBotGitHubToken) return {};
+  try {
+    const codebase = await deps.store.getCodebase(codebaseId);
+    if (!codebase?.repository_url) return {};
+    const parsed = parseGithubRepoUrl(codebase.repository_url);
+    if (!parsed) return {};
+    const token = await deps.resolveBotGitHubToken(parsed.owner, parsed.repo);
+    if (!token) return {};
+    getLog().debug(
+      { owner: parsed.owner, repo: parsed.repo },
+      'workflow.bot_github_token_injected'
+    );
+    return { GH_TOKEN: token, GITHUB_TOKEN: token };
+  } catch (err) {
+    // Resolution failure must not block the workflow — log and fall back.
+    getLog().warn({ err: err as Error, codebaseId }, 'workflow.bot_github_token_resolve_failed');
+    return {};
+  }
+}
+
+/**
+ * Resolve per-user GitHub token overrides for a run. When per-user mode is on
+ * and the run has an originating user, this routes `gh`/`git push` through the
+ * user's personal token — or scrubs the org/bot token when they haven't
+ * connected (see {@link resolveGithubTokenOverrides}). Returns {} (no opinion)
+ * for server-initiated runs and solo installs, leaving the bot env untouched.
+ */
+async function resolveUserGithubEnvForWorkflow(
+  deps: WorkflowDeps,
+  userId: string | undefined
+): Promise<Record<string, string>> {
+  const perUserEnabled = deps.isPerUserGitHubEnabled?.() ?? false;
+  if (!perUserEnabled) return {};
+  let userToken: string | undefined;
+  if (userId && deps.getUserGithubToken) {
+    try {
+      userToken = await deps.getUserGithubToken(userId);
+    } catch (err) {
+      getLog().warn({ err: err as Error, userId }, 'workflow.user_github_token_resolve_failed');
+    }
+  }
+  return resolveGithubTokenOverrides(perUserEnabled, userId, userToken);
 }
 
 /**
@@ -161,8 +245,23 @@ export type ExecuteWorkflowOptions = ResumePayload & {
     prSha?: string;
     prBranch?: string;
   };
+  /**
+   * Discovery source of the workflow (bundled / global / project). Used only
+   * for anonymous telemetry — bundled workflows report their real name, custom
+   * ones report `"custom"`. Optional: defaults to the `"custom"`/project
+   * treatment when a caller doesn't thread it through.
+   */
+  source?: WorkflowSource;
   /** Parent conversation ID — enables approve/reject auto-resume from chat. */
   parentConversationId?: string;
+  /**
+   * Archon user UUID for attribution on the workflow_run row. Resolved by
+   * chat/forge adapters via findOrCreateUserByPlatformIdentity. Web/CLI paths
+   * pass undefined until their own auth surfaces are wired.
+   * Ignored when `preCreatedRun` is set — the original creator's attribution
+   * is preserved on resume.
+   */
+  userId?: string;
 };
 
 /**
@@ -226,13 +325,30 @@ export async function executeWorkflow(
     parentConversationId,
     preCreatedRun,
     priorCompletedNodes,
+    userId,
+    source,
   } = opts;
   // Load config once for the entire workflow execution
   const fileConfig = await deps.loadConfig(cwd);
   const dbEnvVars = codebaseId ? await deps.store.getCodebaseEnvVars(codebaseId) : {};
+  // Resolve a fresh bot GitHub token once at workflow start when:
+  //   (a) the codebase URL is a github.com repo, and
+  //   (b) deps.resolveBotGitHubToken is registered (App mode).
+  // Injected into envVars so bash/script subprocesses authenticate `gh` and
+  // initial `git push` via inherited GH_TOKEN. Workflows that run >1h still
+  // need the credential helper for live token rotation (handled at clone
+  // time in the GitHub adapter), but the env injection is enough for the
+  // typical <1h workflow.
+  const botGitHubEnv = await resolveBotGitHubEnvForWorkflow(deps, codebaseId);
+  const userGitHubEnv = await resolveUserGithubEnvForWorkflow(deps, userId);
   const config: WorkflowConfig = {
     ...fileConfig,
-    envVars: { ...fileConfig.envVars, ...dbEnvVars },
+    // Order: file < db < bot-token < per-user. Per-codebase env vars are
+    // operator-set; the injected bot token is system-set; the per-user override
+    // wins last so a run routes through the originating human's token (or scrubs
+    // the org/bot token when they haven't connected). Empty-string values from
+    // the per-user policy scrub the corresponding key via the subprocess merge.
+    envVars: { ...fileConfig.envVars, ...dbEnvVars, ...botGitHubEnv, ...userGitHubEnv },
   };
   const configuredCommandFolder = config.commands.folder;
 
@@ -312,6 +428,7 @@ export async function executeWorkflow(
         working_path: cwd,
         metadata: issueContext ? { github_context: issueContext } : {},
         parent_conversation_id: parentConversationId,
+        user_id: userId,
       });
     } catch (error) {
       const err = error as Error;
@@ -480,14 +597,24 @@ export async function executeWorkflow(
       conversationId: conversationDbId,
     });
 
-    // Fire-and-forget anonymous usage telemetry. No PII: only workflow name +
-    // description (authored by the user in their YAML) + platform + version.
-    // Opt out via ARCHON_TELEMETRY_DISABLED=1 or DO_NOT_TRACK=1.
+    // Fire-and-forget anonymous usage telemetry. Categorical only: bundled
+    // workflows report their real name, custom ones report "custom". No PII —
+    // descriptions/prompts/paths are never sent. Machine context + version ride
+    // along as super-properties. Opt out: ARCHON_TELEMETRY_DISABLED=1 / DO_NOT_TRACK=1.
     captureWorkflowInvoked({
       workflowName: workflow.name,
-      workflowDescription: workflow.description,
+      workflowSource: source,
       platform: platform.getPlatformType(),
-      archonVersion: BUNDLED_VERSION,
+      provider: resolvedProvider,
+      model: resolvedModel,
+      nodeCount: workflow.nodes.length,
+      usesLoop: workflow.nodes.some(isLoopNode),
+      usesApproval: workflow.nodes.some(isApprovalNode),
+      usesScript: workflow.nodes.some(isScriptNode),
+      usesBash: workflow.nodes.some(isBashNode),
+      interactive: workflow.interactive ?? false,
+      usedIsolation: isolationContext !== undefined,
+      isResume: dagPriorCompletedNodes !== undefined,
     });
     deps.store
       .createWorkflowEvent({
@@ -608,7 +735,8 @@ export async function executeWorkflow(
       config,
       configuredCommandFolder,
       issueContext,
-      dagPriorCompletedNodes
+      dagPriorCompletedNodes,
+      source
     );
 
     // executeDagWorkflow throws on fatal errors; check DB status for result
@@ -659,6 +787,17 @@ export async function executeWorkflow(
       runId: workflowRun.id,
       workflowName: workflow.name,
       error: err.message,
+    });
+    // Anonymous telemetry for the unhandled-throw failure path. The DAG-internal
+    // failure paths (no/partial completion) fire their own captureWorkflowCompleted
+    // and return without throwing, so this only covers genuine unhandled errors —
+    // no double-count. Duration/node-counts are not in scope here.
+    captureWorkflowCompleted({
+      outcome: 'failed',
+      workflowName: workflow.name,
+      workflowSource: source,
+      provider: resolvedProvider,
+      exitReason: 'unhandled_error',
     });
     deps.store
       .createWorkflowEvent({

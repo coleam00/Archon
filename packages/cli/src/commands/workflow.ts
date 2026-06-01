@@ -28,6 +28,7 @@ import {
   resumeWorkflow as resumeWorkflowOp,
   abandonWorkflow,
   getWorkflowStatus,
+  resetWorkflowNodeSessions,
 } from '@archon/core/operations/workflow-operations';
 import * as conversationDb from '@archon/core/db/conversations';
 import * as codebaseDb from '@archon/core/db/codebases';
@@ -294,6 +295,11 @@ export async function workflowRunCommand(
   const workflows = workflowEntries.map(ws => ws.workflow);
 
   const workflow = resolveWorkflowName(workflowName, workflows);
+  // Recover the discovery source (dropped by the .map above) for telemetry —
+  // bundled workflows report their real name, custom ones report "custom".
+  const workflowSource = workflow
+    ? workflowEntries.find(ws => ws.workflow === workflow)?.source
+    : undefined;
 
   if (!workflow) {
     // Check if the requested workflow had a load error
@@ -651,7 +657,11 @@ export async function workflowRunCommand(
   // Wire adapter for assistant message persistence
   adapter.setConversationDbId(conversationId, conversation.id);
 
-  // Persist user message for Web UI history
+  // Persist user message for Web UI history.
+  // TODO: thread the CLI user id (resolveCliUserId() in commands/auth.ts —
+  // ARCHON_USER_ID / $USER) through to addMessage and executeWorkflow so CLI
+  // runs are attributed. `archon auth github` has landed; this is the remaining
+  // wiring.
   try {
     await messageDb.addMessage(conversation.id, 'user', userMessage);
   } catch (error) {
@@ -783,8 +793,8 @@ export async function workflowRunCommand(
   let result: Awaited<ReturnType<typeof executeWorkflow>>;
   try {
     const opts = prepared
-      ? { codebaseId: codebase?.id, ...prepared }
-      : { codebaseId: codebase?.id };
+      ? { codebaseId: codebase?.id, source: workflowSource, ...prepared }
+      : { codebaseId: codebase?.id, source: workflowSource };
     result = await executeWorkflow(
       deps,
       adapter,
@@ -1241,6 +1251,57 @@ export async function workflowRejectCommand(runId: string, reason?: string): Pro
       `Rejected but failed to resume workflow '${result.workflowName}': ${err.message}\n` +
         `The rejection was recorded. Run 'bun run cli workflow resume ${runId}' to retry.`
     );
+  }
+}
+
+/**
+ * Reset persisted per-node provider sessions for a workflow.
+ *
+ * Filter rules:
+ *   - workflow-name required (positional)
+ *   - --scope <key>: restrict to one scope (e.g. a conversation UUID); when
+ *     omitted, deletes across ALL scopes (use --yes to skip the confirmation)
+ *   - --node <id>: restrict to one node within the scope
+ *   - --json: machine-readable output
+ */
+export async function workflowResetSessionsCommand(
+  workflowName: string,
+  options: { scope?: string; node?: string; yes?: boolean; json?: boolean }
+): Promise<void> {
+  if (!options.scope && !options.yes) {
+    throw new Error(
+      `Refusing to delete every persisted session for workflow '${workflowName}' across all scopes without confirmation.\n` +
+        'Pass --scope <key> to narrow, or --yes to confirm cross-scope reset.'
+    );
+  }
+  try {
+    const { deleted } = await resetWorkflowNodeSessions({
+      workflow_name: workflowName,
+      scope_key: options.scope,
+      node_id: options.node,
+    });
+    if (options.json) {
+      console.log(
+        JSON.stringify({
+          workflow: workflowName,
+          deleted,
+          scope: options.scope ?? null,
+          node: options.node ?? null,
+        })
+      );
+    } else if (deleted === 0) {
+      console.log(`No persisted sessions matched for workflow '${workflowName}'.`);
+    } else {
+      const scope = options.scope ? ` in scope '${options.scope}'` : ' across all scopes';
+      const node = options.node ? ` for node '${options.node}'` : '';
+      console.log(
+        `Deleted ${deleted} persisted session(s) for workflow '${workflowName}'${node}${scope}.`
+      );
+    }
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, workflowName, ...options }, 'cli.workflow_reset_sessions_failed');
+    throw new Error(`Failed to reset workflow sessions: ${err.message}`);
   }
 }
 

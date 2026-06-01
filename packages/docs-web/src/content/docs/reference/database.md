@@ -35,36 +35,9 @@ Set your remote connection string in `.env`:
 DATABASE_URL=postgresql://user:password@host:5432/dbname
 ```
 
-**For fresh installations**, run the combined migration:
+**No manual migration step is required.** On startup, the Postgres adapter applies the bundled `migrations/000_combined.sql` inside an advisory-lock transaction. The SQL is idempotent (`CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`), so both fresh installs and version upgrades converge automatically — including new tables and columns added in later releases.
 
-```bash
-psql $DATABASE_URL < migrations/000_combined.sql
-```
-
-**For updates to existing installations**, run only the migrations you haven't applied yet:
-
-```bash
-# Check which migrations you've already run, then apply new ones:
-psql $DATABASE_URL < migrations/002_command_templates.sql
-psql $DATABASE_URL < migrations/003_add_worktree.sql
-psql $DATABASE_URL < migrations/004_worktree_sharing.sql
-psql $DATABASE_URL < migrations/005_isolation_abstraction.sql
-psql $DATABASE_URL < migrations/006_isolation_environments.sql
-psql $DATABASE_URL < migrations/007_drop_legacy_columns.sql
-psql $DATABASE_URL < migrations/008_workflow_runs.sql
-psql $DATABASE_URL < migrations/009_workflow_last_activity.sql
-psql $DATABASE_URL < migrations/010_immutable_sessions.sql
-psql $DATABASE_URL < migrations/011_partial_unique_constraint.sql
-psql $DATABASE_URL < migrations/012_workflow_events.sql
-psql $DATABASE_URL < migrations/013_conversation_titles.sql
-psql $DATABASE_URL < migrations/014_message_history.sql
-psql $DATABASE_URL < migrations/015_background_dispatch.sql
-psql $DATABASE_URL < migrations/016_session_ended_reason.sql
-psql $DATABASE_URL < migrations/017_drop_command_templates.sql
-psql $DATABASE_URL < migrations/018_fix_workflow_status_default.sql
-psql $DATABASE_URL < migrations/019_workflow_resume_path.sql
-psql $DATABASE_URL < migrations/020_codebase_env_vars.sql
-```
+If schema application fails (permissions, syntax error, network), the process aborts at the first DB operation with the underlying Postgres error logged at `db.pg_schema_init_failed`.
 
 ## Local PostgreSQL via Docker
 
@@ -76,33 +49,7 @@ Set in `.env`:
 DATABASE_URL=postgresql://postgres:postgres@postgres:5432/remote_coding_agent
 ```
 
-**For fresh installations**, the database schema is created automatically when you start with `docker compose --profile with-db`. The combined migration runs on first startup.
-
-**For updates to existing Docker installations**, you need to manually run new migrations:
-
-```bash
-# Connect to the running postgres container
-docker compose exec postgres psql -U postgres -d remote_coding_agent
-
-# Then run the migrations you haven't applied yet
-\i /migrations/012_workflow_events.sql
-\i /migrations/013_conversation_titles.sql
-\i /migrations/014_message_history.sql
-\i /migrations/015_background_dispatch.sql
-\i /migrations/016_session_ended_reason.sql
-\i /migrations/017_drop_command_templates.sql
-\i /migrations/018_fix_workflow_status_default.sql
-\i /migrations/019_workflow_resume_path.sql
-\i /migrations/020_codebase_env_vars.sql
-\q
-```
-
-Or from your host machine (requires `psql` installed):
-
-```bash
-psql postgresql://postgres:postgres@localhost:5432/remote_coding_agent < migrations/020_codebase_env_vars.sql
-# ... and so on for each migration not yet applied
-```
+The app converges the schema automatically on startup (see the note above for remote Postgres). Both fresh installs and upgrades are handled by the same path; the `docker-entrypoint-initdb.d` mount in `docker-compose.yml` is now redundant and is retained only as a no-op on fresh volumes.
 
 ## Verifying the Database
 
@@ -119,7 +66,7 @@ psql $DATABASE_URL -c "\dt"
 
 ## Schema Overview
 
-The database has 8 tables, all prefixed with `remote_agent_`:
+The database has 10 tables, all prefixed with `remote_agent_`:
 
 1. **`remote_agent_codebases`** - Repository metadata
    - Commands stored as JSONB: `{command_name: {path, description}}`
@@ -130,6 +77,7 @@ The database has 8 tables, all prefixed with `remote_agent_`:
    - Platform type + conversation ID (unique constraint)
    - Linked to codebase via foreign key
    - AI assistant type locked at creation
+   - Nullable `user_id` records the first user who created the conversation (first-user-wins; later replies in the same thread are attributed on the workflow_run, not here)
 
 3. **`remote_agent_sessions`** - AI session management
    - Active session flag (one per conversation)
@@ -139,11 +87,13 @@ The database has 8 tables, all prefixed with `remote_agent_`:
 4. **`remote_agent_isolation_environments`** - Worktree isolation
    - Tracks git worktrees per issue/PR
    - Enables worktree sharing between linked issues and PRs
+   - Nullable `created_by_user_id` preserves the original creator across re-activation (the `ON CONFLICT DO UPDATE` clause intentionally omits this column)
 
 5. **`remote_agent_workflow_runs`** - Workflow execution tracking
    - Tracks active workflows per conversation
    - Locks concurrent execution per `working_path`: a second dispatch on a path with an active run (status `pending`/`running`/`paused`) is auto-cancelled with an actionable message. Stale `pending` rows older than 5 minutes are treated as orphaned and ignored.
    - Stores workflow state, step progress, and parent conversation linkage
+   - Nullable `user_id` records which user triggered the run
 
 6. **`remote_agent_workflow_events`** - Step-level workflow event log
    - Records step transitions, artifacts, and errors per workflow run
@@ -154,11 +104,23 @@ The database has 8 tables, all prefixed with `remote_agent_`:
    - Persists user and assistant messages with timestamps
    - Stores tool call metadata (name, input, duration) in JSONB
    - Enables message history in Web UI across page refreshes
+   - Nullable `user_id` on user-role rows (NULL on assistant rows since the AI isn't a user)
 
 8. **`remote_agent_codebase_env_vars`** - Per-project env vars for workflow execution
    - Key-value pairs scoped to a codebase
    - Injected into Claude SDK subprocess environment at execution time
    - Managed via Web UI Settings panel; `env:` in `.archon/config.yaml` for CLI users
+
+9. **`remote_agent_users`** - Archon-internal user identity
+   - One row per human (or bot) across all platforms
+   - Created lazily on first sight by any chat/forge adapter
+   - `display_name` and `email` are nullable until enrichment succeeds
+
+10. **`remote_agent_user_identities`** - Platform-to-Archon user mapping
+    - One row per `(platform, platform_user_id)` pair — Slack U-id, Telegram chat id, Discord snowflake, GitHub login, etc.
+    - `UNIQUE(platform, platform_user_id)` enforces deduplication at the DB level
+    - References `users.id` with `ON DELETE CASCADE` (deleting a user removes their identity mappings)
+    - All user_id FKs on the four tables above use `ON DELETE SET NULL` so future user deletion never destructively cascades
 
 ## Migration List
 

@@ -13,6 +13,7 @@ import {
   workflowApproveCommand,
   workflowRejectCommand,
   workflowCleanupCommand,
+  workflowResetSessionsCommand,
 } from './workflow';
 
 const mockLogger = {
@@ -141,6 +142,16 @@ mock.module('@archon/core/db/workflows', () => ({
 mock.module('@archon/core/db/workflow-events', () => ({
   listWorkflowEvents: mock(() => Promise.resolve([])),
   createWorkflowEvent: mock(() => Promise.resolve()),
+}));
+
+// Reset-sessions runs the real resetWorkflowNodeSessions operation over this mocked
+// DB layer (same pattern as the other workflow commands in this file). Safe from
+// mock.module pollution: workflow.test.ts is its own isolated `bun test` invocation.
+const mockDeleteNodeSessions = mock(() => Promise.resolve({ deleted: 0 }));
+mock.module('@archon/core/db/workflow-node-sessions', () => ({
+  deleteWorkflowNodeSessions: mockDeleteNodeSessions,
+  getWorkflowNodeSession: mock(() => Promise.resolve(null)),
+  upsertWorkflowNodeSession: mock(() => Promise.resolve()),
 }));
 
 describe('workflowListCommand', () => {
@@ -2813,5 +2824,60 @@ describe('extractStaleWorkspaceEntry', () => {
   it('returns null on an empty input', async () => {
     const { extractStaleWorkspaceEntry } = await import('./workflow');
     expect(extractStaleWorkspaceEntry('')).toBeNull();
+  });
+});
+
+describe('workflowResetSessionsCommand', () => {
+  let consoleSpy: ReturnType<typeof spyOn>;
+
+  beforeEach(() => {
+    consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    mockDeleteNodeSessions.mockClear();
+    mockDeleteNodeSessions.mockResolvedValue({ deleted: 0 });
+  });
+
+  afterEach(() => {
+    consoleSpy.mockRestore();
+  });
+
+  it('refuses a cross-scope reset without --scope and without --yes', async () => {
+    await expect(workflowResetSessionsCommand('feature-dev', {})).rejects.toThrow(/Refusing/);
+    expect(mockDeleteNodeSessions).not.toHaveBeenCalled();
+  });
+
+  it('proceeds across all scopes when --yes is given (no scope filter)', async () => {
+    mockDeleteNodeSessions.mockResolvedValueOnce({ deleted: 4 });
+
+    await workflowResetSessionsCommand('feature-dev', { yes: true });
+
+    expect(mockDeleteNodeSessions).toHaveBeenCalledWith({
+      workflow_name: 'feature-dev',
+      scope_key: undefined,
+      node_id: undefined,
+    });
+    const calls = consoleSpy.mock.calls.map((c: unknown[]) => String(c[0]));
+    expect(calls.some(c => c.includes('4') && c.includes('across all scopes'))).toBe(true);
+  });
+
+  it('proceeds with --scope and no --yes, narrowing to that scope', async () => {
+    mockDeleteNodeSessions.mockResolvedValueOnce({ deleted: 1 });
+
+    await workflowResetSessionsCommand('feature-dev', { scope: 'conv-1', node: 'planner' });
+
+    expect(mockDeleteNodeSessions).toHaveBeenCalledWith({
+      workflow_name: 'feature-dev',
+      scope_key: 'conv-1',
+      node_id: 'planner',
+    });
+  });
+
+  it('emits machine-readable JSON when --json is set', async () => {
+    mockDeleteNodeSessions.mockResolvedValueOnce({ deleted: 2 });
+
+    await workflowResetSessionsCommand('feature-dev', { scope: 'conv-1', json: true });
+
+    expect(consoleSpy).toHaveBeenCalledWith(
+      JSON.stringify({ workflow: 'feature-dev', deleted: 2, scope: 'conv-1', node: null })
+    );
   });
 });

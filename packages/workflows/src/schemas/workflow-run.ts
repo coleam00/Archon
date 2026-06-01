@@ -104,12 +104,12 @@ export const workflowRunSchema = z.object({
   codebase_id: z.string().nullable(),
   status: workflowRunStatusSchema,
   user_message: z.string(),
-  metadata: z.record(z.unknown()),
+  metadata: z.record(z.string(), z.unknown()),
   started_at: z.date(),
   completed_at: z.date().nullable(),
   last_activity_at: z.date().nullable(),
   working_path: z.string().nullable(),
-  created_by_user_id: z.string().nullable().optional(),
+  user_id: z.string().nullable(),
 });
 
 export type WorkflowRun = z.infer<typeof workflowRunSchema>;

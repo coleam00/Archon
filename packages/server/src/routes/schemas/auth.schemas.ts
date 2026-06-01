@@ -1,47 +1,42 @@
+/**
+ * Zod schemas for the GitHub device-flow connect endpoints.
+ */
 import { z } from '@hono/zod-openapi';
 
-/**
- * /api/auth/me response — either the authenticated user record, or
- * `{ authenticated: false }` when OIDC is not configured (single-user mode).
- *
- * Two shapes intentionally; the web client treats `authenticated === false`
- * as "no current user" without surfacing it as an error.
- */
-export const authMeAuthenticatedSchema = z
+/** POST /api/auth/github/device/start response — codes shown to the user. */
+export const deviceStartResponseSchema = z
   .object({
-    id: z.string().uuid(),
-    email: z.string().nullable(),
-    username: z.string().nullable(),
-    displayName: z.string().nullable(),
-    githubConnected: z.boolean(),
-    githubUsername: z.string().nullable(),
+    device_code: z.string(),
+    user_code: z.string(),
+    verification_uri: z.string(),
+    interval: z.number(),
+    expires_in: z.number(),
   })
-  .openapi('AuthMeAuthenticated');
+  .openapi('GithubDeviceStartResponse');
 
-export const authMeUnauthenticatedSchema = z
-  .object({ authenticated: z.literal(false) })
-  .openapi('AuthMeUnauthenticated');
+/** POST /api/auth/github/device/poll request — echoes the device_code from start. */
+export const devicePollBodySchema = z
+  .object({ device_code: z.string().min(1) })
+  .openapi('GithubDevicePollBody');
 
-export const authMeResponseSchema = z
-  .union([authMeAuthenticatedSchema, authMeUnauthenticatedSchema])
-  .openapi('AuthMeResponse');
-
-/** Generic `{ ok: true }` confirmation used by the disconnect endpoint. */
-export const okResponseSchema = z.object({ ok: z.literal(true) }).openapi('OkResponse');
-
-/** Query params accepted by OIDC + OAuth callback endpoints. */
-export const oidcCallbackQuerySchema = z
+/** POST /api/auth/github/device/poll response. */
+export const devicePollResponseSchema = z
   .object({
-    code: z.string().optional(),
-    state: z.string().optional(),
-    error: z.string().optional(),
-    error_description: z.string().optional(),
+    status: z.enum(['pending', 'connected', 'expired', 'denied', 'error']),
+    githubLogin: z.string().optional(),
+    detail: z.string().optional(),
   })
-  .openapi('OidcCallbackQuery');
+  .openapi('GithubDevicePollResponse');
 
-export const githubCallbackQuerySchema = z
+/** GET /api/auth/github response — current connection status. */
+export const githubConnectionStatusSchema = z
   .object({
-    code: z.string().optional(),
-    state: z.string().optional(),
+    connected: z.boolean(),
+    githubLogin: z.string().nullable(),
   })
-  .openapi('GithubCallbackQuery');
+  .openapi('GithubConnectionStatus');
+
+/** DELETE /api/auth/github response. */
+export const githubDisconnectResponseSchema = z
+  .object({ success: z.boolean() })
+  .openapi('GithubDisconnectResponse');

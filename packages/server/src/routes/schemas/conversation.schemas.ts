@@ -2,23 +2,16 @@
  * Zod schemas for conversation and message API endpoints.
  */
 import { z } from '@hono/zod-openapi';
+import { conversationRowSchema } from '@archon/core/schemas/conversation';
+import { messageRowSchema } from '@archon/core/schemas/message';
 
-/** A conversation record. */
-export const conversationSchema = z
-  .object({
-    id: z.string(),
-    platform_type: z.string(),
-    platform_conversation_id: z.string(),
-    codebase_id: z.string().nullable(),
-    cwd: z.string().nullable(),
-    isolation_env_id: z.string().nullable(),
-    ai_assistant_type: z.string(),
-    title: z.string().nullable(),
-    hidden: z.boolean(),
-    deleted_at: z.string().nullable(),
-    last_activity_at: z.string().nullable(),
-    created_at: z.string(),
-    updated_at: z.string(),
+/** A conversation record (wire shape with ISO string dates). */
+export const conversationSchema = conversationRowSchema
+  .extend({
+    created_at: z.string().datetime(),
+    updated_at: z.string().datetime(),
+    deleted_at: z.string().datetime().nullable(),
+    last_activity_at: z.string().datetime().nullable(),
   })
   .openapi('Conversation');
 
@@ -62,15 +55,10 @@ export const updateConversationBodySchema = z
 /** Generic success response. */
 export const successResponseSchema = z.object({ success: z.boolean() }).openapi('SuccessResponse');
 
-/** A single message row. */
-export const messageSchema = z
-  .object({
-    id: z.string(),
-    conversation_id: z.string(),
-    role: z.enum(['user', 'assistant']),
-    content: z.string(),
-    metadata: z.string(),
-    created_at: z.string(),
+/** A single message row (wire shape). */
+export const messageSchema = messageRowSchema
+  .extend({
+    created_at: z.string().datetime(),
   })
   .openapi('Message');
 

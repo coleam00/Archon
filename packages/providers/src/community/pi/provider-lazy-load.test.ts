@@ -1,7 +1,7 @@
 /**
  * Regression test: Pi SDK must not load at module-import time.
  *
- * Pi's `@mariozechner/pi-coding-agent/dist/config.js` runs
+ * Pi's `@earendil-works/pi-coding-agent/dist/config.js` runs
  * `readFileSync(getPackageJsonPath(), 'utf-8')` at module top-level. Inside
  * a compiled Archon binary `getPackageJsonPath()` resolves to
  * `dirname(process.execPath) + '/package.json'`, which doesn't exist — so
@@ -25,11 +25,11 @@ import { expect, mock, test } from 'bun:test';
 let piCodingAgentLoaded = false;
 let piAiLoaded = false;
 
-mock.module('@mariozechner/pi-coding-agent', () => {
+mock.module('@earendil-works/pi-coding-agent', () => {
   piCodingAgentLoaded = true;
   return {};
 });
-mock.module('@mariozechner/pi-ai', () => {
+mock.module('@earendil-works/pi-ai', () => {
   piAiLoaded = true;
   return {};
 });

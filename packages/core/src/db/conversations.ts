@@ -67,6 +67,9 @@ export async function getOrCreateConversation(
   );
 
   if (existing.rows[0]) {
+    // First-user-wins: do not overwrite user_id on subsequent messages in the
+    // same thread from a different user. Per-message attribution lives on
+    // workflow_runs/messages instead.
     return existing.rows[0];
   }
 
@@ -106,7 +109,7 @@ export async function getOrCreateConversation(
   }
 
   const created = await pool.query<Conversation>(
-    'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, created_by_user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+    'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
     [platformType, platformId, assistantType, finalCodebaseId, inheritedCwd, userId ?? null]
   );
 

@@ -86,7 +86,7 @@ archon setup --spawn              # open in a new terminal window
 
 ### `doctor`
 
-Verify your Archon setup. Runs a checklist of common failure points: Claude binary spawn, gh CLI auth, Pi auth (when Pi is configured as default), database reachability, workspace writability, bundled defaults, and adapter token pings (Slack/Telegram, best-effort).
+Verify your Archon setup. Runs a checklist of common failure points: Claude binary spawn, gh CLI auth, Pi auth (when Pi is configured as default), database reachability, workspace writability, bundled defaults, telemetry state, and adapter token pings (Slack/Telegram, best-effort).
 
 ```bash
 archon doctor
@@ -95,6 +95,38 @@ archon doctor
 Exit code 0 if all checks pass or are skipped; 1 if any critical check fails. Adapter pings degrade to `skip` on network errors — a flaky connection does not flip the result red.
 
 Also runs automatically at the end of `archon setup` (optional).
+
+### `auth github`
+
+Connect the current CLI user's GitHub identity via the GitHub device flow, so workflow commits, PR comments, and pushes attribute to you instead of the bot.
+
+```bash
+archon auth github
+```
+
+Only meaningful on **multi-user installs** running GitHub App mode (`GITHUB_APP_ID` + `GITHUB_APP_CLIENT_ID`) with `TOKEN_ENCRYPTION_KEY` set — solo `GITHUB_TOKEN` installs don't need it and the command exits with an explanatory error. Your CLI identity is resolved from `ARCHON_USER_ID` (explicit override) or `$USER` / `$USERNAME`, mapped to a stable Archon user via the `cli` platform identity.
+
+The command prints a `verification_uri` and a one-time `user_code`; visit the URL, enter the code, and authorize. On success the access/refresh tokens are stored encrypted (AES-256-GCM) in Archon's database. Exit code 0 on success; 1 if per-user GitHub is disabled, the identity can't be resolved, the code expires, or authorization is denied.
+
+### `telemetry status`
+
+Show the current anonymous telemetry state: whether it is enabled, the opt-out reason if not, the install UUID, the active PostHog host, and the key source.
+
+```bash
+archon telemetry status
+```
+
+Useful for verifying that an opt-out env var (`DO_NOT_TRACK=1`, `ARCHON_TELEMETRY_DISABLED=1`, `CI=true`, `POSTHOG_API_KEY=off`) is being picked up. Inspecting status never creates a `telemetry-id` file while opted out.
+
+### `telemetry reset`
+
+Rotate the persisted anonymous install UUID at `~/.archon/telemetry-id`. The previous ID is overwritten and not recoverable.
+
+```bash
+archon telemetry reset
+```
+
+Exit code 0 on success; 1 if the ID file cannot be written.
 
 ### `workflow list`
 

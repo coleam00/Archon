@@ -1,63 +1,56 @@
 /**
- * Multi-user GitHub token policy.
+ * Per-user GitHub token policy for workflow subprocesses.
  *
- * Prevents a workflow run from silently inheriting another user's (or the
- * shared org's) GitHub credentials through `process.env`.
+ * Prevents a workflow run from silently inheriting the shared org (or another
+ * user's) GitHub credentials through `process.env`. When per-user GitHub is
+ * enabled AND the run was initiated by a specific user, the run's subprocess
+ * env is rewritten so:
  *
- * Multi-user mode is detected by KEYCLOAK_URL being set. When in multi-user
- * mode AND the run was initiated by a specific user (workflow_runs.created_by_user_id
- * is set), the run's subprocess env is rewritten so:
- *
- *   - If the user has a personal GitHub OAuth token: inject it as
- *     GH_TOKEN / GITHUB_TOKEN. COPILOT_GITHUB_TOKEN is always cleared in
- *     this case — Copilot is a paid SaaS and an OAuth token does not grant
- *     equivalent access.
- *
- *   - If the user has NO personal token:
+ *   - User has a personal token → inject it as GH_TOKEN / GITHUB_TOKEN.
+ *     COPILOT_GITHUB_TOKEN is always cleared (Copilot is a paid SaaS; an OAuth
+ *     token does not grant equivalent access).
+ *   - User has NO personal token:
  *       - ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK=true → keep the org token
  *         (legacy behavior — opt-in).
- *       - Otherwise (default) → scrub GH_TOKEN, GITHUB_TOKEN, and
- *         COPILOT_GITHUB_TOKEN so `gh` and `git` cannot authenticate as
- *         the org / another user.
+ *       - Otherwise (default) → scrub GH_TOKEN / GITHUB_TOKEN /
+ *         COPILOT_GITHUB_TOKEN so `gh` and `git` cannot authenticate as the
+ *         org / another user.
  *
- * Server-initiated runs (no created_by_user_id — e.g. GitHub webhooks, cron,
- * CLI) are NOT scrubbed: those are trusted server-context runs.
+ * Server-initiated runs (no originating userId — GitHub webhooks, cron, CLI)
+ * are NOT scrubbed: trusted server context. Per-user mode disabled (solo PAT
+ * installs) is NEVER scrubbed — there is no "other user" to leak to.
  *
- * Single-user mode (KEYCLOAK_URL unset) is NEVER scrubbed — there is no
- * "other user" to leak to.
+ * Adapted from the #1774 donor: the KEYCLOAK_URL mode-detector is replaced by an
+ * injected `perUserEnabled` flag (resolved from `isPerUserGitHubEnabled()` at
+ * the call site) so this module stays pure and dependency-free.
  */
 
 const SENSITIVE_KEYS = ['GH_TOKEN', 'GITHUB_TOKEN', 'COPILOT_GITHUB_TOKEN'] as const;
 
-export function isMultiUserMode(): boolean {
-  return Boolean(process.env.KEYCLOAK_URL);
-}
-
-export function isOrgTokenFallbackAllowed(): boolean {
-  const v = process.env.ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK;
+export function isOrgTokenFallbackAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
+  const v = env.ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK;
   return v === 'true' || v === '1';
 }
 
 /**
- * Resolve the GitHub token overrides to apply on top of process.env for a
- * given workflow run.
+ * Resolve the GitHub token overrides to apply on top of process.env for a run.
  *
- * Returned record uses these conventions:
- *   - non-empty string value → set this env var to that value
- *   - empty string ('')      → scrub: remove this env var (or override to '',
- *                              which `gh`/`git` treat the same as unset)
- *   - key absent             → no opinion, inherit from process.env as-is
+ * Conventions:
+ *   - non-empty value → set this env var
+ *   - empty string '' → scrub: `gh`/`git` treat an empty value the same as unset
+ *   - key absent      → no opinion; inherit from process.env as-is
  *
- * Designed so callers in two different env-construction styles can apply it
- * uniformly: subprocess env builders (where we own the dict and can delete)
- * AND provider `requestOptions.env` (where empty string acts as scrub via
- * the provider's `{ ...process.env, ...requestOptions.env }` merge).
+ * Empty-string scrub composes with both env-construction styles: subprocess env
+ * builders (which spread `...process.env, ...overrides`, so '' wins over the org
+ * token) and AI-provider `requestOptions.env` (same merge semantics).
  */
 export function resolveGithubTokenOverrides(
+  perUserEnabled: boolean,
   userId: string | null | undefined,
-  userToken: string | null | undefined
+  userToken: string | null | undefined,
+  env: NodeJS.ProcessEnv = process.env
 ): Record<string, string> {
-  if (!isMultiUserMode()) return {};
+  if (!perUserEnabled) return {};
   if (!userId) return {}; // server-initiated trusted run
 
   if (userToken) {
@@ -68,7 +61,7 @@ export function resolveGithubTokenOverrides(
     };
   }
 
-  if (isOrgTokenFallbackAllowed()) return {};
+  if (isOrgTokenFallbackAllowed(env)) return {};
 
   return {
     GH_TOKEN: '',
@@ -78,9 +71,9 @@ export function resolveGithubTokenOverrides(
 }
 
 /**
- * Apply token overrides to an owned ProcessEnv (e.g. a subprocess env we
- * built ourselves). Empty-string overrides delete the key outright (cleaner
- * than passing an empty value to the subprocess).
+ * Apply token overrides to an owned ProcessEnv (a subprocess env we built
+ * ourselves). Empty-string overrides delete the key outright — cleaner than
+ * passing an empty value when we control the dict.
  */
 export function applyGithubTokenOverridesToProcessEnv(
   baseEnv: NodeJS.ProcessEnv,
@@ -89,8 +82,6 @@ export function applyGithubTokenOverridesToProcessEnv(
   const out: NodeJS.ProcessEnv = { ...baseEnv };
   for (const [k, v] of Object.entries(overrides)) {
     if (v === '') {
-      // Reflect.deleteProperty avoids the `no-dynamic-delete` lint rule
-      // and behaves identically to `delete out[k]`.
       Reflect.deleteProperty(out, k);
     } else {
       out[k] = v;

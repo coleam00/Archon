@@ -85,7 +85,7 @@ describe('conversations', () => {
       expect(mockQuery).toHaveBeenCalledTimes(2);
       expect(mockQuery).toHaveBeenNthCalledWith(
         2,
-        'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, created_by_user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+        'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
         ['telegram', 'chat-789', 'claude', null, null, null]
       );
     });
@@ -116,7 +116,7 @@ describe('conversations', () => {
       );
       expect(mockQuery).toHaveBeenNthCalledWith(
         3,
-        'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, created_by_user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+        'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
         ['telegram', 'chat-789', 'codex', 'codebase-123', null, null]
       );
     });
@@ -139,7 +139,7 @@ describe('conversations', () => {
       expect(result).toEqual(newConversation);
       expect(mockQuery).toHaveBeenNthCalledWith(
         2,
-        'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, created_by_user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+        'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
         ['telegram', 'chat-789', 'codex', null, null, null]
       );
     });
@@ -162,7 +162,7 @@ describe('conversations', () => {
       expect(result).toEqual(newConversation);
       expect(mockQuery).toHaveBeenNthCalledWith(
         3,
-        'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, created_by_user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+        'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
         ['telegram', 'chat-789', 'claude', 'non-existent-codebase', null, null]
       );
     });
@@ -210,7 +210,7 @@ describe('conversations', () => {
       // Verify inherited values in INSERT
       expect(mockQuery).toHaveBeenNthCalledWith(
         3,
-        'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, created_by_user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+        'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
         ['discord', 'thread-123', 'codex', 'codebase-123', '/workspace/project', null]
       );
     });
@@ -244,7 +244,7 @@ describe('conversations', () => {
       // Should use inherited assistant type but null for codebase/cwd
       expect(mockQuery).toHaveBeenNthCalledWith(
         3,
-        'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, created_by_user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+        'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
         ['discord', 'thread-123', 'claude', null, null, null]
       );
     });

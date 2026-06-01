@@ -292,9 +292,11 @@ The Web UI and CLI work out of the box. Optionally connect a chat platform for r
                            │
                            ▼
 ┌─────────────────────────────────────────────────────────┐
-│              SQLite / PostgreSQL (7 Tables)             │
-│   Codebases • Conversations • Sessions • Workflow Runs  │
-│    Isolation Environments • Messages • Workflow Events  │
+│             SQLite / PostgreSQL (12 Tables)             │
+│  Codebases • Conversations • Sessions • Workflow Runs   │
+│   Isolation Environments • Messages • Workflow Events   │
+│    Users • User Identities • Workflow Node Sessions     │
+│         Codebase Env Vars • User GitHub Tokens          │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -317,18 +319,27 @@ Full documentation is available at **[archon.diy](https://archon.diy)**.
 
 ## Telemetry
 
-Archon sends a single anonymous event — `workflow_invoked` — each time a workflow starts, so maintainers can see which workflows get real usage and prioritize accordingly. **No PII, ever.**
+Archon sends a few anonymous events so maintainers can see which workflows get real usage, on what platforms, and whether runs succeed — and prioritize accordingly. **No PII, ever.** Events: `archon_started` (once per CLI invocation / server boot), `workflow_invoked` (each workflow start), and `workflow_completed` / `workflow_failed` (each run outcome).
 
-**What's collected:** the workflow name, the workflow description (both authored by you in YAML), the platform that triggered it (`cli`, `web`, `slack`, etc.), the Archon version, and a random install UUID stored at `~/.archon/telemetry-id`. Nothing else.
+**What's collected (categorical only):**
+- **Workflow name** — the real name for *bundled* (Archon-authored) workflows; `"custom"` for your own workflows, so private names never leave your machine.
+- **Run shape & outcome** — platform (`cli`/`web`/`slack`/…), provider id (plus the model id on `workflow_invoked`), node count, which node types are used, success/failure, duration, and a categorical failure reason (never raw error text).
+- **Machine context** — OS, architecture, Archon version, runtime, whether it's a binary build, and a CI flag.
+- A random install UUID stored at `~/.archon/telemetry-id`. Nothing else.
 
-**What's *not* collected:** your code, prompts, messages, git remotes, file paths, usernames, tokens, AI output, workflow node details — none of it.
+**What's *not* collected:** your code, prompts, messages, custom workflow names, workflow descriptions, git remotes, file paths, usernames, tokens, AI output, error message text, your IP address, your geographic location — none of it.
 
 **Opt out:** set any of these in your environment:
 
 ```bash
 ARCHON_TELEMETRY_DISABLED=1
 DO_NOT_TRACK=1        # de facto standard honored by Astro, Bun, Prisma, Nuxt, etc.
+POSTHOG_API_KEY=off   # off | 0 | false | disabled | "" all disable
 ```
+
+CI environments (`CI=true`) are auto-disabled — forks running fixtures in GitHub Actions, CircleCI, etc. do not send events.
+
+**Check the current state:** run `archon telemetry status` to see whether telemetry is enabled, why (if not), the install UUID, and the active host. Run `archon telemetry reset` to rotate the install UUID. `archon doctor` also surfaces the current state in its check list.
 
 Self-host PostHog or use a different project by setting `POSTHOG_API_KEY` and `POSTHOG_HOST`.
 

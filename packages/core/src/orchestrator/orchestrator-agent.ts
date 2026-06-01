@@ -34,11 +34,18 @@ import type { WorkspaceSyncResult } from '@archon/git';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { findWorkflow } from '@archon/workflows/router';
 import { executeWorkflow, hydrateResumableRun } from '@archon/workflows/executor';
+import {
+  assertWorkflowRequirementsMet,
+  WorkflowRequirementError,
+} from '@archon/workflows/utils/workflow-requirements';
 import type {
   WorkflowDefinition,
   WorkflowWithSource,
   WorkflowLoadError,
+  WorkflowSource,
 } from '@archon/workflows/schemas/workflow';
+import { isPerUserGitHubEnabled } from '../github-auth/config';
+import { getDecryptedAccessToken } from '../db/user-github-token-store';
 import { createWorkflowDeps } from '../workflows/store-adapter';
 import { loadConfig } from '../config/config-loader';
 import type { MergedConfig } from '../config/config-types';
@@ -317,8 +324,35 @@ async function dispatchOrchestratorWorkflow(
   codebase: Codebase,
   workflow: WorkflowDefinition,
   userMessage: string,
-  isolationHints?: HandleMessageContext['isolationHints']
+  isolationHints?: HandleMessageContext['isolationHints'],
+  userId?: string,
+  /**
+   * Discovery source of the workflow — telemetry only (bundled workflows
+   * report their real name, custom ones report "custom"). Optional: callers
+   * that don't have it readily in scope omit it and the run reports "custom".
+   */
+  source?: WorkflowSource
 ): Promise<void> {
+  // Capability gate: hard-fail before any worktree/clone/AI cost if the
+  // workflow declares `requires: [github]` and the originating user hasn't
+  // connected. No-op when per-user GitHub is disabled (solo PAT installs).
+  if (isPerUserGitHubEnabled() && workflow.requires?.length) {
+    const githubConnected = userId ? Boolean(await getDecryptedAccessToken(userId)) : false;
+    try {
+      assertWorkflowRequirementsMet(workflow, { githubConnected });
+    } catch (err) {
+      if (err instanceof WorkflowRequirementError) {
+        getLog().info(
+          { workflowName: workflow.name, conversationId, userId, requirement: err.requirement },
+          'workflow.requirement_unmet'
+        );
+        await platform.sendMessage(conversationId, err.message);
+        return;
+      }
+      throw err;
+    }
+  }
+
   // Auto-attach project to conversation
   await db.updateConversation(conversation.id, {
     codebase_id: codebase.id,
@@ -343,7 +377,9 @@ async function dispatchOrchestratorWorkflow(
         codebase,
         platform,
         conversationId,
-        isolationHints
+        isolationHints,
+        false,
+        userId
       );
       cwd = result.cwd;
     } catch (error) {
@@ -401,6 +437,8 @@ async function dispatchOrchestratorWorkflow(
         {
           codebaseId: codebase.id,
           parentConversationId: conversation.id,
+          userId,
+          source,
           ...prepared,
         }
       );
@@ -420,6 +458,8 @@ async function dispatchOrchestratorWorkflow(
         {
           codebaseId: codebase.id,
           parentConversationId: conversation.id,
+          userId,
+          source,
         }
       );
     }
@@ -435,6 +475,8 @@ async function dispatchOrchestratorWorkflow(
         codebaseId: codebase.id,
         availableWorkflows: [workflow],
         isolationHints,
+        userId,
+        source,
       },
       workflow
     );
@@ -451,6 +493,8 @@ async function dispatchOrchestratorWorkflow(
       {
         codebaseId: codebase.id,
         parentConversationId: conversation.id,
+        userId,
+        source,
       }
     );
   }
@@ -636,17 +680,26 @@ export async function handleMessage(
   message: string,
   context?: HandleMessageContext
 ): Promise<void> {
-  const { issueContext, threadContext, parentConversationId, isolationHints, attachedFiles } =
-    context ?? {};
+  const {
+    issueContext,
+    threadContext,
+    parentConversationId,
+    isolationHints,
+    attachedFiles,
+    userId,
+  } = context ?? {};
   try {
-    getLog().debug({ conversationId }, 'orchestrator_message_received');
+    getLog().debug({ conversationId, userId }, 'orchestrator_message_received');
 
-    // 1. Get/create conversation and inherit thread context
+    // 1. Get/create conversation and inherit thread context.
+    // userId is recorded on the conversation row only on first creation —
+    // first-user-wins. Per-message attribution happens on workflow_runs.
     let conversation = await db.getOrCreateConversation(
       platform.getPlatformType(),
       conversationId,
       undefined,
-      parentConversationId
+      parentConversationId,
+      userId
     );
     conversation = await inheritThreadContext(
       platform,
@@ -732,6 +785,9 @@ export async function handleMessage(
           const { workflows: discoveredWorkflows } = await discoverAllWorkflows(conversation);
           const allWorkflows: WorkflowDefinition[] = discoveredWorkflows.map(w => w.workflow);
           const workflow = findWorkflow(pausedRun.workflow_name, allWorkflows);
+          const workflowSource = workflow
+            ? discoveredWorkflows.find(w => w.workflow === workflow)?.source
+            : undefined;
           if (!workflow) {
             await platform.sendMessage(
               conversationId,
@@ -759,7 +815,9 @@ export async function handleMessage(
             codebase,
             workflow,
             pausedRun.user_message,
-            isolationHints
+            isolationHints,
+            userId,
+            workflowSource
           );
           getLog().info(
             { conversationId, workflowRunId: pausedRun.id, workflowName: pausedRun.workflow_name },
@@ -829,7 +887,8 @@ export async function handleMessage(
             conversation,
             result.workflow.definition,
             result.workflow.args ?? message,
-            isolationHints
+            isolationHints,
+            userId
           );
         }
         return;
@@ -1006,7 +1065,8 @@ export async function handleMessage(
         isolationHints,
         conversation,
         issueContext,
-        requestOptions
+        requestOptions,
+        userId
       );
     } else {
       await handleBatchMode(
@@ -1022,7 +1082,8 @@ export async function handleMessage(
         isolationHints,
         conversation,
         issueContext,
-        requestOptions
+        requestOptions,
+        userId
       );
     }
 
@@ -1058,7 +1119,8 @@ async function handleStreamMode(
   isolationHints: HandleMessageContext['isolationHints'],
   conversation: Conversation,
   issueContext?: string,
-  requestOptions?: SendQueryOptions
+  requestOptions?: SendQueryOptions,
+  userId?: string
 ): Promise<void> {
   const allMessages: string[] = [];
   let newSessionId: string | undefined;
@@ -1198,7 +1260,8 @@ async function handleStreamMode(
       commands.workflowInvocation,
       originalMessage,
       isolationHints,
-      issueContext
+      issueContext,
+      userId
     );
     return;
   }
@@ -1239,7 +1302,8 @@ async function handleBatchMode(
   isolationHints: HandleMessageContext['isolationHints'],
   conversation: Conversation,
   issueContext?: string,
-  requestOptions?: SendQueryOptions
+  requestOptions?: SendQueryOptions,
+  userId?: string
 ): Promise<void> {
   const allChunks: { type: string; content: string }[] = [];
   const assistantMessages: string[] = [];
@@ -1410,7 +1474,8 @@ async function handleBatchMode(
       commands.workflowInvocation,
       originalMessage,
       isolationHints,
-      issueContext
+      issueContext,
+      userId
     );
     return;
   }
@@ -1469,7 +1534,8 @@ async function handleWorkflowInvocationResult(
   invocation: WorkflowInvocation,
   originalMessage: string,
   isolationHints: HandleMessageContext['isolationHints'],
-  issueContext?: string
+  issueContext?: string,
+  userId?: string
 ): Promise<void> {
   const { workflowName, projectName, remainingMessage } = invocation;
 
@@ -1501,7 +1567,8 @@ async function handleWorkflowInvocationResult(
       codebase,
       workflow,
       workflowPrompt,
-      isolationHints
+      isolationHints,
+      userId
     );
     return;
   }
@@ -1681,7 +1748,8 @@ async function handleWorkflowRunCommand(
   conversation: Conversation,
   workflow: WorkflowDefinition,
   userMessage: string,
-  isolationHints?: HandleMessageContext['isolationHints']
+  isolationHints?: HandleMessageContext['isolationHints'],
+  userId?: string
 ): Promise<void> {
   // Check if conversation has a project
   if (conversation.codebase_id) {
@@ -1701,7 +1769,8 @@ async function handleWorkflowRunCommand(
       codebase,
       workflow,
       userMessage,
-      isolationHints
+      isolationHints,
+      userId
     );
     return;
   }
@@ -1778,7 +1847,9 @@ async function handleWorkflowRunCommand(
       codebase,
       resolvedWorkflow,
       userMessage,
-      isolationHints
+      isolationHints,
+      userId,
+      resolvedEntry?.source
     );
     return;
   }

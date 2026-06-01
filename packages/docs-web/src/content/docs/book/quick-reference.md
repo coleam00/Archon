@@ -295,7 +295,7 @@ defaults:
 | `Not a git repository` | Running outside a repo | `cd` into a git repo first — workflow and isolation commands require one |
 | `Unknown provider 'X'. Registered: claude, codex, pi` | Typo in `provider:` (workflow root or node-level) | Set `provider:` to one of the registered ids. Model strings themselves are not validated at load time — the SDK rejects unknown models at request time. |
 | `$BASE_BRANCH referenced but could not be detected` | No base branch set and auto-detection failed | Set `worktree.baseBranch` in `.archon/config.yaml` or ensure `main`/`master` exists |
-| Workflow hangs with no output | Node idle timeout hit | Increase `idle_timeout` on the node (milliseconds) |
+| Node fails with "timed out with no output" | `idle_timeout` fired before the provider emitted anything (time-to-first-token exceeded the window) | Increase `idle_timeout` on the node or reduce prompt size |
 
 ### Debug Techniques
 

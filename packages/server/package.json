@@ -1,12 +1,12 @@
 {
   "name": "@archon/server",
-  "version": "0.3.12",
+  "version": "0.4.1",
   "type": "module",
   "main": "./src/index.ts",
   "scripts": {
     "dev": "bun --watch src/index.ts",
     "start": "bun src/index.ts",
-    "test": "bun test src/routes/api.workflows.test.ts && bun test src/routes/api.conversations.test.ts && bun test src/routes/api.codebases.test.ts && bun test src/routes/api.messages.test.ts && bun test src/routes/api.health.test.ts && bun test src/routes/api.workflow-runs.test.ts && bun test src/routes/api.providers.test.ts && bun test src/adapters/web/transport.test.ts && bun test src/adapters/web/persistence.test.ts",
+    "test": "bun test src/routes/api.workflows.test.ts && bun test src/routes/api.conversations.test.ts && bun test src/routes/api.codebases.test.ts && bun test src/routes/api.messages.test.ts && bun test src/routes/api.health.test.ts && bun test src/routes/api.workflow-runs.test.ts && bun test src/routes/api.providers.test.ts && bun test src/adapters/web/transport.test.ts && bun test src/adapters/web/persistence.test.ts && bun test src/resolve-user-id.test.ts && bun test src/github-auth-bootstrap.test.ts && bun test src/routes/auth-poll-status.test.ts",
     "type-check": "bun x tsc --noEmit",
     "setup-auth": "bun src/scripts/setup-auth.ts"
   },
@@ -17,11 +17,10 @@
     "@archon/paths": "workspace:*",
     "@archon/providers": "workspace:*",
     "@archon/workflows": "workspace:*",
-    "@hono/zod-openapi": "^0.19.6",
+    "@hono/zod-openapi": "^1.4.0",
     "dotenv": "^17.2.3",
     "hono": "^4.12.16",
-    "jose": "^6.2.3",
-    "zod": "^3.25.28"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^22.0.0"
