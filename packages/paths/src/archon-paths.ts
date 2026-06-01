@@ -16,7 +16,7 @@
 
 import { join, dirname, normalize, basename } from 'path';
 import { homedir } from 'os';
-import { access, mkdir, symlink, lstat, readdir, readlink, rm, stat } from 'fs/promises';
+import { access, mkdir, symlink, lstat, readdir, readlink, realpath, rm, stat } from 'fs/promises';
 import { createLogger } from './logger';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -219,10 +219,31 @@ export async function findMarkdownFilesRecursive(
   relativePath = '',
   options?: { maxDepth?: number }
 ): Promise<{ commandName: string; relativePath: string }[]> {
+  return findMarkdownFilesRecursiveImpl(rootPath, relativePath, options, new Set<string>());
+}
+
+async function findMarkdownFilesRecursiveImpl(
+  rootPath: string,
+  relativePath: string,
+  options: { maxDepth?: number } | undefined,
+  visitedRealPaths: Set<string>
+): Promise<{ commandName: string; relativePath: string }[]> {
   const maxDepth = options?.maxDepth ?? Infinity;
   const currentDepth = relativePath ? relativePath.split(/[/\\]/).filter(Boolean).length : 0;
   const results: { commandName: string; relativePath: string }[] = [];
   const fullPath = join(rootPath, relativePath);
+
+  // Seed visited-set on first entry so a symlink that points back at the
+  // search root itself is detected as a cycle on the first descent.
+  if (visitedRealPaths.size === 0) {
+    try {
+      visitedRealPaths.add(await realpath(fullPath));
+    } catch (e) {
+      const err = e as NodeJS.ErrnoException;
+      if (err.code === 'ENOENT') return results;
+      throw err;
+    }
+  }
 
   let entries;
   try {
@@ -264,10 +285,24 @@ export async function findMarkdownFilesRecursive(
       // levels are silently ignored (matches the convention that `.archon/*/`
       // folders support one level of grouping like `defaults/`).
       if (currentDepth >= maxDepth) continue;
-      const subResults = await findMarkdownFilesRecursive(
+
+      // Resolve the child directory's real path before descending. A symlink
+      // pointing back at an ancestor (or any already-visited target) would
+      // otherwise recurse forever.
+      let realChild: string;
+      try {
+        realChild = await realpath(join(fullPath, entry.name));
+      } catch {
+        continue;
+      }
+      if (visitedRealPaths.has(realChild)) continue;
+      visitedRealPaths.add(realChild);
+
+      const subResults = await findMarkdownFilesRecursiveImpl(
         rootPath,
         join(relativePath, entry.name),
-        options
+        options,
+        visitedRealPaths
       );
       results.push(...subResults);
     } else if (isFile && entry.name.endsWith('.md')) {

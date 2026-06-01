@@ -22,13 +22,36 @@ import type { WorkflowDefinition, DagNode } from './schemas';
 // =============================================================================
 
 let tmpDir: string;
+// Isolated ARCHON_HOME so home-scoped command/workflow discovery never sees
+// the developer's real ~/.archon/. Without this, tests that assert "no
+// commands found" fail on machines where the user has personal commands in
+// their home dir.
+let tmpHomeDir: string;
+let originalArchonHome: string | undefined;
+let originalArchonDocker: string | undefined;
 
 beforeEach(async () => {
   tmpDir = await mkdtemp(join(tmpdir(), 'validator-test-'));
+  tmpHomeDir = await mkdtemp(join(tmpdir(), 'validator-home-'));
+  originalArchonHome = process.env.ARCHON_HOME;
+  originalArchonDocker = process.env.ARCHON_DOCKER;
+  process.env.ARCHON_HOME = tmpHomeDir;
+  delete process.env.ARCHON_DOCKER;
 });
 
 afterEach(async () => {
   await rm(tmpDir, { recursive: true, force: true });
+  await rm(tmpHomeDir, { recursive: true, force: true });
+  if (originalArchonHome === undefined) {
+    delete process.env.ARCHON_HOME;
+  } else {
+    process.env.ARCHON_HOME = originalArchonHome;
+  }
+  if (originalArchonDocker === undefined) {
+    delete process.env.ARCHON_DOCKER;
+  } else {
+    process.env.ARCHON_DOCKER = originalArchonDocker;
+  }
 });
 
 function makeWorkflow(name: string, nodes: DagNode[], provider?: string): WorkflowDefinition {

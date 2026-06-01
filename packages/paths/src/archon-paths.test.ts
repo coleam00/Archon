@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { homedir, tmpdir } from 'os';
 import { join } from 'path';
 import { existsSync } from 'fs';
-import { mkdir, rm, writeFile, lstat, readlink } from 'fs/promises';
+import { mkdir, rm, writeFile, lstat, readlink, symlink as fsSymlink } from 'fs/promises';
 
 const isWindows = process.platform === 'win32';
 
@@ -38,7 +38,6 @@ import {
   createProjectSourceSymlink,
   findMarkdownFilesRecursive,
 } from './archon-paths';
-import { symlink as fsSymlink } from 'fs/promises';
 
 /** All env vars that path functions depend on */
 const ENV_VARS = ['WORKSPACE_PATH', 'WORKTREE_BASE', 'ARCHON_HOME', 'ARCHON_DOCKER', 'HOME'];
@@ -842,5 +841,26 @@ describe.skipIf(isWindows)('findMarkdownFilesRecursive — symlinks', () => {
 
     const found = await findMarkdownFilesRecursive(tempRoot);
     expect(found.map(e => e.commandName)).toEqual(['real']);
+  });
+
+  test('does not recurse infinitely on a self-referential symlink cycle', async () => {
+    // Symlink that points at the search root itself — the classic infinite
+    // loop trap. Walk must terminate and report only the real file.
+    await writeFile(join(tempRoot, 'top.md'), '# top');
+    await fsSymlink(tempRoot, join(tempRoot, 'loop'));
+
+    const found = await findMarkdownFilesRecursive(tempRoot);
+    expect(found.map(e => e.commandName)).toEqual(['top']);
+  });
+
+  test('does not recurse infinitely on a multi-level symlink cycle', async () => {
+    // tempRoot/a/back → tempRoot (loop via a sibling subdirectory).
+    const subA = join(tempRoot, 'a');
+    await mkdir(subA, { recursive: true });
+    await writeFile(join(subA, 'inside.md'), '# inside');
+    await fsSymlink(tempRoot, join(subA, 'back'));
+
+    const found = await findMarkdownFilesRecursive(tempRoot);
+    expect(found.map(e => e.commandName).sort()).toEqual(['inside']);
   });
 });
