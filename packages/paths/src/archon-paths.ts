@@ -72,6 +72,10 @@ export function isWSL(): boolean {
     const release = readFileSync('/proc/sys/kernel/osrelease', 'utf8').toLowerCase();
     return release.includes('microsoft');
   } catch {
+    // No env var (checked above) and no readable /proc/sys/kernel/osrelease
+    // means neither WSL signal fires — we're not in WSL. Safe to return false:
+    // a false negative only downgrades the "Open in IDE" link to vscode://file/...,
+    // which is the correct form outside WSL anyway.
     return false;
   }
 }
