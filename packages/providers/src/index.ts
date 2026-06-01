@@ -72,3 +72,9 @@ export {
   resolveCopilotBinaryPath,
   fileExists as copilotFileExists,
 } from './community/copilot/binary-resolver';
+export {
+  KiroProvider,
+  parseKiroConfig,
+  registerKiroProvider,
+  type KiroProviderDefaults,
+} from './community/kiro';

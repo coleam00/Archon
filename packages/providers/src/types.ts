@@ -155,6 +155,24 @@ export interface OpencodeProviderDefaults {
   agent?: string;
 }
 
+/** Defaults for the Kiro CLI community provider. */
+export interface KiroProviderDefaults {
+  [key: string]: unknown;
+  model?: string;
+  /** Path to the Kiro CLI binary. Defaults to `kiro-cli` on PATH. */
+  binaryPath?: string;
+  /** Optional Kiro agent/profile passed as `--agent`. */
+  agent?: string;
+  /** Pass `--trust-all-tools` for automation profiles that intentionally allow all tools. */
+  trustAllTools?: boolean;
+  /** Pass `--trust-tools=<csv>` to restrict the trusted Kiro tool set. */
+  trustTools?: string[];
+  /** Require configured MCP servers to start successfully before the node runs. */
+  requireMcpStartup?: boolean;
+  /** Extra raw CLI arguments appended before the prompt. */
+  additionalArgs?: string[];
+}
+
 /** Generic per-provider defaults bag used by config surfaces and UI. */
 export type ProviderDefaults = Record<string, unknown>;
 
