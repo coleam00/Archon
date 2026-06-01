@@ -658,8 +658,10 @@ export async function workflowRunCommand(
   adapter.setConversationDbId(conversationId, conversation.id);
 
   // Persist user message for Web UI history.
-  // TODO: thread userId once the CLI auth path lands (`archon auth github`
-  // resolving via ~/.archon/config.yaml `user_id`).
+  // TODO: thread the CLI user id (resolveCliUserId() in commands/auth.ts —
+  // ARCHON_USER_ID / $USER) through to addMessage and executeWorkflow so CLI
+  // runs are attributed. `archon auth github` has landed; this is the remaining
+  // wiring.
   try {
     await messageDb.addMessage(conversation.id, 'user', userMessage);
   } catch (error) {

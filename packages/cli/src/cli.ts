@@ -69,6 +69,7 @@ import { skillInstallCommand } from './commands/skill';
 import { validateWorkflowsCommand, validateCommandsCommand } from './commands/validate';
 import { serveCommand } from './commands/serve';
 import { doctorCommand } from './commands/doctor';
+import { authGithubCommand } from './commands/auth';
 import { telemetryStatusCommand, telemetryResetCommand } from './commands/telemetry';
 import { closeDatabase } from '@archon/core';
 import {
@@ -116,6 +117,7 @@ Commands:
   serve                      Start the web UI server (downloads web UI on first run)
   skill install [path]       Install the bundled Archon skill into .claude/skills/archon
   doctor                     Verify your Archon setup (Claude binary, gh auth, DB, adapters)
+  auth github                Connect your GitHub identity via device flow (multi-user installs)
   telemetry status           Show anonymous telemetry state (enabled, reason, ID, host)
   telemetry reset            Rotate the anonymous install UUID
   validate workflows [name]  Validate workflow definitions and their references
@@ -304,6 +306,7 @@ async function main(): Promise<number> {
     'skill',
     'doctor',
     'telemetry',
+    'auth',
   ];
   const requiresGitRepo = !noGitCommands.includes(command ?? '');
 
@@ -704,6 +707,21 @@ async function main(): Promise<number> {
 
       case 'doctor': {
         return await doctorCommand();
+      }
+
+      case 'auth': {
+        switch (subcommand) {
+          case 'github':
+            return await authGithubCommand();
+          default:
+            if (subcommand === undefined) {
+              console.error('Missing auth subcommand');
+            } else {
+              console.error(`Unknown auth subcommand: ${subcommand}`);
+            }
+            console.error('Available: github');
+            return 1;
+        }
       }
 
       case 'telemetry': {

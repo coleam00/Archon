@@ -2,15 +2,19 @@
 -- Version: Combined (final state after migrations 001-020)
 -- Description: Complete database schema (idempotent - safe to run multiple times)
 --
--- 8 Tables:
+-- 12 Tables:
 --   1. remote_agent_codebases
 --   1b. remote_agent_codebase_env_vars
+--   1c. remote_agent_users
+--   1d. remote_agent_user_identities
 --   2. remote_agent_conversations
 --   3. remote_agent_sessions
 --   4. remote_agent_isolation_environments
 --   5. remote_agent_workflow_runs
 --   6. remote_agent_workflow_events
+--   6b. remote_agent_workflow_node_sessions
 --   7. remote_agent_messages
+--   8. remote_agent_user_github_tokens
 --
 -- Dropped tables (via migrations):
 --   - remote_agent_command_templates (017)
@@ -391,3 +395,20 @@ CREATE INDEX IF NOT EXISTS idx_conversations_user_id
   ON remote_agent_conversations(user_id) WHERE user_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_user_id
   ON remote_agent_workflow_runs(user_id) WHERE user_id IS NOT NULL;
+
+-- From PR-C: per-user GitHub user-to-server tokens (device flow), encrypted at rest.
+-- One row per Archon user; cascades on user deletion. github_user_id is the
+-- numeric anchor for the commit no-reply email (survives username changes).
+CREATE TABLE IF NOT EXISTS remote_agent_user_github_tokens (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES remote_agent_users(id) ON DELETE CASCADE,
+  github_user_id BIGINT NOT NULL,
+  github_login VARCHAR(255) NOT NULL,
+  access_token_encrypted TEXT NOT NULL,
+  refresh_token_encrypted TEXT,
+  access_token_expires_at TIMESTAMP WITH TIME ZONE,
+  refresh_token_expires_at TIMESTAMP WITH TIME ZONE,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  UNIQUE(user_id)
+);

@@ -161,7 +161,34 @@ export {
   type GitHubAppConfig,
   type IGitHubAppAuthProvider,
   type GitHubAuth,
+  // Per-user device flow (PR-C)
+  isPerUserGitHubEnabled,
+  loadDeviceFlowConfig,
+  assertEncryptionKeyAtBoot,
+  connectGithubForUser,
+  persistGithubConnection,
+  startDeviceFlow,
+  pollDeviceFlowOnce,
+  DeviceFlowError,
+  type DeviceCodeResponse,
+  type DeviceAccessToken,
+  type PollOnceResult,
+  type ConnectGithubResult,
 } from './github-auth';
+
+// Per-user GitHub token store (PR-C)
+export {
+  saveUserGithubToken,
+  getUserGithubTokenRecord,
+  getDecryptedAccessToken,
+  deleteUserGithubToken,
+  getUserGithubNoreplyEmail,
+} from './db/user-github-token-store';
+export {
+  updateUserGithubProfile,
+  linkGithubIdentity,
+  GithubIdentityConflictError,
+} from './db/users';
 
 // Path validation
 export { isPathWithinWorkspace, validateAndResolvePath } from './utils/path-validation';

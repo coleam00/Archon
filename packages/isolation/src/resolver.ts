@@ -188,7 +188,8 @@ export class IsolationResolver {
       hints,
       canonicalPath,
       request.platformType,
-      request.userId
+      request.userId,
+      request.gitIdentity
     );
   }
 
@@ -436,7 +437,8 @@ export class IsolationResolver {
     hints: IsolationHints | undefined,
     canonicalPath: RepoPath,
     platformType: string,
-    userId: string | undefined
+    userId: string | undefined,
+    gitIdentity: { email: string; name?: string } | undefined
   ): Promise<IsolationResolution> {
     // Construct request based on workflow type
     const baseRequest = {
@@ -444,6 +446,7 @@ export class IsolationResolver {
       codebaseName: codebase.name,
       canonicalRepoPath: canonicalPath,
       identifier: workflowId,
+      gitIdentity,
     };
 
     let isolationRequest: IsolationRequest;

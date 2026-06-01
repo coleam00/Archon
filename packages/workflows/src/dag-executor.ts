@@ -2194,6 +2194,11 @@ async function executeLoopNode(
             CONTEXT: issueContext ?? '',
             EXTERNAL_CONTEXT: issueContext ?? '',
             ISSUE_CONTEXT: issueContext ?? '',
+            // Managed per-project env vars + per-user GitHub token overrides
+            // (incl. the unconnected-user scrub) must win last, exactly as
+            // executeBashNode/executeScriptNode do — otherwise until_bash would
+            // inherit the server's ambient GH token and bypass the scrub.
+            ...(config.envVars ?? {}),
           },
         });
         bashComplete = true; // exit 0 = complete

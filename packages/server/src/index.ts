@@ -82,6 +82,9 @@ import {
   createGitHubAppAuthProvider,
   loadAppPrivateKey,
   registerGitHubAppAuthProvider,
+  isPerUserGitHubEnabled,
+  assertEncryptionKeyAtBoot,
+  getDecryptedAccessToken,
   type GitHubAuth,
   type IGitHubAppAuthProvider,
 } from '@archon/core';
@@ -350,6 +353,15 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         throw new Error('GitHub App mode misconfigured: GITHUB_APP_ID and WEBHOOK_SECRET required');
       }
       const privateKey = loadAppPrivateKey();
+      // Fail fast on a malformed TOKEN_ENCRYPTION_KEY when per-user is enabled,
+      // so we never store unencryptable tokens at runtime. If the key is absent,
+      // per-user GitHub is simply disabled (App-for-bot-only remains valid).
+      assertEncryptionKeyAtBoot();
+      if (!isPerUserGitHubEnabled()) {
+        getLog().warn(
+          'github_app.per_user_disabled — set TOKEN_ENCRYPTION_KEY (and GITHUB_APP_CLIENT_ID) to enable per-user GitHub identity'
+        );
+      }
       const defaultInstallationId = process.env.GITHUB_APP_INSTALLATION_ID
         ? Number(process.env.GITHUB_APP_INSTALLATION_ID)
         : undefined;
@@ -365,7 +377,14 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       const botMention =
         process.env.GITHUB_BOT_MENTION || process.env.BOT_DISPLAY_NAME || config.botName;
       const auth: GitHubAuth = { kind: 'app', provider: githubAppAuthProvider };
-      github = new GitHubAdapter(auth, webhookSecret, lockManager, botMention);
+      // Per-user comment attribution: when enabled, let the adapter author PR/
+      // issue comments under the originating user's GitHub identity. Resolver
+      // returns undefined for unconnected users → bot identity fallback.
+      const getUserToken = isPerUserGitHubEnabled()
+        ? async (userId: string): Promise<string | undefined> =>
+            (await getDecryptedAccessToken(userId)) ?? undefined
+        : undefined;
+      github = new GitHubAdapter(auth, webhookSecret, lockManager, botMention, { getUserToken });
       await github.start();
       activePlatforms.push('GitHub (App)');
       getLog().info(
@@ -625,9 +644,9 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   //
   // SECURITY: hands out live installation access tokens to anyone who can hit
   // this URL. MUST be exposed on 127.0.0.1 only — the reverse proxy in front
-  // of Archon must NOT forward `/internal/*`. The startup WARN below fires when
-  // the operator binds the server to 0.0.0.0 with App mode active, making the
-  // misconfiguration obvious in logs.
+  // of Archon must NOT forward `/internal/*`. The startup guard below refuses
+  // to start the server (fatal error) when the operator binds to a non-loopback
+  // host with App mode active, unless ARCHON_ALLOW_INTERNAL_ON_PUBLIC_BIND=1.
   if (github?.getAuthMode() === 'app') {
     // Request schema for /internal/git-credential. Validates the small
     // host/path payload the credential helper sends. Inline declaration
@@ -781,6 +800,26 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
           'setting ARCHON_ALLOW_INTERNAL_ON_PUBLIC_BIND=1.'
       );
     }
+  }
+
+  // Security guardrail (advisory): the web identity header (ARCHON_WEB_AUTH_HEADER,
+  // default X-Archon-User) is trusted as-is — Archon attributes web requests to
+  // whoever the header names. That is only sound when Archon is reachable SOLELY
+  // through a reverse proxy that authenticates and sets the header (loopback bind).
+  // On a non-loopback bind any client that can reach the port can forge it:
+  // cosmetic misattribution without per-user GitHub, but in per-user mode a forged
+  // header can read/disconnect another user's GitHub connection or bind a
+  // device-flow token under their identity. WARN (not fatal) so existing exposed
+  // installs without per-user identity keep starting — but the misconfiguration is
+  // surfaced. The default header name means the trust is live even when
+  // ARCHON_WEB_AUTH_HEADER is unset, so per-user mode alone arms this check.
+  const webAuthHeaderTrustActive =
+    Boolean(process.env.ARCHON_WEB_AUTH_HEADER) || isPerUserGitHubEnabled();
+  if (webAuthHeaderTrustActive && hostname !== '127.0.0.1' && hostname !== 'localhost') {
+    getLog().warn(
+      { hostname, headerName: process.env.ARCHON_WEB_AUTH_HEADER || 'X-Archon-User' },
+      'web_auth.header_trust_on_public_bind'
+    );
   }
 
   const server = Bun.serve({

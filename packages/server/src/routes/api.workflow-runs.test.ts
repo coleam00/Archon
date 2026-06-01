@@ -388,7 +388,13 @@ describe('POST /api/workflows/:name/run', () => {
       body: JSON.stringify({ conversationId: 'web-test-abc', message: 'Deploy' }),
     });
 
-    expect(mockAddMessage).toHaveBeenCalledWith(MOCK_CONV.id, 'user', 'Deploy');
+    expect(mockAddMessage).toHaveBeenCalledWith(
+      MOCK_CONV.id,
+      'user',
+      'Deploy',
+      undefined,
+      undefined
+    );
   });
 
   test('fires title generation for conversations without title', async () => {

@@ -305,6 +305,21 @@ export class SqliteAdapter implements IDatabase {
         UNIQUE(platform, platform_user_id)
       );
 
+      -- User GitHub tokens (per-user device-flow tokens, encrypted at rest) [PR-C]
+      CREATE TABLE IF NOT EXISTS remote_agent_user_github_tokens (
+        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+        user_id TEXT NOT NULL REFERENCES remote_agent_users(id) ON DELETE CASCADE,
+        github_user_id INTEGER NOT NULL,
+        github_login TEXT NOT NULL,
+        access_token_encrypted TEXT NOT NULL,
+        refresh_token_encrypted TEXT,
+        access_token_expires_at TEXT,
+        refresh_token_expires_at TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now')),
+        UNIQUE(user_id)
+      );
+
       -- Codebases table
       CREATE TABLE IF NOT EXISTS remote_agent_codebases (
         id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),

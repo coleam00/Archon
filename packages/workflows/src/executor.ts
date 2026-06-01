@@ -21,6 +21,7 @@ import { formatDuration, parseDbTimestamp } from './utils/duration';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { isRegisteredProvider, getRegisteredProviders } from '@archon/providers';
 import { classifyError, safeSendMessage, type SendMessageContext } from './executor-shared';
+import { resolveGithubTokenOverrides } from './utils/github-token-policy';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -142,6 +143,30 @@ async function resolveBotGitHubEnvForWorkflow(
     getLog().warn({ err: err as Error, codebaseId }, 'workflow.bot_github_token_resolve_failed');
     return {};
   }
+}
+
+/**
+ * Resolve per-user GitHub token overrides for a run. When per-user mode is on
+ * and the run has an originating user, this routes `gh`/`git push` through the
+ * user's personal token — or scrubs the org/bot token when they haven't
+ * connected (see {@link resolveGithubTokenOverrides}). Returns {} (no opinion)
+ * for server-initiated runs and solo installs, leaving the bot env untouched.
+ */
+async function resolveUserGithubEnvForWorkflow(
+  deps: WorkflowDeps,
+  userId: string | undefined
+): Promise<Record<string, string>> {
+  const perUserEnabled = deps.isPerUserGitHubEnabled?.() ?? false;
+  if (!perUserEnabled) return {};
+  let userToken: string | undefined;
+  if (userId && deps.getUserGithubToken) {
+    try {
+      userToken = await deps.getUserGithubToken(userId);
+    } catch (err) {
+      getLog().warn({ err: err as Error, userId }, 'workflow.user_github_token_resolve_failed');
+    }
+  }
+  return resolveGithubTokenOverrides(perUserEnabled, userId, userToken);
 }
 
 /**
@@ -315,13 +340,15 @@ export async function executeWorkflow(
   // time in the GitHub adapter), but the env injection is enough for the
   // typical <1h workflow.
   const botGitHubEnv = await resolveBotGitHubEnvForWorkflow(deps, codebaseId);
+  const userGitHubEnv = await resolveUserGithubEnvForWorkflow(deps, userId);
   const config: WorkflowConfig = {
     ...fileConfig,
-    // Order: file < db < bot-token. Per-codebase env vars are operator-set; the
-    // injected bot token is system-set and represents the live identity for
-    // workflow-driven `gh`/`git push` operations — it must win to avoid a
-    // stale or wrong token leaking from a `GH_TOKEN=` line in .archon/.env.
-    envVars: { ...fileConfig.envVars, ...dbEnvVars, ...botGitHubEnv },
+    // Order: file < db < bot-token < per-user. Per-codebase env vars are
+    // operator-set; the injected bot token is system-set; the per-user override
+    // wins last so a run routes through the originating human's token (or scrubs
+    // the org/bot token when they haven't connected). Empty-string values from
+    // the per-user policy scrub the corresponding key via the subprocess merge.
+    envVars: { ...fileConfig.envVars, ...dbEnvVars, ...botGitHubEnv, ...userGitHubEnv },
   };
   const configuredCommandFolder = config.commands.folder;
 

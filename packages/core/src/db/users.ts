@@ -212,3 +212,77 @@ export async function updateUserDisplayName(userId: string, displayName: string)
     [displayName, userId]
   );
 }
+
+/**
+ * Raised when a GitHub account is already linked to a different Archon user.
+ * Connecting must never silently reassign an identity from one user to another.
+ */
+export class GithubIdentityConflictError extends Error {
+  constructor(public readonly login: string) {
+    super(`GitHub account @${login} is already linked to a different Archon user.`);
+    this.name = 'GithubIdentityConflictError';
+  }
+}
+
+/**
+ * Cache the user's GitHub profile on the users row (display_name + email).
+ * COALESCE keeps existing values when a field is omitted. Called at connect
+ * time (connectGithubForUser); token rotation persists tokens only and does not
+ * touch the profile.
+ */
+export async function updateUserGithubProfile(
+  userId: string,
+  profile: { display_name?: string | null; email?: string | null }
+): Promise<void> {
+  const dialect = getDialect();
+  await pool.query(
+    `UPDATE remote_agent_users
+       SET display_name = COALESCE($1, display_name),
+           email = COALESCE($2, email),
+           updated_at = ${dialect.now()}
+     WHERE id = $3`,
+    [profile.display_name ?? null, profile.email ?? null, userId]
+  );
+}
+
+/**
+ * Attach a GitHub identity to an EXISTING Archon user (the connecting actor).
+ * Unlike findOrCreateUserByPlatformIdentity, this never mints a new user — the
+ * device-flow connect surfaces already have the actor's user_id and only need
+ * to bind their GitHub login to it. Throws GithubIdentityConflictError if the
+ * login already maps to a different user.
+ */
+export async function linkGithubIdentity(userId: string, login: string): Promise<void> {
+  const platform: IdentityPlatform = 'github';
+  const existing = await selectIdentity(platform, login);
+  if (existing) {
+    if (existing.user_id !== userId) {
+      throw new GithubIdentityConflictError(login);
+    }
+    await pool.query(
+      'UPDATE remote_agent_user_identities SET platform_display_name = $1 WHERE id = $2',
+      [login, existing.id]
+    );
+    getLog().info({ userId, login }, 'user.github_identity_relinked');
+    return;
+  }
+  try {
+    await pool.query(
+      `INSERT INTO remote_agent_user_identities (user_id, platform, platform_user_id, platform_display_name)
+       VALUES ($1, $2, $3, $4)`,
+      [userId, platform, login, login]
+    );
+    getLog().info({ userId, login }, 'user.github_identity_linked');
+  } catch (err) {
+    // Concurrent connect of the same ('github', login) raced us past the SELECT
+    // and inserted first. UNIQUE(platform, platform_user_id) rejects the loser —
+    // re-read and honor the winner: conflict if it's a different user, otherwise
+    // a no-op (e.g. a double-clicked "Connect GitHub").
+    if (!isUniqueViolation(err)) throw err;
+    const winner = await selectIdentity(platform, login);
+    if (winner && winner.user_id !== userId) {
+      throw new GithubIdentityConflictError(login);
+    }
+    getLog().info({ userId, login }, 'user.github_identity_link_race_recovered');
+  }
+}
