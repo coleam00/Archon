@@ -393,13 +393,27 @@ export async function resumeWorkflowRun(id: string): Promise<WorkflowRun> {
     // an active row semantically means "when did this active phase start."
     // The original creation time can be recovered from workflow_events
     // history if needed for analytics.
+    // Compare-and-swap guard: only flip to 'running' if the row is STILL in a
+    // resumable state. The predicate mirrors findResumableRun's exactly —
+    // failed/paused, or a stale 'running' orphan (no activity in 3 days) — so
+    // legitimate orphan-recovery still works. Because this UPDATE refreshes both
+    // started_at and last_activity_at, a second concurrent resumer is excluded
+    // in every case: a freshly-resumed run is now 'running' with a current
+    // last_activity_at, so it no longer matches the stale-running clause. Without
+    // this guard two callers (e.g. the web Resume button + a chat re-dispatch, or
+    // the lock-less CLI path) could both flip the same run to 'running' and
+    // double-claim the worktree.
     updateResult = await pool.query(
       `UPDATE remote_agent_workflow_runs
        SET status = 'running',
            completed_at = NULL,
            started_at = ${dialect.now()},
            last_activity_at = ${dialect.now()}
-       WHERE id = $1`,
+       WHERE id = $1
+         AND (
+           status IN ('failed', 'paused')
+           OR (status = 'running' AND (last_activity_at IS NULL OR last_activity_at < ${dialect.nowMinusDays(3)}))
+         )`,
       [id]
     );
   } catch (error) {
@@ -409,9 +423,31 @@ export async function resumeWorkflowRun(id: string): Promise<WorkflowRun> {
   }
 
   if (updateResult.rowCount === 0) {
-    // Logical race: run was deleted or already activated between find and resume
-    getLog().warn({ workflowRunId: id }, 'db.workflow_run_resume_not_found');
-    throw new Error(`Workflow run not found (id: ${id})`);
+    // CAS miss: the row is no longer resumable. Either it was deleted, it's
+    // terminal, or another caller already activated it (concurrent double-resume)
+    // — refuse rather than double-claim the worktree. Probe the current status
+    // for an actionable message; the probe is best-effort error context only.
+    let currentStatus: string | undefined;
+    try {
+      const probe = await pool.query<{ status: string }>(
+        'SELECT status FROM remote_agent_workflow_runs WHERE id = $1',
+        [id]
+      );
+      currentStatus = probe.rows[0]?.status;
+    } catch (error) {
+      const err = error as Error;
+      getLog().error({ err, workflowRunId: id }, 'db.workflow_run_resume_probe_failed');
+      throw new Error(`Failed to resume workflow run: ${err.message}`);
+    }
+    if (currentStatus === undefined) {
+      getLog().warn({ workflowRunId: id }, 'db.workflow_run_resume_not_found');
+      throw new Error(`Workflow run not found (id: ${id})`);
+    }
+    getLog().warn({ workflowRunId: id, currentStatus }, 'db.workflow_run_resume_not_resumable');
+    throw new Error(
+      `Workflow run is not resumable (id: ${id}, status: ${currentStatus}). ` +
+        'It may have already been resumed, completed, or cancelled.'
+    );
   }
 
   let selectResult: Awaited<ReturnType<typeof pool.query<WorkflowRun>>>;
@@ -576,17 +612,30 @@ export async function failWorkflowRun(id: string, error: string): Promise<void> 
 
 export async function cancelWorkflowRun(id: string): Promise<void> {
   const dialect = getDialect();
+  let result: Awaited<ReturnType<typeof pool.query>>;
   try {
-    await pool.query(
+    // Guard against re-stamping an already-finished run. Cancelling a run that
+    // is 'completed' or 'cancelled' must be a no-op, not a re-write of
+    // completed_at / a resurrection of terminal state. 'failed' is intentionally
+    // still cancellable (it is overloaded as a resumable/approval state), and a
+    // 'running' run stays cancellable — that is cooperative cancellation, which
+    // the executor honors via its between-layer status check.
+    result = await pool.query(
       `UPDATE remote_agent_workflow_runs
        SET status = 'cancelled', completed_at = ${dialect.now()}
-       WHERE id = $1`,
+       WHERE id = $1 AND status NOT IN ('completed', 'cancelled')`,
       [id]
     );
   } catch (error) {
     const err = error as Error;
     getLog().error({ err }, 'db.workflow_run_cancel_failed');
     throw new Error(`Failed to cancel workflow run: ${err.message}`);
+  }
+  // Idempotent no-op when the run was already terminal — surface at debug for
+  // observability without erroring the caller (double-click cancel, abandon of
+  // an already-finished run, etc.).
+  if (result.rowCount === 0) {
+    getLog().debug({ workflowRunId: id }, 'db.workflow_run_cancel_noop');
   }
 }
 

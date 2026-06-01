@@ -25,6 +25,7 @@ import {
   updateWorkflowActivity,
   findResumableRun,
   resumeWorkflowRun,
+  cancelWorkflowRun,
   failOrphanedRuns,
   listWorkflowRuns,
   deleteOldWorkflowRuns,
@@ -743,12 +744,50 @@ describe('workflows database', () => {
       expect(updateQuery).toContain('started_at = NOW()');
     });
 
-    test('throws when no row matched (run not found)', async () => {
+    test('guards the UPDATE with the resumable-status CAS predicate', async () => {
+      // The flip to 'running' must only match a row that is still resumable —
+      // failed/paused, or a stale 'running' orphan — so two concurrent resumers
+      // can't both win and double-claim the worktree.
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([{ ...mockWorkflowRun, status: 'running' as const }])
+      );
+
+      await resumeWorkflowRun('workflow-run-123');
+
+      const [updateQuery] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(updateQuery).toContain("status IN ('failed', 'paused')");
+      expect(updateQuery).toContain("status = 'running' AND");
+    });
+
+    test('throws when no row matched and the run is gone (not found)', async () => {
       // UPDATE returns rowCount 0
       mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
+      // Probe SELECT finds no row → deleted
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
 
       await expect(resumeWorkflowRun('nonexistent-id')).rejects.toThrow(
         'Workflow run not found (id: nonexistent-id)'
+      );
+    });
+
+    test('throws "not resumable" when the run was concurrently activated (CAS miss)', async () => {
+      // UPDATE matches nothing because the row is already 'running'
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
+      // Probe SELECT reveals the current status
+      mockQuery.mockResolvedValueOnce(createQueryResult([{ status: 'running' }]));
+
+      await expect(resumeWorkflowRun('workflow-run-123')).rejects.toThrow(
+        'Workflow run is not resumable (id: workflow-run-123, status: running)'
+      );
+    });
+
+    test('throws on database error during the disambiguation probe', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 0)); // UPDATE matched nothing
+      mockQuery.mockRejectedValueOnce(new Error('Connection lost')); // probe fails
+
+      await expect(resumeWorkflowRun('workflow-run-123')).rejects.toThrow(
+        'Failed to resume workflow run: Connection lost'
       );
     });
 
@@ -779,6 +818,35 @@ describe('workflows database', () => {
 
       await expect(resumeWorkflowRun('workflow-run-123')).rejects.toThrow(
         'Workflow run vanished after update (id: workflow-run-123)'
+      );
+    });
+  });
+
+  describe('cancelWorkflowRun', () => {
+    test('cancels a non-terminal run and guards against re-stamping a finished one', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+
+      await cancelWorkflowRun('workflow-run-123');
+
+      const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(query).toContain("status = 'cancelled'");
+      // Must not re-cancel / re-stamp completed_at on an already-finished run.
+      expect(query).toContain("status NOT IN ('completed', 'cancelled')");
+      expect(params).toEqual(['workflow-run-123']);
+    });
+
+    test('is an idempotent no-op when the run is already terminal (no throw)', async () => {
+      // UPDATE matches nothing because the run is completed/cancelled
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
+
+      await expect(cancelWorkflowRun('workflow-run-123')).resolves.toBeUndefined();
+    });
+
+    test('throws on database error', async () => {
+      mockQuery.mockRejectedValueOnce(new Error('Lock timeout'));
+
+      await expect(cancelWorkflowRun('workflow-run-123')).rejects.toThrow(
+        'Failed to cancel workflow run: Lock timeout'
       );
     });
   });
