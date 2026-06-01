@@ -321,7 +321,7 @@ Archon sends a few anonymous events so maintainers can see which workflows get r
 
 **What's collected (categorical only):**
 - **Workflow name** — the real name for *bundled* (Archon-authored) workflows; `"custom"` for your own workflows, so private names never leave your machine.
-- **Run shape & outcome** — platform (`cli`/`web`/`slack`/…), provider/model id, node count, which node types are used, success/failure, duration, and a categorical failure reason (never raw error text).
+- **Run shape & outcome** — platform (`cli`/`web`/`slack`/…), provider id (plus the model id on `workflow_invoked`), node count, which node types are used, success/failure, duration, and a categorical failure reason (never raw error text).
 - **Machine context** — OS, architecture, Archon version, runtime, whether it's a binary build, and a CI flag.
 - A random install UUID stored at `~/.archon/telemetry-id`. Nothing else.
 

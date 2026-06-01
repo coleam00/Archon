@@ -70,6 +70,7 @@ export type {
   WorkflowInvokedProperties,
   ArchonStartedProperties,
   WorkflowCompletedProperties,
+  WorkflowExitReason,
   WorkflowTelemetrySource,
   TelemetryStatus,
   TelemetryDisabledReason,

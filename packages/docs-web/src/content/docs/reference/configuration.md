@@ -347,7 +347,7 @@ The Copilot provider also reads `assistants.copilot.{model, modelReasoningEffort
 
 ### Telemetry
 
-Archon sends a few anonymous events — `archon_started` (once per process), `workflow_invoked` (workflow start), and `workflow_completed`/`workflow_failed` (run outcome). Categorical only: workflow name (real for bundled workflows, `"custom"` for your own), platform, provider/model, node shape, outcome/duration, OS/arch/version, and a random install UUID. No code, prompts, paths, IP, geo, or error text. Any one of the variables below disables it. See `archon telemetry status` to inspect the live state.
+Archon sends a few anonymous events — `archon_started` (once per process), `workflow_invoked` (workflow start), and `workflow_completed`/`workflow_failed` (run outcome). Categorical only: workflow name (real for bundled workflows, `"custom"` for your own), platform, provider id (model id on `workflow_invoked`), node shape, outcome/duration, OS/arch/version, and a random install UUID. No code, prompts, paths, IP, geo, or error text. Any one of the variables below disables it. See `archon telemetry status` to inspect the live state.
 
 | Variable | Description | Default |
 | --- | --- | --- |

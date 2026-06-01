@@ -9,6 +9,7 @@ import {
   captureArchonStarted,
   captureWorkflowCompleted,
   classifyWorkflowForTelemetry,
+  sanitizeModelForTelemetry,
   shutdownTelemetry,
   resetTelemetryForTests,
   getOrCreateTelemetryId,
@@ -348,7 +349,6 @@ describe('captureWorkflowInvoked when disabled', () => {
       captureWorkflowInvoked({
         workflowName: 'test-workflow',
         platform: 'cli',
-        archonVersion: 'dev',
       });
     }).not.toThrow();
   });
@@ -463,7 +463,7 @@ describe('new capture functions are fire-and-forget no-throw', () => {
     expect(() => captureArchonStarted({ surface: 'server' })).not.toThrow();
   });
 
-  test('captureWorkflowCompleted does not throw for completed/failed/cancelled', () => {
+  test('captureWorkflowCompleted does not throw for completed/failed (disabled)', () => {
     process.env.ARCHON_TELEMETRY_DISABLED = '1';
     expect(() =>
       captureWorkflowCompleted({
@@ -482,5 +482,46 @@ describe('new capture functions are fire-and-forget no-throw', () => {
         exitReason: 'node_error',
       })
     ).not.toThrow();
+  });
+
+  test('captureWorkflowCompleted does not throw (enabled)', () => {
+    delete process.env.ARCHON_TELEMETRY_DISABLED;
+    delete process.env.DO_NOT_TRACK;
+    delete process.env.CI;
+    delete process.env.POSTHOG_API_KEY;
+    expect(() =>
+      captureWorkflowCompleted({
+        outcome: 'failed',
+        workflowName: 'implement',
+        workflowSource: 'bundled',
+        exitReason: 'unhandled_error',
+      })
+    ).not.toThrow();
+  });
+});
+
+describe('sanitizeModelForTelemetry', () => {
+  test('forwards real model refs verbatim', () => {
+    for (const model of [
+      'sonnet',
+      'opus',
+      'claude-sonnet-4-6',
+      'gpt-5.3-codex',
+      'anthropic/claude-haiku-4-5',
+      'openrouter/qwen/qwen3-coder',
+    ]) {
+      expect(sanitizeModelForTelemetry(model)).toBe(model);
+    }
+  });
+
+  test('drops free-text / non-categorical values so they cannot leak', () => {
+    expect(sanitizeModelForTelemetry('claude for the acme prod deploy')).toBeUndefined();
+    expect(sanitizeModelForTelemetry('john.doe@example.com is testing')).toBeUndefined();
+    expect(sanitizeModelForTelemetry('x'.repeat(100))).toBeUndefined();
+    expect(sanitizeModelForTelemetry('')).toBeUndefined();
+  });
+
+  test('passes through undefined', () => {
+    expect(sanitizeModelForTelemetry(undefined)).toBeUndefined();
   });
 });

@@ -132,7 +132,12 @@ function collectMachineProperties(): Record<string, string | boolean> {
     // Mirrors the CI auto-disable check; when telemetry is enabled this is
     // effectively always false, but it's cheap and future-proof.
     is_ci: process.env.CI?.toLowerCase() === 'true',
-    is_tty: process.stderr.isTTY,
+    // `process.stderr.isTTY` is `undefined` at runtime when stderr is not a TTY
+    // (servers, pipes, CI), so without coercion the field is silently omitted on
+    // the primary server path. bun-types incorrectly narrows it to `boolean`,
+    // which makes the lint rule think the coercion is redundant — it is not.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-conversion -- bun-types mis-types process.stderr.isTTY as always-boolean; runtime value is boolean|undefined and the coercion guarantees a present `false`.
+    is_tty: Boolean(process.stderr.isTTY),
   };
 }
 
@@ -150,13 +155,28 @@ export type WorkflowTelemetrySource = 'bundled' | 'global' | 'project';
 export function classifyWorkflowForTelemetry(
   name: string,
   source: WorkflowTelemetrySource | undefined
-): { workflow_name: string; is_builtin: boolean; workflow_source: string } {
+): { workflow_name: string; is_builtin: boolean; workflow_source: WorkflowTelemetrySource } {
   const isBuiltin = source === 'bundled';
   return {
     is_builtin: isBuiltin,
     workflow_name: isBuiltin ? name : 'custom',
     workflow_source: source ?? 'project',
   };
+}
+
+/**
+ * Model ids are user-supplied (forwarded verbatim from workflow/`config.yaml`
+ * YAML), so unlike `provider` they're not structurally categorical. Forward a
+ * value only when it looks like a real model ref (alphanumerics plus `/._:-`,
+ * bounded length — covers `sonnet`, `gpt-5.3-codex`, `anthropic/claude-haiku-4-5`,
+ * `openrouter/qwen/qwen3-coder`). Anything else is dropped so a stray free-text
+ * value can't slip through the "categorical only" telemetry contract.
+ *
+ * Exported for direct testing of the privacy guard. @internal
+ */
+export function sanitizeModelForTelemetry(model: string | undefined): string | undefined {
+  if (model === undefined) return undefined;
+  return /^[a-zA-Z0-9/._:-]{1,64}$/.test(model) ? model : undefined;
 }
 
 /** Why telemetry is currently disabled. `null` means it's enabled. */
@@ -498,9 +518,17 @@ export interface ArchonStartedProperties {
   surface: 'cli' | 'server';
 }
 
-/** Terminal workflow-run event (`workflow_completed` / `workflow_failed`). */
+/** Categorical terminal exit reason — a fixed enum, never raw error text. */
+export type WorkflowExitReason = 'no_nodes_completed' | 'node_error' | 'unhandled_error';
+
+/**
+ * Terminal workflow-run event (`workflow_completed` / `workflow_failed`).
+ * Cancellation is intentionally not tracked: external `/workflow cancel` exits
+ * via the `skipIfStatusChanged` paths in the DAG executor, which emit no
+ * telemetry by design (see "No Autonomous Lifecycle Mutation" in CLAUDE.md).
+ */
 export interface WorkflowCompletedProperties {
-  outcome: 'completed' | 'failed' | 'cancelled';
+  outcome: 'completed' | 'failed';
   workflowName: string;
   workflowSource?: WorkflowTelemetrySource;
   provider?: string;
@@ -509,8 +537,25 @@ export interface WorkflowCompletedProperties {
   nodesFailed?: number;
   nodesSkipped?: number;
   nodesTotal?: number;
-  /** Categorical reason enum — never raw error text. */
-  exitReason?: string;
+  exitReason?: WorkflowExitReason;
+}
+
+/**
+ * Run a telemetry capture fire-and-forget: never awaited, never throws. Resolves
+ * the lazy client, skips when disabled/uninitialized, and swallows every error
+ * (network, SDK, malformed props) at `debug` — telemetry must never crash Archon.
+ * The per-event error policy lives here, in exactly one place.
+ */
+function fireAndForget(capture: (client: PostHog) => void): void {
+  void (async (): Promise<void> => {
+    try {
+      const client = await getClient();
+      if (!client) return;
+      capture(client);
+    } catch (error) {
+      getLog().debug({ err: error as Error }, 'telemetry.capture_failed');
+    }
+  })();
 }
 
 /**
@@ -521,100 +566,84 @@ export interface WorkflowCompletedProperties {
 export function captureWorkflowInvoked(props: WorkflowInvokedProperties): void {
   if (isTelemetryDisabled()) return;
   maybeShowFirstRunNotice();
-  void (async (): Promise<void> => {
-    try {
-      const client = await getClient();
-      if (!client) return;
-      client.capture({
-        distinctId: getTelemetryId(),
-        event: 'workflow_invoked',
-        properties: {
-          ...PRIVACY_INVARIANTS,
-          ...classifyWorkflowForTelemetry(props.workflowName, props.workflowSource),
-          schema_version: TELEMETRY_SCHEMA_VERSION,
-          ...(props.platform ? { platform: props.platform } : {}),
-          ...(props.provider ? { provider: props.provider } : {}),
-          ...(props.model ? { model: props.model } : {}),
-          ...(props.nodeCount !== undefined ? { node_count: props.nodeCount } : {}),
-          uses_loop: Boolean(props.usesLoop),
-          uses_approval: Boolean(props.usesApproval),
-          uses_script: Boolean(props.usesScript),
-          uses_bash: Boolean(props.usesBash),
-          interactive: Boolean(props.interactive),
-          used_isolation: Boolean(props.usedIsolation),
-          is_resume: Boolean(props.isResume),
-        },
-      });
-    } catch (error) {
-      // Fire-and-forget: telemetry must never crash Archon, so swallow every
-      // error here (network, SDK, malformed props) and record it at debug.
-      getLog().debug({ err: error as Error }, 'telemetry.capture_failed');
-    }
-  })();
+  const model = sanitizeModelForTelemetry(props.model);
+  fireAndForget(client => {
+    client.capture({
+      distinctId: getTelemetryId(),
+      event: 'workflow_invoked',
+      properties: {
+        ...PRIVACY_INVARIANTS,
+        ...classifyWorkflowForTelemetry(props.workflowName, props.workflowSource),
+        schema_version: TELEMETRY_SCHEMA_VERSION,
+        ...(props.platform ? { platform: props.platform } : {}),
+        ...(props.provider ? { provider: props.provider } : {}),
+        ...(model ? { model } : {}),
+        ...(props.nodeCount !== undefined ? { node_count: props.nodeCount } : {}),
+        uses_loop: Boolean(props.usesLoop),
+        uses_approval: Boolean(props.usesApproval),
+        uses_script: Boolean(props.usesScript),
+        uses_bash: Boolean(props.usesBash),
+        interactive: Boolean(props.interactive),
+        used_isolation: Boolean(props.usedIsolation),
+        is_resume: Boolean(props.isResume),
+      },
+    });
+  });
 }
 
 /**
- * Fire-and-forget capture of an `archon_started` event — emitted once per CLI
- * invocation and per server boot. This (not just `workflow_invoked`) is what
- * makes active-install / DAU metrics honest, since users who only run
+ * Fire-and-forget capture of an `archon_started` event. Call once per CLI
+ * invocation and per server boot (the single call sites in `cli.ts` / the
+ * server entrypoint enforce the "once per process" contract — there is no
+ * in-function dedup guard). This (not just `workflow_invoked`) is what makes
+ * active-install / DAU metrics honest, since users who only run
  * `doctor`/`serve`/chat would otherwise be invisible. Machine context rides
  * along via the registered super-properties. Also shows the first-run notice.
  */
 export function captureArchonStarted(props: ArchonStartedProperties): void {
   if (isTelemetryDisabled()) return;
   maybeShowFirstRunNotice();
-  void (async (): Promise<void> => {
-    try {
-      const client = await getClient();
-      if (!client) return;
-      client.capture({
-        distinctId: getTelemetryId(),
-        event: 'archon_started',
-        properties: {
-          ...PRIVACY_INVARIANTS,
-          surface: props.surface,
-          schema_version: TELEMETRY_SCHEMA_VERSION,
-        },
-      });
-    } catch (error) {
-      getLog().debug({ err: error as Error }, 'telemetry.capture_failed');
-    }
-  })();
+  fireAndForget(client => {
+    client.capture({
+      distinctId: getTelemetryId(),
+      event: 'archon_started',
+      properties: {
+        ...PRIVACY_INVARIANTS,
+        surface: props.surface,
+        schema_version: TELEMETRY_SCHEMA_VERSION,
+      },
+    });
+  });
 }
 
 /**
  * Fire-and-forget capture of a terminal workflow run. Emits `workflow_completed`
  * when `outcome === 'completed'`, otherwise `workflow_failed`. Carries run
  * outcome, duration, node counts, and a categorical exit reason so maintainers
- * can measure success rates and funnels — not just intent.
+ * can measure success rates and funnels — not just intent. Intentionally does
+ * not show the first-run notice (that fires on start events, not completion).
  */
 export function captureWorkflowCompleted(props: WorkflowCompletedProperties): void {
   if (isTelemetryDisabled()) return;
-  void (async (): Promise<void> => {
-    try {
-      const client = await getClient();
-      if (!client) return;
-      client.capture({
-        distinctId: getTelemetryId(),
-        event: props.outcome === 'completed' ? 'workflow_completed' : 'workflow_failed',
-        properties: {
-          ...PRIVACY_INVARIANTS,
-          ...classifyWorkflowForTelemetry(props.workflowName, props.workflowSource),
-          outcome: props.outcome,
-          schema_version: TELEMETRY_SCHEMA_VERSION,
-          ...(props.provider ? { provider: props.provider } : {}),
-          ...(props.durationMs !== undefined ? { duration_ms: props.durationMs } : {}),
-          ...(props.nodesCompleted !== undefined ? { nodes_completed: props.nodesCompleted } : {}),
-          ...(props.nodesFailed !== undefined ? { nodes_failed: props.nodesFailed } : {}),
-          ...(props.nodesSkipped !== undefined ? { nodes_skipped: props.nodesSkipped } : {}),
-          ...(props.nodesTotal !== undefined ? { nodes_total: props.nodesTotal } : {}),
-          ...(props.exitReason ? { exit_reason: props.exitReason } : {}),
-        },
-      });
-    } catch (error) {
-      getLog().debug({ err: error as Error }, 'telemetry.capture_failed');
-    }
-  })();
+  fireAndForget(client => {
+    client.capture({
+      distinctId: getTelemetryId(),
+      event: props.outcome === 'completed' ? 'workflow_completed' : 'workflow_failed',
+      properties: {
+        ...PRIVACY_INVARIANTS,
+        ...classifyWorkflowForTelemetry(props.workflowName, props.workflowSource),
+        outcome: props.outcome,
+        schema_version: TELEMETRY_SCHEMA_VERSION,
+        ...(props.provider ? { provider: props.provider } : {}),
+        ...(props.durationMs !== undefined ? { duration_ms: props.durationMs } : {}),
+        ...(props.nodesCompleted !== undefined ? { nodes_completed: props.nodesCompleted } : {}),
+        ...(props.nodesFailed !== undefined ? { nodes_failed: props.nodesFailed } : {}),
+        ...(props.nodesSkipped !== undefined ? { nodes_skipped: props.nodesSkipped } : {}),
+        ...(props.nodesTotal !== undefined ? { nodes_total: props.nodesTotal } : {}),
+        ...(props.exitReason ? { exit_reason: props.exitReason } : {}),
+      },
+    });
+  });
 }
 
 /**
