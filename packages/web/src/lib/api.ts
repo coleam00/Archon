@@ -514,17 +514,3 @@ export async function getAuthMe(): Promise<AuthMeResponse | null> {
   return data as AuthMeResponse;
 }
 
-/**
- * Disconnect the current user's GitHub OAuth connection. Best-effort revokes the
- * token on GitHub server-side and clears local DB columns.
- */
-export async function disconnectGithub(): Promise<void> {
-  const res = await fetch('/api/auth/github', {
-    method: 'DELETE',
-    credentials: 'include',
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Failed to disconnect GitHub (${String(res.status)}): ${body.slice(0, 200)}`);
-  }
-}
