@@ -3,12 +3,25 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'crypto';
 const ALGORITHM = 'aes-256-gcm';
 const IV_BYTES = 12;
 const AUTH_TAG_BYTES = 16;
+const KEY_BYTES = 32; // AES-256
+
+/**
+ * Assert the key is the 32 bytes AES-256 requires. Surfaces an Archon-owned,
+ * actionable error instead of Node's opaque internal "Invalid key length" if a
+ * caller bypasses getEncryptionKey() and passes a wrong-sized buffer.
+ */
+function assertKeyLength(key: Buffer): void {
+  if (key.length !== KEY_BYTES) {
+    throw new Error(`Encryption key must be ${KEY_BYTES} bytes (AES-256), got ${key.length}`);
+  }
+}
 
 /**
  * Encrypt a plaintext string with AES-256-GCM.
  * Returns base64(iv + authTag + ciphertext).
  */
 export function encryptToken(plaintext: string, key: Buffer): string {
+  assertKeyLength(key);
   const iv = randomBytes(IV_BYTES);
   const cipher = createCipheriv(ALGORITHM, key, iv);
   const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
@@ -21,6 +34,7 @@ export function encryptToken(plaintext: string, key: Buffer): string {
  * Throws if the key is wrong or ciphertext is tampered.
  */
 export function decryptToken(ciphertext: string, key: Buffer): string {
+  assertKeyLength(key);
   const buf = Buffer.from(ciphertext, 'base64');
   const iv = buf.subarray(0, IV_BYTES);
   const authTag = buf.subarray(IV_BYTES, IV_BYTES + AUTH_TAG_BYTES);

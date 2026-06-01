@@ -300,6 +300,19 @@ The Copilot provider also reads `assistants.copilot.{model, modelReasoningEffort
 | `GITHUB_ALLOWED_USERS` | Comma-separated GitHub usernames for whitelist (case-insensitive) | Open access |
 | `GITHUB_BOT_MENTION` | @mention name the bot responds to in issues/PRs | Falls back to `BOT_DISPLAY_NAME` |
 
+### Per-user GitHub identity (App mode, optional)
+
+An opt-in layer on top of [GitHub App mode](/adapters/github-app-setup/) that lets each teammate connect their own GitHub identity so commits, PR comments, and pushes attribute to the human rather than the bot. The feature gate turns on when `GITHUB_APP_ID` **and** `TOKEN_ENCRYPTION_KEY` are both set; `GITHUB_APP_CLIENT_ID` is additionally required for the connect (device) flow — set all three. Solo `GITHUB_TOKEN` installs and App-for-bot-only installs are unaffected.
+
+| Variable | Description | Default |
+| --- | --- | --- |
+| `GITHUB_APP_CLIENT_ID` | The App's **Client ID** (starts with `Iv1.`/`Iv23…`, distinct from the numeric `GITHUB_APP_ID`). Required for the device flow that connects per-user identities. | -- |
+| `TOKEN_ENCRYPTION_KEY` | 64-char hex (32 bytes; `openssl rand -hex 32`) used to encrypt stored per-user tokens at rest (AES-256-GCM). Setting it with `GITHUB_APP_ID` enables per-user mode. **Rotating it invalidates all stored user tokens** (users must reconnect). | -- |
+| `ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK` | When `false` (default), a workflow run by an **unconnected** user has `GH_TOKEN`/`GITHUB_TOKEN` scrubbed (so `gh`/`git` fail) rather than silently using the shared org/bot token. Set `true` to opt back into the shared token. | `false` |
+| `ARCHON_WEB_AUTH_HEADER` | Name of the reverse-proxy-set header Archon trusts to identify the web user (interim web auth). Only safe when Archon is reachable **solely** through the proxy on a loopback bind — on a public bind the header is forgeable. Absent header → unattributed (never elevated). | `X-Archon-User` |
+
+To connect once the vars are set: `archon auth github` (CLI), `/archon connect github` (Slack), or the Web UI **Settings → Connect GitHub** card.
+
 ### Platform Adapters -- Gitea
 
 | Variable | Description | Default |

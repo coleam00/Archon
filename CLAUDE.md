@@ -132,7 +132,7 @@ bun test --watch            # Watch mode (single package)
 bun test packages/core/src/handlers/command-handler.test.ts  # Single file
 ```
 
-**Test isolation (mock.module pollution):** Bun's `mock.module()` permanently replaces modules in the process-wide cache — `mock.restore()` does NOT undo it ([oven-sh/bun#7823](https://github.com/oven-sh/bun/issues/7823)). To prevent cross-file pollution, packages that have conflicting `mock.module()` calls split their tests into separate `bun test` invocations: `@archon/core` (7 batches), `@archon/workflows` (5), `@archon/adapters` (6), `@archon/isolation` (3). See each package's `package.json` for the exact splits.
+**Test isolation (mock.module pollution):** Bun's `mock.module()` permanently replaces modules in the process-wide cache — `mock.restore()` does NOT undo it ([oven-sh/bun#7823](https://github.com/oven-sh/bun/issues/7823)). To prevent cross-file pollution, packages that have conflicting `mock.module()` calls split their tests into separate `bun test` invocations: `@archon/core` (20 batches), `@archon/workflows` (5), `@archon/adapters` (6), `@archon/isolation` (3). See each package's `package.json` for the exact splits.
 
 **Do NOT run `bun test` from the repo root** — it discovers all test files across all packages and runs them in one process, causing ~135 mock pollution failures. Always use `bun run test` (which uses `bun --filter '*' test` for per-package isolation).
 
@@ -260,6 +260,10 @@ bun run cli skill install /path/to/project
 
 # Verify your Archon setup (Claude binary, gh auth, DB, adapters)
 bun run cli doctor
+
+# Connect your GitHub identity via device flow (multi-user installs only:
+# App mode + TOKEN_ENCRYPTION_KEY). Identity from ARCHON_USER_ID or $USER.
+bun run cli auth github
 
 # Inspect or rotate the anonymous telemetry install UUID
 bun run cli telemetry status

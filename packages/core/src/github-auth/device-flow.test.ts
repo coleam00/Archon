@@ -2,6 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import {
   startDeviceFlow,
   pollDeviceFlow,
+  pollDeviceFlowOnce,
   refreshUserToken,
   fetchGithubUser,
   DeviceFlowError,
@@ -92,6 +93,42 @@ describe('device-flow', () => {
       await expect(
         pollDeviceFlow('Iv1.client', 'dc', 5, { sleep: noSleep, signal: ctrl.signal })
       ).rejects.toMatchObject({ code: 'aborted' });
+    });
+  });
+
+  // pollDeviceFlowOnce is the non-blocking variant the web poll endpoint calls
+  // directly (the browser owns the retry cadence). pollDeviceFlow exercises it
+  // via its loop, but the discriminated PollOnceResult branches are surfaced
+  // verbatim only here.
+  describe('pollDeviceFlowOnce', () => {
+    test('returns pending on authorization_pending', async () => {
+      enqueue({ error: 'authorization_pending' });
+      const r = await pollDeviceFlowOnce('Iv1.client', 'dc');
+      expect(r.status).toBe('pending');
+    });
+
+    test('returns slow_down with the server-supplied interval', async () => {
+      enqueue({ error: 'slow_down', interval: 15 });
+      const r = await pollDeviceFlowOnce('Iv1.client', 'dc');
+      expect(r).toMatchObject({ status: 'slow_down', interval: 15 });
+    });
+
+    test('defaults slow_down interval to 5 when absent', async () => {
+      enqueue({ error: 'slow_down' });
+      const r = await pollDeviceFlowOnce('Iv1.client', 'dc');
+      expect(r).toMatchObject({ status: 'slow_down', interval: 5 });
+    });
+
+    test('returns authorized with the token on success', async () => {
+      enqueue({ access_token: 'ghu_x', token_type: 'bearer', scope: '', expires_in: 28800 });
+      const r = await pollDeviceFlowOnce('Iv1.client', 'dc');
+      expect(r).toMatchObject({ status: 'authorized', token: { access_token: 'ghu_x' } });
+    });
+
+    test('returns error with the raw code for terminal states', async () => {
+      enqueue({ error: 'expired_token' });
+      const r = await pollDeviceFlowOnce('Iv1.client', 'dc');
+      expect(r).toMatchObject({ status: 'error', code: 'expired_token' });
     });
   });
 

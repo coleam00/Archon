@@ -138,7 +138,15 @@ async function resolveAccessToken(userId: string): Promise<string | null> {
   const needsRefresh = expiresAtMs !== null && Date.now() + REFRESH_BUFFER_MS >= expiresAtMs;
 
   if (!needsRefresh) {
-    return decryptToken(row.access_token_encrypted, key);
+    try {
+      return decryptToken(row.access_token_encrypted, key);
+    } catch (err) {
+      // Wrong key (post key-rotation), tampered/bitrotted ciphertext. Honor the
+      // documented null contract instead of throwing an opaque crypto error at
+      // callers (the requires:[github] gate treats null as "unconnected").
+      getLog().error({ err: err as Error, userId }, 'user_github_token.decrypt_failed');
+      return null;
+    }
   }
 
   if (!row.refresh_token_encrypted) {
@@ -150,7 +158,13 @@ async function resolveAccessToken(userId: string): Promise<string | null> {
   // recoverable (another process may have rotated the token — re-read below),
   // whereas a persist failure after a SUCCESSFUL refresh must not be mislabeled
   // as a refresh failure nor discard the freshly issued (now-valid) token.
-  const refreshToken = decryptToken(row.refresh_token_encrypted, key);
+  let refreshToken: string;
+  try {
+    refreshToken = decryptToken(row.refresh_token_encrypted, key);
+  } catch (err) {
+    getLog().error({ err: err as Error, userId }, 'user_github_token.decrypt_failed');
+    return null;
+  }
   let refreshed: DeviceAccessToken;
   try {
     const { clientId } = loadDeviceFlowConfig();
@@ -162,7 +176,12 @@ async function resolveAccessToken(userId: string): Promise<string | null> {
     const fresh = await getUserGithubTokenRecord(userId);
     const freshExpiry = fresh ? toEpochMs(fresh.access_token_expires_at) : null;
     if (fresh && freshExpiry !== null && Date.now() + REFRESH_BUFFER_MS < freshExpiry) {
-      return decryptToken(fresh.access_token_encrypted, key);
+      try {
+        return decryptToken(fresh.access_token_encrypted, key);
+      } catch (decryptErr) {
+        getLog().error({ err: decryptErr as Error, userId }, 'user_github_token.decrypt_failed');
+        return null;
+      }
     }
     return null;
   }

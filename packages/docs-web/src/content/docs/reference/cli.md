@@ -96,6 +96,18 @@ Exit code 0 if all checks pass or are skipped; 1 if any critical check fails. Ad
 
 Also runs automatically at the end of `archon setup` (optional).
 
+### `auth github`
+
+Connect the current CLI user's GitHub identity via the GitHub device flow, so workflow commits, PR comments, and pushes attribute to you instead of the bot.
+
+```bash
+archon auth github
+```
+
+Only meaningful on **multi-user installs** running GitHub App mode (`GITHUB_APP_ID` + `GITHUB_APP_CLIENT_ID`) with `TOKEN_ENCRYPTION_KEY` set — solo `GITHUB_TOKEN` installs don't need it and the command exits with an explanatory error. Your CLI identity is resolved from `ARCHON_USER_ID` (explicit override) or `$USER` / `$USERNAME`, mapped to a stable Archon user via the `cli` platform identity.
+
+The command prints a `verification_uri` and a one-time `user_code`; visit the URL, enter the code, and authorize. On success the access/refresh tokens are stored encrypted (AES-256-GCM) in Archon's database. Exit code 0 on success; 1 if per-user GitHub is disabled, the identity can't be resolved, the code expires, or authorization is denied.
+
 ### `telemetry status`
 
 Show the current anonymous telemetry state: whether it is enabled, the opt-out reason if not, the install UUID, the active PostHog host, and the key source.

@@ -145,6 +145,7 @@ import {
   githubConnectionStatusSchema,
   githubDisconnectResponseSchema,
 } from './schemas/auth.schemas';
+import { mapDeviceFlowErrorToPollStatus } from './auth-poll-status';
 import { getProviderInfoList, isRegisteredProvider } from '@archon/providers';
 import { messageSchema } from './schemas/conversation.schemas';
 import {
@@ -999,7 +1000,7 @@ export function registerApiRoutes(
 ): void {
   function apiError(
     c: Context,
-    status: 400 | 401 | 404 | 422 | 500,
+    status: 400 | 401 | 404 | 422 | 500 | 503,
     message: string,
     detail?: string
   ): Response {
@@ -1041,15 +1042,41 @@ export function registerApiRoutes(
       const user = await userDb.findOrCreateUserByPlatformIdentity('web', headerVal, headerVal);
       return user.id;
     } catch (err) {
-      getLog().warn({ err: err as Error }, 'web.user_resolve_failed');
+      // Best-effort attribution: the header WAS present, but identity resolution
+      // failed (e.g. DB outage). Fall back to NULL attribution rather than
+      // failing the request. headerPresent distinguishes this from "no header".
+      getLog().warn({ err: err as Error, headerPresent: true }, 'web.user_resolve_failed');
       return undefined;
+    }
+  }
+
+  /**
+   * Strict variant for endpoints that REQUIRE a web identity (connect/disconnect).
+   * Unlike resolveWebUserId, this distinguishes a missing header (401) from a
+   * backend failure resolving the header to a user (503) — a DB outage must not
+   * masquerade as "authentication required". Returns the resolved id, or the
+   * HTTP error Response the caller should return verbatim.
+   */
+  async function requireWebUser(
+    c: Context,
+    failMessage = 'Web authentication required'
+  ): Promise<{ userId: string } | { error: Response }> {
+    const headerName = process.env.ARCHON_WEB_AUTH_HEADER || 'X-Archon-User';
+    const headerVal = c.req.header(headerName)?.trim();
+    if (!headerVal) return { error: apiError(c, 401, failMessage) };
+    try {
+      const user = await userDb.findOrCreateUserByPlatformIdentity('web', headerVal, headerVal);
+      return { userId: user.id };
+    } catch (err) {
+      getLog().error({ err: err as Error, headerPresent: true }, 'web.user_resolve_failed');
+      return { error: apiError(c, 503, 'Could not verify web identity — backend unavailable') };
     }
   }
 
   // ---- GitHub device-flow connect endpoints ----
   registerOpenApiRoute(githubDeviceStartRoute, async c => {
-    const userId = await resolveWebUserId(c);
-    if (!userId) return apiError(c, 401, 'Web authentication required to connect GitHub');
+    const web = await requireWebUser(c, 'Web authentication required to connect GitHub');
+    if ('error' in web) return web.error;
     if (!isPerUserGitHubEnabled()) {
       return apiError(c, 500, 'Per-user GitHub is not enabled on this install');
     }
@@ -1070,8 +1097,8 @@ export function registerApiRoutes(
   });
 
   registerOpenApiRoute(githubDevicePollRoute, async c => {
-    const userId = await resolveWebUserId(c);
-    if (!userId) return apiError(c, 401, 'Web authentication required to connect GitHub');
+    const web = await requireWebUser(c, 'Web authentication required to connect GitHub');
+    if ('error' in web) return web.error;
     if (!isPerUserGitHubEnabled()) {
       return apiError(c, 500, 'Per-user GitHub is not enabled on this install');
     }
@@ -1083,16 +1110,11 @@ export function registerApiRoutes(
         return c.json({ status: 'pending' as const });
       }
       if (result.status === 'error') {
-        const status =
-          result.code === 'expired_token'
-            ? ('expired' as const)
-            : result.code === 'access_denied'
-              ? ('denied' as const)
-              : ('error' as const);
-        return c.json({ status, detail: result.code });
+        // Terminal device-flow codes → client-visible status (testable helper).
+        return c.json({ status: mapDeviceFlowErrorToPollStatus(result.code), detail: result.code });
       }
       // authorized
-      const { githubLogin } = await persistGithubConnection(userId, result.token);
+      const { githubLogin } = await persistGithubConnection(web.userId, result.token);
       return c.json({ status: 'connected' as const, githubLogin });
     } catch (err) {
       if (err instanceof GithubIdentityConflictError) {
@@ -1107,17 +1129,27 @@ export function registerApiRoutes(
   });
 
   registerOpenApiRoute(githubConnectionStatusRoute, async c => {
-    const userId = await resolveWebUserId(c);
-    if (!userId) return apiError(c, 401, 'Web authentication required');
-    const record = await getUserGithubTokenRecord(userId);
-    return c.json({ connected: record !== null, githubLogin: record?.github_login ?? null });
+    const web = await requireWebUser(c);
+    if ('error' in web) return web.error;
+    try {
+      const record = await getUserGithubTokenRecord(web.userId);
+      return c.json({ connected: record !== null, githubLogin: record?.github_login ?? null });
+    } catch (err) {
+      getLog().error({ err: err as Error, userId: web.userId }, 'auth.github_status_failed');
+      return apiError(c, 500, 'Failed to read GitHub connection status');
+    }
   });
 
   registerOpenApiRoute(githubDisconnectRoute, async c => {
-    const userId = await resolveWebUserId(c);
-    if (!userId) return apiError(c, 401, 'Web authentication required');
-    await deleteUserGithubToken(userId);
-    return c.json({ success: true });
+    const web = await requireWebUser(c);
+    if ('error' in web) return web.error;
+    try {
+      await deleteUserGithubToken(web.userId);
+      return c.json({ success: true });
+    } catch (err) {
+      getLog().error({ err: err as Error, userId: web.userId }, 'auth.github_disconnect_failed');
+      return apiError(c, 500, 'Failed to disconnect GitHub');
+    }
   });
 
   // Shared lock/dispatch/error handling for message and workflow endpoints

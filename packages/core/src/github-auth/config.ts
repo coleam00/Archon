@@ -2,10 +2,14 @@
  * Boot-time configuration helpers for per-user GitHub auth (device flow +
  * token encryption at rest).
  *
- * Per-user attribution is an opt-in layer on top of the GitHub App. It is
- * active only when BOTH the App is configured and a token-encryption key is
- * present. Solo PAT installs (no GITHUB_APP_ID) and App installs that haven't
- * set TOKEN_ENCRYPTION_KEY see every per-user code path as a no-op.
+ * Per-user attribution is an opt-in layer on top of the GitHub App. The feature
+ * gate (`isPerUserGitHubEnabled`) is active only when BOTH the App is configured
+ * (GITHUB_APP_ID) and a token-encryption key (TOKEN_ENCRYPTION_KEY) is present.
+ * GITHUB_APP_CLIENT_ID is additionally required for the device flow itself
+ * (`loadDeviceFlowConfig`) — without it the gate/scrub still activate but every
+ * connect attempt throws, so all three env vars must be set together. Solo PAT
+ * installs (no GITHUB_APP_ID) and App installs that haven't set
+ * TOKEN_ENCRYPTION_KEY see every per-user code path as a no-op.
  */
 import { getEncryptionKey } from '../utils/token-crypto';
 

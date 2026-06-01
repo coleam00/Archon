@@ -120,6 +120,13 @@ model: sonnet
 modelReasoningEffort: medium     # Codex only
 webSearchMode: live              # Codex only
 interactive: true                # Web only: run in foreground instead of background
+requires: [github]               # Optional: hard-block invocation unless the triggering
+                                 #   user has connected their GitHub identity. Enforced only
+                                 #   when per-user GitHub is enabled (App mode + TOKEN_ENCRYPTION_KEY);
+                                 #   a no-op for solo PAT / bot-only installs. The block fires
+                                 #   BEFORE any worktree/clone/AI cost. Currently the only
+                                 #   supported value is `github`; unknown values are rejected
+                                 #   at load time.
 worktree:                        # Optional: pin isolation behavior regardless of caller
   enabled: false                 #   false = always run in the live checkout (CLI --no-worktree
                                  #           and web both honor it). Use for read-only workflows
