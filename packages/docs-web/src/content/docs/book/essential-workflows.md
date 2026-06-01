@@ -259,7 +259,7 @@ Scans for complexity hotspots (large files, import fan-out, function length), an
 archon workflow run archon-architect --branch refactor/simplify-orchestrator "Focus on the orchestrator package"
 ```
 
-**What it produces**: A PR with targeted simplifications, each justified and independently revertable.
+**What it produces**: A PR with targeted simplifications, each justified and independently revertible.
 
 ---
 
@@ -267,13 +267,13 @@ archon workflow run archon-architect --branch refactor/simplify-orchestrator "Fo
 
 Splits or extracts code into smaller modules with a layered safety architecture: two read-only analysis nodes map the impact before any file is touched, a hook forces a type-check after every single edit, and a third read-only node verifies no logic was changed before the PR is created.
 
-**When to use it**: When you need to split a large file, extract a module, or decompose a tightly-coupled component — and you cannot afford behavior changes. The analysis and verification phases are denied write access by design, and the execution phase commits one task at a time so each extraction is independently revertable. Not for bug fixes or feature development; not for architectural sweeps or simplification (use `archon-architect` for those). Purely structural: code moves, no logic changes.
+**When to use it**: When you need to split a large file, extract a module, or decompose a tightly-coupled component — and you cannot afford behavior changes. The analysis and verification phases are denied write access by design, and the execution phase commits one task at a time so each extraction is independently revertible. Not for bug fixes or feature development; not for architectural sweeps or simplification (use `archon-architect` for those). Purely structural: code moves, no logic changes.
 
 ```bash
 archon workflow run archon-refactor-safely "Split the orchestrator into smaller modules"
 ```
 
-**What it produces**: A PR with a before/after file structure comparison in the body and one commit per extraction task (each independently revertable); an artifact confirming behavior verification passed (read-only audit that no function logic changed); and validation results showing type-check, lint, format, and tests all pass after the refactor.
+**What it produces**: A PR with a before/after file structure comparison in the body and one commit per extraction task (each independently revertible); an artifact confirming behavior verification passed (read-only audit that no function logic changed); and validation results showing type-check, lint, format, and tests all pass after the refactor.
 
 ---
 
