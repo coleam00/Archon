@@ -13,6 +13,17 @@ import type { Project } from '../primitives/project';
 import type { Message } from '../primitives/message';
 import type { ConversationSummary } from '../primitives/conversation';
 
+// While a turn is active, refetch messages on this cadence so streamed replies
+// still surface if a per-conversation SSE event is dropped (cross-origin
+// EventSource in dev can miss bursts). Mirrors RunDetailPage's safety-net poll.
+const ACTIVE_POLL_MS = 3000;
+// Consider the turn done once the trailing message is an assistant reply that
+// has stayed stable this long. Independent of any SSE lock event.
+const SETTLE_MS = 6000;
+// Hard cap so a turn that never produces a reply (server error, etc.) can't
+// disable the composer forever.
+const MAX_WAIT_MS = 300_000;
+
 /**
  * Project-scoped agent chat. A tab peer of the runs view under a project.
  *
@@ -50,16 +61,75 @@ export function ChatPage(): ReactElement {
     () => (activeConvId !== null ? skill.listMessages(activeConvId) : Promise.resolve([]))
   );
 
-  const [locked, setLocked] = useState(false);
-  useConversationSSE(activeConvId, setLocked);
-
-  const [sending, setSending] = useState(false);
+  // `busy` = a reply is pending → composer disabled + recovery poll active.
+  // Driven by message content and the send action, NOT by the SSE lock event,
+  // so it stays correct even when the per-conversation SSE drops or never
+  // connects (which it can, cross-origin in dev). SSE is a pure accelerator.
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // SSE accelerator: invalidates the message cache on text/tool events for
+  // snappy live updates when connected. Correctness doesn't depend on it.
+  useConversationSSE(activeConvId);
+
+  // Derive turn state from the trailing message: a user message means a reply
+  // is pending; once an assistant reply lands and stays stable for SETTLE_MS the
+  // turn is done. This also recovers a reload mid-turn (trailing user message).
+  const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const settleSigRef = useRef('');
+  useEffect(() => {
+    const list = messages ?? [];
+    const last = list[list.length - 1];
+    if (last === undefined) return;
+    if (last.role === 'user') {
+      settleSigRef.current = '';
+      if (settleTimerRef.current !== null) {
+        clearTimeout(settleTimerRef.current);
+        settleTimerRef.current = null;
+      }
+      setBusy(true);
+      return;
+    }
+    // Trailing message is an assistant/system reply. Arm the settle timer once;
+    // re-arm only on real content change so identical poll refetches (same sig)
+    // don't reset it forever.
+    const sig = `${list.length}:${last.id}`;
+    if (sig === settleSigRef.current) return;
+    settleSigRef.current = sig;
+    if (settleTimerRef.current !== null) clearTimeout(settleTimerRef.current);
+    settleTimerRef.current = setTimeout(() => {
+      setBusy(false);
+    }, SETTLE_MS);
+  }, [messages]);
+  useEffect(
+    () => (): void => {
+      if (settleTimerRef.current !== null) clearTimeout(settleTimerRef.current);
+    },
+    []
+  );
+
+  // Recovery poll: while a reply is pending, refetch messages on a cadence so a
+  // dropped or absent SSE event can't hide the reply. Hard-caps at MAX_WAIT_MS.
+  const busySinceRef = useRef(0);
+  useEffect(() => {
+    if (!busy || activeConvId === null) return;
+    busySinceRef.current = Date.now();
+    const id = setInterval(() => {
+      if (Date.now() - busySinceRef.current > MAX_WAIT_MS) {
+        setBusy(false);
+        return;
+      }
+      invalidate(K.messages(activeConvId));
+    }, ACTIVE_POLL_MS);
+    return (): void => {
+      clearInterval(id);
+    };
+  }, [busy, activeConvId]);
 
   const onSend = (text: string): void => {
     if (projectId === undefined) return;
     setError(null);
-    setSending(true);
+    setBusy(true); // optimistic: disable the composer immediately
     void (async (): Promise<void> => {
       try {
         if (activeConvId === null) {
@@ -73,9 +143,9 @@ export function ChatPage(): ReactElement {
         }
       } catch (e: unknown) {
         setError(e instanceof Error ? e.message : 'Send failed.');
-      } finally {
-        setSending(false);
+        setBusy(false); // unblock so the user can retry
       }
+      // On success `busy` stays true until the settle detector sees the reply.
     })();
   };
 
@@ -133,7 +203,7 @@ export function ChatPage(): ReactElement {
         </div>
       ) : null}
 
-      <ChatComposer onSend={onSend} disabled={locked || sending} />
+      <ChatComposer onSend={onSend} disabled={busy} />
     </section>
   );
 }
