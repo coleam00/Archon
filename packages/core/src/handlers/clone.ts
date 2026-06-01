@@ -18,10 +18,6 @@ import {
 import { findMarkdownFilesRecursive } from '../utils/commands';
 import { createLogger } from '@archon/paths';
 import { resolveDefaultAssistant } from '../config/resolve-assistant';
-import {
-  isMultiUserMode,
-  isOrgTokenFallbackAllowed,
-} from '@archon/workflows/utils/github-token-policy';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -275,14 +271,8 @@ function normalizeRepoUrl(rawUrl: string): {
  * Clone a repository from a URL and register it in the database.
  * Local paths (starting with /, ~, or .) are delegated to registerRepository
  * to avoid wrong owner/repo naming. See #383 for broader rethink.
- *
- * @param userGithubToken - Per-user GitHub OAuth token (multi-user mode). When provided
- *   and the URL is on github.com, takes precedence over the org-level GH_TOKEN env var.
  */
-export async function cloneRepository(
-  repoUrl: string,
-  userGithubToken?: string
-): Promise<RegisterResult> {
+export async function cloneRepository(repoUrl: string): Promise<RegisterResult> {
   // Local paths should be registered (symlink), not cloned (copied)
   if (repoUrl.startsWith('/') || repoUrl.startsWith('~') || repoUrl.startsWith('.')) {
     const resolvedPath = repoUrl.startsWith('~') ? expandTilde(repoUrl) : resolve(repoUrl);
@@ -331,33 +321,17 @@ export async function cloneRepository(
 
   getLog().info({ url: workingUrl, targetPath }, 'clone_started');
 
-  // Build clone command with authentication using forge-specific tokens.
-  // Per-user GitHub token takes precedence over the org-level token, but ONLY
-  // for canonical github.com URLs. Substring matching ('includes') would also
-  // match attacker-controlled hosts like `github.com.example.com` and leak the
-  // user's personal token there.
+  // Build clone command with authentication using forge-specific tokens
   let cloneUrl = workingUrl;
-  const parsedForHost = safeParseUrl(workingUrl);
-  const isGithubUrl = parsedForHost?.hostname === 'github.com';
   const { token: forgeToken, scheme: authScheme } = resolveForgeAuth(workingUrl);
-  // Multi-user token policy: if we're in multi-user mode and the user hasn't
-  // connected a personal token, only use the forge-level org token when the
-  // operator has explicitly opted in via ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK.
-  // Otherwise clone anonymously — public repos still work; private clones fail
-  // with an actionable auth error rather than silently authenticating as the
-  // shared org account.
-  const allowForgeFallback = !isMultiUserMode() || isOrgTokenFallbackAllowed();
-  const effectiveToken =
-    isGithubUrl && userGithubToken ? userGithubToken : allowForgeFallback ? forgeToken : undefined;
 
-  if (effectiveToken) {
-    if (parsedForHost) {
-      // Use `host` (not `hostname`) to preserve any non-default port for
-      // self-hosted forges like gitea.internal:3000.
-      cloneUrl = `https://${authScheme}${effectiveToken}@${parsedForHost.host}${parsedForHost.pathname}`;
+  if (forgeToken) {
+    const parsed = safeParseUrl(workingUrl);
+    if (parsed) {
+      cloneUrl = `https://${authScheme}${forgeToken}@${parsed.hostname}${parsed.pathname}`;
     } else if (!workingUrl.startsWith('http')) {
       // Bare host/path form (e.g. github.com/owner/repo)
-      cloneUrl = `https://${authScheme}${effectiveToken}@${workingUrl}`;
+      cloneUrl = `https://${authScheme}${forgeToken}@${workingUrl}`;
     }
     getLog().debug('clone_authenticated');
   }

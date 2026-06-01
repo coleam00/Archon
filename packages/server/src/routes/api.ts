@@ -2044,7 +2044,7 @@ export function registerApiRoutes(
 
       // .refine() guarantees exactly one of url/path is present
       const result = body.url
-        ? await cloneRepository(body.url, userGithubToken)
+        ? await cloneRepository(body.url)
         : await registerRepository(body.path ?? '');
 
       // Fetch the full codebase record for a consistent response
