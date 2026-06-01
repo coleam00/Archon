@@ -262,7 +262,13 @@ describe('POST /api/conversations/:id/message', () => {
       body: JSON.stringify({ message: 'Test message' }),
     });
 
-    expect(mockAddMessage).toHaveBeenCalledWith(MOCK_CONV.id, 'user', 'Test message', undefined);
+    expect(mockAddMessage).toHaveBeenCalledWith(
+      MOCK_CONV.id,
+      'user',
+      'Test message',
+      undefined,
+      undefined
+    );
   });
 
   test('still dispatches when conversation lookup fails (no message persistence)', async () => {

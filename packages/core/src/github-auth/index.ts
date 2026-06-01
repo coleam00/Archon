@@ -10,16 +10,22 @@ export type { GitHubAppConfig, IGitHubAppAuthProvider, CachedInstallationToken }
 // Per-user device flow (PR-C)
 export { isPerUserGitHubEnabled, loadDeviceFlowConfig, assertEncryptionKeyAtBoot } from './config';
 export type { DeviceFlowConfig } from './config';
-export { connectGithubForUser } from './connect-service';
+export { connectGithubForUser, persistGithubConnection } from './connect-service';
 export type { ConnectGithubResult, ConnectGithubOptions } from './connect-service';
 export {
   startDeviceFlow,
   pollDeviceFlow,
+  pollDeviceFlowOnce,
   refreshUserToken,
   fetchGithubUser,
   DeviceFlowError,
 } from './device-flow';
-export type { DeviceCodeResponse, DeviceAccessToken, GithubUserProfile } from './device-flow';
+export type {
+  DeviceCodeResponse,
+  DeviceAccessToken,
+  GithubUserProfile,
+  PollOnceResult,
+} from './device-flow';
 
 import type { IGitHubAppAuthProvider } from './types';
 

@@ -16,6 +16,7 @@ import {
   startDeviceFlow,
   pollDeviceFlow,
   fetchGithubUser,
+  type DeviceAccessToken,
   type DeviceCodeResponse,
 } from './device-flow';
 import { saveUserGithubToken } from '../db/user-github-token-store';
@@ -50,33 +51,47 @@ export async function connectGithubForUser(
     const token = await pollDeviceFlow(clientId, device.device_code, device.interval, {
       signal: opts.signal,
     });
-    const profile = await fetchGithubUser(token.access_token);
-
-    // Conflict guard first — throws GithubIdentityConflictError if this GitHub
-    // account already belongs to a different Archon user.
-    await linkGithubIdentity(userId, profile.login);
-
-    const now = Date.now();
-    await saveUserGithubToken({
-      userId,
-      githubUserId: profile.id,
-      githubLogin: profile.login,
-      accessToken: token.access_token,
-      refreshToken: token.refresh_token ?? null,
-      accessTokenExpiresAt: token.expires_in ? new Date(now + token.expires_in * 1000) : null,
-      refreshTokenExpiresAt: token.refresh_token_expires_in
-        ? new Date(now + token.refresh_token_expires_in * 1000)
-        : null,
-    });
-    await updateUserGithubProfile(userId, {
-      display_name: profile.name ?? profile.login,
-      email: profile.email,
-    });
-
-    getLog().info({ userId, githubLogin: profile.login }, 'github_connect.completed');
-    return { githubLogin: profile.login };
+    return await persistGithubConnection(userId, token);
   } catch (err) {
     getLog().error({ err: err as Error, userId }, 'github_connect.failed');
     throw err;
   }
+}
+
+/**
+ * Persist a freshly-authorized device-flow token for a user: fetch the GitHub
+ * profile, bind the identity (conflict-guarded), store the encrypted tokens, and
+ * cache display_name/email. Shared by the blocking connect path (CLI/Slack) and
+ * the non-blocking web poll endpoint, which obtains the token itself via
+ * pollDeviceFlowOnce. Throws GithubIdentityConflictError if the GitHub account
+ * already belongs to a different Archon user.
+ */
+export async function persistGithubConnection(
+  userId: string,
+  token: DeviceAccessToken
+): Promise<ConnectGithubResult> {
+  const profile = await fetchGithubUser(token.access_token);
+
+  // Conflict guard first — before persisting any token for a contested account.
+  await linkGithubIdentity(userId, profile.login);
+
+  const now = Date.now();
+  await saveUserGithubToken({
+    userId,
+    githubUserId: profile.id,
+    githubLogin: profile.login,
+    accessToken: token.access_token,
+    refreshToken: token.refresh_token ?? null,
+    accessTokenExpiresAt: token.expires_in ? new Date(now + token.expires_in * 1000) : null,
+    refreshTokenExpiresAt: token.refresh_token_expires_in
+      ? new Date(now + token.refresh_token_expires_in * 1000)
+      : null,
+  });
+  await updateUserGithubProfile(userId, {
+    display_name: profile.name ?? profile.login,
+    email: profile.email,
+  });
+
+  getLog().info({ userId, githubLogin: profile.login }, 'github_connect.completed');
+  return { githubLogin: profile.login };
 }

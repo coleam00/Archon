@@ -166,8 +166,13 @@ export {
   loadDeviceFlowConfig,
   assertEncryptionKeyAtBoot,
   connectGithubForUser,
+  persistGithubConnection,
+  startDeviceFlow,
+  pollDeviceFlowOnce,
   DeviceFlowError,
   type DeviceCodeResponse,
+  type DeviceAccessToken,
+  type PollOnceResult,
   type ConnectGithubResult,
 } from './github-auth';
 

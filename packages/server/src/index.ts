@@ -83,6 +83,7 @@ import {
   loadAppPrivateKey,
   registerGitHubAppAuthProvider,
   isPerUserGitHubEnabled,
+  assertEncryptionKeyAtBoot,
   getDecryptedAccessToken,
   type GitHubAuth,
   type IGitHubAppAuthProvider,
@@ -348,6 +349,15 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         throw new Error('GitHub App mode misconfigured: GITHUB_APP_ID and WEBHOOK_SECRET required');
       }
       const privateKey = loadAppPrivateKey();
+      // Fail fast on a malformed TOKEN_ENCRYPTION_KEY when per-user is enabled,
+      // so we never store unencryptable tokens at runtime. If the key is absent,
+      // per-user GitHub is simply disabled (App-for-bot-only remains valid).
+      assertEncryptionKeyAtBoot();
+      if (!isPerUserGitHubEnabled()) {
+        getLog().warn(
+          'github_app.per_user_disabled — set TOKEN_ENCRYPTION_KEY (and GITHUB_APP_CLIENT_ID) to enable per-user GitHub identity'
+        );
+      }
       const defaultInstallationId = process.env.GITHUB_APP_INSTALLATION_ID
         ? Number(process.env.GITHUB_APP_INSTALLATION_ID)
         : undefined;

@@ -117,24 +117,46 @@ export async function pollDeviceFlow(
       throw new DeviceFlowError('aborted', 'Device flow polling was aborted');
     }
     await sleep(interval * 1000);
-    const data = await postForm<DeviceAccessToken & { error?: string; interval?: number }>(
-      ACCESS_TOKEN_URL,
-      {
-        client_id: clientId,
-        device_code: deviceCode,
-        grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
-      }
-    );
-    if (!data.error) return data;
-    if (data.error === 'authorization_pending') continue;
-    if (data.error === 'slow_down') {
-      // Honor the server's new interval, else add 5s per the device-flow spec.
-      // Floor at 1s so a malformed `interval: 0` can't turn this into a busy loop.
-      interval = Math.max(1, data.interval ?? interval + 5);
+    const result = await pollDeviceFlowOnce(clientId, deviceCode);
+    if (result.status === 'authorized') return result.token;
+    if (result.status === 'pending') continue;
+    if (result.status === 'slow_down') {
+      // Honor the server's new interval, else keep the current. Floor at 1s so a
+      // malformed `interval: 0` can't turn this into a busy loop.
+      interval = Math.max(1, result.interval);
       continue;
     }
-    throw new DeviceFlowError(data.error);
+    throw new DeviceFlowError(result.code);
   }
+}
+
+/** Result of a single (non-blocking) device-flow poll. */
+export type PollOnceResult =
+  | { status: 'pending' }
+  | { status: 'slow_down'; interval: number }
+  | { status: 'authorized'; token: DeviceAccessToken }
+  | { status: 'error'; code: string };
+
+/**
+ * One non-blocking poll attempt. Used by the web endpoint (which polls from the
+ * browser) and internally by {@link pollDeviceFlow}'s blocking loop.
+ */
+export async function pollDeviceFlowOnce(
+  clientId: string,
+  deviceCode: string
+): Promise<PollOnceResult> {
+  const data = await postForm<DeviceAccessToken & { error?: string; interval?: number }>(
+    ACCESS_TOKEN_URL,
+    {
+      client_id: clientId,
+      device_code: deviceCode,
+      grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+    }
+  );
+  if (!data.error) return { status: 'authorized', token: data };
+  if (data.error === 'authorization_pending') return { status: 'pending' };
+  if (data.error === 'slow_down') return { status: 'slow_down', interval: data.interval ?? 5 };
+  return { status: 'error', code: data.error };
 }
 
 /** Exchange a refresh token for a fresh access/refresh pair (no client_secret). */
