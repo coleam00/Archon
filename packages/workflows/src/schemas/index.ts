@@ -76,12 +76,14 @@ export type {
 export {
   modelReasoningEffortSchema,
   webSearchModeSchema,
+  workflowRequirementSchema,
   workflowBaseSchema,
   workflowDefinitionSchema,
 } from './workflow';
 export type {
   ModelReasoningEffort,
   WebSearchMode,
+  WorkflowRequirement,
   WorkflowBase,
   WorkflowDefinition,
 } from './workflow';

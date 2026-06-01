@@ -21,6 +21,15 @@ export type ModelReasoningEffort = z.infer<typeof modelReasoningEffortSchema>;
 
 export const webSearchModeSchema = z.enum(['disabled', 'cached', 'live']);
 
+/**
+ * External capabilities a workflow declares it needs. Today only `github`
+ * (the originating user must have connected their GitHub identity); the array
+ * shape leaves room for `gitea`/`gitlab` etc. without a schema change.
+ */
+export const workflowRequirementSchema = z.enum(['github']);
+
+export type WorkflowRequirement = z.infer<typeof workflowRequirementSchema>;
+
 export type WebSearchMode = z.infer<typeof webSearchModeSchema>;
 
 // ---------------------------------------------------------------------------
@@ -83,6 +92,13 @@ export const workflowBaseSchema = z.object({
    */
   persist_sessions: z.boolean().optional(),
   tags: z.array(z.string().min(1)).optional(),
+  /**
+   * External capabilities this workflow needs. When it includes `github`, the
+   * run is hard-blocked at invocation (before any worktree/clone/AI cost) if
+   * the originating user has not connected their GitHub identity. Only enforced
+   * when per-user GitHub is enabled; a no-op for solo PAT installs.
+   */
+  requires: z.array(workflowRequirementSchema).optional(),
 });
 
 export type WorkflowBase = z.infer<typeof workflowBaseSchema>;

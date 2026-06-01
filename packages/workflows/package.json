@@ -17,6 +17,7 @@
     "./defaults": "./src/defaults/bundled-defaults.ts",
     "./validator": "./src/validator.ts",
     "./utils/tool-formatter": "./src/utils/tool-formatter.ts",
+    "./utils/workflow-requirements": "./src/utils/workflow-requirements.ts",
     "./test-utils": "./src/test-utils.ts"
   },
   "scripts": {

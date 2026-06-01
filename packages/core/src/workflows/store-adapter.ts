@@ -15,6 +15,8 @@ import { getAgentProvider } from '@archon/providers';
 import { loadConfig as loadMergedConfig } from '../config/config-loader';
 import { createLogger } from '@archon/paths';
 import type { IGitHubAppAuthProvider } from '../github-auth';
+import { isPerUserGitHubEnabled } from '../github-auth/config';
+import { getDecryptedAccessToken } from '../db/user-github-token-store';
 
 // Compile-time assertion: MergedConfig must remain a structural subtype of WorkflowConfig.
 // If MergedConfig drifts from WorkflowConfig, this line becomes a type error.
@@ -111,5 +113,17 @@ export function createWorkflowDeps(): WorkflowDeps {
           }
         }
       : undefined,
+    // Per-user token policy (PR-C): when per-user mode is on, route a run's
+    // gh/git through the originating user's personal token (decrypted, refreshed
+    // on read), or scrub the org/bot token when they haven't connected.
+    isPerUserGitHubEnabled: () => isPerUserGitHubEnabled(),
+    getUserGithubToken: async (userId: string): Promise<string | undefined> => {
+      try {
+        return (await getDecryptedAccessToken(userId)) ?? undefined;
+      } catch (err) {
+        getLog().warn({ err: err as Error, userId }, 'workflow_deps.user_token_resolve_failed');
+        return undefined;
+      }
+    },
   };
 }
