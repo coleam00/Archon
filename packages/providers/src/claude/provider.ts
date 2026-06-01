@@ -39,6 +39,7 @@ import type {
 import { parseClaudeConfig } from './config';
 import { CLAUDE_CAPABILITIES } from './capabilities';
 import { resolveClaudeBinaryPath } from './binary-resolver';
+import { buildArchonMcpServer, ARCHON_TOOL_SERVER } from './native-tools';
 import { createLogger } from '@archon/paths';
 import { loadMcpConfig } from '../mcp/config';
 
@@ -915,6 +916,19 @@ export class ClaudeProvider implements IAgentProvider {
       // 2. Apply nodeConfig translation (re-applied per attempt since options are fresh)
       if (requestOptions?.nodeConfig) {
         await applyNodeConfig(options, requestOptions.nodeConfig, cwd);
+      }
+
+      // 2b. Register in-process native tools (e.g. manage_run) as an archon MCP
+      //     server, mirroring the file-based mcp branch. Merge so a nodeConfig
+      //     mcp config and native tools can coexist.
+      if (requestOptions?.nativeTools && requestOptions.nativeTools.length > 0) {
+        const server = buildArchonMcpServer(requestOptions.nativeTools);
+        options.mcpServers = { ...(options.mcpServers ?? {}), [ARCHON_TOOL_SERVER]: server };
+        options.allowedTools = [...(options.allowedTools ?? []), `mcp__${ARCHON_TOOL_SERVER}__*`];
+        getLog().info(
+          { count: requestOptions.nativeTools.length },
+          'claude.native_tools_registered'
+        );
       }
 
       // 3. Set session resume

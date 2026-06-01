@@ -25,6 +25,7 @@ import { formatToolCall } from '@archon/workflows/utils/tool-formatter';
 import { classifyAndFormatError } from '../utils/error-formatter';
 import { toError } from '../utils/error';
 import { getAgentProvider, getProviderCapabilities } from '@archon/providers';
+import { buildManageRunTool } from './manage-run-tool';
 import { getArchonWorkspacesPath, ensureArchonWorkspacesPath } from '@archon/paths';
 import { syncArchonToWorktree } from '../utils/worktree-sync';
 import { syncWorkspace, toRepoPath } from '@archon/git';
@@ -1047,6 +1048,13 @@ export async function handleMessage(
       env: Object.keys(effectiveEnv).length > 0 ? effectiveEnv : undefined,
       systemPrompt,
     };
+
+    // Project-scoped chats get the read-only `manage_run` tool so the agent can
+    // see this project's workflow runs. Only when a codebase is scoped and the
+    // provider supports in-process native tools (Claude, Pi).
+    if (conversation.codebase_id !== null && getProviderCapabilities(providerKey).nativeTools) {
+      requestOptions.nativeTools = [buildManageRunTool({ codebaseId: conversation.codebase_id })];
+    }
 
     const mode = platform.getStreamingMode();
     if (mode === 'stream') {

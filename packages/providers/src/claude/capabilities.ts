@@ -14,4 +14,5 @@ export const CLAUDE_CAPABILITIES: ProviderCapabilities = {
   thinkingControl: true,
   fallbackModel: true,
   sandbox: true,
+  nativeTools: true,
 };

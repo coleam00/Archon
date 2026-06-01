@@ -14,4 +14,5 @@ export const CODEX_CAPABILITIES: ProviderCapabilities = {
   thinkingControl: false,
   fallbackModel: false,
   sandbox: false,
+  nativeTools: false,
 };
