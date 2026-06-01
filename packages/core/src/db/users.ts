@@ -14,6 +14,7 @@
 import { pool, getDatabase, getDialect } from './connection';
 import type { IdentityPlatform, User, UserIdentity } from '../types';
 import { createLogger } from '@archon/paths';
+import { encryptToken, decryptToken, getEncryptionKey } from '../utils/token-crypto';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -285,4 +286,101 @@ export async function linkGithubIdentity(userId: string, login: string): Promise
     }
     getLog().info({ userId, login }, 'user.github_identity_link_race_recovered');
   }
+}
+
+// ---------------------------------------------------------------------------
+// Keycloak / multi-user fork APIs.
+//
+// These functions operate on the fork-only columns of remote_agent_users
+// (`keycloak_sub`, `github_oauth_token`, `github_username`) which dev's User
+// type doesn't model. They live here (not in dev's API surface) because
+// routes/auth.ts and api.ts still depend on them for the Keycloak login +
+// per-user GitHub OAuth flow. Co-located with dev's identity-model functions
+// so the whole user-row API surface lives in one file.
+// ---------------------------------------------------------------------------
+
+/** Keycloak-era user row. Distinct from dev's `User` type. */
+export interface KeycloakUser {
+  id: string;
+  keycloak_sub: string;
+  email: string | null;
+  username: string | null;
+  display_name: string | null;
+  github_oauth_token: string | null;
+  github_username: string | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export async function upsertUser(
+  keycloakSub: string,
+  email: string | null,
+  username: string | null,
+  displayName?: string | null
+): Promise<KeycloakUser> {
+  const result = await pool.query<KeycloakUser>(
+    `INSERT INTO remote_agent_users (keycloak_sub, email, username, display_name)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (keycloak_sub)
+     DO UPDATE SET
+       email = EXCLUDED.email,
+       username = EXCLUDED.username,
+       display_name = COALESCE(EXCLUDED.display_name, remote_agent_users.display_name),
+       updated_at = NOW()
+     RETURNING *`,
+    [keycloakSub, email, username, displayName ?? null]
+  );
+  const user = result.rows[0];
+  if (!user) {
+    throw new Error(`upsertUser failed for sub=${keycloakSub}`);
+  }
+  return user;
+}
+
+export async function getUserByKeycloakSub(sub: string): Promise<KeycloakUser | null> {
+  const result = await pool.query<KeycloakUser>(
+    'SELECT * FROM remote_agent_users WHERE keycloak_sub = $1',
+    [sub]
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function setGithubToken(
+  userId: string,
+  plainToken: string,
+  githubUsername: string
+): Promise<void> {
+  const key = getEncryptionKey();
+  const encrypted = encryptToken(plainToken, key);
+  const result = await pool.query(
+    `UPDATE remote_agent_users
+     SET github_oauth_token = $1, github_username = $2, updated_at = NOW()
+     WHERE id = $3`,
+    [encrypted, githubUsername, userId]
+  );
+  if (result.rowCount !== 1) {
+    throw new Error(`setGithubToken failed: no user found for id=${userId}`);
+  }
+  getLog().info({ userId }, 'user.github_token_stored');
+}
+
+export async function clearGithubToken(userId: string): Promise<void> {
+  await pool.query(
+    `UPDATE remote_agent_users
+     SET github_oauth_token = NULL, github_username = NULL, updated_at = NOW()
+     WHERE id = $1`,
+    [userId]
+  );
+  getLog().info({ userId }, 'user.github_token_cleared');
+}
+
+export async function getGithubToken(userId: string): Promise<string | null> {
+  const result = await pool.query<{ github_oauth_token: string | null }>(
+    'SELECT github_oauth_token FROM remote_agent_users WHERE id = $1',
+    [userId]
+  );
+  const row = result.rows[0];
+  if (!row || !row.github_oauth_token) return null;
+  const key = getEncryptionKey();
+  return decryptToken(row.github_oauth_token, key);
 }
