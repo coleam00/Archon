@@ -9,6 +9,7 @@ import { ApprovalContext } from '../components/ApprovalContext';
 import { ApprovalPanel } from '../components/ApprovalPanel';
 import { RunGraphPanel } from '../components/RunGraphPanel';
 import { ArtifactPanel } from '../components/ArtifactPanel';
+import { RunStartedLine, RunFinishedLine } from '../components/RunLifecycle';
 import { StreamContextProvider } from '../lib/stream-context';
 import { useRunStreamSSE } from '../lib/sse';
 import { useEntity, invalidate } from '../store/cache';
@@ -332,12 +333,18 @@ export function RunDetailPage(): ReactElement {
                 <div className="sticky top-0 z-10 -mx-6 bg-surface px-6">{toolbar}</div>
 
                 <div className="py-4">
-                  <RunStream
-                    messages={messageList}
-                    events={events}
-                    showToolCalls={showToolCalls}
-                    showSystem={showSystem}
-                  />
+                  <RunStartedLine run={run} />
+
+                  <div className="mt-2">
+                    <RunStream
+                      messages={messageList}
+                      events={events}
+                      showToolCalls={showToolCalls}
+                      showSystem={showSystem}
+                    />
+                  </div>
+
+                  <RunFinishedLine run={run} />
 
                   {run.status === 'paused' &&
                   run.approval !== null &&

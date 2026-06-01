@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState, type ReactElement } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import { useParams } from 'react-router';
 import { ChatStream } from '../components/ChatStream';
 import { ChatComposer } from '../components/ChatComposer';
 import { ProjectViewTabs } from '../components/ProjectViewTabs';
+import { WorkingIndicator } from '../components/WorkingIndicator';
+import { WorkflowDock } from '../components/WorkflowDock';
 import { EmptyState } from '../components/EmptyState';
 import { StreamContextProvider } from '../lib/stream-context';
 import { useConversationSSE } from '../lib/sse';
@@ -126,6 +128,9 @@ export function ChatPage(): ReactElement {
     };
   }, [busy, activeConvId]);
 
+  // Reveal the raw tool trace inline (toggled from the working indicator).
+  const [showTools, setShowTools] = useState(false);
+
   const onSend = (text: string): void => {
     if (projectId === undefined) return;
     setError(null);
@@ -170,6 +175,20 @@ export function ChatPage(): ReactElement {
 
   const messageList = messages ?? [];
 
+  // Current activity for the working indicator: the latest tool the agent
+  // invoked in the in-flight turn (walk back to the last user message).
+  const currentActivity = useMemo<string | null>(() => {
+    for (let i = messageList.length - 1; i >= 0; i--) {
+      const m = messageList[i];
+      if (m === undefined) continue;
+      if (m.role === 'user') break;
+      if (m.role === 'assistant' && m.toolCalls.length > 0) {
+        return m.toolCalls[m.toolCalls.length - 1]?.name ?? null;
+      }
+    }
+    return null;
+  }, [messageList]);
+
   return (
     <section className="flex h-full flex-col">
       <header className="flex flex-col gap-3 border-b border-border px-6 py-4">
@@ -185,17 +204,28 @@ export function ChatPage(): ReactElement {
       </header>
 
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
-        {messageList.length === 0 ? (
+        {messageList.length === 0 && !busy ? (
           <EmptyState
             title="No messages yet."
             hint="Ask the agent about this project, or tell it what to run."
           />
         ) : (
           <StreamContextProvider value={{ runStartedAt: null }}>
-            <ChatStream messages={messageList} />
+            <ChatStream messages={messageList} showTools={showTools} />
+            {busy ? (
+              <WorkingIndicator
+                activity={currentActivity}
+                expanded={showTools}
+                onToggle={() => {
+                  setShowTools(v => !v);
+                }}
+              />
+            ) : null}
           </StreamContextProvider>
         )}
       </div>
+
+      <WorkflowDock projectId={projectId} />
 
       {error !== null ? (
         <div className="shrink-0 border-t border-error/30 bg-error/[0.06] px-6 py-2 font-mono text-[11px] text-error">
