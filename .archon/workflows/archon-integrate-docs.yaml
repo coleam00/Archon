@@ -1,0 +1,492 @@
+name: integrate-docs
+description: |
+  Use when: Merging new documentation sections into an existing document while preserving
+            structure, updating cross-references (decision trees, tables, indexes), and
+            maintaining formatting consistency.
+  Triggers: "integrate these docs", "merge into existing", "update the documentation",
+            "add sections to", "extend this document with".
+  Does: Analyzes both documents → Creates integration plan → Merges content →
+        Adversarial review for consistency → Outputs merged document.
+  NOT for: Creating documentation from scratch (use adversarial-docs instead).
+
+  Designed to work as Stage 2 after adversarial-docs, but works with any well-formatted
+  source content.
+
+provider: claude
+model: sonnet
+
+# Expected inputs via $ARGUMENTS:
+#   --source <path>    Path to new content to integrate
+#   --target <path>    Path to existing document to update
+#   --instructions     Optional specific integration guidance
+#
+# Example:
+#   archon workflow run archon-integrate-docs \
+#     --source .archon/artifacts/adversarial-docs/final/document.md \
+#     --target packages/docs-web/src/content/docs/book/essential-workflows.md \
+#     --instructions "Add workflows to appropriate categories, update decision tree"
+
+nodes:
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 1: ANALYSIS
+  # Understand both documents deeply before attempting integration
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: analyze-documents
+    prompt: |
+      You are a documentation architect preparing to integrate new content into an existing document.
+
+      **Arguments**: $ARGUMENTS
+
+      Parse the arguments to identify:
+      - `--source`: Path to new content
+      - `--target`: Path to existing document
+      - `--instructions`: Any specific guidance (optional)
+
+      ## Your Task
+
+      Analyze BOTH documents thoroughly. Your analysis will guide the entire integration.
+
+      ### Step 1: Analyze the Target Document
+
+      Read the target document and identify:
+
+      1. **Document Structure**
+         - What are the major sections/headings?
+         - Is there a hierarchy (H1 → H2 → H3)?
+         - Are there special structural elements? (decision trees, tables, indexes, TOC)
+
+      2. **Formatting Patterns**
+         - How are items formatted? (bold labels, code blocks, lists)
+         - Is there a consistent template for entries?
+         - What's the voice/tone?
+
+      3. **Cross-Reference Elements**
+         - Decision trees (ASCII diagrams showing navigation)
+         - Quick reference tables
+         - Indexes or catalogs
+         - Internal links between sections
+
+      4. **Content Categories**
+         - How is content organized? (by type, by use case, alphabetically)
+         - What categories exist?
+         - Where would new content logically fit?
+
+      ### Step 2: Analyze the Source Document
+
+      Read the source document and identify:
+
+      1. **Content Units**
+         - How many distinct sections/entries are there?
+         - What is each one about?
+
+      2. **Format Match**
+         - Does the source format match the target format?
+         - What transformations are needed?
+
+      3. **Category Mapping**
+         - For each source section, which target category does it belong to?
+
+      ### Step 3: Write Analysis Report
+
+      **Write to `$ARTIFACTS_DIR/analysis.md`:**
+
+      ```markdown
+      # Integration Analysis
+
+      ## Target Document: {path}
+
+      ### Structure
+      {Hierarchical outline of the document}
+
+      ### Formatting Template
+      {The pattern used for entries, with placeholders}
+
+      ### Cross-Reference Elements
+      | Element | Location | Update Required |
+      |---------|----------|-----------------|
+      | {e.g., Decision tree} | {line range} | {Yes/No + why} |
+
+      ### Content Categories
+      {List of categories with descriptions}
+
+      ## Source Document: {path}
+
+      ### Content Units
+      | Unit | Summary | Target Category | Format Match |
+      |------|---------|-----------------|--------------|
+      | {name} | {one-line} | {category} | {Yes/Needs adjustment} |
+
+      ## Integration Complexity
+
+      **Simple insertions**: {count} (just add to existing section)
+      **Structure updates**: {count} (decision tree, tables, etc.)
+      **Format transformations**: {count} (need to reformat)
+
+      ## Risks
+      - {Any potential issues: ordering dependencies, conflicts, etc.}
+      ```
+
+      After writing the analysis, summarize key findings.
+    allowed_tools: [Read, Write, Glob, Grep]
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 2: INTEGRATION PLANNING
+  # Create a detailed, step-by-step merge plan
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: create-integration-plan
+    depends_on: [analyze-documents]
+    prompt: |
+      You are a documentation architect creating a precise integration plan.
+
+      ## Read First
+
+      1. `$ARTIFACTS_DIR/analysis.md` — your document analysis
+      2. The target document (path from analysis)
+      3. The source document (path from analysis)
+
+      ## Create Integration Plan
+
+      For each piece of content to integrate, specify EXACTLY what changes to make.
+
+      **Write to `$ARTIFACTS_DIR/integration-plan.md`:**
+
+      ```markdown
+      # Integration Plan
+
+      ## Overview
+      - **Source**: {path}
+      - **Target**: {path}
+      - **Total operations**: {N}
+
+      ## Pre-Integration Checklist
+      - [ ] Back up target document
+      - [ ] Verify source content is final
+      - [ ] Confirm integration points exist
+
+      ---
+
+      ## Operations
+
+      ### Operation 1: {Brief description}
+
+      **Type**: {Insert Section | Update Table | Update Decision Tree | Reformat & Insert}
+      **Source content**: {Which section from source}
+      **Target location**: {Exact location in target - after which heading/line}
+
+      **Before** (target context):
+      ```
+      {3-5 lines showing where insertion happens}
+      ```
+
+      **Insert/Change**:
+      ```
+      {The exact content to add/change}
+      ```
+
+      **After** (expected result):
+      ```
+      {How it should look after integration}
+      ```
+
+      ---
+
+      ### Operation 2: Update Decision Tree
+
+      **Type**: Update Decision Tree
+      **Location**: {Line range in target}
+
+      **Current tree snippet**:
+      ```
+      {Relevant portion of decision tree}
+      ```
+
+      **Updated tree snippet**:
+      ```
+      {How it should look with new entries}
+      ```
+
+      **Placement logic**: {Why this branch point}
+
+      ---
+
+      ### Operation N: Update Quick Reference Table
+
+      **Type**: Update Table
+      **Location**: {Line range}
+
+      **Rows to add**:
+      | {col1} | {col2} | {col3} |
+      |--------|--------|--------|
+      | {new entry 1} | ... | ... |
+      | {new entry 2} | ... | ... |
+
+      **Insert after row**: {Which existing row}
+
+      ---
+
+      ## Operation Order
+
+      Execute operations in this order to avoid line number drift:
+      1. {Operation N} — furthest down in document
+      2. {Operation M} — next furthest
+      ...
+      N. {Operation 1} — nearest to top
+
+      ## Validation Checklist
+
+      After integration, verify:
+      - [ ] All source sections appear in target
+      - [ ] Decision tree includes all new entries
+      - [ ] Tables include all new rows
+      - [ ] No formatting inconsistencies
+      - [ ] No orphaned references
+      - [ ] Document still renders correctly
+      ```
+
+      Be extremely precise. The integrator will follow this plan literally.
+    allowed_tools: [Read, Write, Glob, Grep]
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 3: WORKSPACE SETUP
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: init-workspace
+    depends_on: [create-integration-plan]
+    bash: |
+      mkdir -p "$ARTIFACTS_DIR/backup"
+      mkdir -p "$ARTIFACTS_DIR/staged"
+      mkdir -p "$ARTIFACTS_DIR/final"
+      mkdir -p "$ARTIFACTS_DIR/reviews"
+
+      # Count operations from plan
+      OP_COUNT=$(grep -c "^### Operation" "$ARTIFACTS_DIR/integration-plan.md" 2>/dev/null || echo "1")
+
+      # Initialize state
+      cat > "$ARTIFACTS_DIR/state.json" << STATEEOF
+      {
+        "phase": "integrating",
+        "operation": 1,
+        "totalOperations": $OP_COUNT,
+        "retry": 0,
+        "maxRetries": 2,
+        "completedOperations": [],
+        "status": "running"
+      }
+      STATEEOF
+
+      echo "Integration workspace initialized."
+      echo "Operations to execute: $OP_COUNT"
+    timeout: 30000
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 4: EXECUTE INTEGRATION
+  # Apply each operation from the plan
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: execute-integration
+    depends_on: [init-workspace]
+    prompt: |
+      You are an integration executor. Apply ALL operations from the integration plan.
+
+      ## Read First
+
+      1. `$ARTIFACTS_DIR/integration-plan.md` — the full plan
+      2. `$ARTIFACTS_DIR/analysis.md` — for reference
+      3. The target document
+      4. The source document
+
+      ## Your Task
+
+      1. **Create backup**: Copy the target document to `$ARTIFACTS_DIR/backup/`
+
+      2. **Execute operations**: Follow the integration plan EXACTLY.
+         - Work in the order specified (bottom-up to avoid line drift)
+         - For each operation, make the precise change described
+         - Use the Edit tool for surgical changes when possible
+         - For complex restructuring, you may need to rewrite sections
+
+      3. **Write integrated document**: Save the result to `$ARTIFACTS_DIR/staged/integrated.md`
+
+      4. **Create change log**: Write to `$ARTIFACTS_DIR/staged/changes.md`:
+         ```markdown
+         # Integration Change Log
+
+         ## Operations Executed
+
+         ### Operation 1: {description}
+         - **Status**: Complete
+         - **Lines affected**: {range}
+         - **Notes**: {any issues or decisions}
+
+         ...
+
+         ## Summary
+         - Operations completed: {N}
+         - Operations skipped: {N} (with reasons)
+         - Total lines added: {N}
+         - Total lines modified: {N}
+         ```
+
+      Be precise. Do not improvise beyond the plan unless you encounter an error,
+      in which case document the issue and your resolution.
+    allowed_tools: [Read, Write, Edit, Glob, Grep, Bash]
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 5: ADVERSARIAL REVIEW
+  # Fresh-context review of the integration quality
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: review-integration
+    depends_on: [execute-integration]
+    context: fresh
+    prompt: |
+      You are an ADVERSARIAL REVIEWER checking an integration for quality issues.
+
+      ## Your Persona
+
+      You are a pedantic technical editor who:
+      - Checks every detail for consistency
+      - Notices formatting mismatches others miss
+      - Verifies cross-references actually work
+      - Reads as a confused new user would
+
+      ## Read These Files
+
+      1. `$ARTIFACTS_DIR/backup/` — the original document (for comparison)
+      2. `$ARTIFACTS_DIR/staged/integrated.md` — the integrated document
+      3. `$ARTIFACTS_DIR/staged/changes.md` — what was changed
+      4. `$ARTIFACTS_DIR/analysis.md` — original analysis
+      5. `$ARTIFACTS_DIR/integration-plan.md` — what was supposed to happen
+
+      ## Review Checklist
+
+      ### 1. Completeness
+      - [ ] All planned operations were executed
+      - [ ] All source content appears in the integrated document
+      - [ ] Nothing from the original was accidentally deleted
+
+      ### 2. Structural Integrity
+      - [ ] Decision trees are valid (all paths lead somewhere)
+      - [ ] Table rows are properly formatted
+      - [ ] Heading hierarchy is consistent
+      - [ ] No orphaned sections
+
+      ### 3. Formatting Consistency
+      - [ ] New sections match existing formatting patterns
+      - [ ] Code blocks use correct language tags
+      - [ ] Bold/italic usage matches existing style
+      - [ ] Spacing and blank lines are consistent
+
+      ### 4. Cross-Reference Validity
+      - [ ] Decision tree entries point to real sections
+      - [ ] Table entries correspond to actual content
+      - [ ] Internal links (if any) are valid
+
+      ### 5. Content Quality
+      - [ ] No obvious copy-paste artifacts
+      - [ ] Transitions between old and new content are smooth
+      - [ ] No duplicate content
+
+      ## Write Review Report
+
+      **Write to `$ARTIFACTS_DIR/reviews/integration-review.md`:**
+
+      ```markdown
+      # Integration Review
+
+      ## Overall: PASS / FAIL / PASS WITH NOTES
+
+      ## Checklist Results
+
+      | Category | Status | Issues |
+      |----------|--------|--------|
+      | Completeness | ✓/✗ | {details if failed} |
+      | Structural Integrity | ✓/✗ | {details} |
+      | Formatting Consistency | ✓/✗ | {details} |
+      | Cross-Reference Validity | ✓/✗ | {details} |
+      | Content Quality | ✓/✗ | {details} |
+
+      ## Issues Found
+
+      ### Issue 1: {Title}
+      **Severity**: Critical / Major / Minor
+      **Location**: {Line number or section}
+      **Problem**: {What's wrong}
+      **Fix**: {How to fix it}
+
+      ...
+
+      ## Recommendations
+
+      {Any suggestions for improvement, even if passing}
+      ```
+
+      Be thorough. A "PASS" means you'd be comfortable publishing this.
+    allowed_tools: [Read, Write, Glob, Grep]
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 6: FIX ISSUES (if any)
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: fix-issues
+    depends_on: [review-integration]
+    prompt: |
+      Check if the integration review found issues that need fixing.
+
+      ## Read First
+
+      1. `$ARTIFACTS_DIR/reviews/integration-review.md`
+
+      ## Decision Tree
+
+      **If review status is PASS:**
+      - Copy `$ARTIFACTS_DIR/staged/integrated.md` to `$ARTIFACTS_DIR/final/integrated.md`
+      - No fixes needed
+
+      **If review status is PASS WITH NOTES:**
+      - Apply minor fixes if they're quick
+      - Copy result to `$ARTIFACTS_DIR/final/integrated.md`
+
+      **If review status is FAIL:**
+      - Read each issue carefully
+      - Apply the recommended fixes to the staged document
+      - Save the fixed version to `$ARTIFACTS_DIR/final/integrated.md`
+      - Document what you fixed in `$ARTIFACTS_DIR/final/fix-log.md`
+
+      ## Output
+
+      After fixing (or copying if no fixes needed), confirm the final document is ready.
+    allowed_tools: [Read, Write, Edit, Glob, Grep]
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 7: FINAL REPORT
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: report
+    depends_on: [fix-issues]
+    context: fresh
+    model: haiku
+    prompt: |
+      Generate a completion report for the documentation integration.
+
+      ## Read
+
+      1. `$ARTIFACTS_DIR/analysis.md` — what was planned
+      2. `$ARTIFACTS_DIR/staged/changes.md` — what was done
+      3. `$ARTIFACTS_DIR/reviews/integration-review.md` — review results
+      4. `$ARTIFACTS_DIR/final/fix-log.md` — fixes applied (if exists)
+
+      ## Output
+
+      Provide a concise summary:
+
+      1. **Status**: Complete / Complete with fixes / Failed
+      2. **Integration summary**: What was added
+      3. **Review result**: Pass/Fail and key findings
+      4. **Final document location**: `$ARTIFACTS_DIR/final/integrated.md`
+      5. **Next steps**: What the user should do now (review, copy to target location, commit)
+
+      Keep it brief — the user wants to know if it worked and where to find the result.
+    allowed_tools: [Read, Glob]
