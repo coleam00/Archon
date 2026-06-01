@@ -31,12 +31,13 @@ export function decryptToken(ciphertext: string, key: Buffer): string {
 }
 
 /**
- * Parse TOKEN_ENCRYPTION_KEY env var into a 32-byte Buffer.
- * Throws with a clear message if absent or malformed — callers must validate
- * at startup rather than discovering the failure at runtime.
+ * Parse TOKEN_ENCRYPTION_KEY (from `env`, default `process.env`) into a 32-byte
+ * Buffer. Throws with a clear message if absent or malformed — callers must
+ * validate at startup rather than discovering the failure at runtime. The `env`
+ * param lets boot-time validators pass the same env they gate on.
  */
-export function getEncryptionKey(): Buffer {
-  const hex = process.env.TOKEN_ENCRYPTION_KEY;
+export function getEncryptionKey(env: NodeJS.ProcessEnv = process.env): Buffer {
+  const hex = env.TOKEN_ENCRYPTION_KEY;
   if (!hex) {
     throw new Error(
       'TOKEN_ENCRYPTION_KEY is required when the GitHub App is configured for per-user tokens. ' +

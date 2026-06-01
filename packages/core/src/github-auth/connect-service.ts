@@ -40,37 +40,43 @@ export async function connectGithubForUser(
   onCode: (info: DeviceCodeResponse) => void | Promise<void>,
   opts: ConnectGithubOptions = {}
 ): Promise<ConnectGithubResult> {
-  const { clientId } = loadDeviceFlowConfig();
+  getLog().info({ userId }, 'github_connect.started');
+  try {
+    const { clientId } = loadDeviceFlowConfig();
 
-  const device = await startDeviceFlow(clientId);
-  await onCode(device);
+    const device = await startDeviceFlow(clientId);
+    await onCode(device);
 
-  const token = await pollDeviceFlow(clientId, device.device_code, device.interval, {
-    signal: opts.signal,
-  });
-  const profile = await fetchGithubUser(token.access_token);
+    const token = await pollDeviceFlow(clientId, device.device_code, device.interval, {
+      signal: opts.signal,
+    });
+    const profile = await fetchGithubUser(token.access_token);
 
-  // Conflict guard first — throws GithubIdentityConflictError if this GitHub
-  // account already belongs to a different Archon user.
-  await linkGithubIdentity(userId, profile.login);
+    // Conflict guard first — throws GithubIdentityConflictError if this GitHub
+    // account already belongs to a different Archon user.
+    await linkGithubIdentity(userId, profile.login);
 
-  const now = Date.now();
-  await saveUserGithubToken({
-    userId,
-    githubUserId: profile.id,
-    githubLogin: profile.login,
-    accessToken: token.access_token,
-    refreshToken: token.refresh_token ?? null,
-    accessTokenExpiresAt: token.expires_in ? new Date(now + token.expires_in * 1000) : null,
-    refreshTokenExpiresAt: token.refresh_token_expires_in
-      ? new Date(now + token.refresh_token_expires_in * 1000)
-      : null,
-  });
-  await updateUserGithubProfile(userId, {
-    display_name: profile.name ?? profile.login,
-    email: profile.email,
-  });
+    const now = Date.now();
+    await saveUserGithubToken({
+      userId,
+      githubUserId: profile.id,
+      githubLogin: profile.login,
+      accessToken: token.access_token,
+      refreshToken: token.refresh_token ?? null,
+      accessTokenExpiresAt: token.expires_in ? new Date(now + token.expires_in * 1000) : null,
+      refreshTokenExpiresAt: token.refresh_token_expires_in
+        ? new Date(now + token.refresh_token_expires_in * 1000)
+        : null,
+    });
+    await updateUserGithubProfile(userId, {
+      display_name: profile.name ?? profile.login,
+      email: profile.email,
+    });
 
-  getLog().info({ userId, githubLogin: profile.login }, 'github_connect.completed');
-  return { githubLogin: profile.login };
+    getLog().info({ userId, githubLogin: profile.login }, 'github_connect.completed');
+    return { githubLogin: profile.login };
+  } catch (err) {
+    getLog().error({ err: err as Error, userId }, 'github_connect.failed');
+    throw err;
+  }
 }

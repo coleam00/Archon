@@ -45,6 +45,6 @@ export function loadDeviceFlowConfig(env: NodeJS.ProcessEnv = process.env): Devi
  */
 export function assertEncryptionKeyAtBoot(env: NodeJS.ProcessEnv = process.env): void {
   if (isPerUserGitHubEnabled(env)) {
-    getEncryptionKey();
+    getEncryptionKey(env);
   }
 }

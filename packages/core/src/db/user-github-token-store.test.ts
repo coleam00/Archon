@@ -123,6 +123,55 @@ describe('user-github-token-store', () => {
       expect(await getDecryptedAccessToken('user-1')).toBeNull();
       expect(mockRefresh).not.toHaveBeenCalled();
     });
+
+    test('concurrent reads share a single refresh (per-user in-flight mutex)', async () => {
+      // Both callers see a near-expiry row, but the second must reuse the first's
+      // in-flight promise so the single-use refresh token is consumed only once.
+      const nearExpiry = tokenRow({ access_token_expires_at: new Date(Date.now() + 60 * 1000) });
+      mockQuery.mockResolvedValueOnce(createQueryResult([nearExpiry])); // one SELECT
+      mockQuery.mockResolvedValueOnce(createQueryResult([])); // one save after refresh
+
+      const [a, b] = await Promise.all([
+        getDecryptedAccessToken('user-1'),
+        getDecryptedAccessToken('user-1'),
+      ]);
+
+      expect(mockRefresh).toHaveBeenCalledTimes(1);
+      expect(a).toBe('ghu_refreshed');
+      expect(b).toBe('ghu_refreshed');
+    });
+
+    test('refresh failure re-reads and returns a token another writer already rotated', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([tokenRow({ access_token_expires_at: new Date(Date.now() + 60 * 1000) })])
+      );
+      mockRefresh.mockRejectedValueOnce(new Error('bad_refresh_token'));
+      // Re-read finds a freshly-rotated (far-from-expiry) row → use it.
+      mockQuery.mockResolvedValueOnce(createQueryResult([tokenRow()]));
+      expect(await getDecryptedAccessToken('user-1')).toBe('ghu_access');
+    });
+
+    test('refresh failure returns null when the re-read row is still near expiry', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([tokenRow({ access_token_expires_at: new Date(Date.now() + 60 * 1000) })])
+      );
+      mockRefresh.mockRejectedValueOnce(new Error('bad_refresh_token'));
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([tokenRow({ access_token_expires_at: new Date(Date.now() + 60 * 1000) })])
+      );
+      expect(await getDecryptedAccessToken('user-1')).toBeNull();
+    });
+
+    test('persist failure after a successful refresh still returns the fresh token', async () => {
+      // refresh succeeds (mockRefresh → ghu_refreshed) but the save throws; the
+      // caller must still get a usable token rather than a mislabeled null.
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([tokenRow({ access_token_expires_at: new Date(Date.now() + 60 * 1000) })])
+      );
+      mockQuery.mockRejectedValueOnce(new Error('db write failed')); // saveUserGithubToken
+      expect(await getDecryptedAccessToken('user-1')).toBe('ghu_refreshed');
+      expect(mockRefresh).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('getUserGithubNoreplyEmail', () => {

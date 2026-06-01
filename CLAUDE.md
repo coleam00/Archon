@@ -405,7 +405,7 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 
 ### Database Schema
 
-**11 Tables (all prefixed with `remote_agent_`):**
+**12 Tables (all prefixed with `remote_agent_`):**
 1. **`codebases`** - Repository metadata and commands (JSONB)
 2. **`conversations`** - Track platform conversations with titles and soft-delete support; nullable `user_id` records first creator
 3. **`sessions`** - Track AI SDK sessions with resume capability
@@ -417,6 +417,7 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 9. **`users`** - Archon-internal identity (one row per human/bot); created lazily on first sight by any adapter
 10. **`user_identities`** - Per-platform mapping (Slack U-id, Telegram chat id, Discord snowflake, GitHub login) → `users.id`; `UNIQUE(platform, platform_user_id)`
 11. **`workflow_node_sessions`** - Per-node provider session IDs persisted across workflow re-runs (opt-in via `persist_session`); keyed by `(workflow_name, node_id, scope_key, provider)`; `scope_key` is typically the conversation UUID
+12. **`user_github_tokens`** - Per-user GitHub device-flow tokens encrypted at rest (AES-256-GCM); one row per Archon user (`UNIQUE(user_id)`), cascades on user deletion; numeric `github_user_id` anchors the commit no-reply email
 
 **Key Patterns:**
 - Conversation ID format: Platform-specific (`thread_ts`, `chat_id`, `user/repo#123`)

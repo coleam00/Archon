@@ -12,6 +12,11 @@
  */
 import { z } from '@hono/zod-openapi';
 
+// Timestamps are read back as `Date` on PostgreSQL (node-postgres hydrates
+// TIMESTAMPTZ) but as ISO `string` on SQLite (TEXT). The store normalizes both
+// via `toEpochMs`; the union keeps the row type honest for either dialect.
+const dbTimestamp = z.union([z.date(), z.string()]);
+
 export const userGithubTokenRowSchema = z.object({
   id: z.string(),
   user_id: z.string(),
@@ -19,10 +24,10 @@ export const userGithubTokenRowSchema = z.object({
   github_login: z.string(),
   access_token_encrypted: z.string(),
   refresh_token_encrypted: z.string().nullable(),
-  access_token_expires_at: z.date().nullable(),
-  refresh_token_expires_at: z.date().nullable(),
-  created_at: z.date(),
-  updated_at: z.date(),
+  access_token_expires_at: dbTimestamp.nullable(),
+  refresh_token_expires_at: dbTimestamp.nullable(),
+  created_at: dbTimestamp,
+  updated_at: dbTimestamp,
 });
 
 export type UserGithubTokenRow = z.infer<typeof userGithubTokenRowSchema>;

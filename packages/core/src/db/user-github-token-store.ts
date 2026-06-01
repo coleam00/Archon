@@ -14,7 +14,7 @@
 import { pool, getDialect } from './connection';
 import { createLogger } from '@archon/paths';
 import { encryptToken, decryptToken, getEncryptionKey } from '../utils/token-crypto';
-import { refreshUserToken } from '../github-auth/device-flow';
+import { refreshUserToken, type DeviceAccessToken } from '../github-auth/device-flow';
 import { loadDeviceFlowConfig } from '../github-auth/config';
 import type { UserGithubTokenRow } from '../schemas/user-github-token-row';
 
@@ -81,11 +81,15 @@ export async function saveUserGithubToken(params: SaveUserGithubTokenParams): Pr
 }
 
 export async function getUserGithubTokenRecord(userId: string): Promise<UserGithubTokenRow | null> {
-  const result = await pool.query<UserGithubTokenRow>(
-    'SELECT * FROM remote_agent_user_github_tokens WHERE user_id = $1',
-    [userId]
-  );
-  return result.rows[0] ?? null;
+  // node-postgres returns BIGINT as a string; type the raw read accordingly and
+  // normalize github_user_id so the number-typed row is honest for both dialects
+  // (SQLite already yields a number).
+  const result = await pool.query<
+    Omit<UserGithubTokenRow, 'github_user_id'> & { github_user_id: number | string }
+  >('SELECT * FROM remote_agent_user_github_tokens WHERE user_id = $1', [userId]);
+  const row = result.rows[0];
+  if (!row) return null;
+  return { ...row, github_user_id: Number(row.github_user_id) };
 }
 
 export async function deleteUserGithubToken(userId: string): Promise<void> {
@@ -121,7 +125,13 @@ export async function getDecryptedAccessToken(userId: string): Promise<string | 
 
 async function resolveAccessToken(userId: string): Promise<string | null> {
   const row = await getUserGithubTokenRecord(userId);
-  if (!row) return null;
+  if (!row) {
+    // Normal "never connected" path. Logged at debug so it is distinguishable
+    // from the expired/refresh-failed null results below when tracing why a
+    // user's commits lack GitHub attribution.
+    getLog().debug({ userId }, 'user_github_token.not_connected');
+    return null;
+  }
 
   const key = getEncryptionKey();
   const expiresAtMs = toEpochMs(row.access_token_expires_at);
@@ -136,11 +146,29 @@ async function resolveAccessToken(userId: string): Promise<string | null> {
     return null;
   }
 
+  // Refresh and persist are deliberately separated: a refresh failure is
+  // recoverable (another process may have rotated the token — re-read below),
+  // whereas a persist failure after a SUCCESSFUL refresh must not be mislabeled
+  // as a refresh failure nor discard the freshly issued (now-valid) token.
+  const refreshToken = decryptToken(row.refresh_token_encrypted, key);
+  let refreshed: DeviceAccessToken;
   try {
-    const refreshToken = decryptToken(row.refresh_token_encrypted, key);
     const { clientId } = loadDeviceFlowConfig();
-    const refreshed = await refreshUserToken(clientId, refreshToken);
-    const now = Date.now();
+    refreshed = await refreshUserToken(clientId, refreshToken);
+  } catch (err) {
+    getLog().warn({ err: err as Error, userId }, 'user_github_token.refresh_failed');
+    // A concurrent process (or prior call) may have already refreshed — re-read
+    // once and use the fresh token if it's now valid.
+    const fresh = await getUserGithubTokenRecord(userId);
+    const freshExpiry = fresh ? toEpochMs(fresh.access_token_expires_at) : null;
+    if (fresh && freshExpiry !== null && Date.now() + REFRESH_BUFFER_MS < freshExpiry) {
+      return decryptToken(fresh.access_token_encrypted, key);
+    }
+    return null;
+  }
+
+  const now = Date.now();
+  try {
     await saveUserGithubToken({
       userId,
       githubUserId: row.github_user_id,
@@ -155,16 +183,11 @@ async function resolveAccessToken(userId: string): Promise<string | null> {
         : null,
     });
     getLog().info({ userId }, 'user_github_token.refreshed');
-    return refreshed.access_token;
   } catch (err) {
-    getLog().warn({ err: err as Error, userId }, 'user_github_token.refresh_failed');
-    // A concurrent process (or prior call) may have already refreshed — re-read
-    // once and use the fresh token if it's now valid.
-    const fresh = await getUserGithubTokenRecord(userId);
-    const freshExpiry = fresh ? toEpochMs(fresh.access_token_expires_at) : null;
-    if (fresh && freshExpiry !== null && Date.now() + REFRESH_BUFFER_MS < freshExpiry) {
-      return decryptToken(fresh.access_token_encrypted, key);
-    }
-    return null;
+    // GitHub already rotated the token, but we could not persist the new pair.
+    // Surface loudly (distinct from refresh_failed) so the broken-on-next-read
+    // state is visible, but still return the valid token for the current call.
+    getLog().error({ err: err as Error, userId }, 'user_github_token.persist_failed');
   }
+  return refreshed.access_token;
 }

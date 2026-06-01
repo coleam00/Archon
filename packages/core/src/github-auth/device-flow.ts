@@ -41,7 +41,12 @@ export interface GithubUserProfile {
   email: string | null;
 }
 
-/** Discriminator for the terminal/recoverable device-flow error states. */
+/**
+ * Discriminator for the terminal/recoverable device-flow error states. `code`
+ * is the raw `error` string from GitHub (e.g. `access_denied`, `expired_token`,
+ * `slow_down`) or an Archon-raised code (`aborted`, `http_error`,
+ * `user_fetch_failed`). Left as `string` because the upstream set is not frozen.
+ */
 export class DeviceFlowError extends Error {
   constructor(
     public readonly code: string,
@@ -59,7 +64,20 @@ async function postForm<T>(url: string, params: Record<string, string>): Promise
     body: new URLSearchParams(params).toString(),
   });
   if (!res.ok) {
-    throw new DeviceFlowError('http_error', `GitHub device flow returned HTTP ${res.status}`);
+    // GitHub returns actionable detail in the body even on non-2xx (e.g.
+    // {"error":"invalid_client","error_description":"..."}). Surface it so a
+    // misconfigured client id reads as more than a bare "HTTP 401".
+    let detail = '';
+    try {
+      const body = (await res.json()) as { error_description?: string; error?: string };
+      detail = body.error_description ?? body.error ?? '';
+    } catch {
+      // Body was not JSON — fall back to the status line only.
+    }
+    throw new DeviceFlowError(
+      'http_error',
+      `GitHub device flow returned HTTP ${res.status}${detail ? `: ${detail}` : ''}`
+    );
   }
   return (await res.json()) as T;
 }
@@ -110,7 +128,9 @@ export async function pollDeviceFlow(
     if (!data.error) return data;
     if (data.error === 'authorization_pending') continue;
     if (data.error === 'slow_down') {
-      interval = data.interval ?? interval + 5;
+      // Honor the server's new interval, else add 5s per the device-flow spec.
+      // Floor at 1s so a malformed `interval: 0` can't turn this into a busy loop.
+      interval = Math.max(1, data.interval ?? interval + 5);
       continue;
     }
     throw new DeviceFlowError(data.error);
@@ -143,11 +163,11 @@ export async function fetchGithubUser(accessToken: string): Promise<GithubUserPr
   if (!res.ok) {
     throw new DeviceFlowError('user_fetch_failed', `GET /user returned HTTP ${res.status}`);
   }
-  const u = (await res.json()) as {
+  const raw = (await res.json()) as {
     id: number;
     login: string;
     name?: string | null;
     email?: string | null;
   };
-  return { id: u.id, login: u.login, name: u.name ?? null, email: u.email ?? null };
+  return { id: raw.id, login: raw.login, name: raw.name ?? null, email: raw.email ?? null };
 }
