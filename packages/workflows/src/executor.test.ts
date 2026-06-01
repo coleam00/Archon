@@ -895,6 +895,8 @@ describe('telemetry wiring', () => {
       'db-conv-1'
     );
 
+    // Exactly once — the executor catch must not double-emit with the DAG paths.
+    expect(mockCaptureWorkflowCompleted).toHaveBeenCalledTimes(1);
     expect(mockCaptureWorkflowCompleted).toHaveBeenCalledWith(
       expect.objectContaining({ outcome: 'failed', exitReason: 'unhandled_error' })
     );

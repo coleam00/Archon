@@ -455,12 +455,22 @@ describe('new capture functions are fire-and-forget no-throw', () => {
     expect(() => captureArchonStarted({ surface: 'cli' })).not.toThrow();
   });
 
-  test('captureArchonStarted does not throw (enabled)', () => {
+  test('captureArchonStarted does not throw (enabled)', async () => {
     delete process.env.ARCHON_TELEMETRY_DISABLED;
     delete process.env.DO_NOT_TRACK;
     delete process.env.CI;
     delete process.env.POSTHOG_API_KEY;
-    expect(() => captureArchonStarted({ surface: 'server' })).not.toThrow();
+    // Stub the transport so the enabled path never touches the network, then
+    // flush deterministically before restoring (no flaky timers / real ingest).
+    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('{"status":"ok"}', { status: 200 })
+    );
+    try {
+      expect(() => captureArchonStarted({ surface: 'server' })).not.toThrow();
+      await shutdownTelemetry();
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 
   test('captureWorkflowCompleted does not throw for completed/failed (disabled)', () => {
@@ -484,19 +494,27 @@ describe('new capture functions are fire-and-forget no-throw', () => {
     ).not.toThrow();
   });
 
-  test('captureWorkflowCompleted does not throw (enabled)', () => {
+  test('captureWorkflowCompleted does not throw (enabled)', async () => {
     delete process.env.ARCHON_TELEMETRY_DISABLED;
     delete process.env.DO_NOT_TRACK;
     delete process.env.CI;
     delete process.env.POSTHOG_API_KEY;
-    expect(() =>
-      captureWorkflowCompleted({
-        outcome: 'failed',
-        workflowName: 'implement',
-        workflowSource: 'bundled',
-        exitReason: 'unhandled_error',
-      })
-    ).not.toThrow();
+    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('{"status":"ok"}', { status: 200 })
+    );
+    try {
+      expect(() =>
+        captureWorkflowCompleted({
+          outcome: 'failed',
+          workflowName: 'implement',
+          workflowSource: 'bundled',
+          exitReason: 'unhandled_error',
+        })
+      ).not.toThrow();
+      await shutdownTelemetry();
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 });
 

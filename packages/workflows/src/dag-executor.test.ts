@@ -8474,6 +8474,8 @@ describe('executeDagWorkflow -- completion telemetry', () => {
 
     await runDag({ name: 'dag-ok', nodes: [{ id: 'step', prompt: 'Do thing.' }] });
 
+    // Exactly once — guards against the double-count risk the PR flagged.
+    expect(mockCaptureWorkflowCompleted).toHaveBeenCalledTimes(1);
     expect(mockCaptureWorkflowCompleted).toHaveBeenCalledWith(
       expect.objectContaining({
         outcome: 'completed',
@@ -8493,8 +8495,13 @@ describe('executeDagWorkflow -- completion telemetry', () => {
 
     await runDag({ name: 'dag-empty', nodes: [{ id: 'only', prompt: 'Do thing.' }] });
 
+    expect(mockCaptureWorkflowCompleted).toHaveBeenCalledTimes(1);
     expect(mockCaptureWorkflowCompleted).toHaveBeenCalledWith(
-      expect.objectContaining({ outcome: 'failed', exitReason: 'no_nodes_completed' })
+      expect.objectContaining({
+        outcome: 'failed',
+        workflowSource: 'bundled',
+        exitReason: 'no_nodes_completed',
+      })
     );
   });
 
@@ -8520,8 +8527,13 @@ describe('executeDagWorkflow -- completion telemetry', () => {
       ],
     });
 
+    expect(mockCaptureWorkflowCompleted).toHaveBeenCalledTimes(1);
     expect(mockCaptureWorkflowCompleted).toHaveBeenCalledWith(
-      expect.objectContaining({ outcome: 'failed', exitReason: 'node_error' })
+      expect.objectContaining({
+        outcome: 'failed',
+        workflowSource: 'bundled',
+        exitReason: 'node_error',
+      })
     );
   });
 });
