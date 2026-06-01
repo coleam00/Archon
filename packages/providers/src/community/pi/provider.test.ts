@@ -158,6 +158,10 @@ mock.module('@earendil-works/pi-coding-agent', () => ({
   createGrepTool: mockCreateGrepTool,
   createFindTool: mockCreateFindTool,
   createLsTool: mockCreateLsTool,
+  // Value import required by ./native-tools (added when manage_run native tools
+  // were wired into Pi). These tests don't pass nativeTools, so it's never
+  // called — but the static `import { defineTool }` needs the binding to exist.
+  defineTool: mock((def: unknown) => def),
 }));
 
 // Import AFTER mocks are set — module resolution freezes the mocks.

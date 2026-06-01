@@ -87,6 +87,7 @@ describe('CodexProvider', () => {
         thinkingControl: false,
         fallbackModel: false,
         sandbox: false,
+        nativeTools: false,
       });
     });
   });
