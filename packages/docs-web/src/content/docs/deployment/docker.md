@@ -320,6 +320,8 @@ To disable, leave `CADDY_BASIC_AUTH` empty or unset — the Caddyfile expands it
 
 ### Form-Based Authentication (HTML Login Page)
 
+> **PostgreSQL deployments:** prefer native [Web UI login via Better Auth](/reference/configuration/#web-ui-login-better-auth-optional) (`BETTER_AUTH_SECRET`), which supersedes this single-user `auth-service` sidecar with real per-user accounts. Self-serve signup is **disabled by default** — invite teammates with `ARCHON_AUTH_ALLOWED_EMAILS` (an allowlist) or open it explicitly with `ARCHON_AUTH_OPEN_SIGNUP=true`. When enabled, Better Auth also **gates the API server-side** (every `/api/*` request needs a session or gets `401`), so it can fully replace this `forward_auth` sidecar — see the sidecar-retirement runbook in the [Security reference](/reference/security/#adapter-authorization). The sidecar below still works (and remains the option for SQLite/solo installs) but is no longer the recommended path on Postgres.
+
 An alternative to basic auth that serves a styled HTML login form instead of the browser's credential popup. Uses a lightweight `auth-service` sidecar and Caddy's `forward_auth` directive.
 
 **When to use form auth vs basic auth:**

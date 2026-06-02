@@ -409,7 +409,7 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 
 ### Database Schema
 
-**12 Tables (all prefixed with `remote_agent_`):**
+**16 Tables (all prefixed with `remote_agent_`):**
 1. **`codebases`** - Repository metadata and commands (JSONB)
 2. **`conversations`** - Track platform conversations with titles and soft-delete support; nullable `user_id` records first creator
 3. **`sessions`** - Track AI SDK sessions with resume capability
@@ -418,10 +418,11 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 6. **`workflow_events`** - Step-level workflow event log (step transitions, artifacts, errors)
 7. **`messages`** - Conversation message history with tool call metadata (JSONB); nullable `user_id` (NULL for assistant rows)
 8. **`codebase_env_vars`** - Per-project env vars injected into project-scoped execution surfaces (Claude, Codex, bash/script nodes, and direct chat when codebase-scoped), managed via Web UI or `env:` in config
-9. **`users`** - Archon-internal identity (one row per human/bot); created lazily on first sight by any adapter
-10. **`user_identities`** - Per-platform mapping (Slack U-id, Telegram chat id, Discord snowflake, GitHub login) → `users.id`; `UNIQUE(platform, platform_user_id)`
+9. **`users`** - Archon-internal identity (one row per human/bot); created lazily on first sight by any adapter; `role` (`'admin'`(default)`/'member'`) is the identity seam for future per-resource scoping (visibility stays open today)
+10. **`user_identities`** - Per-platform mapping (Slack U-id, Telegram chat id, Discord snowflake, GitHub login, Better Auth web user id) → `users.id`; `UNIQUE(platform, platform_user_id)`
 11. **`workflow_node_sessions`** - Per-node provider session IDs persisted across workflow re-runs (opt-in via `persist_session`); keyed by `(workflow_name, node_id, scope_key, provider)`; `scope_key` is typically the conversation UUID
 12. **`user_github_tokens`** - Per-user GitHub device-flow tokens encrypted at rest (AES-256-GCM); one row per Archon user (`UNIQUE(user_id)`), cascades on user deletion; numeric `github_user_id` anchors the commit no-reply email
+13–16. **`remote_agent_auth_user` / `remote_agent_auth_session` / `remote_agent_auth_account` / `remote_agent_auth_verification`** - Better Auth tables for opt-in web login (**PostgreSQL only**; always created on Postgres via the idempotent schema apply, but populated only when web auth is enabled — `DATABASE_URL` + `BETTER_AUTH_SECRET`). Owned and shaped by Better Auth (text ids, camelCase columns); Archon never queries them directly — a session maps to the canonical `users` row via `user_identities('web', <betterAuthUserId>)`
 
 **Key Patterns:**
 - Conversation ID format: Platform-specific (`thread_ts`, `chat_id`, `user/repo#123`)
@@ -843,6 +844,14 @@ Pattern: Use `classifyIsolationError()` (from `@archon/isolation`) to map git er
 
 **Providers:**
 - `GET /api/providers` - List registered AI providers; returns `{ providers: [{ id, displayName, capabilities, builtIn }] }`
+
+**Web Auth (opt-in Better Auth; Postgres + `BETTER_AUTH_SECRET`):**
+- Better Auth mounts email/password login at `/api/auth/*` (sign-up/sign-in/sign-out/get-session). Mounted only when enabled; the catch-all explicitly falls through for Archon-owned `/api/auth/status` + `/api/auth/github*` paths so they aren't shadowed.
+- `GET /api/auth/status` - Web auth availability + signup posture (no auth required); returns `{ enabled: boolean, signup: 'allowlist' | 'open' | 'disabled' }`. Drives the Web UI login gate.
+- The per-request identity seam is `resolveAuthContext(c): { userId, role } | undefined` (in `routes/api.ts`): Better Auth session first, then the `X-Archon-User` header, then undefined. `resolveWebUserId` delegates to it; `requireWebUser` is the session-aware strict variant (401 missing / 503 backend). `role` rides the canonical user row (default `admin`).
+- **Server-side API gate** (`isApiGateEnabled`): when web auth is enabled, every `/api/*` request must resolve to an identity or gets **401** — except `/api/auth/*` (login surface) and `/api/health*` (healthcheck must stay reachable). `/webhooks/*` and `/internal/*` are outside `/api/*` and untouched. On by default; `ARCHON_WEB_AUTH_REQUIRED=false` keeps login-UI-only. This is what lets Better Auth replace the Caddy `forward_auth` sidecar as the real access boundary.
+- **Signup safety** (`getSignupMode`): with web auth on and no `ARCHON_AUTH_ALLOWED_EMAILS`, signup defaults to **disabled** (login only) + a boot WARN — never silently open. `ARCHON_AUTH_OPEN_SIGNUP=true` opts into open public signup.
+- `GET /api/workflows/runs?mine=true` and `GET /api/conversations?mine=true` - Non-enforcing "my" filter (narrows to `ctx.userId` only when an identity resolves; default lists everything). Not a security boundary.
 
 **GitHub Identity (per-user device flow; App mode + `TOKEN_ENCRYPTION_KEY`):**
 - `POST /api/auth/github/device/start` - Begin the device flow for the current web user (from `X-Archon-User`); returns `{ device_code, user_code, verification_uri, interval, expires_in }`; 401 if no web-auth header

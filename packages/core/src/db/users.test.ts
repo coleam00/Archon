@@ -32,6 +32,7 @@ const userRow = (overrides: Partial<User> = {}): User => ({
   id: 'user-1',
   display_name: null,
   email: null,
+  role: 'admin',
   created_at: new Date(),
   updated_at: new Date(),
   ...overrides,
@@ -82,6 +83,25 @@ describe('users', () => {
       expect(result).toEqual(u);
       expect(mockQuery).toHaveBeenCalledTimes(2);
       expect(mockWithTransaction).not.toHaveBeenCalled();
+    });
+
+    test('returns the role from the user row (identity seam, defaults admin)', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([identityRow()]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([userRow({ role: 'admin' })]));
+
+      const result = await findOrCreateUserByPlatformIdentity('web', 'web-user-1');
+
+      expect(result.role).toBe('admin');
+    });
+
+    test('propagates a non-default role from the user row (member round-trip)', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([identityRow()]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([userRow({ role: 'member' })]));
+
+      const result = await findOrCreateUserByPlatformIdentity('web', 'web-user-2');
+
+      // Confirms the column value is plumbed through, not hardcoded to 'admin'.
+      expect(result.role).toBe('member');
     });
 
     test('backfills both identity and user display_name when both previously null', async () => {

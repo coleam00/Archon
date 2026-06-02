@@ -252,4 +252,8 @@ export const workflowRunsQuerySchema = z.object({
   status: z.string().optional(),
   codebaseId: z.string().optional(),
   limit: z.string().optional(),
+  // Non-enforcing "mine" filter: 'true' restricts to the caller's own runs
+  // when an identity resolves. Default lists everything. Enum makes the boolean
+  // contract explicit (the handler treats only 'true' as on).
+  mine: z.enum(['true', 'false']).optional(),
 });

@@ -194,7 +194,12 @@ export async function listConversations(
   limit = 50,
   platformType?: string,
   codebaseId?: string,
-  excludeEmpty = false
+  excludeEmpty = false,
+  /**
+   * Non-enforcing "mine" filter: when set, restrict to conversations attributed
+   * to this user (`user_id = $N`). Absent → all (default visibility stays open).
+   */
+  userId?: string
 ): Promise<readonly Conversation[]> {
   const params: unknown[] = [];
   let sql =
@@ -213,6 +218,11 @@ export async function listConversations(
   if (codebaseId) {
     params.push(codebaseId);
     sql += ` AND codebase_id = $${String(params.length)}`;
+  }
+
+  if (userId) {
+    params.push(userId);
+    sql += ` AND user_id = $${String(params.length)}`;
   }
 
   sql += ' ORDER BY last_activity_at DESC NULLS LAST';

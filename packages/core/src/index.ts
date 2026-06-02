@@ -26,6 +26,7 @@ export {
   type MessageMetadata,
   type User,
   type UserIdentity,
+  type UserRole,
   type IdentityPlatform,
 } from './types';
 

@@ -18,6 +18,7 @@
     "@tanstack/react-query": "^5.0.0",
     "@tanstack/react-virtual": "^3.0.0",
     "@xyflow/react": "^12.10.1",
+    "better-auth": "~1.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "escape-string-regexp": "^5.0.0",

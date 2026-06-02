@@ -309,9 +309,26 @@ An opt-in layer on top of [GitHub App mode](/adapters/github-app-setup/) that le
 | `GITHUB_APP_CLIENT_ID` | The App's **Client ID** (starts with `Iv1.`/`Iv23…`, distinct from the numeric `GITHUB_APP_ID`). Required for the device flow that connects per-user identities. | -- |
 | `TOKEN_ENCRYPTION_KEY` | 64-char hex (32 bytes; `openssl rand -hex 32`) used to encrypt stored per-user tokens at rest (AES-256-GCM). Setting it with `GITHUB_APP_ID` enables per-user mode. **Rotating it invalidates all stored user tokens** (users must reconnect). | -- |
 | `ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK` | When `false` (default), a workflow run by an **unconnected** user has `GH_TOKEN`/`GITHUB_TOKEN` scrubbed (so `gh`/`git` fail) rather than silently using the shared org/bot token. Set `true` to opt back into the shared token. | `false` |
-| `ARCHON_WEB_AUTH_HEADER` | Name of the reverse-proxy-set header Archon trusts to identify the web user (interim web auth). Only safe when Archon is reachable **solely** through the proxy on a loopback bind — on a public bind the header is forgeable. Absent header → unattributed (never elevated). | `X-Archon-User` |
+| `ARCHON_WEB_AUTH_HEADER` | Name of the reverse-proxy-set header Archon trusts to identify the web user (reverse-proxy fallback; still honored alongside Better Auth web login below). Only safe when Archon is reachable **solely** through the proxy on a loopback bind — on a public bind the header is forgeable. Absent header → unattributed (never elevated). | `X-Archon-User` |
 
 To connect once the vars are set: `archon auth github` (CLI), `/archon connect github` (Slack), or the Web UI **Settings → Connect GitHub** card.
+
+### Web UI login (Better Auth, optional)
+
+Real per-user email/password login for the Web UI, mounted at `/api/auth/*` by [Better Auth](https://better-auth.com). **Opt-in and Postgres-only**: enabled only when **both** `DATABASE_URL` (Postgres) and `BETTER_AUTH_SECRET` are set. SQLite/solo installs can never enable it and behave exactly as before (no login UI). It supersedes the single-user `auth-service` sidecar; the `ARCHON_WEB_AUTH_HEADER` trust above remains a fallback for reverse-proxy deploys.
+
+A Better Auth session resolves to the **canonical** `remote_agent_users` row via the `web` platform identity, so chat/CLI/forge identities and the `role` column live on the one Archon user — Better Auth is only the login mechanism. Better Auth owns four tables prefixed `remote_agent_auth_*` (`user`/`session`/`account`/`verification`), applied automatically on startup. Every web request resolves a `{ userId, role }` auth context (session first, then the trusted header); `role` defaults to `admin` and visibility stays open. `GET /api/workflows/runs?mine=true` and `GET /api/conversations?mine=true` are non-enforcing "my" filters that prove the scoping seam — they are not a security boundary.
+
+| Variable | Description | Default |
+| --- | --- | --- |
+| `BETTER_AUTH_SECRET` | Session signing secret, **≥32 chars** (`openssl rand -base64 32`). Its presence (with `DATABASE_URL`) is what enables web login. Boot fails fast if set but too short. | -- |
+| `BETTER_AUTH_URL` | Public base URL. Omit for same-origin deploys (inferred from the request); set only behind a fixed-origin reverse proxy. | inferred |
+| `BETTER_AUTH_TRUSTED_ORIGINS` | Comma-separated extra origins allowed for CSRF/cross-origin (beyond same-origin). | -- |
+| `ARCHON_AUTH_ALLOWED_EMAILS` | Comma-separated invite allowlist for signup (case-insensitive). Set this to invite teammates. | -- |
+| `ARCHON_AUTH_OPEN_SIGNUP` | `true` allows open public signup when no allowlist is set. Default (unset) + no allowlist = signup **disabled** (login only). | `false` |
+| `ARCHON_WEB_AUTH_REQUIRED` | When web auth is enabled, gate every `/api/*` request server-side (401 without a session/identity), except `/api/auth/*` and `/api/health*`. `false` keeps login-UI-only. | on (when enabled) |
+
+Signup uses email + password (no email verification by default). **Signup posture:** allowlist set → invite-gated (403 for non-listed emails); no allowlist + `ARCHON_AUTH_OPEN_SIGNUP=true` → open; otherwise **disabled** (login only, with a boot WARN) so enabling auth never silently opens public registration. Existing sessions remain valid until expiry even if an email is later removed from the allowlist. When `ARCHON_WEB_AUTH_REQUIRED` is on (default), Better Auth is the real access gate, so the Caddy `forward_auth` sidecar can be retired.
 
 ### Platform Adapters -- Gitea
 
