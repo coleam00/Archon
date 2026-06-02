@@ -73,6 +73,9 @@ export function isEmailAllowed(email: string, allowlist: string[]): boolean {
  *   - `disabled`  — no allowlist and no open flag → signup off (login only).
  * The default is `disabled`, so enabling web auth without an allowlist never
  * silently exposes open public registration on a reachable URL.
+ *
+ * Precedence: a non-empty allowlist wins over `ARCHON_AUTH_OPEN_SIGNUP` — set
+ * both and the mode is `allowlist` (the invite gate, not open signup).
  */
 export function getSignupMode(
   env: NodeJS.ProcessEnv = process.env

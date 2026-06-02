@@ -167,15 +167,24 @@ function makeApp(): OpenAPIHono {
 describe('GET /api/auth/status', () => {
   beforeEach(() => {
     authEnabled = false;
-    signupMode = 'open';
+    // `disabled` is the real default posture (no allowlist + no open-signup flag).
+    signupMode = 'disabled';
     authInstance = null;
   });
 
-  test('disabled → { enabled: false, signup: open }', async () => {
+  test('auth disabled → { enabled: false, signup: disabled }', async () => {
     const app = makeApp();
     const res = await app.request('/api/auth/status');
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ enabled: false, signup: 'open' });
+    expect(await res.json()).toEqual({ enabled: false, signup: 'disabled' });
+  });
+
+  test('enabled + no allowlist → { enabled: true, signup: disabled } (safe default)', async () => {
+    authEnabled = true;
+    const app = makeApp();
+    const res = await app.request('/api/auth/status');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ enabled: true, signup: 'disabled' });
   });
 
   test('enabled + allowlist → { enabled: true, signup: allowlist }', async () => {
@@ -241,6 +250,23 @@ describe('server-side /api/* gate', () => {
       headers: { 'X-Archon-User': 'alice' },
     });
     expect(res.status).toBe(200);
+  });
+
+  // Fail-closed: a session lookup that throws (e.g. DB outage) with NO trusted
+  // header must NOT admit the request. resolveAuthContext swallows the throw and
+  // returns undefined, which the gate maps to 401 — never access-granted.
+  test('gate on + session lookup throws + no header → 401 (fails closed)', async () => {
+    apiGateEnabled = true;
+    authEnabled = true;
+    authInstance = {
+      api: {
+        getSession: async () => {
+          throw new Error('PG connection refused');
+        },
+      },
+    };
+    const res = await makeApp().request('/api/conversations');
+    expect(res.status).toBe(401);
   });
 });
 

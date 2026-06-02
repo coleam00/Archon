@@ -101,9 +101,18 @@ function buildAuth(env: NodeJS.ProcessEnv): AuthInstance {
       user: {
         create: {
           before: async (user: { email: string }) => {
-            // Invite gate: reject signups whose email is not on the allowlist.
-            // Throwing APIError surfaces a clean 403 to the client instead of a
-            // generic 500. An empty allowlist means open signup.
+            // Defense in depth: `disableSignUp` (set above from getSignupMode)
+            // already blocks registration in `disabled` mode before this hook
+            // runs — re-check here so the hook stays correct on its own if that
+            // upstream enforcement ever changes.
+            if (signupDisabled) {
+              throw new APIError('FORBIDDEN', { message: 'Signup is disabled.' });
+            }
+            // Invite gate (`allowlist` mode): reject signups whose email is not on
+            // the allowlist. Throwing APIError surfaces a clean 403 instead of a
+            // generic 500. An empty allowlist makes isEmailAllowed() return true,
+            // so this hook is a no-op in `open` mode — `disableSignUp` and the
+            // posture above are what actually govern whether signup is permitted.
             if (!isEmailAllowed(user.email, allowedEmails)) {
               throw new APIError('FORBIDDEN', {
                 message: 'This email is not on the invite allowlist.',

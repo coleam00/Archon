@@ -1049,6 +1049,13 @@ export function registerApiRoutes(
   // /webhooks/* (HMAC-verified) and /internal/* (loopback-guarded) are outside
   // /api/* and untouched. No-op when web auth is disabled (solo/local unchanged).
   // `resolveAuthContext`/`apiError` are function declarations below → hoisted.
+  //
+  // SECURITY: resolveAuthContext also accepts the trusted reverse-proxy header
+  // (ARCHON_WEB_AUTH_HEADER, default `X-Archon-User`) as an identity. That header
+  // is only safe to trust when the app is reachable solely through a proxy that
+  // STRIPS it from inbound requests (or the app binds 127.0.0.1). If you retire
+  // the proxy auth sidecar, the proxy MUST still strip that header — otherwise a
+  // client can forge it and walk straight through this gate.
   const PUBLIC_API_GATE_PREFIXES = ['/api/auth/', '/api/health'];
   app.use('/api/*', async (c, next) => {
     if (!isApiGateEnabled()) return next();
@@ -1093,9 +1100,11 @@ export function registerApiRoutes(
         }
       } catch (err) {
         // Session lookup failed (e.g. DB outage). Fall through to the header so a
-        // proxy-authenticated deploy still resolves; absent that, NULL attribution.
-        // warn (not error): this is the soft attribution seam, never an access
-        // gate — requireWebUser is the strict variant that 503s instead.
+        // proxy-authenticated deploy still resolves; absent that → undefined
+        // (NULL attribution). warn (not error): this is the soft attribution seam
+        // — it returns undefined rather than throwing. The /api/* gate maps that
+        // undefined to a 401 (fail-closed); requireWebUser is the strict variant
+        // that distinguishes a backend 503 from a missing identity.
         getLog().warn({ err: err as Error, path: c.req.path }, 'web.session_resolve_failed');
       }
     }

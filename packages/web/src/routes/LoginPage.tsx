@@ -57,6 +57,11 @@ export function LoginPage(): React.ReactElement {
     }
   }
 
+  // Self-serve signup is off when the server reports `disabled` (no allowlist +
+  // no open-signup flag). Hide the signup affordance entirely so we don't invite
+  // a registration the server will only 403. Defaults to allowed while status is
+  // still loading (it resolves quickly and the gate only renders when auth is on).
+  const signupAllowed = status?.signup !== 'disabled';
   const isSignup = mode === 'signup';
 
   return (
@@ -134,16 +139,18 @@ export function LoginPage(): React.ReactElement {
           </Button>
         </form>
 
-        <button
-          type="button"
-          onClick={() => {
-            setMode(isSignup ? 'login' : 'signup');
-            setError(null);
-          }}
-          className="mt-4 w-full text-center text-sm text-text-secondary hover:text-text-primary"
-        >
-          {isSignup ? 'Already have an account? Sign in' : "Don't have an account? Sign up"}
-        </button>
+        {signupAllowed && (
+          <button
+            type="button"
+            onClick={() => {
+              setMode(isSignup ? 'login' : 'signup');
+              setError(null);
+            }}
+            className="mt-4 w-full text-center text-sm text-text-secondary hover:text-text-primary"
+          >
+            {isSignup ? 'Already have an account? Sign in' : "Don't have an account? Sign up"}
+          </button>
+        )}
       </div>
     </div>
   );

@@ -641,8 +641,10 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     // invite teammates isn't silently locked out of signups.
     if (getSignupMode() === 'disabled') {
       getLog().warn(
-        'web_auth.signup_disabled_no_allowlist — signup is OFF. Set ARCHON_AUTH_ALLOWED_EMAILS ' +
-          'to invite users, or ARCHON_AUTH_OPEN_SIGNUP=true for open signup.'
+        {
+          hint: 'Set ARCHON_AUTH_ALLOWED_EMAILS to invite users, or ARCHON_AUTH_OPEN_SIGNUP=true for open signup.',
+        },
+        'web_auth.signup_disabled_no_allowlist'
       );
     }
   }
