@@ -2,7 +2,7 @@
  * Database operations for workflow runs
  */
 import { pool, getDialect, getDatabaseType } from './connection';
-import type { IDatabase } from './adapters/types';
+import type { IDatabase, SqlDialect } from './adapters/types';
 import type {
   WorkflowRun,
   WorkflowRunStatus,
@@ -50,6 +50,45 @@ let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('db.workflows');
   return cachedLog;
+}
+
+/**
+ * Days of inactivity after which a 'running' run is treated as an orphan (its
+ * executor presumed dead) and becomes eligible for resume. Bound as a query
+ * parameter — never interpolated — so both dialects handle it positionally.
+ */
+const ORPHAN_RESUME_STALE_DAYS = 1;
+
+/**
+ * SQL fragment matching a run that may be resumed: failed/paused, or a stale
+ * 'running' orphan (no activity for ORPHAN_RESUME_STALE_DAYS). `dayParamIndex`
+ * is the 1-based placeholder position at which the caller MUST bind
+ * ORPHAN_RESUME_STALE_DAYS. Shared by findResumableRun and resumeWorkflowRun so
+ * the two predicates cannot drift — a hand-duplicated copy did drift and bound
+ * the wrong placeholder, breaking resume (PR #1830 review C1).
+ */
+function resumableStatusClause(dialect: SqlDialect, dayParamIndex: number): string {
+  const staleOrphan = `last_activity_at IS NULL OR last_activity_at < ${dialect.nowMinusDays(dayParamIndex)}`;
+  return `(status IN ('failed', 'paused') OR (status = 'running' AND (${staleOrphan})))`;
+}
+
+/**
+ * Thrown by resumeWorkflowRun when the target run is no longer in a resumable
+ * state (already running/terminal, or concurrently resumed). Callers translate
+ * this into a user-facing "already being resumed" message instead of leaking
+ * the raw internal error string.
+ */
+export class WorkflowNotResumableError extends Error {
+  constructor(
+    public readonly runId: string,
+    public readonly currentStatus: string
+  ) {
+    super(
+      `Workflow run is not resumable (id: ${runId}, status: ${currentStatus}). ` +
+        'It may have already been resumed, completed, or cancelled.'
+    );
+    this.name = 'WorkflowNotResumableError';
+  }
 }
 
 export async function createWorkflowRun(data: {
@@ -320,13 +359,10 @@ export async function findResumableRun(
       `SELECT * FROM remote_agent_workflow_runs
        WHERE workflow_name = $1
          AND working_path = $2
-         AND (
-           status IN ('failed', 'paused')
-           OR (status = 'running' AND (last_activity_at IS NULL OR last_activity_at < ${dialect.nowMinusDays(3)}))
-         )
+         AND ${resumableStatusClause(dialect, 3)}
        ORDER BY started_at DESC
        LIMIT 1`,
-      [workflowName, workingPath, 1]
+      [workflowName, workingPath, ORPHAN_RESUME_STALE_DAYS]
     );
     const row = result.rows[0];
     return row ? normalizeWorkflowRun(row) : null;
@@ -393,28 +429,23 @@ export async function resumeWorkflowRun(id: string): Promise<WorkflowRun> {
     // an active row semantically means "when did this active phase start."
     // The original creation time can be recovered from workflow_events
     // history if needed for analytics.
-    // Compare-and-swap guard: only flip to 'running' if the row is STILL in a
-    // resumable state. The predicate mirrors findResumableRun's exactly —
-    // failed/paused, or a stale 'running' orphan (no activity in 3 days) — so
-    // legitimate orphan-recovery still works. Because this UPDATE refreshes both
-    // started_at and last_activity_at, a second concurrent resumer is excluded
-    // in every case: a freshly-resumed run is now 'running' with a current
-    // last_activity_at, so it no longer matches the stale-running clause. Without
-    // this guard two callers (e.g. the web Resume button + a chat re-dispatch, or
-    // the lock-less CLI path) could both flip the same run to 'running' and
-    // double-claim the worktree.
+    // Compare-and-swap guard: flip to 'running' only if the row is STILL
+    // resumable (resumableStatusClause — shared with findResumableRun so the two
+    // predicates can't drift). The exclusion mechanism is the atomic row-level
+    // UPDATE: because it also refreshes last_activity_at, a second concurrent
+    // resumer finds the row already 'running' with fresh activity, no longer
+    // matches the clause, and gets rowCount 0. Without it two callers (web
+    // Resume + a chat re-dispatch, or the lock-less CLI path) could both flip
+    // the same run to 'running' and double-claim the worktree. The day param is
+    // bound at $2 (ORPHAN_RESUME_STALE_DAYS), matching findResumableRun's bind.
     updateResult = await pool.query(
       `UPDATE remote_agent_workflow_runs
        SET status = 'running',
            completed_at = NULL,
            started_at = ${dialect.now()},
            last_activity_at = ${dialect.now()}
-       WHERE id = $1
-         AND (
-           status IN ('failed', 'paused')
-           OR (status = 'running' AND (last_activity_at IS NULL OR last_activity_at < ${dialect.nowMinusDays(3)}))
-         )`,
-      [id]
+       WHERE id = $1 AND ${resumableStatusClause(dialect, 2)}`,
+      [id, ORPHAN_RESUME_STALE_DAYS]
     );
   } catch (error) {
     const err = error as Error;
@@ -423,31 +454,29 @@ export async function resumeWorkflowRun(id: string): Promise<WorkflowRun> {
   }
 
   if (updateResult.rowCount === 0) {
-    // CAS miss: the row is no longer resumable. Either it was deleted, it's
-    // terminal, or another caller already activated it (concurrent double-resume)
-    // — refuse rather than double-claim the worktree. Probe the current status
-    // for an actionable message; the probe is best-effort error context only.
-    let currentStatus: string | undefined;
+    // CAS miss: the row is no longer resumable — deleted, terminal, or already
+    // activated by another caller. Refuse rather than double-claim the worktree.
+    // Probe the current status for an actionable error (informational only; the
+    // probe rethrows on its own failure).
+    let probeRows: readonly { status: string }[];
     try {
       const probe = await pool.query<{ status: string }>(
         'SELECT status FROM remote_agent_workflow_runs WHERE id = $1',
         [id]
       );
-      currentStatus = probe.rows[0]?.status;
+      probeRows = probe.rows;
     } catch (error) {
       const err = error as Error;
       getLog().error({ err, workflowRunId: id }, 'db.workflow_run_resume_probe_failed');
-      throw new Error(`Failed to resume workflow run: ${err.message}`);
+      throw new Error(`Failed to resume workflow run: ${err.message}`, { cause: err });
     }
+    const currentStatus = probeRows[0]?.status;
     if (currentStatus === undefined) {
       getLog().warn({ workflowRunId: id }, 'db.workflow_run_resume_not_found');
       throw new Error(`Workflow run not found (id: ${id})`);
     }
-    getLog().warn({ workflowRunId: id, currentStatus }, 'db.workflow_run_resume_not_resumable');
-    throw new Error(
-      `Workflow run is not resumable (id: ${id}, status: ${currentStatus}). ` +
-        'It may have already been resumed, completed, or cancelled.'
-    );
+    getLog().info({ workflowRunId: id, currentStatus }, 'db.workflow_run_resume_not_resumable');
+    throw new WorkflowNotResumableError(id, currentStatus);
   }
 
   let selectResult: Awaited<ReturnType<typeof pool.query<WorkflowRun>>>;
@@ -610,7 +639,7 @@ export async function failWorkflowRun(id: string, error: string): Promise<void> 
   }
 }
 
-export async function cancelWorkflowRun(id: string): Promise<void> {
+export async function cancelWorkflowRun(id: string): Promise<{ cancelled: boolean }> {
   const dialect = getDialect();
   let result: Awaited<ReturnType<typeof pool.query>>;
   try {
@@ -619,7 +648,7 @@ export async function cancelWorkflowRun(id: string): Promise<void> {
     // completed_at / a resurrection of terminal state. 'failed' is intentionally
     // still cancellable (it is overloaded as a resumable/approval state), and a
     // 'running' run stays cancellable — that is cooperative cancellation, which
-    // the executor honors via its between-layer status check.
+    // the executor honors via its between-layer status check (dag-executor).
     result = await pool.query(
       `UPDATE remote_agent_workflow_runs
        SET status = 'cancelled', completed_at = ${dialect.now()}
@@ -631,12 +660,14 @@ export async function cancelWorkflowRun(id: string): Promise<void> {
     getLog().error({ err }, 'db.workflow_run_cancel_failed');
     throw new Error(`Failed to cancel workflow run: ${err.message}`);
   }
-  // Idempotent no-op when the run was already terminal — surface at debug for
-  // observability without erroring the caller (double-click cancel, abandon of
-  // an already-finished run, etc.).
-  if (result.rowCount === 0) {
-    getLog().debug({ workflowRunId: id }, 'db.workflow_run_cancel_noop');
+  const cancelled = (result.rowCount ?? 0) > 0;
+  if (!cancelled) {
+    // Idempotent no-op: the run was already terminal. Returned so callers can
+    // report "nothing to cancel" instead of a false "Cancelled" (see #1830 I1).
+    // Same info level as the resume CAS-miss signal for consistency (S2).
+    getLog().info({ workflowRunId: id }, 'db.workflow_run_cancel_noop');
   }
+  return { cancelled };
 }
 
 /**

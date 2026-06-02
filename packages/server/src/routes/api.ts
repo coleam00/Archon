@@ -2346,8 +2346,13 @@ export function registerApiRoutes(
       if (run.status !== 'running' && run.status !== 'pending' && run.status !== 'paused') {
         return apiError(c, 400, `Cannot cancel workflow in '${run.status}' status`);
       }
-      await workflowDb.cancelWorkflowRun(runId);
-      return c.json({ success: true, message: `Cancelled workflow: ${run.workflow_name}` });
+      const { cancelled } = await workflowDb.cancelWorkflowRun(runId);
+      return c.json({
+        success: true,
+        message: cancelled
+          ? `Cancelled workflow: ${run.workflow_name}`
+          : `Workflow ${run.workflow_name} already finished — nothing to cancel.`,
+      });
     } catch (error) {
       getLog().error({ err: error }, 'cancel_workflow_run_api_failed');
       return apiError(c, 500, 'Failed to cancel workflow run');

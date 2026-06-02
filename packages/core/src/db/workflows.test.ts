@@ -721,7 +721,9 @@ describe('workflows database', () => {
       const [updateQuery, updateParams] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(updateQuery).toContain("status = 'running'");
       expect(updateQuery).toContain('completed_at = NULL');
-      expect(updateParams).toEqual(['workflow-run-123']);
+      // $1 = id, $2 = ORPHAN_RESUME_STALE_DAYS. The day param MUST be bound or the
+      // CAS predicate's `< $2 days` references an unbound placeholder (PR #1830 C1).
+      expect(updateParams).toEqual(['workflow-run-123', 1]);
       // Second call: SELECT
       const [selectQuery, selectParams] = mockQuery.mock.calls[1] as [string, unknown[]];
       expect(selectQuery).toContain('SELECT *');
@@ -755,9 +757,12 @@ describe('workflows database', () => {
 
       await resumeWorkflowRun('workflow-run-123');
 
-      const [updateQuery] = mockQuery.mock.calls[0] as [string, unknown[]];
+      const [updateQuery, updateParams] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(updateQuery).toContain("status IN ('failed', 'paused')");
       expect(updateQuery).toContain("status = 'running' AND");
+      // The stale-orphan arm references $2 — it MUST be bound to the day count.
+      expect(updateQuery).toContain('$2');
+      expect(updateParams).toEqual(['workflow-run-123', 1]);
     });
 
     test('throws when no row matched and the run is gone (not found)', async () => {
@@ -823,11 +828,12 @@ describe('workflows database', () => {
   });
 
   describe('cancelWorkflowRun', () => {
-    test('cancels a non-terminal run and guards against re-stamping a finished one', async () => {
+    test('cancels a non-terminal run and reports { cancelled: true }', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
 
-      await cancelWorkflowRun('workflow-run-123');
+      const result = await cancelWorkflowRun('workflow-run-123');
 
+      expect(result).toEqual({ cancelled: true });
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain("status = 'cancelled'");
       // Must not re-cancel / re-stamp completed_at on an already-finished run.
@@ -835,11 +841,11 @@ describe('workflows database', () => {
       expect(params).toEqual(['workflow-run-123']);
     });
 
-    test('is an idempotent no-op when the run is already terminal (no throw)', async () => {
+    test('reports { cancelled: false } when the run is already terminal (no throw)', async () => {
       // UPDATE matches nothing because the run is completed/cancelled
       mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
 
-      await expect(cancelWorkflowRun('workflow-run-123')).resolves.toBeUndefined();
+      await expect(cancelWorkflowRun('workflow-run-123')).resolves.toEqual({ cancelled: false });
     });
 
     test('throws on database error', async () => {
