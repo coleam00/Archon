@@ -62,8 +62,8 @@ export function ActiveRunCard({
             }
           : undefined
       }
-      className={`group relative overflow-hidden rounded border bg-surface transition-colors hover:bg-surface-hover ${
-        selected ? 'border-accent-bright/70 ring-2 ring-accent-bright/40' : 'border-border'
+      className={`group relative overflow-hidden border-[3px] bg-white transition-colors hover:bg-[#F0F0F0] ${
+        selected ? 'border-black ring-2 ring-black/20' : 'border-black'
       } ${canOpen ? 'cursor-pointer focus-visible:outline-none' : ''}`}
     >
       <StatusStrip status={run.status} />

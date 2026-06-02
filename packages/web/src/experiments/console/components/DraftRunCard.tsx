@@ -275,12 +275,12 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
         onClick={() => {
           setMode('expanded');
         }}
-        className="group flex items-center gap-3 rounded border border-dashed border-border px-3 py-2 text-left transition-colors hover:border-accent-bright/60 hover:bg-surface-hover"
+        className="group flex items-center gap-3 border-[3px] border-dashed border-black bg-white px-3 py-2 text-left transition-colors hover:bg-[#F0F0F0]"
         title="Start a new run — press N"
       >
         <span
           aria-hidden
-          className="flex h-5 w-5 items-center justify-center rounded-full border border-border text-text-tertiary transition-colors group-hover:border-accent-bright/60 group-hover:text-accent-bright"
+          className="flex h-5 w-5 items-center justify-center border-[3px] border-black text-[#666666] transition-colors group-hover:text-black"
         >
           +
         </span>
@@ -289,7 +289,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
         </span>
         <span
           aria-hidden
-          className="ml-auto rounded border border-border px-1.5 py-0.5 font-mono text-[10px] tabular-nums text-text-tertiary"
+          className="ml-auto border-[3px] border-black bg-[#F0F0F0] px-1.5 py-0.5 font-mono text-[10px] tabular-nums text-[#666666]"
         >
           N
         </span>
@@ -299,14 +299,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
 
   return (
     <article
-      className="relative rounded border bg-surface"
-      style={{
-        // Soft-magenta hairline border on all four sides; the brand-gradient
-        // strip is painted as an absolute child so the card can keep
-        // `overflow: visible` (the workflow picker's dropdown escapes these
-        // bounds).
-        borderColor: 'color-mix(in oklch, var(--brand-magenta), transparent 60%)',
-      }}
+      className="relative border-[3px] border-black bg-white"
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       onDrop={onDrop}
@@ -320,7 +313,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
           aria-hidden
           className="brand-bar-soft pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded"
         >
-          <span className="rounded border border-[color:var(--brand-magenta)] bg-surface px-3 py-1.5 font-mono text-[11px] text-[color:var(--brand-magenta)]">
+          <span className="border-[3px] border-black bg-white px-3 py-1.5 font-mono text-[11px] text-black">
             drop files to attach
           </span>
         </div>
@@ -328,8 +321,8 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
       <div className="pl-5 pr-4 py-3">
         {/* Header: status dot + DRAFT label + workflow picker + close */}
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <span aria-hidden className="h-2.5 w-2.5 shrink-0 rounded-full bg-accent-bright" />
-          <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.14em] text-accent-bright">
+          <span aria-hidden className="h-2.5 w-2.5 shrink-0 bg-black" />
+          <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.14em] text-black">
             Draft
           </span>
           <span className="mx-1 h-3 w-px shrink-0 bg-border" aria-hidden />
@@ -447,7 +440,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
               type="button"
               onClick={() => void submit()}
               disabled={submitting || workflowName.length === 0}
-              className="brand-bar flex items-center gap-1 rounded px-3 py-1.5 text-[12px] font-semibold text-white shadow-sm transition-all hover:brightness-110 active:brightness-95 disabled:opacity-50"
+              className="brand-bar flex items-center gap-1 border-[3px] border-black px-3 py-1.5 text-[12px] font-semibold text-white transition-colors hover:bg-[#333333] disabled:opacity-50"
             >
               {submitting ? 'Starting…' : 'Start run'}
               <span aria-hidden className="font-mono text-[10px] opacity-70">

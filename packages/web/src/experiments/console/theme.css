@@ -1,136 +1,96 @@
 /*
- * Archon Console — brand foundation port.
+ * Kairon Console — RawBlock skin port.
  *
- * Scoped to `.console-root` so the production app's existing palette is
- * untouched. Tailwind v4's @theme inline (in index.css) defines --color-*
- * theme tokens that reference plain CSS variables (--surface, --border,
- * --text-primary, etc.); redefining those CSS variables inside .console-root
- * cascades through every utility that reads them without needing a parallel
- * @theme block.
- *
- * Source: Archon Brand · Standalone. The duotone magenta → violet → teal
- * gradient drawn from the shield logo is THE brand. Cool charcoal surfaces
- * (hue 265) carry the gradient without competing.
- *
- *   magenta  oklch(0.640 0.295 330)  #ED10EC
- *   violet   oklch(0.560 0.215 305)
- *   teal     oklch(0.755 0.165 168)  #06CE94
+ * Scoped to `.console-root` so upstream Cole console tokens don't bleed into
+ * the main app. Mirrors the :root palette in index.css (chat / dashboard).
  */
 
-/* Geist & Geist Mono — loaded only when a console route mounts. */
-@import url('https://fonts.googleapis.com/css2?family=Geist:wght@300..700&family=Geist+Mono:wght@400..600&display=swap');
-
 .console-root {
-  /* Surfaces — cool charcoal (hue 265) */
-  --surface: oklch(0.175 0.007 265);
-  --surface-inset: oklch(0.13 0.006 265);
-  --surface-elevated: oklch(0.205 0.009 265);
-  --surface-hover: oklch(0.225 0.01 265);
-  --surface-variant: oklch(0.21 0.009 265);
-  --surface-bright: oklch(0.275 0.012 265);
+  /* Surfaces */
+  --surface: #ffffff;
+  --surface-inset: #f0f0f0;
+  --surface-elevated: #ffffff;
+  --surface-hover: #e8e8e8;
+  --surface-variant: #f5f5f5;
+  --surface-bright: #e8e8e8;
+  --surface-accent: #f5f5f5;
 
   /* Borders */
-  --border: oklch(0.275 0.012 265);
-  --border-bright: oklch(0.355 0.016 265);
-  --outline-variant: oklch(0.4 0.018 265);
+  --border: #000000;
+  --border-bright: #333333;
+  --border-subtle: #cccccc;
+  --outline-variant: #cccccc;
 
   /* Text */
-  --text-primary: oklch(0.975 0.004 265);
-  --text-secondary: oklch(0.745 0.014 265);
-  --text-tertiary: oklch(0.56 0.017 265);
+  --text-primary: #000000;
+  --text-secondary: #4a4a4a;
+  --text-tertiary: #666666;
 
-  /* Brand thread — the duotone */
-  --brand-magenta: oklch(0.64 0.295 330);
-  --brand-magenta-2: oklch(0.72 0.26 335);
-  --brand-violet: oklch(0.56 0.215 305);
-  --brand-teal: oklch(0.755 0.165 168);
-  --brand-teal-2: oklch(0.7 0.15 175);
-  --brand-gradient: linear-gradient(
-    135deg,
-    var(--brand-magenta) 0%,
-    var(--brand-violet) 50%,
-    var(--brand-teal) 100%
-  );
-  --brand-gradient-soft: linear-gradient(
-    135deg,
-    oklch(0.64 0.295 330 / 0.18) 0%,
-    oklch(0.56 0.215 305 / 0.12) 50%,
-    oklch(0.755 0.165 168 / 0.18) 100%
-  );
+  /* Accent — RawBlock black + blue highlight */
+  --accent: #000000;
+  --accent-bright: #0000ff;
+  --accent-hover: #333333;
+  --accent-muted: #f0f0f0;
+  --accent-soft: rgb(0 0 0 / 0.06);
+  --accent-ring: rgb(0 0 0 / 0.25);
+  --accent-foreground: #ffffff;
 
-  /* Accent — brand magenta (default). All accent tokens point to the same
-     hue so `bg-accent-bright`, `text-accent-bright`, etc. all read as brand. */
-  --accent: var(--brand-magenta);
-  --accent-bright: var(--brand-magenta);
-  --accent-hover: oklch(0.7 0.28 330);
-  --accent-muted: oklch(0.64 0.295 330 / 0.3);
-  --accent-soft: oklch(0.64 0.295 330 / 0.14);
-  --accent-ring: oklch(0.64 0.295 330 / 0.3);
+  /* Status */
+  --running: #0000ff;
+  --running-soft: rgb(0 0 255 / 0.12);
+  --success: #008000;
+  --success-soft: rgb(0 128 0 / 0.12);
+  --warning: #ffa500;
+  --warning-soft: rgb(255 165 0 / 0.14);
+  --error: #ff0000;
+  --error-soft: rgb(255 0 0 / 0.12);
 
-  /* Status — kept distinct from accent so brand swaps don't break meaning.
-     - running   electric blue (active/in-progress)
-     - success   brand teal (affirmative IS brand)
-     - warning   amber
-     - error     hot red */
-  --running: oklch(0.72 0.155 245);
-  --running-soft: oklch(0.72 0.155 245 / 0.14);
-  --success: var(--brand-teal);
-  --success-soft: oklch(0.755 0.165 168 / 0.14);
-  --warning: oklch(0.8 0.14 85);
-  --warning-soft: oklch(0.8 0.14 85 / 0.14);
-  --error: oklch(0.68 0.215 18);
-  --error-soft: oklch(0.68 0.215 18 / 0.14);
+  /* Legacy brand aliases — mapped to RawBlock (no gradient) */
+  --brand-magenta: #000000;
+  --brand-magenta-2: #333333;
+  --brand-violet: #000000;
+  --brand-teal: #008000;
+  --brand-teal-2: #006600;
+  --brand-gradient: linear-gradient(180deg, #000000 0%, #000000 100%);
+  --brand-gradient-soft: rgb(0 0 0 / 0.04);
 
   /* shadcn-compatible overrides */
-  --background: oklch(0.145 0.006 265);
-  --foreground: var(--text-primary);
-  --card: var(--surface);
-  --card-foreground: var(--text-primary);
-  --popover: var(--surface-elevated);
-  --popover-foreground: var(--text-primary);
-  --primary: var(--brand-magenta);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: var(--surface-elevated);
-  --secondary-foreground: var(--text-primary);
-  --muted: var(--surface-elevated);
-  --muted-foreground: var(--text-secondary);
-  --destructive: var(--error);
-  --input: var(--border);
-  --ring: var(--brand-magenta);
+  --background: #ffffff;
+  --foreground: #000000;
+  --card: #ffffff;
+  --card-foreground: #000000;
+  --popover: #ffffff;
+  --popover-foreground: #000000;
+  --primary: #000000;
+  --primary-foreground: #ffffff;
+  --secondary: #f0f0f0;
+  --secondary-foreground: #000000;
+  --muted: #f0f0f0;
+  --muted-foreground: #666666;
+  --destructive: #ff0000;
+  --input: #f0f0f0;
+  --ring: #000000;
 
-  /* Typography — Geist, with the SS01/CV11 alternates the brand uses. */
   font-family:
-    'Geist',
+    'Work Sans',
     ui-sans-serif,
     system-ui,
     -apple-system,
     'Segoe UI',
     sans-serif;
-  font-feature-settings: 'ss01', 'cv11';
-  letter-spacing: -0.005em;
+  letter-spacing: normal;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Override Tailwind's compiled font-mono so console-internal monospace
-   becomes Geist Mono. Higher specificity than the bare .font-mono utility. */
 .console-root .font-mono,
 .console-root code,
 .console-root pre,
 .console-root kbd,
 .console-root samp {
-  font-family: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
-  font-feature-settings: 'ss01', 'ss02';
+  font-family: 'Space Mono', ui-monospace, 'SF Mono', Menlo, monospace;
 }
 
-/* Heading tightening — brand uses -0.028em for big titles. */
-.console-root h1,
-.console-root h2 {
-  letter-spacing: -0.028em;
-}
-
-/* Override the global `* { @apply border-border ... }` rule's effect inside
-   the console so bare borders pick up our charcoal border color. */
 .console-root *,
 .console-root *::before,
 .console-root *::after {
@@ -138,32 +98,50 @@
 }
 
 .console-root ::selection {
-  background: var(--accent-ring);
-  color: var(--text-primary);
+  background: #000000;
+  color: #ffffff;
 }
 
 .console-root :focus-visible {
-  outline: 2px solid var(--accent-ring);
+  outline: 2px solid #000000;
   outline-offset: 2px;
-  border-radius: 6px;
 }
 
-/* Brand utilities — restricted to console scope.
-   .brand-text  → paints text with the duotone gradient (logo/wordmark)
-   .brand-bar   → solid gradient fill (CTAs, accent strips)
-   .brand-bar-soft → translucent gradient wash (subtle hero/selected states) */
+/* RawBlock structural chrome */
+.console-root header {
+  border-bottom-width: 3px;
+  border-bottom-color: #000000;
+  background: #ffffff;
+}
+
+.console-root nav[aria-label='Projects'] {
+  border-right-width: 3px;
+  border-right-color: #000000;
+}
+
+/* Cards & panels — match dashboard border weight */
+.console-root article,
+.console-root [role='dialog'] > div {
+  border-width: 3px;
+  border-color: #000000;
+}
+
+/* RawBlock brand utilities (no gradient) */
 .console-root .brand-text {
-  background: var(--brand-gradient);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  -webkit-text-fill-color: transparent;
+  color: #000000;
+  font-weight: 600;
 }
 
 .console-root .brand-bar {
-  background: var(--brand-gradient);
+  background: #000000;
 }
 
 .console-root .brand-bar-soft {
-  background: var(--brand-gradient-soft);
+  background: rgb(0 0 0 / 0.04);
+}
+
+/* Square corners on structural elements; keep dots circular */
+.console-root .rounded-md,
+.console-root .rounded-lg {
+  border-radius: 0;
 }

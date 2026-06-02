@@ -53,32 +53,28 @@ export function ConsoleApp(): ReactElement {
   });
 
   return (
-    <div className="console-root flex h-screen w-screen flex-col bg-surface text-text-primary">
-      <header className="flex h-12 shrink-0 items-center justify-between border-b border-border px-4">
+    <div className="console-root flex h-screen w-screen flex-col bg-white text-text-primary">
+      <header className="flex h-12 shrink-0 items-center justify-between border-b-[3px] border-black bg-white px-4">
         <div className="flex items-center gap-2.5">
-          <img
-            src="/favicon.png"
-            alt=""
-            aria-hidden="true"
-            width={22}
-            height={22}
-            className="shrink-0 select-none"
-            draggable={false}
-          />
-          <span className="brand-text text-base font-semibold tracking-tight">Archon</span>
-          <span className="rounded-full border border-border px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest text-text-tertiary">
+          <Link to="/chat" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
+            <div className="flex h-7 w-7 items-center justify-center bg-black text-white">
+              <span className="text-sm font-semibold">K</span>
+            </div>
+            <span className="text-sm font-semibold text-black">Kairon</span>
+          </Link>
+          <span className="border-[3px] border-black bg-[#F0F0F0] px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest text-[#666666]">
             console
           </span>
         </div>
         <Link
           to="/chat"
           title="Switch back to the classic UI"
-          className="flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-[11px] text-text-secondary transition-colors hover:border-border-bright hover:bg-surface-hover hover:text-text-primary"
+          className="inline-flex items-center gap-1.5 border-[3px] border-black bg-white px-2.5 py-1.5 text-[11px] font-semibold text-black transition-colors hover:bg-[#F0F0F0]"
         >
           <span aria-hidden className="font-mono text-[11px] leading-none">
             ←
           </span>
-          Old UI
+          Classic UI
         </Link>
       </header>
 

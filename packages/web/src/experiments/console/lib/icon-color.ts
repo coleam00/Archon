@@ -1,24 +1,17 @@
 /**
  * Deterministic color for a project tile based on its id.
- * Same id always yields the same color so tiles are stable across sessions.
- *
- * Uses a small palette of oklch hues tuned for the app's dark surface. Kept in
- * sync with the general visual language (no neon, no clashing with success/
- * warning/error status colors).
+ * RawBlock palette — stark, high-contrast, aligned with index.css semantics.
  */
 
-// Warm palette. Hues concentrated in 0–90 (roses, corals, peaches, ambers)
-// with two jewel-tone outliers (plum + teal, echoing the logo's magenta→teal
-// gradient endpoints) so 8+ projects still feel visually distinct.
 const PALETTE: readonly string[] = [
-  'oklch(0.58 0.16 15)', // rose
-  'oklch(0.60 0.14 40)', // coral
-  'oklch(0.62 0.14 65)', // peach
-  'oklch(0.62 0.13 85)', // warm amber-gold
-  'oklch(0.56 0.15 350)', // warm magenta (logo-leaning)
-  'oklch(0.52 0.14 325)', // plum
-  'oklch(0.58 0.13 160)', // warm teal (logo-leaning)
-  'oklch(0.55 0.13 100)', // olive-gold
+  '#000000',
+  '#333333',
+  '#4a4a4a',
+  '#666666',
+  '#0000ff',
+  '#008000',
+  '#ffa500',
+  '#ff0000',
 ];
 
 /** FNV-1a hash, 32-bit, non-cryptographic but deterministic. */
@@ -38,14 +31,12 @@ export function tileColor(projectId: string): string {
 export function tileAbbreviation(name: string): string {
   const cleaned = name.trim();
   if (cleaned.length === 0) return '??';
-  // owner/repo → ownerInitial + repoInitial
   if (cleaned.includes('/')) {
     const [a, b] = cleaned.split('/', 2);
     const left = (a ?? '').trim()[0] ?? '';
     const right = (b ?? '').trim()[0] ?? '';
     if (left && right) return `${left}${right}`.toUpperCase();
   }
-  // First two alphanumeric characters
   const alnum = cleaned.replace(/[^A-Za-z0-9]/g, '');
   return (alnum.slice(0, 2) || cleaned.slice(0, 2)).toUpperCase();
 }
