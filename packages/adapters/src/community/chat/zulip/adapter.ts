@@ -35,8 +35,8 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-/** Returns current UTC time formatted as HH:MM:SS. */
-function formatUtcTime(): string {
+/** Returns current UTC time formatted as HH:MM:SS. Exported for isolated unit testing. */
+export function formatUtcTime(): string {
   const now = new Date();
   const h = String(now.getUTCHours()).padStart(2, '0');
   const m = String(now.getUTCMinutes()).padStart(2, '0');
@@ -75,8 +75,12 @@ export class ZulipAdapter implements IPlatformAdapter {
     this.botEmail = botEmail;
     this.apiKey = apiKey;
     this.streamingMode = mode;
+    // TODO: `mode === 'stream'` is accepted but currently has no runtime effect — every reply
+    // path uses the batch-style "Starting thinking…" / "Done thinking." status edits.
+    // True progressive token streaming would require splitting `sendMessage` and editing the
+    // answer message in place; until then, callers picking `stream` get the same UX as `batch`.
     this.allowedUserIds = parseAllowedUserIds(process.env.ZULIP_ALLOWED_USER_IDS);
-    // zulip-js@1 has no /users/me endpoint — bot full name must be supplied via env
+    // bot full name (required for @mention detection — must be set via env)
     this.botFullName = process.env.ZULIP_BOT_FULL_NAME ?? '';
 
     if (this.allowedUserIds.length > 0) {
@@ -149,7 +153,15 @@ export class ZulipAdapter implements IPlatformAdapter {
       const statusEntry = statusQueue.shift();
       // `length > 0` above guarantees a value, but the codebase forbids `!` non-null assertions
       // (eslint `no-non-null-assertion`), so we keep this defensive narrowing for the type-checker.
-      if (statusEntry === undefined) return;
+      // If we ever hit this branch in practice, the per-conversation queue invariant has been
+      // violated — log loudly so it's not silently swallowed.
+      if (statusEntry === undefined) {
+        getLog().error(
+          { conversationId, queueLength: statusQueue.length },
+          'zulip.status_queue_inconsistency'
+        );
+        return;
+      }
       const queueNowEmpty = statusQueue.length === 0;
       if (queueNowEmpty) {
         this.statusMessageQueues.delete(conversationId);
@@ -467,7 +479,7 @@ export class ZulipAdapter implements IPlatformAdapter {
         for (const event of eventsResult.events) {
           lastEventId = event.id;
           if (event.type === 'message' && event.message) {
-            // zulip-js ships no types; message shape matches ZulipMessage per Zulip API docs
+            // zulip-js ships no types; casting from their untyped event shape to ZulipMessage.
             await this.handleIncomingMessage(event.message as ZulipMessage);
           } else if (event.type === 'update_message' && typeof event.message_id === 'number') {
             // A message edited to ADD an @mention arrives only as update_message — re-evaluate it.
@@ -552,7 +564,10 @@ export class ZulipAdapter implements IPlatformAdapter {
       const oldestKey = this.replyContexts.keys().next().value;
       if (oldestKey !== undefined) this.replyContexts.delete(oldestKey);
     }
-    if (msg.type === 'stream' && msg.stream_id !== undefined && msg.subject !== undefined) {
+    // Use `typeof === 'number'` (not `!== undefined`) for the numeric check so the intent is
+    // explicit; both forms accept any valid Zulip stream ID (which start at 1, but `0` would
+    // also pass — we don't gate on truthiness).
+    if (msg.type === 'stream' && typeof msg.stream_id === 'number' && msg.subject !== undefined) {
       this.replyContexts.set(conversationId, {
         type: 'stream',
         stream_id: msg.stream_id,
@@ -573,7 +588,6 @@ export class ZulipAdapter implements IPlatformAdapter {
     // (during backfill) short-circuits at the dedup check above.
     this.rememberProcessed(msg.id);
 
-    // Post "Starting thinking..." immediately after reply target is known.
     await this.createStatusMessage(conversationId);
 
     // Defer mark-read until the reply is actually posted (sendMessage). The handler is

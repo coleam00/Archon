@@ -24,7 +24,11 @@ declare module 'zulip-js' {
 
   interface ZulipPrivateMessageParams {
     type: 'private';
-    to: number[];
+    // JSON-encoded array of user IDs (e.g. `JSON.stringify([1, 2, 3])`). The Zulip REST API
+    // wants a string here, NOT a literal array — on the wire this is `to: "[1,2,3]"`.
+    // (The adapter currently bypasses `client.messages.send` for POSTs via `zulipPost`, but
+    // this type guides any direct caller of `ZulipClient.messages.send`.)
+    to: string;
     content: string;
   }
 
