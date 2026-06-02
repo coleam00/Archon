@@ -52,7 +52,7 @@ All six `ZULIP_*` variables are documented in `.env.example`. Three are **requir
 | `ZULIP_BOT_API_KEY` | **Yes** | The bot's API key (`key` in `zuliprc`). |
 | `ZULIP_BOT_FULL_NAME` | No (but **recommended**) | The bot's display name — required for `@**Bot Name**` mention detection in streams. Without it, the bot still replies to direct messages but cannot detect @mentions. |
 | `ZULIP_ALLOWED_USER_IDS` | No | Comma-separated numeric Zulip user IDs allowed to interact with the bot. **Unset (or empty) → open access**; set → only listed users are answered. A set-but-malformed value (e.g. non-numeric or all-invalid tokens) is a misconfiguration and the bot will **fail to start** — fail-closed, not fail-open. |
-| `ZULIP_STREAMING_MODE` | No | `batch` (default) — the bot edits a "thinking…" status message and posts the full answer once ready. `stream` — the bot streams tokens by editing its own message progressively. See [Configuration → Streaming Modes](/getting-started/configuration/) for the trade-offs. |
+| `ZULIP_STREAMING_MODE` | No | `batch` (default) — the bot edits a "thinking…" status message and posts the full answer once ready. `stream` is accepted but currently has **no runtime effect** in the Zulip adapter (it behaves like `batch`); progressive token streaming is a future addition. See [Configuration → Streaming Modes](/getting-started/configuration/) for the cross-platform overview. |
 
 Example:
 

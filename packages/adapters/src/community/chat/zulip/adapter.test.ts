@@ -55,7 +55,7 @@ globalThis.fetch = mockFetch as unknown as typeof fetch;
 /** Flush queued microtasks/timers so background work (backfill, poll) can run in tests. */
 const flush = (): Promise<void> => new Promise(resolve => setTimeout(resolve, 0));
 
-import { ZulipAdapter } from './adapter';
+import { ZulipAdapter, formatUtcTime } from './adapter';
 import type { ZulipMessage, ZulipReplyContext } from './types';
 
 describe('ZulipAdapter', () => {
@@ -816,5 +816,188 @@ describe('ZulipAdapter', () => {
         delete process.env.ZULIP_BOT_FULL_NAME;
       }
     });
+  });
+});
+
+// Coverage for the gaps Wirasm flagged on PR #1760:
+// formatUtcTime isolate, zulipPost error branch, FIFO eviction, debounce guard,
+// plus the backfill "no abort on successful empty fetch" negative assertion.
+
+describe('formatUtcTime', () => {
+  test('returns time in HH:MM:SS format with zero-padded components', () => {
+    expect(formatUtcTime()).toMatch(/^\d{2}:\d{2}:\d{2}$/);
+  });
+
+  test('uses UTC accessors (independent of local timezone)', () => {
+    // Verify the formatted seconds match Date.getUTCSeconds() at call-time, allowing for the
+    // one-second window where the clock could have ticked between samples.
+    const before = new Date().getUTCSeconds();
+    const result = formatUtcTime();
+    const after = new Date().getUTCSeconds();
+    const parsedSec = Number(result.split(':')[2]);
+    expect([before, after, (before + 1) % 60]).toContain(parsedSec);
+  });
+});
+
+describe('zulipPost error branch', () => {
+  test('throws when the HTTP response has a non-2xx status', async () => {
+    const adapter = new ZulipAdapter('https://test.zulipchat.com', 'bot@test.com', 'key');
+    mockFetch.mockImplementationOnce(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ result: 'error', msg: 'unauthorized' }), {
+          status: 401,
+          headers: { 'content-type': 'application/json' },
+        })
+      )
+    );
+    await expect(adapter.start()).rejects.toThrow(/Zulip POST \/register failed: HTTP 401/);
+  });
+
+  test('throws when the response is 200 but result is not "success"', async () => {
+    const adapter = new ZulipAdapter('https://test.zulipchat.com', 'bot@test.com', 'key');
+    mockFetch.mockImplementationOnce(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ result: 'error', msg: 'bad request' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      )
+    );
+    await expect(adapter.start()).rejects.toThrow(/Zulip POST \/register failed:.*bad request/);
+  });
+});
+
+describe('FIFO eviction', () => {
+  // The constants live in adapter.ts and are not exported (REPLY_CONTEXTS_MAX=1000,
+  // PROCESSED_IDS_MAX=2000). Tests assert the invariant — the cap holds and the oldest
+  // entry is the one dropped — rather than the specific numeric value.
+  test('evicts the oldest replyContexts entry once REPLY_CONTEXTS_MAX is reached', async () => {
+    process.env.ZULIP_BOT_FULL_NAME = 'TestBot';
+    try {
+      const adapter = new ZulipAdapter('https://test.zulipchat.com', 'bot@test.com', 'key');
+      (adapter as unknown as { client: typeof mockZulipClient }).client = mockZulipClient;
+      const ctxs = (adapter as unknown as { replyContexts: Map<string, ZulipReplyContext> })
+        .replyContexts;
+
+      // Saturate the map up to (just under) the eviction threshold by directly populating it —
+      // dispatching that many messages through the public API would be unnecessarily slow.
+      for (let i = 0; i < 1000; i++) {
+        ctxs.set(`stream:${i}:T`, { type: 'stream', stream_id: i, topic: 'T' });
+      }
+      const capacity = ctxs.size;
+      expect(ctxs.has('stream:0:T')).toBe(true);
+
+      // One more inbound message creates a new context, which must evict the oldest.
+      await (
+        adapter as unknown as { handleIncomingMessage: (m: ZulipMessage) => Promise<void> }
+      ).handleIncomingMessage({
+        id: 99999,
+        sender_id: 5,
+        sender_email: 'u@test.com',
+        sender_full_name: 'U',
+        content: '@**TestBot** hi',
+        type: 'stream',
+        stream_id: 9999,
+        subject: 'new',
+        display_recipient: 'general',
+      });
+
+      expect(ctxs.size).toBe(capacity); // capped, not grown
+      expect(ctxs.has('stream:0:T')).toBe(false); // oldest gone
+      expect(ctxs.has('stream:9999:new')).toBe(true); // new added
+    } finally {
+      delete process.env.ZULIP_BOT_FULL_NAME;
+    }
+  });
+
+  test('evicts the oldest processedMessageIds entry once PROCESSED_IDS_MAX is reached', () => {
+    const adapter = new ZulipAdapter('https://test.zulipchat.com', 'bot@test.com', 'key');
+    const processed = (adapter as unknown as { processedMessageIds: Set<number> })
+      .processedMessageIds;
+
+    for (let i = 1; i <= 2000; i++) processed.add(i);
+    const capacity = processed.size;
+    expect(processed.has(1)).toBe(true);
+
+    (adapter as unknown as { rememberProcessed: (n: number) => void }).rememberProcessed(99999);
+
+    expect(processed.size).toBe(capacity); // capped, not grown
+    expect(processed.has(1)).toBe(false); // oldest gone (Set iteration = insertion order)
+    expect(processed.has(99999)).toBe(true);
+  });
+});
+
+describe('status-message debounce guard', () => {
+  test('skips the status-message edit (and logs) when more entries remain and lastEdit is recent', async () => {
+    const adapter = new ZulipAdapter('https://test.zulipchat.com', 'bot@test.com', 'key');
+    (adapter as unknown as { client: typeof mockZulipClient }).client = mockZulipClient;
+    (adapter as unknown as { replyContexts: Map<string, ZulipReplyContext> }).replyContexts.set(
+      'stream:1:T',
+      { type: 'stream', stream_id: 1, topic: 'T' }
+    );
+    // Two queued status entries so the drain leaves the queue non-empty (debounce only fires
+    // while more entries remain — once empty, the final update always goes through).
+    // lastEdit set to "now" means now - lastEdit ~= 0, well under STATUS_MIN_INTERVAL_MS (500ms).
+    (
+      adapter as unknown as {
+        statusMessageQueues: Map<string, Array<{ id: number; text: string }>>;
+      }
+    ).statusMessageQueues.set('stream:1:T', [
+      { id: 100, text: 'Starting thinking...' },
+      { id: 101, text: 'Starting thinking...' },
+    ]);
+    (adapter as unknown as { statusLastEdit: Map<string, number> }).statusLastEdit.set(
+      'stream:1:T',
+      Date.now()
+    );
+
+    mockFetch.mockClear();
+    mockLogger.warn.mockClear();
+
+    await adapter.sendMessage('stream:1:T', 'answer');
+
+    // No PATCH to /api/v1/messages/<id> (the status-edit endpoint) means the edit was skipped.
+    const patchEdits = mockFetch.mock.calls.filter(c => {
+      const url = String(c[0]);
+      const init = c[1] as { method?: string } | undefined;
+      return /\/api\/v1\/messages\/\d+$/.test(url) && init?.method === 'PATCH';
+    });
+    expect(patchEdits.length).toBe(0);
+
+    const skipped = mockLogger.warn.mock.calls.find(
+      args => args[args.length - 1] === 'zulip.status_debounce_skipped'
+    );
+    expect(skipped).toBeDefined();
+  });
+});
+
+// Negative assertion for the backfill_aborted contract (Wirasm 2nd review): confirm the abort
+// path is taken ONLY on actual fetch failures — a successful fetch that returns zero unread
+// messages must NOT log `zulip.backfill_aborted`. Without this companion to the failure test
+// above, we couldn't distinguish "abort because of failure" from "abort regardless".
+describe('startup backfill — empty success does not trip abort', () => {
+  test('a clean fetch that returns no unread messages completes without backfill_aborted', async () => {
+    process.env.ZULIP_BOT_FULL_NAME = 'TestBot';
+    try {
+      const adapter = new ZulipAdapter('https://test.zulipchat.com', 'bot@test.com', 'key');
+      mockEventsRetrieve.mockImplementation(() => new Promise(() => {})); // block live loop
+      mockMessagesRetrieve.mockImplementation(() => Promise.resolve({ messages: [] }));
+
+      await adapter.start();
+      await flush();
+      await flush();
+
+      const aborted = mockLogger.error.mock.calls.find(
+        args => args[args.length - 1] === 'zulip.backfill_aborted'
+      );
+      expect(aborted).toBeUndefined(); // success-but-empty must NOT take the abort path
+      const none = mockLogger.info.mock.calls.find(
+        args => args[args.length - 1] === 'zulip.backfill_none'
+      );
+      expect(none).toBeDefined();
+      adapter.stop();
+    } finally {
+      delete process.env.ZULIP_BOT_FULL_NAME;
+    }
   });
 });
