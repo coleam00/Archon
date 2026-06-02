@@ -146,6 +146,71 @@ describe('CodexProvider', () => {
       });
     });
 
+    test('captured thread id flows through the turn.failed result', async () => {
+      mockStartThread.mockReturnValue({ id: null, runStreamed: mockRunStreamed });
+      mockRunStreamed.mockResolvedValue({
+        events: (async function* () {
+          yield { type: 'thread.started', thread_id: 'evt-thread-id' };
+          yield { type: 'turn.failed', error: { message: 'boom' } };
+        })(),
+      });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('x', '/workspace')) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks.find(c => c.type === 'result')).toMatchObject({
+        type: 'result',
+        sessionId: 'evt-thread-id',
+        isError: true,
+      });
+    });
+
+    test('captured thread id flows through the stream_incomplete result', async () => {
+      mockStartThread.mockReturnValue({ id: null, runStreamed: mockRunStreamed });
+      mockRunStreamed.mockResolvedValue({
+        // Stream closes without turn.completed/turn.failed → fail-stop result.
+        events: (async function* () {
+          yield { type: 'thread.started', thread_id: 'evt-thread-id' };
+        })(),
+      });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('x', '/workspace')) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks.find(c => c.type === 'result')).toMatchObject({
+        type: 'result',
+        sessionId: 'evt-thread-id',
+        isError: true,
+        errorSubtype: 'codex_stream_incomplete',
+      });
+    });
+
+    test('an empty thread.started thread_id keeps the snapshot id (guard)', async () => {
+      // Default startThread snapshot id is 'new-thread-id'; an empty event id
+      // must not overwrite it (and would otherwise warn, not emit sessionId: '').
+      mockRunStreamed.mockResolvedValue({
+        events: (async function* () {
+          yield { type: 'thread.started', thread_id: '' };
+          yield { type: 'item.completed', item: { type: 'agent_message', text: 'ok' } };
+          yield { type: 'turn.completed', usage: defaultUsage };
+        })(),
+      });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('x', '/workspace')) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks.find(c => c.type === 'result')).toMatchObject({
+        type: 'result',
+        sessionId: 'new-thread-id',
+      });
+    });
+
     test('yields tool events from command_execution items', async () => {
       mockRunStreamed.mockResolvedValue({
         events: (async function* () {
@@ -600,8 +665,9 @@ describe('CodexProvider', () => {
         })(),
       });
 
-      for await (const _ of client.sendQuery('test prompt', '/workspace', 'existing-thread')) {
-        // consume
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test prompt', '/workspace', 'existing-thread')) {
+        chunks.push(chunk);
       }
 
       expect(mockResumeThread).toHaveBeenCalledWith(
@@ -615,6 +681,10 @@ describe('CodexProvider', () => {
         })
       );
       expect(mockStartThread).not.toHaveBeenCalled();
+      // No thread.started re-fires on resume → the snapshot (resumeThread's id) survives.
+      expect(chunks.find(c => c.type === 'result')).toMatchObject({
+        sessionId: 'resumed-thread-id',
+      });
     });
 
     test('falls back to new thread when resume fails and notifies user', async () => {

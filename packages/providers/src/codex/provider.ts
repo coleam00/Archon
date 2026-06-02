@@ -8,6 +8,7 @@ import {
   type ThreadOptions,
   type TurnOptions,
   type TurnCompletedEvent,
+  type ThreadStartedEvent,
 } from '@openai/codex-sdk';
 import type {
   IAgentProvider,
@@ -315,12 +316,11 @@ async function* streamCodexEvents(
   const state: CodexStreamState = {};
   let accumulatedText = '';
 
-  // For a NEW thread the snapshot `threadId` passed in is null — the Codex SDK
-  // only assigns the thread id during the run, via the `thread.started` event
-  // handled below. Capture it so the terminal result chunk surfaces a resumable
-  // sessionId; persist_session and suspend/resume both depend on it. For a
-  // resumed thread the snapshot is already the id (thread.started may or may not
-  // re-fire), so the captured value stays correct either way.
+  // A new thread's id is assigned during the run via the `thread.started` event
+  // (the SDK emits it only for new threads), not synchronously on startThread().
+  // Capture it so the terminal result chunk surfaces a resumable sessionId —
+  // persist_session and suspend/resume depend on it. A resumed thread keeps the
+  // snapshot id (no thread.started fires), so the seeded value stays correct.
   let resolvedThreadId: string | null | undefined = threadId;
 
   if (abortSignal?.aborted) {
@@ -342,13 +342,21 @@ async function* streamCodexEvents(
     }
 
     if (event.type === 'thread.started') {
-      // ThreadStartedEvent.thread_id — "can be used to resume the thread later"
-      // (@openai/codex-sdk index.d.ts). This is the only place a new thread's id
-      // surfaces, so capture it for the result chunk's sessionId.
-      const startedThreadId = (event as { thread_id?: string }).thread_id;
-      if (typeof startedThreadId === 'string' && startedThreadId.length > 0) {
+      // Capture the new thread's id. Its SDK doc comment reads: "The identifier
+      // of the new thread. Can be used to resume the thread later." This is the
+      // only place a new thread's id surfaces. `continue` — the event carries no
+      // user-facing content, only this metadata.
+      const startedThreadId = (event as ThreadStartedEvent).thread_id;
+      if (startedThreadId) {
         resolvedThreadId = startedThreadId;
-        getLog().debug({ threadId: startedThreadId }, 'codex.thread_started');
+        getLog().info({ threadId: startedThreadId }, 'codex.thread_started');
+      } else {
+        // The SDK types thread_id as a non-empty string, so this should never
+        // fire. If it does, a new thread would surface sessionId: undefined and
+        // the dag-executor would treat the run as session-less — silently
+        // dropping any persist_session continuity. Warn rather than degrade
+        // quietly (CLAUDE.md: Fail Fast + Explicit Errors).
+        getLog().warn({ snapshotThreadId: resolvedThreadId }, 'codex.thread_started_missing_id');
       }
       continue;
     }
