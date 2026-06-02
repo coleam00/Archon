@@ -14,7 +14,7 @@ import { SettingsPage } from '@/routes/SettingsPage';
 import { TTSPage } from '@/routes/TTSPage';
 import { BRTPage } from '@/routes/BRTPage';
 import { SgInkPage } from '@/routes/SgInkPage';
-import { NABAPage } from '@/routes/NABAPage';
+// NABAPage removed 2026-06-01 (NABA eliminated; replaced by Quicksilver under /solutions)
 import { IHHTPage } from '@/routes/IHHTPage';
 import { QEPPage } from '@/routes/QEPPage';
 import { SocialContentPage } from '@/routes/SocialContentPage';
@@ -22,6 +22,8 @@ import { PMCPage } from '@/routes/PMCPage';
 import { CategoryPage } from '@/routes/CategoryPage';
 import { ContactsPage } from '@/routes/ContactsPage';
 import { DrivePage } from '@/routes/DrivePage';
+import { SolutionsPage } from '@/routes/SolutionsPage';
+import { StartHerePage } from '@/routes/StartHerePage';
 
 interface ErrorBoundaryState {
   hasError: boolean;
@@ -79,13 +81,15 @@ export function App(): React.ReactElement {
           <BrowserRouter>
             <Routes>
               <Route element={<Layout />}>
-                <Route path="/" element={<Navigate to="/chat" replace />} />
+                <Route path="/" element={<Navigate to="/welcome" replace />} />
+                <Route path="/welcome" element={<StartHerePage />} />
                 <Route path="/chat" element={<ChatPage />} />
                 <Route path="/chat/*" element={<ChatPage />} />
                 <Route path="/dashboard" element={<DashboardPage />} />
                 <Route path="/category/:slug" element={<CategoryPage />} />
                 <Route path="/contacts" element={<ContactsPage />} />
                 <Route path="/drive" element={<DrivePage />} />
+                <Route path="/solutions" element={<SolutionsPage />} />
                 <Route path="/pmc" element={<PMCPage />} />
                 <Route path="/workflows" element={<WorkflowsPage />} />
                 <Route path="/workflows/builder" element={<WorkflowBuilderPage />} />
@@ -95,7 +99,7 @@ export function App(): React.ReactElement {
                 <Route path="/tts" element={<TTSPage />} />
                 <Route path="/brt" element={<BRTPage />} />
                 <Route path="/sg-ink" element={<SgInkPage />} />
-                <Route path="/naba" element={<NABAPage />} />
+                {/* /naba route removed 2026-06-01 (NABA eliminated; replaced by Quicksilver under /solutions) */}
                 <Route path="/ihht" element={<IHHTPage />} />
                 <Route path="/qep" element={<QEPPage />} />
                 <Route path="/social-content" element={<SocialContentPage />} />

@@ -8,7 +8,6 @@ import {
   Volume2,
   BarChart2,
   PenLine,
-  Globe,
   Activity,
   ClipboardList,
   Share2,
@@ -19,31 +18,37 @@ import {
   CheckSquare,
   Users,
   HardDrive,
+  Home,
 } from 'lucide-react';
 import { listDashboardRuns, getUpdateCheck } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
 const tabs = [
+  // Top-level
+  { to: '/welcome', end: true, icon: Home, label: 'Welcome' },
   { to: '/chat', end: false, icon: MessageSquare, label: 'Chat' },
   { to: '/dashboard', end: true, icon: LayoutDashboard, label: 'Dashboard' },
-  // Categories — operating-lens nav (per 2026-05-07 consultant review)
+  // Operating-lens categories (per 2026-05-07 consultant review)
   { to: '/category/writing-comms', end: false, icon: Mail, label: 'Writing' },
   { to: '/category/research-learning', end: false, icon: FlaskConical, label: 'Research' },
   { to: '/category/techbase', end: false, icon: Wrench, label: 'Techbase' },
   { to: '/category/work-daily-ops', end: false, icon: CheckSquare, label: 'Daily Ops' },
+  // Knowledge surfaces (vault-driven)
   { to: '/contacts', end: false, icon: Users, label: 'Contacts' },
   { to: '/drive', end: false, icon: HardDrive, label: 'Drive' },
-  // Brand tabs (drill-down per business)
+  { to: '/solutions', end: false, icon: Briefcase, label: 'Solutions' },
+  // PMC + sub-brands (Jason owns these)
   { to: '/pmc', end: false, icon: Briefcase, label: 'PMC' },
-  { to: '/workflows', end: false, icon: Workflow, label: 'Workflows' },
-  { to: '/settings', end: false, icon: Settings, label: 'Settings' },
-  { to: '/tts', end: false, icon: Volume2, label: 'TTS' },
   { to: '/brt', end: false, icon: BarChart2, label: 'BRT' },
-  { to: '/sg-ink', end: false, icon: PenLine, label: 'SG INK' },
-  { to: '/naba', end: false, icon: Globe, label: 'NABA' },
+  { to: '/tts', end: false, icon: Volume2, label: 'TTS' },
   { to: '/ihht', end: false, icon: Activity, label: 'IHHT' },
   { to: '/qep', end: false, icon: ClipboardList, label: 'QEP' },
+  { to: '/sg-ink', end: false, icon: PenLine, label: 'SG INK' },
   { to: '/social-content', end: false, icon: Share2, label: 'Social Content' },
+  // NABA REMOVED 2026-06-01 (eliminated; replaced by Quicksilver under /solutions)
+  // Utility
+  { to: '/workflows', end: false, icon: Workflow, label: 'Workflows' },
+  { to: '/settings', end: false, icon: Settings, label: 'Settings' },
 ] as const;
 
 export function TopNav(): React.ReactElement {
@@ -68,7 +73,7 @@ export function TopNav(): React.ReactElement {
   return (
     <nav className="flex items-center gap-1 border-b border-border bg-surface px-4">
       {/* Brand logo */}
-      <Link to="/chat" className="flex items-center gap-2 mr-4 hover:opacity-80 transition-opacity">
+      <Link to="/welcome" className="flex items-center gap-2 mr-4 hover:opacity-80 transition-opacity">
         <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary">
           <span className="text-sm font-semibold text-primary-foreground">P</span>
         </div>

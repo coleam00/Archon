@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-05-19T20:07:26.059492Z",
+  "generated_at": "2026-06-02T03:58:28.205969Z",
   "vault_path": "second-brain/contacts",
-  "count": 15,
+  "count": 16,
   "contacts": [
     {
       "id": "team/andrea-redassich",
@@ -15,7 +15,12 @@
       "phone": "",
       "status": "stub",
       "preview": "Stub for Andrea Redassich, surfaced in 2026-04-29 AI Session. Role/scope/access level all unresolved per open question #45 \u2014 full involvement TBD pending Jason confirmation.",
-      "tags": ["team", "person", "status/stub", "parent/pmc"],
+      "tags": [
+        "team",
+        "person",
+        "status/stub",
+        "parent/pmc"
+      ],
       "vaultPath": "contacts/team/andrea-redassich.md"
     },
     {
@@ -52,7 +57,14 @@
       "phone": "",
       "status": "active",
       "preview": "PMC Virtual Office Services Asst PM \u2014 project flow, tracking, status updates. Onboarded to Carlos VA bot 2026-05-08 with Telegram ID 5478885548.",
-      "tags": ["team", "person", "status/active", "parent/pmc", "va-team", "role/asst-pm"],
+      "tags": [
+        "team",
+        "person",
+        "status/active",
+        "parent/pmc",
+        "va-team",
+        "role/asst-pm"
+      ],
       "vaultPath": "contacts/team/james.md"
     },
     {
@@ -67,7 +79,14 @@
       "phone": "",
       "status": "",
       "preview": "VP of Sales \u00b7 Director of Business Development \u00b7 10+ years experience \u00b7 3\u00d7 President's Club Winner \u00b7 Top 10% National Sales Rankings",
-      "tags": ["pmc", "bio", "principal", "healthcare", "sales", "business-development"],
+      "tags": [
+        "pmc",
+        "bio",
+        "principal",
+        "healthcare",
+        "sales",
+        "business-development"
+      ],
       "vaultPath": "contacts/team/jason-diaz.md"
     },
     {
@@ -82,7 +101,14 @@
       "phone": "",
       "status": "active",
       "preview": "PMC Virtual Office Services Main PM \u2014 strategy, coordination, execution. Routing point for ambiguous VA-team asks. Email louiseannebremen.va@gmail.com.",
-      "tags": ["team", "person", "status/active", "parent/pmc", "va-team", "role/main-pm"],
+      "tags": [
+        "team",
+        "person",
+        "status/active",
+        "parent/pmc",
+        "va-team",
+        "role/main-pm"
+      ],
       "vaultPath": "contacts/team/louise.md"
     },
     {
@@ -97,7 +123,12 @@
       "phone": "",
       "status": "pending-confirmation",
       "preview": "Placeholder stub for the new hire pending confirmation. Hire decision expected Thursday or Friday week of 2026-04-29 per session blocker #43, action #21, open question #51.",
-      "tags": ["team", "person", "status/pending", "parent/pmc"],
+      "tags": [
+        "team",
+        "person",
+        "status/pending",
+        "parent/pmc"
+      ],
       "vaultPath": "contacts/team/new-hire-tbd.md"
     },
     {
@@ -127,7 +158,14 @@
       "phone": "",
       "status": "active",
       "preview": "PMC Virtual Office Services Social Media Manager \u2014 content planning, posting, engagement across PMC + sub-brands. Reports under Louise. Stub record (TBD fields) created 2026-05-10.",
-      "tags": ["team", "person", "status/active", "parent/pmc", "va-team", "role/social-media-mgr"],
+      "tags": [
+        "team",
+        "person",
+        "status/active",
+        "parent/pmc",
+        "va-team",
+        "role/social-media-mgr"
+      ],
       "vaultPath": "contacts/team/trisha.md"
     },
     {
@@ -142,7 +180,14 @@
       "phone": "",
       "status": "active",
       "preview": "PMC Virtual Office Services Creative Manager \u2014 design, visuals, creative direction across PMC + sub-brands. Reports under Louise. Stub record (TBD fields) created 2026-05-10.",
-      "tags": ["team", "person", "status/active", "parent/pmc", "va-team", "role/creative-mgr"],
+      "tags": [
+        "team",
+        "person",
+        "status/active",
+        "parent/pmc",
+        "va-team",
+        "role/creative-mgr"
+      ],
       "vaultPath": "contacts/team/vincent.md"
     },
     {
@@ -234,6 +279,27 @@
       "preview": "",
       "tags": [],
       "vaultPath": "contacts/prospects/jordan-sternberg.md"
+    },
+    {
+      "id": "prospects/jose-ramos-rrt-rpft",
+      "slug": "jose-ramos-rrt-rpft",
+      "category": "prospects",
+      "name": "Jos\u00e9 Ramos",
+      "role": "",
+      "company": "",
+      "email": "",
+      "linkedin": "",
+      "phone": "",
+      "status": "warm-reply",
+      "preview": "",
+      "tags": [
+        "prospect",
+        "pmc",
+        "salesnav",
+        "warm",
+        "client/jid5274"
+      ],
+      "vaultPath": "contacts/prospects/jose-ramos-rrt-rpft.md"
     }
   ]
 }
