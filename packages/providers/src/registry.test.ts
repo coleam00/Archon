@@ -14,6 +14,7 @@ import {
 import { registerPiProvider } from './community/pi/registration';
 import { registerCopilotProvider } from './community/copilot/registration';
 import { registerOpencodeProvider } from './community/opencode/registration';
+import { registerOmpProvider } from './community/omp/registration';
 import { UnknownProviderError } from './errors';
 import type { ProviderRegistration, IAgentProvider, ProviderCapabilities } from './types';
 
@@ -257,6 +258,7 @@ describe('registry', () => {
       expect(isRegisteredProvider('opencode')).toBe(true);
       expect(isRegisteredProvider('pi')).toBe(true);
       expect(isRegisteredProvider('copilot')).toBe(true);
+      expect(isRegisteredProvider('omp')).toBe(true);
     });
 
     test('is idempotent', () => {
@@ -265,9 +267,11 @@ describe('registry', () => {
       const opencodeCount = getRegisteredProviders().filter(p => p.id === 'opencode').length;
       const piCount = getRegisteredProviders().filter(p => p.id === 'pi').length;
       const copilotCount = getRegisteredProviders().filter(p => p.id === 'copilot').length;
+      const ompCount = getRegisteredProviders().filter(p => p.id === 'omp').length;
       expect(opencodeCount).toBe(1);
       expect(piCount).toBe(1);
       expect(copilotCount).toBe(1);
+      expect(ompCount).toBe(1);
     });
   });
 
@@ -373,6 +377,22 @@ describe('registry', () => {
         .map(p => p.id)
         .sort();
       expect(ids).toEqual(['claude', 'codex', 'opencode', 'pi']);
+    });
+  });
+
+  describe('registerOmpProvider (community provider)', () => {
+    test('registers omp with builtIn: false', () => {
+      registerOmpProvider();
+      const reg = getRegistration('omp');
+      expect(reg.id).toBe('omp');
+      expect(reg.displayName).toBe('OMP (community)');
+      expect(reg.builtIn).toBe(false);
+    });
+
+    test('factory returns OmpProvider instance', () => {
+      registerOmpProvider();
+      const provider = getRegistration('omp').factory();
+      expect(provider.getType()).toBe('omp');
     });
   });
 

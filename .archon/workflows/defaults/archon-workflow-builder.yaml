@@ -6,6 +6,8 @@ description: |
   Does: Scans codebase -> extracts intent (JSON) -> generates YAML -> validates -> saves.
   NOT for: Editing existing workflows or creating non-workflow files.
 
+provider: omp
+model: cursor/composer-2.5
 nodes:
   - id: scan-codebase
     bash: |
@@ -109,8 +111,8 @@ nodes:
         NOT for: ...
 
       # Optional top-level settings:
-      # provider: claude    (or codex)
-      # model: sonnet       (or haiku, opus, etc.)
+      # provider: omp       (or claude, codex, pi)
+      # model: cursor/composer-2.5   (OMP: <provider-id>/<model-id>)
       # interactive: true   (forces foreground execution in web UI)
 
       nodes:
@@ -245,5 +247,3 @@ nodes:
          - How to run it: `bun run cli workflow run $extract-intent.output.workflow_name "your input"`
          - How to test it: `bun run cli validate workflows $extract-intent.output.workflow_name`
     depends_on: [validate-yaml]
-provider: claude
-model: MiniMax-M2.7

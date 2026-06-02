@@ -8,8 +8,8 @@ description: "Use when: User wants to create a new custom workflow for their pro
   Does: Scans codebase -> extracts intent (JSON) -> generates YAML -> validates -> saves.
 
   NOT for: Editing existing workflows or creating non-workflow files.\n"
-provider: claude
-model: MiniMax-M2.7
+provider: omp
+model: cursor/composer-2.5
 nodes:
   - id: scan-codebase
     bash: "echo \"=== Existing Commands ===\"
@@ -157,9 +157,9 @@ nodes:
 
       # Optional top-level settings:
 
-      # provider: claude    (or codex)
+      # provider: omp       (or claude, codex, pi)
 
-      # model: sonnet       (or haiku, opus, etc.)
+      # model: cursor/composer-2.5   (OMP: <provider-id>/<model-id>)
 
       # interactive: true   (forces foreground execution in web UI)
 

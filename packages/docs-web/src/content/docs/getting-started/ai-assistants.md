@@ -1,6 +1,6 @@
 ---
 title: AI Assistants
-description: Configure Claude Code, Codex, OpenCode, GitHub Copilot, and Pi as AI assistants for Archon.
+description: Configure Claude Code, Codex, OpenCode, GitHub Copilot, Pi, and OMP (Oh My Pi) as AI assistants for Archon.
 category: getting-started
 area: clients
 audience: [user]
@@ -9,7 +9,7 @@ sidebar:
   order: 4
 ---
 
-You must configure **at least one** AI assistant. All four can be configured and mixed within workflows.
+You must configure **at least one** AI assistant. All assistants can be configured and mixed within workflows.
 
 ## Claude Code
 
@@ -582,6 +582,120 @@ DEFAULT_AI_ASSISTANT=copilot
 
 - [Adding a Community Provider](../contributing/adding-a-community-provider/) — the contributor-facing guide for extending Archon with your own provider.
 - [`@github/copilot-sdk`](https://www.npmjs.com/package/@github/copilot-sdk) — upstream SDK.
+
+
+## OMP / Oh My Pi (Community Provider)
+
+**Archon-native Oh My Pi harness.** OMP (`@oh-my-pi/pi-coding-agent`) is the upstream Oh My Pi coding agent that Archon integrates as the `provider: omp` community adapter. It uses the same `<provider-id>/<model-id>` reference format as Pi but reads configuration from **`~/.omp/agent/`**, not `~/.pi/agent/`.
+
+OMP is registered as `builtIn: false` — a bundled community provider, not a core built-in.
+
+### Install
+
+OMP is included as a dependency of `@archon/providers` — `bun install` pulls it in automatically.
+
+Install the OMP CLI separately if you want interactive login and model discovery:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/can1357/oh-my-pi/main/install.sh | bash
+```
+
+### Model catalogs (models.yml, models.db — not models.json)
+
+| File | Purpose |
+|---|---|
+| `~/.omp/agent/models.yml` | **Canonical** custom providers, overrides, and model definitions |
+| `~/.omp/agent/models.json` | Legacy format — only read when `models.yml` is absent |
+| `~/.omp/agent/models.db` | SQLite cache of **runtime-discovered** provider catalogs (Cursor, GitHub Copilot, Ollama, OpenAI Codex) |
+| `~/.omp/agent/agent.db` | Credentials from `omp /login` and config API keys |
+
+**Cursor / Composer models** (e.g. `cursor/composer-2.5`) are **not** defined in `models.yml`. They come from Cursor discovery and are cached in `models.db`. After adding models in Cursor IDE, run `omp` interactively or let Archon refresh the registry on the next workflow run.
+
+**Custom API providers** (e.g. MiniMax) belong in `models.yml`:
+
+```yaml
+# ~/.omp/agent/models.yml
+providers:
+  minimax-token-plan:
+    baseUrl: https://api.minimax.io/v1
+    api: openai-completions
+    models:
+      - id: MiniMax-M3
+        name: MiniMax M3
+```
+
+Use the **exact provider id** from YAML (lowercase letters, digits, hyphens — no underscores): `minimax-token-plan/MiniMax-M3`, not `minimax_m3/minimax-m3` from an old `models.json`.
+
+### Authenticate
+
+Archon calls `discoverAuthStorage()` so credentials load from **`~/.omp/agent/agent.db`** (SQLite), not legacy `auth.json`.
+
+- Run `omp /login` locally for OAuth subscriptions (Claude Pro/Max, ChatGPT, Copilot, etc.)
+- Or set API keys via env vars (same table as Pi for common providers) or `assistants.omp.env` in `.archon/config.yaml`
+
+| OMP provider id | Env var |
+|---|---|
+| `anthropic` | `ANTHROPIC_API_KEY` |
+| `openai` | `OPENAI_API_KEY` |
+| `google` | `GEMINI_API_KEY` |
+| `groq` | `GROQ_API_KEY` |
+| `openrouter` | `OPENROUTER_API_KEY` |
+
+Cursor uses discovery auth in `agent.db` — there is no `CURSOR_API_KEY` shortcut in Archon's adapter.
+
+### Configuration Options
+
+```yaml
+assistants:
+  omp:
+    # Omit `model` here to pick the model per workflow YAML (recommended).
+    enableExtensions: false   # opt in to ~/.omp/agent/extensions/
+    interactive: false        # UI bridge for approval-gate extensions (requires enableExtensions)
+    extensionFlags:
+      plan: true
+    env:
+      SOME_EXTENSION_FLAG: "1"
+```
+
+### Model reference format
+
+```yaml
+name: my-workflow
+provider: omp
+model: cursor/composer-2.5
+
+nodes:
+  - id: analyze
+    prompt: "Analyze the codebase"
+    # model: anthropic/claude-opus-4-6
+```
+
+Resolution order: node `model` → workflow `model` → `assistants.omp.model` in `.archon/config.yaml` → `modelRoles.default` in `~/.omp/agent/config.yml`. **Prefer per-workflow `model:`** so each workflow can use a different OMP model; leave `assistants.omp.model` unset unless you want one global fallback.
+
+### Supported Archon Features
+
+| Feature | Support | Notes |
+|---|---|---|
+| Session resume | ✅ | JSONL sessions under `~/.omp/agent/sessions/` |
+| Skills | ✅ | `.agents/skills` and `.claude/skills` |
+| Tool restrictions | ✅ | `allowed_tools` / `denied_tools` |
+| Structured output | ✅ | Best-effort via prompt augmentation + parse on `agent_end` |
+| Thinking / effort | ✅ | Maps to OMP `thinkingLevel` |
+| Codebase env vars | ✅ | `assistants.omp.env` merged at startup |
+| Extensions | ⚠️ | Opt-in via `enableExtensions: true` — loads arbitrary JS |
+| MCP / hooks / agents | ❌ | Not wired in v1 OMP adapter |
+
+### Set as Default (Optional)
+
+```ini
+DEFAULT_AI_ASSISTANT=omp
+```
+
+### See also
+
+- [Oh My Pi models documentation](https://github.com/can1357/oh-my-pi/blob/main/docs/models.md)
+- [Adding a Community Provider](../contributing/adding-a-community-provider/)
+
 
 ## How Assistant Selection Works
 

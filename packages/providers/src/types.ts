@@ -140,6 +140,38 @@ export interface PiProviderDefaults {
    */
   maxConcurrent?: number;
 }
+/**
+ * Community provider defaults for OMP (@oh-my-pi/pi-coding-agent).
+ * Mirrors PiProviderDefaults — OMP has the same extension, env, and model config surface.
+ */
+export interface OmpProviderDefaults {
+  [key: string]: unknown;
+  /** Default model ref in '<provider-id>/<model-id>' format, e.g. 'anthropic/claude-opus-4-5'. */
+  model?: string;
+  /**
+   * Opt-in to OMP's extension discovery. When true, OMP loads from
+   * `~/.omp/agent/extensions/` and `<cwd>/.omp/extensions/`. The cwd scope
+   * loads arbitrary JS from the workflow's target repo — only enable on hosts
+   * you trust.
+   * @default false
+   */
+  enableExtensions?: boolean;
+  /**
+   * Bind an ExtensionUIContext so extensions see ctx.hasUI === true.
+   * @default false
+   */
+  interactive?: boolean;
+  /**
+   * Flag values passed to OMP's ExtensionRunner before session_start.
+   * @default undefined
+   */
+  extensionFlags?: Record<string, boolean | string>;
+  /**
+   * Environment variables injected into process.env at session start.
+   * @default undefined
+   */
+  env?: Record<string, string>;
+}
 
 /**
  * Community provider defaults for OpenCode (opencode-ai).
