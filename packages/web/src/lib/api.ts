@@ -69,6 +69,17 @@ export async function listProviders(): Promise<ProviderInfo[]> {
   return data.providers;
 }
 
+// Web auth status (opt-in). Drives the login gate: when `enabled` is false the
+// UI renders exactly as before (no login). `signup` reports the invite posture.
+export interface AuthStatus {
+  enabled: boolean;
+  signup: 'allowlist' | 'open';
+}
+
+export async function getAuthStatus(): Promise<AuthStatus> {
+  return fetchJSON<AuthStatus>('/api/auth/status');
+}
+
 // GitHub device-flow connect
 export interface GithubDeviceStart {
   device_code: string;

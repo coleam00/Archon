@@ -162,6 +162,21 @@ export class SqliteAdapter implements IDatabase {
    * the columns were added to createSchema().
    */
   private migrateColumns(): void {
+    // Users columns. `role` is the web-auth identity seam (default 'admin').
+    // Better Auth's own tables are PostgreSQL-only — web auth is never enabled
+    // on SQLite — so only the role column is backfilled here.
+    try {
+      const userCols = this.db.prepare("PRAGMA table_info('remote_agent_users')").all() as {
+        name: string;
+      }[];
+      const userColNames = new Set(userCols.map(c => c.name));
+      if (!userColNames.has('role')) {
+        this.db.run("ALTER TABLE remote_agent_users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'");
+      }
+    } catch (e: unknown) {
+      getLog().warn({ err: e as Error }, 'db.sqlite_migration_users_columns_failed');
+    }
+
     // Conversations columns
     try {
       const cols = this.db.prepare("PRAGMA table_info('remote_agent_conversations')").all() as {
@@ -290,6 +305,7 @@ export class SqliteAdapter implements IDatabase {
         id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
         display_name TEXT,
         email TEXT,
+        role TEXT NOT NULL DEFAULT 'admin',
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now'))
       );

@@ -252,4 +252,7 @@ export const workflowRunsQuerySchema = z.object({
   status: z.string().optional(),
   codebaseId: z.string().optional(),
   limit: z.string().optional(),
+  // Non-enforcing "mine" filter: 'true' restricts to the caller's own runs
+  // when an identity resolves. Default lists everything.
+  mine: z.string().optional(),
 });

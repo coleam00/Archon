@@ -1,7 +1,19 @@
 /**
- * Zod schemas for the GitHub device-flow connect endpoints.
+ * Zod schemas for the auth endpoints (web-auth status + GitHub device flow).
  */
 import { z } from '@hono/zod-openapi';
+
+/**
+ * GET /api/auth/status response — drives the web UI's login gate. `enabled`
+ * reflects whether Better Auth web login is mounted; `signup` reports whether
+ * new accounts are gated by the invite allowlist or open. No auth required.
+ */
+export const authStatusResponseSchema = z
+  .object({
+    enabled: z.boolean(),
+    signup: z.enum(['allowlist', 'open']),
+  })
+  .openapi('AuthStatusResponse');
 
 /** POST /api/auth/github/device/start response — codes shown to the user. */
 export const deviceStartResponseSchema = z

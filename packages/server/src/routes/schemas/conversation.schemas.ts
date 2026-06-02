@@ -19,6 +19,9 @@ export const conversationSchema = conversationRowSchema
 export const listConversationsQuerySchema = z.object({
   platform: z.string().optional(),
   codebaseId: z.string().optional(),
+  // Non-enforcing "mine" filter: 'true' restricts to the caller's own
+  // conversations when an identity resolves. Default lists everything.
+  mine: z.string().optional(),
 });
 
 /** GET /api/conversations response. */

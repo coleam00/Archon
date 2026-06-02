@@ -99,6 +99,7 @@ import {
   captureArchonStarted,
 } from '@archon/paths';
 import { selectGitHubAuthMode, parseGitCredentialPath } from './github-auth-bootstrap';
+import { getAuth, isWebAuthEnabled, assertWebAuthAtBoot } from './auth';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -596,6 +597,11 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     getLog().info('platform_adapters_skipped');
   }
 
+  // Fail fast on a misconfigured web-auth secret before binding a socket: when
+  // web auth is enabled, BETTER_AUTH_SECRET must be long enough to be a real
+  // signing key. No-op when web auth is disabled.
+  assertWebAuthAtBoot();
+
   // Setup Hono server
   const app = new OpenAPIHono({ defaultHook: validationErrorHook });
   const port = opts.port ?? (await getPort());
@@ -605,6 +611,32 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     getLog().error({ err, path: c.req.path, method: c.req.method }, 'unhandled_request_error');
     return c.json({ error: 'Internal server error' }, 500);
   });
+
+  // Opt-in web auth (Better Auth). Mount the handler at /api/auth/* AFTER
+  // app.onError and BEFORE registerApiRoutes (so it wins over the '*' SPA
+  // fallback). getAuth() returns null when web auth is disabled — solo/SQLite
+  // installs mount nothing and behave exactly as before.
+  //
+  // Better Auth's basePath is /api/auth, so its handler is a catch-all under
+  // that prefix. Archon ALSO owns a few /api/auth/* routes (status + the GitHub
+  // device flow) registered later in registerApiRoutes. To avoid shadowing
+  // them, explicitly fall through (next()) for those Archon-owned paths so the
+  // later route handlers run; everything else under /api/auth/* is Better Auth.
+  // DELETE isn't registered here, so DELETE /api/auth/github is never
+  // intercepted either. (Raw app.on, not registerOpenApiRoute: Better Auth is
+  // an external handler serving its own non-OpenAPI surface, like the webhooks.)
+  const webAuth = getAuth();
+  if (webAuth) {
+    const isArchonOwnedAuthPath = (path: string): boolean =>
+      path === '/api/auth/status' ||
+      path === '/api/auth/github' ||
+      path.startsWith('/api/auth/github/');
+    app.on(['POST', 'GET'], '/api/auth/*', (c, next) => {
+      if (isArchonOwnedAuthPath(c.req.path)) return next();
+      return webAuth.handler(c.req.raw);
+    });
+    getLog().info('web_auth.handler_registered');
+  }
 
   // Register Web UI API routes
   registerApiRoutes(app, webAdapter, lockManager, activePlatforms);
@@ -813,8 +845,11 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   // installs without per-user identity keep starting — but the misconfiguration is
   // surfaced. The default header name means the trust is live even when
   // ARCHON_WEB_AUTH_HEADER is unset, so per-user mode alone arms this check.
+  // Web auth (Better Auth) also keeps the header active as a fallback (proxy
+  // deploys / auth-service sidecar), so an enabled install on a public bind
+  // gets the same advisory.
   const webAuthHeaderTrustActive =
-    Boolean(process.env.ARCHON_WEB_AUTH_HEADER) || isPerUserGitHubEnabled();
+    Boolean(process.env.ARCHON_WEB_AUTH_HEADER) || isPerUserGitHubEnabled() || isWebAuthEnabled();
   if (webAuthHeaderTrustActive && hostname !== '127.0.0.1' && hostname !== 'localhost') {
     getLog().warn(
       { hostname, headerName: process.env.ARCHON_WEB_AUTH_HEADER || 'X-Archon-User' },

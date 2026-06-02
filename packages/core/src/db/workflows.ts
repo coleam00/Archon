@@ -873,6 +873,11 @@ export async function listWorkflowRuns(options?: {
   status?: WorkflowRunStatus | WorkflowRunStatus[];
   limit?: number;
   codebaseId?: string;
+  /**
+   * Non-enforcing "mine" filter: when set, restrict to runs attributed to this
+   * user (`user_id = $N`). Absent → all runs (default visibility stays open).
+   */
+  userId?: string;
 }): Promise<WorkflowRun[]> {
   const whereClauses: string[] = [];
   const values: unknown[] = [];
@@ -880,6 +885,10 @@ export async function listWorkflowRuns(options?: {
   if (options?.conversationId) {
     values.push(options.conversationId);
     whereClauses.push(`conversation_id = $${String(values.length)}`);
+  }
+  if (options?.userId) {
+    values.push(options.userId);
+    whereClauses.push(`user_id = $${String(values.length)}`);
   }
   if (options?.status !== undefined) {
     const statuses = Array.isArray(options.status) ? options.status : [options.status];

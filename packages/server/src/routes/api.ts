@@ -82,6 +82,7 @@ import * as workflowEventDb from '@archon/core/db/workflow-events';
 import * as messageDb from '@archon/core/db/messages';
 import * as userDb from '@archon/core/db/users';
 import { resetWorkflowNodeSessions } from '@archon/core/operations/workflow-operations';
+import { getAuth, isWebAuthEnabled, getSignupMode } from '../auth';
 import { errorSchema } from './schemas/common.schemas';
 import { updateCheckResponseSchema } from './schemas/system.schemas';
 import {
@@ -139,6 +140,7 @@ import {
 } from './schemas/config.schemas';
 import { providerListResponseSchema } from './schemas/provider.schemas';
 import {
+  authStatusResponseSchema,
   deviceStartResponseSchema,
   devicePollBodySchema,
   devicePollResponseSchema,
@@ -868,6 +870,19 @@ const getProvidersRoute = createRoute({
   },
 });
 
+const authStatusRoute = createRoute({
+  method: 'get',
+  path: '/api/auth/status',
+  tags: ['Auth'],
+  summary: 'Web auth availability + signup posture (no auth required)',
+  responses: {
+    200: {
+      content: { 'application/json': { schema: authStatusResponseSchema } },
+      description: 'Auth status',
+    },
+  },
+});
+
 const githubDeviceStartRoute = createRoute({
   method: 'post',
   path: '/api/auth/github/device/start',
@@ -1025,22 +1040,51 @@ export function registerApiRoutes(
   app.use('/api/*', cors({ origin: process.env.WEB_UI_ORIGIN || '*' }));
 
   /**
-   * Resolve the current web user from the trusted reverse-proxy header
-   * (ARCHON_WEB_AUTH_HEADER, default `X-Archon-User`). The proxy authenticates
-   * (e.g. Caddy basicauth) and sets the header; Archon trusts it. Absent header
-   * → undefined (NULL attribution, never elevated). The opaque username is
-   * resolved to a stable Archon user via the 'web' platform identity.
+   * Resolve the per-request auth context: `{ userId, role }`, or undefined when
+   * no identity is present. This is the single chokepoint generalised from the
+   * old header-only seam. Resolution order:
+   *   1. Better Auth session (when web auth is enabled) → canonical
+   *      remote_agent_users row via the 'web' platform identity.
+   *   2. Trusted reverse-proxy header (ARCHON_WEB_AUTH_HEADER, default
+   *      `X-Archon-User`) — kept for proxy deploys and the auth-service sidecar.
+   *   3. undefined → NULL attribution, never elevated.
    *
-   * SECURITY: this is only safe when Archon is reachable solely through the
-   * reverse proxy (bind 127.0.0.1). The server logs a startup warning otherwise.
+   * `role` rides along on the canonical user row (defaults 'admin'); it is the
+   * durable seam future per-resource scoping hooks into. Visibility stays open.
+   *
+   * SECURITY: header trust is only safe when Archon is reachable solely through
+   * a reverse proxy (bind 127.0.0.1). The server logs a startup warning otherwise.
    */
-  async function resolveWebUserId(c: Context): Promise<string | undefined> {
+  async function resolveAuthContext(
+    c: Context
+  ): Promise<{ userId: string; role: string } | undefined> {
+    // 1. Better Auth session first (no-op when web auth is disabled).
+    const auth = getAuth();
+    if (auth) {
+      try {
+        const session = await auth.api.getSession({ headers: c.req.raw.headers });
+        if (session?.user) {
+          const user = await userDb.findOrCreateUserByPlatformIdentity(
+            'web',
+            session.user.id,
+            session.user.name ?? session.user.email ?? undefined
+          );
+          return { userId: user.id, role: user.role };
+        }
+      } catch (err) {
+        // Session lookup failed (e.g. DB outage). Fall through to the header so a
+        // proxy-authenticated deploy still resolves; absent that, NULL attribution.
+        getLog().warn({ err: err as Error }, 'web.session_resolve_failed');
+      }
+    }
+
+    // 2. Trusted reverse-proxy header.
     const headerName = process.env.ARCHON_WEB_AUTH_HEADER || 'X-Archon-User';
     const headerVal = c.req.header(headerName)?.trim();
     if (!headerVal) return undefined;
     try {
       const user = await userDb.findOrCreateUserByPlatformIdentity('web', headerVal, headerVal);
-      return user.id;
+      return { userId: user.id, role: user.role };
     } catch (err) {
       // Best-effort attribution: the header WAS present, but identity resolution
       // failed (e.g. DB outage). Fall back to NULL attribution rather than
@@ -1050,28 +1094,68 @@ export function registerApiRoutes(
     }
   }
 
+  /** Back-compat: the soft attribution call sites only need the user id. */
+  async function resolveWebUserId(c: Context): Promise<string | undefined> {
+    return (await resolveAuthContext(c))?.userId;
+  }
+
   /**
    * Strict variant for endpoints that REQUIRE a web identity (connect/disconnect).
-   * Unlike resolveWebUserId, this distinguishes a missing header (401) from a
-   * backend failure resolving the header to a user (503) — a DB outage must not
-   * masquerade as "authentication required". Returns the resolved id, or the
-   * HTTP error Response the caller should return verbatim.
+   * Session-first then header, mirroring resolveAuthContext, but distinguishing a
+   * missing identity (401) from a backend failure resolving it (503) — a DB
+   * outage must not masquerade as "authentication required". Returns the resolved
+   * context, or the HTTP error Response the caller should return verbatim.
    */
   async function requireWebUser(
     c: Context,
     failMessage = 'Web authentication required'
-  ): Promise<{ userId: string } | { error: Response }> {
+  ): Promise<{ userId: string; role: string } | { error: Response }> {
+    // 1. Better Auth session.
+    const auth = getAuth();
+    if (auth) {
+      let session: Awaited<ReturnType<typeof auth.api.getSession>> | undefined;
+      try {
+        session = await auth.api.getSession({ headers: c.req.raw.headers });
+      } catch (err) {
+        getLog().error({ err: err as Error }, 'web.session_resolve_failed');
+        return { error: apiError(c, 503, 'Could not verify session — backend unavailable') };
+      }
+      if (session?.user) {
+        try {
+          const user = await userDb.findOrCreateUserByPlatformIdentity(
+            'web',
+            session.user.id,
+            session.user.name ?? session.user.email ?? undefined
+          );
+          return { userId: user.id, role: user.role };
+        } catch (err) {
+          getLog().error({ err: err as Error }, 'web.user_resolve_failed');
+          return { error: apiError(c, 503, 'Could not verify web identity — backend unavailable') };
+        }
+      }
+    }
+
+    // 2. Trusted reverse-proxy header.
     const headerName = process.env.ARCHON_WEB_AUTH_HEADER || 'X-Archon-User';
     const headerVal = c.req.header(headerName)?.trim();
     if (!headerVal) return { error: apiError(c, 401, failMessage) };
     try {
       const user = await userDb.findOrCreateUserByPlatformIdentity('web', headerVal, headerVal);
-      return { userId: user.id };
+      return { userId: user.id, role: user.role };
     } catch (err) {
       getLog().error({ err: err as Error, headerPresent: true }, 'web.user_resolve_failed');
       return { error: apiError(c, 503, 'Could not verify web identity — backend unavailable') };
     }
   }
+
+  // GET /api/auth/status - web auth availability + signup posture.
+  // Public (no identity required): the web UI calls this before login to decide
+  // whether to render the login gate at all. When web auth is enabled this path
+  // is NOT a Better Auth endpoint, so the mounted handler 404s and falls through
+  // to here (see the mount in index.ts).
+  registerOpenApiRoute(authStatusRoute, c => {
+    return c.json({ enabled: isWebAuthEnabled(), signup: getSignupMode() });
+  });
 
   // ---- GitHub device-flow connect endpoints ----
   registerOpenApiRoute(githubDeviceStartRoute, async c => {
@@ -1573,11 +1657,16 @@ export function registerApiRoutes(
     try {
       const platformType = c.req.query('platform') ?? undefined;
       const codebaseId = c.req.query('codebaseId') ?? undefined;
+      // Non-enforcing "mine" filter: only narrows when an identity resolves.
+      // Default visibility stays open (everyone sees everyone's conversations).
+      const mine = c.req.query('mine') === 'true';
+      const userId = mine ? (await resolveAuthContext(c))?.userId : undefined;
       const conversations = await conversationDb.listConversations(
         50,
         platformType,
         codebaseId,
-        true
+        true,
+        userId
       );
       return c.json(conversations.map(toApiConversation));
     } catch (error) {
@@ -2628,12 +2717,17 @@ export function registerApiRoutes(
       const codebaseId = c.req.query('codebaseId') ?? undefined;
       const limitRaw = Number(c.req.query('limit'));
       const limit = Number.isNaN(limitRaw) ? 50 : Math.min(Math.max(1, limitRaw), 200);
+      // Non-enforcing "mine" filter: only narrows when an identity resolves.
+      // Default visibility stays open (everyone sees everyone's runs).
+      const mine = c.req.query('mine') === 'true';
+      const userId = mine ? (await resolveAuthContext(c))?.userId : undefined;
 
       const runs = await workflowDb.listWorkflowRuns({
         conversationId,
         status,
         limit,
         codebaseId,
+        userId,
       });
       return c.json({ runs: runs.map(toApiWorkflowRun) });
     } catch (error) {

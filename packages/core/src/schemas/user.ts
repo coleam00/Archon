@@ -24,10 +24,19 @@ export type IdentityPlatform = z.infer<typeof identityPlatformSchema>;
 // User
 // ---------------------------------------------------------------------------
 
+/**
+ * Identity role seam. Everyone defaults to 'admin' today (visibility stays
+ * open); 'member' is reserved for future per-resource scoping.
+ */
+export const userRoleSchema = z.enum(['admin', 'member']);
+
+export type UserRole = z.infer<typeof userRoleSchema>;
+
 export const userRowSchema = z.object({
   id: z.string(),
   display_name: z.string().nullable(),
   email: z.string().nullable(),
+  role: userRoleSchema,
   created_at: z.date(),
   updated_at: z.date(),
 });
