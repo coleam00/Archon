@@ -500,7 +500,14 @@ for await (const msg of query({ prompt, options })) {
 **Codex SDK** (`packages/providers/src/codex/provider.ts`):
 
 ```typescript
+// A new thread's id is assigned during the run via the thread.started event,
+// not synchronously on startThread() — capture it for a resumable sessionId.
+let resolvedThreadId = thread.id;
 for await (const event of result.events) {
+  if (event.type === 'thread.started') {
+    resolvedThreadId = event.thread_id; // resumable id; persist_session depends on it
+    continue;
+  }
   if (event.type === 'item.completed') {
     switch (event.item.type) {
       case 'agent_message':
@@ -514,7 +521,7 @@ for await (const event of result.events) {
         break;
     }
   } else if (event.type === 'turn.completed') {
-    yield { type: 'result', sessionId: thread.id };
+    yield { type: 'result', sessionId: resolvedThreadId };
     break; // CRITICAL: Exit loop on turn completion
   }
 }
