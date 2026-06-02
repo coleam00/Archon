@@ -1,0 +1,1533 @@
+{
+  "generated_at": "2026-06-02T02:40:35+00:00",
+  "vault_path": "second-brain/resources/drive-index",
+  "count": 19,
+  "folders": [
+    {
+      "id": "root",
+      "slug": "root",
+      "name": "PMC Assets (loose root files)",
+      "folderId": "1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
+      "parentId": "",
+      "audience": "all",
+      "lastSynced": "2026-06-02T02:35:57+00:00",
+      "fileCount": 8,
+      "vaultPath": "second-brain/resources/drive-index/_root.md",
+      "driveUrl": "https://drive.google.com/drive/folders/1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
+      "files": [
+        {
+          "name": "Carlos Briefing -- Content & Canon Package 2026-06-01",
+          "type": "g-document",
+          "modified": "2026-06-01",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1ZcnNNUWFwSkETOUqj5TJmk9zMwMrxw7z-a0YEP3-kuA/edit?usp=drivesdk"
+        },
+        {
+          "name": "VA Playbook -- PMC + EWC Content Operations",
+          "type": "g-document",
+          "modified": "2026-06-01",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1hf-KXHIMjegRvJhdtX4fJzVX2XowsLsgAsJFAlXoFGo/edit?usp=drivesdk"
+        },
+        {
+          "name": "PMC \u00b7 MTI \u00b7 HypeReel for Jose Ramos \u00b7 2026-05-29 \u00b7 60s",
+          "type": "video/mp4",
+          "modified": "2026-05-29",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1lH5Mq3LWtr1aIusmmXCLLQ64hgj-3W3U/view?usp=drivesdk"
+        },
+        {
+          "name": "Billing Program Proposal PMC \u00b7 MTI \u00b7 Final \u00b7 2026-05-29",
+          "type": "g-presentation",
+          "modified": "2026-05-29",
+          "size": "",
+          "link": "https://docs.google.com/presentation/d/1XJ5Upn79NyC9x_1GVE5-8qz_dubvsLPpkID7y7u61Bk/edit?usp=drivesdk"
+        },
+        {
+          "name": "RPM Program Proposal -- Cleveland Clinic v1.2 (Care delay slide added)",
+          "type": "g-presentation",
+          "modified": "2026-05-29",
+          "size": "",
+          "link": "https://docs.google.com/presentation/d/1wbr0YrFfcNJZqLyopW3u-hFWhTuXGE1ZNXqKIcl2cPk/edit?usp=drivesdk"
+        },
+        {
+          "name": "Billing Process Cleanup Program -- Cleveland Clinic v3 (billing-focused alternat",
+          "type": "vnd.openxmlformats-o",
+          "modified": "2026-05-29",
+          "size": "",
+          "link": "https://docs.google.com/presentation/d/1IlykwDx9xRns4rjg8ejOhb7UfCew-1Uw/edit?usp=drivesdk&ouid=116423807964134856224&rtpof=true&sd=true"
+        },
+        {
+          "name": "RPM Program Proposal -- Cleveland Clinic v2 (with market context).pptx",
+          "type": "vnd.openxmlformats-o",
+          "modified": "2026-05-29",
+          "size": "",
+          "link": "https://docs.google.com/presentation/d/1gYG4ZZZJk6PQDUY4yFP4CMs3zFuauM_I/edit?usp=drivesdk&ouid=116423807964134856224&rtpof=true&sd=true"
+        },
+        {
+          "name": "PMC Leads from Photos \u2014 May 2026",
+          "type": "g-spreadsheet",
+          "modified": "2026-05-21",
+          "size": "",
+          "link": "https://docs.google.com/spreadsheets/d/11JZCUtNLQwbAhv7MJSXs6EEm2pcuy2ewt3viJad57Ao/edit?usp=drivesdk"
+        }
+      ]
+    },
+    {
+      "id": "apollo-sequences-outbound",
+      "slug": "apollo-sequences-outbound",
+      "name": "Apollo Sequences & Outbound",
+      "folderId": "1rk6Ddq6Gmgbq4h_GXm-Vff4B8wnMuWpv",
+      "parentId": "1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
+      "audience": "all",
+      "lastSynced": "2026-06-02T02:35:53+00:00",
+      "fileCount": 6,
+      "vaultPath": "second-brain/resources/drive-index/apollo-sequences-outbound.md",
+      "driveUrl": "https://drive.google.com/drive/folders/1rk6Ddq6Gmgbq4h_GXm-Vff4B8wnMuWpv",
+      "files": [
+        {
+          "name": "Apollo Messaging Book \u2014 2026-05-14 (v3 clean read).pdf",
+          "type": "pdf",
+          "modified": "2026-05-14",
+          "size": "",
+          "link": "https://drive.google.com/file/d/18eMNrNQ5Y1Faf874xZO2_ywaCpR_M5xK/view?usp=drivesdk"
+        },
+        {
+          "name": "Pre-Import Audit -- 60 Medspa Contacts -- 2026-05-12",
+          "type": "g-document",
+          "modified": "2026-05-12",
+          "size": "",
+          "link": "https://docs.google.com/document/d/11FXLKDHQgNU72swDHo-4M5gss0CyaXPUG8mnZ735-wA/edit?usp=drivesdk"
+        },
+        {
+          "name": "Lead List Analysis + Apollo Dedupe -- 2026-05-12",
+          "type": "g-document",
+          "modified": "2026-05-12",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1m4HNcvEG0GGxGUx9-BOOS2Yn_7Ykml6x7LQeNGdTbxo/edit?usp=drivesdk"
+        },
+        {
+          "name": "PMC-apollo-campaign drafts-2026.04.17.xlsx",
+          "type": "vnd.openxmlformats-o",
+          "modified": "2026-05-02",
+          "size": "",
+          "link": "https://docs.google.com/spreadsheets/d/1MAi6VFCu3wJfYfhQ6BfAKDl85m8Oo_ie/edit?usp=drivesdk&ouid=116423807964134856224&rtpof=true&sd=true"
+        },
+        {
+          "name": "PMC-apollo-campaign drafts-2026.04.17 7.numbers",
+          "type": "x-iwork-numbers-sffn",
+          "modified": "2026-04-23",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1i1mqGw2bXGVYi1LA99eYQYwi0Fg_xjrP/view?usp=drivesdk"
+        },
+        {
+          "name": "PMC-apollo-campaign drafts-2026.04.17.xlsx",
+          "type": "vnd.openxmlformats-o",
+          "modified": "2026-04-17",
+          "size": "",
+          "link": "https://docs.google.com/spreadsheets/d/1b7V_TW5iWy7LUvL2IwvYkjf68OtSZULw/edit?usp=drivesdk&ouid=116423807964134856224&rtpof=true&sd=true"
+        }
+      ]
+    },
+    {
+      "id": "bioreg-assets",
+      "slug": "bioreg-assets",
+      "name": "Bioreg Assets",
+      "folderId": "1hxiUwSZEGBQA00gVkhHWV1y5IztPVsyl",
+      "parentId": "1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
+      "audience": "all",
+      "lastSynced": "2026-06-02T02:35:56+00:00",
+      "fileCount": 67,
+      "vaultPath": "second-brain/resources/drive-index/bioreg-assets.md",
+      "driveUrl": "https://drive.google.com/drive/folders/1hxiUwSZEGBQA00gVkhHWV1y5IztPVsyl",
+      "files": [
+        {
+          "name": "Scientific Foundations of BRT V1 2026.pdf",
+          "type": "pdf",
+          "modified": "2026-06-01",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1HuIrpYSqTLAuhoullLaeuwDJGMJK2Rai/view?usp=drivesdk"
+        },
+        {
+          "name": "BRT White Paper V2 LR 2026.pdf",
+          "type": "pdf",
+          "modified": "2026-06-01",
+          "size": "",
+          "link": "https://drive.google.com/file/d/19iwauDLtlUdoKREvk7k96TKCR0rc0JiJ/view?usp=drivesdk"
+        },
+        {
+          "name": "CellCom Technical Overview 2025.pdf",
+          "type": "pdf",
+          "modified": "2026-06-01",
+          "size": "",
+          "link": "https://drive.google.com/file/d/11fhch7gnbojoR5hy6HFMpBHL2ymsP6aZ/view?usp=drivesdk"
+        },
+        {
+          "name": "Bio-Regulation Technology: Dr. Hersh",
+          "type": "g-document",
+          "modified": "2026-06-01",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1UfqkDW1Deld6oxyS7M0jIRVHrCEbA1_98hE4kQeidCo/edit?usp=drivesdk"
+        },
+        {
+          "name": "Call Prep -- Dr. Anne Hirsch (Health e Practices) -- 2026-06-01",
+          "type": "g-document",
+          "modified": "2026-06-01",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1hJKwJ_IaUYXvdE8fL6Kub4DwR--pEhCns-gD-EF0kbk/edit?usp=drivesdk"
+        },
+        {
+          "name": "Dr. Anne Hirsch (Health e Practices) -- Call Prep -- 2026-06-01 PM",
+          "type": "g-document",
+          "modified": "2026-06-01",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1EQWjFpa9Y7cfnSiEZeeaiau7f5ithfqJvnHNMfNMpnU/edit?usp=drivesdk"
+        },
+        {
+          "name": "Top Dial Board (2026-05-28)",
+          "type": "g-document",
+          "modified": "2026-05-28",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1CyLpzwoOBhvWgoDzDFpue-bFEEd9flhLUC6rnNg4qxM/edit?usp=drivesdk"
+        },
+        {
+          "name": "Jose Ramos MTI - Strategic Partner Intake (2026-05-28)",
+          "type": "g-document",
+          "modified": "2026-05-28",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1oAKFeL1WR602Rc0lmQ7vLMaSkhfIdO3-1A5PYpmScjw/edit?usp=drivesdk"
+        },
+        {
+          "name": "Jose Ramos MTI - Strategic Partner Intake 12pm EST 2026-05-28",
+          "type": "octet-stream",
+          "modified": "2026-05-28",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1y5prFQS9s7hTKgVRKj5LIPBSoUOpWZRA/view?usp=drivesdk"
+        },
+        {
+          "name": "Dr. Lily Girson \u2014 Mindful Medicine and Wellness MD \u2014 Cellcom Call Prep (2026-05-",
+          "type": "g-document",
+          "modified": "2026-05-20",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1PJELhmG_lbGS4VuhmYJEd7dFzYGmjNOB0mSWSN2CC7s/edit?usp=drivesdk"
+        },
+        {
+          "name": "CODE Health \u00d7 BRT Cellcom \u2014 Wendy Cohn-Osborne Call Prep (12pm 2026-05-19)",
+          "type": "g-document",
+          "modified": "2026-05-19",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1Zwd_65SElhNRNHcFhXKYM8VgJPJfHwXtFKL7V-gms1s/edit?usp=drivesdk"
+        },
+        {
+          "name": "Logo V1 transparent white text.png",
+          "type": "png",
+          "modified": "2026-05-15",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1jmRbkwOyzxWX3jRNYzRygKIgOIQJxb2K/view?usp=drivesdk"
+        },
+        {
+          "name": "Logo V1 transparent dark text (1).png",
+          "type": "png",
+          "modified": "2026-05-15",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1w3aidKV_VOYdfWSzZS8kU0_-9X09WsRb/view?usp=drivesdk"
+        },
+        {
+          "name": "Logo V1 Resize.png",
+          "type": "png",
+          "modified": "2026-05-15",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1jGMkjPeIIqpgn80uWzpN2cUvZ3Nhae2F/view?usp=drivesdk"
+        },
+        {
+          "name": "Cellcom Flyer Q2 2026 (1).pdf",
+          "type": "pdf",
+          "modified": "2026-05-15",
+          "size": "",
+          "link": "https://drive.google.com/file/d/19gn6cmUZ5pcpQg6vQhF2nbWtaSreYCpo/view?usp=drivesdk"
+        },
+        {
+          "name": "BRT Clinical Partner Program \u2014 Opt-In Mini-Sequence v1 (DRAFT for internal revie",
+          "type": "g-document",
+          "modified": "2026-05-15",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1zcFggglmycp51bItlSlcWRGg_l4CTuZTvMtiQU0q-YQ/edit?usp=drivesdk"
+        },
+        {
+          "name": "BRT Clinical Partner Program \u2014 walkthrough (Andrew, 2:56).mp4",
+          "type": "video/mp4",
+          "modified": "2026-05-15",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1S4C3cposaTJYIZbEkH9dwMdI6qsB47Ey/view?usp=drivesdk"
+        },
+        {
+          "name": "BioReg Clinical Partner Program -- Opt-In Mini-Sequence v1 -- 2026-05-14",
+          "type": "g-document",
+          "modified": "2026-05-15",
+          "size": "",
+          "link": "https://docs.google.com/document/d/10mqOXOWJ8IRXrFCEo1v-VoS5t9kl5Pk5fZxCFKSk18I/edit?usp=drivesdk"
+        },
+        {
+          "name": "Legacy Video Content",
+          "type": "g-folder",
+          "modified": "2026-05-15",
+          "size": "",
+          "link": "https://drive.google.com/drive/folders/1xw5NnsFQ9Y8Dg1fxHdw1vHxFPlEgsacT"
+        },
+        {
+          "name": "BioReg Frequency Medicine Technology Overview",
+          "type": "g-document",
+          "modified": "2026-05-15",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1t3lF0yYIRjWi04kGxLMys9AiVj8AcyVe2PahpakYWNY/edit?usp=drivesdk"
+        },
+        {
+          "name": "Portfolio Marketing Plan - Clinical Authority + NEPQ Content Engine - 2026-05-13",
+          "type": "g-document",
+          "modified": "2026-05-14",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1LN4ZChJDmgNvpSWKiuYMUO1vRNDN2X2i_jylIn5Dh7M/edit?usp=drivesdk"
+        },
+        {
+          "name": "Multi-Line Revenue Acceleration PRD - First-Meetings KPI - 2026-05-13 (v1.1)",
+          "type": "g-document",
+          "modified": "2026-05-13",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1LZhsQ_gzRdNVfIn56ODPmeForfbyzKgkG-95wUj75Q4/edit?usp=drivesdk"
+        },
+        {
+          "name": "Travel Patient Coordinator Interview: Jason",
+          "type": "g-document",
+          "modified": "2026-05-13",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1G5UJoJui53ocZ5-oxmRTYHekbLSTfv3dNIxfJsBQsKQ/edit?usp=drivesdk"
+        },
+        {
+          "name": "Medspa Talent Accelerator - Interview Prep (v2)",
+          "type": "g-document",
+          "modified": "2026-05-13",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1WA1FrVdgbB9qoTDoWzDCFxTpSJ4rFSsO6Ngm398hq08/edit?usp=drivesdk"
+        },
+        {
+          "name": "BRT (Jason) Leads_2026.03.xlsx",
+          "type": "vnd.openxmlformats-o",
+          "modified": "2026-05-13",
+          "size": "",
+          "link": "https://docs.google.com/spreadsheets/d/1R0JKo8l1kM_4MA17VDL6-PRQxcP67jpW/edit?usp=drivesdk&ouid=116423807964134856224&rtpof=true&sd=true"
+        },
+        {
+          "name": "BRT Sales & Marketing Strategy \u2014 Hype Reel \u2014 2026-05-12.mp4",
+          "type": "video/mp4",
+          "modified": "2026-05-13",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1W_6eKnqX7vSMblaTX4twC12HDflwdINa/view?usp=drivesdk"
+        },
+        {
+          "name": "2025 Attendee Email List.xlsx",
+          "type": "vnd.openxmlformats-o",
+          "modified": "2026-05-13",
+          "size": "",
+          "link": "https://docs.google.com/spreadsheets/d/1HyO165ibyLMcPHwjMEaR31lCC7Dk8YEf/edit?usp=drivesdk&ouid=116423807964134856224&rtpof=true&sd=true"
+        },
+        {
+          "name": "BioReg BH Segmentation Brief -- 2026-05-12",
+          "type": "g-document",
+          "modified": "2026-05-13",
+          "size": "",
+          "link": "https://docs.google.com/document/d/126j7dtmRKEpS7o6Um6Y3IHk5Wl8vwPZjdMWjcRkW2jY/edit?usp=drivesdk"
+        },
+        {
+          "name": "BioReg BH Sequence -- Therapy Variant v2 -- 2026-05-12",
+          "type": "g-document",
+          "modified": "2026-05-13",
+          "size": "",
+          "link": "https://docs.google.com/document/d/10zOm-m75FLfLSksAEO4Pw2f6lheZigUJX1HlKRvZ6T4/edit?usp=drivesdk"
+        },
+        {
+          "name": "BioReg BH Sequence -- Psychiatric Variant v2 -- 2026-05-12",
+          "type": "g-document",
+          "modified": "2026-05-13",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1HWy9PhOY7aWoy7L4UYe5lKXNwu5Fjv5i6b7zk0q8Stw/edit?usp=drivesdk"
+        },
+        {
+          "name": "BioReg Behavioral Health Sequence -- Draft v1 -- 2026-05-12",
+          "type": "g-document",
+          "modified": "2026-05-13",
+          "size": "",
+          "link": "https://docs.google.com/document/d/14eAMJwAHxjFkp3GuKJ9VIdnKb1_DZoh7R5WPPFAwtzw/edit?usp=drivesdk"
+        },
+        {
+          "name": "BRT Sales & Marketing Strategy \u2014 Turul Review v2 \u2014 2026-05-12.html",
+          "type": "html",
+          "modified": "2026-05-12",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1kzPza47i8wii8uWvf2lv3MfqeQ8xRasR/view?usp=drivesdk"
+        },
+        {
+          "name": "BioReg Medspa Sequence v1 -- DRAFT for review (2026-05-12)",
+          "type": "g-document",
+          "modified": "2026-05-12",
+          "size": "",
+          "link": "https://docs.google.com/document/d/193LpeZl_7nMWCnwJDNNDI_INl5qmmvNrv5rSOJ1WdqY/edit?usp=drivesdk"
+        },
+        {
+          "name": "Bioreg & ICANotes Potential Collab Framework \u2014 2026-05-11",
+          "type": "g-document",
+          "modified": "2026-05-12",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1lmjzajgG-OWDZOQNMZBx85exuecHkDcEhFWfitkKWv0/edit?usp=drivesdk"
+        },
+        {
+          "name": "Bioreg & ICANotes Potential Collab Framework v2 \u2014 2026-05-11",
+          "type": "g-document",
+          "modified": "2026-05-12",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1uYndaW8jmuH5GOlwH0CW2E8ZWLQqJiJtJyuVfahl4Zw/edit?usp=drivesdk"
+        },
+        {
+          "name": "Bioreg & Soma Health Potential Collab Framework TS April 8 2026 (1).docx",
+          "type": "vnd.openxmlformats-o",
+          "modified": "2026-05-12",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1158Yr_8XU7A2rngtB_oKkyW_7RPCCjh5/edit?usp=drivesdk&ouid=116423807964134856224&rtpof=true&sd=true"
+        },
+        {
+          "name": "BRT_Cold Outreach Status_2026.05.11",
+          "type": "g-document",
+          "modified": "2026-05-12",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1hQz9P5WxVikEFNuq0pToMCw3W4YGOXZsL8Q88uImrI0/edit?usp=drivesdk"
+        },
+        {
+          "name": "BRT_Cold Outreach Status_2026.05.11_Img8",
+          "type": "png",
+          "modified": "2026-05-12",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1hWxDxXMrvAKRQWu2m8VN5lvfszxEkVxk/view?usp=drivesdk"
+        },
+        {
+          "name": "BRT_Cold Outreach Status_2026.05.11_Img7",
+          "type": "png",
+          "modified": "2026-05-12",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1nPdVMoLyiUh1BTb6HUf37sqyij-3iaj_/view?usp=drivesdk"
+        },
+        {
+          "name": "BRT_Cold Outreach Status_2026.05.11_Img6",
+          "type": "png",
+          "modified": "2026-05-12",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1knOu9U7g2xto4vW3h5c3LEWskUQb7o_X/view?usp=drivesdk"
+        },
+        {
+          "name": "BRT_Cold Outreach Status_2026.05.11_Img5",
+          "type": "png",
+          "modified": "2026-05-12",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1MnNmnVMmT4_R79ixVsn50ncdnb3aV2Sq/view?usp=drivesdk"
+        },
+        {
+          "name": "BRT_Cold Outreach Status_2026.05.11_Img4",
+          "type": "png",
+          "modified": "2026-05-12",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1eB6KES9oNQiEzbSqt7XeMpbhbm6Pfhp2/view?usp=drivesdk"
+        },
+        {
+          "name": "BRT_Cold Outreach Status_2026.05.11_Img3",
+          "type": "png",
+          "modified": "2026-05-12",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1R63Hv3gvawnGvVXOg6OCghFwnnNykUw4/view?usp=drivesdk"
+        },
+        {
+          "name": "BRT_Cold Outreach Status_2026.05.11_Img2",
+          "type": "png",
+          "modified": "2026-05-12",
+          "size": "",
+          "link": "https://drive.google.com/file/d/17IFdxzSz6pLUZy67sHmxyyWWBw61--kX/view?usp=drivesdk"
+        },
+        {
+          "name": "BRT_Cold Outreach Status_2026.05.11_Img1",
+          "type": "png",
+          "modified": "2026-05-12",
+          "size": "",
+          "link": "https://drive.google.com/file/d/162GilcmJvBhWGiphVgzD1JinzRREPfa4/view?usp=drivesdk"
+        },
+        {
+          "name": "BRT_Cold Outreach Status_2026.05.11_Img0",
+          "type": "png",
+          "modified": "2026-05-12",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1E9CnWjKpFRx_pJHNtsvWAl5AYfRHJAFA/view?usp=drivesdk"
+        },
+        {
+          "name": "BRT <> Boldly Branding 2026-05-11",
+          "type": "g-document",
+          "modified": "2026-05-12",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1PV9RHkzj4T9qyQoCAiVI_bb8nEA41qhKHDblLJDCZmo/edit?usp=drivesdk"
+        },
+        {
+          "name": "Strategic Partnership Discussion: BioReg and ICANotes",
+          "type": "g-document",
+          "modified": "2026-05-12",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1YZczoyDorcwmiEtbF9TEX_KYzIRUOD_ugkoEUdXRH1Y/edit?usp=drivesdk"
+        },
+        {
+          "name": "Sales Strategy and Marketing Alignment",
+          "type": "g-document",
+          "modified": "2026-05-12",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1eMB_2qupvNXkhRaZLX8d5Wb106kGDmI3CZ8yg7mzibs/edit?usp=drivesdk"
+        },
+        {
+          "name": "Copy of BioReg_Apollo_ColdOutreach_Sequences.docx",
+          "type": "vnd.openxmlformats-o",
+          "modified": "2026-05-11",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1OgyxmbR7fRnDHwtOz2uD6rGOTCU4It9N/edit?usp=drivesdk&ouid=116423807964134856224&rtpof=true&sd=true"
+        },
+        {
+          "name": "BRT __ Boldly Branding 2026-05-11.pdf",
+          "type": "pdf",
+          "modified": "2026-05-11",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1uKp9a0GxqNE19A2blLHEi8e8rX8ScDk6/view?usp=drivesdk"
+        },
+        {
+          "name": "clip1-therapy-alone.mp4",
+          "type": "video/mp4",
+          "modified": "2026-04-24",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1gFcBW6bebgBoxwZqTO218WjcGG7r0zWE/view?usp=drivesdk"
+        },
+        {
+          "name": "BRT Chiro.csv",
+          "type": "csv",
+          "modified": "2026-04-24",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1SHPzruMqZa9jNBsX9JgsWeNxNskkZYf4/view?usp=drivesdk"
+        },
+        {
+          "name": "BRT Medspa.csv",
+          "type": "csv",
+          "modified": "2026-04-24",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1g4SdeV6O7PShzb4dA-dLgc2vnCRksktr/view?usp=drivesdk"
+        },
+        {
+          "name": "Enriched lead list - Medspa + Chiro (Enriched) (1).csv",
+          "type": "csv",
+          "modified": "2026-04-23",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1XaIwc2-6-lnQtALehdZqdM5EPLQq2dAR/view?usp=drivesdk"
+        },
+        {
+          "name": "Consolidated_Lead_List_2026.04.16 (1).xlsx",
+          "type": "vnd.openxmlformats-o",
+          "modified": "2026-04-23",
+          "size": "",
+          "link": "https://docs.google.com/spreadsheets/d/1SePGYdBaugYwxYkL2kYgLXFLA5Nar2uk/edit?usp=drivesdk&ouid=116423807964134856224&rtpof=true&sd=true"
+        },
+        {
+          "name": "Products",
+          "type": "g-folder",
+          "modified": "2026-04-14",
+          "size": "",
+          "link": "https://drive.google.com/drive/folders/1a1mowbJBGzcHoMv8xf7ZvefOsyMEtmwR"
+        },
+        {
+          "name": "BRT_TASK LIST_2026.04.13.xlsx",
+          "type": "vnd.openxmlformats-o",
+          "modified": "2026-04-13",
+          "size": "",
+          "link": "https://docs.google.com/spreadsheets/d/1QJSWmyurVKEwMhM8QLw6vHzv7LA6F4rV/edit?usp=drivesdk&ouid=116423807964134856224&rtpof=true&sd=true"
+        },
+        {
+          "name": "BioReg Technologies Key ICPs 2026.04.13 AR.docx",
+          "type": "vnd.openxmlformats-o",
+          "modified": "2026-04-13",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1XJUkaXSrv7t5gN3t4A1jel8o_FEGtMNu/edit?usp=drivesdk&ouid=116423807964134856224&rtpof=true&sd=true"
+        },
+        {
+          "name": "BioReg Revenue Led Model 2026.04.13 AR.docx",
+          "type": "vnd.openxmlformats-o",
+          "modified": "2026-04-13",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1Smfl1kxf81nIv_GyKElaWQ0E06dOjbq5/edit?usp=drivesdk&ouid=116423807964134856224&rtpof=true&sd=true"
+        },
+        {
+          "name": "BioReg Our Why Value Prop 2026.04.13 AR.docx",
+          "type": "vnd.openxmlformats-o",
+          "modified": "2026-04-13",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1iC3-IBPyRSH8LptQ544atv7EpusNu9lF/edit?usp=drivesdk&ouid=116423807964134856224&rtpof=true&sd=true"
+        },
+        {
+          "name": "Copy of BioReg_CallPrep_DrJuan_VitalityChiropractic.docx",
+          "type": "vnd.openxmlformats-o",
+          "modified": "2026-04-13",
+          "size": "",
+          "link": "https://docs.google.com/document/d/125h6xOPJ6fUKgg9AW_sV9cB71kFUzkpo/edit?usp=drivesdk&ouid=116423807964134856224&rtpof=true&sd=true"
+        },
+        {
+          "name": "Copy of Nesta Clinical Partner Program Details 2026.pdf",
+          "type": "pdf",
+          "modified": "2026-04-13",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1G_VjcwMB7yNv5Jns2eAs0erpq6rZMyNi/view?usp=drivesdk"
+        },
+        {
+          "name": "Copy of BioReg_Clinical_Partner_Slides  V4  March 2026.pptx",
+          "type": "vnd.openxmlformats-o",
+          "modified": "2026-04-13",
+          "size": "",
+          "link": "https://docs.google.com/presentation/d/1ZtqJvDo1zedStWqTGWOjuZwT9D0rcrDx/edit?usp=drivesdk&ouid=116423807964134856224&rtpof=true&sd=true"
+        },
+        {
+          "name": "Copy of Nesta Metabalance Details 2026 (1).pdf",
+          "type": "pdf",
+          "modified": "2026-04-13",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1L0LqQsNRwThQ6iKLrY5xRhJ09xfiscH4/view?usp=drivesdk"
+        },
+        {
+          "name": "Copy of BioReg_NEPQ_Phone_Script.docx",
+          "type": "vnd.openxmlformats-o",
+          "modified": "2026-04-13",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1X5a8i324q_oCyWNQ4GCR0GQ6kDE3NpLJ/edit?usp=drivesdk&ouid=116423807964134856224&rtpof=true&sd=true"
+        },
+        {
+          "name": "Copy of BRT White Paper V2 LR 2026.pdf",
+          "type": "pdf",
+          "modified": "2026-04-13",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1R2xKvH1XlmdTkeZKKg43hMIrws_pnbbh/view?usp=drivesdk"
+        }
+      ]
+    },
+    {
+      "id": "briefs-research",
+      "slug": "briefs-research",
+      "name": "Briefs & Research",
+      "folderId": "1r7PnnwMDKMZb5k_iGIvrH9_6aHrle7VW",
+      "parentId": "1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
+      "audience": "all",
+      "lastSynced": "2026-06-02T02:35:52+00:00",
+      "fileCount": 12,
+      "vaultPath": "second-brain/resources/drive-index/briefs-research.md",
+      "driveUrl": "https://drive.google.com/drive/folders/1r7PnnwMDKMZb5k_iGIvrH9_6aHrle7VW",
+      "files": [
+        {
+          "name": "Video Production Stack \u2014 Comparison & Recommendation (2026.05.14 v4)",
+          "type": "g-document",
+          "modified": "2026-05-14",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1ZCKANxmxjnWw3isJ_tYdqxMbbFvky1DVLXCmPSKxWVU/edit?usp=drivesdk"
+        },
+        {
+          "name": "Video Production Stack \u2014 Comparison & Recommendation \u2014 PMC-Styled (2026.05.14 v4",
+          "type": "html",
+          "modified": "2026-05-14",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1T0PdGht2qetSZiwIFJqM24Zb1vXmbJor/view?usp=drivesdk"
+        },
+        {
+          "name": "Video Production Stack Analysis \u2014 A/B/C Framework \u2014 2026-05-14",
+          "type": "g-document",
+          "modified": "2026-05-14",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1m8CNNX5DMV8Xa4yeyE1XUz9OCbbmCXVbiLekeqbedXo/edit?usp=drivesdk"
+        },
+        {
+          "name": "FMHCA 2025 Attendee Load Brief -- 2026-05-12",
+          "type": "g-document",
+          "modified": "2026-05-13",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1knHo04naCQQXcqo_FnJeChyjS3l9cv4rwVNOuMpNS5E/edit?usp=drivesdk"
+        },
+        {
+          "name": "Behavioral Health Research Brief -- 2026-05-12",
+          "type": "g-document",
+          "modified": "2026-05-13",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1kA5pzsYmS_KhKylpRjh8_OipHi7tMRWEsRNqzvQ1T3U/edit?usp=drivesdk"
+        },
+        {
+          "name": "Copy of BioReg_PMC_DualBrand_Audit.docx",
+          "type": "vnd.openxmlformats-o",
+          "modified": "2026-05-04",
+          "size": "",
+          "link": "https://docs.google.com/document/d/14t_EcZpPGT5byjzqnubht-hDWxCAVAHA/edit?usp=drivesdk&ouid=116423807964134856224&rtpof=true&sd=true"
+        },
+        {
+          "name": "90 day reset",
+          "type": "g-document",
+          "modified": "2026-04-29",
+          "size": "",
+          "link": "https://docs.google.com/document/d/13dMZ_syZNX7ZnaUi_xfoncx85qSWvNb3Qe5a_EYj_jA/edit?usp=drivesdk"
+        },
+        {
+          "name": "PMC_Marketing PRD_2026.04.27_v1",
+          "type": "g-document",
+          "modified": "2026-04-27",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1cbwM9oN9hAHGIX3tu39ERjAsx1_JVNRDLkS7rKDga4g/edit?usp=drivesdk"
+        },
+        {
+          "name": "PMC + BRT Strategic Recommendations Brief \u2014 REVISED v2 (2026.04.16)",
+          "type": "vnd.openxmlformats-o",
+          "modified": "2026-04-17",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1njlmhrDyg5QawtMMSiDbnIwZ5dG9dVWM/edit?usp=drivesdk&ouid=116423807964134856224&rtpof=true&sd=true"
+        },
+        {
+          "name": "PMC + BRT Strategic Recommendations Brief \u2014 PMC-Styled (formatted)",
+          "type": "vnd.openxmlformats-o",
+          "modified": "2026-04-16",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1N0VQKgZYHZvMh9t9UVZiG48asiZKL8UG/edit?usp=drivesdk&ouid=116423807964134856224&rtpof=true&sd=true"
+        },
+        {
+          "name": "PMC + BRT Strategic Recommendations Brief \u2014 PMC-Styled (2026.04.16)",
+          "type": "html",
+          "modified": "2026-04-16",
+          "size": "",
+          "link": "https://drive.google.com/file/d/18-h-TSQI859OrpDPiyj8189LETrGYTsx/view?usp=drivesdk"
+        },
+        {
+          "name": "PMC + BRT Strategic Recommendations Brief \u2014 Thought Leader Synthesis 2026.04.16",
+          "type": "g-document",
+          "modified": "2026-04-16",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1sWwhxbgS3N5Vdm89vihymVbVv-tYyIyNybopDIVLoRg/edit?usp=drivesdk"
+        }
+      ]
+    },
+    {
+      "id": "field-photos",
+      "slug": "field-photos",
+      "name": "Field Photos",
+      "folderId": "1gnPxtrWO8oHhIWfwaMRKzTyLgFDbPnT6",
+      "parentId": "1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
+      "audience": "all",
+      "lastSynced": "2026-06-02T02:35:47+00:00",
+      "fileCount": 9,
+      "vaultPath": "second-brain/resources/drive-index/field-photos.md",
+      "driveUrl": "https://drive.google.com/drive/folders/1gnPxtrWO8oHhIWfwaMRKzTyLgFDbPnT6",
+      "files": [
+        {
+          "name": "Leads from Photos \u2014 May 2026 (physician practices)",
+          "type": "g-document",
+          "modified": "2026-05-21",
+          "size": "",
+          "link": "https://docs.google.com/document/d/11OsM47pH6MeWYNy_EqTYQL6ZS7fEEcfmROLoVmsIGJo/edit?usp=drivesdk"
+        },
+        {
+          "name": "handwritten-contact-nick-mossom-2026-05-06.jpg",
+          "type": "jpeg",
+          "modified": "2026-05-21",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1PtgW8vLg-WHrziP3Ta_7nkagb0pbyYUU/view?usp=drivesdk"
+        },
+        {
+          "name": "forefront-health-advisors-openhouse-flyer-2026-04-03.jpg",
+          "type": "jpeg",
+          "modified": "2026-05-21",
+          "size": "",
+          "link": "https://drive.google.com/file/d/104EmEjzBD48gMrwUvjps7r967cST_S7n/view?usp=drivesdk"
+        },
+        {
+          "name": "sarasota-practices-jobboard-henson-cardiology-biospine-2026-04-02.jpg",
+          "type": "jpeg",
+          "modified": "2026-05-21",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1HcAsfPOMMajqoi0bOuBb8SvRDWedluoD/view?usp=drivesdk"
+        },
+        {
+          "name": "sarasota-practices-jobboard-chiropractic-medcenter-2026-04-02.jpg",
+          "type": "jpeg",
+          "modified": "2026-05-21",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1X70tKEOPbja_EIbNzOL4mi4ZG-gaevio/view?usp=drivesdk"
+        },
+        {
+          "name": "precision-health-aesthetics-sign-sarasota-2026-04-02.jpg",
+          "type": "jpeg",
+          "modified": "2026-05-21",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1YA9qiO5EEjNfx5uax7NtpPsUzDWd9VB3/view?usp=drivesdk"
+        },
+        {
+          "name": "md-one-concierge-physicians-storefront-sarasota-2026-04-09.jpg",
+          "type": "jpeg",
+          "modified": "2026-05-21",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1AdcgH8pCCERO6NZPocsXgQdm8kLRGMjF/view?usp=drivesdk"
+        },
+        {
+          "name": "apollo-batch1-prospecting-list-sarasota-2026-04-05.jpg",
+          "type": "jpeg",
+          "modified": "2026-05-21",
+          "size": "",
+          "link": "https://drive.google.com/file/d/11duBIBMBhfQk5-p_2cceZJ4cn8HtPPaO/view?usp=drivesdk"
+        },
+        {
+          "name": "apollo-crm-sparksmd-physician-leads-2026-04-05.jpg",
+          "type": "jpeg",
+          "modified": "2026-05-21",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1b5j1s2Cxacm3x1z5pdSSSQfmFQWGxfKP/view?usp=drivesdk"
+        }
+      ]
+    },
+    {
+      "id": "hypeframes-hypereels",
+      "slug": "hypeframes-hypereels",
+      "name": "HypeFrames & HypeReels",
+      "folderId": "1_2XY2Anjl6XtnvI81BT2cuvL7FEqKm48",
+      "parentId": "1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
+      "audience": "all",
+      "lastSynced": "2026-06-02T02:35:49+00:00",
+      "fileCount": 3,
+      "vaultPath": "second-brain/resources/drive-index/hypeframes-hypereels.md",
+      "driveUrl": "https://drive.google.com/drive/folders/1_2XY2Anjl6XtnvI81BT2cuvL7FEqKm48",
+      "files": [
+        {
+          "name": "Brt HypeReels",
+          "type": "g-folder",
+          "modified": "2026-05-19",
+          "size": "",
+          "link": "https://drive.google.com/drive/folders/177LaDAW1WUuhQnhU8FJpM6Pgqz3atZbF"
+        },
+        {
+          "name": "Brt HypeFrames",
+          "type": "g-folder",
+          "modified": "2026-05-19",
+          "size": "",
+          "link": "https://drive.google.com/drive/folders/1ndZ7AOWpWtxgAAx6cC90Zt4q4UQ-XcjO"
+        },
+        {
+          "name": "Client Reels",
+          "type": "g-folder",
+          "modified": "2026-05-15",
+          "size": "",
+          "link": "https://drive.google.com/drive/folders/1fwbtuuGNQqU_6iyhu_PZdVZBxecCZJWX"
+        }
+      ]
+    },
+    {
+      "id": "jid5274-vault-mirror-2026-05-22",
+      "slug": "jid5274-vault-mirror-2026-05-22",
+      "name": "jid5274-vault-mirror-2026-05-22",
+      "folderId": "1DMF37L9WAURIWHeGSEbkE3kz1fqnVbkI",
+      "parentId": "1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
+      "audience": "all",
+      "lastSynced": "2026-06-02T02:35:47+00:00",
+      "fileCount": 14,
+      "vaultPath": "second-brain/resources/drive-index/jid5274-vault-mirror-2026-05-22.md",
+      "driveUrl": "https://drive.google.com/drive/folders/1DMF37L9WAURIWHeGSEbkE3kz1fqnVbkI",
+      "files": [
+        {
+          "name": "businesses__pmc__bioreg__sales__lpca-atlanta-2026__sent__2026-05-21-shantel-mill",
+          "type": "md",
+          "modified": "2026-05-22",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1PIzYj58QlQSKKCNbHBKSDXAhMW7bnaBH/view?usp=drivesdk"
+        },
+        {
+          "name": "businesses__pmc__bioreg__sales__lpca-atlanta-2026__sent__2026-05-21-nathan-kerr.",
+          "type": "md",
+          "modified": "2026-05-22",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1HLYBqP7mLzs1sVfiGm4nal54mMQ9oPUd/view?usp=drivesdk"
+        },
+        {
+          "name": "businesses__pmc__bioreg__sales__lpca-atlanta-2026__sent__2026-05-21-jim-trotti.m",
+          "type": "md",
+          "modified": "2026-05-22",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1UTZOSBFYCry55rXv0ir7hf9RasWAYHw0/view?usp=drivesdk"
+        },
+        {
+          "name": "businesses__pmc__bioreg__sales__lpca-atlanta-2026__sent__2026-05-21-augustine-es",
+          "type": "md",
+          "modified": "2026-05-22",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1odPbwf9zEq-0Zijn6ow4r1hTH6oesz0f/view?usp=drivesdk"
+        },
+        {
+          "name": "businesses__pmc__bioreg__sales__lpca-atlanta-2026__sent__2026-05-21-allison-buch",
+          "type": "md",
+          "modified": "2026-05-22",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1QCDJ5tvSsGSrg3FjiN3Xa32qWuDXVtfP/view?usp=drivesdk"
+        },
+        {
+          "name": "intelligence__decisions__2026-05-21-soul-update-jid5274-primary-origin.md",
+          "type": "md",
+          "modified": "2026-05-22",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1ATRxMJBTi85obhefBZiZXo9zGg2tA5w0/view?usp=drivesdk"
+        },
+        {
+          "name": "operations__2026-05-21-calendly-playbook.md",
+          "type": "md",
+          "modified": "2026-05-22",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1jkWfvIQ-Tb5kKR9lJcPdOuUenefGoKAV/view?usp=drivesdk"
+        },
+        {
+          "name": "intelligence__escalations__2026-05-21-cron-jobs-failing-investigation.md",
+          "type": "md",
+          "modified": "2026-05-22",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1uMIZP0IyJk1QKHnW4mH3E4tPRkOkuIlD/view?usp=drivesdk"
+        },
+        {
+          "name": "businesses__pmc__strategy__2026-05-20-medvectis-vs-tennr-distributorship-evaluat",
+          "type": "md",
+          "modified": "2026-05-22",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1MaEzSb9JE47Ci_bzucg4dWyX2ZJ-5LNy/view?usp=drivesdk"
+        },
+        {
+          "name": "businesses__pmc__bioreg__sales__2026-05-21-lpca-followup-template.md",
+          "type": "md",
+          "modified": "2026-05-22",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1-_AmXL39YwlyrocSH5fsVC_XLoeKCZ6T/view?usp=drivesdk"
+        },
+        {
+          "name": "intelligence__briefs__2026-05-22-lpca-dial-priority.md",
+          "type": "md",
+          "modified": "2026-05-22",
+          "size": "",
+          "link": "https://drive.google.com/file/d/14Y_yBTQdX3FLK6RpPca2h6Z9xwYDT38g/view?usp=drivesdk"
+        },
+        {
+          "name": "businesses__pmc__bioreg__sales__lpca-atlanta-2026__2026-05-21-lpca-lead-tracker.",
+          "type": "md",
+          "modified": "2026-05-22",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1AnSN_U7y2wos07G79RcXexApIFFC0Ht_/view?usp=drivesdk"
+        },
+        {
+          "name": "projects__va-workstream__readiness__2026-05-21-va-bot-readiness-diagnosis.md",
+          "type": "md",
+          "modified": "2026-05-22",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1dcmR5J5SM09jfPZsX1TKF2mDO8kBM7oy/view?usp=drivesdk"
+        },
+        {
+          "name": "businesses__pmc__canonical-answers.md",
+          "type": "md",
+          "modified": "2026-05-22",
+          "size": "",
+          "link": "https://drive.google.com/file/d/13J7pbMud4VwUO0ePFLe1fqd3xc4O_bis/view?usp=drivesdk"
+        }
+      ]
+    },
+    {
+      "id": "lead-lists-apollo-imports",
+      "slug": "lead-lists-apollo-imports",
+      "name": "Lead Lists & Apollo Imports",
+      "folderId": "1rc58IY7vFgaiAob48MbDtKeSh4U3k658",
+      "parentId": "1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
+      "audience": "all",
+      "lastSynced": "2026-06-02T02:35:53+00:00",
+      "fileCount": 17,
+      "vaultPath": "second-brain/resources/drive-index/lead-lists-apollo-imports.md",
+      "driveUrl": "https://drive.google.com/drive/folders/1rc58IY7vFgaiAob48MbDtKeSh4U3k658",
+      "files": [
+        {
+          "name": "Dial List ALL \u2014 Apollo Sequences \u2014 2026-05-13",
+          "type": "g-spreadsheet",
+          "modified": "2026-05-14",
+          "size": "",
+          "link": "https://docs.google.com/spreadsheets/d/1s8zo40EmpHoMIf9OursqsjMZRDqZQYEfdcuPZLzDFig/edit?usp=drivesdk"
+        },
+        {
+          "name": "Dial List ALL \u2014 Apollo Sequences \u2014 2026-05-13.csv",
+          "type": "csv",
+          "modified": "2026-05-14",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1cZsAVW3VFHbBvZpz0r4RkuTm7_A6OUFa/view?usp=drivesdk"
+        },
+        {
+          "name": "Medspa EXCLUDED (3) -- audit trail -- 2026-05-12",
+          "type": "g-spreadsheet",
+          "modified": "2026-05-12",
+          "size": "",
+          "link": "https://docs.google.com/spreadsheets/d/1CRoNxVFPd_d8HAL1o4TlClFAwfC6cX9CLRPUMLa9xDQ/edit?usp=drivesdk"
+        },
+        {
+          "name": "Medspa TIER-2 Hold (14) -- Apollo Import -- 2026-05-12",
+          "type": "g-spreadsheet",
+          "modified": "2026-05-12",
+          "size": "",
+          "link": "https://docs.google.com/spreadsheets/d/1VusagDUcSP8I1nab2rC3UrjYUgrqe1UWx2eOHvzduyQ/edit?usp=drivesdk"
+        },
+        {
+          "name": "apollo-import-MEDSPA-TIER1-2026-05-12.csv (raw)",
+          "type": "csv",
+          "modified": "2026-05-12",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1f7q7zToypAYsWwy20gT3rzyXkVmzDeho/view?usp=drivesdk"
+        },
+        {
+          "name": "Medspa TIER-1 Ready (43) -- Apollo Import -- 2026-05-12",
+          "type": "g-spreadsheet",
+          "modified": "2026-05-12",
+          "size": "",
+          "link": "https://docs.google.com/spreadsheets/d/1fLKrsUEnfKikBt8HD2LAkOpx0V9eBkNAqT008tBmVa8/edit?usp=drivesdk"
+        },
+        {
+          "name": "apollo-import-medspa-2026-05-12.csv (raw)",
+          "type": "csv",
+          "modified": "2026-05-12",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1ER87VHtWUq-TxgWnfE9-JjJ_NTbTbzrO/view?usp=drivesdk"
+        },
+        {
+          "name": "Medspa Leads Ready for Apollo Import -- 60 contacts -- 2026-05-12",
+          "type": "g-spreadsheet",
+          "modified": "2026-05-12",
+          "size": "",
+          "link": "https://docs.google.com/spreadsheets/d/1oiVczjfrAyBU0ZI6h0umhIhzR72IiutdO9-RathUgwM/edit?usp=drivesdk"
+        },
+        {
+          "name": "Batch #3 - Chiro + Medspa - Medspa Leads (1).numbers",
+          "type": "x-iwork-numbers-sffn",
+          "modified": "2026-05-12",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1O6_gc2JzvQSNRwXY-W6BQo7XE67VFu-S/view?usp=drivesdk"
+        },
+        {
+          "name": "Enriched lead list - Medspa + Chiro (Enriched) (1).numbers",
+          "type": "x-iwork-numbers-sffn",
+          "modified": "2026-05-12",
+          "size": "",
+          "link": "https://drive.google.com/file/d/104709PUpzAveJneKhFkSmyIUluQ4d5c6/view?usp=drivesdk"
+        },
+        {
+          "name": "apollo-contacts-export.csv",
+          "type": "csv",
+          "modified": "2026-04-24",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1vTRK1QcSY-nHOAF49LJ_xm-XRPJctLy4/view?usp=drivesdk"
+        },
+        {
+          "name": "Leads_2026.03.xlsx",
+          "type": "vnd.openxmlformats-o",
+          "modified": "2026-04-24",
+          "size": "",
+          "link": "https://docs.google.com/spreadsheets/d/1qmuGK3Lo-pfGLiFMVJUvaHHB_jqVU5gm/edit?usp=drivesdk&ouid=116423807964134856224&rtpof=true&sd=true"
+        },
+        {
+          "name": "Lead List #1 - Enriched + Verified.xlsx",
+          "type": "vnd.openxmlformats-o",
+          "modified": "2026-04-16",
+          "size": "",
+          "link": "https://docs.google.com/spreadsheets/d/15-7KNlVRKQioSCB6qMDFAFUvO-5navIx/edit?usp=drivesdk&ouid=116423807964134856224&rtpof=true&sd=true"
+        },
+        {
+          "name": "sg_ink_full_enrichment.jsx",
+          "type": "octet-stream",
+          "modified": "2026-04-13",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1cwoSJFssiTViCsXMlCt4WoyTDzFBbzWR/view?usp=drivesdk"
+        },
+        {
+          "name": "Copy of SG_Ink_Top_100_Apollo_Contact List_2026.04.04.xlsx - Top 100 \u2014 Full Inte",
+          "type": "csv",
+          "modified": "2026-04-13",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1fbkpgQIIb2cjHynatPE4_1tsmZTFPOhm/view?usp=drivesdk"
+        },
+        {
+          "name": "Copy of SG_Ink_Top_100_GHL_Campaign_Analysis.xlsx",
+          "type": "vnd.openxmlformats-o",
+          "modified": "2026-04-13",
+          "size": "",
+          "link": "https://docs.google.com/spreadsheets/d/17lUsKUxeiH082UAENTM7X72DA0gPFTBd/edit?usp=drivesdk&ouid=116423807964134856224&rtpof=true&sd=true"
+        },
+        {
+          "name": "Copy of sg_ink_lead_prioritizer (4).jsx",
+          "type": "octet-stream",
+          "modified": "2026-04-13",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1dXh0wZoYL4pbHpkm2ur9YPEcg8YXsjWH/view?usp=drivesdk"
+        }
+      ]
+    },
+    {
+      "id": "legacy-archive",
+      "slug": "legacy-archive",
+      "name": "Legacy & Archive",
+      "folderId": "198MaHJc6kaRPgFWSEZ2T55nHScESq9De",
+      "parentId": "1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
+      "audience": "all",
+      "lastSynced": "2026-06-02T02:35:50+00:00",
+      "fileCount": 2,
+      "vaultPath": "second-brain/resources/drive-index/legacy-archive.md",
+      "driveUrl": "https://drive.google.com/drive/folders/198MaHJc6kaRPgFWSEZ2T55nHScESq9De",
+      "files": [
+        {
+          "name": "Copy of Miscellaneous",
+          "type": "g-document",
+          "modified": "2026-04-22",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1-i4Lmy6p8t72AFu4oxmTz0w_mJJv5h5P4CIQKz8lXfQ/edit?usp=drivesdk"
+        },
+        {
+          "name": "Copy of Copy of CRM & TOOLS ANALYSIS_EWC MASTER_2026.02",
+          "type": "g-document",
+          "modified": "2026-04-13",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1FeTk89rrCIrKHycPC6Z4LPPn_1nlxMuRavE81ToTPOk/edit?usp=drivesdk"
+        }
+      ]
+    },
+    {
+      "id": "marketing",
+      "slug": "marketing",
+      "name": "Marketing",
+      "folderId": "17hjDL9_zva1jlrFHwkjMsHE-Y5LWA5K0",
+      "parentId": "1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
+      "audience": "all",
+      "lastSynced": "2026-06-02T02:35:54+00:00",
+      "fileCount": 5,
+      "vaultPath": "second-brain/resources/drive-index/marketing.md",
+      "driveUrl": "https://drive.google.com/drive/folders/17hjDL9_zva1jlrFHwkjMsHE-Y5LWA5K0",
+      "files": [
+        {
+          "name": "RPM Program Proposal PMC.pptx",
+          "type": "vnd.openxmlformats-o",
+          "modified": "2026-05-29",
+          "size": "",
+          "link": "https://docs.google.com/presentation/d/1ixTftDq6oPHfl7VHbLxrSRQMQyDVfbQH/edit?usp=drivesdk&ouid=116423807964134856224&rtpof=true&sd=true"
+        },
+        {
+          "name": "Apollo Marketing",
+          "type": "g-folder",
+          "modified": "2026-05-19",
+          "size": "",
+          "link": "https://drive.google.com/drive/folders/1fR-flgMxsrthFOa73o_IXytQ03sNWoOw"
+        },
+        {
+          "name": "PMC Marketing",
+          "type": "g-folder",
+          "modified": "2026-05-19",
+          "size": "",
+          "link": "https://drive.google.com/drive/folders/19j9lQbdiXLZpHHV0XnBcWWjvoMvUIn7T"
+        },
+        {
+          "name": "Content Research",
+          "type": "g-folder",
+          "modified": "2026-05-18",
+          "size": "",
+          "link": "https://drive.google.com/drive/folders/1NEa4O0oujkfuQZ0tCl_EY4yJW92_65t3"
+        },
+        {
+          "name": "C-Level_Research_Priority_List.xlsx",
+          "type": "vnd.openxmlformats-o",
+          "modified": "2026-04-16",
+          "size": "",
+          "link": "https://docs.google.com/spreadsheets/d/1X8oqPivMH4ze45K0Z2zNjNDTxkt926I8/edit?usp=drivesdk&ouid=116423807964134856224&rtpof=true&sd=true"
+        }
+      ]
+    },
+    {
+      "id": "meeting-notes",
+      "slug": "meeting-notes",
+      "name": "Meeting Notes",
+      "folderId": "1VjVEqWlwmT7TLIfqLPTUWfBIQhuJR1S6",
+      "parentId": "1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
+      "audience": "all",
+      "lastSynced": "2026-06-02T02:35:55+00:00",
+      "fileCount": 10,
+      "vaultPath": "second-brain/resources/drive-index/meeting-notes.md",
+      "driveUrl": "https://drive.google.com/drive/folders/1VjVEqWlwmT7TLIfqLPTUWfBIQhuJR1S6",
+      "files": [
+        {
+          "name": "DRAFT \u2014 Follow-up email to Dr. Andre Melo (The Way Concierge) \u2014 2026-05-20",
+          "type": "g-document",
+          "modified": "2026-05-20",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1eo_VjyynsbvADxrnRmcz0AX_r9PIFi782eWfK_UFuL8/edit?usp=drivesdk"
+        },
+        {
+          "name": "The Way Concierge_Dr Melo_Meeting 1_2026.05.20.docx",
+          "type": "vnd.openxmlformats-o",
+          "modified": "2026-05-20",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1gtKnmId5TebaH6jYF-83IRXfCSZ-p6mY/edit?usp=drivesdk&ouid=116423807964134856224&rtpof=true&sd=true"
+        },
+        {
+          "name": "DRAFT v2 \u2014 Thank-you note to Dr. Girson (Ayurveda + BRT + 3 peer-reviewed citati",
+          "type": "g-document",
+          "modified": "2026-05-20",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1c6MIyVpW71ZfnOyxfO0yf9I6Mj76c2eiZGpzTGmfpOY/edit?usp=drivesdk"
+        },
+        {
+          "name": "Dr. Andre Melo \u2014 The Way Concierge Medicine \u2014 Discovery Visit Prep (2026-05-20 1",
+          "type": "g-document",
+          "modified": "2026-05-20",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1ybcQdF_7aOJ8z8hGmAW6YfHBDSjbEDE2EbMI8eylNPc/edit?usp=drivesdk"
+        },
+        {
+          "name": "Intro Call with Dr. Girson",
+          "type": "g-document",
+          "modified": "2026-05-20",
+          "size": "",
+          "link": "https://docs.google.com/document/d/17X9mlfsV7mcuE_pdozRWt5ogTKWPCZkxgvWKsKJBO0E/edit?usp=drivesdk"
+        },
+        {
+          "name": "2026-05-20 Research Firehose.docx",
+          "type": "vnd.openxmlformats-o",
+          "modified": "2026-05-20",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1jZ8hjhsBkVskgi-VfjdWCHiyftN7Bcqw/edit?usp=drivesdk&ouid=116423807964134856224&rtpof=true&sd=true"
+        },
+        {
+          "name": "AR Weekly",
+          "type": "g-document",
+          "modified": "2026-05-12",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1gbhNLoIR2tTuEZmi8PlyPfYOaPN3RheHj9T5Cnux_V0/edit?usp=drivesdk"
+        },
+        {
+          "name": "MEETING NOTES [05_01_2026].pdf",
+          "type": "pdf",
+          "modified": "2026-05-02",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1HUH6qjCAmwVadtrLRU9IhTSRHJok7q_G/view?usp=drivesdk"
+        },
+        {
+          "name": "May 2026",
+          "type": "g-folder",
+          "modified": "2026-05-01",
+          "size": "",
+          "link": "https://drive.google.com/drive/folders/13sk_pLmqUniZ7OrlfDnkcL5yxu00f8O_"
+        },
+        {
+          "name": "TEMPLATE [For Duplicate]",
+          "type": "g-document",
+          "modified": "2026-05-01",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1tMstTgoQV4pCSATgy4fB8WrfsK5dL7qnht2C_NYhYmE/edit?usp=drivesdk"
+        }
+      ]
+    },
+    {
+      "id": "meeting-prep-interviews",
+      "slug": "meeting-prep-interviews",
+      "name": "Meeting Prep & Interviews",
+      "folderId": "1YUkmsxC4TkEOfwPjxobH2GbESBHyEart",
+      "parentId": "1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
+      "audience": "all",
+      "lastSynced": "2026-06-02T02:35:51+00:00",
+      "fileCount": 8,
+      "vaultPath": "second-brain/resources/drive-index/meeting-prep-interviews.md",
+      "driveUrl": "https://drive.google.com/drive/folders/1YUkmsxC4TkEOfwPjxobH2GbESBHyEart",
+      "files": [
+        {
+          "name": "Weave Value Summary PDF.PDF",
+          "type": "pdf",
+          "modified": "2026-05-12",
+          "size": "",
+          "link": "https://drive.google.com/file/d/13iwhKtoxb2mtHXiN5b1z9uVbz0YyYv7i/view?usp=drivesdk"
+        },
+        {
+          "name": "Weave __ PMC Initial Partnership Meeting.docx",
+          "type": "vnd.openxmlformats-o",
+          "modified": "2026-05-12",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1WDJtV0Sn0UdhqOiAqK3NETeC79xDNPFy/edit?usp=drivesdk&ouid=116423807964134856224&rtpof=true&sd=true"
+        },
+        {
+          "name": "Weave <> PMC Initial Partnership Meeting",
+          "type": "g-document",
+          "modified": "2026-05-12",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1CyHe0iDC2T8a5NJDsecmPd6Xusi4NWvc6nVLmbugxXA/edit?usp=drivesdk"
+        },
+        {
+          "name": "NeuralCloud_Erik_Suokas_Meeting_Prep_v1",
+          "type": "g-document",
+          "modified": "2026-05-07",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1uxP0524oi5yvCPqzhMrn-C_TxZU0yp7FAFWygo7uN0U/edit?usp=drivesdk"
+        },
+        {
+          "name": "BRMI_Jane_Dolan_Meeting_Prep_v2_BioReg",
+          "type": "g-document",
+          "modified": "2026-05-07",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1FWY3U1zjdt1vTuelSvnbgklCfkwEgkMEVGDcHMXwXU8/edit?usp=drivesdk"
+        },
+        {
+          "name": "BRMI_Jane_Dolan_Meeting_Prep_v1",
+          "type": "g-document",
+          "modified": "2026-05-07",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1hTwaPeBA2fBJ9TdiW0FyrBUTdxM1gvm7OhchgILujY0/edit?usp=drivesdk"
+        },
+        {
+          "name": "GCM_VP_Physician_Partnerships_Interview_Guide_v4",
+          "type": "g-document",
+          "modified": "2026-05-06",
+          "size": "",
+          "link": "https://docs.google.com/document/d/15YNxaTaIXatSJgsvGnR32uGQK3igZ2nAyYq1KtkRm7A/edit?usp=drivesdk"
+        },
+        {
+          "name": "GCM_VP_Physician_Partnerships_Interview_Guide_v3.docx",
+          "type": "vnd.openxmlformats-o",
+          "modified": "2026-05-06",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1G6MqnrgesGfpbl9i6ko8KwjBk7_oM5QT/edit?usp=drivesdk&ouid=116423807964134856224&rtpof=true&sd=true"
+        }
+      ]
+    },
+    {
+      "id": "operations",
+      "slug": "operations",
+      "name": "Operations",
+      "folderId": "19e39sLAsQCr67WtjNE01jD2hJaDyrVcI",
+      "parentId": "1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
+      "audience": "all",
+      "lastSynced": "2026-06-02T02:35:48+00:00",
+      "fileCount": 1,
+      "vaultPath": "second-brain/resources/drive-index/operations.md",
+      "driveUrl": "https://drive.google.com/drive/folders/19e39sLAsQCr67WtjNE01jD2hJaDyrVcI",
+      "files": [
+        {
+          "name": "[OPERATIONS] Accessing Credentials via Bitwarden",
+          "type": "g-document",
+          "modified": "2026-05-20",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1GfNDzT24tOVrGZIH4BESkGHnruHZ7Scl2eP9PcHR0aw/edit?usp=drivesdk"
+        }
+      ]
+    },
+    {
+      "id": "sales-scripts-nepq",
+      "slug": "sales-scripts-nepq",
+      "name": "Sales Scripts & NEPQ",
+      "folderId": "1OtY-0gtU6YUI61NiOLfZi8PCtGPwiYJz",
+      "parentId": "1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
+      "audience": "all",
+      "lastSynced": "2026-06-02T02:35:51+00:00",
+      "fileCount": 2,
+      "vaultPath": "second-brain/resources/drive-index/sales-scripts-nepq.md",
+      "driveUrl": "https://drive.google.com/drive/folders/1OtY-0gtU6YUI61NiOLfZi8PCtGPwiYJz",
+      "files": [
+        {
+          "name": "Proactive_Practice_Management_Guardrails_NEPQ.docx",
+          "type": "vnd.openxmlformats-o",
+          "modified": "2026-04-16",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1rBMll0tYucpG1CyTPf4hLVSiSZuGdOMp/edit?usp=drivesdk&ouid=116423807964134856224&rtpof=true&sd=true"
+        },
+        {
+          "name": "Sales Talking Points for Nesta PEMF V1.docx",
+          "type": "vnd.openxmlformats-o",
+          "modified": "2026-04-13",
+          "size": "",
+          "link": "https://docs.google.com/document/d/11Gsa8_gnYHHqfbJUbVNTilLlTfs0q6hR/edit?usp=drivesdk&ouid=116423807964134856224&rtpof=true&sd=true"
+        }
+      ]
+    },
+    {
+      "id": "sarasota-art-dance-night",
+      "slug": "sarasota-art-dance-night",
+      "name": "Sarasota Art & Dance Night",
+      "folderId": "1XNWcwNujKK89JLmUeinjc69zVH2qjA0Z",
+      "parentId": "1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
+      "audience": "all",
+      "lastSynced": "2026-06-02T02:35:54+00:00",
+      "fileCount": 4,
+      "vaultPath": "second-brain/resources/drive-index/sarasota-art-dance-night.md",
+      "driveUrl": "https://drive.google.com/drive/folders/1XNWcwNujKK89JLmUeinjc69zVH2qjA0Z",
+      "files": [
+        {
+          "name": "Sarasota Art & Dance Night \u2014 Sponsor Prospect List (Tier 1, v2026-05-20)",
+          "type": "g-spreadsheet",
+          "modified": "2026-05-21",
+          "size": "",
+          "link": "https://docs.google.com/spreadsheets/d/1-6OlsU-LLJyWq86lSj3HoIzaa2iu1r6xgs9V827jZjQ/edit?usp=drivesdk"
+        },
+        {
+          "name": "Sarasota Art & Dance Night \u2014 Sponsor Outreach Email Templates (v1, 2026-05-20)",
+          "type": "g-document",
+          "modified": "2026-05-20",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1sNiHq93jHxspgoLaS1i_E4_DPR9LcbzEXAeQXx9ipA4/edit?usp=drivesdk"
+        },
+        {
+          "name": "smallSponsorshipOpportunities.pdf",
+          "type": "pdf",
+          "modified": "2026-05-20",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1Ol7WUtRjBrmDwJq-QIt9yHGCkpvN_AID/view?usp=drivesdk"
+        },
+        {
+          "name": "Jason Diaz - Sarasota Art and Dance Night-20260514T171449Z-3-001.zip",
+          "type": "zip",
+          "modified": "2026-05-14",
+          "size": "",
+          "link": "https://drive.google.com/file/d/19RmhrV1PxJYWkJ8FUZ9cc9Cz4KXWfxk5/view?usp=drivesdk"
+        }
+      ]
+    },
+    {
+      "id": "screenshots-archive-aprmay-2026",
+      "slug": "screenshots-archive-aprmay-2026",
+      "name": "Screenshots Archive (Apr\u2013May 2026)",
+      "folderId": "10Atkf8gF7IHZJg4PokuFxQpXurUqW1qv",
+      "parentId": "1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
+      "audience": "all",
+      "lastSynced": "2026-06-02T02:35:48+00:00",
+      "fileCount": 5,
+      "vaultPath": "second-brain/resources/drive-index/screenshots-archive-aprmay-2026.md",
+      "driveUrl": "https://drive.google.com/drive/folders/10Atkf8gF7IHZJg4PokuFxQpXurUqW1qv",
+      "files": [
+        {
+          "name": "misc",
+          "type": "g-folder",
+          "modified": "2026-05-20",
+          "size": "",
+          "link": "https://drive.google.com/drive/folders/1eg5KPYcnpYMIjrJJe5Z9NF_oD-ap29nG"
+        },
+        {
+          "name": "calls-and-onboarding",
+          "type": "g-folder",
+          "modified": "2026-05-20",
+          "size": "",
+          "link": "https://drive.google.com/drive/folders/1MVEeVgmghbT6x0UL3e4gSV8QwGVaBiOu"
+        },
+        {
+          "name": "website-and-brand",
+          "type": "g-folder",
+          "modified": "2026-05-20",
+          "size": "",
+          "link": "https://drive.google.com/drive/folders/1NCS5qZKlHdPi6mIEzy8HopaU1qayLz4d"
+        },
+        {
+          "name": "linkedin",
+          "type": "g-folder",
+          "modified": "2026-05-20",
+          "size": "",
+          "link": "https://drive.google.com/drive/folders/1FiUnI9cnD-VRUUNPW6AulDlIGgBbtCez"
+        },
+        {
+          "name": "apollo-outreach",
+          "type": "g-folder",
+          "modified": "2026-05-20",
+          "size": "",
+          "link": "https://drive.google.com/drive/folders/1_GRDHMiKDzJI837QWPTi59tALGYIAAV6"
+        }
+      ]
+    },
+    {
+      "id": "social-media",
+      "slug": "social-media",
+      "name": "Social Media",
+      "folderId": "1aO-IEBzPewrOx_sbvZWJtzSbo9k5Jgmv",
+      "parentId": "1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
+      "audience": "all",
+      "lastSynced": "2026-06-02T02:35:57+00:00",
+      "fileCount": 5,
+      "vaultPath": "second-brain/resources/drive-index/social-media.md",
+      "driveUrl": "https://drive.google.com/drive/folders/1aO-IEBzPewrOx_sbvZWJtzSbo9k5Jgmv",
+      "files": [
+        {
+          "name": "PMC/BRT ASSETS",
+          "type": "g-folder",
+          "modified": "2026-05-19",
+          "size": "",
+          "link": "https://drive.google.com/drive/folders/1-MV2lLZi5aqZtEvDYz0h-8etlXYkTxWp"
+        },
+        {
+          "name": "Video and Graphic Assets Collection",
+          "type": "g-folder",
+          "modified": "2026-05-07",
+          "size": "",
+          "link": "https://drive.google.com/drive/folders/1nilztgm4-rnCMqw2-vy5DkNbrpUfLntq"
+        },
+        {
+          "name": "TTTS - Instagram/Linkedin'",
+          "type": "g-folder",
+          "modified": "2026-04-14",
+          "size": "",
+          "link": "https://drive.google.com/drive/folders/1mNCv6u1YIHEcnV8VaXG-5GofcFyfjl9Z"
+        },
+        {
+          "name": "PMC - Linkedin",
+          "type": "g-folder",
+          "modified": "2026-04-14",
+          "size": "",
+          "link": "https://drive.google.com/drive/folders/1plkA4tqn93AIIhYRhJMhq71D-m_uYh7b"
+        },
+        {
+          "name": "BRT - Instagram",
+          "type": "g-folder",
+          "modified": "2026-04-14",
+          "size": "",
+          "link": "https://drive.google.com/drive/folders/1jP8BcnubmstvgFARZVgwz_LXLi4EpdtX"
+        }
+      ]
+    },
+    {
+      "id": "ttts-assets",
+      "slug": "ttts-assets",
+      "name": "TTTS Assets",
+      "folderId": "1bhcNbhJ4oHVZODBa6ky9pPtL1HotWU8T",
+      "parentId": "1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
+      "audience": "all",
+      "lastSynced": "2026-06-02T02:35:56+00:00",
+      "fileCount": 1,
+      "vaultPath": "second-brain/resources/drive-index/ttts-assets.md",
+      "driveUrl": "https://drive.google.com/drive/folders/1bhcNbhJ4oHVZODBa6ky9pPtL1HotWU8T",
+      "files": [
+        {
+          "name": "Assets",
+          "type": "g-folder",
+          "modified": "2026-05-19",
+          "size": "",
+          "link": "https://drive.google.com/drive/folders/1R6nPbKBQObISQ_QvDSlvd2_PKKTFZylT"
+        }
+      ]
+    },
+    {
+      "id": "visual-brand-assets",
+      "slug": "visual-brand-assets",
+      "name": "Visual Brand Assets",
+      "folderId": "1qEKk9LboJG2r7eZIIqkO57C8ghdZh7Xb",
+      "parentId": "1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
+      "audience": "all",
+      "lastSynced": "2026-06-02T02:35:50+00:00",
+      "fileCount": 1,
+      "vaultPath": "second-brain/resources/drive-index/visual-brand-assets.md",
+      "driveUrl": "https://drive.google.com/drive/folders/1qEKk9LboJG2r7eZIIqkO57C8ghdZh7Xb",
+      "files": [
+        {
+          "name": "Brand Assets",
+          "type": "g-folder",
+          "modified": "2026-05-19",
+          "size": "",
+          "link": "https://drive.google.com/drive/folders/1gmpPUAG1PqsafjlMySf_FfvhLrWfwhbo"
+        }
+      ]
+    }
+  ]
+}
