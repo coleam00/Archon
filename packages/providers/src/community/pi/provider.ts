@@ -9,6 +9,7 @@ import type {
   MessageChunk,
   ProviderCapabilities,
   SendQueryOptions,
+  SystemPromptInput,
 } from '../../types';
 
 import { PI_CAPABILITIES } from './capabilities';
@@ -382,15 +383,26 @@ export class PiProvider implements IAgentProvider {
     //        "Pi documentation" block that Anthropic's subscription-OAuth
     //        detector flags as third-party (400 "out of extra usage"). See the
     //        constant's doc comment for the full wire-level rationale.
-    //        Pi only supports string system prompts; ignore structured preset objects.
-    const rawSystemPrompt = requestOptions?.systemPrompt ?? nodeConfig?.systemPrompt;
-    const explicitSystemPrompt = typeof rawSystemPrompt === 'string' ? rawSystemPrompt : undefined;
-    if (rawSystemPrompt !== undefined && explicitSystemPrompt === undefined) {
+    //        Pi only supports string system prompts; structured preset objects
+    //        and string[] are dropped. Validate each level INDEPENDENTLY before
+    //        applying precedence — otherwise a non-string request-level value
+    //        (e.g. a preset object) would win via `??` and mask a valid
+    //        node-level string, wrongly falling back to the Archon default.
+    const coerceStringPrompt = (
+      value: SystemPromptInput | undefined,
+      source: 'request' | 'node'
+    ): string | undefined => {
+      if (value === undefined) return undefined;
+      if (typeof value === 'string') return value;
       getLog().warn(
-        { systemPromptType: typeof rawSystemPrompt },
+        { systemPromptType: typeof value, systemPromptSource: source },
         'pi.system_prompt_dropped_non_string'
       );
-    }
+      return undefined;
+    };
+    const explicitSystemPrompt =
+      coerceStringPrompt(requestOptions?.systemPrompt, 'request') ??
+      coerceStringPrompt(nodeConfig?.systemPrompt, 'node');
     const systemPrompt = explicitSystemPrompt ?? ARCHON_PI_DEFAULT_SYSTEM_PROMPT;
 
     //    4d. skills: Archon uses name references (e.g. `skills: [agent-browser]`).

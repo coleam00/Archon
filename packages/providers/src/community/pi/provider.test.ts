@@ -1121,6 +1121,38 @@ describe('PiProvider', () => {
     expect(loaderArgs?.systemPrompt).toBe(ARCHON_PI_DEFAULT_SYSTEM_PROMPT);
   });
 
+  test('invalid request-level systemPrompt does not mask valid node-level prompt', async () => {
+    // Regression: a non-string request-level prompt (preset object) must NOT win
+    // via `??` and shadow a valid node-level string — otherwise the node prompt
+    // is dropped and we wrongly fall back to ARCHON_PI_DEFAULT_SYSTEM_PROMPT.
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        systemPrompt: {
+          type: 'preset',
+          preset: 'claude_code',
+          append: 'extra',
+        } as unknown as string,
+        nodeConfig: { systemPrompt: 'node-level prompt' },
+      })
+    );
+
+    // The dropped request-level object is reported, tagged with its source.
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ systemPromptType: 'object', systemPromptSource: 'request' }),
+      'pi.system_prompt_dropped_non_string'
+    );
+
+    // The valid node-level string is used — NOT the Archon default.
+    const loaderArgs = MockDefaultResourceLoader.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
+    expect(loaderArgs?.systemPrompt).toBe('node-level prompt');
+  });
+
   test('falls back to ARCHON_PI_DEFAULT_SYSTEM_PROMPT when no systemPrompt given', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript(scriptedAgentEnd());
