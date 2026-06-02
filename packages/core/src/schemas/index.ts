@@ -14,8 +14,8 @@ export { messageRowSchema } from './message';
 export type { MessageRow } from './message';
 
 // User
-export { userRowSchema, userIdentityRowSchema } from './user';
-export type { User, UserIdentity } from './user';
+export { userRowSchema, userIdentityRowSchema, userRoleSchema } from './user';
+export type { User, UserIdentity, UserRole } from './user';
 export { userGithubTokenRowSchema } from './user-github-token-row';
 export type { UserGithubTokenRow } from './user-github-token-row';
 

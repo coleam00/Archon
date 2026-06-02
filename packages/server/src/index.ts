@@ -99,7 +99,7 @@ import {
   captureArchonStarted,
 } from '@archon/paths';
 import { selectGitHubAuthMode, parseGitCredentialPath } from './github-auth-bootstrap';
-import { getAuth, isWebAuthEnabled, assertWebAuthAtBoot } from './auth';
+import { getAuth, closeAuth, isWebAuthEnabled, assertWebAuthAtBoot } from './auth';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -932,6 +932,9 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
         // Flush queued telemetry events before pool closes the process.
         await shutdownTelemetry();
+
+        // Release the dedicated Better Auth pool (no-op when web auth is off).
+        await closeAuth();
 
         return pool.end();
       })

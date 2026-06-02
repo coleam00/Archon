@@ -12,4 +12,4 @@ export {
   getSignupMode,
   MIN_BETTER_AUTH_SECRET_LENGTH,
 } from './config';
-export { getAuth, resetAuthForTest, type AuthInstance } from './instance';
+export { getAuth, closeAuth, resetAuthForTest, type AuthInstance } from './instance';

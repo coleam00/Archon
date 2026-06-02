@@ -94,6 +94,16 @@ describe('users', () => {
       expect(result.role).toBe('admin');
     });
 
+    test('propagates a non-default role from the user row (member round-trip)', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([identityRow()]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([userRow({ role: 'member' })]));
+
+      const result = await findOrCreateUserByPlatformIdentity('web', 'web-user-2');
+
+      // Confirms the column value is plumbed through, not hardcoded to 'admin'.
+      expect(result.role).toBe('member');
+    });
+
     test('backfills both identity and user display_name when both previously null', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([identityRow()]));
       mockQuery.mockResolvedValueOnce(createQueryResult([userRow()]));

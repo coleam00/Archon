@@ -6,8 +6,9 @@ import { useSession } from '@/lib/auth-client';
 
 /**
  * Gates the app behind a Better Auth session — but ONLY when the server has web
- * auth enabled. When disabled (the default / solo installs), this is a pure
- * passthrough and the UI behaves exactly as before.
+ * auth enabled. When disabled (the default / solo installs), it renders a brief
+ * full-screen loader until GET /api/auth/status resolves (cached for the
+ * session), then passes children through unchanged.
  *
  * Enabled + no session → redirect to /login. Enabled + session → render the app.
  */

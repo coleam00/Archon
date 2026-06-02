@@ -66,7 +66,7 @@ psql $DATABASE_URL -c "\dt"
 
 ## Schema Overview
 
-The database has 10 tables, all prefixed with `remote_agent_`:
+The database has 16 tables, all prefixed with `remote_agent_`:
 
 1. **`remote_agent_codebases`** - Repository metadata
    - Commands stored as JSONB: `{command_name: {path, description}}`
@@ -115,12 +115,25 @@ The database has 10 tables, all prefixed with `remote_agent_`:
    - One row per human (or bot) across all platforms
    - Created lazily on first sight by any chat/forge adapter
    - `display_name` and `email` are nullable until enrichment succeeds
+   - `role` (`VARCHAR`, default `'admin'`) is the identity seam for future per-resource scoping; everyone is `admin` today (visibility stays open), `'member'` is reserved
 
 10. **`remote_agent_user_identities`** - Platform-to-Archon user mapping
-    - One row per `(platform, platform_user_id)` pair — Slack U-id, Telegram chat id, Discord snowflake, GitHub login, etc.
+    - One row per `(platform, platform_user_id)` pair — Slack U-id, Telegram chat id, Discord snowflake, GitHub login, the `web` Better Auth user id, etc.
     - `UNIQUE(platform, platform_user_id)` enforces deduplication at the DB level
     - References `users.id` with `ON DELETE CASCADE` (deleting a user removes their identity mappings)
     - All user_id FKs on the four tables above use `ON DELETE SET NULL` so future user deletion never destructively cascades
+
+11. **`remote_agent_workflow_node_sessions`** - Per-node provider session IDs persisted across workflow re-runs
+    - Opt-in via `persist_session`; keyed by `(workflow_name, node_id, scope_key, provider)`
+    - `scope_key` is typically the conversation UUID
+
+12. **`remote_agent_user_github_tokens`** - Per-user GitHub device-flow tokens
+    - Encrypted at rest (AES-256-GCM); one row per Archon user (`UNIQUE(user_id)`), cascades on user deletion
+    - Numeric `github_user_id` anchors the commit no-reply email
+
+13–16. **`remote_agent_auth_user` / `remote_agent_auth_session` / `remote_agent_auth_account` / `remote_agent_auth_verification`** - Better Auth tables for opt-in web login
+    - **PostgreSQL only.** Always created on Postgres via the idempotent schema apply, but populated only when web auth is enabled (`DATABASE_URL` + `BETTER_AUTH_SECRET`)
+    - Owned and shaped by Better Auth (text ids, camelCase columns); Archon never queries them directly — a session maps to the canonical `users` row via `user_identities('web', <betterAuthUserId>)`
 
 ## Migration List
 
@@ -147,3 +160,7 @@ The database has 10 tables, all prefixed with `remote_agent_`:
 | `018_fix_workflow_status_default.sql` | Fix workflow status default value |
 | `019_workflow_resume_path.sql` | Workflow resume path support |
 | `020_codebase_env_vars.sql` | Per-project environment variables |
+| `021_add_allow_env_keys_to_codebases.sql` | Allow-listed env keys per codebase |
+| `022_workflow_node_sessions.sql` | Per-node provider session persistence |
+
+> The `remote_agent_users.role` column and the four `remote_agent_auth_*` Better Auth tables (opt-in web login) are applied inline in `000_combined.sql` rather than as numbered migrations, and converge on startup via the idempotent schema apply.

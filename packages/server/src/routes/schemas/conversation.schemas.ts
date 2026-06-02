@@ -20,8 +20,9 @@ export const listConversationsQuerySchema = z.object({
   platform: z.string().optional(),
   codebaseId: z.string().optional(),
   // Non-enforcing "mine" filter: 'true' restricts to the caller's own
-  // conversations when an identity resolves. Default lists everything.
-  mine: z.string().optional(),
+  // conversations when an identity resolves. Default lists everything. Enum
+  // makes the boolean contract explicit (the handler treats only 'true' as on).
+  mine: z.enum(['true', 'false']).optional(),
 });
 
 /** GET /api/conversations response. */

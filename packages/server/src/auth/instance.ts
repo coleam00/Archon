@@ -17,7 +17,10 @@
 import { betterAuth } from 'better-auth';
 import { APIError } from 'better-auth/api';
 import { Pool } from 'pg';
+import { createLogger } from '@archon/paths';
 import { isWebAuthEnabled, parseAllowedEmails, isEmailAllowed } from './config';
+
+const log = createLogger('web-auth');
 
 /** The configured Better Auth instance type (inferred — no hand-written shape). */
 export type AuthInstance = ReturnType<typeof betterAuth>;
@@ -26,13 +29,35 @@ export type AuthInstance = ReturnType<typeof betterAuth>;
 // disabled install short-circuit without re-checking env on every request.
 let cached: AuthInstance | null | undefined;
 
+// The dedicated pg.Pool owned by the Better Auth instance, retained so
+// closeAuth() can release it on shutdown. Null when web auth is disabled.
+let authPool: Pool | null = null;
+
 /**
  * Resolve the singleton Better Auth instance, or `null` when web auth is
  * disabled. Safe to call on every request — construction happens at most once.
+ *
+ * A construction failure (e.g. a malformed DATABASE_URL) is logged and cached as
+ * `null` so it surfaces as a clear log line and a disabled auth surface, rather
+ * than throwing into the request path where the soft seam would swallow it as a
+ * generic "session resolve failed".
  */
 export function getAuth(env: NodeJS.ProcessEnv = process.env): AuthInstance | null {
   if (cached !== undefined) return cached;
-  cached = isWebAuthEnabled(env) ? buildAuth(env) : null;
+  if (!isWebAuthEnabled(env)) {
+    cached = null;
+    return cached;
+  }
+  try {
+    cached = buildAuth(env);
+    log.info('web_auth.instance_built');
+  } catch (err) {
+    log.error(
+      { err: err as Error },
+      'web_auth.instance_build_failed — web auth will be unavailable'
+    );
+    cached = null;
+  }
   return cached;
 }
 
@@ -45,9 +70,16 @@ function buildAuth(env: NodeJS.ProcessEnv): AuthInstance {
     .map(s => s.trim())
     .filter(Boolean);
 
+  // The allowlist is static for this install — parse it once at construction
+  // rather than on every signup.
+  const allowedEmails = parseAllowedEmails(env);
+
+  // Dedicated small pool; Better Auth requires a real pg.Pool. Retained at module
+  // scope so closeAuth() can end it on shutdown.
+  authPool = new Pool({ connectionString, max: 5 });
+
   return betterAuth({
-    // Dedicated small pool; Better Auth requires a real pg.Pool.
-    database: new Pool({ connectionString, max: 5 }),
+    database: authPool,
     secret,
     // Omit baseURL for same-origin deploys — Better Auth infers it from the
     // request. Set BETTER_AUTH_URL only when behind a proxy with a fixed origin.
@@ -66,7 +98,7 @@ function buildAuth(env: NodeJS.ProcessEnv): AuthInstance {
             // Invite gate: reject signups whose email is not on the allowlist.
             // Throwing APIError surfaces a clean 403 to the client instead of a
             // generic 500. An empty allowlist means open signup.
-            if (!isEmailAllowed(user.email, parseAllowedEmails(env))) {
+            if (!isEmailAllowed(user.email, allowedEmails)) {
               throw new APIError('FORBIDDEN', {
                 message: 'This email is not on the invite allowlist.',
               });
@@ -79,7 +111,19 @@ function buildAuth(env: NodeJS.ProcessEnv): AuthInstance {
   });
 }
 
+/**
+ * Release the Better Auth pg.Pool on graceful shutdown. No-op when web auth is
+ * disabled (no pool was ever created).
+ */
+export async function closeAuth(): Promise<void> {
+  if (authPool) {
+    await authPool.end();
+    authPool = null;
+  }
+}
+
 /** Test-only: clear the cached instance so env changes take effect. */
 export function resetAuthForTest(): void {
   cached = undefined;
+  authPool = null;
 }

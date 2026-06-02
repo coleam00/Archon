@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router';
+import { Navigate, useNavigate } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -16,7 +16,11 @@ type Mode = 'login' | 'signup';
 export function LoginPage(): React.ReactElement {
   const navigate = useNavigate();
   const { data: session } = useSession();
-  const { data: status } = useQuery({ queryKey: ['auth-status'], queryFn: getAuthStatus });
+  const { data: status } = useQuery({
+    queryKey: ['auth-status'],
+    queryFn: getAuthStatus,
+    staleTime: 5 * 60 * 1000,
+  });
 
   const [mode, setMode] = useState<Mode>('login');
   const [name, setName] = useState('');
@@ -25,9 +29,11 @@ export function LoginPage(): React.ReactElement {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  // Already signed in (or auth disabled) → bounce to the app.
+  // Already signed in (or auth disabled) → bounce to the app. Declarative
+  // redirect (not an imperative navigate() in render) so we short-circuit before
+  // rendering the form and don't fire a side effect during React's render phase.
   if (session?.user || status?.enabled === false) {
-    navigate('/', { replace: true });
+    return <Navigate to="/" replace />;
   }
 
   async function handleSubmit(e: React.FormEvent): Promise<void> {

@@ -16,6 +16,7 @@ import type {
   AttachedFile,
   HandleMessageContext,
   GlobalConfig,
+  UserRole,
 } from '@archon/core';
 import {
   handleMessage,
@@ -1057,7 +1058,7 @@ export function registerApiRoutes(
    */
   async function resolveAuthContext(
     c: Context
-  ): Promise<{ userId: string; role: string } | undefined> {
+  ): Promise<{ userId: string; role: UserRole } | undefined> {
     // 1. Better Auth session first (no-op when web auth is disabled).
     const auth = getAuth();
     if (auth) {
@@ -1074,7 +1075,9 @@ export function registerApiRoutes(
       } catch (err) {
         // Session lookup failed (e.g. DB outage). Fall through to the header so a
         // proxy-authenticated deploy still resolves; absent that, NULL attribution.
-        getLog().warn({ err: err as Error }, 'web.session_resolve_failed');
+        // warn (not error): this is the soft attribution seam, never an access
+        // gate — requireWebUser is the strict variant that 503s instead.
+        getLog().warn({ err: err as Error, path: c.req.path }, 'web.session_resolve_failed');
       }
     }
 
@@ -1089,12 +1092,15 @@ export function registerApiRoutes(
       // Best-effort attribution: the header WAS present, but identity resolution
       // failed (e.g. DB outage). Fall back to NULL attribution rather than
       // failing the request. headerPresent distinguishes this from "no header".
-      getLog().warn({ err: err as Error, headerPresent: true }, 'web.user_resolve_failed');
+      getLog().warn(
+        { err: err as Error, headerPresent: true, path: c.req.path },
+        'web.user_resolve_failed'
+      );
       return undefined;
     }
   }
 
-  /** Back-compat: the soft attribution call sites only need the user id. */
+  /** Soft attribution: call sites that only need the user id, not the role. */
   async function resolveWebUserId(c: Context): Promise<string | undefined> {
     return (await resolveAuthContext(c))?.userId;
   }
@@ -1109,7 +1115,7 @@ export function registerApiRoutes(
   async function requireWebUser(
     c: Context,
     failMessage = 'Web authentication required'
-  ): Promise<{ userId: string; role: string } | { error: Response }> {
+  ): Promise<{ userId: string; role: UserRole } | { error: Response }> {
     // 1. Better Auth session.
     const auth = getAuth();
     if (auth) {
@@ -1150,9 +1156,10 @@ export function registerApiRoutes(
 
   // GET /api/auth/status - web auth availability + signup posture.
   // Public (no identity required): the web UI calls this before login to decide
-  // whether to render the login gate at all. When web auth is enabled this path
-  // is NOT a Better Auth endpoint, so the mounted handler 404s and falls through
-  // to here (see the mount in index.ts).
+  // whether to render the login gate at all. When web auth is enabled the
+  // /api/auth/* mount explicitly next()s Archon-owned paths (this one included)
+  // before Better Auth's handler runs, so the request reaches here untouched
+  // (see isArchonOwnedAuthPath in index.ts).
   registerOpenApiRoute(authStatusRoute, c => {
     return c.json({ enabled: isWebAuthEnabled(), signup: getSignupMode() });
   });

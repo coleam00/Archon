@@ -95,7 +95,7 @@ Each platform adapter supports an optional user whitelist via environment variab
 - Every incoming message or webhook is checked before processing.
 - Unauthorized users are silently rejected -- no error response is sent back.
 - Unauthorized attempts are logged with masked user identifiers for auditing.
-- The Web UI has no built-in user authentication. Use `CADDY_BASIC_AUTH` or form auth when exposing it publicly (see [Docker / Deployment](/reference/configuration/#docker--deployment) variables).
+- SQLite/solo installs have no built-in user authentication -- use `CADDY_BASIC_AUTH` or form auth to protect the Web UI when exposing it publicly (see [Docker / Deployment](/reference/configuration/#docker--deployment) variables). PostgreSQL deployments can additionally enable optional per-user email/password login via Better Auth (`BETTER_AUTH_SECRET`), allowlist-gated by default.
 
 ## Webhook Security
 

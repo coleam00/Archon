@@ -247,4 +247,43 @@ describe('?mine filter — non-enforcing', () => {
     expect(res.status).toBe(200);
     expect(mockListConversations.mock.calls[0]?.[4]).toBe('user-from-bob');
   });
+
+  // The headline guarantee of this PR: ?mine is non-enforcing. With no
+  // resolvable identity (no session, no header) it must degrade to listing
+  // everything — NOT to an empty/zero-result gate.
+  test('runs: ?mine=true with no identity → still returns all (no userId filter)', async () => {
+    const app = makeApp();
+    const res = await app.request('/api/workflows/runs?mine=true');
+    expect(res.status).toBe(200);
+    expect(mockFindOrCreateUser).not.toHaveBeenCalled();
+    expect(mockListWorkflowRuns.mock.calls[0]?.[0]?.userId).toBeUndefined();
+  });
+
+  test('conversations: ?mine=true with no identity → still returns all (no userId filter)', async () => {
+    const app = makeApp();
+    const res = await app.request('/api/conversations?mine=true');
+    expect(res.status).toBe(200);
+    expect(mockFindOrCreateUser).not.toHaveBeenCalled();
+    expect(mockListConversations.mock.calls[0]?.[4]).toBeUndefined();
+  });
+
+  // Resilience: a Better Auth session lookup that throws (e.g. DB outage) must
+  // fall through to the trusted proxy header rather than dropping attribution.
+  test('runs: ?mine=true — session lookup throws → falls through to header', async () => {
+    authEnabled = true;
+    authInstance = {
+      api: {
+        getSession: async () => {
+          throw new Error('PG connection refused');
+        },
+      },
+    };
+    const app = makeApp();
+    const res = await app.request('/api/workflows/runs?mine=true', {
+      headers: { 'X-Archon-User': 'fallback-user' },
+    });
+    expect(res.status).toBe(200);
+    expect(mockFindOrCreateUser).toHaveBeenCalledWith('web', 'fallback-user', 'fallback-user');
+    expect(mockListWorkflowRuns.mock.calls[0]?.[0]?.userId).toBe('user-from-fallback-user');
+  });
 });

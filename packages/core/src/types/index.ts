@@ -12,6 +12,7 @@ export type {
   IdentityPlatform,
   User,
   UserIdentity,
+  UserRole,
   Codebase,
   Session,
   SessionMetadata,

@@ -428,8 +428,9 @@ ALTER TABLE remote_agent_users
 -- bundled-schema auto-apply on startup converges. Better Auth owns these tables
 -- and the column shape (text ids, camelCase columns) — Archon never queries them
 -- directly; a session is mapped to the canonical remote_agent_users row via
--- user_identities('web', <betterAuthUserId>). Created only when web auth is
--- enabled (BETTER_AUTH_SECRET + DATABASE_URL); harmless no-ops otherwise.
+-- user_identities('web', <betterAuthUserId>). Always created on Postgres (the
+-- IF NOT EXISTS apply runs on every boot); populated only when web auth is
+-- enabled (BETTER_AUTH_SECRET + DATABASE_URL), harmless empty tables otherwise.
 CREATE TABLE IF NOT EXISTS remote_agent_auth_user (
   "id" text NOT NULL PRIMARY KEY,
   "name" text NOT NULL,
