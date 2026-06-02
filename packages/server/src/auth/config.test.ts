@@ -5,6 +5,7 @@ import {
   parseAllowedEmails,
   isEmailAllowed,
   getSignupMode,
+  isApiGateEnabled,
 } from './config';
 
 const VALID_SECRET = 'a'.repeat(32);
@@ -77,12 +78,44 @@ describe('auth/config', () => {
   });
 
   describe('getSignupMode', () => {
-    test("'open' when no allowlist", () => {
-      expect(getSignupMode({})).toBe('open');
+    test("'disabled' by default when no allowlist (safe default — not open)", () => {
+      expect(getSignupMode({})).toBe('disabled');
     });
 
     test("'allowlist' when emails are configured", () => {
       expect(getSignupMode({ ARCHON_AUTH_ALLOWED_EMAILS: 'a@b.com' })).toBe('allowlist');
+    });
+
+    test("'open' only when ARCHON_AUTH_OPEN_SIGNUP=true and no allowlist", () => {
+      expect(getSignupMode({ ARCHON_AUTH_OPEN_SIGNUP: 'true' })).toBe('open');
+    });
+
+    test('allowlist wins over the open flag', () => {
+      expect(
+        getSignupMode({ ARCHON_AUTH_ALLOWED_EMAILS: 'a@b.com', ARCHON_AUTH_OPEN_SIGNUP: 'true' })
+      ).toBe('allowlist');
+    });
+  });
+
+  describe('isApiGateEnabled', () => {
+    test('true when web auth is enabled and not opted out (default)', () => {
+      expect(isApiGateEnabled({ DATABASE_URL: PG_URL, BETTER_AUTH_SECRET: VALID_SECRET })).toBe(
+        true
+      );
+    });
+
+    test('false when web auth is disabled', () => {
+      expect(isApiGateEnabled({})).toBe(false);
+    });
+
+    test('false when explicitly opted out via ARCHON_WEB_AUTH_REQUIRED=false', () => {
+      expect(
+        isApiGateEnabled({
+          DATABASE_URL: PG_URL,
+          BETTER_AUTH_SECRET: VALID_SECRET,
+          ARCHON_WEB_AUTH_REQUIRED: 'false',
+        })
+      ).toBe(false);
     });
   });
 });

@@ -45,7 +45,9 @@ export function assertWebAuthAtBoot(env: NodeJS.ProcessEnv = process.env): void 
 
 /**
  * Parse the signup allowlist from `ARCHON_AUTH_ALLOWED_EMAILS` (comma-separated,
- * lowercased, trimmed, blanks dropped). An empty/unset list means open signup.
+ * lowercased, trimmed, blanks dropped). An empty/unset list does NOT mean open
+ * signup — see `getSignupMode` (empty defaults to `disabled` unless
+ * `ARCHON_AUTH_OPEN_SIGNUP=true`).
  */
 export function parseAllowedEmails(env: NodeJS.ProcessEnv = process.env): string[] {
   return (env.ARCHON_AUTH_ALLOWED_EMAILS ?? '')
@@ -63,7 +65,29 @@ export function isEmailAllowed(email: string, allowlist: string[]): boolean {
   return allowlist.includes(email.trim().toLowerCase());
 }
 
-/** Signup posture surfaced to the web UI (`GET /api/auth/status`). */
-export function getSignupMode(env: NodeJS.ProcessEnv = process.env): 'allowlist' | 'open' {
-  return parseAllowedEmails(env).length > 0 ? 'allowlist' : 'open';
+/**
+ * Signup posture surfaced to the web UI (`GET /api/auth/status`) and used to set
+ * Better Auth's `disableSignUp`:
+ *   - `allowlist` — `ARCHON_AUTH_ALLOWED_EMAILS` set → invite-gated.
+ *   - `open`      — no allowlist but `ARCHON_AUTH_OPEN_SIGNUP=true` → anyone may register.
+ *   - `disabled`  — no allowlist and no open flag → signup off (login only).
+ * The default is `disabled`, so enabling web auth without an allowlist never
+ * silently exposes open public registration on a reachable URL.
+ */
+export function getSignupMode(
+  env: NodeJS.ProcessEnv = process.env
+): 'allowlist' | 'open' | 'disabled' {
+  if (parseAllowedEmails(env).length > 0) return 'allowlist';
+  return env.ARCHON_AUTH_OPEN_SIGNUP === 'true' ? 'open' : 'disabled';
+}
+
+/**
+ * Whether enabling web auth also gates the API server-side: every `/api/*`
+ * request must resolve to an identity (except the public allowlist) or get 401.
+ * On by default when web auth is enabled; `ARCHON_WEB_AUTH_REQUIRED=false` keeps
+ * the login-UI-only posture (e.g. when a reverse proxy already gates access).
+ * Always false when web auth is disabled (solo/local installs unaffected).
+ */
+export function isApiGateEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return isWebAuthEnabled(env) && env.ARCHON_WEB_AUTH_REQUIRED !== 'false';
 }

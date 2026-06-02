@@ -83,7 +83,7 @@ import * as workflowEventDb from '@archon/core/db/workflow-events';
 import * as messageDb from '@archon/core/db/messages';
 import * as userDb from '@archon/core/db/users';
 import { resetWorkflowNodeSessions } from '@archon/core/operations/workflow-operations';
-import { getAuth, isWebAuthEnabled, getSignupMode } from '../auth';
+import { getAuth, isWebAuthEnabled, getSignupMode, isApiGateEnabled } from '../auth';
 import { errorSchema } from './schemas/common.schemas';
 import { updateCheckResponseSchema } from './schemas/system.schemas';
 import {
@@ -1039,6 +1039,25 @@ export function registerApiRoutes(
   // CORS for Web UI — allow-all is fine for a single-developer tool.
   // Override with WEB_UI_ORIGIN env var to restrict if exposing publicly.
   app.use('/api/*', cors({ origin: process.env.WEB_UI_ORIGIN || '*' }));
+
+  // Server-side access gate: when web auth is enabled (and not opted out via
+  // ARCHON_WEB_AUTH_REQUIRED=false), every /api/* request must resolve to an
+  // identity or get 401 — this is what makes Better Auth the real access
+  // boundary so a reverse-proxy auth sidecar can retire. Public exceptions:
+  //   - /api/auth/* — the login/status/device-flow surface (can't gate login)
+  //   - /api/health* — the Docker/uptime healthcheck MUST stay reachable
+  // /webhooks/* (HMAC-verified) and /internal/* (loopback-guarded) are outside
+  // /api/* and untouched. No-op when web auth is disabled (solo/local unchanged).
+  // `resolveAuthContext`/`apiError` are function declarations below → hoisted.
+  const PUBLIC_API_GATE_PREFIXES = ['/api/auth/', '/api/health'];
+  app.use('/api/*', async (c, next) => {
+    if (!isApiGateEnabled()) return next();
+    const path = c.req.path;
+    if (PUBLIC_API_GATE_PREFIXES.some(p => path === p || path.startsWith(p))) return next();
+    const ctx = await resolveAuthContext(c);
+    if (!ctx) return apiError(c, 401, 'Authentication required');
+    return next();
+  });
 
   /**
    * Resolve the per-request auth context: `{ userId, role }`, or undefined when

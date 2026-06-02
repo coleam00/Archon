@@ -95,7 +95,9 @@ Each platform adapter supports an optional user whitelist via environment variab
 - Every incoming message or webhook is checked before processing.
 - Unauthorized users are silently rejected -- no error response is sent back.
 - Unauthorized attempts are logged with masked user identifiers for auditing.
-- SQLite/solo installs have no built-in user authentication -- use `CADDY_BASIC_AUTH` or form auth to protect the Web UI when exposing it publicly (see [Docker / Deployment](/reference/configuration/#docker--deployment) variables). PostgreSQL deployments can additionally enable optional per-user email/password login via Better Auth (`BETTER_AUTH_SECRET`), allowlist-gated by default.
+- SQLite/solo installs have no built-in user authentication -- use `CADDY_BASIC_AUTH` or form auth to protect the Web UI when exposing it publicly (see [Docker / Deployment](/reference/configuration/#docker--deployment) variables). PostgreSQL deployments can additionally enable optional per-user email/password login via Better Auth (`BETTER_AUTH_SECRET`).
+- When web auth is enabled it **gates the API server-side**: every `/api/*` request needs a session/identity or gets `401`, except `/api/auth/*` (login) and `/api/health*` (healthcheck). This makes Better Auth the real access boundary — so you can drop the Caddy `forward_auth` sidecar and stop the `auth-service`. To flip the deployment: confirm `/api/health`, a webhook, and the SSE stream still work, then remove the `forward_auth` block from the Caddyfile and the `auth-service` from compose. Set `ARCHON_WEB_AUTH_REQUIRED=false` to keep login-UI-only (e.g. when a proxy still gates access).
+- **Signup is closed by default.** With web auth on and no `ARCHON_AUTH_ALLOWED_EMAILS`, self-serve registration is **disabled** (login only) and the server logs `web_auth.signup_disabled_no_allowlist` at boot — it never silently opens public signup on a reachable URL. Set the allowlist to invite teammates, or `ARCHON_AUTH_OPEN_SIGNUP=true` for open signup.
 
 ## Webhook Security
 

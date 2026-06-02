@@ -99,7 +99,7 @@ import {
   captureArchonStarted,
 } from '@archon/paths';
 import { selectGitHubAuthMode, parseGitCredentialPath } from './github-auth-bootstrap';
-import { getAuth, closeAuth, isWebAuthEnabled, assertWebAuthAtBoot } from './auth';
+import { getAuth, closeAuth, isWebAuthEnabled, assertWebAuthAtBoot, getSignupMode } from './auth';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -636,6 +636,15 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       return webAuth.handler(c.req.raw);
     });
     getLog().info('web_auth.handler_registered');
+    // Safe-default signal: web auth is on but no allowlist + no open-signup flag
+    // → self-serve registration is OFF. Surface it so an operator who meant to
+    // invite teammates isn't silently locked out of signups.
+    if (getSignupMode() === 'disabled') {
+      getLog().warn(
+        'web_auth.signup_disabled_no_allowlist — signup is OFF. Set ARCHON_AUTH_ALLOWED_EMAILS ' +
+          'to invite users, or ARCHON_AUTH_OPEN_SIGNUP=true for open signup.'
+      );
+    }
   }
 
   // Register Web UI API routes

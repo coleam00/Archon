@@ -1,4 +1,4 @@
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
@@ -29,13 +29,15 @@ const noopLogger = () => ({
 
 // --- Controllable web-auth module (../auth) ---
 let authEnabled = false;
-let signupMode: 'allowlist' | 'open' = 'open';
+let signupMode: 'allowlist' | 'open' | 'disabled' = 'disabled';
+let apiGateEnabled = false;
 let authInstance: { api: { getSession: (args: unknown) => Promise<unknown> } } | null = null;
 
 mock.module('../auth', () => ({
   getAuth: () => authInstance,
   isWebAuthEnabled: () => authEnabled,
   getSignupMode: () => signupMode,
+  isApiGateEnabled: () => apiGateEnabled,
 }));
 
 // --- Identity resolution ---
@@ -183,6 +185,62 @@ describe('GET /api/auth/status', () => {
     const res = await app.request('/api/auth/status');
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ enabled: true, signup: 'allowlist' });
+  });
+});
+
+describe('server-side /api/* gate', () => {
+  beforeEach(() => {
+    authEnabled = false;
+    apiGateEnabled = false;
+    authInstance = null;
+    mockFindOrCreateUser.mockClear();
+  });
+  afterEach(() => {
+    apiGateEnabled = false; // don't leak the gate into other describes
+  });
+
+  test('gate off (default) → /api/conversations is reachable unauthenticated', async () => {
+    const res = await makeApp().request('/api/conversations');
+    expect(res.status).toBe(200);
+  });
+
+  test('gate on + no identity → 401 on a protected /api route', async () => {
+    apiGateEnabled = true;
+    const res = await makeApp().request('/api/conversations');
+    expect(res.status).toBe(401);
+  });
+
+  test('gate on → /api/auth/status stays public (login surface allowlisted)', async () => {
+    apiGateEnabled = true;
+    authEnabled = true;
+    const res = await makeApp().request('/api/auth/status');
+    expect(res.status).toBe(200);
+  });
+
+  test('gate on → /api/health is never blocked by the gate (healthcheck allowlist)', async () => {
+    apiGateEnabled = true;
+    // /api/health is registered in startServer, not registerApiRoutes, so it 404s
+    // in this app — but the assertion that matters is it is NOT a 401 (the gate let it through).
+    const res = await makeApp().request('/api/health');
+    expect(res.status).not.toBe(401);
+  });
+
+  test('gate on + Better Auth session → protected route passes', async () => {
+    apiGateEnabled = true;
+    authEnabled = true;
+    authInstance = {
+      api: { getSession: async () => ({ user: { id: 'sess-1', name: 'A', email: 'a@x.io' } }) },
+    };
+    const res = await makeApp().request('/api/conversations');
+    expect(res.status).toBe(200);
+  });
+
+  test('gate on + X-Archon-User header → protected route passes', async () => {
+    apiGateEnabled = true;
+    const res = await makeApp().request('/api/conversations', {
+      headers: { 'X-Archon-User': 'alice' },
+    });
+    expect(res.status).toBe(200);
   });
 });
 

@@ -18,7 +18,7 @@ import { betterAuth } from 'better-auth';
 import { APIError } from 'better-auth/api';
 import { Pool } from 'pg';
 import { createLogger } from '@archon/paths';
-import { isWebAuthEnabled, parseAllowedEmails, isEmailAllowed } from './config';
+import { isWebAuthEnabled, parseAllowedEmails, isEmailAllowed, getSignupMode } from './config';
 
 const log = createLogger('web-auth');
 
@@ -73,6 +73,9 @@ function buildAuth(env: NodeJS.ProcessEnv): AuthInstance {
   // The allowlist is static for this install — parse it once at construction
   // rather than on every signup.
   const allowedEmails = parseAllowedEmails(env);
+  // Safe default: with no allowlist and no explicit open-signup flag, signup is
+  // OFF (login only) rather than silently open on a reachable URL.
+  const signupDisabled = getSignupMode(env) === 'disabled';
 
   // Dedicated small pool; Better Auth requires a real pg.Pool. Retained at module
   // scope so closeAuth() can end it on shutdown.
@@ -86,7 +89,10 @@ function buildAuth(env: NodeJS.ProcessEnv): AuthInstance {
     ...(env.BETTER_AUTH_URL ? { baseURL: env.BETTER_AUTH_URL } : {}),
     ...(trustedOrigins.length ? { trustedOrigins } : {}),
     // requireEmailVerification defaults false → simple flow, no email sender.
-    emailAndPassword: { enabled: true },
+    // disableSignUp closes self-serve registration when the posture is
+    // `disabled` (no allowlist + no ARCHON_AUTH_OPEN_SIGNUP=true). The allowlist
+    // hook below is the belt-and-suspenders for `allowlist` mode.
+    emailAndPassword: { enabled: true, disableSignUp: signupDisabled },
     user: { modelName: 'remote_agent_auth_user' },
     session: { modelName: 'remote_agent_auth_session' },
     account: { modelName: 'remote_agent_auth_account' },

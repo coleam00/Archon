@@ -10,6 +10,7 @@ export {
   parseAllowedEmails,
   isEmailAllowed,
   getSignupMode,
+  isApiGateEnabled,
   MIN_BETTER_AUTH_SECRET_LENGTH,
 } from './config';
 export { getAuth, closeAuth, resetAuthForTest, type AuthInstance } from './instance';
