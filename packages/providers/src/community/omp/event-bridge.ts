@@ -91,6 +91,130 @@ export function usageToTokens(usage: Usage): TokenUsage {
   };
 }
 
+const THINKING_OPEN_TAGS = ['<think>', '<thinking>'] as const;
+const THINKING_CLOSE_TAGS = ['</think>', '</thinking>'] as const;
+const THINKING_TAGS = [...THINKING_OPEN_TAGS, ...THINKING_CLOSE_TAGS] as const;
+
+interface ThinkingTagMatch {
+  kind: 'open' | 'close';
+  end: number;
+}
+
+function matchThinkingTagAt(lowerText: string, index: number): ThinkingTagMatch | undefined {
+  for (const tag of THINKING_OPEN_TAGS) {
+    if (lowerText.startsWith(tag, index)) return { kind: 'open', end: index + tag.length };
+  }
+  for (const tag of THINKING_CLOSE_TAGS) {
+    if (lowerText.startsWith(tag, index)) return { kind: 'close', end: index + tag.length };
+  }
+  return undefined;
+}
+
+function isThinkingTagPrefix(lowerText: string, tags: readonly string[]): boolean {
+  if (lowerText.length === 0) return false;
+  return tags.some(tag => tag.startsWith(lowerText));
+}
+
+function trailingThinkingTagPrefixLength(lowerText: string, tags: readonly string[]): number {
+  const maxLength = Math.min(lowerText.length, Math.max(...tags.map(tag => tag.length - 1)));
+  for (let length = maxLength; length > 0; length -= 1) {
+    const suffix = lowerText.slice(lowerText.length - length);
+    if (isThinkingTagPrefix(suffix, tags)) return length;
+  }
+  return 0;
+}
+
+/**
+ * Streaming-safe remover for model-emitted thinking markup.
+ *
+ * OMP normally emits reasoning as `thinking_delta`, which Archon keeps out of
+ * user-visible text. Some OpenAI-compatible/custom models still stream raw
+ * `<think>` / `<thinking>` blocks as `text_delta`; strip those blocks before
+ * they reach Archon's command parser or platform adapters.
+ */
+export class ThinkingTagStripper {
+  private pending = '';
+  private inThinkingBlock = false;
+
+  write(input: string): string {
+    if (input.length === 0) return '';
+    const text = this.pending + input;
+    this.pending = '';
+    return this.process(text);
+  }
+
+  flush(): string {
+    if (this.inThinkingBlock) {
+      this.pending = '';
+      return '';
+    }
+    const out = this.pending;
+    this.pending = '';
+    return out;
+  }
+
+  private process(text: string): string {
+    const lowerText = text.toLowerCase();
+    let out = '';
+    let index = 0;
+
+    while (index < text.length) {
+      if (this.inThinkingBlock) {
+        const closeIndex = lowerText.indexOf('<', index);
+        if (closeIndex === -1) {
+          this.pending = '';
+          return out;
+        }
+
+        const tag = matchThinkingTagAt(lowerText, closeIndex);
+        if (tag?.kind === 'close') {
+          this.inThinkingBlock = false;
+          index = tag.end;
+          continue;
+        }
+
+        const suffix = lowerText.slice(closeIndex);
+        if (isThinkingTagPrefix(suffix, THINKING_CLOSE_TAGS)) {
+          this.pending = text.slice(closeIndex);
+          return out;
+        }
+
+        index = closeIndex + 1;
+        continue;
+      }
+
+      const tagIndex = lowerText.indexOf('<', index);
+      if (tagIndex === -1) {
+        const remaining = lowerText.slice(index);
+        const pendingLength = trailingThinkingTagPrefixLength(remaining, THINKING_TAGS);
+        const emitEnd = text.length - pendingLength;
+        out += text.slice(index, emitEnd);
+        this.pending = pendingLength > 0 ? text.slice(emitEnd) : '';
+        return out;
+      }
+
+      out += text.slice(index, tagIndex);
+      const tag = matchThinkingTagAt(lowerText, tagIndex);
+      if (tag) {
+        this.inThinkingBlock = tag.kind === 'open';
+        index = tag.end;
+        continue;
+      }
+
+      const suffix = lowerText.slice(tagIndex);
+      if (isThinkingTagPrefix(suffix, THINKING_TAGS)) {
+        this.pending = text.slice(tagIndex);
+        return out;
+      }
+
+      out += text[tagIndex];
+      index = tagIndex + 1;
+    }
+
+    return out;
+  }
+}
+
 // ─── Event mapping ─────────────────────────────────────────────────────────
 
 type OmpEvent =
@@ -264,14 +388,38 @@ export async function* bridgeSession(
 ): AsyncGenerator<MessageChunk> {
   const queue = new AsyncQueue<BridgeQueueItem>();
   const pendingChunks: MessageChunk[] = [];
+  const thinkingTagStripper = new ThinkingTagStripper();
   let done = false;
   let error: Error | undefined;
 
+  const enqueueSanitizedChunk = (chunk: MessageChunk): void => {
+    if (chunk.type !== 'assistant') {
+      queue.push({ kind: 'chunk', chunk });
+      return;
+    }
+
+    const content = thinkingTagStripper.write(chunk.content);
+    if (content.length > 0) {
+      queue.push({ kind: 'chunk', chunk: { ...chunk, content } });
+    }
+  };
+
+  const enqueuePendingAssistantText = (): void => {
+    const content = thinkingTagStripper.flush();
+    if (content.length > 0) {
+      queue.push({ kind: 'chunk', chunk: { type: 'assistant', content } });
+    }
+  };
+
   const unsubscribe = session.subscribe(event => {
     if (done) return;
-    const chunks = mapOmpEvent(event as OmpEvent);
+    const ompEvent = event as OmpEvent;
+    if (ompEvent.type === 'agent_end') {
+      enqueuePendingAssistantText();
+    }
+    const chunks = mapOmpEvent(ompEvent);
     for (const chunk of chunks) {
-      queue.push({ kind: 'chunk', chunk });
+      enqueueSanitizedChunk(chunk);
     }
   });
 
@@ -302,6 +450,12 @@ export async function* bridgeSession(
   try {
     for await (const item of queue) {
       if (item.kind === 'done') {
+        const content = thinkingTagStripper.flush();
+        if (content.length > 0) {
+          const chunk: MessageChunk = { type: 'assistant', content };
+          pendingChunks.push(chunk);
+          yield chunk;
+        }
         done = true;
         break;
       }

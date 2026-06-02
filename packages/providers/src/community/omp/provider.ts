@@ -127,9 +127,10 @@ export class OmpProvider implements IAgentProvider {
     }
     if (!model) {
       const loadError = modelRegistry.getError?.();
-      if (loadError) {
+      const loadErrorMessage = typeof loadError === 'string' ? loadError : loadError?.message;
+      if (loadErrorMessage) {
         getLog().warn(
-          { ompProvider: parsed.provider, modelId: parsed.modelId, loadError },
+          { ompProvider: parsed.provider, modelId: parsed.modelId, loadError: loadErrorMessage },
           'omp.model_registry_load_error'
         );
       }
@@ -137,11 +138,13 @@ export class OmpProvider implements IAgentProvider {
         {
           ompProvider: parsed.provider,
           modelId: parsed.modelId,
-          loadError: loadError ?? null,
+          loadError: loadErrorMessage ?? null,
         },
         'omp.model_not_found'
       );
-      throw new Error(formatOmpModelNotFoundMessage(parsed.provider, parsed.modelId, loadError));
+      throw new Error(
+        formatOmpModelNotFoundMessage(parsed.provider, parsed.modelId, loadErrorMessage)
+      );
     }
 
     const envVarName = OMP_PROVIDER_ENV_VARS[parsed.provider];
