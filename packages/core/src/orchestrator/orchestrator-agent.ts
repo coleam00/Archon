@@ -422,7 +422,29 @@ async function dispatchOrchestratorWorkflow(
     // gate) — surface that to the user and fall through to a fresh run on
     // the same worktree rather than silently restarting.
     const deps = createWorkflowDeps();
-    const prepared = await hydrateResumableRun(deps, resumableRun);
+    let prepared: Awaited<ReturnType<typeof hydrateResumableRun>>;
+    try {
+      prepared = await hydrateResumableRun(deps, resumableRun);
+    } catch (err) {
+      // resumeWorkflowRun is a compare-and-swap: if another surface (web Resume,
+      // a concurrent re-dispatch, the CLI) already claimed this run, it throws
+      // WorkflowNotResumableError. Surface a friendly note instead of leaking the
+      // raw internal string to the generic failure catch, and do NOT fall through
+      // to a fresh run — the other resumer owns the worktree (#1830 I2).
+      if (err instanceof workflowDb.WorkflowNotResumableError) {
+        getLog().info(
+          { workflowName: workflow.name, runId: resumableRun.id, status: err.currentStatus },
+          'orchestrator.resume_lost_race'
+        );
+        await platform.sendMessage(
+          conversationId,
+          `⚠️ **${workflow.name}** is already being resumed (status: ${err.currentStatus}). ` +
+            'No action taken — follow the existing run for progress.'
+        );
+        return;
+      }
+      throw err;
+    }
     if (prepared) {
       await executeWorkflow(
         deps,
