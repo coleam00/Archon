@@ -315,6 +315,14 @@ async function* streamCodexEvents(
   const state: CodexStreamState = {};
   let accumulatedText = '';
 
+  // For a NEW thread the snapshot `threadId` passed in is null — the Codex SDK
+  // only assigns the thread id during the run, via the `thread.started` event
+  // handled below. Capture it so the terminal result chunk surfaces a resumable
+  // sessionId; persist_session and suspend/resume both depend on it. For a
+  // resumed thread the snapshot is already the id (thread.started may or may not
+  // re-fire), so the captured value stays correct either way.
+  let resolvedThreadId: string | null | undefined = threadId;
+
   if (abortSignal?.aborted) {
     getLog().info('query_aborted_before_stream');
     throw new Error('Query aborted');
@@ -331,6 +339,18 @@ async function* streamCodexEvents(
     if (abortSignal?.aborted) {
       getLog().info('query_aborted_between_events');
       throw new Error('Query aborted');
+    }
+
+    if (event.type === 'thread.started') {
+      // ThreadStartedEvent.thread_id — "can be used to resume the thread later"
+      // (@openai/codex-sdk index.d.ts). This is the only place a new thread's id
+      // surfaces, so capture it for the result chunk's sessionId.
+      const startedThreadId = (event as { thread_id?: string }).thread_id;
+      if (typeof startedThreadId === 'string' && startedThreadId.length > 0) {
+        resolvedThreadId = startedThreadId;
+        getLog().debug({ threadId: startedThreadId }, 'codex.thread_started');
+      }
+      continue;
     }
 
     if (event.type === 'item.started') {
@@ -367,7 +387,7 @@ async function* streamCodexEvents(
       getLog().error({ errorMessage }, 'turn_failed');
       yield {
         type: 'result',
-        sessionId: threadId ?? undefined,
+        sessionId: resolvedThreadId ?? undefined,
         isError: true,
         errorSubtype: 'codex_turn_failed',
         errors: [errorMessage],
@@ -563,7 +583,7 @@ async function* streamCodexEvents(
 
       yield {
         type: 'result',
-        sessionId: threadId ?? undefined,
+        sessionId: resolvedThreadId ?? undefined,
         tokens: usage,
         ...(structuredOutput !== undefined ? { structuredOutput } : {}),
       };
@@ -583,7 +603,7 @@ async function* streamCodexEvents(
   getLog().error({ message }, 'stream_incomplete');
   yield {
     type: 'result',
-    sessionId: threadId ?? undefined,
+    sessionId: resolvedThreadId ?? undefined,
     isError: true,
     errorSubtype: 'codex_stream_incomplete',
     errors: [message],

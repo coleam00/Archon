@@ -117,6 +117,35 @@ describe('CodexProvider', () => {
       });
     });
 
+    test('captures the new-thread id from the thread.started event (resumable sessionId)', async () => {
+      // The real Codex SDK assigns a NEW thread's id during the run, via the
+      // thread.started event — not synchronously on startThread(). Simulate a
+      // thread whose .id is still null and assert the result carries the id from
+      // the event, so persist_session / suspend-resume have a resumable id.
+      mockStartThread.mockReturnValue({ id: null, runStreamed: mockRunStreamed });
+      mockRunStreamed.mockResolvedValue({
+        events: (async function* () {
+          yield { type: 'thread.started', thread_id: 'evt-thread-id' };
+          yield {
+            type: 'item.completed',
+            item: { type: 'agent_message', text: 'stored' },
+          };
+          yield { type: 'turn.completed', usage: defaultUsage };
+        })(),
+      });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('remember X', '/workspace')) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks[chunks.length - 1]).toEqual({
+        type: 'result',
+        sessionId: 'evt-thread-id',
+        tokens: { input: 10, output: 5 },
+      });
+    });
+
     test('yields tool events from command_execution items', async () => {
       mockRunStreamed.mockResolvedValue({
         events: (async function* () {
