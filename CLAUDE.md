@@ -497,6 +497,7 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 - Variable substitution: `$1`, `$2`, `$3`, `$ARGUMENTS`
 - Session management: Create new or resume existing
 - Stream AI responses to platform
+- System prompt includes a "Managing Workflow Runs" section (`buildRunManagementSection` in `prompt-builder.ts`) so the chat agent on **any** provider can drive run management (`archon workflow runs/get/status/run --detach/approve/reject/abandon`) directly via bash. This is the cross-provider delivery of the `manage-run` skill — direct chat doesn't consume the `skills:` option (workflow-node-only), and Codex has no skills capability, so the system prompt is the only channel that reaches all five providers.
 
 **4. AI Agent Providers** (`packages/providers/src/`)
 - Implement `IAgentProvider` interface

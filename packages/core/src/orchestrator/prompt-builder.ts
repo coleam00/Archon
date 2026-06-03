@@ -213,9 +213,36 @@ ${formatProjectSection(scopedCodebase)}
 }
 
 /**
+ * Build the run-management section of the orchestrator prompt.
+ *
+ * Teaches the chat agent (any provider) that it can inspect and control workflow
+ * runs directly via the `archon` CLI over bash — the cross-provider delivery of
+ * the `manage-run` skill. Direct chat is the one path where the `skills:` option
+ * is NOT consumed (it is workflow-node-only), so the system prompt is the only
+ * reliable channel that reaches every provider, including Codex (no skills
+ * capability). Invocation inherits the same `archon`-on-PATH convention the
+ * `archon` skill already assumes.
+ */
+export function buildRunManagementSection(): string {
+  return `## Managing Workflow Runs
+
+You can inspect and control this project's workflow runs directly via the \`archon\` CLI (bash) — you do NOT need to invoke a workflow for run management. Add \`--json\` to any command for a single clean, machine-readable line.
+
+- \`archon workflow runs [--json]\` — recent runs of ALL statuses for this project
+- \`archon workflow get <run-id> [--json]\` — one run's status/error (add \`--verbose\` for per-node detail)
+- \`archon workflow status [--json]\` — active runs only (running/paused)
+- \`archon workflow run <workflow> "<message>" --detach\` — start a run in the background (returns immediately)
+- \`archon workflow approve <run-id> [--json]\` / \`archon workflow reject <run-id> [reason] [--json]\` — resolve a paused approval gate
+- \`archon workflow abandon <run-id> [--json]\` — cancel a non-terminal run
+
+When the user asks what's running, whether a run passed/failed, or to approve / reject / cancel a run, use these commands directly instead of invoking a workflow. The \`manage-run\` skill has the full reference if it is loaded.`;
+}
+
+/**
  * Build the static orchestrator context string for use as a cacheable system prompt append.
  * Returns the same content as buildOrchestratorPrompt/buildProjectScopedPrompt depending
- * on whether the conversation is scoped to a project.
+ * on whether the conversation is scoped to a project, with the run-management section
+ * appended so every provider's direct chat can drive run management via the CLI.
  */
 export function buildOrchestratorSystemAppend(
   conversation: Conversation,
@@ -226,7 +253,9 @@ export function buildOrchestratorSystemAppend(
     ? codebases.find(c => c.id === conversation.codebase_id)
     : undefined;
 
-  return scopedCodebase
+  const base = scopedCodebase
     ? buildProjectScopedPrompt(scopedCodebase, codebases, workflows)
     : buildOrchestratorPrompt(codebases, workflows);
+
+  return `${base}\n\n${buildRunManagementSection()}`;
 }

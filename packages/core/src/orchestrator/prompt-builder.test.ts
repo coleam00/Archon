@@ -3,6 +3,7 @@ import {
   buildRoutingRulesWithProject,
   formatWorkflowContextSection,
   buildOrchestratorSystemAppend,
+  buildRunManagementSection,
 } from './prompt-builder';
 
 describe('buildRoutingRulesWithProject', () => {
@@ -133,5 +134,38 @@ describe('buildOrchestratorSystemAppend', () => {
       workflows
     );
     expect(result).toContain('## Registered Projects');
+  });
+
+  test('appends the run-management section for a scoped conversation', () => {
+    const result = buildOrchestratorSystemAppend(makeConversation('cb-1'), codebases, workflows);
+    expect(result).toContain('## Managing Workflow Runs');
+    expect(result).toContain('archon workflow runs');
+    expect(result).toContain('--detach');
+  });
+
+  test('appends the run-management section for an unscoped conversation', () => {
+    const result = buildOrchestratorSystemAppend(makeConversation(null), codebases, workflows);
+    expect(result).toContain('## Managing Workflow Runs');
+    expect(result).toContain('archon workflow approve');
+  });
+});
+
+describe('buildRunManagementSection', () => {
+  test('lists the run-management verbs and the --json hint', () => {
+    const section = buildRunManagementSection();
+    expect(section).toContain('## Managing Workflow Runs');
+    for (const verb of [
+      'archon workflow runs',
+      'archon workflow get',
+      'archon workflow status',
+      'archon workflow run',
+      'archon workflow approve',
+      'archon workflow reject',
+      'archon workflow abandon',
+    ]) {
+      expect(section).toContain(verb);
+    }
+    expect(section).toContain('--json');
+    expect(section).toContain('--detach');
   });
 });
