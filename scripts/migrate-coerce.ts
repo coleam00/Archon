@@ -87,8 +87,13 @@ export function coerceJson(value: string | object | null): unknown {
     try {
       return JSON.parse(value);
     } catch (err) {
-      const e = err as Error;
-      throw new Error(`coerceJson: invalid JSON: ${e.message}; value=${value.slice(0, 200)}`);
+      // Logged with a 200-char preview so the operator can inspect the
+      // source data after the cutover. Returning null keeps the
+      // migration moving — the Postgres JSONB column accepts NULL.
+      console.error(
+        `[migrate-coerce] coerceJson: invalid JSON, treating as null: ${(err as Error).message}; value=${value.slice(0, 200)}`
+      );
+      return null;
     }
   }
   throw new TypeError(`coerceJson: expected string|object|null, got ${typeof value}`);

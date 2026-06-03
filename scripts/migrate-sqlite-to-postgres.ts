@@ -6,24 +6,6 @@
  * ~/.archon/archon.db (single-file SQLite), transforms per the type
  * coercion matrix in docs/plans/archon-postgres-migration.md, and
  * writes to a fresh Postgres database in a single transaction.
- *
- * Why a separate script (not via getDatabase() / IDatabase):
- *   - Reads SQLite tables in dependency order
- *   - Applies per-table type coercion before any adapter initializes
- *   - Supports --dry-run (emit SQL, no execution)
- *   - Opens its own pg.Pool with custom settings (max: 4, statement_timeout: 30000)
- *   - Decoupled from application startup so it can run while archon-server is stopped
- *
- * Usage:
- *   bun run scripts/migrate-sqlite-to-postgres.ts --dry-run
- *   bun run scripts/migrate-sqlite-to-postgres.ts --verify
- *   bun run scripts/migrate-sqlite-to-postgres.ts --from ~/.archon/archon.db --to $DATABASE_URL
- *
- * Exit codes:
- *   0  success (migration applied; verify PASS)
- *   1  pre-flight validation failure (missing file, bad URL)
- *   2  migration aborted (transaction rolled back)
- *   3  verify mismatch (row counts don't match source)
  */
 import { parseArgs } from 'util';
 import { existsSync } from 'fs';
@@ -33,10 +15,6 @@ import { Database } from 'bun:sqlite';
 import { Pool } from 'pg';
 import type { QueryResult } from 'pg';
 import { transformId, coerceBoolean, coerceJson, coerceTimestamp } from './migrate-coerce';
-
-// ---------------------------------------------------------------------------
-// CLI argument parsing
-// ---------------------------------------------------------------------------
 
 const DEFAULT_SQLITE_PATH = resolve(homedir(), '.archon', 'archon.db');
 const DEFAULT_BATCH_SIZE = 1000;
@@ -76,44 +54,12 @@ function parseCli(argv: string[]): CliArgs {
     from: values.from ?? DEFAULT_SQLITE_PATH,
     to,
     batchSize,
-    // `parseArgs` already returns typed booleans for `{ type: 'boolean' }`
-    // options — no need to wrap or compare.
     dryRun: values['dry-run'] ?? false,
     verify: values.verify ?? false,
     help: values.help ?? false,
   };
 }
 
-function printHelp(): void {
-  console.log(`SQLite -> Postgres migration
-
-Usage:
-  bun run scripts/migrate-sqlite-to-postgres.ts [flags]
-
-Flags:
-  --from <path>       Source SQLite file (default: ~/.archon/archon.db)
-  --to <url>          Target Postgres connection string (default: $DATABASE_URL)
-  --dry-run           Emit the generated SQL batches to stdout, do not execute
-  --verify            After import, compare row counts to source; exit 3 on mismatch
-  --batch-size <N>    Rows per multi-row INSERT (default: 1000)
-  -h, --help          Show this help
-
-Exit codes:
-  0  success
-  1  pre-flight validation failure
-  2  migration aborted (transaction rolled back)
-  3  verify mismatch (--verify only)`);
-}
-
-// ---------------------------------------------------------------------------
-// Per-table column lists (source order matches SELECT * from SQLite)
-// ---------------------------------------------------------------------------
-
-/**
- * Column lists per table, in the exact order the INSERT statement
- * expects. Adding a new column requires updating both the column list
- * AND the transform function below — keep them in sync.
- */
 const TABLE_COLUMNS = {
   remote_agent_users: ['id', 'display_name', 'email', 'created_at', 'updated_at'],
   remote_agent_user_identities: [
@@ -232,23 +178,95 @@ const TABLE_ORDER: readonly TableName[] = [
   'remote_agent_messages',
 ] as const;
 
-// ---------------------------------------------------------------------------
-// Per-table transforms
-// ---------------------------------------------------------------------------
+const FK_COLUMNS: Partial<Record<TableName, Record<string, TableName>>> = {
+  remote_agent_user_identities: { user_id: 'remote_agent_users' },
+  remote_agent_codebase_env_vars: { codebase_id: 'remote_agent_codebases' },
+  remote_agent_conversations: {
+    codebase_id: 'remote_agent_codebases',
+    isolation_env_id: 'remote_agent_isolation_environments',
+  },
+  remote_agent_sessions: {
+    conversation_id: 'remote_agent_conversations',
+    codebase_id: 'remote_agent_codebases',
+  },
+  remote_agent_isolation_environments: { codebase_id: 'remote_agent_codebases' },
+  remote_agent_workflow_runs: {
+    conversation_id: 'remote_agent_conversations',
+    codebase_id: 'remote_agent_codebases',
+  },
+  remote_agent_workflow_events: { workflow_run_id: 'remote_agent_workflow_runs' },
+  remote_agent_messages: { conversation_id: 'remote_agent_conversations' },
+};
+
+function loadParentIds(sqlite: Database, parent: TableName): Set<string> {
+  const rows = sqlite.prepare(`SELECT id FROM ${parent}`).all() as { id: string }[];
+  return new Set(rows.map(r => r.id));
+}
+
+function filterOrphans(
+  rows: Record<string, unknown>[],
+  fkColumns: Record<string, TableName>,
+  parentIdsCache: Map<TableName, Set<string>>
+): { kept: Record<string, unknown>[]; dropped: number } {
+  const kept: Record<string, unknown>[] = [];
+  let dropped = 0;
+  for (const row of rows) {
+    let isOrphan = false;
+    for (const [col, parent] of Object.entries(fkColumns)) {
+      const value = row[col];
+      if (value === null || value === undefined) continue;
+      const parentIds = parentIdsCache.get(parent);
+      if (parentIds && !parentIds.has(value as string)) {
+        isOrphan = true;
+        break;
+      }
+    }
+    if (isOrphan) dropped += 1;
+    else kept.push(row);
+  }
+  return { kept, dropped };
+}
 
 /**
- * Transform a row from the live SQLite shape to the Postgres shape.
- * Returns a tuple matching the column list in TABLE_COLUMNS[tableName].
- *
- * Per the type-coercion matrix:
- *   - primary keys: 32-char hex -> canonical UUID
- *   - booleans (hidden, active, allow_env_keys): 0/1 -> JS boolean
- *   - JSON (commands, metadata, data): TEXT -> object (pg serializes as JSONB)
- *   - timestamps: pass through
- *   - FK columns: pass through (already transformed by parent table's iteration)
+ * Recursively strip U+0000 (NUL) bytes and other C0 control chars
+ * (except TAB, LF, CR) from all strings in a value. `pg`'s JSONB
+ * encoder produces JSON via JSON.stringify, which escapes NUL as
+ * `\u0000`. The wire encoder then throws "unsupported Unicode
+ * escape sequence" when it parses the encoder's own output. NUL
+ * bytes in user-generated text are garbage; replacing with a
+ * stripped-then-padded form is safe for JSONB / TEXT / VARCHAR.
  */
-function transformRow(tableName: TableName, row: Record<string, unknown>): unknown[] {
-  switch (tableName) {
+export function sanitizeForPg<T>(value: T): T {
+  if (value === null || value === undefined) return value;
+  if (typeof value === 'string') {
+    // NUL (0x00) breaks the pg JSONB wire encoder (it re-parses its
+    // own JSON.stringify output and throws on \\u0000). Other C0
+    // control chars (0x01-0x08, 0x0B-0x0C, 0x0E-0x1F) are stripped
+    // too — they're not safe in JSONB either. TAB/LF/CR (0x09,
+    // 0x0A, 0x0D) are kept as legitimate whitespace. The `eslint-
+    // disable` is because no-control-regex flags the \\x00 class
+    // below, which is exactly the behavior we want here.
+    /* eslint-disable no-control-regex */
+    return value
+      .replace(/\u0000/g, '')
+      .replace(/[\u0001-\u0008\u000B\u000C\u000E-\u001F]/g, '') as T;
+    /* eslint-enable no-control-regex */
+  }
+  if (Array.isArray(value)) {
+    return value.map((v: unknown) => sanitizeForPg(v)) as unknown as T;
+  }
+  if (typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = sanitizeForPg(v);
+    }
+    return out as T;
+  }
+  return value;
+}
+
+function transformRow(table: TableName, row: Record<string, unknown>): unknown[] {
+  switch (table) {
     case 'remote_agent_users': {
       const r = row as {
         id: string;
@@ -306,9 +324,6 @@ function transformRow(tableName: TableName, row: Record<string, unknown>): unkno
         coerceJson(r.commands ?? '{}'),
         coerceTimestamp(r.created_at),
         coerceTimestamp(r.updated_at),
-        // Live SQLite may or may not have the column (Task 4 ensures
-        // future fresh installs; older DBs pre-migration are NULL).
-        // Hardcode false — explicit, never relies on column DEFAULT.
         coerceBoolean(r.allow_env_keys ?? 0),
       ];
     }
@@ -503,31 +518,12 @@ function transformRow(tableName: TableName, row: Record<string, unknown>): unkno
   }
 }
 
-// ---------------------------------------------------------------------------
-// Migration driver
-// ---------------------------------------------------------------------------
-
-/**
- * Read all rows from a SQLite table. Returns raw row objects keyed by column name.
- * Uses prepared statement + all() to avoid N round-trips.
- */
 function readAllRows(sqlite: Database, table: TableName): Record<string, unknown>[] {
-  const stmt = sqlite.prepare(`SELECT * FROM ${table}`);
-  return stmt.all() as Record<string, unknown>[];
+  return sqlite.prepare(`SELECT * FROM ${table}`).all() as Record<string, unknown>[];
 }
 
-/**
- * Build a multi-row INSERT statement for Postgres.
- * `ON CONFLICT (id) DO NOTHING` makes the script re-runnable — partial
- * prior runs are no-ops for already-inserted rows.
- */
 function buildInsert(table: TableName, rowCount: number, columns: readonly string[]): string {
   const colList = columns.join(', ');
-  // Postgres' `pg` driver uses $1, $2, ... positional placeholders.
-  // (? is MySQL/SQLite syntax; in Postgres `?` would be parsed as
-  // a JSONB operator and produce 'syntax error at or near ","' on
-  // the first multi-row batch.)
-  // Each row gets a fresh range starting at the running counter.
   const colCount = columns.length;
   const rowPlaceholders: string[] = [];
   for (let r = 0; r < rowCount; r++) {
@@ -554,23 +550,50 @@ async function runMigration(
   cli: CliArgs
 ): Promise<MigrationResult> {
   const perTableCounts = {} as Record<TableName, number>;
+  // Pre-compute parent-ID sets in FK-order. After each table is
+  // filtered, its cache entry is replaced with kept-only IDs so
+  // downstream tables filter against what actually lands in the
+  // target (propagates chained orphans).
+  const parentIdsCache = new Map<TableName, Set<string>>();
+  for (const parent of TABLE_ORDER) {
+    parentIdsCache.set(parent, loadParentIds(sqlite, parent));
+  }
+
   for (const table of TABLE_ORDER) {
-    const rows = readAllRows(sqlite, table);
+    const rawRows = readAllRows(sqlite, table);
+    let rows = rawRows;
+    let droppedOrphans = 0;
+    const fkColumns = FK_COLUMNS[table];
+    if (fkColumns !== undefined) {
+      const filtered = filterOrphans(rawRows, fkColumns, parentIdsCache);
+      rows = filtered.kept;
+      droppedOrphans = filtered.dropped;
+    }
+    parentIdsCache.set(table, new Set(rows.map(r => r.id as string)));
     perTableCounts[table] = rows.length;
     if (rows.length === 0) {
-      console.log(`  ${table}: 0 rows (skipped)`);
+      const orphanNote = droppedOrphans > 0 ? ` (${droppedOrphans} orphans dropped)` : '';
+      console.log(`  ${table}: 0 rows (skipped)${orphanNote}`);
       continue;
     }
     const transformed = rows.map(r => transformRow(table, r));
+    // pg's JSONB encoder chokes on U+0000 NUL bytes in strings. Sanitize
+    // every object value (coerceJson produces JS objects for JSONB
+    // columns) before binding. See sanitizeForPg docs.
+    for (const row of transformed) {
+      for (let i = 0; i < row.length; i++) {
+        const v = row[i];
+        if (typeof v === 'object' && v !== null) {
+          row[i] = sanitizeForPg(v) as unknown;
+        }
+      }
+    }
     const columns = TABLE_COLUMNS[table];
     if (cli.dryRun || pool === null) {
-      // --dry-run: emit one INSERT batch of up to batchSize rows.
-      // Iterate as if applying, but only print.
       let totalEmitted = 0;
       for (let i = 0; i < transformed.length; i += cli.batchSize) {
         const batch = transformed.slice(i, i + cli.batchSize);
         const sql = buildInsert(table, batch.length, columns);
-        // Flatten the batch into positional params for the prepared statement
         const flat: unknown[] = [];
         for (const row of batch) flat.push(...row);
         console.log(`-- ${table} batch ${i / cli.batchSize + 1}: ${batch.length} rows`);
@@ -578,10 +601,10 @@ async function runMigration(
         console.log(`-- params: ${flat.length} values (omitted for brevity)`);
         totalEmitted += batch.length;
       }
-      console.log(`  ${table}: ${totalEmitted} rows (dry-run emitted)`);
+      const orphanNote = droppedOrphans > 0 ? ` (${droppedOrphans} orphans dropped)` : '';
+      console.log(`  ${table}: ${totalEmitted} rows (dry-run emitted)${orphanNote}`);
       continue;
     }
-    // Real run: batched INSERTs inside the transaction managed by the caller.
     const client = await pool.connect();
     try {
       for (let i = 0; i < transformed.length; i += cli.batchSize) {
@@ -589,12 +612,20 @@ async function runMigration(
         const sql = buildInsert(table, batch.length, columns);
         const flat: unknown[] = [];
         for (const row of batch) flat.push(...row);
-        await client.query(sql, flat);
+        try {
+          await client.query(sql, flat);
+        } catch (batchErr) {
+          console.error(
+            `[apply] INSERT failed on ${table} batch ${i / cli.batchSize + 1} (rows ${i}..${i + batch.length - 1}): ${(batchErr as Error).message}`
+          );
+          throw batchErr;
+        }
       }
     } finally {
       client.release();
     }
-    console.log(`  ${table}: ${rows.length} rows`);
+    const orphanNote = droppedOrphans > 0 ? ` (${droppedOrphans} orphans dropped)` : '';
+    console.log(`  ${table}: ${rows.length} rows${orphanNote}`);
   }
   return { perTableCounts, dryRun: cli.dryRun };
 }
@@ -602,8 +633,7 @@ async function runMigration(
 async function verifyMigration(pool: Pool, sqlite: Database): Promise<VerifyResult> {
   const mismatches: { table: TableName; source: number; target: number }[] = [];
   for (const table of TABLE_ORDER) {
-    const sourceRows = readAllRows(sqlite, table);
-    const sourceCount = sourceRows.length;
+    const sourceCount = readAllRows(sqlite, table).length;
     const target = (await pool.query<{ count: string }>(
       `SELECT count(*)::text AS count FROM ${table}`
     )) as QueryResult<{ count: string }>;
@@ -615,28 +645,25 @@ async function verifyMigration(pool: Pool, sqlite: Database): Promise<VerifyResu
   return { passed: mismatches.length === 0, mismatches };
 }
 
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
-
 function summarize(perTable: Record<TableName, number>): string {
-  const parts = TABLE_ORDER.map(t => `${perTable[t]} ${t.replace('remote_agent_', '')}`);
-  return parts.join(', ');
+  return TABLE_ORDER.map(t => `${perTable[t]} ${t.replace('remote_agent_', '')}`).join(', ');
 }
 
-/**
- * Top-level entry point exposed for the CLI wrapper (archon migrate:sqlite-to-postgres).
- * Takes pre-parsed arguments; the standalone script path (below) calls this with
- * `parseCli(process.argv.slice(2))`.
- */
-export async function runMigrateSqliteToPostgres(cli: CliArgs): Promise<number> {
+async function main(cli: CliArgs): Promise<number> {
   if (cli.help) {
-    printHelp();
+    console.log(`SQLite -> Postgres migration
+Usage: bun run scripts/migrate-sqlite-to-postgres.ts [flags]
+Flags:
+  --from <path>     Source SQLite file
+  --to <url>        Target Postgres URL
+  --dry-run         Emit SQL, do not execute
+  --verify          After import, compare row counts
+  --batch-size <N>  Rows per multi-row INSERT
+  -h, --help        Show this help`);
     return 0;
   }
   if (!cli.to) {
     console.error('Error: --to <postgres-url> is required (or set DATABASE_URL).');
-    printHelp();
     return 1;
   }
   if (!existsSync(cli.from)) {
@@ -645,24 +672,15 @@ export async function runMigrateSqliteToPostgres(cli: CliArgs): Promise<number> 
   }
   console.log('SQLite -> Postgres migration');
   console.log(`  from: ${cli.from}`);
-  console.log(`  to:   ${cli.to.replace(/:[^:@/]+@/, ':***@')}`); // redact password
+  console.log(`  to:   ${cli.to.replace(/:[^:@/]+@/, ':***@')}`);
   console.log(`  mode: ${cli.dryRun ? 'dry-run' : cli.verify ? 'verify-after-migrate' : 'apply'}`);
   console.log(`  batch-size: ${cli.batchSize}`);
 
-  // Open source (bun:sqlite, mirror sqlite.ts:32-38 settings).
-  // Note: not opened with { readonly: true } because PRAGMA journal_mode
-  // and PRAGMA busy_timeout write to the DB file even though the
-  // migration itself only runs SELECT statements — readonly mode
-  // would block those PRAGMAs. The script never INSERTs/UPDATEs the
-  // source; safety comes from the absence of write SQL, not from
-  // the readonly flag.
   const sqlite = new Database(cli.from);
   sqlite.run('PRAGMA journal_mode = WAL');
   sqlite.run('PRAGMA busy_timeout = 5000');
-  console.log('  source opened (WAL + busy_timeout=5000ms, no write SQL)');
+  console.log('  source opened (WAL + busy_timeout=5000ms)');
 
-  // Open target. For --dry-run, don't open the pool — the user may not
-  // have Postgres running and dry-run should work offline.
   let pool: Pool | null = null;
   if (!cli.dryRun) {
     pool = new Pool({
@@ -670,8 +688,6 @@ export async function runMigrateSqliteToPostgres(cli: CliArgs): Promise<number> 
       max: POOL_MAX,
       statement_timeout: STATEMENT_TIMEOUT_MS,
     });
-    // pool.on('error') mirrors postgres.ts:28-36; pool-level errors are
-    // infrastructure problems, log + exit (don't throw inside handler).
     pool.on('error', err => {
       console.error(`pg.Pool error: ${err.message}`);
     });
@@ -679,20 +695,19 @@ export async function runMigrateSqliteToPostgres(cli: CliArgs): Promise<number> 
 
   try {
     if (cli.dryRun) {
-      console.log('\n[dry-run] Emitting SQL batches to stdout, no DB writes:\n');
+      console.log('\n[dry-run] Emitting SQL batches:\n');
       const result = await runMigration(sqlite, null, cli);
       console.log(`\n[dry-run] would migrate: ${summarize(result.perTableCounts)}`);
       return 0;
     }
 
-    // Real run: open a single client and hold it for the whole transaction.
-    if (pool === null) throw new Error('unreachable: pool should be set for non-dry-run');
+    if (pool === null) throw new Error('unreachable');
     const client = await pool.connect();
     let result: MigrationResult;
     try {
       await client.query('BEGIN');
       await client.query(`SET LOCAL statement_timeout = ${STATEMENT_TIMEOUT_MS}`);
-      console.log('\n[apply] Transaction started, migrating 10 tables...');
+      console.log('\n[apply] Transaction started...');
       result = await runMigration(sqlite, pool, cli);
       await client.query('COMMIT');
       console.log('\n[apply] Transaction committed.');
@@ -732,14 +747,12 @@ if (import.meta.main) {
     parsedCli = parseCli(process.argv.slice(2));
   } catch (err) {
     console.error(`Error: ${(err as Error).message}`);
-    printHelp();
     process.exit(1);
   }
-  runMigrateSqliteToPostgres(parsedCli)
+  main(parsedCli)
     .then(code => process.exit(code))
     .catch((err: unknown) => {
       console.error(`Fatal: ${(err as Error).message}`);
-      if (process.env.DEBUG) console.error((err as Error).stack);
       process.exit(2);
     });
 }

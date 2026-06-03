@@ -92,8 +92,11 @@ describe('coerceJson', () => {
     expect(result).toBe(obj);
   });
 
-  test('rejects malformed JSON', () => {
-    expect(() => coerceJson('{not json}')).toThrow(/invalid JSON/);
+  test('returns null for malformed JSON (tolerant mode for migration)', () => {
+    // The migration script's coerceJson is tolerant: it returns null
+    // on parse error rather than throwing, so a single bad row doesn't
+    // abort the entire 188 MiB cutover. The error is logged to stderr.
+    expect(coerceJson('{not json}')).toBeNull();
   });
 
   test('rejects non-string non-object input', () => {

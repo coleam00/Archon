@@ -53,18 +53,25 @@ fi
 # ---------------------------------------------------------------------------
 # Run pg_dump
 # ---------------------------------------------------------------------------
+# We invoke pg_dump inside the `archon-postgres-1` container rather than
+# the host's pg_dump because the system Postgres client (16.x) refuses
+# to dump a 17.x server ("aborting because of server version mismatch").
+# `docker exec` is the only path that has matching major versions here
+# without requiring apt-get root.
 mkdir -p "$BACKUP_DIR"
 TIMESTAMP="$(date -u +%Y-%m-%dT%H-%M-%SZ)"
 OUT_FILE="$BACKUP_DIR/archon-pg-$TIMESTAMP.dump"
-
-# `time` in a subshell so we can capture duration without invoking `time` as
-# a bash builtin. stderr/stdout are both captured.
+ERR_FILE="$BACKUP_DIR/archon-pg-$TIMESTAMP.err"
 START_EPOCH="$(date +%s)"
-if ! pg_dump -Fc -Z 9 "$DATABASE_URL" >"$OUT_FILE"; then
-  rm -f "$OUT_FILE"
-  echo "Error: pg_dump failed. Partial output removed." >&2
+if ! docker exec archon-postgres-1 \
+     pg_dump -U postgres -Fc -Z 9 remote_coding_agent \
+     >"$OUT_FILE" 2>"$ERR_FILE"; then
+  echo "Error: docker exec pg_dump failed:" >&2
+  cat "$ERR_FILE" >&2
+  rm -f "$OUT_FILE" "$ERR_FILE"
   exit 2
 fi
+rm -f "$ERR_FILE"
 END_EPOCH="$(date +%s)"
 DURATION=$((END_EPOCH - START_EPOCH))
 
