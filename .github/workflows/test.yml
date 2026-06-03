@@ -10,12 +10,25 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-jobs:
   test:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: archon_test
+          POSTGRES_PASSWORD: archon_test
+          POSTGRES_DB: archon_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U archon_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -40,6 +53,8 @@ jobs:
         run: bun run format:check
 
       - name: Run tests
+        env:
+          DATABASE_URL: postgresql://archon_test:archon_test@localhost:5432/archon_test
         run: bun run test
 
   docker-build:

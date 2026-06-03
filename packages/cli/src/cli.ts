@@ -68,6 +68,7 @@ import { skillInstallCommand } from './commands/skill';
 import { validateWorkflowsCommand, validateCommandsCommand } from './commands/validate';
 import { serveCommand } from './commands/serve';
 import { doctorCommand } from './commands/doctor';
+import { migrateSqliteToPostgresCommand } from './commands/migrate-sqlite-to-postgres';
 import { closeDatabase } from '@archon/core';
 import {
   setLogLevel,
@@ -113,9 +114,9 @@ Commands:
   serve                      Start the web UI server (downloads web UI on first run)
   skill install [path]       Install the bundled Archon skill into .claude/skills/archon
   doctor                     Verify your Archon setup (Claude binary, gh auth, DB, adapters)
+  migrate:sqlite-to-postgres  One-shot migration from SQLite to PostgreSQL
   validate workflows [name]  Validate workflow definitions and their references
   validate commands [name]   Validate command files
-  version, --version, -V     Show version info (also -v when used alone)
   help                       Show this help message
 
 Options:
@@ -644,6 +645,11 @@ async function main(): Promise<number> {
 
       case 'doctor': {
         return await doctorCommand();
+      }
+
+      case 'migrate:sqlite-to-postgres': {
+        const passthroughArgs = positionals.slice(1);
+        return await migrateSqliteToPostgresCommand(passthroughArgs);
       }
 
       case 'skill': {

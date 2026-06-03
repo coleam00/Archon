@@ -1,0 +1,9 @@
+[Unit]
+Description=Archon Postgres nightly backup
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.archon/.env
+ExecStart=%h/archon/scripts/pg-backup.sh
+StandardOutput=journal
+StandardError=journal

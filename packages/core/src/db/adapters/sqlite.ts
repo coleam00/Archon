@@ -272,6 +272,24 @@ export class SqliteAdapter implements IDatabase {
         'db.sqlite_migration_isolation_environments_columns_failed'
       );
     }
+
+    // Codebases columns
+    try {
+      const cols = this.db.prepare("PRAGMA table_info('remote_agent_codebases')").all() as {
+        name: string;
+      }[];
+      const colNames = new Set(cols.map(c => c.name));
+      // SQLite stores booleans as INTEGER 0/1; the Postgres equivalent is BOOLEAN.
+      // The DEFAULT 0 matches Postgres' DEFAULT FALSE so freshly-migrated rows
+      // land in the same state on both backends.
+      if (!colNames.has('allow_env_keys')) {
+        this.db.run(
+          'ALTER TABLE remote_agent_codebases ADD COLUMN allow_env_keys INTEGER NOT NULL DEFAULT 0'
+        );
+      }
+    } catch (e: unknown) {
+      getLog().warn({ err: e as Error }, 'db.sqlite_migration_codebases_columns_failed');
+    }
   }
 
   /**

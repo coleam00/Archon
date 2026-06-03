@@ -1,5 +1,5 @@
 -- Remote Coding Agent - Combined Schema
--- Version: Combined (final state after migrations 001-020)
+-- Version: Combined (final state after migrations 001-022)
 -- Description: Complete database schema (idempotent - safe to run multiple times)
 --
 -- 8 Tables:
@@ -347,6 +347,10 @@ ALTER TABLE remote_agent_sessions
 -- From migration 021: allow_env_keys on codebases
 ALTER TABLE remote_agent_codebases
   ADD COLUMN IF NOT EXISTS allow_env_keys BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- From migration 022: default_branch on codebases (preserved from SQLite for migration parity)
+ALTER TABLE remote_agent_codebases
+  ADD COLUMN IF NOT EXISTS default_branch TEXT DEFAULT 'main';
 
 -- User identity foreign keys (nullable on the four primary tables).
 -- All FKs use ON DELETE SET NULL so future user deletion never cascades destructively.
