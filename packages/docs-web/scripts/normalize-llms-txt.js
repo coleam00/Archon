@@ -51,17 +51,14 @@ const replacements = [
 ];
 
 function normalizeFile(filePath) {
-  let content = readFileSync(filePath, 'utf-8');
-  let modified = false;
+  const original = readFileSync(filePath, 'utf-8');
+  let content = original;
 
   for (const [pattern, replacement] of replacements) {
-    if (pattern.test(content)) {
-      content = content.replace(pattern, replacement);
-      modified = true;
-    }
+    content = content.replace(pattern, replacement);
   }
 
-  if (modified) {
+  if (content !== original) {
     writeFileSync(filePath, content, 'utf-8');
     console.log(`Normalized: ${filePath}`);
   }
@@ -79,11 +76,17 @@ const SUBSETS_DIR = join(DIST_DIR, '_llms-txt');
 let subsetFiles = [];
 try {
   subsetFiles = readdirSync(SUBSETS_DIR).filter(f => f.endsWith('.txt'));
-  for (const file of subsetFiles) {
-    normalizeFile(join(SUBSETS_DIR, file));
-  }
-} catch {
-  // _llms-txt directory may not exist if no customSets configured
+} catch (err) {
+  // Only ENOENT is expected (no customSets configured); rethrow other errors
+  if (err.code !== 'ENOENT') throw err;
 }
 
-console.log(`Processed ${files.length + subsetFiles.length} llms.txt file(s)`);
+for (const file of subsetFiles) {
+  normalizeFile(join(SUBSETS_DIR, file));
+}
+
+const totalFiles = files.length + subsetFiles.length;
+if (totalFiles === 0) {
+  console.warn('Warning: No llms*.txt files found in dist/ — plugin may be disabled or output path changed');
+}
+console.log(`Processed ${totalFiles} llms.txt file(s)`);

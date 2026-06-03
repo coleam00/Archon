@@ -362,23 +362,23 @@ archon workflow run archon-remotion-generate "A 10-second animated title card wi
 |----------|----------|-------------|-----------------|
 | `archon-assist` | Questions, exploration, debugging | No | No |
 | `archon-fix-github-issue` | Fix a GitHub issue (smart routing) | Yes (draft) | Yes |
-| `archon-idea-to-pr` | Feature from description | Yes | Yes |
-| `archon-plan-to-pr` | Execute an existing plan | Yes | Yes |
-| `archon-feature-development` | Implement + ship (lightweight) | Yes | Yes |
-| `archon-smart-pr-review` | Review current PR (adaptive) | No | No |
-| `archon-comprehensive-pr-review` | Review current PR (all agents) | No | No |
-| `archon-architect` | Architectural sweep | Yes | Yes |
-| `archon-ralph-dag` | PRD implementation loop | Yes | Yes |
-| `archon-resolve-conflicts` | Resolve merge conflicts | No | No |
 | `archon-create-issue` | File a bug with automated reproduction | No | No |
 | `archon-issue-review-full` | Fix a GitHub issue, full 5-agent review | Yes (draft) | Yes |
 | `archon-piv-loop` | Interactive feature development (3 human gates) | Yes (draft) | Yes |
+| `archon-idea-to-pr` | Feature from description | Yes | Yes |
+| `archon-plan-to-pr` | Execute an existing plan | Yes | Yes |
+| `archon-feature-development` | Implement + ship (lightweight) | Yes | Yes |
 | `archon-adversarial-dev` | Build a new standalone app from scratch | No | Yes (own repo) |
+| `archon-smart-pr-review` | Review current PR (adaptive) | No | No |
+| `archon-comprehensive-pr-review` | Review current PR (all agents) | No | No |
 | `archon-validate-pr` | Validate a PR: dual-branch review + conditional E2E | No | Yes |
+| `archon-architect` | Architectural sweep | Yes | Yes |
 | `archon-refactor-safely` | Structural extraction/splitting (no behavior change) | Yes | Yes |
 | `archon-interactive-prd` | Create a PRD through 3 conversation rounds | No | No |
+| `archon-ralph-dag` | PRD implementation loop | Yes | Yes |
 | `archon-workflow-builder` | Generate a new Archon workflow YAML | No | No |
 | `archon-remotion-generate` | Generate a Remotion video (existing project required) | No | No |
+| `archon-resolve-conflicts` | Resolve merge conflicts | No | No |
 
 ---
 

@@ -69,7 +69,6 @@ export default defineConfig({
             'deployment/**', // Deployment is advanced
             'contributing/**', // Not needed for using Archon
             'reference/security', // Deep reference
-            'reference/changelog', // Historical
             'book/**', // Long-form content
           ],
 
