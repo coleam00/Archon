@@ -186,7 +186,7 @@ function MessageBubbleRaw({ message }: MessageBubbleProps): React.ReactElement {
           {isUser ? (
             <div className="flex flex-col gap-1.5">
               <div className="flex items-start gap-2">
-                <p className="text-sm text-text-primary whitespace-pre-wrap flex-1">
+                <p className="text-sm text-text-primary whitespace-pre-wrap break-words min-w-0 flex-1">
                   {message.content}
                 </p>
                 <button

@@ -23,4 +23,5 @@
 [data-theme='dark'] .sidebar-content a[aria-current='page'] {
   background: linear-gradient(135deg, rgba(168, 85, 247, 0.15), rgba(59, 130, 246, 0.15));
   border-left-color: #a855f7;
+  color: var(--sl-color-white);
 }
