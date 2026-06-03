@@ -226,6 +226,38 @@ function shouldSkipSymlinkTargetError(err: NodeJS.ErrnoException): boolean {
   return err.code === 'ENOENT' || err.code === 'ELOOP';
 }
 
+async function getEntryKind(
+  entryPath: string,
+  entry: { isSymbolicLink(): boolean; isDirectory(): boolean; isFile(): boolean }
+): Promise<'directory' | 'file' | 'other' | null> {
+  if (entry.isSymbolicLink()) {
+    try {
+      const targetStat = await stat(entryPath);
+      if (targetStat.isDirectory()) return 'directory';
+      if (targetStat.isFile()) return 'file';
+      return 'other';
+    } catch (e) {
+      const err = e as NodeJS.ErrnoException;
+      if (shouldSkipSymlinkTargetError(err)) return null;
+      throw err;
+    }
+  }
+
+  if (entry.isDirectory()) return 'directory';
+  if (entry.isFile()) return 'file';
+  return 'other';
+}
+
+async function getReachableRealPath(path: string): Promise<string | null> {
+  try {
+    return await realpath(path);
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    if (shouldSkipSymlinkTargetError(err)) return null;
+    throw err;
+  }
+}
+
 async function findMarkdownFilesRecursiveImpl(
   rootPath: string,
   relativePath: string,
@@ -262,38 +294,17 @@ async function findMarkdownFilesRecursiveImpl(
     }
 
     const entryPath = join(fullPath, entry.name);
-    let isDir: boolean;
-    let isFile: boolean;
+    const entryKind = await getEntryKind(entryPath, entry);
+    if (entryKind === null) continue;
 
-    if (entry.isSymbolicLink()) {
-      try {
-        const targetStat = await stat(entryPath);
-        isDir = targetStat.isDirectory();
-        isFile = targetStat.isFile();
-      } catch (e) {
-        const err = e as NodeJS.ErrnoException;
-        if (shouldSkipSymlinkTargetError(err)) continue;
-        throw err;
-      }
-    } else {
-      isDir = entry.isDirectory();
-      isFile = entry.isFile();
-    }
-
-    if (isDir) {
+    if (entryKind === 'directory') {
       // Skip descending if we're already at the depth cap — files at deeper
       // levels are silently ignored (matches the convention that `.archon/*/`
       // folders support one level of grouping like `defaults/`).
       if (currentDepth >= maxDepth) continue;
 
-      let realChild: string;
-      try {
-        realChild = await realpath(entryPath);
-      } catch (e) {
-        const err = e as NodeJS.ErrnoException;
-        if (shouldSkipSymlinkTargetError(err)) continue;
-        throw err;
-      }
+      const realChild = await getReachableRealPath(entryPath);
+      if (!realChild) continue;
       if (visitedRealPaths.has(realChild)) continue;
 
       const childVisitedRealPaths = new Set(visitedRealPaths);
@@ -306,7 +317,7 @@ async function findMarkdownFilesRecursiveImpl(
         childVisitedRealPaths
       );
       results.push(...subResults);
-    } else if (isFile && entry.name.endsWith('.md')) {
+    } else if (entryKind === 'file' && entry.name.endsWith('.md')) {
       results.push({
         commandName: basename(entry.name, '.md'),
         relativePath: join(relativePath, entry.name),
