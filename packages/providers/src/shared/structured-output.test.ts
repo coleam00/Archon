@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 
 import {
   augmentPromptForJsonSchema,
+  hasOpenAdditionalProperties,
   normalizeJsonSchemaForOpenAiStrict,
   tryParseStructuredOutput,
 } from './structured-output';
@@ -168,5 +169,76 @@ describe('normalizeJsonSchemaForOpenAiStrict', () => {
     const input = { type: 'object', properties: { a: { type: 'string' } } };
     normalizeJsonSchemaForOpenAiStrict(input);
     expect('additionalProperties' in input).toBe(false);
+  });
+
+  test('is idempotent — an already-normalized schema is structurally unchanged', () => {
+    const alreadyNormalized = {
+      type: 'object',
+      properties: {
+        a: { type: 'string' },
+        nested: {
+          type: 'object',
+          properties: { b: { type: 'number' } },
+          additionalProperties: false,
+        },
+      },
+      additionalProperties: false,
+    };
+    const out = normalizeJsonSchemaForOpenAiStrict(alreadyNormalized);
+    expect(out).toEqual(alreadyNormalized);
+  });
+});
+
+describe('hasOpenAdditionalProperties', () => {
+  test('true when an object declares an open-record additionalProperties subschema', () => {
+    expect(
+      hasOpenAdditionalProperties({
+        type: 'object',
+        properties: { key: { type: 'string' } },
+        additionalProperties: { type: 'number' },
+      })
+    ).toBe(true);
+  });
+
+  test('true when additionalProperties is the boolean true', () => {
+    expect(hasOpenAdditionalProperties({ type: 'object', additionalProperties: true })).toBe(true);
+  });
+
+  test('detects an open-record subschema nested below a closed parent', () => {
+    expect(
+      hasOpenAdditionalProperties({
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          map: { type: 'object', additionalProperties: { type: 'string' } },
+        },
+      })
+    ).toBe(true);
+  });
+
+  test('false when every object is already closed (additionalProperties:false)', () => {
+    expect(
+      hasOpenAdditionalProperties({
+        type: 'object',
+        properties: { a: { type: 'string' } },
+        additionalProperties: false,
+      })
+    ).toBe(false);
+  });
+
+  test('false when no additionalProperties is declared anywhere', () => {
+    expect(
+      hasOpenAdditionalProperties({
+        type: 'object',
+        properties: { a: { type: 'string' } },
+      })
+    ).toBe(false);
+  });
+
+  test('does not flag a non-object node carrying additionalProperties (normalizer leaves it untouched)', () => {
+    // No `type: object` and no `properties` → not an object node by the
+    // normalizer's rule, so the normalizer would NOT rewrite it. The predicate
+    // must match that and stay silent.
+    expect(hasOpenAdditionalProperties({ additionalProperties: { type: 'string' } })).toBe(false);
   });
 });
