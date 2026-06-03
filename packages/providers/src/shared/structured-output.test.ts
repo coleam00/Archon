@@ -145,6 +145,20 @@ describe('normalizeJsonSchemaForOpenAiStrict', () => {
     expect(out.additionalProperties).toBe(false);
   });
 
+  test('replaces an existing additionalProperties subschema with false (OpenAI strict-mode)', () => {
+    const input = {
+      type: 'object',
+      properties: { key: { type: 'string' } },
+      additionalProperties: { type: 'number' },
+    };
+    const out = normalizeJsonSchemaForOpenAiStrict(input) as Record<string, unknown>;
+    // OpenAI strict-mode forbids open/typed additional properties; false is the
+    // only accepted value, so the subschema is intentionally replaced.
+    expect(out.additionalProperties).toBe(false);
+    // Input is not mutated.
+    expect(input.additionalProperties).toEqual({ type: 'number' });
+  });
+
   test('leaves non-object schemas untouched', () => {
     const out = normalizeJsonSchemaForOpenAiStrict({ type: 'string' }) as Record<string, unknown>;
     expect(out.additionalProperties).toBeUndefined();

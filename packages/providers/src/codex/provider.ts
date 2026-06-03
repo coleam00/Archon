@@ -280,10 +280,16 @@ function buildTurnOptions(requestOptions?: SendQueryOptions): {
   hasOutputFormat: boolean;
 } {
   const turnOptions: TurnOptions = {};
+  // Preserve the original precedence: an explicit `outputFormat` wins over
+  // `nodeConfig.output_format` even when its `.schema` is undefined.
   const rawSchema =
-    requestOptions?.outputFormat?.schema ?? requestOptions?.nodeConfig?.output_format;
-  const hasOutputFormat = !!rawSchema;
-  if (rawSchema) {
+    requestOptions?.outputFormat !== undefined
+      ? requestOptions.outputFormat.schema
+      : requestOptions?.nodeConfig?.output_format;
+  const hasOutputFormat = !!(
+    requestOptions?.outputFormat ?? requestOptions?.nodeConfig?.output_format
+  );
+  if (rawSchema !== undefined) {
     // OpenAI Structured Outputs strict-mode requires additionalProperties:false
     // on every object schema (HTTP 400 invalid_json_schema otherwise). Workflow
     // authors write portable output_format schemas, so normalize here before

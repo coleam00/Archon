@@ -102,6 +102,12 @@ function tryJsonParseObject(text: string): unknown {
  * the Codex provider adapts them here. Returns a deep clone — the caller's
  * schema object is never mutated.
  *
+ * A pre-existing `additionalProperties` on an object — including a value
+ * subschema like `additionalProperties: { type: 'string' }` (an open record /
+ * map) — is replaced with `false`. OpenAI strict-mode forbids open or typed
+ * additional properties, so `false` is the only value the API accepts; keeping
+ * the subschema would just re-trigger the HTTP 400 this normalizer exists to fix.
+ *
  * Scope: only `additionalProperties` is injected. The other strict-mode rule
  * (every key in `properties` must appear in `required`) is intentionally NOT
  * enforced here — forcing it would silently turn optional fields into required
