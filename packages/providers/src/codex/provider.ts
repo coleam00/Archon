@@ -22,6 +22,7 @@ import { CODEX_CAPABILITIES } from './capabilities';
 import { resolveCodexBinaryPath } from './binary-resolver';
 import { createLogger } from '@archon/paths';
 import { loadMcpConfig } from '../mcp/config';
+import { normalizeJsonSchemaForOpenAiStrict } from '../shared/structured-output';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -279,14 +280,15 @@ function buildTurnOptions(requestOptions?: SendQueryOptions): {
   hasOutputFormat: boolean;
 } {
   const turnOptions: TurnOptions = {};
-  const hasOutputFormat = !!(
-    requestOptions?.outputFormat ?? requestOptions?.nodeConfig?.output_format
-  );
-  if (requestOptions?.outputFormat) {
-    turnOptions.outputSchema = requestOptions.outputFormat.schema;
-  }
-  if (requestOptions?.nodeConfig?.output_format && !requestOptions?.outputFormat) {
-    turnOptions.outputSchema = requestOptions.nodeConfig.output_format;
+  const rawSchema =
+    requestOptions?.outputFormat?.schema ?? requestOptions?.nodeConfig?.output_format;
+  const hasOutputFormat = !!rawSchema;
+  if (rawSchema) {
+    // OpenAI Structured Outputs strict-mode requires additionalProperties:false
+    // on every object schema (HTTP 400 invalid_json_schema otherwise). Workflow
+    // authors write portable output_format schemas, so normalize here before
+    // handing the schema to the Codex SDK. See issue #1843.
+    turnOptions.outputSchema = normalizeJsonSchemaForOpenAiStrict(rawSchema);
   }
   // Signal assignment is intentionally per-attempt (in sendQuery's retry
   // loop), not here. Reusing a single AbortSignal across retries can poison

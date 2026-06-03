@@ -91,3 +91,45 @@ function tryJsonParseObject(text: string): unknown {
     return undefined;
   }
 }
+
+/**
+ * Recursively inject `additionalProperties: false` on every object schema so a
+ * JSON Schema satisfies OpenAI's Structured Outputs strict-mode validator.
+ *
+ * OpenAI rejects any `object` node that does not declare `additionalProperties:
+ * false` (HTTP 400 invalid_json_schema). Claude and most other providers don't
+ * require this, so workflow authors write portable `output_format` schemas and
+ * the Codex provider adapts them here. Returns a deep clone — the caller's
+ * schema object is never mutated.
+ *
+ * Scope: only `additionalProperties` is injected. The other strict-mode rule
+ * (every key in `properties` must appear in `required`) is intentionally NOT
+ * enforced here — forcing it would silently turn optional fields into required
+ * ones. See issue #1843.
+ */
+export function normalizeJsonSchemaForOpenAiStrict(schema: unknown): unknown {
+  if (Array.isArray(schema)) {
+    return schema.map(item => normalizeJsonSchemaForOpenAiStrict(item));
+  }
+  if (schema === null || typeof schema !== 'object') {
+    return schema;
+  }
+
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(schema as Record<string, unknown>)) {
+    result[key] = normalizeJsonSchemaForOpenAiStrict(value);
+  }
+
+  // Treat as an object schema if it declares type:'object' (or a type union
+  // including 'object') or carries a `properties` map. OpenAI requires every
+  // such object to set additionalProperties:false.
+  const isObjectSchema =
+    result.type === 'object' ||
+    (Array.isArray(result.type) && result.type.includes('object')) ||
+    'properties' in result;
+  if (isObjectSchema) {
+    result.additionalProperties = false;
+  }
+
+  return result;
+}
