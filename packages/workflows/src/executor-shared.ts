@@ -164,7 +164,6 @@ export function formatSubprocessFailure(
 
 /** Patterns that indicate a subscription session limit in streamed assistant output */
 const SESSION_LIMIT_OUTPUT_PATTERNS = [
-  "you've hit your session limit",
   'hit your session limit',
   'session limit reached',
   'session limit has been reached',
@@ -191,6 +190,10 @@ function extractResetTime(text: string): string | null {
  * credit exhaustion as normal assistant text messages rather than thrown errors.
  * This function checks the accumulated output for known phrases and returns an
  * actionable error string, or null if no limit is detected.
+ *
+ * @returns null if no limit detected; a session-limit string (instructs user to
+ * abandon and retry after reset) or a credit-exhaustion string (instructs user
+ * to resume when credits refill).
  */
 export function detectCreditExhaustion(text: string): string | null {
   const lower = text.toLowerCase();

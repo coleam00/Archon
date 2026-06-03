@@ -436,6 +436,18 @@ describe('detectCreditExhaustion', () => {
   it('detects "hit your session limit" variant (case-insensitive)', () => {
     expect(detectCreditExhaustion("YOU'VE HIT YOUR SESSION LIMIT · resets noon")).not.toBeNull();
   });
+
+  it('detects "session limit reached" variant', () => {
+    const result = detectCreditExhaustion('session limit reached');
+    expect(result).not.toBeNull();
+    expect(result).toContain('session limit');
+  });
+
+  it('detects "session limit has been reached" variant', () => {
+    const result = detectCreditExhaustion('Session limit has been reached.');
+    expect(result).not.toBeNull();
+    expect(result).toContain('session limit');
+  });
 });
 
 describe('isInlineScript', () => {
