@@ -831,6 +831,18 @@ describe.skipIf(isWindows)('findMarkdownFilesRecursive - symlinks', () => {
     ]);
   });
 
+  test('preserves sibling symlink aliases that point to the same directory', async () => {
+    const localSourceDir = join(tempDir, 'source');
+    await mkdir(localSourceDir);
+    await writeFile(join(localSourceDir, 'foo.md'), '# foo');
+    await fsSymlink(localSourceDir, join(tempDir, 'alias'));
+
+    const files = await findMarkdownFilesRecursive(tempDir);
+    const relativePaths = files.map(file => file.relativePath).sort();
+
+    expect(relativePaths).toEqual([join('alias', 'foo.md'), join('source', 'foo.md')]);
+  });
+
   test('skips broken symlinks silently', async () => {
     await writeFile(join(tempDir, 'regular.md'), '# regular');
     await fsSymlink(join(sourceDir, 'missing.md'), join(tempDir, 'broken.md'));

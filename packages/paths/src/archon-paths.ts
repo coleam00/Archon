@@ -222,6 +222,10 @@ export async function findMarkdownFilesRecursive(
   return findMarkdownFilesRecursiveImpl(rootPath, relativePath, options, new Set<string>());
 }
 
+function shouldSkipSymlinkTargetError(err: NodeJS.ErrnoException): boolean {
+  return err.code === 'ENOENT' || err.code === 'ELOOP';
+}
+
 async function findMarkdownFilesRecursiveImpl(
   rootPath: string,
   relativePath: string,
@@ -266,8 +270,10 @@ async function findMarkdownFilesRecursiveImpl(
         const targetStat = await stat(entryPath);
         isDir = targetStat.isDirectory();
         isFile = targetStat.isFile();
-      } catch {
-        continue;
+      } catch (e) {
+        const err = e as NodeJS.ErrnoException;
+        if (shouldSkipSymlinkTargetError(err)) continue;
+        throw err;
       }
     } else {
       isDir = entry.isDirectory();
@@ -283,17 +289,21 @@ async function findMarkdownFilesRecursiveImpl(
       let realChild: string;
       try {
         realChild = await realpath(entryPath);
-      } catch {
-        continue;
+      } catch (e) {
+        const err = e as NodeJS.ErrnoException;
+        if (shouldSkipSymlinkTargetError(err)) continue;
+        throw err;
       }
       if (visitedRealPaths.has(realChild)) continue;
-      visitedRealPaths.add(realChild);
+
+      const childVisitedRealPaths = new Set(visitedRealPaths);
+      childVisitedRealPaths.add(realChild);
 
       const subResults = await findMarkdownFilesRecursiveImpl(
         rootPath,
         join(relativePath, entry.name),
         options,
-        visitedRealPaths
+        childVisitedRealPaths
       );
       results.push(...subResults);
     } else if (isFile && entry.name.endsWith('.md')) {
