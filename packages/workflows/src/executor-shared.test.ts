@@ -412,18 +412,12 @@ describe('detectCreditExhaustion', () => {
     expect(detectCreditExhaustion("YOU'RE OUT OF EXTRA USAGE")).not.toBeNull();
   });
 
-  it('detects "You\'ve hit your session limit" (subscription session limit)', () => {
+  it('detects "You\'ve hit your session limit" and includes reset time', () => {
     const result = detectCreditExhaustion(
       "You've hit your session limit · resets 3am (America/Mexico_City)"
     );
     expect(result).not.toBeNull();
     expect(result).toContain('session limit');
-  });
-
-  it('includes reset time in error message when present', () => {
-    const result = detectCreditExhaustion(
-      "You've hit your session limit · resets 3am (America/Mexico_City)"
-    );
     expect(result).toContain('3am (America/Mexico_City)');
   });
 
