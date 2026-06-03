@@ -161,6 +161,7 @@ describe('buildRunManagementSection', () => {
       'archon workflow run',
       'archon workflow approve',
       'archon workflow reject',
+      'archon workflow resume',
       'archon workflow abandon',
     ]) {
       expect(section).toContain(verb);

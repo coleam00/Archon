@@ -1759,7 +1759,7 @@ describe('workflowGetCommand', () => {
     expect(consoleSpy).toHaveBeenCalledWith('Workflow run not found: nope');
   });
 
-  it('emits {error:not_found} JSON for a missing run', async () => {
+  it('emits {ok:false, error:not_found} JSON for a missing run', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
 
@@ -1767,9 +1767,28 @@ describe('workflowGetCommand', () => {
 
     expect(consoleSpy).toHaveBeenCalledTimes(1);
     expect(JSON.parse(consoleSpy.mock.calls[0][0] as string)).toEqual({
-      error: 'not_found',
+      ok: false,
       runId: 'nope',
+      error: 'not_found',
     });
+  });
+
+  it('emits {ok:false} JSON (never throws) when the DB lookup fails', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockRejectedValueOnce(
+      new Error('connection refused')
+    );
+
+    await workflowGetCommand('run-x', true);
+
+    const parsed = JSON.parse(consoleSpy.mock.calls[0][0] as string) as {
+      ok: boolean;
+      runId: string;
+      error: string;
+    };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.runId).toBe('run-x');
+    expect(parsed.error).toContain('connection refused');
   });
 
   it('prints run detail (human) including the error from metadata', async () => {
@@ -1939,6 +1958,17 @@ describe('workflowRunsCommand', () => {
     await expect(workflowRunsCommand('/test/path', { status: 'bogus' })).rejects.toThrow(
       /Invalid --status 'bogus'/
     );
+  });
+
+  it('emits {ok:false} JSON (never throws) on an invalid --status in --json mode', async () => {
+    await workflowRunsCommand('/test/path', { status: 'bogus', json: true });
+
+    const parsed = JSON.parse(consoleSpy.mock.calls[0][0] as string) as {
+      ok: boolean;
+      error: string;
+    };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.error).toContain("Invalid --status 'bogus'");
   });
 });
 

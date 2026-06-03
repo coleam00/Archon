@@ -77,7 +77,7 @@ An unregistered cwd falls back to a global list with a `(not a registered projec
 
 ### `archon workflow get <run-id> [--verbose]`
 
-Show detail for **one run, any status** (status, working path, error). `--verbose` adds a per-node summary from the event log (and, in `--json`, an `events` array). `--json` emits the raw run object; not found → `{ "error": "not_found", "runId": "…" }`.
+Show detail for **one run, any status** (status, working path, error). `--verbose` adds a per-node summary from the event log (and, in `--json`, an `events` array). `--json` emits the raw run object on success; on failure (not found, DB error) it emits one `{ "ok": false, "runId": "…", "error": "…" }` line and never throws (`error` is `"not_found"` for a missing run).
 
 ```bash
 archon workflow get abc123

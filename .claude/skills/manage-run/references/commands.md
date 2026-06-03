@@ -36,7 +36,7 @@ active-only).
 Detail for **one run, any status**.
 
 - `--verbose` — also derive a per-node summary from the event log (and, in `--json`, attach the raw `events` array).
-- `--json` emits the raw run object; not found → `{ "error": "not_found", "runId": "…" }`.
+- `--json` emits the raw run object on success; on failure (not found, DB error) it emits one `{ "ok": false, "runId": "…", "error": "…" }` line and never throws (`error` is `"not_found"` for a missing run).
 
 ```json
 { "id": "…", "workflow_name": "archon-assist", "status": "failed",

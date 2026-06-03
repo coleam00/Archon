@@ -1150,12 +1150,18 @@ export async function workflowGetCommand(
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, runId }, 'cli.workflow_get_failed');
+    // In --json mode never throw — emit one parseable {ok:false} line (same
+    // contract as the write commands) so a parsing agent always gets JSON.
+    if (json) {
+      console.log(JSON.stringify({ ok: false, runId, error: err.message }, null, 2));
+      return;
+    }
     throw new Error(`Failed to get workflow run: ${err.message}`);
   }
 
   if (!run) {
     if (json) {
-      console.log(JSON.stringify({ error: 'not_found', runId }, null, 2));
+      console.log(JSON.stringify({ ok: false, runId, error: 'not_found' }, null, 2));
     } else {
       console.log(`Workflow run not found: ${runId}`);
     }
@@ -1208,9 +1214,13 @@ export async function workflowRunsCommand(
   if (opts.status) {
     const parsed = workflowRunStatusSchema.safeParse(opts.status);
     if (!parsed.success) {
-      throw new Error(
-        `Invalid --status '${opts.status}'. Valid: ${workflowRunStatusSchema.options.join(', ')}.`
-      );
+      const msg = `Invalid --status '${opts.status}'. Valid: ${workflowRunStatusSchema.options.join(', ')}.`;
+      // --json never throws — emit one parseable {ok:false} line (write-command contract).
+      if (opts.json) {
+        console.log(JSON.stringify({ ok: false, error: msg }, null, 2));
+        return;
+      }
+      throw new Error(msg);
     }
     statusFilter = parsed.data;
   }
@@ -1239,6 +1249,10 @@ export async function workflowRunsCommand(
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, cwd }, 'cli.workflow_runs_failed');
+    if (opts.json) {
+      console.log(JSON.stringify({ ok: false, error: err.message }, null, 2));
+      return;
+    }
     throw new Error(`Failed to list workflow runs: ${err.message}`);
   }
 

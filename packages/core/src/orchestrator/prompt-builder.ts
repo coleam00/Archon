@@ -228,14 +228,17 @@ export function buildRunManagementSection(): string {
 
 You can inspect and control this project's workflow runs directly via the \`archon\` CLI (bash) — you do NOT need to invoke a workflow for run management. Add \`--json\` to any command for a single clean, machine-readable line.
 
+Run these from within the project's git repo (any subdirectory works — they resolve to the repo root, which also scopes \`runs\` to this project). They fail with "Not in a git repository" if the working directory is \`~/.archon/workspaces/\` or another non-repo path.
+
 - \`archon workflow runs [--json]\` — recent runs of ALL statuses for this project
 - \`archon workflow get <run-id> [--json]\` — one run's status/error (add \`--verbose\` for per-node detail)
 - \`archon workflow status [--json]\` — active runs only (running/paused)
 - \`archon workflow run <workflow> "<message>" --detach\` — start a run in the background (returns immediately)
 - \`archon workflow approve <run-id> [--json]\` / \`archon workflow reject <run-id> [reason] [--json]\` — resolve a paused approval gate
+- \`archon workflow resume <run-id>\` — re-run a failed/paused run, skipping completed nodes (run as a background task; \`--json\` validates only)
 - \`archon workflow abandon <run-id> [--json]\` — cancel a non-terminal run
 
-When the user asks what's running, whether a run passed/failed, or to approve / reject / cancel a run, use these commands directly instead of invoking a workflow. The \`manage-run\` skill has the full reference if it is loaded.`;
+When the user asks what's running, whether a run passed/failed, or to approve / reject / resume / cancel a run, use these commands directly instead of invoking a workflow. The \`manage-run\` skill has the full reference if it is loaded.`;
 }
 
 /**
