@@ -10,7 +10,7 @@
  * - `patch` and `set` are for the SSE dispatcher and skill-layer optimistic
  *   updates only.
  *
- * Deliberately minimal: ~120 LOC. No React Query, no Zustand.
+ * Deliberately minimal. No React Query, no Zustand.
  */
 
 import { useCallback, useRef, useSyncExternalStore } from 'react';

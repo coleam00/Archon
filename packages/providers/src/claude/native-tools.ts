@@ -1,3 +1,7 @@
+// Direct `zod` import (not `@hono/zod-openapi`): this builds the Zod shape the
+// Claude SDK's `tool()` expects, never an OpenAPI schema, and `@archon/providers`
+// is an SDK-deps-only leaf package that must not pull in Hono. See the documented
+// exception in CLAUDE.md (Zod Schema Conventions).
 import { z, type ZodTypeAny } from 'zod';
 import {
   tool,

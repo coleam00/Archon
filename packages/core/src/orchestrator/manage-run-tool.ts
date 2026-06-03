@@ -1,7 +1,7 @@
 import type { NativeTool } from '@archon/providers/types';
 import { createLogger } from '@archon/paths';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
-import { listDashboardRuns, getWorkflowRun } from '../db/workflows';
+import { listDashboardRuns, findWorkflowRunsByIdPrefix } from '../db/workflows';
 import {
   abandonWorkflow,
   approveWorkflow,
@@ -23,14 +23,19 @@ export interface ManageRunContext {
 }
 
 /**
- * Actions that mutate non-terminal lifecycle state. These require an explicit
- * `confirm: true` (tiered-confirmation policy): without it the tool returns a
- * preview and asks the agent to check with the user first. This is the
- * tool-layer realization of the confirm gate — a model-visible two-step that
- * creates an audit point and a natural place to involve the human, since there
- * is no mid-turn UI-confirm primitive to block on.
+ * Actions that require an explicit `confirm: true` before they run. `cancel`
+ * and `abandon` are irreversible (the run becomes cancelled); `approve` and
+ * `reject` are gated because a human gate stays a human decision even when an
+ * agent is driving. `resume` is intentionally NOT here — it only validates
+ * eligibility and changes nothing, so it's recoverable. Without confirm the
+ * tool returns a preview and asks the agent to check with the user first: a
+ * model-visible two-step that creates an audit point and a natural place to
+ * involve the human, since there is no mid-turn UI-confirm primitive to block on.
  */
 const DESTRUCTIVE_ACTIONS = new Set(['cancel', 'abandon', 'approve', 'reject']);
+
+/** Of the destructive actions, the two that decide a paused human gate. */
+const GATE_ACTIONS = new Set(['approve', 'reject']);
 
 /** Every action the tool understands, in catalog order. */
 const ACTIONS = [
@@ -92,8 +97,8 @@ const HELP_OVERVIEW = [
   '  list     — recent runs in this project (id, workflow, status, step). No params.',
   '  get      — one run’s detail. Params: runId.',
   '  start    — launch a workflow in the background. Params: workflow, message.',
-  '  resume   — mark a failed/paused run resumable from completed nodes. Params: runId.',
-  '  cancel   — stop a running run. Params: runId, confirm=true.',
+  '  resume   — check a failed/paused run can resume from completed nodes. Params: runId.',
+  '  cancel   — mark a running run cancelled. Params: runId, confirm=true.',
   '  abandon  — discard a paused/failed run. Params: runId, confirm=true.',
   '  approve  — approve a paused human gate. Params: runId, message=comment, confirm=true.',
   '  reject   — reject a paused human gate. Params: runId, message=reason, confirm=true.',
@@ -108,9 +113,9 @@ const HELP_BY_ACTION: Record<Exclude<Action, 'help'>, string> = {
   start:
     'start — launch a workflow in the background. Required: workflow (name). Recommended: message (what it should do). It appears in the runs list and the workflow dock.',
   resume:
-    'resume — validate a failed/paused run and mark it resumable from its completed nodes. Required: runId. Does not re-run immediately; continue it from the run’s controls or by re-invoking the workflow.',
+    'resume — validate that a failed/paused run can resume from its completed nodes. Required: runId. Does NOT re-run it — it stays in its current status; continue it from the run’s controls or by re-invoking the workflow.',
   cancel:
-    'cancel — stop a running (non-terminal) run. Required: runId, confirm=true. Irreversible: the run becomes cancelled.',
+    'cancel — mark a running (non-terminal) run cancelled. Required: runId, confirm=true. Irreversible. A process already executing may finish its current step before it stops.',
   abandon:
     'abandon — discard a paused/failed (non-terminal) run. Required: runId, confirm=true. Irreversible: the run becomes cancelled.',
   approve:
@@ -146,7 +151,9 @@ export function buildManageRunTool(ctx: ManageRunContext): NativeTool {
       "Inspect and operate this project's workflow runs (list, get, start, resume, cancel, abandon, approve, reject). Call action='help' first to see what each action needs. Destructive actions require confirm=true.",
     inputSchema: INPUT_SCHEMA,
     handler: async (input): Promise<string> => {
-      const action = typeof input.action === 'string' ? (input.action as Action) : '';
+      // Switch on the raw string; unknown values fall through to `default`. No
+      // assertion to `Action` — the switch's case labels narrow it for us.
+      const action = typeof input.action === 'string' ? input.action : '';
       try {
         switch (action) {
           case 'help':
@@ -172,7 +179,8 @@ export function buildManageRunTool(ctx: ManageRunContext): NativeTool {
         }
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
-        log.error({ err: e, action, codebaseId: ctx.codebaseId }, 'manage_run.failed');
+        const runId = typeof input.runId === 'string' ? input.runId : undefined;
+        log.error({ err: e, action, runId, codebaseId: ctx.codebaseId }, 'manage_run.failed');
         return `manage_run error: ${msg}`;
       }
     },
@@ -246,9 +254,11 @@ async function handleWrite(
   // Destructive actions need explicit confirmation. Without it, preview only.
   if (DESTRUCTIVE_ACTIONS.has(action) && input.confirm !== true) {
     log.info({ runId: run.id, action }, 'manage_run.confirm_preview');
+    const subject = GATE_ACTIONS.has(action)
+      ? `the paused human gate on run ${run.id.slice(0, 8)} (${run.workflow_name})`
+      : `run ${run.id.slice(0, 8)} (${run.workflow_name}), currently '${run.status}' — irreversible`;
     return (
-      `⚠️ This will ${action} run ${run.id.slice(0, 8)} (${run.workflow_name}), ` +
-      `currently '${run.status}'. This is not undoable. ` +
+      `⚠️ This will ${action} ${subject}. ` +
       'Confirm with the user, then call manage_run again with confirm: true to proceed.'
     );
   }
@@ -256,32 +266,36 @@ async function handleWrite(
   const message = typeof input.message === 'string' ? input.message.trim() : '';
   log.info({ runId: run.id, action }, 'manage_run.write_requested');
 
+  // Use the verified full id from `getScopedRun`, not the (possibly short) input
+  // — the operations below look runs up by exact id.
+  const id = run.id;
   switch (action) {
     case 'resume': {
-      const resumed = await resumeWorkflow(runId);
+      const resumed = await resumeWorkflow(id);
       return (
-        `Run ${resumed.id.slice(0, 8)} (${resumed.workflow_name}) is ready to resume from its ` +
-        'completed nodes. Continue it from the run’s controls or by re-invoking the workflow.'
+        `Run ${resumed.id.slice(0, 8)} (${resumed.workflow_name}) can resume from its completed ` +
+        'nodes. It does not restart automatically — continue it from the run’s controls or by ' +
+        're-invoking the workflow.'
       );
     }
     case 'cancel':
     case 'abandon': {
-      const cancelled = await abandonWorkflow(runId);
+      const cancelled = await abandonWorkflow(id);
       return `Cancelled run ${cancelled.id.slice(0, 8)} (${cancelled.workflow_name}).`;
     }
     case 'approve': {
-      const result = await approveWorkflow(runId, message.length > 0 ? message : undefined);
+      const result = await approveWorkflow(id, message.length > 0 ? message : undefined);
       return result.type === 'interactive_loop'
-        ? `Loop input recorded for ${result.workflowName} (${runId.slice(0, 8)}). The run is now set to resume.`
-        : `Approved ${result.workflowName} (${runId.slice(0, 8)}). The run is now set to resume.`;
+        ? `Loop input recorded for ${result.workflowName} (${id.slice(0, 8)}). The run is now set to resume.`
+        : `Approved ${result.workflowName} (${id.slice(0, 8)}). The run is now set to resume.`;
     }
     case 'reject': {
-      const result = await rejectWorkflow(runId, message.length > 0 ? message : undefined);
+      const result = await rejectWorkflow(id, message.length > 0 ? message : undefined);
       if (result.cancelled) {
         const suffix = result.maxAttemptsReached ? ' (max attempts reached)' : '';
-        return `Rejected and cancelled ${result.workflowName} (${runId.slice(0, 8)})${suffix}.`;
+        return `Rejected and cancelled ${result.workflowName} (${id.slice(0, 8)})${suffix}.`;
       }
-      return `Rejected ${result.workflowName} (${runId.slice(0, 8)}). It will rework with your feedback when it resumes.`;
+      return `Rejected ${result.workflowName} (${id.slice(0, 8)}). It will rework with your feedback when it resumes.`;
     }
   }
 }
@@ -289,19 +303,20 @@ async function handleWrite(
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 /**
- * Fetch a run and confirm it belongs to this chat's project. Returns the run,
- * or a user-facing string on miss / cross-project access — so an agent scoped
- * to project A cannot read or mutate project B's runs by guessing an id.
+ * Resolve a run id — the short prefix shown in listings OR a full id — to a run
+ * in THIS chat's project. The lookup is scoped to `codebaseId` in the query, so
+ * an agent in project A can never read or mutate project B's runs: a foreign id
+ * simply resolves to nothing. Returns the run, or a user-facing string on miss
+ * or ambiguous prefix.
  */
 async function getScopedRun(runId: string, ctx: ManageRunContext): Promise<WorkflowRun | string> {
-  const run = await getWorkflowRun(runId);
-  if (run === null) return `manage_run: no run found for id '${runId}' in this project.`;
-  if (run.codebase_id !== ctx.codebaseId) {
-    log.warn(
-      { runId, runCodebase: run.codebase_id, scopedCodebase: ctx.codebaseId },
-      'manage_run.cross_project_blocked'
-    );
-    return `manage_run: run '${runId}' is not part of this project.`;
+  const matches = await findWorkflowRunsByIdPrefix(runId, ctx.codebaseId);
+  if (matches.length > 1) {
+    return `manage_run: id '${runId}' matches more than one run — use more characters or the full id.`;
+  }
+  const [run] = matches;
+  if (run === undefined) {
+    return `manage_run: no run found for id '${runId}' in this project.`;
   }
   return run;
 }

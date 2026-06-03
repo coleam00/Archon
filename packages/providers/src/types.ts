@@ -268,8 +268,10 @@ export interface AgentRequestOptions {
  * boundary as data + a function on the request options.
  *
  * `inputSchema` is canonical JSON Schema (object). Each provider converts it to
- * its SDK's schema form. The handler must catch its own errors and return a
- * text result — never throw into the agent loop.
+ * its SDK's schema form. The handler is expected to return a text result rather
+ * than throw — provider adapters add no safety net, so an uncaught throw would
+ * surface into the agent loop. (core's `buildManageRunTool` guarantees this with
+ * an outer try/catch around its dispatch.)
  */
 export interface NativeTool {
   name: string;

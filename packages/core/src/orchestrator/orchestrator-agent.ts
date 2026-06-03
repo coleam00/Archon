@@ -1068,19 +1068,28 @@ export async function handleMessage(
               const names = workflows.map(w => w.name).join(', ');
               return `No workflow named "${workflowName}". Available: ${names}`;
             }
-            await dispatchBackgroundWorkflow(
-              {
-                platform,
-                conversationId,
-                cwd,
-                originalMessage: msg.length > 0 ? msg : `Run ${wf.name}`,
-                conversationDbId: conversation.id,
-                codebaseId: scopedCodebaseId,
-                availableWorkflows: workflows,
-                userId,
-              },
-              wf
-            );
+            try {
+              await dispatchBackgroundWorkflow(
+                {
+                  platform,
+                  conversationId,
+                  cwd,
+                  originalMessage: msg.length > 0 ? msg : `Run ${wf.name}`,
+                  conversationDbId: conversation.id,
+                  codebaseId: scopedCodebaseId,
+                  availableWorkflows: workflows,
+                  userId,
+                },
+                wf
+              );
+            } catch (e: unknown) {
+              const err = toError(e);
+              getLog().error(
+                { err, workflow: wf.name, codebaseId: scopedCodebaseId, conversationId },
+                'manage_run.start_failed'
+              );
+              return `Failed to start workflow "${wf.name}": ${err.message}`;
+            }
             return `Started workflow "${wf.name}" in the background — it'll appear in the runs list and the workflow dock shortly.`;
           },
         }),

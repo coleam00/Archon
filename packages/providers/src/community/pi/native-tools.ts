@@ -58,8 +58,10 @@ function jsonSchemaToTypeBox(schema: Record<string, unknown>): TObject {
 export function buildPiNativeToolDefinitions(nativeTools: NativeTool[]): ToolDefinition[] {
   return nativeTools.map(spec =>
     defineTool({
+      // Pi shows `label` in its UI; derive it per-tool from the name so a future
+      // second native tool doesn't inherit a hardcoded "Manage runs".
       name: spec.name,
-      label: 'Manage runs',
+      label: spec.name,
       description: spec.description,
       parameters: jsonSchemaToTypeBox(spec.inputSchema),
       execute: async (

@@ -10,6 +10,7 @@ Mounted at `/console/*`. Not part of the shipped product. Validates the mental m
 
 - `/console` → Runs view (scope = `all`)
 - `/console/p/:projectId` → Runs view scoped to a project
+- `/console/p/:projectId/chat` → Project-scoped agent chat
 - `/console/p/:projectId/r/:runId` → Run detail
 
 ## Constraints

@@ -51,13 +51,16 @@ So a project's chat is a single, ever-growing thread forever.
    accept the 500 cap but tell the user ("showing last 500"). Silent truncation
    is the current trap.
 
-## 2. The core hypothesis is still unbuilt: `manage_run`
+## 2. The core hypothesis — `manage_run` Wave 1 shipped
 
-The whole thesis — _the agent helps you run/track/manage workflows_ — needs the
-`manage_run` native tool (Wave 1 plan exists). Today the chat agent can only talk
-and use Bash; it cannot list/start/cancel/approve runs. The dock + working pill
-make the chat pleasant, but the agent isn't yet an _operator_. **This is the
-highest-value next build** and the reason the chat exists.
+The whole thesis — _the agent helps you run/track/manage workflows_ — needed the
+`manage_run` native tool. **Shipped in this PR (Wave 1):** a provider-neutral tool
+exposing `list`/`get`/`start`/`resume`/`cancel`/`abandon`/`approve`/`reject` (+ a
+`help` action for progressive disclosure), wired for Claude (in-process MCP) and
+Pi (`customTools`), project-scoped, with a confirm gate on destructive actions.
+The chat agent is now an _operator_, not just a talker. **Deferred:**
+Codex/OpenCode (served-MCP, a later wave); agent-initiated `approve`/`reject` is
+state-only (no auto-resume — the dock's human path owns that).
 
 ## 3. Live-repo mutation risk (safety — look into early)
 
@@ -82,14 +85,13 @@ meaningful **"▶ Started workflow X →"** line inline in the chat (not a raw s
 row) that links to the run, so the conversation records _what it kicked off_. The
 dock shows live progress; the inline line gives causality.
 
-## 5. Approvals from chat
+## 5. Approvals from chat — inline approvals shipped
 
-If a chat-dispatched workflow pauses for approval, the user finds out only via
-the dock card ("Waiting for approval", click → run-detail to approve). The
-RunsPage pending-input banner doesn't cover the chat. Look into: should the dock
-(or a chat-local banner) let you **approve/reject inline** without leaving the
-chat? Reuse `ApprovalPanel`. Otherwise the "agent manages runs" loop has a
-context switch at the most important moment.
+**Shipped in this PR:** the WorkflowDock renders **approve/reject inline**
+(reusing `ApprovalPanel` + `ApprovalContext`), so the user can act on a paused
+gate without leaving the chat. Remaining: the RunsPage pending-input banner still
+doesn't extend to the chat surface, and `manage_run`'s agent-initiated
+`approve`/`reject` is state-only (the dock's human path handles auto-resume).
 
 ## 6. Streaming granularity
 
@@ -126,9 +128,9 @@ flaky) deserves hardening.
 
 ## Suggested priority to look into
 
-1. `manage_run` tool (Wave 1) — the hypothesis. _(build)_
+1. ~~`manage_run` tool (Wave 1)~~ — the hypothesis. _(shipped in this PR)_
 2. "New chat" + conversation switcher — the §1 escape hatch. _(build, small)_
 3. Live-repo mutation policy for chat — safety decision. _(decide)_
-4. Inline workflow-dispatch line + inline approvals — close the operator loop. _(build)_
+4. Inline workflow-dispatch line + ~~inline approvals~~ — close the operator loop. Inline approvals shipped; the inline "▶ Started workflow X" causality line is still open. _(build)_
 5. Cost/turn-count surfacing + DB-history policy — context-growth visibility. _(build, small)_
 6. Streaming granularity + error UX — polish. _(decide/build)_

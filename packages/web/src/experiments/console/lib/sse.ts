@@ -33,7 +33,9 @@ function parse(raw: string): ParsedEvent | null {
 
 /**
  * Subscribe to the dashboard SSE stream and invalidate the runs feed on any
- * lifecycle change. Mount once at a high level (RunsPage).
+ * lifecycle change. Safe to mount from more than one route — RunsPage and the
+ * ChatPage WorkflowDock both do; each opens an independent connection and the
+ * invalidations are idempotent.
  *
  * Events we care about:
  *   workflow_status   — run created / status changed / completed / failed

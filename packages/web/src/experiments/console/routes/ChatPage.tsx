@@ -45,7 +45,7 @@ export function ChatPage(): ReactElement {
     () => (projectId !== undefined ? skill.getProject(projectId) : Promise.resolve(null))
   );
 
-  const { data: conversations } = useEntity<ConversationSummary[]>(
+  const { data: conversations, error: conversationsError } = useEntity<ConversationSummary[]>(
     projectId !== undefined ? K.conversations(projectId) : 'noop:no-project-convs',
     () => (projectId !== undefined ? skill.listConversations(projectId) : Promise.resolve([]))
   );
@@ -58,7 +58,7 @@ export function ChatPage(): ReactElement {
     if (web !== undefined) setActiveConvId(web.id);
   }, [conversations, activeConvId]);
 
-  const { data: messages } = useEntity<Message[]>(
+  const { data: messages, error: messagesError } = useEntity<Message[]>(
     activeConvId !== null ? K.messages(activeConvId) : 'noop:no-conv',
     () => (activeConvId !== null ? skill.listMessages(activeConvId) : Promise.resolve([]))
   );
@@ -175,6 +175,11 @@ export function ChatPage(): ReactElement {
 
   const messageList = messages ?? [];
 
+  // Surface a failed (re)load of the conversation list or message history — a
+  // revalidation can fail silently (network blip, server restart) and otherwise
+  // leave stale/empty data with no signal. Send errors take precedence.
+  const loadError = messagesError ?? conversationsError;
+
   // Current activity for the working indicator: the latest tool the agent
   // invoked in the in-flight turn (walk back to the last user message).
   const currentActivity = useMemo<string | null>(() => {
@@ -227,9 +232,9 @@ export function ChatPage(): ReactElement {
 
       <WorkflowDock projectId={projectId} />
 
-      {error !== null ? (
+      {error !== null || loadError !== undefined ? (
         <div className="shrink-0 border-t border-error/30 bg-error/[0.06] px-6 py-2 font-mono text-[11px] text-error">
-          {error}
+          {error ?? `Failed to load chat: ${loadError?.message ?? 'unknown error'}`}
         </div>
       ) : null}
 
