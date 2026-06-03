@@ -411,6 +411,31 @@ describe('detectCreditExhaustion', () => {
   it('is case-insensitive', () => {
     expect(detectCreditExhaustion("YOU'RE OUT OF EXTRA USAGE")).not.toBeNull();
   });
+
+  it('detects "You\'ve hit your session limit" (subscription session limit)', () => {
+    const result = detectCreditExhaustion(
+      "You've hit your session limit · resets 3am (America/Mexico_City)"
+    );
+    expect(result).not.toBeNull();
+    expect(result).toContain('session limit');
+  });
+
+  it('includes reset time in error message when present', () => {
+    const result = detectCreditExhaustion(
+      "You've hit your session limit · resets 3am (America/Mexico_City)"
+    );
+    expect(result).toContain('3am (America/Mexico_City)');
+  });
+
+  it('returns generic session limit message when no reset time found', () => {
+    const result = detectCreditExhaustion("You've hit your session limit.");
+    expect(result).not.toBeNull();
+    expect(result).toContain('session limit');
+  });
+
+  it('detects "hit your session limit" variant (case-insensitive)', () => {
+    expect(detectCreditExhaustion("YOU'VE HIT YOUR SESSION LIMIT · resets noon")).not.toBeNull();
+  });
 });
 
 describe('isInlineScript', () => {
