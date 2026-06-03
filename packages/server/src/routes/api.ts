@@ -2427,7 +2427,25 @@ export function registerApiRoutes(
       if (!run) {
         return apiError(c, 404, 'Workflow run not found');
       }
-      const events = await workflowEventDb.listWorkflowEvents(runId);
+
+      // BAND-AID (incident 2026-06-02): archon.db has a corrupted page range
+      // in the workflow_events table. The events query can throw
+      // `database disk image is malformed`. Wrap it so the route still serves
+      // run metadata + an empty events array when the events page is unreadable.
+      // The long-term fix is a `sqlite3 .recover` rebuild (see incidents/active).
+      let events: Awaited<ReturnType<typeof workflowEventDb.listWorkflowEvents>> = [];
+      let eventsTruncated = false;
+      let eventsErrorMessage: string | undefined;
+      try {
+        events = await workflowEventDb.listWorkflowEvents(runId);
+      } catch (eventsErr) {
+        eventsTruncated = true;
+        eventsErrorMessage = eventsErr instanceof Error ? eventsErr.message : String(eventsErr);
+        getLog().error(
+          { err: eventsErr, runId },
+          'workflow_run_events_unreadable_returning_truncated'
+        );
+      }
 
       // Look up the run's conversation platform ID.
       // For web runs (parent_conversation_id set): conversation_id is the worker conversation → set worker_platform_id
@@ -2460,6 +2478,8 @@ export function registerApiRoutes(
           conversation_platform_id: conversationPlatformId ?? null,
         },
         events,
+        events_truncated: eventsTruncated,
+        events_error: eventsErrorMessage ?? null,
       });
     } catch (error) {
       getLog().error({ err: error }, 'get_workflow_run_failed');
