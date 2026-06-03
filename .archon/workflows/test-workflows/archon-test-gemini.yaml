@@ -1,0 +1,36 @@
+name: archon-test-gemini
+description: |
+  Simple test workflow to verify the gemini provider works with Archon.
+  Triggers: "test gemini", "test gemini provider".
+
+provider: gemini
+model: gemini-2.0-flash-exp
+
+nodes:
+  - id: hello
+    prompt: |
+      Who won the 1984 Major League Baseball World Series? Answer in one sentence.
+
+  - id: hello-ollama
+    model: ollama/qwen2.5-coder:7b
+    prompt: |
+      Who won the 1984 Major League Baseball World Series? Answer in one sentence.
+
+  - id: verify
+    provider: claude
+    model: sonnet
+    prompt: |
+      The extension model node said:
+
+      $hello.output
+
+      The ollama node said:
+
+      $hello-ollama.output
+
+      If both answers mention the Detroit Tigers, say "Gemini provider verified ✅ (extension + ollama)".
+      If only the extension model is correct, say "Gemini extension verified ✅, ollama FAILED ❌".
+      If only ollama is correct, say "Gemini ollama verified ✅, extension FAILED ❌".
+      If neither is correct, say "Gemini provider FAILED ❌ — both wrong".
+      Say nothing else.
+    depends_on: [hello, hello-ollama]
