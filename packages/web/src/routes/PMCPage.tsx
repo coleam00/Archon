@@ -84,8 +84,10 @@ const KPI_TILES: { label: string; value: string; sub: string; icon: typeof Trend
   },
   {
     label: 'Engaged contacts',
-    value: '230',
-    sub: 'Across BRT + PMC + Medspa + Chiro',
+    value: String(
+      Object.values(prospectsData.totals as Record<string, number>).reduce((a, b) => a + b, 0)
+    ),
+    sub: `Across ${Object.keys(prospectsData.totals as Record<string, number>).join(' + ')}`,
     icon: Users,
   },
 ];

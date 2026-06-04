@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-04T12:06:54.835731+00:00",
+  "generated_at": "2026-06-04T17:56:15.162873+00:00",
   "source": {
     "apollo_api": "live",
     "apollo_csv": "second-brain/intelligence/briefs/2026-05-13-apollo-dial-list-all.csv",
@@ -237,7 +237,7 @@
   "outcome_funnel": [
     {
       "stage": "total-dials",
-      "count": 44
+      "count": 46
     },
     {
       "stage": "connected",
