@@ -410,7 +410,7 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 ### Database Schema
 
 **16 Tables (all prefixed with `remote_agent_`):**
-1. **`codebases`** - Repository metadata and commands (JSONB)
+1. **`codebases`** - Repository metadata, default branch, and commands (JSONB); `default_branch` captured at clone time for non-destructive chat-tick sync
 2. **`conversations`** - Track platform conversations with titles and soft-delete support; nullable `user_id` records first creator
 3. **`sessions`** - Track AI SDK sessions with resume capability
 4. **`isolation_environments`** - Git worktree isolation tracking; nullable `created_by_user_id` preserves first creator

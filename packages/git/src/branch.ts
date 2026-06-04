@@ -329,8 +329,10 @@ export async function getCurrentBranch(
     );
     const branch = stdout.trim();
     return branch ? toBranchName(branch) : null;
-  } catch {
-    // Detached HEAD, missing path, or not a git repo — all caller-recoverable.
+  } catch (error) {
+    // Expected: detached HEAD, missing path, not a git repo.
+    // Unexpected (permission denied, timeout): same safe default; log for debugging.
+    getLog().debug({ workingPath, err: error as Error }, 'get_current_branch_failed');
     return null;
   }
 }

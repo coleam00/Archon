@@ -17,7 +17,7 @@ export const codebaseRowSchema = z.object({
    * time; used as the chat-tick sync target without re-detecting on every message.
    * Nullable for pre-existing rows and for repos without a remote.
    */
-  default_branch: z.string().nullable().optional(),
+  default_branch: z.string().nullable(),
   ai_assistant_type: z.string(),
   commands: z.record(z.string(), z.object({ path: z.string(), description: z.string() })),
   created_at: z.date(),

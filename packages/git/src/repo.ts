@@ -189,6 +189,10 @@ async function syncWorkspaceFastForward(
   if (!local || !remote) {
     // Either HEAD or origin/<branch> couldn't be resolved (fresh clone, detached
     // HEAD, etc.). Don't move anything — preserve current state.
+    getLog().debug(
+      { workspacePath, local, remote, branchToSync },
+      'sync_workspace_rev_parse_inconclusive_skipping_merge'
+    );
     return {
       branch: branchToSync,
       synced: true,
@@ -274,13 +278,16 @@ async function syncWorkspaceFastForward(
       };
     }
     const newHead = await readShortHead(workspacePath);
+    const advanced = previousHead !== newHead && previousHead !== '';
     return {
       branch: branchToSync,
       synced: true,
       previousHead,
       newHead,
-      updated: previousHead !== newHead && previousHead !== '',
-      state: 'behind',
+      updated: advanced,
+      // After a successful ff-merge HEAD advanced → we are now in_sync.
+      // If merge was a no-op (shouldn't happen here), remain 'behind'.
+      state: advanced ? 'in_sync' : 'behind',
     };
   }
 

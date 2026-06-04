@@ -578,6 +578,7 @@ interface DiscoverResult {
   syncResult?: WorkspaceSyncResult;
   syncError?: string;
   config?: MergedConfig;
+  codebase?: Codebase | null;
 }
 
 /** Discover global + repo-specific workflows, merge by name (repo overrides global) */
@@ -587,6 +588,7 @@ async function discoverAllWorkflows(conversation: Conversation): Promise<Discove
   let syncResult: WorkspaceSyncResult | undefined;
   let syncError: string | undefined;
   let config: MergedConfig | undefined;
+  let codebase: Codebase | null | undefined;
 
   try {
     // Home-scoped workflows at ~/.archon/workflows/ are discovered automatically
@@ -601,7 +603,7 @@ async function discoverAllWorkflows(conversation: Conversation): Promise<Discove
 
   if (conversation.codebase_id) {
     try {
-      const codebase = await codebaseDb.getCodebase(conversation.codebase_id);
+      codebase = await codebaseDb.getCodebase(conversation.codebase_id);
       if (codebase) {
         // Sync canonical source with remote before the AI reads codebase state.
         // Always non-destructive (mode: 'fast-forward'): if the working tree is dirty,
@@ -647,7 +649,7 @@ async function discoverAllWorkflows(conversation: Conversation): Promise<Discove
     }
   }
 
-  return { workflows, errors: allErrors, syncResult, syncError, config };
+  return { workflows, errors: allErrors, syncResult, syncError, config, codebase };
 }
 
 /** Build the user-facing prompt with message and optional contexts */
@@ -924,6 +926,7 @@ export async function handleMessage(
       syncResult,
       syncError,
       config: discoveredConfig,
+      codebase: discoveredCodebase,
     } = await discoverAllWorkflows(conversation);
     const workflows: readonly WorkflowDefinition[] = workflowsWithSource.map(ws => ws.workflow);
     if (workflowErrors.length > 0) {
@@ -1137,12 +1140,10 @@ export async function handleMessage(
     // (uncommitted edits, unpushed commits), surface a one-line reminder so the
     // user can push or commit + push before the next worktree creation or
     // re-clone destroys that work. No-op when no codebase is attached.
-    if (conversation.codebase_id) {
+    // Use the codebase already fetched by discoverAllWorkflows — no second DB call.
+    if (discoveredCodebase) {
       try {
-        const codebase = await codebaseDb.getCodebase(conversation.codebase_id);
-        if (codebase) {
-          await reportUnpushedWorkInSource(conversationId, codebase, platform);
-        }
+        await reportUnpushedWorkInSource(conversationId, discoveredCodebase, platform);
       } catch (err) {
         getLog().warn(
           { err: err as Error, conversationId, codebaseId: conversation.codebase_id },

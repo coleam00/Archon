@@ -444,6 +444,28 @@ describe('codebases', () => {
       );
     });
 
+    test('updates default_branch only', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+
+      await updateCodebase('codebase-123', { default_branch: 'develop' });
+
+      expect(mockQuery).toHaveBeenCalledWith(
+        'UPDATE remote_agent_codebases SET default_branch = $1, updated_at = NOW() WHERE id = $2',
+        ['develop', 'codebase-123']
+      );
+    });
+
+    test('sets default_branch to null (explicit clear)', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+
+      await updateCodebase('codebase-123', { default_branch: null });
+
+      expect(mockQuery).toHaveBeenCalledWith(
+        'UPDATE remote_agent_codebases SET default_branch = $1, updated_at = NOW() WHERE id = $2',
+        [null, 'codebase-123']
+      );
+    });
+
     test('no-ops when no fields provided', async () => {
       await updateCodebase('codebase-123', {});
 

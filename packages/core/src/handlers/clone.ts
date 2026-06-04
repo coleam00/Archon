@@ -137,8 +137,7 @@ export interface RegisterResult {
  * runtime auto-detection on first sync.
  */
 async function detectDefaultBranch(targetPath: string): Promise<string | null> {
-  const branch = await getCurrentBranch(toRepoPath(targetPath));
-  return branch ?? null;
+  return getCurrentBranch(toRepoPath(targetPath));
 }
 
 /**
