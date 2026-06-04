@@ -276,10 +276,19 @@ nodes:
   # NODE 8: DECIDE — deterministic decision logic (inline Bun script)
   # ═══════════════════════════════════════════════════════════════
 
+  - id: persist-ai-review
+    # bash bridge: in a bash node $ai-review.output is shell-quoted, so a failed
+    # or non-JSON AI verdict (e.g. provider/API error) is written verbatim to a
+    # file instead of being injected raw into the decide script — where it would
+    # otherwise be invalid JS and crash the run at parse time.
+    depends_on: [ai-review]
+    bash: |
+      printf '%s' $ai-review.output > "$ARTIFACTS_DIR/ai-review.json"
+
   - id: decide
     runtime: bun
     timeout: 10000
-    depends_on: [ai-review, fetch-pr-metadata]
+    depends_on: [persist-ai-review, fetch-pr-metadata]
     script: |
       import { readFileSync, writeFileSync } from 'node:fs';
       import { resolve } from 'node:path';
@@ -292,8 +301,25 @@ nodes:
       const scopeResult = readFileSync(resolve(artifactsDir, '.scope-result'), 'utf8').trim();
 
       const scanResult = $security-scan.output;
-      const aiReview = $ai-review.output;
       const schemaResult = $validate-schema.output;
+
+      // ai-review verdict is read from a file (written by the persist-ai-review
+      // bash bridge) so a failed or non-JSON AI output can't crash this script.
+      let aiReview: { recommendation?: string; reasoning?: string };
+      try {
+        const aiReviewRaw = readFileSync(resolve(artifactsDir, 'ai-review.json'), 'utf8').trim();
+        aiReview = JSON.parse(aiReviewRaw) as { recommendation?: string; reasoning?: string };
+        if (typeof aiReview.recommendation !== 'string') {
+          throw new Error('missing "recommendation" field');
+        }
+      } catch (err) {
+        console.error(
+          `decide: ai-review did not produce a valid structured verdict (${(err as Error).message}). ` +
+            `The AI review step likely failed or was unavailable (e.g. provider/API quota). ` +
+            `Failing safe — not auto-merging. Re-run the marketplace auto-review once the provider is available.`,
+        );
+        process.exit(1);
+      }
 
       const author = prMeta.author.login;
       const isDraft = prMeta.isDraft;

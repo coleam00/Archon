@@ -21,29 +21,8 @@ export const SSE_BASE_URL = import.meta.env.DEV
 
 export { getCodebaseInput } from '@/lib/codebase-input';
 
-export interface ConversationResponse {
-  id: string;
-  platform_type: string;
-  platform_conversation_id: string;
-  codebase_id: string | null;
-  cwd: string | null;
-  ai_assistant_type: string;
-  title: string | null;
-  last_activity_at: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface CodebaseResponse {
-  id: string;
-  name: string;
-  repository_url: string | null;
-  default_cwd: string;
-  ai_assistant_type: string;
-  commands: Record<string, { path: string; description: string }>;
-  created_at: string;
-  updated_at: string;
-}
+export type ConversationResponse = components['schemas']['Conversation'];
+export type CodebaseResponse = components['schemas']['Codebase'];
 
 export interface HealthResponse {
   status: string;
@@ -68,9 +47,9 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
     const body = await res.text();
     const truncated = body.length > 200 ? body.slice(0, 200) + '...' : body;
     const path = new URL(url, window.location.origin).pathname;
-    const error = new Error(`API error ${String(res.status)} (${path}): ${truncated}`);
-    (error as Error & { status: number }).status = res.status;
-    throw error;
+    throw Object.assign(new Error(`API error ${res.status} (${path}): ${truncated}`), {
+      status: res.status,
+    });
   }
   return res.json() as Promise<T>;
 }
@@ -85,33 +64,66 @@ export interface ProviderInfo {
 
 export type ProviderDefaults = Record<string, unknown>;
 
-export interface SafeConfigResponse {
-  botName: string;
-  assistant: string;
-  assistants: Record<string, ProviderDefaults>;
-  streaming: {
-    telegram: 'stream' | 'batch';
-    discord: 'stream' | 'batch';
-    slack: 'stream' | 'batch';
-  };
-  concurrency: {
-    maxConversations: number;
-  };
-  defaults: {
-    copyDefaults: boolean;
-    loadDefaultCommands: boolean;
-    loadDefaultWorkflows: boolean;
-  };
-}
-
-export interface UpdateAssistantConfigBody {
-  assistant?: string;
-  assistants?: Record<string, ProviderDefaults>;
-}
+export type SafeConfigResponse = components['schemas']['SafeConfig'];
+export type UpdateAssistantConfigBody = components['schemas']['UpdateAssistantConfigBody'];
 
 export async function listProviders(): Promise<ProviderInfo[]> {
   const data = await fetchJSON<{ providers: ProviderInfo[] }>('/api/providers');
   return data.providers;
+}
+
+// Web auth status (opt-in). Drives the login gate: when `enabled` is false the
+// UI renders exactly as before (no login). `signup` reports the invite posture:
+//   - 'allowlist' — invite-only (allowlisted emails)
+//   - 'open'      — anyone may register
+//   - 'disabled'  — self-serve signup is off (login only); hide signup UI
+export interface AuthStatus {
+  enabled: boolean;
+  signup: 'allowlist' | 'open' | 'disabled';
+}
+
+export async function getAuthStatus(): Promise<AuthStatus> {
+  return fetchJSON<AuthStatus>('/api/auth/status');
+}
+
+// GitHub device-flow connect
+export interface GithubDeviceStart {
+  device_code: string;
+  user_code: string;
+  verification_uri: string;
+  interval: number;
+  expires_in: number;
+}
+
+export interface GithubDevicePoll {
+  status: 'pending' | 'connected' | 'expired' | 'denied' | 'error';
+  githubLogin?: string;
+  detail?: string;
+}
+
+export interface GithubConnectionStatus {
+  connected: boolean;
+  githubLogin: string | null;
+}
+
+export async function getGithubConnection(): Promise<GithubConnectionStatus> {
+  return fetchJSON<GithubConnectionStatus>('/api/auth/github');
+}
+
+export async function startGithubDeviceFlow(): Promise<GithubDeviceStart> {
+  return fetchJSON<GithubDeviceStart>('/api/auth/github/device/start', { method: 'POST' });
+}
+
+export async function pollGithubDeviceFlow(deviceCode: string): Promise<GithubDevicePoll> {
+  return fetchJSON<GithubDevicePoll>('/api/auth/github/device/poll', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ device_code: deviceCode }),
+  });
+}
+
+export async function disconnectGithub(): Promise<{ success: boolean }> {
+  return fetchJSON<{ success: boolean }>('/api/auth/github', { method: 'DELETE' });
 }
 
 // Conversations
@@ -177,14 +189,7 @@ export async function sendMessage(
 }
 
 // Messages
-export interface MessageResponse {
-  id: string;
-  conversation_id: string;
-  role: 'user' | 'assistant';
-  content: string;
-  metadata: string;
-  created_at: string;
-}
+export type MessageResponse = components['schemas']['Message'];
 
 export async function getMessages(conversationId: string, limit = 200): Promise<MessageResponse[]> {
   return fetchJSON<MessageResponse[]>(
@@ -215,32 +220,8 @@ export async function deleteCodebase(id: string): Promise<{ success: boolean }> 
   return fetchJSON<{ success: boolean }>(`/api/codebases/${id}`, { method: 'DELETE' });
 }
 
-export interface WorkflowRunResponse {
-  id: string;
-  workflow_name: string;
-  conversation_id: string;
-  parent_conversation_id: string | null;
-  codebase_id: string | null;
-  status: WorkflowRunStatus;
-  user_message: string;
-  metadata: Record<string, unknown>;
-  started_at: string;
-  completed_at: string | null;
-  last_activity_at: string | null;
-  worker_platform_id?: string;
-  parent_platform_id?: string;
-  conversation_platform_id?: string;
-}
-
-export interface WorkflowEventResponse {
-  id: string;
-  workflow_run_id: string;
-  event_type: string;
-  step_index: number | null;
-  step_name: string | null;
-  data: Record<string, unknown>;
-  created_at: string;
-}
+export type WorkflowRunResponse = components['schemas']['WorkflowRun'];
+export type WorkflowEventResponse = components['schemas']['WorkflowEvent'];
 
 export type WorkflowListEntry = components['schemas']['WorkflowListEntry'];
 
@@ -262,41 +243,9 @@ export async function runWorkflow(
   });
 }
 
-// Dashboard-enriched workflow run (includes joined data from single SQL query)
-export interface DashboardRunResponse extends Omit<
-  WorkflowRunResponse,
-  'worker_platform_id' | 'parent_platform_id'
-> {
-  working_path: string | null;
-  codebase_name: string | null;
-  platform_type: string | null;
-  worker_platform_id: string | null;
-  parent_platform_id: string | null;
-  current_step_name: string | null;
-  total_steps: number | null;
-  current_step_status: 'running' | 'completed' | 'failed' | null;
-  agents_completed: number | null;
-  agents_failed: number | null;
-  agents_total: number | null;
-}
-
-/** Status counts across all matching runs (ignoring status filter). */
-export interface DashboardCounts {
-  all: number;
-  running: number;
-  completed: number;
-  failed: number;
-  cancelled: number;
-  pending: number;
-  paused: number;
-}
-
-/** Paginated dashboard runs response. */
-export interface DashboardRunsResult {
-  runs: DashboardRunResponse[];
-  total: number;
-  counts: DashboardCounts;
-}
+export type DashboardRunResponse = components['schemas']['DashboardWorkflowRun'];
+export type DashboardCounts = components['schemas']['DashboardRunsResponse']['counts'];
+export type DashboardRunsResult = components['schemas']['DashboardRunsResponse'];
 
 export async function listDashboardRuns(options?: {
   status?: WorkflowRunStatus;
@@ -393,13 +342,13 @@ export async function listWorkflowRuns(options?: {
 
 export async function getWorkflowRun(
   runId: string
-): Promise<{ run: WorkflowRunResponse; events: WorkflowEventResponse[] }> {
+): Promise<components['schemas']['WorkflowRunDetail']> {
   return fetchJSON(`/api/workflows/runs/${encodeURIComponent(runId)}`);
 }
 
 export async function getWorkflowRunByWorker(
   workerPlatformId: string
-): Promise<{ run: WorkflowRunResponse } | null> {
+): Promise<components['schemas']['WorkflowRunByWorkerResponse'] | null> {
   try {
     return await fetchJSON(`/api/workflows/runs/by-worker/${encodeURIComponent(workerPlatformId)}`);
   } catch (e: unknown) {

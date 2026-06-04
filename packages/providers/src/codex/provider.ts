@@ -8,6 +8,7 @@ import {
   type ThreadOptions,
   type TurnOptions,
   type TurnCompletedEvent,
+  type ThreadStartedEvent,
 } from '@openai/codex-sdk';
 import type {
   IAgentProvider,
@@ -21,6 +22,10 @@ import { CODEX_CAPABILITIES } from './capabilities';
 import { resolveCodexBinaryPath } from './binary-resolver';
 import { createLogger } from '@archon/paths';
 import { loadMcpConfig } from '../mcp/config';
+import {
+  hasOpenAdditionalProperties,
+  normalizeJsonSchemaForOpenAiStrict,
+} from '../shared/structured-output';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -278,14 +283,31 @@ function buildTurnOptions(requestOptions?: SendQueryOptions): {
   hasOutputFormat: boolean;
 } {
   const turnOptions: TurnOptions = {};
+  // Preserve the original precedence: an explicit `outputFormat` wins over
+  // `nodeConfig.output_format` even when its `.schema` is undefined. Note the
+  // resulting asymmetry: if `outputFormat` is set but `.schema` is undefined,
+  // `rawSchema` is undefined (no schema sent) yet `hasOutputFormat` is still
+  // true — the stream accumulator runs and JSON.parses the response text.
+  const rawSchema =
+    requestOptions?.outputFormat !== undefined
+      ? requestOptions.outputFormat.schema
+      : requestOptions?.nodeConfig?.output_format;
   const hasOutputFormat = !!(
     requestOptions?.outputFormat ?? requestOptions?.nodeConfig?.output_format
   );
-  if (requestOptions?.outputFormat) {
-    turnOptions.outputSchema = requestOptions.outputFormat.schema;
-  }
-  if (requestOptions?.nodeConfig?.output_format && !requestOptions?.outputFormat) {
-    turnOptions.outputSchema = requestOptions.nodeConfig.output_format;
+  if (rawSchema !== undefined) {
+    // OpenAI Structured Outputs strict-mode requires additionalProperties:false
+    // on every object schema (HTTP 400 invalid_json_schema otherwise). Workflow
+    // authors write portable output_format schemas, so normalize here before
+    // handing the schema to the Codex SDK. See issue #1843.
+    if (hasOpenAdditionalProperties(rawSchema)) {
+      // The normalizer is about to rewrite an open-record `additionalProperties`
+      // (e.g. `{ type: 'string' }` or `true`) to `false`. OpenAI would 400 the
+      // open form anyway, but the author never declared a closed object — warn
+      // so the silent narrowing is visible rather than a surprise at runtime.
+      getLog().warn({ schema: rawSchema }, 'codex.output_format_open_record_closed');
+    }
+    turnOptions.outputSchema = normalizeJsonSchemaForOpenAiStrict(rawSchema);
   }
   // Signal assignment is intentionally per-attempt (in sendQuery's retry
   // loop), not here. Reusing a single AbortSignal across retries can poison
@@ -315,6 +337,13 @@ async function* streamCodexEvents(
   const state: CodexStreamState = {};
   let accumulatedText = '';
 
+  // A new thread's id is assigned during the run via the `thread.started` event
+  // (the SDK emits it only for new threads), not synchronously on startThread().
+  // Capture it so the terminal result chunk surfaces a resumable sessionId —
+  // persist_session and suspend/resume depend on it. A resumed thread keeps the
+  // snapshot id (no thread.started fires), so the seeded value stays correct.
+  let resolvedThreadId: string | null | undefined = threadId;
+
   if (abortSignal?.aborted) {
     getLog().info('query_aborted_before_stream');
     throw new Error('Query aborted');
@@ -331,6 +360,26 @@ async function* streamCodexEvents(
     if (abortSignal?.aborted) {
       getLog().info('query_aborted_between_events');
       throw new Error('Query aborted');
+    }
+
+    if (event.type === 'thread.started') {
+      // Capture the new thread's id. Its SDK doc comment reads: "The identifier
+      // of the new thread. Can be used to resume the thread later." This is the
+      // only place a new thread's id surfaces. `continue` — the event carries no
+      // user-facing content, only this metadata.
+      const startedThreadId = (event as ThreadStartedEvent).thread_id;
+      if (startedThreadId) {
+        resolvedThreadId = startedThreadId;
+        getLog().info({ threadId: startedThreadId }, 'codex.thread_started');
+      } else {
+        // The SDK types thread_id as a non-empty string, so this should never
+        // fire. If it does, a new thread would surface sessionId: undefined and
+        // the dag-executor would treat the run as session-less — silently
+        // dropping any persist_session continuity. Warn rather than degrade
+        // quietly (CLAUDE.md: Fail Fast + Explicit Errors).
+        getLog().warn({ snapshotThreadId: resolvedThreadId }, 'codex.thread_started_missing_id');
+      }
+      continue;
     }
 
     if (event.type === 'item.started') {
@@ -367,7 +416,7 @@ async function* streamCodexEvents(
       getLog().error({ errorMessage }, 'turn_failed');
       yield {
         type: 'result',
-        sessionId: threadId ?? undefined,
+        sessionId: resolvedThreadId ?? undefined,
         isError: true,
         errorSubtype: 'codex_turn_failed',
         errors: [errorMessage],
@@ -392,7 +441,9 @@ async function* streamCodexEvents(
       switch (itemType) {
         case 'agent_message':
           if (item.text) {
-            if (hasOutputFormat) accumulatedText += item.text as string;
+            // Multiple agent_message items can arrive in one turn (preamble + answer);
+            // keep only the last — it's the authoritative structured-output candidate.
+            if (hasOutputFormat) accumulatedText = item.text as string;
             yield { type: 'assistant', content: item.text as string };
           }
           break;
@@ -563,7 +614,7 @@ async function* streamCodexEvents(
 
       yield {
         type: 'result',
-        sessionId: threadId ?? undefined,
+        sessionId: resolvedThreadId ?? undefined,
         tokens: usage,
         ...(structuredOutput !== undefined ? { structuredOutput } : {}),
       };
@@ -583,7 +634,7 @@ async function* streamCodexEvents(
   getLog().error({ message }, 'stream_incomplete');
   yield {
     type: 'result',
-    sessionId: threadId ?? undefined,
+    sessionId: resolvedThreadId ?? undefined,
     isError: true,
     errorSubtype: 'codex_stream_incomplete',
     errors: [message],

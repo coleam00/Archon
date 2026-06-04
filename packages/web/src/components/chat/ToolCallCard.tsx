@@ -34,6 +34,11 @@ export function ToolCallCard({ tool }: ToolCallCardProps): React.ReactElement {
   const outputLines = tool.output?.split('\n') ?? [];
   const isLongOutput = outputLines.length > 20;
   const displayOutput = showAllOutput ? tool.output : outputLines.slice(0, 20).join('\n');
+  const outputPreview = outputLines
+    .map(line => line.trim())
+    .find(line => line.length > 0)
+    ?.slice(0, 80);
+  const statusLabel = isRunning ? 'Running' : tool.output !== undefined ? 'Complete' : 'Done';
 
   return (
     <div
@@ -61,7 +66,14 @@ export function ToolCallCard({ tool }: ToolCallCardProps): React.ReactElement {
           <Terminal className="h-3.5 w-3.5 shrink-0 text-text-secondary" />
         )}
         <span className="truncate font-mono text-xs text-text-secondary">{tool.name}</span>
-        {summaryText && <span className="truncate text-xs text-text-tertiary">{summaryText}</span>}
+        <span className="shrink-0 rounded-full bg-surface-elevated px-2 py-0.5 text-[10px] text-text-secondary">
+          {statusLabel}
+        </span>
+        {summaryText ? (
+          <span className="truncate text-xs text-text-tertiary">{summaryText}</span>
+        ) : outputPreview ? (
+          <span className="truncate text-xs text-text-tertiary">{outputPreview}</span>
+        ) : null}
         <span className="ml-auto shrink-0">
           {isRunning && elapsed > 0 ? (
             <span className="rounded-full bg-primary/20 px-2 py-0.5 text-[10px] text-primary">

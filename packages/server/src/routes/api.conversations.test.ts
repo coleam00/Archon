@@ -116,6 +116,32 @@ describe('GET /api/conversations/:id', () => {
     expect(body.platform_conversation_id).toBe('web-test-abc');
   });
 
+  test('converts Date objects to ISO strings in response', async () => {
+    const now = new Date('2025-06-01T12:00:00.000Z');
+    mockFindConversationByPlatformId.mockImplementationOnce(async () => ({
+      ...MOCK_CONV,
+      created_at: now,
+      updated_at: now,
+      deleted_at: null,
+      last_activity_at: undefined, // mock omission
+    }));
+
+    const app = new OpenAPIHono();
+    registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+    const response = await app.request('/api/conversations/web-test-abc');
+    const body = (await response.json()) as {
+      created_at: string;
+      updated_at: string;
+      deleted_at: null;
+      last_activity_at: null;
+    };
+    expect(body.created_at).toBe('2025-06-01T12:00:00.000Z');
+    expect(body.updated_at).toBe('2025-06-01T12:00:00.000Z');
+    expect(body.deleted_at).toBeNull();
+    expect(body.last_activity_at).toBeNull();
+  });
+
   test('returns 404 for unknown platform conversation ID', async () => {
     mockFindConversationByPlatformId.mockImplementationOnce(async () => null);
 

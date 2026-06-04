@@ -93,8 +93,7 @@ nodes:
 
       ## Output
 
-      Produce your complete impact analysis below (do NOT attempt to write files —
-      your output will be captured automatically). Use the following structure:
+      Write a thorough impact analysis to `$ARTIFACTS_DIR/impact-analysis.md` with:
 
       ### Target Files
       - File path, line count, function count
@@ -118,20 +117,7 @@ nodes:
       - Rationale for each grouping (cohesion, shared dependencies)
     depends_on: [scan-scope]
     context: fresh
-    denied_tools: [Write, Edit, Bash]
-
-  # Persist the impact analysis to a file so downstream nodes can read it.
-  # The analysis node is read-only (denied_tools prevents file writes),
-  # so we use a bash node to bridge the context boundary.
-  - id: persist-impact
-    bash: |
-      mkdir -p "$ARTIFACTS_DIR"
-      cat > "$ARTIFACTS_DIR/impact-analysis.md" << 'ARCHON_EOF'
-      $analyze-impact.output
-      ARCHON_EOF
-      echo "Impact analysis written to $ARTIFACTS_DIR/impact-analysis.md"
-    depends_on: [analyze-impact]
-    timeout: 30000
+    denied_tools: [Edit, Bash]
 
   # ═══════════════════════════════════════════════════════════════
   # PHASE 3: PLAN REFACTOR — Ordered task list with rollback strategy
@@ -175,8 +161,7 @@ nodes:
 
       ## Output
 
-      Produce the complete plan below (do NOT attempt to write files —
-      your output will be captured automatically). Use the following structure:
+      Write the plan to `$ARTIFACTS_DIR/refactor-plan.md` with:
 
       ### File Structure (Before)
       ```
@@ -212,22 +197,9 @@ nodes:
       - Lint: `bun run lint`
       - Tests: `bun run test`
       - Format: `bun run format:check`
-    depends_on: [persist-impact]
+    depends_on: [analyze-impact]
     context: fresh
-    denied_tools: [Write, Edit, Bash]
-
-  # Persist the refactoring plan to a file so the execute node can read it.
-  # Same pattern as persist-impact: the plan node is read-only, so a bash
-  # node writes its captured output to disk.
-  - id: persist-plan
-    bash: |
-      mkdir -p "$ARTIFACTS_DIR"
-      cat > "$ARTIFACTS_DIR/refactor-plan.md" << 'ARCHON_EOF'
-      $plan-refactor.output
-      ARCHON_EOF
-      echo "Refactoring plan written to $ARTIFACTS_DIR/refactor-plan.md"
-    depends_on: [plan-refactor]
-    timeout: 30000
+    denied_tools: [Edit, Bash]
 
   # ═══════════════════════════════════════════════════════════════
   # PHASE 4: EXECUTE REFACTOR — Implements the plan with guardrails
@@ -278,7 +250,7 @@ nodes:
       - If a task is more complex than planned: complete it anyway, note the deviation
       - If you discover the plan missed an import site: update it and note it
       - NEVER skip a task — complete them in order
-    depends_on: [persist-plan]
+    depends_on: [plan-refactor]
     context: fresh
     hooks:
       PreToolUse:
