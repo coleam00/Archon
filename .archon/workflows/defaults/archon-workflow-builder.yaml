@@ -63,7 +63,7 @@ nodes:
       Be specific and concrete. Each proposed node should have a clear type
       (bash, prompt, command, script, loop, or approval) and a one-line
       description of what it does.
-    model: haiku
+    model: small
     allowed_tools: []
     output_format:
       type: object

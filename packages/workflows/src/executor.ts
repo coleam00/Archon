@@ -22,6 +22,12 @@ import { getWorkflowEventEmitter } from './event-emitter';
 import { isRegisteredProvider, getRegisteredProviders } from '@archon/providers';
 import { classifyError, safeSendMessage, type SendMessageContext } from './executor-shared';
 import { resolveGithubTokenOverrides } from './utils/github-token-policy';
+import {
+  buildAiProfile,
+  isLiteralSpec,
+  resolveModelSpec,
+  type ResolvedAiProfile,
+} from './model-resolver';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -375,19 +381,69 @@ export async function executeWorkflow(
 
   // Resolve provider and model once (used by all nodes).
   // Provider is explicit: node.provider ?? workflow.provider ?? config.assistant.
-  // Model strings pass through to the SDK as-is — the SDK validates at request time.
-  const resolvedProvider: string = workflow.provider ?? config.assistant;
+  // Workflow-level `model:` may be a tier keyword (small/medium/large), a custom
+  // @alias, or a literal model string. Tier/@alias refs are resolved against the
+  // AI profile (built from tier-defaults.json + config tiers: + config aliases:).
+  // Literal model strings pass through to the SDK as-is — the SDK validates at
+  // request time.
+  const baseProvider: string = workflow.provider ?? config.assistant;
   const providerSource = workflow.provider ? 'workflow definition' : 'config';
-  if (!isRegisteredProvider(resolvedProvider)) {
+  if (!isRegisteredProvider(baseProvider)) {
     throw new Error(
-      `Workflow '${workflow.name}': unknown provider '${resolvedProvider}'. ` +
+      `Workflow '${workflow.name}': unknown provider '${baseProvider}'. ` +
         `Registered: ${getRegisteredProviders()
           .map(p => p.id)
           .join(', ')}`
     );
   }
-  const assistantDefaults = config.assistants[resolvedProvider];
-  const resolvedModel = workflow.model ?? (assistantDefaults?.model as string | undefined);
+  const assistantDefaults = config.assistants[baseProvider];
+
+  // Build the AI profile once for this run — layers tier-defaults.json,
+  // config tiers:, and config aliases:. The same profile is threaded into
+  // executeDagWorkflow so per-node `model:` refs resolve identically.
+  const aiProfile: ResolvedAiProfile = buildAiProfile(baseProvider, {
+    globalAliases: config.aliases,
+    globalTiers: config.tiers,
+  });
+
+  // Resolve workflow-level `model:` ref. A preset (tier or @alias) may switch
+  // the provider; an explicit `workflow.provider` conflict is non-blocking — the
+  // alias provider wins, but we warn so operators see the surprise.
+  let resolvedProvider: string = baseProvider;
+  let resolvedModel: string | undefined;
+  if (workflow.model) {
+    const spec = resolveModelSpec(aiProfile, workflow.model);
+    if (isLiteralSpec(spec)) {
+      resolvedModel = spec.literal;
+    } else {
+      if (workflow.provider && workflow.provider !== spec.provider) {
+        getLog().warn(
+          {
+            workflowName: workflow.name,
+            workflowProvider: workflow.provider,
+            aliasProvider: spec.provider,
+            modelRef: workflow.model,
+          },
+          'workflow.alias_provider_conflict'
+        );
+      }
+      resolvedProvider = spec.provider;
+      resolvedModel = spec.model;
+    }
+  } else {
+    resolvedModel = assistantDefaults?.model as string | undefined;
+  }
+
+  // Re-validate provider in case the alias switched it (e.g. tier resolves
+  // to a provider not in the registry — bad config, fail loudly).
+  if (!isRegisteredProvider(resolvedProvider)) {
+    throw new Error(
+      `Workflow '${workflow.name}': alias resolved to unknown provider '${resolvedProvider}'. ` +
+        `Registered: ${getRegisteredProviders()
+          .map(p => p.id)
+          .join(', ')}`
+    );
+  }
 
   getLog().info(
     {
@@ -736,7 +792,8 @@ export async function executeWorkflow(
       configuredCommandFolder,
       issueContext,
       dagPriorCompletedNodes,
-      source
+      source,
+      aiProfile
     );
 
     // executeDagWorkflow throws on fatal errors; check DB status for result

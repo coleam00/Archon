@@ -174,7 +174,7 @@ nodes:
   # ═══════════════════════════════════════════════════════════════
 
   - id: create-plan
-    model: sonnet
+    model: medium
     depends_on: [explore]
     context: fresh
     prompt: |

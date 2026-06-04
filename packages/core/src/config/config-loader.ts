@@ -36,6 +36,7 @@ import type {
   AssistantDefaults,
   AssistantDefaultsConfig,
   RawAliasesConfig,
+  RawTiersConfig,
 } from './config-types';
 import { createLogger } from '@archon/paths';
 import {
@@ -58,13 +59,27 @@ function getRegisteredProviderNames(): string[] {
 /**
  * Shallow-merge alias maps. Last-write-wins per key, intentional — repo wins
  * over global, global wins over (currently absent) built-in alias defaults.
- * Reserved-name validation lives in `buildAiProfile()` (model-validation.ts),
+ * Reserved-name validation lives in `buildAiProfile()` (model-resolver.ts),
  * not here — config-loader is a data-merge layer, not a resolver.
  */
 function mergeAliases(
   base: RawAliasesConfig | undefined,
   overrides: RawAliasesConfig | undefined
 ): RawAliasesConfig | undefined {
+  if (!base && !overrides) return undefined;
+  return { ...base, ...overrides };
+}
+
+/**
+ * Shallow-merge tier-override maps. Last-write-wins per tier key — repo wins
+ * over global, global wins over built-in tier-defaults.json (applied later in
+ * `buildAiProfile()`). Entry-shape validation lives in `buildAiProfile()`, not
+ * here — config-loader is a data-merge layer, not a resolver.
+ */
+function mergeTiers(
+  base: RawTiersConfig | undefined,
+  overrides: RawTiersConfig | undefined
+): RawTiersConfig | undefined {
   if (!base && !overrides) return undefined;
   return { ...base, ...overrides };
 }
@@ -404,6 +419,7 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
   result.assistants = mergeAssistantDefaults(result.assistants, global.assistants);
 
   result.aliases = mergeAliases(result.aliases, global.aliases);
+  result.tiers = mergeTiers(result.tiers, global.tiers);
 
   // Streaming preferences
   if (global.streaming) {
@@ -450,6 +466,7 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
   result.assistants = mergeAssistantDefaults(result.assistants, repo.assistants);
 
   result.aliases = mergeAliases(result.aliases, repo.aliases);
+  result.tiers = mergeTiers(result.tiers, repo.tiers);
 
   // Commands config
   if (repo.commands) {

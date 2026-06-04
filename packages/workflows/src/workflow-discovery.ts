@@ -155,6 +155,44 @@ async function loadWorkflowsFromDir(dirPath: string, depth = 0): Promise<DirLoad
 }
 
 /**
+ * Reject bundled workflows that reference `@custom` aliases — those are per-install
+ * config (defined in user/repo `.archon/config.yaml`), so a bundled workflow that
+ * names them only works on installs that happen to ship the same alias. Bundled
+ * defaults must portably resolve everywhere: tier keywords (small/medium/large)
+ * or literal model strings only.
+ *
+ * Returns the first violation as a validation error, or null if the workflow is
+ * portable. Called by `loadBundledWorkflows` (binary builds) and by the
+ * filesystem bundled-load path so source builds enforce the same rule.
+ */
+export function validateBundledWorkflowAliases(
+  workflow: WorkflowDefinition,
+  filename: string
+): WorkflowLoadError | null {
+  const violations: string[] = [];
+
+  if (typeof workflow.model === 'string' && workflow.model.startsWith('@')) {
+    violations.push(`workflow.model '${workflow.model}'`);
+  }
+  for (const node of workflow.nodes) {
+    const nodeModel = (node as { model?: unknown }).model;
+    if (typeof nodeModel === 'string' && nodeModel.startsWith('@')) {
+      violations.push(`node '${node.id}' model '${nodeModel}'`);
+    }
+  }
+
+  if (violations.length === 0) return null;
+  return {
+    filename,
+    error:
+      `Bundled workflow '${workflow.name}' references custom @alias(es): ${violations.join(', ')}. ` +
+      'Bundled defaults may only use tier keywords (small/medium/large) or literal model strings — ' +
+      '@aliases are per-install config and not portable.',
+    errorType: 'validation_error',
+  };
+}
+
+/**
  * Load bundled default workflows (for binary distribution)
  * Returns a Map of filename -> workflow for consistency with loadWorkflowsFromDir
  *
@@ -169,6 +207,15 @@ function loadBundledWorkflows(): DirLoadResult {
     const filename = `${name}.yaml`;
     const result = parseWorkflow(content, filename);
     if (result.workflow) {
+      const aliasViolation = validateBundledWorkflowAliases(result.workflow, filename);
+      if (aliasViolation) {
+        getLog().error(
+          { filename, error: aliasViolation.error },
+          'bundled_workflow_alias_rejected'
+        );
+        errors.push(aliasViolation);
+        continue;
+      }
       workflows.set(filename, result.workflow);
       getLog().debug({ workflowName: result.workflow.name }, 'bundled_workflow_loaded');
     } else {
@@ -230,6 +277,15 @@ export async function discoverWorkflows(
         await access(appDefaultsPath);
         const appResult = await loadWorkflowsFromDir(appDefaultsPath);
         for (const [filename, workflow] of appResult.workflows) {
+          const aliasViolation = validateBundledWorkflowAliases(workflow, filename);
+          if (aliasViolation) {
+            getLog().error(
+              { filename, error: aliasViolation.error },
+              'bundled_workflow_alias_rejected'
+            );
+            appResult.errors.push(aliasViolation);
+            continue;
+          }
           workflowsByFile.set(filename, { workflow, source: 'bundled' });
         }
         if (appResult.errors.length > 0) {
@@ -304,7 +360,18 @@ export async function discoverWorkflows(
       const existing = workflowsByFile.get(filename);
       if (existing?.source === 'bundled') {
         // This file was already loaded as a bundled default — the repo's defaults/
-        // subdirectory is re-discovering it. Keep the bundled source label.
+        // subdirectory is re-discovering it. Keep the bundled source label, but
+        // still apply the @alias rule so a tampered defaults/ copy can't smuggle
+        // in per-install aliases.
+        const aliasViolation = validateBundledWorkflowAliases(workflow, filename);
+        if (aliasViolation) {
+          getLog().error(
+            { filename, error: aliasViolation.error },
+            'bundled_workflow_alias_rejected'
+          );
+          allErrors.push(aliasViolation);
+          continue;
+        }
         getLog().debug({ filename }, 'repo_default_preserves_bundled_source');
         workflowsByFile.set(filename, { workflow, source: 'bundled' });
       } else {

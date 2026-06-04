@@ -39,6 +39,12 @@ export interface RawAliasEntry {
 /** The aliases map from config YAML — keyed by alias name */
 export type RawAliasesConfig = Record<string, RawAliasEntry>;
 
+/** Tier-override map from config YAML — keyed by tier name, partial allowed.
+ * Distinct from `RawAliasesConfig`: tier names (small/medium/large) are reserved
+ * and do NOT require the `@` prefix; the `assertNotReserved` / `assertCustomAliasPrefix`
+ * validators do not apply here. */
+export type RawTiersConfig = Partial<Record<TierName, RawAliasEntry>>;
+
 /** The resolved AI profile — used by resolveModelSpec */
 export interface ResolvedAiProfile {
   defaultProvider: string;
@@ -100,6 +106,10 @@ export interface BuildAiProfileOptions {
   globalAliases?: RawAliasesConfig;
   /** Aliases from .archon/config.yaml (repo) — override globalAliases on key collision */
   repoAliases?: RawAliasesConfig;
+  /** Tier overrides from ~/.archon/config.yaml — override built-in tier defaults per tier */
+  globalTiers?: RawTiersConfig;
+  /** Tier overrides from .archon/config.yaml (repo) — override globalTiers on same tier */
+  repoTiers?: RawTiersConfig;
 }
 
 /**
@@ -124,6 +134,22 @@ export function buildAiProfile(
           ...(entry.effort !== undefined ? { effort: entry.effort } : {}),
         };
       }
+    }
+  }
+
+  // Layer cross-provider tier overrides (global → repo) on top of the
+  // tier-defaults.json seed. Tier names are reserved and pre-validated by the
+  // RawTiersConfig type — only assert entry shape (non-empty provider+model).
+  for (const layer of [options.globalTiers, options.repoTiers]) {
+    if (!layer) continue;
+    for (const [name, entry] of Object.entries(layer) as [TierName, RawAliasEntry][]) {
+      assertValidEntry(name, entry);
+      aliases[name] = {
+        provider: entry.provider,
+        model: entry.model,
+        ...(entry.effort !== undefined ? { effort: entry.effort } : {}),
+        ...(entry.thinking !== undefined ? { thinking: entry.thinking } : {}),
+      };
     }
   }
 

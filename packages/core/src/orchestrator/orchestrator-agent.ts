@@ -51,6 +51,7 @@ import type { MergedConfig } from '../config/config-types';
 import { generateAndSetTitle } from '../services/title-generator';
 import { validateAndResolveIsolation, dispatchBackgroundWorkflow } from './orchestrator';
 import { IsolationBlockedError } from '@archon/isolation';
+import { buildAiProfile, isLiteralSpec, resolveModelSpec } from '@archon/workflows/model-resolver';
 import {
   buildOrchestratorSystemAppend,
   buildRunManagementSection,
@@ -1067,6 +1068,39 @@ export async function handleMessage(
       env: Object.keys(effectiveEnv).length > 0 ? effectiveEnv : undefined,
       systemPrompt,
     };
+
+    // Resolve the `large` tier for chat: use the configured tier model when it
+    // matches this conversation's provider, so chat honors the user's tier
+    // config (e.g. `tiers.large = { provider: claude, model: opus }` → Opus for
+    // direct chat on claude). Cross-provider switching in chat is Phase 2 — if
+    // the resolved tier preset names a different provider, we silently keep the
+    // SDK default. Any error (unknown provider, no tier configured) falls
+    // through with a debug log so chat continues working without surprises.
+    try {
+      const chatProfile = buildAiProfile(providerKey, {
+        globalAliases: config.aliases,
+        globalTiers: config.tiers,
+      });
+      const spec = resolveModelSpec(chatProfile, 'large');
+      if (!isLiteralSpec(spec)) {
+        if (spec.provider === providerKey) {
+          requestOptions.model = spec.model;
+          if (spec.effort !== undefined && (providerKey === 'codex' || providerKey === 'copilot')) {
+            requestOptions.assistantConfig = {
+              ...(requestOptions.assistantConfig ?? {}),
+              modelReasoningEffort: spec.effort,
+            };
+          }
+        } else {
+          getLog().debug(
+            { providerKey, tierProvider: spec.provider, tierModel: spec.model },
+            'orchestrator.tier_cross_provider_skipped'
+          );
+        }
+      }
+    } catch (err) {
+      getLog().debug({ err: toError(err), providerKey }, 'orchestrator.tier_resolution_skipped');
+    }
 
     // Project-scoped chats get the `manage_run` tool so the agent can see and
     // launch this project's workflow runs. Only when a codebase is scoped and

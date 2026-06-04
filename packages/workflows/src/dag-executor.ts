@@ -56,6 +56,12 @@ import { createLogger, captureWorkflowCompleted } from '@archon/paths';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { evaluateCondition } from './condition-evaluator';
 import {
+  buildAiProfile,
+  isLiteralSpec,
+  resolveModelSpec,
+  type ResolvedAiProfile,
+} from './model-resolver';
+import {
   logNodeStart,
   logNodeComplete,
   logNodeSkip,
@@ -354,6 +360,7 @@ async function resolveNodeProviderAndModel(
   node: DagNode,
   workflowProvider: string,
   workflowModel: string | undefined,
+  aiProfile: ResolvedAiProfile,
   config: WorkflowConfig,
   platform: IWorkflowPlatform,
   conversationId: string,
@@ -365,24 +372,78 @@ async function resolveNodeProviderAndModel(
   model: string | undefined;
   options: SendQueryOptions | undefined;
 }> {
-  // Provider is explicit: node.provider ?? workflow.provider. Model never
-  // influences provider selection. Model strings pass through to the SDK.
-  const provider: string = node.provider ?? workflowProvider;
-  if (!isRegisteredProvider(provider)) {
+  // Base provider — node-level override or workflow default. A tier/@alias on
+  // `node.model` may further switch the provider (preset.provider wins; we warn
+  // on conflict with an explicit `node.provider`).
+  const baseProvider: string = node.provider ?? workflowProvider;
+  if (!isRegisteredProvider(baseProvider)) {
     throw new Error(
-      `Node '${node.id}': unknown provider '${provider}'. ` +
+      `Node '${node.id}': unknown provider '${baseProvider}'. ` +
         `Registered: ${getRegisteredProviders()
           .map(p => p.id)
           .join(', ')}`
     );
   }
 
-  const providerAssistantConfig = config.assistants[provider];
-  const model: string | undefined =
-    node.model ??
-    (provider === workflowProvider
-      ? workflowModel
-      : (providerAssistantConfig?.model as string | undefined));
+  // Resolve model ref. Workflow-level `model:` is already resolved upstream in
+  // executor.ts (literal value reaches us via `workflowModel`), so the only
+  // tier/@alias resolution that happens here is for `node.model`. When the node
+  // does not set `model:` and the provider matches workflow-level, inherit the
+  // already-resolved `workflowModel`; otherwise fall back to the provider's
+  // default model from config.
+  let provider: string = baseProvider;
+  let model: string | undefined;
+  let presetEffort: string | undefined;
+  let presetThinking: ThinkingConfig | undefined;
+
+  if (node.model !== undefined) {
+    const spec = resolveModelSpec(aiProfile, node.model);
+    if (isLiteralSpec(spec)) {
+      model = spec.literal;
+    } else {
+      if (node.provider && node.provider !== spec.provider) {
+        getLog().warn(
+          {
+            nodeId: node.id,
+            nodeProvider: node.provider,
+            aliasProvider: spec.provider,
+            modelRef: node.model,
+          },
+          'dag.node_alias_provider_conflict'
+        );
+        const delivered = await safeSendMessage(
+          platform,
+          conversationId,
+          `Warning: Node '${node.id}' has explicit provider '${node.provider}' but the model ref '${node.model}' resolves to provider '${spec.provider}'. The alias provider wins.`,
+          { workflowId: workflowRunId, nodeName: node.id }
+        );
+        if (!delivered) {
+          getLog().error(
+            { nodeId: node.id, workflowRunId },
+            'dag.alias_conflict_warning_delivery_failed'
+          );
+        }
+      }
+      provider = spec.provider;
+      model = spec.model;
+      presetEffort = spec.effort;
+      presetThinking = spec.thinking;
+    }
+  } else if (baseProvider === workflowProvider) {
+    model = workflowModel;
+  } else {
+    const providerAssistantConfig = config.assistants[baseProvider];
+    model = providerAssistantConfig?.model as string | undefined;
+  }
+
+  if (!isRegisteredProvider(provider)) {
+    throw new Error(
+      `Node '${node.id}': alias resolved to unknown provider '${provider}'. ` +
+        `Registered: ${getRegisteredProviders()
+          .map(p => p.id)
+          .join(', ')}`
+    );
+  }
 
   // Get provider capabilities for capability warnings (static lookup, no instantiation)
   const caps = getProviderCapabilities(provider);
@@ -481,7 +542,28 @@ async function resolveNodeProviderAndModel(
   };
 
   // Pass assistantConfig from config — provider parses internally
-  const assistantConfig = config.assistants[provider] ?? {};
+  let assistantConfig: Record<string, unknown> = config.assistants[provider] ?? {};
+
+  // Inject preset effort/thinking from a tier/@alias preset — only when the
+  // node didn't override it explicitly. Routing is provider-conditional:
+  //   - Codex/Copilot: effort → assistantConfig.modelReasoningEffort
+  //   - Claude (and others): effort → nodeConfig.effort
+  //   - Thinking → nodeConfig.thinking (Claude-only; ignored by other providers'
+  //     translators, safe pass-through)
+  if (presetEffort !== undefined) {
+    if (provider === 'codex' || provider === 'copilot') {
+      if (
+        (assistantConfig as { modelReasoningEffort?: unknown }).modelReasoningEffort === undefined
+      ) {
+        assistantConfig = { ...assistantConfig, modelReasoningEffort: presetEffort };
+      }
+    } else if (nodeConfig.effort === undefined) {
+      nodeConfig.effort = presetEffort as EffortLevel;
+    }
+  }
+  if (presetThinking !== undefined && nodeConfig.thinking === undefined) {
+    nodeConfig.thinking = presetThinking;
+  }
 
   const options: SendQueryOptions = {
     ...baseOptions,
@@ -2387,6 +2469,7 @@ async function executeApprovalNode(
   conversationId: string,
   workflowProvider: string,
   workflowModel: string | undefined,
+  aiProfile: ResolvedAiProfile,
   cwd: string,
   artifactsDir: string,
   logDir: string,
@@ -2481,6 +2564,7 @@ async function executeApprovalNode(
       syntheticNode,
       workflowProvider,
       workflowModel,
+      aiProfile,
       config,
       platform,
       conversationId,
@@ -2586,8 +2670,22 @@ export async function executeDagWorkflow(
   issueContext?: string,
   priorCompletedNodes?: Map<string, string>,
   /** Discovery source — telemetry only (custom-vs-default + name redaction). */
-  source?: WorkflowSource
+  source?: WorkflowSource,
+  /**
+   * Optional resolved AI profile. The production caller in executor.ts passes
+   * a profile built once upstream for telemetry consistency. When omitted,
+   * we build a fresh profile from `config.aliases` + `config.tiers` here —
+   * cheap, pure, and the right default for test paths that don't care about
+   * upstream resolution.
+   */
+  aiProfile?: ResolvedAiProfile
 ): Promise<string | undefined> {
+  const resolvedAiProfile: ResolvedAiProfile =
+    aiProfile ??
+    buildAiProfile(workflowProvider, {
+      globalAliases: config.aliases,
+      globalTiers: config.tiers,
+    });
   const dagStartTime = Date.now();
   const workflowLevelOptions = {
     effort: workflow.effort,
@@ -2860,24 +2958,53 @@ export async function executeDagWorkflow(
           // 3b. Loop node dispatch — manages its own AI sessions and iteration
           if (isLoopNode(node)) {
             // Resolve per-node provider/model overrides (same logic as other node types).
-            // Provider is explicit; model passes through to the SDK. Throw on an
-            // unknown provider so the outer catch below emits the standard
-            // node_failed event + user-facing message — the same path
-            // resolveNodeProviderAndModel uses for non-loop nodes.
-            const loopProvider: string = node.provider ?? workflowProvider;
-            if (!isRegisteredProvider(loopProvider)) {
+            // Throws on an unknown provider so the outer catch below emits the
+            // standard node_failed event + user-facing message — the same path
+            // resolveNodeProviderAndModel uses for non-loop nodes. Tier/@alias
+            // resolution on `node.model` may switch the provider; mirrors the
+            // resolveNodeProviderAndModel branch.
+            const loopBaseProvider: string = node.provider ?? workflowProvider;
+            if (!isRegisteredProvider(loopBaseProvider)) {
               throw new Error(
-                `Node '${node.id}': unknown provider '${loopProvider}'. Registered: ${getRegisteredProviders()
+                `Node '${node.id}': unknown provider '${loopBaseProvider}'. Registered: ${getRegisteredProviders()
                   .map(p => p.id)
                   .join(', ')}`
               );
             }
-            const loopAssistantConfig = config.assistants[loopProvider];
-            const loopModel: string | undefined =
-              node.model ??
-              (loopProvider === workflowProvider
-                ? workflowModel
-                : (loopAssistantConfig?.model as string | undefined));
+            let loopProvider: string = loopBaseProvider;
+            let loopModel: string | undefined;
+            if (node.model !== undefined) {
+              const spec = resolveModelSpec(resolvedAiProfile, node.model);
+              if (isLiteralSpec(spec)) {
+                loopModel = spec.literal;
+              } else {
+                if (node.provider && node.provider !== spec.provider) {
+                  getLog().warn(
+                    {
+                      nodeId: node.id,
+                      nodeProvider: node.provider,
+                      aliasProvider: spec.provider,
+                      modelRef: node.model,
+                    },
+                    'dag.loop_node_alias_provider_conflict'
+                  );
+                }
+                loopProvider = spec.provider;
+                loopModel = spec.model;
+              }
+            } else if (loopBaseProvider === workflowProvider) {
+              loopModel = workflowModel;
+            } else {
+              const loopAssistantConfig = config.assistants[loopBaseProvider];
+              loopModel = loopAssistantConfig?.model as string | undefined;
+            }
+            if (!isRegisteredProvider(loopProvider)) {
+              throw new Error(
+                `Node '${node.id}': alias resolved to unknown provider '${loopProvider}'. Registered: ${getRegisteredProviders()
+                  .map(p => p.id)
+                  .join(', ')}`
+              );
+            }
 
             const output = await executeLoopNode(
               deps,
@@ -2910,6 +3037,7 @@ export async function executeDagWorkflow(
               conversationId,
               workflowProvider,
               workflowModel,
+              resolvedAiProfile,
               cwd,
               artifactsDir,
               logDir,
@@ -2981,6 +3109,7 @@ export async function executeDagWorkflow(
             node,
             workflowProvider,
             workflowModel,
+            resolvedAiProfile,
             config,
             platform,
             conversationId,

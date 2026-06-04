@@ -9,6 +9,7 @@
  */
 import type { IWorkflowStore } from './store';
 import type { ModelReasoningEffort, WebSearchMode } from './schemas';
+import type { RawAliasesConfig, RawTiersConfig } from './model-resolver';
 import type {
   IAgentProvider,
   MessageChunk,
@@ -75,6 +76,10 @@ export interface WorkflowConfig {
   baseBranch?: string;
   docsPath?: string;
   envVars?: Record<string, string>;
+  /** Merged custom @aliases — passed to buildAiProfile. Undefined when none configured. */
+  aliases?: RawAliasesConfig;
+  /** Merged cross-provider tier overrides — passed to buildAiProfile. Undefined when none configured. */
+  tiers?: RawTiersConfig;
   commands: { folder?: string };
   defaults?: {
     loadDefaultWorkflows?: boolean;

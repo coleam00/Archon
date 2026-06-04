@@ -2,12 +2,16 @@
  * AI-powered conversation title generator
  *
  * Generates concise 3-6 word titles using the configured AI assistant.
- * Optionally uses TITLE_GENERATION_MODEL env var for a cheaper/faster model.
+ * Resolves the `small` tier from the AI profile (so users with custom tier
+ * config get cheap-and-fast titling automatically); falls back to the
+ * TITLE_GENERATION_MODEL env var, then the SDK default.
  * Designed to be fire-and-forget — never throws, all errors logged internally.
  */
 import { getAgentProvider } from '@archon/providers';
 import * as conversationDb from '../db/conversations';
 import { createLogger } from '@archon/paths';
+import { loadConfig } from '../config/config-loader';
+import { buildAiProfile, isLiteralSpec, resolveModelSpec } from '@archon/workflows/model-resolver';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -42,8 +46,30 @@ export async function generateAndSetTitle(
   try {
     getLog().debug({ conversationDbId, assistantType }, 'title.generate_started');
 
-    // Model: use TITLE_GENERATION_MODEL env var if set, otherwise let SDK use its default
-    const titleModel = process.env.TITLE_GENERATION_MODEL || undefined;
+    // Resolve the `small` tier from the AI profile (cheapest/fastest tier).
+    // Cross-provider switching is not supported here — we only use the tier
+    // model when its provider matches `assistantType`. Falls back to
+    // TITLE_GENERATION_MODEL env var, then SDK default. Best-effort: any
+    // failure is silent so titling never blocks a conversation.
+    let titleModel: string | undefined;
+    try {
+      const cfg = await loadConfig(cwd);
+      const profile = buildAiProfile(assistantType, {
+        globalAliases: cfg.aliases,
+        globalTiers: cfg.tiers,
+      });
+      const spec = resolveModelSpec(profile, 'small');
+      if (isLiteralSpec(spec)) {
+        titleModel = spec.literal;
+      } else if (spec.provider === assistantType) {
+        titleModel = spec.model;
+      }
+    } catch {
+      // Silent: best-effort tier resolution. Fall through to env-var/SDK default.
+    }
+    if (titleModel === undefined && process.env.TITLE_GENERATION_MODEL) {
+      titleModel = process.env.TITLE_GENERATION_MODEL;
+    }
 
     // Build the title generation prompt
     const titlePrompt = buildTitlePrompt(userMessage, workflowName);

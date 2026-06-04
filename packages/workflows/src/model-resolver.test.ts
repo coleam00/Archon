@@ -7,7 +7,7 @@ import {
   TIER_NAMES,
   type ModelAliasPreset,
   type ResolvedAiProfile,
-} from './model-validation';
+} from './model-resolver';
 
 describe('TIER_NAMES constant', () => {
   test('contains exactly small, medium, large', () => {
@@ -111,6 +111,97 @@ describe('buildAiProfile — alias layering', () => {
       type: 'enabled',
       budgetTokens: 10000,
     });
+  });
+});
+
+describe('buildAiProfile — tiers: overrides', () => {
+  test('global tier override replaces tier-defaults entry', () => {
+    const profile = buildAiProfile('claude', {
+      globalTiers: { large: { provider: 'codex', model: 'gpt-5.5' } },
+    });
+    expect(profile.aliases.large).toEqual({ provider: 'codex', model: 'gpt-5.5' });
+  });
+
+  test('repo tier override wins over global tier', () => {
+    const profile = buildAiProfile('claude', {
+      globalTiers: { large: { provider: 'claude', model: 'opus' } },
+      repoTiers: { large: { provider: 'codex', model: 'gpt-5.5' } },
+    });
+    expect(profile.aliases.large?.provider).toBe('codex');
+    expect(profile.aliases.large?.model).toBe('gpt-5.5');
+  });
+
+  test('tier override is cross-provider', () => {
+    const profile = buildAiProfile('claude', {
+      globalTiers: { small: { provider: 'pi', model: 'minimax-m3' } },
+    });
+    expect(profile.aliases.small?.provider).toBe('pi');
+    expect(profile.aliases.small?.model).toBe('minimax-m3');
+  });
+
+  test('partial tier override preserves unoverridden tiers from defaults', () => {
+    const profile = buildAiProfile('claude', {
+      globalTiers: { large: { provider: 'codex', model: 'gpt-5.5' } },
+    });
+    // medium and small still come from claude tier-defaults.json
+    expect(profile.aliases.medium?.provider).toBe('claude');
+    expect(profile.aliases.small?.provider).toBe('claude');
+  });
+
+  test('tier override preserves effort field', () => {
+    const profile = buildAiProfile('claude', {
+      globalTiers: { large: { provider: 'codex', model: 'gpt-5.5', effort: 'high' } },
+    });
+    expect(profile.aliases.large?.effort).toBe('high');
+  });
+
+  test('tier override preserves thinking field', () => {
+    const profile = buildAiProfile('claude', {
+      globalTiers: {
+        large: {
+          provider: 'claude',
+          model: 'opus',
+          thinking: { type: 'enabled', budgetTokens: 8000 },
+        },
+      },
+    });
+    expect(profile.aliases.large?.thinking).toEqual({ type: 'enabled', budgetTokens: 8000 });
+  });
+
+  test('rejects tier override with empty provider', () => {
+    expect(() =>
+      buildAiProfile('claude', {
+        globalTiers: { large: { provider: '', model: 'opus' } },
+      })
+    ).toThrow(/provider/);
+  });
+
+  test('rejects tier override with empty model', () => {
+    expect(() =>
+      buildAiProfile('claude', {
+        globalTiers: { large: { provider: 'claude', model: '' } },
+      })
+    ).toThrow(/model/);
+  });
+
+  test('tier override seeds aliases for providers with no tier-defaults entry', () => {
+    // 'newprovider' has no tier-defaults — only the override should land
+    const profile = buildAiProfile('newprovider', {
+      globalTiers: { large: { provider: 'claude', model: 'opus' } },
+    });
+    expect(profile.aliases.large).toEqual({ provider: 'claude', model: 'opus' });
+    // medium/small are NOT seeded — no defaults to fall back on
+    expect(profile.aliases.medium).toBeUndefined();
+    expect(profile.aliases.small).toBeUndefined();
+  });
+
+  test('@custom aliases coexist with tier overrides', () => {
+    const profile = buildAiProfile('claude', {
+      globalTiers: { large: { provider: 'codex', model: 'gpt-5.5' } },
+      globalAliases: { '@fast': { provider: 'claude', model: 'haiku' } },
+    });
+    expect(profile.aliases.large?.provider).toBe('codex');
+    expect(profile.aliases['@fast']).toEqual({ provider: 'claude', model: 'haiku' });
   });
 });
 

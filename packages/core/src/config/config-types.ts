@@ -20,7 +20,7 @@ import type {
   PiProviderDefaults,
   ProviderDefaultsMap,
 } from '@archon/providers/types';
-import type { RawAliasesConfig } from '@archon/workflows/model-validation';
+import type { RawAliasesConfig, RawTiersConfig } from '@archon/workflows/model-resolver';
 
 export type {
   ClaudeProviderDefaults,
@@ -29,7 +29,7 @@ export type {
   PiProviderDefaults,
   ProviderDefaultsMap,
 };
-export type { RawAliasesConfig };
+export type { RawAliasesConfig, RawTiersConfig };
 
 /**
  * Intersection type: generic `ProviderDefaultsMap` (any string key) with
@@ -89,6 +89,13 @@ export interface GlobalConfig {
   aliases?: RawAliasesConfig;
 
   /**
+   * Cross-provider tier overrides. Each tier may point at any provider+model.
+   * Overrides the built-in tier defaults from tier-defaults.json.
+   * @example tiers: { large: { provider: claude, model: opus }, medium: { provider: codex, model: gpt-5.5 } }
+   */
+  tiers?: RawTiersConfig;
+
+  /**
    * Platform streaming preferences (can be overridden per conversation)
    */
   streaming?: {
@@ -144,6 +151,9 @@ export interface RepoConfig {
 
   /** Repo-level model aliases — override global aliases with same name. */
   aliases?: RawAliasesConfig;
+
+  /** Repo-level tier overrides — override global tier overrides on same tier. */
+  tiers?: RawTiersConfig;
 
   /**
    * Commands configuration
@@ -274,6 +284,11 @@ export interface MergedConfig {
    * Undefined when no aliases are configured anywhere.
    */
   aliases?: RawAliasesConfig;
+  /**
+   * Merged tier overrides (repo > global). Used by buildAiProfile at execution time.
+   * Undefined when no tier overrides are configured anywhere.
+   */
+  tiers?: RawTiersConfig;
   streaming: {
     telegram: 'stream' | 'batch';
     discord: 'stream' | 'batch';
