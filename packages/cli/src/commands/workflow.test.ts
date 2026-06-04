@@ -97,6 +97,19 @@ mock.module('@archon/git', () => ({
   findRepoRoot: mock(() => Promise.resolve(null)),
   getRemoteUrl: mock(() => Promise.resolve(null)),
   checkout: mock(() => Promise.resolve()),
+  execFileAsync: mock((_cmd: string, args: string[], options?: { cwd?: string }) => {
+    if (args[0] === 'branch' && args[1] === '--show-current') {
+      const cwd = options?.cwd;
+      const branch = cwd === '/tmp/test-worktree' ? 'feat/prd-0045-r2' : 'main';
+      return Promise.resolve({ stdout: `${branch}\n`, stderr: '' });
+    }
+    if (args[0] === 'rev-parse' && args[1] === 'HEAD') {
+      const cwd = options?.cwd;
+      const sha = cwd === '/tmp/test-worktree' ? 'abc123' : 'def456';
+      return Promise.resolve({ stdout: `${sha}\n`, stderr: '' });
+    }
+    return Promise.resolve({ stdout: '', stderr: '' });
+  }),
   toRepoPath: mock((path: string) => path),
   toWorktreePath: mock((path: string) => path),
   toBranchName: mock((branch: string) => branch),
@@ -119,6 +132,7 @@ mock.module('@archon/core/db/codebases', () => ({
 
 mock.module('@archon/core/db/isolation-environments', () => ({
   findActiveByWorkflow: mock(() => Promise.resolve(null)),
+  listByCodebase: mock(() => Promise.resolve([])),
   create: mock(() => Promise.resolve({ id: 'iso-123' })),
 }));
 
@@ -141,6 +155,14 @@ mock.module('@archon/core/db/workflows', () => ({
 mock.module('@archon/core/db/workflow-events', () => ({
   listWorkflowEvents: mock(() => Promise.resolve([])),
   createWorkflowEvent: mock(() => Promise.resolve()),
+}));
+
+mock.module('@archon/core/db/prd-execution-leases', () => ({
+  getActivePrdExecutionLease: mock(() => Promise.resolve(null)),
+  getPrdExecutionLeaseByRunId: mock(() => Promise.resolve(null)),
+  acquirePrdExecutionLease: mock(() => Promise.resolve(undefined)),
+  updatePrdExecutionLeaseStatus: mock(() => Promise.resolve()),
+  releasePrdExecutionLease: mock(() => Promise.resolve()),
 }));
 
 describe('workflowListCommand', () => {
@@ -985,6 +1007,120 @@ describe('workflowRunCommand', () => {
       'Remove the stale workspace entry at /home/test/.archon/workspaces/acme/widget and retry'
     );
     expect(error.message).not.toContain('Not in a git repository');
+  });
+
+  it('uses exact resumeRunId and verifies PRD lease/provenance on resume', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const conversationDb = await import('@archon/core/db/conversations');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const workflowDb = await import('@archon/core/db/workflows');
+    const workflowExecutor = await import('@archon/workflows/executor');
+    const leaseDb = await import('@archon/core/db/prd-execution-leases');
+
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'implement' })],
+      errors: [],
+    });
+    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'conv-123',
+      ai_assistant_type: 'claude',
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+    (codebaseDb.getCodebase as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-existing',
+      name: 'owner/repo',
+      default_cwd: '/path/to/main-checkout',
+    });
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-1',
+      workflow_name: 'implement',
+      conversation_id: 'conv-123',
+      parent_conversation_id: null,
+      codebase_id: 'cb-existing',
+      status: 'failed',
+      user_message: 'add auth',
+      metadata: {
+        execution_identity: {
+          kind: 'prd',
+          prdId: 'PRD-0045',
+          canonicalRepoPath: '/path/to/main-checkout',
+          sourceBranch: 'main',
+          executionBranch: 'feat/prd-0045-r2',
+        },
+        provenance: {
+          canonicalRepoPath: '/path/to/main-checkout',
+          workingPath: '/tmp/test-worktree',
+          currentBranch: 'feat/prd-0045-r2',
+          headSha: 'abc123',
+          capturedAt: '2026-06-05T00:00:00.000Z',
+        },
+      },
+      started_at: new Date('2026-06-05T00:00:00.000Z'),
+      completed_at: new Date('2026-06-05T00:10:00.000Z'),
+      last_activity_at: new Date('2026-06-05T00:10:00.000Z'),
+      working_path: '/tmp/test-worktree',
+    });
+    (workflowExecutor.hydrateResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      preCreatedRun: {
+        id: 'run-1',
+        workflow_name: 'implement',
+      },
+      priorCompletedNodes: new Map([['plan', 'done']]),
+    });
+    (workflowExecutor.executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-1',
+    });
+
+    await workflowRunCommand('/tmp/test-worktree', 'implement', 'add auth', {
+      resume: true,
+      resumeRunId: 'run-1',
+      codebaseId: 'cb-existing',
+    });
+
+    expect(workflowDb.getWorkflowRun).toHaveBeenCalledWith('run-1');
+    expect(workflowDb.findResumableRun).not.toHaveBeenCalled();
+    expect(leaseDb.acquirePrdExecutionLease).toHaveBeenCalledWith(
+      expect.objectContaining({
+        codebase_id: 'cb-existing',
+        prd_id: 'PRD-0045',
+        workflow_run_id: 'run-1',
+        execution_branch: 'feat/prd-0045-r2',
+      })
+    );
+  });
+
+  it('blocks fresh PRD launch when another active lease already exists', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const conversationDb = await import('@archon/core/db/conversations');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const leaseDb = await import('@archon/core/db/prd-execution-leases');
+
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'implement' })],
+      errors: [],
+    });
+    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'conv-123',
+      ai_assistant_type: 'claude',
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-1',
+      name: 'owner/repo',
+      default_cwd: '/test/path',
+    });
+    (leaseDb.getActivePrdExecutionLease as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflow_run_id: 'run-other',
+      execution_branch: 'feat/prd-0045-old',
+    });
+
+    await expect(
+      workflowRunCommand('/test/path', 'implement', 'add auth', {
+        prdId: 'PRD-0045',
+        sourceBranch: 'main',
+        noWorktree: true,
+      })
+    ).rejects.toThrow("PRD 'PRD-0045' already has an active lease held by run 'run-other'");
   });
 
   it('falls back to generic workspace hint when registration error has an unrecognized shape', async () => {

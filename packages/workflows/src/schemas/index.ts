@@ -92,10 +92,18 @@ export {
   nodeStateSchema,
   nodeOutputSchema,
   workflowRunSchema,
+  workflowRunMetadataSchema,
+  prdExecutionIdentitySchema,
+  workflowProvenanceSchema,
   artifactTypeSchema,
   TERMINAL_WORKFLOW_STATUSES,
   RESUMABLE_WORKFLOW_STATUSES,
   isApprovalContext,
+  isPrdExecutionIdentity,
+  isWorkflowProvenance,
+  getWorkflowRunMetadata,
+  getPrdExecutionIdentity,
+  getWorkflowProvenance,
 } from './workflow-run';
 export type {
   WorkflowRunStatus,
@@ -103,6 +111,9 @@ export type {
   NodeState,
   NodeOutput,
   WorkflowRun,
+  WorkflowRunMetadata,
+  PrdExecutionIdentity,
+  WorkflowProvenance,
   ArtifactType,
   ApprovalContext,
 } from './workflow-run';

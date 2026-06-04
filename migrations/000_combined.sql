@@ -1,16 +1,17 @@
 -- Remote Coding Agent - Combined Schema
--- Version: Combined (final state after migrations 001-020)
+-- Version: Combined (final state after migrations 001-022)
 -- Description: Complete database schema (idempotent - safe to run multiple times)
 --
--- 8 Tables:
+-- 9 Tables:
 --   1. remote_agent_codebases
 --   1b. remote_agent_codebase_env_vars
 --   2. remote_agent_conversations
 --   3. remote_agent_sessions
 --   4. remote_agent_isolation_environments
 --   5. remote_agent_workflow_runs
---   6. remote_agent_workflow_events
---   7. remote_agent_messages
+--   6. remote_agent_prd_execution_leases
+--   7. remote_agent_workflow_events
+--   8. remote_agent_messages
 --
 -- Dropped tables (via migrations):
 --   - remote_agent_command_templates (017)
@@ -215,7 +216,40 @@ COMMENT ON TABLE remote_agent_workflow_runs IS
   'Tracks workflow execution state for resumption and observability';
 
 -- ============================================================================
--- Table 6: Workflow Events
+-- Table 6: PRD Execution Leases
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS remote_agent_prd_execution_leases (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  codebase_id UUID NOT NULL REFERENCES remote_agent_codebases(id) ON DELETE CASCADE,
+  prd_id VARCHAR(255) NOT NULL,
+  workflow_run_id UUID NOT NULL REFERENCES remote_agent_workflow_runs(id) ON DELETE CASCADE,
+  workflow_name VARCHAR(255) NOT NULL,
+  canonical_repo_path TEXT NOT NULL,
+  source_branch TEXT NOT NULL,
+  execution_branch TEXT NOT NULL,
+  working_path TEXT,
+  status VARCHAR(20) NOT NULL DEFAULT 'active',
+  metadata JSONB DEFAULT '{}'::jsonb,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  released_at TIMESTAMP WITH TIME ZONE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_prd_execution_leases_active_unique
+  ON remote_agent_prd_execution_leases(codebase_id, prd_id)
+  WHERE released_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_prd_execution_leases_run_id
+  ON remote_agent_prd_execution_leases(workflow_run_id);
+CREATE INDEX IF NOT EXISTS idx_prd_execution_leases_status
+  ON remote_agent_prd_execution_leases(status);
+
+COMMENT ON TABLE remote_agent_prd_execution_leases IS
+  'Durable ownership/identity lease for PRD executions in coding-system workflows';
+
+-- ============================================================================
+-- Table 7: Workflow Events
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS remote_agent_workflow_events (
@@ -237,7 +271,7 @@ COMMENT ON TABLE remote_agent_workflow_events IS
   'Lean UI-relevant workflow events for observability (step transitions, artifacts, errors)';
 
 -- ============================================================================
--- Table 7: Messages
+-- Table 8: Messages
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS remote_agent_messages (

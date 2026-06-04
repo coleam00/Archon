@@ -124,6 +124,8 @@ Options:
   --from, --from-branch <name> Create new branch from specific start point
   --no-worktree              Run on branch directly without worktree isolation
   --resume                   Resume the most recent failed run of the workflow (mutually exclusive with --branch)
+  --prd-id <id>              Enable PRD execution identity/lease verification for this run
+  --source-branch <name>     Canonical source branch for PRD verification (defaults to current branch / --from)
   --spawn                    Open setup wizard in a new terminal window (for setup command)
   --quiet, -q                Reduce log verbosity to warnings and errors only
   --verbose, -v              Show debug-level output
@@ -140,6 +142,7 @@ Examples:
   archon workflow run investigate-issue "Fix the login bug"
   archon workflow run plan --cwd /path/to/repo "Add dark mode"
   archon workflow run implement --branch feature-auth "Implement auth"
+  archon workflow run prd-to-pr --prd-id PRD-0045 --from main --branch feat/prd-0045-r2 "Continue the repaired PRD"
   archon workflow run quick-fix --no-worktree "Fix typo"
   archon continue fix/issue-42 --workflow archon-smart-pr-review "Review the changes"
   archon skill install
@@ -227,6 +230,8 @@ async function main(): Promise<number> {
         'from-branch': { type: 'string' },
         'no-worktree': { type: 'boolean' },
         resume: { type: 'boolean' },
+        'prd-id': { type: 'string' },
+        'source-branch': { type: 'string' },
         spawn: { type: 'boolean' },
         quiet: { type: 'boolean', short: 'q' },
         verbose: { type: 'boolean', short: 'v' },
@@ -261,6 +266,8 @@ async function main(): Promise<number> {
     (values.from as string | undefined) ?? (values['from-branch'] as string | undefined);
   const noWorktree = values['no-worktree'] as boolean | undefined;
   const resumeFlag = values.resume as boolean | undefined;
+  const prdId = values['prd-id'] as string | undefined;
+  const sourceBranch = values['source-branch'] as string | undefined;
   const spawnFlag = values.spawn as boolean | undefined;
   const jsonFlag = values.json as boolean | undefined;
   // Handle help flag
@@ -419,6 +426,8 @@ async function main(): Promise<number> {
               fromBranch,
               noWorktree,
               resume: resumeFlag,
+              prdId,
+              sourceBranch,
               quiet: values.quiet as boolean | undefined,
               verbose: values.verbose as boolean | undefined,
             };

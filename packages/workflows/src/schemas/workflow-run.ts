@@ -113,6 +113,78 @@ export const workflowRunSchema = z.object({
 
 export type WorkflowRun = z.infer<typeof workflowRunSchema>;
 
+// ---------------------------------------------------------------------------
+// WorkflowRun metadata helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * First-class PRD execution identity stored in workflow run metadata.
+ *
+ * This distinguishes durable PRD/source/execution identity from generic
+ * workflow name + cwd routing, which is too weak for reliable coding-system
+ * resume and lease ownership.
+ */
+export const prdExecutionIdentitySchema = z.object({
+  kind: z.literal('prd'),
+  prdId: z.string(),
+  canonicalRepoPath: z.string(),
+  sourceBranch: z.string(),
+  executionBranch: z.string(),
+});
+
+export type PrdExecutionIdentity = z.infer<typeof prdExecutionIdentitySchema>;
+
+/**
+ * Launch/resume provenance captured at the control-plane boundary.
+ * Stored as strings so the JSON survives round-trips across DB engines.
+ */
+export const workflowProvenanceSchema = z.object({
+  canonicalRepoPath: z.string(),
+  workingPath: z.string(),
+  currentBranch: z.string().nullable(),
+  headSha: z.string().nullable(),
+  requestedSourceBranch: z.string().optional(),
+  requestedExecutionBranch: z.string().optional(),
+  capturedAt: z.string(),
+});
+
+export type WorkflowProvenance = z.infer<typeof workflowProvenanceSchema>;
+
+export const workflowRunMetadataSchema = z
+  .object({
+    github_context: z.string().optional(),
+    execution_identity: prdExecutionIdentitySchema.optional(),
+    provenance: workflowProvenanceSchema.optional(),
+  })
+  .catchall(z.unknown());
+
+export type WorkflowRunMetadata = z.infer<typeof workflowRunMetadataSchema>;
+
+export function isPrdExecutionIdentity(val: unknown): val is PrdExecutionIdentity {
+  return prdExecutionIdentitySchema.safeParse(val).success;
+}
+
+export function isWorkflowProvenance(val: unknown): val is WorkflowProvenance {
+  return workflowProvenanceSchema.safeParse(val).success;
+}
+
+export function getWorkflowRunMetadata(metadata: unknown): WorkflowRunMetadata {
+  const parsed = workflowRunMetadataSchema.safeParse(metadata);
+  return parsed.success ? parsed.data : {};
+}
+
+export function getPrdExecutionIdentity(metadata: unknown): PrdExecutionIdentity | null {
+  const parsed = workflowRunMetadataSchema.safeParse(metadata);
+  if (!parsed.success) return null;
+  return parsed.data.execution_identity ?? null;
+}
+
+export function getWorkflowProvenance(metadata: unknown): WorkflowProvenance | null {
+  const parsed = workflowRunMetadataSchema.safeParse(metadata);
+  if (!parsed.success) return null;
+  return parsed.data.provenance ?? null;
+}
+
 /** Approval context stored in workflow run metadata when paused for human review. */
 export interface ApprovalContext {
   nodeId: string;
