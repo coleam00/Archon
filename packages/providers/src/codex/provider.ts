@@ -22,6 +22,10 @@ import { CODEX_CAPABILITIES } from './capabilities';
 import { resolveCodexBinaryPath } from './binary-resolver';
 import { createLogger } from '@archon/paths';
 import { loadMcpConfig } from '../mcp/config';
+import {
+  hasOpenAdditionalProperties,
+  normalizeJsonSchemaForOpenAiStrict,
+} from '../shared/structured-output';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -279,14 +283,31 @@ function buildTurnOptions(requestOptions?: SendQueryOptions): {
   hasOutputFormat: boolean;
 } {
   const turnOptions: TurnOptions = {};
+  // Preserve the original precedence: an explicit `outputFormat` wins over
+  // `nodeConfig.output_format` even when its `.schema` is undefined. Note the
+  // resulting asymmetry: if `outputFormat` is set but `.schema` is undefined,
+  // `rawSchema` is undefined (no schema sent) yet `hasOutputFormat` is still
+  // true — the stream accumulator runs and JSON.parses the response text.
+  const rawSchema =
+    requestOptions?.outputFormat !== undefined
+      ? requestOptions.outputFormat.schema
+      : requestOptions?.nodeConfig?.output_format;
   const hasOutputFormat = !!(
     requestOptions?.outputFormat ?? requestOptions?.nodeConfig?.output_format
   );
-  if (requestOptions?.outputFormat) {
-    turnOptions.outputSchema = requestOptions.outputFormat.schema;
-  }
-  if (requestOptions?.nodeConfig?.output_format && !requestOptions?.outputFormat) {
-    turnOptions.outputSchema = requestOptions.nodeConfig.output_format;
+  if (rawSchema !== undefined) {
+    // OpenAI Structured Outputs strict-mode requires additionalProperties:false
+    // on every object schema (HTTP 400 invalid_json_schema otherwise). Workflow
+    // authors write portable output_format schemas, so normalize here before
+    // handing the schema to the Codex SDK. See issue #1843.
+    if (hasOpenAdditionalProperties(rawSchema)) {
+      // The normalizer is about to rewrite an open-record `additionalProperties`
+      // (e.g. `{ type: 'string' }` or `true`) to `false`. OpenAI would 400 the
+      // open form anyway, but the author never declared a closed object — warn
+      // so the silent narrowing is visible rather than a surprise at runtime.
+      getLog().warn({ schema: rawSchema }, 'codex.output_format_open_record_closed');
+    }
+    turnOptions.outputSchema = normalizeJsonSchemaForOpenAiStrict(rawSchema);
   }
   // Signal assignment is intentionally per-attempt (in sendQuery's retry
   // loop), not here. Reusing a single AbortSignal across retries can poison

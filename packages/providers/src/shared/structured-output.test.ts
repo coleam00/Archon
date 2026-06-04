@@ -1,6 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 
-import { augmentPromptForJsonSchema, tryParseStructuredOutput } from './structured-output';
+import {
+  augmentPromptForJsonSchema,
+  hasOpenAdditionalProperties,
+  normalizeJsonSchemaForOpenAiStrict,
+  tryParseStructuredOutput,
+} from './structured-output';
 
 describe('augmentPromptForJsonSchema', () => {
   test('appends schema and JSON-only instruction', () => {
@@ -82,5 +87,158 @@ After careful evaluation, here is the JSON:
   test('returns undefined when forward scan finds no parseable JSON', () => {
     // First `{` is at index > 0 but what follows is not valid JSON either.
     expect(tryParseStructuredOutput('prose with stray { brace and no closer')).toBeUndefined();
+  });
+});
+
+describe('normalizeJsonSchemaForOpenAiStrict', () => {
+  test('adds additionalProperties:false to a top-level object schema', () => {
+    const out = normalizeJsonSchemaForOpenAiStrict({
+      type: 'object',
+      properties: { a: { type: 'string' } },
+      required: ['a'],
+    }) as Record<string, unknown>;
+    expect(out.additionalProperties).toBe(false);
+  });
+
+  test('recurses into nested object properties', () => {
+    const out = normalizeJsonSchemaForOpenAiStrict({
+      type: 'object',
+      properties: {
+        nested: { type: 'object', properties: { b: { type: 'number' } } },
+      },
+    }) as { additionalProperties: unknown; properties: { nested: Record<string, unknown> } };
+    expect(out.additionalProperties).toBe(false);
+    expect(out.properties.nested.additionalProperties).toBe(false);
+  });
+
+  test('recurses into array items', () => {
+    const out = normalizeJsonSchemaForOpenAiStrict({
+      type: 'array',
+      items: { type: 'object', properties: { c: { type: 'string' } } },
+    }) as { items: Record<string, unknown> };
+    expect(out.items.additionalProperties).toBe(false);
+  });
+
+  test('recurses into anyOf and $defs composition', () => {
+    const out = normalizeJsonSchemaForOpenAiStrict({
+      $defs: { Foo: { type: 'object', properties: { x: { type: 'string' } } } },
+      anyOf: [{ type: 'object', properties: { y: { type: 'string' } } }],
+    }) as {
+      $defs: { Foo: Record<string, unknown> };
+      anyOf: Record<string, unknown>[];
+    };
+    expect(out.$defs.Foo.additionalProperties).toBe(false);
+    expect(out.anyOf[0].additionalProperties).toBe(false);
+  });
+
+  test('treats a schema with properties but no explicit type as an object', () => {
+    const out = normalizeJsonSchemaForOpenAiStrict({
+      properties: { a: { type: 'string' } },
+    }) as Record<string, unknown>;
+    expect(out.additionalProperties).toBe(false);
+  });
+
+  test('handles a type union that includes object', () => {
+    const out = normalizeJsonSchemaForOpenAiStrict({
+      type: ['object', 'null'],
+      properties: { a: { type: 'string' } },
+    }) as Record<string, unknown>;
+    expect(out.additionalProperties).toBe(false);
+  });
+
+  test('replaces an existing additionalProperties subschema with false (OpenAI strict-mode)', () => {
+    const input = {
+      type: 'object',
+      properties: { key: { type: 'string' } },
+      additionalProperties: { type: 'number' },
+    };
+    const out = normalizeJsonSchemaForOpenAiStrict(input) as Record<string, unknown>;
+    // OpenAI strict-mode forbids open/typed additional properties; false is the
+    // only accepted value, so the subschema is intentionally replaced.
+    expect(out.additionalProperties).toBe(false);
+    // Input is not mutated.
+    expect(input.additionalProperties).toEqual({ type: 'number' });
+  });
+
+  test('leaves non-object schemas untouched', () => {
+    const out = normalizeJsonSchemaForOpenAiStrict({ type: 'string' }) as Record<string, unknown>;
+    expect(out.additionalProperties).toBeUndefined();
+  });
+
+  test('does not mutate the input object (returns a deep clone)', () => {
+    const input = { type: 'object', properties: { a: { type: 'string' } } };
+    normalizeJsonSchemaForOpenAiStrict(input);
+    expect('additionalProperties' in input).toBe(false);
+  });
+
+  test('is idempotent — an already-normalized schema is structurally unchanged', () => {
+    const alreadyNormalized = {
+      type: 'object',
+      properties: {
+        a: { type: 'string' },
+        nested: {
+          type: 'object',
+          properties: { b: { type: 'number' } },
+          additionalProperties: false,
+        },
+      },
+      additionalProperties: false,
+    };
+    const out = normalizeJsonSchemaForOpenAiStrict(alreadyNormalized);
+    expect(out).toEqual(alreadyNormalized);
+  });
+});
+
+describe('hasOpenAdditionalProperties', () => {
+  test('true when an object declares an open-record additionalProperties subschema', () => {
+    expect(
+      hasOpenAdditionalProperties({
+        type: 'object',
+        properties: { key: { type: 'string' } },
+        additionalProperties: { type: 'number' },
+      })
+    ).toBe(true);
+  });
+
+  test('true when additionalProperties is the boolean true', () => {
+    expect(hasOpenAdditionalProperties({ type: 'object', additionalProperties: true })).toBe(true);
+  });
+
+  test('detects an open-record subschema nested below a closed parent', () => {
+    expect(
+      hasOpenAdditionalProperties({
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          map: { type: 'object', additionalProperties: { type: 'string' } },
+        },
+      })
+    ).toBe(true);
+  });
+
+  test('false when every object is already closed (additionalProperties:false)', () => {
+    expect(
+      hasOpenAdditionalProperties({
+        type: 'object',
+        properties: { a: { type: 'string' } },
+        additionalProperties: false,
+      })
+    ).toBe(false);
+  });
+
+  test('false when no additionalProperties is declared anywhere', () => {
+    expect(
+      hasOpenAdditionalProperties({
+        type: 'object',
+        properties: { a: { type: 'string' } },
+      })
+    ).toBe(false);
+  });
+
+  test('does not flag a non-object node carrying additionalProperties (normalizer leaves it untouched)', () => {
+    // No `type: object` and no `properties` → not an object node by the
+    // normalizer's rule, so the normalizer would NOT rewrite it. The predicate
+    // must match that and stay silent.
+    expect(hasOpenAdditionalProperties({ additionalProperties: { type: 'string' } })).toBe(false);
   });
 });

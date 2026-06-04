@@ -91,3 +91,97 @@ function tryJsonParseObject(text: string): unknown {
     return undefined;
   }
 }
+
+/**
+ * True when `node`'s shape marks it as a JSON-Schema object node: it declares
+ * `type: 'object'` (or a type union including `'object'`) or carries a
+ * `properties` map. OpenAI strict-mode requires `additionalProperties: false`
+ * on exactly these nodes.
+ */
+function isObjectSchemaNode(node: Record<string, unknown>): boolean {
+  const typeIncludesObject =
+    node.type === 'object' || (Array.isArray(node.type) && node.type.includes('object'));
+  return typeIncludesObject || 'properties' in node;
+}
+
+/**
+ * Recursively inject `additionalProperties: false` on every object schema so a
+ * JSON Schema satisfies OpenAI's Structured Outputs strict-mode validator.
+ *
+ * OpenAI rejects any `object` node that does not declare `additionalProperties:
+ * false` (HTTP 400 invalid_json_schema). Claude and most other providers don't
+ * require this, so workflow authors write portable `output_format` schemas and
+ * the Codex provider adapts them here. Returns a deep clone — the caller's
+ * schema object is never mutated.
+ *
+ * A pre-existing `additionalProperties` on an object — including a value
+ * subschema like `additionalProperties: { type: 'string' }` (an open record /
+ * map) — is replaced with `false`. OpenAI strict-mode forbids open or typed
+ * additional properties, so `false` is the only value the API accepts; keeping
+ * the subschema would just re-trigger the HTTP 400 this normalizer exists to fix.
+ * Callers that want to warn the author before silently dropping those semantics
+ * can detect the case up front with {@link hasOpenAdditionalProperties}.
+ *
+ * Scope: only `additionalProperties` is injected. The other strict-mode rule
+ * (every key in `properties` must appear in `required`) is intentionally NOT
+ * enforced here — forcing it would silently turn optional fields into required
+ * ones. See issue #1843.
+ */
+export function normalizeJsonSchemaForOpenAiStrict(
+  schema: Record<string, unknown>
+): Record<string, unknown> {
+  return normalizeNode(schema) as Record<string, unknown>;
+}
+
+/**
+ * Recursive worker for {@link normalizeJsonSchemaForOpenAiStrict}. Walks any
+ * JSON value (object, array, or scalar); only object nodes are closed. Kept
+ * private so the public entry point can express the real `Record → Record`
+ * contract while recursion still descends into arrays and scalars.
+ */
+function normalizeNode(node: unknown): unknown {
+  if (Array.isArray(node)) {
+    return node.map(normalizeNode);
+  }
+  if (node === null || typeof node !== 'object') {
+    return node;
+  }
+
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+    result[key] = normalizeNode(value);
+  }
+  if (isObjectSchemaNode(result)) {
+    result.additionalProperties = false;
+  }
+
+  return result;
+}
+
+/**
+ * True if any object node in `schema` declares `additionalProperties` as
+ * something other than `false` — e.g. `additionalProperties: true` or an
+ * open-record subschema like `additionalProperties: { type: 'string' }`.
+ * {@link normalizeJsonSchemaForOpenAiStrict} silently rewrites these to `false`
+ * for OpenAI strict-mode; the Codex provider uses this to warn the author that
+ * their open-record semantics were dropped. Detection reuses the normalizer's
+ * object-node rule, so it never flags a node the normalizer would leave
+ * untouched. See issue #1843.
+ */
+export function hasOpenAdditionalProperties(schema: unknown): boolean {
+  if (Array.isArray(schema)) {
+    return schema.some(hasOpenAdditionalProperties);
+  }
+  if (schema === null || typeof schema !== 'object') {
+    return false;
+  }
+  const node = schema as Record<string, unknown>;
+  if (
+    isObjectSchemaNode(node) &&
+    'additionalProperties' in node &&
+    node.additionalProperties !== false
+  ) {
+    return true;
+  }
+  return Object.values(node).some(hasOpenAdditionalProperties);
+}

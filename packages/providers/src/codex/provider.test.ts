@@ -760,7 +760,7 @@ describe('CodexProvider', () => {
       );
     });
 
-    test('passes outputFormat schema as outputSchema in TurnOptions', async () => {
+    test('normalizes outputFormat schema (adds additionalProperties:false) before sending as outputSchema', async () => {
       mockRunStreamed.mockResolvedValue({
         events: (async function* () {
           yield { type: 'turn.completed', usage: defaultUsage };
@@ -769,7 +769,10 @@ describe('CodexProvider', () => {
 
       const schema = {
         type: 'object',
-        properties: { summary: { type: 'string' } },
+        properties: {
+          summary: { type: 'string' },
+          meta: { type: 'object', properties: { tag: { type: 'string' } } },
+        },
         required: ['summary'],
       };
 
@@ -780,9 +783,70 @@ describe('CodexProvider', () => {
         chunks.push(chunk);
       }
 
+      // OpenAI strict-mode requires additionalProperties:false on every object,
+      // including the nested `meta` object — verifies recursion through the
+      // real provider path. See issue #1843.
       expect(mockRunStreamed).toHaveBeenCalledWith(
         'test prompt',
-        expect.objectContaining({ outputSchema: schema })
+        expect.objectContaining({
+          outputSchema: {
+            type: 'object',
+            properties: {
+              summary: { type: 'string' },
+              meta: {
+                type: 'object',
+                properties: { tag: { type: 'string' } },
+                additionalProperties: false,
+              },
+            },
+            required: ['summary'],
+            additionalProperties: false,
+          },
+        })
+      );
+    });
+
+    test('normalizes nodeConfig.output_format schema before sending as outputSchema', async () => {
+      // The DAG executor populates nodeConfig.output_format (not outputFormat),
+      // so this is the actual path from issue #1843. Pin the normalized schema
+      // at the SDK boundary, not just the downstream parse.
+      mockRunStreamed.mockResolvedValue({
+        events: (async function* () {
+          yield { type: 'turn.completed', usage: defaultUsage };
+        })(),
+      });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test prompt', '/workspace', undefined, {
+        nodeConfig: {
+          output_format: {
+            type: 'object',
+            properties: {
+              verdict: { type: 'string' },
+              meta: { type: 'object', properties: { score: { type: 'number' } } },
+            },
+          },
+        },
+      })) {
+        chunks.push(chunk);
+      }
+
+      expect(mockRunStreamed).toHaveBeenCalledWith(
+        'test prompt',
+        expect.objectContaining({
+          outputSchema: {
+            type: 'object',
+            properties: {
+              verdict: { type: 'string' },
+              meta: {
+                type: 'object',
+                properties: { score: { type: 'number' } },
+                additionalProperties: false,
+              },
+            },
+            additionalProperties: false,
+          },
+        })
       );
     });
 
