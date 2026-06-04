@@ -1,0 +1,39 @@
+/** Loop variant: defaults + sparse fromDag/toDag conversion. */
+import type { LoopNodeData, WireDagNode } from '../types';
+
+/** Default loop config for a freshly-created loop node. */
+export function defaultLoopData(): LoopNodeData {
+  return { prompt: '', until: 'COMPLETE', max_iterations: 10, fresh_context: false };
+}
+
+/** Build `LoopNodeData` from a partitioned wire node's variant-specific fields. */
+export function loopFromDag(variantSpecific: Partial<WireDagNode>): LoopNodeData {
+  const loop = variantSpecific.loop;
+  if (!loop) return defaultLoopData();
+  return {
+    prompt: loop.prompt,
+    until: loop.until,
+    max_iterations: loop.max_iterations,
+    // Engine default is false but the generated type makes it required, so it is
+    // always present on the wire and must be carried verbatim across the round-trip.
+    fresh_context: loop.fresh_context,
+    ...(loop.until_bash !== undefined ? { until_bash: loop.until_bash } : {}),
+    ...(loop.interactive !== undefined ? { interactive: loop.interactive } : {}),
+    ...(loop.gate_message !== undefined ? { gate_message: loop.gate_message } : {}),
+  };
+}
+
+/** Serialize `LoopNodeData` to the sparse `{ loop: … }` wire fragment. */
+export function loopToDag(data: LoopNodeData): Partial<WireDagNode> {
+  return {
+    loop: {
+      prompt: data.prompt,
+      until: data.until,
+      max_iterations: data.max_iterations,
+      fresh_context: data.fresh_context,
+      ...(data.until_bash !== undefined ? { until_bash: data.until_bash } : {}),
+      ...(data.interactive !== undefined ? { interactive: data.interactive } : {}),
+      ...(data.gate_message !== undefined ? { gate_message: data.gate_message } : {}),
+    },
+  };
+}
