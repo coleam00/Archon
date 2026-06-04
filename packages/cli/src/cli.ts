@@ -331,11 +331,15 @@ async function main(): Promise<number> {
     const isInteractiveCommand =
       command === 'setup' || command === 'doctor' || command === 'telemetry';
     const suppressByDefault = isInteractiveCommand && !values.verbose && !isVerboseBoot();
-    // --json implies log suppression: Pino's default destination is stdout, so
-    // without this every `--json` command would interleave info logs with the
-    // JSON payload and break JSON.parse for a consuming agent. Keeps stdout to
-    // exactly the machine-readable result.
-    if (values.quiet || suppressByDefault || jsonFlag) {
+    // --json must keep stdout to EXACTLY the machine-readable payload. Pino's
+    // default destination is stdout, so even one warn/error line would precede
+    // the JSON and break JSON.parse for a consuming agent. Silence logs entirely
+    // (not just lower to 'warn' — warnings still print at that level): every
+    // --json command surfaces failures inside its own { ok: false } envelope, so
+    // no diagnostic the caller needs is lost.
+    if (jsonFlag) {
+      setLogLevel('silent');
+    } else if (values.quiet || suppressByDefault) {
       setLogLevel('warn');
     } else if (values.verbose) {
       setLogLevel('debug');
@@ -488,18 +492,33 @@ async function main(): Promise<number> {
               console.error('Usage: archon workflow get <run-id> [--json] [--verbose]');
               return 1;
             }
-            await workflowGetCommand(getRunId, jsonFlag, values.verbose as boolean | undefined);
-            break;
+            // Propagate the command's exit code so `get <id> && ...` and CI
+            // pipelines see a non-zero status when the run is missing.
+            return await workflowGetCommand(
+              getRunId,
+              jsonFlag,
+              values.verbose as boolean | undefined
+            );
           }
 
-          case 'runs':
+          case 'runs': {
+            const rawLimit = values.limit as string | undefined;
+            let limit: number | undefined;
+            if (rawLimit !== undefined) {
+              limit = Number(rawLimit);
+              if (!Number.isInteger(limit) || limit < 1) {
+                console.error(`Error: --limit must be a positive integer, got '${rawLimit}'.`);
+                return 1;
+              }
+            }
             await workflowRunsCommand(effectiveCwd, {
               json: jsonFlag,
               all: values.all as boolean | undefined,
               status: values.status as string | undefined,
-              limit: values.limit ? Number(values.limit) : undefined,
+              limit,
             });
             break;
+          }
 
           case 'resume': {
             const resumeRunId = positionals[2];

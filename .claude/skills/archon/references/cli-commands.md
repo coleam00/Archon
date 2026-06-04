@@ -71,9 +71,9 @@ archon workflow runs --all           # across all projects (ignore cwd scope)
 | `--all` | List across all projects (drop the cwd→codebase scope) |
 | `--status <s>` | Filter to one status: `pending`, `running`, `completed`, `failed`, `cancelled`, `paused` |
 | `--limit <n>` | Max rows (default 20) |
-| `--json` | Emit the full `{ runs, total, counts }` dashboard result |
+| `--json` | Emit the full `{ runs, total, counts, scopeFallback }` dashboard result |
 
-An unregistered cwd falls back to a global list with a `(not a registered project — showing all runs)` note (never a silent wrong scope).
+An unregistered cwd (or a codebase lookup failure) falls back to a global list with a `(not a registered project — showing all runs)` note (never a silent wrong scope). In `--json`, `scopeFallback: true` flags that the result is global rather than the requested project scope.
 
 ### `archon workflow get <run-id> [--verbose]`
 

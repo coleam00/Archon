@@ -16,6 +16,7 @@ import {
   workflowRejectCommand,
   workflowCleanupCommand,
   workflowResetSessionsCommand,
+  buildDetachedRunCmd,
 } from './workflow';
 
 const mockLogger = {
@@ -1750,20 +1751,22 @@ describe('workflowGetCommand', () => {
     consoleSpy.mockRestore();
   });
 
-  it('prints not-found (human) for a missing run', async () => {
+  it('prints not-found (human) and exits non-zero for a missing run', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
 
-    await workflowGetCommand('nope');
+    const code = await workflowGetCommand('nope');
 
     expect(consoleSpy).toHaveBeenCalledWith('Workflow run not found: nope');
+    // Exit 1 so `get <id> && ...` and CI checks react to a missing run.
+    expect(code).toBe(1);
   });
 
-  it('emits {ok:false, error:not_found} JSON for a missing run', async () => {
+  it('emits {ok:false, error:not_found} JSON and exits non-zero for a missing run', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
 
-    await workflowGetCommand('nope', true);
+    const code = await workflowGetCommand('nope', true);
 
     expect(consoleSpy).toHaveBeenCalledTimes(1);
     expect(JSON.parse(consoleSpy.mock.calls[0][0] as string)).toEqual({
@@ -1771,6 +1774,7 @@ describe('workflowGetCommand', () => {
       runId: 'nope',
       error: 'not_found',
     });
+    expect(code).toBe(1);
   });
 
   it('emits {ok:false} JSON (never throws) when the DB lookup fails', async () => {
@@ -1821,7 +1825,7 @@ describe('workflowGetCommand', () => {
       metadata: {},
     });
 
-    await workflowGetCommand('run-json', true);
+    const code = await workflowGetCommand('run-json', true);
 
     expect(consoleSpy).toHaveBeenCalledTimes(1);
     const parsed = JSON.parse(consoleSpy.mock.calls[0][0] as string) as {
@@ -1830,6 +1834,7 @@ describe('workflowGetCommand', () => {
     };
     expect(parsed.id).toBe('run-json');
     expect(parsed.status).toBe('completed');
+    expect(code).toBe(0);
   });
 
   it('attaches events in verbose JSON mode', async () => {
@@ -1930,9 +1935,32 @@ describe('workflowRunsCommand', () => {
     const parsed = JSON.parse(consoleSpy.mock.calls[0][0] as string) as {
       runs: unknown[];
       total: number;
+      scopeFallback: boolean;
     };
     expect(parsed.total).toBe(1);
     expect(parsed.runs).toHaveLength(1);
+    // codebase did not resolve → result is a global fallback, flagged for agents
+    expect(parsed.scopeFallback).toBe(true);
+  });
+
+  it('marks scopeFallback false in --json when the project scope resolves', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-proj',
+      name: 'owner/repo',
+      default_cwd: '/test/path',
+    });
+    (workflowDb.listDashboardRuns as ReturnType<typeof mock>).mockResolvedValueOnce({
+      runs: [],
+      total: 0,
+      counts: EMPTY_COUNTS,
+    });
+
+    await workflowRunsCommand('/test/path', { json: true });
+
+    const parsed = JSON.parse(consoleSpy.mock.calls[0][0] as string) as { scopeFallback: boolean };
+    expect(parsed.scopeFallback).toBe(false);
   });
 
   it('passes --all (no codebase scope) plus --status/--limit through to listDashboardRuns', async () => {
@@ -2203,6 +2231,53 @@ describe('workflowRunCommand — detach', () => {
     const parsed = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
     expect(parsed).toMatchObject({ ok: true, action: 'run', detached: true, workflow: 'assist' });
     expect(typeof parsed.conversationId).toBe('string');
+  });
+});
+
+describe('buildDetachedRunCmd', () => {
+  // BUNDLED_IS_BINARY is a module-level const (mocked false), so the binary
+  // branch is unreachable through spawnDetachedWorkflowRun — exercise both
+  // branches directly via the pure builder.
+
+  it('dev mode: keeps [execPath, entryScript], slices argv(2), drops --detach/--json', () => {
+    const cmd = buildDetachedRunCmd(
+      false,
+      '/path/to/bun',
+      ['/path/to/bun', '/abs/cli.ts', 'workflow', 'run', 'assist', 'hello', '--detach', '--json'],
+      '/abs/cwd',
+      ['--branch', 'assist-123', '--conversation-id', 'cli-1']
+    );
+
+    expect(cmd[0]).toBe('/path/to/bun');
+    expect(cmd[1]).toBe('/abs/cli.ts');
+    expect(cmd).not.toContain('--detach');
+    expect(cmd).not.toContain('--json');
+    expect(cmd).toContain('assist');
+    // --cwd pinned absolute, then extra flags
+    const cwdIdx = cmd.indexOf('--cwd');
+    expect(cmd[cwdIdx + 1]).toBe('/abs/cwd');
+    expect(cmd).toContain('--branch');
+    expect(cmd).toContain('--conversation-id');
+  });
+
+  it('binary mode: uses [execPath] only (no duplicated entry arg), slices argv(1)', () => {
+    const cmd = buildDetachedRunCmd(
+      true,
+      '/usr/local/bin/archon',
+      ['/usr/local/bin/archon', 'workflow', 'run', 'assist', 'hello', '--detach', '--json'],
+      '/abs/cwd',
+      ['--branch', 'assist-123']
+    );
+
+    expect(cmd[0]).toBe('/usr/local/bin/archon');
+    // The binary path must appear exactly once — never duplicated as argv[1].
+    expect(cmd.filter(arg => arg === '/usr/local/bin/archon')).toHaveLength(1);
+    expect(cmd[1]).toBe('workflow');
+    expect(cmd).not.toContain('--detach');
+    expect(cmd).not.toContain('--json');
+    const cwdIdx = cmd.indexOf('--cwd');
+    expect(cmd[cwdIdx + 1]).toBe('/abs/cwd');
+    expect(cmd.slice(cwdIdx + 2)).toEqual(['--branch', 'assist-123']);
   });
 });
 

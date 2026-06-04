@@ -9,7 +9,7 @@
  */
 
 // =============================================================================
-// Skill Files (21 total)
+// Skill Files (23 total: 21 archon + 2 manage-run)
 // =============================================================================
 
 import skillMd from '../../../.claude/skills/archon/SKILL.md' with { type: 'text' };

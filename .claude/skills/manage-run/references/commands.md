@@ -16,7 +16,7 @@ active-only).
 - `--all` — drop the project scope; list runs across every project.
 - `--status <s>` — filter to one status: `pending | running | completed | failed | cancelled | paused`.
 - `--limit <n>` — max rows (default 20).
-- Unregistered cwd: falls back to a global list and prints a `(not a registered project — showing all runs)` note (never a silent wrong scope).
+- Unregistered cwd (or a codebase lookup failure): falls back to a global list and prints a `(not a registered project — showing all runs)` note (never a silent wrong scope). In `--json` this is the `scopeFallback` field — `true` means the result is global, not the project scope you asked for.
 
 `--json` shape — the dashboard result:
 ```json
@@ -28,7 +28,8 @@ active-only).
   ],
   "total": 87,
   "counts": { "all": 87, "running": 1, "completed": 70, "failed": 12,
-              "cancelled": 3, "pending": 0, "paused": 1 }
+              "cancelled": 3, "pending": 0, "paused": 1 },
+  "scopeFallback": false
 }
 ```
 
@@ -37,6 +38,7 @@ Detail for **one run, any status**.
 
 - `--verbose` — also derive a per-node summary from the event log (and, in `--json`, attach the raw `events` array).
 - `--json` emits the raw run object on success; on failure (not found, DB error) it emits one `{ "ok": false, "runId": "…", "error": "…" }` line and never throws (`error` is `"not_found"` for a missing run).
+- Exit code is non-zero when the run is not found (so `archon workflow get <id> && …` and CI checks react to a missing run); `0` on success.
 
 ```json
 { "id": "…", "workflow_name": "archon-assist", "status": "failed",

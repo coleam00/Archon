@@ -12,7 +12,7 @@ import { WORKFLOW_EVENT_TYPES, type WorkflowEventType } from '@archon/workflows/
 import { configureIsolation, getIsolationProvider } from '@archon/isolation';
 import { createLogger, getArchonHome, BUNDLED_IS_BINARY } from '@archon/paths';
 import { join } from 'node:path';
-import { mkdirSync, openSync } from 'node:fs';
+import { mkdirSync, openSync, closeSync } from 'node:fs';
 import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { resolveWorkflowName } from '@archon/workflows/router';
@@ -82,7 +82,12 @@ export interface WorkflowRunOptions {
    * exactly one worktree/conversation is created. The child does all the work.
    */
   detach?: boolean;
-  /** Emit a machine-readable JSON ack instead of human text (only honored with --detach). */
+  /**
+   * Emit a machine-readable JSON ack for the spawned child instead of human
+   * text. Only meaningful together with `detach`: without `detach` a foreground
+   * `workflow run` streams human output and has no JSON ack to emit (passing
+   * `--json` alone still suppresses CLI logs but does not change the output).
+   */
   json?: boolean;
 }
 
@@ -96,9 +101,11 @@ function generateConversationId(): string {
 }
 
 /**
- * Re-invoke `archon workflow run` (minus --detach) as a detached background
- * child so the caller's shell returns immediately. Reconstructs the current
- * argv, drops `--detach`, pins `--cwd` (absolute) plus any caller-supplied extra
+ * Re-invoke `archon workflow run` (minus --detach/--json) as a detached
+ * background child so the caller's shell returns immediately. Reconstructs the
+ * current argv, drops `--detach` (the child runs in the foreground) and `--json`
+ * (the parent already emitted the ack; the child should log normally to its log
+ * file, not run silent), pins `--cwd` (absolute) plus any caller-supplied extra
  * flags (a generated branch / conversation id), then detaches via `unref()`.
  *
  * `dispatchBackgroundWorkflow` is deliberately NOT reused here: it is web-
@@ -111,20 +118,43 @@ function generateConversationId(): string {
  * Falls back to discarding output only if the log file cannot be opened.
  * Returns the log path (or null when discarded) so the caller can surface it.
  */
+/**
+ * Build the argv for the detached re-invoke. Pure (no spawn / no process reads)
+ * so both the dev (bun + entry script) and compiled-binary (execPath only)
+ * branches are unit-testable — the binary branch is otherwise unreachable in
+ * tests because `BUNDLED_IS_BINARY` is a module-level const. Drops `--detach`
+ * and `--json` and appends `--cwd <cwd>` (last-wins) plus any extra flags.
+ */
+export function buildDetachedRunCmd(
+  isBinary: boolean,
+  execPath: string,
+  argv: string[],
+  cwd: string,
+  extraArgs: string[]
+): string[] {
+  // In a compiled binary, execPath IS the archon binary and there is no
+  // entry-script argv[1]; in dev, execPath is bun and argv[1] is the cli entry.
+  const baseCmd = isBinary ? [execPath] : [execPath, argv[1]];
+  const userArgs = (isBinary ? argv.slice(1) : argv.slice(2)).filter(
+    arg => arg !== '--detach' && arg !== '--json'
+  );
+  // --cwd is appended last (parseArgs last-wins) so the child resolves the same
+  // absolute working dir regardless of any relative --cwd the caller passed.
+  return [...baseCmd, ...userArgs, '--cwd', cwd, ...extraArgs];
+}
+
 function spawnDetachedWorkflowRun(
   cwd: string,
   conversationId: string,
   extraArgs: string[]
 ): string | null {
-  // In a compiled binary, process.execPath IS the archon binary and there is no
-  // entry-script argv[1]; in dev, execPath is bun and argv[1] is the cli entry.
-  const baseCmd = BUNDLED_IS_BINARY ? [process.execPath] : [process.execPath, process.argv[1]];
-  const userArgs = (BUNDLED_IS_BINARY ? process.argv.slice(1) : process.argv.slice(2)).filter(
-    arg => arg !== '--detach'
+  const cmd = buildDetachedRunCmd(
+    BUNDLED_IS_BINARY,
+    process.execPath,
+    process.argv,
+    cwd,
+    extraArgs
   );
-  // --cwd is appended last (parseArgs last-wins) so the child resolves the same
-  // absolute working dir regardless of any relative --cwd the caller passed.
-  const cmd = [...baseCmd, ...userArgs, '--cwd', cwd, ...extraArgs];
 
   let logPath: string | null = null;
   let logFd: number | undefined;
@@ -139,14 +169,25 @@ function spawnDetachedWorkflowRun(
     logFd = undefined;
   }
 
-  const child = Bun.spawn({
-    cmd,
-    cwd,
-    env: process.env,
-    stdio: ['ignore', logFd ?? 'ignore', logFd ?? 'ignore'],
-  });
-  // Detach: let the parent exit without waiting on (or killing) the child.
-  child.unref();
+  try {
+    const child = Bun.spawn({
+      cmd,
+      cwd,
+      env: process.env,
+      stdio: ['ignore', logFd ?? 'ignore', logFd ?? 'ignore'],
+    });
+    child.unref();
+  } finally {
+    // The child inherits its own dup of the log fd; close the parent's copy so a
+    // synchronous spawn failure (bad execPath, invalid cwd) doesn't leak it.
+    if (logFd !== undefined) {
+      try {
+        closeSync(logFd);
+      } catch {
+        /* fd already closed/invalid — nothing to clean up */
+      }
+    }
+  }
   return logPath;
 }
 
@@ -1047,6 +1088,24 @@ function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
 }
 
 /**
+ * Fetch a run's events for `--verbose` rendering. A failed event query must not
+ * abort the command (the run summary itself is still useful), but it must NOT be
+ * indistinguishable from "this run has no events" — so log a warn and flag the
+ * failure to the caller, which prints a visible note. (In `--json` mode logs are
+ * silenced; the empty `events` array is the documented signal there.)
+ */
+async function fetchVerboseEvents(
+  runId: string
+): Promise<{ events: WorkflowEventRow[]; failed: boolean }> {
+  try {
+    return { events: await workflowEventsDb.listWorkflowEvents(runId), failed: false };
+  } catch (error) {
+    getLog().warn({ err: error as Error, runId }, 'cli.workflow_events_fetch_failed');
+    return { events: [], failed: true };
+  }
+}
+
+/**
  * Render per-node summaries for a run's events as an indented "Nodes:" block.
  * Shared by `workflow status --verbose` and `workflow get --verbose`.
  * Prints nothing when the run has no node events.
@@ -1118,11 +1177,9 @@ export async function workflowStatusCommand(json?: boolean, verbose?: boolean): 
     console.log(`  Age:    ${age}`);
 
     if (verbose) {
-      let events: WorkflowEventRow[];
-      try {
-        events = await workflowEventsDb.listWorkflowEvents(run.id);
-      } catch {
-        events = [];
+      const { events, failed } = await fetchVerboseEvents(run.id);
+      if (failed) {
+        console.log('  (node events unavailable — see logs)');
       }
       printVerboseNodes(events);
     }
@@ -1143,7 +1200,7 @@ export async function workflowGetCommand(
   runId: string,
   json?: boolean,
   verbose?: boolean
-): Promise<void> {
+): Promise<number> {
   let run: WorkflowRun | null;
   try {
     run = await workflowDb.getWorkflowRun(runId);
@@ -1154,34 +1211,36 @@ export async function workflowGetCommand(
     // contract as the write commands) so a parsing agent always gets JSON.
     if (json) {
       console.log(JSON.stringify({ ok: false, runId, error: err.message }, null, 2));
-      return;
+      return 1;
     }
     throw new Error(`Failed to get workflow run: ${err.message}`);
   }
 
   if (!run) {
+    // Not-found exits non-zero so `get <id> && ...` and CI checks see the
+    // failure (the JSON envelope already carries ok:false for parsers).
     if (json) {
       console.log(JSON.stringify({ ok: false, runId, error: 'not_found' }, null, 2));
     } else {
       console.log(`Workflow run not found: ${runId}`);
     }
-    return;
+    return 1;
   }
 
   // getWorkflowRun returns the base WorkflowRun (no current_step_name) — derive
   // per-node detail from the event log, and only when verbose is requested.
   let events: WorkflowEventRow[] | undefined;
+  let eventsFailed = false;
   if (verbose) {
-    try {
-      events = await workflowEventsDb.listWorkflowEvents(run.id);
-    } catch {
-      events = [];
-    }
+    const fetched = await fetchVerboseEvents(run.id);
+    events = fetched.events;
+    eventsFailed = fetched.failed;
   }
 
   if (json) {
-    console.log(JSON.stringify(verbose ? { ...run, events: events ?? [] } : run, null, 2));
-    return;
+    const output = verbose ? { ...run, events: events ?? [] } : run;
+    console.log(JSON.stringify(output, null, 2));
+    return 0;
   }
 
   console.log(`  ID:     ${run.id}`);
@@ -1194,8 +1253,12 @@ export async function workflowGetCommand(
     console.log(`  Error:  ${runError}`);
   }
   if (events) {
+    if (eventsFailed) {
+      console.log('  (node events unavailable — see logs)');
+    }
     printVerboseNodes(events);
   }
+  return 0;
 }
 
 /**
@@ -1237,13 +1300,15 @@ export async function workflowRunsCommand(
       getLog().warn({ err: error as Error, cwd }, 'cli.workflow_runs_codebase_lookup_failed');
     }
   }
-  const codebaseId = opts.all ? undefined : (codebase?.id ?? undefined);
+  // listDashboardRuns ignores undefined filters (truthy-guarded WHERE clauses),
+  // so pass codebaseId/status straight through — no conditional spread needed.
+  const codebaseId = opts.all ? undefined : codebase?.id;
 
   let result;
   try {
     result = await workflowDb.listDashboardRuns({
-      ...(codebaseId ? { codebaseId } : {}),
-      ...(statusFilter ? { status: statusFilter } : {}),
+      codebaseId,
+      status: statusFilter,
       limit: opts.limit ?? 20,
     });
   } catch (error) {
@@ -1256,12 +1321,18 @@ export async function workflowRunsCommand(
     throw new Error(`Failed to list workflow runs: ${err.message}`);
   }
 
+  // True when project scoping was requested but fell back to the global list
+  // (unregistered cwd or a lookup failure). The human path prints a note below;
+  // surface the same signal in --json so an agent isn't handed a global result
+  // it silently mistakes for a project-scoped one.
+  const scopeFallback = !opts.all && !codebase;
+
   if (opts.json) {
-    console.log(JSON.stringify(result, null, 2));
+    console.log(JSON.stringify({ ...result, scopeFallback }, null, 2));
     return;
   }
 
-  if (!opts.all && !codebase) {
+  if (scopeFallback) {
     console.log('(not a registered project — showing all runs)');
   }
 
@@ -1284,10 +1355,22 @@ export async function workflowRunsCommand(
 }
 
 /**
+ * Emit the standard `{ ok: false }` error line for a `--json` write command
+ * (approve/reject/abandon/resume). Centralizes the envelope so all four stay in
+ * lockstep; never throws — in --json mode the JSON line IS the error surface.
+ */
+function printJsonWriteError(runId: string, action: string, error: unknown): void {
+  console.log(
+    JSON.stringify({ ok: false, runId, action, error: (error as Error).message }, null, 2)
+  );
+}
+
+/**
  * Resume a failed workflow run by ID.
  *
- * Re-executes the workflow with --resume semantics — the executor's
- * findResumableRun picks up the prior failed run and skips completed nodes.
+ * Re-executes the workflow with --resume semantics: `workflowRunCommand` locates
+ * the prior failed run via findResumableRun and hands it to the executor, which
+ * skips already-completed nodes (the executor no longer auto-detects on its own).
  */
 export async function workflowResumeCommand(runId: string, json?: boolean): Promise<void> {
   // JSON mode is a non-blocking control-plane ack: validate the run is resumable
@@ -1314,13 +1397,7 @@ export async function workflowResumeCommand(runId: string, json?: boolean): Prom
         )
       );
     } catch (error) {
-      console.log(
-        JSON.stringify(
-          { ok: false, runId, action: 'resume', error: (error as Error).message },
-          null,
-          2
-        )
-      );
+      printJsonWriteError(runId, 'resume', error);
     }
     return;
   }
@@ -1361,9 +1438,9 @@ export async function workflowResumeCommand(runId: string, json?: boolean): Prom
   }
   if (discoveryCwd) console.log(`Discovery path: ${discoveryCwd}`);
 
-  // Re-execute via workflowRunCommand with --resume.
-  // The executor's implicit findResumableRun detects the prior failed run
-  // and skips already-completed nodes.
+  // Re-execute via workflowRunCommand with --resume: it locates the prior failed
+  // run via findResumableRun and skips already-completed nodes (the executor
+  // itself no longer auto-detects resumable runs).
   try {
     await workflowRunCommand(run.working_path, run.workflow_name, run.user_message ?? '', {
       resume: true,
@@ -1405,16 +1482,11 @@ export async function workflowAbandonCommand(runId: string, json?: boolean): Pro
         )
       );
     } catch (error) {
-      console.log(
-        JSON.stringify(
-          { ok: false, runId, action: 'abandon', error: (error as Error).message },
-          null,
-          2
-        )
-      );
+      printJsonWriteError(runId, 'abandon', error);
     }
     return;
   }
+
   const run = await abandonWorkflow(runId);
   console.log(`Abandoned workflow run: ${runId}`);
   console.log(`Workflow: ${run.workflow_name}`);
@@ -1422,7 +1494,11 @@ export async function workflowAbandonCommand(runId: string, json?: boolean): Pro
 
 /**
  * Approve a paused workflow run by ID.
- * Writes the approval events and transitions to 'failed' for auto-resume.
+ *
+ * Human mode writes the approval events (transitioning to 'failed') and then
+ * auto-resumes the run inline. `--json` mode records the approval and returns a
+ * structured ack WITHOUT resuming — the run is left resumable for a backgrounded
+ * `resume`/`run --resume` (inline resume would stream output and break the JSON).
  */
 export async function workflowApproveCommand(
   runId: string,
@@ -1451,13 +1527,7 @@ export async function workflowApproveCommand(
         )
       );
     } catch (error) {
-      console.log(
-        JSON.stringify(
-          { ok: false, runId, action: 'approve', error: (error as Error).message },
-          null,
-          2
-        )
-      );
+      printJsonWriteError(runId, 'approve', error);
     }
     return;
   }
@@ -1573,13 +1643,7 @@ export async function workflowRejectCommand(
         )
       );
     } catch (error) {
-      console.log(
-        JSON.stringify(
-          { ok: false, runId, action: 'reject', error: (error as Error).message },
-          null,
-          2
-        )
-      );
+      printJsonWriteError(runId, 'reject', error);
     }
     return;
   }
