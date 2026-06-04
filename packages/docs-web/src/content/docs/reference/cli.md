@@ -415,7 +415,7 @@ The cached web UI is stored at `~/.archon/web-dist/<version>/`. Each version is 
 
 ### `skill install [path]`
 
-Install the bundled Archon skills into a project's `.claude/skills/` directory. Always overwrites existing files to ensure the latest version shipped with the current Archon binary is installed.
+Install the bundled Archon skills into both `.claude/skills/` (Claude Code) and `.agents/skills/` (Codex) directories of a project. Always overwrites existing files to ensure the latest version shipped with the current Archon binary is installed.
 
 ```bash
 # Install into the current directory
@@ -425,7 +425,7 @@ archon skill install
 archon skill install /path/to/project
 ```
 
-Two skills are installed: **`archon`** (`.claude/skills/archon/`), which teaches Claude Code how to work with Archon workflows, commands, and project conventions; and **`manage-run`** (`.claude/skills/manage-run/`), a focused skill for inspecting and controlling workflow runs via the `archon` CLI. Both are also installed automatically during `archon setup`.
+Two skills are installed: **`archon`**, which teaches the assistant how to work with Archon workflows, commands, and project conventions; and **`manage-run`**, a focused skill for inspecting and controlling workflow runs via the `archon` CLI. Each skill is written to both `.claude/skills/<skill>/` (Claude Code) and `.agents/skills/<skill>/` (Codex's canonical project-level skill path). Both are also installed automatically during `archon setup`.
 
 ### `version`
 

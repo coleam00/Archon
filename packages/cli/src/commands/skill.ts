@@ -2,8 +2,9 @@
  * Skill command - Install bundled Archon skill files into a project
  *
  * Writes the bundled `archon` skill (SKILL.md, guides, references, examples) and
- * the focused `manage-run` skill into <targetPath>/.claude/skills/<skill>/ so
- * Claude Code picks them up the next time the project is opened.
+ * the focused `manage-run` skill into <targetPath>/.claude/skills/<skill>/ (for
+ * Claude Code) and <targetPath>/.agents/skills/<skill>/ (the canonical Codex
+ * project-level skill path) so both Claude Code and Codex pick them up.
  *
  * Always overwrites existing files to ensure the latest skill version
  * shipped with the current Archon binary is installed.
@@ -42,9 +43,14 @@ function writeSkillFiles(skillRoot: string, files: Record<string, string>): void
  */
 export async function copyArchonSkill(targetPath: string): Promise<void> {
   const { BUNDLED_SKILL_FILES, BUNDLED_MANAGE_RUN_SKILL_FILES } = await import('../bundled-skill');
-  const skillsRoot = join(targetPath, '.claude', 'skills');
-  writeSkillFiles(join(skillsRoot, 'archon'), BUNDLED_SKILL_FILES);
-  writeSkillFiles(join(skillsRoot, 'manage-run'), BUNDLED_MANAGE_RUN_SKILL_FILES);
+  // Claude Code
+  const claudeSkillsRoot = join(targetPath, '.claude', 'skills');
+  writeSkillFiles(join(claudeSkillsRoot, 'archon'), BUNDLED_SKILL_FILES);
+  writeSkillFiles(join(claudeSkillsRoot, 'manage-run'), BUNDLED_MANAGE_RUN_SKILL_FILES);
+  // Codex — canonical project-level skill path (auto-discovered by Codex)
+  const codexSkillsRoot = join(targetPath, '.agents', 'skills');
+  writeSkillFiles(join(codexSkillsRoot, 'archon'), BUNDLED_SKILL_FILES);
+  writeSkillFiles(join(codexSkillsRoot, 'manage-run'), BUNDLED_MANAGE_RUN_SKILL_FILES);
 }
 
 /**
@@ -60,18 +66,19 @@ export async function skillInstallCommand(targetPath: string): Promise<number> {
     return 1;
   }
 
-  const skillsRoot = join(absoluteTarget, '.claude', 'skills');
+  const claudeSkillsRoot = join(absoluteTarget, '.claude', 'skills');
+  const codexSkillsRoot = join(absoluteTarget, '.agents', 'skills');
   try {
     const { BUNDLED_SKILL_FILES, BUNDLED_MANAGE_RUN_SKILL_FILES } =
       await import('../bundled-skill');
     const fileCount =
       Object.keys(BUNDLED_SKILL_FILES).length + Object.keys(BUNDLED_MANAGE_RUN_SKILL_FILES).length;
     console.log(
-      `Installing Archon skills (archon + manage-run, ${fileCount} files) into ${skillsRoot}`
+      `Installing Archon skills (archon + manage-run, ${fileCount} files) into ${claudeSkillsRoot} and ${codexSkillsRoot}`
     );
 
     await copyArchonSkill(absoluteTarget);
-    console.log('Done. Restart Claude Code to load the skills.');
+    console.log('Done. Restart Claude Code or Codex to load the skills.');
     return 0;
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
