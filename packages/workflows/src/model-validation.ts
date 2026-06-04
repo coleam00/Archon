@@ -12,6 +12,7 @@
  */
 
 import tierDefaults from './defaults/tier-defaults.json';
+import type { ThinkingConfig } from './schemas/dag-node';
 
 /** Reserved tier names — cannot be used as custom alias names */
 export const TIER_NAMES = ['small', 'medium', 'large'] as const;
@@ -22,15 +23,17 @@ export interface ModelAliasPreset {
   provider: string;
   model: string;
   effort?: string;
-  thinking?: unknown;
+  thinking?: ThinkingConfig;
 }
 
-/** Raw alias entry as it appears in config YAML (before provider injection) */
+/** Alias entry as written in config YAML — user-defined @custom aliases.
+ * Structurally identical to ModelAliasPreset; kept separate to distinguish
+ * config-layer input from resolved output. */
 export interface RawAliasEntry {
   provider: string;
   model: string;
   effort?: string;
-  thinking?: unknown;
+  thinking?: ThinkingConfig;
 }
 
 /** The aliases map from config YAML — keyed by alias name */
@@ -54,7 +57,7 @@ export type ResolvedModelSpec = ModelAliasPreset | { literal: string };
  */
 const TIER_FALLBACK: Record<TierName, readonly TierName[]> = {
   large: ['large', 'medium', 'small'],
-  medium: ['medium', 'large', 'small'],
+  medium: ['medium', 'large', 'small'], // prefer over-capable (large) when both sides missing
   small: ['small', 'medium', 'large'],
 };
 
@@ -71,6 +74,14 @@ function assertNotReserved(name: string): void {
   if (isTierName(name)) {
     throw new Error(
       `Alias name '${name}' is reserved (small/medium/large are tier keywords). Use a different name.`
+    );
+  }
+}
+
+function assertCustomAliasPrefix(name: string): void {
+  if (!name.startsWith('@')) {
+    throw new Error(
+      `Alias name '${name}' must start with '@' (e.g. '@${name}'). Reserved tier names (small/medium/large) do not need '@'.`
     );
   }
 }
@@ -93,7 +104,8 @@ export interface BuildAiProfileOptions {
 
 /**
  * Build a ResolvedAiProfile by layering tier defaults → global aliases → repo aliases.
- * Throws if any alias name collides with a reserved tier name.
+ * Throws if any alias name collides with a reserved tier name, or if an alias
+ * entry has an empty provider or model string, or if an alias key lacks the `@` prefix.
  */
 export function buildAiProfile(
   defaultProvider: string,
@@ -123,6 +135,7 @@ export function buildAiProfile(
     if (!layer) continue;
     for (const [name, entry] of Object.entries(layer)) {
       assertNotReserved(name);
+      assertCustomAliasPrefix(name);
       assertValidEntry(name, entry);
       aliases[name] = {
         provider: entry.provider,

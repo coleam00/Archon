@@ -103,13 +103,13 @@ describe('buildAiProfile — alias layering', () => {
         '@think': {
           provider: 'claude',
           model: 'opus',
-          thinking: { type: 'enabled', budget_tokens: 10000 },
+          thinking: { type: 'enabled', budgetTokens: 10000 },
         },
       },
     });
     expect(profile.aliases['@think']?.thinking).toEqual({
       type: 'enabled',
-      budget_tokens: 10000,
+      budgetTokens: 10000,
     });
   });
 });
@@ -153,6 +153,22 @@ describe('buildAiProfile — reserved name validation', () => {
         repoAliases: { '@bad': { provider: '', model: 'opus' } },
       })
     ).toThrow(/provider/);
+  });
+
+  test('rejects alias entry with empty model', () => {
+    expect(() =>
+      buildAiProfile('claude', {
+        repoAliases: { '@bad': { provider: 'claude', model: '' } },
+      })
+    ).toThrow(/model/);
+  });
+
+  test('rejects alias key without @ prefix', () => {
+    expect(() =>
+      buildAiProfile('claude', {
+        repoAliases: { cheap: { provider: 'claude', model: 'haiku' } },
+      })
+    ).toThrow(/'@cheap'/);
   });
 });
 
@@ -228,6 +244,14 @@ describe('resolveModelSpec — tier fallback chains', () => {
 
   test('only large configured → medium falls back to large', () => {
     const profile = profileWithTiers({ large: 'opus' });
+    expect(resolveModelSpec(profile, 'medium')).toEqual({
+      provider: 'claude',
+      model: 'opus',
+    });
+  });
+
+  test('large and small configured (no medium) → medium prefers large', () => {
+    const profile = profileWithTiers({ small: 'haiku', large: 'opus' });
     expect(resolveModelSpec(profile, 'medium')).toEqual({
       provider: 'claude',
       model: 'opus',

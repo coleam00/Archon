@@ -403,7 +403,6 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
 
   result.assistants = mergeAssistantDefaults(result.assistants, global.assistants);
 
-  // Merge global aliases on top of (currently empty) base aliases
   result.aliases = mergeAliases(result.aliases, global.aliases);
 
   // Streaming preferences
@@ -450,7 +449,6 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
 
   result.assistants = mergeAssistantDefaults(result.assistants, repo.assistants);
 
-  // Repo aliases override global aliases with the same key
   result.aliases = mergeAliases(result.aliases, repo.aliases);
 
   // Commands config

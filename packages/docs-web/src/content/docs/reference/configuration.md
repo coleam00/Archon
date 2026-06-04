@@ -96,6 +96,11 @@ paths:
 concurrency:
   maxConversations: 10
 
+# Model aliases — optional. Wired into workflow `model:` resolution in a follow-up.
+# aliases:
+#   '@fast': { provider: claude, model: haiku }
+#   '@think': { provider: claude, model: opus, thinking: { type: enabled, budgetTokens: 8000 } }
+
 ```
 
 ## Repository Configuration
@@ -150,6 +155,10 @@ defaults:
 # env:
 #   MY_API_KEY: value
 #   CUSTOM_ENDPOINT: https://...
+
+# Model aliases — override global aliases with the same name (repo > global).
+# aliases:
+#   '@fast': { provider: claude, model: haiku }
 
 ```
 

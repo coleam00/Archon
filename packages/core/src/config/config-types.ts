@@ -83,7 +83,8 @@ export interface GlobalConfig {
 
   /**
    * Named model aliases accessible in workflow/node `model:` fields.
-   * Keys: `@<name>` for custom aliases. Reserved names: small, medium, large.
+   * Keys must use `@<name>` prefix (e.g. `@cheap`) — bare names are not
+   * reachable as aliases. Reserved names (enforced at runtime): small, medium, large.
    */
   aliases?: RawAliasesConfig;
 
