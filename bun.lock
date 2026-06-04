@@ -142,6 +142,7 @@
         "@openai/codex-sdk": "^0.125.0",
         "@opencode-ai/sdk": "^1.14.20",
         "@sinclair/typebox": "^0.34.41",
+        "zod": "^4.0.0",
       },
       "devDependencies": {
         "pino": "^9",

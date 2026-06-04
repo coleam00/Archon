@@ -177,6 +177,31 @@ export async function getWorkflowRun(id: string): Promise<WorkflowRun | null> {
   }
 }
 
+/**
+ * Find runs in a codebase whose id starts with `idPrefix` (e.g. the 8-char
+ * short id shown in listings). Returns up to two matches so callers can detect
+ * an ambiguous prefix. Scoped to `codebaseId` in the query, so it never crosses
+ * projects. Run ids are UUIDs, so `idPrefix` is rejected unless it's within the
+ * UUID charset — that keeps it out of LIKE-wildcard territory (`%` / `_`).
+ */
+export async function findWorkflowRunsByIdPrefix(
+  idPrefix: string,
+  codebaseId: string
+): Promise<WorkflowRun[]> {
+  if (idPrefix.length === 0 || !/^[0-9a-fA-F-]+$/.test(idPrefix)) return [];
+  try {
+    const result = await pool.query<WorkflowRun>(
+      'SELECT * FROM remote_agent_workflow_runs WHERE codebase_id = $1 AND id LIKE $2 LIMIT 2',
+      [codebaseId, `${idPrefix}%`]
+    );
+    return result.rows.map(normalizeWorkflowRun);
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err }, 'db.workflow_run_find_by_prefix_failed');
+    throw new Error(`Failed to find workflow runs by id prefix: ${err.message}`);
+  }
+}
+
 export async function getWorkflowRunStatus(id: string): Promise<string | null> {
   try {
     const result = await pool.query<{ status: string }>(

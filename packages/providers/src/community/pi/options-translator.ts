@@ -166,6 +166,17 @@ const PI_DEFAULT_TOOL_NAMES = [
 ] as const satisfies readonly PiToolName[];
 
 /**
+ * Pi's default coding tools, rebuilt with managed-env injection. Used when
+ * attaching native tools to a chat that had no tool restrictions: setting
+ * `customTools` forces `noTools: 'builtin'`, so the defaults must be
+ * re-supplied or the agent loses bash/read/edit/write.
+ */
+export function buildDefaultPiTools(cwd: string, env?: Record<string, string>): PiTool[] {
+  const spawnHook = buildBashSpawnHook(env);
+  return PI_DEFAULT_TOOL_NAMES.map(name => buildPiTool(name, cwd, spawnHook));
+}
+
+/**
  * Filter Pi's built-in tool set against Archon's `allowed_tools` /
  * `denied_tools` node config, with managed env injected into any bash tool.
  *

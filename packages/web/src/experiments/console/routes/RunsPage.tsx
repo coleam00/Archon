@@ -4,7 +4,9 @@ import { EmptyState } from '../components/EmptyState';
 import { ActiveRunCard } from '../components/ActiveRunCard';
 import { RecentRunRow } from '../components/RecentRunRow';
 import { FilterChips, type Filter } from '../components/FilterChips';
+import { ProjectViewTabs } from '../components/ProjectViewTabs';
 import { DraftRunCard } from '../components/DraftRunCard';
+import { PendingInputBanner } from '../components/PendingInputBanner';
 import { useEntity } from '../store/cache';
 import { K, type Scope } from '../store/keys';
 import { useDashboardSSE } from '../lib/sse';
@@ -185,6 +187,8 @@ interface RunsFeedProps {
   showProject: boolean;
   draftProject: { id: string; path: string } | null;
   selectedRunId: string | null;
+  /** Run ids whose approval is currently shown in the pending-input banner. */
+  promotedRunIds: ReadonlySet<string>;
 }
 
 /**
@@ -197,7 +201,13 @@ interface RunsFeedProps {
  * card shape as a paused-approval card, just waiting for YOU instead of
  * the agent. Starting a new run is "another card in the list."
  */
-function RunsFeed({ runs, showProject, draftProject, selectedRunId }: RunsFeedProps): ReactElement {
+function RunsFeed({
+  runs,
+  showProject,
+  draftProject,
+  selectedRunId,
+  promotedRunIds,
+}: RunsFeedProps): ReactElement {
   const active = runs.filter(r => r.status === 'running' || r.status === 'paused');
   const recent = runs.filter(
     r => r.status === 'completed' || r.status === 'failed' || r.status === 'cancelled'
@@ -220,6 +230,7 @@ function RunsFeed({ runs, showProject, draftProject, selectedRunId }: RunsFeedPr
                 run={run}
                 showProject={showProject}
                 selected={run.id === selectedRunId}
+                inputPromoted={promotedRunIds.has(run.id)}
               />
             ))}
           </div>
@@ -259,6 +270,9 @@ export function RunsPage(): ReactElement {
   // Selection index for j/k navigation. -1 = nothing selected.
   const [selectedIndex, setSelectedIndex] = useState<number>(-1);
   const searchRef = useRef<HTMLInputElement | null>(null);
+  // Pending-input runs the user has dismissed from the banner this session.
+  // Not persisted — the run is still paused, so it re-surfaces on reload.
+  const [dismissed, setDismissed] = useState<ReadonlySet<string>>(() => new Set());
 
   const { data, loading, error } = useEntity<FeedData>(K.runs(scope), () =>
     skill.listRuns(scope === 'all' ? {} : { codebaseId: scope })
@@ -290,6 +304,38 @@ export function RunsPage(): ReactElement {
   const allRuns = [...demoRuns, ...realRuns];
   const counts = demoMode ? mergeCounts(realCounts, demoCounts) : realCounts;
   const runs = useMemo(() => filterRuns(allRuns, filter, query), [allRuns, filter, query]);
+
+  // Runs paused on a human gate (approval node / agent question). Derived from
+  // the unfiltered set on purpose: a run that needs you should surface even
+  // while the feed is filtered to `completed` or a search is active.
+  const pendingRuns = useMemo(
+    () =>
+      allRuns.filter(r => r.status === 'paused' && r.approval !== null && r.approval !== undefined),
+    [allRuns]
+  );
+
+  // Drop dismissed ids that are no longer pending so a run that pauses again
+  // (a later approval node, or a repeating interactive loop gate) re-surfaces
+  // instead of staying suppressed for the rest of the session.
+  useEffect(() => {
+    setDismissed(prev => {
+      if (prev.size === 0) return prev;
+      const pendingIds = new Set(pendingRuns.map(r => r.id));
+      let changed = false;
+      const next = new Set<string>();
+      for (const id of prev) {
+        if (pendingIds.has(id)) next.add(id);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [pendingRuns]);
+
+  const visiblePending = useMemo(
+    () => pendingRuns.filter(r => !dismissed.has(r.id)),
+    [pendingRuns, dismissed]
+  );
+  const promotedRunIds = useMemo(() => new Set(visiblePending.map(r => r.id)), [visiblePending]);
 
   const heading = scope === 'all' ? 'All projects' : (project?.name ?? 'Project');
   const hasScopedProject = scope !== 'all' && project !== undefined && project !== null;
@@ -459,10 +505,24 @@ export function RunsPage(): ReactElement {
           <div className="rounded border border-dashed border-border bg-surface-inset/60 px-3 py-2 text-[12px] text-text-tertiary">
             Pick a project on the left to start a run.
           </div>
-        ) : null}
+        ) : (
+          <ProjectViewTabs projectId={scope} active="runs" />
+        )}
 
         <FilterChips value={filter} onChange={setFilter} counts={counts} />
       </header>
+
+      <PendingInputBanner
+        runs={visiblePending}
+        showProject={scope === 'all'}
+        onDismiss={runId => {
+          setDismissed(prev => {
+            const next = new Set(prev);
+            next.add(runId);
+            return next;
+          });
+        }}
+      />
 
       <div className="flex-1 overflow-y-auto px-6 py-4">
         {error !== undefined && !demoMode ? (
@@ -486,6 +546,7 @@ export function RunsPage(): ReactElement {
             showProject={scope === 'all'}
             draftProject={draftProject}
             selectedRunId={selectedRunId}
+            promotedRunIds={promotedRunIds}
           />
         )}
       </div>

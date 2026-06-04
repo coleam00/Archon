@@ -29,4 +29,5 @@ export const OPENCODE_CAPABILITIES: ProviderCapabilities = {
   thinkingControl: false, // OpenCode handles effort/thinking via opencode.json agent config, not prompt body
   fallbackModel: false,
   sandbox: false,
+  nativeTools: false,
 };

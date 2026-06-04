@@ -25,12 +25,13 @@ import { formatToolCall } from '@archon/workflows/utils/tool-formatter';
 import { classifyAndFormatError } from '../utils/error-formatter';
 import { toError } from '../utils/error';
 import { getAgentProvider, getProviderCapabilities } from '@archon/providers';
+import { buildManageRunTool } from './manage-run-tool';
 import { getArchonWorkspacesPath, ensureArchonWorkspacesPath } from '@archon/paths';
 import { syncArchonToWorktree } from '../utils/worktree-sync';
 import { syncWorkspace, toRepoPath } from '@archon/git';
 import type { WorkspaceSyncResult } from '@archon/git';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
-import { findWorkflow } from '@archon/workflows/router';
+import { findWorkflow, resolveWorkflowName } from '@archon/workflows/router';
 import { executeWorkflow, hydrateResumableRun } from '@archon/workflows/executor';
 import {
   assertWorkflowRequirementsMet,
@@ -1047,6 +1048,53 @@ export async function handleMessage(
       env: Object.keys(effectiveEnv).length > 0 ? effectiveEnv : undefined,
       systemPrompt,
     };
+
+    // Project-scoped chats get the `manage_run` tool so the agent can see and
+    // launch this project's workflow runs. Only when a codebase is scoped and
+    // the provider supports in-process native tools (Claude, Pi).
+    if (conversation.codebase_id !== null && getProviderCapabilities(providerKey).nativeTools) {
+      const scopedCodebaseId = conversation.codebase_id;
+      requestOptions.nativeTools = [
+        buildManageRunTool({
+          codebaseId: scopedCodebaseId,
+          startWorkflow: async (workflowName, msg): Promise<string> => {
+            let wf: WorkflowDefinition | undefined;
+            try {
+              wf = resolveWorkflowName(workflowName, workflows);
+            } catch (e: unknown) {
+              return toError(e).message; // ambiguous-name error is user-facing
+            }
+            if (wf === undefined) {
+              const names = workflows.map(w => w.name).join(', ');
+              return `No workflow named "${workflowName}". Available: ${names}`;
+            }
+            try {
+              await dispatchBackgroundWorkflow(
+                {
+                  platform,
+                  conversationId,
+                  cwd,
+                  originalMessage: msg.length > 0 ? msg : `Run ${wf.name}`,
+                  conversationDbId: conversation.id,
+                  codebaseId: scopedCodebaseId,
+                  availableWorkflows: workflows,
+                  userId,
+                },
+                wf
+              );
+            } catch (e: unknown) {
+              const err = toError(e);
+              getLog().error(
+                { err, workflow: wf.name, codebaseId: scopedCodebaseId, conversationId },
+                'manage_run.start_failed'
+              );
+              return `Failed to start workflow "${wf.name}": ${err.message}`;
+            }
+            return `Started workflow "${wf.name}" in the background — it'll appear in the runs list and the workflow dock shortly.`;
+          },
+        }),
+      ];
+    }
 
     const mode = platform.getStreamingMode();
     if (mode === 'stream') {

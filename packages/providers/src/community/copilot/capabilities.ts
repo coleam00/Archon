@@ -25,4 +25,5 @@ export const COPILOT_CAPABILITIES: ProviderCapabilities = {
   thinkingControl: true,
   fallbackModel: false,
   sandbox: false,
+  nativeTools: false,
 };
