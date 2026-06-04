@@ -12,7 +12,7 @@
   --sl-color-bg-nav: #0f1219;
   --sl-color-hairline-light: #1e293b;
   --sl-color-text-accent: rgba(168, 85, 247, 0.25); /* mobile sidebar active-link bg — re-test after Starlight upgrades */
-  --sl-color-text-invert: hsl(0, 0%, 100%);
+  --sl-color-text-invert: white;
 }
 
 /* !important needed: Starlight sets .hero padding/gap via inline styles */
