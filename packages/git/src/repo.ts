@@ -131,28 +131,12 @@ export async function syncWorkspace(
     const state = await classifyWorkspaceState(workspacePath, branchToSync);
 
     if (mode === 'fetch-only' || state !== 'behind') {
-      return {
-        branch: branchToSync,
-        synced: true,
-        mode,
-        state,
-        previousHead,
-        newHead: previousHead,
-        updated: false,
-      };
+      return unchangedSyncResult(branchToSync, mode, state, previousHead);
     }
 
     const currentBranch = await getCurrentBranch(workspacePath);
     if (currentBranch !== branchToSync) {
-      return {
-        branch: branchToSync,
-        synced: true,
-        mode,
-        state,
-        previousHead,
-        newHead: previousHead,
-        updated: false,
-      };
+      return unchangedSyncResult(branchToSync, mode, state, previousHead);
     }
 
     try {
@@ -201,6 +185,23 @@ export async function syncWorkspace(
     previousHead,
     newHead,
     updated: previousHead !== newHead && previousHead !== '',
+  };
+}
+
+function unchangedSyncResult(
+  branch: BranchName,
+  mode: WorkspaceSyncMode,
+  state: WorkspaceSyncState,
+  head: string
+): WorkspaceSyncResult {
+  return {
+    branch,
+    synced: true,
+    mode,
+    state,
+    previousHead: head,
+    newHead: head,
+    updated: false,
   };
 }
 

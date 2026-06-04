@@ -186,6 +186,10 @@ async function registerRepoAtPath(
 
     // Still reload commands for the existing codebase
     const effectiveCwd = shouldUpdateCwd ? targetPath : existing.default_cwd;
+    const effectiveDefaultBranch =
+      updates.default_branch !== undefined
+        ? updates.default_branch
+        : (existing.default_branch ?? null);
     let commandsLoaded = 0;
     for (const folder of getCommandFolderSearchPaths()) {
       const commandPath = join(effectiveCwd, folder);
@@ -214,10 +218,7 @@ async function registerRepoAtPath(
       name: existing.name,
       repositoryUrl: existing.repository_url,
       defaultCwd: shouldUpdateCwd ? targetPath : existing.default_cwd,
-      defaultBranch:
-        updates.default_branch !== undefined
-          ? updates.default_branch
-          : (existing.default_branch ?? null),
+      defaultBranch: effectiveDefaultBranch,
       commandCount: commandsLoaded,
       alreadyExisted: true,
     };

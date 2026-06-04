@@ -30,16 +30,20 @@ describe('path-validation', () => {
   const originalArchonDocker = process.env.ARCHON_DOCKER;
   const originalHome = process.env.HOME;
 
-  beforeEach(() => {
-    // Reset to default for consistent test behavior (clear Docker detection too)
-    delete process.env.WORKSPACE_PATH;
-    delete process.env.ARCHON_HOME;
-    delete process.env.ARCHON_DOCKER;
+  function restoreHome(): void {
     if (originalHome !== undefined) {
       process.env.HOME = originalHome;
     } else {
       delete process.env.HOME;
     }
+  }
+
+  beforeEach(() => {
+    // Reset to default for consistent test behavior (clear Docker detection too)
+    delete process.env.WORKSPACE_PATH;
+    delete process.env.ARCHON_HOME;
+    delete process.env.ARCHON_DOCKER;
+    restoreHome();
   });
 
   afterAll(() => {
@@ -59,11 +63,7 @@ describe('path-validation', () => {
     } else {
       delete process.env.ARCHON_DOCKER;
     }
-    if (originalHome !== undefined) {
-      process.env.HOME = originalHome;
-    } else {
-      delete process.env.HOME;
-    }
+    restoreHome();
   });
 
   describe('isPathWithinWorkspace', () => {
