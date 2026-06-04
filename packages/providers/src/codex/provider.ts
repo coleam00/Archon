@@ -441,6 +441,8 @@ async function* streamCodexEvents(
       switch (itemType) {
         case 'agent_message':
           if (item.text) {
+            // Multiple agent_message items can arrive in one turn (preamble + answer);
+            // keep only the last — it's the authoritative structured-output candidate.
             if (hasOutputFormat) accumulatedText = item.text as string;
             yield { type: 'assistant', content: item.text as string };
           }
