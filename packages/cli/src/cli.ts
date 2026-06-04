@@ -103,6 +103,10 @@ Commands:
   workflow list              List available workflows in current directory
   workflow run <name> [msg]  Run a workflow with optional message
   workflow status            Show status of running workflows
+  workflow resume <run-id>   Resume a failed workflow by exact run ID
+  workflow approve <run-id>  Approve a paused workflow run
+  workflow reject <run-id>   Reject a paused workflow run
+  workflow abandon <run-id>  Discard a failed workflow run
   workflow search [query]    Search the workflow marketplace
   workflow install <slug>    Install a workflow from the marketplace
   isolation list             List all active worktrees/environments
@@ -143,6 +147,7 @@ Examples:
   archon workflow run plan --cwd /path/to/repo "Add dark mode"
   archon workflow run implement --branch feature-auth "Implement auth"
   archon workflow run prd-to-pr --prd-id PRD-0045 --from main --branch feat/prd-0045-r2 "Continue the repaired PRD"
+  archon workflow resume run-uuid-4
   archon workflow run quick-fix --no-worktree "Fix typo"
   archon continue fix/issue-42 --workflow archon-smart-pr-review "Review the changes"
   archon skill install
