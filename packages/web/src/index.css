@@ -7,54 +7,62 @@
 @custom-variant dark (&:is(.dark *));
 
 /* PMC Theme - Practice Management Consultants
-   Dark navy base with warm gold accents, mirroring practicemanagementconsultants.com */
+   IVORY app background, navy banner retained, warm gold accents.
+   (2026-06-03: flipped from dark-navy default to light-ivory canvas.)
+
+   The TopNav uses --surface (navy) so the banner remains brand-blue.
+   A soft warm-gold gradient lives between the navy banner and the ivory
+   canvas to seamlessly blend the two surfaces. */
 :root {
-  /* App-specific colors */
-  --surface: oklch(0.21 0.04 255);          /* dark navy sidebar/panels */
-  --surface-elevated: oklch(0.25 0.04 255); /* slightly lighter navy */
-  --border-bright: oklch(0.38 0.04 255);    /* visible borders on navy */
-  --text-primary: oklch(0.96 0.008 78);     /* warm off-white for dark bg */
-  --text-secondary: oklch(0.70 0.015 78);   /* muted warm text */
-  --text-tertiary: oklch(0.48 0.015 78);    /* very muted text */
-  --accent-hover: oklch(0.65 0.14 78);      /* darker gold on hover */
-  --accent-muted: oklch(0.32 0.07 78);      /* deep muted gold */
-  --surface-inset: oklch(0.13 0.03 255);    /* deepest inset bg */
-  --surface-hover: oklch(0.28 0.04 255);    /* hover state on navy */
-  --accent-bright: oklch(0.80 0.12 78);     /* bright gold highlight */
-  --success: oklch(0.65 0.17 155);
-  --warning: oklch(0.75 0.15 75);
-  --error: oklch(0.6 0.2 25);
+  /* App background tokens — IVORY canvas */
+  --background: oklch(0.978 0.012 88);       /* warm ivory #FBF8F0 */
+  --foreground: oklch(0.21 0.04 255);        /* deep navy ink */
+  --surface: oklch(0.21 0.04 255);           /* NAVY banner — UNCHANGED */
+  --surface-elevated: oklch(0.965 0.013 88); /* card surface (light cream) */
+  --surface-inset: oklch(0.94 0.014 88);     /* inset background (slightly deeper cream) */
+  --surface-hover: oklch(0.945 0.014 88);    /* hover state on light cards */
+  --border: oklch(0.88 0.012 88);            /* warm cream border */
+  --border-bright: oklch(0.78 0.018 88);     /* slightly bolder border */
+  --text-primary: oklch(0.22 0.04 255);      /* navy ink for body */
+  --text-secondary: oklch(0.42 0.025 255);   /* muted navy */
+  --text-tertiary: oklch(0.55 0.018 255);    /* very muted */
+  --accent-hover: oklch(0.58 0.13 78);       /* deeper gold on hover */
+  --accent-muted: oklch(0.88 0.04 78);       /* muted gold tint */
+  --accent-bright: oklch(0.70 0.14 78);      /* bright gold highlight */
+  --success: oklch(0.55 0.16 155);
+  --warning: oklch(0.62 0.16 75);
+  --error: oklch(0.55 0.20 25);
 
   /* Node type colors */
-  --node-command: oklch(0.73 0.13 78);      /* gold */
-  --node-prompt: oklch(0.62 0.16 290);      /* purple */
-  --node-bash: oklch(0.75 0.15 75);         /* yellow-green */
+  --node-command: oklch(0.65 0.14 78);
+  --node-prompt: oklch(0.55 0.16 290);
+  --node-bash: oklch(0.62 0.16 75);
 
-  /* shadcn variables - PMC navy + gold */
+  /* shadcn variables - ivory canvas + navy ink + gold accent */
   --radius: 0.5rem;
-  --background: oklch(0.17 0.038 255);      /* main dark navy bg */
-  --foreground: oklch(0.96 0.008 78);       /* warm off-white */
-  --card: oklch(0.21 0.04 255);
-  --card-foreground: oklch(0.96 0.008 78);
-  --popover: oklch(0.21 0.04 255);
-  --popover-foreground: oklch(0.96 0.008 78);
-  --primary: oklch(0.73 0.13 78);           /* PMC gold #C9A84C */
-  --primary-foreground: oklch(0.14 0.03 255); /* dark navy on gold */
-  --secondary: oklch(0.25 0.04 255);
-  --secondary-foreground: oklch(0.96 0.008 78);
-  --muted: oklch(0.25 0.04 255);
-  --muted-foreground: oklch(0.65 0.015 78);
-  --accent: oklch(0.28 0.06 78);
-  --accent-foreground: oklch(0.96 0.008 78);
-  --destructive: oklch(0.6 0.2 25);
-  --border: oklch(0.30 0.04 255);
-  --input: oklch(0.28 0.04 255);
-  --ring: oklch(0.73 0.13 78);
-  --chart-1: oklch(0.73 0.13 78);
-  --chart-2: oklch(0.65 0.17 155);
-  --chart-3: oklch(0.75 0.15 75);
-  --chart-4: oklch(0.6 0.2 25);
-  --chart-5: oklch(0.62 0.16 290);
+  --card: oklch(0.965 0.013 88);             /* light cream card */
+  --card-foreground: oklch(0.22 0.04 255);
+  --popover: oklch(0.985 0.012 88);
+  --popover-foreground: oklch(0.22 0.04 255);
+  --primary: oklch(0.65 0.14 78);            /* PMC gold (warmer, darker for light bg) */
+  --primary-foreground: oklch(0.99 0.005 78);
+  --secondary: oklch(0.92 0.014 88);
+  --secondary-foreground: oklch(0.22 0.04 255);
+  --muted: oklch(0.94 0.013 88);
+  --muted-foreground: oklch(0.45 0.022 255);
+  --accent: oklch(0.90 0.04 78);
+  --accent-foreground: oklch(0.30 0.10 78);
+  --destructive: oklch(0.55 0.20 25);
+  --input: oklch(0.92 0.014 88);
+  --ring: oklch(0.65 0.14 78);
+  /* Chart palette tuned for the ivory canvas (more saturated) */
+  --chart-1: oklch(0.62 0.16 78);            /* gold */
+  --chart-2: oklch(0.55 0.15 155);           /* emerald */
+  --chart-3: oklch(0.55 0.20 25);            /* coral */
+  --chart-4: oklch(0.42 0.10 255);           /* navy */
+  --chart-5: oklch(0.55 0.16 290);           /* violet */
+
+  /* Sidebar / TopNav — NAVY KEPT INTACT */
   --sidebar: oklch(0.19 0.04 255);
   --sidebar-foreground: oklch(0.96 0.008 78);
   --sidebar-primary: oklch(0.73 0.13 78);
@@ -141,12 +149,28 @@
   }
 }
 
-/* Base body styling */
+/* Base body styling — ivory canvas, navy ink */
 body {
   background-color: var(--background);
   color: var(--text-primary);
   font-family: var(--font-sans);
   font-weight: 300;
+}
+
+/* Seamless blend strip between navy nav and ivory canvas
+   Apply this class to a 1-line element right under <TopNav /> in <Layout />.
+   It gradients from the navy banner color into the ivory background via a
+   thin warm-gold mid-tone. */
+.pmc-nav-blend {
+  height: 6px;
+  background: linear-gradient(
+    to bottom,
+    oklch(0.21 0.04 255) 0%,
+    oklch(0.45 0.07 110) 35%,
+    oklch(0.85 0.04 88) 70%,
+    var(--background) 100%
+  );
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
 }
 
 /* PMC: Playfair Display for all headings */

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-02T03:58:28+00:00",
+  "generated_at": "2026-06-04T09:06:00+00:00",
   "vault_path": "second-brain/resources/drive-index",
   "count": 19,
   "folders": [
@@ -10,11 +10,32 @@
       "folderId": "1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
       "parentId": "",
       "audience": "jason-only",
-      "lastSynced": "2026-06-02T02:35:57+00:00",
-      "fileCount": 8,
+      "lastSynced": "2026-06-03T19:00:49+00:00",
+      "fileCount": 11,
       "vaultPath": "second-brain/resources/drive-index/_root.md",
       "driveUrl": "https://drive.google.com/drive/folders/1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
       "files": [
+        {
+          "name": "Dial Board -- Wed June 3 2026 (Top 30 enriched, PMC + BRT)",
+          "type": "g-document",
+          "modified": "2026-06-03",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1j4_gYKVWH1vND4ydQY46kmwFQwXtrRhjDxlv-a4M2_M/edit?usp=drivesdk"
+        },
+        {
+          "name": "Jason LinkedIn Drafts -- System-Rot Arc (UPF / AI Billing / UHC) -- 2026-06-03",
+          "type": "g-document",
+          "modified": "2026-06-03",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1_Gzan1W5pAzwjX_nYMyf8IoY4Rtin27arHe4gQBo0ak/edit?usp=drivesdk"
+        },
+        {
+          "name": "Top 20 LinkedIn Engagement Stories -- 2026-06-03 (7-day firehose aggregate)",
+          "type": "g-document",
+          "modified": "2026-06-03",
+          "size": "",
+          "link": "https://docs.google.com/document/d/10QwdcQTuACcS-T75MoNEbRaBf556A_29jZ4MiCNp5KA/edit?usp=drivesdk"
+        },
         {
           "name": "Carlos Briefing -- Content & Canon Package 2026-06-01",
           "type": "g-document",
@@ -794,11 +815,18 @@
       "folderId": "1_2XY2Anjl6XtnvI81BT2cuvL7FEqKm48",
       "parentId": "1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
       "audience": "all",
-      "lastSynced": "2026-06-02T02:35:49+00:00",
-      "fileCount": 3,
+      "lastSynced": "2026-06-03T19:00:44+00:00",
+      "fileCount": 4,
       "vaultPath": "second-brain/resources/drive-index/hypeframes-hypereels.md",
       "driveUrl": "https://drive.google.com/drive/folders/1_2XY2Anjl6XtnvI81BT2cuvL7FEqKm48",
       "files": [
+        {
+          "name": "A New Way to Wellness.mov",
+          "type": "video/quicktime",
+          "modified": "2026-05-20",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1I850N45-gzc9xpkJll5PYs4N80n2xIZz/view?usp=drivesdk"
+        },
         {
           "name": "Brt HypeReels",
           "type": "g-folder",

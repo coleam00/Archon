@@ -6,7 +6,6 @@ import { Layout } from '@/components/layout/Layout';
 import { ProjectProvider } from '@/contexts/ProjectContext';
 import { queryClient } from '@/lib/query-client';
 import { BRTPage } from '@/routes/BRTPage';
-import { SgInkPage } from '@/routes/SgInkPage';
 import { IHHTPage } from '@/routes/IHHTPage';
 import { QEPPage } from '@/routes/QEPPage';
 import { SocialContentPage } from '@/routes/SocialContentPage';
@@ -89,7 +88,6 @@ export function App(): React.ReactElement {
                 <Route path="/ewc" element={<EWCPage />} />
                 <Route path="/fountain" element={<FountainPage />} />
                 <Route path="/ttts" element={<TTSPage />} />
-                <Route path="/sg-ink" element={<SgInkPage />} />
                 <Route path="/ihht" element={<IHHTPage />} />
                 <Route path="/qep" element={<QEPPage />} />
                 <Route path="/playground" element={<PlaygroundPage />} />

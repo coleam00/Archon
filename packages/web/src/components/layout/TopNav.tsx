@@ -1,6 +1,5 @@
 import { NavLink, Link } from 'react-router';
 import {
-  PenLine,
   Activity,
   ClipboardList,
   Share2,
@@ -52,7 +51,6 @@ const coreTabs: readonly NavTab[] = [
   { to: '/ttts', end: false, icon: Calendar, label: 'TTTS' },
   { to: '/ihht', end: false, icon: Activity, label: 'IHHT' },
   { to: '/qep', end: false, icon: ClipboardList, label: 'QEP' },
-  { to: '/sg-ink', end: false, icon: PenLine, label: 'SG INK' },
   { to: '/accufit', end: false, icon: Zap, label: 'AccuFit' },
   { to: '/social-content', end: false, icon: Share2, label: 'Social Content' },
 ] as const;
@@ -85,16 +83,11 @@ function NavTabLink({ to, end, icon: Icon, label }: NavTab): React.ReactElement 
 export function TopNav(): React.ReactElement {
   return (
     <nav className="flex items-center gap-1 border-b border-border bg-surface px-4 overflow-x-auto">
-      <Link to="/welcome" className="flex items-center gap-2 mr-4 hover:opacity-80 transition-opacity">
-        <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary">
-          <span className="text-sm font-semibold text-primary-foreground">P</span>
-        </div>
-        <span
-          className="text-sm font-semibold text-text-primary whitespace-nowrap"
-          style={{ fontFamily: "'Playfair Display', serif" }}
-        >
-          PMC
-        </span>
+      <Link
+        to="/welcome"
+        className="flex items-center gap-2 mr-4 hover:opacity-80 transition-opacity"
+      >
+        <img src="/pmc-logo.png" alt="PMC" className="h-7 w-auto" style={{ maxWidth: 96 }} />
       </Link>
 
       {coreTabs.map(tab => (

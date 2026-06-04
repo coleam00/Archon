@@ -13,6 +13,8 @@ import {
   ClipboardList,
   PenLine,
   Share2,
+  Megaphone,
+  Sparkles,
 } from 'lucide-react';
 
 interface CardProps {
@@ -50,13 +52,16 @@ export function StartHerePage(): React.ReactElement {
     <div className="flex h-full flex-1 flex-col gap-6 overflow-y-auto p-6">
       {/* Hero */}
       <div className="flex flex-col gap-2">
-        <h1 className="text-3xl font-semibold text-text-primary" style={{ fontFamily: "'Playfair Display', serif" }}>
+        <h1
+          className="text-3xl font-semibold text-text-primary"
+          style={{ fontFamily: "'Playfair Display', serif" }}
+        >
           Welcome
         </h1>
         <p className="text-sm text-text-secondary">
-          This is Jason Diaz's operations dashboard -- a single surface for the PMC
-          portfolio, partner / solution catalog, Google Drive index, contacts,
-          and live engagement state. Built to keep the team aligned and moving.
+          This is Jason Diaz's operations dashboard -- a single surface for the PMC portfolio,
+          partner / solution catalog, Google Drive index, contacts, and live engagement state. Built
+          to keep the team aligned and moving.
         </p>
         <div className="flex flex-wrap items-center gap-3 text-xs text-text-tertiary">
           <span>Single KPI:</span>
@@ -69,40 +74,34 @@ export function StartHerePage(): React.ReactElement {
 
       {/* Three audience views explainer */}
       <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-4">
-        <h2 className="mb-2 text-base font-semibold text-text-primary">
-          Three audience views
-        </h2>
+        <h2 className="mb-2 text-base font-semibold text-text-primary">Three audience views</h2>
         <p className="mb-3 text-xs text-text-secondary">
-          Append <code className="rounded bg-zinc-900 px-1">?view=jason</code>{' '}
-          (default), <code className="rounded bg-zinc-900 px-1">?view=va</code>,
-          or <code className="rounded bg-zinc-900 px-1">?view=partner</code> to
-          any Drive or Solutions URL to filter what's visible. Folder-level{' '}
-          <code className="rounded bg-zinc-900 px-1">audience:</code> tags in
-          the vault are curator-controlled.
+          Append <code className="rounded bg-zinc-900 px-1">?view=jason</code> (default),{' '}
+          <code className="rounded bg-zinc-900 px-1">?view=va</code>, or{' '}
+          <code className="rounded bg-zinc-900 px-1">?view=partner</code> to any Drive or Solutions
+          URL to filter what's visible. Folder-level{' '}
+          <code className="rounded bg-zinc-900 px-1">audience:</code> tags in the vault are
+          curator-controlled.
         </p>
         <div className="grid grid-cols-1 gap-2 text-xs md:grid-cols-3">
           <div className="rounded border border-zinc-800 bg-zinc-900 p-2">
-            <strong className="text-text-primary">view=jason</strong> -- sees
-            everything. The default for Jason and Carlos.
+            <strong className="text-text-primary">view=jason</strong> -- sees everything. The
+            default for Jason and Carlos.
           </div>
           <div className="rounded border border-zinc-800 bg-zinc-900 p-2">
-            <strong className="text-text-primary">view=va</strong> -- sees{' '}
-            <em>all</em> + <em>internal</em>. For Louise, James, Trisha,
-            Vincent, Ed.
+            <strong className="text-text-primary">view=va</strong> -- sees <em>all</em> +{' '}
+            <em>internal</em>. For Louise, James, Trisha, Vincent, Ed.
           </div>
           <div className="rounded border border-zinc-800 bg-zinc-900 p-2">
-            <strong className="text-text-primary">view=partner</strong> -- sees{' '}
-            <em>all</em> + <em>partner-only</em>. For strategic partners on
-            specific portals.
+            <strong className="text-text-primary">view=partner</strong> -- sees <em>all</em> +{' '}
+            <em>partner-only</em>. For strategic partners on specific portals.
           </div>
         </div>
       </div>
 
       {/* Primary surfaces */}
       <div>
-        <h2 className="mb-3 text-base font-semibold text-text-primary">
-          Primary surfaces
-        </h2>
+        <h2 className="mb-3 text-base font-semibold text-text-primary">Primary surfaces</h2>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
           <Card
             to="/drive"
@@ -130,20 +129,66 @@ export function StartHerePage(): React.ReactElement {
 
       {/* PMC sub-brands */}
       <div>
-        <h2 className="mb-1 text-base font-semibold text-text-primary">
-          PMC sub-brands
-        </h2>
+        <h2 className="mb-1 text-base font-semibold text-text-primary">PMC sub-brands</h2>
         <p className="mb-3 text-xs text-text-tertiary">
           Entities Jason owns and operates. The PMC umbrella holds all of these.
         </p>
         <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
           <Card to="/pmc" icon={Briefcase} title="PMC" description="Parent advisory consultancy." />
-          <Card to="/brt" icon={BarChart2} title="BRT (BioReg)" description="Clinical PEMF + EEG biofeedback. bioreg.us." />
-          <Card to="/social-content" icon={Volume2} title="TTTS" description="Therapeutic Technology Showcase. June 27 closed-door Sarasota session." />
-          <Card to="/ihht" icon={Activity} title="IHHT" description="Intermittent Hypoxia-Hyperoxia Therapy program." />
-          <Card to="/qep" icon={ClipboardList} title="QEP" description="Quantum Executive Protocol -- The Fountain venue." />
+          <Card
+            to="/brt"
+            icon={BarChart2}
+            title="BRT (BioReg)"
+            description="Clinical PEMF + EEG biofeedback. bioreg.us."
+          />
+          <Card
+            to="/social-content"
+            icon={Volume2}
+            title="TTTS"
+            description="Therapeutic Technology Showcase. June 27 closed-door Sarasota session."
+          />
+          <Card
+            to="/ihht"
+            icon={Activity}
+            title="IHHT"
+            description="Intermittent Hypoxia-Hyperoxia Therapy program."
+          />
+          <Card
+            to="/qep"
+            icon={ClipboardList}
+            title="QEP"
+            description="Quantum Executive Protocol -- The Fountain venue."
+          />
           <Card to="/sg-ink" icon={PenLine} title="SG INK" description="SG INK content brand." />
-          <Card to="/social-content" icon={Share2} title="VA Workspace" description="Active campaigns, sequences, brand voice, and canon for the VA team." />
+          <Card
+            to="/social-content"
+            icon={Share2}
+            title="VA Workspace"
+            description="Active campaigns, sequences, brand voice, and canon for the VA team."
+          />
+        </div>
+      </div>
+
+      {/* External-rep engagements (Jason as 1099 outside sales for non-PMC principals) */}
+      <div>
+        <h2 className="mb-1 text-base font-semibold text-text-primary">External Reps</h2>
+        <p className="mb-3 text-xs text-text-tertiary">
+          Engagements where Jason sells someone else's product as a 1099 contractor. Not PMC
+          sub-brands. Comp routes to Elevated Wellness LLC.
+        </p>
+        <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+          <Card
+            to="/external-reps/arc"
+            icon={Megaphone}
+            title="ARC Brand Agency"
+            description="Adam Riley -- Google Ads / PPC for European luxury auto. 60-day trial through 2026-07-31."
+          />
+          <Card
+            to="/external-reps/sadn"
+            icon={Sparkles}
+            title="SADN 2026"
+            description="Susan Szantosi -- partner outreach for Sarasota Art & Dance Night, Nov 15 at Art Ovation Hotel."
+          />
         </div>
       </div>
 
@@ -153,23 +198,41 @@ export function StartHerePage(): React.ReactElement {
           Operating-lens categories
         </h2>
         <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-          <Card to="/category/writing-comms" icon={Mail} title="Writing" description="Outbound comms, drafts, voice." />
-          <Card to="/category/research-learning" icon={FlaskConical} title="Research" description="Briefs, market intel, decision memos." />
-          <Card to="/category/techbase" icon={Wrench} title="Techbase" description="Tools, infra, integrations." />
-          <Card to="/category/work-daily-ops" icon={CheckSquare} title="Daily Ops" description="Tasks, this-week, blockers." />
+          <Card
+            to="/category/writing-comms"
+            icon={Mail}
+            title="Writing"
+            description="Outbound comms, drafts, voice."
+          />
+          <Card
+            to="/category/research-learning"
+            icon={FlaskConical}
+            title="Research"
+            description="Briefs, market intel, decision memos."
+          />
+          <Card
+            to="/category/techbase"
+            icon={Wrench}
+            title="Techbase"
+            description="Tools, infra, integrations."
+          />
+          <Card
+            to="/category/work-daily-ops"
+            icon={CheckSquare}
+            title="Daily Ops"
+            description="Tasks, this-week, blockers."
+          />
         </div>
       </div>
 
       {/* Quick orientation */}
       <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-4 text-xs">
-        <h2 className="mb-2 text-base font-semibold text-text-primary">
-          Where things live
-        </h2>
+        <h2 className="mb-2 text-base font-semibold text-text-primary">Where things live</h2>
         <ul className="space-y-1.5 text-text-secondary">
           <li>
             <strong className="text-text-primary">Vault source of truth:</strong>{' '}
-            <code className="text-text-tertiary">gbauto/jid5274</code> on GitHub
-            (every commit is pushed; this dashboard reads from it).
+            <code className="text-text-tertiary">gbauto/jid5274</code> on GitHub (every commit is
+            pushed; this dashboard reads from it).
           </li>
           <li>
             <strong className="text-text-primary">PMC sub-brands:</strong>{' '}
@@ -181,8 +244,8 @@ export function StartHerePage(): React.ReactElement {
           </li>
           <li>
             <strong className="text-text-primary">Client engagements:</strong>{' '}
-            <code className="text-text-tertiary">clients-engagements/</code>{' '}
-            (Cleveland Clinic, Precision Health, ...)
+            <code className="text-text-tertiary">clients-engagements/</code> (Cleveland Clinic,
+            Precision Health, ...)
           </li>
           <li>
             <strong className="text-text-primary">Decisions / ADRs:</strong>{' '}
@@ -196,8 +259,8 @@ export function StartHerePage(): React.ReactElement {
       </div>
 
       <p className="text-[11px] text-text-tertiary">
-        Edit any markdown file in the vault and this dashboard refreshes within
-        ~2s (Vite hot-reload). Hourly cron syncs Google Drive metadata.
+        Edit any markdown file in the vault and this dashboard refreshes within ~2s (Vite
+        hot-reload). Hourly cron syncs Google Drive metadata.
       </p>
     </div>
   );
