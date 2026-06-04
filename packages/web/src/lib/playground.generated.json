@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-04T02:56:53.441248+00:00",
+  "generated_at": "2026-06-04T03:16:42.799120+00:00",
   "source": {
     "apollo_api": "live",
     "apollo_csv": "second-brain/intelligence/briefs/2026-05-13-apollo-dial-list-all.csv",
@@ -30,11 +30,16 @@
       "opened": 52,
       "replied": 4,
       "clicked": 0,
+      "bounced": 5,
+      "bounce_rate": 3.55,
+      "delivered_open_tracked": 141,
+      "tracking_ok": true,
       "reply_rate": 2.84,
       "open_rate": 36.88,
       "click_rate": 0,
       "status": "active",
-      "num_steps": 6
+      "num_steps": 6,
+      "health_flag": "\u26a0\ufe0f bounce"
     },
     {
       "slug": "69ea4d1207b925001d6b3afa",
@@ -48,11 +53,16 @@
       "opened": 46,
       "replied": 4,
       "clicked": 1,
+      "bounced": 7,
+      "bounce_rate": 6.31,
+      "delivered_open_tracked": 111,
+      "tracking_ok": true,
       "reply_rate": 3.6,
       "open_rate": 41.44,
       "click_rate": 0.9,
       "status": "active",
-      "num_steps": 6
+      "num_steps": 6,
+      "health_flag": "\ud83d\udea8 bounce"
     },
     {
       "slug": "699cd7f19c628f001d095cc4",
@@ -66,11 +76,16 @@
       "opened": 0,
       "replied": 0,
       "clicked": 0,
+      "bounced": 10,
+      "bounce_rate": 11.24,
+      "delivered_open_tracked": 0,
+      "tracking_ok": false,
       "reply_rate": 0,
       "open_rate": 0,
       "click_rate": 0,
       "status": "active",
-      "num_steps": 6
+      "num_steps": 6,
+      "health_flag": "\ud83d\udea8 bounce"
     },
     {
       "slug": "69f0f72379dfb40019372627",
@@ -84,11 +99,16 @@
       "opened": 2,
       "replied": 0,
       "clicked": 0,
+      "bounced": 0,
+      "bounce_rate": 0.0,
+      "delivered_open_tracked": 4,
+      "tracking_ok": true,
       "reply_rate": 0,
       "open_rate": 50.0,
       "click_rate": 0,
       "status": "active",
-      "num_steps": 5
+      "num_steps": 5,
+      "health_flag": "\u2713"
     },
     {
       "slug": "6a03e2fed5095c001d2e2c78",
@@ -102,11 +122,16 @@
       "opened": 3,
       "replied": 0,
       "clicked": 0,
+      "bounced": 2,
+      "bounce_rate": 8.33,
+      "delivered_open_tracked": 24,
+      "tracking_ok": true,
       "reply_rate": 0,
       "open_rate": 12.5,
       "click_rate": 0,
       "status": "active",
-      "num_steps": 6
+      "num_steps": 6,
+      "health_flag": "\ud83d\udea8 bounce"
     },
     {
       "slug": "698f86da485ea40010fcfc19",
@@ -120,11 +145,16 @@
       "opened": 0,
       "replied": 0,
       "clicked": 0,
+      "bounced": 0,
+      "bounce_rate": 0.0,
+      "delivered_open_tracked": 0,
+      "tracking_ok": false,
       "reply_rate": 0,
       "open_rate": 0,
       "click_rate": 0,
       "status": "paused",
-      "num_steps": 3
+      "num_steps": 3,
+      "health_flag": "\u2713"
     }
   ],
   "dials_by_day": [

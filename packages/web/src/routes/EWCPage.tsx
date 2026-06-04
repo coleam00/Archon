@@ -1,7 +1,25 @@
 import overviewRaw from '@second-brain/businesses/pmc/ewc/overview.md?raw';
-import { BusinessPage } from '@/components/business/BusinessPage';
+import { BusinessPage, type BusinessProspect } from '@/components/business/BusinessPage';
+import prospectsData from '@/lib/business-prospects.generated.json';
 
 const VAULT_PATH = 'second-brain/businesses/pmc/ewc/overview.md';
+
+const PROSPECTS = (prospectsData.by_business as Record<string, BusinessProspect[]>).EWC ?? [];
+
+const VALUE_PROPS = [
+  {
+    title: 'Three-pillar premium stack',
+    body: 'Wellness products + FDA-cleared Lumnen/Avologi laser + AI practice automation. Sticky multi-line revenue per partner.',
+  },
+  {
+    title: 'Lumnen Clinical Partner Program',
+    body: 'Co-branded laser partnership — one-pager and reel shipped, ready for outbound launch to 50-contact pilot list.',
+  },
+  {
+    title: 'Cash-pay practice pivot',
+    body: 'Concierge, DPC, medspa, functional med — high-LTV cash-pay practices evaluating premium service+device+automation bundle.',
+  },
+];
 
 const SECTIONS = [
   {
@@ -98,7 +116,11 @@ export function EWCPage(): React.ReactElement {
       statusText="Active · Line #5"
       statusTone="emerald"
       kpis={KPIS}
+      valueProps={VALUE_PROPS}
       sections={SECTIONS}
+      prospects={PROSPECTS}
+      prospectsHeading="EWC / Lumnen prospects"
+      prospectsSubtitle={`${PROSPECTS.length} contacts — 50-contact list build is pending (Line 5 needle-mover)`}
       vaultPath={VAULT_PATH}
     />
   );

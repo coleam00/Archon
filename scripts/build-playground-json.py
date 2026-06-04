@@ -246,12 +246,17 @@ def build_sequences(skip_apollo: bool = False) -> list[dict]:
         opened = c.get("unique_opened") or 0
         replied = c.get("unique_replied") or 0
         clicked = c.get("unique_clicked") or 0
+        bounced = c.get("unique_bounced") or 0
+        delivered_open_tracked = c.get("unique_delivered_open_tracked") or 0
         # Skip campaigns that are inactive AND have zero send history
         if not c.get("active") and sent == 0:
             continue
         csv_match = find_csv_match(name.upper())
         contacts = csv_match["contacts"] if csv_match else sent
         active = csv_match["active"] if csv_match else (sent if c.get("active") else 0)
+        # Health flags surfaced to the UI
+        bounce_rate = (bounced / sent * 100) if sent else 0
+        tracking_ok = (delivered_open_tracked > 0) if sent > 0 else True
         sequences.append({
             "slug": (c.get("id") or name.lower())[:24],
             "name": name,
@@ -264,11 +269,22 @@ def build_sequences(skip_apollo: bool = False) -> list[dict]:
             "opened": opened,
             "replied": replied,
             "clicked": clicked,
+            "bounced": bounced,
+            "bounce_rate": round(bounce_rate, 2),
+            "delivered_open_tracked": delivered_open_tracked,
+            "tracking_ok": tracking_ok,
             "reply_rate": round((c.get("reply_rate") or 0) * 100, 2),
             "open_rate": round((c.get("open_rate") or 0) * 100, 2),
             "click_rate": round((c.get("click_rate") or 0) * 100, 2),
             "status": "active" if c.get("active") else "paused",
             "num_steps": c.get("num_steps") or 0,
+            # Health flag string for the UI tooltip
+            "health_flag": (
+                "🚨 bounce" if bounce_rate >= 5 else
+                "⚠️ bounce" if bounce_rate >= 2 else
+                "⚠️ tracking off" if not tracking_ok and sent > 10 else
+                "✓"
+            ),
         })
 
     # Fallback: CSV-only sequences not matched to Apollo (warmup/staging)

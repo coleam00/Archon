@@ -1,7 +1,25 @@
 import overviewRaw from '@second-brain/businesses/pmc/qep/overview.md?raw';
-import { BusinessPage } from '@/components/business/BusinessPage';
+import { BusinessPage, type BusinessProspect } from '@/components/business/BusinessPage';
+import prospectsData from '@/lib/business-prospects.generated.json';
 
 const VAULT_PATH = 'second-brain/businesses/pmc/qep/overview.md';
+
+const PROSPECTS = (prospectsData.by_business as Record<string, BusinessProspect[]>).QEP ?? [];
+
+const VALUE_PROPS = [
+  {
+    title: 'Anchor at The Fountain',
+    body: 'QEP is the WPB Fountain partnership. Quantum executive protocols delivered in a premium clinical venue.',
+  },
+  {
+    title: 'Bioenergetic medicine',
+    body: 'Cellular-energy modality positioning for functional medicine, executive performance, longevity buyers.',
+  },
+  {
+    title: 'Cross-brand carrier',
+    body: 'QEP gives BioReg/Cellcom a clinical context for the luxury-wellness ICP — protocols, not just devices.',
+  },
+];
 
 const SECTIONS = [
   {
@@ -59,7 +77,10 @@ export function QEPPage(): React.ReactElement {
       statusText="Active"
       statusTone="emerald"
       kpis={KPIS}
+      valueProps={VALUE_PROPS}
       sections={SECTIONS}
+      prospects={PROSPECTS}
+      prospectsHeading="QEP key contacts"
       vaultPath={VAULT_PATH}
     />
   );

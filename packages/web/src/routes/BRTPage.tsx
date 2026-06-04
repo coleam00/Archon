@@ -1,7 +1,25 @@
 import overviewRaw from '@second-brain/businesses/pmc/bioreg/overview.md?raw';
-import { BusinessPage } from '@/components/business/BusinessPage';
+import { BusinessPage, type BusinessProspect } from '@/components/business/BusinessPage';
+import prospectsData from '@/lib/business-prospects.generated.json';
 
 const VAULT_PATH = 'second-brain/businesses/pmc/bioreg/overview.md';
+
+const PROSPECTS = (prospectsData.by_business as Record<string, BusinessProspect[]>).BRT ?? [];
+
+const VALUE_PROPS = [
+  {
+    title: 'Recovery + autonomic',
+    body: 'Nesta Pro + Cellcom deliver clinical-grade recovery and parasympathetic activation — measurable HRV improvement, faster post-treatment turnaround.',
+  },
+  {
+    title: 'Practice-revenue layer',
+    body: 'Adds high-margin recurring revenue ($150-300/session retail) on top of existing service mix without new headcount.',
+  },
+  {
+    title: 'Co-placement w/ BRT',
+    body: 'Bundle with AccuFit DEMS (body contouring) for "wellness + aesthetics" complete stack — 2-product close, higher LTV.',
+  },
+];
 
 const SECTIONS = [
   {
@@ -100,7 +118,11 @@ export function BRTPage(): React.ReactElement {
       statusText="Active · Line #1"
       statusTone="emerald"
       kpis={KPIS}
+      valueProps={VALUE_PROPS}
       sections={SECTIONS}
+      prospects={PROSPECTS}
+      prospectsHeading="Engaged contacts — Apollo replied (BH-Therapy + BH-Psych + Chiro + Medspa)"
+      prospectsSubtitle={`${PROSPECTS.length} most-engaged across BRT sequences`}
       vaultPath={VAULT_PATH}
     />
   );

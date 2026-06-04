@@ -1,7 +1,25 @@
 import overviewRaw from '@second-brain/businesses/pmc/clients/fountain-wpb/overview.md?raw';
-import { BusinessPage } from '@/components/business/BusinessPage';
+import { BusinessPage, type BusinessProspect } from '@/components/business/BusinessPage';
+import prospectsData from '@/lib/business-prospects.generated.json';
 
 const VAULT_PATH = 'second-brain/businesses/pmc/clients/fountain-wpb/overview.md';
+
+const PROSPECTS = (prospectsData.by_business as Record<string, BusinessProspect[]>).Fountain ?? [];
+
+const VALUE_PROPS = [
+  {
+    title: 'Luxury wellness destination',
+    body: 'West Palm Beach high-performance venue. Premium audience and longevity ICP overlap directly with BioReg + Cellcom target market.',
+  },
+  {
+    title: 'Cross-brand showcase',
+    body: 'BioReg, Cellcom, IHHT, QEP all natural product fits at the venue. Single client engagement opens 4 product surfaces.',
+  },
+  {
+    title: 'Referral flywheel',
+    body: 'Executive clientele drives high-LTV referral pipeline back to PMC fractional advisory and direct device sales.',
+  },
+];
 
 const SECTIONS = [
   {
@@ -102,7 +120,11 @@ export function FountainPage(): React.ReactElement {
       statusText="Core client"
       statusTone="emerald"
       kpis={KPIS}
+      valueProps={VALUE_PROPS}
       sections={SECTIONS}
+      prospects={PROSPECTS}
+      prospectsHeading="Fountain WPB contacts"
+      prospectsSubtitle="Key contact + audience — engagement scope intake pending"
       vaultPath={VAULT_PATH}
     />
   );

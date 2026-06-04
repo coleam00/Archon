@@ -8,6 +8,44 @@ import { parseFrontmatter } from '@/lib/pmc-frontmatter';
 const REMARK_PLUGINS = [remarkGfm, remarkBreaks];
 const REHYPE_PLUGINS = [rehypeHighlight];
 
+export interface ProspectChannelMessage {
+  /** Display label for the channel (Apollo email, LinkedIn DM, SMS) */
+  channel: string;
+  /** Optional subject/preview line */
+  subject?: string;
+  /** Optional last-touch date (YYYY-MM-DD) */
+  date?: string;
+  /** Direction of the message */
+  direction?: 'outbound' | 'inbound';
+}
+
+export interface BusinessProspect {
+  name: string;
+  title?: string | null;
+  company?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  linkedin_url?: string | null;
+  /** Where this person came from (Apollo campaign / referral / SADN list / etc) */
+  source_campaign?: string;
+  /** Channel currently being used (Apollo email, LinkedIn DM, direct, etc) */
+  channel?: string;
+  /** Stage descriptor — "Replied", "Warm", "Cold", "Key contact" */
+  tier?: string;
+  /** Engagement status string */
+  engagement?: string;
+  /** Notes — strategy, context, next move */
+  notes?: string;
+  /** Optional Apollo / HeyReach record ID */
+  apollo_id?: string;
+  /** Optional category label (used for SADN — wellness, medspa, etc) */
+  category?: string;
+  /** Optional ask label (used for SADN) */
+  ask?: string;
+  /** Optional message history (for prospects with multi-touch threads) */
+  messages?: ProspectChannelMessage[];
+}
+
 export interface BusinessSubItem {
   /** Optional slug for the sub-card key */
   slug?: string;
@@ -45,8 +83,16 @@ export interface BusinessPageProps {
   statusTone?: 'emerald' | 'amber' | 'sky' | 'rose' | 'zinc';
   /** Optional KPI strip — rendered as labeled metrics under the header */
   kpis?: { label: string; value: string }[];
+  /** Optional value-prop tiles rendered above the overview (concise pitch) */
+  valueProps?: { title: string; body: string }[];
   /** Optional sub-sections rendered after the overview body */
   sections?: BusinessSection[];
+  /** Optional top-prospects rendered as a contact card grid */
+  prospects?: BusinessProspect[];
+  /** Optional label for the prospects section heading */
+  prospectsHeading?: string;
+  /** Optional sub-label for the prospects section */
+  prospectsSubtitle?: string;
   /** Vault path footer */
   vaultPath: string;
 }
@@ -82,7 +128,11 @@ export function BusinessPage({
   statusText,
   statusTone = 'emerald',
   kpis,
+  valueProps,
   sections = [],
+  prospects,
+  prospectsHeading = 'Top prospects',
+  prospectsSubtitle,
   vaultPath,
 }: BusinessPageProps): React.ReactElement {
   const doc = parseFrontmatter(overviewRaw);
@@ -135,6 +185,23 @@ export function BusinessPage({
                 <div className="mt-1 text-lg font-semibold text-text-primary">
                   {k.value}
                 </div>
+              </div>
+            ))}
+          </section>
+        )}
+
+        {/* Value props — pitch tiles */}
+        {valueProps && valueProps.length > 0 && (
+          <section className="grid gap-3 md:grid-cols-3">
+            {valueProps.map(v => (
+              <div
+                key={v.title}
+                className="rounded-lg border border-primary/30 bg-primary/5 p-4"
+              >
+                <div className="text-xs font-semibold uppercase tracking-wider text-primary">
+                  {v.title}
+                </div>
+                <div className="mt-2 text-sm text-text-primary">{v.body}</div>
               </div>
             ))}
           </section>
@@ -212,6 +279,149 @@ export function BusinessPage({
             )}
           </section>
         ))}
+
+        {/* Top prospects — contact card grid */}
+        {prospects && prospects.length > 0 && (
+          <section>
+            <div className="mb-3 flex items-baseline justify-between">
+              <h2 className="text-sm font-semibold text-text-primary">
+                {prospectsHeading}
+              </h2>
+              <span className="text-[10px] text-text-tertiary">
+                {prospectsSubtitle ?? `${prospects.length} contact${prospects.length === 1 ? '' : 's'}`}
+              </span>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+              {prospects.map((p, idx) => (
+                <article
+                  key={`${p.name}-${idx}`}
+                  className="rounded-lg border border-border bg-surface p-4 transition-colors hover:border-primary/40"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <h3 className="truncate text-sm font-medium text-text-primary">
+                        {p.name}
+                      </h3>
+                      {p.title && (
+                        <p className="mt-0.5 truncate text-xs text-text-secondary">
+                          {p.title}
+                        </p>
+                      )}
+                      {p.company && (
+                        <p className="mt-0.5 truncate text-xs text-text-tertiary">
+                          {p.company}
+                        </p>
+                      )}
+                    </div>
+                    {p.tier && (
+                      <span
+                        className={`shrink-0 rounded-md border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide ${
+                          p.tier.toLowerCase().includes('warm') || p.tier.toLowerCase().includes('replied') || p.tier.toLowerCase().includes('key')
+                            ? BADGE_STYLE.emerald
+                            : p.tier.toLowerCase().includes('cold') || p.tier.toLowerCase().includes('pending')
+                            ? BADGE_STYLE.amber
+                            : BADGE_STYLE.sky
+                        }`}
+                      >
+                        {p.tier}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Contact links */}
+                  {(p.email || p.phone || p.linkedin_url) && (
+                    <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-[11px]">
+                      {p.email && (
+                        <a
+                          href={`mailto:${p.email}`}
+                          className="text-primary hover:underline"
+                        >
+                          ✉ {p.email.length > 30 ? p.email.slice(0, 28) + '…' : p.email}
+                        </a>
+                      )}
+                      {p.phone && (
+                        <a
+                          href={`tel:${p.phone.replace(/[^+0-9]/g, '')}`}
+                          className="text-primary hover:underline"
+                        >
+                          ☏ {p.phone}
+                        </a>
+                      )}
+                      {p.linkedin_url && (
+                        <a
+                          href={p.linkedin_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-primary hover:underline"
+                        >
+                          in/LinkedIn
+                        </a>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Channel + source */}
+                  {(p.channel || p.source_campaign) && (
+                    <div className="mt-2 flex flex-wrap gap-x-2 gap-y-0.5 text-[10px] text-text-tertiary">
+                      {p.channel && <span>📡 {p.channel}</span>}
+                      {p.source_campaign && (
+                        <span>· {p.source_campaign.length > 32 ? p.source_campaign.slice(0, 30) + '…' : p.source_campaign}</span>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Engagement label */}
+                  {p.engagement && (
+                    <div className="mt-2 text-[10px] uppercase tracking-wider text-emerald-300">
+                      {p.engagement}
+                    </div>
+                  )}
+
+                  {/* Notes */}
+                  {p.notes && (
+                    <p className="mt-2 text-xs italic text-text-secondary">{p.notes}</p>
+                  )}
+
+                  {/* Category + ask (SADN/sponsor pattern) */}
+                  {(p.category || p.ask) && (
+                    <div className="mt-2 flex flex-wrap gap-x-2 text-[10px] text-text-tertiary">
+                      {p.category && <span>{p.category}</span>}
+                      {p.ask && <span>· Ask: {p.ask}</span>}
+                    </div>
+                  )}
+
+                  {/* Message history */}
+                  {p.messages && p.messages.length > 0 && (
+                    <details className="mt-2">
+                      <summary className="cursor-pointer text-[10px] uppercase tracking-wider text-text-tertiary">
+                        {p.messages.length} message{p.messages.length === 1 ? '' : 's'}
+                      </summary>
+                      <ul className="mt-2 space-y-1">
+                        {p.messages.map((m, mi) => (
+                          <li
+                            key={mi}
+                            className="rounded border border-border bg-bg p-2 text-[11px]"
+                          >
+                            <div className="flex justify-between text-text-tertiary">
+                              <span>
+                                {m.direction === 'inbound' ? '⬅ ' : '➡ '}
+                                {m.channel}
+                              </span>
+                              {m.date && <span>{m.date}</span>}
+                            </div>
+                            {m.subject && (
+                              <div className="mt-1 text-text-secondary">{m.subject}</div>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  )}
+                </article>
+              ))}
+            </div>
+          </section>
+        )}
 
         {/* Vault path footer */}
         <footer className="border-t border-border pt-4 text-[10px] text-text-tertiary">

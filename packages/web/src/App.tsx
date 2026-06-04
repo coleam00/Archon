@@ -15,6 +15,7 @@ import { EWCPage } from '@/routes/EWCPage';
 import { FountainPage } from '@/routes/FountainPage';
 import { TTSPage } from '@/routes/TTSPage';
 import { PlaygroundPage } from '@/routes/PlaygroundPage';
+import { AccuFitPage } from '@/routes/AccuFitPage';
 import { ARCPage } from '@/routes/ARCPage';
 import { SADNPage } from '@/routes/SADNPage';
 import { CategoryPage } from '@/routes/CategoryPage';
@@ -92,6 +93,7 @@ export function App(): React.ReactElement {
                 <Route path="/ihht" element={<IHHTPage />} />
                 <Route path="/qep" element={<QEPPage />} />
                 <Route path="/playground" element={<PlaygroundPage />} />
+                <Route path="/accufit" element={<AccuFitPage />} />
                 <Route path="/social-content" element={<SocialContentPage />} />
                 <Route path="/external-reps/arc" element={<ARCPage />} />
                 <Route path="/external-reps/sadn" element={<SADNPage />} />

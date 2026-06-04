@@ -18,6 +18,7 @@ import {
   Leaf,
   Calendar,
   LineChart as LineChartIcon,
+  Zap,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -52,6 +53,7 @@ const coreTabs: readonly NavTab[] = [
   { to: '/ihht', end: false, icon: Activity, label: 'IHHT' },
   { to: '/qep', end: false, icon: ClipboardList, label: 'QEP' },
   { to: '/sg-ink', end: false, icon: PenLine, label: 'SG INK' },
+  { to: '/accufit', end: false, icon: Zap, label: 'AccuFit' },
   { to: '/social-content', end: false, icon: Share2, label: 'Social Content' },
 ] as const;
 
