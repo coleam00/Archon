@@ -24,9 +24,6 @@ import type { WorkflowDefinition, WorkflowLoadResult } from '@archon/workflows/s
 import {
   RESUMABLE_WORKFLOW_STATUSES,
   getPrdExecutionIdentity,
-  getWorkflowProvenance,
-  type PrdExecutionIdentity,
-  type WorkflowProvenance,
   type WorkflowRun,
 } from '@archon/workflows/schemas/workflow-run';
 import {
@@ -44,6 +41,14 @@ import * as workflowDb from '@archon/core/db/workflows';
 import * as workflowEventsDb from '@archon/core/db/workflow-events';
 import type { WorkflowEventRow } from '@archon/core/db/workflow-events';
 import * as prdExecutionLeaseDb from '@archon/core/db/prd-execution-leases';
+import {
+  acquirePrdExecutionLeaseForRun,
+  buildPrdExecutionContext,
+  buildPrdRunMetadata,
+  releasePrdLeaseIfHeld,
+  updatePrdLeaseForWorkflowResult,
+  verifyPrdResumeProvenance,
+} from '@archon/core/workflows/prd-execution';
 import * as git from '@archon/git';
 import { CLIAdapter } from '../adapters/cli-adapter';
 
@@ -157,141 +162,6 @@ function resolveTitleAssistantType(
   const fallbackAssistant = defaultAssistant ?? conversationAssistant ?? 'claude';
   if (workflow.provider) return workflow.provider;
   return fallbackAssistant;
-}
-
-interface PrdExecutionContext {
-  identity: PrdExecutionIdentity;
-  provenance: WorkflowProvenance;
-}
-
-async function getGitBranch(cwd: string): Promise<string | null> {
-  try {
-    const { stdout } = await git.execFileAsync('git', ['branch', '--show-current'], { cwd });
-    const branch = stdout.trim();
-    return branch.length > 0 ? branch : null;
-  } catch {
-    return null;
-  }
-}
-
-async function getGitHeadSha(cwd: string): Promise<string | null> {
-  try {
-    const { stdout } = await git.execFileAsync('git', ['rev-parse', 'HEAD'], { cwd });
-    const sha = stdout.trim();
-    return sha.length > 0 ? sha : null;
-  } catch {
-    return null;
-  }
-}
-
-async function buildPrdExecutionContext(params: {
-  prdId: string;
-  canonicalRepoPath: string;
-  workingPath: string;
-  sourceBranch?: string;
-  executionBranch?: string;
-}): Promise<PrdExecutionContext> {
-  const canonicalRepoPath = resolvePath(params.canonicalRepoPath);
-  const workingPath = resolvePath(params.workingPath);
-  const currentBranch = await getGitBranch(workingPath);
-  const headSha = await getGitHeadSha(workingPath);
-  const resolvedSourceBranch = params.sourceBranch ?? (await getGitBranch(canonicalRepoPath));
-  const resolvedExecutionBranch = params.executionBranch ?? currentBranch ?? resolvedSourceBranch;
-
-  if (!resolvedSourceBranch) {
-    throw new Error(
-      `PRD execution '${params.prdId}' could not determine a source branch for ${canonicalRepoPath}.`
-    );
-  }
-  if (!resolvedExecutionBranch) {
-    throw new Error(
-      `PRD execution '${params.prdId}' could not determine an execution branch for ${workingPath}.`
-    );
-  }
-  if (currentBranch && currentBranch !== resolvedExecutionBranch) {
-    throw new Error(
-      `PRD execution '${params.prdId}' expected branch '${resolvedExecutionBranch}' but found '${currentBranch}' at ${workingPath}.`
-    );
-  }
-
-  return {
-    identity: {
-      kind: 'prd',
-      prdId: params.prdId,
-      canonicalRepoPath,
-      sourceBranch: resolvedSourceBranch,
-      executionBranch: resolvedExecutionBranch,
-    },
-    provenance: {
-      canonicalRepoPath,
-      workingPath,
-      currentBranch,
-      headSha,
-      requestedSourceBranch: params.sourceBranch,
-      requestedExecutionBranch: params.executionBranch,
-      capturedAt: new Date().toISOString(),
-    },
-  };
-}
-
-function verifyPrdResumeProvenance(
-  run: WorkflowRun,
-  prdContext: PrdExecutionContext,
-  requestedPrdId?: string
-): void {
-  const storedIdentity = getPrdExecutionIdentity(run.metadata);
-  if (!storedIdentity) {
-    throw new Error(
-      `Workflow run '${run.id}' has no PRD execution identity recorded. Use a fresh verified launch instead of an implicit resume.`
-    );
-  }
-  const storedProvenance = getWorkflowProvenance(run.metadata);
-
-  if (requestedPrdId && storedIdentity.prdId !== requestedPrdId) {
-    throw new Error(
-      `Workflow run '${run.id}' belongs to PRD '${storedIdentity.prdId}', not requested PRD '${requestedPrdId}'.`
-    );
-  }
-  if (resolvePath(storedIdentity.canonicalRepoPath) !== prdContext.identity.canonicalRepoPath) {
-    throw new Error(
-      `Workflow run '${run.id}' was created from canonical repo '${storedIdentity.canonicalRepoPath}', expected '${prdContext.identity.canonicalRepoPath}'.`
-    );
-  }
-  if (storedIdentity.executionBranch !== prdContext.identity.executionBranch) {
-    throw new Error(
-      `Workflow run '${run.id}' targets execution branch '${storedIdentity.executionBranch}', but the current worktree is on '${prdContext.identity.executionBranch}'.`
-    );
-  }
-  if (run.working_path && resolvePath(run.working_path) !== prdContext.provenance.workingPath) {
-    throw new Error(
-      `Workflow run '${run.id}' recorded working path '${run.working_path}', but resume is attempting '${prdContext.provenance.workingPath}'.`
-    );
-  }
-  if (
-    storedProvenance?.workingPath &&
-    resolvePath(storedProvenance.workingPath) !== prdContext.provenance.workingPath
-  ) {
-    throw new Error(
-      `Workflow run '${run.id}' recorded provenance working path '${storedProvenance.workingPath}', but resume is attempting '${prdContext.provenance.workingPath}'.`
-    );
-  }
-}
-
-async function releasePrdLeaseIfHeld(
-  workflowRunId: string,
-  status: 'completed' | 'failed' | 'cancelled' | 'released',
-  metadata?: Record<string, unknown>
-): Promise<void> {
-  try {
-    const lease = await prdExecutionLeaseDb.getPrdExecutionLeaseByRunId(workflowRunId);
-    if (!lease || lease.released_at) return;
-    await prdExecutionLeaseDb.releasePrdExecutionLease(workflowRunId, status, metadata);
-  } catch (error) {
-    getLog().warn(
-      { err: error as Error, workflowRunId, status },
-      'workflow.prd_lease_release_failed'
-    );
-  }
 }
 
 /** Render a workflow event to stderr as a progress line. Called only when --quiet is not set. */
@@ -816,16 +686,11 @@ export async function workflowRunCommand(
 
   if (resumable && prdContext && prdCodebaseId) {
     verifyPrdResumeProvenance(resumable, prdContext, options.prdId);
-    await prdExecutionLeaseDb.acquirePrdExecutionLease({
-      codebase_id: prdCodebaseId,
-      prd_id: prdContext.identity.prdId,
-      workflow_run_id: resumable.id,
-      workflow_name: workflow.name,
-      canonical_repo_path: prdContext.identity.canonicalRepoPath,
-      source_branch: prdContext.identity.sourceBranch,
-      execution_branch: prdContext.identity.executionBranch,
-      working_path: prdContext.provenance.workingPath,
-      metadata: { provenance: prdContext.provenance },
+    await acquirePrdExecutionLeaseForRun({
+      codebaseId: prdCodebaseId,
+      workflowRunId: resumable.id,
+      workflowName: workflow.name,
+      context: prdContext,
     });
   } else if (prdContext && prdCodebaseId) {
     const activeLease = await prdExecutionLeaseDb.getActivePrdExecutionLease(
@@ -1004,26 +869,16 @@ export async function workflowRunCommand(
       conversation.id,
       {
         ...opts,
-        runMetadata: prdContext
-          ? {
-              execution_identity: prdContext.identity,
-              provenance: prdContext.provenance,
-            }
-          : undefined,
+        runMetadata: prdContext ? buildPrdRunMetadata(prdContext) : undefined,
         onWorkflowRunCreated:
           prdContext && prdCodebaseId
             ? async (run): Promise<void> => {
                 prdLeaseRunId = run.id;
-                await prdExecutionLeaseDb.acquirePrdExecutionLease({
-                  codebase_id: prdCodebaseId,
-                  prd_id: prdContext.identity.prdId,
-                  workflow_run_id: run.id,
-                  workflow_name: workflow.name,
-                  canonical_repo_path: prdContext.identity.canonicalRepoPath,
-                  source_branch: prdContext.identity.sourceBranch,
-                  execution_branch: prdContext.identity.executionBranch,
-                  working_path: prdContext.provenance.workingPath,
-                  metadata: { provenance: prdContext.provenance },
+                await acquirePrdExecutionLeaseForRun({
+                  codebaseId: prdCodebaseId,
+                  workflowRunId: run.id,
+                  workflowName: workflow.name,
+                  context: prdContext,
                 });
               }
             : undefined,
@@ -1034,30 +889,12 @@ export async function workflowRunCommand(
   } finally {
     unsubscribe?.();
     if (prdLeaseRunId) {
-      if (result?.success && 'paused' in result && result.paused) {
-        try {
-          await prdExecutionLeaseDb.updatePrdExecutionLeaseStatus(prdLeaseRunId, 'paused', {
-            provenance: prdContext?.provenance,
-            paused_at: new Date().toISOString(),
-          });
-        } catch (error) {
-          getLog().warn(
-            { err: error as Error, workflowRunId: prdLeaseRunId },
-            'workflow.prd_lease_pause_update_failed'
-          );
-        }
-      } else if (result?.success) {
-        await releasePrdLeaseIfHeld(prdLeaseRunId, 'completed', {
-          provenance: prdContext?.provenance,
-          completed_at: new Date().toISOString(),
-        });
-      } else {
-        await releasePrdLeaseIfHeld(prdLeaseRunId, 'failed', {
-          provenance: prdContext?.provenance,
-          error: result && !result.success ? result.error : executionError?.message,
-          failed_at: new Date().toISOString(),
-        });
-      }
+      await updatePrdLeaseForWorkflowResult({
+        workflowRunId: prdLeaseRunId,
+        result,
+        error: executionError,
+        context: prdContext,
+      });
     }
   }
 

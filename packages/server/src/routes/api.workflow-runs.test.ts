@@ -357,7 +357,41 @@ describe('POST /api/workflows/:name/run', () => {
     expect(mockHandleMessage).toHaveBeenCalledWith(
       expect.anything(),
       'web-test-abc',
-      '/workflow run test-suite Run tests',
+      '/workflow run test-suite -- Run tests',
+      expect.objectContaining({
+        isolationHints: { workflowType: 'thread', workflowId: 'web-test-abc' },
+      })
+    );
+  });
+
+  test('sends PRD workflow options to orchestrator command', async () => {
+    mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
+    mockAddMessage.mockImplementationOnce(async () => ({
+      id: 'msg-1',
+      conversation_id: MOCK_CONV.id,
+      role: 'user' as const,
+      content: 'Implement PRD',
+      metadata: '{}',
+      created_at: NOW,
+    }));
+    mockHandleMessage.mockImplementationOnce(async () => {});
+
+    const { app } = makeApp();
+    await app.request('/api/workflows/prd-to-pr-pi/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        conversationId: 'web-test-abc',
+        message: 'Implement PRD',
+        prdId: 'PRD-0045',
+        sourceBranch: 'archon/source-prd-0045',
+      }),
+    });
+
+    expect(mockHandleMessage).toHaveBeenCalledWith(
+      expect.anything(),
+      'web-test-abc',
+      '/workflow run prd-to-pr-pi --prd-id PRD-0045 --source-branch archon/source-prd-0045 -- Implement PRD',
       expect.objectContaining({
         isolationHints: { workflowType: 'thread', workflowId: 'web-test-abc' },
       })
@@ -1136,7 +1170,9 @@ describe('POST /api/workflows/runs/:runId/resume', () => {
       string,
     ];
     expect(platformConvId).toBe('web-plat-abc');
-    expect(dispatchedMessage).toBe('/workflow run deploy Run the deploy');
+    expect(dispatchedMessage).toBe(
+      '/workflow run deploy --resume-run-id run-uuid-4 -- Run the deploy'
+    );
   });
 });
 
@@ -1488,7 +1524,9 @@ describe('approve/reject auto-resume', () => {
       string,
     ];
     expect(platformConvId).toBe('web-plat-abc');
-    expect(dispatchedMessage).toBe('/workflow run deploy Deploy feature X');
+    expect(dispatchedMessage).toBe(
+      '/workflow run deploy --resume-run-id run-auto-resume-approve -- Deploy feature X'
+    );
   });
 
   test('approve: skips dispatch when parent_conversation_id is null (CLI-dispatched run)', async () => {
@@ -1600,7 +1638,9 @@ describe('approve/reject auto-resume', () => {
       string,
     ];
     expect(platformConvId).toBe('web-plat-xyz');
-    expect(dispatchedMessage).toBe('/workflow run deploy Review PR');
+    expect(dispatchedMessage).toBe(
+      '/workflow run deploy --resume-run-id run-auto-resume-reject -- Review PR'
+    );
   });
 
   test('reject: does NOT dispatch when the run is being cancelled (no on_reject configured)', async () => {

@@ -36,6 +36,7 @@ import {
   Codebase,
   ConversationNotFoundError,
   isWebAdapter,
+  type WorkflowRunCommandOptions,
 } from '../types';
 import type { IsolationHints, IsolationEnvironmentRow } from '@archon/isolation';
 import {
@@ -50,6 +51,13 @@ import { toError } from '../utils/error';
 import { getCodebase } from '../db/codebases';
 import { executeWorkflow } from '@archon/workflows/executor';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
+import {
+  acquirePrdExecutionLeaseForRun,
+  buildPrdExecutionContext,
+  buildPrdRunMetadata,
+  updatePrdLeaseForWorkflowResult,
+  type PrdExecutionContext,
+} from '../workflows/prd-execution';
 import { createWorkflowDeps } from '../workflows/store-adapter';
 import {
   cleanupToMakeRoom,
@@ -246,6 +254,8 @@ export interface WorkflowRoutingContext {
    * Hints for isolation environment (PR review context, etc.)
    */
   readonly isolationHints?: IsolationHints;
+  /** Workflow control-plane options parsed from /workflow run. */
+  readonly workflowOptions?: WorkflowRunCommandOptions;
 }
 
 /**
@@ -277,8 +287,9 @@ export async function dispatchBackgroundWorkflow(
   // 3. Resolve isolation for this worker (each background workflow gets its own worktree).
   // Isolation failure is fatal — never run a workflow in a shared/parent worktree.
   let workerCwd: string;
+  let codebase: Awaited<ReturnType<typeof getCodebase>> | null = null;
   if (ctx.codebaseId) {
-    const codebase = await getCodebase(ctx.codebaseId);
+    codebase = await getCodebase(ctx.codebaseId);
     if (!codebase) {
       throw new Error(
         `Cannot dispatch workflow "${workflow.name}": codebase ${ctx.codebaseId} not found`
@@ -301,6 +312,36 @@ export async function dispatchBackgroundWorkflow(
   } else {
     // No codebase — run in parent's cwd (no isolation needed for non-repo workflows)
     workerCwd = ctx.cwd;
+  }
+
+  let prdContext: PrdExecutionContext | null = null;
+  if (ctx.workflowOptions?.prdId) {
+    if (!ctx.codebaseId || !codebase) {
+      await ctx.platform.sendMessage(
+        ctx.conversationId,
+        `❌ PRD execution guard blocked workflow \`${workflow.name}\`: PRD workflows require a registered codebase.`
+      );
+      return;
+    }
+    try {
+      prdContext = await buildPrdExecutionContext({
+        prdId: ctx.workflowOptions.prdId,
+        canonicalRepoPath: codebase.default_cwd,
+        workingPath: workerCwd,
+        sourceBranch: ctx.workflowOptions.sourceBranch,
+      });
+    } catch (error) {
+      const err = toError(error);
+      getLog().warn(
+        { err, workflowName: workflow.name, conversationId: ctx.conversationId },
+        'workflow.prd_execution_guard_blocked'
+      );
+      await ctx.platform.sendMessage(
+        ctx.conversationId,
+        `❌ PRD execution guard blocked workflow \`${workflow.name}\`: ${err.message}`
+      );
+      return;
+    }
   }
 
   // 4. Notify parent chat that workflow is dispatching
@@ -341,7 +382,12 @@ export async function dispatchBackgroundWorkflow(
   // Without this, navigating to the execution page before executeWorkflow's
   // async setup completes would 404 (row doesn't exist yet for 1-5 seconds).
   const workflowDeps = createWorkflowDeps();
+  const runMetadata = {
+    ...(ctx.issueContext ? { github_context: ctx.issueContext } : {}),
+    ...(prdContext ? buildPrdRunMetadata(prdContext) : {}),
+  };
   let preCreatedRun: Awaited<ReturnType<typeof workflowDeps.store.createWorkflowRun>> | undefined;
+  let prdLeaseRunId: string | undefined;
   try {
     preCreatedRun = await workflowDeps.store.createWorkflowRun({
       workflow_name: workflow.name,
@@ -349,7 +395,7 @@ export async function dispatchBackgroundWorkflow(
       codebase_id: ctx.codebaseId,
       user_message: ctx.originalMessage,
       working_path: workerCwd,
-      metadata: ctx.issueContext ? { github_context: ctx.issueContext } : {},
+      metadata: runMetadata,
       parent_conversation_id: ctx.conversationDbId,
     });
   } catch (error) {
@@ -358,26 +404,79 @@ export async function dispatchBackgroundWorkflow(
     // Non-fatal: executeWorkflow will create its own row as fallback
   }
 
+  if (preCreatedRun && prdContext && ctx.codebaseId) {
+    try {
+      prdLeaseRunId = preCreatedRun.id;
+      await acquirePrdExecutionLeaseForRun({
+        codebaseId: ctx.codebaseId,
+        workflowRunId: preCreatedRun.id,
+        workflowName: workflow.name,
+        context: prdContext,
+      });
+    } catch (error) {
+      const err = toError(error);
+      getLog().warn(
+        { err, workflowName: workflow.name, conversationId: ctx.conversationId },
+        'workflow.prd_execution_guard_blocked'
+      );
+      await ctx.platform.sendMessage(
+        ctx.conversationId,
+        `❌ PRD execution guard blocked workflow \`${workflow.name}\`: ${err.message}`
+      );
+      return;
+    }
+  }
+
   // 8. Fire-and-forget: run workflow in background
   void (async (): Promise<void> => {
     try {
       try {
-        const result = await executeWorkflow(
-          workflowDeps,
-          ctx.platform,
-          workerPlatformId,
-          workerCwd,
-          workflow,
-          ctx.originalMessage,
-          workerConv.id,
-          {
-            codebaseId: ctx.codebaseId,
-            issueContext: ctx.issueContext,
-            isolationContext,
-            parentConversationId: ctx.conversationDbId,
-            preCreatedRun,
+        let result: Awaited<ReturnType<typeof executeWorkflow>> | undefined;
+        let executionError: Error | null = null;
+        const prdCodebaseId = prdContext ? ctx.codebaseId : undefined;
+        try {
+          result = await executeWorkflow(
+            workflowDeps,
+            ctx.platform,
+            workerPlatformId,
+            workerCwd,
+            workflow,
+            ctx.originalMessage,
+            workerConv.id,
+            {
+              codebaseId: ctx.codebaseId,
+              issueContext: ctx.issueContext,
+              isolationContext,
+              parentConversationId: ctx.conversationDbId,
+              preCreatedRun,
+              runMetadata,
+              onWorkflowRunCreated:
+                prdContext && prdCodebaseId
+                  ? async (run): Promise<void> => {
+                      prdLeaseRunId = run.id;
+                      await acquirePrdExecutionLeaseForRun({
+                        codebaseId: prdCodebaseId,
+                        workflowRunId: run.id,
+                        workflowName: workflow.name,
+                        context: prdContext,
+                      });
+                    }
+                  : undefined,
+            }
+          );
+        } catch (error) {
+          executionError = toError(error);
+          throw error;
+        } finally {
+          if (prdLeaseRunId) {
+            await updatePrdLeaseForWorkflowResult({
+              workflowRunId: prdLeaseRunId,
+              result,
+              error: executionError,
+              context: prdContext,
+            });
           }
-        );
+        }
         // Surface workflow output to parent conversation as a result card
         if ('paused' in result) {
           // Paused workflows (approval gates) — no result card yet

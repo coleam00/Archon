@@ -56,12 +56,6 @@ import {
 import type { ApprovalContext, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { findMarkdownFilesRecursive } from '@archon/core/utils/commands';
 
-/** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
-let cachedLog: ReturnType<typeof createLogger> | undefined;
-function getLog(): ReturnType<typeof createLogger> {
-  if (!cachedLog) cachedLog = createLogger('api');
-  return cachedLog;
-}
 import * as conversationDb from '@archon/core/db/conversations';
 import * as codebaseDb from '@archon/core/db/codebases';
 import * as envVarDb from '@archon/core/db/env-vars';
@@ -123,6 +117,27 @@ import {
 } from './schemas/config.schemas';
 import { providerListResponseSchema } from './schemas/provider.schemas';
 import { getProviderInfoList, isRegisteredProvider } from '@archon/providers';
+
+/** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
+let cachedLog: ReturnType<typeof createLogger> | undefined;
+function getLog(): ReturnType<typeof createLogger> {
+  if (!cachedLog) cachedLog = createLogger('api');
+  return cachedLog;
+}
+
+function buildWorkflowRunCommand(
+  workflowName: string,
+  message: string | null | undefined,
+  options: { resumeRunId?: string; prdId?: string; sourceBranch?: string } = {}
+): string {
+  const parts = ['/workflow', 'run', workflowName];
+  if (options.resumeRunId) parts.push('--resume-run-id', options.resumeRunId);
+  if (options.prdId) parts.push('--prd-id', options.prdId);
+  if (options.sourceBranch) parts.push('--source-branch', options.sourceBranch);
+  const userMessage = message?.trim();
+  if (userMessage) parts.push('--', userMessage);
+  return parts.join(' ');
+}
 
 // Read app version: use build-time constant in binary, package.json in dev
 let appVersion = 'unknown';
@@ -1115,7 +1130,9 @@ export function registerApiRoutes(
         );
         return false;
       }
-      const resumeMessage = `/workflow run ${run.workflow_name} ${run.user_message ?? ''}`.trim();
+      const resumeMessage = buildWorkflowRunCommand(run.workflow_name, run.user_message, {
+        resumeRunId: run.id,
+      });
       await dispatchToOrchestrator(platformConvId, resumeMessage);
       getLog().info(
         { runId: run.id, workflowName: run.workflow_name, platformConvId },
@@ -1802,7 +1819,10 @@ export function registerApiRoutes(
       return apiError(c, 400, 'Invalid workflow name');
     }
     try {
-      const { conversationId, message } = getValidatedBody(c, runWorkflowBodySchema);
+      const { conversationId, message, prdId, sourceBranch } = getValidatedBody(
+        c,
+        runWorkflowBodySchema
+      );
       // Persist user message and register DB ID (same as message endpoint)
       let conv: Awaited<ReturnType<typeof conversationDb.findConversationByPlatformId>> = null;
       try {
@@ -1829,7 +1849,10 @@ export function registerApiRoutes(
         }
       }
 
-      const fullMessage = `/workflow run ${workflowName} ${message}`;
+      const fullMessage = buildWorkflowRunCommand(workflowName, message, {
+        prdId,
+        sourceBranch,
+      });
       const result = await dispatchToOrchestrator(conversationId, fullMessage);
       return c.json(result);
     } catch (error) {
@@ -1930,7 +1953,9 @@ export function registerApiRoutes(
           `Cannot resume from web UI: the run's parent conversation is not a web conversation. Use \`archon workflow resume ${runId}\` from the CLI.`
         );
       }
-      const resumeMessage = `/workflow run ${run.workflow_name} ${run.user_message ?? ''}`.trim();
+      const resumeMessage = buildWorkflowRunCommand(run.workflow_name, run.user_message, {
+        resumeRunId: run.id,
+      });
       await dispatchToOrchestrator(parentConv.platform_conversation_id, resumeMessage);
       getLog().info(
         {
