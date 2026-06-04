@@ -232,23 +232,25 @@ Archon ships with workflows for common development tasks:
 |----------|-------------|
 | `archon-assist` | General Q&A, debugging, exploration - full Claude Code agent with all tools |
 | `archon-fix-github-issue` | Classify issue → investigate/plan → implement → validate → PR → smart review → self-fix |
+| `archon-create-issue` | Classify problem → gather context → investigate → create GitHub issue |
+| `archon-issue-review-full` | Comprehensive fix + full multi-agent review pipeline for GitHub issues |
+| `archon-piv-loop` | Guided Plan-Implement-Validate loop with human review between iterations |
 | `archon-idea-to-pr` | Feature idea → plan → implement → validate → PR → 5 parallel reviews → self-fix |
 | `archon-plan-to-pr` | Execute existing plan → implement → validate → PR → review → self-fix |
-| `archon-issue-review-full` | Comprehensive fix + full multi-agent review pipeline for GitHub issues |
+| `archon-feature-development` | Implement feature from plan → validate → create PR |
+| `archon-adversarial-dev` | Build a complete application from scratch using adversarial development |
 | `archon-smart-pr-review` | Classify PR complexity → run targeted review agents → synthesize findings |
 | `archon-comprehensive-pr-review` | Multi-agent PR review (5 parallel reviewers) with automatic fixes |
-| `archon-create-issue` | Classify problem → gather context → investigate → create GitHub issue |
 | `archon-validate-pr` | Thorough PR validation testing both main and feature branches |
-| `archon-resolve-conflicts` | Detect merge conflicts → analyze both sides → resolve → validate → commit |
-| `archon-feature-development` | Implement feature from plan → validate → create PR |
 | `archon-architect` | Architectural sweep, complexity reduction, codebase health improvement |
 | `archon-refactor-safely` | Safe refactoring with type-check hooks and behavior verification |
+| `archon-interactive-prd` | Create a PRD through guided conversation |
 | `archon-ralph-dag` | PRD implementation loop - iterate through stories until done |
+| `archon-workflow-builder` | Generate a new Archon workflow YAML for your project |
 | `archon-remotion-generate` | Generate or modify Remotion video compositions with AI |
-| `archon-test-loop-dag` | Loop node test workflow - iterative counter until completion |
-| `archon-piv-loop` | Guided Plan-Implement-Validate loop with human review between iterations |
+| `archon-resolve-conflicts` | Detect merge conflicts → analyze both sides → resolve → validate → commit |
 
-Archon ships 17 default workflows - run `archon workflow list` or describe what you want and the router picks the right one.
+Archon ships 19 default workflows - run `archon workflow list` or describe what you want and the router picks the right one.
 
 **Or define your own.** Default workflows are great starting points - copy one from `.archon/workflows/defaults/` and customize it. Workflows are YAML files in `.archon/workflows/`, commands are markdown files in `.archon/commands/`. Same-named files in your repo override the bundled defaults. Commit them - your whole team runs the same process.
 
@@ -316,6 +318,8 @@ Full documentation is available at **[archon.diy](https://archon.diy)**.
 | [Deployment](https://archon.diy/deployment/) | Docker, VPS, production setup |
 | [Architecture](https://archon.diy/reference/architecture/) | System design and internals |
 | [Troubleshooting](https://archon.diy/reference/troubleshooting/) | Common issues and fixes |
+
+**For AI tools:** Point your LLM at [`/llms.txt`](https://archon.diy/llms.txt) for an index of all documentation, [`/llms-full.txt`](https://archon.diy/llms-full.txt) for the complete docs in a single file, or [`/llms-small.txt`](https://archon.diy/llms-small.txt) for a condensed version.
 
 ## Telemetry
 
