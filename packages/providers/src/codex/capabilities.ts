@@ -4,7 +4,7 @@ export const CODEX_CAPABILITIES: ProviderCapabilities = {
   sessionResume: true,
   mcp: true,
   hooks: false,
-  skills: false,
+  skills: true, // filesystem autodiscovery from .agents/skills/ — not per-node injection; nodeConfig.skills is ignored
   agents: false,
   toolRestrictions: false,
   structuredOutput: true,

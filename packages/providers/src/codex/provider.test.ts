@@ -77,7 +77,7 @@ describe('CodexProvider', () => {
         sessionResume: true,
         mcp: true,
         hooks: false,
-        skills: false,
+        skills: true,
         agents: false,
         toolRestrictions: false,
         structuredOutput: true,
