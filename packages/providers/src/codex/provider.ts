@@ -441,7 +441,7 @@ async function* streamCodexEvents(
       switch (itemType) {
         case 'agent_message':
           if (item.text) {
-            if (hasOutputFormat) accumulatedText += item.text as string;
+            if (hasOutputFormat) accumulatedText = item.text as string;
             yield { type: 'assistant', content: item.text as string };
           }
           break;

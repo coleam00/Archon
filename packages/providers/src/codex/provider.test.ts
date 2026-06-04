@@ -1595,6 +1595,40 @@ describe('CodexProvider', () => {
         );
       });
 
+      test('uses the latest agent_message for structuredOutput when outputFormat is set', async () => {
+        const firstPayload = { status: 'draft', count: 1 };
+        const finalPayload = { status: 'ok', count: 42 };
+        mockRunStreamed.mockResolvedValueOnce({
+          events: (async function* () {
+            yield {
+              type: 'item.completed',
+              item: { type: 'agent_message', id: 'msg-1', text: JSON.stringify(firstPayload) },
+            };
+            yield {
+              type: 'item.completed',
+              item: { type: 'agent_message', id: 'msg-2', text: JSON.stringify(finalPayload) },
+            };
+            yield { type: 'turn.completed', usage: defaultUsage };
+          })(),
+        });
+
+        const chunks = [];
+        for await (const chunk of client.sendQuery('test', '/tmp', undefined, {
+          outputFormat: { type: 'json_schema', schema: { type: 'object' } },
+        })) {
+          chunks.push(chunk);
+        }
+
+        const assistantChunks = chunks.filter(c => c.type === 'assistant');
+        expect(assistantChunks).toHaveLength(2);
+
+        const resultChunk = chunks.find(c => c.type === 'result');
+        expect(resultChunk).toBeDefined();
+        expect(resultChunk!.type === 'result' && resultChunk!.structuredOutput).toEqual(
+          finalPayload
+        );
+      });
+
       test('yields system warning when outputFormat is set but text is not valid JSON', async () => {
         mockRunStreamed.mockResolvedValueOnce({
           events: (async function* () {
@@ -1668,6 +1702,37 @@ describe('CodexProvider', () => {
         expect(resultChunk).toBeDefined();
         expect(resultChunk!.type === 'result' && resultChunk!.structuredOutput).toEqual(
           jsonPayload
+        );
+      });
+
+      test('uses the latest agent_message for structuredOutput from nodeConfig.output_format', async () => {
+        const firstPayload = { key: 'draft' };
+        const finalPayload = { key: 'value' };
+        mockRunStreamed.mockResolvedValueOnce({
+          events: (async function* () {
+            yield {
+              type: 'item.completed',
+              item: { type: 'agent_message', id: 'msg-1', text: JSON.stringify(firstPayload) },
+            };
+            yield {
+              type: 'item.completed',
+              item: { type: 'agent_message', id: 'msg-2', text: JSON.stringify(finalPayload) },
+            };
+            yield { type: 'turn.completed', usage: defaultUsage };
+          })(),
+        });
+
+        const chunks = [];
+        for await (const chunk of client.sendQuery('test', '/tmp', undefined, {
+          nodeConfig: { output_format: { type: 'object' } },
+        })) {
+          chunks.push(chunk);
+        }
+
+        const resultChunk = chunks.find(c => c.type === 'result');
+        expect(resultChunk).toBeDefined();
+        expect(resultChunk!.type === 'result' && resultChunk!.structuredOutput).toEqual(
+          finalPayload
         );
       });
     });
