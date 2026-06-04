@@ -63,6 +63,7 @@ const steps = [
   />
   <meta property="og:type" content="website" />
   <meta property="og:url" content="https://archon.diy/" />
+  <meta property="og:image" content="https://archon.diy/brand/assets/archon-logo.png" />
   <script is:inline>
     if (!localStorage.getItem('archon-theme-init')) {
       localStorage.setItem('archon-theme-init', '1');
@@ -257,7 +258,7 @@ const steps = [
   </footer>
 
   <style>
-    /* ---- Archon brand tokens (dark) — mirrored from public/brand/app.css ---- */
+    /* ---- Archon brand tokens (dark) — subset of public/brand/app.css (the source of truth) ---- */
     :root {
       --bg: oklch(0.145 0.006 265);
       --surface: oklch(0.175 0.007 265);
@@ -273,6 +274,7 @@ const steps = [
       --brand-gradient: linear-gradient(135deg, var(--brand-magenta) 0%, var(--brand-violet) 50%, var(--brand-teal) 100%);
       --accent-ring: oklch(0.64 0.295 330 / 0.3);
       --shadow-brand: 0 8px 32px -8px oklch(0.64 0.295 330 / 0.3);
+      --font-mono: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
     }
 
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -383,7 +385,7 @@ const steps = [
       50% { transform: translateY(-7px); }
     }
     .eyebrow {
-      font-family: 'Geist Mono', ui-monospace, monospace;
+      font-family: var(--font-mono);
       font-size: 0.78rem;
       font-weight: 500;
       letter-spacing: 0.08em;
@@ -451,7 +453,7 @@ const steps = [
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 10px;
-      font-family: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+      font-family: var(--font-mono);
       font-size: 0.88rem;
     }
     .install-prompt { color: var(--brand-teal); font-weight: 600; }
@@ -477,7 +479,7 @@ const steps = [
     .section-head { text-align: center; margin-bottom: 2.75rem; }
     .section-kicker {
       display: block;
-      font-family: 'Geist Mono', ui-monospace, monospace;
+      font-family: var(--font-mono);
       font-size: 0.76rem;
       font-weight: 500;
       letter-spacing: 0.1em;
@@ -526,7 +528,7 @@ const steps = [
     }
     .feature-card:hover::before { opacity: 1; }
     .feature-label {
-      font-family: 'Geist Mono', ui-monospace, monospace;
+      font-family: var(--font-mono);
       font-size: 0.72rem;
       font-weight: 500;
       letter-spacing: 0.07em;
@@ -556,7 +558,7 @@ const steps = [
       background: linear-gradient(180deg, var(--surface) 0%, oklch(0.145 0.006 265 / 0) 140%);
     }
     .step-n {
-      font-family: 'Geist Mono', ui-monospace, monospace;
+      font-family: var(--font-mono);
       font-size: 1.6rem;
       font-weight: 600;
       letter-spacing: -0.02em;
