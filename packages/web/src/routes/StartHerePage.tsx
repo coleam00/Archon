@@ -11,7 +11,6 @@ import {
   Activity,
   Volume2,
   ClipboardList,
-  PenLine,
   Share2,
   Megaphone,
   Sparkles,
@@ -142,10 +141,22 @@ export function StartHerePage(): React.ReactElement {
             description="Clinical PEMF + EEG biofeedback. bioreg.us."
           />
           <Card
-            to="/social-content"
+            to="/ttts"
             icon={Volume2}
             title="TTTS"
             description="Therapeutic Technology Showcase. June 27 closed-door Sarasota session."
+          />
+          <Card
+            to="/ewc"
+            icon={Sparkles}
+            title="EWC"
+            description="Elevated Wellness Center / public landing brand. jid5274.gbautomation.xyz."
+          />
+          <Card
+            to="/fountain"
+            icon={Activity}
+            title="The Fountain"
+            description="Premium wellness venue; QEP delivery site. WPB."
           />
           <Card
             to="/ihht"
@@ -159,7 +170,12 @@ export function StartHerePage(): React.ReactElement {
             title="QEP"
             description="Quantum Executive Protocol -- The Fountain venue."
           />
-          <Card to="/sg-ink" icon={PenLine} title="SG INK" description="SG INK content brand." />
+          <Card
+            to="/accufit"
+            icon={Wrench}
+            title="AccuFit"
+            description="Partner integration tab — AccuFit channel program."
+          />
           <Card
             to="/social-content"
             icon={Share2}

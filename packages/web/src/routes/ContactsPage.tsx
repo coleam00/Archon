@@ -1,5 +1,14 @@
 import { useMemo, useState } from 'react';
-import { Search, Mail, Linkedin, Phone, ExternalLink, Users, Stethoscope, UserPlus } from 'lucide-react';
+import {
+  Search,
+  Mail,
+  Linkedin,
+  Phone,
+  ExternalLink,
+  Users,
+  Stethoscope,
+  UserPlus,
+} from 'lucide-react';
 import contactsData from '@/lib/contacts.generated.json';
 
 interface Contact {
@@ -18,24 +27,52 @@ interface Contact {
   vaultPath: string;
 }
 
-const CATEGORIES: Array<{ slug: string; label: string; icon: React.ComponentType<{ className?: string }>; description: string }> = [
+const CATEGORIES: {
+  slug: string;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  description: string;
+}[] = [
   { slug: 'all', label: 'All', icon: Users, description: 'Everyone in the directory.' },
-  { slug: 'team', label: 'Team', icon: Users, description: "Jason's team and strategic partners. VAs, PMs, principals." },
-  { slug: 'clinical-partners', label: 'Clinical Partners', icon: Stethoscope, description: 'Doctors and clinical practitioners who provide demos, case studies, or partnership.' },
-  { slug: 'prospects', label: 'Prospects', icon: UserPlus, description: 'Sales prospects across PMC and BRT pipelines.' },
+  {
+    slug: 'team',
+    label: 'Team',
+    icon: Users,
+    description: "Jason's team and strategic partners. VAs, PMs, principals.",
+  },
+  {
+    slug: 'clinical-partners',
+    label: 'Clinical Partners',
+    icon: Stethoscope,
+    description:
+      'Doctors and clinical practitioners who provide demos, case studies, or partnership.',
+  },
+  {
+    slug: 'prospects',
+    label: 'Prospects',
+    icon: UserPlus,
+    description: 'Sales prospects across PMC and BRT pipelines.',
+  },
 ];
-
 
 export function ContactsPage(): React.ReactElement {
   const [activeCategory, setActiveCategory] = useState<string>('all');
   const [search, setSearch] = useState<string>('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  const allContacts = (contactsData.contacts as Contact[]) ?? [];
+  const allContacts = useMemo<Contact[]>(() => {
+    const raw = (contactsData.contacts as Contact[]) ?? [];
+    // Filter vault stubs — contacts with TBD role/email are placeholders pending
+    // Jason confirmation, not real records. Surface them only via /contacts?include=stubs.
+    return raw.filter(c => {
+      const isStub = c.email === 'TBD' || (c.role ?? '').trim().toUpperCase().startsWith('TBD');
+      return !isStub;
+    });
+  }, []);
 
   const filtered = useMemo<Contact[]>(() => {
     const q = search.trim().toLowerCase();
-    return allContacts.filter((c) => {
+    return allContacts.filter(c => {
       if (activeCategory !== 'all' && c.category !== activeCategory) return false;
       if (!q) return true;
       const haystack = [c.name, c.role, c.company, c.email, c.preview, ...(c.tags ?? [])]
@@ -53,7 +90,7 @@ export function ContactsPage(): React.ReactElement {
     return out;
   }, [allContacts]);
 
-  const selected = selectedId ? allContacts.find((c) => c.id === selectedId) ?? null : null;
+  const selected = selectedId ? (allContacts.find(c => c.id === selectedId) ?? null) : null;
 
   return (
     <div className="flex flex-1 flex-col gap-6 p-6">
@@ -61,8 +98,8 @@ export function ContactsPage(): React.ReactElement {
       <div className="flex flex-col gap-2">
         <h1 className="text-2xl font-semibold text-text-primary">Contacts</h1>
         <p className="text-sm text-text-secondary">
-          People across the PMC engagement — team, clinical partners, prospects.
-          Pulled from the second-brain vault on every dashboard build.
+          People across the PMC engagement — team, clinical partners, prospects. Pulled from the
+          second-brain vault on every dashboard build.
         </p>
         <p className="text-xs text-text-tertiary">
           {allContacts.length} contacts · last refreshed{' '}
@@ -76,7 +113,9 @@ export function ContactsPage(): React.ReactElement {
         <input
           type="search"
           value={search}
-          onChange={(e): void => setSearch(e.target.value)}
+          onChange={(e): void => {
+            setSearch(e.target.value);
+          }}
           placeholder="Search by name, role, email, company..."
           className="w-full rounded-md border border-border bg-surface-elevated py-2 pl-10 pr-3 text-sm text-text-primary placeholder:text-text-tertiary focus:border-primary focus:outline-none"
         />
@@ -84,14 +123,17 @@ export function ContactsPage(): React.ReactElement {
 
       {/* Category tabs */}
       <div className="flex flex-wrap gap-1 border-b border-border">
-        {CATEGORIES.map((cat) => {
+        {CATEGORIES.map(cat => {
           const isActive = cat.slug === activeCategory;
           const count = counts[cat.slug] ?? 0;
+          // eslint-disable-next-line @typescript-eslint/naming-convention
           const Icon = cat.icon;
           return (
             <button
               key={cat.slug}
-              onClick={(): void => setActiveCategory(cat.slug)}
+              onClick={(): void => {
+                setActiveCategory(cat.slug);
+              }}
               className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
                 isActive
                   ? 'border-primary text-primary'
@@ -102,9 +144,7 @@ export function ContactsPage(): React.ReactElement {
               {cat.label}
               <span
                 className={`inline-flex min-w-[1.25rem] items-center justify-center rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
-                  isActive
-                    ? 'bg-primary text-primary-foreground'
-                    : 'bg-zinc-800 text-zinc-300'
+                  isActive ? 'bg-primary text-primary-foreground' : 'bg-zinc-800 text-zinc-300'
                 }`}
               >
                 {count}
@@ -125,10 +165,12 @@ export function ContactsPage(): React.ReactElement {
               </p>
             </div>
           ) : (
-            filtered.map((c) => (
+            filtered.map(c => (
               <button
                 key={c.id}
-                onClick={(): void => setSelectedId(c.id)}
+                onClick={(): void => {
+                  setSelectedId(c.id);
+                }}
                 className={`flex flex-col gap-1 rounded-md border p-3 text-left transition-colors ${
                   selectedId === c.id
                     ? 'border-primary bg-primary/5'
@@ -149,8 +191,8 @@ export function ContactsPage(): React.ReactElement {
                       c.category === 'team'
                         ? 'bg-blue-950/50 text-blue-300'
                         : c.category === 'clinical-partners'
-                        ? 'bg-emerald-950/50 text-emerald-300'
-                        : 'bg-amber-950/50 text-amber-300'
+                          ? 'bg-emerald-950/50 text-emerald-300'
+                          : 'bg-amber-950/50 text-amber-300'
                     }`}
                   >
                     {c.category.replace('-', ' ')}
@@ -175,24 +217,19 @@ export function ContactsPage(): React.ReactElement {
               </button>
             ))
           )}
-
         </div>
 
         {/* Detail pane */}
         <div className="lg:sticky lg:top-4 lg:self-start">
           {!selected ? (
             <div className="rounded-md border border-dashed border-border bg-surface-elevated p-6 text-center">
-              <p className="text-sm text-text-secondary">
-                Select a contact to see details.
-              </p>
+              <p className="text-sm text-text-secondary">Select a contact to see details.</p>
             </div>
           ) : (
             <div className="flex flex-col gap-4 rounded-md border border-border bg-surface-elevated p-5">
               <div className="flex flex-col gap-1">
                 <h2 className="text-lg font-semibold text-text-primary">{selected.name}</h2>
-                {selected.role && (
-                  <p className="text-sm text-text-secondary">{selected.role}</p>
-                )}
+                {selected.role && <p className="text-sm text-text-secondary">{selected.role}</p>}
                 {selected.company && (
                   <p className="text-xs text-text-tertiary">{selected.company}</p>
                 )}
@@ -230,9 +267,7 @@ export function ContactsPage(): React.ReactElement {
                   </span>
                 )}
                 {!selected.email && !selected.linkedin && !selected.phone && (
-                  <p className="text-xs text-text-tertiary">
-                    No contact methods recorded yet.
-                  </p>
+                  <p className="text-xs text-text-tertiary">No contact methods recorded yet.</p>
                 )}
               </div>
 
@@ -244,7 +279,7 @@ export function ContactsPage(): React.ReactElement {
 
               {selected.tags && selected.tags.length > 0 && (
                 <div className="flex flex-wrap gap-1 border-t border-border pt-3">
-                  {selected.tags.slice(0, 8).map((t) => (
+                  {selected.tags.slice(0, 8).map(t => (
                     <span
                       key={t}
                       className="rounded bg-zinc-800 px-2 py-0.5 text-[10px] font-mono text-zinc-400"

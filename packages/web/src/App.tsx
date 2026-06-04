@@ -20,6 +20,7 @@ import { SADNPage } from '@/routes/SADNPage';
 import { CategoryPage } from '@/routes/CategoryPage';
 import { DrivePage } from '@/routes/DrivePage';
 import { SolutionsPage } from '@/routes/SolutionsPage';
+import { ContactsPage } from '@/routes/ContactsPage';
 import { StartHerePage } from '@/routes/StartHerePage';
 
 interface ErrorBoundaryState {
@@ -83,6 +84,7 @@ export function App(): React.ReactElement {
                 <Route path="/category/:slug" element={<CategoryPage />} />
                 <Route path="/drive" element={<DrivePage />} />
                 <Route path="/solutions" element={<SolutionsPage />} />
+                <Route path="/contacts" element={<ContactsPage />} />
                 <Route path="/pmc" element={<PMCPage />} />
                 <Route path="/brt" element={<BRTPage />} />
                 <Route path="/ewc" element={<EWCPage />} />
