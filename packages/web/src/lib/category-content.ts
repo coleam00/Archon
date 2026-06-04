@@ -58,8 +58,7 @@ export const CATEGORIES: CategoryDef[] = [
     quickLinks: [
       { label: 'PMC tab', href: '/pmc' },
       { label: 'BRT tab', href: '/brt' },
-      { label: 'TTS tab', href: '/tts' },
-      { label: 'Social Content tab', href: '/social-content' },
+      { label: 'VA Workspace', href: '/social-content' },
     ],
   },
   {

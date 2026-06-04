@@ -52,14 +52,26 @@ export const BRANDS: BrandDef[] = [
     ],
   },
   {
-    slug: 'tts',
-    label: 'TTS',
-    apolloPrefix: 'TTS',
-    icp: 'Wellness-tech vendors and clinical device makers exhibiting at therapeutic-technology showcases. Sponsors / exhibitors / speaker prospects.',
+    slug: 'ttts',
+    label: 'TTTS',
+    apolloPrefix: 'TTTS',
+    icp: 'Closed-door 12-founder Sarasota session (June 27, 2026). Wellness-tech vendors and clinical device makers as invitation-only attendees, sponsors, and speaker prospects.',
     adjacentIcps: [
       'Healthcare conference organizers',
       'Wellness influencers with clinical credibility',
       'Adjacent device categories (red light, hyperbaric, cold plunge)',
+    ],
+  },
+  {
+    slug: 'ewc',
+    label: 'EWC',
+    apolloPrefix: 'EWC',
+    icp: 'Cash-pay-curious providers (concierge, DPC, medspa, functional med) evaluating practice transformation. Three-pillar partnership: premium wellness products + FDA-cleared equipment + AI practice automation.',
+    adjacentIcps: [
+      'Independent physicians considering cash-pay pivot',
+      'Concierge medicine launching add-on services',
+      'Direct primary care (DPC) practices scaling vertical',
+      'Functional medicine + medspa hybrids',
     ],
   },
   {

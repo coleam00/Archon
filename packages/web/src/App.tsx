@@ -1,26 +1,22 @@
 import { Component } from 'react';
 import type { ReactNode, ErrorInfo } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router';
+import { HashRouter, Routes, Route, Navigate } from 'react-router';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { Layout } from '@/components/layout/Layout';
 import { ProjectProvider } from '@/contexts/ProjectContext';
 import { queryClient } from '@/lib/query-client';
-import { DashboardPage } from '@/routes/DashboardPage';
-import { ChatPage } from '@/routes/ChatPage';
-import { WorkflowsPage } from '@/routes/WorkflowsPage';
-import { WorkflowExecutionPage } from '@/routes/WorkflowExecutionPage';
-import { WorkflowBuilderPage } from '@/routes/WorkflowBuilderPage';
-import { SettingsPage } from '@/routes/SettingsPage';
-import { TTSPage } from '@/routes/TTSPage';
 import { BRTPage } from '@/routes/BRTPage';
 import { SgInkPage } from '@/routes/SgInkPage';
-// NABAPage removed 2026-06-01 (NABA eliminated; replaced by Quicksilver under /solutions)
 import { IHHTPage } from '@/routes/IHHTPage';
 import { QEPPage } from '@/routes/QEPPage';
 import { SocialContentPage } from '@/routes/SocialContentPage';
 import { PMCPage } from '@/routes/PMCPage';
+import { EWCPage } from '@/routes/EWCPage';
+import { FountainPage } from '@/routes/FountainPage';
+import { TTSPage } from '@/routes/TTSPage';
+import { ARCPage } from '@/routes/ARCPage';
+import { SADNPage } from '@/routes/SADNPage';
 import { CategoryPage } from '@/routes/CategoryPage';
-import { ContactsPage } from '@/routes/ContactsPage';
 import { DrivePage } from '@/routes/DrivePage';
 import { SolutionsPage } from '@/routes/SolutionsPage';
 import { StartHerePage } from '@/routes/StartHerePage';
@@ -78,34 +74,31 @@ export function App(): React.ReactElement {
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
         <ProjectProvider>
-          <BrowserRouter>
+          <HashRouter>
             <Routes>
               <Route element={<Layout />}>
                 <Route path="/" element={<Navigate to="/welcome" replace />} />
                 <Route path="/welcome" element={<StartHerePage />} />
-                <Route path="/chat" element={<ChatPage />} />
-                <Route path="/chat/*" element={<ChatPage />} />
-                <Route path="/dashboard" element={<DashboardPage />} />
                 <Route path="/category/:slug" element={<CategoryPage />} />
-                <Route path="/contacts" element={<ContactsPage />} />
                 <Route path="/drive" element={<DrivePage />} />
                 <Route path="/solutions" element={<SolutionsPage />} />
                 <Route path="/pmc" element={<PMCPage />} />
-                <Route path="/workflows" element={<WorkflowsPage />} />
-                <Route path="/workflows/builder" element={<WorkflowBuilderPage />} />
-                <Route path="/workflows/runs/:runId" element={<WorkflowExecutionPage />} />
-                <Route path="/workflows/runs" element={<Navigate to="/workflows" replace />} />
-                <Route path="/settings" element={<SettingsPage />} />
-                <Route path="/tts" element={<TTSPage />} />
                 <Route path="/brt" element={<BRTPage />} />
+                <Route path="/ewc" element={<EWCPage />} />
+                <Route path="/fountain" element={<FountainPage />} />
+                <Route path="/ttts" element={<TTSPage />} />
                 <Route path="/sg-ink" element={<SgInkPage />} />
-                {/* /naba route removed 2026-06-01 (NABA eliminated; replaced by Quicksilver under /solutions) */}
                 <Route path="/ihht" element={<IHHTPage />} />
                 <Route path="/qep" element={<QEPPage />} />
                 <Route path="/social-content" element={<SocialContentPage />} />
+                <Route path="/external-reps/arc" element={<ARCPage />} />
+                <Route path="/external-reps/sadn" element={<SADNPage />} />
+                {/* Backend-dependent routes intentionally omitted for static build:
+                    /chat, /dashboard, /workflows*, /settings, /tts */}
+                <Route path="*" element={<Navigate to="/welcome" replace />} />
               </Route>
             </Routes>
-          </BrowserRouter>
+          </HashRouter>
         </ProjectProvider>
       </QueryClientProvider>
     </ErrorBoundary>

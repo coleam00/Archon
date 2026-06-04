@@ -139,11 +139,11 @@ export function StartHerePage(): React.ReactElement {
         <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
           <Card to="/pmc" icon={Briefcase} title="PMC" description="Parent advisory consultancy." />
           <Card to="/brt" icon={BarChart2} title="BRT (BioReg)" description="Clinical PEMF + EEG biofeedback. bioreg.us." />
-          <Card to="/tts" icon={Volume2} title="TTS" description="Therapeutic Technology Showcase. June 27 closed-door." />
+          <Card to="/social-content" icon={Volume2} title="TTTS" description="Therapeutic Technology Showcase. June 27 closed-door Sarasota session." />
           <Card to="/ihht" icon={Activity} title="IHHT" description="Intermittent Hypoxia-Hyperoxia Therapy program." />
           <Card to="/qep" icon={ClipboardList} title="QEP" description="Quantum Executive Protocol -- The Fountain venue." />
           <Card to="/sg-ink" icon={PenLine} title="SG INK" description="SG INK content brand." />
-          <Card to="/social-content" icon={Share2} title="Social Content" description="Cross-brand content engine including bioreg.tech IG audience layer." />
+          <Card to="/social-content" icon={Share2} title="VA Workspace" description="Active campaigns, sequences, brand voice, and canon for the VA team." />
         </div>
       </div>
 
