@@ -214,6 +214,8 @@ export const runWorkflowBodySchema = z
   .object({
     conversationId: z.string(),
     message: z.string(),
+    prdId: z.string().optional(),
+    sourceBranch: z.string().optional(),
   })
   .openapi('RunWorkflowBody');
 

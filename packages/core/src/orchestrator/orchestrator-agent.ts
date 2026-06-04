@@ -14,6 +14,7 @@ import type {
   Conversation,
   Codebase,
   AttachedFile,
+  WorkflowRunCommandOptions,
 } from '../types';
 import type { SendQueryOptions, TokenUsage } from '@archon/providers/types';
 import { ConversationNotFoundError } from '../types';
@@ -32,7 +33,11 @@ import { syncWorkspace, toRepoPath } from '@archon/git';
 import type { WorkspaceSyncResult } from '@archon/git';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { findWorkflow, resolveWorkflowName } from '@archon/workflows/router';
-import { executeWorkflow, hydrateResumableRun } from '@archon/workflows/executor';
+import {
+  executeWorkflow,
+  hydrateResumableRun,
+  type ExecuteWorkflowOptions,
+} from '@archon/workflows/executor';
 import {
   assertWorkflowRequirementsMet,
   WorkflowRequirementError,
@@ -61,7 +66,20 @@ import * as messageDb from '../db/messages';
 import * as workflowDb from '../db/workflows';
 import * as workflowEventDb from '../db/workflow-events';
 import { getCodebaseEnvVars } from '../db/env-vars';
-import type { ApprovalContext } from '@archon/workflows/schemas/workflow-run';
+import {
+  RESUMABLE_WORKFLOW_STATUSES,
+  getPrdExecutionIdentity,
+  type ApprovalContext,
+  type WorkflowRun,
+} from '@archon/workflows/schemas/workflow-run';
+import {
+  acquirePrdExecutionLeaseForRun,
+  buildPrdExecutionContext,
+  buildPrdRunMetadata,
+  updatePrdLeaseForWorkflowResult,
+  verifyPrdResumeProvenance,
+  type PrdExecutionContext,
+} from '../workflows/prd-execution';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -313,6 +331,92 @@ function filterToolIndicators(assistantMessages: string[]): string {
 
 // ─── Workflow Dispatch ──────────────────────────────────────────────────────
 
+async function preparePrdExecutionContextForWorkflow(params: {
+  codebase: Codebase;
+  workflowOptions: WorkflowRunCommandOptions;
+  workingPath: string;
+  resumableRun?: WorkflowRun | null;
+}): Promise<PrdExecutionContext | null> {
+  const storedIdentity = params.resumableRun
+    ? getPrdExecutionIdentity(params.resumableRun.metadata)
+    : null;
+  const prdId = params.workflowOptions.prdId ?? storedIdentity?.prdId;
+  if (!prdId) return null;
+
+  const prdContext = await buildPrdExecutionContext({
+    prdId,
+    canonicalRepoPath: params.codebase.default_cwd,
+    workingPath: params.workingPath,
+    sourceBranch: params.workflowOptions.sourceBranch ?? storedIdentity?.sourceBranch,
+    executionBranch: storedIdentity?.executionBranch,
+  });
+
+  if (params.resumableRun) {
+    verifyPrdResumeProvenance(params.resumableRun, prdContext, params.workflowOptions.prdId);
+  }
+
+  return prdContext;
+}
+
+async function executeWorkflowWithPrdLease(params: {
+  platform: IPlatformAdapter;
+  conversationId: string;
+  cwd: string;
+  workflow: WorkflowDefinition;
+  userMessage: string;
+  conversationDbId: string;
+  codebaseId: string;
+  prdContext: PrdExecutionContext | null;
+  opts: ExecuteWorkflowOptions;
+  leaseRunId?: string;
+}): Promise<Awaited<ReturnType<typeof executeWorkflow>>> {
+  let result: Awaited<ReturnType<typeof executeWorkflow>> | undefined;
+  let executionError: Error | null = null;
+  let prdLeaseRunId = params.leaseRunId;
+  const prdContext = params.prdContext;
+
+  try {
+    result = await executeWorkflow(
+      createWorkflowDeps(),
+      params.platform,
+      params.conversationId,
+      params.cwd,
+      params.workflow,
+      params.userMessage,
+      params.conversationDbId,
+      {
+        ...params.opts,
+        runMetadata: prdContext ? buildPrdRunMetadata(prdContext) : undefined,
+        onWorkflowRunCreated: prdContext
+          ? async (run): Promise<void> => {
+              prdLeaseRunId = run.id;
+              await acquirePrdExecutionLeaseForRun({
+                codebaseId: params.codebaseId,
+                workflowRunId: run.id,
+                workflowName: params.workflow.name,
+                context: prdContext,
+              });
+            }
+          : undefined,
+      }
+    );
+  } catch (error) {
+    executionError = error as Error;
+    throw error;
+  } finally {
+    if (prdLeaseRunId) {
+      await updatePrdLeaseForWorkflowResult({
+        workflowRunId: prdLeaseRunId,
+        result,
+        error: executionError,
+        context: params.prdContext,
+      });
+    }
+  }
+
+  return result;
+}
+
 /**
  * Dispatch a workflow after the orchestrator resolves a project.
  * Auto-attaches the project to the conversation, resolves isolation, and executes.
@@ -334,7 +438,8 @@ async function dispatchOrchestratorWorkflow(
    * report their real name, custom ones report "custom"). Optional: callers
    * that don't have it readily in scope omit it and the run reports "custom".
    */
-  source?: WorkflowSource
+  source?: WorkflowSource,
+  workflowOptions: WorkflowRunCommandOptions = {}
 ): Promise<void> {
   // Capability gate: hard-fail before any worktree/clone/AI cost if the
   // workflow declares `requires: [github]` and the originating user hasn't
@@ -402,40 +507,120 @@ async function dispatchOrchestratorWorkflow(
     }
   }
 
-  // Dispatch workflow.
-  // Resume detection runs for ALL platforms: check if a prior run for this workflow
-  // is in a resumable state (paused/failed-by-approval) in this conversation+codebase
-  // before dispatching fresh. This ensures chat platforms (slack, telegram, discord,
-  // github) resume after approval gates just like web does.
-  const resumableRun = await workflowDb.findResumableRunByParentConversation(
-    workflow.name,
-    conversation.id,
-    codebase.id
-  );
+  let explicitResumableRun: WorkflowRun | null = null;
+  if (workflowOptions.resumeRunId) {
+    const run = await workflowDb.getWorkflowRun(workflowOptions.resumeRunId);
+    if (!run) {
+      await platform.sendMessage(
+        conversationId,
+        `Workflow run \`${workflowOptions.resumeRunId}\` not found.`
+      );
+      return;
+    }
+    if (run.workflow_name !== workflow.name) {
+      await platform.sendMessage(
+        conversationId,
+        `Workflow run \`${run.id}\` belongs to \`${run.workflow_name}\`, not \`${workflow.name}\`.`
+      );
+      return;
+    }
+    if (!RESUMABLE_WORKFLOW_STATUSES.includes(run.status)) {
+      await platform.sendMessage(
+        conversationId,
+        `Cannot resume workflow run \`${run.id}\` in \`${run.status}\` status.`
+      );
+      return;
+    }
+    if (!run.working_path) {
+      await platform.sendMessage(
+        conversationId,
+        `Workflow run \`${run.id}\` has no recorded working path and cannot be resumed from chat.`
+      );
+      return;
+    }
+    explicitResumableRun = run;
+  }
+
+  const runForegroundWorkflow = async (
+    runCwd: string,
+    opts: ExecuteWorkflowOptions,
+    resumableRun?: WorkflowRun
+  ): Promise<void> => {
+    let prdContext: PrdExecutionContext | null = null;
+    try {
+      prdContext = await preparePrdExecutionContextForWorkflow({
+        codebase,
+        workflowOptions,
+        workingPath: runCwd,
+        resumableRun,
+      });
+      if (prdContext && resumableRun) {
+        await acquirePrdExecutionLeaseForRun({
+          codebaseId: codebase.id,
+          workflowRunId: resumableRun.id,
+          workflowName: workflow.name,
+          context: prdContext,
+        });
+      }
+    } catch (error) {
+      const err = toError(error);
+      getLog().warn(
+        { err, workflowName: workflow.name, conversationId },
+        'workflow.prd_execution_guard_blocked'
+      );
+      await platform.sendMessage(
+        conversationId,
+        `❌ PRD execution guard blocked workflow \`${workflow.name}\`: ${err.message}`
+      );
+      return;
+    }
+
+    await executeWorkflowWithPrdLease({
+      platform,
+      conversationId,
+      cwd: runCwd,
+      workflow,
+      userMessage,
+      conversationDbId: conversation.id,
+      codebaseId: codebase.id,
+      prdContext,
+      opts,
+      leaseRunId: resumableRun?.id,
+    });
+  };
+
+  // Dispatch workflow. Resume detection runs for ALL platforms: check if a prior
+  // run for this workflow is in a resumable state in this conversation+codebase
+  // before dispatching fresh. Exact run-id resume fails closed instead of
+  // silently starting a new row.
+  const resumableRun =
+    explicitResumableRun ??
+    (await workflowDb.findResumableRunByParentConversation(
+      workflow.name,
+      conversation.id,
+      codebase.id
+    ));
+
   if (resumableRun?.working_path) {
     getLog().info(
       {
         workflowName: workflow.name,
         resumableRunId: resumableRun.id,
+        explicitResume: Boolean(workflowOptions.resumeRunId),
         workingPath: resumableRun.working_path,
         platformType: platform.getPlatformType(),
       },
       'orchestrator.foreground_resume_detected'
     );
-    // Hydrate the already-found candidate. If hydration returns null the
-    // prior run had nothing worth resuming (zero completed nodes, no loop
-    // gate) — surface that to the user and fall through to a fresh run on
-    // the same worktree rather than silently restarting.
+
     const deps = createWorkflowDeps();
     let prepared: Awaited<ReturnType<typeof hydrateResumableRun>>;
     try {
       prepared = await hydrateResumableRun(deps, resumableRun);
     } catch (err) {
-      // resumeWorkflowRun is a compare-and-swap: if another surface (web Resume,
-      // a concurrent re-dispatch, the CLI) already claimed this run, it throws
-      // WorkflowNotResumableError. Surface a friendly note instead of leaking the
-      // raw internal string to the generic failure catch, and do NOT fall through
-      // to a fresh run — the other resumer owns the worktree (#1830 I2).
+      // resumeWorkflowRun is a compare-and-swap: if another surface already
+      // claimed this run, surface a friendly note and do NOT fall through to a
+      // fresh run — the other resumer owns the worktree (#1830 I2).
       if (err instanceof workflowDb.WorkflowNotResumableError) {
         getLog().info(
           { workflowName: workflow.name, runId: resumableRun.id, status: err.currentStatus },
@@ -450,43 +635,35 @@ async function dispatchOrchestratorWorkflow(
       }
       throw err;
     }
+
     if (prepared) {
-      await executeWorkflow(
-        deps,
-        platform,
-        conversationId,
+      await runForegroundWorkflow(
         resumableRun.working_path,
-        workflow,
-        userMessage,
-        conversation.id,
         {
           codebaseId: codebase.id,
           parentConversationId: conversation.id,
           userId,
           source,
           ...prepared,
-        }
+        },
+        resumableRun
+      );
+    } else if (workflowOptions.resumeRunId) {
+      await platform.sendMessage(
+        conversationId,
+        `Cannot resume workflow run \`${resumableRun.id}\`: no completed nodes or interactive-loop state were found.`
       );
     } else {
       await platform.sendMessage(
         conversationId,
         `⚠️ Prior run for **${workflow.name}** had no completed nodes; starting fresh in the same worktree.`
       );
-      await executeWorkflow(
-        deps,
-        platform,
-        conversationId,
-        resumableRun.working_path,
-        workflow,
-        userMessage,
-        conversation.id,
-        {
-          codebaseId: codebase.id,
-          parentConversationId: conversation.id,
-          userId,
-          source,
-        }
-      );
+      await runForegroundWorkflow(resumableRun.working_path, {
+        codebaseId: codebase.id,
+        parentConversationId: conversation.id,
+        userId,
+        source,
+      });
     }
   } else if (platform.getPlatformType() === 'web' && !workflow.interactive) {
     // Background dispatch: web-only, non-interactive workflows with no resumable run
@@ -502,26 +679,18 @@ async function dispatchOrchestratorWorkflow(
         isolationHints,
         userId,
         source,
+        workflowOptions,
       },
       workflow
     );
   } else {
     // Fresh foreground execution: web interactive workflows + all chat platforms
-    await executeWorkflow(
-      createWorkflowDeps(),
-      platform,
-      conversationId,
-      cwd,
-      workflow,
-      userMessage,
-      conversation.id,
-      {
-        codebaseId: codebase.id,
-        parentConversationId: conversation.id,
-        userId,
-        source,
-      }
-    );
+    await runForegroundWorkflow(cwd, {
+      codebaseId: codebase.id,
+      parentConversationId: conversation.id,
+      userId,
+      source,
+    });
   }
 }
 
@@ -842,7 +1011,8 @@ export async function handleMessage(
             pausedRun.user_message,
             isolationHints,
             userId,
-            workflowSource
+            workflowSource,
+            { resumeRunId: pausedRun.id }
           );
           getLog().info(
             { conversationId, workflowRunId: pausedRun.id, workflowName: pausedRun.workflow_name },
@@ -913,7 +1083,9 @@ export async function handleMessage(
             result.workflow.definition,
             result.workflow.args ?? message,
             isolationHints,
-            userId
+            userId,
+            undefined,
+            result.workflow.options
           );
         }
         return;
@@ -1816,7 +1988,9 @@ async function handleWorkflowRunCommand(
   workflow: WorkflowDefinition,
   userMessage: string,
   isolationHints?: HandleMessageContext['isolationHints'],
-  userId?: string
+  userId?: string,
+  source?: WorkflowSource,
+  workflowOptions: WorkflowRunCommandOptions = {}
 ): Promise<void> {
   // Check if conversation has a project
   if (conversation.codebase_id) {
@@ -1837,7 +2011,9 @@ async function handleWorkflowRunCommand(
       workflow,
       userMessage,
       isolationHints,
-      userId
+      userId,
+      source,
+      workflowOptions
     );
     return;
   }
@@ -1916,7 +2092,8 @@ async function handleWorkflowRunCommand(
       userMessage,
       isolationHints,
       userId,
-      resolvedEntry?.source
+      resolvedEntry?.source,
+      workflowOptions
     );
     return;
   }

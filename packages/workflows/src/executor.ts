@@ -230,6 +230,10 @@ type ResumePayload =
 export type ExecuteWorkflowOptions = ResumePayload & {
   /** Codebase ID for env vars + isolation context. */
   codebaseId?: string;
+  /** Extra workflow-run metadata to persist at run creation time. */
+  runMetadata?: Record<string, unknown>;
+  /** Hook invoked immediately after a fresh workflow run row is created. */
+  onWorkflowRunCreated?: (run: WorkflowRun) => Promise<void> | void;
   /**
    * GitHub issue/PR context. When provided:
    * - Stored in `WorkflowRun.metadata` as `{ github_context }`
@@ -327,6 +331,8 @@ export async function executeWorkflow(
     priorCompletedNodes,
     userId,
     source,
+    runMetadata,
+    onWorkflowRunCreated,
   } = opts;
   // Load config once for the entire workflow execution
   const fileConfig = await deps.loadConfig(cwd);
@@ -426,10 +432,15 @@ export async function executeWorkflow(
         codebase_id: codebaseId,
         user_message: userMessage,
         working_path: cwd,
-        metadata: issueContext ? { github_context: issueContext } : {},
+        metadata: {
+          ...(issueContext ? { github_context: issueContext } : {}),
+          ...(runMetadata ?? {}),
+        },
         parent_conversation_id: parentConversationId,
         user_id: userId,
       });
+
+      await onWorkflowRunCreated?.(workflowRun);
     } catch (error) {
       const err = error as Error;
       getLog().error(

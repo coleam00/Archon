@@ -55,6 +55,15 @@ export interface HandleMessageContext {
   readonly userId?: string;
 }
 
+export interface WorkflowRunCommandOptions {
+  /** Exact workflow run ID to resume instead of implicit parent-conversation lookup. */
+  resumeRunId?: string;
+  /** First-class PRD execution identity to attach to the workflow run. */
+  prdId?: string;
+  /** Canonical source branch for PRD provenance. */
+  sourceBranch?: string;
+}
+
 export interface CommandResult {
   success: boolean;
   message: string;
@@ -63,6 +72,7 @@ export interface CommandResult {
     // If set, orchestrator should execute this workflow
     definition: WorkflowDefinition;
     args: string;
+    options?: WorkflowRunCommandOptions;
   };
 }
 

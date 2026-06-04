@@ -12,6 +12,12 @@ mock.module('@archon/paths', () => ({
   getArchonWorkspacesPath: mock(() => '/home/test/.archon/workspaces'),
   ensureArchonWorkspacesPath: mock(() => Promise.resolve('/home/test/.archon/workspaces')),
   getArchonHome: mock(() => '/home/test/.archon'),
+  getProjectWorktreesPath: mock(
+    () => '/home/test/.archon/workspaces/test-owner/test-repo/worktrees'
+  ),
+  BUNDLED_IS_BINARY: false,
+  BUNDLED_VERSION: '0.0.0-test',
+  BUNDLED_GIT_COMMIT: 'test',
 }));
 
 // DB mocks
@@ -130,9 +136,14 @@ mock.module('@archon/workflows/utils/tool-formatter', () => ({
   formatToolCall: mock(() => ''),
 }));
 
-mock.module('fs', () => ({
+const mockFsModule = {
   existsSync: mock(() => true),
-}));
+  mkdirSync: mock(() => undefined),
+  readFileSync: mock(() => '{}'),
+  writeFileSync: mock(() => undefined),
+};
+mock.module('fs', () => mockFsModule);
+mock.module('node:fs', () => mockFsModule);
 
 mock.module('../services/title-generator', () => ({
   generateAndSetTitle: mock(() => Promise.resolve()),

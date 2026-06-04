@@ -1665,6 +1665,57 @@ describe('CommandHandler', () => {
         expect(result.workflow?.args).toBe('#42 add dark mode');
       });
 
+      test('should parse PRD and exact resume workflow options before sentinel', async () => {
+        spyDiscoverWorkflows.mockResolvedValueOnce({
+          workflows: [
+            makeTestWorkflowWithSource({ name: 'fix-issue', description: 'Fix a GitHub issue' }),
+          ],
+          errors: [],
+        });
+
+        const result = await handleCommand(
+          conversationWithCodebase,
+          '/workflow run fix-issue --prd-id PRD-0045 --source-branch source/prd --resume-run-id run-123 -- --literal-flag keep this'
+        );
+
+        expect(result.success).toBe(true);
+        expect(result.workflow?.definition.name).toBe('fix-issue');
+        expect(result.workflow?.args).toBe('--literal-flag keep this');
+        expect(result.workflow?.options).toEqual({
+          prdId: 'PRD-0045',
+          sourceBranch: 'source/prd',
+          resumeRunId: 'run-123',
+        });
+      });
+
+      test('should keep unknown workflow flags as workflow arguments', async () => {
+        spyDiscoverWorkflows.mockResolvedValueOnce({
+          workflows: [
+            makeTestWorkflowWithSource({ name: 'fix-issue', description: 'Fix a GitHub issue' }),
+          ],
+          errors: [],
+        });
+
+        const result = await handleCommand(
+          conversationWithCodebase,
+          '/workflow run fix-issue --unknown value'
+        );
+
+        expect(result.success).toBe(true);
+        expect(result.workflow?.args).toBe('--unknown value');
+        expect(result.workflow?.options).toEqual({});
+      });
+
+      test('should reject PRD workflow options missing required values', async () => {
+        const result = await handleCommand(
+          conversationWithCodebase,
+          '/workflow run fix-issue --prd-id --source-branch source/prd'
+        );
+
+        expect(result.success).toBe(false);
+        expect(result.message).toContain('--prd-id requires a value');
+      });
+
       test('should return not-found when no codebase is configured', async () => {
         const result = await handleCommand(baseConversation, '/workflow run test-workflow');
 

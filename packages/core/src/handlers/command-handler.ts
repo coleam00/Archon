@@ -4,7 +4,12 @@
  */
 import { writeFile, access } from 'fs/promises';
 import { join, relative } from 'path';
-import { type Conversation, type CommandResult, ConversationNotFoundError } from '../types';
+import {
+  type Conversation,
+  type CommandResult,
+  type WorkflowRunCommandOptions,
+  ConversationNotFoundError,
+} from '../types';
 import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
 import * as sessionDb from '../db/sessions';
@@ -198,6 +203,71 @@ export function parseCommand(text: string): { command: string; args: string[] } 
   });
 
   return { command, args };
+}
+
+function parseWorkflowRunCommandArgs(args: string[]): {
+  workflowName: string | undefined;
+  workflowArgs: string;
+  options: WorkflowRunCommandOptions;
+  error?: string;
+} {
+  const workflowName = args[1];
+  const rest = args.slice(2);
+  const workflowMessageParts: string[] = [];
+  const options: WorkflowRunCommandOptions = {};
+  let parsingOptions = true;
+
+  for (let i = 0; i < rest.length; i += 1) {
+    const token = rest[i];
+    if (parsingOptions && token === '--') {
+      parsingOptions = false;
+      continue;
+    }
+
+    if (parsingOptions && token === '--prd-id') {
+      const value = rest[i + 1];
+      if (!value || value.startsWith('--')) {
+        return { workflowName, workflowArgs: '', options, error: '--prd-id requires a value' };
+      }
+      options.prdId = value;
+      i += 1;
+      continue;
+    }
+
+    if (parsingOptions && token === '--source-branch') {
+      const value = rest[i + 1];
+      if (!value || value.startsWith('--')) {
+        return {
+          workflowName,
+          workflowArgs: '',
+          options,
+          error: '--source-branch requires a value',
+        };
+      }
+      options.sourceBranch = value;
+      i += 1;
+      continue;
+    }
+
+    if (parsingOptions && token === '--resume-run-id') {
+      const value = rest[i + 1];
+      if (!value || value.startsWith('--')) {
+        return {
+          workflowName,
+          workflowArgs: '',
+          options,
+          error: '--resume-run-id requires a value',
+        };
+      }
+      options.resumeRunId = value;
+      i += 1;
+      continue;
+    }
+
+    workflowMessageParts.push(token);
+  }
+
+  return { workflowName, workflowArgs: workflowMessageParts.join(' '), options };
 }
 
 /**
@@ -816,14 +886,25 @@ async function handleWorkflowCommand(
 
     case 'run': {
       // Directly invoke a workflow by name (bypasses AI router)
-      const workflowName = args[1];
-      const workflowArgs = args.slice(2).join(' ');
+      const {
+        workflowName,
+        workflowArgs,
+        options: workflowOptions,
+        error,
+      } = parseWorkflowRunCommandArgs(args);
 
       if (!workflowName) {
         return {
           success: false,
           message:
-            'Usage: /workflow run <name> [args]\n\nUse /workflow list to see available workflows.',
+            'Usage: /workflow run <name> [--prd-id <id>] [--source-branch <branch>] [--resume-run-id <id>] [--] [args]\n\nUse /workflow list to see available workflows.',
+        };
+      }
+
+      if (error) {
+        return {
+          success: false,
+          message: `${error}\n\nUsage: /workflow run <name> [--prd-id <id>] [--source-branch <branch>] [--resume-run-id <id>] [--] [args]`,
         };
       }
 
@@ -906,6 +987,7 @@ async function handleWorkflowCommand(
         workflow: {
           definition: workflow,
           args: workflowArgs,
+          options: workflowOptions,
         },
       };
     }
@@ -914,7 +996,7 @@ async function handleWorkflowCommand(
       return {
         success: false,
         message:
-          'Usage:\n  /workflow list - Show available workflows\n  /workflow reload - Reload workflow definitions\n  /workflow status - Show all active workflows\n  /workflow cancel - Cancel running workflow\n  /workflow resume <id> - Resume a failed run\n  /workflow abandon <id> - Discard a failed run\n  /workflow approve <id> [comment] - Approve a paused run\n  /workflow reject <id> [reason] - Reject a paused run\n  /workflow reset-sessions <name> [<node-id>] - Clear persisted AI session memory for this conversation\n  /workflow run <name> [args] - Run a workflow directly',
+          'Usage:\n  /workflow list - Show available workflows\n  /workflow reload - Reload workflow definitions\n  /workflow status - Show all active workflows\n  /workflow cancel - Cancel running workflow\n  /workflow resume <id> - Resume a failed run\n  /workflow abandon <id> - Discard a failed run\n  /workflow approve <id> [comment] - Approve a paused run\n  /workflow reject <id> [reason] - Reject a paused run\n  /workflow reset-sessions <name> [<node-id>] - Clear persisted AI session memory for this conversation\n  /workflow run <name> [--prd-id <id>] [--source-branch <branch>] [--resume-run-id <id>] [--] [args] - Run a workflow directly',
       };
   }
 }

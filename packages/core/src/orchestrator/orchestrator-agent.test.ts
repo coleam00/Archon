@@ -119,6 +119,37 @@ mock.module('@archon/workflows/executor', () => ({
   hydrateResumableRun: mockHydrateResumableRun,
 }));
 
+const mockPrdContext = {
+  identity: {
+    kind: 'prd' as const,
+    prdId: 'PRD-0045',
+    canonicalRepoPath: '/repos/test-repo',
+    sourceBranch: 'source/prd',
+    executionBranch: 'feature/prd',
+  },
+  provenance: {
+    canonicalRepoPath: '/repos/test-repo',
+    workingPath: '/test/cwd',
+    currentBranch: 'feature/prd',
+    headSha: 'abc123',
+    requestedSourceBranch: 'source/prd',
+    capturedAt: '2026-06-02T00:00:00.000Z',
+  },
+};
+const mockBuildPrdExecutionContext = mock(() => Promise.resolve(mockPrdContext));
+const mockAcquirePrdExecutionLeaseForRun = mock(() => Promise.resolve());
+const mockUpdatePrdLeaseForWorkflowResult = mock(() => Promise.resolve());
+mock.module('../workflows/prd-execution', () => ({
+  buildPrdExecutionContext: mockBuildPrdExecutionContext,
+  buildPrdRunMetadata: mock((context: typeof mockPrdContext) => ({
+    execution_identity: context.identity,
+    provenance: context.provenance,
+  })),
+  verifyPrdResumeProvenance: mock(() => undefined),
+  acquirePrdExecutionLeaseForRun: mockAcquirePrdExecutionLeaseForRun,
+  updatePrdLeaseForWorkflowResult: mockUpdatePrdLeaseForWorkflowResult,
+}));
+
 mock.module('@archon/providers', () => ({
   getAgentProvider: mock(() => ({
     sendQuery: mockSendQuery,
@@ -145,9 +176,11 @@ mock.module('../workflows/store-adapter', () => ({
 }));
 
 const mockGetPausedWorkflowRun = mock(() => Promise.resolve(null as unknown));
+const mockGetWorkflowRun = mock(() => Promise.resolve(null as unknown));
 const mockFindResumableRunByParentConversation = mock(() => Promise.resolve(null as unknown));
 mock.module('../db/workflows', () => ({
   getPausedWorkflowRun: mockGetPausedWorkflowRun,
+  getWorkflowRun: mockGetWorkflowRun,
   findResumableRunByParentConversation: mockFindResumableRunByParentConversation,
   updateWorkflowRun: mock(() => Promise.resolve()),
 }));
@@ -206,6 +239,7 @@ mock.module('../utils/worktree-sync', () => ({
 mock.module('@archon/git', () => ({
   syncWorkspace: mockSyncWorkspace,
   toRepoPath: mockToRepoPath,
+  execFileAsync: mock(() => Promise.resolve({ stdout: 'main\n', stderr: '' })),
 }));
 
 mock.module('fs', () => ({
@@ -1230,6 +1264,9 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockHandleCommand.mockImplementation(() =>
       Promise.resolve({ success: true, message: 'ok', workflow: undefined })
     );
+    mockBuildPrdExecutionContext.mockClear();
+    mockAcquirePrdExecutionLeaseForRun.mockClear();
+    mockUpdatePrdLeaseForWorkflowResult.mockClear();
     mockGetOrCreateConversation.mockReset();
     mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(null));
     mockGetCodebase.mockReset();
@@ -1252,6 +1289,49 @@ describe('workflow dispatch routing — interactive flag', () => {
     const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
     const opts = callArgs[callArgs.length - 1] as { parentConversationId?: string };
     expect(opts.parentConversationId).toBe('conv-1');
+  });
+
+  test('passes PRD workflow options into foreground execution metadata and lease hook', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve({
+        success: true,
+        message: 'Starting workflow: `test-workflow`',
+        workflow: {
+          definition: makeTestWorkflow({ name: 'test-workflow', interactive: true }),
+          args: 'test message',
+          options: { prdId: 'PRD-0045', sourceBranch: 'source/prd' },
+        },
+      })
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+
+    expect(mockBuildPrdExecutionContext).toHaveBeenCalledWith({
+      prdId: 'PRD-0045',
+      canonicalRepoPath: '/repos/test-repo',
+      workingPath: '/test/cwd',
+      sourceBranch: 'source/prd',
+      executionBranch: undefined,
+    });
+    const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
+    const opts = callArgs[callArgs.length - 1] as {
+      runMetadata?: Record<string, unknown>;
+      onWorkflowRunCreated?: (run: { id: string }) => Promise<void>;
+    };
+    expect(opts.runMetadata).toEqual({
+      execution_identity: mockPrdContext.identity,
+      provenance: mockPrdContext.provenance,
+    });
+    await opts.onWorkflowRunCreated?.({ id: 'run-1' });
+    expect(mockAcquirePrdExecutionLeaseForRun).toHaveBeenCalledWith({
+      codebaseId: 'codebase-1',
+      workflowRunId: 'run-1',
+      workflowName: 'test-workflow',
+      context: mockPrdContext,
+    });
   });
 
   test('foreground_resume_detected: passes parentConversationId to executeWorkflow when a resumable run exists', async () => {
@@ -1334,12 +1414,25 @@ describe('workflow dispatch routing — interactive flag', () => {
   test('calls dispatchBackgroundWorkflow for non-interactive workflow on web', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
-    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(undefined)));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve({
+        ...makeWorkflowResult(undefined),
+        workflow: {
+          ...makeWorkflowResult(undefined).workflow,
+          options: { prdId: 'PRD-0045', sourceBranch: 'source/prd' },
+        },
+      })
+    );
 
     const platform = makePlatform(); // getPlatformType returns 'web'
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
 
     expect(mockDispatchBackgroundWorkflow).toHaveBeenCalled();
+    const [ctx] = mockDispatchBackgroundWorkflow.mock.calls[0] as [
+      { workflowOptions?: Record<string, string> },
+      unknown,
+    ];
+    expect(ctx.workflowOptions).toEqual({ prdId: 'PRD-0045', sourceBranch: 'source/prd' });
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 
@@ -1514,6 +1607,8 @@ describe('natural-language approval routing', () => {
   beforeEach(() => {
     mockGetPausedWorkflowRun.mockReset();
     mockGetPausedWorkflowRun.mockImplementation(() => Promise.resolve(null));
+    mockGetWorkflowRun.mockReset();
+    mockGetWorkflowRun.mockImplementation(() => Promise.resolve(null));
     mockCreateWorkflowEvent.mockReset();
     mockCreateWorkflowEvent.mockImplementation(() => Promise.resolve());
     mockGetOrCreateConversation.mockReset();
@@ -1532,6 +1627,7 @@ describe('natural-language approval routing', () => {
     const codebase = makeApprovalCodebase();
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
     mockGetPausedWorkflowRun.mockReturnValueOnce(Promise.resolve(makePausedRun()));
+    mockGetWorkflowRun.mockReturnValueOnce(Promise.resolve(makePausedRun()));
     // discoverAllWorkflows calls getCodebase once internally, then the NL path calls it again
     mockGetCodebase.mockImplementation(() => Promise.resolve(codebase));
     mockDiscoverWorkflowsWithConfig.mockImplementation(() =>

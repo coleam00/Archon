@@ -1,8 +1,8 @@
 -- Remote Coding Agent - Combined Schema
--- Version: Combined (final state after migrations 001-020)
+-- Version: Combined (final state after migrations 001-022)
 -- Description: Complete database schema (idempotent - safe to run multiple times)
 --
--- 12 Tables:
+-- 13 Core Tables:
 --   1. remote_agent_codebases
 --   1b. remote_agent_codebase_env_vars
 --   1c. remote_agent_users
@@ -11,10 +11,11 @@
 --   3. remote_agent_sessions
 --   4. remote_agent_isolation_environments
 --   5. remote_agent_workflow_runs
---   6. remote_agent_workflow_events
---   6b. remote_agent_workflow_node_sessions
---   7. remote_agent_messages
---   8. remote_agent_user_github_tokens
+--   6. remote_agent_prd_execution_leases
+--   7. remote_agent_workflow_events
+--   7b. remote_agent_workflow_node_sessions
+--   8. remote_agent_messages
+--   9. remote_agent_user_github_tokens
 --
 -- Dropped tables (via migrations):
 --   - remote_agent_command_templates (017)
@@ -254,7 +255,40 @@ COMMENT ON TABLE remote_agent_workflow_runs IS
   'Tracks workflow execution state for resumption and observability';
 
 -- ============================================================================
--- Table 6: Workflow Events
+-- Table 6: PRD Execution Leases
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS remote_agent_prd_execution_leases (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  codebase_id UUID NOT NULL REFERENCES remote_agent_codebases(id) ON DELETE CASCADE,
+  prd_id VARCHAR(255) NOT NULL,
+  workflow_run_id UUID NOT NULL REFERENCES remote_agent_workflow_runs(id) ON DELETE CASCADE,
+  workflow_name VARCHAR(255) NOT NULL,
+  canonical_repo_path TEXT NOT NULL,
+  source_branch TEXT NOT NULL,
+  execution_branch TEXT NOT NULL,
+  working_path TEXT,
+  status VARCHAR(20) NOT NULL DEFAULT 'active',
+  metadata JSONB DEFAULT '{}'::jsonb,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  released_at TIMESTAMP WITH TIME ZONE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_prd_execution_leases_active_unique
+  ON remote_agent_prd_execution_leases(codebase_id, prd_id)
+  WHERE released_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_prd_execution_leases_run_id
+  ON remote_agent_prd_execution_leases(workflow_run_id);
+CREATE INDEX IF NOT EXISTS idx_prd_execution_leases_status
+  ON remote_agent_prd_execution_leases(status);
+
+COMMENT ON TABLE remote_agent_prd_execution_leases IS
+  'Durable ownership/identity lease for PRD executions in coding-system workflows';
+
+-- ============================================================================
+-- Table 7: Workflow Events
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS remote_agent_workflow_events (
@@ -304,7 +338,7 @@ COMMENT ON TABLE remote_agent_workflow_node_sessions IS
   'Per-node provider session IDs persisted across workflow re-runs. Keyed by (workflow, node, scope, provider). Scope is typically conversation UUID. No cascade on conversation delete (soft delete + never-reused UUID = harmless orphans); a future hard-delete path must delete by scope_key.';
 
 -- ============================================================================
--- Table 7: Messages
+-- Table 8: Messages
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS remote_agent_messages (

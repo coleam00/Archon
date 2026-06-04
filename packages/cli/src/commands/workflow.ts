@@ -11,7 +11,7 @@ import {
 import { WORKFLOW_EVENT_TYPES, type WorkflowEventType } from '@archon/workflows/store';
 import { configureIsolation, getIsolationProvider } from '@archon/isolation';
 import { createLogger, getArchonHome, BUNDLED_IS_BINARY } from '@archon/paths';
-import { join } from 'node:path';
+import { join, resolve as resolvePath } from 'node:path';
 import { mkdirSync, openSync, closeSync } from 'node:fs';
 import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
@@ -22,8 +22,13 @@ import {
   type WorkflowEmitterEvent,
 } from '@archon/workflows/event-emitter';
 import type { WorkflowDefinition, WorkflowLoadResult } from '@archon/workflows/schemas/workflow';
-import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
-import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
+import {
+  RESUMABLE_WORKFLOW_STATUSES,
+  getPrdExecutionIdentity,
+  workflowRunStatusSchema,
+  type WorkflowRun,
+  type WorkflowRunStatus,
+} from '@archon/workflows/schemas/workflow-run';
 import {
   approveWorkflow,
   rejectWorkflow,
@@ -39,6 +44,15 @@ import * as messageDb from '@archon/core/db/messages';
 import * as workflowDb from '@archon/core/db/workflows';
 import * as workflowEventsDb from '@archon/core/db/workflow-events';
 import type { WorkflowEventRow } from '@archon/core/db/workflow-events';
+import * as prdExecutionLeaseDb from '@archon/core/db/prd-execution-leases';
+import {
+  acquirePrdExecutionLeaseForRun,
+  buildPrdExecutionContext,
+  buildPrdRunMetadata,
+  releasePrdLeaseIfHeld,
+  updatePrdLeaseForWorkflowResult,
+  verifyPrdResumeProvenance,
+} from '@archon/core/workflows/prd-execution';
 import * as git from '@archon/git';
 import { CLIAdapter } from '../adapters/cli-adapter';
 
@@ -65,6 +79,7 @@ export interface WorkflowRunOptions {
   fromBranch?: string;
   noWorktree?: boolean;
   resume?: boolean;
+  resumeRunId?: string;
   codebaseId?: string; // Skips path-based codebase lookup when resume/approve/reject already resolved it
   /**
    * Override the directory used for workflow YAML discovery.
@@ -72,6 +87,8 @@ export interface WorkflowRunOptions {
    * `working_path` is a worktree or workspace clone that lacks the file.
    */
   discoveryCwd?: string;
+  prdId?: string;
+  sourceBranch?: string;
   quiet?: boolean;
   verbose?: boolean;
   /** Platform conversation ID (e.g. `cli-{ts}-{rand}`), NOT a DB UUID. */
@@ -620,9 +637,9 @@ export async function workflowRunCommand(
   let workingCwd = cwd;
   let isolationEnvId: string | undefined;
 
-  // Handle --resume: locate the prior failed run, reuse its worktree, and hand
-  // the resumed-run handle to executeWorkflow below via opts. The executor no
-  // longer performs implicit resume detection on its own.
+  // Handle --resume: either resume an exact run ID (preferred) or fall back to
+  // legacy workflow-name/path matching. Exact run IDs are required for verified
+  // coding-system resumes because name+cwd matching is too weak.
   let resumable: WorkflowRun | null = null;
   if (options.resume) {
     if (!codebase) {
@@ -642,7 +659,22 @@ export async function workflowRunCommand(
       );
     }
 
-    resumable = await workflowDb.findResumableRun(workflowName, cwd);
+    if (options.resumeRunId) {
+      resumable = await workflowDb.getWorkflowRun(options.resumeRunId);
+      if (!resumable) {
+        throw new Error(`Workflow run '${options.resumeRunId}' not found.`);
+      }
+      if (resumable.workflow_name !== workflowName) {
+        throw new Error(
+          `Workflow run '${options.resumeRunId}' belongs to workflow '${resumable.workflow_name}', not '${workflowName}'.`
+        );
+      }
+      if (!RESUMABLE_WORKFLOW_STATUSES.includes(resumable.status)) {
+        throw new Error(`Cannot resume run with status '${resumable.status}'`);
+      }
+    } else {
+      resumable = await workflowDb.findResumableRun(workflowName, cwd);
+    }
 
     if (!resumable) {
       throw new Error(`No resumable run found for workflow '${workflowName}' at path '${cwd}'.`);
@@ -653,6 +685,7 @@ export async function workflowRunCommand(
         workflowRunId: resumable.id,
         workflowName,
         workingPath: resumable.working_path,
+        exactResume: Boolean(options.resumeRunId),
       },
       'workflow.resume_found_resumable'
     );
@@ -795,6 +828,48 @@ export async function workflowRunCommand(
     );
   }
 
+  const canonicalRepoPath = resolvePath(
+    codebase?.default_cwd ?? (await git.findRepoRoot(workingCwd)) ?? cwd
+  );
+  const storedPrdIdentity = resumable ? getPrdExecutionIdentity(resumable.metadata) : null;
+  const prdId = options.prdId ?? storedPrdIdentity?.prdId;
+  const prdContext = prdId
+    ? await buildPrdExecutionContext({
+        prdId,
+        canonicalRepoPath,
+        workingPath: workingCwd,
+        sourceBranch: options.sourceBranch ?? storedPrdIdentity?.sourceBranch ?? options.fromBranch,
+        executionBranch: options.branchName ?? storedPrdIdentity?.executionBranch,
+      })
+    : null;
+  const prdCodebaseId = prdContext ? codebase?.id : undefined;
+
+  if (prdId && !prdCodebaseId) {
+    throw new Error(
+      `PRD execution '${prdId}' requires a registered codebase before workflow launch.`
+    );
+  }
+
+  if (resumable && prdContext && prdCodebaseId) {
+    verifyPrdResumeProvenance(resumable, prdContext, options.prdId);
+    await acquirePrdExecutionLeaseForRun({
+      codebaseId: prdCodebaseId,
+      workflowRunId: resumable.id,
+      workflowName: workflow.name,
+      context: prdContext,
+    });
+  } else if (prdContext && prdCodebaseId) {
+    const activeLease = await prdExecutionLeaseDb.getActivePrdExecutionLease(
+      prdCodebaseId,
+      prdContext.identity.prdId
+    );
+    if (activeLease) {
+      throw new Error(
+        `PRD '${prdContext.identity.prdId}' already has an active lease held by run '${activeLease.workflow_run_id}' on branch '${activeLease.execution_branch}'.`
+      );
+    }
+  }
+
   // Update conversation with cwd and isolation info
   try {
     await conversationDb.updateConversation(conversation.id, {
@@ -864,9 +939,13 @@ export async function workflowRunCommand(
     getLog().info({ conversationId: conversation.id, signal }, 'workflow.process_terminating');
     workflowDb
       .getActiveWorkflowRun(conversation.id)
-      .then(activeRun => {
+      .then(async activeRun => {
         if (activeRun) {
-          return workflowDb.failWorkflowRun(activeRun.id, `Process terminated (${signal})`);
+          await workflowDb.failWorkflowRun(activeRun.id, `Process terminated (${signal})`);
+          await releasePrdLeaseIfHeld(activeRun.id, 'failed', {
+            terminated_by_signal: signal,
+            terminated_at: new Date().toISOString(),
+          });
         }
         return undefined;
       })
@@ -943,7 +1022,9 @@ export async function workflowRunCommand(
   }
 
   // Execute workflow with workingCwd (may be worktree path)
-  let result: Awaited<ReturnType<typeof executeWorkflow>>;
+  let result: Awaited<ReturnType<typeof executeWorkflow>> | undefined;
+  let prdLeaseRunId = resumable?.id;
+  let executionError: Error | null = null;
   try {
     const opts = prepared
       ? { codebaseId: codebase?.id, source: workflowSource, ...prepared }
@@ -956,10 +1037,42 @@ export async function workflowRunCommand(
       workflow,
       userMessage,
       conversation.id,
-      opts
+      {
+        ...opts,
+        runMetadata: prdContext ? buildPrdRunMetadata(prdContext) : undefined,
+        onWorkflowRunCreated:
+          prdContext && prdCodebaseId
+            ? async (run): Promise<void> => {
+                prdLeaseRunId = run.id;
+                await acquirePrdExecutionLeaseForRun({
+                  codebaseId: prdCodebaseId,
+                  workflowRunId: run.id,
+                  workflowName: workflow.name,
+                  context: prdContext,
+                });
+              }
+            : undefined,
+      }
     );
+  } catch (error) {
+    executionError = error as Error;
   } finally {
     unsubscribe?.();
+    if (prdLeaseRunId) {
+      await updatePrdLeaseForWorkflowResult({
+        workflowRunId: prdLeaseRunId,
+        result,
+        error: executionError,
+        context: prdContext,
+      });
+    }
+  }
+
+  if (executionError) {
+    throw executionError;
+  }
+  if (!result) {
+    throw new Error(`Workflow '${workflow.name}' exited without a result.`);
   }
 
   // Check result and exit appropriately
@@ -1444,6 +1557,7 @@ export async function workflowResumeCommand(runId: string, json?: boolean): Prom
   try {
     await workflowRunCommand(run.working_path, run.workflow_name, run.user_message ?? '', {
       resume: true,
+      resumeRunId: run.id,
       codebaseId: run.codebase_id ?? undefined,
       discoveryCwd,
     });
@@ -1488,6 +1602,10 @@ export async function workflowAbandonCommand(runId: string, json?: boolean): Pro
   }
 
   const run = await abandonWorkflow(runId);
+  await releasePrdLeaseIfHeld(runId, 'cancelled', {
+    cancelled_at: new Date().toISOString(),
+    cancellation_reason: 'abandoned',
+  });
   console.log(`Abandoned workflow run: ${runId}`);
   console.log(`Workflow: ${run.workflow_name}`);
 }
@@ -1593,6 +1711,7 @@ export async function workflowApproveCommand(
   try {
     await workflowRunCommand(result.workingPath, result.workflowName, result.userMessage ?? '', {
       resume: true,
+      resumeRunId: runId,
       codebaseId: result.codebaseId ?? undefined,
       conversationId: platformConversationId,
       discoveryCwd,
@@ -1713,6 +1832,7 @@ export async function workflowRejectCommand(
   try {
     await workflowRunCommand(result.workingPath, result.workflowName, result.userMessage ?? '', {
       resume: true,
+      resumeRunId: runId,
       codebaseId: result.codebaseId ?? undefined,
       conversationId: platformConversationId,
       discoveryCwd,

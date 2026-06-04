@@ -1,6 +1,7 @@
 import { describe, test, expect, afterEach } from 'bun:test';
-import { SqliteAdapter } from './sqlite';
 import { Database } from 'bun:sqlite';
+import { createPrdExecutionLeaseDb } from '../prd-execution-leases';
+import { SqliteAdapter, sqliteDialect } from './sqlite';
 import { unlinkSync } from 'fs';
 import { join } from 'path';
 
@@ -21,6 +22,26 @@ async function insertCodebase(db: SqliteAdapter, id: string): Promise<void> {
     `test-codebase-${id}`,
     '/tmp/test-cwd',
   ]);
+}
+
+async function insertConversationAndWorkflowRun(
+  db: SqliteAdapter,
+  codebaseId: string,
+  conversationId: string,
+  workflowRunId: string
+): Promise<void> {
+  await db.query(
+    `INSERT INTO remote_agent_conversations
+     (id, platform_type, platform_conversation_id, codebase_id, ai_assistant_type)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [conversationId, 'cli', `test-conversation-${conversationId}`, codebaseId, 'pi']
+  );
+  await db.query(
+    `INSERT INTO remote_agent_workflow_runs
+     (id, conversation_id, codebase_id, workflow_name, user_message, status)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [workflowRunId, conversationId, codebaseId, 'prd-to-pr-pi', 'Implement PRD-0045', 'running']
+  );
 }
 
 describe('SqliteAdapter', () => {
@@ -45,6 +66,59 @@ describe('SqliteAdapter', () => {
     } catch {
       /* may not exist */
     }
+  });
+
+  describe('schema initialization', () => {
+    test('creates PRD execution lease table and supports acquire/refresh on SQLite', async () => {
+      db = createTestDb();
+      await insertCodebase(db, 'cb-prd');
+      await insertConversationAndWorkflowRun(db, 'cb-prd', 'conv-prd', 'run-prd');
+
+      const tables = await db.query<{ name: string }>(
+        `SELECT name FROM sqlite_master WHERE type = $1 AND name = $2`,
+        ['table', 'remote_agent_prd_execution_leases']
+      );
+      expect(tables.rows).toHaveLength(1);
+
+      const indexes = await db.query<{ name: string }>(
+        `SELECT name FROM sqlite_master WHERE type = $1 AND name = $2`,
+        ['index', 'idx_prd_execution_leases_active_unique']
+      );
+      expect(indexes.rows).toHaveLength(1);
+
+      const leaseDb = createPrdExecutionLeaseDb({
+        query: db.query.bind(db),
+        getDialect: () => sqliteDialect,
+      });
+
+      const inserted = await leaseDb.acquirePrdExecutionLease({
+        codebase_id: 'cb-prd',
+        prd_id: 'PRD-0045',
+        workflow_run_id: 'run-prd',
+        workflow_name: 'prd-to-pr-pi',
+        canonical_repo_path: '/repo',
+        source_branch: 'main',
+        execution_branch: 'feat/prd-0045-r2',
+        working_path: '/repo/.worktree/prd-0045',
+        metadata: { provenance: { headSha: 'abc123' } },
+      });
+      expect(inserted.prd_id).toBe('PRD-0045');
+      expect(inserted.metadata).toEqual({ provenance: { headSha: 'abc123' } });
+
+      const refreshed = await leaseDb.acquirePrdExecutionLease({
+        codebase_id: 'cb-prd',
+        prd_id: 'PRD-0045',
+        workflow_run_id: 'run-prd',
+        workflow_name: 'prd-to-pr-pi',
+        canonical_repo_path: '/repo',
+        source_branch: 'archon/source-prd-0045',
+        execution_branch: 'feat/prd-0045-r2',
+        working_path: '/repo/.worktree/prd-0045',
+        metadata: { provenance: { headSha: 'def456' } },
+      });
+      expect(refreshed.source_branch).toBe('archon/source-prd-0045');
+      expect(refreshed.metadata).toEqual({ provenance: { headSha: 'def456' } });
+    });
   });
 
   describe('INSERT with RETURNING', () => {

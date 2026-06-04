@@ -4,6 +4,7 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import {
   isNewerVersion,
+  isForkBuildVersion,
   parseLatestRelease,
   checkForUpdate,
   getCachedUpdateCheck,
@@ -34,6 +35,21 @@ describe('isNewerVersion', () => {
 
   test('handles double-digit segments correctly (not string comparison)', () => {
     expect(isNewerVersion('0.9.0', '0.10.0')).toBe(true);
+  });
+});
+
+// ─── isForkBuildVersion ──────────────────────────────────────────────
+
+describe('isForkBuildVersion', () => {
+  test('detects AISRV fork build versions', () => {
+    expect(isForkBuildVersion('0.3.12-aisrv.6130ddb')).toBe(true);
+    expect(isForkBuildVersion('0.3.12-aisrv')).toBe(true);
+    expect(isForkBuildVersion('0.3.12+aisrv.6130ddb')).toBe(true);
+  });
+
+  test('does not classify upstream versions as fork builds', () => {
+    expect(isForkBuildVersion('0.3.12')).toBe(false);
+    expect(isForkBuildVersion('0.4.1')).toBe(false);
   });
 });
 
@@ -92,6 +108,22 @@ describe('checkForUpdate', () => {
     } catch {
       // ignore cleanup errors
     }
+  });
+
+  test('skips upstream update checks for AISRV fork builds', async () => {
+    const cache = {
+      latestVersion: '0.5.0',
+      releaseUrl: 'https://github.com/coleam00/Archon/releases/tag/v0.5.0',
+      checkedAt: Date.now(),
+    };
+    writeFileSync(join(testDir, 'update-check.json'), JSON.stringify(cache));
+
+    const fetchSpy = spyOn(globalThis, 'fetch');
+    const result = await checkForUpdate('0.3.12-aisrv.6130ddb');
+
+    expect(result).toBeNull();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
   });
 
   test('returns result from fresh cache without fetching', async () => {
@@ -227,6 +259,16 @@ describe('getCachedUpdateCheck', () => {
     } catch {
       // ignore cleanup errors
     }
+  });
+
+  test('returns null for AISRV fork builds even when cache exists', () => {
+    const cache = {
+      latestVersion: '0.5.0',
+      releaseUrl: 'https://example.com',
+      checkedAt: Date.now(),
+    };
+    writeFileSync(join(testDir, 'update-check.json'), JSON.stringify(cache));
+    expect(getCachedUpdateCheck('0.3.12-aisrv.6130ddb')).toBeNull();
   });
 
   test('returns null when no cache file', () => {

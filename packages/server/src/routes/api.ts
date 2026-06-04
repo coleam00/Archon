@@ -68,12 +68,6 @@ import type { MessageRow } from '@archon/core/schemas/message';
 import type { DashboardWorkflowRun } from '@archon/core/schemas/workflow-run';
 import { findMarkdownFilesRecursive } from '@archon/core/utils/commands';
 
-/** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
-let cachedLog: ReturnType<typeof createLogger> | undefined;
-function getLog(): ReturnType<typeof createLogger> {
-  if (!cachedLog) cachedLog = createLogger('api');
-  return cachedLog;
-}
 import * as conversationDb from '@archon/core/db/conversations';
 import * as codebaseDb from '@archon/core/db/codebases';
 import * as envVarDb from '@archon/core/db/env-vars';
@@ -156,6 +150,27 @@ import {
   dashboardWorkflowRunSchema,
   workflowRunStatusSchema,
 } from './schemas/workflow.schemas';
+
+/** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
+let cachedLog: ReturnType<typeof createLogger> | undefined;
+function getLog(): ReturnType<typeof createLogger> {
+  if (!cachedLog) cachedLog = createLogger('api');
+  return cachedLog;
+}
+
+function buildWorkflowRunCommand(
+  workflowName: string,
+  message: string | null | undefined,
+  options: { resumeRunId?: string; prdId?: string; sourceBranch?: string } = {}
+): string {
+  const parts = ['/workflow', 'run', workflowName];
+  if (options.resumeRunId) parts.push('--resume-run-id', options.resumeRunId);
+  if (options.prdId) parts.push('--prd-id', options.prdId);
+  if (options.sourceBranch) parts.push('--source-branch', options.sourceBranch);
+  const userMessage = message?.trim();
+  if (userMessage) parts.push('--', userMessage);
+  return parts.join(' ');
+}
 
 // Read app version: use build-time constant in binary, package.json in dev
 let appVersion = 'unknown';
@@ -1587,7 +1602,9 @@ export function registerApiRoutes(
         );
         return false;
       }
-      const resumeMessage = `/workflow run ${run.workflow_name} ${run.user_message ?? ''}`.trim();
+      const resumeMessage = buildWorkflowRunCommand(run.workflow_name, run.user_message, {
+        resumeRunId: run.id,
+      });
       await dispatchToOrchestrator(platformConvId, resumeMessage);
       getLog().info(
         { runId: run.id, workflowName: run.workflow_name, platformConvId },
@@ -2302,6 +2319,8 @@ export function registerApiRoutes(
 
     let message: string;
     let conversationId: string;
+    let prdId: string | undefined;
+    let sourceBranch: string | undefined;
     let savedFiles: AttachedFile[] = [];
     let uploadDir = '';
 
@@ -2326,6 +2345,16 @@ export function registerApiRoutes(
       }
       message = rawMessage;
       conversationId = rawConv;
+      const rawPrdId = body.prdId;
+      const rawSourceBranch = body.sourceBranch;
+      if (rawPrdId !== undefined && typeof rawPrdId !== 'string') {
+        return apiError(c, 400, 'prdId must be a string when provided');
+      }
+      if (rawSourceBranch !== undefined && typeof rawSourceBranch !== 'string') {
+        return apiError(c, 400, 'sourceBranch must be a string when provided');
+      }
+      prdId = rawPrdId?.trim() || undefined;
+      sourceBranch = rawSourceBranch?.trim() || undefined;
 
       const rawFiles = body.files;
       const fileList: (string | File)[] = Array.isArray(rawFiles)
@@ -2348,7 +2377,12 @@ export function registerApiRoutes(
         );
       }
     } else {
-      let body: { conversationId?: unknown; message?: unknown };
+      let body: {
+        conversationId?: unknown;
+        message?: unknown;
+        prdId?: unknown;
+        sourceBranch?: unknown;
+      };
       try {
         body = await c.req.json();
       } catch (parseErr: unknown) {
@@ -2361,8 +2395,16 @@ export function registerApiRoutes(
       if (typeof body.message !== 'string' || !body.message) {
         return apiError(c, 400, 'message must be a non-empty string');
       }
+      if (body.prdId !== undefined && typeof body.prdId !== 'string') {
+        return apiError(c, 400, 'prdId must be a string when provided');
+      }
+      if (body.sourceBranch !== undefined && typeof body.sourceBranch !== 'string') {
+        return apiError(c, 400, 'sourceBranch must be a string when provided');
+      }
       conversationId = body.conversationId;
       message = body.message;
+      prdId = body.prdId?.trim() || undefined;
+      sourceBranch = body.sourceBranch?.trim() || undefined;
     }
 
     try {
@@ -2403,7 +2445,10 @@ export function registerApiRoutes(
         }
       }
 
-      const fullMessage = `/workflow run ${workflowName} ${message}`;
+      const fullMessage = buildWorkflowRunCommand(workflowName, message, {
+        prdId,
+        sourceBranch,
+      });
       const extraContext: Omit<HandleMessageContext, 'isolationHints'> =
         savedFiles.length > 0 ? { userId, attachedFiles: savedFiles } : { userId };
       const filesToCleanup = savedFiles.length > 0 ? { files: savedFiles, uploadDir } : undefined;
@@ -2513,7 +2558,9 @@ export function registerApiRoutes(
           `Cannot resume from web UI: the run's parent conversation is not a web conversation. Use \`archon workflow resume ${runId}\` from the CLI.`
         );
       }
-      const resumeMessage = `/workflow run ${run.workflow_name} ${run.user_message ?? ''}`.trim();
+      const resumeMessage = buildWorkflowRunCommand(run.workflow_name, run.user_message, {
+        resumeRunId: run.id,
+      });
       await dispatchToOrchestrator(parentConv.platform_conversation_id, resumeMessage);
       getLog().info(
         {

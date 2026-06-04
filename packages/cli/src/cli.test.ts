@@ -23,6 +23,9 @@ describe('CLI argument parsing', () => {
         from: { type: 'string' },
         'from-branch': { type: 'string' },
         'no-worktree': { type: 'boolean' },
+        resume: { type: 'boolean' },
+        'prd-id': { type: 'string' },
+        'source-branch': { type: 'string' },
         spawn: { type: 'boolean' },
         quiet: { type: 'boolean', short: 'q' },
         verbose: { type: 'boolean', short: 'v' },
@@ -150,6 +153,24 @@ describe('CLI argument parsing', () => {
       ]);
       expect(result.values.from).toBe('feature/primary');
       expect(result.values['from-branch']).toBe('feature/secondary');
+    });
+
+    it('should parse PRD identity flags for workflow run', () => {
+      const result = parseCliArgs([
+        'workflow',
+        'run',
+        'prd-to-pr-pi',
+        '--prd-id',
+        'PRD-0045',
+        '--source-branch',
+        'archon/source-prd-0045',
+        '--branch',
+        'feat/prd-0045-r2',
+        'Implement PRD-0045',
+      ]);
+      expect(result.values['prd-id']).toBe('PRD-0045');
+      expect(result.values['source-branch']).toBe('archon/source-prd-0045');
+      expect(result.values.branch).toBe('feat/prd-0045-r2');
     });
   });
 

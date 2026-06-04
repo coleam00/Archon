@@ -21,6 +21,7 @@ export * as isolationEnvDb from './isolation-environments';
 export * as workflowDb from './workflows';
 export * as workflowNodeSessionDb from './workflow-node-sessions';
 export * as userDb from './users';
+export * as prdExecutionLeaseDb from './prd-execution-leases';
 
 // Also export individual functions for direct imports
 export * from './conversations';
@@ -31,3 +32,4 @@ export * from './isolation-environments';
 export * from './workflows';
 export * from './workflow-node-sessions';
 export * from './users';
+export * from './prd-execution-leases';
