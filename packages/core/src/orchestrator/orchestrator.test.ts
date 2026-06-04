@@ -1477,6 +1477,7 @@ describe('orchestrator-agent handleMessage', () => {
       expect(mockCreateCodebase).toHaveBeenCalledWith({
         name: 'my-app',
         default_cwd: '/home/user/my-app',
+        default_branch: null,
         ai_assistant_type: 'claude',
       });
       expect(platform.sendMessage).toHaveBeenCalledWith(
