@@ -376,6 +376,10 @@ ALTER TABLE remote_agent_sessions
 ALTER TABLE remote_agent_codebases
   ADD COLUMN IF NOT EXISTS allow_env_keys BOOLEAN NOT NULL DEFAULT FALSE;
 
+-- From migration 023: default_branch on codebases (captured at clone/register time).
+ALTER TABLE remote_agent_codebases
+  ADD COLUMN IF NOT EXISTS default_branch TEXT;
+
 -- User identity foreign keys (nullable on the four primary tables).
 -- All FKs use ON DELETE SET NULL so future user deletion never cascades destructively.
 ALTER TABLE remote_agent_conversations

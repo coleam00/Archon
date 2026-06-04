@@ -31,6 +31,7 @@ const mockSyncWorkspace = mock(() =>
 );
 // Identity passthrough — strips branded type for test simplicity; empty-string guard not needed here
 const mockToRepoPath = mock((p: string) => p);
+const mockToBranchName = mock((b: string) => b);
 const mockGetOrCreateConversation = mock(() => Promise.resolve(null as unknown));
 const mockGetCodebase = mock(() => Promise.resolve(null as unknown));
 const mockExecuteWorkflow = mock(() => Promise.resolve());
@@ -205,6 +206,12 @@ mock.module('../utils/worktree-sync', () => ({
 mock.module('@archon/git', () => ({
   syncWorkspace: mockSyncWorkspace,
   toRepoPath: mockToRepoPath,
+  toBranchName: mockToBranchName,
+  // Stubs for post-message-reminder (loaded transitively by orchestrator-agent).
+  // Return null/0/false so the reminder short-circuits without emitting an event.
+  getCurrentBranch: mock(() => Promise.resolve(null)),
+  countCommitsAhead: mock(() => Promise.resolve(0)),
+  hasUncommittedChanges: mock(() => Promise.resolve(false)),
 }));
 
 mock.module('fs', () => ({
@@ -984,16 +991,18 @@ describe('discoverAllWorkflows — remote sync', () => {
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', 'What is the latest commit?');
 
-    // /repos/test-repo is NOT under ~/.archon/workspaces/ so resetAfterFetch=false
-    expect(mockSyncWorkspace).toHaveBeenCalledWith('/repos/test-repo', undefined, {
-      resetAfterFetch: false,
-    });
+    // Default mode is 'fast-forward' (non-destructive) for every chat tick now —
+    // managed vs. unmanaged distinction was removed (#1516). No options passed.
+    expect(mockSyncWorkspace).toHaveBeenCalledWith('/repos/test-repo', undefined);
     // Regression guard: orchestrator must resolve cwd through the ensure variant
     // so the workspaces dir is created before the AI provider spawn (issue #1528).
     expect(mockEnsureArchonWorkspacesPath).toHaveBeenCalled();
   });
 
-  test('passes resetAfterFetch=true for managed clones', async () => {
+  test('chat tick on managed clones is still non-destructive (no mode: reset)', async () => {
+    // Regression guard for #1516: chat-tick sync must never hard-reset source/,
+    // even for Archon-managed clones, because the AI may have written to source/
+    // in earlier turns within the same conversation.
     const conversation = makeConversation({ codebase_id: 'codebase-1' });
     const codebase = {
       ...makeCodebaseForSync(),
@@ -1005,11 +1014,24 @@ describe('discoverAllWorkflows — remote sync', () => {
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', 'What is the latest commit?');
 
-    expect(mockSyncWorkspace).toHaveBeenCalledWith(
-      '/home/test/.archon/workspaces/owner/repo/source',
-      undefined,
-      { resetAfterFetch: true }
-    );
+    // Either no third arg, or a third arg that is NOT { mode: 'reset' }.
+    const calls = mockSyncWorkspace.mock.calls;
+    expect(calls.length).toBeGreaterThan(0);
+    const lastCall = calls[calls.length - 1];
+    const opts = lastCall[2] as { mode?: string } | undefined;
+    expect(opts?.mode).not.toBe('reset');
+  });
+
+  test('passes stored default_branch from DB instead of auto-detecting', async () => {
+    const conversation = makeConversation({ codebase_id: 'codebase-1' });
+    const codebase = { ...makeCodebaseForSync(), default_branch: 'develop' };
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'What is the latest commit?');
+
+    expect(mockSyncWorkspace).toHaveBeenCalledWith('/repos/test-repo', 'develop');
   });
 
   test('proceeds without throwing when syncWorkspace rejects', async () => {
@@ -1024,9 +1046,7 @@ describe('discoverAllWorkflows — remote sync', () => {
     await expect(
       handleMessage(platform, 'conv-1', 'What is the latest commit?')
     ).resolves.toBeUndefined();
-    expect(mockSyncWorkspace).toHaveBeenCalledWith('/repos/test-repo', undefined, {
-      resetAfterFetch: false,
-    });
+    expect(mockSyncWorkspace).toHaveBeenCalledWith('/repos/test-repo', undefined);
   });
 
   test('does not call syncWorkspace when conversation has no codebase_id', async () => {

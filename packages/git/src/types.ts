@@ -36,6 +36,25 @@ export type GitError =
   | { code: 'no_space'; path: string }
   | { code: 'unknown'; message: string };
 
+/**
+ * Observed state of a workspace relative to its tracked remote branch.
+ *
+ * Reported only by `syncWorkspace(..., { mode: 'fast-forward' })`. In
+ * `'reset'` mode the working tree is overwritten so the post-sync state is
+ * always `'in_sync'` and the field is not set.
+ */
+export type WorkspaceSyncState =
+  /** HEAD === origin/<branch>, working tree clean */
+  | 'in_sync'
+  /** Working tree had uncommitted edits; no sync performed */
+  | 'dirty'
+  /** Strictly behind origin/<branch>; fast-forwarded if on target branch */
+  | 'behind'
+  /** Local has commits not on origin/<branch>; left alone */
+  | 'ahead'
+  /** Local and remote have independent commits; manual resolution required */
+  | 'diverged';
+
 /** Result of a workspace sync operation */
 export interface WorkspaceSyncResult {
   branch: BranchName;
@@ -46,6 +65,11 @@ export interface WorkspaceSyncResult {
   newHead: string;
   /** True if the working tree was updated (HEAD changed) */
   updated: boolean;
+  /**
+   * Observed state vs origin/<branch>. Populated only for `mode: 'fast-forward'`;
+   * `mode: 'reset'` callers don't need this signal and would always see `'in_sync'`.
+   */
+  state?: WorkspaceSyncState;
 }
 
 /** Info about a single worktree entry */

@@ -12,6 +12,12 @@ export const codebaseRowSchema = z.object({
   name: z.string(),
   repository_url: z.string().nullable(),
   default_cwd: z.string(),
+  /**
+   * Default remote branch (e.g. 'main', 'develop'). Captured at clone/register
+   * time; used as the chat-tick sync target without re-detecting on every message.
+   * Nullable for pre-existing rows and for repos without a remote.
+   */
+  default_branch: z.string().nullable().optional(),
   ai_assistant_type: z.string(),
   commands: z.record(z.string(), z.object({ path: z.string(), description: z.string() })),
   created_at: z.date(),

@@ -28,7 +28,7 @@ import { getAgentProvider, getProviderCapabilities } from '@archon/providers';
 import { buildManageRunTool } from './manage-run-tool';
 import { getArchonWorkspacesPath, ensureArchonWorkspacesPath } from '@archon/paths';
 import { syncArchonToWorktree } from '../utils/worktree-sync';
-import { syncWorkspace, toRepoPath } from '@archon/git';
+import { syncWorkspace, toBranchName, toRepoPath } from '@archon/git';
 import type { WorkspaceSyncResult } from '@archon/git';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { findWorkflow, resolveWorkflowName } from '@archon/workflows/router';
@@ -53,6 +53,7 @@ import { validateAndResolveIsolation, dispatchBackgroundWorkflow } from './orche
 import { IsolationBlockedError } from '@archon/isolation';
 import { buildOrchestratorSystemAppend, formatWorkflowContextSection } from './prompt-builder';
 import type { WorkflowResultContext } from './prompt-builder';
+import { reportUnpushedWorkInSource } from './post-message-reminder';
 import * as messageDb from '../db/messages';
 import * as workflowDb from '../db/workflows';
 import * as workflowEventDb from '../db/workflow-events';
@@ -603,21 +604,20 @@ async function discoverAllWorkflows(conversation: Conversation): Promise<Discove
       const codebase = await codebaseDb.getCodebase(conversation.codebase_id);
       if (codebase) {
         // Sync canonical source with remote before the AI reads codebase state.
-        // Only hard-reset for Archon-managed clones (under ~/.archon/workspaces/).
-        // Locally-registered repos get fetch-only to avoid destroying uncommitted work.
+        // Always non-destructive (mode: 'fast-forward'): if the working tree is dirty,
+        // local commits exist, or branches diverged, the workspace is left alone.
+        // The AI may have been writing to source/ in earlier turns; destroying that
+        // state here is what made the agent enter a redo loop (#1516).
         // Non-fatal: if fetch fails (network, no remote), proceed with local state.
         try {
-          const isManagedClone = codebase.default_cwd
-            .replace(/\\/g, '/')
-            .startsWith(getArchonWorkspacesPath().replace(/\\/g, '/'));
-          syncResult = await syncWorkspace(toRepoPath(codebase.default_cwd), undefined, {
-            resetAfterFetch: isManagedClone,
-          });
+          const storedBranch = codebase.default_branch
+            ? toBranchName(codebase.default_branch)
+            : undefined;
+          syncResult = await syncWorkspace(toRepoPath(codebase.default_cwd), storedBranch);
           getLog().debug(
             {
               codebaseId: codebase.id,
               repoPath: codebase.default_cwd,
-              isManagedClone,
               ...syncResult,
             },
             'workspace.sync_completed'
@@ -1131,6 +1131,24 @@ export async function handleMessage(
         requestOptions,
         userId
       );
+    }
+
+    // Direct-chat tick may have written to source/. If there is local-only state
+    // (uncommitted edits, unpushed commits), surface a one-line reminder so the
+    // user can push or commit + push before the next worktree creation or
+    // re-clone destroys that work. No-op when no codebase is attached.
+    if (conversation.codebase_id) {
+      try {
+        const codebase = await codebaseDb.getCodebase(conversation.codebase_id);
+        if (codebase) {
+          await reportUnpushedWorkInSource(conversationId, codebase, platform);
+        }
+      } catch (err) {
+        getLog().warn(
+          { err: err as Error, conversationId, codebaseId: conversation.codebase_id },
+          'orchestrator.post_message_reminder_lookup_failed'
+        );
+      }
     }
 
     getLog().debug({ conversationId }, 'orchestrator_message_completed');

@@ -6,7 +6,7 @@ import { access, rm } from 'fs/promises';
 import { join, basename, resolve } from 'path';
 import * as codebaseDb from '../db/codebases';
 import { sanitizeError } from '../utils/credential-sanitizer';
-import { execFileAsync } from '@archon/git';
+import { execFileAsync, getCurrentBranch, toRepoPath } from '@archon/git';
 import {
   expandTilde,
   getCommandFolderSearchPaths,
@@ -132,6 +132,16 @@ export interface RegisterResult {
 }
 
 /**
+ * Detect the currently checked-out branch at a freshly cloned/registered repo.
+ * Returns null for detached HEAD or unexpected errors — callers fall back to
+ * runtime auto-detection on first sync.
+ */
+async function detectDefaultBranch(targetPath: string): Promise<string | null> {
+  const branch = await getCurrentBranch(toRepoPath(targetPath));
+  return branch ?? null;
+}
+
+/**
  * Shared logic: register a repo at a given path in the DB and load commands.
  */
 async function registerRepoAtPath(
@@ -140,6 +150,7 @@ async function registerRepoAtPath(
   repositoryUrl: string | null
 ): Promise<RegisterResult> {
   const suggestedAssistant = await resolveDefaultAssistant(targetPath);
+  const detectedBranch = await detectDefaultBranch(targetPath);
 
   // Check if a codebase with this name already exists (dedup by project identity)
   const existing = await codebaseDb.findCodebaseByName(name);
@@ -149,13 +160,22 @@ async function registerRepoAtPath(
     const isExistingPathManaged = existing.default_cwd.includes('/.archon/workspaces/');
     const shouldUpdateCwd = isNewPathLocal && isExistingPathManaged;
 
-    const updates: { default_cwd?: string; repository_url?: string | null } = {};
+    const updates: {
+      default_cwd?: string;
+      repository_url?: string | null;
+      default_branch?: string | null;
+    } = {};
     if (shouldUpdateCwd) {
       updates.default_cwd = targetPath;
     }
     // Fill in repository_url if the existing record doesn't have one
     if (!existing.repository_url && repositoryUrl) {
       updates.repository_url = repositoryUrl;
+    }
+    // Backfill default_branch when missing — pre-existing rows are NULL until
+    // the first re-register/clone observes the branch.
+    if (!existing.default_branch && detectedBranch) {
+      updates.default_branch = detectedBranch;
     }
     if (Object.keys(updates).length > 0) {
       await codebaseDb.updateCodebase(existing.id, updates);
@@ -201,6 +221,7 @@ async function registerRepoAtPath(
     name,
     repository_url: repositoryUrl ?? undefined,
     default_cwd: targetPath,
+    default_branch: detectedBranch,
     ai_assistant_type: suggestedAssistant,
   });
 

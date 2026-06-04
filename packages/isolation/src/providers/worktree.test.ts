@@ -2258,9 +2258,9 @@ describe('WorktreeProvider', () => {
       await provider.create(baseRequest);
 
       // syncWorkspace called with undefined → triggers auto-detect via getDefaultBranch
-      // resetAfterFetch: false because test path is not a managed clone under ~/.archon/workspaces
+      // mode: 'fast-forward' because test path is not a managed clone under ~/.archon/workspaces
       expect(syncWorkspaceSpy).toHaveBeenCalledWith('/workspace/owner/repo', undefined, {
-        resetAfterFetch: false,
+        mode: 'fast-forward',
       });
     });
 
@@ -2280,7 +2280,7 @@ describe('WorktreeProvider', () => {
 
       // fromBranch is the start-point for the branch, not for sync — sync auto-detects
       expect(syncWorkspaceSpy).toHaveBeenCalledWith('/workspace/owner/repo', undefined, {
-        resetAfterFetch: false,
+        mode: 'fast-forward',
       });
     });
 
@@ -2299,7 +2299,7 @@ describe('WorktreeProvider', () => {
       await provider.create(request);
 
       expect(syncWorkspaceSpy).toHaveBeenCalledWith('/workspace/owner/repo', 'main', {
-        resetAfterFetch: false,
+        mode: 'fast-forward',
       });
     });
 
@@ -2318,7 +2318,7 @@ describe('WorktreeProvider', () => {
 
       // fromBranch is ignored for non-task types, so syncWorkspace gets undefined → auto-detect
       expect(syncWorkspaceSpy).toHaveBeenCalledWith('/workspace/owner/repo', undefined, {
-        resetAfterFetch: false,
+        mode: 'fast-forward',
       });
     });
 
@@ -2332,9 +2332,29 @@ describe('WorktreeProvider', () => {
       await provider.create(baseRequest);
 
       expect(syncWorkspaceSpy).toHaveBeenCalledWith('/workspace/owner/repo', 'develop', {
-        resetAfterFetch: false,
+        mode: 'fast-forward',
       });
       expect(getDefaultBranchSpy).not.toHaveBeenCalled();
+    });
+
+    test("uses mode: 'reset' for Archon-managed clones (worktree creation needs canonical=remote)", async () => {
+      // Managed clones live under ~/.archon/workspaces/ — the test harness sets
+      // TEST_ARCHON_HOME so any path under that prefix is "managed".
+      const managedRepoPath = join(TEST_ARCHON_HOME, 'workspaces', 'owner', 'repo', 'source');
+      const managedRequest: IsolationRequest = {
+        ...baseRequest,
+        canonicalRepoPath: managedRepoPath,
+      };
+      getCanonicalRepoPathSpy.mockImplementation(async () => managedRepoPath);
+      worktreeExistsSpy.mockResolvedValue(false);
+      const configLoader: RepoConfigLoader = async () => ({});
+      provider = new WorktreeProvider(configLoader);
+
+      await provider.create(managedRequest);
+
+      expect(syncWorkspaceSpy).toHaveBeenCalledWith(managedRepoPath, undefined, {
+        mode: 'reset',
+      });
     });
 
     test('throws when sync fails with network error', async () => {

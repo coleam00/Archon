@@ -1323,6 +1323,52 @@ branch refs/heads/feature/auth
     let execSpy: Mock<typeof git.execFileAsync>;
     let getDefaultBranchSpy: Mock<typeof git.getDefaultBranch>;
 
+    /**
+     * Helper: build an execFileAsync mock that maps git subcommand → stdout.
+     *
+     * The fast-forward path calls many independent git subcommands
+     * (`fetch`, `status`, `rev-parse`, `merge-base`, `symbolic-ref`, `merge`).
+     * Tests only care about a handful at a time, so the helper provides safe
+     * defaults (succeed, empty stdout) and lets callers override per command.
+     */
+    function setupExec(
+      handlers: Partial<{
+        fetch: string | Error;
+        status: string | Error;
+        revParseHead: string | Error;
+        revParseRemote: string | Error;
+        mergeBase: string | Error;
+        symbolicRef: string | Error;
+        merge: string | Error;
+        reset: string | Error;
+        revParseShortHead: string | Error;
+      }> = {}
+    ): void {
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        const has = (token: string): boolean => args.includes(token);
+        const respond = (value: string | Error | undefined, fallback: string) => {
+          if (value instanceof Error) throw value;
+          return { stdout: value ?? fallback, stderr: '' };
+        };
+
+        if (has('fetch')) return respond(handlers.fetch, '');
+        if (has('status') && has('--porcelain')) return respond(handlers.status, '');
+        if (has('symbolic-ref')) return respond(handlers.symbolicRef, 'main');
+        if (has('merge-base')) return respond(handlers.mergeBase, '');
+        if (has('merge') && has('--ff-only')) return respond(handlers.merge, '');
+        if (has('reset') && has('--hard')) return respond(handlers.reset, '');
+        if (has('rev-parse')) {
+          if (has('--short=8')) return respond(handlers.revParseShortHead, '');
+          // Differentiate HEAD vs origin/<branch> by argument position
+          const ref = args[args.length - 1];
+          if (ref === 'HEAD')
+            return respond(handlers.revParseHead, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+          return respond(handlers.revParseRemote, 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
+        }
+        return { stdout: '', stderr: '' };
+      });
+    }
+
     beforeEach(() => {
       execSpy = spyOn(git, 'execFileAsync');
       getDefaultBranchSpy = spyOn(git, 'getDefaultBranch');
@@ -1334,60 +1380,157 @@ branch refs/heads/feature/auth
       getDefaultBranchSpy.mockRestore();
     });
 
-    test('fetches origin branch and returns synced result', async () => {
-      execSpy.mockResolvedValue({ stdout: '', stderr: '' });
+    // -----------------------------------------------------------------------
+    // mode: 'reset' (destructive — used by worktree creation only)
+    // -----------------------------------------------------------------------
 
-      const result = await git.syncWorkspace('/workspace/repo', 'main');
+    test("mode: 'reset' hard-resets working tree to origin after fetch", async () => {
+      setupExec();
 
-      expect(result).toEqual({
-        branch: 'main',
-        synced: true,
-        previousHead: '',
-        newHead: '',
-        updated: false,
-      });
-
-      expect(execSpy).toHaveBeenCalledWith(
-        'git',
-        ['-C', '/workspace/repo', 'fetch', 'origin', 'main'],
-        expect.any(Object)
-      );
-    });
-
-    test('hard-resets working tree to origin after fetch', async () => {
-      execSpy.mockResolvedValue({ stdout: '', stderr: '' });
-
-      await git.syncWorkspace('/workspace/repo', 'main');
+      await git.syncWorkspace('/workspace/repo', 'main', { mode: 'reset' });
 
       const resetCalls = execSpy.mock.calls.filter((call: unknown[]) => {
         const args = call[1] as string[];
-        return args.includes('reset');
+        return args.includes('reset') && args.includes('--hard');
       });
-
       expect(resetCalls).toHaveLength(1);
       expect(resetCalls[0][1]).toEqual(['-C', '/workspace/repo', 'reset', '--hard', 'origin/main']);
     });
 
-    test('throws if reset fails after successful fetch', async () => {
-      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
-        if (args.includes('reset')) {
-          throw new Error('fatal: Could not reset index file');
-        }
-        return { stdout: '', stderr: '' };
-      });
+    test("mode: 'reset' throws if reset fails after successful fetch", async () => {
+      setupExec({ reset: new Error('fatal: Could not reset index file') });
 
-      await expect(git.syncWorkspace('/workspace/repo', 'main')).rejects.toThrow(
+      await expect(git.syncWorkspace('/workspace/repo', 'main', { mode: 'reset' })).rejects.toThrow(
         'Reset to origin/main failed'
       );
     });
 
-    test('throws error if fetch fails', async () => {
-      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
-        if (args.includes('fetch')) {
-          throw new Error('fatal: unable to access repository');
-        }
-        return { stdout: '', stderr: '' };
+    // -----------------------------------------------------------------------
+    // mode: 'fast-forward' (default — non-destructive)
+    // -----------------------------------------------------------------------
+
+    test("default mode is 'fast-forward': never runs git reset --hard", async () => {
+      setupExec({ revParseHead: 'same', revParseRemote: 'same' });
+
+      await git.syncWorkspace('/workspace/repo', 'main');
+
+      const hardResetCalls = execSpy.mock.calls.filter((call: unknown[]) => {
+        const args = call[1] as string[];
+        return args.includes('reset') && args.includes('--hard');
       });
+      expect(hardResetCalls).toHaveLength(0);
+    });
+
+    test("fast-forward reports state: 'dirty' and does not touch HEAD when uncommitted changes present", async () => {
+      setupExec({ status: 'M file.ts\n' });
+
+      const result = await git.syncWorkspace('/workspace/repo', 'main');
+
+      expect(result.state).toBe('dirty');
+      expect(result.updated).toBe(false);
+      // merge should never have been called
+      const mergeCalls = execSpy.mock.calls.filter((call: unknown[]) => {
+        const args = call[1] as string[];
+        return args.includes('merge') && args.includes('--ff-only');
+      });
+      expect(mergeCalls).toHaveLength(0);
+    });
+
+    test("fast-forward reports state: 'in_sync' when HEAD === origin/<branch>", async () => {
+      setupExec({ revParseHead: 'same\n', revParseRemote: 'same\n' });
+
+      const result = await git.syncWorkspace('/workspace/repo', 'main');
+
+      expect(result.state).toBe('in_sync');
+      expect(result.updated).toBe(false);
+    });
+
+    test("fast-forward reports state: 'ahead' when local has commits beyond origin (preserves local)", async () => {
+      // local !== remote, merge-base === remote → ahead
+      setupExec({
+        revParseHead: 'local-sha\n',
+        revParseRemote: 'remote-sha\n',
+        mergeBase: 'remote-sha\n',
+      });
+
+      const result = await git.syncWorkspace('/workspace/repo', 'main');
+
+      expect(result.state).toBe('ahead');
+      expect(result.updated).toBe(false);
+      // No HEAD movement
+      const mergeCalls = execSpy.mock.calls.filter((call: unknown[]) => {
+        const args = call[1] as string[];
+        return args.includes('merge') && args.includes('--ff-only');
+      });
+      expect(mergeCalls).toHaveLength(0);
+    });
+
+    test("fast-forward reports state: 'diverged' when local and remote have independent commits", async () => {
+      // local !== remote, merge-base !== either → diverged
+      setupExec({
+        revParseHead: 'local-sha\n',
+        revParseRemote: 'remote-sha\n',
+        mergeBase: 'older-sha\n',
+      });
+
+      const result = await git.syncWorkspace('/workspace/repo', 'main');
+
+      expect(result.state).toBe('diverged');
+      expect(result.updated).toBe(false);
+    });
+
+    test('fast-forward advances HEAD via merge --ff-only when behind on target branch', async () => {
+      // local !== remote, merge-base === local → behind. symbolic-ref returns target branch.
+      setupExec({
+        revParseHead: 'local-sha\n',
+        revParseRemote: 'remote-sha\n',
+        mergeBase: 'local-sha\n',
+        symbolicRef: 'main\n',
+      });
+
+      const result = await git.syncWorkspace('/workspace/repo', 'main');
+
+      expect(result.state).toBe('behind');
+      const mergeCalls = execSpy.mock.calls.filter((call: unknown[]) => {
+        const args = call[1] as string[];
+        return args.includes('merge') && args.includes('--ff-only');
+      });
+      expect(mergeCalls).toHaveLength(1);
+      expect(mergeCalls[0][1]).toEqual([
+        '-C',
+        '/workspace/repo',
+        'merge',
+        '--ff-only',
+        'origin/main',
+      ]);
+    });
+
+    test('fast-forward does NOT move HEAD when behind but checked out on a different branch', async () => {
+      // local !== remote, merge-base === local → behind. Current branch is 'feature', not 'main'.
+      setupExec({
+        revParseHead: 'local-sha\n',
+        revParseRemote: 'remote-sha\n',
+        mergeBase: 'local-sha\n',
+        symbolicRef: 'feature\n',
+      });
+
+      const result = await git.syncWorkspace('/workspace/repo', 'main');
+
+      expect(result.state).toBe('behind');
+      expect(result.updated).toBe(false);
+      const mergeCalls = execSpy.mock.calls.filter((call: unknown[]) => {
+        const args = call[1] as string[];
+        return args.includes('merge') && args.includes('--ff-only');
+      });
+      expect(mergeCalls).toHaveLength(0);
+    });
+
+    // -----------------------------------------------------------------------
+    // Shared behavior (both modes)
+    // -----------------------------------------------------------------------
+
+    test('throws error if fetch fails', async () => {
+      setupExec({ fetch: new Error('fatal: unable to access repository') });
 
       await expect(git.syncWorkspace('/workspace/repo', 'main')).rejects.toThrow(
         'unable to access repository'
@@ -1395,7 +1538,7 @@ branch refs/heads/feature/auth
     });
 
     test('passes correct timeout value to fetch command', async () => {
-      execSpy.mockResolvedValue({ stdout: '', stderr: '' });
+      setupExec({ revParseHead: 'same\n', revParseRemote: 'same\n' });
 
       await git.syncWorkspace('/workspace/repo', 'main');
 
@@ -1407,12 +1550,7 @@ branch refs/heads/feature/auth
     });
 
     test('includes operation context in fetch error message', async () => {
-      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
-        if (args.includes('fetch')) {
-          throw new Error('fatal: network unreachable');
-        }
-        return { stdout: '', stderr: '' };
-      });
+      setupExec({ fetch: new Error('fatal: network unreachable') });
 
       await expect(git.syncWorkspace('/workspace/repo', 'main')).rejects.toThrow(
         'Sync fetch from origin/main failed'
@@ -1420,28 +1558,17 @@ branch refs/heads/feature/auth
     });
 
     test('derives branch from getDefaultBranch when override not provided', async () => {
-      execSpy.mockResolvedValue({ stdout: '', stderr: '' });
       getDefaultBranchSpy.mockResolvedValue('develop');
+      setupExec({ revParseHead: 'same\n', revParseRemote: 'same\n' });
 
       const result = await git.syncWorkspace('/workspace/repo');
 
-      expect(result).toEqual({
-        branch: 'develop',
-        synced: true,
-        previousHead: '',
-        newHead: '',
-        updated: false,
-      });
+      expect(result.branch).toBe('develop');
       expect(getDefaultBranchSpy).toHaveBeenCalledWith('/workspace/repo');
     });
 
     test('throws actionable error when configured branch not found on remote', async () => {
-      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
-        if (args.includes('fetch')) {
-          throw new Error("fatal: couldn't find remote ref does-not-exist");
-        }
-        return { stdout: '', stderr: '' };
-      });
+      setupExec({ fetch: new Error("fatal: couldn't find remote ref does-not-exist") });
 
       await expect(git.syncWorkspace('/workspace/repo', 'does-not-exist')).rejects.toThrow(
         "Configured base branch 'does-not-exist' not found on remote"
@@ -1452,48 +1579,13 @@ branch refs/heads/feature/auth
     });
 
     test('throws generic error when auto-detected branch not found (not actionable)', async () => {
-      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
-        if (args.includes('fetch')) {
-          throw new Error("fatal: couldn't find remote ref main");
-        }
-        return { stdout: '', stderr: '' };
-      });
+      setupExec({ fetch: new Error("fatal: couldn't find remote ref main") });
       getDefaultBranchSpy.mockResolvedValue('main');
 
       await expect(git.syncWorkspace('/workspace/repo')).rejects.toThrow(
         'Sync fetch from origin/main failed'
       );
       await expect(git.syncWorkspace('/workspace/repo')).rejects.not.toThrow('worktree.baseBranch');
-    });
-
-    test('skips reset when resetAfterFetch is false (fetch-only mode)', async () => {
-      execSpy.mockResolvedValue({ stdout: '', stderr: '' });
-
-      const result = await git.syncWorkspace('/workspace/repo', 'main', {
-        resetAfterFetch: false,
-      });
-
-      expect(result).toEqual({
-        branch: 'main',
-        synced: true,
-        previousHead: '',
-        newHead: '',
-        updated: false,
-      });
-
-      // Fetch should still have been called
-      const fetchCalls = execSpy.mock.calls.filter((call: unknown[]) => {
-        const args = call[1] as string[];
-        return args.includes('fetch');
-      });
-      expect(fetchCalls).toHaveLength(1);
-
-      // Reset should NOT have been called
-      const resetCalls = execSpy.mock.calls.filter((call: unknown[]) => {
-        const args = call[1] as string[];
-        return args.includes('reset');
-      });
-      expect(resetCalls).toHaveLength(0);
     });
   });
 

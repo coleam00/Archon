@@ -6,6 +6,7 @@ export type {
   GitResult,
   GitError,
   WorkspaceSyncResult,
+  WorkspaceSyncState,
   WorktreeInfo,
 } from './types';
 export { toRepoPath, toBranchName, toWorktreePath } from './types';
@@ -31,6 +32,8 @@ export type { WorktreeLayout, WorktreeBaseOverride } from './worktree';
 // Branch operations
 export {
   getDefaultBranch,
+  getCurrentBranch,
+  countCommitsAhead,
   checkout,
   hasUncommittedChanges,
   commitAllChanges,
