@@ -23,6 +23,15 @@ const STALENESS_MS = 60 * 60 * 1000; // 1 hour
 const FETCH_TIMEOUT_MS = 3000; // 3 seconds
 const GITHUB_API_URL = 'https://api.github.com/repos/coleam00/Archon/releases/latest';
 
+export function isForkBuildVersion(version: string): boolean {
+  return (
+    version.includes('-aisrv.') ||
+    version.includes('-aisrv-') ||
+    version.endsWith('-aisrv') ||
+    version.includes('+aisrv.')
+  );
+}
+
 function getCachePath(): string {
   return join(getArchonHome(), CACHE_FILE);
 }
@@ -92,6 +101,8 @@ export function parseLatestRelease(json: unknown): { version: string; url: strin
  * Only call when BUNDLED_IS_BINARY is true.
  */
 export async function checkForUpdate(currentVersion: string): Promise<UpdateCheckResult | null> {
+  if (isForkBuildVersion(currentVersion)) return null;
+
   try {
     // Try cache first
     const cached = readCache();
@@ -141,6 +152,8 @@ export async function checkForUpdate(currentVersion: string): Promise<UpdateChec
  * Returns null for stale or corrupt cache entries.
  */
 export function getCachedUpdateCheck(currentVersion: string): UpdateCheckResult | null {
+  if (isForkBuildVersion(currentVersion)) return null;
+
   const cached = readCache();
   if (!cached) return null;
   return {
