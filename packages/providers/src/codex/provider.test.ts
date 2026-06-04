@@ -1569,6 +1569,24 @@ describe('CodexProvider', () => {
     });
 
     describe('structured output normalization', () => {
+      const mockAgentMessagePayloads = (...payloads: Record<string, unknown>[]): void => {
+        mockRunStreamed.mockResolvedValueOnce({
+          events: (async function* () {
+            for (const [index, payload] of payloads.entries()) {
+              yield {
+                type: 'item.completed',
+                item: {
+                  type: 'agent_message',
+                  id: `msg-${String(index + 1)}`,
+                  text: JSON.stringify(payload),
+                },
+              };
+            }
+            yield { type: 'turn.completed', usage: defaultUsage };
+          })(),
+        });
+      };
+
       test('populates structuredOutput on result when outputFormat is set and text is valid JSON', async () => {
         const jsonPayload = { status: 'ok', count: 42 };
         mockRunStreamed.mockResolvedValueOnce({
@@ -1598,19 +1616,7 @@ describe('CodexProvider', () => {
       test('uses the latest agent_message for structuredOutput when outputFormat is set', async () => {
         const firstPayload = { status: 'draft', count: 1 };
         const finalPayload = { status: 'ok', count: 42 };
-        mockRunStreamed.mockResolvedValueOnce({
-          events: (async function* () {
-            yield {
-              type: 'item.completed',
-              item: { type: 'agent_message', id: 'msg-1', text: JSON.stringify(firstPayload) },
-            };
-            yield {
-              type: 'item.completed',
-              item: { type: 'agent_message', id: 'msg-2', text: JSON.stringify(finalPayload) },
-            };
-            yield { type: 'turn.completed', usage: defaultUsage };
-          })(),
-        });
+        mockAgentMessagePayloads(firstPayload, finalPayload);
 
         const chunks = [];
         for await (const chunk of client.sendQuery('test', '/tmp', undefined, {
@@ -1708,19 +1714,7 @@ describe('CodexProvider', () => {
       test('uses the latest agent_message for structuredOutput from nodeConfig.output_format', async () => {
         const firstPayload = { key: 'draft' };
         const finalPayload = { key: 'value' };
-        mockRunStreamed.mockResolvedValueOnce({
-          events: (async function* () {
-            yield {
-              type: 'item.completed',
-              item: { type: 'agent_message', id: 'msg-1', text: JSON.stringify(firstPayload) },
-            };
-            yield {
-              type: 'item.completed',
-              item: { type: 'agent_message', id: 'msg-2', text: JSON.stringify(finalPayload) },
-            };
-            yield { type: 'turn.completed', usage: defaultUsage };
-          })(),
-        });
+        mockAgentMessagePayloads(firstPayload, finalPayload);
 
         const chunks = [];
         for await (const chunk of client.sendQuery('test', '/tmp', undefined, {
