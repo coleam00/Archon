@@ -127,11 +127,7 @@ export function buildAiProfile(
     }
   }
 
-  const layers: readonly (RawAliasesConfig | undefined)[] = [
-    options.globalAliases,
-    options.repoAliases,
-  ];
-  for (const layer of layers) {
+  for (const layer of [options.globalAliases, options.repoAliases]) {
     if (!layer) continue;
     for (const [name, entry] of Object.entries(layer)) {
       assertNotReserved(name);

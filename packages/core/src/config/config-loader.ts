@@ -65,8 +65,8 @@ function mergeAliases(
   base: RawAliasesConfig | undefined,
   overrides: RawAliasesConfig | undefined
 ): RawAliasesConfig | undefined {
-  if (!overrides && !base) return undefined;
-  return { ...(base ?? {}), ...(overrides ?? {}) };
+  if (!base && !overrides) return undefined;
+  return { ...base, ...overrides };
 }
 
 function mergeAssistantDefaults(
