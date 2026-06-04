@@ -264,6 +264,38 @@ function renderResult(r: CheckResult): string {
   return `${icon} ${r.label}: ${r.message}`;
 }
 
+export async function checkOmpModelResolution(env: NodeJS.ProcessEnv): Promise<CheckResult> {
+  const label = 'OMP model resolution';
+  try {
+    const { loadConfig } = await import('@archon/core/config/config-loader');
+    const cwd = process.cwd();
+    const config = await loadConfig(cwd);
+    const assistant = config.assistant ?? env.DEFAULT_AI_ASSISTANT;
+    if (assistant !== 'omp') {
+      return { label, status: 'skip', message: 'default assistant is not omp' };
+    }
+    const ompAssistant = config.assistants.omp as { model?: string } | undefined;
+    const modelPath = ompAssistant?.model ?? env.OMP_MODEL;
+    if (!modelPath || modelPath.trim().length === 0) {
+      return { label, status: 'skip', message: 'no omp model configured' };
+    }
+    const { checkModelResolution } =
+      await import('@archon/providers/community/omp/model-preflight');
+    const result = await checkModelResolution(modelPath, cwd);
+    if (result.ok) {
+      const ms = result.latencyMs !== undefined ? ` (${String(result.latencyMs)}ms)` : '';
+      return { label, status: 'pass', message: `${modelPath} reachable${ms}` };
+    }
+    return { label, status: 'fail', message: `${modelPath}: ${result.error ?? 'probe failed'}` };
+  } catch (err) {
+    return {
+      label,
+      status: 'fail',
+      message: `preflight error: ${(err as Error).message}`,
+    };
+  }
+}
+
 export async function doctorCommand(
   // Injected so tests can drive the exit-code contract and the
   // Promise.allSettled rejection branch with synthetic checks.
@@ -284,6 +316,7 @@ export async function doctorCommand(
         checkBundledDefaults(),
         checkSlack(env),
         checkTelegram(env),
+        checkOmpModelResolution(env),
       ];
 
   // Promise.allSettled so one unexpected rejection doesn't skip remaining checks.

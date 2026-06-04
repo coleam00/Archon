@@ -31,6 +31,7 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 import { isScriptNode } from './schemas';
+import { validateOmpModelLiveness } from './model-preflight';
 import type { WorkflowDefinition, DagNode } from './schemas';
 import type { ScriptRuntime } from './script-discovery';
 import { discoverScriptsForCwd } from './script-discovery';
@@ -529,6 +530,9 @@ export async function validateWorkflowResources(
       }
     }
   }
+
+  const modelIssues = await validateOmpModelLiveness(workflow, cwd, defaultProvider, undefined);
+  issues.push(...modelIssues);
 
   return issues;
 }

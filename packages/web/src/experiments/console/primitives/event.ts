@@ -54,6 +54,10 @@ export interface NodeTransitionEvent extends RunEventBase {
   skipReason: string | null;
   /** Only populated for `skipped` — the evaluated expression that gated it. */
   skipExpr: string | null;
+  failureError?: string | null;
+  failureModel?: string | null;
+  failureProvider?: string | null;
+  failureRetryCount?: number | null;
 }
 
 export interface ApprovalEvent extends RunEventBase {
@@ -148,6 +152,10 @@ export function toRunEvent(raw: RawWorkflowEvent): RunEvent {
       durationMs: readNumberOrNull(data, 'duration'),
       skipReason: transition === 'skipped' ? readStringOrNull(data, 'reason') : null,
       skipExpr: transition === 'skipped' ? readStringOrNull(data, 'expr') : null,
+      failureError: transition === 'failed' ? readStringOrNull(data, 'error') : null,
+      failureModel: transition === 'failed' ? readStringOrNull(data, 'model') : null,
+      failureProvider: transition === 'failed' ? readStringOrNull(data, 'provider') : null,
+      failureRetryCount: transition === 'failed' ? readNumberOrNull(data, 'retry_count') : null,
     };
   }
 

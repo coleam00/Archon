@@ -118,6 +118,10 @@ export interface DagNodeEvent extends BaseSSEEvent {
   status: WorkflowStepStatus;
   duration?: number;
   error?: string;
+  model?: string;
+  provider?: string;
+  stderr?: string;
+  retry_count?: number;
   reason?: 'when_condition' | 'trigger_rule';
 }
 
@@ -246,6 +250,10 @@ export interface DagNodeState {
   status: WorkflowStepStatus;
   duration?: number;
   error?: string;
+  model?: string;
+  provider?: string;
+  stderr?: string;
+  retry_count?: number;
   reason?: 'when_condition' | 'trigger_rule';
   currentIteration?: number;
   maxIterations?: number;

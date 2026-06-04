@@ -81,6 +81,33 @@ function writeView(v: DetailView): void {
   }
 }
 
+function NodeFailuresPanel({ run }: { run: Run }): ReactElement | null {
+  const meta = run.metadata;
+  const raw = meta?.node_failures;
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  return (
+    <div className="border-b border-border-subtle bg-surface-elevated px-4 py-2 text-xs">
+      <div className="font-medium text-text-secondary mb-1">Node failures</div>
+      <ul className="space-y-1 font-mono text-text-primary">
+        {raw.map((item, i) => {
+          const row = item as Record<string, unknown>;
+          const node = typeof row.node === 'string' ? row.node : '?';
+          const err = typeof row.error === 'string' ? row.error : 'unknown';
+          const model = typeof row.model === 'string' ? row.model : null;
+          const retries = typeof row.retry_count === 'number' ? row.retry_count : null;
+          return (
+            <li key={`${node}-${String(i)}`} className="truncate" title={err}>
+              <span className="text-status-error">✗ {node}</span>
+              {model ? ` (${model})` : ''}
+              {retries !== null ? ` [retries=${String(retries)}]` : ''}: {err}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
 export function RunDetailPage(): ReactElement {
   const { projectId, runId } = useParams<{ projectId: string; runId: string }>();
   const navigate = useNavigate();
@@ -324,6 +351,7 @@ export function RunDetailPage(): ReactElement {
     <StreamContextProvider value={{ runStartedAt: run.startedAt }}>
       <section className="flex h-full flex-col">
         <RunDetailHeader run={run} projectId={projectId} projectName={project?.name ?? projectId} />
+        <NodeFailuresPanel run={run} />
 
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           {view === 'log' ? (

@@ -30,6 +30,7 @@ export interface Run {
   currentNode?: string | null;
   lastTool?: string | null;
   approval?: { nodeId: string; message: string } | null;
+  metadata?: Record<string, unknown>;
 }
 
 // Server shapes we read from. These track the real server schema loosely —
@@ -125,5 +126,6 @@ export function toRun(raw: RawWorkflowRun): Run {
     currentNode: raw.current_step_name ?? null,
     lastTool: null,
     approval: parsedApproval,
+    metadata: raw.metadata,
   };
 }

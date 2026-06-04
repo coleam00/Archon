@@ -78,12 +78,12 @@ export class OmpProvider implements IAgentProvider {
 
     const [
       omp,
-      { bridgeSession },
+      { bridgeSessionWithRetry },
       { resolveOmpThinkingLevel, resolveOmpSkills },
       { resolveOmpSession },
     ] = await Promise.all([
       import('@oh-my-pi/pi-coding-agent'),
-      import('./event-bridge'),
+      import('./retry'),
       import('./options-translator'),
       import('./session-resolver'),
     ]);
@@ -233,7 +233,7 @@ export class OmpProvider implements IAgentProvider {
       : prompt;
 
     try {
-      yield* bridgeSession(
+      yield* bridgeSessionWithRetry(
         session,
         effectivePrompt,
         requestOptions?.abortSignal,

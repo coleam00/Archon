@@ -135,6 +135,8 @@ export const dagNodeBaseSchema = z.object({
   when: z.string().optional(),
   trigger_rule: triggerRuleSchema.optional(),
   model: z.string().optional(),
+  /** Full provider/model path to use when primary model fails or breaker is open. */
+  fallback: z.string().min(1).optional(),
   provider: z.string().trim().min(1).optional(),
   context: z.enum(['fresh', 'shared']).optional(),
   output_format: z.record(z.unknown()).optional(),
@@ -567,6 +569,7 @@ export const dagNodeSchema = dagNodeBaseSchema
       ...(data.thinking !== undefined ? { thinking: data.thinking } : {}),
       ...(data.maxBudgetUsd !== undefined ? { maxBudgetUsd: data.maxBudgetUsd } : {}),
       ...(data.systemPrompt !== undefined ? { systemPrompt: data.systemPrompt } : {}),
+      ...(data.fallback !== undefined ? { fallback: data.fallback } : {}),
       ...(data.fallbackModel !== undefined ? { fallbackModel: data.fallbackModel } : {}),
       ...(data.betas !== undefined ? { betas: data.betas } : {}),
       ...(data.sandbox !== undefined ? { sandbox: data.sandbox } : {}),

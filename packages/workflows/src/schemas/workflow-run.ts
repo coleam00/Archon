@@ -2,6 +2,7 @@
  * Zod schemas for workflow run state types.
  */
 import { z } from '@hono/zod-openapi';
+import { nodeFailureDetailSchema } from './node-failure';
 
 // ---------------------------------------------------------------------------
 // WorkflowRunStatus
@@ -53,6 +54,13 @@ export const nodeStateSchema = z.enum(['pending', 'running', 'completed', 'faile
 
 export type NodeState = z.infer<typeof nodeStateSchema>;
 
+export {
+  nodeFailureDetailSchema,
+  readNodeFailuresFromMetadata,
+  WORKFLOW_RUN_NODE_FAILURES_KEY,
+} from './node-failure';
+export type { NodeFailureDetail } from './node-failure';
+
 // ---------------------------------------------------------------------------
 // NodeOutput
 // ---------------------------------------------------------------------------
@@ -80,6 +88,7 @@ export const nodeOutputSchema = z.discriminatedUnion('state', [
     sessionId: z.string().optional(),
     error: z.string(),
     structuredOutput: z.unknown().optional(),
+    failure: nodeFailureDetailSchema.optional(),
   }),
   z.object({
     state: z.enum(['pending', 'skipped']),

@@ -96,6 +96,9 @@ export {
   TERMINAL_WORKFLOW_STATUSES,
   RESUMABLE_WORKFLOW_STATUSES,
   isApprovalContext,
+  nodeFailureDetailSchema,
+  readNodeFailuresFromMetadata,
+  WORKFLOW_RUN_NODE_FAILURES_KEY,
 } from './workflow-run';
 export type {
   WorkflowRunStatus,
@@ -105,6 +108,7 @@ export type {
   WorkflowRun,
   ArtifactType,
   ApprovalContext,
+  NodeFailureDetail,
 } from './workflow-run';
 
 // Result types (non-schema hand-written types)

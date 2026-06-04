@@ -53,6 +53,8 @@ import {
 import { formatToolCall } from './utils/tool-formatter';
 import { createLogger } from '@archon/paths';
 import { getWorkflowEventEmitter } from './event-emitter';
+import { buildNodeFailureDetail, attachFailureToOutput, recordNodeFailure } from './node-failure';
+import { RunModelCircuitBreaker, circuitBreakerOpenMessage } from './model-circuit-breaker';
 import { evaluateCondition } from './condition-evaluator';
 import {
   logNodeStart,
@@ -2591,6 +2593,7 @@ export async function executeDagWorkflow(
   };
   const layers = buildTopologicalLayers(workflow.nodes);
   const nodeOutputs = new Map<string, NodeOutput>();
+  const modelCircuitBreaker = new RunModelCircuitBreaker();
 
   // Pre-populate nodeOutputs from prior run so already-completed nodes are
   // treated as done for trigger-rule and $nodeId.output substitution purposes.
@@ -2963,7 +2966,11 @@ export async function executeDagWorkflow(
           }
 
           // 4. Resolve per-node provider/model/options
-          const { provider, options: nodeOptions } = await resolveNodeProviderAndModel(
+          const {
+            provider,
+            model: resolvedModel,
+            options: nodeOptions,
+          } = await resolveNodeProviderAndModel(
             node,
             workflowProvider,
             workflowModel,
@@ -2975,21 +2982,60 @@ export async function executeDagWorkflow(
             workflowLevelOptions
           );
 
+          const primaryModel = nodeOptions?.model ?? resolvedModel ?? node.model ?? workflowModel;
+          const nodeFallback =
+            'fallback' in node && typeof node.fallback === 'string' ? node.fallback : undefined;
+          let activeOptions = nodeOptions;
+          let activeModel = primaryModel;
+          let usedFallback = false;
+
+          if (primaryModel && modelCircuitBreaker.isOpen(provider, primaryModel)) {
+            if (nodeFallback) {
+              activeModel = nodeFallback;
+              activeOptions = { ...nodeOptions, model: nodeFallback };
+              usedFallback = true;
+              await safeSendMessage(
+                platform,
+                conversationId,
+                `⚡ Node \`${node.id}\`: circuit breaker open for \`${primaryModel}\` — routing to fallback \`${nodeFallback}\`.`,
+                { workflowId: workflowRun.id, nodeName: node.id }
+              );
+            } else {
+              const breakerMsg = circuitBreakerOpenMessage(provider, primaryModel);
+              const detail = buildNodeFailureDetail({
+                nodeId: node.id,
+                error: breakerMsg,
+                model: primaryModel,
+                provider,
+                retryCount: 0,
+                circuitBreaker: true,
+              });
+              await recordNodeFailure(deps, workflowRun, detail, node.command ?? node.id);
+              return {
+                nodeId: node.id,
+                output: attachFailureToOutput(
+                  { state: 'failed' as const, output: '', error: breakerMsg },
+                  detail
+                ),
+              };
+            }
+          }
+
           // 5. Determine session — parallel or context:fresh → always fresh
-          // Parallel layers always get fresh sessions; explicit 'fresh' context also forces it.
-          // 'shared' forces continuation. Default: fresh for parallel, inherited for sequential.
           const isFresh = isParallelLayer || node.context === 'fresh';
           const resumeSessionId = isFresh ? undefined : lastSequentialSessionId;
 
-          // 6. Execute with retry for transient failures
+          // 6. Execute with retry for transient failures (+ optional fallback model)
           const retryConfig = getEffectiveNodeRetryConfig(node);
           let output: NodeExecutionResult = {
             state: 'failed',
             output: '',
             error: 'Node did not execute',
           };
+          let lastAttempt = 0;
 
           for (let attempt = 0; attempt <= retryConfig.maxRetries; attempt++) {
+            lastAttempt = attempt;
             output = await executeNodeInternal(
               deps,
               platform,
@@ -2998,14 +3044,12 @@ export async function executeDagWorkflow(
               workflowRun,
               node,
               provider,
-              nodeOptions,
+              activeOptions,
               artifactsDir,
               logDir,
               baseBranch,
               docsDir,
               nodeOutputs,
-              // Always pass the prior session ID — forkSession:true in executeNodeInternal
-              // ensures the source is never mutated, so retries can safely resume from it.
               resumeSessionId,
               configuredCommandFolder,
               issueContext
@@ -3013,8 +3057,19 @@ export async function executeDagWorkflow(
 
             if (output.state !== 'failed') break;
 
-            // Check if retryable.
-            // FATAL errors (auth, permissions, credit balance) are never retried even when on_error:all.
+            if (!usedFallback && nodeFallback && activeModel === primaryModel) {
+              activeModel = nodeFallback;
+              activeOptions = { ...nodeOptions, model: nodeFallback };
+              usedFallback = true;
+              await safeSendMessage(
+                platform,
+                conversationId,
+                `⚡ Node \`${node.id}\`: primary model failed — trying fallback \`${nodeFallback}\`.`,
+                { workflowId: workflowRun.id, nodeName: node.id }
+              );
+              continue;
+            }
+
             const isFatal = output.error
               ? classifyError(new Error(output.error)) === 'FATAL'
               : false;
@@ -3047,6 +3102,22 @@ export async function executeDagWorkflow(
             );
 
             await new Promise(resolve => setTimeout(resolve, delayMs));
+          }
+
+          if (output.state === 'failed') {
+            if (primaryModel) {
+              modelCircuitBreaker.recordFailure(provider, primaryModel);
+            }
+            const detail = buildNodeFailureDetail({
+              nodeId: node.id,
+              error: output.error ?? 'Unknown error',
+              model: activeModel,
+              provider,
+              retryCount: lastAttempt,
+              ...(usedFallback && activeModel ? { fallbackModel: activeModel } : {}),
+            });
+            output = attachFailureToOutput(output, detail);
+            await recordNodeFailure(deps, workflowRun, detail, node.command ?? node.id);
           }
 
           return { nodeId: node.id, output };

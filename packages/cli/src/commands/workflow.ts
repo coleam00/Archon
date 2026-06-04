@@ -866,6 +866,10 @@ interface NodeSummary {
   durationMs?: number;
   outputPreview?: string;
   error?: string;
+  model?: string;
+  provider?: string;
+  stderr?: string;
+  retry_count?: number;
 }
 
 /**
@@ -907,11 +911,16 @@ function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
       case 'node_failed': {
         const started = startTimes.get(nodeId);
         const endTime = new Date(event.created_at).getTime();
+        const data = event.data;
         summaries.set(nodeId, {
           nodeId,
           state: 'failed',
           durationMs: started !== undefined ? endTime - started : undefined,
-          error: typeof event.data.error === 'string' ? event.data.error : 'Unknown error',
+          error: typeof data.error === 'string' ? data.error : 'Unknown error',
+          model: typeof data.model === 'string' ? data.model : undefined,
+          provider: typeof data.provider === 'string' ? data.provider : undefined,
+          stderr: typeof data.stderr === 'string' ? data.stderr : undefined,
+          retry_count: typeof data.retry_count === 'number' ? data.retry_count : undefined,
         });
         break;
       }
@@ -995,6 +1004,17 @@ export async function workflowStatusCommand(json?: boolean, verbose?: boolean): 
           }
           if (node.error !== undefined) {
             console.log(`        Error:  ${node.error}`);
+          }
+          if (node.model !== undefined || node.provider !== undefined) {
+            console.log(
+              `        Model:  ${node.provider ?? '?'}${node.model ? '/' + node.model : ''}`
+            );
+          }
+          if (node.retry_count !== undefined) {
+            console.log(`        Retries: ${String(node.retry_count)}`);
+          }
+          if (node.stderr !== undefined) {
+            console.log(`        Stderr: ${node.stderr.slice(0, 200)}`);
           }
         }
       }

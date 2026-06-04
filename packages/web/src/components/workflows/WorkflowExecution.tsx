@@ -444,8 +444,16 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
           return `[${ts}] Node started: ${e.step_name ?? 'node'}`;
         case 'node_completed':
           return `[${ts}] Node completed: ${e.step_name ?? 'node'}`;
-        case 'node_failed':
-          return `[${ts}] Node failed: ${e.step_name ?? 'node'}: ${(e.data.error as string | undefined) ?? 'Unknown error'}`;
+        case 'node_failed': {
+          const d = e.data;
+          const model =
+            typeof d.model === 'string'
+              ? ` model=${typeof d.provider === 'string' ? d.provider + '/' : ''}${d.model}`
+              : '';
+          const retries =
+            typeof d.retry_count === 'number' ? ` retries=${String(d.retry_count)}` : '';
+          return `[${ts}] Node failed: ${e.step_name ?? 'node'}: ${(d.error as string | undefined) ?? 'Unknown error'}${model}${retries}`;
+        }
         case 'node_skipped':
           return `[${ts}] Node skipped: ${e.step_name ?? 'node'}`;
         default:
