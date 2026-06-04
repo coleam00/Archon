@@ -22,6 +22,7 @@ import { getWorkflowEventEmitter } from './event-emitter';
 import { isRegisteredProvider, getRegisteredProviders } from '@archon/providers';
 import { classifyError, safeSendMessage, type SendMessageContext } from './executor-shared';
 import { resolveGithubTokenOverrides } from './utils/github-token-policy';
+import { buildAiProfile, isLiteralSpec, resolveModelSpec } from './model-validation';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -373,11 +374,39 @@ export async function executeWorkflow(
 
   const docsDir = config.docsPath ?? 'docs/';
 
-  // Resolve provider and model once (used by all nodes).
-  // Provider is explicit: node.provider ?? workflow.provider ?? config.assistant.
-  // Model strings pass through to the SDK as-is — the SDK validates at request time.
-  const resolvedProvider: string = workflow.provider ?? config.assistant;
-  const providerSource = workflow.provider ? 'workflow definition' : 'config';
+  const aiProfile = buildAiProfile(config.assistant, {
+    repoTiers: config.tiers,
+    repoAliases: config.aliases,
+  });
+
+  // Resolve provider and model once (used by all nodes). Literal model strings
+  // keep the existing workflow/provider/config chain; tier and @alias refs use
+  // the resolved preset provider/model so bundled workflows are portable.
+  let resolvedProvider: string = workflow.provider ?? config.assistant;
+  let resolvedModel: string | undefined;
+  let providerSource = workflow.provider ? 'workflow definition' : 'config';
+  if (workflow.model) {
+    const workflowModelSpec = resolveModelSpec(aiProfile, workflow.model);
+    if (isLiteralSpec(workflowModelSpec)) {
+      resolvedModel = workflowModelSpec.literal;
+    } else {
+      if (workflow.provider && workflow.provider !== workflowModelSpec.provider) {
+        getLog().warn(
+          {
+            workflowName: workflow.name,
+            configuredProvider: workflow.provider,
+            resolvedProvider: workflowModelSpec.provider,
+            modelRef: workflow.model,
+          },
+          'workflow.model_provider_conflict'
+        );
+      }
+      resolvedProvider = workflowModelSpec.provider;
+      resolvedModel = workflowModelSpec.model;
+      providerSource = `model preset '${workflow.model}'`;
+    }
+  }
+
   if (!isRegisteredProvider(resolvedProvider)) {
     throw new Error(
       `Workflow '${workflow.name}': unknown provider '${resolvedProvider}'. ` +
@@ -387,7 +416,7 @@ export async function executeWorkflow(
     );
   }
   const assistantDefaults = config.assistants[resolvedProvider];
-  const resolvedModel = workflow.model ?? (assistantDefaults?.model as string | undefined);
+  resolvedModel ??= assistantDefaults?.model as string | undefined;
 
   getLog().info(
     {
@@ -736,7 +765,8 @@ export async function executeWorkflow(
       configuredCommandFolder,
       issueContext,
       dagPriorCompletedNodes,
-      source
+      source,
+      aiProfile
     );
 
     // executeDagWorkflow throws on fatal errors; check DB status for result

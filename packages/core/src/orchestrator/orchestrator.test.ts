@@ -1491,7 +1491,13 @@ describe('orchestrator-agent handleMessage', () => {
         'conv-123',
         'Hello world',
         'claude',
-        '/home/test/.archon/workspaces'
+        '/home/test/.archon/workspaces',
+        undefined,
+        {},
+        expect.objectContaining({
+          model: 'haiku',
+          assistantConfig: {},
+        })
       );
     });
 

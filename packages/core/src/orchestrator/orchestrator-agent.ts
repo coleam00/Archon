@@ -62,6 +62,12 @@ import * as workflowDb from '../db/workflows';
 import * as workflowEventDb from '../db/workflow-events';
 import { getCodebaseEnvVars } from '../db/env-vars';
 import type { ApprovalContext } from '@archon/workflows/schemas/workflow-run';
+import {
+  buildAiProfile,
+  isLiteralSpec,
+  resolveModelSpec,
+  type ModelAliasPreset,
+} from '@archon/workflows/model-validation';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -76,6 +82,32 @@ function getLog(): ReturnType<typeof createLogger> {
 const MAX_BATCH_ASSISTANT_CHUNKS = 20;
 /** Max total chunks (assistant + tool) to keep in batch mode */
 const MAX_BATCH_TOTAL_CHUNKS = 200;
+const CLAUDE_EFFORTS = new Set(['low', 'medium', 'high', 'max']);
+const MODEL_REASONING_EFFORTS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh']);
+
+function applyPresetToRequestOptions(
+  provider: string,
+  preset: ModelAliasPreset,
+  options: SendQueryOptions
+): void {
+  if (preset.thinking !== undefined) {
+    options.nodeConfig = { ...(options.nodeConfig ?? {}), thinking: preset.thinking };
+  }
+
+  if (preset.effort === undefined) return;
+
+  if (provider === 'claude' && CLAUDE_EFFORTS.has(preset.effort)) {
+    options.nodeConfig = { ...(options.nodeConfig ?? {}), effort: preset.effort };
+    return;
+  }
+
+  if (provider === 'codex' && MODEL_REASONING_EFFORTS.has(preset.effort)) {
+    options.assistantConfig = {
+      ...(options.assistantConfig ?? {}),
+      modelReasoningEffort: preset.effort,
+    };
+  }
+}
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -733,16 +765,6 @@ export async function handleMessage(
       conversationId
     );
 
-    // 1c. Auto-generate title for untitled conversations (fire-and-forget)
-    if (!conversation.title && !message.startsWith('/')) {
-      void generateAndSetTitle(
-        conversation.id,
-        message,
-        conversation.ai_assistant_type,
-        getArchonWorkspacesPath()
-      );
-    }
-
     // Natural-language approval routing — if a workflow is paused in this
     // conversation, treat any non-slash message as the approval response.
     if (!message.startsWith('/')) {
@@ -1007,14 +1029,25 @@ export async function handleMessage(
       });
     }
 
-    // 5. Send to AI provider
-    const aiClient = getAgentProvider(conversation.ai_assistant_type);
-    getLog().debug({ assistantType: conversation.ai_assistant_type }, 'sending_to_ai');
-
     // Reuse the config already loaded during workflow discovery (avoids a second disk read).
     // Fall back to loadConfig only when no codebase is scoped (discoveredConfig is undefined).
     const config = discoveredConfig ?? (await loadConfig());
-    const providerKey = conversation.ai_assistant_type;
+    const configuredProviderKey = conversation.ai_assistant_type;
+    const aiProfile = buildAiProfile(configuredProviderKey, {
+      repoTiers: config.tiers,
+      repoAliases: config.aliases,
+    });
+    const chatSpec = resolveModelSpec(aiProfile, 'large');
+    let providerKey = configuredProviderKey;
+    let chatPreset: ModelAliasPreset | undefined;
+    let chatModel: string | undefined;
+    if (isLiteralSpec(chatSpec)) {
+      chatModel = chatSpec.literal;
+    } else {
+      chatPreset = chatSpec;
+      providerKey = chatSpec.provider;
+      chatModel = chatSpec.model;
+    }
     let dbEnvVars: Record<string, string> = {};
     if (conversation.codebase_id) {
       try {
@@ -1063,10 +1096,51 @@ export async function handleMessage(
         : systemAppend;
 
     const requestOptions: SendQueryOptions = {
-      assistantConfig: config.assistants[providerKey] ?? {},
+      assistantConfig: { ...(config.assistants[providerKey] ?? {}) },
       env: Object.keys(effectiveEnv).length > 0 ? effectiveEnv : undefined,
+      model: chatModel,
       systemPrompt,
     };
+    if (chatPreset) {
+      applyPresetToRequestOptions(providerKey, chatPreset, requestOptions);
+    }
+
+    if (!conversation.title && !message.startsWith('/')) {
+      const titleSpec = resolveModelSpec(aiProfile, 'small');
+      let titleProvider = configuredProviderKey;
+      let titlePreset: ModelAliasPreset | undefined;
+      let titleModel: string | undefined;
+      if (isLiteralSpec(titleSpec)) {
+        titleModel = titleSpec.literal;
+      } else {
+        titlePreset = titleSpec;
+        titleProvider = titleSpec.provider;
+        titleModel = titleSpec.model;
+      }
+      const titleOptions: SendQueryOptions = {
+        model: titleModel,
+        assistantConfig: { ...(config.assistants[titleProvider] ?? {}) },
+      };
+      if (titlePreset) {
+        applyPresetToRequestOptions(titleProvider, titlePreset, titleOptions);
+      }
+      void generateAndSetTitle(
+        conversation.id,
+        message,
+        titleProvider,
+        cwd,
+        undefined,
+        titleOptions.assistantConfig,
+        titleOptions
+      );
+    }
+
+    // 5. Send to AI provider
+    const aiClient = getAgentProvider(providerKey);
+    getLog().debug(
+      { assistantType: conversation.ai_assistant_type, resolvedAssistantType: providerKey },
+      'sending_to_ai'
+    );
 
     // Project-scoped chats get the `manage_run` tool so the agent can see and
     // launch this project's workflow runs. Only when a codebase is scoped and

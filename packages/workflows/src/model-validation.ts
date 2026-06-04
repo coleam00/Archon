@@ -7,8 +7,9 @@
  *   - bare literal (anything else) → returned unchanged for SDK pass-through
  *
  * No side effects, no logger, no I/O. The `ResolvedAiProfile` is built once by
- * `buildAiProfile()` from layered config (tier defaults → global aliases → repo
- * aliases) and then handed to `resolveModelSpec()` per call.
+ * `buildAiProfile()` from layered config (tier defaults → global tiers → repo
+ * tiers → global aliases → repo aliases) and then handed to `resolveModelSpec()`
+ * per call.
  */
 
 import tierDefaults from './defaults/tier-defaults.json';
@@ -38,6 +39,9 @@ export interface RawAliasEntry {
 
 /** The aliases map from config YAML — keyed by alias name */
 export type RawAliasesConfig = Record<string, RawAliasEntry>;
+
+/** The tiers map from config YAML — keyed by small/medium/large */
+export type RawTiersConfig = Partial<Record<TierName, RawAliasEntry>>;
 
 /** The resolved AI profile — used by resolveModelSpec */
 export interface ResolvedAiProfile {
@@ -95,7 +99,17 @@ function assertValidEntry(name: string, entry: RawAliasEntry): void {
   }
 }
 
+function assertValidTierName(name: string): asserts name is TierName {
+  if (!isTierName(name)) {
+    throw new Error(`Tier name '${name}' is invalid. Supported tiers: ${TIER_NAMES.join(', ')}.`);
+  }
+}
+
 export interface BuildAiProfileOptions {
+  /** Tier overrides from ~/.archon/config.yaml */
+  globalTiers?: RawTiersConfig;
+  /** Tier overrides from .archon/config.yaml (repo) — override globalTiers on key collision */
+  repoTiers?: RawTiersConfig;
   /** Aliases from ~/.archon/config.yaml */
   globalAliases?: RawAliasesConfig;
   /** Aliases from .archon/config.yaml (repo) — override globalAliases on key collision */
@@ -103,7 +117,8 @@ export interface BuildAiProfileOptions {
 }
 
 /**
- * Build a ResolvedAiProfile by layering tier defaults → global aliases → repo aliases.
+ * Build a ResolvedAiProfile by layering tier defaults → global tiers → repo tiers
+ * → global aliases → repo aliases.
  * Throws if any alias name collides with a reserved tier name, or if an alias
  * entry has an empty provider or model string, or if an alias key lacks the `@` prefix.
  */
@@ -124,6 +139,20 @@ export function buildAiProfile(
           ...(entry.effort !== undefined ? { effort: entry.effort } : {}),
         };
       }
+    }
+  }
+
+  for (const layer of [options.globalTiers, options.repoTiers]) {
+    if (!layer) continue;
+    for (const [name, entry] of Object.entries(layer)) {
+      assertValidTierName(name);
+      assertValidEntry(name, entry);
+      aliases[name] = {
+        provider: entry.provider,
+        model: entry.model,
+        ...(entry.effort !== undefined ? { effort: entry.effort } : {}),
+        ...(entry.thinking !== undefined ? { thinking: entry.thinking } : {}),
+      };
     }
   }
 
@@ -158,7 +187,7 @@ export function resolveModelSpec(profile: ResolvedAiProfile, ref: string): Resol
       if (preset) return preset;
     }
     throw new Error(
-      `Tier '${ref}' has no configured alias and no built-in default for provider '${profile.defaultProvider}'. Configure 'aliases.small/medium/large' in .archon/config.yaml.`
+      `Tier '${ref}' has no configured preset and no built-in default for provider '${profile.defaultProvider}'. Configure 'tiers.small/medium/large' in .archon/config.yaml.`
     );
   }
 

@@ -21,7 +21,7 @@ nodes:
   # ═══════════════════════════════════════════════════════════════
 
   - id: detect-input
-    model: haiku
+    model: small
     prompt: |
       # Detect Ralph Input
 
@@ -189,7 +189,7 @@ nodes:
   - id: implement
     depends_on: [validate-prd]
     idle_timeout: 600000
-    model: opus[1m]
+    model: large
     loop:
       prompt: |
         # Ralph Agent — Autonomous Story Implementation

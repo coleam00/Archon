@@ -106,8 +106,13 @@ export async function validateWorkflowsCommand(
   }
 
   // Validate successfully parsed workflows (Level 3)
-  for (const { workflow } of workflowEntries) {
-    const issues = await validateWorkflowResources(workflow, cwd, config, defaultProvider);
+  for (const { workflow, source } of workflowEntries) {
+    const issues = await validateWorkflowResources(
+      workflow,
+      cwd,
+      { ...config, workflowSource: source },
+      defaultProvider
+    );
     results.push(makeWorkflowResult(workflow.name, issues));
   }
 

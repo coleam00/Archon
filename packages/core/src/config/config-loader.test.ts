@@ -426,6 +426,56 @@ aliases:
       expect(config.aliases).toBeUndefined();
     });
 
+    test('global tiers are propagated to merged config', async () => {
+      mockFsReadFile.mockResolvedValue(`
+tiers:
+  large: { provider: claude, model: opus }
+  medium: { provider: codex, model: gpt-5.5, effort: high }
+`);
+
+      const config = await loadConfig();
+      expect(config.tiers).toEqual({
+        large: { provider: 'claude', model: 'opus' },
+        medium: { provider: 'codex', model: 'gpt-5.5', effort: 'high' },
+      });
+    });
+
+    test('repo tiers override global tiers with same key', async () => {
+      const pathMatches = (path: string, pattern: string): boolean =>
+        path.replace(/\\/g, '/').includes(pattern);
+
+      let globalRead = false;
+      mockFsReadFile.mockImplementation(async (path: string) => {
+        if (pathMatches(path, '/repo/.archon/config.yaml')) {
+          return `tiers:\n  medium: { provider: codex, model: gpt-5.5, effort: medium }\n`;
+        }
+        if (pathMatches(path, '.archon/config.yaml') && !globalRead) {
+          globalRead = true;
+          return `tiers:\n  small: { provider: claude, model: haiku }\n  medium: { provider: claude, model: sonnet }\n`;
+        }
+        const e = new Error('ENOENT') as NodeJS.ErrnoException;
+        e.code = 'ENOENT';
+        throw e;
+      });
+
+      const config = await loadConfig('/test/repo');
+      expect(config.tiers?.medium).toEqual({
+        provider: 'codex',
+        model: 'gpt-5.5',
+        effort: 'medium',
+      });
+      expect(config.tiers?.small).toEqual({ provider: 'claude', model: 'haiku' });
+    });
+
+    test('config.tiers is undefined when no tiers configured', async () => {
+      const error = new Error('ENOENT') as NodeJS.ErrnoException;
+      error.code = 'ENOENT';
+      mockFsReadFile.mockRejectedValue(error);
+
+      const config = await loadConfig();
+      expect(config.tiers).toBeUndefined();
+    });
+
     test('propagates docsPath from repo docs config', async () => {
       const pathMatches = (path: string, pattern: string): boolean => {
         const normalizedPath = path.replace(/\\/g, '/');

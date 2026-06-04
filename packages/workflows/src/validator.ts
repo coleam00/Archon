@@ -31,7 +31,7 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 import { isScriptNode } from './schemas';
-import type { WorkflowDefinition, DagNode } from './schemas';
+import type { WorkflowDefinition, DagNode, WorkflowSource } from './schemas';
 import type { ScriptRuntime } from './script-discovery';
 import { discoverScriptsForCwd } from './script-discovery';
 import { isInlineScript } from './executor-shared';
@@ -83,6 +83,7 @@ export interface CommandValidationResult {
 export interface ValidationConfig {
   loadDefaultCommands?: boolean;
   commandFolder?: string;
+  workflowSource?: WorkflowSource;
 }
 
 // =============================================================================
@@ -317,9 +318,30 @@ export async function validateWorkflowResources(
 ): Promise<ValidationIssue[]> {
   const issues: ValidationIssue[] = [];
   const availableCommands = await discoverAvailableCommands(cwd, config);
+  const requiresPortableModelRefs =
+    config?.workflowSource === 'bundled' || config?.workflowSource === 'global';
+
+  if (requiresPortableModelRefs && workflow.model?.startsWith('@')) {
+    issues.push({
+      level: 'error',
+      field: 'model',
+      message: `Workflow '${workflow.name}' uses custom model alias '${workflow.model}', which is not portable for ${config.workflowSource} workflows`,
+      hint: 'Use small, medium, large, or a literal provider model string. Reserve @custom aliases for project workflows.',
+    });
+  }
 
   for (const node of workflow.nodes) {
     const provider = resolveProvider(node, workflow.provider, defaultProvider);
+
+    if (requiresPortableModelRefs && 'model' in node && node.model?.startsWith('@')) {
+      issues.push({
+        level: 'error',
+        nodeId: node.id,
+        field: 'model',
+        message: `Node '${node.id}' uses custom model alias '${node.model}', which is not portable for ${config.workflowSource} workflows`,
+        hint: 'Use small, medium, large, or a literal provider model string. Reserve @custom aliases for project workflows.',
+      });
+    }
 
     // --- Command nodes: check file exists ---
     if ('command' in node && typeof node.command === 'string') {
