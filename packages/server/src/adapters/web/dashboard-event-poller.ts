@@ -9,34 +9,47 @@
  * poller tails that table and replays new rows to `__dashboard__`, covering every
  * process that writes events to the DB.
  *
- * Correctness vs SQLite's 1-second `CURRENT_TIMESTAMP` resolution: the cursor uses
+ * Correctness vs SQLite's 1-second `datetime('now')` resolution: the cursor uses
  * `created_at >= cursor` (not `>`), so events that arrive late at the boundary
  * second are not skipped; a `seenAtBoundary` id-set suppresses re-emitting rows
  * already sent at that second. Duplicate emissions are harmless anyway — the
  * dashboard client reacts to events by invalidating + refetching (idempotent), so
- * the REST response is always the source of truth.
+ * the REST response is always the source of truth. The query is filtered to the
+ * dashboard-relevant event types, which keeps high-frequency `tool_*` rows out of
+ * the result so a 1-second bucket realistically never exceeds `DRAIN_LIMIT`.
  */
 import { createLogger } from '@archon/paths';
 import { listWorkflowEventsSince } from '@archon/core/db/workflow-events';
-import { mapWorkflowEventRow } from './workflow-bridge';
-import type { SSETransport } from './transport';
+import { mapWorkflowEventRow, DASHBOARD_SOURCE_EVENT_TYPES } from './workflow-bridge';
 
 const log = createLogger('adapter.web.dashboard-poller');
 
 const DASHBOARD_STREAM = '__dashboard__';
-/** Max rows per drain. Large enough that a single timestamp-second won't overflow. */
+/** Max rows per drain. With the event-type filter, a single second won't realistically overflow. */
 const DRAIN_LIMIT = 500;
+/** Escalate from warn → error after this many consecutive failed drains (a sustained outage). */
+const FAILURE_ESCALATION_THRESHOLD = 5;
+
+/**
+ * The narrow slice of `SSETransport` the poller needs — decouples it from the
+ * concrete transport and removes the cast in tests.
+ */
+export interface DashboardTransport {
+  hasActiveStream(conversationId: string): boolean;
+  emitWorkflowEvent(conversationId: string, event: string): void;
+}
 
 export class DashboardEventPoller {
-  private transport: SSETransport | null = null;
+  private transport: DashboardTransport | null = null;
   private intervalId: ReturnType<typeof setInterval> | null = null;
   private cursor: Date = new Date(); // start at boot — never replay history
   private seenAtBoundary = new Set<string>();
   private draining = false;
   private redrainRequested = false;
+  private consecutiveFailures = 0;
 
   /** Begin polling. `intervalMs` is the (SQLite) poll cadence / (Postgres) backstop. */
-  start(transport: SSETransport, intervalMs: number): void {
+  start(transport: DashboardTransport, intervalMs: number): void {
     if (this.intervalId) return;
     this.transport = transport;
     this.cursor = new Date();
@@ -58,17 +71,15 @@ export class DashboardEventPoller {
     this.transport = null;
   }
 
-  /**
-   * Drain immediately (e.g. woken by a Postgres NOTIFY). Coalesced with in-flight
-   * drains. Returns the drain promise (callers may ignore it; tests await it).
-   */
+  /** Drain immediately (e.g. woken by a Postgres NOTIFY). Returns the drain promise. */
   drainNow(): Promise<void> {
     return this.drain();
   }
 
   private async drain(): Promise<void> {
     if (!this.transport) return;
-    // Coalesce: a drain already running absorbs this request (one follow-up pass).
+    // Coalesce: a drain already running absorbs this request (one follow-up pass),
+    // so a burst of NOTIFYs collapses into a single trailing drain.
     if (this.draining) {
       this.redrainRequested = true;
       return;
@@ -88,8 +99,19 @@ export class DashboardEventPoller {
         this.redrainRequested = false;
         await this.drainOnce();
       } while (this.redrainRequested);
+      this.consecutiveFailures = 0;
     } catch (err) {
-      log.warn({ err }, 'dashboard_poller.drain_failed');
+      this.consecutiveFailures += 1;
+      // A sustained DB outage (vs a transient blip) escalates so it's alertable
+      // instead of an indistinguishable warn every interval forever.
+      if (this.consecutiveFailures >= FAILURE_ESCALATION_THRESHOLD) {
+        log.error(
+          { err, consecutiveFailures: this.consecutiveFailures },
+          'dashboard_poller.drain_failing_persistently'
+        );
+      } else {
+        log.warn({ err }, 'dashboard_poller.drain_failed');
+      }
     } finally {
       this.draining = false;
     }
@@ -99,7 +121,11 @@ export class DashboardEventPoller {
     const transport = this.transport;
     if (!transport) return;
 
-    const rows = await listWorkflowEventsSince(this.cursor, DRAIN_LIMIT);
+    const rows = await listWorkflowEventsSince(
+      this.cursor,
+      DRAIN_LIMIT,
+      DASHBOARD_SOURCE_EVENT_TYPES
+    );
     if (rows.length === 0) return;
 
     let maxTs = this.cursor.getTime();

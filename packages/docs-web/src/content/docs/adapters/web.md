@@ -200,6 +200,8 @@ Events streamed over SSE include:
 
 A separate dashboard SSE stream at `/api/stream/__dashboard__` multiplexes workflow events across all conversations, powering the Command Center's live updates.
 
+This stream also covers runs started **out of process** — the `archon` CLI, especially `archon workflow run --detach`. Those runs write their events to the database but never reach the server's in-process emitter, so a server-side poller tails the `workflow_events` table and replays them to `__dashboard__`. On PostgreSQL a `LISTEN/NOTIFY` trigger pushes them in real time; on SQLite the poller picks them up within its poll interval.
+
 ## Projects and Codebases
 
 ### Registering a Project

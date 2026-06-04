@@ -77,8 +77,6 @@ export class PostgresAdapter implements IDatabase, DbNotificationListener {
       // The SQL is fully idempotent (CREATE TABLE IF NOT EXISTS,
       // ADD COLUMN IF NOT EXISTS, CREATE INDEX IF NOT EXISTS).
       await client.query(sql);
-      // Postgres-only NOTIFY trigger (kept out of the shared schema — SQLite-incompatible).
-      await client.query(WORKFLOW_EVENT_NOTIFY_SQL);
       await client.query('COMMIT');
       getLog().info('db.postgres_schema_init_completed');
     } catch (e) {
@@ -98,6 +96,42 @@ export class PostgresAdapter implements IDatabase, DbNotificationListener {
       const err = e instanceof Error ? e : new Error(String(e));
       getLog().fatal({ err }, 'db.postgres_schema_init_failed');
       throw err;
+    } finally {
+      client?.release();
+    }
+    // Best-effort, AFTER the core schema commits: a role without CREATE FUNCTION/
+    // TRIGGER must not fail boot — the dashboard poller's interval backstop still
+    // streams CLI runs, just without the instant LISTEN/NOTIFY push.
+    await this.installNotifyTrigger();
+  }
+
+  /**
+   * Install the Postgres-only `pg_notify` trigger on workflow_events (real-time
+   * dashboard push). Idempotent and non-fatal — its own advisory-locked txn so
+   * concurrent boots don't race on DROP/CREATE TRIGGER.
+   */
+  private async installNotifyTrigger(): Promise<void> {
+    let client: PoolClient | undefined;
+    try {
+      client = await this.pool.connect();
+      await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock(1797)');
+      await client.query(WORKFLOW_EVENT_NOTIFY_SQL);
+      await client.query('COMMIT');
+      getLog().info('db.postgres_notify_trigger_installed');
+    } catch (e) {
+      if (client) {
+        try {
+          await client.query('ROLLBACK');
+        } catch {
+          /* best-effort cleanup */
+        }
+      }
+      getLog().warn(
+        { err: e instanceof Error ? e : new Error(String(e)) },
+        'db.postgres_notify_trigger_install_failed'
+      );
+      // Non-fatal — degrade to poll-only.
     } finally {
       client?.release();
     }
@@ -170,19 +204,27 @@ export class PostgresAdapter implements IDatabase, DbNotificationListener {
       released = true;
       client.removeAllListeners('notification');
       client.removeAllListeners('error');
-      // Destroy (true) rather than return to the pool — a LISTEN client must not be reused.
-      client.release(destroy === false ? true : destroy);
+      // Destroy rather than return to the pool — a LISTEN client must not be reused.
+      client.release(destroy);
     };
-    client.on('notification', msg => {
-      if (msg.channel === channel) onNotify(msg.payload ?? '');
-    });
-    client.on('error', err => {
+    try {
+      client.on('notification', msg => {
+        if (msg.channel === channel) onNotify(msg.payload ?? '');
+      });
+      client.on('error', err => {
+        const e = err instanceof Error ? err : new Error(String(err));
+        getLog().warn({ err: e, channel }, 'db.postgres_listen_client_error');
+        release(e);
+        onError(e);
+      });
+      // If LISTEN setup throws, release the checked-out client so a flaky reconnect
+      // loop can't exhaust the pool (max 10) and stall all DB work.
+      await client.query(`LISTEN ${channel}`);
+    } catch (err) {
       const e = err instanceof Error ? err : new Error(String(err));
-      getLog().warn({ err: e, channel }, 'db.postgres_listen_client_error');
       release(e);
-      onError(e);
-    });
-    await client.query(`LISTEN ${channel}`);
+      throw e;
+    }
     return () => {
       release(true);
     };

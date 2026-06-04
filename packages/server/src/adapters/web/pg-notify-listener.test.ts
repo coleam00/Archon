@@ -46,4 +46,32 @@ describe('PgNotifyListener', () => {
 
     expect(unsub).toHaveBeenCalledTimes(1);
   });
+
+  test('reconnects (with backoff) after the LISTEN connection drops', async () => {
+    let calls = 0;
+    let onError: ((e: Error) => void) | undefined;
+    const unsub = mock(() => undefined);
+    const notifier: DbNotificationListener = {
+      listen: mock((_channel, _onNotify: (p: string) => void, oe: (e: Error) => void) => {
+        calls += 1;
+        onError = oe;
+        return Promise.resolve(unsub);
+      }),
+    };
+    const listener = new PgNotifyListener(
+      notifier,
+      { drainNow: mock(() => Promise.resolve()) } as unknown as DashboardEventPoller,
+      5 // tiny backoff so the test doesn't wait a second
+    );
+
+    await listener.start();
+    expect(calls).toBe(1);
+
+    onError?.(new Error('connection lost')); // simulate the LISTEN connection dropping
+    await new Promise(r => setTimeout(r, 30)); // wait past the 5ms backoff
+
+    expect(calls).toBe(2); // reconnected
+    expect(unsub).toHaveBeenCalled(); // old subscription cleaned up
+    listener.stop();
+  });
 });

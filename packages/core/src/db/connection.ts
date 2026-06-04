@@ -85,6 +85,11 @@ export function getDatabaseType(): 'postgresql' | 'sqlite' {
   return process.env.DATABASE_URL ? 'postgresql' : 'sqlite';
 }
 
+/** Type guard: does this database implement the optional notification-listener capability? */
+function isDbNotificationListener(db: IDatabase): db is IDatabase & DbNotificationListener {
+  return typeof (db as Partial<DbNotificationListener>).listen === 'function';
+}
+
 /**
  * Return the active database as a notification listener (Postgres `LISTEN/NOTIFY`),
  * or null when the backend doesn't support it (SQLite). Feature-detection seam so
@@ -93,9 +98,7 @@ export function getDatabaseType(): 'postgresql' | 'sqlite' {
 export function getDbNotificationListener(): DbNotificationListener | null {
   if (getDatabaseType() !== 'postgresql') return null;
   const db = getDatabase();
-  return typeof (db as Partial<DbNotificationListener>).listen === 'function'
-    ? (db as unknown as DbNotificationListener)
-    : null;
+  return isDbNotificationListener(db) ? db : null;
 }
 
 /**

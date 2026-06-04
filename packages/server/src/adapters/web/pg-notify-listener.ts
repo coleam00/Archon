@@ -20,13 +20,16 @@ const MAX_BACKOFF_MS = 30_000;
 export class PgNotifyListener {
   private unsubscribe: (() => void) | null = null;
   private stopped = false;
-  private backoffMs = 1000;
+  private backoffMs: number;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private readonly notifier: DbNotificationListener,
-    private readonly poller: DashboardEventPoller
-  ) {}
+    private readonly poller: DashboardEventPoller,
+    private readonly initialBackoffMs = 1000
+  ) {
+    this.backoffMs = initialBackoffMs;
+  }
 
   async start(): Promise<void> {
     this.stopped = false;
@@ -36,7 +39,7 @@ export class PgNotifyListener {
   private async connect(): Promise<void> {
     if (this.stopped) return;
     try {
-      this.unsubscribe = await this.notifier.listen(
+      const unsubscribe = await this.notifier.listen(
         CHANNEL,
         () => {
           void this.poller.drainNow();
@@ -45,7 +48,14 @@ export class PgNotifyListener {
           this.scheduleReconnect();
         }
       );
-      this.backoffMs = 1000; // reset on a successful connect
+      // stop() may have run while we were awaiting listen() — don't leave a live
+      // subscription (it would keep calling drainNow() after shutdown).
+      if (this.stopped) {
+        this.safeUnsubscribe(unsubscribe);
+        return;
+      }
+      this.unsubscribe = unsubscribe;
+      this.backoffMs = this.initialBackoffMs; // reset on a successful connect
       log.info({ channel: CHANNEL }, 'pg_notify.listening');
     } catch (err) {
       log.warn({ err }, 'pg_notify.connect_failed');
@@ -53,14 +63,19 @@ export class PgNotifyListener {
     }
   }
 
+  /** Run an unsubscribe, surfacing (not swallowing) an unexpected failure. */
+  private safeUnsubscribe(unsubscribe: () => void): void {
+    try {
+      unsubscribe();
+    } catch (err) {
+      log.debug({ err }, 'pg_notify.unsubscribe_error');
+    }
+  }
+
   private scheduleReconnect(): void {
     if (this.stopped || this.reconnectTimer) return;
     if (this.unsubscribe) {
-      try {
-        this.unsubscribe();
-      } catch {
-        /* already closed */
-      }
+      this.safeUnsubscribe(this.unsubscribe);
       this.unsubscribe = null;
     }
     const delay = this.backoffMs;
@@ -81,11 +96,7 @@ export class PgNotifyListener {
       this.reconnectTimer = null;
     }
     if (this.unsubscribe) {
-      try {
-        this.unsubscribe();
-      } catch {
-        /* already closed */
-      }
+      this.safeUnsubscribe(this.unsubscribe);
       this.unsubscribe = null;
     }
   }
