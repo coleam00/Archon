@@ -1,61 +1,130 @@
 {
-  "generated_at": "2026-06-04T02:40:16.770828+00:00",
+  "generated_at": "2026-06-04T02:56:53.441248+00:00",
   "source": {
+    "apollo_api": "live",
     "apollo_csv": "second-brain/intelligence/briefs/2026-05-13-apollo-dial-list-all.csv",
-    "dial_history": "/Users/jason-agent/.hermes/state/dial_tracker_history.json"
+    "dial_history": "/Users/jason-agent/.hermes/state/dial_tracker_history.json",
+    "first_meetings_state": "/Users/jason-agent/.hermes/state/first-meetings-by-week.json"
   },
   "kpis": {
     "meetings_this_week": 0,
     "dials_last_7d": 0,
-    "active_sequences": 4,
-    "reply_rate_14d": 0.0,
+    "active_sequences": 5,
+    "reply_rate_14d": 2.13,
+    "open_rate_14d": 27.39,
+    "total_delivered": 376,
+    "total_replied": 8,
     "target_30d_meetings": 8,
     "target_90d_meetings": 15
   },
   "sequences": [
     {
-      "slug": "bh-therapy",
-      "name": "BH_THERAPY",
+      "slug": "6a03e3072cb7c80015b5a288",
+      "name": "Behavioral Health Sequence -- Therapy",
       "brand": "BRT",
+      "apollo_id": "6a03e3072cb7c80015b5a288",
       "contacts": 368,
       "active": 368,
       "paused": 0,
-      "replied": 0,
-      "reply_rate": 0.0,
-      "status": "active"
+      "sent": 141,
+      "opened": 52,
+      "replied": 4,
+      "clicked": 0,
+      "reply_rate": 2.84,
+      "open_rate": 36.88,
+      "click_rate": 0,
+      "status": "active",
+      "num_steps": 6
     },
     {
-      "slug": "chiro",
-      "name": "CHIRO",
+      "slug": "69ea4d1207b925001d6b3afa",
+      "name": "Chiro Sequence -- BRT/PMC(SOMA)",
       "brand": "BRT",
+      "apollo_id": "69ea4d1207b925001d6b3afa",
       "contacts": 122,
       "active": 113,
       "paused": 0,
-      "replied": 0,
-      "reply_rate": 0.0,
-      "status": "active"
+      "sent": 111,
+      "opened": 46,
+      "replied": 4,
+      "clicked": 1,
+      "reply_rate": 3.6,
+      "open_rate": 41.44,
+      "click_rate": 0.9,
+      "status": "active",
+      "num_steps": 6
     },
     {
-      "slug": "medspa",
-      "name": "MEDSPA",
+      "slug": "699cd7f19c628f001d095cc4",
+      "name": "US PMC ICP Verfied Only",
+      "brand": "PMC",
+      "apollo_id": "699cd7f19c628f001d095cc4",
+      "contacts": 89,
+      "active": 89,
+      "paused": 0,
+      "sent": 89,
+      "opened": 0,
+      "replied": 0,
+      "clicked": 0,
+      "reply_rate": 0,
+      "open_rate": 0,
+      "click_rate": 0,
+      "status": "active",
+      "num_steps": 6
+    },
+    {
+      "slug": "69f0f72379dfb40019372627",
+      "name": "Medspa Sequence 1",
       "brand": "BRT",
+      "apollo_id": "69f0f72379dfb40019372627",
       "contacts": 52,
       "active": 4,
       "paused": 0,
+      "sent": 4,
+      "opened": 2,
       "replied": 0,
-      "reply_rate": 0.0,
-      "status": "active"
+      "clicked": 0,
+      "reply_rate": 0,
+      "open_rate": 50.0,
+      "click_rate": 0,
+      "status": "active",
+      "num_steps": 5
     },
     {
-      "slug": "bh-psych",
-      "name": "BH_PSYCH",
+      "slug": "6a03e2fed5095c001d2e2c78",
+      "name": "Behavioral Health Sequence -- Psychiatric",
       "brand": "BRT",
+      "apollo_id": "6a03e2fed5095c001d2e2c78",
       "contacts": 30,
       "active": 30,
       "paused": 0,
+      "sent": 24,
+      "opened": 3,
       "replied": 0,
-      "reply_rate": 0.0,
-      "status": "active"
+      "clicked": 0,
+      "reply_rate": 0,
+      "open_rate": 12.5,
+      "click_rate": 0,
+      "status": "active",
+      "num_steps": 6
+    },
+    {
+      "slug": "698f86da485ea40010fcfc19",
+      "name": "Andrew's Outbound AI Sequence 2",
+      "brand": "Unassigned",
+      "apollo_id": "698f86da485ea40010fcfc19",
+      "contacts": 7,
+      "active": 0,
+      "paused": 0,
+      "sent": 7,
+      "opened": 0,
+      "replied": 0,
+      "clicked": 0,
+      "reply_rate": 0,
+      "open_rate": 0,
+      "click_rate": 0,
+      "status": "paused",
+      "num_steps": 3
     }
   ],
   "dials_by_day": [
@@ -178,24 +247,24 @@
     },
     {
       "week": "2026-05-04",
-      "total": 0,
+      "total": 1,
       "by_line": {
         "BRT": 0,
         "PMC": 0,
         "EWC": 0,
         "Fountain": 0,
-        "Other": 0
+        "Other": 1
       }
     },
     {
       "week": "2026-05-11",
-      "total": 0,
+      "total": 2,
       "by_line": {
         "BRT": 0,
         "PMC": 0,
         "EWC": 0,
         "Fountain": 0,
-        "Other": 0
+        "Other": 2
       }
     },
     {

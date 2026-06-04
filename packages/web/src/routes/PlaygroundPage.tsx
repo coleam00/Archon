@@ -21,12 +21,19 @@ interface Sequence {
   slug: string;
   name: string;
   brand: string;
+  apollo_id: string | null;
   contacts: number;
   active: number;
   paused: number;
+  sent: number;
+  opened: number;
   replied: number;
+  clicked: number;
   reply_rate: number;
+  open_rate: number;
+  click_rate: number;
   status: string;
+  num_steps: number;
 }
 
 interface DialDay {
@@ -51,6 +58,9 @@ interface Kpis {
   dials_last_7d: number;
   active_sequences: number;
   reply_rate_14d: number;
+  open_rate_14d: number;
+  total_delivered: number;
+  total_replied: number;
   target_30d_meetings: number;
   target_90d_meetings: number;
 }
@@ -107,7 +117,7 @@ function ChartCard({
   height = 280,
 }: {
   title: string;
-  subtitle?: string;
+  subtitle?: React.ReactNode;
   children: React.ReactNode;
   height?: number;
 }): React.ReactElement {
@@ -142,13 +152,17 @@ function KpiTile({
 
 export function PlaygroundPage(): React.ReactElement {
   const [highlightedBrand, setHighlightedBrand] = useState<string | null>(null);
+  const [sequenceMetric, setSequenceMetric] = useState<'sent' | 'replied' | 'reply_rate' | 'open_rate'>('sent');
 
   // Sequence reply-rate horizontal bar
   const seqChartData = useMemo(
     () =>
       data.sequences.map(s => ({
-        name: s.name,
+        name: s.name.length > 32 ? s.name.slice(0, 30) + '…' : s.name,
         replyRate: s.reply_rate,
+        openRate: s.open_rate,
+        sent: s.sent,
+        replied: s.replied,
         contacts: s.contacts,
         active: s.active,
         brand: s.brand,
@@ -157,6 +171,13 @@ export function PlaygroundPage(): React.ReactElement {
       })),
     [highlightedBrand]
   );
+
+  const SEQUENCE_METRIC_LABEL: Record<typeof sequenceMetric, string> = {
+    sent: 'Sent (delivered)',
+    replied: 'Replies',
+    reply_rate: 'Reply rate %',
+    open_rate: 'Open rate %',
+  };
 
   // Dial outcomes stacked area — pivot dial_by_day into wide format
   const dialsAreaData = useMemo(() => {
@@ -230,11 +251,12 @@ export function PlaygroundPage(): React.ReactElement {
           <KpiTile
             label="Active sequences"
             value={String(data.kpis.active_sequences)}
+            hint={`${data.kpis.total_delivered} delivered / ${data.kpis.total_replied} replied`}
           />
           <KpiTile
             label="Reply rate (14d)"
             value={`${data.kpis.reply_rate_14d}%`}
-            hint="Phase 2: wire apollo-daily-performance"
+            hint={`Open rate: ${data.kpis.open_rate_14d}%`}
           />
         </section>
 
@@ -278,8 +300,30 @@ export function PlaygroundPage(): React.ReactElement {
         </h2>
         <div className="grid gap-3 lg:grid-cols-2">
           <ChartCard
-            title="Sequence contacts by brand"
-            subtitle="Click a brand chip above to highlight"
+            title={`Sequence ${SEQUENCE_METRIC_LABEL[sequenceMetric].toLowerCase()}`}
+            subtitle={
+              <span className="flex gap-1">
+                {(['sent', 'replied', 'reply_rate', 'open_rate'] as const).map(m => (
+                  <button
+                    key={m}
+                    onClick={(): void => setSequenceMetric(m)}
+                    className={`rounded border px-1.5 py-0.5 text-[10px] transition-colors ${
+                      sequenceMetric === m
+                        ? 'border-primary text-primary'
+                        : 'border-border text-text-tertiary hover:text-text-secondary'
+                    }`}
+                  >
+                    {m === 'sent'
+                      ? 'sent'
+                      : m === 'replied'
+                      ? 'replies'
+                      : m === 'reply_rate'
+                      ? 'reply%'
+                      : 'open%'}
+                  </button>
+                ))}
+              </span>
+            }
           >
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={seqChartData} layout="vertical" margin={{ left: 30 }}>
@@ -290,7 +334,7 @@ export function PlaygroundPage(): React.ReactElement {
                   type="category"
                   stroke="#71717a"
                   fontSize={11}
-                  width={120}
+                  width={180}
                 />
                 <Tooltip
                   contentStyle={{
@@ -299,8 +343,29 @@ export function PlaygroundPage(): React.ReactElement {
                     borderRadius: 6,
                     fontSize: 12,
                   }}
+                  formatter={(_v: unknown, _name: unknown, item: unknown): React.ReactNode => {
+                    const payload = (item as { payload?: { sent: number; replied: number; reply_rate?: number; replyRate?: number; openRate: number } }).payload;
+                    if (!payload) return '';
+                    return [
+                      `${payload.sent} sent`,
+                      `${payload.replied} replied`,
+                      `${payload.replyRate ?? payload.reply_rate ?? 0}% reply`,
+                      `${payload.openRate}% open`,
+                    ].join(' · ');
+                  }}
                 />
-                <Bar dataKey="contacts" name="Contacts">
+                <Bar
+                  dataKey={
+                    sequenceMetric === 'sent'
+                      ? 'sent'
+                      : sequenceMetric === 'replied'
+                      ? 'replied'
+                      : sequenceMetric === 'reply_rate'
+                      ? 'replyRate'
+                      : 'openRate'
+                  }
+                  name={SEQUENCE_METRIC_LABEL[sequenceMetric]}
+                >
                   {seqChartData.map(d => (
                     <rect
                       key={d.name}
