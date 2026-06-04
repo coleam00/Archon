@@ -2205,9 +2205,14 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
   }
 
   if (skillInstalledPath) {
+    const codexInstalledPath = skillInstalledPath.replace(
+      join('.claude', 'skills', 'archon'),
+      join('.agents', 'skills', 'archon')
+    );
     summaryLines.push('');
     summaryLines.push('Archon skill installed:');
-    summaryLines.push(`  ${skillInstalledPath}`);
+    summaryLines.push(`  ${skillInstalledPath}  (Claude Code)`);
+    summaryLines.push(`  ${codexInstalledPath}  (Codex)`);
     if (projectConfigCreatedPath) {
       summaryLines.push('');
       summaryLines.push('Project config created:');

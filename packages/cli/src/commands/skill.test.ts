@@ -104,7 +104,8 @@ describe('skillInstallCommand', () => {
     expect(errSpy).toHaveBeenCalled();
     const firstError = errSpy.mock.calls[0][0] as string;
     expect(firstError).toContain('Directory does not exist');
-    // Nothing should have been written
+    // Nothing should have been written to either path
     expect(existsSync(join(missing, '.claude'))).toBe(false);
+    expect(existsSync(join(missing, '.agents'))).toBe(false);
   });
 });

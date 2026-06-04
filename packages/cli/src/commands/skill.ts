@@ -25,7 +25,8 @@ function writeSkillFiles(skillRoot: string, files: Record<string, string>): void
 }
 
 /**
- * Copy the bundled Archon skills into <targetPath>/.claude/skills/:
+ * Copy the bundled Archon skills into <targetPath>/.claude/skills/ (Claude Code)
+ * and <targetPath>/.agents/skills/ (Codex):
  *   - `archon`     — the broad authoring/setup/run skill
  *   - `manage-run` — the focused run-management skill
  *
@@ -74,7 +75,7 @@ export async function skillInstallCommand(targetPath: string): Promise<number> {
     const fileCount =
       Object.keys(BUNDLED_SKILL_FILES).length + Object.keys(BUNDLED_MANAGE_RUN_SKILL_FILES).length;
     console.log(
-      `Installing Archon skills (archon + manage-run, ${fileCount} files) into ${claudeSkillsRoot} and ${codexSkillsRoot}`
+      `Installing Archon skills (archon + manage-run, ${fileCount} files per destination) into ${claudeSkillsRoot} and ${codexSkillsRoot}`
     );
 
     await copyArchonSkill(absoluteTarget);
