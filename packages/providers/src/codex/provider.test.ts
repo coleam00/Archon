@@ -1670,6 +1670,46 @@ describe('CodexProvider', () => {
           jsonPayload
         );
       });
+
+      test('uses last agent_message when multiple messages are emitted with output_format', async () => {
+        const preamble = { claims_accurate: 'false', reasoning: "I'll verify first" };
+        const finalAnswer = {
+          claims_accurate: 'true',
+          reasoning: 'Checked — claims are correct',
+        };
+        mockRunStreamed.mockResolvedValueOnce({
+          events: (async function* () {
+            yield {
+              type: 'item.completed',
+              item: { type: 'agent_message', id: 'msg-1', text: JSON.stringify(preamble) },
+            };
+            yield {
+              type: 'item.completed',
+              item: { type: 'agent_message', id: 'msg-2', text: JSON.stringify(finalAnswer) },
+            };
+            yield { type: 'turn.completed', usage: defaultUsage };
+          })(),
+        });
+
+        const chunks = [];
+        for await (const chunk of client.sendQuery('test', '/tmp', undefined, {
+          outputFormat: { type: 'json_schema', schema: { type: 'object' } },
+        })) {
+          chunks.push(chunk);
+        }
+
+        const assistantChunks = chunks.filter(c => c.type === 'assistant');
+        expect(assistantChunks).toHaveLength(2);
+
+        const resultChunk = chunks.find(c => c.type === 'result');
+        expect(resultChunk).toBeDefined();
+        expect(resultChunk!.type === 'result' && resultChunk!.structuredOutput).toEqual(
+          finalAnswer
+        );
+
+        const systemChunk = chunks.find(c => c.type === 'system');
+        expect(systemChunk).toBeUndefined();
+      });
     });
   });
 });
