@@ -15,7 +15,7 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
   <a href="https://github.com/coleam00/Archon/actions/workflows/test.yml"><img src="https://github.com/coleam00/Archon/actions/workflows/test.yml/badge.svg" alt="CI" /></a>
-  <a href="https://archon.diy"><img src="https://img.shields.io/badge/docs-archon.diy-blue" alt="Docs" /></a>
+  <a href="https://archon.diy/docs/"><img src="https://img.shields.io/badge/docs-archon.diy-blue" alt="Docs" /></a>
 </p>
 
 ---
@@ -185,7 +185,7 @@ brew install coleam00/archon/archon
 > ```
 >
 > Or set `assistants.claude.claudeBinaryPath` in `~/.archon/config.yaml`.
-> The Docker image ships Claude Code pre-installed. See [AI Assistants → Binary path configuration](https://archon.diy/docs/getting-started/ai-assistants/#binary-path-configuration-compiled-binaries-only) for details.
+> The Docker image ships Claude Code pre-installed. See [AI Assistants → Binary path configuration](https://archon.diy/getting-started/ai-assistants/#binary-path-configuration-compiled-binaries-only) for details.
 
 ### Start Using Archon
 
@@ -304,7 +304,7 @@ The Web UI and CLI work out of the box. Optionally connect a chat platform for r
 
 ## Documentation
 
-Full documentation is available at **[archon.diy](https://archon.diy)**.
+Full documentation is available at **[archon.diy/docs](https://archon.diy/docs/)**.
 
 | Topic | Description |
 |-------|-------------|
