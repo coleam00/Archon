@@ -44,11 +44,9 @@ function writeSkillFiles(skillRoot: string, files: Record<string, string>): void
  */
 export async function copyArchonSkill(targetPath: string): Promise<void> {
   const { BUNDLED_SKILL_FILES, BUNDLED_MANAGE_RUN_SKILL_FILES } = await import('../bundled-skill');
-  // Claude Code
   const claudeSkillsRoot = join(targetPath, '.claude', 'skills');
   writeSkillFiles(join(claudeSkillsRoot, 'archon'), BUNDLED_SKILL_FILES);
   writeSkillFiles(join(claudeSkillsRoot, 'manage-run'), BUNDLED_MANAGE_RUN_SKILL_FILES);
-  // Codex — canonical project-level skill path (auto-discovered by Codex)
   const codexSkillsRoot = join(targetPath, '.agents', 'skills');
   writeSkillFiles(join(codexSkillsRoot, 'archon'), BUNDLED_SKILL_FILES);
   writeSkillFiles(join(codexSkillsRoot, 'manage-run'), BUNDLED_MANAGE_RUN_SKILL_FILES);
@@ -67,15 +65,13 @@ export async function skillInstallCommand(targetPath: string): Promise<number> {
     return 1;
   }
 
-  const claudeSkillsRoot = join(absoluteTarget, '.claude', 'skills');
-  const codexSkillsRoot = join(absoluteTarget, '.agents', 'skills');
   try {
     const { BUNDLED_SKILL_FILES, BUNDLED_MANAGE_RUN_SKILL_FILES } =
       await import('../bundled-skill');
     const fileCount =
       Object.keys(BUNDLED_SKILL_FILES).length + Object.keys(BUNDLED_MANAGE_RUN_SKILL_FILES).length;
     console.log(
-      `Installing Archon skills (archon + manage-run, ${fileCount} files per destination) into ${claudeSkillsRoot} and ${codexSkillsRoot}`
+      `Installing Archon skills (archon + manage-run, ${fileCount} files per destination) into ${join(absoluteTarget, '.claude', 'skills')} and ${join(absoluteTarget, '.agents', 'skills')}`
     );
 
     await copyArchonSkill(absoluteTarget);
