@@ -15,6 +15,9 @@ import {
   Megaphone,
   Sparkles,
 } from 'lucide-react';
+import driveIndex from '@/lib/drive-index.generated.json';
+import solutionsData from '@/lib/solutions.generated.json';
+import contactsData from '@/lib/contacts.generated.json';
 
 interface CardProps {
   to: string;
@@ -28,7 +31,7 @@ function Card({ to, title, description, icon: Icon, badge }: CardProps): React.R
   return (
     <Link
       to={to}
-      className="group flex flex-col gap-2 rounded-lg border border-zinc-800 bg-zinc-950/40 p-4 transition-colors hover:border-zinc-600 hover:bg-zinc-900/60"
+      className="group flex flex-col gap-2 rounded-lg border border-border bg-surface-elevated p-4 transition-colors hover:border-border-bright hover:bg-surface-hover"
     >
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-center gap-2">
@@ -36,7 +39,7 @@ function Card({ to, title, description, icon: Icon, badge }: CardProps): React.R
           <h3 className="text-sm font-semibold text-text-primary">{title}</h3>
         </div>
         {badge && (
-          <span className="rounded-full bg-emerald-900/40 px-2 py-0.5 text-[10px] text-emerald-300">
+          <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-800">
             {badge}
           </span>
         )}
@@ -47,6 +50,24 @@ function Card({ to, title, description, icon: Icon, badge }: CardProps): React.R
 }
 
 export function StartHerePage(): React.ReactElement {
+  // Live counts from generated JSON (refreshed by build script + cron syncs)
+  const driveFolderCount = driveIndex.count ?? 0;
+  const driveFileCount = (driveIndex.folders ?? []).reduce(
+    (acc: number, f: { fileCount?: number }) => acc + (f.fileCount ?? 0),
+    0
+  );
+  const solutionsCount = solutionsData.count ?? 0;
+  const solutionsNames = (solutionsData.solutions ?? [])
+    .map((s: { name: string }) => s.name.replace(/\s*\(.*?\)\s*/g, '').trim())
+    .join(', ');
+  // Filter out TBD-stub contacts the same way ContactsPage does so the count matches
+  const realContactsCount = (contactsData.contacts ?? []).filter(
+    (c: { email?: string; role?: string }) => {
+      const isStub = c.email === 'TBD' || (c.role ?? '').trim().toUpperCase().startsWith('TBD');
+      return !isStub;
+    }
+  ).length;
+
   return (
     <div className="flex h-full flex-1 flex-col gap-6 overflow-y-auto p-6">
       {/* Hero */}
@@ -72,28 +93,46 @@ export function StartHerePage(): React.ReactElement {
       </div>
 
       {/* Three audience views explainer */}
-      <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-4">
+      <div className="rounded-lg border border-border bg-surface-elevated p-4">
         <h2 className="mb-2 text-base font-semibold text-text-primary">Three audience views</h2>
         <p className="mb-3 text-xs text-text-secondary">
-          Append <code className="rounded bg-zinc-900 px-1">?view=jason</code> (default),{' '}
-          <code className="rounded bg-zinc-900 px-1">?view=va</code>, or{' '}
-          <code className="rounded bg-zinc-900 px-1">?view=partner</code> to any Drive or Solutions
-          URL to filter what's visible. Folder-level{' '}
-          <code className="rounded bg-zinc-900 px-1">audience:</code> tags in the vault are
-          curator-controlled.
+          Append{' '}
+          <code className="rounded bg-surface-inset px-1 font-mono text-text-primary">
+            ?view=jason
+          </code>{' '}
+          (default),{' '}
+          <code className="rounded bg-surface-inset px-1 font-mono text-text-primary">
+            ?view=va
+          </code>
+          , or{' '}
+          <code className="rounded bg-surface-inset px-1 font-mono text-text-primary">
+            ?view=partner
+          </code>{' '}
+          to any Drive or Solutions URL to filter what's visible. Folder-level{' '}
+          <code className="rounded bg-surface-inset px-1 font-mono text-text-primary">
+            audience:
+          </code>{' '}
+          tags in the vault are curator-controlled.
         </p>
         <div className="grid grid-cols-1 gap-2 text-xs md:grid-cols-3">
-          <div className="rounded border border-zinc-800 bg-zinc-900 p-2">
-            <strong className="text-text-primary">view=jason</strong> -- sees everything. The
-            default for Jason and Carlos.
+          <div className="rounded border border-border bg-surface-inset p-2">
+            <strong className="text-text-primary">view=jason</strong>{' '}
+            <span className="text-text-secondary">
+              -- sees everything. The default for Jason and Carlos.
+            </span>
           </div>
-          <div className="rounded border border-zinc-800 bg-zinc-900 p-2">
-            <strong className="text-text-primary">view=va</strong> -- sees <em>all</em> +{' '}
-            <em>internal</em>. For Louise, James, Trisha, Vincent, Ed.
+          <div className="rounded border border-border bg-surface-inset p-2">
+            <strong className="text-text-primary">view=va</strong>{' '}
+            <span className="text-text-secondary">
+              -- sees <em>all</em> + <em>internal</em>. For Louise, James, Trisha, Vincent, Ed.
+            </span>
           </div>
-          <div className="rounded border border-zinc-800 bg-zinc-900 p-2">
-            <strong className="text-text-primary">view=partner</strong> -- sees <em>all</em> +{' '}
-            <em>partner-only</em>. For strategic partners on specific portals.
+          <div className="rounded border border-border bg-surface-inset p-2">
+            <strong className="text-text-primary">view=partner</strong>{' '}
+            <span className="text-text-secondary">
+              -- sees <em>all</em> + <em>partner-only</em>. For strategic partners on specific
+              portals.
+            </span>
           </div>
         </div>
       </div>
@@ -106,21 +145,21 @@ export function StartHerePage(): React.ReactElement {
             to="/drive"
             icon={HardDrive}
             title="Drive"
-            description="19 folders, 180 files from the PMC Assets Google Drive. Hourly snapshot via cron; live hot-reload on vault edits."
+            description={`${driveFolderCount} folders, ${driveFileCount} files from the PMC Assets Google Drive. Hourly snapshot via cron; live hot-reload on vault edits.`}
             badge="live"
           />
           <Card
             to="/solutions"
             icon={Briefcase}
             title="Solutions & Partners"
-            description="MedVectis, Quicksilver, Weave, CMPSE, PLAUD, AccuFit, EarthFirst, ThinkSgink. Third-party solutions Jason represents or integrates."
+            description={`${solutionsCount} third-party solutions Jason represents or integrates: ${solutionsNames}.`}
             badge="live"
           />
           <Card
             to="/contacts"
             icon={Users}
             title="Contacts"
-            description="Team + clinical partners + prospects. Pulled from the vault contacts directory."
+            description={`${realContactsCount} people across the team + clinical partners + prospects. Pulled from the vault contacts directory.`}
             badge="live"
           />
         </div>
@@ -242,34 +281,46 @@ export function StartHerePage(): React.ReactElement {
       </div>
 
       {/* Quick orientation */}
-      <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-4 text-xs">
+      <div className="rounded-lg border border-border bg-surface-elevated p-4 text-xs">
         <h2 className="mb-2 text-base font-semibold text-text-primary">Where things live</h2>
         <ul className="space-y-1.5 text-text-secondary">
           <li>
             <strong className="text-text-primary">Vault source of truth:</strong>{' '}
-            <code className="text-text-tertiary">gbauto/jid5274</code> on GitHub (every commit is
-            pushed; this dashboard reads from it).
+            <code className="rounded bg-surface-inset px-1 font-mono text-text-primary">
+              gbauto/jid5274
+            </code>{' '}
+            on GitHub (every commit is pushed; this dashboard reads from it).
           </li>
           <li>
             <strong className="text-text-primary">PMC sub-brands:</strong>{' '}
-            <code className="text-text-tertiary">businesses/pmc/</code>
+            <code className="rounded bg-surface-inset px-1 font-mono text-text-primary">
+              businesses/pmc/
+            </code>
           </li>
           <li>
             <strong className="text-text-primary">Solutions & Partners:</strong>{' '}
-            <code className="text-text-tertiary">partners/</code>
+            <code className="rounded bg-surface-inset px-1 font-mono text-text-primary">
+              partners/
+            </code>
           </li>
           <li>
             <strong className="text-text-primary">Client engagements:</strong>{' '}
-            <code className="text-text-tertiary">clients-engagements/</code> (Cleveland Clinic,
-            Precision Health, ...)
+            <code className="rounded bg-surface-inset px-1 font-mono text-text-primary">
+              clients-engagements/
+            </code>{' '}
+            (Cleveland Clinic, Precision Health, ...)
           </li>
           <li>
             <strong className="text-text-primary">Decisions / ADRs:</strong>{' '}
-            <code className="text-text-tertiary">intelligence/decisions/</code>
+            <code className="rounded bg-surface-inset px-1 font-mono text-text-primary">
+              intelligence/decisions/
+            </code>
           </li>
           <li>
             <strong className="text-text-primary">Escalations to Greg:</strong>{' '}
-            <code className="text-text-tertiary">intelligence/escalations/</code>
+            <code className="rounded bg-surface-inset px-1 font-mono text-text-primary">
+              intelligence/escalations/
+            </code>
           </li>
         </ul>
       </div>

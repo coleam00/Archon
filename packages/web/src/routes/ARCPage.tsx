@@ -161,11 +161,12 @@ export function ARCPage(): React.ReactElement {
           </p>
           <p className="text-xs text-red-300/80">
             The intake doc has both{' '}
-            <code className="rounded bg-zinc-800 px-1 py-0.5">sales@arcbrandagency.com</code> (in
-            the exec summary; matches the public site) and{' '}
-            <code className="rounded bg-zinc-800 px-1 py-0.5">sales@arkbrandagency.com</code> (Adam
-            said verbally twice). Only <code className="rounded bg-zinc-800 px-1 py-0.5">arc</code>{' '}
-            resolves on the web. Ask Adam to confirm before provisioning Jason's access.
+            <code className="rounded bg-surface-inset px-1 py-0.5">sales@arcbrandagency.com</code>{' '}
+            (in the exec summary; matches the public site) and{' '}
+            <code className="rounded bg-surface-inset px-1 py-0.5">sales@arkbrandagency.com</code>{' '}
+            (Adam said verbally twice). Only{' '}
+            <code className="rounded bg-surface-inset px-1 py-0.5">arc</code> resolves on the web.
+            Ask Adam to confirm before provisioning Jason's access.
           </p>
         </div>
       </div>

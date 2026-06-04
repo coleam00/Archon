@@ -34,7 +34,7 @@ interface CampaignPillar {
 const CAMPAIGN_PILLARS: CampaignPillar[] = [
   {
     num: 1,
-    belief: 'The system you\'re in isn\'t the only option',
+    belief: "The system you're in isn't the only option",
     challenge: '"Reimbursements are tight. Burnout is the cost of caring. No exit."',
     surface: 'PMC LinkedIn · EWC IG · Jason personal',
   },
@@ -46,20 +46,20 @@ const CAMPAIGN_PILLARS: CampaignPillar[] = [
   },
   {
     num: 3,
-    belief: 'Cash-pay isn\'t a luxury. It\'s the next default.',
+    belief: "Cash-pay isn't a luxury. It's the next default.",
     challenge: '"My patients won\'t pay cash. That\'s for concierge people."',
     surface: 'EWC IG primary',
   },
   {
     num: 4,
-    belief: 'You don\'t need to assemble it yourself',
+    belief: "You don't need to assemble it yourself",
     challenge: '"I\'d love to make the leap but don\'t have time to figure out which vendors."',
     surface: 'EWC IG · occasional PMC',
   },
 ];
 
 const COMPLIANCE_GATES = [
-  'Approval flow: nothing ships without Jason\'s explicit OK.',
+  "Approval flow: nothing ships without Jason's explicit OK.",
   'No named entities (health systems, payers, pharma, insurers) in the body without prior approval. Source citations OK.',
   'Every claim has a tier 1-3 source: peer-reviewed > regulatory > government > major investigative journalism.',
   'Medical-adjacent: no FDA disease claims on BRT content. No specific medical advice. Composite cases labeled.',
@@ -197,7 +197,9 @@ export function SocialContentPage(): React.ReactElement {
     <div className="flex flex-1 flex-col gap-6 p-6">
       {/* Header */}
       <div className="flex flex-col gap-2">
-        <h1 className="text-2xl font-semibold text-text-primary">VA Workspace — Content & Outbound</h1>
+        <h1 className="text-2xl font-semibold text-text-primary">
+          VA Workspace — Content & Outbound
+        </h1>
         <p className="text-sm text-text-secondary">
           Active campaign and live outbound sequences for the PMC portfolio. North-star metric:{' '}
           <span className="font-semibold text-text-primary">first meetings booked per week</span>{' '}
@@ -212,7 +214,7 @@ export function SocialContentPage(): React.ReactElement {
           <p className="text-sm font-medium text-emerald-200">
             Active Campaign: 2026-05-31 → 2026-08-31 (60-90 day window)
           </p>
-          <p className="text-xs text-emerald-300/80">
+          <p className="text-xs text-emerald-800/80">
             <span className="font-medium">Two throughlines:</span>{' '}
             <span className="italic">
               "Your practice was the dream. Built for the physicians who refused to quit caring."
@@ -220,10 +222,12 @@ export function SocialContentPage(): React.ReactElement {
             (PMC LinkedIn primary) ·{' '}
             <span className="italic">"Independent medicine, reengineered."</span> (EWC IG primary).
           </p>
-          <p className="text-xs text-emerald-300/80">
+          <p className="text-xs text-emerald-800/80">
             We are subliminally challenging how readers see healthcare while championing the
             independent physician.{' '}
-            <span className="font-semibold">Advocate, not crusader. Invitational, never preachy.</span>
+            <span className="font-semibold">
+              Advocate, not crusader. Invitational, never preachy.
+            </span>
           </p>
         </div>
       </div>
@@ -278,8 +282,8 @@ export function SocialContentPage(): React.ReactElement {
           </ol>
           <p className="mt-3 border-t border-red-700/30 pt-2 text-[11px] text-red-300/80">
             <span className="font-semibold">Universal voice rules:</span> No em-dashes (use{' '}
-            <code className="rounded bg-zinc-800 px-1 py-0.5">--</code>). Precise odd numbers only
-            ($147,200, not $150K). Physician = hero, PMC/EWC = guide. One controlling idea per
+            <code className="rounded bg-surface-inset px-1 py-0.5">--</code>). Precise odd numbers
+            only ($147,200, not $150K). Physician = hero, PMC/EWC = guide. One controlling idea per
             post.
           </p>
         </div>
@@ -306,7 +310,9 @@ export function SocialContentPage(): React.ReactElement {
               {seqCount > 0 && (
                 <span
                   className={`inline-flex min-w-[1.25rem] items-center justify-center rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
-                    isActive ? 'bg-primary text-primary-foreground' : 'bg-zinc-800 text-zinc-300'
+                    isActive
+                      ? 'bg-primary text-primary-foreground'
+                      : 'bg-surface-inset text-text-secondary'
                   }`}
                 >
                   {seqCount}
@@ -372,11 +378,11 @@ export function SocialContentPage(): React.ReactElement {
             </p>
             <p className="mt-1 text-xs text-text-tertiary">
               When a sequence launches in Apollo, prefix the name with{' '}
-              <code className="rounded bg-zinc-800 px-1 py-0.5 font-mono text-zinc-200">
+              <code className="rounded bg-surface-inset px-1 py-0.5 font-mono text-text-primary">
                 [{activeBrand.apolloPrefix}]
               </code>{' '}
               and add a vault doc under{' '}
-              <code className="rounded bg-zinc-800 px-1 py-0.5 font-mono text-zinc-200">
+              <code className="rounded bg-surface-inset px-1 py-0.5 font-mono text-text-primary">
                 businesses/pmc/{activeBrand.slug}/
               </code>
               .
@@ -396,12 +402,12 @@ export function SocialContentPage(): React.ReactElement {
                             ? 'bg-green-950/50 text-green-400'
                             : seq.status === 'drafting'
                               ? 'bg-blue-950/50 text-blue-400'
-                              : 'bg-zinc-800 text-zinc-400'
+                              : 'bg-surface-inset text-text-secondary'
                         }`}
                       >
                         {seq.status}
                       </span>
-                      <span className="inline-flex w-fit items-center rounded bg-zinc-800 px-2 py-0.5 text-[10px] font-medium text-zinc-300 capitalize">
+                      <span className="inline-flex w-fit items-center rounded bg-surface-inset px-2 py-0.5 text-[10px] font-medium text-text-secondary capitalize">
                         {seq.channel}
                       </span>
                       {seq.touches > 0 && (
@@ -412,12 +418,10 @@ export function SocialContentPage(): React.ReactElement {
                     </div>
                   </div>
                 </div>
-                {seq.notes && (
-                  <p className="mb-2 text-xs text-text-secondary">{seq.notes}</p>
-                )}
+                {seq.notes && <p className="mb-2 text-xs text-text-secondary">{seq.notes}</p>}
                 <p className="text-[11px] font-mono text-text-tertiary">
                   <span className="text-text-tertiary">Vault:</span>{' '}
-                  <code className="rounded bg-zinc-800 px-1 py-0.5">{seq.vaultPath}</code>
+                  <code className="rounded bg-surface-inset px-1 py-0.5">{seq.vaultPath}</code>
                 </p>
               </div>
             ))}
@@ -446,7 +450,7 @@ export function SocialContentPage(): React.ReactElement {
               <p className="text-sm font-semibold text-text-primary">{link.label}</p>
               <p className="text-xs text-text-secondary">{link.description}</p>
               <p className="text-[11px] font-mono text-text-tertiary">
-                <code className="rounded bg-zinc-800 px-1 py-0.5">{link.path}</code>
+                <code className="rounded bg-surface-inset px-1 py-0.5">{link.path}</code>
               </p>
             </div>
           ))}

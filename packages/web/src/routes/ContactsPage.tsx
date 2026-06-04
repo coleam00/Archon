@@ -144,7 +144,9 @@ export function ContactsPage(): React.ReactElement {
               {cat.label}
               <span
                 className={`inline-flex min-w-[1.25rem] items-center justify-center rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
-                  isActive ? 'bg-primary text-primary-foreground' : 'bg-zinc-800 text-zinc-300'
+                  isActive
+                    ? 'bg-primary text-primary-foreground'
+                    : 'bg-surface-inset text-text-secondary'
                 }`}
               >
                 {count}
@@ -174,7 +176,7 @@ export function ContactsPage(): React.ReactElement {
                 className={`flex flex-col gap-1 rounded-md border p-3 text-left transition-colors ${
                   selectedId === c.id
                     ? 'border-primary bg-primary/5'
-                    : 'border-border bg-surface-elevated hover:border-zinc-600'
+                    : 'border-border bg-surface-elevated hover:border-border-bright'
                 }`}
               >
                 <div className="flex items-start justify-between gap-3">
@@ -191,7 +193,7 @@ export function ContactsPage(): React.ReactElement {
                       c.category === 'team'
                         ? 'bg-blue-950/50 text-blue-300'
                         : c.category === 'clinical-partners'
-                          ? 'bg-emerald-950/50 text-emerald-300'
+                          ? 'bg-emerald-950/50 text-emerald-800'
                           : 'bg-amber-950/50 text-amber-300'
                     }`}
                   >
@@ -282,7 +284,7 @@ export function ContactsPage(): React.ReactElement {
                   {selected.tags.slice(0, 8).map(t => (
                     <span
                       key={t}
-                      className="rounded bg-zinc-800 px-2 py-0.5 text-[10px] font-mono text-zinc-400"
+                      className="rounded bg-surface-inset px-2 py-0.5 text-[10px] font-mono text-text-secondary"
                     >
                       {t}
                     </span>
@@ -292,7 +294,7 @@ export function ContactsPage(): React.ReactElement {
 
               <div className="border-t border-border pt-3 text-[11px] text-text-tertiary">
                 Source:{' '}
-                <code className="rounded bg-zinc-800 px-1 py-0.5">{selected.vaultPath}</code>
+                <code className="rounded bg-surface-inset px-1 py-0.5">{selected.vaultPath}</code>
               </div>
             </div>
           )}

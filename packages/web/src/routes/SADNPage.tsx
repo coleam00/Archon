@@ -90,14 +90,14 @@ export function SADNPage(): React.ReactElement {
           <span className="rounded bg-green-950/40 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-green-300">
             active
           </span>
-          <span className="rounded bg-zinc-800 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-zinc-400">
+          <span className="rounded bg-surface-inset px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-text-secondary">
             volunteer mode (comp tbd)
           </span>
         </div>
         <p className="text-sm text-text-secondary">
-          Sarasota Art and Dance Night 2026 -- partner outreach for Susan Szantosi (Vividiance
-          LLC). 3rd annual cultural event. Jason curates business/community partners against
-          Susan's approved ICP and template.
+          Sarasota Art and Dance Night 2026 -- partner outreach for Susan Szantosi (Vividiance LLC).
+          3rd annual cultural event. Jason curates business/community partners against Susan's
+          approved ICP and template.
         </p>
       </div>
 
@@ -110,9 +110,7 @@ export function SADNPage(): React.ReactElement {
           </div>
           <div className="flex items-center gap-2">
             <MapPin className="h-4 w-4 text-purple-300" />
-            <span className="text-sm text-purple-200">
-              Art Ovation Hotel, downtown Sarasota
-            </span>
+            <span className="text-sm text-purple-200">Art Ovation Hotel, downtown Sarasota</span>
           </div>
           <div className="flex items-center gap-2">
             <ExternalLink className="h-4 w-4 text-purple-300" />
@@ -128,8 +126,7 @@ export function SADNPage(): React.ReactElement {
         </div>
         <p className="mt-3 text-xs text-purple-300/80 italic">
           Visual art + live music + performing arts + social dancing + artist recognition + curated
-          networking. Benefits The Creative Bridge Foundation (501(c)(3)) and the Rising Star
-          Award.
+          networking. Benefits The Creative Bridge Foundation (501(c)(3)) and the Rising Star Award.
         </p>
       </div>
 
@@ -149,12 +146,17 @@ export function SADNPage(): React.ReactElement {
             <dt className="text-text-tertiary">Phone:</dt>
             <dd>(941) 894-4168</dd>
             <dt className="text-text-tertiary">Background:</dt>
-            <dd>Multidisciplinary artist + 10yr ballroom competitor. Also founded Women in Velocity + DancingSRQ.</dd>
+            <dd>
+              Multidisciplinary artist + 10yr ballroom competitor. Also founded Women in Velocity +
+              DancingSRQ.
+            </dd>
           </dl>
         </div>
 
         <div className="rounded-md border border-border bg-surface-elevated p-4">
-          <h3 className="mb-2 text-sm font-semibold text-text-primary">Susan-approved positioning</h3>
+          <h3 className="mb-2 text-sm font-semibold text-text-primary">
+            Susan-approved positioning
+          </h3>
           <p className="text-xs text-text-secondary italic mb-2">
             "Join a movement that strengthens Sarasota's cultural economy."
           </p>
@@ -179,9 +181,9 @@ export function SADNPage(): React.ReactElement {
             Suppression risk: luxury auto dealerships overlap with ARC Brand Agency
           </p>
           <p className="text-xs text-red-300/80">
-            "Luxury automotive dealerships" is on Susan's SADN priority list AND on Adam Riley's
-            ARC target list. Never send both an ARC cold pitch and an SADN partnership pitch to
-            the same Sarasota luxury auto contact in the same week. Proposed split:{' '}
+            "Luxury automotive dealerships" is on Susan's SADN priority list AND on Adam Riley's ARC
+            target list. Never send both an ARC cold pitch and an SADN partnership pitch to the same
+            Sarasota luxury auto contact in the same week. Proposed split:{' '}
             <span className="font-semibold">ARC owns</span> Sarasota-area independent service
             centers + smaller shops; <span className="font-semibold">SADN owns</span> dealership
             principals + sales / marketing directors at brand-name dealerships.
@@ -238,8 +240,8 @@ export function SADNPage(): React.ReactElement {
         </div>
         <div className="rounded-md border border-border bg-surface-elevated p-4">
           <p className="text-xs text-text-secondary">
-            Business owners, professionals, community leaders, philanthropists, arts supporters,
-            and residents who value culture, creativity, and meaningful local connections.
+            Business owners, professionals, community leaders, philanthropists, arts supporters, and
+            residents who value culture, creativity, and meaningful local connections.
           </p>
         </div>
       </section>
@@ -300,9 +302,13 @@ export function SADNPage(): React.ReactElement {
             <li>1. Sponsorship tier sheet -- exact entry / mid / top levels + prices?</li>
             <li>2. Compensation for Jason -- pure volunteer, commission, or honorarium?</li>
             <li>
-              3. Sending mailbox -- send from <code className="rounded bg-zinc-800 px-1">jid5274@gmail.com</code> or provision <code className="rounded bg-zinc-800 px-1">jason@sarasotaartanddance.com</code>?
+              3. Sending mailbox -- send from{' '}
+              <code className="rounded bg-surface-inset px-1">jid5274@gmail.com</code> or provision{' '}
+              <code className="rounded bg-surface-inset px-1">jason@sarasotaartanddance.com</code>?
             </li>
-            <li>4. Calendly handoff -- once prospect says yes to 15-min, book with Jason or Susan?</li>
+            <li>
+              4. Calendly handoff -- once prospect says yes to 15-min, book with Jason or Susan?
+            </li>
             <li>5. Whose CRM -- Jason's Google Sheet (Susan views) or Susan's existing tracker?</li>
             <li>6. 2024 recap video edit -- Vincent (Creative VA) handoff? Target length?</li>
           </ol>
@@ -312,15 +318,15 @@ export function SADNPage(): React.ReactElement {
       {/* Warm Tier 1 prospects — Jason's prior relationships */}
       <section className="flex flex-col gap-3">
         <div className="flex items-center gap-2">
-          <Sparkles className="h-4 w-4 text-emerald-300" />
+          <Sparkles className="h-4 w-4 text-emerald-800" />
           <h2 className="text-base font-semibold text-text-primary">
             Warm Tier 1 prospects — Jason's prior relationships
           </h2>
         </div>
         <p className="text-xs text-text-secondary">
-          Curated from Susan's Sarasota_Businesses sheet + Jason's prior sponsor-track relationships.
-          Voice contract: warm, peer-to-peer, single-sentence flattery max, no em dashes, sign-off
-          "Jason / Call/text: 412.508.3539".
+          Curated from Susan's Sarasota_Businesses sheet + Jason's prior sponsor-track
+          relationships. Voice contract: warm, peer-to-peer, single-sentence flattery max, no em
+          dashes, sign-off "Jason / Call/text: 412.508.3539".
         </p>
         <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
           {((prospectsData.by_business as Record<string, BusinessProspect[]>).SADN ?? []).map(
@@ -332,14 +338,12 @@ export function SADNPage(): React.ReactElement {
                 <div className="flex items-start justify-between gap-2">
                   <h3 className="text-sm font-medium text-text-primary">{p.name}</h3>
                   {p.tier && (
-                    <span className="shrink-0 rounded-md border border-emerald-700/40 bg-emerald-900/40 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-300">
+                    <span className="shrink-0 rounded-md border border-emerald-700/40 bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-800">
                       {p.tier}
                     </span>
                   )}
                 </div>
-                {p.category && (
-                  <p className="mt-1 text-[11px] text-text-tertiary">{p.category}</p>
-                )}
+                {p.category && <p className="mt-1 text-[11px] text-text-tertiary">{p.category}</p>}
                 {p.ask && (
                   <p className="mt-2 text-[11px] text-text-secondary">
                     <span className="text-text-tertiary">Ask:</span> {p.ask}
