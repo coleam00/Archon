@@ -271,6 +271,10 @@ CREATE INDEX IF NOT EXISTS idx_workflow_events_run_id
   ON remote_agent_workflow_events(workflow_run_id);
 CREATE INDEX IF NOT EXISTS idx_workflow_events_type
   ON remote_agent_workflow_events(event_type);
+-- Global created_at index for the dashboard event poller's cross-run tail
+-- (WHERE created_at >= $1 ORDER BY created_at ASC).
+CREATE INDEX IF NOT EXISTS idx_workflow_events_created_at
+  ON remote_agent_workflow_events(created_at);
 
 COMMENT ON TABLE remote_agent_workflow_events IS
   'Lean UI-relevant workflow events for observability (step transitions, artifacts, errors)';
