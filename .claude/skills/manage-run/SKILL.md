@@ -68,6 +68,13 @@ run id (it's created in the child) — find it with `archon workflow runs`. If t
 never appears, check the child log path printed by the command (or the `logPath`
 field in `--detach --json`).
 
+> **Console UI note:** a detached run *does* appear in the web console's Workflow dock
+> (the dock lists runs by project), but its progress may **not update live** — detached
+> runs execute in a separate process and don't stream to the console's live event feed,
+> so the dock catches up on its next refetch rather than in real time. Tell the user to
+> refresh if they want the latest state. (Re-running progress live for CLI-started runs
+> is a tracked follow-up.)
+
 ### Approve or reject a paused run (two steps)
 `--json` approve/reject/resume **record the decision** (the run becomes resumable) but
 do **not** execute the workflow — execution streams output that would corrupt the JSON.

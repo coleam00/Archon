@@ -34,7 +34,7 @@ archon workflow run archon-assist "Investigate the flaky test" --detach
 | `--from <name>` / `--from-branch <name>` | Start-point branch for new worktree (default: repo default branch) |
 | `--no-worktree` | Skip isolation — run in the live checkout |
 | `--resume` | Resume the last failed run of this workflow at this cwd (skips completed nodes) |
-| `--detach` | Run in a detached background child and return immediately (find the run via `workflow runs`). Pair with `--json` for a structured ack. Child output goes to `~/.archon/logs/`. |
+| `--detach` | Run in a detached background child and return immediately (find the run via `workflow runs`). Pair with `--json` for a structured ack. Child output goes to `~/.archon/logs/`. In the web console the run appears in the Workflow dock (listed by project) but may not update **live** until a refetch — it runs out-of-process and doesn't stream to the console's live event feed. |
 | `--cwd <path>` | Working directory override |
 
 **Flag conflicts** (errors):

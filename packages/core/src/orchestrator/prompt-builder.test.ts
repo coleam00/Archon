@@ -136,17 +136,14 @@ describe('buildOrchestratorSystemAppend', () => {
     expect(result).toContain('## Registered Projects');
   });
 
-  test('appends the run-management section for a scoped conversation', () => {
-    const result = buildOrchestratorSystemAppend(makeConversation('cb-1'), codebases, workflows);
-    expect(result).toContain('## Managing Workflow Runs');
-    expect(result).toContain('archon workflow runs');
-    expect(result).toContain('--detach');
-  });
-
-  test('appends the run-management section for an unscoped conversation', () => {
-    const result = buildOrchestratorSystemAppend(makeConversation(null), codebases, workflows);
-    expect(result).toContain('## Managing Workflow Runs');
-    expect(result).toContain('archon workflow approve');
+  test('does NOT include the run-management section (orchestrator gates it per-provider)', () => {
+    // The CLI run-management pointer is appended by orchestrator-agent.ts only for
+    // project-scoped chats on providers WITHOUT the native manage_run tool — never
+    // here, so Claude/Pi (nativeTools) don't get a redundant pointer.
+    const scoped = buildOrchestratorSystemAppend(makeConversation('cb-1'), codebases, workflows);
+    const unscoped = buildOrchestratorSystemAppend(makeConversation(null), codebases, workflows);
+    expect(scoped).not.toContain('## Managing Workflow Runs');
+    expect(unscoped).not.toContain('## Managing Workflow Runs');
   });
 });
 

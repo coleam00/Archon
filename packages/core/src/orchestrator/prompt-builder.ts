@@ -215,13 +215,15 @@ ${formatProjectSection(scopedCodebase)}
 /**
  * Build the run-management section of the orchestrator prompt.
  *
- * Teaches the chat agent (any provider) that it can inspect and control workflow
- * runs directly via the `archon` CLI over bash — the cross-provider delivery of
- * the `manage-run` skill. Direct chat is the one path where the `skills:` option
- * is NOT consumed (it is workflow-node-only), so the system prompt is the only
- * reliable channel that reaches every provider, including Codex (no skills
- * capability). Invocation inherits the same `archon`-on-PATH convention the
- * `archon` skill already assumes.
+ * Teaches the chat agent it can inspect and control workflow runs directly via
+ * the `archon` CLI over bash — the delivery of the `manage-run` skill for
+ * providers WITHOUT the in-process `manage_run` tool. Direct chat is the one path
+ * where the `skills:` option is NOT consumed (it is workflow-node-only), so the
+ * system prompt is the only channel that reaches Codex/OpenCode/Copilot. The
+ * orchestrator (orchestrator-agent.ts) appends this ONLY for project-scoped chats
+ * on non-nativeTools providers — Claude/Pi use the native tool instead, and the
+ * CLI commands require a git-repo cwd that unscoped chats don't have. Invocation
+ * inherits the same `archon`-on-PATH convention the `archon` skill already assumes.
  */
 export function buildRunManagementSection(): string {
   return `## Managing Workflow Runs
@@ -244,8 +246,9 @@ When the user asks what's running, whether a run passed/failed, or to approve / 
 /**
  * Build the static orchestrator context string for use as a cacheable system prompt append.
  * Returns the same content as buildOrchestratorPrompt/buildProjectScopedPrompt depending
- * on whether the conversation is scoped to a project, with the run-management section
- * appended so every provider's direct chat can drive run management via the CLI.
+ * on whether the conversation is scoped to a project. The run-management section is NOT
+ * appended here — the orchestrator adds it conditionally (project-scoped + non-nativeTools
+ * providers) via buildRunManagementSection().
  */
 export function buildOrchestratorSystemAppend(
   conversation: Conversation,
@@ -256,9 +259,7 @@ export function buildOrchestratorSystemAppend(
     ? codebases.find(c => c.id === conversation.codebase_id)
     : undefined;
 
-  const base = scopedCodebase
+  return scopedCodebase
     ? buildProjectScopedPrompt(scopedCodebase, codebases, workflows)
     : buildOrchestratorPrompt(codebases, workflows);
-
-  return `${base}\n\n${buildRunManagementSection()}`;
 }
