@@ -1,0 +1,17 @@
+/** Prompt variant: defaults + sparse fromDag/toDag conversion. */
+import type { PromptNodeData, WireDagNode } from '../types';
+
+/** Default prompt config (empty body) for a freshly-created prompt node. */
+export function defaultPromptData(): PromptNodeData {
+  return { prompt: '' };
+}
+
+/** Build `PromptNodeData` from a partitioned wire node's variant-specific fields. */
+export function promptFromDag(variantSpecific: Partial<WireDagNode>): PromptNodeData {
+  return { prompt: variantSpecific.prompt ?? '' };
+}
+
+/** Serialize `PromptNodeData` to the sparse `{ prompt: … }` wire fragment. */
+export function promptToDag(data: PromptNodeData): Partial<WireDagNode> {
+  return { prompt: data.prompt };
+}
