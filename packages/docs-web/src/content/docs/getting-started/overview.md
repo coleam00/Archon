@@ -306,8 +306,10 @@ archon workflow run <name> --cwd /path/to/repo "<message>"
 | `archon setup` | Interactive setup wizard for credentials and config |
 | `archon doctor` | Verify your setup (Claude binary, gh auth, DB, adapters) |
 | `archon workflow list` | List available workflows |
-| `archon workflow run <name> [msg]` | Run a workflow |
-| `archon workflow status` | Show running workflows |
+| `archon workflow run <name> [msg]` | Run a workflow (`--detach` to background it) |
+| `archon workflow status` | Show active runs (running + paused) |
+| `archon workflow runs` | List recent runs of every status for this project |
+| `archon workflow get <id>` | Show detail for a single run (any status) |
 | `archon workflow resume <id>` | Resume a failed workflow |
 | `archon workflow abandon <id>` | Abandon a non-terminal run |
 | `archon workflow approve <id> [comment]` | Approve an interactive loop gate |
@@ -465,13 +467,14 @@ If you want Claude Code to be able to invoke Archon workflows on your behalf, in
 Archon skill into your project. The setup wizard handles this automatically — just run
 `archon setup` and accept the skill installation prompt.
 
-To install manually instead:
+To install manually instead, run `archon skill install /path/to/your/repo` (which writes both the `archon` and `manage-run` skills), or copy them by hand:
 
 ```bash
 cp -r Archon/.claude/skills/archon /path/to/your/repo/.claude/skills/
+cp -r Archon/.claude/skills/manage-run /path/to/your/repo/.claude/skills/
 ```
 
-Then in Claude Code, say things like "use archon to fix issue #42" and it will invoke the appropriate workflow.
+Then in Claude Code, say things like "use archon to fix issue #42" and it will invoke the appropriate workflow. The `manage-run` skill lets it inspect and control runs (`archon workflow runs`/`get`/`approve`...).
 
 ---
 

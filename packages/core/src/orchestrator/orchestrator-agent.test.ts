@@ -175,6 +175,7 @@ mock.module('./prompt-builder', () => ({
   buildOrchestratorPrompt: mock(() => 'orchestrator system prompt'),
   buildProjectScopedPrompt: mock(() => 'project scoped system prompt'),
   buildOrchestratorSystemAppend: mock(() => 'orchestrator system append'),
+  buildRunManagementSection: mock(() => '## Managing Workflow Runs\n(mocked)'),
   formatWorkflowContextSection: mock((results: unknown[]) =>
     results.length > 0 ? '## Recent Workflow Results\n\n...' : ''
   ),
@@ -1138,6 +1139,54 @@ describe('discoverAllWorkflows — remote sync', () => {
     const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
     expect(typeof requestOptions.systemPrompt).toBe('string');
     expect(requestOptions.systemPrompt).toBe('orchestrator system append');
+  });
+
+  test('appends the run-management section (and no native tool) for a project-scoped non-native-tool provider', async () => {
+    const providers = await import('@archon/providers');
+    const capsMock = providers.getProviderCapabilities as ReturnType<typeof mock>;
+    capsMock.mockReturnValue({ envInjection: true, nativeTools: false });
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ ai_assistant_type: 'codex', codebase_id: 'codebase-1' }))
+    );
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebaseForSync()));
+
+    try {
+      const platform = makePlatform();
+      await handleMessage(platform, 'conv-1', 'Hello');
+
+      const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
+      // Codex → plain-string prompt that now carries the CLI pointer section.
+      expect(requestOptions.systemPrompt).toContain('## Managing Workflow Runs');
+      // Providers without native tools get NO in-process tool — bash CLI only.
+      expect(requestOptions.nativeTools).toBeUndefined();
+    } finally {
+      capsMock.mockReturnValue({ envInjection: true });
+    }
+  });
+
+  test('omits the run-management section and injects the native tool for a project-scoped native-tool provider', async () => {
+    const providers = await import('@archon/providers');
+    const capsMock = providers.getProviderCapabilities as ReturnType<typeof mock>;
+    capsMock.mockReturnValue({ envInjection: true, nativeTools: true });
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ ai_assistant_type: 'claude', codebase_id: 'codebase-1' }))
+    );
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebaseForSync()));
+
+    try {
+      const platform = makePlatform();
+      await handleMessage(platform, 'conv-1', 'Hello');
+
+      const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
+      // Claude → preset object; the append must NOT carry the CLI pointer
+      // (it gets the in-process tool instead, so the pointer would be redundant).
+      const sp = requestOptions.systemPrompt as { append?: string };
+      expect(sp.append).not.toContain('## Managing Workflow Runs');
+      // Native-tool provider gets the manage_run tool instead.
+      expect(Array.isArray(requestOptions.nativeTools)).toBe(true);
+    } finally {
+      capsMock.mockReturnValue({ envInjection: true });
+    }
   });
 });
 

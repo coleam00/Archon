@@ -1,9 +1,9 @@
 /**
  * Skill command - Install bundled Archon skill files into a project
  *
- * Writes the bundled SKILL.md, guides, references and examples into
- * <targetPath>/.claude/skills/archon/ so Claude Code picks up the skill
- * the next time the project is opened.
+ * Writes the bundled `archon` skill (SKILL.md, guides, references, examples) and
+ * the focused `manage-run` skill into <targetPath>/.claude/skills/<skill>/ so
+ * Claude Code picks them up the next time the project is opened.
  *
  * Always overwrites existing files to ensure the latest skill version
  * shipped with the current Archon binary is installed.
@@ -11,13 +11,27 @@
 import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { dirname, join, resolve } from 'path';
 
+/** Write a skill's relative-path→content map under <skillRoot>, creating dirs as needed. */
+function writeSkillFiles(skillRoot: string, files: Record<string, string>): void {
+  for (const [relativePath, content] of Object.entries(files)) {
+    const dest = join(skillRoot, relativePath);
+    const destDir = dirname(dest);
+    if (!existsSync(destDir)) {
+      mkdirSync(destDir, { recursive: true });
+    }
+    writeFileSync(dest, content);
+  }
+}
+
 /**
- * Copy the bundled Archon skill files to <targetPath>/.claude/skills/archon/
+ * Copy the bundled Archon skills into <targetPath>/.claude/skills/:
+ *   - `archon`     — the broad authoring/setup/run skill
+ *   - `manage-run` — the focused run-management skill
  *
  * Pure file-system helper used by both the standalone `skill install` CLI
  * command and the interactive setup wizard.
  *
- * The `bundled-skill` module is dynamically imported here so that its 18 top-level
+ * The `bundled-skill` module is dynamically imported here so that its top-level
  * `import … with { type: 'text' }` statements only execute when this function is
  * actually called. Compiled binaries (`bun build --compile`) still statically
  * analyze the literal-string `import()` and embed the chunk; linked-source
@@ -27,16 +41,10 @@ import { dirname, join, resolve } from 'path';
  * the source skill files are missing from disk.
  */
 export async function copyArchonSkill(targetPath: string): Promise<void> {
-  const { BUNDLED_SKILL_FILES } = await import('../bundled-skill');
-  const skillRoot = join(targetPath, '.claude', 'skills', 'archon');
-  for (const [relativePath, content] of Object.entries(BUNDLED_SKILL_FILES)) {
-    const dest = join(skillRoot, relativePath);
-    const destDir = dirname(dest);
-    if (!existsSync(destDir)) {
-      mkdirSync(destDir, { recursive: true });
-    }
-    writeFileSync(dest, content);
-  }
+  const { BUNDLED_SKILL_FILES, BUNDLED_MANAGE_RUN_SKILL_FILES } = await import('../bundled-skill');
+  const skillsRoot = join(targetPath, '.claude', 'skills');
+  writeSkillFiles(join(skillsRoot, 'archon'), BUNDLED_SKILL_FILES);
+  writeSkillFiles(join(skillsRoot, 'manage-run'), BUNDLED_MANAGE_RUN_SKILL_FILES);
 }
 
 /**
@@ -52,14 +60,18 @@ export async function skillInstallCommand(targetPath: string): Promise<number> {
     return 1;
   }
 
-  const skillRoot = join(absoluteTarget, '.claude', 'skills', 'archon');
+  const skillsRoot = join(absoluteTarget, '.claude', 'skills');
   try {
-    const { BUNDLED_SKILL_FILES } = await import('../bundled-skill');
-    const fileCount = Object.keys(BUNDLED_SKILL_FILES).length;
-    console.log(`Installing Archon skill (${fileCount} files) into ${skillRoot}`);
+    const { BUNDLED_SKILL_FILES, BUNDLED_MANAGE_RUN_SKILL_FILES } =
+      await import('../bundled-skill');
+    const fileCount =
+      Object.keys(BUNDLED_SKILL_FILES).length + Object.keys(BUNDLED_MANAGE_RUN_SKILL_FILES).length;
+    console.log(
+      `Installing Archon skills (archon + manage-run, ${fileCount} files) into ${skillsRoot}`
+    );
 
     await copyArchonSkill(absoluteTarget);
-    console.log('Done. Restart Claude Code to load the skill.');
+    console.log('Done. Restart Claude Code to load the skills.');
     return 0;
   } catch (error) {
     const err = error as NodeJS.ErrnoException;

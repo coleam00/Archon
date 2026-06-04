@@ -203,14 +203,32 @@ bun run cli workflow run implement --branch feature-auth "Add auth"
 # Opt out of isolation (run in live checkout)
 bun run cli workflow run quick-fix --no-worktree "Fix typo"
 
-# Show running workflows
+# Run in a detached background child (returns immediately; find it via `workflow runs`)
+bun run cli workflow run implement "Add auth" --detach
+
+# Show active runs (running + paused)
 bun run cli workflow status
+
+# List recent runs of ALL statuses, scoped to this project's codebase (cwd)
+bun run cli workflow runs
+bun run cli workflow runs --json                 # machine-readable { runs, total, counts }
+bun run cli workflow runs --status failed --limit 50
+bun run cli workflow runs --all                  # across all projects
+
+# Show detail for one run (any status); --verbose adds per-node summary
+bun run cli workflow get <run-id>
+bun run cli workflow get <run-id> --json
 
 # Resume a failed workflow (re-runs, skipping completed nodes)
 bun run cli workflow resume <run-id>
 
 # Discard a non-terminal run
 bun run cli workflow abandon <run-id>
+
+# Most read/write subcommands accept --json for machine-readable output:
+#   list, status, runs, get, approve, reject, abandon, resume.
+# For approve/reject/resume, --json records/validates the decision and returns a
+# clean JSON line WITHOUT the inline auto-resume (drive continuation separately).
 
 # Delete old workflow run records (default: 7 days)
 bun run cli workflow cleanup
@@ -479,6 +497,7 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 - Variable substitution: `$1`, `$2`, `$3`, `$ARGUMENTS`
 - Session management: Create new or resume existing
 - Stream AI responses to platform
+- System prompt gets a "Managing Workflow Runs" section (`buildRunManagementSection` in `prompt-builder.ts`) teaching the chat agent to drive run management (`archon workflow runs/get/status/run --detach/approve/reject/abandon`) directly via bash. It is appended **only for project-scoped chats on providers without the native `manage_run` tool** (Codex/OpenCode/Copilot) — gated in `orchestrator-agent.ts` on `!scopedCaps.nativeTools`. Claude and Pi instead receive the in-process `manage_run` native tool (the prompt section would be redundant for them). This is the CLI-bash delivery path for providers that have neither native tools nor `skills:` (direct chat doesn't consume the `skills:` option — it is workflow-node-only).
 
 **4. AI Agent Providers** (`packages/providers/src/`)
 - Implement `IAgentProvider` interface
