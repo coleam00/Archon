@@ -1710,6 +1710,39 @@ describe('CodexProvider', () => {
         const systemChunk = chunks.find(c => c.type === 'system');
         expect(systemChunk).toBeUndefined();
       });
+
+      test('uses last agent_message when multiple messages are emitted via nodeConfig.output_format', async () => {
+        // Workflow path: dag-executor sets nodeConfig.output_format from YAML
+        // output_format. Locks the same last-wins fix on this entry point.
+        const preamble = { claims_accurate: 'false', reasoning: 'draft' };
+        const finalAnswer = { claims_accurate: 'true', reasoning: 'verified' };
+        mockRunStreamed.mockResolvedValueOnce({
+          events: (async function* () {
+            yield {
+              type: 'item.completed',
+              item: { type: 'agent_message', id: 'msg-1', text: JSON.stringify(preamble) },
+            };
+            yield {
+              type: 'item.completed',
+              item: { type: 'agent_message', id: 'msg-2', text: JSON.stringify(finalAnswer) },
+            };
+            yield { type: 'turn.completed', usage: defaultUsage };
+          })(),
+        });
+
+        const chunks = [];
+        for await (const chunk of client.sendQuery('test', '/tmp', undefined, {
+          nodeConfig: { output_format: { type: 'object' } },
+        })) {
+          chunks.push(chunk);
+        }
+
+        const resultChunk = chunks.find(c => c.type === 'result');
+        expect(resultChunk).toBeDefined();
+        expect(resultChunk!.type === 'result' && resultChunk!.structuredOutput).toEqual(
+          finalAnswer
+        );
+      });
     });
   });
 });
