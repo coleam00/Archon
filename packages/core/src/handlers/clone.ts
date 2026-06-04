@@ -165,9 +165,16 @@ async function registerRepoAtPath(
     const isExistingPathManaged = existing.default_cwd.includes('/.archon/workspaces/');
     const shouldUpdateCwd = isNewPathLocal && isExistingPathManaged;
 
-    const updates: { default_cwd?: string; repository_url?: string | null } = {};
+    const updates: {
+      default_cwd?: string;
+      repository_url?: string | null;
+      default_branch?: string | null;
+    } = {};
     if (shouldUpdateCwd) {
       updates.default_cwd = targetPath;
+      updates.default_branch = detectedBranch;
+    } else if (!existing.default_branch && detectedBranch) {
+      updates.default_branch = detectedBranch;
     }
     // Fill in repository_url if the existing record doesn't have one
     if (!existing.repository_url && repositoryUrl) {
@@ -207,7 +214,10 @@ async function registerRepoAtPath(
       name: existing.name,
       repositoryUrl: existing.repository_url,
       defaultCwd: shouldUpdateCwd ? targetPath : existing.default_cwd,
-      defaultBranch: existing.default_branch ?? null,
+      defaultBranch:
+        updates.default_branch !== undefined
+          ? updates.default_branch
+          : (existing.default_branch ?? null),
       commandCount: commandsLoaded,
       alreadyExisted: true,
     };

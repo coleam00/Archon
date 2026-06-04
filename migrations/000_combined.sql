@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS remote_agent_codebases (
 );
 
 COMMENT ON TABLE remote_agent_codebases IS
-  'Repository metadata: name, URL, working directory, AI assistant type, and command paths (JSONB)';
+  'Repository metadata: name, URL, working directory, default branch, AI assistant type, and command paths (JSONB)';
 
 -- ============================================================================
 -- Table 1b: Codebase Env Vars

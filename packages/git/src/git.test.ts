@@ -1421,6 +1421,31 @@ branch refs/heads/feature/auth
       );
     });
 
+    test('logs short SHA read failures without failing sync', async () => {
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('rev-parse') && args.includes('--short=8')) {
+          throw new Error('fatal: bad revision HEAD');
+        }
+        if (args.includes('status')) return { stdout: '', stderr: '' };
+        if (args.includes('rev-parse') && args.includes('HEAD')) {
+          return { stdout: 'abc12345abcdef\n', stderr: '' };
+        }
+        if (args.includes('rev-parse') && args.includes('origin/main')) {
+          return { stdout: 'abc12345abcdef\n', stderr: '' };
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      const result = await git.syncWorkspace('/workspace/repo', 'main');
+
+      expect(result.previousHead).toBe('');
+      expect(result.newHead).toBe('');
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ workspacePath: '/workspace/repo', ref: 'HEAD' }),
+        'workspace.short_sha_read_failed'
+      );
+    });
+
     test('passes correct timeout value to fetch command', async () => {
       execSpy.mockResolvedValue({ stdout: '', stderr: '' });
 
@@ -1519,7 +1544,9 @@ branch refs/heads/feature/auth
         if (args.includes('rev-parse') && args.includes('origin/main')) {
           return { stdout: 'def67890abcdef\n', stderr: '' };
         }
-        if (args.includes('merge-base')) throw new Error('not ancestor');
+        if (args.includes('merge-base')) {
+          throw Object.assign(new Error('not ancestor'), { code: 1 });
+        }
         return { stdout: '', stderr: '' };
       });
 
@@ -1616,7 +1643,7 @@ branch refs/heads/feature/auth
           if (args[4] === 'abc12345abcdef' && args[5] === 'def67890abcdef') {
             return { stdout: '', stderr: '' };
           }
-          throw new Error('not ancestor');
+          throw Object.assign(new Error('not ancestor'), { code: 1 });
         }
         return { stdout: '', stderr: '' };
       });
@@ -1649,7 +1676,7 @@ branch refs/heads/feature/auth
           if (args[4] === 'abc12345abcdef' && args[5] === 'def67890abcdef') {
             return { stdout: '', stderr: '' };
           }
-          throw new Error('not ancestor');
+          throw Object.assign(new Error('not ancestor'), { code: 1 });
         }
         return { stdout: '', stderr: '' };
       });
@@ -1679,7 +1706,7 @@ branch refs/heads/feature/auth
           if (args[4] === 'abc12345abcdef' && args[5] === 'def67890abcdef') {
             return { stdout: '', stderr: '' };
           }
-          throw new Error('not ancestor');
+          throw Object.assign(new Error('not ancestor'), { code: 1 });
         }
         return { stdout: '', stderr: '' };
       });
@@ -1694,7 +1721,8 @@ branch refs/heads/feature/auth
       execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
         if (args.includes('status')) return { stdout: '', stderr: '' };
         if (args.includes('rev-parse')) return { stdout: `${args.at(-1)}-sha\n`, stderr: '' };
-        if (args.includes('merge-base')) throw new Error('not ancestor');
+        if (args.includes('merge-base'))
+          throw Object.assign(new Error('not ancestor'), { code: 1 });
         return { stdout: '', stderr: '' };
       });
 
@@ -1703,6 +1731,33 @@ branch refs/heads/feature/auth
       expect(
         execSpy.mock.calls.some((call: unknown[]) => (call[1] as string[]).includes('merge'))
       ).toBe(false);
+    });
+
+    test('throws unexpected merge-base failures instead of treating them as diverged', async () => {
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('status')) return { stdout: '', stderr: '' };
+        if (args.includes('rev-parse') && args.includes('--short=8')) {
+          return { stdout: 'abc12345\n', stderr: '' };
+        }
+        if (args.includes('rev-parse') && args.includes('HEAD')) {
+          return { stdout: 'local-sha\n', stderr: '' };
+        }
+        if (args.includes('rev-parse') && args.includes('origin/main')) {
+          return { stdout: 'remote-sha\n', stderr: '' };
+        }
+        if (args.includes('merge-base')) {
+          throw Object.assign(new Error('fatal: bad object'), { code: 128, stderr: 'bad object' });
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      await expect(git.syncWorkspace('/workspace/repo', 'main')).rejects.toThrow(
+        'Failed to compare git ancestry'
+      );
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ workspacePath: '/workspace/repo' }),
+        'workspace.merge_base_check_failed'
+      );
     });
   });
 

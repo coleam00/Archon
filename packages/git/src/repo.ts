@@ -212,7 +212,8 @@ async function readShortSha(workspacePath: RepoPath, ref: string): Promise<strin
       { timeout: 10000 }
     );
     return stdout.trim();
-  } catch {
+  } catch (error) {
+    getLog().warn({ err: error as Error, workspacePath, ref }, 'workspace.short_sha_read_failed');
     return '';
   }
 }
@@ -259,8 +260,17 @@ async function isAncestor(
       { timeout: 10000 }
     );
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    const err = error as Error & { code?: number | string; exitCode?: number; stderr?: string };
+    const exitCode = err.exitCode ?? err.code;
+    if (exitCode === 1 || exitCode === '1') {
+      return false;
+    }
+    getLog().error(
+      { err, workspacePath, ancestor, descendant, stderr: err.stderr },
+      'workspace.merge_base_check_failed'
+    );
+    throw new Error(`Failed to compare git ancestry in ${workspacePath}: ${err.message}`);
   }
 }
 

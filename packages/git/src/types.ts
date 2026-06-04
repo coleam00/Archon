@@ -48,9 +48,9 @@ export interface WorkspaceSyncResult {
   synced: boolean;
   mode: WorkspaceSyncMode;
   state: WorkspaceSyncState;
-  /** HEAD SHA before the reset (short, 8 chars) */
+  /** HEAD SHA before the sync operation (short, 8 chars) */
   previousHead: string;
-  /** HEAD SHA after the reset (short, 8 chars) */
+  /** HEAD SHA after the sync operation (short, 8 chars) */
   newHead: string;
   /** True if the working tree was updated (HEAD changed) */
   updated: boolean;

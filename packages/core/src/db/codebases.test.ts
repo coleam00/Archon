@@ -437,6 +437,17 @@ describe('codebases', () => {
       );
     });
 
+    test('updates default_branch', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+
+      await updateCodebase('codebase-123', { default_branch: 'develop' });
+
+      expect(mockQuery).toHaveBeenCalledWith(
+        'UPDATE remote_agent_codebases SET default_branch = $1, updated_at = NOW() WHERE id = $2',
+        ['develop', 'codebase-123']
+      );
+    });
+
     test('throws when codebase not found', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
 

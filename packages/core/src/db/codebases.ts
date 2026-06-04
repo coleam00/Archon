@@ -135,7 +135,7 @@ export async function findCodebaseByName(name: string): Promise<Codebase | null>
 
 export async function updateCodebase(
   id: string,
-  data: { default_cwd?: string; repository_url?: string | null }
+  data: { default_cwd?: string; repository_url?: string | null; default_branch?: string | null }
 ): Promise<void> {
   const dialect = getDialect();
   const updates: string[] = [];
@@ -150,6 +150,11 @@ export async function updateCodebase(
   if (data.repository_url !== undefined) {
     updates.push(`repository_url = $${paramIndex++}`);
     values.push(data.repository_url);
+  }
+
+  if (data.default_branch !== undefined) {
+    updates.push(`default_branch = $${paramIndex++}`);
+    values.push(data.default_branch);
   }
 
   if (updates.length === 0) return;
