@@ -17,6 +17,7 @@ import {
   Droplet,
   Leaf,
   Calendar,
+  LineChart as LineChartIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -36,6 +37,7 @@ interface NavTab {
 
 const coreTabs: readonly NavTab[] = [
   { to: '/welcome', end: true, icon: Home, label: 'Welcome' },
+  { to: '/playground', end: false, icon: LineChartIcon, label: 'Playground' },
   { to: '/category/writing-comms', end: false, icon: Mail, label: 'Writing' },
   { to: '/category/research-learning', end: false, icon: FlaskConical, label: 'Research' },
   { to: '/category/techbase', end: false, icon: Wrench, label: 'Techbase' },

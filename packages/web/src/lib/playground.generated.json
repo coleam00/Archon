@@ -1,0 +1,235 @@
+{
+  "generated_at": "2026-06-04T02:40:16.770828+00:00",
+  "source": {
+    "apollo_csv": "second-brain/intelligence/briefs/2026-05-13-apollo-dial-list-all.csv",
+    "dial_history": "/Users/jason-agent/.hermes/state/dial_tracker_history.json"
+  },
+  "kpis": {
+    "meetings_this_week": 0,
+    "dials_last_7d": 0,
+    "active_sequences": 4,
+    "reply_rate_14d": 0.0,
+    "target_30d_meetings": 8,
+    "target_90d_meetings": 15
+  },
+  "sequences": [
+    {
+      "slug": "bh-therapy",
+      "name": "BH_THERAPY",
+      "brand": "BRT",
+      "contacts": 368,
+      "active": 368,
+      "paused": 0,
+      "replied": 0,
+      "reply_rate": 0.0,
+      "status": "active"
+    },
+    {
+      "slug": "chiro",
+      "name": "CHIRO",
+      "brand": "BRT",
+      "contacts": 122,
+      "active": 113,
+      "paused": 0,
+      "replied": 0,
+      "reply_rate": 0.0,
+      "status": "active"
+    },
+    {
+      "slug": "medspa",
+      "name": "MEDSPA",
+      "brand": "BRT",
+      "contacts": 52,
+      "active": 4,
+      "paused": 0,
+      "replied": 0,
+      "reply_rate": 0.0,
+      "status": "active"
+    },
+    {
+      "slug": "bh-psych",
+      "name": "BH_PSYCH",
+      "brand": "BRT",
+      "contacts": 30,
+      "active": 30,
+      "paused": 0,
+      "replied": 0,
+      "reply_rate": 0.0,
+      "status": "active"
+    }
+  ],
+  "dials_by_day": [
+    {
+      "date": "2026-05-14",
+      "outcome": "closed-test",
+      "count": 1
+    },
+    {
+      "date": "2026-05-14",
+      "outcome": "closed-stale",
+      "count": 1
+    },
+    {
+      "date": "2026-05-14",
+      "outcome": "closed-no-response",
+      "count": 2
+    },
+    {
+      "date": "2026-05-21",
+      "outcome": "voicemail",
+      "count": 4
+    },
+    {
+      "date": "2026-05-21",
+      "outcome": "callback-pending",
+      "count": 1
+    },
+    {
+      "date": "2026-05-21",
+      "outcome": "not-interested",
+      "count": 1
+    },
+    {
+      "date": "2026-05-21",
+      "outcome": "no-answer",
+      "count": 9
+    },
+    {
+      "date": "2026-05-21",
+      "outcome": "follow-up",
+      "count": 4
+    },
+    {
+      "date": "2026-05-22",
+      "outcome": "voicemail",
+      "count": 1
+    },
+    {
+      "date": "2026-05-22",
+      "outcome": "no-answer",
+      "count": 4
+    },
+    {
+      "date": "2026-05-22",
+      "outcome": "interested",
+      "count": 1
+    },
+    {
+      "date": "2026-05-22",
+      "outcome": "follow-up",
+      "count": 2
+    }
+  ],
+  "outcome_funnel": [
+    {
+      "stage": "total-dials",
+      "count": 39
+    },
+    {
+      "stage": "connected",
+      "count": 10
+    },
+    {
+      "stage": "conversation",
+      "count": 9
+    },
+    {
+      "stage": "follow-up",
+      "count": 6
+    },
+    {
+      "stage": "meeting-booked",
+      "count": 0
+    }
+  ],
+  "meetings_by_week": [
+    {
+      "week": "2026-04-13",
+      "total": 0,
+      "by_line": {
+        "BRT": 0,
+        "PMC": 0,
+        "EWC": 0,
+        "Fountain": 0,
+        "Other": 0
+      }
+    },
+    {
+      "week": "2026-04-20",
+      "total": 0,
+      "by_line": {
+        "BRT": 0,
+        "PMC": 0,
+        "EWC": 0,
+        "Fountain": 0,
+        "Other": 0
+      }
+    },
+    {
+      "week": "2026-04-27",
+      "total": 0,
+      "by_line": {
+        "BRT": 0,
+        "PMC": 0,
+        "EWC": 0,
+        "Fountain": 0,
+        "Other": 0
+      }
+    },
+    {
+      "week": "2026-05-04",
+      "total": 0,
+      "by_line": {
+        "BRT": 0,
+        "PMC": 0,
+        "EWC": 0,
+        "Fountain": 0,
+        "Other": 0
+      }
+    },
+    {
+      "week": "2026-05-11",
+      "total": 0,
+      "by_line": {
+        "BRT": 0,
+        "PMC": 0,
+        "EWC": 0,
+        "Fountain": 0,
+        "Other": 0
+      }
+    },
+    {
+      "week": "2026-05-18",
+      "total": 0,
+      "by_line": {
+        "BRT": 0,
+        "PMC": 0,
+        "EWC": 0,
+        "Fountain": 0,
+        "Other": 0
+      }
+    },
+    {
+      "week": "2026-05-25",
+      "total": 0,
+      "by_line": {
+        "BRT": 0,
+        "PMC": 0,
+        "EWC": 0,
+        "Fountain": 0,
+        "Other": 0
+      }
+    },
+    {
+      "week": "2026-06-01",
+      "total": 0,
+      "by_line": {
+        "BRT": 0,
+        "PMC": 0,
+        "EWC": 0,
+        "Fountain": 0,
+        "Other": 0
+      }
+    }
+  ]
+}

@@ -7,6 +7,7 @@ import { defineConfig, loadEnv } from 'vite';
 import { vaultContactsPlugin } from './vite.plugin.vault-contacts';
 import { vaultDriveIndexPlugin } from './vite.plugin.vault-drive-index';
 import { vaultSolutionsPlugin } from './vite.plugin.vault-solutions';
+import { vaultPlaygroundPlugin } from './vite.plugin.vault-playground';
 
 export default defineConfig(({ mode }) => {
   // Load env from repo root so PORT from .env is available
@@ -29,12 +30,14 @@ export default defineConfig(({ mode }) => {
   }
 
   return {
+    base: '/app/',
     plugins: [
       react(),
       tailwindcss(),
       vaultContactsPlugin(),
       vaultDriveIndexPlugin(),
       vaultSolutionsPlugin(),
+      vaultPlaygroundPlugin(),
     ],
     define: {
       // Inject API port so browser code can access it via import.meta.env.VITE_API_PORT

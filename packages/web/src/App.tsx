@@ -14,6 +14,7 @@ import { PMCPage } from '@/routes/PMCPage';
 import { EWCPage } from '@/routes/EWCPage';
 import { FountainPage } from '@/routes/FountainPage';
 import { TTSPage } from '@/routes/TTSPage';
+import { PlaygroundPage } from '@/routes/PlaygroundPage';
 import { ARCPage } from '@/routes/ARCPage';
 import { SADNPage } from '@/routes/SADNPage';
 import { CategoryPage } from '@/routes/CategoryPage';
@@ -90,6 +91,7 @@ export function App(): React.ReactElement {
                 <Route path="/sg-ink" element={<SgInkPage />} />
                 <Route path="/ihht" element={<IHHTPage />} />
                 <Route path="/qep" element={<QEPPage />} />
+                <Route path="/playground" element={<PlaygroundPage />} />
                 <Route path="/social-content" element={<SocialContentPage />} />
                 <Route path="/external-reps/arc" element={<ARCPage />} />
                 <Route path="/external-reps/sadn" element={<SADNPage />} />
