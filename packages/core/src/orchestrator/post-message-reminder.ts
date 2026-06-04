@@ -16,8 +16,7 @@ import {
   toRepoPath,
 } from '@archon/git';
 import { createLogger, getArchonWorkspacesPath } from '@archon/paths';
-import type { IPlatformAdapter } from '../types';
-import type { Codebase } from '../types';
+import type { Codebase, IPlatformAdapter } from '../types';
 
 const log = createLogger('orchestrator.post_message_reminder');
 

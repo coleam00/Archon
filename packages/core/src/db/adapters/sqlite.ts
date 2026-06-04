@@ -166,11 +166,11 @@ export class SqliteAdapter implements IDatabase {
     // Better Auth's own tables are PostgreSQL-only — web auth is never enabled
     // on SQLite — so only the role column is backfilled here.
     try {
-      const userCols = this.db.prepare("PRAGMA table_info('remote_agent_users')").all() as {
+      const cols = this.db.prepare("PRAGMA table_info('remote_agent_users')").all() as {
         name: string;
       }[];
-      const userColNames = new Set(userCols.map(c => c.name));
-      if (!userColNames.has('role')) {
+      const colNames = new Set(cols.map(c => c.name));
+      if (!colNames.has('role')) {
         this.db.run("ALTER TABLE remote_agent_users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'");
       }
     } catch (e: unknown) {
@@ -211,22 +211,22 @@ export class SqliteAdapter implements IDatabase {
 
     // Workflow runs columns
     try {
-      const wfCols = this.db.prepare("PRAGMA table_info('remote_agent_workflow_runs')").all() as {
+      const cols = this.db.prepare("PRAGMA table_info('remote_agent_workflow_runs')").all() as {
         name: string;
       }[];
-      const wfColNames = new Set(wfCols.map(c => c.name));
+      const colNames = new Set(cols.map(c => c.name));
 
-      if (!wfColNames.has('parent_conversation_id')) {
+      if (!colNames.has('parent_conversation_id')) {
         this.db.run(
           'ALTER TABLE remote_agent_workflow_runs ADD COLUMN parent_conversation_id TEXT'
         );
       }
 
-      if (!wfColNames.has('working_path')) {
+      if (!colNames.has('working_path')) {
         this.db.run('ALTER TABLE remote_agent_workflow_runs ADD COLUMN working_path TEXT');
       }
 
-      if (!wfColNames.has('user_id')) {
+      if (!colNames.has('user_id')) {
         this.db.run(
           'ALTER TABLE remote_agent_workflow_runs ADD COLUMN user_id TEXT REFERENCES remote_agent_users(id) ON DELETE SET NULL'
         );
@@ -241,12 +241,12 @@ export class SqliteAdapter implements IDatabase {
 
     // Sessions columns
     try {
-      const sessCols = this.db.prepare("PRAGMA table_info('remote_agent_sessions')").all() as {
+      const cols = this.db.prepare("PRAGMA table_info('remote_agent_sessions')").all() as {
         name: string;
       }[];
-      const sessColNames = new Set(sessCols.map(c => c.name));
+      const colNames = new Set(cols.map(c => c.name));
 
-      if (!sessColNames.has('ended_reason')) {
+      if (!colNames.has('ended_reason')) {
         this.db.run('ALTER TABLE remote_agent_sessions ADD COLUMN ended_reason TEXT');
       }
     } catch (e: unknown) {

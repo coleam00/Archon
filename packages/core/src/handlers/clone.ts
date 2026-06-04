@@ -52,10 +52,6 @@ const FORGE_AUTH: ForgeAuthEntry[] = [
   { hostPattern: 'gitea.com', envVar: 'GITEA_TOKEN', scheme: '' },
 ];
 
-/**
- * Resolve forge-specific authentication token and URL scheme for a repository URL.
- * Returns the token and auth scheme prefix, or empty values if no token is available.
- */
 /** Well-known self-hosted hostname label patterns → env var + scheme. */
 const SELF_HOSTED_FORGE: { label: string; envVar: string; scheme: string }[] = [
   { label: 'gitlab', envVar: 'GITLAB_TOKEN', scheme: 'oauth2:' },
@@ -63,6 +59,10 @@ const SELF_HOSTED_FORGE: { label: string; envVar: string; scheme: string }[] = [
   { label: 'forgejo', envVar: 'GITEA_TOKEN', scheme: '' },
 ];
 
+/**
+ * Resolve forge-specific authentication token and URL scheme for a repository URL.
+ * Returns the token and auth scheme prefix, or empty values if no token is available.
+ */
 export function resolveForgeAuth(url: string): { token: string | undefined; scheme: string } {
   // Extract hostname from URL (or from bare host/path like "github.com/owner/repo")
   let hostname: string;
@@ -132,15 +132,6 @@ export interface RegisterResult {
 }
 
 /**
- * Detect the currently checked-out branch at a freshly cloned/registered repo.
- * Returns null for detached HEAD or unexpected errors — callers fall back to
- * runtime auto-detection on first sync.
- */
-async function detectDefaultBranch(targetPath: string): Promise<string | null> {
-  return getCurrentBranch(toRepoPath(targetPath));
-}
-
-/**
  * Shared logic: register a repo at a given path in the DB and load commands.
  */
 async function registerRepoAtPath(
@@ -149,7 +140,7 @@ async function registerRepoAtPath(
   repositoryUrl: string | null
 ): Promise<RegisterResult> {
   const suggestedAssistant = await resolveDefaultAssistant(targetPath);
-  const detectedBranch = await detectDefaultBranch(targetPath);
+  const detectedBranch = await getCurrentBranch(toRepoPath(targetPath));
 
   // Check if a codebase with this name already exists (dedup by project identity)
   const existing = await codebaseDb.findCodebaseByName(name);
