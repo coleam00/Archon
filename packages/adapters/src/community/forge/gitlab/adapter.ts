@@ -32,6 +32,7 @@ import {
 } from '@archon/git';
 import * as db from '@archon/core/db/conversations';
 import * as codebaseDb from '@archon/core/db/codebases';
+import * as userDb from '@archon/core/db/users';
 import { resolveDefaultAssistant } from '@archon/core/config/resolve-assistant';
 import { parseAllowedUsers, isGitLabUserAuthorized, verifyWebhookToken } from './auth';
 import { splitIntoParagraphChunks } from '../../../utils/message-splitting';
@@ -687,9 +688,28 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
 
     getLog().info({ eventType, projectPath, iid, isMR }, 'gitlab.webhook_processing');
 
-    // Steps 7-13 wrapped in try-catch so user gets error feedback on setup failures
+    // Resolution failure must not drop the webhook — warn-log and continue with
+    // archonUserId undefined so the conversation/run rows fall back to NULL.
+    let archonUserId: string | undefined;
+    if (senderUsername) {
+      try {
+        const user = await userDb.findOrCreateUserByPlatformIdentity(
+          'gitlab',
+          senderUsername,
+          senderUsername
+        );
+        archonUserId = user.id;
+      } catch (err) {
+        getLog().warn(
+          { err: toError(err), gitlabUsername: senderUsername },
+          'gitlab.user_resolve_failed'
+        );
+      }
+    }
+
+    // Steps 8-14 wrapped in try-catch so user gets error feedback on setup failures
     try {
-      // 7. Conversation + codebase setup
+      // 8. Conversation + codebase setup
       const conversationId = this.buildConversationId(projectPath, iid, isMR);
       const existingConv = await db.getOrCreateConversation('gitlab', conversationId);
       const isNewConversation = !existingConv.codebase_id;
@@ -718,18 +738,18 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
         }
       }
 
-      // 8. Get default branch
+      // 9. Get default branch
       const defaultBranch = event.project.default_branch;
 
-      // 9. Ensure repo ready
+      // 10. Ensure repo ready
       await this.ensureRepoReady(projectPath, defaultBranch, repoPath, isNewCodebase);
 
-      // 10. Auto-load commands
+      // 11. Auto-load commands
       if (isNewCodebase) {
         await this.autoDetectAndLoadCommands(repoPath, codebase.id);
       }
 
-      // 11. Isolation hints
+      // 12. Isolation hints
       const isolationHints: IsolationHints = {
         workflowType: isMR ? 'pr' : 'issue',
         workflowId: String(iid),
@@ -749,7 +769,7 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
         );
       }
 
-      // 12. Build message with context
+      // 13. Build message with context
       const strippedComment = this.stripMention(comment);
       let finalMessage = strippedComment;
       let contextToAppend: string | undefined;
@@ -775,7 +795,7 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
         }
       }
 
-      // 13. Thread context + dispatch
+      // 14. Thread context + dispatch
       const commentHistory = await this.fetchCommentHistory(projectPath, iid, isMR);
       const threadContext = commentHistory.length > 0 ? commentHistory.join('\n') : undefined;
       getLog().debug(
@@ -789,6 +809,7 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
             issueContext: contextToAppend,
             threadContext,
             isolationHints,
+            userId: archonUserId,
           });
         } catch (error) {
           const err = toError(error);

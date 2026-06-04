@@ -345,6 +345,20 @@ describe('GET /api/codebases/:id', () => {
     expect(body.commands).not.toBeNull();
   });
 
+  test('returns empty commands object when JSON is corrupted', async () => {
+    mockGetCodebase.mockImplementationOnce(async () => ({
+      ...MOCK_CODEBASE,
+      commands: '{not valid json',
+    }));
+
+    const app = makeApp();
+    const response = await app.request('/api/codebases/codebase-uuid-1');
+    expect(response.status).toBe(200);
+
+    const body = (await response.json()) as { commands: unknown };
+    expect(body.commands).toEqual({});
+  });
+
   test('returns 500 when DB throws', async () => {
     mockGetCodebase.mockImplementationOnce(async () => {
       throw new Error('Connection error');

@@ -96,6 +96,17 @@ mock.module('../db/workflow-events', () => ({
   createWorkflowEvent: mockCreateWorkflowEvent,
 }));
 
+// Mock the node-session DB layer so /workflow reset-sessions exercises the real
+// operation (resetWorkflowNodeSessions) without touching a database. Safe from
+// mock.module pollution because command-handler.test.ts runs as its own isolated
+// `bun test` invocation (see packages/core/package.json).
+const mockDeleteWorkflowNodeSessions = mock(() => Promise.resolve({ deleted: 0 }));
+mock.module('../db/workflow-node-sessions', () => ({
+  deleteWorkflowNodeSessions: mockDeleteWorkflowNodeSessions,
+  getWorkflowNodeSession: mock(() => Promise.resolve(null)),
+  upsertWorkflowNodeSession: mock(() => Promise.resolve()),
+}));
+
 // Mock isolation-environments database
 const mockIsolationEnvDbCreate = mock(() =>
   Promise.resolve({
@@ -232,6 +243,7 @@ function clearAllMocks(): void {
   mockFailWorkflowRun.mockClear();
   mockUpdateWorkflowRun.mockClear();
   mockCreateWorkflowEvent.mockClear();
+  mockDeleteWorkflowNodeSessions.mockClear();
   // Isolation mocks
   mockIsolationCreate.mockClear();
   mockIsolationDestroy.mockClear();
@@ -653,6 +665,56 @@ describe('CommandHandler', () => {
         const result = await handleCommand(baseConversation, '/reset');
         expect(result.success).toBe(true);
         expect(result.message).toContain('No active session');
+      });
+    });
+
+    describe('/workflow reset-sessions', () => {
+      test('auto-scopes the reset to the current conversation', async () => {
+        mockDeleteWorkflowNodeSessions.mockResolvedValueOnce({ deleted: 2 });
+
+        const result = await handleCommand(
+          baseConversation,
+          '/workflow reset-sessions feature-dev'
+        );
+
+        expect(result.success).toBe(true);
+        expect(result.message).toContain('Cleared 2');
+        expect(mockDeleteWorkflowNodeSessions).toHaveBeenCalledWith({
+          workflow_name: 'feature-dev',
+          scope_key: 'conv-123',
+          node_id: undefined,
+        });
+      });
+
+      test('narrows to a single node when a node id is given', async () => {
+        mockDeleteWorkflowNodeSessions.mockResolvedValueOnce({ deleted: 1 });
+
+        await handleCommand(baseConversation, '/workflow reset-sessions feature-dev planner');
+
+        expect(mockDeleteWorkflowNodeSessions).toHaveBeenCalledWith({
+          workflow_name: 'feature-dev',
+          scope_key: 'conv-123',
+          node_id: 'planner',
+        });
+      });
+
+      test('returns a usage error when the workflow name is missing', async () => {
+        const result = await handleCommand(baseConversation, '/workflow reset-sessions');
+        expect(result.success).toBe(false);
+        expect(result.message).toContain('Usage');
+        expect(mockDeleteWorkflowNodeSessions).not.toHaveBeenCalled();
+      });
+
+      test('returns a failure message (does not throw) on DB error', async () => {
+        mockDeleteWorkflowNodeSessions.mockRejectedValueOnce(new Error('connection refused'));
+
+        const result = await handleCommand(
+          baseConversation,
+          '/workflow reset-sessions feature-dev'
+        );
+
+        expect(result.success).toBe(false);
+        expect(result.message).toContain('Failed to reset workflow sessions');
       });
     });
 

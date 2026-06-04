@@ -4,8 +4,11 @@
  * Supports:
  *   String equality:  "$nodeId.output == 'VALUE'"  / "$nodeId.output != 'VALUE'"
  *   Dot notation:     "$nodeId.output.field == 'VALUE'"
+ *   Shorthand path:   "$nodeId.field == 'VALUE'"  (equivalent to "$nodeId.output.field")
  *   Numeric ops:      "$nodeId.output > '80'"  / ">=" / "<" / "<="
  *                     (both sides must parse as finite numbers; fail-closed otherwise)
+ *   Unquoted RHS:     "$nodeId.exit_code == 0"  / "$nodeId.passed == true"
+ *                     (numbers and booleans may be written without surrounding quotes)
  *   Compound AND/OR:  "$a.output == 'X' && $b.output != 'Y'"
  *                     "$a.output == 'X' || $b.output == 'Y'"
  *                     AND has higher precedence than OR. No parentheses.
@@ -120,9 +123,23 @@ function splitOutsideQuotes(expr: string, sep: string): string[] {
   return parts;
 }
 
-/** Pattern matching a single condition atom: $nodeId.output[.field] OPERATOR 'value' */
+/**
+ * Pattern matching a single condition atom.
+ *
+ * Capture groups:
+ *   1. nodeId       — `$nodeId`
+ *   2. segment1     — first path segment after the node (`output` for canonical refs, else a
+ *                     shorthand field name)
+ *   3. segment2     — optional second path segment (the field name when segment1 is `output`)
+ *   4. operator     — `== | != | <= | >= | < | >`
+ *   5. quotedValue  — single-quoted RHS literal (may be empty)
+ *   6. unquotedValue — bare numeric or boolean RHS (`-?\d+(.\d+)?` | `true` | `false`)
+ *
+ * Exactly one of groups 5/6 is populated on a successful match. The canonical-vs-shorthand
+ * path resolution and the sub-field rejection happen in evaluateAtom.
+ */
 const atomPattern =
-  /^\$([a-zA-Z_][a-zA-Z0-9_-]*)\.output(?:\.([a-zA-Z_][a-zA-Z0-9_]*))?\s*(==|!=|<=|>=|<|>)\s*'([^']*)'$/;
+  /^\$([a-zA-Z_][a-zA-Z0-9_-]*)\.([a-zA-Z_][a-zA-Z0-9_]*)(?:\.([a-zA-Z_][a-zA-Z0-9_]*))?\s*(==|!=|<=|>=|<|>)\s*(?:'([^']*)'|(-?\d+(?:\.\d+)?|true|false))$/;
 
 /**
  * Evaluate a single atomic condition expression against upstream node outputs.
@@ -139,9 +156,33 @@ function evaluateAtom(
     return { result: false, parsed: false };
   }
 
-  const [, nodeId, field, operator, expected] = match;
+  const [, nodeId, segment1, segment2, operator, quotedValue, unquotedValue] = match;
 
-  if (nodeId === undefined || operator === undefined || expected === undefined) {
+  if (nodeId === undefined || segment1 === undefined || operator === undefined) {
+    getLog().debug({ expr }, 'condition_parse_unexpected_undefined');
+    return { result: false, parsed: false };
+  }
+
+  // Resolve the effective field, preserving the canonical `$node.output[.field]` semantics
+  // while also accepting the `$node.field` shorthand:
+  //   - `$node.output`        → bare output reference (field undefined)
+  //   - `$node.output.field`  → field access on the output
+  //   - `$node.field`         → shorthand, equivalent to `$node.output.field`
+  // The shorthand form cannot carry a sub-field (`$node.field.sub` is rejected fail-closed).
+  let field: string | undefined;
+  if (segment1 === 'output') {
+    field = segment2;
+  } else {
+    if (segment2 !== undefined) {
+      getLog().debug({ expr }, 'condition_parse_failed');
+      return { result: false, parsed: false };
+    }
+    field = segment1;
+  }
+
+  // Quoted RHS takes precedence; the unquoted alternative covers numbers and booleans.
+  const expected = quotedValue !== undefined ? quotedValue : unquotedValue;
+  if (expected === undefined) {
     getLog().debug({ expr }, 'condition_parse_unexpected_undefined');
     return { result: false, parsed: false };
   }

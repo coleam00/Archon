@@ -30,4 +30,5 @@ export const PI_CAPABILITIES: ProviderCapabilities = {
   thinkingControl: true,
   fallbackModel: false,
   sandbox: false,
+  nativeTools: true,
 };

@@ -2,6 +2,13 @@
   "extends": "../../tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
+    // The web app is a leaf SPA bundled by Vite — it never emits or is consumed
+    // for .d.ts files. Override the root's `declaration: true` so `tsc --noEmit`
+    // skips the declaration-portability check, which otherwise trips TS2742 on
+    // Better Auth's hash-named internal dist chunks under a hoisted node_modules
+    // (the Docker web build). declarationMap must follow (it can't be set alone).
+    "declaration": false,
+    "declarationMap": false,
     "jsx": "react-jsx",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "types": ["vite/client", "bun-types"],

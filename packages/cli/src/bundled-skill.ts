@@ -9,7 +9,7 @@
  */
 
 // =============================================================================
-// Skill Files (21 total)
+// Skill Files (23 total: 21 archon + 2 manage-run)
 // =============================================================================
 
 import skillMd from '../../../.claude/skills/archon/SKILL.md' with { type: 'text' };
@@ -33,6 +33,10 @@ import repoInit from '../../../.claude/skills/archon/references/repo-init.md' wi
 import troubleshooting from '../../../.claude/skills/archon/references/troubleshooting.md' with { type: 'text' };
 import variables from '../../../.claude/skills/archon/references/variables.md' with { type: 'text' };
 import workflowDag from '../../../.claude/skills/archon/references/workflow-dag.md' with { type: 'text' };
+
+// manage-run skill (focused run-management skill — separate install target)
+import manageRunSkillMd from '../../../.claude/skills/manage-run/SKILL.md' with { type: 'text' };
+import manageRunCommands from '../../../.claude/skills/manage-run/references/commands.md' with { type: 'text' };
 
 // =============================================================================
 // Export
@@ -63,4 +67,14 @@ export const BUNDLED_SKILL_FILES: Record<string, string> = {
   'references/troubleshooting.md': troubleshooting,
   'references/variables.md': variables,
   'references/workflow-dag.md': workflowDag,
+};
+
+/**
+ * Bundled manage-run skill files - relative path within .claude/skills/manage-run/ -> content.
+ * Installed into a separate `.claude/skills/manage-run/` directory (kept distinct from the
+ * broad `archon` skill so the run-management agent's context stays tiny).
+ */
+export const BUNDLED_MANAGE_RUN_SKILL_FILES: Record<string, string> = {
+  'SKILL.md': manageRunSkillMd,
+  'references/commands.md': manageRunCommands,
 };

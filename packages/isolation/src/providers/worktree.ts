@@ -724,6 +724,14 @@ export class WorktreeProvider implements IIsolationProvider {
       await this.createNewBranch(request, repoPath, worktreePath, branchName, baseBranch);
     }
 
+    // Stamp the originating user's git identity on this worktree so workflow
+    // commits attribute to the human (PR-C). Scoped to the worktree's local
+    // config; absent identity leaves the ambient git config untouched. Failure
+    // is non-fatal — commits would just fall back to the ambient identity.
+    if (request.gitIdentity?.email) {
+      await this.applyGitIdentity(worktreePath, request.gitIdentity);
+    }
+
     // Initialize submodules unless explicitly opted out. The check is free
     // when `.gitmodules` is absent (access-based short-circuit), so repos
     // without submodules pay nothing. Default-on matches git's own intent
@@ -746,6 +754,30 @@ export class WorktreeProvider implements IIsolationProvider {
       );
     }
     return { warnings };
+  }
+
+  /**
+   * Set worktree-local `git config user.email`/`user.name` so commits made in
+   * this worktree attribute to the originating user. Non-fatal on failure: a
+   * worktree without the override simply uses the ambient git identity.
+   */
+  private async applyGitIdentity(
+    worktreePath: string,
+    identity: { email: string; name?: string }
+  ): Promise<void> {
+    try {
+      await execFileAsync('git', ['-C', worktreePath, 'config', 'user.email', identity.email], {
+        timeout: 5000,
+      });
+      if (identity.name) {
+        await execFileAsync('git', ['-C', worktreePath, 'config', 'user.name', identity.name], {
+          timeout: 5000,
+        });
+      }
+      getLog().debug({ worktreePath, email: identity.email }, 'isolation.git_identity_applied');
+    } catch (err) {
+      getLog().warn({ err: err as Error, worktreePath }, 'isolation.git_identity_apply_failed');
+    }
   }
 
   /**
