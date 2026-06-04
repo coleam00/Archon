@@ -107,6 +107,40 @@ export async function listRecentEvents(
 }
 
 /**
+ * List workflow events across ALL runs created at or after `after`, oldest first,
+ * capped at `limit`. Used by the dashboard event poller to tail events written by
+ * any process (incl. out-of-process CLI runs) and replay them to the SSE dashboard.
+ *
+ * `>=` (not `>`) so events sharing the boundary timestamp are not skipped — SQLite's
+ * CURRENT_TIMESTAMP is 1-second resolution, so ties are common; the caller dedupes by
+ * id at the boundary and tolerates harmless duplicates (the dashboard reacts to events
+ * by refetching, which is idempotent).
+ */
+export async function listWorkflowEventsSince(
+  after: Date,
+  limit: number
+): Promise<WorkflowEventRow[]> {
+  try {
+    const result = await pool.query<WorkflowEventRow>(
+      `SELECT * FROM remote_agent_workflow_events
+       WHERE created_at >= $1
+       ORDER BY created_at ASC
+       LIMIT $2`,
+      [after.toISOString(), limit]
+    );
+    return [...result.rows].map(row => ({
+      ...row,
+      data: typeof row.data === 'string' ? JSON.parse(row.data) : row.data,
+    }));
+  } catch (error) {
+    getLog().error({ err: error as Error }, 'db.workflow_events_list_since_failed');
+    throw new Error(
+      `Failed to list workflow events since ${after.toISOString()}: ${(error as Error).message}`
+    );
+  }
+}
+
+/**
  * Return a map of nodeId → output for all node_completed events in a workflow run.
  * Used by the DAG executor to restore node outputs when resuming a failed run.
  * Throws on DB error — caller owns the degradation policy.

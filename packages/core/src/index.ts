@@ -38,10 +38,11 @@ export {
   getDatabase,
   getDialect,
   getDatabaseType,
+  getDbNotificationListener,
   closeDatabase,
   resetDatabase,
 } from './db/connection';
-export type { IDatabase, SqlDialect } from './db/adapters/types';
+export type { IDatabase, SqlDialect, DbNotificationListener } from './db/adapters/types';
 
 // Namespaced db modules for explicit access
 export * as conversationDb from './db/conversations';
