@@ -118,6 +118,7 @@ describe('prd-execution-leases', () => {
   test('acquirePrdExecutionLease refreshes existing same-run lease', async () => {
     mockQuery
       .mockResolvedValueOnce(createQueryResult([sampleLease]))
+      .mockResolvedValueOnce(createQueryResult([], 1))
       .mockResolvedValueOnce(
         createQueryResult([
           { ...sampleLease, metadata: JSON.stringify({ provenance: { headSha: 'def456' } }) },
@@ -137,6 +138,8 @@ describe('prd-execution-leases', () => {
     });
 
     expect(mockQuery.mock.calls[1]?.[0]).toContain('UPDATE remote_agent_prd_execution_leases');
+    expect(mockQuery.mock.calls[1]?.[0]).not.toContain('RETURNING');
+    expect(mockQuery.mock.calls[2]?.[0]).toContain('WHERE workflow_run_id = $1');
     expect(result?.metadata).toEqual({ provenance: { headSha: 'def456' } });
   });
 

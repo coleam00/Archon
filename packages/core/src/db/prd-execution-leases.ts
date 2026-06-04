@@ -149,7 +149,7 @@ export function createPrdExecutionLeaseDb(
       }
 
       if (existing?.workflow_run_id === data.workflow_run_id) {
-        const result = await query<PrdExecutionLeaseRow>(
+        const result = await query(
           `UPDATE remote_agent_prd_execution_leases
            SET workflow_name = $1,
                canonical_repo_path = $2,
@@ -159,8 +159,7 @@ export function createPrdExecutionLeaseDb(
                status = 'active',
                updated_at = ${dialect.now()},
                metadata = ${dialect.jsonMerge('metadata', 6)}
-           WHERE id = $7
-           RETURNING *`,
+           WHERE id = $7`,
           [
             data.workflow_name,
             data.canonical_repo_path,
@@ -171,11 +170,14 @@ export function createPrdExecutionLeaseDb(
             existing.id,
           ]
         );
-        const row = result.rows[0];
-        if (!row) {
+        if (result.rowCount === 0) {
           throw new Error(`Failed to refresh PRD execution lease for '${data.prd_id}'`);
         }
-        return normalizeLeaseRow({ ...row });
+        const refreshed = await this.getPrdExecutionLeaseByRunId(data.workflow_run_id);
+        if (!refreshed) {
+          throw new Error(`Failed to reload refreshed PRD execution lease for '${data.prd_id}'`);
+        }
+        return refreshed;
       }
 
       try {

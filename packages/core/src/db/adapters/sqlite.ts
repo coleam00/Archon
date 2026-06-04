@@ -325,6 +325,24 @@ export class SqliteAdapter implements IDatabase {
         working_path TEXT
       );
 
+      -- PRD execution leases table
+      CREATE TABLE IF NOT EXISTS remote_agent_prd_execution_leases (
+        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+        codebase_id TEXT NOT NULL REFERENCES remote_agent_codebases(id) ON DELETE CASCADE,
+        prd_id TEXT NOT NULL,
+        workflow_run_id TEXT NOT NULL REFERENCES remote_agent_workflow_runs(id) ON DELETE CASCADE,
+        workflow_name TEXT NOT NULL,
+        canonical_repo_path TEXT NOT NULL,
+        source_branch TEXT NOT NULL,
+        execution_branch TEXT NOT NULL,
+        working_path TEXT,
+        status TEXT NOT NULL DEFAULT 'active',
+        metadata TEXT DEFAULT '{}',
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now')),
+        released_at TEXT
+      );
+
       -- Workflow events table
       CREATE TABLE IF NOT EXISTS remote_agent_workflow_events (
         id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
@@ -355,6 +373,11 @@ export class SqliteAdapter implements IDatabase {
       CREATE INDEX IF NOT EXISTS idx_isolation_workflow ON remote_agent_isolation_environments(workflow_type, workflow_id);
       CREATE INDEX IF NOT EXISTS idx_workflow_runs_conversation ON remote_agent_workflow_runs(conversation_id);
       CREATE INDEX IF NOT EXISTS idx_workflow_runs_status ON remote_agent_workflow_runs(status);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_prd_execution_leases_active_unique
+        ON remote_agent_prd_execution_leases(codebase_id, prd_id)
+        WHERE released_at IS NULL;
+      CREATE INDEX IF NOT EXISTS idx_prd_execution_leases_run_id ON remote_agent_prd_execution_leases(workflow_run_id);
+      CREATE INDEX IF NOT EXISTS idx_prd_execution_leases_status ON remote_agent_prd_execution_leases(status);
       CREATE INDEX IF NOT EXISTS idx_workflow_events_run_id ON remote_agent_workflow_events(workflow_run_id);
       CREATE INDEX IF NOT EXISTS idx_workflow_events_type ON remote_agent_workflow_events(event_type);
       CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON remote_agent_messages(conversation_id, created_at ASC);

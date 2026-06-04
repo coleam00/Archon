@@ -12,6 +12,9 @@ mock.module('@archon/paths', () => ({
   getArchonWorkspacesPath: mock(() => '/home/test/.archon/workspaces'),
   ensureArchonWorkspacesPath: mock(() => Promise.resolve('/home/test/.archon/workspaces')),
   getArchonHome: mock(() => '/home/test/.archon'),
+  getProjectWorktreesPath: mock(
+    () => '/home/test/.archon/workspaces/test-owner/test-repo/worktrees'
+  ),
 }));
 
 // DB mocks
@@ -125,6 +128,7 @@ mock.module('@archon/workflows/utils/tool-formatter', () => ({
 
 mock.module('fs', () => ({
   existsSync: mock(() => true),
+  mkdirSync: mock(() => undefined),
 }));
 
 mock.module('../services/title-generator', () => ({
