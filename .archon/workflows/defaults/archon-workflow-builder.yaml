@@ -132,12 +132,12 @@ nodes:
           # --- command node (references a .archon/commands/ file) ---
           command: command-name
 
-          # --- script node (TypeScript via bun, or Python via uv — no AI, stdout = captures output) ---
+          # --- script node (TypeScript via bun, or Python via uv — no AI, stdout = $<nodeId>.output) ---
           # Use for deterministic data transforms the shell would mangle (JSON parsing, etc.)
           script: |
             // JSON is valid JS expression syntax — assign directly (String.raw breaks on backticks)
-            const data = (otherNode).output;
-            console.log(JSON.stringify({ count: 1 }));
+            const data = $other-node.output;
+            console.log(JSON.stringify({ count: data.items.length }));
           runtime: bun                       # required: 'bun' (.ts/.js) or 'uv' (.py)
           # deps: [requests]                 # uv only
           # Or reference a named script in .archon/scripts/:
@@ -164,11 +164,11 @@ nodes:
       ```
 
       ## Variable Reference
-      - {{ARGUMENTS}} — user's input text
-      - {{ARTIFACTS_DIR}} — pre-created directory for workflow artifacts
-      - (nodeId).output — stdout from a bash/script node or AI response from a prompt node
-      - (nodeId).output.field — JSON field from a node with output_format
-      - {{BASE_BRANCH}} — base git branch
+      - `$ARGUMENTS` — user's input text
+      - `$ARTIFACTS_DIR` — pre-created directory for workflow artifacts
+      - `$<nodeId>.output` — stdout from a bash/script node or AI response from a prompt node
+      - `$<nodeId>.output.field` — JSON field from a node with output_format
+      - `$BASE_BRANCH` — base git branch
 
       ## Rules
       1. The `name:` field MUST match: $extract-intent.output.workflow_name
@@ -178,10 +178,10 @@ nodes:
       5. Use `bash` nodes for deterministic shell operations (file checks, git commands, installs)
       6. Use `script` nodes for typed data transforms (TypeScript JSON parsing, Python with deps)
          — stdout is captured as output, stderr is forwarded as a warning.
-         Interpolation is NOT shell-quoted in script bodies.
-         - **TypeScript/bun**: assign directly — `const data = (nodeId).output;`
+         `$nodeId.output` is NOT shell-quoted in script bodies.
+         - **TypeScript/bun**: assign directly — `const data = $nodeId.output;`
            (JSON is valid JS expression syntax; avoid String.raw — it breaks on backticks)
-         - **Python/uv**: use json.loads — `import json; data = json.loads("""(nodeId).output""")`
+         - **Python/uv**: use json.loads — `import json; data = json.loads("""$nodeId.output""")`
          Never interpolate into shell syntax.
       7. Use `prompt` nodes for AI reasoning tasks
       8. Use `approval` nodes to pause for human review at risky gates (plan→execute boundary, destructive actions)
@@ -192,7 +192,7 @@ nodes:
 
       ## Output
 
-      Write the complete workflow YAML to: {{ARTIFACTS_DIR}}/generated-workflow.yaml
+      Write the complete workflow YAML to: `$ARTIFACTS_DIR/generated-workflow.yaml`
 
       Use the Write tool. Do NOT use Edit or Bash. The file must be valid YAML and follow
       all the patterns above.
