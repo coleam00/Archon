@@ -35,6 +35,7 @@ import type {
   SafeConfig,
   AssistantDefaults,
   AssistantDefaultsConfig,
+  RawAliasesConfig,
 } from './config-types';
 import { createLogger } from '@archon/paths';
 import {
@@ -52,6 +53,20 @@ import {
  */
 function getRegisteredProviderNames(): string[] {
   return getRegisteredProviders().map(p => p.id);
+}
+
+/**
+ * Shallow-merge alias maps. Last-write-wins per key, intentional — repo wins
+ * over global, global wins over (currently absent) built-in alias defaults.
+ * Reserved-name validation lives in `buildAiProfile()` (model-validation.ts),
+ * not here — config-loader is a data-merge layer, not a resolver.
+ */
+function mergeAliases(
+  base: RawAliasesConfig | undefined,
+  overrides: RawAliasesConfig | undefined
+): RawAliasesConfig | undefined {
+  if (!base && !overrides) return undefined;
+  return { ...base, ...overrides };
 }
 
 function mergeAssistantDefaults(
@@ -388,6 +403,8 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
 
   result.assistants = mergeAssistantDefaults(result.assistants, global.assistants);
 
+  result.aliases = mergeAliases(result.aliases, global.aliases);
+
   // Streaming preferences
   if (global.streaming) {
     if (global.streaming.telegram) result.streaming.telegram = global.streaming.telegram;
@@ -431,6 +448,8 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
   }
 
   result.assistants = mergeAssistantDefaults(result.assistants, repo.assistants);
+
+  result.aliases = mergeAliases(result.aliases, repo.aliases);
 
   // Commands config
   if (repo.commands) {
