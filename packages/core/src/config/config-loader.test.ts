@@ -37,6 +37,9 @@ import {
 } from './config-loader';
 
 describe('config-loader', () => {
+  const pathMatches = (path: string, pattern: string): boolean =>
+    path.replace(/\\/g, '/').includes(pattern);
+
   const originalEnv: Record<string, string | undefined> = {};
   const envVars = [
     'DEFAULT_AI_ASSISTANT',
@@ -275,19 +278,11 @@ streaming:
     });
 
     test('repo config overrides global config', async () => {
-      // Helper to check path in cross-platform way (handles both / and \ separators)
-      const pathMatches = (path: string, pattern: string): boolean => {
-        const normalizedPath = path.replace(/\\/g, '/');
-        return normalizedPath.includes(pattern);
-      };
-
       let globalConfigRead = false;
       mockFsReadFile.mockImplementation(async (path: string) => {
-        // First check for repo-specific config path (contains /repo/.archon/)
         if (pathMatches(path, '/repo/.archon/config.yaml')) {
           return 'assistant: codex';
         }
-        // Then check for global config (just .archon/config.yaml but not under /repo/)
         if (pathMatches(path, '.archon/config.yaml') && !globalConfigRead) {
           globalConfigRead = true;
           return 'defaultAssistant: claude';
@@ -302,11 +297,6 @@ streaming:
     });
 
     test('merges assistant defaults from global and repo config', async () => {
-      const pathMatches = (path: string, pattern: string): boolean => {
-        const normalizedPath = path.replace(/\\/g, '/');
-        return normalizedPath.includes(pattern);
-      };
-
       let globalConfigRead = false;
       mockFsReadFile.mockImplementation(async (path: string) => {
         if (pathMatches(path, '/repo/.archon/config.yaml')) {
@@ -330,11 +320,6 @@ streaming:
     });
 
     test('propagates baseBranch from repo worktree config', async () => {
-      const pathMatches = (path: string, pattern: string): boolean => {
-        const normalizedPath = path.replace(/\\/g, '/');
-        return normalizedPath.includes(pattern);
-      };
-
       mockFsReadFile.mockImplementation(async (path: string) => {
         if (pathMatches(path, '/repo/.archon/config.yaml')) {
           return `
@@ -352,11 +337,6 @@ worktree:
     });
 
     test('trims whitespace from baseBranch', async () => {
-      const pathMatches = (path: string, pattern: string): boolean => {
-        const normalizedPath = path.replace(/\\/g, '/');
-        return normalizedPath.includes(pattern);
-      };
-
       mockFsReadFile.mockImplementation(async (path: string) => {
         if (pathMatches(path, '/repo/.archon/config.yaml')) {
           return `
@@ -395,9 +375,6 @@ aliases:
     });
 
     test('repo aliases override global aliases with same key', async () => {
-      const pathMatches = (path: string, pattern: string): boolean =>
-        path.replace(/\\/g, '/').includes(pattern);
-
       let globalRead = false;
       mockFsReadFile.mockImplementation(async (path: string) => {
         if (pathMatches(path, '/repo/.archon/config.yaml')) {
@@ -439,9 +416,6 @@ tiers:
     });
 
     test('repo tiers override global tiers with same tier name', async () => {
-      const pathMatches = (path: string, pattern: string): boolean =>
-        path.replace(/\\/g, '/').includes(pattern);
-
       let globalRead = false;
       mockFsReadFile.mockImplementation(async (path: string) => {
         if (pathMatches(path, '/repo/.archon/config.yaml')) {
@@ -471,11 +445,6 @@ tiers:
     });
 
     test('propagates docsPath from repo docs config', async () => {
-      const pathMatches = (path: string, pattern: string): boolean => {
-        const normalizedPath = path.replace(/\\/g, '/');
-        return normalizedPath.includes(pattern);
-      };
-
       mockFsReadFile.mockImplementation(async (path: string) => {
         if (pathMatches(path, '/repo/.archon/config.yaml')) {
           return `
@@ -493,11 +462,6 @@ docs:
     });
 
     test('trims whitespace from docsPath', async () => {
-      const pathMatches = (path: string, pattern: string): boolean => {
-        const normalizedPath = path.replace(/\\/g, '/');
-        return normalizedPath.includes(pattern);
-      };
-
       mockFsReadFile.mockImplementation(async (path: string) => {
         if (pathMatches(path, '/repo/.archon/config.yaml')) {
           return `
@@ -524,9 +488,6 @@ docs:
     });
 
     test('propagates env vars from repo config', async () => {
-      const pathMatches = (path: string, pattern: string): boolean =>
-        path.replace(/\\/g, '/').includes(pattern);
-
       mockFsReadFile.mockImplementation(async (path: string) => {
         if (pathMatches(path, '/repo/.archon/config.yaml')) {
           return `
@@ -585,11 +546,6 @@ assistants:
     });
 
     test('repo settingSources overrides global', async () => {
-      const pathMatches = (path: string, pattern: string): boolean => {
-        const normalizedPath = path.replace(/\\/g, '/');
-        return normalizedPath.includes(pattern);
-      };
-
       let globalConfigRead = false;
       mockFsReadFile.mockImplementation(async (path: string) => {
         if (pathMatches(path, '/repo/.archon/config.yaml')) {

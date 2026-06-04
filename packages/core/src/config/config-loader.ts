@@ -35,8 +35,6 @@ import type {
   SafeConfig,
   AssistantDefaults,
   AssistantDefaultsConfig,
-  RawAliasesConfig,
-  RawTiersConfig,
 } from './config-types';
 import { createLogger } from '@archon/paths';
 import {
@@ -57,30 +55,16 @@ function getRegisteredProviderNames(): string[] {
 }
 
 /**
- * Shallow-merge alias maps. Last-write-wins per key, intentional — repo wins
- * over global. Reserved-name validation lives in `buildAiProfile()` (model-resolver.ts),
+ * Shallow-merge optional config maps (aliases or tiers). Last-write-wins per key —
+ * repo wins over global. Validation lives in `buildAiProfile()` (model-resolver.ts),
  * not here — config-loader is a data-merge layer, not a resolver.
  */
-function mergeAliases(
-  base: RawAliasesConfig | undefined,
-  overrides: RawAliasesConfig | undefined
-): RawAliasesConfig | undefined {
+function mergeOptionalRecord<T extends Record<string, unknown>>(
+  base: T | undefined,
+  overrides: T | undefined
+): T | undefined {
   if (!base && !overrides) return undefined;
-  return { ...base, ...overrides };
-}
-
-/**
- * Shallow-merge tier-override maps. Last-write-wins per tier key — repo wins
- * over global, global wins over built-in tier-defaults.json (applied later in
- * `buildAiProfile()`). Entry-shape validation lives in `buildAiProfile()`, not
- * here — config-loader is a data-merge layer, not a resolver.
- */
-function mergeTiers(
-  base: RawTiersConfig | undefined,
-  overrides: RawTiersConfig | undefined
-): RawTiersConfig | undefined {
-  if (!base && !overrides) return undefined;
-  return { ...base, ...overrides };
+  return { ...base, ...overrides } as T;
 }
 
 function mergeAssistantDefaults(
@@ -395,10 +379,9 @@ function applyEnvOverrides(config: MergedConfig): MergedConfig {
 function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): MergedConfig {
   const result: MergedConfig = {
     ...defaults,
-    assistants: mergeAssistantDefaults(defaults.assistants),
+    assistants: mergeAssistantDefaults(defaults.assistants, global.assistants),
   };
 
-  // Bot name preference
   if (global.botName) {
     result.botName = global.botName;
   }
@@ -415,10 +398,8 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
     }
   }
 
-  result.assistants = mergeAssistantDefaults(result.assistants, global.assistants);
-
-  result.aliases = mergeAliases(result.aliases, global.aliases);
-  result.tiers = mergeTiers(result.tiers, global.tiers);
+  result.aliases = mergeOptionalRecord(result.aliases, global.aliases);
+  result.tiers = mergeOptionalRecord(result.tiers, global.tiers);
 
   // Streaming preferences
   if (global.streaming) {
@@ -447,7 +428,7 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
 function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
   const result: MergedConfig = {
     ...merged,
-    assistants: mergeAssistantDefaults(merged.assistants),
+    assistants: mergeAssistantDefaults(merged.assistants, repo.assistants),
   };
 
   // Assistant override (repo-level takes precedence) — validate against registry
@@ -462,12 +443,9 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
     }
   }
 
-  result.assistants = mergeAssistantDefaults(result.assistants, repo.assistants);
+  result.aliases = mergeOptionalRecord(result.aliases, repo.aliases);
+  result.tiers = mergeOptionalRecord(result.tiers, repo.tiers);
 
-  result.aliases = mergeAliases(result.aliases, repo.aliases);
-  result.tiers = mergeTiers(result.tiers, repo.tiers);
-
-  // Commands config
   if (repo.commands) {
     result.commands = {
       ...result.commands,
@@ -476,7 +454,6 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
     };
   }
 
-  // Defaults config
   if (repo.defaults) {
     result.defaults = {
       ...result.defaults,

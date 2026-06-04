@@ -462,7 +462,6 @@ export async function executeWorkflow(
   // Workflow run + resume state. Caller decides whether to resume by passing
   // preCreatedRun (from hydrateResumableRun) + priorCompletedNodes via opts.
   // When both are absent the executor creates a fresh row below.
-  const dagPriorCompletedNodes = priorCompletedNodes;
   let workflowRun: WorkflowRun | undefined = preCreatedRun;
 
   if (preCreatedRun && priorCompletedNodes !== undefined) {
@@ -670,7 +669,7 @@ export async function executeWorkflow(
       usesBash: workflow.nodes.some(isBashNode),
       interactive: workflow.interactive ?? false,
       usedIsolation: isolationContext !== undefined,
-      isResume: dagPriorCompletedNodes !== undefined,
+      isResume: priorCompletedNodes !== undefined,
     });
     deps.store
       .createWorkflowEvent({
@@ -686,7 +685,7 @@ export async function executeWorkflow(
       });
 
     // Set status to running now that execution has started (skip for resumed runs — already running)
-    if (!dagPriorCompletedNodes) {
+    if (!priorCompletedNodes) {
       try {
         await deps.store.updateWorkflowRun(workflowRun.id, { status: 'running' });
       } catch (dbError) {
@@ -791,7 +790,7 @@ export async function executeWorkflow(
       config,
       configuredCommandFolder,
       issueContext,
-      dagPriorCompletedNodes,
+      priorCompletedNodes,
       source,
       aiProfile
     );

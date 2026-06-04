@@ -124,6 +124,13 @@ export interface BuildAiProfileOptions {
   repoTiers?: RawTiersConfig;
 }
 
+function aliasFromEntry(provider: string, entry: RawAliasEntry): ModelAliasPreset {
+  const preset: ModelAliasPreset = { provider, model: entry.model };
+  if (entry.effort !== undefined) preset.effort = entry.effort;
+  if (entry.thinking !== undefined) preset.thinking = entry.thinking;
+  return preset;
+}
+
 /**
  * Build a ResolvedAiProfile by layering tier defaults → global aliases → repo aliases.
  * Throws if any alias name collides with a reserved tier name, or if an alias
@@ -156,12 +163,7 @@ export function buildAiProfile(
     if (!layer) continue;
     for (const [name, entry] of Object.entries(layer) as [TierName, RawAliasEntry][]) {
       assertValidEntry(name, entry);
-      aliases[name] = {
-        provider: entry.provider,
-        model: entry.model,
-        ...(entry.effort !== undefined ? { effort: entry.effort } : {}),
-        ...(entry.thinking !== undefined ? { thinking: entry.thinking } : {}),
-      };
+      aliases[name] = aliasFromEntry(entry.provider, entry);
     }
   }
 
@@ -171,12 +173,7 @@ export function buildAiProfile(
       assertNotReserved(name);
       assertCustomAliasPrefix(name);
       assertValidEntry(name, entry);
-      aliases[name] = {
-        provider: entry.provider,
-        model: entry.model,
-        ...(entry.effort !== undefined ? { effort: entry.effort } : {}),
-        ...(entry.thinking !== undefined ? { thinking: entry.thinking } : {}),
-      };
+      aliases[name] = aliasFromEntry(entry.provider, entry);
     }
   }
 
