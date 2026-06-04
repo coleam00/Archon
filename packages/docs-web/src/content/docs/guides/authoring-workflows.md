@@ -721,7 +721,9 @@ provider: claude     # Any registered provider (default: from config)
 model: sonnet        # Model override (default: from config assistants.claude.model)
 ```
 
-**Model strings:** Whatever you write in `model:` is forwarded verbatim to the resolved provider's SDK. Archon doesn't keep an internal allow-list, because vendor SDKs ship new models faster than this doc can. The provider's API decides whether the string is valid at request time.
+**Tier keywords** — `small`, `medium`, and `large` are cross-provider tier keywords that Archon resolves before forwarding to the SDK. They map to the provider's built-in tier defaults (e.g. `small` → `haiku` for Claude, `gpt-5.5` for Codex) or your custom overrides in `tiers:` config. Use these for portable workflows that work regardless of which provider is active.
+
+**Model strings:** Whatever you write in `model:` that isn't a tier keyword is forwarded verbatim to the resolved provider's SDK. Archon doesn't keep an internal allow-list, because vendor SDKs ship new models faster than this doc can. The provider's API decides whether the string is valid at request time.
 
 Common shapes you'll see in practice:
 
@@ -732,7 +734,7 @@ Common shapes you'll see in practice:
 
 If the SDK rejects the string at request time, the node fails loudly with the SDK's error message — Archon never silently re-routes a model from one provider to another based on the string.
 
-**Provider selection is independent of the model string** — a `model: opus[1m]` node with no `provider:` field will route to your `defaultAssistant` regardless of the model name. Always pair a provider-specific model string with an explicit `provider:` on the node.
+**Provider selection is independent of the model string** — a `model: opus[1m]` node with no `provider:` field will route to your `defaultAssistant` regardless of the model name. Always pair a provider-specific model string with an explicit `provider:` on the node. (Tier keywords like `large` are an exception: Archon resolves the provider from the tier preset before forwarding to the SDK.)
 
 ### Codex-Specific Options
 
@@ -808,7 +810,7 @@ Example validation error:
 Unknown provider 'claud'. Registered: claude, codex, pi, copilot
 ```
 
-Model strings are not validated at load time — they're forwarded to the SDK as-is and validated by the upstream API at request time.
+Tier keywords (`small`, `medium`, `large`) are resolved by Archon before the request. Other model strings are not validated at load time — they're forwarded to the SDK as-is and validated by the upstream API at request time.
 
 ### Resource Validation (CLI)
 

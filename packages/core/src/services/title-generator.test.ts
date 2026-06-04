@@ -160,20 +160,25 @@ describe('title-generator', () => {
     expect(optionsArg.model).toBe('haiku');
   });
 
-  test('TITLE_GENERATION_MODEL env var still works as a fallback', async () => {
-    // Set the env var — even though tier resolution would succeed (claude →
-    // haiku), the env var is consulted only when tier resolution fails to
-    // produce a model. We can't easily force resolution failure in this
-    // test, so we assert the value is at least one of the expected sources:
-    // tier-resolved 'haiku' (claude small) takes precedence.
+  test('tier-resolved model takes precedence over TITLE_GENERATION_MODEL env var', async () => {
     process.env.TITLE_GENERATION_MODEL = 'sonnet';
 
     await generateAndSetTitle('conv-10', 'Some message', 'claude', '/tmp');
 
     const optionsArg = mockSendQuery.mock.calls[0][3] as { model?: string; tools?: string[] };
-    // Tier resolution wins; env var is the fallback only when tier resolution
-    // fails to produce a model.
+    // Small tier for claude = haiku; env var is only consulted when tier resolution fails
     expect(optionsArg.model).toBe('haiku');
+  });
+
+  test('TITLE_GENERATION_MODEL env var is used when assistantType has no tier defaults', async () => {
+    // Use a provider ID that has no entry in tier-defaults.json so tier
+    // resolution throws and falls back to the env var.
+    process.env.TITLE_GENERATION_MODEL = 'my-custom-model';
+
+    await generateAndSetTitle('conv-10b', 'Some message', 'unknown-provider', '/tmp');
+
+    const optionsArg = mockSendQuery.mock.calls[0][3] as { model?: string; tools?: string[] };
+    expect(optionsArg.model).toBe('my-custom-model');
   });
 
   test('passes nodeConfig with allowed_tools: [] to disable tool access', async () => {

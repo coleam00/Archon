@@ -49,6 +49,7 @@ import {
   substituteNodeOutputRefs,
   executeDagWorkflow,
 } from './dag-executor';
+import { buildAiProfile } from './model-resolver';
 import { loadMcpConfig } from '@archon/providers/mcp/config';
 import type { DagNode, BashNode, ScriptNode, NodeOutput, WorkflowRun } from './schemas';
 import { discoverWorkflows } from './workflow-discovery';
@@ -7944,6 +7945,59 @@ describe('provider resolution -- regression for #1610', () => {
 
     // getAgentProvider must have been called with 'claude'
     expect(mockGetAgentProviderDag).toHaveBeenCalledWith('claude');
+  });
+
+  it('node with model: "large" tier keyword resolves to the preset model before reaching sendQuery', async () => {
+    // Regression: tier keywords must be resolved to a real model string before
+    // being passed to the SDK. If resolution is broken, 'large' would reach the
+    // SDK verbatim — causing an SDK error or unexpected behavior.
+    mockSendQueryDag.mockClear();
+    mockGetAgentProviderDag.mockClear();
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'response' };
+      yield { type: 'result', sessionId: 'session-id' };
+    });
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    // Build a profile where large → { provider: 'claude', model: 'opus' }
+    const profile = buildAiProfile('claude');
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-tier',
+      testDir,
+      {
+        name: 'tier-test',
+        nodes: [{ id: 'n1', command: 'my-cmd', model: 'large' }],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      { ...minimalConfig, assistant: 'claude' },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      profile // pass profile explicitly so tier resolution uses the known defaults
+    );
+
+    // model 'large' for claude resolves to 'opus' from tier-defaults.json
+    expect(mockSendQueryDag.mock.calls.length).toBeGreaterThan(0);
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    expect(optionsArg.model).toBe('opus');
   });
 });
 

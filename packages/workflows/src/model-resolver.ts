@@ -7,8 +7,9 @@
  *   - bare literal (anything else) → returned unchanged for SDK pass-through
  *
  * No side effects, no logger, no I/O. The `ResolvedAiProfile` is built once by
- * `buildAiProfile()` from layered config (tier defaults → global aliases → repo
- * aliases) and then handed to `resolveModelSpec()` per call.
+ * `buildAiProfile()` from layered config (tier defaults → global tier overrides →
+ * repo tier overrides → global @aliases → repo @aliases) and then handed to
+ * `resolveModelSpec()` per call.
  */
 
 import tierDefaults from './defaults/tier-defaults.json';
@@ -93,6 +94,10 @@ function assertCustomAliasPrefix(name: string): void {
 }
 
 function assertValidEntry(name: string, entry: RawAliasEntry): void {
+  // Null happens when YAML has `large:` with no value (Bun parses as null)
+  if (entry == null) {
+    throw new Error(`Alias '${name}' has no value — expected { provider, model }.`);
+  }
   if (typeof entry.provider !== 'string' || entry.provider.length === 0) {
     throw new Error(`Alias '${name}' has invalid provider — must be a non-empty string.`);
   }
@@ -101,12 +106,19 @@ function assertValidEntry(name: string, entry: RawAliasEntry): void {
   }
 }
 
+/**
+ * Production callers (executor.ts, orchestrator-agent.ts, title-generator.ts) pass
+ * already-merged config via `globalAliases` + `globalTiers` only — `config-loader`
+ * pre-merges global + repo before returning `MergedConfig`, so the repo params are
+ * unused in production. `repoAliases` / `repoTiers` exist for test expressiveness
+ * (two-layer layering tests read more clearly with explicit global/repo separation).
+ */
 export interface BuildAiProfileOptions {
-  /** Aliases from ~/.archon/config.yaml */
+  /** Aliases from ~/.archon/config.yaml (or pre-merged global+repo in production callers) */
   globalAliases?: RawAliasesConfig;
   /** Aliases from .archon/config.yaml (repo) — override globalAliases on key collision */
   repoAliases?: RawAliasesConfig;
-  /** Tier overrides from ~/.archon/config.yaml — override built-in tier defaults per tier */
+  /** Tier overrides from ~/.archon/config.yaml (or pre-merged in production callers) */
   globalTiers?: RawTiersConfig;
   /** Tier overrides from .archon/config.yaml (repo) — override globalTiers on same tier */
   repoTiers?: RawTiersConfig;

@@ -2673,10 +2673,10 @@ export async function executeDagWorkflow(
   source?: WorkflowSource,
   /**
    * Optional resolved AI profile. The production caller in executor.ts passes
-   * a profile built once upstream for telemetry consistency. When omitted,
-   * we build a fresh profile from `config.aliases` + `config.tiers` here —
-   * cheap, pure, and the right default for test paths that don't care about
-   * upstream resolution.
+   * a profile built once upstream so that workflow-level and all per-node
+   * `model:` refs resolve against the same alias+tier snapshot. When omitted,
+   * a fresh profile is built from `config.aliases` + `config.tiers` — correct
+   * for test paths that don't need cross-caller consistency.
    */
   aiProfile?: ResolvedAiProfile
 ): Promise<string | undefined> {
@@ -2988,6 +2988,18 @@ export async function executeDagWorkflow(
                     },
                     'dag.loop_node_alias_provider_conflict'
                   );
+                  const delivered = await safeSendMessage(
+                    platform,
+                    conversationId,
+                    `Warning: Node '${node.id}' has explicit provider '${node.provider}' but the model ref '${node.model}' resolves to provider '${spec.provider}'. The alias provider wins.`,
+                    { workflowId: workflowRun.id, nodeName: node.id }
+                  );
+                  if (!delivered) {
+                    getLog().error(
+                      { nodeId: node.id, workflowRunId: workflowRun.id },
+                      'dag.loop_alias_conflict_warning_delivery_failed'
+                    );
+                  }
                 }
                 loopProvider = spec.provider;
                 loopModel = spec.model;

@@ -1075,7 +1075,8 @@ export async function handleMessage(
     // direct chat on claude). Cross-provider switching in chat is Phase 2 — if
     // the resolved tier preset names a different provider, we silently keep the
     // SDK default. Any error (unknown provider, no tier configured) falls
-    // through with a debug log so chat continues working without surprises.
+    // through (provider has no tier defaults and no user tiers: config, or
+    // other resolution failure) with a debug log so chat continues working.
     try {
       const chatProfile = buildAiProfile(providerKey, {
         globalAliases: config.aliases,
@@ -1085,11 +1086,20 @@ export async function handleMessage(
       if (!isLiteralSpec(spec)) {
         if (spec.provider === providerKey) {
           requestOptions.model = spec.model;
-          if (spec.effort !== undefined && (providerKey === 'codex' || providerKey === 'copilot')) {
-            requestOptions.assistantConfig = {
-              ...(requestOptions.assistantConfig ?? {}),
-              modelReasoningEffort: spec.effort,
-            };
+          if (spec.effort !== undefined) {
+            if (providerKey === 'codex' || providerKey === 'copilot') {
+              requestOptions.assistantConfig = {
+                ...(requestOptions.assistantConfig ?? {}),
+                modelReasoningEffort: spec.effort,
+              };
+            } else {
+              // Claude (and others): effort goes into nodeConfig
+              // Phase 2: move to a top-level AgentRequestOptions.effort field
+              requestOptions.nodeConfig = {
+                ...(requestOptions.nodeConfig ?? {}),
+                effort: spec.effort,
+              };
+            }
           }
         } else {
           getLog().debug(

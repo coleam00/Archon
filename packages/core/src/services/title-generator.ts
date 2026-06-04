@@ -64,8 +64,8 @@ export async function generateAndSetTitle(
       } else if (spec.provider === assistantType) {
         titleModel = spec.model;
       }
-    } catch {
-      // Silent: best-effort tier resolution. Fall through to env-var/SDK default.
+    } catch (err) {
+      getLog().debug({ err, assistantType }, 'title.tier_resolution_skipped');
     }
     if (titleModel === undefined && process.env.TITLE_GENERATION_MODEL) {
       titleModel = process.env.TITLE_GENERATION_MODEL;

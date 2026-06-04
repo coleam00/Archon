@@ -58,8 +58,7 @@ function getRegisteredProviderNames(): string[] {
 
 /**
  * Shallow-merge alias maps. Last-write-wins per key, intentional — repo wins
- * over global, global wins over (currently absent) built-in alias defaults.
- * Reserved-name validation lives in `buildAiProfile()` (model-resolver.ts),
+ * over global. Reserved-name validation lives in `buildAiProfile()` (model-resolver.ts),
  * not here — config-loader is a data-merge layer, not a resolver.
  */
 function mergeAliases(

@@ -161,9 +161,9 @@ async function loadWorkflowsFromDir(dirPath: string, depth = 0): Promise<DirLoad
  * defaults must portably resolve everywhere: tier keywords (small/medium/large)
  * or literal model strings only.
  *
- * Returns the first violation as a validation error, or null if the workflow is
- * portable. Called by `loadBundledWorkflows` (binary builds) and by the
- * filesystem bundled-load path so source builds enforce the same rule.
+ * Returns null if valid, or a WorkflowLoadError listing all violations.
+ * Called by `loadBundledWorkflows` (binary builds) and by the filesystem
+ * bundled-load path so source builds enforce the same rule.
  */
 export function validateBundledWorkflowAliases(
   workflow: WorkflowDefinition,

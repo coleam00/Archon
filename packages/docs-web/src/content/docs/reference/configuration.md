@@ -96,10 +96,17 @@ paths:
 concurrency:
   maxConversations: 10
 
-# Model aliases — optional. Wired into workflow `model:` resolution in a follow-up.
-# aliases:
-#   '@fast': { provider: claude, model: haiku }
-#   '@think': { provider: claude, model: opus, thinking: { type: enabled, budgetTokens: 8000 } }
+# Model aliases — custom shorthand refs for use in workflow model: fields.
+# Alias keys must start with @ (e.g. @fast). Reserved: small, medium, large.
+aliases:
+  '@fast': { provider: claude, model: haiku }
+  '@think': { provider: claude, model: opus, thinking: { type: enabled, budgetTokens: 8000 } }
+
+# Tier overrides — customize what small/medium/large resolve to per provider.
+# Each tier entry: { provider, model, effort? }. Repo config overrides global per tier.
+# tiers:
+#   large: { provider: codex, model: gpt-5.5, effort: high }
+#   small: { provider: claude, model: haiku }
 
 ```
 
@@ -159,6 +166,10 @@ defaults:
 # Model aliases — override global aliases with the same name (repo > global).
 # aliases:
 #   '@fast': { provider: claude, model: haiku }
+
+# Tier overrides — repo-level overrides for small/medium/large tier resolution.
+# tiers:
+#   large: { provider: claude, model: claude-opus-4-7 }
 
 ```
 
