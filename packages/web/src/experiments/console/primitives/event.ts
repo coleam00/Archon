@@ -50,10 +50,19 @@ export interface NodeTransitionEvent extends RunEventBase {
   nodeName: string;
   transition: 'started' | 'completed' | 'failed' | 'skipped';
   durationMs: number | null;
-  /** Only populated for `skipped` — `when_condition` or `trigger_rule`. */
+  /** Only populated for `skipped` — `when_condition`, `trigger_rule`, or `prior_success`. */
   skipReason: string | null;
   /** Only populated for `skipped` — the evaluated expression that gated it. */
   skipExpr: string | null;
+  /**
+   * `node_completed` enrichment, read straight from the persisted event payload.
+   * Not rendered yet — the per-node accordion (follow-up) surfaces these. Null on
+   * non-completion transitions (and when a provider doesn't report them).
+   */
+  outputPreview: string | null;
+  costUsd: number | null;
+  stopReason: string | null;
+  numTurns: number | null;
 }
 
 export interface ApprovalEvent extends RunEventBase {
@@ -137,17 +146,35 @@ export function toRunEvent(raw: RawWorkflowEvent): RunEvent {
     et === 'node_started' ||
     et === 'node_completed' ||
     et === 'node_failed' ||
-    et === 'node_skipped'
+    et === 'node_skipped' ||
+    et === 'node_skipped_prior_success'
   ) {
-    const transition = et.replace('node_', '') as 'started' | 'completed' | 'failed' | 'skipped';
+    // `node_skipped_prior_success` (emitted on resume for already-completed nodes)
+    // doesn't fit the `node_<transition>` shape, so map transitions explicitly
+    // rather than string-slicing.
+    const transition: NodeTransitionEvent['transition'] =
+      et === 'node_started'
+        ? 'started'
+        : et === 'node_completed'
+          ? 'completed'
+          : et === 'node_failed'
+            ? 'failed'
+            : 'skipped';
+    const output = readStringOrNull(data, 'node_output');
     return {
       ...base,
       kind: 'node_transition',
       nodeName: readString(data, 'name') || (raw.step_name ?? ''),
       transition,
-      durationMs: readNumberOrNull(data, 'duration'),
+      // Server persists `duration_ms` (NOT `duration`); reading the wrong key here
+      // left every node duration null in the UI.
+      durationMs: readNumberOrNull(data, 'duration_ms'),
       skipReason: transition === 'skipped' ? readStringOrNull(data, 'reason') : null,
       skipExpr: transition === 'skipped' ? readStringOrNull(data, 'expr') : null,
+      outputPreview: output === null ? null : output.slice(0, 300),
+      costUsd: readNumberOrNull(data, 'cost_usd'),
+      stopReason: readStringOrNull(data, 'stop_reason'),
+      numTurns: readNumberOrNull(data, 'num_turns'),
     };
   }
 
@@ -182,15 +209,30 @@ export function toRunEvent(raw: RawWorkflowEvent): RunEvent {
     };
   }
 
-  if (et === 'approval_pending' || et === 'approval_resolved') {
-    const resolution = et === 'approval_resolved';
-    const resolvedAs = readString(data, 'resolution'); // 'approved' | 'rejected'
+  // The server writes two rows around a human gate: `approval_requested` (carries
+  // the prompt in `message`) and `approval_received` (carries the outcome in
+  // `decision` + `comment`/`reason`). The prompt does NOT ride the received row —
+  // a renderer pairs the two by nodeId, the way tool_called/tool_completed pair.
+  // (The old code checked `approval_pending`/`approval_resolved` and read a
+  // `resolution` key, none of which the server ever writes, so approvals fell
+  // through to the raw-JSON fallback below.)
+  if (et === 'approval_requested') {
     return {
       ...base,
       kind: 'approval',
       prompt: readString(data, 'message'),
-      resolution: resolution
-        ? resolvedAs === 'rejected'
+      resolution: null,
+    };
+  }
+
+  if (et === 'approval_received') {
+    const decision = readString(data, 'decision'); // 'approved' | 'rejected'
+    return {
+      ...base,
+      kind: 'approval',
+      prompt: '',
+      resolution:
+        decision === 'rejected'
           ? {
               kind: 'rejected',
               at: raw.created_at,
@@ -200,8 +242,7 @@ export function toRunEvent(raw: RawWorkflowEvent): RunEvent {
               kind: 'approved',
               at: raw.created_at,
               comment: readStringOrNull(data, 'comment'),
-            }
-        : null,
+            },
     };
   }
 
