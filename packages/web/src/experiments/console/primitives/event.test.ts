@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { toRunEvent } from './event';
+import { toRunEvent, countTerminalNodes } from './event';
 
 type Raw = Parameters<typeof toRunEvent>[0];
 
@@ -235,5 +235,51 @@ describe('toRunEvent — fallback', () => {
     expect(e.kind).toBe('text');
     if (e.kind !== 'text') throw new Error('unreachable');
     expect(e.content).toContain('mystery_event');
+  });
+});
+
+describe('countTerminalNodes', () => {
+  // Build a normalized node-transition RunEvent for `nodeId` via toRunEvent.
+  const node = (nodeId: string | null, eventType: string) =>
+    toRunEvent(raw({ event_type: eventType, step_name: nodeId }));
+
+  test('empty event list → 0/0', () => {
+    expect(countTerminalNodes([])).toEqual({ completed: 0, total: 0 });
+  });
+
+  test('only started (in-flight) nodes are excluded from the total', () => {
+    expect(countTerminalNodes([node('a', 'node_started'), node('b', 'node_started')])).toEqual({
+      completed: 0,
+      total: 0,
+    });
+  });
+
+  test('completed counts toward completed+total; failed/skipped only toward total', () => {
+    const events = [
+      node('a', 'node_completed'),
+      node('b', 'node_failed'),
+      node('c', 'node_skipped'),
+    ];
+    expect(countTerminalNodes(events)).toEqual({ completed: 1, total: 3 });
+  });
+
+  test('a node seen as completed then resume-skipped counts ONCE, still completed (dedup regression)', () => {
+    // A resumed run reuses one run id: the node has its original node_completed AND a
+    // later node_skipped_prior_success. Raw counting would report 2/2; dedup → 1/1.
+    const events = [node('a', 'node_completed'), node('a', 'node_skipped_prior_success')];
+    expect(countTerminalNodes(events)).toEqual({ completed: 1, total: 1 });
+  });
+
+  test('non-node_transition events are ignored', () => {
+    const events = [
+      node('a', 'node_completed'),
+      toRunEvent(raw({ event_type: 'tool_called', data: { tool_name: 'Bash' } })),
+      toRunEvent(raw({ event_type: 'workflow_completed', data: {} })),
+    ];
+    expect(countTerminalNodes(events)).toEqual({ completed: 1, total: 1 });
+  });
+
+  test('a terminal event with a null nodeId is skipped (can not be deduped)', () => {
+    expect(countTerminalNodes([node(null, 'node_completed')])).toEqual({ completed: 0, total: 0 });
   });
 });

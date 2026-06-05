@@ -1,6 +1,7 @@
 import { Fragment, type ReactElement } from 'react';
 import { MessageItem } from './MessageItem';
 import { ToolCallItem } from './ToolCallItem';
+import { ConsoleWorkflowResultCard } from './ConsoleWorkflowResultCard';
 import { isSystemCategory, type Message } from '../primitives/message';
 
 interface ChatStreamProps {
@@ -23,15 +24,30 @@ interface ChatStreamProps {
  * resolve — pass runStartedAt: null for wall-clock display.
  */
 export function ChatStream({ messages, showTools = false }: ChatStreamProps): ReactElement {
+  // `workflow_result` messages are normally swept up by `isSystemCategory` (the
+  // `workflow_` prefix), but they carry the run summary + a completion card — let
+  // them through explicitly. Other `workflow_*` narration stays suppressed.
   const visible = showTools
     ? messages
-    : messages.filter(m => !isSystemCategory(m.category) && m.content.trim().length > 0);
+    : messages.filter(
+        m =>
+          m.category === 'workflow_result' ||
+          (!isSystemCategory(m.category) && m.content.trim().length > 0)
+      );
 
   return (
     <div className="flex flex-col gap-1.5">
       {visible.map(message => (
         <Fragment key={message.id}>
-          <MessageItem message={message} />
+          {message.category === 'workflow_result' && message.workflowResult !== null ? (
+            <ConsoleWorkflowResultCard
+              runId={message.workflowResult.runId}
+              workflowName={message.workflowResult.workflowName}
+              summary={message.content}
+            />
+          ) : (
+            <MessageItem message={message} />
+          )}
           {showTools
             ? message.toolCalls.map((call, i) => (
                 <ToolCallItem

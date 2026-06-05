@@ -38,6 +38,12 @@ export interface WorkflowDispatchMeta {
   workerConversationId?: string;
 }
 
+/** Completion metadata on a `workflow_result` message — identifies the finished run. */
+export interface WorkflowResultMeta {
+  workflowName: string;
+  runId: string;
+}
+
 export interface Message {
   id: string;
   role: MessageRole;
@@ -45,10 +51,12 @@ export interface Message {
   timestamp: string;
   toolCalls: InlineToolCall[];
   error: InlineError | null;
-  /** Framework category from metadata (e.g. workflow_dispatch_status). */
+  /** Framework category from metadata (e.g. workflow_dispatch_status, workflow_result). */
   category: string | null;
   /** Parsed workflowDispatch payload, if present on this message. */
   dispatch: WorkflowDispatchMeta | null;
+  /** Parsed workflowResult payload — present on `workflow_result` messages. */
+  workflowResult: WorkflowResultMeta | null;
 }
 
 interface RawMessage {
@@ -72,13 +80,28 @@ interface ParsedMetadata {
     workflowName: string;
     workerConversationId?: string;
   };
+  // Untrusted/raw shape straight from JSON.parse — stays inline (rather than
+  // reusing WorkflowResultMeta) because toMessage validates it before producing
+  // the domain value. Runtime may hand us null or wrong-typed fields regardless
+  // of this annotation; the guard in toMessage is what enforces the contract.
+  workflowResult?: {
+    workflowName: string;
+    runId: string;
+  };
 }
 
 function parseMetadata(raw: string): ParsedMetadata {
   if (raw.length === 0) return {};
   try {
     return JSON.parse(raw) as ParsedMetadata;
-  } catch {
+  } catch (e) {
+    // Corrupt metadata degrades to "no metadata" (the message still renders as
+    // plain prose) — but never silently: a malformed blob here is the kind of
+    // thing that would otherwise hide a real workflow_result with no trace.
+    console.warn('[console] failed to parse message metadata; treating as empty', {
+      error: e,
+      raw: raw.slice(0, 200),
+    });
     return {};
   }
 }
@@ -110,6 +133,15 @@ export function toMessage(raw: RawMessage): Message {
           workerConversationId: meta.workflowDispatch.workerConversationId,
         }
       : null;
+  // Only a fully-formed payload yields a result (the hard-failure orchestrator path
+  // can omit it) — guard both fields so a partial object never half-renders a card.
+  // `!= null` (not `!== undefined`) so an explicit JSON `null` doesn't slip past and
+  // make the `typeof wr.workflowName` access throw.
+  const wr = meta.workflowResult;
+  const workflowResult: WorkflowResultMeta | null =
+    wr != null && typeof wr.workflowName === 'string' && typeof wr.runId === 'string'
+      ? { workflowName: wr.workflowName, runId: wr.runId }
+      : null;
   return {
     id: raw.id,
     role: toMessageRole(raw.role),
@@ -119,5 +151,6 @@ export function toMessage(raw: RawMessage): Message {
     error,
     category: meta.category ?? null,
     dispatch,
+    workflowResult,
   };
 }
