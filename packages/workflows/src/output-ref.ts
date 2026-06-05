@@ -28,21 +28,23 @@ import type { NodeOutput } from './schemas';
  * no-silent-drop contract. Propagates to fail the consuming node (both call
  * sites run inside the dag-executor's per-node try/catch).
  */
+export type OutputRefErrorReason =
+  | 'not-in-schema'
+  | 'unparseable'
+  | 'missing-key'
+  | 'producer-not-run';
+
 export class OutputRefError extends Error {
   constructor(
     public readonly nodeId: string,
     public readonly field: string,
-    public readonly reason: 'not-in-schema' | 'unparseable' | 'missing-key'
+    public readonly reason: OutputRefErrorReason
   ) {
     super(OutputRefError.messageFor(nodeId, field, reason));
     this.name = 'OutputRefError';
   }
 
-  private static messageFor(
-    nodeId: string,
-    field: string,
-    reason: 'not-in-schema' | 'unparseable' | 'missing-key'
-  ): string {
+  private static messageFor(nodeId: string, field: string, reason: OutputRefErrorReason): string {
     const ref = `$${nodeId}.output.${field}`;
     switch (reason) {
       case 'not-in-schema':
@@ -51,6 +53,8 @@ export class OutputRefError extends Error {
         return `'${ref}' references field '${field}', but node '${nodeId}'s output is not a JSON object, so the field cannot be read. Emit JSON containing '${field}', or reference '$${nodeId}.output' (whole text) instead.`;
       case 'missing-key':
         return `'${ref}' references field '${field}', but node '${nodeId}'s JSON output has no such key. Emit '${field}' in the output, or fix the reference.`;
+      case 'producer-not-run':
+        return `'${ref}' references field '${field}', but node '${nodeId}' did not run (skipped or pending), so it has no output to read. Guard this reference with a 'when:' condition, or fix the dependency.`;
     }
   }
 }
@@ -105,6 +109,14 @@ export function resolveNodeOutputField(
   nodeId: string,
   field: string
 ): FieldResolution {
+  // A producer that did not run (skipped) or has not settled (pending) has no
+  // output to read a field from. Surface that directly rather than letting it
+  // fall through to the schemaless path and throw the misleading "not a JSON
+  // object" error on its empty output.
+  if (nodeOutput.state === 'skipped' || nodeOutput.state === 'pending') {
+    throw new OutputRefError(nodeId, field, 'producer-not-run');
+  }
+
   const declaredFields = 'declaredFields' in nodeOutput ? nodeOutput.declaredFields : undefined;
   const structured = 'structuredOutput' in nodeOutput ? nodeOutput.structuredOutput : undefined;
   const structuredObj = asPlainObject(structured);

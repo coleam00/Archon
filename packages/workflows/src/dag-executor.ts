@@ -990,32 +990,46 @@ async function executeNodeInternal(
     // no provider-specific branching here.
     if (nodeOptions?.outputFormat) {
       if (structuredOutput !== undefined) {
-        // Task 7 — validate the parsed structured output against the declared
-        // schema for EVERY provider, not just best-effort ones. SDK-enforced
-        // providers (Claude/Codex/OpenCode) still bypass grammar-constrained
-        // decoding on a refusal or max_tokens truncation, so this is their net
-        // too. The author's schema is validated as written (optional stays
-        // optional; additionalProperties not required).
-        const { valid, errors } = validateStructuredOutput(
+        // Validate the parsed structured output against the declared schema for
+        // EVERY provider, not just best-effort ones. SDK-enforced providers
+        // (Claude/Codex/OpenCode) still bypass grammar-constrained decoding on a
+        // refusal or max_tokens truncation, so this is their net too. The
+        // author's schema is validated as written (optional stays optional;
+        // additionalProperties not required).
+        //
+        // If ajv can't compile the schema, validation fails SAFE (treated valid)
+        // — but a schema that can't be enforced is surfaced to the user, not
+        // just logged, so it doesn't pass silently.
+        let schemaCompileError: string | undefined;
+        const validation = validateStructuredOutput(
           structuredOutput,
           node.output_format ?? {},
           compileMsg => {
-            getLog().warn(
-              { nodeId: node.id, workflowRunId: workflowRun.id, compileMsg },
-              'dag.structured_output_schema_uncompilable'
-            );
+            schemaCompileError = compileMsg;
           }
         );
-        if (!valid) {
-          // Task 8 — fail loudly. No silent degrade. (The bounded reask loop for
+        if (schemaCompileError !== undefined) {
+          getLog().warn(
+            { nodeId: node.id, workflowRunId: workflowRun.id, compileMsg: schemaCompileError },
+            'dag.structured_output_schema_uncompilable'
+          );
+          await safeSendMessage(
+            platform,
+            conversationId,
+            `⚠️ Node '${node.id}': its \`output_format\` schema could not be compiled (${schemaCompileError}), so the structured output was NOT validated against it. Fix the schema to enforce it.`,
+            nodeContext
+          );
+        }
+        if (!validation.valid) {
+          // Fail loudly. No silent degrade. (The bounded reask loop for
           // best-effort providers lands in PR 2; for now both tiers fail fast on
           // an invalid payload, routed through the catch below → failed node.)
           getLog().warn(
-            { nodeId: node.id, workflowRunId: workflowRun.id, errors },
+            { nodeId: node.id, workflowRunId: workflowRun.id, errors: validation.errors },
             'dag.structured_output_invalid'
           );
           throw new Error(
-            `Node '${node.id}': output_format declared but the provider's structured output failed schema validation: ${errors.join('; ')}`
+            `Node '${node.id}': output_format declared but the provider's structured output failed schema validation: ${validation.errors.join('; ')}`
           );
         }
         try {
@@ -1031,12 +1045,12 @@ async function executeNodeInternal(
         }
         getLog().debug({ nodeId: node.id, streamingMode }, 'dag.structured_output_override');
       } else {
-        // Task 8 — fail-fast: output_format was declared but the provider
-        // returned no structured payload at all (prose, refusal, parse miss).
-        // Previously this warned-and-completed, letting a poisoned-but-green
-        // node feed `''` to every downstream `$node.output.field`. That silent
-        // degrade is the bug this plan removes. Throw → routed to the catch
-        // below → failed node the author can see and fix.
+        // Fail-fast: output_format was declared but the provider returned no
+        // structured payload at all (prose, refusal, parse miss). Previously this
+        // warned-and-completed, letting a poisoned-but-green node feed `''` to
+        // every downstream `$node.output.field`. That silent degrade is the bug
+        // this plan removes. Throw → routed to the catch below → failed node the
+        // author can see and fix.
         getLog().warn(
           { nodeId: node.id, workflowRunId: workflowRun.id },
           'dag.structured_output_missing'

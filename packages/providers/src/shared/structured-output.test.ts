@@ -28,8 +28,11 @@ describe('tryParseStructuredOutput', () => {
     expect(tryParseStructuredOutput('{"a":1,"b":"two"}')).toEqual({ a: 1, b: 'two' });
   });
 
-  test('returns the parsed array for clean JSON', () => {
-    expect(tryParseStructuredOutput('[1,2,3]')).toEqual([1, 2, 3]);
+  test('returns undefined for a top-level array (contract is a JSON object)', () => {
+    // output_format is always an object schema and the augmentation asks for an
+    // object; a top-level array is not valid structured output (object-only
+    // contract, consistent across all parse tiers).
+    expect(tryParseStructuredOutput('[1,2,3]')).toBeUndefined();
   });
 
   test('strips ```json fences', () => {
@@ -128,15 +131,15 @@ describe('validateStructuredOutput', () => {
     required: ['summary'],
   };
 
-  test('valid value passes with no errors', () => {
+  test('valid value passes', () => {
     const r = validateStructuredOutput({ summary: 'hi', count: 2 }, schema);
     expect(r.valid).toBe(true);
-    expect(r.errors).toEqual([]);
   });
 
   test('missing required field fails with a root-level error', () => {
     const r = validateStructuredOutput({ count: 2 }, schema);
     expect(r.valid).toBe(false);
+    if (r.valid) return;
     expect(r.errors.length).toBeGreaterThan(0);
     expect(r.errors.some(e => e.includes('summary'))).toBe(true);
   });
@@ -144,6 +147,7 @@ describe('validateStructuredOutput', () => {
   test('wrong type fails with a path-scoped error', () => {
     const r = validateStructuredOutput({ summary: 'hi', count: 'two' }, schema);
     expect(r.valid).toBe(false);
+    if (r.valid) return;
     expect(r.errors.some(e => e.startsWith('/count'))).toBe(true);
   });
 
@@ -175,6 +179,8 @@ describe('formatSchemaErrors', () => {
       {},
       { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] }
     );
+    expect(r.valid).toBe(false);
+    if (r.valid) return;
     expect(r.errors.some(line => line.startsWith('(root):') && line.includes('name'))).toBe(true);
   });
 

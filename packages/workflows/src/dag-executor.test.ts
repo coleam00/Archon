@@ -5555,6 +5555,69 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
     expect(errMsg).toContain('failed schema validation');
   });
 
+  it('when: referencing a field not in the producer schema FAILS the node (not a silent skip)', async () => {
+    // Regression guard: an unresolvable `.field` ref in a `when:` must fail the
+    // dependent node (OutputRefError → node_failed), NOT fail-closed-skip it —
+    // the exact regression that would silently revert the no-silent-drop fix.
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: '{"verdict":"review"}' };
+      yield { type: 'result', sessionId: 's', structuredOutput: { verdict: 'review' } };
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'when-badref',
+        nodes: [
+          {
+            id: 'gate',
+            prompt: 'decide',
+            output_format: {
+              type: 'object',
+              properties: { verdict: { type: 'string' } },
+              required: ['verdict'],
+            },
+            retry: { max_attempts: 0 },
+          },
+          {
+            id: 'runme',
+            prompt: 'go',
+            depends_on: ['gate'],
+            when: "$gate.output.nonexistent == 'x'",
+            retry: { max_attempts: 0 },
+          },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const runmeFailed = eventCalls.find(
+      (call: unknown[]) =>
+        (call[0] as Record<string, unknown>).event_type === 'node_failed' &&
+        (call[0] as Record<string, unknown>).step_name === 'runme'
+    );
+    expect(runmeFailed).toBeDefined();
+    const errMsg = ((runmeFailed![0] as Record<string, unknown>).data as Record<string, unknown>)
+      .error as string;
+    expect(errMsg).toContain('not declared in node');
+  });
+
   it('idle-timeout WITH output produces node_completed and sends warning, not node_failed', async () => {
     // The "subprocess hung after AI finished" path must still complete the node, not fail it.
     // Note: no `result` event — the generator yields content then hangs, so idle timeout fires

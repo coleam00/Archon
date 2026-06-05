@@ -14,7 +14,16 @@
  *                     AND has higher precedence than OR. No parentheses.
  *
  * Returns true = run this node, false = skip it.
- * Invalid/unparseable expressions default to false (fail-closed = skip the node).
+ *
+ * Two different error modes:
+ *   - A malformed/unparseable EXPRESSION (bad syntax) is fail-closed → result
+ *     false (skip the node), parsed: false.
+ *   - An unresolvable `$node.output.field` REFERENCE (field not in the producer's
+ *     declared schema, or a schemaless node whose output isn't JSON / lacks the
+ *     key) THROWS an `OutputRefError` that propagates to FAIL the node — under the
+ *     no-silent-drop contract a referenced-but-missing value is a visible failure,
+ *     not a silent skip. (Declared-optional fields and whole-text `$node.output`
+ *     still resolve to '' and never throw.)
  */
 import type { NodeOutput } from './schemas';
 import { createLogger } from '@archon/paths';
@@ -58,8 +67,11 @@ function resolveOutputRef(
   const value = resolution.value;
   if (typeof value === 'string') return value;
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  // Arrays, objects, AND null are JSON-stringified here (typeof null === 'object').
+  // A present null on the lenient no-schema path stringifies to "null", matching
+  // legacy structuredOutput-preference behavior — it is NOT mapped to empty.
   if (Array.isArray(value) || typeof value === 'object') return JSON.stringify(value);
-  return ''; // null/undefined already mapped to empty by resolveNodeOutputField
+  return ''; // defensive: JSON.parse can't yield undefined/symbol/bigint
 }
 
 /**

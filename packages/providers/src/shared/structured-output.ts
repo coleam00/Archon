@@ -1,21 +1,24 @@
 /**
- * Shared best-effort structured-output helpers for providers that have no
- * native JSON-mode equivalent to Claude's `outputFormat` or Codex's
- * `outputSchema`. The approach is two-step:
+ * Shared structured-output helpers.
  *
+ * Best-effort providers (Pi/Copilot) have no native JSON-mode equivalent to
+ * Claude's `outputFormat` or Codex's `outputSchema`, so they use a two-step
+ * approach:
  *   1. Augment the user prompt with a "respond with JSON matching this schema"
  *      instruction, so instruction-following models emit parseable JSON.
- *   2. After the run completes, parse the accumulated assistant transcript.
+ *   2. After the run completes, parse the accumulated assistant transcript
+ *      (`tryParseStructuredOutput`).
  *
- * Models that reliably follow instruction (GPT-5, Claude, Gemini 2.x, recent
- * Qwen Coder, DeepSeek V3) return clean JSON; models that don't produce a
- * parse failure, which the executor surfaces via the existing
- * `dag.structured_output_missing` warning.
+ * When parsing fails it returns `undefined`. The dag-executor treats a node that
+ * declared `output_format` but produced no parseable structured output as a
+ * FAILED node (fail-fast) — it no longer degrades silently to a warning. (A
+ * bounded validate-and-reask loop for best-effort providers lands in PR 2; until
+ * then both tiers fail fast.)
  *
- * This module also owns the cross-provider validation layer used by the
- * dag-executor regardless of provider tier: `validateStructuredOutput()` checks
- * a parsed value against the node's declared JSON Schema (ajv), and
- * `formatSchemaErrors()` renders the failures for reask prompts and logs.
+ * This module also owns the cross-provider validation layer the dag-executor
+ * runs for EVERY provider (enforced and best-effort): `validateStructuredOutput()`
+ * checks a parsed value against the node's declared JSON Schema (ajv), and
+ * `formatSchemaErrors()` renders the failures for logs (and PR 2's reask prompts).
  */
 // Direct `ajv` / `jsonrepair` imports (not via @hono/zod-openapi): @archon/providers
 // is an SDK-deps-only leaf package that must not pull in Hono. Precedent: the
@@ -45,18 +48,23 @@ ${JSON.stringify(schema, null, 2)}`;
 }
 
 /**
- * Attempt to parse an assistant transcript as the structured-output JSON.
- * Handles three common model failure modes:
+ * Attempt to parse an assistant transcript as the structured-output JSON object.
+ * Handles four common model failure modes, in tiers:
  *  - trailing/leading whitespace (always stripped)
  *  - markdown code fences (```json ... ``` or bare ``` ... ```) that models
  *    emit despite the "no code fences" instruction in the prompt
  *  - prose preamble followed by a single trailing JSON object — pattern
  *    observed on Minimax M2.7 reasoning models that "think out loud" before
- *    emitting structured output despite explicit JSON-only prompts.
+ *    emitting structured output despite explicit JSON-only prompts
+ *  - structural corruption (trailing commas, single quotes, unquoted keys, a
+ *    `max_tokens`-truncated tail) repaired via jsonrepair (tier 3)
  *
- * Returns the parsed value on success, `undefined` on any failure. Callers
- * treat `undefined` as "structured output unavailable" and degrade via the
- * dag-executor's existing missing-structured-output warning.
+ * The contract is a JSON OBJECT: top-level arrays/primitives return `undefined`
+ * (the augmentation always asks for an object, and `output_format` is an object
+ * schema). Returns the parsed object on success, `undefined` on any failure.
+ * `undefined` means "structured output unavailable" — for a node that declared
+ * `output_format`, the dag-executor fails the node (fail-fast), it does not
+ * silently degrade.
  */
 export function tryParseStructuredOutput(text: string): unknown {
   const trimmed = text.trim();
@@ -99,12 +107,11 @@ export function tryParseStructuredOutput(text: string): unknown {
     const region = cleaned.slice(firstBrace);
     if (region.includes(':')) {
       try {
+        // tryJsonParseObject is object-only, which matters most here: jsonrepair
+        // turns `{valid}\ntrailing prose` into the array `[{valid}, "…"]`, and
+        // rejecting non-objects keeps that bogus data out (degrade cleanly).
         const tier3 = tryJsonParseObject(jsonrepair(region));
-        // Object-only: jsonrepair turns `{valid}\ntrailing prose` into the array
-        // `[{valid}, "trailing prose"]`. The structured-output contract asks for
-        // a JSON object, so a non-object repair is rejected (degrade cleanly)
-        // rather than surfacing bogus array data.
-        if (tier3 !== undefined && !Array.isArray(tier3)) return tier3;
+        if (tier3 !== undefined) return tier3;
       } catch {
         /* irreparable — fall through to the undefined contract */
       }
@@ -115,16 +122,17 @@ export function tryParseStructuredOutput(text: string): unknown {
 }
 
 /**
- * Parse `text` as JSON and only return it if the result is a non-null
- * object (or array). Schema augmentation always asks for an object — bare
- * `null`, numbers, and strings parse cleanly but are not "structured
- * output", so we treat them as missing and let the dag-executor's
- * structured_output_missing path engage.
+ * Parse `text` as JSON and only return it if the result is a non-null, non-array
+ * object. Schema augmentation always asks for an object and `output_format` is an
+ * object schema — bare `null`, numbers, strings, AND top-level arrays parse
+ * cleanly but are not valid structured output, so all of them are treated as
+ * missing (returns `undefined`). Object-only across every tier keeps the contract
+ * consistent and stops jsonrepair's prose→array coercion from leaking through.
  */
 function tryJsonParseObject(text: string): unknown {
   try {
     const parsed: unknown = JSON.parse(text);
-    if (parsed === null || typeof parsed !== 'object') return undefined;
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
     return parsed;
   } catch {
     return undefined;
@@ -244,10 +252,12 @@ const ajv = new Ajv({ allErrors: true, strict: false });
  */
 const validatorCache = new WeakMap<object, ValidateFunction>();
 
-export interface StructuredValidationResult {
-  valid: boolean;
-  errors: string[];
-}
+/**
+ * Discriminated so the `errors` array only exists on the failure branch — the
+ * caller can't read errors off a valid result, and a valid result can't smuggle
+ * a non-empty errors list.
+ */
+export type StructuredValidationResult = { valid: true } | { valid: false; errors: string[] };
 
 /**
  * Validate a parsed structured-output value against the node's declared JSON
@@ -260,9 +270,11 @@ export interface StructuredValidationResult {
  * Codex normalizer), and optional fields stay optional.
  *
  * Fail-SAFE on a schema that ajv cannot compile (exotic dialect, bad `$ref`):
- * returns `{ valid: true, errors: [] }` so an un-compilable schema never turns a
+ * returns `{ valid: true }` so an un-compilable schema never turns a
  * genuinely-correct provider response into a spurious node failure. The compile
- * error is returned to the caller via the `onCompileError` hook for logging.
+ * error is handed to the caller via the `onCompileError` hook, which the
+ * dag-executor uses to both log AND surface a user-facing warning (so a schema
+ * that silently can't be enforced doesn't go unnoticed).
  */
 export function validateStructuredOutput(
   value: unknown,
@@ -278,12 +290,11 @@ export function validateStructuredOutput(
       const message = error instanceof Error ? error.message : String(error);
       onCompileError?.(message);
       // Can't validate → don't block. The net only covers compilable schemas.
-      return { valid: true, errors: [] };
+      return { valid: true };
     }
   }
 
-  const valid = validate(value);
-  if (valid) return { valid: true, errors: [] };
+  if (validate(value)) return { valid: true };
   return { valid: false, errors: formatSchemaErrors(validate.errors) };
 }
 

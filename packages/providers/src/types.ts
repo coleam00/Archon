@@ -359,8 +359,9 @@ export interface ProviderCapabilities {
    *  - `'enforced'`    — SDK/backend grammar-constrains decoding (Claude, Codex,
    *    OpenCode). The request path is native; Archon still validates post-parse
    *    as a net for the refusal / `max_tokens`-truncation edges.
-   *  - `'best-effort'` — prompt-augmentation + repair + validate, with a bounded
-   *    validate-and-reask loop on failure (Pi, Copilot). No backend grammar.
+   *  - `'best-effort'` — prompt-augmentation + repair + post-parse validate (Pi,
+   *    Copilot). No backend grammar; on failure the node fails fast today (a
+   *    bounded validate-and-reask loop is planned for PR 2).
    *  - `false`         — the provider cannot produce structured output at all.
    */
   structuredOutput: 'enforced' | 'best-effort' | false;

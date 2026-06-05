@@ -415,8 +415,10 @@ describe('tryParseStructuredOutput', () => {
     expect(tryParseStructuredOutput('```\n{"ok":1}\n```')).toEqual({ ok: 1 });
   });
 
-  test('parses JSON arrays', () => {
-    expect(tryParseStructuredOutput('[1,2,3]')).toEqual([1, 2, 3]);
+  test('rejects top-level JSON arrays (object-only contract)', () => {
+    // output_format is an object schema and the augmentation asks for an object;
+    // a top-level array is not valid structured output.
+    expect(tryParseStructuredOutput('[1,2,3]')).toBeUndefined();
   });
 
   test('returns undefined on empty string', () => {

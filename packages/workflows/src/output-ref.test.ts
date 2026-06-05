@@ -36,6 +36,28 @@ describe('declaredFieldsFromSchema', () => {
     expect(declaredFieldsFromSchema({ type: 'array', items: {} })).toBeUndefined();
     expect(declaredFieldsFromSchema({ type: 'string' })).toBeUndefined();
   });
+
+  it('returns undefined when properties is explicitly null', () => {
+    expect(declaredFieldsFromSchema({ type: 'object', properties: null })).toBeUndefined();
+  });
+});
+
+describe('resolveNodeOutputField — producer did not run', () => {
+  it('throws producer-not-run for a skipped producer (clear message, not "unparseable")', () => {
+    try {
+      resolveNodeOutputField({ state: 'skipped', output: '' }, 'n', 'field');
+      throw new Error('expected throw');
+    } catch (e) {
+      expect(e).toBeInstanceOf(OutputRefError);
+      expect((e as OutputRefError).reason).toBe('producer-not-run');
+    }
+  });
+
+  it('throws producer-not-run for a pending producer', () => {
+    expect(() => resolveNodeOutputField({ state: 'pending', output: '' }, 'n', 'field')).toThrow(
+      OutputRefError
+    );
+  });
 });
 
 describe('resolveNodeOutputField — declared-schema producer', () => {
