@@ -207,7 +207,7 @@ nodes:
   # ═══════════════════════════════════════════════════════════════
 
   - id: execute-refactor
-    model: large
+    model: opus[1m]
     prompt: |
       You are executing a refactoring plan with strict safety guardrails.
 
