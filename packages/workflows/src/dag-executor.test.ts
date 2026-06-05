@@ -8047,8 +8047,73 @@ describe('executeDagWorkflow -- typed artifacts (output_type)', () => {
       outputType: 'plan',
       runId: 'dag-test-run-id',
       path: join('nodes', 'planner.md'),
+      // sessionId is propagated from the node output into the metadata.
+      sessionId: 'new-session-id',
     });
     expect(typeof meta.producedAt).toBe('string');
+  });
+
+  it('bash node with output_type writes a sidecar with no sessionId', async () => {
+    await executeDagWorkflow(
+      createMockDeps(),
+      createMockPlatform(),
+      'conv-dag',
+      testDir,
+      {
+        name: 'bash-typed',
+        nodes: [{ id: 'metrics', bash: 'echo "result-data"', output_type: 'metrics' }],
+      },
+      makeWorkflowRun(),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const body = await readFile(join(testDir, 'artifacts', 'nodes', 'metrics.md'), 'utf8');
+    expect(body).toContain('result-data');
+    const meta = JSON.parse(
+      await readFile(join(testDir, 'artifacts', 'nodes', 'metrics.meta.json'), 'utf8')
+    ) as Record<string, unknown>;
+    expect(meta).toMatchObject({ nodeId: 'metrics', outputType: 'metrics' });
+    // Bash nodes have no provider session — the field is omitted, not null.
+    expect('sessionId' in meta).toBe(false);
+    // Bash node does not invoke the AI client.
+    expect(mockSendQueryDag.mock.calls.length).toBe(0);
+  });
+
+  it('artifact write failure is non-fatal — the node still completes', async () => {
+    // Force writeNodeArtifact to throw by putting a FILE where the nodes/ dir must
+    // go, so its mkdir fails. The node must still complete (best-effort write).
+    const artifactsDir = join(testDir, 'artifacts');
+    await mkdir(artifactsDir, { recursive: true });
+    await writeFile(join(artifactsDir, 'nodes'), 'not a directory', 'utf8');
+
+    // Resolves without throwing — the best-effort catch swallows the write failure.
+    await executeDagWorkflow(
+      createMockDeps(),
+      createMockPlatform(),
+      'conv-dag',
+      testDir,
+      {
+        name: 'typed-fail',
+        nodes: [{ id: 'planner', command: 'my-cmd', output_type: 'plan' }],
+      },
+      makeWorkflowRun(),
+      'claude',
+      undefined,
+      artifactsDir,
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    // The node executed despite the artifact write being impossible.
+    expect(mockSendQueryDag.mock.calls.length).toBeGreaterThan(0);
   });
 
   it('node without output_type writes no sidecar artifact', async () => {

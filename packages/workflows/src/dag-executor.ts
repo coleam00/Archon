@@ -3254,7 +3254,9 @@ export async function executeDagWorkflow(
                 outputType: completedNode.output_type,
                 runId: workflowRun.id,
                 producedAt: new Date().toISOString(),
-                ...(output.sessionId !== undefined ? { sessionId: output.sessionId } : {}),
+                // `sessionId` may be undefined (e.g. bash/script nodes have no
+                // session); writeNodeArtifact omits it from the metadata when so.
+                sessionId: output.sessionId,
               },
               output.output
             );
