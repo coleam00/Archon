@@ -25,6 +25,9 @@ const SETTLE_MS = 6000;
 // Hard cap so a turn that never produces a reply (server error, etc.) can't
 // disable the composer forever.
 const MAX_WAIT_MS = 300_000;
+// Distance from the bottom (px) within which we treat the scroll as "at bottom"
+// — drives both auto-scroll stickiness and the jump-to-bottom button's visibility.
+const NEAR_BOTTOM_PX = 120;
 
 /**
  * Project-scoped agent chat. A tab peer of the runs view under a project.
@@ -175,7 +178,7 @@ export function ChatPage(): ReactElement {
   useEffect(() => {
     const el = scrollRef.current;
     if (el === null) return;
-    lastBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    lastBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
   });
   useEffect(() => {
     const el = scrollRef.current;
@@ -189,7 +192,7 @@ export function ChatPage(): ReactElement {
   const handleScroll = useCallback((): void => {
     const el = scrollRef.current;
     if (el === null) return;
-    const near = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    const near = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
     lastBottomRef.current = near;
     setAtBottom(near);
   }, []);

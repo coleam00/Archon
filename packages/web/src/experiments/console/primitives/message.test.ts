@@ -42,11 +42,44 @@ describe('toMessage — workflowResult', () => {
     expect(m.workflowResult).toBeNull();
   });
 
+  test('an explicit workflowResult: null does not throw — yields null (guard regression)', () => {
+    // Regression: the guard must be `!= null`, not `!== undefined`. An explicit
+    // JSON null slips past `!== undefined` and then `typeof wr.workflowName` throws.
+    const m = toMessage(raw({ id: 'm1' }, { category: 'workflow_result', workflowResult: null }));
+    expect(m.category).toBe('workflow_result');
+    expect(m.workflowResult).toBeNull();
+  });
+
+  test('a non-string workflowName yields null (typeof guard)', () => {
+    const m = toMessage(
+      raw(
+        { id: 'm1' },
+        { category: 'workflow_result', workflowResult: { workflowName: 42, runId: 'run-123' } }
+      )
+    );
+    expect(m.workflowResult).toBeNull();
+  });
+
   test('a plain assistant message has null category/dispatch/workflowResult', () => {
     const m = toMessage(raw({ id: 'm1', content: 'hi there' }));
     expect(m.category).toBeNull();
     expect(m.dispatch).toBeNull();
     expect(m.workflowResult).toBeNull();
+  });
+});
+
+describe('toMessage — malformed metadata', () => {
+  test('corrupt metadata JSON degrades to empty (no throw, null category/result)', () => {
+    const m = toMessage({
+      id: 'm1',
+      role: 'assistant',
+      content: 'hi',
+      metadata: '{ not valid json',
+      created_at: '2026-06-05T10:00:00Z',
+    });
+    expect(m.category).toBeNull();
+    expect(m.workflowResult).toBeNull();
+    expect(m.content).toBe('hi');
   });
 });
 

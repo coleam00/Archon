@@ -292,3 +292,24 @@ export function toRunEvent(raw: RawWorkflowEvent): RunEvent {
       `${et} — ${JSON.stringify(data).slice(0, 200)}`,
   };
 }
+
+/**
+ * Per-node terminal tally for a run's node-count readout (e.g. `7/8 nodes`).
+ * Deduped by `nodeId`: a resumed run reuses one run id, so a node can appear both
+ * as its original `completed` AND a later `node_skipped_prior_success` (normalized
+ * to a `skipped` transition) — counting raw events would double it. `total` =
+ * distinct nodes that reached any terminal (non-`started`) state; `completed` =
+ * distinct nodes that ever completed (so a completed-then-resume-skipped node
+ * stays counted). Nodes with a null `nodeId` can't be deduped and are skipped.
+ */
+export function countTerminalNodes(events: RunEvent[]): { completed: number; total: number } {
+  const completedByNode = new Map<string, boolean>();
+  for (const e of events) {
+    if (e.kind !== 'node_transition' || e.transition === 'started' || e.nodeId === null) continue;
+    const everCompleted = (completedByNode.get(e.nodeId) ?? false) || e.transition === 'completed';
+    completedByNode.set(e.nodeId, everCompleted);
+  }
+  let completed = 0;
+  for (const done of completedByNode.values()) if (done) completed += 1;
+  return { completed, total: completedByNode.size };
+}
