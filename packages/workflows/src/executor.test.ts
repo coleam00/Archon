@@ -941,6 +941,49 @@ describe('telemetry wiring', () => {
     expect(mockExecuteDagWorkflow.mock.calls[0]?.[16]).toBe('bundled');
   });
 
+  it('resolves top-level workflow tier refs before calling the DAG executor', async () => {
+    const store = makeStore();
+    const deps = {
+      ...makeDeps(store),
+      loadConfig: mock(
+        async (): Promise<WorkflowConfig> => ({
+          assistant: 'claude',
+          assistants: { claude: {}, codex: {} },
+          baseBranch: '',
+          commands: { folder: '' },
+          tiers: {
+            large: { provider: 'codex', model: 'gpt-5.5', effort: 'high' },
+          },
+        })
+      ),
+    } as WorkflowDeps;
+
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow({ model: 'large' }),
+      'msg',
+      'db-conv-1'
+    );
+
+    expect(mockExecuteDagWorkflow.mock.calls[0]?.[6]).toBe('codex');
+    expect(mockExecuteDagWorkflow.mock.calls[0]?.[7]).toBe('gpt-5.5');
+    expect(mockExecuteDagWorkflow.mock.calls[0]?.[17]).toEqual(
+      expect.objectContaining({
+        aliases: expect.objectContaining({
+          large: { provider: 'codex', model: 'gpt-5.5', effort: 'high' },
+        }),
+      })
+    );
+    expect(mockExecuteDagWorkflow.mock.calls[0]?.[18]).toEqual({
+      provider: 'codex',
+      model: 'gpt-5.5',
+      effort: 'high',
+    });
+  });
+
   it('passes undefined source when the caller does not supply one', async () => {
     const store = makeStore();
     const deps = makeDeps(store);

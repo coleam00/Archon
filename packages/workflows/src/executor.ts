@@ -23,6 +23,7 @@ import { isRegisteredProvider, getRegisteredProviders } from '@archon/providers'
 import { classifyError, safeSendMessage, type SendMessageContext } from './executor-shared';
 import { resolveGithubTokenOverrides } from './utils/github-token-policy';
 import { buildAiProfile, isLiteralSpec, resolveModelSpec } from './model-validation';
+import type { ModelAliasPreset } from './model-validation';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -384,12 +385,14 @@ export async function executeWorkflow(
   // the resolved preset provider/model so bundled workflows are portable.
   let resolvedProvider: string = workflow.provider ?? config.assistant;
   let resolvedModel: string | undefined;
+  let workflowPreset: ModelAliasPreset | undefined;
   let providerSource = workflow.provider ? 'workflow definition' : 'config';
   if (workflow.model) {
     const workflowModelSpec = resolveModelSpec(aiProfile, workflow.model);
     if (isLiteralSpec(workflowModelSpec)) {
       resolvedModel = workflowModelSpec.literal;
     } else {
+      workflowPreset = workflowModelSpec;
       if (workflow.provider && workflow.provider !== workflowModelSpec.provider) {
         getLog().warn(
           {
@@ -400,6 +403,17 @@ export async function executeWorkflow(
           },
           'workflow.model_provider_conflict'
         );
+        const delivered = await safeSendMessage(
+          platform,
+          conversationId,
+          `Warning: Workflow '${workflow.name}' sets provider '${workflow.provider}' but model '${workflow.model}' resolves to provider '${workflowModelSpec.provider}' — using '${workflowModelSpec.provider}'.`
+        );
+        if (!delivered) {
+          getLog().error(
+            { workflowName: workflow.name, conversationId },
+            'workflow.model_provider_conflict_warning_delivery_failed'
+          );
+        }
       }
       resolvedProvider = workflowModelSpec.provider;
       resolvedModel = workflowModelSpec.model;
@@ -766,7 +780,8 @@ export async function executeWorkflow(
       issueContext,
       dagPriorCompletedNodes,
       source,
-      aiProfile
+      aiProfile,
+      workflowPreset
     );
 
     // executeDagWorkflow throws on fatal errors; check DB status for result

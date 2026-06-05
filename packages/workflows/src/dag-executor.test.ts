@@ -1141,6 +1141,56 @@ describe('executeDagWorkflow -- tool restrictions', () => {
     expect(nodeConfig.effort).toBeUndefined();
   });
 
+  it('applies inherited workflow tier effort to nodes without model overrides', async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'codex',
+      getCapabilities: mockCodexCapabilities,
+    }));
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+    const workflowPreset = { provider: 'codex', model: 'gpt-5.5', effort: 'high' };
+    const aiProfile = buildAiProfile('claude', {
+      repoTiers: {
+        large: workflowPreset,
+      },
+    });
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'inherited-workflow-tier-test',
+        nodes: [{ id: 'step1', command: 'my-cmd' }],
+      },
+      workflowRun,
+      'codex',
+      'gpt-5.5',
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      aiProfile,
+      workflowPreset
+    );
+
+    expect(mockGetAgentProviderDag.mock.calls[0][0]).toBe('codex');
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    expect(optionsArg.model).toBe('gpt-5.5');
+    const assistantConfig = optionsArg.assistantConfig as Record<string, unknown>;
+    const nodeConfig = optionsArg.nodeConfig as Record<string, unknown>;
+    expect(assistantConfig.modelReasoningEffort).toBe('high');
+    expect(nodeConfig.effort).toBeUndefined();
+  });
+
   it('routes Claude tier effort to nodeConfig.effort', async () => {
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();

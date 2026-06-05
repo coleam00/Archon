@@ -404,7 +404,8 @@ async function resolveNodeProviderAndModel(
   workflowRunId: string,
   _cwd: string,
   workflowLevelOptions: WorkflowLevelOptions,
-  aiProfile?: ResolvedAiProfile
+  aiProfile?: ResolvedAiProfile,
+  workflowPreset?: ModelAliasPreset
 ): Promise<{
   provider: string;
   model: string | undefined;
@@ -467,6 +468,8 @@ async function resolveNodeProviderAndModel(
     provider === workflowProvider
       ? workflowModel
       : (providerAssistantConfig?.model as string | undefined);
+  const effectivePreset =
+    preset ?? (!node.model && provider === workflowProvider ? workflowPreset : undefined);
 
   // Get provider capabilities for capability warnings (static lookup, no instantiation)
   const caps = getProviderCapabilities(provider);
@@ -566,7 +569,14 @@ async function resolveNodeProviderAndModel(
 
   // Pass assistantConfig from config — provider parses internally
   const assistantConfig: Record<string, unknown> = { ...(config.assistants[provider] ?? {}) };
-  applyPresetOptions(provider, preset, node, workflowLevelOptions, nodeConfig, assistantConfig);
+  applyPresetOptions(
+    provider,
+    effectivePreset,
+    node,
+    workflowLevelOptions,
+    nodeConfig,
+    assistantConfig
+  );
 
   const options: SendQueryOptions = {
     ...baseOptions,
@@ -2445,7 +2455,8 @@ async function executeApprovalNode(
   workflowLevelOptions: WorkflowLevelOptions,
   configuredCommandFolder?: string,
   issueContext?: string,
-  aiProfile?: ResolvedAiProfile
+  aiProfile?: ResolvedAiProfile,
+  workflowPreset?: ModelAliasPreset
 ): Promise<NodeOutput> {
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
 
@@ -2536,7 +2547,8 @@ async function executeApprovalNode(
       workflowRun.id,
       cwd,
       workflowLevelOptions,
-      aiProfile
+      aiProfile,
+      workflowPreset
     );
 
     const output = await executeNodeInternal(
@@ -2637,7 +2649,8 @@ export async function executeDagWorkflow(
   priorCompletedNodes?: Map<string, string>,
   /** Discovery source — telemetry only (custom-vs-default + name redaction). */
   source?: WorkflowSource,
-  aiProfile?: ResolvedAiProfile
+  aiProfile?: ResolvedAiProfile,
+  workflowPreset?: ModelAliasPreset
 ): Promise<string | undefined> {
   const dagStartTime = Date.now();
   const workflowLevelOptions = {
@@ -2921,7 +2934,8 @@ export async function executeDagWorkflow(
                 workflowRun.id,
                 cwd,
                 workflowLevelOptions,
-                aiProfile
+                aiProfile,
+                workflowPreset
               );
 
             const output = await executeLoopNode(
@@ -2964,7 +2978,8 @@ export async function executeDagWorkflow(
               workflowLevelOptions,
               configuredCommandFolder,
               issueContext,
-              aiProfile
+              aiProfile,
+              workflowPreset
             );
             return { nodeId: node.id, output };
           }
@@ -3032,7 +3047,8 @@ export async function executeDagWorkflow(
             workflowRun.id,
             cwd,
             workflowLevelOptions,
-            aiProfile
+            aiProfile,
+            workflowPreset
           );
 
           // 5. Determine session — parallel or context:fresh → always fresh

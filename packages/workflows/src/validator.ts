@@ -35,6 +35,8 @@ import type { WorkflowDefinition, DagNode, WorkflowSource } from './schemas';
 import type { ScriptRuntime } from './script-discovery';
 import { discoverScriptsForCwd } from './script-discovery';
 import { isInlineScript } from './executor-shared';
+import { buildAiProfile, resolveModelSpec } from './model-validation';
+import type { RawAliasesConfig, RawTiersConfig, ResolvedAiProfile } from './model-validation';
 
 // =============================================================================
 // Types
@@ -84,6 +86,9 @@ export interface ValidationConfig {
   loadDefaultCommands?: boolean;
   commandFolder?: string;
   workflowSource?: WorkflowSource;
+  assistant?: string;
+  aliases?: RawAliasesConfig;
+  tiers?: RawTiersConfig;
 }
 
 // =============================================================================
@@ -320,6 +325,37 @@ export async function validateWorkflowResources(
   const availableCommands = await discoverAvailableCommands(cwd, config);
   const requiresPortableModelRefs =
     config?.workflowSource === 'bundled' || config?.workflowSource === 'global';
+  const modelProfileProvider = config?.assistant ?? defaultProvider ?? 'claude';
+  let aiProfile: ResolvedAiProfile | undefined;
+
+  try {
+    aiProfile = buildAiProfile(modelProfileProvider, {
+      repoTiers: config?.tiers,
+      repoAliases: config?.aliases,
+    });
+  } catch (error) {
+    issues.push({
+      level: 'error',
+      field: 'model',
+      message: (error as Error).message,
+      hint: 'Fix tiers/aliases in .archon/config.yaml, or use literal provider model strings.',
+    });
+  }
+
+  const validateModelRef = (ref: string, nodeId?: string): void => {
+    if (!aiProfile) return;
+    try {
+      resolveModelSpec(aiProfile, ref);
+    } catch (error) {
+      issues.push({
+        level: 'error',
+        ...(nodeId !== undefined ? { nodeId } : {}),
+        field: 'model',
+        message: (error as Error).message,
+        hint: 'Fix tiers/aliases in .archon/config.yaml, or use a literal provider model string.',
+      });
+    }
+  };
 
   if (requiresPortableModelRefs && workflow.model?.startsWith('@')) {
     issues.push({
@@ -329,6 +365,7 @@ export async function validateWorkflowResources(
       hint: 'Use small, medium, large, or a literal provider model string. Reserve @custom aliases for project workflows.',
     });
   }
+  if (workflow.model) validateModelRef(workflow.model);
 
   for (const node of workflow.nodes) {
     const provider = resolveProvider(node, workflow.provider, defaultProvider);
@@ -342,6 +379,7 @@ export async function validateWorkflowResources(
         hint: 'Use small, medium, large, or a literal provider model string. Reserve @custom aliases for project workflows.',
       });
     }
+    if ('model' in node && node.model) validateModelRef(node.model, node.id);
 
     // --- Command nodes: check file exists ---
     if ('command' in node && typeof node.command === 'string') {

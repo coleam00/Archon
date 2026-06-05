@@ -110,7 +110,13 @@ export async function validateWorkflowsCommand(
     const issues = await validateWorkflowResources(
       workflow,
       cwd,
-      { ...config, workflowSource: source },
+      {
+        ...config,
+        workflowSource: source,
+        assistant: mergedConfig.assistant,
+        aliases: mergedConfig.aliases,
+        tiers: mergedConfig.tiers,
+      },
       defaultProvider
     );
     results.push(makeWorkflowResult(workflow.name, issues));

@@ -1,6 +1,7 @@
 import { mock, describe, test, expect, beforeEach, type Mock } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
 import type { MessageChunk } from '../types';
+import type { SendQueryOptions } from '@archon/providers/types';
 
 // ─── Mock setup (BEFORE importing module under test) ─────────────────────────
 
@@ -27,7 +28,7 @@ const mockSendQuery = mock(async function* (): AsyncGenerator<MessageChunk> {
     prompt: string,
     cwd: string,
     resumeSessionId?: string,
-    options?: { model?: string; tools?: string[]; assistantConfig?: Record<string, unknown> }
+    options?: SendQueryOptions
   ) => AsyncGenerator<MessageChunk>
 >;
 
@@ -193,6 +194,22 @@ describe('title-generator', () => {
       assistantConfig?: Record<string, unknown>;
     };
     expect(optionsArg.assistantConfig).toEqual(assistantConfig);
+  });
+
+  test('merges resolved requestOptions while disabling tools', async () => {
+    await generateAndSetTitle('conv-13', 'Some message', 'claude', '/tmp', undefined, undefined, {
+      model: 'haiku',
+      assistantConfig: { settingSources: ['project'] },
+      nodeConfig: { thinking: { type: 'enabled', budgetTokens: 1000 } },
+    });
+
+    const optionsArg = mockSendQuery.mock.calls[0][3] as SendQueryOptions;
+    expect(optionsArg.model).toBe('haiku');
+    expect(optionsArg.assistantConfig).toEqual({ settingSources: ['project'] });
+    expect(optionsArg.nodeConfig).toEqual({
+      thinking: { type: 'enabled', budgetTokens: 1000 },
+      allowed_tools: [],
+    });
   });
 
   test('handles double failure gracefully (AI fails + fallback DB write fails)', async () => {
