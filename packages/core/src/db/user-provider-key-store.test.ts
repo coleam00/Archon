@@ -201,5 +201,30 @@ describe('user-provider-key-store', () => {
       const out = await listDecryptedUserProviderCredentials('user-1');
       expect(out).toEqual([]);
     });
+
+    test('returns partial results (does not throw) when a per-provider fetch fails', async () => {
+      // List query: two providers.
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          { provider: 'openrouter', kind: 'api_key', label: null },
+          { provider: 'claude', kind: 'api_key', label: null },
+        ])
+      );
+      // openrouter individual fetch → transient DB failure.
+      mockQuery.mockRejectedValueOnce(new Error('db transient'));
+      // claude individual fetch → valid api_key row.
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          apiKeyRow({
+            provider: 'claude',
+            api_key_encrypted: encryptToken('sk-claude-test', getEncryptionKey()),
+          }),
+        ])
+      );
+      const out = await listDecryptedUserProviderCredentials('user-1');
+      expect(out).toHaveLength(1);
+      expect(out[0]!.provider).toBe('claude');
+      expect(out[0]!.cred).toEqual({ kind: 'api_key', apiKey: 'sk-claude-test' });
+    });
   });
 });

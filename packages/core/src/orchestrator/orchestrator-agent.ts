@@ -266,7 +266,7 @@ async function resolveUserProviderEnvForChat(userId: string): Promise<Record<str
         const result = deliverCredential(provider, cred, { artifactsDir: '' });
         if (!result.files?.length) Object.assign(env, result.env);
       } catch (err) {
-        getLog().warn(
+        getLog().error(
           { err: err as Error, userId, provider },
           'orchestrator.provider_creds_deliver_failed'
         );
@@ -1890,7 +1890,8 @@ async function handleUpdateProject(message: string): Promise<string> {
 
   try {
     await codebaseDb.updateCodebase(codebase.id, { default_cwd: newPath });
-  } catch {
+  } catch (err) {
+    getLog().warn({ err: err as Error, codebaseId: codebase.id, newPath }, 'project.update_failed');
     return `Project "${projectName}" could not be updated — it may have been removed.`;
   }
   getLog().info(

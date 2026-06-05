@@ -212,6 +212,25 @@ mock.module('fs', () => ({
   existsSync: mock(() => true),
 }));
 
+// Credential feature mocks (per-user AI-provider credentials).
+// Default: feature disabled — existing tests are unaffected.
+const mockIsPerUserProviderKeysEnabled = mock(() => false);
+mock.module('../credentials/config', () => ({
+  isPerUserProviderKeysEnabled: mockIsPerUserProviderKeysEnabled,
+}));
+
+const mockListDecryptedUserProviderCredentials = mock(
+  async () => [] as { provider: string; cred: { kind: 'api_key'; apiKey: string } }[]
+);
+mock.module('../db/user-provider-key-store', () => ({
+  listDecryptedUserProviderCredentials: mockListDecryptedUserProviderCredentials,
+  saveUserProviderKey: mock(() => Promise.resolve()),
+  getUserProviderKeyRecord: mock(() => Promise.resolve(null)),
+  listUserProviderKeys: mock(() => Promise.resolve([])),
+  deleteUserProviderKey: mock(() => Promise.resolve()),
+  getDecryptedProviderCredential: mock(() => Promise.resolve(null)),
+}));
+
 // ─── Import module under test (AFTER all mocks) ───────────────────────────────
 
 import { parseOrchestratorCommands, handleMessage } from './orchestrator-agent';
@@ -2290,5 +2309,88 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
     expect(mockCreateCodebase).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'Foo', default_cwd: '/path' })
     );
+  });
+});
+
+// ─── resolveUserProviderEnvForChat — per-user credential injection ────────────
+
+describe('resolveUserProviderEnvForChat — chat env injection', () => {
+  beforeEach(() => {
+    mockSendQuery.mockReset();
+    mockSendQuery.mockImplementation(async function* () {
+      yield { type: 'assistant', content: 'ok' };
+      yield { type: 'result', sessionId: 'session-1' };
+    });
+    mockGetOrCreateConversation.mockReset();
+    mockGetOrCreateConversation.mockImplementation(() =>
+      Promise.resolve(makeConversation({ user_id: 'u-test' }))
+    );
+    mockGetRecentWorkflowResultMessages.mockReset();
+    mockGetRecentWorkflowResultMessages.mockImplementation(() => Promise.resolve([]));
+    mockDiscoverWorkflowsWithConfig.mockReset();
+    mockDiscoverWorkflowsWithConfig.mockImplementation(() =>
+      Promise.resolve({ workflows: [], errors: [] })
+    );
+    mockListCodebases.mockReset();
+    mockListCodebases.mockImplementation(() => Promise.resolve([]));
+    mockListDecryptedUserProviderCredentials.mockReset();
+    mockListDecryptedUserProviderCredentials.mockImplementation(async () => []);
+    mockIsPerUserProviderKeysEnabled.mockReset();
+    mockIsPerUserProviderKeysEnabled.mockImplementation(() => true);
+  });
+
+  test('injects api_key env vars from a connected provider', async () => {
+    mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([
+      { provider: 'openrouter', cred: { kind: 'api_key', apiKey: 'or-key' } },
+    ]);
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello');
+    // The env passed to sendQuery should contain the provider's env var.
+    const requestOptions = mockSendQuery.mock.calls[0]?.[3] as { env?: Record<string, string> };
+    expect(requestOptions?.env).toMatchObject({ OPENROUTER_API_KEY: 'or-key' });
+  });
+
+  test('drops file-based deliveries (Codex OAuth) — no CODEX_HOME in chat env', async () => {
+    mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([
+      {
+        provider: 'codex',
+        cred: { kind: 'oauth', oauthApiKey: 'tok', rawCreds: { access: 'tok' } },
+      },
+    ]);
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello');
+    const requestOptions = mockSendQuery.mock.calls[0]?.[3] as
+      | { env?: Record<string, string> }
+      | undefined;
+    // Codex OAuth would write auth.json + set CODEX_HOME — both must be absent in chat.
+    expect(requestOptions?.env?.CODEX_HOME).toBeUndefined();
+  });
+
+  test('skips one broken credential but includes remaining providers', async () => {
+    // 'mystery-broken' is not in KNOWN_PROVIDERS → deliverCredential throws.
+    mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([
+      { provider: 'mystery-broken', cred: { kind: 'api_key', apiKey: 'x' } },
+      { provider: 'openrouter', cred: { kind: 'api_key', apiKey: 'or-key' } },
+    ]);
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello');
+    const requestOptions = mockSendQuery.mock.calls[0]?.[3] as { env?: Record<string, string> };
+    expect(requestOptions?.env).toMatchObject({ OPENROUTER_API_KEY: 'or-key' });
+  });
+
+  test('does not throw when listDecryptedUserProviderCredentials rejects', async () => {
+    mockListDecryptedUserProviderCredentials.mockRejectedValueOnce(new Error('db gone'));
+    const platform = makePlatform();
+    await expect(handleMessage(platform, 'conv-1', 'hello')).resolves.toBeUndefined();
+  });
+
+  test('skips injection when feature is disabled', async () => {
+    mockIsPerUserProviderKeysEnabled.mockReturnValueOnce(false);
+    mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([
+      { provider: 'openrouter', cred: { kind: 'api_key', apiKey: 'or-key' } },
+    ]);
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello');
+    expect(mockListDecryptedUserProviderCredentials).not.toHaveBeenCalled();
   });
 });

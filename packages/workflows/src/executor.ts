@@ -190,6 +190,12 @@ async function resolveUserProviderEnvForWorkflow(
   const perUserEnabled = deps.isPerUserProviderKeysEnabled?.() ?? false;
   if (!perUserEnabled || !userId || !deps.getUserProviderEnv) return {};
   try {
+    // TODO(#1891 PR-3): when Codex OAuth delivery is enabled, file-write failures
+    // must drop only the affected provider's env keys, not all of them. Move file
+    // writes into getUserProviderEnv per-delivery so env + write are atomic
+    // per-provider, or wrap each write in a per-file try-catch that strips the
+    // matching env keys on failure. Currently safe: no OAuth rows can be created
+    // in PR-1 so `files` is always empty and this loop never executes.
     const { env, files } = await deps.getUserProviderEnv(userId, artifactsDir);
     for (const f of files) {
       await mkdir(dirname(f.path), { recursive: true });

@@ -57,10 +57,12 @@ export interface DeliveryOptions {
  * `PI_PROVIDER_ENV_VARS` in `packages/providers/src/community/pi/provider.ts`.
  * When updating one, update both (intentional small duplication to avoid a
  * cross-package import from `@archon/core` into `@archon/providers`).
+ *
+ * Note: `anthropic` and `openai` are intentionally absent here — they are
+ * handled by explicit `case` branches in `deliverCredential` (they reject
+ * OAuth and map the same env vars, but the switch path is authoritative).
  */
 const PI_PROVIDER_ENV_VARS: Record<string, string> = {
-  anthropic: 'ANTHROPIC_API_KEY',
-  openai: 'OPENAI_API_KEY',
   google: 'GEMINI_API_KEY',
   groq: 'GROQ_API_KEY',
   mistral: 'MISTRAL_API_KEY',
@@ -75,8 +77,11 @@ const PI_PROVIDER_ENV_VARS: Record<string, string> = {
  * to fail fast on typos before encrypting and persisting a key for a
  * provider we can't actually deliver.
  *
- * Note: `claude` / `codex` are the Archon-level provider ids (distinct from
- * the Pi-backend `anthropic` / `openai` which use the same env names).
+ * Note: `claude` / `codex` are the Archon-level provider ids. `anthropic` /
+ * `openai` are alias providers handled by explicit switch cases in
+ * `deliverCredential` — they map the same env vars as the Pi backends but
+ * reject OAuth (direct subscription is routed through `claude` / `codex`).
+ * All remaining entries are Pi-backend ids sourced from PI_PROVIDER_ENV_VARS.
  */
 export const KNOWN_PROVIDERS: ReadonlySet<string> = new Set<string>([
   'claude',

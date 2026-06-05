@@ -151,9 +151,10 @@ export function createWorkflowDeps(): WorkflowDeps {
             Object.assign(env, result.env);
             if (result.files) files.push(...result.files);
           } catch (err) {
-            // Unknown provider / shape mismatch — log and skip this credential
-            // rather than abort all delivery for the user.
-            getLog().warn(
+            // Unknown provider / shape mismatch — log at ERROR (user has no
+            // feedback path until PR-2 adds credential_delivery_skipped events)
+            // and skip this credential rather than abort all delivery.
+            getLog().error(
               { err: err as Error, userId, provider },
               'workflow_deps.provider_creds_deliver_failed'
             );

@@ -161,6 +161,10 @@ export async function getDecryptedProviderCredential(
  * workflow inject path to build the per-run env bag.
  *
  * Never throws — returns [] on any failure so the workflow continues.
+ *
+ * TODO(#1891 PR-2): replace the 1+N query pattern (listUserProviderKeys +
+ * one getUserProviderKeyRecord per provider) with a single SELECT * so every
+ * chat turn and workflow run pays only one round-trip to the DB.
  */
 export async function listDecryptedUserProviderCredentials(
   userId: string
@@ -174,8 +178,21 @@ export async function listDecryptedUserProviderCredentials(
   }
   const out: { provider: string; cred: ResolvedCredential }[] = [];
   for (const r of rows) {
-    const cred = await getDecryptedProviderCredential(userId, r.provider);
-    if (cred) out.push({ provider: r.provider, cred });
+    try {
+      const cred = await getDecryptedProviderCredential(userId, r.provider);
+      if (cred) out.push({ provider: r.provider, cred });
+    } catch (err) {
+      getLog().warn(
+        { err: err as Error, userId, provider: r.provider },
+        'user_provider_key.list_decrypted_individual_failed'
+      );
+    }
+  }
+  if (out.length < rows.length) {
+    getLog().warn(
+      { userId, total: rows.length, resolved: out.length },
+      'user_provider_key.partial_decrypt_failure'
+    );
   }
   return out;
 }

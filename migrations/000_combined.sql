@@ -2,7 +2,7 @@
 -- Version: Combined (final state after migrations 001-020)
 -- Description: Complete database schema (idempotent - safe to run multiple times)
 --
--- 12 Tables:
+-- 13 Tables:
 --   1. remote_agent_codebases
 --   1b. remote_agent_codebase_env_vars
 --   1c. remote_agent_users
@@ -15,6 +15,7 @@
 --   6b. remote_agent_workflow_node_sessions
 --   7. remote_agent_messages
 --   8. remote_agent_user_github_tokens
+--   9. remote_agent_user_provider_keys
 --
 -- Dropped tables (via migrations):
 --   - remote_agent_command_templates (017)
