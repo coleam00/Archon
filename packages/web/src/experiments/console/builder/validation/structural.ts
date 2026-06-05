@@ -54,6 +54,19 @@ function checkRequiredFields(node: BuilderNode): Issue[] {
       })
     );
   };
+  // Distinct from `missing`: the field is present but holds an invalid value, so
+  // the UI shouldn't render it as a required-but-empty field.
+  const invalid = (field: string, message: string): void => {
+    issues.push(
+      makeIssue({
+        rule: 'structural.field.invalid',
+        severity: 'error',
+        source: 'client-instant',
+        message,
+        path: { nodeId: node.id, field },
+      })
+    );
+  };
 
   switch (node.variant) {
     case 'prompt':
@@ -72,7 +85,7 @@ function checkRequiredFields(node: BuilderNode): Issue[] {
       if (node.data.script.trim().length === 0)
         missing('script', `node '${node.id}': script must not be empty`);
       if (node.data.runtime !== 'bun' && node.data.runtime !== 'uv')
-        missing('runtime', `node '${node.id}': script requires runtime 'bun' or 'uv'`);
+        invalid('runtime', `node '${node.id}': script requires runtime 'bun' or 'uv'`);
       break;
     case 'loop':
       if (node.data.prompt.trim().length === 0)
@@ -80,7 +93,7 @@ function checkRequiredFields(node: BuilderNode): Issue[] {
       if (node.data.until.trim().length === 0)
         missing('loop.until', `node '${node.id}': loop requires an 'until' signal`);
       if (!Number.isInteger(node.data.max_iterations) || node.data.max_iterations <= 0)
-        missing(
+        invalid(
           'loop.max_iterations',
           `node '${node.id}': loop requires a positive integer max_iterations`
         );

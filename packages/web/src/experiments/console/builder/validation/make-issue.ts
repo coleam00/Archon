@@ -17,6 +17,13 @@ function fnv1a(input: string): string {
 /** Build a complete `Issue` with a stable id derived from its identifying fields. */
 export function makeIssue(input: Omit<Issue, 'id'>): Issue {
   const { rule, path, message } = input;
-  const key = [rule, path.nodeId ?? '', path.field ?? '', path.atomIndex ?? '', message].join('|');
+  // JSON.stringify is lossless: a '|' join would collide when a field contains '|'.
+  const key = JSON.stringify([
+    rule,
+    path.nodeId ?? '',
+    path.field ?? '',
+    path.atomIndex ?? '',
+    message,
+  ]);
   return { ...input, id: `${rule}:${fnv1a(key)}` };
 }

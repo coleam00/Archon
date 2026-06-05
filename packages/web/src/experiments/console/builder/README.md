@@ -19,7 +19,7 @@ There is **no canvas, no skill wiring, no route mount, and no logging** in PR-1.
 
 ## What's here
 
-```
+```text
 builder/
 ├── types/        # BuilderNode / BuilderWorkflow / VariantData / Issue / When AST
 │                 #   + wire.ts: the ONLY type-only touch point for @/lib/api.generated
@@ -48,7 +48,7 @@ builder/
 
 ## Layered dependency direction
 
-```
+```text
 types/        ← variants/ , validation/when-grammar
               ← validation/* , model/
               ← fixtures/ , *.test.ts

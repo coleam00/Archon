@@ -75,11 +75,13 @@ describe('when-grammar format', () => {
 
 describe('when-grammar toDnf', () => {
   test('drops empty AND-groups and preserves structure', () => {
-    const r = parse("$a.output == 'X' || $b.output == 'Y'");
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      const dnf = toDnf(r.ast);
-      expect(dnf.or.length).toBe(2);
-    }
+    // The parser never yields an empty group, so feed toDnf an AST that has one.
+    const dnf = toDnf({
+      or: [[{ nodeId: 'a', op: '==', value: 'X' }], [], [{ nodeId: 'b', op: '==', value: 'Y' }]],
+    });
+    expect(dnf.or).toEqual([
+      [{ nodeId: 'a', op: '==', value: 'X' }],
+      [{ nodeId: 'b', op: '==', value: 'Y' }],
+    ]);
   });
 });

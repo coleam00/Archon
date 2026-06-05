@@ -39,12 +39,14 @@ function textBodies(node: BuilderNode): string[] {
 /** Compute the transitive set of upstream node ids reachable via `depends_on`. */
 function upstreamSet(startId: string, depsById: Map<string, string[]>): Set<string> {
   const seen = new Set<string>();
-  const queue: string[] = [...(depsById.get(startId) ?? [])];
-  while (queue.length > 0) {
-    const current = queue.shift();
+  // Stack + pop() (not queue.shift()) keeps traversal O(V+E) on long chains;
+  // visitation order is irrelevant since we only collect into a set.
+  const stack: string[] = [...(depsById.get(startId) ?? [])];
+  while (stack.length > 0) {
+    const current = stack.pop();
     if (current === undefined || seen.has(current)) continue;
     seen.add(current);
-    for (const dep of depsById.get(current) ?? []) queue.push(dep);
+    for (const dep of depsById.get(current) ?? []) stack.push(dep);
   }
   return seen;
 }

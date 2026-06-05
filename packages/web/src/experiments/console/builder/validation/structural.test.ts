@@ -34,7 +34,7 @@ describe('validateStructural', () => {
     expect(issues.some(i => i.rule === 'structural.id.duplicate')).toBe(true);
   });
 
-  test('loop missing prompt/until/max_iterations is flagged', () => {
+  test('loop empty prompt/until is flagged as missing; bad max_iterations as invalid', () => {
     const issues = validateStructural(
       wf([
         {
@@ -45,13 +45,19 @@ describe('validateStructural', () => {
         },
       ])
     );
-    const fields = issues.filter(i => i.rule === 'structural.field.missing').map(i => i.path.field);
-    expect(fields).toContain('loop.prompt');
-    expect(fields).toContain('loop.until');
-    expect(fields).toContain('loop.max_iterations');
+    const missing = issues
+      .filter(i => i.rule === 'structural.field.missing')
+      .map(i => i.path.field);
+    expect(missing).toContain('loop.prompt');
+    expect(missing).toContain('loop.until');
+    // A present-but-invalid value uses the distinct invalid rule, not missing.
+    const invalid = issues
+      .filter(i => i.rule === 'structural.field.invalid')
+      .map(i => i.path.field);
+    expect(invalid).toContain('loop.max_iterations');
   });
 
-  test('script missing runtime is flagged', () => {
+  test('script invalid runtime is flagged', () => {
     const issues = validateStructural(
       wf([
         {
@@ -63,7 +69,9 @@ describe('validateStructural', () => {
         },
       ])
     );
-    expect(issues.some(i => i.path.field === 'runtime')).toBe(true);
+    expect(
+      issues.some(i => i.path.field === 'runtime' && i.rule === 'structural.field.invalid')
+    ).toBe(true);
   });
 
   test('approval missing message is flagged', () => {

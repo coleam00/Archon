@@ -19,8 +19,9 @@ export const VARIANT_CAPABILITIES: Record<VariantId, VariantCapabilities> = {
   command: { honorsAiFields: true },
   // Loop forwards model/provider to each iteration's AI call but rejects retry.
   loop: { honorsAiFields: true, forbidsRetry: true },
-  // Approval is a human gate; it pauses the run and requires interactive mode.
-  approval: { honorsAiFields: true, requiresInteractive: true },
+  // Approval is a human gate; it makes no provider call (no AI fields) and
+  // requires interactive mode because it pauses the run for human input.
+  approval: { honorsAiFields: false, requiresInteractive: true },
   // bash/script/cancel make no provider call — AI fields are meaningless on them.
   bash: { honorsAiFields: false },
   script: { honorsAiFields: false },
