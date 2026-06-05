@@ -74,7 +74,14 @@ export function RecentRunRow({
       >
         {run.status}
       </span>
-      <span className="min-w-0 flex-1 truncate text-text-primary">{run.workflow}</span>
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+        <span className="max-w-[55%] shrink-0 truncate text-text-primary">{run.workflow}</span>
+        {run.userMessage !== '' ? (
+          <span className="min-w-0 truncate text-text-tertiary" title={run.userMessage}>
+            {run.userMessage}
+          </span>
+        ) : null}
+      </div>
       {showProject && run.projectName !== null ? (
         <span className="hidden w-40 shrink-0 truncate text-text-secondary md:inline">
           {run.projectName}

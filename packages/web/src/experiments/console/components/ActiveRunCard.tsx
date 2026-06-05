@@ -127,16 +127,31 @@ export function ActiveRunCard({
           </div>
         </div>
 
-        {/* Activity detail — running only */}
-        {run.status === 'running' ? (
+        {/* Provenance + activity detail: the triggering input (always, truncated —
+            full text on hover), plus live node/tool rows while running. */}
+        {run.userMessage !== '' || run.status === 'running' ? (
           <div className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[12px]">
-            {run.currentNode !== null && run.currentNode !== undefined && run.currentNode !== '' ? (
+            {run.userMessage !== '' ? (
+              <>
+                <span className="font-mono text-text-tertiary">input</span>
+                <span className="truncate font-mono text-text-secondary" title={run.userMessage}>
+                  {run.userMessage}
+                </span>
+              </>
+            ) : null}
+            {run.status === 'running' &&
+            run.currentNode !== null &&
+            run.currentNode !== undefined &&
+            run.currentNode !== '' ? (
               <>
                 <span className="font-mono text-text-tertiary">node</span>
                 <span className="font-mono text-text-primary">{run.currentNode}</span>
               </>
             ) : null}
-            {run.lastTool !== null && run.lastTool !== undefined && run.lastTool !== '' ? (
+            {run.status === 'running' &&
+            run.lastTool !== null &&
+            run.lastTool !== undefined &&
+            run.lastTool !== '' ? (
               <>
                 <span className="font-mono text-text-tertiary">tool</span>
                 <span className="font-mono text-text-primary">

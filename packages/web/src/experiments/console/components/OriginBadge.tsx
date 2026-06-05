@@ -1,4 +1,5 @@
 import type { ReactElement } from 'react';
+import { Globe, Terminal, Hash, Send, MessageCircle, GitBranch } from 'lucide-react';
 import type { RunOrigin } from '../primitives/run';
 
 const ORIGIN_LABEL: Record<RunOrigin, string> = {
@@ -11,13 +12,27 @@ const ORIGIN_LABEL: Record<RunOrigin, string> = {
   unknown: '—',
 };
 
+// One icon per platform so the source is recognisable at a glance (mirrors the
+// old dashboard's WorkflowRunCard PLATFORM_ICONS). `unknown` has no icon.
+const ORIGIN_ICON: Record<RunOrigin, ReactElement | null> = {
+  web: <Globe className="h-3 w-3" />,
+  cli: <Terminal className="h-3 w-3" />,
+  slack: <Hash className="h-3 w-3" />,
+  telegram: <Send className="h-3 w-3" />,
+  discord: <MessageCircle className="h-3 w-3" />,
+  github: <GitBranch className="h-3 w-3" />,
+  unknown: null,
+};
+
 /** Compact monochrome pill. Never ALL-CAPS, never suffixed. */
 export function OriginBadge({ origin }: { origin: RunOrigin }): ReactElement {
+  const icon = ORIGIN_ICON[origin];
   return (
     <span
-      className="inline-flex items-center rounded border border-border px-1.5 py-0.5 font-mono text-[10px] text-text-secondary"
+      className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 font-mono text-[10px] text-text-secondary"
       title={`Origin: ${ORIGIN_LABEL[origin]}`}
     >
+      {icon}
       {ORIGIN_LABEL[origin]}
     </span>
   );

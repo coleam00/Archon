@@ -69,7 +69,7 @@ function normalizeStatus(s: string): RunStatus {
   return (KNOWN_STATUSES as readonly string[]).includes(s) ? (s as RunStatus) : 'running';
 }
 
-function normalizeOrigin(s: string | null | undefined): RunOrigin {
+export function normalizeOrigin(s: string | null | undefined): RunOrigin {
   if (s === null || s === undefined) return 'unknown';
   const lower = s.toLowerCase();
   switch (lower) {
