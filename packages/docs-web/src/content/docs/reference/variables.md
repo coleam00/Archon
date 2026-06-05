@@ -67,7 +67,22 @@ In DAG workflows, nodes can reference the output of any completed upstream node.
 
 ### Shell Quoting in `bash:` vs `script:`
 
-`$nodeId.output` values are **auto shell-quoted** (single-quoted, with embedded `'` escaped) when substituted into `bash:` scripts, so the value is always safe to embed in a shell command. They are **not** shell-quoted when substituted into `script:` bodies — the raw value is embedded as-is. For script nodes, treat substituted values as untrusted input and parse them with language features (e.g. `JSON.parse`), not by interpolating into shell syntax.
+`$nodeId.output` values are **auto shell-quoted** when substituted into `bash:` scripts, so the value is always safe to embed in a shell command. For small outputs, values are single-quoted inline. For outputs exceeding 32 KB, Archon spills to a temp file and substitutes `$(cat '/tmp/path')` instead — the unquoted assignment form is correct in both cases. They are **not** shell-quoted when substituted into `script:` bodies — the raw value is embedded as-is. For script nodes, treat substituted values as untrusted input and parse them with language features (e.g. `JSON.parse`), not by interpolating into shell syntax.
+
+Because `bash:` substitutions arrive pre-quoted, wrapping them in double quotes is a silent footgun for small (inline) values:
+
+```bash
+# WRONG — for a small value, $emit.output.status is injected as 'ok' (single-quoted),
+# so status="$emit.output.status" becomes status="'ok'" — the quotes become data.
+status="$emit.output.status"
+[ "$status" = "ok" ] && echo pass   # → silently fails ($status is 'ok', not ok)
+
+# CORRECT — leave the substitution unquoted; Archon's quoting is the quoting.
+status=$emit.output.status          # → status='ok' → bash assigns: ok
+[ "$status" = "ok" ] && echo pass   # → passes
+```
+
+For **large** outputs (>32 KB) the substitution is `$(cat '/path')`, where `var="$(cat ...)"` is correct bash — but you can't know the size at author time, so the rule is unconditional. Numeric and boolean **fields** are injected raw (no quotes), so double-quoting accidentally "works" for them — which makes the bug intermittent. Always use `var=$node.output.field`, never `var="$node.output.field"`.
 
 ### Example
 

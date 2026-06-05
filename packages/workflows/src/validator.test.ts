@@ -547,3 +547,106 @@ describe('validateWorkflowResources — agents capability', () => {
     expect(warning).toBeUndefined();
   });
 });
+
+// =============================================================================
+// validateWorkflowResources — bash double-quote lint
+// =============================================================================
+
+describe('validateWorkflowResources — bash double-quote lint', () => {
+  test('no warning when bash uses correct unquoted idiom', async () => {
+    const workflow = makeWorkflow('test', [
+      {
+        id: 'check',
+        bash: 'status=$node.output.field\n[ "$status" = "ok" ] && echo pass',
+      } as DagNode,
+    ]);
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    const warnings = issues.filter(i => i.level === 'warning' && i.field === 'bash');
+    expect(warnings).toHaveLength(0);
+  });
+
+  test('warning when bash body has double-quoted $nodeId.output.field', async () => {
+    const workflow = makeWorkflow('test', [
+      {
+        id: 'check',
+        bash: 'status="$emit.output.status"\n[ "$status" = "ok" ] && echo pass',
+      } as DagNode,
+    ]);
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    const warnings = issues.filter(i => i.level === 'warning' && i.field === 'bash');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].nodeId).toBe('check');
+    expect(warnings[0].message).toContain('double-quoting');
+    expect(warnings[0].hint).toContain('var=$node.output.field');
+  });
+
+  test('warning when $nodeId.output is embedded inside a double-quoted string', async () => {
+    const workflow = makeWorkflow('test', [
+      {
+        id: 'check',
+        bash: 'echo "result: $emit.output.status"',
+      } as DagNode,
+    ]);
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    const warnings = issues.filter(i => i.level === 'warning' && i.field === 'bash');
+    expect(warnings).toHaveLength(1);
+  });
+
+  test('script nodes are exempt from the double-quote lint', async () => {
+    const workflow = makeWorkflow('test', [
+      {
+        id: 'check',
+        script: 'const status = "$emit.output.status";\nconsole.log(status);',
+        runtime: 'bun',
+      } as unknown as DagNode,
+    ]);
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    const warnings = issues.filter(i => i.level === 'warning' && i.field === 'bash');
+    expect(warnings).toHaveLength(0);
+  });
+
+  test('no warning when $nodeId.output is inside single quotes', async () => {
+    const workflow = makeWorkflow('test', [
+      {
+        id: 'check',
+        bash: "status='$emit.output.status'",
+      } as DagNode,
+    ]);
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    const warnings = issues.filter(i => i.level === 'warning' && i.field === 'bash');
+    expect(warnings).toHaveLength(0);
+  });
+
+  test('no false positive: a prior double-quoted string before an unquoted ref on the same line', async () => {
+    // The closing `"` of "Build complete." must NOT seed a match that slides across
+    // the `;` to the correctly-unquoted $build.output.score.
+    const workflow = makeWorkflow('test', [
+      {
+        id: 'check',
+        bash: 'echo "Build complete."; result=$build.output.score',
+      } as DagNode,
+    ]);
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    const warnings = issues.filter(i => i.level === 'warning' && i.field === 'bash');
+    expect(warnings).toHaveLength(0);
+  });
+
+  test('warns on a double-quoted $node.output in a loop until_bash', async () => {
+    // until_bash substitutes with the same escapedForBash=true path as bash nodes,
+    // so the footgun applies there too.
+    const workflow = makeWorkflow('test', [
+      {
+        id: 'gen',
+        prompt: 'produce output',
+        loop: {
+          until: 'DONE',
+          until_bash: 'status="$emit.output.status" && [ "$status" = "done" ]',
+        },
+      } as unknown as DagNode,
+    ]);
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    const warnings = issues.filter(i => i.level === 'warning' && i.field === 'loop.until_bash');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].message).toContain('double-quoting');
+  });
+});

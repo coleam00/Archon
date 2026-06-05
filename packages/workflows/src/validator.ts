@@ -30,7 +30,7 @@ function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('workflow.validator');
   return cachedLog;
 }
-import { isScriptNode } from './schemas';
+import { isBashNode, isLoopNode, isScriptNode } from './schemas';
 import type { WorkflowDefinition, DagNode, WorkflowSource } from './schemas';
 import type { ScriptRuntime } from './script-discovery';
 import { discoverScriptsForCwd } from './script-discovery';
@@ -587,6 +587,41 @@ export async function validateWorkflowResources(
           hint: 'Remove deps or switch to runtime: uv if you need explicit dependency management',
         });
       }
+    }
+
+    // In bash node bodies (and loop `until_bash`, which substitutes the same way),
+    // $node.output values are injected PRE-QUOTED by Archon: small values are
+    // single-quoted inline ('the value'), large outputs (>32 KB) spill to a temp
+    // file as $(cat '/path'). Wrapping the substitution in double quotes breaks the
+    // SMALL case — var="$n.output" becomes var="'value'", embedding the literal
+    // single-quote chars as data. (For the large $(cat ...) case double-quoting is
+    // actually fine, but the author can't predict the size at write time, so the
+    // rule is unconditional: never double-quote.) Numeric/boolean FIELD values are
+    // injected raw, so double-quoting is harmless for those — which is why the bug
+    // is intermittent and easy to miss.
+    //   wrong="$n.output.field" → wrong="'ok'" (single quotes become part of the value)
+    //   right=$n.output.field   → right='ok' → bash assigns: ok
+    //
+    // The `(?:^|[=\s])"` prefix requires the opening `"` to be an operand (line
+    // start, after `=`, or after whitespace) so a *closing* quote of an unrelated
+    // earlier string doesn't cause a false positive (e.g. `echo "hi"; x=$a.output`).
+    // `[^"\n]` excludes newlines — a double-quote spanning lines is pathological.
+    const doubleQuotedOutputRef = /(?:^|[=\s])"[^"\n]*\$[a-zA-Z_][a-zA-Z0-9_-]*\.output/m;
+    const warnDoubleQuoted = (body: string, field: string): void => {
+      if (doubleQuotedOutputRef.test(body)) {
+        issues.push({
+          level: 'warning',
+          nodeId: node.id,
+          field,
+          message:
+            '`"$nodeId.output"` — double-quoting a substitution that is already shell-quoted by Archon produces the wrong value',
+          hint: 'Use `var=$node.output.field` (unquoted) — the substitution is injected already quoted. (Numeric/boolean fields are injected raw, so double-quoting is harmless for those, but the rule is uniform.)',
+        });
+      }
+    };
+    if (isBashNode(node)) warnDoubleQuoted(node.bash, 'bash');
+    if (isLoopNode(node) && node.loop.until_bash) {
+      warnDoubleQuoted(node.loop.until_bash, 'loop.until_bash');
     }
   }
 
