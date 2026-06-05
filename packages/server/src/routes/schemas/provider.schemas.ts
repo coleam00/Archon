@@ -10,6 +10,7 @@ const providerCapabilitiesSchema = z
     mcp: z.boolean(),
     hooks: z.boolean(),
     skills: z.boolean(),
+    agents: z.boolean(),
     toolRestrictions: z.boolean(),
     // Mirrors ProviderCapabilities.structuredOutput: 'enforced' | 'best-effort' | false.
     structuredOutput: z.union([z.literal('enforced'), z.literal('best-effort'), z.literal(false)]),
@@ -19,6 +20,7 @@ const providerCapabilitiesSchema = z
     thinkingControl: z.boolean(),
     fallbackModel: z.boolean(),
     sandbox: z.boolean(),
+    nativeTools: z.boolean(),
   })
   .openapi('ProviderCapabilities');
 

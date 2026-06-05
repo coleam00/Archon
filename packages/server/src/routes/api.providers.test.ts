@@ -224,8 +224,10 @@ describe('GET /api/providers', () => {
     expect(typeof caps.sessionResume).toBe('boolean');
     expect(typeof caps.mcp).toBe('boolean');
     expect(typeof caps.hooks).toBe('boolean');
+    expect(typeof caps.agents).toBe('boolean');
     // structuredOutput is the tiered union, not a boolean.
     expect(['enforced', 'best-effort', false]).toContain(caps.structuredOutput);
+    expect(typeof caps.nativeTools).toBe('boolean');
   });
 });
 

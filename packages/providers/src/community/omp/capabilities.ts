@@ -11,11 +11,12 @@ export const OMP_CAPABILITIES: ProviderCapabilities = {
   skills: true,
   agents: false,
   toolRestrictions: true,
-  structuredOutput: true,
+  structuredOutput: 'best-effort',
   envInjection: true,
   costControl: false,
   effortControl: true,
   thinkingControl: true,
   fallbackModel: true,
   sandbox: false,
+  nativeTools: false,
 };

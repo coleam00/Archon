@@ -354,10 +354,17 @@ describe('bridgeSession', () => {
       chunks.push(chunk);
     }
 
-    expect(chunks).toEqual([{ type: 'result', sessionId: 'sess-delayed-agent-end' }]);
+    expect(chunks).toEqual([
+      {
+        type: 'result',
+        tokens: { input: 5, output: 8 },
+        stopReason: 'end_turn',
+        sessionId: 'sess-delayed-agent-end',
+      },
+    ]);
   }, 5_000);
 
-  test('emits successful result when prompt settles without agent_end', async () => {
+  test('fails when prompt settles without agent_end', async () => {
     const session: OmpSession = {
       subscribe() {
         return () => undefined;
@@ -373,14 +380,13 @@ describe('bridgeSession', () => {
       },
     };
 
-    const chunks: unknown[] = [];
-    const startedAt = Date.now();
-    for await (const chunk of bridgeSession(session, 'hi')) {
-      chunks.push(chunk);
-    }
+    const run = (async () => {
+      for await (const _chunk of bridgeSession(session, 'hi')) {
+        // consume
+      }
+    })();
 
-    expect(chunks).toEqual([{ type: 'result' }]);
-    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    await expect(run).rejects.toThrow('Oh My Pi prompt resolved before agent_end terminal event.');
   }, 5_000);
 
   test('does not prompt when abort signal is already aborted', async () => {

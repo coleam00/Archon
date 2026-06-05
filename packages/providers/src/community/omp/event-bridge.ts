@@ -10,6 +10,8 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
+const TERMINAL_EVENT_WAIT_MS = 1_000;
+
 function serializeToolResult(result: unknown): string {
   if (typeof result === 'string') return result;
   try {
@@ -307,9 +309,17 @@ export async function* bridgeSession(
   let promptSettled = false;
   let sawTerminalResult = false;
   let pendingTerminalResult: ResultChunk | undefined;
+  let terminalWaitTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const clearTerminalWaitTimer = (): void => {
+    if (terminalWaitTimer === undefined) return;
+    clearTimeout(terminalWaitTimer);
+    terminalWaitTimer = undefined;
+  };
 
   const maybeFinish = (): void => {
     if (!promptSettled || !sawTerminalResult) return;
+    clearTerminalWaitTimer();
     if (pendingTerminalResult) {
       queue.push({ kind: 'chunk', chunk: pendingTerminalResult });
       pendingTerminalResult = undefined;
@@ -345,6 +355,7 @@ export async function* bridgeSession(
             if (wantsStructured) assistantBuffer += chunk.content;
           }
           if (chunk.type === 'result') {
+            clearTerminalWaitTimer();
             sawTerminalResult = true;
             pendingTerminalResult = chunk;
             maybeFinish();
@@ -369,9 +380,13 @@ export async function* bridgeSession(
       () => {
         promptSettled = true;
         if (!sawTerminalResult) {
-          getLog().warn('omp.event-bridge.result_missing_terminal_event');
-          sawTerminalResult = true;
-          pendingTerminalResult = { type: 'result' };
+          terminalWaitTimer = setTimeout(() => {
+            getLog().error('omp.event-bridge.result_missing_terminal_event');
+            queue.push({
+              kind: 'error',
+              error: new Error('Oh My Pi prompt resolved before agent_end terminal event.'),
+            });
+          }, TERMINAL_EVENT_WAIT_MS);
         }
         maybeFinish();
       },
@@ -408,6 +423,7 @@ export async function* bridgeSession(
       }
     }
   } finally {
+    clearTerminalWaitTimer();
     queue.close();
     uiBridge?.setEmitter(undefined);
     unsubscribe?.();

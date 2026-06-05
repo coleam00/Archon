@@ -17,6 +17,7 @@ import { registerOpencodeProvider } from './community/opencode/registration';
 import { registerOmpProvider } from './community/omp/registration';
 import { UnknownProviderError } from './errors';
 import type { ProviderRegistration, IAgentProvider, ProviderCapabilities } from './types';
+import type { NativeTool } from '@archon/providers';
 
 /** Minimal mock provider for testing registration. */
 function makeMockProvider(id: string): IAgentProvider {
@@ -404,7 +405,7 @@ describe('registry', () => {
       expect(caps.sessionResume).toBe(true);
       expect(caps.skills).toBe(true);
       expect(caps.toolRestrictions).toBe(true);
-      expect(caps.structuredOutput).toBe(true);
+      expect(caps.structuredOutput).toBe('best-effort');
       expect(caps.effortControl).toBe(true);
       expect(caps.thinkingControl).toBe(true);
       expect(caps.envInjection).toBe(true);
@@ -414,6 +415,7 @@ describe('registry', () => {
       expect(caps.costControl).toBe(false);
       expect(caps.fallbackModel).toBe(true);
       expect(caps.sandbox).toBe(false);
+      expect(caps.nativeTools).toBe(false);
     });
 
     test('appears in getProviderInfoList with builtIn: false', () => {
@@ -481,6 +483,26 @@ describe('registry', () => {
         .map(p => p.id)
         .sort();
       expect(ids).toEqual(['claude', 'codex', 'copilot']);
+    });
+  });
+
+  describe('package exports', () => {
+    test('exports OMP provider symbols from root and community subpath', async () => {
+      const root = await import('@archon/providers');
+      const omp = await import('@archon/providers/community/omp');
+      const nativeTool: NativeTool = {
+        name: 'manage_run',
+        description: 'test tool',
+        inputSchema: { type: 'object' },
+        async handler() {
+          return 'ok';
+        },
+      };
+
+      expect(root.OmpProvider).toBe(omp.OmpProvider);
+      expect(root.registerOmpProvider).toBe(omp.registerOmpProvider);
+      expect(root.OMP_CAPABILITIES).toBe(omp.OMP_CAPABILITIES);
+      expect(nativeTool.name).toBe('manage_run');
     });
   });
 });

@@ -3848,6 +3848,7 @@ export interface components {
       mcp: boolean;
       hooks: boolean;
       skills: boolean;
+      agents: boolean;
       toolRestrictions: boolean;
       structuredOutput: 'enforced' | 'best-effort' | false;
       envInjection: boolean;
@@ -3856,6 +3857,7 @@ export interface components {
       thinkingControl: boolean;
       fallbackModel: boolean;
       sandbox: boolean;
+      nativeTools: boolean;
     };
     PiModelListResponse: {
       models: components['schemas']['PiModelInfo'][];

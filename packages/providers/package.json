@@ -17,6 +17,7 @@
     "./oauth": "./src/oauth.ts",
     "./community/pi": "./src/community/pi/index.ts",
     "./community/copilot": "./src/community/copilot/index.ts",
+    "./community/omp": "./src/community/omp/index.ts",
     "./community/copilot/binary-resolver": "./src/community/copilot/binary-resolver.ts",
     "./errors": "./src/errors.ts",
     "./registry": "./src/registry.ts"

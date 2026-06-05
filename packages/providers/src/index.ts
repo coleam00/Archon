@@ -14,6 +14,7 @@ export type {
   CredentialKind,
   CredentialSpec,
   ProviderCredentialCatalog,
+  NativeTool,
 } from './types';
 export { CREDENTIAL_KINDS } from './types';
 
@@ -90,6 +91,13 @@ export {
   resetCopilotSingleton,
   type CopilotProviderDefaults,
 } from './community/copilot';
+export {
+  OMP_CAPABILITIES,
+  OmpProvider,
+  parseOmpConfig,
+  registerOmpProvider,
+  type OmpProviderDefaults,
+} from './community/omp';
 export {
   resolveCopilotBinaryPath,
   fileExists as copilotFileExists,
