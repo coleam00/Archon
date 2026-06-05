@@ -10,6 +10,9 @@ import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/form
 import { useIsDocker, openInIde } from '../lib/health';
 import { statusTextClass, statusLabel } from '../lib/run-status';
 
+/** Present + non-empty — narrows `string | null | undefined` to `string`. */
+const hasValue = (v: string | null | undefined): v is string => v != null && v !== '';
+
 interface ActiveRunCardProps {
   run: Run;
   showProject?: boolean;
@@ -49,6 +52,7 @@ export function ActiveRunCard({
   const canOpen = run.projectId !== null && !run.id.startsWith('demo-');
   const canOpenIde =
     !isDocker && run.workingPath !== null && run.workingPath !== '' && !run.id.startsWith('demo-');
+  const showDetailGrid = run.userMessage !== '' || run.status === 'running';
 
   const onCardClick = (): void => {
     if (canOpen) navigate(`/console/p/${run.projectId}/r/${run.id}`);
@@ -127,16 +131,25 @@ export function ActiveRunCard({
           </div>
         </div>
 
-        {/* Activity detail — running only */}
-        {run.status === 'running' ? (
+        {/* Provenance + activity detail: the triggering input (when present, truncated —
+            full text on hover), plus live node/tool rows while running. */}
+        {showDetailGrid ? (
           <div className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[12px]">
-            {run.currentNode !== null && run.currentNode !== undefined && run.currentNode !== '' ? (
+            {run.userMessage !== '' ? (
+              <>
+                <span className="font-mono text-text-tertiary">input</span>
+                <span className="truncate font-mono text-text-secondary" title={run.userMessage}>
+                  {run.userMessage}
+                </span>
+              </>
+            ) : null}
+            {run.status === 'running' && hasValue(run.currentNode) ? (
               <>
                 <span className="font-mono text-text-tertiary">node</span>
                 <span className="font-mono text-text-primary">{run.currentNode}</span>
               </>
             ) : null}
-            {run.lastTool !== null && run.lastTool !== undefined && run.lastTool !== '' ? (
+            {run.status === 'running' && hasValue(run.lastTool) ? (
               <>
                 <span className="font-mono text-text-tertiary">tool</span>
                 <span className="font-mono text-text-primary">

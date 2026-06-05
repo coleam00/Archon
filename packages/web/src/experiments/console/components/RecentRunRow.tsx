@@ -53,7 +53,7 @@ export function RecentRunRow({
       rerun: '1',
       workflow: run.workflow,
     });
-    if (run.userMessage.length > 0) params.set('message', run.userMessage);
+    if (run.userMessage !== '') params.set('message', run.userMessage);
     navigate(`/console/p/${run.projectId}?${params.toString()}`);
   };
 
@@ -74,7 +74,22 @@ export function RecentRunRow({
       >
         {run.status}
       </span>
-      <span className="min-w-0 flex-1 truncate text-text-primary">{run.workflow}</span>
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+        {/* With a message, cap the name at 55% so both share the line; without one,
+            let the name fill the full width (avoids blank space + needless truncation). */}
+        <span
+          className={`truncate text-text-primary ${
+            run.userMessage !== '' ? 'max-w-[55%] shrink-0' : 'min-w-0 flex-1'
+          }`}
+        >
+          {run.workflow}
+        </span>
+        {run.userMessage !== '' ? (
+          <span className="min-w-0 truncate text-text-tertiary" title={run.userMessage}>
+            {run.userMessage}
+          </span>
+        ) : null}
+      </div>
       {showProject && run.projectName !== null ? (
         <span className="hidden w-40 shrink-0 truncate text-text-secondary md:inline">
           {run.projectName}
