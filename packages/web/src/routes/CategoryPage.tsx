@@ -30,7 +30,7 @@ export function CategoryPage(): React.ReactElement {
               <Link
                 key={c.slug}
                 to={`/category/${c.slug}`}
-                className="rounded-md border border-border bg-surface px-3 py-1.5 text-xs text-text-primary hover:border-primary hover:text-primary"
+                className="rounded-md border border-border bg-surface-elevated px-3 py-1.5 text-xs text-text-primary hover:border-primary hover:text-primary"
               >
                 {c.emoji} {c.label}
               </Link>
@@ -58,7 +58,7 @@ export function CategoryPage(): React.ReactElement {
         </header>
 
         {/* Description */}
-        <section className="rounded-lg border border-border bg-surface p-4">
+        <section className="rounded-lg border border-border bg-surface-elevated p-4">
           <p className="text-sm leading-relaxed text-text-primary">{category.description}</p>
         </section>
 
@@ -74,7 +74,7 @@ export function CategoryPage(): React.ReactElement {
                 href={vaultLink(s.path)}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="group flex items-center justify-between rounded-md border border-border bg-surface p-3 text-sm text-text-primary transition-colors hover:border-primary hover:bg-surface/80"
+                className="group flex items-center justify-between rounded-md border border-border bg-surface-elevated p-3 text-sm text-text-primary transition-colors hover:border-primary hover:bg-surface-hover"
               >
                 <span className="font-medium">{s.label}</span>
                 <code className="text-[11px] text-text-tertiary group-hover:text-primary">
@@ -100,7 +100,7 @@ export function CategoryPage(): React.ReactElement {
                   href={vaultLink('workflows/workflow-catalog.md')}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="rounded-md border border-border bg-surface px-2.5 py-1 font-mono text-xs text-text-secondary hover:border-primary hover:text-primary"
+                  className="rounded-md border border-border bg-surface-elevated px-2.5 py-1 font-mono text-xs text-text-secondary hover:border-primary hover:text-primary"
                 >
                   {wf}
                 </a>
@@ -143,7 +143,7 @@ export function CategoryPage(): React.ReactElement {
                     href={link.href}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="rounded-md border border-border bg-surface px-3 py-1.5 text-xs text-text-primary hover:border-primary hover:text-primary"
+                    className="rounded-md border border-border bg-surface-elevated px-3 py-1.5 text-xs text-text-primary hover:border-primary hover:text-primary"
                   >
                     {link.label} ↗
                   </a>
@@ -151,7 +151,7 @@ export function CategoryPage(): React.ReactElement {
                   <Link
                     key={link.href}
                     to={link.href}
-                    className="rounded-md border border-border bg-surface px-3 py-1.5 text-xs text-text-primary hover:border-primary hover:text-primary"
+                    className="rounded-md border border-border bg-surface-elevated px-3 py-1.5 text-xs text-text-primary hover:border-primary hover:text-primary"
                   >
                     {link.label}
                   </Link>
