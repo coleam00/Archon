@@ -80,6 +80,13 @@ import {
   safeSendMessage,
   type SendMessageContext,
 } from './executor-shared';
+import {
+  isLiteralSpec,
+  resolveModelSpec,
+  routePresetEffort,
+  type ModelAliasPreset,
+  type ResolvedAiProfile,
+} from './model-validation';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -96,6 +103,50 @@ const MCP_FAILURE_PREFIX = 'MCP server connection failed: ';
 export interface McpFailureEntry {
   name: string;
   segment: string;
+}
+
+function applyPresetOptions(
+  provider: string,
+  preset: ModelAliasPreset | undefined,
+  node: DagNode,
+  workflowLevelOptions: WorkflowLevelOptions,
+  nodeConfig: NodeConfig,
+  assistantConfig: Record<string, unknown>
+): void {
+  if (!preset) return;
+
+  if (
+    preset.thinking !== undefined &&
+    node.thinking === undefined &&
+    workflowLevelOptions.thinking === undefined
+  ) {
+    nodeConfig.thinking = preset.thinking;
+  }
+
+  if (
+    preset.effort === undefined ||
+    node.effort !== undefined ||
+    workflowLevelOptions.effort !== undefined
+  ) {
+    return;
+  }
+
+  const routed = routePresetEffort(provider, preset.effort);
+  if (!routed) {
+    // Cross-provider effort mismatch (e.g. a `tiers:` entry sets `effort: max`
+    // on a Codex tier). Warn rather than silently drop it — fail-loud per the
+    // project's fail-fast guideline.
+    getLog().warn(
+      { provider, effort: preset.effort, nodeId: node.id },
+      'dag.preset_effort_unsupported'
+    );
+    return;
+  }
+  if (routed.field === 'effort') {
+    nodeConfig.effort = routed.value;
+  } else {
+    assistantConfig.modelReasoningEffort = routed.value;
+  }
 }
 
 /**
@@ -360,15 +411,57 @@ async function resolveNodeProviderAndModel(
   conversationId: string,
   workflowRunId: string,
   _cwd: string,
-  workflowLevelOptions: WorkflowLevelOptions
+  workflowLevelOptions: WorkflowLevelOptions,
+  aiProfile?: ResolvedAiProfile,
+  workflowPreset?: ModelAliasPreset
 ): Promise<{
   provider: string;
   model: string | undefined;
   options: SendQueryOptions | undefined;
 }> {
-  // Provider is explicit: node.provider ?? workflow.provider. Model never
-  // influences provider selection. Model strings pass through to the SDK.
-  const provider: string = node.provider ?? workflowProvider;
+  const configuredProvider: string = node.provider ?? workflowProvider;
+  let provider: string = configuredProvider;
+  let preset: ModelAliasPreset | undefined;
+  let model: string | undefined;
+
+  if (node.model) {
+    if (aiProfile) {
+      const modelSpec = resolveModelSpec(aiProfile, node.model);
+      if (isLiteralSpec(modelSpec)) {
+        model = modelSpec.literal;
+      } else {
+        preset = modelSpec;
+        provider = modelSpec.provider;
+        model = modelSpec.model;
+        if (node.provider && node.provider !== provider) {
+          getLog().warn(
+            {
+              nodeId: node.id,
+              configuredProvider: node.provider,
+              resolvedProvider: provider,
+              modelRef: node.model,
+            },
+            'dag.model_provider_conflict'
+          );
+          const delivered = await safeSendMessage(
+            platform,
+            conversationId,
+            `Warning: Node '${node.id}' sets provider '${node.provider}' but model '${node.model}' resolves to provider '${provider}' — using '${provider}'.`,
+            { workflowId: workflowRunId, nodeName: node.id }
+          );
+          if (!delivered) {
+            getLog().error(
+              { nodeId: node.id, workflowRunId },
+              'dag.model_provider_conflict_warning_delivery_failed'
+            );
+          }
+        }
+      }
+    } else {
+      model = node.model;
+    }
+  }
+
   if (!isRegisteredProvider(provider)) {
     throw new Error(
       `Node '${node.id}': unknown provider '${provider}'. ` +
@@ -379,11 +472,12 @@ async function resolveNodeProviderAndModel(
   }
 
   const providerAssistantConfig = config.assistants[provider];
-  const model: string | undefined =
-    node.model ??
-    (provider === workflowProvider
+  model ??=
+    provider === workflowProvider
       ? workflowModel
-      : (providerAssistantConfig?.model as string | undefined));
+      : (providerAssistantConfig?.model as string | undefined);
+  const effectivePreset =
+    preset ?? (!node.model && provider === workflowProvider ? workflowPreset : undefined);
 
   // Get provider capabilities for capability warnings (static lookup, no instantiation)
   const caps = getProviderCapabilities(provider);
@@ -482,7 +576,15 @@ async function resolveNodeProviderAndModel(
   };
 
   // Pass assistantConfig from config — provider parses internally
-  const assistantConfig = config.assistants[provider] ?? {};
+  const assistantConfig: Record<string, unknown> = { ...(config.assistants[provider] ?? {}) };
+  applyPresetOptions(
+    provider,
+    effectivePreset,
+    node,
+    workflowLevelOptions,
+    nodeConfig,
+    assistantConfig
+  );
 
   const options: SendQueryOptions = {
     ...baseOptions,
@@ -1726,35 +1828,6 @@ async function executeScriptNode(
 }
 
 /**
- * Build SendQueryOptions from resolved provider, model, and config.
- * Uses the same nodeConfig + assistantConfig pattern as resolveNodeProviderAndModel.
- */
-function buildLoopNodeOptions(
-  provider: string,
-  model: string | undefined,
-  config: WorkflowConfig,
-  workflowLevelOptions?: WorkflowLevelOptions
-): SendQueryOptions {
-  const options: SendQueryOptions = {};
-  if (model) options.model = model;
-  if (config.envVars && Object.keys(config.envVars).length > 0) {
-    options.env = config.envVars;
-  }
-  options.assistantConfig = config.assistants[provider] ?? {};
-  // Pass workflow-level options as nodeConfig so providers can apply them
-  if (workflowLevelOptions) {
-    options.nodeConfig = {
-      effort: workflowLevelOptions.effort,
-      thinking: workflowLevelOptions.thinking,
-      sandbox: workflowLevelOptions.sandbox,
-      betas: workflowLevelOptions.betas,
-      fallbackModel: workflowLevelOptions.fallbackModel,
-    };
-  }
-  return options;
-}
-
-/**
  * Execute a loop node — runs prompt repeatedly until completion signal or max iterations.
  *
  * Key behaviors:
@@ -1770,15 +1843,14 @@ async function executeLoopNode(
   workflowRun: WorkflowRun,
   node: LoopNode,
   workflowProvider: string,
-  workflowModel: string | undefined,
+  resolvedOptions: SendQueryOptions | undefined,
   artifactsDir: string,
   logDir: string,
   baseBranch: string,
   docsDir: string,
   nodeOutputs: Map<string, NodeOutput>,
   config: WorkflowConfig,
-  issueContext?: string,
-  workflowLevelOptions?: WorkflowLevelOptions
+  issueContext?: string
 ): Promise<NodeExecutionResult> {
   const loop = node.loop;
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -1812,13 +1884,6 @@ async function executeLoopNode(
   let loopTotalCostUsd: number | undefined;
   let loopFinalStopReason: string | undefined;
   let loopTotalNumTurns: number | undefined;
-  const resolvedOptions = buildLoopNodeOptions(
-    workflowProvider,
-    workflowModel,
-    config,
-    workflowLevelOptions
-  );
-
   // Helper to log event store errors consistently
   const logEventStoreError = (err: Error, iteration: number): void => {
     getLog().error({ err, nodeId: node.id, iteration }, 'loop_node.iteration_event_failed');
@@ -2397,7 +2462,9 @@ async function executeApprovalNode(
   config: WorkflowConfig,
   workflowLevelOptions: WorkflowLevelOptions,
   configuredCommandFolder?: string,
-  issueContext?: string
+  issueContext?: string,
+  aiProfile?: ResolvedAiProfile,
+  workflowPreset?: ModelAliasPreset
 ): Promise<NodeOutput> {
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
 
@@ -2487,7 +2554,9 @@ async function executeApprovalNode(
       conversationId,
       workflowRun.id,
       cwd,
-      workflowLevelOptions
+      workflowLevelOptions,
+      aiProfile,
+      workflowPreset
     );
 
     const output = await executeNodeInternal(
@@ -2587,7 +2656,9 @@ export async function executeDagWorkflow(
   issueContext?: string,
   priorCompletedNodes?: Map<string, string>,
   /** Discovery source — telemetry only (custom-vs-default + name redaction). */
-  source?: WorkflowSource
+  source?: WorkflowSource,
+  aiProfile?: ResolvedAiProfile,
+  workflowPreset?: ModelAliasPreset
 ): Promise<string | undefined> {
   const dagStartTime = Date.now();
   const workflowLevelOptions = {
@@ -2860,25 +2931,20 @@ export async function executeDagWorkflow(
 
           // 3b. Loop node dispatch — manages its own AI sessions and iteration
           if (isLoopNode(node)) {
-            // Resolve per-node provider/model overrides (same logic as other node types).
-            // Provider is explicit; model passes through to the SDK. Throw on an
-            // unknown provider so the outer catch below emits the standard
-            // node_failed event + user-facing message — the same path
-            // resolveNodeProviderAndModel uses for non-loop nodes.
-            const loopProvider: string = node.provider ?? workflowProvider;
-            if (!isRegisteredProvider(loopProvider)) {
-              throw new Error(
-                `Node '${node.id}': unknown provider '${loopProvider}'. Registered: ${getRegisteredProviders()
-                  .map(p => p.id)
-                  .join(', ')}`
+            const { provider: loopProvider, options: loopOptions } =
+              await resolveNodeProviderAndModel(
+                node,
+                workflowProvider,
+                workflowModel,
+                config,
+                platform,
+                conversationId,
+                workflowRun.id,
+                cwd,
+                workflowLevelOptions,
+                aiProfile,
+                workflowPreset
               );
-            }
-            const loopAssistantConfig = config.assistants[loopProvider];
-            const loopModel: string | undefined =
-              node.model ??
-              (loopProvider === workflowProvider
-                ? workflowModel
-                : (loopAssistantConfig?.model as string | undefined));
 
             const output = await executeLoopNode(
               deps,
@@ -2888,15 +2954,14 @@ export async function executeDagWorkflow(
               workflowRun,
               node,
               loopProvider,
-              loopModel,
+              loopOptions,
               artifactsDir,
               logDir,
               baseBranch,
               docsDir,
               nodeOutputs,
               config,
-              issueContext,
-              workflowLevelOptions
+              issueContext
             );
             return { nodeId: node.id, output };
           }
@@ -2920,7 +2985,9 @@ export async function executeDagWorkflow(
               config,
               workflowLevelOptions,
               configuredCommandFolder,
-              issueContext
+              issueContext,
+              aiProfile,
+              workflowPreset
             );
             return { nodeId: node.id, output };
           }
@@ -2987,7 +3054,9 @@ export async function executeDagWorkflow(
             conversationId,
             workflowRun.id,
             cwd,
-            workflowLevelOptions
+            workflowLevelOptions,
+            aiProfile,
+            workflowPreset
           );
 
           // 5. Determine session — parallel or context:fresh → always fresh

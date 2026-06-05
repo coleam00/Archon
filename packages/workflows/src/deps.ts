@@ -18,6 +18,7 @@ import type {
   ProviderDefaultsMap,
   ProviderCapabilities,
 } from '@archon/providers/types';
+import type { RawAliasesConfig, RawTiersConfig } from './model-validation';
 
 // Re-export provider types so existing workflow engine consumers don't break
 export type {
@@ -75,6 +76,8 @@ export interface WorkflowConfig {
   baseBranch?: string;
   docsPath?: string;
   envVars?: Record<string, string>;
+  aliases?: RawAliasesConfig;
+  tiers?: RawTiersConfig;
   commands: { folder?: string };
   defaults?: {
     loadDefaultWorkflows?: boolean;

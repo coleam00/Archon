@@ -174,7 +174,7 @@ nodes:
   # ═══════════════════════════════════════════════════════════════
 
   - id: create-plan
-    model: sonnet
+    model: medium
     depends_on: [explore]
     context: fresh
     prompt: |
@@ -411,7 +411,7 @@ nodes:
   - id: implement
     depends_on: [implement-setup]
     idle_timeout: 600000
-    model: claude-opus-4-6[1m]
+    model: large
     loop:
       prompt: |
         # PIV Loop — Implementation Agent
@@ -541,7 +541,7 @@ nodes:
   # ═══════════════════════════════════════════════════════════════
 
   - id: code-review
-    model: sonnet
+    model: medium
     depends_on: [implement]
     context: fresh
     prompt: |
@@ -701,7 +701,7 @@ nodes:
   # ═══════════════════════════════════════════════════════════════
 
   - id: finalize
-    model: sonnet
+    model: medium
     depends_on: [fix-feedback]
     context: fresh
     prompt: |

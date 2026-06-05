@@ -20,7 +20,7 @@ nodes:
   # ═══════════════════════════════════════════════════════════════
 
   - id: initiate
-    model: sonnet
+    model: medium
     prompt: |
       You are a sharp product manager starting a PRD creation process.
       You think from first principles — start with primitives, not features.
@@ -60,7 +60,7 @@ nodes:
   # ═══════════════════════════════════════════════════════════════
 
   - id: research
-    model: sonnet
+    model: medium
     prompt: |
       You are researching context for a PRD. Think from first principles —
       what already exists before proposing anything new.
@@ -115,7 +115,7 @@ nodes:
   # ═══════════════════════════════════════════════════════════════
 
   - id: technical
-    model: sonnet
+    model: medium
     prompt: |
       You are assessing technical feasibility for a PRD.
       Think from first principles — start with what exists, not what you'd build from scratch.
@@ -182,7 +182,7 @@ nodes:
   # ═══════════════════════════════════════════════════════════════
 
   - id: generate
-    model: sonnet
+    model: medium
     prompt: |
       You are generating a PRD from the user's guided inputs.
 
@@ -239,7 +239,7 @@ nodes:
   # ═══════════════════════════════════════════════════════════════
 
   - id: validate
-    model: sonnet
+    model: medium
     prompt: |
       You are a technical validator checking a PRD for accuracy.
 

@@ -11,7 +11,7 @@ description: |
   to avoid conflicts. Produces artifacts in $ARTIFACTS_DIR/ and posts a validation report.
 
 provider: claude
-model: opus
+model: large
 
 nodes:
   # ═══════════════════════════════════════════════════════════════
@@ -117,7 +117,7 @@ nodes:
       Consider: even if a change is backend, if it affects what the frontend displays
       (e.g., API response format changes, SSE event changes), it IS e2e_testable.
     depends_on: [fetch-pr]
-    model: haiku
+    model: small
     allowed_tools: []
     output_format:
       type: object

@@ -36,6 +36,7 @@ import type {
   AssistantDefaults,
   AssistantDefaultsConfig,
   RawAliasesConfig,
+  RawTiersConfig,
 } from './config-types';
 import { createLogger } from '@archon/paths';
 import {
@@ -65,6 +66,18 @@ function mergeAliases(
   base: RawAliasesConfig | undefined,
   overrides: RawAliasesConfig | undefined
 ): RawAliasesConfig | undefined {
+  if (!base && !overrides) return undefined;
+  return { ...base, ...overrides };
+}
+
+/**
+ * Shallow-merge tier maps. Last-write-wins per tier: repo wins over global.
+ * Tier-name and entry validation lives in `buildAiProfile()`.
+ */
+function mergeTiers(
+  base: RawTiersConfig | undefined,
+  overrides: RawTiersConfig | undefined
+): RawTiersConfig | undefined {
   if (!base && !overrides) return undefined;
   return { ...base, ...overrides };
 }
@@ -178,6 +191,12 @@ const DEFAULT_CONFIG_CONTENT = `# Archon Global Configuration
 #     webSearchMode: disabled
 #     additionalDirectories:
 #       - /absolute/path/to/other/repo
+
+# Model tier presets (usable as model: small / medium / large)
+# tiers:
+#   large: { provider: claude, model: opus }
+#   medium: { provider: codex, model: gpt-5.5, effort: high }
+#   small: { provider: pi, model: minimax-m3 }
 
 # Streaming mode per platform (stream or batch)
 # streaming:
@@ -404,6 +423,7 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
   result.assistants = mergeAssistantDefaults(result.assistants, global.assistants);
 
   result.aliases = mergeAliases(result.aliases, global.aliases);
+  result.tiers = mergeTiers(result.tiers, global.tiers);
 
   // Streaming preferences
   if (global.streaming) {
@@ -450,6 +470,7 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
   result.assistants = mergeAssistantDefaults(result.assistants, repo.assistants);
 
   result.aliases = mergeAliases(result.aliases, repo.aliases);
+  result.tiers = mergeTiers(result.tiers, repo.tiers);
 
   // Commands config
   if (repo.commands) {

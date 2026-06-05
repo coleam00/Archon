@@ -63,7 +63,7 @@ nodes:
       Be specific and concrete. Each proposed node should have a clear type
       (bash, prompt, command, script, loop, or approval) and a one-line
       description of what it does.
-    model: haiku
+    model: small
     allowed_tools: []
     output_format:
       type: object
@@ -111,7 +111,7 @@ nodes:
 
       # Optional top-level settings:
       # provider: claude    (or codex)
-      # model: sonnet       (or haiku, opus, etc.)
+      # model: medium       (or haiku, opus, etc.)
       # interactive: true   (forces foreground execution in web UI)
 
       nodes:
@@ -188,7 +188,7 @@ nodes:
       9. Use `output_format` on prompt nodes when downstream nodes need structured data
       10. Use `allowed_tools: []` on classification/analysis nodes that don't need tools
       11. Use `denied_tools: [Edit, Bash]` when a node should only use Write (not edit existing files)
-      12. Prefer `model: haiku` for simple classification tasks to save cost
+      12. Prefer `model: small` for simple classification tasks to save cost
 
       ## Output
 

@@ -45,7 +45,7 @@ nodes:
 
       Provide your reasoning for each decision.
     depends_on: [scope]
-    model: haiku
+    model: small
     allowed_tools: []
     output_format:
       type: object

@@ -178,6 +178,108 @@ describe('validateWorkflowResources — command nodes', () => {
 });
 
 // =============================================================================
+// validateWorkflowResources — portable model refs
+// =============================================================================
+
+describe('validateWorkflowResources — portable model refs', () => {
+  test('bundled workflow rejects top-level @custom model ref', async () => {
+    await createCommandFile('my-command');
+    const workflow = {
+      ...makeWorkflow('test', [{ id: 'step1', command: 'my-command' } as DagNode]),
+      model: '@custom',
+    } as WorkflowDefinition;
+
+    const issues = await validateWorkflowResources(workflow, tmpDir, {
+      workflowSource: 'bundled',
+    });
+
+    expect(issues.some(i => i.field === 'model' && i.message.includes('@custom'))).toBe(true);
+  });
+
+  test('global workflow rejects node @custom model ref', async () => {
+    await createCommandFile('my-command');
+    const workflow = makeWorkflow('test', [
+      { id: 'step1', command: 'my-command', model: '@custom' } as DagNode,
+    ]);
+
+    const issues = await validateWorkflowResources(workflow, tmpDir, {
+      workflowSource: 'global',
+    });
+
+    expect(issues.some(i => i.nodeId === 'step1' && i.field === 'model')).toBe(true);
+  });
+
+  test('project workflow allows configured @custom model refs', async () => {
+    await createCommandFile('my-command');
+    const workflow = makeWorkflow('test', [
+      { id: 'step1', command: 'my-command', model: '@custom' } as DagNode,
+    ]);
+
+    const issues = await validateWorkflowResources(workflow, tmpDir, {
+      workflowSource: 'project',
+      aliases: {
+        '@custom': { provider: 'claude', model: 'sonnet' },
+      },
+    });
+
+    expect(issues.some(i => i.field === 'model')).toBe(false);
+  });
+
+  test('project workflow rejects unknown @custom model refs', async () => {
+    await createCommandFile('my-command');
+    const workflow = makeWorkflow('test', [
+      { id: 'step1', command: 'my-command', model: '@missing' } as DagNode,
+    ]);
+
+    const issues = await validateWorkflowResources(workflow, tmpDir, {
+      workflowSource: 'project',
+    });
+
+    expect(
+      issues.some(
+        i => i.nodeId === 'step1' && i.field === 'model' && i.message.includes('@missing')
+      )
+    ).toBe(true);
+  });
+
+  test('rejects invalid tier config during workflow validation', async () => {
+    await createCommandFile('my-command');
+    const workflow = {
+      ...makeWorkflow('test', [{ id: 'step1', command: 'my-command' } as DagNode]),
+      model: 'tiny',
+    } as WorkflowDefinition;
+
+    const issues = await validateWorkflowResources(workflow, tmpDir, {
+      workflowSource: 'project',
+      tiers: {
+        tiny: { provider: 'claude', model: 'sonnet' },
+      } as never,
+    });
+
+    expect(issues.some(i => i.field === 'model' && i.message.includes("Tier name 'tiny'"))).toBe(
+      true
+    );
+  });
+
+  test('bundled workflow accepts tiers and literal models', async () => {
+    await createCommandFile('my-command');
+    const workflow = {
+      ...makeWorkflow('test', [
+        { id: 'step1', command: 'my-command', model: 'small' } as DagNode,
+        { id: 'step2', command: 'my-command', model: 'gpt-5.5' } as DagNode,
+      ]),
+      model: 'large',
+    } as WorkflowDefinition;
+
+    const issues = await validateWorkflowResources(workflow, tmpDir, {
+      workflowSource: 'bundled',
+    });
+
+    expect(issues.some(i => i.field === 'model')).toBe(false);
+  });
+});
+
+// =============================================================================
 // validateWorkflowResources — MCP validation
 // =============================================================================
 

@@ -737,10 +737,20 @@ For the Claude SDK advanced options (`effort`, `thinking`, `fallbackModel`, `bet
 ```yaml
 name: my-workflow
 provider: claude     # Any registered provider (default: from config)
-model: sonnet        # Model override (default: from config assistants.claude.model)
+model: medium        # Tier, alias, or literal model override
 ```
 
-**Model strings:** Whatever you write in `model:` is forwarded verbatim to the resolved provider's SDK. Archon doesn't keep an internal allow-list, because vendor SDKs ship new models faster than this doc can. The provider's API decides whether the string is valid at request time.
+### Portable Model References
+
+`model:` accepts three shapes:
+
+- `small`, `medium`, or `large` - portable tier refs resolved from built-in defaults plus `tiers:` in `~/.archon/config.yaml` and `.archon/config.yaml`
+- `@name` - custom aliases from `aliases:`; use these for project workflows, not bundled or global workflows, because aliases are project-specific
+- Any other string - a literal model id passed through to the resolved provider's SDK
+
+Tier and alias refs resolve to a provider, model, and optional provider-specific options such as `effort` or `thinking`. If a workflow or node sets both `provider:` and a model ref that resolves to a different provider, Archon warns and uses the provider from the resolved preset. Literal model strings keep the normal provider chain (`node.provider ?? workflow.provider ?? config.assistant`).
+
+Archon does not keep an internal allow-list for literal model ids because vendor SDKs ship new models faster than this doc can. The provider's API decides whether a literal string is valid at request time.
 
 Common shapes you'll see in practice:
 
@@ -749,9 +759,7 @@ Common shapes you'll see in practice:
 - **Pi (community):** `<backend>/<model-id>` refs — e.g. `google/gemini-2.5-pro`, `openrouter/qwen/qwen3-coder`.
 - **Copilot (community):** GitHub Copilot model names — e.g. `gpt-5`, `gpt-5-mini`, `claude-sonnet-4.5`, or `auto`.
 
-If the SDK rejects the string at request time, the node fails loudly with the SDK's error message — Archon never silently re-routes a model from one provider to another based on the string.
-
-**Provider selection is independent of the model string** — a `model: opus[1m]` node with no `provider:` field will route to your `defaultAssistant` regardless of the model name. Always pair a provider-specific model string with an explicit `provider:` on the node.
+If the SDK rejects a literal string at request time, the node fails loudly with the SDK's error message. Use portable tiers for cross-provider workflow defaults, and pair provider-specific literal strings with an explicit `provider:` on the workflow or node.
 
 ### Codex-Specific Options
 
@@ -827,7 +835,7 @@ Example validation error:
 Unknown provider 'claud'. Registered: claude, codex, pi, copilot
 ```
 
-Model strings are not validated at load time — they're forwarded to the SDK as-is and validated by the upstream API at request time.
+Tier and alias model refs are resolved during workflow validation so malformed `tiers:` / `aliases:` config, unknown aliases, and missing tier presets fail before execution. Literal model strings are not API-validated by Archon; they are forwarded to the SDK and validated by the upstream API at request time.
 
 ### Resource Validation (CLI)
 
@@ -837,7 +845,7 @@ To validate that all referenced command files, MCP config files, and skill direc
 archon validate workflows <name>
 ```
 
-This checks resource resolution beyond what load-time validation covers. Use `--json` for machine-readable output. See the [CLI Reference](/reference/cli/) for details.
+This checks resource resolution beyond what load-time validation covers. Bundled and global workflows also reject `@custom` model aliases because those refs are not portable across projects. Use `--json` for machine-readable output. See the [CLI Reference](/reference/cli/) for details.
 
 ### Example: Config Defaults + Workflow Override
 

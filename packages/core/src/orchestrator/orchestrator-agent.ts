@@ -62,6 +62,13 @@ import * as workflowDb from '../db/workflows';
 import * as workflowEventDb from '../db/workflow-events';
 import { getCodebaseEnvVars } from '../db/env-vars';
 import type { ApprovalContext } from '@archon/workflows/schemas/workflow-run';
+import {
+  buildAiProfile,
+  isLiteralSpec,
+  resolveModelSpec,
+  routePresetEffort,
+  type ModelAliasPreset,
+} from '@archon/workflows/model-validation';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -76,6 +83,50 @@ function getLog(): ReturnType<typeof createLogger> {
 const MAX_BATCH_ASSISTANT_CHUNKS = 20;
 /** Max total chunks (assistant + tool) to keep in batch mode */
 const MAX_BATCH_TOTAL_CHUNKS = 200;
+function applyPresetToRequestOptions(
+  provider: string,
+  preset: ModelAliasPreset,
+  options: SendQueryOptions
+): void {
+  if (preset.thinking !== undefined) {
+    options.nodeConfig = { ...(options.nodeConfig ?? {}), thinking: preset.thinking };
+  }
+
+  if (preset.effort === undefined) return;
+
+  const routed = routePresetEffort(provider, preset.effort);
+  if (!routed) {
+    // Cross-provider effort mismatch — warn instead of silently dropping.
+    getLog().warn({ provider, effort: preset.effort }, 'orchestrator.preset_effort_unsupported');
+    return;
+  }
+  if (routed.field === 'effort') {
+    options.nodeConfig = { ...(options.nodeConfig ?? {}), effort: routed.value };
+  } else {
+    options.assistantConfig = {
+      ...(options.assistantConfig ?? {}),
+      modelReasoningEffort: routed.value,
+    };
+  }
+}
+
+interface ResolvedModelRequest {
+  provider: string;
+  model: string | undefined;
+  preset?: ModelAliasPreset;
+}
+
+function resolveModelRequest(
+  aiProfile: ReturnType<typeof buildAiProfile>,
+  modelRef: string,
+  fallbackProvider: string
+): ResolvedModelRequest {
+  const spec = resolveModelSpec(aiProfile, modelRef);
+  if (isLiteralSpec(spec)) {
+    return { provider: fallbackProvider, model: spec.literal };
+  }
+  return { provider: spec.provider, model: spec.model, preset: spec };
+}
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -733,16 +784,6 @@ export async function handleMessage(
       conversationId
     );
 
-    // 1c. Auto-generate title for untitled conversations (fire-and-forget)
-    if (!conversation.title && !message.startsWith('/')) {
-      void generateAndSetTitle(
-        conversation.id,
-        message,
-        conversation.ai_assistant_type,
-        getArchonWorkspacesPath()
-      );
-    }
-
     // Natural-language approval routing — if a workflow is paused in this
     // conversation, treat any non-slash message as the approval response.
     if (!message.startsWith('/')) {
@@ -1007,14 +1048,16 @@ export async function handleMessage(
       });
     }
 
-    // 5. Send to AI provider
-    const aiClient = getAgentProvider(conversation.ai_assistant_type);
-    getLog().debug({ assistantType: conversation.ai_assistant_type }, 'sending_to_ai');
-
     // Reuse the config already loaded during workflow discovery (avoids a second disk read).
     // Fall back to loadConfig only when no codebase is scoped (discoveredConfig is undefined).
     const config = discoveredConfig ?? (await loadConfig());
-    const providerKey = conversation.ai_assistant_type;
+    const configuredProviderKey = conversation.ai_assistant_type;
+    const aiProfile = buildAiProfile(configuredProviderKey, {
+      repoTiers: config.tiers,
+      repoAliases: config.aliases,
+    });
+    const chatRequest = resolveModelRequest(aiProfile, 'large', configuredProviderKey);
+    const providerKey = chatRequest.provider;
     let dbEnvVars: Record<string, string> = {};
     if (conversation.codebase_id) {
       try {
@@ -1063,10 +1106,41 @@ export async function handleMessage(
         : systemAppend;
 
     const requestOptions: SendQueryOptions = {
-      assistantConfig: config.assistants[providerKey] ?? {},
+      assistantConfig: { ...(config.assistants[providerKey] ?? {}) },
       env: Object.keys(effectiveEnv).length > 0 ? effectiveEnv : undefined,
+      model: chatRequest.model,
       systemPrompt,
     };
+    if (chatRequest.preset) {
+      applyPresetToRequestOptions(providerKey, chatRequest.preset, requestOptions);
+    }
+
+    if (!conversation.title && !message.startsWith('/')) {
+      const titleRequest = resolveModelRequest(aiProfile, 'small', configuredProviderKey);
+      const titleOptions: SendQueryOptions = {
+        model: titleRequest.model,
+        assistantConfig: { ...(config.assistants[titleRequest.provider] ?? {}) },
+      };
+      if (titleRequest.preset) {
+        applyPresetToRequestOptions(titleRequest.provider, titleRequest.preset, titleOptions);
+      }
+      void generateAndSetTitle(
+        conversation.id,
+        message,
+        titleRequest.provider,
+        cwd,
+        undefined,
+        titleOptions.assistantConfig,
+        titleOptions
+      );
+    }
+
+    // 5. Send to AI provider
+    const aiClient = getAgentProvider(providerKey);
+    getLog().debug(
+      { assistantType: conversation.ai_assistant_type, resolvedAssistantType: providerKey },
+      'sending_to_ai'
+    );
 
     // Project-scoped chats get the `manage_run` tool so the agent can see and
     // launch this project's workflow runs. Only when a codebase is scoped and

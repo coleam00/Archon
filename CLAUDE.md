@@ -542,6 +542,18 @@ assistants:
 
 # docs:
 #   path: docs  # Optional: default is docs/
+
+tiers:
+  small:
+    provider: claude
+    model: haiku
+  medium:
+    provider: claude
+    model: sonnet
+  large:
+    provider: codex
+    model: gpt-5.5
+    effort: high
 ```
 
 **Configuration Priority:**
@@ -551,9 +563,9 @@ assistants:
 
 **Model Validation:**
 - Workflows are validated at load time for provider _identity_ only — `provider:` (workflow-level and per-node) must be a registered provider id, otherwise the YAML is rejected with `Unknown provider '<id>'. Registered: claude, codex, pi`.
-- Model strings are classified by `resolveModelSpec()` in `packages/workflows/src/model-validation.ts`: tier keywords (`small`/`medium`/`large`) resolve via tier-defaults and fallback chains; `@<name>` refs resolve via the merged alias map from config; anything else is forwarded verbatim to the resolved SDK. **Call-sites are not yet wired** — currently all strings pass through as literals.
-- `aliases:` is now a valid key on `GlobalConfig` and `RepoConfig` (repo overrides global). Reserved names `small`, `medium`, `large` cannot be used as custom alias names. Custom alias keys must start with `@` (e.g. `@fast`).
-- Provider is resolved via an explicit chain: `node.provider ?? workflow.provider ?? config.assistant`. Model never influences provider selection.
+- Model strings are classified by `resolveModelSpec()` in `packages/workflows/src/model-validation.ts`: tier keywords (`small`/`medium`/`large`) resolve via built-in defaults plus `tiers:` overrides; `@<name>` refs resolve via the merged alias map from config; anything else remains a literal SDK model string.
+- Tier and alias refs can resolve provider, model, and provider-specific options. Literal model strings keep the normal provider chain (`node.provider ?? workflow.provider ?? config.assistant`).
+- `tiers:` and `aliases:` are valid on global and repo config (repo overrides global). Reserved names `small`, `medium`, `large` cannot be used as custom alias names. Custom alias keys must start with `@` (e.g. `@fast`).
 
 ### Running the App in Worktrees
 

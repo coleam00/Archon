@@ -45,6 +45,76 @@ describe('buildAiProfile — tier defaults', () => {
 });
 
 describe('buildAiProfile — alias layering', () => {
+  test('global tier override can point large to another provider', () => {
+    const profile = buildAiProfile('codex', {
+      globalTiers: {
+        large: { provider: 'claude', model: 'opus' },
+      },
+    });
+    expect(profile.aliases.large).toEqual({ provider: 'claude', model: 'opus' });
+    expect(profile.aliases.medium?.provider).toBe('codex');
+  });
+
+  test('repo tier overrides global tier with same key', () => {
+    const profile = buildAiProfile('claude', {
+      globalTiers: {
+        medium: { provider: 'claude', model: 'sonnet' },
+        small: { provider: 'claude', model: 'haiku' },
+      },
+      repoTiers: {
+        medium: { provider: 'codex', model: 'gpt-5.5', effort: 'medium' },
+      },
+    });
+    expect(profile.aliases.medium).toEqual({
+      provider: 'codex',
+      model: 'gpt-5.5',
+      effort: 'medium',
+    });
+    expect(profile.aliases.small).toEqual({ provider: 'claude', model: 'haiku' });
+  });
+
+  test('partial tier configs still use fallback order', () => {
+    const profile = buildAiProfile('newprovider', {
+      repoTiers: {
+        small: { provider: 'pi', model: 'minimax-m3' },
+      },
+    });
+    expect(resolveModelSpec(profile, 'large')).toEqual({
+      provider: 'pi',
+      model: 'minimax-m3',
+    });
+  });
+
+  test('tier entry effort and thinking are preserved', () => {
+    const profile = buildAiProfile('claude', {
+      repoTiers: {
+        large: {
+          provider: 'claude',
+          model: 'opus',
+          effort: 'max',
+          thinking: { type: 'enabled', budgetTokens: 10000 },
+        },
+      },
+    });
+    expect(profile.aliases.large).toEqual({
+      provider: 'claude',
+      model: 'opus',
+      effort: 'max',
+      thinking: { type: 'enabled', budgetTokens: 10000 },
+    });
+  });
+
+  test('rejects unknown tier override key', () => {
+    expect(() =>
+      buildAiProfile('claude', {
+        repoTiers: {
+          // Intentional invalid config shape to exercise runtime validation.
+          tiny: { provider: 'claude', model: 'haiku' },
+        } as never,
+      })
+    ).toThrow(/Tier name 'tiny' is invalid/);
+  });
+
   test('repo alias overrides global alias with same name', () => {
     const profile = buildAiProfile('claude', {
       globalAliases: {
@@ -264,7 +334,7 @@ describe('resolveModelSpec — tier fallback chains', () => {
       aliases: {},
     };
     expect(() => resolveModelSpec(profile, 'large')).toThrow(
-      /Tier 'large'.*newprovider.*aliases\.small\/medium\/large/
+      /Tier 'large'.*newprovider.*tiers\.small\/medium\/large/
     );
   });
 });
