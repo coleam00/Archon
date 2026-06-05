@@ -30,7 +30,7 @@ function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('workflow.validator');
   return cachedLog;
 }
-import { isScriptNode } from './schemas';
+import { isBashNode, isScriptNode } from './schemas';
 import type { WorkflowDefinition, DagNode, WorkflowSource } from './schemas';
 import type { ScriptRuntime } from './script-discovery';
 import { discoverScriptsForCwd } from './script-discovery';
@@ -585,6 +585,25 @@ export async function validateWorkflowResources(
           field: 'deps',
           message: "'deps' is ignored for bun runtime (bun auto-installs packages at runtime)",
           hint: 'Remove deps or switch to runtime: uv if you need explicit dependency management',
+        });
+      }
+    }
+
+    // --- Bash nodes: warn when a double-quoted $nodeId.output ref is detected ---
+    // In bash nodes, substituted values are already single-quoted by shellQuote().
+    // Wrapping in double quotes embeds the single quotes into the value:
+    //   wrong="$n.output.field" → wrong="'ok'" (broken comparison)
+    //   right=$n.output.field   → right='ok' → bash assigns: ok
+    if (isBashNode(node)) {
+      const doubleQuotedOutputRef = /"[^"\n]*\$[a-zA-Z_][a-zA-Z0-9_-]*\.output/;
+      if (doubleQuotedOutputRef.test(node.bash)) {
+        issues.push({
+          level: 'warning',
+          nodeId: node.id,
+          field: 'bash',
+          message:
+            '`"$nodeId.output"` — double-quoting a substitution that is already single-quoted by Archon produces the wrong value',
+          hint: 'Remove the surrounding double quotes: use `var=$node.output.field` not `var="$node.output.field"`. The injected single-quotes are the quoting.',
         });
       }
     }

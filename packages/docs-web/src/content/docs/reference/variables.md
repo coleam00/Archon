@@ -69,6 +69,21 @@ In DAG workflows, nodes can reference the output of any completed upstream node.
 
 `$nodeId.output` values are **auto shell-quoted** (single-quoted, with embedded `'` escaped) when substituted into `bash:` scripts, so the value is always safe to embed in a shell command. They are **not** shell-quoted when substituted into `script:` bodies — the raw value is embedded as-is. For script nodes, treat substituted values as untrusted input and parse them with language features (e.g. `JSON.parse`), not by interpolating into shell syntax.
 
+Because `bash:` substitutions arrive pre-quoted, wrapping them in double quotes is a silent footgun — the surrounding `'…'` literals get embedded into the value:
+
+```bash
+# WRONG — $node.output.field is already single-quoted by Archon.
+# Double-quoting wraps the single quotes into the value: status="'ok'" not ok.
+status="$emit.output.status"        # → status="'ok'"  ← broken
+[ "$status" = "ok" ] && echo pass   # → silently fails
+
+# CORRECT — leave the substitution unquoted; the injected single-quotes are the quoting.
+status=$emit.output.status          # → status='ok' → bash assigns: ok
+[ "$status" = "ok" ] && echo pass   # → passes
+```
+
+Numeric and boolean fields are injected raw (no surrounding quotes), so double-quoting accidentally "works" for them — which makes the bug intermittent. The rule is unconditional: in `bash:` nodes, use `var=$node.output.field`, never `var="$node.output.field"`.
+
 ### Example
 
 ```yaml

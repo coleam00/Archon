@@ -378,6 +378,22 @@ Variable substitution order:
 1. Standard variables (`$WORKFLOW_ID`, `$USER_MESSAGE`, `$ARTIFACTS_DIR`, etc.)
 2. Node output references (`$nodeId.output`, `$nodeId.output.field`)
 
+:::caution[Double-quoting `$node.output` in `bash:` nodes is a silent footgun]
+In `bash:` nodes, `$nodeId.output` and `$nodeId.output.field` are injected as **shell-safe single-quoted literals** — the quoting is already provided by the substitution. Wrapping in double quotes embeds the single quotes into the variable value, breaking comparisons silently:
+
+```bash
+# WRONG — produces status="'ok'" (single quotes become part of the value)
+status="$emit.output.status"
+[ "$status" = "ok" ]   # → always false
+
+# CORRECT — leave unquoted; bash assigns: status=ok
+status=$emit.output.status
+[ "$status" = "ok" ]   # → true
+```
+
+**Rule:** use `var=$node.output.field`, never `var="$node.output.field"`. Numeric and boolean fields are injected raw (without quotes), so double-quoting accidentally "works" for them — making the bug intermittent and hard to spot.
+:::
+
 ### `output_format` for Structured JSON
 
 Use `output_format` to enforce JSON output from an AI node. For Claude, the schema is passed via the SDK's `outputFormat` option and `structured_output` is used directly. For Codex (v0.116.0+), the schema is passed via `TurnOptions.outputSchema` and the agent's inline JSON response is used. Both ensure clean JSON for `when:` conditions and `$nodeId.output` substitution:
