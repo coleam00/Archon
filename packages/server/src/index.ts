@@ -87,6 +87,7 @@ import {
   registerGitHubAppAuthProvider,
   isPerUserGitHubEnabled,
   assertEncryptionKeyAtBoot,
+  assertProviderKeysKeyAtBoot,
   getDecryptedAccessToken,
   type GitHubAuth,
   type IGitHubAppAuthProvider,
@@ -206,6 +207,13 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   // Anonymous once-per-boot startup event (self-gates on opt-out). Flushed by
   // the shutdownTelemetry() call in the SIGINT/SIGTERM shutdown handler.
   captureArchonStarted({ surface: 'server' });
+
+  // Phase 2: validate the encryption key the moment per-user provider keys are
+  // enabled, regardless of GitHub App configuration. TOKEN_ENCRYPTION_KEY alone
+  // is the gate — a malformed key must fail boot here rather than at the first
+  // PUT /api/auth/providers/* (when an operator is already wired in).
+  // No-op when the feature is disabled.
+  assertProviderKeysKeyAtBoot();
 
   // Database auto-detected: SQLite (default) or PostgreSQL (if DATABASE_URL set)
   // No required environment variables - SQLite works out of the box
