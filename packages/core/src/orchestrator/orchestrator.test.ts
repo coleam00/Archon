@@ -82,9 +82,25 @@ mock.module('../handlers/command-handler', () => ({
 
 // AI provider mock
 const mockGetAgentProvider = mock(() => null);
+const mockGetProviderCapabilities = mock(() => ({
+  sessionResume: true,
+  mcp: true,
+  hooks: true,
+  skills: true,
+  agents: true,
+  toolRestrictions: true,
+  structuredOutput: true,
+  envInjection: true,
+  costControl: true,
+  effortControl: true,
+  thinkingControl: true,
+  fallbackModel: true,
+  nativeTools: true,
+}));
 
 mock.module('@archon/providers', () => ({
   getAgentProvider: mockGetAgentProvider,
+  getProviderCapabilities: mockGetProviderCapabilities,
 }));
 
 // Workflow mocks
@@ -287,6 +303,7 @@ function clearAllMocks(): void {
   mockHandleCommand.mockClear();
   mockParseCommand.mockClear();
   mockGetAgentProvider.mockClear();
+  mockGetProviderCapabilities.mockClear();
   mockDiscoverWorkflows.mockClear();
   mockExecuteWorkflow.mockClear();
   mockFindWorkflow.mockClear();
@@ -471,6 +488,21 @@ describe('orchestrator-agent handleMessage', () => {
     mockCreateSession.mockResolvedValue(mockSession);
     mockTransitionSession.mockResolvedValue(mockSession);
     mockGetAgentProvider.mockReturnValue(mockClient);
+    mockGetProviderCapabilities.mockReturnValue({
+      sessionResume: true,
+      mcp: true,
+      hooks: true,
+      skills: true,
+      agents: true,
+      toolRestrictions: true,
+      structuredOutput: true,
+      envInjection: true,
+      costControl: true,
+      effortControl: true,
+      thinkingControl: true,
+      fallbackModel: true,
+      nativeTools: true,
+    });
     mockDiscoverWorkflows.mockResolvedValue({ workflows: [], errors: [] });
     mockParseCommand.mockImplementation((message: string) => {
       const parts = message.split(/\s+/);
@@ -783,6 +815,52 @@ describe('orchestrator-agent handleMessage', () => {
       expect(requestOptions).toBeDefined();
       expect(requestOptions).not.toHaveProperty('settingSources');
       expect(requestOptions?.assistantConfig).toBeDefined();
+    });
+
+    test('uses repo tiers for direct chat and title generation', async () => {
+      mockLoadConfig.mockResolvedValueOnce({
+        botName: 'Archon',
+        assistant: 'claude',
+        assistants: {
+          claude: {},
+          codex: {},
+        },
+        tiers: {
+          large: { provider: 'codex', model: 'gpt-5.5', effort: 'high' },
+          small: { provider: 'claude', model: 'haiku' },
+        },
+        streaming: { telegram: 'stream', discord: 'batch', slack: 'batch' },
+        paths: { workspaces: '/tmp', worktrees: '/tmp' },
+        concurrency: { maxConversations: 10 },
+        commands: { autoLoad: true },
+        defaults: { copyDefaults: true, loadDefaultCommands: true, loadDefaultWorkflows: true },
+      });
+
+      mockClient.sendQuery.mockImplementation(async function* () {
+        yield { type: 'result', sessionId: 'session-id' };
+      });
+
+      await handleMessage(platform, 'chat-456', 'hello');
+
+      expect(mockGetAgentProvider).toHaveBeenCalledWith('codex');
+      expect(mockClient.sendQuery).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.any(String),
+        expect.anything(),
+        expect.objectContaining({
+          model: 'gpt-5.5',
+          assistantConfig: expect.objectContaining({ modelReasoningEffort: 'high' }),
+        })
+      );
+      expect(mockGenerateAndSetTitle).toHaveBeenCalledWith(
+        'conv-123',
+        'hello',
+        'claude',
+        expect.any(String),
+        undefined,
+        expect.any(Object),
+        expect.objectContaining({ model: 'haiku' })
+      );
     });
   });
 
@@ -1491,7 +1569,13 @@ describe('orchestrator-agent handleMessage', () => {
         'conv-123',
         'Hello world',
         'claude',
-        '/home/test/.archon/workspaces'
+        '/home/test/.archon/workspaces',
+        undefined,
+        {},
+        expect.objectContaining({
+          model: 'haiku',
+          assistantConfig: {},
+        })
       );
     });
 

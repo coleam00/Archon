@@ -26,6 +26,7 @@ import {
   getProviderCapabilities,
   getRegisteredProviders,
   isRegisteredProvider,
+  validateStructuredOutput,
 } from '@archon/providers';
 import type {
   DagNode,
@@ -55,6 +56,8 @@ import { formatToolCall } from './utils/tool-formatter';
 import { createLogger, captureWorkflowCompleted } from '@archon/paths';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { evaluateCondition } from './condition-evaluator';
+import { declaredFieldsFromSchema, resolveNodeOutputField } from './output-ref';
+import { writeNodeArtifact } from './artifacts-index';
 import {
   logNodeStart,
   logNodeComplete,
@@ -79,6 +82,13 @@ import {
   safeSendMessage,
   type SendMessageContext,
 } from './executor-shared';
+import {
+  isLiteralSpec,
+  resolveModelSpec,
+  routePresetEffort,
+  type ModelAliasPreset,
+  type ResolvedAiProfile,
+} from './model-validation';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -95,6 +105,50 @@ const MCP_FAILURE_PREFIX = 'MCP server connection failed: ';
 export interface McpFailureEntry {
   name: string;
   segment: string;
+}
+
+function applyPresetOptions(
+  provider: string,
+  preset: ModelAliasPreset | undefined,
+  node: DagNode,
+  workflowLevelOptions: WorkflowLevelOptions,
+  nodeConfig: NodeConfig,
+  assistantConfig: Record<string, unknown>
+): void {
+  if (!preset) return;
+
+  if (
+    preset.thinking !== undefined &&
+    node.thinking === undefined &&
+    workflowLevelOptions.thinking === undefined
+  ) {
+    nodeConfig.thinking = preset.thinking;
+  }
+
+  if (
+    preset.effort === undefined ||
+    node.effort !== undefined ||
+    workflowLevelOptions.effort !== undefined
+  ) {
+    return;
+  }
+
+  const routed = routePresetEffort(provider, preset.effort);
+  if (!routed) {
+    // Cross-provider effort mismatch (e.g. a `tiers:` entry sets `effort: max`
+    // on a Codex tier). Warn rather than silently drop it — fail-loud per the
+    // project's fail-fast guideline.
+    getLog().warn(
+      { provider, effort: preset.effort, nodeId: node.id },
+      'dag.preset_effort_unsupported'
+    );
+    return;
+  }
+  if (routed.field === 'effort') {
+    nodeConfig.effort = routed.value;
+  } else {
+    assistantConfig.modelReasoningEffort = routed.value;
+  }
 }
 
 /**
@@ -195,6 +249,14 @@ const DEFAULT_NODE_MAX_RETRIES = 2;
 const DEFAULT_NODE_RETRY_DELAY_MS = 3000;
 
 /**
+ * Max validate-and-reask attempts for a `best-effort` provider whose structured
+ * output fails schema validation (separate from transient-error retries above).
+ * Enforced providers don't reask — a validation failure there is a genuine edge
+ * (refusal / max_tokens truncation) and fails fast.
+ */
+const STRUCTURED_OUTPUT_MAX_REASKS = 3;
+
+/**
  * Get effective retry config for a DAG node.
  */
 function getEffectiveNodeRetryConfig(node: DagNode): {
@@ -290,51 +352,26 @@ export function substituteNodeOutputRefs(
           ? shellQuoteOrFile(nodeOutput.output, nodeId, undefined, outputFileDir)
           : nodeOutput.output;
       }
-      // Prefer the provider-supplied structured payload when present. Providers that emit
-      // fence-wrapped or preamble-prefixed JSON (Pi/Minimax) parse it onto the result chunk
-      // via tryParseStructuredOutput; consuming that object directly avoids re-parsing prose
-      // here. Falls back to JSON.parse on output for providers that don't normalize
-      // (or for older NodeOutput rows from before this field existed).
-      const structured = 'structuredOutput' in nodeOutput ? nodeOutput.structuredOutput : undefined;
-      if (
-        structured !== undefined &&
-        structured !== null &&
-        typeof structured === 'object' &&
-        !Array.isArray(structured)
-      ) {
-        const value = (structured as Record<string, unknown>)[field];
-        if (typeof value === 'string')
-          return escapedForBash ? shellQuoteOrFile(value, nodeId, field, outputFileDir) : value;
-        if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-        if (Array.isArray(value) || typeof value === 'object') {
-          const json = JSON.stringify(value);
-          return escapedForBash ? shellQuoteOrFile(json, nodeId, field, outputFileDir) : json;
-        }
-        return escapedForBash ? "''" : '';
-      }
-      try {
-        const parsed = JSON.parse(nodeOutput.output) as Record<string, unknown>;
-        const value = parsed[field];
-        if (typeof value === 'string')
-          return escapedForBash ? shellQuoteOrFile(value, nodeId, field, outputFileDir) : value;
-        // numbers and booleans from JSON.parse are shell-safe without quoting:
-        // JSON disallows NaN/Infinity, so String(number) contains only digits, sign, and '.'.
-        // String(boolean) is 'true' or 'false' — no shell metacharacters.
-        if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-        // arrays and objects: JSON-stringify. Bash passes substitution as a single
-        // argument, so downstream tools (jq, etc.) receive a JSON literal they can parse.
-        if (Array.isArray(value) || typeof value === 'object') {
-          const json = JSON.stringify(value);
-          return escapedForBash ? shellQuoteOrFile(json, nodeId, field, outputFileDir) : json;
-        }
-        return escapedForBash ? "''" : ''; // undefined, symbol, bigint → empty (null is caught above by typeof check)
-      } catch (jsonErr) {
-        getLog().warn(
-          { nodeId, field, outputPreview: nodeOutput.output.slice(0, 100), err: jsonErr as Error },
-          'dag_node_output_ref_json_parse_failed'
-        );
-        return escapedForBash ? "''" : '';
-      }
+      // No-silent-drop field access (resolveNodeOutputField): prefers the parsed
+      // structuredOutput payload, falls back to parsing `output`, and THROWS an
+      // OutputRefError for an unresolvable reference (field not in the producer's
+      // declared schema, or a schemaless node whose output isn't JSON / lacks the
+      // key). The throw propagates to the dag-executor's per-node catch → the
+      // consuming node fails visibly instead of receiving a poisoned ''. The only
+      // value that resolves to empty is an author-declared-optional field.
+      const resolution = resolveNodeOutputField(nodeOutput, nodeId, field);
+      if (resolution.kind === 'empty') return escapedForBash ? "''" : '';
+      const value = resolution.value;
+      if (typeof value === 'string')
+        return escapedForBash ? shellQuoteOrFile(value, nodeId, field, outputFileDir) : value;
+      // numbers and booleans are shell-safe without quoting: JSON disallows
+      // NaN/Infinity so String(number) is digits/sign/'.', and String(boolean) is
+      // 'true'/'false' — no shell metacharacters.
+      if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+      // arrays and objects: JSON-stringify so downstream tools (jq, etc.) get a
+      // single JSON literal argument.
+      const json = JSON.stringify(value);
+      return escapedForBash ? shellQuoteOrFile(json, nodeId, field, outputFileDir) : json;
     }
   );
 }
@@ -359,15 +396,57 @@ async function resolveNodeProviderAndModel(
   conversationId: string,
   workflowRunId: string,
   _cwd: string,
-  workflowLevelOptions: WorkflowLevelOptions
+  workflowLevelOptions: WorkflowLevelOptions,
+  aiProfile?: ResolvedAiProfile,
+  workflowPreset?: ModelAliasPreset
 ): Promise<{
   provider: string;
   model: string | undefined;
   options: SendQueryOptions | undefined;
 }> {
-  // Provider is explicit: node.provider ?? workflow.provider. Model never
-  // influences provider selection. Model strings pass through to the SDK.
-  const provider: string = node.provider ?? workflowProvider;
+  const configuredProvider: string = node.provider ?? workflowProvider;
+  let provider: string = configuredProvider;
+  let preset: ModelAliasPreset | undefined;
+  let model: string | undefined;
+
+  if (node.model) {
+    if (aiProfile) {
+      const modelSpec = resolveModelSpec(aiProfile, node.model);
+      if (isLiteralSpec(modelSpec)) {
+        model = modelSpec.literal;
+      } else {
+        preset = modelSpec;
+        provider = modelSpec.provider;
+        model = modelSpec.model;
+        if (node.provider && node.provider !== provider) {
+          getLog().warn(
+            {
+              nodeId: node.id,
+              configuredProvider: node.provider,
+              resolvedProvider: provider,
+              modelRef: node.model,
+            },
+            'dag.model_provider_conflict'
+          );
+          const delivered = await safeSendMessage(
+            platform,
+            conversationId,
+            `Warning: Node '${node.id}' sets provider '${node.provider}' but model '${node.model}' resolves to provider '${provider}' — using '${provider}'.`,
+            { workflowId: workflowRunId, nodeName: node.id }
+          );
+          if (!delivered) {
+            getLog().error(
+              { nodeId: node.id, workflowRunId },
+              'dag.model_provider_conflict_warning_delivery_failed'
+            );
+          }
+        }
+      }
+    } else {
+      model = node.model;
+    }
+  }
+
   if (!isRegisteredProvider(provider)) {
     throw new Error(
       `Node '${node.id}': unknown provider '${provider}'. ` +
@@ -378,11 +457,12 @@ async function resolveNodeProviderAndModel(
   }
 
   const providerAssistantConfig = config.assistants[provider];
-  const model: string | undefined =
-    node.model ??
-    (provider === workflowProvider
+  model ??=
+    provider === workflowProvider
       ? workflowModel
-      : (providerAssistantConfig?.model as string | undefined));
+      : (providerAssistantConfig?.model as string | undefined);
+  const effectivePreset =
+    preset ?? (!node.model && provider === workflowProvider ? workflowPreset : undefined);
 
   // Get provider capabilities for capability warnings (static lookup, no instantiation)
   const caps = getProviderCapabilities(provider);
@@ -481,7 +561,15 @@ async function resolveNodeProviderAndModel(
   };
 
   // Pass assistantConfig from config — provider parses internally
-  const assistantConfig = config.assistants[provider] ?? {};
+  const assistantConfig: Record<string, unknown> = { ...(config.assistants[provider] ?? {}) };
+  applyPresetOptions(
+    provider,
+    effectivePreset,
+    node,
+    workflowLevelOptions,
+    nodeConfig,
+    assistantConfig
+  );
 
   const options: SendQueryOptions = {
     ...baseOptions,
@@ -719,9 +807,32 @@ async function executeNodeInternal(
   const effectiveIdleTimeout = node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS;
   let lastToolStartedAt: { toolName: string; startedAt: number } | null = null;
 
-  try {
+  // Best-effort providers (Pi/Copilot) get a bounded validate-and-reask loop: on a
+  // structured-output validation miss, re-run the stream with the schema errors
+  // appended. Enforced providers and non-output_format nodes get 0 reasks.
+  const maxReasks =
+    getProviderCapabilities(provider).structuredOutput === 'best-effort' &&
+    nodeOptions?.outputFormat
+      ? STRUCTURED_OUTPUT_MAX_REASKS
+      : 0;
+  let accumulatedCostUsd: number | undefined;
+
+  // One sendQuery stream pass. Resets the per-attempt accumulators it mutates
+  // (output text, structured output, the batched-message buffer, per-pass cost,
+  // idle-timeout flag) so a prior reask attempt's state never leaks into this one,
+  // then streams. Throws on SDK error / budget cap (propagates to the outer catch
+  // — those failures are never reasked).
+  const runStreamPass = async (
+    attemptPrompt: string,
+    attemptResumeId: string | undefined
+  ): Promise<void> => {
+    nodeOutputText = '';
+    structuredOutput = undefined;
+    batchMessages.length = 0; // else a failed attempt's prose flushes during reask
+    nodeCostUsd = undefined;
+    nodeIdleTimedOut = false;
     for await (const msg of withIdleTimeout(
-      aiClient.sendQuery(finalPrompt, cwd, resumeSessionId, nodeOptionsWithAbort),
+      aiClient.sendQuery(attemptPrompt, cwd, attemptResumeId, nodeOptionsWithAbort),
       effectiveIdleTimeout,
       () => {
         nodeIdleTimedOut = true;
@@ -1005,39 +1116,142 @@ async function executeNodeInternal(
       }
       // rate_limit chunks: already log.warn'd in claude.ts; not surfaced to SSE per design
     }
+  };
 
-    // When output_format is set and the provider returned structured_output,
-    // use it instead of the concatenated assistant text (which includes prose).
-    // Each provider normalizes its own structured output onto the result chunk —
-    // no provider-specific branching here.
-    if (nodeOptions?.outputFormat) {
+  // Build a reask prompt: the original prompt + a correction block listing the
+  // schema errors. The provider still augments with the JSON schema itself
+  // (best-effort providers add their own JSON-only instruction), so this only
+  // appends the per-attempt feedback.
+  const buildReaskPrompt = (errors: string[]): string =>
+    `${finalPrompt}\n\n--- CORRECTION ---\n` +
+    `Your previous response did not satisfy the required JSON schema: ${errors.join('; ')}. ` +
+    'Respond again with ONLY a JSON object matching the schema — no prose, no code fences.';
+
+  // Observability: log every reask; notify the user once (first reask) so a
+  // best-effort provider being auto-corrected isn't invisible.
+  const emitReask = async (attempt: number): Promise<void> => {
+    getLog().warn(
+      { nodeId: node.id, workflowRunId: workflowRun.id, attempt, maxReasks },
+      'dag.structured_output_reask'
+    );
+    if (attempt === 1) {
+      await safeSendMessage(
+        platform,
+        conversationId,
+        `⚠️ Node \`${node.id}\`: structured output didn't match the schema — asking the model to correct it (up to ${maxReasks} attempt(s)).`,
+        nodeContext
+      );
+    }
+  };
+
+  try {
+    // Validate-and-reask loop. Enforced / non-output_format nodes run exactly once
+    // (maxReasks = 0). A best-effort node whose structured output is missing or
+    // schema-invalid is re-run with the errors appended, up to maxReasks times;
+    // exhaustion (or a non-best-effort failure) throws → failed node.
+    let reaskAttempt = 0;
+    let reaskPrompt = finalPrompt;
+    // Set up the next reask attempt (increment, augment the prompt, notify).
+    const scheduleReask = async (errors: string[]): Promise<void> => {
+      reaskAttempt++;
+      reaskPrompt = buildReaskPrompt(errors);
+      await emitReask(reaskAttempt);
+    };
+    while (true) {
+      // Fresh session per reask attempt (resume only the original session on the
+      // first pass) so a prior invalid turn isn't carried forward.
+      await runStreamPass(reaskPrompt, reaskAttempt === 0 ? resumeSessionId : undefined);
+      if (nodeCostUsd !== undefined) {
+        accumulatedCostUsd = (accumulatedCostUsd ?? 0) + nodeCostUsd;
+      }
+      // Carry the running total onto nodeCostUsd every pass so the exhaustion throw
+      // paths (which jump straight to the outer catch) report cost across ALL reask
+      // attempts, not just the last pass. runStreamPass clears it next iteration.
+      nodeCostUsd = accumulatedCostUsd;
+
+      // When output_format is set and the provider returned structured_output, use
+      // it instead of the concatenated assistant text. Each provider normalizes its
+      // own structured output onto the result chunk — no provider branching here.
+      if (!nodeOptions?.outputFormat) break;
+
+      // Don't reask after an idle-timeout/abort — those are genuine failures, not
+      // validation misses; they fall through to a cause-specific throw below.
+      const canReask =
+        reaskAttempt < maxReasks && !nodeIdleTimedOut && !nodeAbortController.signal.aborted;
+
       if (structuredOutput !== undefined) {
-        try {
-          nodeOutputText =
-            typeof structuredOutput === 'string'
-              ? structuredOutput
-              : JSON.stringify(structuredOutput);
-        } catch (serializeErr) {
-          const err = serializeErr as Error;
-          throw new Error(
-            `Node '${node.id}': failed to serialize structured_output to JSON: ${err.message}`
+        // Validate against the declared schema for EVERY provider — SDK-enforced
+        // ones still bypass grammar-constrained decoding on a refusal / max_tokens
+        // truncation. Fail-SAFE on an uncompilable schema, but surface it.
+        let schemaCompileError: string | undefined;
+        const validation = validateStructuredOutput(
+          structuredOutput,
+          node.output_format ?? {},
+          compileMsg => {
+            schemaCompileError = compileMsg;
+          }
+        );
+        if (schemaCompileError !== undefined) {
+          getLog().warn(
+            { nodeId: node.id, workflowRunId: workflowRun.id, compileMsg: schemaCompileError },
+            'dag.structured_output_schema_uncompilable'
+          );
+          await safeSendMessage(
+            platform,
+            conversationId,
+            `⚠️ Node '${node.id}': its \`output_format\` schema could not be compiled (${schemaCompileError}), so the structured output was NOT validated against it. Fix the schema to enforce it.`,
+            nodeContext
           );
         }
-        getLog().debug({ nodeId: node.id, streamingMode }, 'dag.structured_output_override');
-      } else {
-        // Provider did not populate structuredOutput — warn the user.
-        // If the provider detected invalid output, it already yielded a system warning.
+        if (validation.valid) {
+          try {
+            nodeOutputText =
+              typeof structuredOutput === 'string'
+                ? structuredOutput
+                : JSON.stringify(structuredOutput);
+          } catch (serializeErr) {
+            const err = serializeErr as Error;
+            throw new Error(
+              `Node '${node.id}': failed to serialize structured_output to JSON: ${err.message}`
+            );
+          }
+          getLog().debug({ nodeId: node.id, streamingMode }, 'dag.structured_output_override');
+          break;
+        }
+        // Invalid payload.
         getLog().warn(
-          { nodeId: node.id, workflowRunId: workflowRun.id },
-          'dag.structured_output_missing'
+          { nodeId: node.id, workflowRunId: workflowRun.id, errors: validation.errors },
+          'dag.structured_output_invalid'
         );
-        await safeSendMessage(
-          platform,
-          conversationId,
-          `Warning: Node '${node.id}' requested output_format but the provider did not return structured output. Downstream conditions may not evaluate correctly.`,
-          nodeContext
+        if (canReask) {
+          await scheduleReask(validation.errors);
+          continue;
+        }
+        throw new Error(
+          `Node '${node.id}': output_format declared but the provider's structured output failed schema validation: ${validation.errors.join('; ')}`
         );
       }
+
+      // No structured output at all (prose / refusal / parse miss / timeout).
+      getLog().warn(
+        { nodeId: node.id, workflowRunId: workflowRun.id },
+        'dag.structured_output_missing'
+      );
+      if (canReask) {
+        await scheduleReask(['no JSON object was found in the response']);
+        continue;
+      }
+      // Surface the real cause: a timeout/abort produces no structured output too,
+      // and reporting it as "the model replied with prose" would mislead.
+      if (nodeIdleTimedOut) {
+        throw new Error(
+          `Node '${node.id}': timed out (no output for ${String(effectiveIdleTimeout / 60000)} min) before producing the required structured output.`
+        );
+      }
+      throw new Error(
+        `Node '${node.id}': output_format declared but the provider returned no schema-valid structured output. ` +
+          'The model likely replied with prose, refused, or emitted unparseable JSON.'
+      );
     }
 
     // Only post "completed via idle timeout" when output exists — zero-output timeout falls through to the empty-output guard below.
@@ -1215,12 +1429,18 @@ async function executeNodeInternal(
     lastNodeCancelCheck.delete(`${workflowRun.id}:${node.id}`);
     lastNodeActivityUpdate.delete(`${workflowRun.id}:${node.id}`);
 
+    // Capture the producer's declared field set so downstream `$node.output.field`
+    // refs can tell a declared-optional-absent field ('') from a typo (throws).
+    // Only present when output_format declares an object with `properties`.
+    const declaredFields = declaredFieldsFromSchema(node.output_format);
+
     return {
       state: 'completed',
       output: nodeOutputText,
       sessionId: newSessionId,
       costUsd: nodeCostUsd,
       ...(structuredOutput !== undefined ? { structuredOutput } : {}),
+      ...(declaredFields !== undefined ? { declaredFields } : {}),
     };
   } catch (error) {
     const err = error as Error;
@@ -1725,35 +1945,6 @@ async function executeScriptNode(
 }
 
 /**
- * Build SendQueryOptions from resolved provider, model, and config.
- * Uses the same nodeConfig + assistantConfig pattern as resolveNodeProviderAndModel.
- */
-function buildLoopNodeOptions(
-  provider: string,
-  model: string | undefined,
-  config: WorkflowConfig,
-  workflowLevelOptions?: WorkflowLevelOptions
-): SendQueryOptions {
-  const options: SendQueryOptions = {};
-  if (model) options.model = model;
-  if (config.envVars && Object.keys(config.envVars).length > 0) {
-    options.env = config.envVars;
-  }
-  options.assistantConfig = config.assistants[provider] ?? {};
-  // Pass workflow-level options as nodeConfig so providers can apply them
-  if (workflowLevelOptions) {
-    options.nodeConfig = {
-      effort: workflowLevelOptions.effort,
-      thinking: workflowLevelOptions.thinking,
-      sandbox: workflowLevelOptions.sandbox,
-      betas: workflowLevelOptions.betas,
-      fallbackModel: workflowLevelOptions.fallbackModel,
-    };
-  }
-  return options;
-}
-
-/**
  * Execute a loop node — runs prompt repeatedly until completion signal or max iterations.
  *
  * Key behaviors:
@@ -1769,15 +1960,14 @@ async function executeLoopNode(
   workflowRun: WorkflowRun,
   node: LoopNode,
   workflowProvider: string,
-  workflowModel: string | undefined,
+  resolvedOptions: SendQueryOptions | undefined,
   artifactsDir: string,
   logDir: string,
   baseBranch: string,
   docsDir: string,
   nodeOutputs: Map<string, NodeOutput>,
   config: WorkflowConfig,
-  issueContext?: string,
-  workflowLevelOptions?: WorkflowLevelOptions
+  issueContext?: string
 ): Promise<NodeExecutionResult> {
   const loop = node.loop;
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -1811,13 +2001,6 @@ async function executeLoopNode(
   let loopTotalCostUsd: number | undefined;
   let loopFinalStopReason: string | undefined;
   let loopTotalNumTurns: number | undefined;
-  const resolvedOptions = buildLoopNodeOptions(
-    workflowProvider,
-    workflowModel,
-    config,
-    workflowLevelOptions
-  );
-
   // Helper to log event store errors consistently
   const logEventStoreError = (err: Error, iteration: number): void => {
     getLog().error({ err, nodeId: node.id, iteration }, 'loop_node.iteration_event_failed');
@@ -2396,7 +2579,9 @@ async function executeApprovalNode(
   config: WorkflowConfig,
   workflowLevelOptions: WorkflowLevelOptions,
   configuredCommandFolder?: string,
-  issueContext?: string
+  issueContext?: string,
+  aiProfile?: ResolvedAiProfile,
+  workflowPreset?: ModelAliasPreset
 ): Promise<NodeOutput> {
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
 
@@ -2486,7 +2671,9 @@ async function executeApprovalNode(
       conversationId,
       workflowRun.id,
       cwd,
-      workflowLevelOptions
+      workflowLevelOptions,
+      aiProfile,
+      workflowPreset
     );
 
     const output = await executeNodeInternal(
@@ -2586,7 +2773,9 @@ export async function executeDagWorkflow(
   issueContext?: string,
   priorCompletedNodes?: Map<string, string>,
   /** Discovery source — telemetry only (custom-vs-default + name redaction). */
-  source?: WorkflowSource
+  source?: WorkflowSource,
+  aiProfile?: ResolvedAiProfile,
+  workflowPreset?: ModelAliasPreset
 ): Promise<string | undefined> {
   const dagStartTime = Date.now();
   const workflowLevelOptions = {
@@ -2859,25 +3048,20 @@ export async function executeDagWorkflow(
 
           // 3b. Loop node dispatch — manages its own AI sessions and iteration
           if (isLoopNode(node)) {
-            // Resolve per-node provider/model overrides (same logic as other node types).
-            // Provider is explicit; model passes through to the SDK. Throw on an
-            // unknown provider so the outer catch below emits the standard
-            // node_failed event + user-facing message — the same path
-            // resolveNodeProviderAndModel uses for non-loop nodes.
-            const loopProvider: string = node.provider ?? workflowProvider;
-            if (!isRegisteredProvider(loopProvider)) {
-              throw new Error(
-                `Node '${node.id}': unknown provider '${loopProvider}'. Registered: ${getRegisteredProviders()
-                  .map(p => p.id)
-                  .join(', ')}`
+            const { provider: loopProvider, options: loopOptions } =
+              await resolveNodeProviderAndModel(
+                node,
+                workflowProvider,
+                workflowModel,
+                config,
+                platform,
+                conversationId,
+                workflowRun.id,
+                cwd,
+                workflowLevelOptions,
+                aiProfile,
+                workflowPreset
               );
-            }
-            const loopAssistantConfig = config.assistants[loopProvider];
-            const loopModel: string | undefined =
-              node.model ??
-              (loopProvider === workflowProvider
-                ? workflowModel
-                : (loopAssistantConfig?.model as string | undefined));
 
             const output = await executeLoopNode(
               deps,
@@ -2887,15 +3071,14 @@ export async function executeDagWorkflow(
               workflowRun,
               node,
               loopProvider,
-              loopModel,
+              loopOptions,
               artifactsDir,
               logDir,
               baseBranch,
               docsDir,
               nodeOutputs,
               config,
-              issueContext,
-              workflowLevelOptions
+              issueContext
             );
             return { nodeId: node.id, output };
           }
@@ -2919,7 +3102,9 @@ export async function executeDagWorkflow(
               config,
               workflowLevelOptions,
               configuredCommandFolder,
-              issueContext
+              issueContext,
+              aiProfile,
+              workflowPreset
             );
             return { nodeId: node.id, output };
           }
@@ -2986,7 +3171,9 @@ export async function executeDagWorkflow(
             conversationId,
             workflowRun.id,
             cwd,
-            workflowLevelOptions
+            workflowLevelOptions,
+            aiProfile,
+            workflowPreset
           );
 
           // 5. Determine session — parallel or context:fresh → always fresh
@@ -3232,12 +3419,40 @@ export async function executeDagWorkflow(
     );
 
     // Process layer results — store all outputs, track failures
+    const nodeById = new Map(layer.map(n => [n.id, n]));
     let layerHadFailure = false;
     for (const result of layerResults) {
       if (result.status === 'fulfilled') {
         const { nodeId, output } = result.value;
         if (output.costUsd !== undefined) totalCostUsd += output.costUsd;
         nodeOutputs.set(nodeId, output);
+        // Typed artifact: when a node declares `output_type`, persist its output
+        // as a typed sidecar (nodes/<id>.md + .meta.json) so other nodes and
+        // later runs can locate it by type. Best-effort — a metadata write must
+        // never fail an otherwise-successful node.
+        const completedNode = nodeById.get(nodeId);
+        if (output.state === 'completed' && completedNode?.output_type) {
+          try {
+            await writeNodeArtifact(
+              artifactsDir,
+              {
+                nodeId,
+                outputType: completedNode.output_type,
+                runId: workflowRun.id,
+                producedAt: new Date().toISOString(),
+                // `sessionId` may be undefined (e.g. bash/script nodes have no
+                // session); writeNodeArtifact omits it from the metadata when so.
+                sessionId: output.sessionId,
+              },
+              output.output
+            );
+          } catch (err) {
+            getLog().warn(
+              { err: err as Error, nodeId, workflowRunId: workflowRun.id },
+              'artifacts.write_failed'
+            );
+          }
+        }
         if (output.state === 'completed' && !isParallelLayer && output.sessionId !== undefined) {
           lastSequentialSessionId = output.sessionId;
         }

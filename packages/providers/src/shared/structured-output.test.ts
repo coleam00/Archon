@@ -2,9 +2,11 @@ import { describe, expect, test } from 'bun:test';
 
 import {
   augmentPromptForJsonSchema,
+  formatSchemaErrors,
   hasOpenAdditionalProperties,
   normalizeJsonSchemaForOpenAiStrict,
   tryParseStructuredOutput,
+  validateStructuredOutput,
 } from './structured-output';
 
 describe('augmentPromptForJsonSchema', () => {
@@ -26,8 +28,11 @@ describe('tryParseStructuredOutput', () => {
     expect(tryParseStructuredOutput('{"a":1,"b":"two"}')).toEqual({ a: 1, b: 'two' });
   });
 
-  test('returns the parsed array for clean JSON', () => {
-    expect(tryParseStructuredOutput('[1,2,3]')).toEqual([1, 2, 3]);
+  test('returns undefined for a top-level array (contract is a JSON object)', () => {
+    // output_format is always an object schema and the augmentation asks for an
+    // object; a top-level array is not valid structured output (object-only
+    // contract, consistent across all parse tiers).
+    expect(tryParseStructuredOutput('[1,2,3]')).toBeUndefined();
   });
 
   test('strips ```json fences', () => {
@@ -87,6 +92,101 @@ After careful evaluation, here is the JSON:
   test('returns undefined when forward scan finds no parseable JSON', () => {
     // First `{` is at index > 0 but what follows is not valid JSON either.
     expect(tryParseStructuredOutput('prose with stray { brace and no closer')).toBeUndefined();
+  });
+
+  // Tier 3: jsonrepair structural recovery (issue #1849 / structured-output plan)
+  test('tier 3 repairs trailing commas', () => {
+    expect(tryParseStructuredOutput('{"a":1,"b":2,}')).toEqual({ a: 1, b: 2 });
+  });
+
+  test('tier 3 repairs single-quoted keys and values', () => {
+    expect(tryParseStructuredOutput("{'verdict':'ok'}")).toEqual({ verdict: 'ok' });
+  });
+
+  test('tier 3 repairs a max_tokens-truncated tail', () => {
+    // Response cut mid-object by a token cap — jsonrepair closes the structure.
+    expect(tryParseStructuredOutput('{"summary":"done","items":["a","b"')).toEqual({
+      summary: 'done',
+      items: ['a', 'b'],
+    });
+  });
+
+  test('tier 3 still returns undefined for irreparable non-JSON', () => {
+    expect(tryParseStructuredOutput('this is just prose, not JSON at all')).toBeUndefined();
+  });
+
+  test('tier 3 rejects a valid object followed by trailing prose (no bogus array)', () => {
+    // jsonrepair would coerce `{...}\nprose` into `[{...}, "prose"]`; the object-only
+    // gate rejects that so the result degrades cleanly instead of surfacing an array.
+    expect(
+      tryParseStructuredOutput('Here is the JSON:\n{"ok":true}\nHope this helps!')
+    ).toBeUndefined();
+  });
+});
+
+describe('validateStructuredOutput', () => {
+  const schema = {
+    type: 'object',
+    properties: { summary: { type: 'string' }, count: { type: 'number' } },
+    required: ['summary'],
+  };
+
+  test('valid value passes', () => {
+    const r = validateStructuredOutput({ summary: 'hi', count: 2 }, schema);
+    expect(r.valid).toBe(true);
+  });
+
+  test('missing required field fails with a root-level error', () => {
+    const r = validateStructuredOutput({ count: 2 }, schema);
+    expect(r.valid).toBe(false);
+    if (r.valid) return;
+    expect(r.errors.length).toBeGreaterThan(0);
+    expect(r.errors.some(e => e.includes('summary'))).toBe(true);
+  });
+
+  test('wrong type fails with a path-scoped error', () => {
+    const r = validateStructuredOutput({ summary: 'hi', count: 'two' }, schema);
+    expect(r.valid).toBe(false);
+    if (r.valid) return;
+    expect(r.errors.some(e => e.startsWith('/count'))).toBe(true);
+  });
+
+  test('enum violation fails', () => {
+    const enumSchema = { type: 'object', properties: { kind: { enum: ['A', 'B'] } } };
+    expect(validateStructuredOutput({ kind: 'C' }, enumSchema).valid).toBe(false);
+    expect(validateStructuredOutput({ kind: 'A' }, enumSchema).valid).toBe(true);
+  });
+
+  test('optional field absent is still valid (additionalProperties not required)', () => {
+    expect(validateStructuredOutput({ summary: 'hi' }, schema).valid).toBe(true);
+  });
+
+  test('uncompilable schema fails SAFE (valid:true) and reports via onCompileError', () => {
+    let compileError: string | undefined;
+    // `$ref` to a non-existent definition makes ajv.compile throw.
+    const broken = { type: 'object', properties: { a: { $ref: '#/$defs/missing' } } };
+    const r = validateStructuredOutput({ a: 1 }, broken, msg => {
+      compileError = msg;
+    });
+    expect(r.valid).toBe(true);
+    expect(compileError).toBeDefined();
+  });
+});
+
+describe('formatSchemaErrors', () => {
+  test('renders root-level missing-property failures with the property name', () => {
+    const r = validateStructuredOutput(
+      {},
+      { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] }
+    );
+    expect(r.valid).toBe(false);
+    if (r.valid) return;
+    expect(r.errors.some(line => line.startsWith('(root):') && line.includes('name'))).toBe(true);
+  });
+
+  test('returns a generic line for null/empty error input', () => {
+    expect(formatSchemaErrors(null)).toEqual(['value does not match the declared schema']);
+    expect(formatSchemaErrors([])).toEqual(['value does not match the declared schema']);
   });
 });
 

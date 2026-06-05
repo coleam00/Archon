@@ -30,11 +30,13 @@ function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('workflow.validator');
   return cachedLog;
 }
-import { isScriptNode } from './schemas';
-import type { WorkflowDefinition, DagNode } from './schemas';
+import { isBashNode, isLoopNode, isScriptNode } from './schemas';
+import type { WorkflowDefinition, DagNode, WorkflowSource } from './schemas';
 import type { ScriptRuntime } from './script-discovery';
 import { discoverScriptsForCwd } from './script-discovery';
 import { isInlineScript } from './executor-shared';
+import { buildAiProfile, resolveModelSpec } from './model-validation';
+import type { RawAliasesConfig, RawTiersConfig, ResolvedAiProfile } from './model-validation';
 
 // =============================================================================
 // Types
@@ -83,6 +85,10 @@ export interface CommandValidationResult {
 export interface ValidationConfig {
   loadDefaultCommands?: boolean;
   commandFolder?: string;
+  workflowSource?: WorkflowSource;
+  assistant?: string;
+  aliases?: RawAliasesConfig;
+  tiers?: RawTiersConfig;
 }
 
 // =============================================================================
@@ -317,9 +323,63 @@ export async function validateWorkflowResources(
 ): Promise<ValidationIssue[]> {
   const issues: ValidationIssue[] = [];
   const availableCommands = await discoverAvailableCommands(cwd, config);
+  const requiresPortableModelRefs =
+    config?.workflowSource === 'bundled' || config?.workflowSource === 'global';
+  const modelProfileProvider = config?.assistant ?? defaultProvider ?? 'claude';
+  let aiProfile: ResolvedAiProfile | undefined;
+
+  try {
+    aiProfile = buildAiProfile(modelProfileProvider, {
+      repoTiers: config?.tiers,
+      repoAliases: config?.aliases,
+    });
+  } catch (error) {
+    issues.push({
+      level: 'error',
+      field: 'model',
+      message: (error as Error).message,
+      hint: 'Fix tiers/aliases in .archon/config.yaml, or use literal provider model strings.',
+    });
+  }
+
+  const validateModelRef = (ref: string, nodeId?: string): void => {
+    if (!aiProfile) return;
+    try {
+      resolveModelSpec(aiProfile, ref);
+    } catch (error) {
+      issues.push({
+        level: 'error',
+        ...(nodeId !== undefined ? { nodeId } : {}),
+        field: 'model',
+        message: (error as Error).message,
+        hint: 'Fix tiers/aliases in .archon/config.yaml, or use a literal provider model string.',
+      });
+    }
+  };
+
+  if (requiresPortableModelRefs && workflow.model?.startsWith('@')) {
+    issues.push({
+      level: 'error',
+      field: 'model',
+      message: `Workflow '${workflow.name}' uses custom model alias '${workflow.model}', which is not portable for ${config.workflowSource} workflows`,
+      hint: 'Use small, medium, large, or a literal provider model string. Reserve @custom aliases for project workflows.',
+    });
+  }
+  if (workflow.model) validateModelRef(workflow.model);
 
   for (const node of workflow.nodes) {
     const provider = resolveProvider(node, workflow.provider, defaultProvider);
+
+    if (requiresPortableModelRefs && 'model' in node && node.model?.startsWith('@')) {
+      issues.push({
+        level: 'error',
+        nodeId: node.id,
+        field: 'model',
+        message: `Node '${node.id}' uses custom model alias '${node.model}', which is not portable for ${config.workflowSource} workflows`,
+        hint: 'Use small, medium, large, or a literal provider model string. Reserve @custom aliases for project workflows.',
+      });
+    }
+    if ('model' in node && node.model) validateModelRef(node.model, node.id);
 
     // --- Command nodes: check file exists ---
     if ('command' in node && typeof node.command === 'string') {
@@ -527,6 +587,41 @@ export async function validateWorkflowResources(
           hint: 'Remove deps or switch to runtime: uv if you need explicit dependency management',
         });
       }
+    }
+
+    // In bash node bodies (and loop `until_bash`, which substitutes the same way),
+    // $node.output values are injected PRE-QUOTED by Archon: small values are
+    // single-quoted inline ('the value'), large outputs (>32 KB) spill to a temp
+    // file as $(cat '/path'). Wrapping the substitution in double quotes breaks the
+    // SMALL case — var="$n.output" becomes var="'value'", embedding the literal
+    // single-quote chars as data. (For the large $(cat ...) case double-quoting is
+    // actually fine, but the author can't predict the size at write time, so the
+    // rule is unconditional: never double-quote.) Numeric/boolean FIELD values are
+    // injected raw, so double-quoting is harmless for those — which is why the bug
+    // is intermittent and easy to miss.
+    //   wrong="$n.output.field" → wrong="'ok'" (single quotes become part of the value)
+    //   right=$n.output.field   → right='ok' → bash assigns: ok
+    //
+    // The `(?:^|[=\s])"` prefix requires the opening `"` to be an operand (line
+    // start, after `=`, or after whitespace) so a *closing* quote of an unrelated
+    // earlier string doesn't cause a false positive (e.g. `echo "hi"; x=$a.output`).
+    // `[^"\n]` excludes newlines — a double-quote spanning lines is pathological.
+    const doubleQuotedOutputRef = /(?:^|[=\s])"[^"\n]*\$[a-zA-Z_][a-zA-Z0-9_-]*\.output/m;
+    const warnDoubleQuoted = (body: string, field: string): void => {
+      if (doubleQuotedOutputRef.test(body)) {
+        issues.push({
+          level: 'warning',
+          nodeId: node.id,
+          field,
+          message:
+            '`"$nodeId.output"` — double-quoting a substitution that is already shell-quoted by Archon produces the wrong value',
+          hint: 'Use `var=$node.output.field` (unquoted) — the substitution is injected already quoted. (Numeric/boolean fields are injected raw, so double-quoting is harmless for those, but the rule is uniform.)',
+        });
+      }
+    };
+    if (isBashNode(node)) warnDoubleQuoted(node.bash, 'bash');
+    if (isLoopNode(node) && node.loop.until_bash) {
+      warnDoubleQuoted(node.loop.until_bash, 'loop.until_bash');
     }
   }
 

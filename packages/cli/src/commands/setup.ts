@@ -2095,6 +2095,7 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
   }
 
   let skillInstalledPath: string | null = null;
+  let skillInstalledBase: string | null = null;
   let projectConfigCreatedPath: string | null = null;
 
   if (shouldCopySkill) {
@@ -2118,6 +2119,7 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
       process.exit(1);
     }
     s.stop('Archon skill installed');
+    skillInstalledBase = skillTargetRaw;
     skillInstalledPath = join(skillTargetRaw, '.claude', 'skills', 'archon');
 
     const bootstrapResult = bootstrapProjectConfig(skillTargetRaw);
@@ -2204,10 +2206,12 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
     summaryLines.push('  Add this secret to your GitHub webhook configuration');
   }
 
-  if (skillInstalledPath) {
+  if (skillInstalledPath && skillInstalledBase) {
+    const codexInstalledPath = join(skillInstalledBase, '.agents', 'skills', 'archon');
     summaryLines.push('');
     summaryLines.push('Archon skill installed:');
-    summaryLines.push(`  ${skillInstalledPath}`);
+    summaryLines.push(`  ${skillInstalledPath}  (Claude Code)`);
+    summaryLines.push(`  ${codexInstalledPath}  (Codex)`);
     if (projectConfigCreatedPath) {
       summaryLines.push('');
       summaryLines.push('Project config created:');

@@ -354,7 +354,17 @@ export interface ProviderCapabilities {
   /** Whether the provider supports inline sub-agent definitions (Claude SDK's options.agents). */
   agents: boolean;
   toolRestrictions: boolean;
-  structuredOutput: boolean;
+  /**
+   * Structured-output guarantee tier for `output_format`:
+   *  - `'enforced'`    — SDK/backend grammar-constrains decoding (Claude, Codex,
+   *    OpenCode). The request path is native; Archon still validates post-parse
+   *    as a net for the refusal / `max_tokens`-truncation edges.
+   *  - `'best-effort'` — prompt-augmentation + repair + post-parse validate (Pi,
+   *    Copilot). No backend grammar; on a validation miss the executor re-asks up
+   *    to 3× (prompt + schema errors), then fails the node.
+   *  - `false`         — the provider cannot produce structured output at all.
+   */
+  structuredOutput: 'enforced' | 'best-effort' | false;
   envInjection: boolean;
   costControl: boolean;
   effortControl: boolean;

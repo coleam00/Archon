@@ -73,7 +73,7 @@ assistants:
     # Source/dev mode auto-resolves.
     # claudeBinaryPath: /absolute/path/to/claude
   codex:
-    model: gpt-5.3-codex
+    model: gpt-5.5
     modelReasoningEffort: medium
     webSearchMode: disabled
     additionalDirectories:
@@ -96,6 +96,17 @@ paths:
 concurrency:
   maxConversations: 10
 
+# Model tiers — optional cross-provider presets used by bundled workflows,
+# custom workflows, direct chat (`large`), and title generation (`small`).
+tiers:
+  large: { provider: claude, model: opus }
+  medium: { provider: codex, model: gpt-5.5, effort: high }
+  small: { provider: pi, model: minimax-m3 }
+
+# Model aliases — optional custom refs for project workflows.
+aliases:
+  '@reasoning': { provider: claude, model: opus, thinking: { type: enabled, budgetTokens: 8000 } }
+
 ```
 
 ## Repository Configuration
@@ -113,7 +124,7 @@ assistants:
     settingSources:  # Override global settingSources for this repo
       - project
   codex:
-    model: gpt-5.3-codex
+    model: gpt-5.5
     webSearchMode: live
 
 # Commands configuration
@@ -151,7 +162,17 @@ defaults:
 #   MY_API_KEY: value
 #   CUSTOM_ENDPOINT: https://...
 
+# Model tiers and aliases override global entries with the same name (repo > global).
+# tiers:
+#   small: { provider: codex, model: gpt-5.5, effort: minimal }
+# aliases:
+#   '@fast': { provider: claude, model: haiku }
+
 ```
+
+Providers with built-in tier defaults (`claude`, `codex`, `pi`, `copilot`, `opencode`) work
+without a `tiers:` block. Other providers must configure any tier they use, or resolving
+`small`, `medium`, or `large` will fail with a clear configuration error.
 
 ### Claude settingSources
 

@@ -6,6 +6,7 @@
  * Designed to be fire-and-forget — never throws, all errors logged internally.
  */
 import { getAgentProvider } from '@archon/providers';
+import type { SendQueryOptions } from '@archon/providers/types';
 import * as conversationDb from '../db/conversations';
 import { createLogger } from '@archon/paths';
 
@@ -30,6 +31,7 @@ const MAX_TITLE_LENGTH = 100;
  * @param cwd - Working directory for the AI client
  * @param workflowName - Optional workflow name for additional context
  * @param assistantConfig - Optional provider-specific defaults for the selected assistant
+ * @param requestOptions - Optional fully resolved request options from the caller
  */
 export async function generateAndSetTitle(
   conversationDbId: string,
@@ -37,12 +39,14 @@ export async function generateAndSetTitle(
   assistantType: string,
   cwd: string,
   workflowName?: string,
-  assistantConfig?: Record<string, unknown>
+  assistantConfig?: Record<string, unknown>,
+  requestOptions?: SendQueryOptions
 ): Promise<void> {
   try {
     getLog().debug({ conversationDbId, assistantType }, 'title.generate_started');
 
-    // Model: use TITLE_GENERATION_MODEL env var if set, otherwise let SDK use its default
+    // TITLE_GENERATION_MODEL is an emergency literal override for operators.
+    // Normal title generation should be resolved by the caller to the `small` tier.
     const titleModel = process.env.TITLE_GENERATION_MODEL || undefined;
 
     // Build the title generation prompt
@@ -52,11 +56,17 @@ export async function generateAndSetTitle(
     const client = getAgentProvider(assistantType);
     let generatedTitle = '';
 
-    for await (const chunk of client.sendQuery(titlePrompt, cwd, undefined, {
-      model: titleModel,
-      assistantConfig,
-      nodeConfig: { allowed_tools: [] }, // No tool access — pure text generation
-    })) {
+    const options: SendQueryOptions = {
+      ...(requestOptions ?? {}),
+      ...(titleModel ? { model: titleModel } : {}),
+      assistantConfig: requestOptions?.assistantConfig ?? assistantConfig,
+      nodeConfig: {
+        ...(requestOptions?.nodeConfig ?? {}),
+        allowed_tools: [], // No tool access — pure text generation
+      },
+    };
+
+    for await (const chunk of client.sendQuery(titlePrompt, cwd, undefined, options)) {
       if (chunk.type === 'assistant') {
         generatedTitle += chunk.content;
       }

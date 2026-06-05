@@ -1,0 +1,66 @@
+# E2E smoke — cross-provider structured output (PR 1)
+# Verifies (all should PASS):
+#   - Task 7: enforced provider's structured output is validated against the schema
+#   - Task 9: declared field access resolves; declared-OPTIONAL absent → '' (no throw)
+#   - Task 9: schemaless bash JSON field access resolves present keys
+# Provider: claude (enforced) — reliably returns schema-valid JSON via output_config.format.
+name: e2e-structured-output
+description: 'Structured-output happy path: validation + declared field access + schemaless JSON access.'
+provider: claude
+model: haiku
+
+nodes:
+  # 1. AI node with output_format. Enforced provider → schema-valid JSON, which the
+  #    executor validates (Task 7) before exposing fields. `note` is optional.
+  - id: classify
+    idle_timeout: 60000
+    allowed_tools: []
+    prompt: |
+      Classify the sentiment of this text: "I love this product, it works great!"
+      Pick exactly one sentiment.
+    output_format:
+      type: object
+      properties:
+        sentiment:
+          type: string
+          enum: ['positive', 'negative', 'neutral']
+        note:
+          type: string
+      required: [sentiment]
+
+  # 2. Declared field access. $classify.output.sentiment (required) must resolve;
+  #    $classify.output.note (declared OPTIONAL) resolves to '' if the model omitted it
+  #    — the one case that is '' instead of a throw.
+  - id: use-fields
+    depends_on: [classify]
+    bash: |
+      # No surrounding quotes: $node.output.field is injected as a shell-safe
+      # single-quoted literal already (escapedForBash), so the value's quoting
+      # is provided by the substitution.
+      sentiment=$classify.output.sentiment
+      note=$classify.output.note
+      echo "sentiment=[$sentiment]"
+      echo "note=[$note]"
+      if [ "$sentiment" != "positive" ]; then
+        echo "FAIL: expected 'positive', got '$sentiment'"
+        exit 1
+      fi
+      echo "PASS: declared field access + declared-optional resolved cleanly"
+
+  # 3. Schemaless bash producer emitting JSON (no output_format → schemaless path).
+  - id: emit-json
+    bash: |
+      echo '{"status":"ok","count":3}'
+
+  # 4. Schemaless JSON field access — present keys resolve (strict path, key present → value).
+  - id: use-schemaless
+    depends_on: [emit-json]
+    bash: |
+      status=$emit-json.output.status
+      count=$emit-json.output.count
+      echo "status=[$status] count=[$count]"
+      if [ "$status" != "ok" ] || [ "$count" != "3" ]; then
+        echo "FAIL: schemaless access wrong: status=$status count=$count"
+        exit 1
+      fi
+      echo "PASS: schemaless JSON field access"

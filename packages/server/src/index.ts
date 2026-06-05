@@ -68,6 +68,8 @@ import { WebAdapter } from './adapters/web';
 import { MessagePersistence } from './adapters/web/persistence';
 import { SSETransport } from './adapters/web/transport';
 import { WorkflowEventBridge } from './adapters/web/workflow-bridge';
+import { DashboardEventPoller } from './adapters/web/dashboard-event-poller';
+import { PgNotifyListener } from './adapters/web/pg-notify-listener';
 import { registerApiRoutes } from './routes/api';
 import {
   handleMessage,
@@ -76,6 +78,7 @@ import {
   classifyAndFormatError,
   startCleanupScheduler,
   stopCleanupScheduler,
+  getDbNotificationListener,
   loadConfig,
   logConfig,
   getPort,
@@ -308,6 +311,22 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   const webAdapter = new WebAdapter(transport, persistence, workflowBridge);
   await webAdapter.start();
   persistence.startPeriodicFlush();
+
+  // Stream workflow runs started in ANY process (incl. the `archon` CLI / `--detach`)
+  // to the console dashboard. The in-process WorkflowEventBridge only sees runs
+  // executed inside the server; this poller tails the events table. On Postgres,
+  // LISTEN/NOTIFY wakes it for near-instant push (poll becomes a slow backstop);
+  // on SQLite it polls fast.
+  const dashboardPoller = new DashboardEventPoller();
+  const dbNotifier = getDbNotificationListener();
+  let pgNotifyListener: PgNotifyListener | undefined;
+  if (dbNotifier) {
+    dashboardPoller.start(transport, 10_000);
+    pgNotifyListener = new PgNotifyListener(dbNotifier, dashboardPoller);
+    await pgNotifyListener.start();
+  } else {
+    dashboardPoller.start(transport, 1_500);
+  }
 
   // Mutable — pushed to as each adapter starts, read by the /api/health endpoint.
   // Must be a live reference because Telegram starts after the HTTP listener begins
@@ -936,6 +955,8 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
           slack?.stop();
           gitea?.stop();
           gitlab?.stop();
+          pgNotifyListener?.stop();
+          dashboardPoller.stop();
           await webAdapter.stop();
         } catch (error) {
           getLog().error({ err: error }, 'adapter_stop_error');

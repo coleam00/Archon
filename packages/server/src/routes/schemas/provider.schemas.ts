@@ -11,7 +11,8 @@ const providerCapabilitiesSchema = z
     hooks: z.boolean(),
     skills: z.boolean(),
     toolRestrictions: z.boolean(),
-    structuredOutput: z.boolean(),
+    // Mirrors ProviderCapabilities.structuredOutput: 'enforced' | 'best-effort' | false.
+    structuredOutput: z.union([z.literal('enforced'), z.literal('best-effort'), z.literal(false)]),
     envInjection: z.boolean(),
     costControl: z.boolean(),
     effortControl: z.boolean(),

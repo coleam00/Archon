@@ -68,12 +68,12 @@ run id (it's created in the child) — find it with `archon workflow runs`. If t
 never appears, check the child log path printed by the command (or the `logPath`
 field in `--detach --json`).
 
-> **Console UI note:** a detached run *does* appear in the web console's Workflow dock
-> (the dock lists runs by project), but its progress may **not update live** — detached
-> runs execute in a separate process and don't stream to the console's live event feed,
-> so the dock catches up on its next refetch rather than in real time. Tell the user to
-> refresh if they want the latest state. (Re-running progress live for CLI-started runs
-> is a tracked follow-up.)
+> **Console UI note:** a detached run appears in the web console's Workflow dock
+> (the dock lists runs by project) **and updates live** — even though it executes in a
+> separate process. A server-side poller tails the workflow-event table and replays new
+> rows to the console's live feed (on PostgreSQL a `NOTIFY` trigger pushes them within
+> the same second; on SQLite the poller picks them up on its short interval). No refresh
+> is needed.
 
 ### Approve or reject a paused run (two steps)
 `--json` approve/reject/resume **record the decision** (the run becomes resumable) but

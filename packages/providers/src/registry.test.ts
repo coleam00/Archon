@@ -300,7 +300,7 @@ describe('registry', () => {
       expect(caps.envInjection).toBe(true);
       // Best-effort structured output via prompt engineering + post-parse —
       // not SDK-enforced like Claude/Codex, but wired up and tested.
-      expect(caps.structuredOutput).toBe(true);
+      expect(caps.structuredOutput).toBe('best-effort');
       // Still false (out of v2 scope)
       expect(caps.mcp).toBe(false);
       expect(caps.hooks).toBe(false);
@@ -347,7 +347,7 @@ describe('registry', () => {
       const caps = getProviderCapabilities('opencode');
       expect(caps.sessionResume).toBe(true);
       expect(caps.mcp).toBe(true);
-      expect(caps.structuredOutput).toBe(true);
+      expect(caps.structuredOutput).toBe('enforced');
       expect(caps.envInjection).toBe(true);
       expect(caps.hooks).toBe(true);
       expect(caps.skills).toBe(true);
@@ -404,7 +404,7 @@ describe('registry', () => {
       expect(caps.hooks).toBe(false);
       expect(caps.skills).toBe(true);
       expect(caps.toolRestrictions).toBe(true);
-      expect(caps.structuredOutput).toBe(true);
+      expect(caps.structuredOutput).toBe('best-effort');
       expect(caps.agents).toBe(true);
       expect(caps.fallbackModel).toBe(false);
       expect(caps.sandbox).toBe(false);
