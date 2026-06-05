@@ -326,8 +326,11 @@ describe('git utilities', () => {
         base: join(homedir(), '.archon', 'workspaces', 'projects', 'widget-app', 'worktrees'),
         layout: 'workspace-scoped',
       });
-      expect(result.base).not.toContain(':');
-      expect(result.base).not.toContain('@');
+      // Check only the path below homedir — on Windows the home directory
+      // itself contains ":" in the drive letter (e.g. C:\Users\...).
+      const relativeToHome = result.base.slice(homedir().length);
+      expect(relativeToHome).not.toContain(':');
+      expect(relativeToHome).not.toContain('@');
     });
 
     test('repoLocal override wins over workspace-scoped default', () => {
