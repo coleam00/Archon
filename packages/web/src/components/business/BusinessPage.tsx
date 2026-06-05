@@ -97,12 +97,16 @@ export interface BusinessPageProps {
   vaultPath: string;
 }
 
+// Ivory-canvas badge palette — light tints with dark text for readability on the
+// jid5274 dashboard's beige background. Previously bg-*-900/40 text-*-300 (dark theme)
+// which rendered as muddy boxes on the ivory canvas. See 2026-06-04 contrast pass +
+// dashboard-improvement-log entry C:BusinessPage badges.
 const BADGE_STYLE: Record<NonNullable<BusinessSubItem['badgeTone']>, string> = {
-  emerald: 'bg-emerald-900/40 text-emerald-300 border-emerald-700/40',
-  amber: 'bg-amber-900/40 text-amber-300 border-amber-700/40',
-  sky: 'bg-sky-900/40 text-sky-300 border-sky-700/40',
-  rose: 'bg-rose-900/40 text-rose-300 border-rose-700/40',
-  zinc: 'bg-zinc-800/40 text-zinc-400 border-zinc-700/40',
+  emerald: 'bg-emerald-100 text-emerald-800 border-emerald-700/40',
+  amber: 'bg-amber-100 text-amber-800 border-amber-700/40',
+  sky: 'bg-sky-100 text-sky-800 border-sky-700/40',
+  rose: 'bg-rose-100 text-rose-800 border-rose-700/40',
+  zinc: 'bg-surface-inset text-text-secondary border-border',
 };
 
 const STATUS_STYLE: Record<NonNullable<BusinessPageProps['statusTone']>, string> = BADGE_STYLE;
@@ -167,24 +171,17 @@ export function BusinessPage({
           )}
         </header>
 
-        {tagline && (
-          <p className="text-sm text-text-secondary">{tagline}</p>
-        )}
+        {tagline && <p className="text-sm text-text-secondary">{tagline}</p>}
 
         {/* KPI strip */}
         {kpis && kpis.length > 0 && (
           <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
             {kpis.map(k => (
-              <div
-                key={k.label}
-                className="rounded-lg border border-border bg-surface p-3"
-              >
+              <div key={k.label} className="rounded-lg border border-border bg-surface p-3">
                 <div className="text-[10px] uppercase tracking-wider text-text-tertiary">
                   {k.label}
                 </div>
-                <div className="mt-1 text-lg font-semibold text-text-primary">
-                  {k.value}
-                </div>
+                <div className="mt-1 text-lg font-semibold text-text-primary">{k.value}</div>
               </div>
             ))}
           </section>
@@ -194,10 +191,7 @@ export function BusinessPage({
         {valueProps && valueProps.length > 0 && (
           <section className="grid gap-3 md:grid-cols-3">
             {valueProps.map(v => (
-              <div
-                key={v.title}
-                className="rounded-lg border border-primary/30 bg-primary/5 p-4"
-              >
+              <div key={v.title} className="rounded-lg border border-primary/30 bg-primary/5 p-4">
                 <div className="text-xs font-semibold uppercase tracking-wider text-primary">
                   {v.title}
                 </div>
@@ -219,22 +213,16 @@ export function BusinessPage({
         {/* Sub-sections */}
         {sections.map(sec => (
           <section key={sec.heading}>
-            <h2 className="mb-3 text-sm font-semibold text-text-primary">
-              {sec.heading}
-            </h2>
+            <h2 className="mb-3 text-sm font-semibold text-text-primary">{sec.heading}</h2>
             {sec.items.length === 0 ? (
               <p className="text-xs text-text-tertiary">No items yet.</p>
             ) : (
               <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
                 {sec.items.map((item, idx) => {
                   const inner = (
-                    <article
-                      className="rounded-lg border border-border bg-surface p-4 transition-colors hover:border-primary/40"
-                    >
+                    <article className="rounded-lg border border-border bg-surface p-4 transition-colors hover:border-primary/40">
                       <div className="flex items-start justify-between gap-2">
-                        <h3 className="text-sm font-medium text-text-primary">
-                          {item.title}
-                        </h3>
+                        <h3 className="text-sm font-medium text-text-primary">{item.title}</h3>
                         {item.badge && (
                           <span
                             className={`shrink-0 rounded-md border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide ${
@@ -246,9 +234,7 @@ export function BusinessPage({
                         )}
                       </div>
                       {item.description && (
-                        <p className="mt-1 text-xs text-text-secondary">
-                          {item.description}
-                        </p>
+                        <p className="mt-1 text-xs text-text-secondary">{item.description}</p>
                       )}
                     </article>
                   );
@@ -271,9 +257,7 @@ export function BusinessPage({
                       </Link>
                     );
                   }
-                  return (
-                    <div key={item.slug ?? `${sec.heading}-${idx}`}>{inner}</div>
-                  );
+                  return <div key={item.slug ?? `${sec.heading}-${idx}`}>{inner}</div>;
                 })}
               </div>
             )}
@@ -284,11 +268,10 @@ export function BusinessPage({
         {prospects && prospects.length > 0 && (
           <section>
             <div className="mb-3 flex items-baseline justify-between">
-              <h2 className="text-sm font-semibold text-text-primary">
-                {prospectsHeading}
-              </h2>
+              <h2 className="text-sm font-semibold text-text-primary">{prospectsHeading}</h2>
               <span className="text-[10px] text-text-tertiary">
-                {prospectsSubtitle ?? `${prospects.length} contact${prospects.length === 1 ? '' : 's'}`}
+                {prospectsSubtitle ??
+                  `${prospects.length} contact${prospects.length === 1 ? '' : 's'}`}
               </span>
             </div>
             <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
@@ -299,28 +282,25 @@ export function BusinessPage({
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
-                      <h3 className="truncate text-sm font-medium text-text-primary">
-                        {p.name}
-                      </h3>
+                      <h3 className="truncate text-sm font-medium text-text-primary">{p.name}</h3>
                       {p.title && (
-                        <p className="mt-0.5 truncate text-xs text-text-secondary">
-                          {p.title}
-                        </p>
+                        <p className="mt-0.5 truncate text-xs text-text-secondary">{p.title}</p>
                       )}
                       {p.company && (
-                        <p className="mt-0.5 truncate text-xs text-text-tertiary">
-                          {p.company}
-                        </p>
+                        <p className="mt-0.5 truncate text-xs text-text-tertiary">{p.company}</p>
                       )}
                     </div>
                     {p.tier && (
                       <span
                         className={`shrink-0 rounded-md border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide ${
-                          p.tier.toLowerCase().includes('warm') || p.tier.toLowerCase().includes('replied') || p.tier.toLowerCase().includes('key')
+                          p.tier.toLowerCase().includes('warm') ||
+                          p.tier.toLowerCase().includes('replied') ||
+                          p.tier.toLowerCase().includes('key')
                             ? BADGE_STYLE.emerald
-                            : p.tier.toLowerCase().includes('cold') || p.tier.toLowerCase().includes('pending')
-                            ? BADGE_STYLE.amber
-                            : BADGE_STYLE.sky
+                            : p.tier.toLowerCase().includes('cold') ||
+                                p.tier.toLowerCase().includes('pending')
+                              ? BADGE_STYLE.amber
+                              : BADGE_STYLE.sky
                         }`}
                       >
                         {p.tier}
@@ -332,10 +312,7 @@ export function BusinessPage({
                   {(p.email || p.phone || p.linkedin_url) && (
                     <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-[11px]">
                       {p.email && (
-                        <a
-                          href={`mailto:${p.email}`}
-                          className="text-primary hover:underline"
-                        >
+                        <a href={`mailto:${p.email}`} className="text-primary hover:underline">
                           ✉ {p.email.length > 30 ? p.email.slice(0, 28) + '…' : p.email}
                         </a>
                       )}
@@ -365,7 +342,12 @@ export function BusinessPage({
                     <div className="mt-2 flex flex-wrap gap-x-2 gap-y-0.5 text-[10px] text-text-tertiary">
                       {p.channel && <span>📡 {p.channel}</span>}
                       {p.source_campaign && (
-                        <span>· {p.source_campaign.length > 32 ? p.source_campaign.slice(0, 30) + '…' : p.source_campaign}</span>
+                        <span>
+                          ·{' '}
+                          {p.source_campaign.length > 32
+                            ? p.source_campaign.slice(0, 30) + '…'
+                            : p.source_campaign}
+                        </span>
                       )}
                     </div>
                   )}
@@ -378,9 +360,7 @@ export function BusinessPage({
                   )}
 
                   {/* Notes */}
-                  {p.notes && (
-                    <p className="mt-2 text-xs italic text-text-secondary">{p.notes}</p>
-                  )}
+                  {p.notes && <p className="mt-2 text-xs italic text-text-secondary">{p.notes}</p>}
 
                   {/* Category + ask (SADN/sponsor pattern) */}
                   {(p.category || p.ask) && (
@@ -425,8 +405,8 @@ export function BusinessPage({
 
         {/* Vault path footer */}
         <footer className="border-t border-border pt-4 text-[10px] text-text-tertiary">
-          Source: <code className="font-mono">{vaultPath}</code> · Edit in
-          Obsidian, save, dashboard hot-reloads.
+          Source: <code className="font-mono">{vaultPath}</code> · Edit in Obsidian, save, dashboard
+          hot-reloads.
         </footer>
       </div>
     </div>
