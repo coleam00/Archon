@@ -1,6 +1,7 @@
 import { type ReactElement } from 'react';
 import { AssistantConfigPanel } from '../components/AssistantConfigPanel';
 import { SystemPanel } from '../components/SystemPanel';
+import { GithubIdentityPanel } from '../components/GithubIdentityPanel';
 
 /**
  * Global (installation-wide) console settings — assistant config + system health.
@@ -17,6 +18,7 @@ export function SettingsPage(): ReactElement {
         <div className="mx-auto flex max-w-2xl flex-col gap-6">
           <AssistantConfigPanel />
           <SystemPanel />
+          <GithubIdentityPanel />
         </div>
       </div>
     </div>
