@@ -379,7 +379,7 @@ Variable substitution order:
 2. Node output references (`$nodeId.output`, `$nodeId.output.field`)
 
 :::caution[Double-quoting `$node.output` in `bash:` nodes is a silent footgun]
-In `bash:` nodes, `$nodeId.output` and `$nodeId.output.field` are injected pre-quoted by Archon. For small outputs, values are **single-quoted inline** — the quoting is already provided by the substitution. For outputs exceeding 32 KB, Archon spills to a temp file and substitutes `$(cat '/tmp/path')` instead. Wrapping in double quotes corrupts both forms: for inline values it embeds the single quotes; for `$(cat ...)` it enables word-splitting on the command output.
+In `bash:` nodes, `$nodeId.output` and `$nodeId.output.field` are injected pre-quoted by Archon. For small outputs, values are **single-quoted inline** — the quoting is already provided by the substitution. For outputs exceeding 32 KB, Archon spills to a temp file and substitutes `$(cat '/tmp/path')` instead. Wrapping the substitution in double quotes breaks the **small (inline) case**: `var="$n.output"` becomes `var="'value'"`, embedding the literal single-quotes as part of the value. (For the large `$(cat ...)` case, double-quoting is harmless — `var="$(cat ...)"` is correct bash — but you can't know the output's size at author time, so the rule is unconditional: never double-quote.)
 
 ```bash
 # WRONG — produces status="'ok'" (single quotes become part of the value)
