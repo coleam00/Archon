@@ -58,7 +58,8 @@ export async function getOrCreateConversation(
   platformType: string,
   platformId: string,
   codebaseId?: string,
-  parentConversationId?: string
+  parentConversationId?: string,
+  userId?: string
 ): Promise<Conversation> {
   const existing = await pool.query<Conversation>(
     'SELECT * FROM remote_agent_conversations WHERE platform_type = $1 AND platform_conversation_id = $2',
@@ -66,6 +67,9 @@ export async function getOrCreateConversation(
   );
 
   if (existing.rows[0]) {
+    // First-user-wins: do not overwrite user_id on subsequent messages in the
+    // same thread from a different user. Per-message attribution lives on
+    // workflow_runs/messages instead.
     return existing.rows[0];
   }
 
@@ -105,8 +109,8 @@ export async function getOrCreateConversation(
   }
 
   const created = await pool.query<Conversation>(
-    'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd) VALUES ($1, $2, $3, $4, $5) RETURNING *',
-    [platformType, platformId, assistantType, finalCodebaseId, inheritedCwd]
+    'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+    [platformType, platformId, assistantType, finalCodebaseId, inheritedCwd, userId ?? null]
   );
 
   return created.rows[0];
@@ -190,7 +194,12 @@ export async function listConversations(
   limit = 50,
   platformType?: string,
   codebaseId?: string,
-  excludeEmpty = false
+  excludeEmpty = false,
+  /**
+   * Non-enforcing "mine" filter: when set, restrict to conversations attributed
+   * to this user (`user_id = $N`). Absent → all (default visibility stays open).
+   */
+  userId?: string
 ): Promise<readonly Conversation[]> {
   const params: unknown[] = [];
   let sql =
@@ -209,6 +218,11 @@ export async function listConversations(
   if (codebaseId) {
     params.push(codebaseId);
     sql += ` AND codebase_id = $${String(params.length)}`;
+  }
+
+  if (userId) {
+    params.push(userId);
+    sql += ` AND user_id = $${String(params.length)}`;
   }
 
   sql += ' ORDER BY last_activity_at DESC NULLS LAST';

@@ -165,6 +165,7 @@ mock.module('@archon/workflows/workflow-discovery', () => ({
 }));
 mock.module('@archon/workflows/executor', () => ({
   executeWorkflow: mockExecuteWorkflow,
+  hydrateResumableRun: mock(() => Promise.resolve(null)),
 }));
 mock.module('@archon/workflows/router', () => ({
   findWorkflow: mockFindWorkflow,
@@ -183,6 +184,15 @@ mock.module('fs', () => ({
 const mockGenerateAndSetTitle = mock(() => Promise.resolve());
 mock.module('../services/title-generator', () => ({
   generateAndSetTitle: mockGenerateAndSetTitle,
+}));
+
+// Workflow DB mock — dispatchOrchestratorWorkflow now consults findResumableRunByParentConversation
+// for all platforms (not just web), so this module must be stubbed even when these tests don't
+// exercise the resume path. The default null return keeps execution on the "fresh run" branch.
+mock.module('../db/workflows', () => ({
+  findResumableRunByParentConversation: mock(() => Promise.resolve(null)),
+  getPausedWorkflowRun: mock(() => Promise.resolve(null)),
+  updateWorkflowRun: mock(() => Promise.resolve()),
 }));
 
 // ─── Import module under test (AFTER all mocks) ─────────────────────────────

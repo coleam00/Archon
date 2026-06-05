@@ -36,7 +36,50 @@ export interface CodexProviderDefaults {
 }
 
 /**
- * Community provider defaults for Pi (@mariozechner/pi-coding-agent).
+ * Community provider defaults for GitHub Copilot (@github/copilot-sdk).
+ */
+export interface CopilotProviderDefaults {
+  [key: string]: unknown;
+  /** Default model ref, e.g. 'gpt-5', 'gpt-5-mini', 'claude-sonnet-4.5'. */
+  model?: string;
+  /**
+   * Reasoning effort passed to the SDK as `reasoningEffort`. Field name
+   * mirrors `CodexProviderDefaults.modelReasoningEffort` so users get one
+   * consistent key across cross-provider configs.
+   */
+  modelReasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
+  /**
+   * Absolute path to the Copilot CLI binary. Required in compiled Archon
+   * builds when `COPILOT_BIN_PATH` env var is not set. Dev-mode builds let
+   * the SDK resolve from `$PATH`.
+   */
+  copilotCliPath?: string;
+  /**
+   * Override Copilot's config directory. When unset the SDK uses its own
+   * default (typically `~/.copilot`).
+   */
+  configDir?: string;
+  /**
+   * Opt in to Copilot's config discovery from the repo (MCP servers, skills,
+   * etc. declared in the repo's `.copilot/` directory). Disabled by default
+   * so arbitrary repos do not implicitly load MCP servers or skills.
+   * @default false
+   */
+  enableConfigDiscovery?: boolean;
+  /**
+   * Reuse the CLI's logged-in user credentials (from `copilot login`) when
+   * no explicit token is provided via env vars. Defaults to true.
+   * @default true
+   */
+  useLoggedInUser?: boolean;
+  /**
+   * Copilot CLI log level. When unset the SDK picks its own default.
+   */
+  logLevel?: 'none' | 'error' | 'warning' | 'info' | 'debug' | 'all';
+}
+
+/**
+ * Community provider defaults for Pi (@earendil-works/pi-coding-agent).
  * v1 minimal shape; extend as capabilities are wired in.
  */
 export interface PiProviderDefaults {
@@ -96,6 +139,20 @@ export interface PiProviderDefaults {
    * @default undefined (unlimited)
    */
   maxConcurrent?: number;
+}
+
+/**
+ * Community provider defaults for OpenCode (opencode-ai).
+ * Minimal shape — extend as capabilities are wired in.
+ */
+export interface OpencodeProviderDefaults {
+  [key: string]: unknown;
+  /** Default model ref in '<provider>/<model>' format, e.g. 'anthropic/claude-3-5-sonnet' */
+  model?: string;
+  /** Base URL of an existing OpenCode server to connect to. */
+  baseUrl?: string;
+  /** Default agent name from opencode.json config to use. */
+  agent?: string;
 }
 
 /** Generic per-provider defaults bag used by config surfaces and UI. */
@@ -194,6 +251,33 @@ export interface AgentRequestOptions {
   forkSession?: boolean;
   /** When false, skip writing session transcript to disk. */
   persistSession?: boolean;
+  /**
+   * In-process tools the model may call this turn. Defined once by the caller
+   * (e.g. core's manage_run) and adapted per provider — Claude wraps each via
+   * `createSdkMcpServer`/`tool()`, Pi via `customTools`. Providers without an
+   * in-process tool path (Codex/OpenCode) ignore them. Gated on the
+   * `nativeTools` capability.
+   */
+  nativeTools?: NativeTool[];
+}
+
+/**
+ * A provider-neutral in-process tool. The handler runs in the host process and
+ * closes over whatever live context it needs (DB, operations, conversation), so
+ * `@archon/providers` never imports `@archon/core` — the tool crosses the
+ * boundary as data + a function on the request options.
+ *
+ * `inputSchema` is canonical JSON Schema (object). Each provider converts it to
+ * its SDK's schema form. The handler is expected to return a text result rather
+ * than throw — provider adapters add no safety net, so an uncaught throw would
+ * surface into the agent loop. (core's `buildManageRunTool` guarantees this with
+ * an outer try/catch around its dispatch.)
+ */
+export interface NativeTool {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  handler: (input: Record<string, unknown>) => Promise<string>;
 }
 
 /**
@@ -201,6 +285,8 @@ export interface AgentRequestOptions {
  * Providers translate fields they understand; unknown fields are ignored.
  */
 export interface NodeConfig {
+  /** Node ID from the workflow DAG — used by providers for per-node isolation (e.g., session dirs). */
+  nodeId?: string;
   mcp?: string;
   hooks?: unknown;
   skills?: string[];
@@ -275,6 +361,8 @@ export interface ProviderCapabilities {
   thinkingControl: boolean;
   fallbackModel: boolean;
   sandbox: boolean;
+  /** Whether the provider can register in-process `NativeTool`s for a turn. */
+  nativeTools: boolean;
 }
 
 /**

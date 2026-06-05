@@ -433,6 +433,9 @@ CODEX_ACCOUNT_ID=account1
       expect(
         existsSync(join(target, '.claude', 'skills', 'archon', 'examples', 'dag-workflow.yaml'))
       ).toBe(true);
+      // Codex path is also populated
+      expect(existsSync(join(target, '.agents', 'skills', 'archon', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(target, '.agents', 'skills', 'manage-run', 'SKILL.md'))).toBe(true);
     });
 
     it('should write non-empty content to skill files', async () => {
@@ -447,18 +450,29 @@ CODEX_ACCOUNT_ID=account1
       );
       expect(content.length).toBeGreaterThan(0);
       expect(content).toContain('archon');
+      // Codex SKILL.md mirrors the Claude one
+      const codexContent = readFileSync(
+        join(target, '.agents', 'skills', 'archon', 'SKILL.md'),
+        'utf-8'
+      );
+      expect(codexContent).toBe(content);
     });
 
     it('should overwrite existing skill files', async () => {
       const target = join(TEST_DIR, 'skill-target-overwrite');
       const skillDir = join(target, '.claude', 'skills', 'archon');
+      const codexSkillDir = join(target, '.agents', 'skills', 'archon');
       mkdirSync(skillDir, { recursive: true });
+      mkdirSync(codexSkillDir, { recursive: true });
       writeFileSync(join(skillDir, 'SKILL.md'), 'old content');
+      writeFileSync(join(codexSkillDir, 'SKILL.md'), 'old codex content');
 
       await copyArchonSkill(target);
 
       const content = readFileSync(join(skillDir, 'SKILL.md'), 'utf-8');
       expect(content).not.toBe('old content');
+      const codexContent = readFileSync(join(codexSkillDir, 'SKILL.md'), 'utf-8');
+      expect(codexContent).not.toBe('old codex content');
     });
 
     it('should create skill files even when target directory does not exist', async () => {
@@ -468,6 +482,7 @@ CODEX_ACCOUNT_ID=account1
       await copyArchonSkill(target);
 
       expect(existsSync(join(target, '.claude', 'skills', 'archon', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(target, '.agents', 'skills', 'archon', 'SKILL.md'))).toBe(true);
     });
   });
 
@@ -882,7 +897,7 @@ describe('checkPiModule', () => {
 
   it('returns ok:false when loader throws (Pi binary missing)', async () => {
     const result = await checkPiModule(async () => {
-      throw new Error('Cannot find module @mariozechner/pi-coding-agent');
+      throw new Error('Cannot find module @earendil-works/pi-coding-agent');
     });
     expect(result.ok).toBe(false);
     expect(result.error).toContain('pi-coding-agent');

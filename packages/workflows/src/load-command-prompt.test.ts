@@ -1,5 +1,6 @@
 import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
+import { symlink as fsSymlink } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import * as realPaths from '@archon/paths';
@@ -65,6 +66,21 @@ describe('loadCommandPrompt — home-scope resolution', () => {
 
     expect(result.success).toBe(true);
     if (result.success) expect(result.content).toBe('Personal helper body');
+  });
+
+  it('resolves a symlinked home command and reads target content', async () => {
+    const sourceDir = mkdtempSync(join(tmpdir(), 'archon-command-source-'));
+    try {
+      writeFileSync(join(sourceDir, 'linked.md'), 'Linked body');
+      await fsSymlink(join(sourceDir, 'linked.md'), join(archonHome, 'commands', 'linked.md'));
+
+      const result = await loadCommandPrompt(makeDeps(false), repoRoot, 'linked');
+
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.content).toBe('Linked body');
+    } finally {
+      rmSync(sourceDir, { recursive: true, force: true });
+    }
   });
 
   it('repo command shadows home command with the same name', async () => {

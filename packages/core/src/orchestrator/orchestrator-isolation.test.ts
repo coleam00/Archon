@@ -35,6 +35,13 @@ mock.module('../db/isolation-environments', () => ({
   })),
 }));
 
+// orchestrator.ts resolves the per-user no-reply email for worktree git identity;
+// mock it (like the other db deps) so the real db/connection + adapters aren't
+// dragged into this test's light module graph.
+mock.module('../db/user-github-token-store', () => ({
+  getUserGithubNoreplyEmail: mock(() => Promise.resolve(null)),
+}));
+
 mock.module('../db/sessions', () => ({
   getActiveSession: mock(() => Promise.resolve(null)),
   createSession: mock(() => Promise.resolve(null)),

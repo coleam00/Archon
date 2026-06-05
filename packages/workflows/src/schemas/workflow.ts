@@ -8,6 +8,7 @@ import {
   effortLevelSchema,
   thinkingConfigSchema,
   sandboxSettingsSchema,
+  betasSchema,
 } from './dag-node';
 
 // ---------------------------------------------------------------------------
@@ -19,6 +20,15 @@ export const modelReasoningEffortSchema = z.enum(['minimal', 'low', 'medium', 'h
 export type ModelReasoningEffort = z.infer<typeof modelReasoningEffortSchema>;
 
 export const webSearchModeSchema = z.enum(['disabled', 'cached', 'live']);
+
+/**
+ * External capabilities a workflow declares it needs. Today only `github`
+ * (the originating user must have connected their GitHub identity); the array
+ * shape leaves room for `gitea`/`gitlab` etc. without a schema change.
+ */
+export const workflowRequirementSchema = z.enum(['github']);
+
+export type WorkflowRequirement = z.infer<typeof workflowRequirementSchema>;
 
 export type WebSearchMode = z.infer<typeof webSearchModeSchema>;
 
@@ -65,7 +75,7 @@ export const workflowBaseSchema = z.object({
   effort: effortLevelSchema.optional(),
   thinking: thinkingConfigSchema.optional(),
   fallbackModel: z.string().min(1).optional(),
-  betas: z.array(z.string().min(1)).nonempty("'betas' must be a non-empty array").optional(),
+  betas: betasSchema.optional(),
   sandbox: sandboxSettingsSchema.optional(),
   worktree: workflowWorktreePolicySchema.optional(),
   /**
@@ -75,7 +85,20 @@ export const workflowBaseSchema = z.object({
    * Defaults to `true` (safe: serialize runs on the same path).
    */
   mutates_checkout: z.boolean().optional(),
+  /**
+   * Default for `persist_session` on every AI node in this workflow.
+   * Individual nodes can override with `persist_session: false`.
+   * Requires the resolved provider to declare `sessionResume: true`.
+   */
+  persist_sessions: z.boolean().optional(),
   tags: z.array(z.string().min(1)).optional(),
+  /**
+   * External capabilities this workflow needs. When it includes `github`, the
+   * run is hard-blocked at invocation (before any worktree/clone/AI cost) if
+   * the originating user has not connected their GitHub identity. Only enforced
+   * when per-user GitHub is enabled; a no-op for solo PAT installs.
+   */
+  requires: z.array(workflowRequirementSchema).optional(),
 });
 
 export type WorkflowBase = z.infer<typeof workflowBaseSchema>;

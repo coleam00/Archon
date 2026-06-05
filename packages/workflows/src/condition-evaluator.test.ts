@@ -511,4 +511,116 @@ describe('evaluateCondition', () => {
     expect(result).toBe(false);
     expect(parsed).toBe(false);
   });
+
+  // --- shorthand path ($nodeId.field) ---
+
+  it('shorthand path: $node.field is equivalent to $node.output.field', () => {
+    const outputs = new Map([['classify', makeOutput(JSON.stringify({ type: 'BUG' }))]]);
+    expect(evaluateCondition("$classify.type == 'BUG'", outputs).result).toBe(true);
+    expect(evaluateCondition("$classify.type == 'FEATURE'", outputs).result).toBe(false);
+  });
+
+  it('shorthand path: matches the canonical .output.field form exactly', () => {
+    const outputs = new Map([['classify', makeOutput(JSON.stringify({ type: 'BUG' }))]]);
+    expect(evaluateCondition("$classify.type == 'BUG'", outputs)).toEqual(
+      evaluateCondition("$classify.output.type == 'BUG'", outputs)
+    );
+  });
+
+  it('shorthand path: resolves structuredOutput like the canonical form', () => {
+    const outputs = new Map([['classify', makeOutput('prose', 'completed', { type: 'BUG' })]]);
+    expect(evaluateCondition("$classify.type == 'BUG'", outputs).result).toBe(true);
+  });
+
+  it('shorthand path: works with numeric operators', () => {
+    const outputs = new Map([['score', makeOutput(JSON.stringify({ confidence: 0.95 }))]]);
+    expect(evaluateCondition("$score.confidence >= '0.9'", outputs).result).toBe(true);
+    expect(evaluateCondition("$score.confidence >= '0.99'", outputs).result).toBe(false);
+  });
+
+  it('shorthand path: rejects a sub-field ($node.field.subfield) fail-closed', () => {
+    const outputs = new Map([['n', makeOutput(JSON.stringify({ a: { b: 'x' } }))]]);
+    const res = evaluateCondition("$n.a.b == 'x'", outputs);
+    expect(res.result).toBe(false);
+    expect(res.parsed).toBe(false);
+  });
+
+  it('shorthand path: absent field resolves to empty string like the canonical form', () => {
+    // An absent shorthand field is not a parse error — it resolves to '' (parsed: true),
+    // mirroring the `$node.output.field` empty-string semantics.
+    const outputs = new Map([['n', makeOutput(JSON.stringify({ type: 'BUG' }))]]);
+    const res = evaluateCondition("$n.missing == 'x'", outputs);
+    expect(res.result).toBe(false);
+    expect(res.parsed).toBe(true);
+    expect(evaluateCondition("$n.missing == ''", outputs).result).toBe(true);
+  });
+
+  // --- unquoted numeric/boolean RHS ---
+
+  it('unquoted RHS: integer comparison with ==', () => {
+    const outputs = new Map([['t', makeOutput(JSON.stringify({ exit_code: 0 }))]]);
+    expect(evaluateCondition('$t.exit_code == 0', outputs).result).toBe(true);
+    expect(evaluateCondition('$t.exit_code == 1', outputs).result).toBe(false);
+  });
+
+  it('unquoted RHS: negative integer comparison', () => {
+    const outputs = new Map([['t', makeOutput(JSON.stringify({ delta: -3 }))]]);
+    expect(evaluateCondition('$t.delta == -3', outputs).result).toBe(true);
+  });
+
+  it('unquoted RHS: integer with numeric operators', () => {
+    const outputs = new Map([['t', makeOutput(JSON.stringify({ exit_code: 0 }))]]);
+    expect(evaluateCondition('$t.exit_code > 0', outputs).result).toBe(false);
+    expect(evaluateCondition('$t.exit_code >= 0', outputs).result).toBe(true);
+    expect(evaluateCondition('$t.exit_code < 1', outputs).result).toBe(true);
+  });
+
+  it('unquoted RHS: decimal comparison', () => {
+    const outputs = new Map([['score', makeOutput(JSON.stringify({ confidence: 0.95 }))]]);
+    expect(evaluateCondition('$score.confidence >= 0.9', outputs).result).toBe(true);
+    expect(evaluateCondition('$score.confidence == 0.95', outputs).result).toBe(true);
+  });
+
+  it('unquoted RHS: boolean true/false', () => {
+    const outputs = new Map([['n', makeOutput(JSON.stringify({ passed: true }))]]);
+    expect(evaluateCondition('$n.passed == true', outputs).result).toBe(true);
+    expect(evaluateCondition('$n.passed == false', outputs).result).toBe(false);
+    expect(evaluateCondition('$n.passed != false', outputs).result).toBe(true);
+  });
+
+  it('unquoted RHS: works on the canonical .output.field form too', () => {
+    const outputs = new Map([['t', makeOutput(JSON.stringify({ exit_code: 0 }))]]);
+    expect(evaluateCondition('$t.output.exit_code == 0', outputs).result).toBe(true);
+  });
+
+  it('unquoted RHS: parsed:true for a valid unquoted expression', () => {
+    const outputs = new Map([['t', makeOutput(JSON.stringify({ exit_code: 0 }))]]);
+    expect(evaluateCondition('$t.exit_code == 0', outputs).parsed).toBe(true);
+  });
+
+  it('mixed quoted + unquoted inside an AND compound', () => {
+    const outputs = new Map([
+      ['classify', makeOutput(JSON.stringify({ type: 'BUG' }))],
+      ['test', makeOutput(JSON.stringify({ exit_code: 0 }))],
+    ]);
+    expect(
+      evaluateCondition("$classify.type == 'BUG' && $test.exit_code == 0", outputs).result
+    ).toBe(true);
+    expect(
+      evaluateCondition("$classify.type == 'BUG' && $test.exit_code == 1", outputs).result
+    ).toBe(false);
+  });
+
+  it('mixed quoted + unquoted inside an OR compound', () => {
+    const outputs = new Map([
+      ['classify', makeOutput(JSON.stringify({ type: 'FEATURE' }))],
+      ['test', makeOutput(JSON.stringify({ passed: true }))],
+    ]);
+    expect(
+      evaluateCondition("$classify.type == 'BUG' || $test.passed == true", outputs).result
+    ).toBe(true);
+    expect(
+      evaluateCondition("$classify.type == 'BUG' || $test.passed == false", outputs).result
+    ).toBe(false);
+  });
 });

@@ -42,6 +42,14 @@ export const effortLevelSchema = z.enum(['low', 'medium', 'high', 'max']);
 export type EffortLevel = z.infer<typeof effortLevelSchema>;
 
 /**
+ * Claude Agent SDK beta header list. Non-empty array of non-empty strings —
+ * the SDK expects either a populated beta header or none at all. `.nonempty()`
+ * enforces the min-length-1 rule at runtime; it does not narrow the inferred
+ * TypeScript type to a non-empty tuple (the type stays `string[]`).
+ */
+export const betasSchema = z.array(z.string().min(1)).nonempty("'betas' must be a non-empty array");
+
+/**
  * Claude Agent SDK ThinkingConfig — string shorthand or full object form.
  * Shorthand: 'adaptive' → { type: 'adaptive' }, 'enabled' → { type: 'enabled' }, 'disabled' → { type: 'disabled' }.
  */
@@ -90,7 +98,7 @@ export const sandboxSettingsSchema = z
         denyRead: z.array(z.string()).optional(),
       })
       .optional(),
-    ignoreViolations: z.record(z.array(z.string())).optional(),
+    ignoreViolations: z.record(z.string(), z.array(z.string())).optional(),
     enableWeakerNestedSandbox: z.boolean().optional(),
     enableWeakerNetworkIsolation: z.boolean().optional(),
     excludedCommands: z.array(z.string()).optional(),
@@ -137,7 +145,7 @@ export const dagNodeBaseSchema = z.object({
   model: z.string().optional(),
   provider: z.string().trim().min(1).optional(),
   context: z.enum(['fresh', 'shared']).optional(),
-  output_format: z.record(z.unknown()).optional(),
+  output_format: z.record(z.string(), z.unknown()).optional(),
   allowed_tools: z.array(z.string()).optional(),
   denied_tools: z.array(z.string()).optional(),
   idle_timeout: z.number().optional(),
@@ -149,10 +157,22 @@ export const dagNodeBaseSchema = z.object({
     .nonempty("'skills' must be a non-empty array")
     .optional(),
   agents: z
-    .record(
-      z.string().regex(AGENT_ID_REGEX, 'agent IDs must be kebab-case (a-z, 0-9, hyphen)'),
-      agentDefinitionSchema
-    )
+    .record(z.string(), agentDefinitionSchema)
+    // Validate agent-id keys in a superRefine rather than via a regex on the
+    // record key schema: zod v4 collapses a failing key-schema into a generic
+    // "Invalid key in record" message and drops the custom text, so the
+    // kebab-case guidance is emitted here (with the offending key in the path).
+    .superRefine((map, ctx) => {
+      for (const key of Object.keys(map)) {
+        if (!AGENT_ID_REGEX.test(key)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `agent IDs must be kebab-case (a-z, 0-9, hyphen): '${key}'`,
+            path: [key],
+          });
+        }
+      }
+    })
     .refine(map => Object.keys(map).length > 0, "'agents' must have at least one entry")
     .optional(),
   effort: effortLevelSchema.optional(),
@@ -162,12 +182,25 @@ export const dagNodeBaseSchema = z.object({
   // programmatically by the orchestrator for prompt caching; Zod intentionally stays narrow.
   systemPrompt: z.string().min(1).optional(),
   fallbackModel: z.string().min(1).optional(),
-  betas: z.array(z.string().min(1)).nonempty("'betas' must be a non-empty array").optional(),
+  betas: betasSchema.optional(),
   sandbox: sandboxSettingsSchema.optional(),
   // Opt out of resume caching: when true, this node re-runs on resume even if a
   // prior run completed it successfully. Use for producers whose exit code does
   // not capture output validity (e.g. bash that writes a file the consumer parses).
   always_run: z.boolean().optional(),
+  // Persist this node's provider session ID across workflow re-runs in the same
+  // scope (typically the conversation). On the next run with the same scope, the
+  // executor loads the stored session and passes it as resumeSessionId. Requires
+  // a provider with sessionResume capability. Distinct from the Claude SDK's
+  // AgentRequestOptions.persistSession (on-disk transcript persistence).
+  persist_session: z.boolean().optional(),
+  // Declares the semantic type of this node's output (e.g. 'plan', 'findings',
+  // 'code', 'summary' — an open set). When set, the executor writes a typed
+  // sidecar artifact (`nodes/<id>.md` + `<id>.meta.json`) after the node
+  // completes, so other nodes and later runs can locate output by type instead
+  // of guessing filenames. Valid on every node type (bash/script produce typed
+  // outputs too) — not an AI-only field.
+  output_type: z.string().min(1).optional(),
 });
 
 export type DagNodeBase = z.infer<typeof dagNodeBaseSchema>;
@@ -345,6 +378,7 @@ export const BASH_NODE_AI_FIELDS: readonly string[] = [
   'fallbackModel',
   'betas',
   'sandbox',
+  'persist_session',
 ];
 
 /** AI-specific fields that are meaningless on script nodes — same as bash nodes */
@@ -544,6 +578,7 @@ export const dagNodeSchema = dagNodeBaseSchema
       ...(data.trigger_rule !== undefined ? { trigger_rule: data.trigger_rule } : {}),
       ...(data.idle_timeout !== undefined ? { idle_timeout: data.idle_timeout } : {}),
       ...(data.always_run !== undefined ? { always_run: data.always_run } : {}),
+      ...(data.output_type !== undefined ? { output_type: data.output_type } : {}),
     };
 
     // Shared optional fields (valid on AI and bash nodes)
@@ -570,6 +605,7 @@ export const dagNodeSchema = dagNodeBaseSchema
       ...(data.fallbackModel !== undefined ? { fallbackModel: data.fallbackModel } : {}),
       ...(data.betas !== undefined ? { betas: data.betas } : {}),
       ...(data.sandbox !== undefined ? { sandbox: data.sandbox } : {}),
+      ...(data.persist_session !== undefined ? { persist_session: data.persist_session } : {}),
     };
 
     if (data.command !== undefined && data.command.trim().length > 0) {
@@ -642,4 +678,22 @@ export function isScriptNode(node: DagNode): node is ScriptNode {
 /** Type guard: validates a value is a known TriggerRule */
 export function isTriggerRule(value: unknown): value is TriggerRule {
   return typeof value === 'string' && (TRIGGER_RULES as readonly string[]).includes(value);
+}
+
+/**
+ * True for node types that invoke a provider and therefore participate in cross-run
+ * session persistence (`persist_session`). bash, script, approval, cancel, and loop
+ * nodes are excluded — they either make no provider call or manage their own per-
+ * iteration sessions. Shared by the loader's load-time capability gate and any other
+ * caller that needs to reason about persistence eligibility, so the exclusion list
+ * lives in one place.
+ */
+export function isPersistableNode(node: DagNode): boolean {
+  return (
+    !isLoopNode(node) &&
+    !isApprovalNode(node) &&
+    !isCancelNode(node) &&
+    !isScriptNode(node) &&
+    !isBashNode(node)
+  );
 }

@@ -306,8 +306,10 @@ archon workflow run <name> --cwd /path/to/repo "<message>"
 | `archon setup` | Interactive setup wizard for credentials and config |
 | `archon doctor` | Verify your setup (Claude binary, gh auth, DB, adapters) |
 | `archon workflow list` | List available workflows |
-| `archon workflow run <name> [msg]` | Run a workflow |
-| `archon workflow status` | Show running workflows |
+| `archon workflow run <name> [msg]` | Run a workflow (`--detach` to background it) |
+| `archon workflow status` | Show active runs (running + paused) |
+| `archon workflow runs` | List recent runs of every status for this project |
+| `archon workflow get <id>` | Show detail for a single run (any status) |
 | `archon workflow resume <id>` | Resume a failed workflow |
 | `archon workflow abandon <id>` | Abandon a non-terminal run |
 | `archon workflow approve <id> [comment]` | Approve an interactive loop gate |
@@ -341,23 +343,23 @@ archon complete <branch> --force   # skip uncommitted-changes check
 |----------|-------------|
 | `archon-assist` | General Q&A, debugging, exploration, CI failures — catch-all |
 | `archon-fix-github-issue` | Investigate, root cause analysis, implement fix, validate, PR |
+| `archon-create-issue` | Classify problem, gather context, investigate, create GitHub issue |
+| `archon-issue-review-full` | Comprehensive fix + full multi-agent review for GitHub issues |
+| `archon-piv-loop` | Guided Plan-Implement-Validate development with human-in-the-loop |
 | `archon-idea-to-pr` | Feature idea, plan, implement, validate, PR, parallel reviews, self-fix |
 | `archon-plan-to-pr` | Execute existing plan, implement, validate, PR, review |
 | `archon-feature-development` | Implement feature from plan, validate, create PR |
-| `archon-comprehensive-pr-review` | Multi-agent PR review (5 parallel reviewers) with automatic fixes |
-| `archon-smart-pr-review` | Complexity-adaptive PR review — routes to relevant agents only |
-| `archon-create-issue` | Classify problem, gather context, investigate, create GitHub issue |
-| `archon-validate-pr` | Thorough PR validation testing both main and feature branches |
-| `archon-resolve-conflicts` | Detect, analyze, and resolve merge conflicts in PRs |
-| `archon-refactor-safely` | Safe refactoring with type-check hooks and behavior verification |
-| `archon-architect` | Architectural sweep, complexity reduction, codebase health |
-| `archon-ralph-dag` | PRD implementation loop (iterate through stories until done) |
-| `archon-issue-review-full` | Comprehensive fix + full multi-agent review for GitHub issues |
-| `archon-test-loop-dag` | Iterative test-fix cycle until all tests pass |
-| `archon-remotion-generate` | Generate or modify Remotion video compositions with AI |
-| `archon-interactive-prd` | Create a PRD through guided conversation |
-| `archon-piv-loop` | Guided Plan-Implement-Validate development with human-in-the-loop |
 | `archon-adversarial-dev` | Build a complete application from scratch using adversarial development |
+| `archon-smart-pr-review` | Complexity-adaptive PR review — routes to relevant agents only |
+| `archon-comprehensive-pr-review` | Multi-agent PR review (5 parallel reviewers) with automatic fixes |
+| `archon-validate-pr` | Thorough PR validation testing both main and feature branches |
+| `archon-architect` | Architectural sweep, complexity reduction, codebase health |
+| `archon-refactor-safely` | Safe refactoring with type-check hooks and behavior verification |
+| `archon-interactive-prd` | Create a PRD through guided conversation |
+| `archon-ralph-dag` | PRD implementation loop (iterate through stories until done) |
+| `archon-workflow-builder` | Generate a new Archon workflow YAML for your project |
+| `archon-remotion-generate` | Generate or modify Remotion video compositions with AI |
+| `archon-resolve-conflicts` | Detect, analyze, and resolve merge conflicts in PRs |
 
 These bundled workflows work for most projects. To customize, copy one from `.archon/workflows/defaults/` into `.archon/workflows/` and modify it — same-named files override the defaults.
 
@@ -465,13 +467,14 @@ If you want Claude Code to be able to invoke Archon workflows on your behalf, in
 Archon skill into your project. The setup wizard handles this automatically — just run
 `archon setup` and accept the skill installation prompt.
 
-To install manually instead:
+To install manually instead, run `archon skill install /path/to/your/repo` (which writes both the `archon` and `manage-run` skills), or copy them by hand:
 
 ```bash
 cp -r Archon/.claude/skills/archon /path/to/your/repo/.claude/skills/
+cp -r Archon/.claude/skills/manage-run /path/to/your/repo/.claude/skills/
 ```
 
-Then in Claude Code, say things like "use archon to fix issue #42" and it will invoke the appropriate workflow.
+Then in Claude Code, say things like "use archon to fix issue #42" and it will invoke the appropriate workflow. The `manage-run` skill lets it inspect and control runs (`archon workflow runs`/`get`/`approve`...).
 
 ---
 

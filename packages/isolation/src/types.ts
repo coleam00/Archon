@@ -43,6 +43,15 @@ interface IsolationRequestBase {
   canonicalRepoPath: RepoPath;
 
   description?: string;
+
+  /**
+   * Optional git author identity to stamp on the new worktree (`git config
+   * user.email`/`user.name`). Populated from the originating user's connected
+   * GitHub no-reply email so workflow commits attribute to the human. Absent in
+   * solo installs and for unconnected users — the worktree then inherits the
+   * ambient git identity (unchanged behavior).
+   */
+  gitIdentity?: { email: string; name?: string };
 }
 
 export interface IssueIsolationRequest extends IsolationRequestBase {
@@ -234,6 +243,8 @@ export interface IsolationEnvironmentRow {
   status: EnvironmentStatus;
   created_at: Date;
   created_by_platform: string | null;
+  /** FK to remote_agent_users.id; populated by chat/forge adapters via the resolver. */
+  created_by_user_id: string | null;
   metadata: Record<string, unknown>;
 }
 
@@ -291,6 +302,8 @@ export interface CreateEnvironmentParams {
   working_path: string;
   branch_name: BranchName;
   created_by_platform?: string;
+  /** FK to remote_agent_users.id; threaded from ResolveRequest.userId. */
+  created_by_user_id?: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -305,6 +318,14 @@ export interface ResolveRequest {
   } | null;
   hints?: IsolationHints;
   platformType: string;
+  /** Archon user UUID; populated by chat/forge adapter handlers. */
+  userId?: string;
+  /**
+   * Git author identity to stamp on a newly-created worktree (no-reply email of
+   * the originating user's connected GitHub account). Forwarded into the
+   * IsolationRequest passed to the provider. Absent → ambient git identity.
+   */
+  gitIdentity?: { email: string; name?: string };
 }
 
 export type ResolutionMethod =

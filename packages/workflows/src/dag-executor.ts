@@ -41,6 +41,7 @@ import type {
   EffortLevel,
   ThinkingConfig,
   SandboxSettings,
+  WorkflowSource,
 } from './schemas';
 import {
   isBashNode,
@@ -51,9 +52,10 @@ import {
   isApprovalContext,
 } from './schemas';
 import { formatToolCall } from './utils/tool-formatter';
-import { createLogger } from '@archon/paths';
+import { createLogger, captureWorkflowCompleted } from '@archon/paths';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { evaluateCondition } from './condition-evaluator';
+import { writeNodeArtifact } from './artifacts-index';
 import {
   logNodeStart,
   logNodeComplete,
@@ -462,6 +464,7 @@ async function resolveNodeProviderAndModel(
 
   // Build raw nodeConfig — provider translates internally
   const nodeConfig: NodeConfig = {
+    nodeId: node.id,
     mcp: node.mcp,
     hooks: node.hooks,
     skills: node.skills,
@@ -1038,8 +1041,8 @@ async function executeNodeInternal(
       }
     }
 
-    // If the node completed via idle timeout, log it
-    if (nodeIdleTimedOut) {
+    // Only post "completed via idle timeout" when output exists — zero-output timeout falls through to the empty-output guard below.
+    if (nodeIdleTimedOut && (nodeOutputText.trim() !== '' || structuredOutput !== undefined)) {
       getLog().warn(
         { nodeId: node.id, timeoutMs: effectiveIdleTimeout },
         'dag_node_completed_via_idle_timeout'
@@ -1133,18 +1136,12 @@ async function executeNodeInternal(
       return { state: 'failed', output: nodeOutputText, error: creditError };
     }
 
-    // Empty assistant output is a failure for AI nodes — a provider stream
-    // that closed cleanly with zero content typically means a silent
-    // rejection or interruption that didn't produce a result.isError chunk.
-    // Bash/script/approval nodes don't reach this path; they have their
-    // own dispatch and never stream through this loop.
-    //
-    // Idle-timeout exits are exempt: the timeout warning at line 1017 has
-    // already told the user the node "completed via idle timeout"; flipping
-    // that to a failure here would directly contradict the on-screen message.
-    if (nodeOutputText.trim() === '' && structuredOutput === undefined && !nodeIdleTimedOut) {
+    // Fail for zero output: covers both silent non-timeout exits AND idle-timeout before first token (time-to-first-token exceeded the window).
+    if (nodeOutputText.trim() === '' && structuredOutput === undefined) {
       const duration = Date.now() - nodeStartTime;
-      const emptyError = `Node '${node.id}' produced no assistant output. The provider stream closed without yielding content — likely a silent provider rejection or stream interruption.`;
+      const emptyError = nodeIdleTimedOut
+        ? `Node '${node.id}' timed out with no output (idle for ${String(effectiveIdleTimeout / 60000)} min). The provider did not emit any content before the watchdog fired — likely time-to-first-token exceeded the timeout. Consider increasing idle_timeout or reducing prompt size.`
+        : `Node '${node.id}' produced no assistant output. The provider stream closed without yielding content — likely a silent provider rejection or stream interruption.`;
       getLog().error({ nodeId: node.id, durationMs: duration }, 'dag.node_empty_output');
       await logNodeError(logDir, workflowRun.id, node.id, emptyError);
 
@@ -2198,6 +2195,11 @@ async function executeLoopNode(
             CONTEXT: issueContext ?? '',
             EXTERNAL_CONTEXT: issueContext ?? '',
             ISSUE_CONTEXT: issueContext ?? '',
+            // Managed per-project env vars + per-user GitHub token overrides
+            // (incl. the unconnected-user scrub) must win last, exactly as
+            // executeBashNode/executeScriptNode do — otherwise until_bash would
+            // inherit the server's ambient GH token and bypass the scrub.
+            ...(config.envVars ?? {}),
           },
         });
         bashComplete = true; // exit 0 = complete
@@ -2567,7 +2569,12 @@ export async function executeDagWorkflow(
   platform: IWorkflowPlatform,
   conversationId: string,
   cwd: string,
-  workflow: { name: string; nodes: readonly DagNode[] } & WorkflowLevelOptions,
+  workflow: {
+    name: string;
+    nodes: readonly DagNode[];
+    /** Workflow-level default for per-node `persist_session` (read directly here). */
+    persist_sessions?: boolean;
+  } & WorkflowLevelOptions,
   workflowRun: WorkflowRun,
   workflowProvider: string,
   workflowModel: string | undefined,
@@ -2578,7 +2585,9 @@ export async function executeDagWorkflow(
   config: WorkflowConfig,
   configuredCommandFolder?: string,
   issueContext?: string,
-  priorCompletedNodes?: Map<string, string>
+  priorCompletedNodes?: Map<string, string>,
+  /** Discovery source — telemetry only (custom-vs-default + name redaction). */
+  source?: WorkflowSource
 ): Promise<string | undefined> {
   const dagStartTime = Date.now();
   const workflowLevelOptions = {
@@ -2632,6 +2641,13 @@ export async function executeDagWorkflow(
   // from the prior run are not included — total_cost_usd will reflect resumed-portion cost only.
   let totalCostUsd = 0;
 
+  // Per-node session persistence across workflow re-runs. Scope = the DB conversation
+  // UUID. The `?? undefined` guard keeps an empty/missing conversation_id from keying
+  // every invocation to the same blank scope — persistence is simply skipped in that case.
+  // Distinct from AgentRequestOptions.persistSession (Claude SDK on-disk transcript flag).
+  const persistScopeKey: string | undefined = workflowRun.conversation_id ?? undefined;
+  const workflowPersistSessions = workflow.persist_sessions === true;
+
   for (let layerIdx = 0; layerIdx < layers.length; layerIdx++) {
     const layer = layers[layerIdx];
     const isParallelLayer = layer.length > 1;
@@ -2647,58 +2663,64 @@ export async function executeDagWorkflow(
           // 0. Skip if this node completed successfully in a prior run (resume path).
           // `always_run: true` opts the node out of resume caching — re-execute even
           // when the prior run completed it.
-          if (priorCompletedNodes?.has(node.id) && node.always_run) {
-            getLog().info({ nodeId: node.id }, 'dag.node_always_run_resume_forced');
-            deps.store
-              .createWorkflowEvent({
-                workflow_run_id: workflowRun.id,
-                event_type: 'node_always_run_reset',
-                step_name: node.id,
-                data: { prior_output: priorCompletedNodes.get(node.id) ?? '' },
-              })
-              .catch((err: Error) => {
-                getLog().error(
-                  { err, workflowRunId: workflowRun.id, eventType: 'node_always_run_reset' },
-                  'workflow_event_persist_failed'
-                );
+          if (priorCompletedNodes?.has(node.id)) {
+            if (node.always_run) {
+              getLog().info({ nodeId: node.id }, 'dag.node_always_run_resume_forced');
+              deps.store
+                .createWorkflowEvent({
+                  workflow_run_id: workflowRun.id,
+                  event_type: 'node_always_run_reset',
+                  step_name: node.id,
+                  data: { prior_output: priorCompletedNodes.get(node.id) ?? '' },
+                })
+                .catch((err: Error) => {
+                  getLog().error(
+                    { err, workflowRunId: workflowRun.id, eventType: 'node_always_run_reset' },
+                    'workflow_event_persist_failed'
+                  );
+                });
+              // falls through to re-execute the node
+            } else {
+              getLog().info({ nodeId: node.id }, 'dag.node_skipped_prior_success');
+              await logNodeSkip(logDir, workflowRun.id, node.id, 'prior_success').catch(
+                (err: Error) => {
+                  getLog().warn({ err, nodeId: node.id }, 'dag.node_skip_log_write_failed');
+                }
+              );
+              deps.store
+                .createWorkflowEvent({
+                  workflow_run_id: workflowRun.id,
+                  event_type: 'node_skipped_prior_success',
+                  step_name: node.id,
+                  data: {
+                    reason: 'prior_success',
+                    node_output: priorCompletedNodes.get(node.id) ?? '',
+                  },
+                })
+                .catch((err: Error) => {
+                  getLog().error(
+                    {
+                      err,
+                      workflowRunId: workflowRun.id,
+                      eventType: 'node_skipped_prior_success',
+                    },
+                    'workflow_event_persist_failed'
+                  );
+                });
+              const emitterPrior = getWorkflowEventEmitter();
+              emitterPrior.emit({
+                type: 'node_skipped',
+                runId: workflowRun.id,
+                nodeId: node.id,
+                nodeName: node.command ?? node.id,
+                reason: 'prior_success',
               });
-          }
-          if (priorCompletedNodes?.has(node.id) && !node.always_run) {
-            getLog().info({ nodeId: node.id }, 'dag.node_skipped_prior_success');
-            await logNodeSkip(logDir, workflowRun.id, node.id, 'prior_success').catch(
-              (err: Error) => {
-                getLog().warn({ err, nodeId: node.id }, 'dag.node_skip_log_write_failed');
-              }
-            );
-            deps.store
-              .createWorkflowEvent({
-                workflow_run_id: workflowRun.id,
-                event_type: 'node_skipped_prior_success',
-                step_name: node.id,
-                data: {
-                  reason: 'prior_success',
-                  node_output: priorCompletedNodes.get(node.id) ?? '',
-                },
-              })
-              .catch((err: Error) => {
-                getLog().error(
-                  { err, workflowRunId: workflowRun.id, eventType: 'node_skipped_prior_success' },
-                  'workflow_event_persist_failed'
-                );
-              });
-            const emitterPrior = getWorkflowEventEmitter();
-            emitterPrior.emit({
-              type: 'node_skipped',
-              runId: workflowRun.id,
-              nodeId: node.id,
-              nodeName: node.command ?? node.id,
-              reason: 'prior_success',
-            });
-            // Return the pre-populated output (already in nodeOutputs)
-            return {
-              nodeId: node.id,
-              output: nodeOutputs.get(node.id) ?? { state: 'skipped' as const, output: '' },
-            };
+              // Return the pre-populated output (already in nodeOutputs)
+              return {
+                nodeId: node.id,
+                output: nodeOutputs.get(node.id) ?? { state: 'skipped' as const, output: '' },
+              };
+            }
           }
 
           // 1. Evaluate trigger rule
@@ -2971,8 +2993,88 @@ export async function executeDagWorkflow(
           // 5. Determine session — parallel or context:fresh → always fresh
           // Parallel layers always get fresh sessions; explicit 'fresh' context also forces it.
           // 'shared' forces continuation. Default: fresh for parallel, inherited for sequential.
-          const isFresh = isParallelLayer || node.context === 'fresh';
-          const resumeSessionId = isFresh ? undefined : lastSequentialSessionId;
+          // isFreshSequential controls in-run threading (lastSequentialSessionId).
+          // bypassesPersistence (context:'fresh' only) also disables cross-run persist_session;
+          // a parallel-layer node CAN still use persist_session — it just doesn't share with siblings.
+          const isFreshSequential = isParallelLayer || node.context === 'fresh';
+          const bypassesPersistence = node.context === 'fresh';
+          let resumeSessionId: string | undefined = isFreshSequential
+            ? undefined
+            : lastSequentialSessionId;
+
+          const nodePersistFlag = 'persist_session' in node ? node.persist_session : undefined;
+          // Strictly opt-in: off unless the node sets persist_session, or the workflow
+          // sets persist_sessions and the node doesn't override it to false.
+          const effectivePersist: boolean = nodePersistFlag ?? workflowPersistSessions;
+
+          if (effectivePersist && !bypassesPersistence) {
+            // Runtime capability guard via the resolved provider instance (catches the
+            // case where provider was resolved from .archon/config.yaml defaults).
+            // Uses the instance's getCapabilities() rather than the static registry so
+            // tests can substitute mock providers with different caps without registering.
+            const caps = deps.getAgentProvider(provider).getCapabilities();
+            if (!caps.sessionResume) {
+              throw new Error(
+                `Node '${node.id}' has persist_session: true but resolved provider '${provider}' does not support sessionResume. Remove persist_session, or use a provider with sessionResume capability.`
+              );
+            }
+            if (persistScopeKey) {
+              try {
+                const persisted = await deps.store.getWorkflowNodeSession({
+                  workflow_name: workflow.name,
+                  node_id: node.id,
+                  scope_key: persistScopeKey,
+                  provider,
+                });
+                if (persisted) {
+                  resumeSessionId = persisted.provider_session_id;
+                  // workflow_events is broader-scoped and longer-lived than the
+                  // node-session table. A session ID can resume a conversation, so we
+                  // store only an 8-char prefix here — enough for observability without
+                  // leaving a resumable artifact in the event log.
+                  const sessionIdPreview = `${persisted.provider_session_id.slice(0, 8)}…`;
+                  deps.store
+                    .createWorkflowEvent({
+                      workflow_run_id: workflowRun.id,
+                      event_type: 'node_session_resumed',
+                      step_name: node.id,
+                      data: {
+                        provider,
+                        scope_key: persistScopeKey,
+                        provider_session_id_preview: sessionIdPreview,
+                      },
+                    })
+                    .catch((err: Error) => {
+                      getLog().warn(
+                        { err, nodeId: node.id },
+                        'persist_session_resumed_event_persist_failed'
+                      );
+                    });
+                }
+              } catch (err) {
+                // Non-fatal: the node still runs (fresh, no resume), but the user opted
+                // into persistence — a DB error here silently breaks continuity, so warn
+                // them as well as the logs. (A "no row" result is not an error: it returns
+                // null above and this catch never fires for it.)
+                getLog().warn(
+                  {
+                    err: err as Error,
+                    nodeId: node.id,
+                    workflow: workflow.name,
+                    scopeKey: persistScopeKey,
+                    provider,
+                  },
+                  'persist_session_lookup_failed'
+                );
+                await safeSendMessage(
+                  platform,
+                  conversationId,
+                  `⚠️ Could not load the persisted session for node \`${node.id}\` — it will run without prior context. Session continuity may be broken; if this recurs, check server logs or run \`/workflow reset-sessions ${workflow.name}\`.`,
+                  { workflowId: workflowRun.id, nodeName: node.id }
+                );
+              }
+            }
+          }
 
           // 6. Execute with retry for transient failures
           const retryConfig = getEffectiveNodeRetryConfig(node);
@@ -3042,6 +3144,59 @@ export async function executeDagWorkflow(
             await new Promise(resolve => setTimeout(resolve, delayMs));
           }
 
+          // Persist (or drop) the node's provider session ID for the next run in this scope.
+          // context:'fresh' nodes are excluded (the author opted out of any cross-run memory).
+          if (
+            effectivePersist &&
+            !bypassesPersistence &&
+            persistScopeKey &&
+            output.state === 'completed'
+          ) {
+            try {
+              if (output.sessionId !== undefined) {
+                await deps.store.upsertWorkflowNodeSession({
+                  workflow_name: workflow.name,
+                  node_id: node.id,
+                  scope_key: persistScopeKey,
+                  provider,
+                  provider_session_id: output.sessionId,
+                  last_run_id: workflowRun.id,
+                });
+              } else {
+                // Provider returned no session ID (e.g. Codex with no thread ID).
+                // Drop the stale row for THIS provider only — leave other providers'
+                // rows intact so switching providers between runs doesn't clobber
+                // the other side's continuity.
+                await deps.store.deleteWorkflowNodeSessions({
+                  workflow_name: workflow.name,
+                  scope_key: persistScopeKey,
+                  node_id: node.id,
+                  provider,
+                });
+              }
+            } catch (err) {
+              // Non-fatal: persistence failure does not undo a successful node execution.
+              // But the user opted into persistence — the next run will start fresh for
+              // this node, so warn them as well as the logs.
+              getLog().warn(
+                {
+                  err: err as Error,
+                  nodeId: node.id,
+                  workflow: workflow.name,
+                  scopeKey: persistScopeKey,
+                  provider,
+                },
+                'persist_session_upsert_failed'
+              );
+              await safeSendMessage(
+                platform,
+                conversationId,
+                `⚠️ Could not persist the session for node \`${node.id}\` (${provider}). The next run will start this node fresh.`,
+                { workflowId: workflowRun.id, nodeName: node.id }
+              );
+            }
+          }
+
           return { nodeId: node.id, output };
         } catch (error) {
           const err = error as Error;
@@ -3078,12 +3233,40 @@ export async function executeDagWorkflow(
     );
 
     // Process layer results — store all outputs, track failures
+    const nodeById = new Map(layer.map(n => [n.id, n]));
     let layerHadFailure = false;
     for (const result of layerResults) {
       if (result.status === 'fulfilled') {
         const { nodeId, output } = result.value;
         if (output.costUsd !== undefined) totalCostUsd += output.costUsd;
         nodeOutputs.set(nodeId, output);
+        // Typed artifact: when a node declares `output_type`, persist its output
+        // as a typed sidecar (nodes/<id>.md + .meta.json) so other nodes and
+        // later runs can locate it by type. Best-effort — a metadata write must
+        // never fail an otherwise-successful node.
+        const completedNode = nodeById.get(nodeId);
+        if (output.state === 'completed' && completedNode?.output_type) {
+          try {
+            await writeNodeArtifact(
+              artifactsDir,
+              {
+                nodeId,
+                outputType: completedNode.output_type,
+                runId: workflowRun.id,
+                producedAt: new Date().toISOString(),
+                // `sessionId` may be undefined (e.g. bash/script nodes have no
+                // session); writeNodeArtifact omits it from the metadata when so.
+                sessionId: output.sessionId,
+              },
+              output.output
+            );
+          } catch (err) {
+            getLog().warn(
+              { err: err as Error, nodeId, workflowRunId: workflowRun.id },
+              'artifacts.write_failed'
+            );
+          }
+        }
         if (output.state === 'completed' && !isParallelLayer && output.sessionId !== undefined) {
           lastSequentialSessionId = output.sessionId;
         }
@@ -3187,6 +3370,20 @@ export async function executeDagWorkflow(
           `${nodeCounts.skipped} downstream node${nodeCounts.skipped !== 1 ? 's were' : ' was'} skipped.`
         : `DAG workflow '${workflow.name}' completed with no successful nodes. ` +
           'Check node conditions, trigger rules, and upstream failures.';
+    // Anonymous telemetry: terminal failure (no successful nodes). Counts/
+    // duration are in scope here even though they aren't persisted to the DB row.
+    captureWorkflowCompleted({
+      outcome: 'failed',
+      workflowName: workflow.name,
+      workflowSource: source,
+      provider: workflowProvider,
+      durationMs: Date.now() - dagStartTime,
+      nodesCompleted: nodeCounts.completed,
+      nodesFailed: nodeCounts.failed,
+      nodesSkipped: nodeCounts.skipped,
+      nodesTotal: nodeCounts.total,
+      exitReason: 'no_nodes_completed',
+    });
     // Note: nodeCounts not stored for failed runs — failWorkflowRun only stores { error }.
     // Frontend guards with isValidNodeCounts so missing node_counts is safe.
     await deps.store.failWorkflowRun(workflowRun.id, failMsg).catch((dbErr: Error) => {
@@ -3220,6 +3417,19 @@ export async function executeDagWorkflow(
       .map(([id, o]) => `'${id}': ${o.state === 'failed' ? o.error : 'unknown'}`)
       .join('; ');
     const failMsg = `DAG workflow '${workflow.name}' completed with failures: ${failedNodes}`;
+    // Anonymous telemetry: terminal failure (some nodes failed).
+    captureWorkflowCompleted({
+      outcome: 'failed',
+      workflowName: workflow.name,
+      workflowSource: source,
+      provider: workflowProvider,
+      durationMs: Date.now() - dagStartTime,
+      nodesCompleted: nodeCounts.completed,
+      nodesFailed: nodeCounts.failed,
+      nodesSkipped: nodeCounts.skipped,
+      nodesTotal: nodeCounts.total,
+      exitReason: 'node_error',
+    });
     await deps.store.failWorkflowRun(workflowRun.id, failMsg).catch((dbErr: Error) => {
       getLog().error({ err: dbErr, workflowRunId: workflowRun.id }, 'dag_db_fail_failed');
     });
@@ -3274,6 +3484,18 @@ export async function executeDagWorkflow(
     runId: workflowRun.id,
     workflowName: workflow.name,
     duration,
+  });
+  // Anonymous telemetry: successful terminal run with outcome + duration + counts.
+  captureWorkflowCompleted({
+    outcome: 'completed',
+    workflowName: workflow.name,
+    workflowSource: source,
+    provider: workflowProvider,
+    durationMs: duration,
+    nodesCompleted: nodeCounts.completed,
+    nodesFailed: nodeCounts.failed,
+    nodesSkipped: nodeCounts.skipped,
+    nodesTotal: nodeCounts.total,
   });
   deps.store
     .createWorkflowEvent({

@@ -5,7 +5,7 @@ import { describe, it, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { BUNDLED_SKILL_FILES } from '../bundled-skill';
+import { BUNDLED_MANAGE_RUN_SKILL_FILES, BUNDLED_SKILL_FILES } from '../bundled-skill';
 import { copyArchonSkill, skillInstallCommand } from './skill';
 
 describe('copyArchonSkill', () => {
@@ -24,6 +24,28 @@ describe('copyArchonSkill', () => {
 
     const skillRoot = join(tempDir, '.claude', 'skills', 'archon');
     for (const [relativePath, content] of Object.entries(BUNDLED_SKILL_FILES)) {
+      const dest = join(skillRoot, relativePath);
+      expect(existsSync(dest)).toBe(true);
+      expect(readFileSync(dest, 'utf-8')).toBe(content);
+    }
+  });
+
+  it('writes every bundled skill file under .agents/skills/archon/ (Codex path)', async () => {
+    await copyArchonSkill(tempDir);
+
+    const skillRoot = join(tempDir, '.agents', 'skills', 'archon');
+    for (const [relativePath, content] of Object.entries(BUNDLED_SKILL_FILES)) {
+      const dest = join(skillRoot, relativePath);
+      expect(existsSync(dest)).toBe(true);
+      expect(readFileSync(dest, 'utf-8')).toBe(content);
+    }
+  });
+
+  it('writes every bundled manage-run skill file under .agents/skills/manage-run/ (Codex path)', async () => {
+    await copyArchonSkill(tempDir);
+
+    const skillRoot = join(tempDir, '.agents', 'skills', 'manage-run');
+    for (const [relativePath, content] of Object.entries(BUNDLED_MANAGE_RUN_SKILL_FILES)) {
       const dest = join(skillRoot, relativePath);
       expect(existsSync(dest)).toBe(true);
       expect(readFileSync(dest, 'utf-8')).toBe(content);
@@ -66,9 +88,12 @@ describe('skillInstallCommand', () => {
 
     expect(exitCode).toBe(0);
     expect(existsSync(join(tempDir, '.claude', 'skills', 'archon', 'SKILL.md'))).toBe(true);
-    // Final log line should mention restarting Claude Code
+    // Also installs into the Codex path
+    expect(existsSync(join(tempDir, '.agents', 'skills', 'archon', 'SKILL.md'))).toBe(true);
+    expect(existsSync(join(tempDir, '.agents', 'skills', 'manage-run', 'SKILL.md'))).toBe(true);
+    // Final log line should mention restarting both Claude Code and Codex
     const lastLog = logSpy.mock.calls.at(-1)?.[0] as string | undefined;
-    expect(lastLog).toContain('Restart Claude Code');
+    expect(lastLog).toContain('Restart Claude Code or Codex');
   });
 
   it('returns 1 and prints an error when the target directory does not exist', async () => {
@@ -79,7 +104,8 @@ describe('skillInstallCommand', () => {
     expect(errSpy).toHaveBeenCalled();
     const firstError = errSpy.mock.calls[0][0] as string;
     expect(firstError).toContain('Directory does not exist');
-    // Nothing should have been written
+    // Nothing should have been written to either path
     expect(existsSync(join(missing, '.claude'))).toBe(false);
+    expect(existsSync(join(missing, '.agents'))).toBe(false);
   });
 });

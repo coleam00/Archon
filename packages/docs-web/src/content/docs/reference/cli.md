@@ -86,7 +86,7 @@ archon setup --spawn              # open in a new terminal window
 
 ### `doctor`
 
-Verify your Archon setup. Runs a checklist of common failure points: Claude binary spawn, gh CLI auth, Pi auth (when Pi is configured as default), database reachability, workspace writability, bundled defaults, and adapter token pings (Slack/Telegram, best-effort).
+Verify your Archon setup. Runs a checklist of common failure points: Claude binary spawn, gh CLI auth, Pi auth (when Pi is configured as default), database reachability, workspace writability, bundled defaults, telemetry state, and adapter token pings (Slack/Telegram, best-effort).
 
 ```bash
 archon doctor
@@ -95,6 +95,38 @@ archon doctor
 Exit code 0 if all checks pass or are skipped; 1 if any critical check fails. Adapter pings degrade to `skip` on network errors — a flaky connection does not flip the result red.
 
 Also runs automatically at the end of `archon setup` (optional).
+
+### `auth github`
+
+Connect the current CLI user's GitHub identity via the GitHub device flow, so workflow commits, PR comments, and pushes attribute to you instead of the bot.
+
+```bash
+archon auth github
+```
+
+Only meaningful on **multi-user installs** running GitHub App mode (`GITHUB_APP_ID` + `GITHUB_APP_CLIENT_ID`) with `TOKEN_ENCRYPTION_KEY` set — solo `GITHUB_TOKEN` installs don't need it and the command exits with an explanatory error. Your CLI identity is resolved from `ARCHON_USER_ID` (explicit override) or `$USER` / `$USERNAME`, mapped to a stable Archon user via the `cli` platform identity.
+
+The command prints a `verification_uri` and a one-time `user_code`; visit the URL, enter the code, and authorize. On success the access/refresh tokens are stored encrypted (AES-256-GCM) in Archon's database. Exit code 0 on success; 1 if per-user GitHub is disabled, the identity can't be resolved, the code expires, or authorization is denied.
+
+### `telemetry status`
+
+Show the current anonymous telemetry state: whether it is enabled, the opt-out reason if not, the install UUID, the active PostHog host, and the key source.
+
+```bash
+archon telemetry status
+```
+
+Useful for verifying that an opt-out env var (`DO_NOT_TRACK=1`, `ARCHON_TELEMETRY_DISABLED=1`, `CI=true`, `POSTHOG_API_KEY=off`) is being picked up. Inspecting status never creates a `telemetry-id` file while opted out.
+
+### `telemetry reset`
+
+Rotate the persisted anonymous install UUID at `~/.archon/telemetry-id`. The previous ID is overwritten and not recoverable.
+
+```bash
+archon telemetry reset
+```
+
+Exit code 0 on success; 1 if the ID file cannot be written.
 
 ### `workflow list`
 
@@ -143,6 +175,7 @@ Progress events (node start/complete/fail/skip, approval gates) are written to s
 | `--resume` | Resume from last failed run at the working path (skips completed nodes) |
 | `--quiet`, `-q` | Suppress all progress output to stderr |
 | `--verbose`, `-v` | Also show tool-level events (tool name and duration) |
+| `--detach` | Run in a detached background child and return immediately. The child does all the work; find it later with `workflow runs`/`workflow get`. Child stdout/stderr is captured to `~/.archon/logs/detached-run-<id>.log`. Combine with `--json` for a machine-readable ack. |
 
 **Default (no flags):**
 - Creates worktree with auto-generated branch (`archon/task-<workflow>-<timestamp>`)
@@ -173,11 +206,36 @@ Ambiguous workflow 'review'. Did you mean:
 
 ### `workflow status`
 
-Show all running workflow runs across all worktrees.
+Show **active** workflow runs (running and paused) across all worktrees. For full history (all statuses) scoped to the current project, use `workflow runs`.
 
 ```bash
 archon workflow status
 archon workflow status --json
+archon workflow status --verbose   # add a per-node summary for each run
+```
+
+### `workflow runs`
+
+List recent runs of **every** status (completed, failed, cancelled, running, paused) for the current project. The project is resolved from `cwd` the same way `workflow run` does. Complements `workflow status` (which is active-only).
+
+```bash
+archon workflow runs
+archon workflow runs --json
+archon workflow runs --status failed   # filter to one status
+archon workflow runs --limit 50        # cap rows (default 20)
+archon workflow runs --all             # list across all projects (ignore cwd scope)
+```
+
+If `cwd` is not a registered project, the command falls back to a global list and says so — `--json` carries this as a `scopeFallback: true` field so a consuming agent never mistakes a global result for a project-scoped one.
+
+### `workflow get`
+
+Show detail for a single run by ID, regardless of status (unlike `status`, which is active-only). Use it to answer "did that run pass?" for a completed/failed run. Exits non-zero when the run is not found.
+
+```bash
+archon workflow get <run-id>
+archon workflow get <run-id> --json
+archon workflow get <run-id> --verbose   # add the per-node event summary
 ```
 
 ### `workflow resume`
@@ -186,7 +244,10 @@ Resume a failed workflow run. Re-executes the workflow, automatically skipping n
 
 ```bash
 archon workflow resume <run-id>
+archon workflow resume <run-id> --json   # validate + ack only; does NOT re-execute inline
 ```
+
+In `--json` mode the command is a non-blocking control-plane ack: it validates the run is resumable and reports its state but does **not** re-execute inline (execution streams output to stdout, which would corrupt the JSON). To actually drive a resumable run to completion, use the blocking form or `workflow run <name> --resume --detach`.
 
 ### `workflow abandon`
 
@@ -194,6 +255,7 @@ Discard a workflow run (marks it as `cancelled`). Use this to unblock a worktree
 
 ```bash
 archon workflow abandon <run-id>
+archon workflow abandon <run-id> --json
 ```
 
 ### `workflow approve`
@@ -204,7 +266,10 @@ Approve a paused workflow run at an interactive approval gate. Optionally provid
 archon workflow approve <run-id>
 archon workflow approve <run-id> "Looks good, proceed"
 archon workflow approve <run-id> --comment "Looks good, proceed"
+archon workflow approve <run-id> --json   # record approval + ack; does NOT auto-resume inline
 ```
+
+In human mode `approve`/`reject` auto-resume the run inline. In `--json` mode they record the decision and return an ack **without** resuming (the run is left resumable for a backgrounded `resume`/`run --resume`).
 
 ### `workflow reject`
 
@@ -213,6 +278,7 @@ Reject a paused workflow run at an approval gate. Optionally provide a reason th
 ```bash
 archon workflow reject <run-id>
 archon workflow reject <run-id> --reason "Needs more tests"
+archon workflow reject <run-id> --json
 ```
 
 ### `workflow cleanup`
@@ -349,7 +415,7 @@ The cached web UI is stored at `~/.archon/web-dist/<version>/`. Each version is 
 
 ### `skill install [path]`
 
-Install the bundled Archon skill files into a project's `.claude/skills/archon/` directory. Always overwrites existing files to ensure the latest version shipped with the current Archon binary is installed.
+Install the bundled Archon skills into both `.claude/skills/` (Claude Code) and `.agents/skills/` (Codex) directories of a project. Always overwrites existing files to ensure the latest version shipped with the current Archon binary is installed.
 
 ```bash
 # Install into the current directory
@@ -359,7 +425,7 @@ archon skill install
 archon skill install /path/to/project
 ```
 
-The Archon skill teaches Claude Code how to work with Archon workflows, commands, and project conventions. It is also installed automatically during `archon setup`.
+Two skills are installed: **`archon`**, which teaches the assistant how to work with Archon workflows, commands, and project conventions; and **`manage-run`**, a focused skill for inspecting and controlling workflow runs via the `archon` CLI. Each skill is written to both `.claude/skills/<skill>/` (Claude Code) and `.agents/skills/<skill>/` (Codex's canonical project-level skill path). Both are also installed automatically during `archon setup`.
 
 ### `version`
 
@@ -376,7 +442,7 @@ archon version
 | `--cwd <path>` | Override working directory (default: current directory) |
 | `--quiet`, `-q` | Reduce log verbosity to warnings and errors only |
 | `--verbose`, `-v` | Show debug-level output |
-| `--json` | Output machine-readable JSON (for workflow list, workflow status) |
+| `--json` | Output machine-readable JSON (workflow `list`, `status`, `runs`, `get`, and the write commands `approve`/`reject`/`abandon`/`resume`). Implies log suppression so stdout is exactly the JSON payload. |
 | `--help`, `-h` | Show help message |
 
 ## Working Directory

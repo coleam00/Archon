@@ -55,9 +55,10 @@ to the user on whatever platform they're using (CLI, Slack, GitHub, etc.). On th
    block the worktree path guard (no other workflow can start on the same path).
 4. **Approve**: The user approves, which writes a `node_completed` event for
    the approval node and transitions the run to resumable. Natural-language
-   messages, the CLI, and the Web UI approve button all auto-resume the
-   workflow from the paused gate. (The explicit `/workflow approve <run-id>`
-   slash command also auto-resumes when issued in the originating conversation.)
+   messages, the CLI, the Web UI approve button, and the in-thread **Approve**
+   button posted by the Slack adapter all auto-resume the workflow from the
+   paused gate. (The explicit `/workflow approve <run-id>` slash command also
+   auto-resumes when issued in the originating conversation.)
 5. **Reject**: The user rejects.
    - **Without `on_reject`**: The workflow is cancelled immediately.
    - **With `on_reject`**: The executor runs the `on_reject.prompt` via AI (with

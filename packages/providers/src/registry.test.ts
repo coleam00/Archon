@@ -12,6 +12,8 @@ import {
   clearRegistry,
 } from './registry';
 import { registerPiProvider } from './community/pi/registration';
+import { registerCopilotProvider } from './community/copilot/registration';
+import { registerOpencodeProvider } from './community/opencode/registration';
 import { UnknownProviderError } from './errors';
 import type { ProviderRegistration, IAgentProvider, ProviderCapabilities } from './types';
 
@@ -33,6 +35,7 @@ function makeMockProvider(id: string): IAgentProvider {
       thinkingControl: false,
       fallbackModel: false,
       sandbox: false,
+      nativeTools: false,
     }),
     async *sendQuery() {
       yield { type: 'result' as const };
@@ -252,16 +255,20 @@ describe('registry', () => {
   describe('registerCommunityProviders (aggregator)', () => {
     test('registers all bundled community providers', () => {
       registerCommunityProviders();
-      // Pi is currently the only community provider bundled. When more are
-      // added, they should appear here automatically.
+      expect(isRegisteredProvider('opencode')).toBe(true);
       expect(isRegisteredProvider('pi')).toBe(true);
+      expect(isRegisteredProvider('copilot')).toBe(true);
     });
 
     test('is idempotent', () => {
       registerCommunityProviders();
       expect(() => registerCommunityProviders()).not.toThrow();
+      const opencodeCount = getRegisteredProviders().filter(p => p.id === 'opencode').length;
       const piCount = getRegisteredProviders().filter(p => p.id === 'pi').length;
+      const copilotCount = getRegisteredProviders().filter(p => p.id === 'copilot').length;
+      expect(opencodeCount).toBe(1);
       expect(piCount).toBe(1);
+      expect(copilotCount).toBe(1);
     });
   });
 
@@ -316,6 +323,106 @@ describe('registry', () => {
         .map(p => p.id)
         .sort();
       expect(ids).toEqual(['claude', 'codex', 'pi']);
+    });
+  });
+
+  describe('registerOpencodeProvider (community provider)', () => {
+    test('registers opencode with builtIn: false', () => {
+      registerOpencodeProvider();
+      const reg = getRegistration('opencode');
+      expect(reg.id).toBe('opencode');
+      expect(reg.displayName).toBe('OpenCode (community)');
+      expect(reg.builtIn).toBe(false);
+    });
+
+    test('is idempotent', () => {
+      registerOpencodeProvider();
+      expect(() => registerOpencodeProvider()).not.toThrow();
+      const opencodeEntries = getRegisteredProviders().filter(p => p.id === 'opencode');
+      expect(opencodeEntries).toHaveLength(1);
+    });
+
+    test('declares capabilities (sessionResume, mcp, structuredOutput, envInjection, hooks, skills, agents, toolRestrictions supported; effort/thinking off because opencode.json owns those)', () => {
+      registerOpencodeProvider();
+      const caps = getProviderCapabilities('opencode');
+      expect(caps.sessionResume).toBe(true);
+      expect(caps.mcp).toBe(true);
+      expect(caps.structuredOutput).toBe(true);
+      expect(caps.envInjection).toBe(true);
+      expect(caps.hooks).toBe(true);
+      expect(caps.skills).toBe(true);
+      expect(caps.agents).toBe(true);
+      expect(caps.toolRestrictions).toBe(true);
+      expect(caps.effortControl).toBe(false);
+      expect(caps.thinkingControl).toBe(false);
+      expect(caps.costControl).toBe(false);
+      expect(caps.fallbackModel).toBe(false);
+      expect(caps.sandbox).toBe(false);
+    });
+
+    test('appears in getProviderInfoList with builtIn: false', () => {
+      registerOpencodeProvider();
+      const info = getProviderInfoList().find(p => p.id === 'opencode');
+      expect(info).toBeDefined();
+      expect(info?.builtIn).toBe(false);
+    });
+
+    test('does not collide with built-ins or other community providers', () => {
+      registerOpencodeProvider();
+      registerPiProvider();
+      const ids = getRegisteredProviders()
+        .map(p => p.id)
+        .sort();
+      expect(ids).toEqual(['claude', 'codex', 'opencode', 'pi']);
+    });
+  });
+
+  describe('registerCopilotProvider (community provider)', () => {
+    test('registers copilot with builtIn: false', () => {
+      registerCopilotProvider();
+      const reg = getRegistration('copilot');
+      expect(reg.id).toBe('copilot');
+      expect(reg.displayName).toBe('Copilot (GitHub)');
+      expect(reg.builtIn).toBe(false);
+    });
+
+    test('is idempotent', () => {
+      registerCopilotProvider();
+      expect(() => registerCopilotProvider()).not.toThrow();
+      const entries = getRegisteredProviders().filter(p => p.id === 'copilot');
+      expect(entries).toHaveLength(1);
+    });
+
+    test('declares conservative capabilities', () => {
+      registerCopilotProvider();
+      const caps = getProviderCapabilities('copilot');
+      expect(caps.sessionResume).toBe(true);
+      expect(caps.envInjection).toBe(true);
+      expect(caps.effortControl).toBe(true);
+      expect(caps.thinkingControl).toBe(true);
+      expect(caps.mcp).toBe(true);
+      expect(caps.hooks).toBe(false);
+      expect(caps.skills).toBe(true);
+      expect(caps.toolRestrictions).toBe(true);
+      expect(caps.structuredOutput).toBe(true);
+      expect(caps.agents).toBe(true);
+      expect(caps.fallbackModel).toBe(false);
+      expect(caps.sandbox).toBe(false);
+    });
+
+    test('appears in getProviderInfoList with builtIn: false', () => {
+      registerCopilotProvider();
+      const info = getProviderInfoList().find(p => p.id === 'copilot');
+      expect(info).toBeDefined();
+      expect(info?.builtIn).toBe(false);
+    });
+
+    test('does not collide with built-ins', () => {
+      registerCopilotProvider();
+      const ids = getRegisteredProviders()
+        .map(p => p.id)
+        .sort();
+      expect(ids).toEqual(['claude', 'codex', 'copilot']);
     });
   });
 });

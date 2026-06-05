@@ -19,11 +19,17 @@ const mockLogger = {
   isLevelEnabled: mock(() => true),
   level: 'info',
 };
+// Telemetry is fire-and-forget; mock as no-ops so the executor can call them.
+// Hoisted so tests can assert on the completion call (outcome / exit reason).
+const mockCaptureWorkflowInvoked = mock(() => {});
+const mockCaptureWorkflowCompleted = mock(() => {});
 mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
   parseOwnerRepo: mock(() => null),
   getRunArtifactsPath: mock(() => '/tmp/artifacts'),
   getProjectLogsPath: mock(() => '/tmp/logs'),
+  captureWorkflowInvoked: mockCaptureWorkflowInvoked,
+  captureWorkflowCompleted: mockCaptureWorkflowCompleted,
 }));
 
 // --- Mock git ---
@@ -856,6 +862,100 @@ describe('finally backstop', () => {
       c => typeof c[1] === 'string' && (c[1] as string).includes('exited without finalizing')
     );
     expect(backstopCall).toBeUndefined();
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Telemetry wiring
+//
+// captureWorkflowCompleted is mocked as a no-op; these tests assert it actually
+// fires on the unhandled-throw path (and only there from the executor) and that
+// the WorkflowSource is threaded into executeDagWorkflow. Telemetry regressions
+// are otherwise invisible — a dropped call leaves no failing assertion.
+// ───────────────────────────────────────────────────────────────────────────
+describe('telemetry wiring', () => {
+  beforeEach(() => {
+    mockExecuteDagWorkflow.mockClear();
+    mockCaptureWorkflowCompleted.mockClear();
+    mockExecuteDagWorkflow.mockImplementation(async (): Promise<string | undefined> => undefined);
+  });
+
+  it('captures workflow_failed with unhandled_error when executeDagWorkflow throws', async () => {
+    mockExecuteDagWorkflow.mockRejectedValueOnce(new Error('dag boom'));
+    const store = makeStore();
+    const deps = makeDeps(store);
+
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow(),
+      'msg',
+      'db-conv-1'
+    );
+
+    // Exactly once — the executor catch must not double-emit with the DAG paths.
+    expect(mockCaptureWorkflowCompleted).toHaveBeenCalledTimes(1);
+    expect(mockCaptureWorkflowCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: 'failed', exitReason: 'unhandled_error' })
+    );
+  });
+
+  it('does not fire executor-level completion telemetry on the success path', async () => {
+    // The DAG executor owns success/partial-failure telemetry; the executor's
+    // own captureWorkflowCompleted must fire only from the unhandled-throw catch.
+    const store = makeStore();
+    const deps = makeDeps(store);
+
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow(),
+      'msg',
+      'db-conv-1'
+    );
+
+    expect(mockCaptureWorkflowCompleted).not.toHaveBeenCalled();
+  });
+
+  it('threads source through to executeDagWorkflow (arg index 16)', async () => {
+    const store = makeStore();
+    const deps = makeDeps(store);
+
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow(),
+      'msg',
+      'db-conv-1',
+      {
+        source: 'bundled',
+      }
+    );
+
+    expect(mockExecuteDagWorkflow.mock.calls[0]?.[16]).toBe('bundled');
+  });
+
+  it('passes undefined source when the caller does not supply one', async () => {
+    const store = makeStore();
+    const deps = makeDeps(store);
+
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow(),
+      'msg',
+      'db-conv-1'
+    );
+
+    expect(mockExecuteDagWorkflow.mock.calls[0]?.[16]).toBeUndefined();
   });
 });
 

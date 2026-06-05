@@ -24,6 +24,10 @@ export {
   type IWebPlatformAdapter,
   isWebAdapter,
   type MessageMetadata,
+  type User,
+  type UserIdentity,
+  type UserRole,
+  type IdentityPlatform,
 } from './types';
 
 // =============================================================================
@@ -34,10 +38,11 @@ export {
   getDatabase,
   getDialect,
   getDatabaseType,
+  getDbNotificationListener,
   closeDatabase,
   resetDatabase,
 } from './db/connection';
-export type { IDatabase, SqlDialect } from './db/adapters/types';
+export type { IDatabase, SqlDialect, DbNotificationListener } from './db/adapters/types';
 
 // Namespaced db modules for explicit access
 export * as conversationDb from './db/conversations';
@@ -46,6 +51,7 @@ export * as sessionDb from './db/sessions';
 export * as isolationEnvDb from './db/isolation-environments';
 export * as workflowDb from './db/workflows';
 export * as messageDb from './db/messages';
+export * as userDb from './db/users';
 
 // Re-export SessionNotFoundError for error handling
 export { SessionNotFoundError } from './db/sessions';
@@ -55,7 +61,11 @@ export { SessionNotFoundError } from './db/sessions';
 // =============================================================================
 
 // Store adapter (bridges core DB to @archon/workflows IWorkflowStore)
-export { createWorkflowStore } from './workflows/store-adapter';
+export {
+  createWorkflowStore,
+  createWorkflowDeps,
+  registerGitHubAppAuthProvider,
+} from './workflows/store-adapter';
 
 // Workflow Events DB
 export * as workflowEventDb from './db/workflow-events';
@@ -142,6 +152,45 @@ export { sanitizeCredentials, sanitizeError } from './utils/credential-sanitizer
 
 // GitHub GraphQL
 export { getLinkedIssueNumbers } from './utils/github-graphql';
+
+// GitHub App auth
+export {
+  createGitHubAppAuthProvider,
+  loadAppPrivateKey,
+  installCredentialHelper,
+  AppNotInstalledError,
+  AppPrivateKeyError,
+  type GitHubAppConfig,
+  type IGitHubAppAuthProvider,
+  type GitHubAuth,
+  // Per-user device flow (PR-C)
+  isPerUserGitHubEnabled,
+  loadDeviceFlowConfig,
+  assertEncryptionKeyAtBoot,
+  connectGithubForUser,
+  persistGithubConnection,
+  startDeviceFlow,
+  pollDeviceFlowOnce,
+  DeviceFlowError,
+  type DeviceCodeResponse,
+  type DeviceAccessToken,
+  type PollOnceResult,
+  type ConnectGithubResult,
+} from './github-auth';
+
+// Per-user GitHub token store (PR-C)
+export {
+  saveUserGithubToken,
+  getUserGithubTokenRecord,
+  getDecryptedAccessToken,
+  deleteUserGithubToken,
+  getUserGithubNoreplyEmail,
+} from './db/user-github-token-store';
+export {
+  updateUserGithubProfile,
+  linkGithubIdentity,
+  GithubIdentityConflictError,
+} from './db/users';
 
 // Path validation
 export { isPathWithinWorkspace, validateAndResolvePath } from './utils/path-validation';

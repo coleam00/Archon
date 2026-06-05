@@ -49,8 +49,26 @@ export { resolveClaudeBinaryPath, fileExists as claudeFileExists } from './claud
 
 // Community providers
 export {
+  OpencodeProvider,
+  parseOpencodeConfig,
+  registerOpencodeProvider,
+  type OpencodeProviderDefaults,
+} from './community/opencode';
+export {
   PiProvider,
   parsePiConfig,
   registerPiProvider,
   type PiProviderDefaults,
 } from './community/pi';
+
+export {
+  CopilotProvider,
+  parseCopilotConfig,
+  registerCopilotProvider,
+  resetCopilotSingleton,
+  type CopilotProviderDefaults,
+} from './community/copilot';
+export {
+  resolveCopilotBinaryPath,
+  fileExists as copilotFileExists,
+} from './community/copilot/binary-resolver';

@@ -131,7 +131,7 @@ nodes:
       - KISS: prefer straightforward over clever
       - YAGNI: remove speculative abstractions
       - Rule of Three: only extract when a pattern appears 3+ times
-      - Each change must be independently revertable
+      - Each change must be independently revertible
       - Do NOT mix refactoring with behavior changes
       - Scope to what can be done safely in one pass (max 5-7 files)
 

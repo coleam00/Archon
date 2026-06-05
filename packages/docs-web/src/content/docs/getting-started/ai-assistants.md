@@ -1,6 +1,6 @@
 ---
 title: AI Assistants
-description: Configure Claude Code, Codex, and Pi as AI assistants for Archon.
+description: Configure Claude Code, Codex, OpenCode, GitHub Copilot, and Pi as AI assistants for Archon.
 category: getting-started
 area: clients
 audience: [user]
@@ -9,7 +9,7 @@ sidebar:
   order: 4
 ---
 
-You must configure **at least one** AI assistant. All three can be configured and mixed within workflows.
+You must configure **at least one** AI assistant. All four can be configured and mixed within workflows.
 
 ## Claude Code
 
@@ -232,9 +232,99 @@ If you want Codex to be the default AI assistant for new conversations without c
 DEFAULT_AI_ASSISTANT=codex
 ```
 
+### Skills
+
+Codex supports skills via filesystem auto-discovery from `.agents/skills/`. Run `archon skill install` (or `archon setup`) to install the bundled `archon` and `manage-run` skills for both Claude Code and Codex.
+
+See [Per-Node Skills](/guides/skills/#codex-compatibility) for behavior details and limitations.
+
+## OpenCode (Community Provider)
+
+**SDK-backed community provider.** Archon's OpenCode adapter uses `@opencode-ai/sdk`, which provides a multi-provider AI coding agent with support for Anthropic, OpenAI, Google, and more through a unified interface.
+
+OpenCode is registered as `builtIn: false` — like Pi, it is a bundled community provider rather than a core built-in.
+
+Archon always runs OpenCode as a **managed embedded runtime** — it spawns and owns the OpenCode server process, generates a random server password per session, and tears it down when the workflow completes. Connecting to an external OpenCode server (`baseUrl`) is not supported.
+
+### Install
+
+OpenCode is included as a dependency of `@archon/providers` — `bun install` pulls in the SDK automatically. It's available immediately.
+
+### Authenticate
+
+OpenCode handles authentication internally — Archon does not pass API keys through config. Configure credentials using one of these methods:
+
+1. **`/connect` TUI command** — Run `opencode` in your terminal, then use the `/connect` command to interactively authenticate with your chosen provider
+2. **Config file** — Store credentials in `~/.config/opencode/opencode.json` with `{env:VAR}` or `{file:PATH}` substitution
+3. **Auth file** — Credentials are persisted in `~/.local/share/opencode/auth.json` after connecting
+
+OpenCode delegates to the underlying LLM provider (Anthropic, OpenAI, Google, etc.) based on your model selection. Request-scoped env vars from Archon workflows are still merged into the OpenCode environment.
+
+### Configuration Options
+
+```yaml
+assistants:
+  opencode:
+    model: anthropic/claude-3-5-sonnet  # Required: '<provider>/<model>' format
+    # or build-in agent
+    agent: general
+```
+
+### Model reference format
+
+OpenCode models use a `<provider>/<model>` format. List all available models via `opencode models`:
+
+```yaml
+assistants:
+  opencode:
+    model: anthropic/claude-3-5-sonnet   # via Anthropic
+    # model: openai/gpt-4o                # via OpenAI
+    # model: google/gemini-2.5-pro        # via Google
+```
+
+### Supported Archon Features
+
+| Feature | Support | Notes |
+|---|---|---|
+| Session resume | ✅ | Single-agent runs return `sessionId`; multi-agent runs do not |
+| MCP servers | ✅ | `mcp: path/to/servers.json` passed through to OpenCode |
+| Structured output | ✅ | `output_format:` — schema passed to OpenCode SDK |
+| System prompt override | ✅ | `systemPrompt:` |
+| Codebase env vars (`envInjection`) | ✅ | merged into the spawned OpenCode environment |
+| Skills | ✅ | SKILL.md files with YAML frontmatter, pattern-based permissions |
+| Tool restrictions | ✅ | `tools` / `disallowedTools` per agent; deny wins over allow |
+| Inline agents (`agents:`) | ✅ | File-materialized agents; single and parallel multi-agent fan-out |
+| Hooks | ✅ | Plugin hook system (tool, session, message hooks) |
+| Effort / reasoning control | ❌ | No per-request param; not configurable in agent file, opencode puts it in config. |
+| Thinking control | ❌ | No explicit `thinking` field in agent frontmatter; OpenCode auto-enables reasoning when `agents[].model` is a reasoning-capable model (e.g. `anthropic/claude-sonnet-4-5`) |
+| Fallback model | ❌ | No native failover in the SDK |
+| Sandbox | ❌ | Not native in the SDK; Archon uses worktree isolation |
+| Cost limits (`maxBudgetUsd`) | ❌ | Cost tracked in result chunks, but no runtime budget enforcement |
+
+Unsupported YAML fields trigger a visible warning from the dag-executor when the workflow runs, so you always know what was ignored.
+
+### Usage in workflows
+
+```yaml
+name: my-workflow
+provider: opencode
+model: anthropic/claude-3-5-sonnet
+
+nodes:
+  - id: analyze
+    prompt: "Analyze the codebase structure"
+    # per-node model override:
+    # model: openai/gpt-4o
+```
+
+### See also
+
+- [Adding a Community Provider](../contributing/adding-a-community-provider/) — the contributor-facing guide for extending Archon with your own provider.
+- [OpenCode on GitHub](https://github.com/opencode-ai/opencode) — upstream project.
+
 ## Pi (Community Provider)
 
-**One adapter, ~20 LLM backends.** Pi (`@mariozechner/pi-coding-agent`) is a community-maintained coding-agent harness that Archon integrates as the first community provider. It unlocks Anthropic, OpenAI, Google (Gemini + Vertex), Groq, Mistral, Cerebras, xAI, OpenRouter, Hugging Face, and local inference (LM Studio, ollama, llamacpp, custom OpenAI-compatible endpoints registered in `~/.pi/agent/models.json`) under a single `provider: pi` entry.
+**One adapter, ~20 LLM backends.** Pi (`@earendil-works/pi-coding-agent`) is a community-maintained coding-agent harness that Archon integrates as the first community provider. It unlocks Anthropic, OpenAI, Google (Gemini + Vertex), Groq, Mistral, Cerebras, xAI, OpenRouter, Hugging Face, and local inference (LM Studio, ollama, llamacpp, custom OpenAI-compatible endpoints registered in `~/.pi/agent/models.json`) under a single `provider: pi` entry.
 
 Pi is registered as `builtIn: false` — it validates the community-provider seam rather than being a core-team-maintained option. If it proves stable and valuable it may be promoted to `builtIn: true` later.
 
@@ -396,6 +486,7 @@ nodes:
 | System prompt override | ✅ | `systemPrompt:` |
 | Codebase env vars (`envInjection`) | ✅ | `.archon/config.yaml` `env:` section |
 | MCP servers | ❌ | Pi rejects MCP by design |
+| In-process native tools | ✅ | none — Archon's `manage_run` tool is auto-injected in project-scoped chat via Pi `customTools` (distinct from MCP, which Pi rejects). Gated on the `nativeTools` provider capability. |
 | Claude-SDK hooks | ❌ | Claude-specific format |
 | Structured output | ✅ (best-effort) | `output_format:` — schema is appended to the prompt and JSON is parsed out of the assistant text. Handles bare JSON, ```json```-fenced, and reasoning-model prose preambles like `Let me evaluate... {...}` (Minimax M2.x pattern). Trailing-text-interleaved cases still degrade cleanly to the missing-structured-output warning. Not SDK-enforced like Claude/Codex. |
 | Cost limits (`maxBudgetUsd`) | ❌ | tracked in result chunk, not enforced |
@@ -407,7 +498,97 @@ Unsupported YAML fields trigger a visible warning from the dag-executor when the
 ### See also
 
 - [Adding a Community Provider](../contributing/adding-a-community-provider/) — the contributor-facing guide for extending Archon with your own provider.
-- [Pi on GitHub](https://github.com/badlogic/pi-mono) — upstream project.
+- [Pi documentation](https://pi.dev) — official Pi docs (extensions, model registry, settings).
+- [Pi on GitHub](https://github.com/earendil-works/pi) — upstream project.
+
+## GitHub Copilot (Community Provider)
+
+**Use a GitHub Copilot subscription inside Archon workflows.** Drives the Copilot CLI via `@github/copilot-sdk`, supporting OpenAI, Anthropic via BYOK, Gemini, and the other models Copilot exposes — switch between them with the `model` field.
+
+Copilot is registered as `builtIn: false` — like Pi, a bundled community provider rather than a core built-in.
+
+### Install
+
+For source installs (`bun run`), the SDK + its bundled CLI dependency come along with `bun install` — nothing extra to do.
+
+For compiled Archon binaries, install the Copilot CLI yourself and point Archon at it:
+
+```bash
+npm install -g @github/copilot
+```
+
+Then tell Archon where the binary lives (the resolver searches these in order):
+
+```ini
+# .env
+COPILOT_BIN_PATH=/absolute/path/to/copilot
+```
+
+```yaml
+# .archon/config.yaml
+assistants:
+  copilot:
+    copilotCliPath: /absolute/path/to/copilot
+```
+
+Or place the binary at `~/.archon/vendor/copilot/copilot` (POSIX) / `~/.archon/vendor/copilot/copilot.exe` (Windows) and the resolver picks it up automatically.
+
+### Authenticate
+
+By default, Copilot uses the credentials from your local `copilot login`. Generic `GH_TOKEN` / `GITHUB_TOKEN` env vars are **not** picked up automatically — classic GitHub PATs lack Copilot entitlement and would fail with a misleading SDK error. Auth precedence (highest to lowest):
+
+1. **`COPILOT_GITHUB_TOKEN`** (env) — always wins when set; treated as explicit Copilot intent
+2. **`useLoggedInUser: false`** in `.archon/config.yaml` — opts into env-token auth, including generic `GH_TOKEN` / `GITHUB_TOKEN`
+3. **`copilot login` credentials** — the default
+
+An active GitHub Copilot subscription is required for any of these to work.
+
+### Copilot Configuration Options
+
+You can configure Copilot's behavior in `.archon/config.yaml`:
+
+```yaml
+assistants:
+  copilot:
+    model: gpt-5-mini             # 'gpt-5', 'gpt-5-mini', 'claude-sonnet-4.5', 'auto', etc.
+    modelReasoningEffort: medium  # 'low' | 'medium' | 'high' | 'xhigh' | 'max' (alias for xhigh)
+    # configDir: /absolute/path/to/copilot-config
+    # enableConfigDiscovery: false  # only enable for trusted repos — bypasses Archon's workflow MCP/skill validation
+    # useLoggedInUser: false        # opt into env-token auth (GH_TOKEN / GITHUB_TOKEN); default uses `copilot login`
+    # logLevel: error               # 'none' | 'error' | 'warning' | 'info' | 'debug' | 'all'
+```
+
+Copilot accepts OpenAI models (`gpt-5`, `gpt-5-mini`), Anthropic via BYOK (`claude-sonnet-4.5`), Gemini, and more. When no model is configured, Archon passes `model: 'auto'` and Copilot picks.
+
+### Supported Archon Features
+
+| Feature | Support | Notes |
+|---|---|---|
+| Session resume | ✅ | Returns `sessionId`; reused on resume |
+| Reasoning control | ✅ | `effort:` / string `thinking:` → Copilot `reasoningEffort`; `max` maps to SDK `xhigh` |
+| System prompt override | ✅ | `systemPrompt:` |
+| Codebase env vars | ✅ | merged into the spawned Copilot CLI environment |
+| Tool restrictions | ✅ | `allowed_tools` → `availableTools`, `denied_tools` → `excludedTools` |
+| MCP servers | ✅ | `mcp: path/to/servers.json` → `SessionConfig.mcpServers` (env vars `$FOO` expanded; missing vars warned) |
+| Skills | ✅ | `skills: [name]` resolved from `.agents/skills/` or `.claude/skills/` (project or home) → `SessionConfig.skillDirectories` |
+| Structured output | ✅ | best-effort via prompt augmentation; unparseable output degrades to dag-executor's missing-output warning |
+| Sub-agents (`agents:`) | ✅ | `name`/`description`/`prompt`/`tools` → `SessionConfig.customAgents`; Claude-specific fields (`model`, `disallowedTools`, `skills`, `maxTurns`) warn per agent and are ignored |
+| Fork-session retry | ⚠️ | Copilot SDK has no fork API — when Archon requests a fork (on retry), we create a fresh session and emit a system-chunk warning |
+| Hooks | ❌ | Archon hooks ≠ Copilot's `SessionHooks` event vocabulary |
+| Fallback model | ❌ | not wired |
+| Cost control | ❌ | no cost-limit API |
+| Sandbox | ❌ | Copilot permissions surface is separate from Archon's sandbox model |
+
+### Set as Default (Optional)
+
+```ini
+DEFAULT_AI_ASSISTANT=copilot
+```
+
+### See also
+
+- [Adding a Community Provider](../contributing/adding-a-community-provider/) — the contributor-facing guide for extending Archon with your own provider.
+- [`@github/copilot-sdk`](https://www.npmjs.com/package/@github/copilot-sdk) — upstream SDK.
 
 ## How Assistant Selection Works
 

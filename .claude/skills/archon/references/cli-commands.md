@@ -25,6 +25,7 @@ archon workflow run archon-fix-github-issue --branch fix/issue-42 "Fix issue #42
 archon workflow run my-workflow --branch feat/dark-mode --from develop "Add dark mode"
 archon workflow run quick-fix --no-worktree "Fix the typo in README"
 archon workflow run archon-fix-github-issue --resume
+archon workflow run archon-assist "Investigate the flaky test" --detach
 ```
 
 | Flag | Description |
@@ -33,6 +34,7 @@ archon workflow run archon-fix-github-issue --resume
 | `--from <name>` / `--from-branch <name>` | Start-point branch for new worktree (default: repo default branch) |
 | `--no-worktree` | Skip isolation — run in the live checkout |
 | `--resume` | Resume the last failed run of this workflow at this cwd (skips completed nodes) |
+| `--detach` | Run in a detached background child and return immediately (find the run via `workflow runs`). Pair with `--json` for a structured ack. Child output goes to `~/.archon/logs/`. In the web console the run appears in the Workflow dock (listed by project) but may not update **live** until a refetch — it runs out-of-process and doesn't stream to the console's live event feed. |
 | `--cwd <path>` | Working directory override |
 
 **Flag conflicts** (errors):
@@ -46,14 +48,44 @@ archon workflow run archon-fix-github-issue --resume
 
 ### `archon workflow status`
 
-Show the currently running workflow (if any) with its run ID, state, and last activity.
+Show **active** workflow runs (running + paused) with run ID, state, and last activity. Add `--verbose` for a per-node summary.
 
 ```bash
 archon workflow status
 archon workflow status --json       # Machine-readable output
 ```
 
-### `archon workflow approve <run-id> [comment]`
+### `archon workflow runs [--all] [--status <s>] [--limit <n>]`
+
+List **recent** runs of **all** statuses, scoped to the current project (cwd → codebase). Complements `status`, which is active-only — use this to answer "did the review pass?" for a completed/failed run.
+
+```bash
+archon workflow runs                 # recent runs (all statuses) for this project
+archon workflow runs --json          # machine-readable (full dashboard result + counts)
+archon workflow runs --status failed --limit 50
+archon workflow runs --all           # across all projects (ignore cwd scope)
+```
+
+| Flag | Description |
+|------|-------------|
+| `--all` | List across all projects (drop the cwd→codebase scope) |
+| `--status <s>` | Filter to one status: `pending`, `running`, `completed`, `failed`, `cancelled`, `paused` |
+| `--limit <n>` | Max rows (default 20) |
+| `--json` | Emit the full `{ runs, total, counts, scopeFallback }` dashboard result |
+
+An unregistered cwd (or a codebase lookup failure) falls back to a global list with a `(not a registered project — showing all runs)` note (never a silent wrong scope). In `--json`, `scopeFallback: true` flags that the result is global rather than the requested project scope.
+
+### `archon workflow get <run-id> [--verbose]`
+
+Show detail for **one run, any status** (status, working path, error). `--verbose` adds a per-node summary from the event log (and, in `--json`, an `events` array). `--json` emits the raw run object on success; on failure (not found, DB error) it emits one `{ "ok": false, "runId": "…", "error": "…" }` line and never throws (`error` is `"not_found"` for a missing run).
+
+```bash
+archon workflow get abc123
+archon workflow get abc123 --json
+archon workflow get abc123 --verbose --json
+```
+
+### `archon workflow approve <run-id> [comment] [--json]`
 
 Approve a paused approval-node workflow. Auto-resumes the workflow.
 
@@ -61,13 +93,16 @@ Approve a paused approval-node workflow. Auto-resumes the workflow.
 archon workflow approve abc123
 archon workflow approve abc123 --comment "Plan looks good"
 archon workflow approve abc123 "Plan looks good"   # positional form
+archon workflow approve abc123 "Plan looks good" --json   # records the decision; does NOT auto-resume
 ```
+
+> **`--json` on `approve`/`reject`/`resume` records/validates the decision and returns a clean JSON line WITHOUT the inline auto-resume** (execution streams output that would corrupt the JSON). The run becomes resumable — drive it to completion with a backgrounded `archon workflow resume <id>` (no `--json`), or drop `--json` to approve-and-resume in one blocking call.
 
 For interactive loop nodes, the comment becomes `$LOOP_USER_INPUT` on the next iteration. For approval nodes with `capture_response: true`, the comment becomes `$<gate-id>.output` for downstream nodes.
 
-### `archon workflow reject <run-id> [reason]`
+### `archon workflow reject <run-id> [reason] [--json]`
 
-Reject a paused approval gate. Without `on_reject` on the node, cancels the workflow. With `on_reject`, runs the rework prompt with `$REJECTION_REASON` substituted and re-pauses.
+Reject a paused approval gate. Without `on_reject` on the node, cancels the workflow. With `on_reject`, runs the rework prompt with `$REJECTION_REASON` substituted and re-pauses. (`--json` records the decision without the inline rework — see the note under `approve`.)
 
 ```bash
 archon workflow reject abc123
@@ -75,19 +110,20 @@ archon workflow reject abc123 --reason "Plan misses test coverage"
 archon workflow reject abc123 "Plan misses test coverage"
 ```
 
-### `archon workflow abandon <run-id>`
+### `archon workflow abandon <run-id> [--json]`
 
 Mark a non-terminal workflow run as cancelled. Use when a `running` row is stuck after a server crash or when you want to discard a paused run without rejecting. This does NOT kill an in-flight subprocess — it only transitions the DB row.
 
 ```bash
 archon workflow abandon abc123
+archon workflow abandon abc123 --json   # { "ok": true, "runId": "abc123", "action": "abandon", "status": "cancelled", ... }
 ```
 
 > **There is no `archon workflow cancel` CLI subcommand.** To actively cancel a running workflow (terminate its subprocess), use the chat slash command `/workflow cancel <run-id>` on the platform that started it (Web UI, Slack, Telegram, etc.), or the Cancel button on the Web UI dashboard. The CLI only offers `abandon`, which is the right tool for orphan cleanup but does not interrupt a live subprocess.
 
-### `archon workflow resume <run-id> [message]`
+### `archon workflow resume <run-id> [message] [--json]`
 
-Explicitly re-run a failed run. Most workflows auto-resume without this — use it when you want to force a specific run ID.
+Explicitly re-run a failed run. Most workflows auto-resume without this — use it when you want to force a specific run ID. (`--json` validates that the run is resumable and returns `executed: false` WITHOUT running — see the note under `approve`; to actually execute, use the blocking form as a background task.)
 
 ```bash
 archon workflow resume abc123

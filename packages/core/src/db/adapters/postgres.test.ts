@@ -51,6 +51,15 @@ mock.module('@archon/paths', () => ({
   }),
 }));
 
+// ---- mock bundled-schema so initSchema() runs known SQL without disk I/O --
+// Tests that exercise initSchema() override this via the `mockSchemaSQL`
+// variable; the default keeps construction cheap for other tests.
+let mockSchemaSQL = '-- noop schema';
+
+mock.module('../bundled-schema', () => ({
+  getSchemaSQL: () => mockSchemaSQL,
+}));
+
 // ---- import after mocks are registered ------------------------------------
 import { PostgresAdapter, postgresDialect } from './postgres';
 
@@ -66,6 +75,7 @@ describe('PostgresAdapter', () => {
       query: async () => ({ rows: [], rowCount: 0 }),
       release: () => {},
     };
+    mockSchemaSQL = '-- noop schema';
     poolErrorHandler = undefined;
 
     adapter = new PostgresAdapter('postgresql://localhost:5432/testdb');
@@ -347,6 +357,109 @@ describe('PostgresAdapter', () => {
       expect(() => {
         if (poolErrorHandler) poolErrorHandler(new Error('pool went away'));
       }).not.toThrow();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // initSchema() — auto-converging Postgres schema on startup
+  // -------------------------------------------------------------------------
+
+  describe('initSchema()', () => {
+    test('runs schema SQL inside an advisory-lock transaction on construction', async () => {
+      const issued: string[] = [];
+      mockClient = {
+        query: async (sql: string) => {
+          issued.push(sql);
+          return { rows: [], rowCount: 0 };
+        },
+        release: () => {},
+      };
+      mockSchemaSQL = '-- schema sql';
+
+      const a = new PostgresAdapter('postgresql://localhost:5432/testdb');
+      // Triggers schema init as a side-effect — callers don't call initSchema() directly
+      await a.query('SELECT 1');
+
+      // Init issues BEGIN, advisory lock, schema SQL, COMMIT — then SELECT 1
+      // goes through pool.query (not client.query) so it's NOT in `issued`.
+      expect(issued[0]).toBe('BEGIN');
+      expect(issued).toContain('SELECT pg_advisory_xact_lock(1796)');
+      expect(issued).toContain('-- schema sql');
+      expect(issued[issued.length - 1]).toBe('COMMIT');
+    });
+
+    test('schema SQL runs exactly once across multiple queries', async () => {
+      let schemaSqlCallCount = 0;
+      mockClient = {
+        query: async (sql: string) => {
+          if (sql === '-- schema sql') schemaSqlCallCount++;
+          return { rows: [], rowCount: 0 };
+        },
+        release: () => {},
+      };
+      mockSchemaSQL = '-- schema sql';
+
+      const a = new PostgresAdapter('postgresql://localhost:5432/testdb');
+      await a.query('SELECT 1');
+      await a.query('SELECT 2');
+      await a.withTransaction(async () => undefined);
+
+      expect(schemaSqlCallCount).toBe(1);
+    });
+
+    test('DDL failure: rolls back and causes all subsequent queries to reject', async () => {
+      const boom = new Error('column already exists');
+      const issued: string[] = [];
+      let released = false;
+
+      mockClient = {
+        query: async (sql: string) => {
+          issued.push(sql);
+          if (sql === '-- bad sql') throw boom;
+          return { rows: [], rowCount: 0 };
+        },
+        release: () => {
+          released = true;
+        },
+      };
+      mockSchemaSQL = '-- bad sql';
+
+      const a = new PostgresAdapter('postgresql://localhost:5432/testdb');
+
+      // First query rejects because initSchema threw
+      await expect(a.query('SELECT 1')).rejects.toThrow('column already exists');
+      // Second query rejects with the same settled-rejected promise
+      await expect(a.query('SELECT 2')).rejects.toThrow('column already exists');
+      // withTransaction also gated by the same promise
+      await expect(a.withTransaction(async () => 'ok')).rejects.toThrow('column already exists');
+
+      // ROLLBACK was issued after the failure
+      expect(issued).toContain('ROLLBACK');
+      // client.release() must be called in the finally block to avoid connection leaks
+      expect(released).toBe(true);
+    });
+
+    test('withTransaction() awaits schema init before opening a tx', async () => {
+      const issued: string[] = [];
+      mockClient = {
+        query: async (sql: string) => {
+          issued.push(sql);
+          return { rows: [], rowCount: 0 };
+        },
+        release: () => {},
+      };
+      mockSchemaSQL = '-- schema sql';
+
+      const a = new PostgresAdapter('postgresql://localhost:5432/testdb');
+      await a.withTransaction(async () => 'ok');
+
+      // Init's BEGIN must come before the tx's BEGIN — same client mock is
+      // reused, so all queries land in `issued` in execution order.
+      const firstBegin = issued.indexOf('BEGIN');
+      const schemaIdx = issued.indexOf('-- schema sql');
+      expect(firstBegin).toBe(0);
+      expect(schemaIdx).toBeGreaterThan(firstBegin);
+      expect(schemaIdx).toBeLessThan(issued.lastIndexOf('COMMIT'));
     });
   });
 });

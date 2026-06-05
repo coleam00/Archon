@@ -747,7 +747,10 @@ export interface paths {
     };
     get?: never;
     put?: never;
-    /** Run a workflow via the orchestrator */
+    /**
+     * Run a workflow via the orchestrator (JSON or multipart with file uploads)
+     * @description Accepts `application/json` with `{ conversationId, message }` or `multipart/form-data` with `conversationId`, `message`, and optional file attachments (max 5 files, 10 MB each).
+     */
     post: {
       parameters: {
         query?: never;
@@ -757,11 +760,7 @@ export interface paths {
         };
         cookie?: never;
       };
-      requestBody: {
-        content: {
-          'application/json': components['schemas']['RunWorkflowBody'];
-        };
-      };
+      requestBody?: never;
       responses: {
         /** @description Accepted */
         200: {
@@ -925,7 +924,7 @@ export interface paths {
     };
     get?: never;
     put?: never;
-    /** Resume a failed workflow run (re-run auto-resumes from completed nodes) */
+    /** Resume a failed workflow run (dispatches resume on the parent web conversation) */
     post: {
       parameters: {
         query?: never;
@@ -1517,6 +1516,7 @@ export interface paths {
       parameters: {
         query?: {
           cwd?: string;
+          source?: 'project' | 'global';
         };
         header?: never;
         path: {
@@ -1565,6 +1565,7 @@ export interface paths {
       parameters: {
         query?: {
           cwd?: string;
+          source?: 'project' | 'global';
         };
         header?: never;
         path: {
@@ -1647,6 +1648,74 @@ export interface paths {
         };
         /** @description Bad request */
         400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/runs/{runId}/artifacts': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List a run's artifact files
+     * @description Walks the run's artifact directory and returns relative file paths with size + mtime. Drives the console Artifacts tab. Returns `{ files: [] }` when the run has no codebase or the codebase name is not in `owner/repo` form.
+     */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          runId: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description OK */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ListArtifactsResponse'];
+          };
+        };
+        /** @description Bad request */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Not found */
+        404: {
           headers: {
             [name: string]: unknown;
           };
@@ -1954,9 +2023,14 @@ export interface components {
       ai_assistant_type: string;
       title: string | null;
       hidden: boolean;
+      /** Format: date-time */
       deleted_at: string | null;
+      /** Format: date-time */
       last_activity_at: string | null;
+      user_id: string | null;
+      /** Format: date-time */
       created_at: string;
+      /** Format: date-time */
       updated_at: string;
     };
     ConversationListResponse: components['schemas']['Conversation'][];
@@ -1985,16 +2059,14 @@ export interface components {
       role: 'user' | 'assistant';
       content: string;
       metadata: string;
+      user_id: string | null;
+      /** Format: date-time */
       created_at: string;
     };
     MessageListResponse: components['schemas']['Message'][];
     DispatchResponse: {
       accepted: boolean;
       status: string;
-    };
-    CodebaseCommand: {
-      path: string;
-      description: string;
     };
     Codebase: {
       id: string;
@@ -2003,9 +2075,14 @@ export interface components {
       default_cwd: string;
       ai_assistant_type: string;
       commands: {
-        [key: string]: components['schemas']['CodebaseCommand'];
+        [key: string]: {
+          path: string;
+          description: string;
+        };
       };
+      /** Format: date-time */
       created_at: string;
+      /** Format: date-time */
       updated_at: string;
     };
     CodebaseListResponse: components['schemas']['Codebase'][];
@@ -2259,6 +2336,7 @@ export interface components {
           args?: string[];
         };
       };
+      always_run?: boolean;
       command?: string;
       prompt?: string;
       bash?: string;
@@ -2348,6 +2426,7 @@ export interface components {
       worktree?: {
         enabled?: boolean;
       };
+      mutates_checkout?: boolean;
       tags?: string[];
       nodes: components['schemas']['DagNode'][];
     };
@@ -2367,19 +2446,14 @@ export interface components {
       workflows: components['schemas']['WorkflowListEntry'][];
       errors?: components['schemas']['WorkflowLoadError'][];
     };
-    RunWorkflowBody: {
-      conversationId: string;
-      message: string;
-    };
-    /** @enum {string} */
-    WorkflowRunStatus: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
-    WorkflowRun: {
+    DashboardWorkflowRun: {
       id: string;
       workflow_name: string;
       conversation_id: string;
       parent_conversation_id: string | null;
       codebase_id: string | null;
-      status: components['schemas']['WorkflowRunStatus'];
+      /** @enum {string} */
+      status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
       user_message: string;
       metadata: {
         [key: string]: unknown;
@@ -2388,8 +2462,7 @@ export interface components {
       completed_at: string | null;
       last_activity_at: string | null;
       working_path: string | null;
-    };
-    DashboardWorkflowRun: components['schemas']['WorkflowRun'] & {
+      user_id: string | null;
       codebase_name: string | null;
       platform_type: string | null;
       worker_platform_id: string | null;
@@ -2429,6 +2502,24 @@ export interface components {
     RejectWorkflowRunBody: {
       reason?: string;
     };
+    WorkflowRun: {
+      id: string;
+      workflow_name: string;
+      conversation_id: string;
+      parent_conversation_id: string | null;
+      codebase_id: string | null;
+      /** @enum {string} */
+      status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+      user_message: string;
+      metadata: {
+        [key: string]: unknown;
+      };
+      started_at: string;
+      completed_at: string | null;
+      last_activity_at: string | null;
+      working_path: string | null;
+      user_id: string | null;
+    };
     WorkflowRunListResponse: {
       runs: components['schemas']['WorkflowRun'][];
     };
@@ -2444,6 +2535,7 @@ export interface components {
       data: {
         [key: string]: unknown;
       };
+      /** Format: date-time */
       created_at: string;
     };
     WorkflowRunDetail: {
@@ -2483,6 +2575,14 @@ export interface components {
     };
     CommandListResponse: {
       commands: components['schemas']['CommandEntry'][];
+    };
+    ArtifactFile: {
+      path: string;
+      size: number;
+      modifiedAt: string;
+    };
+    ListArtifactsResponse: {
+      files: components['schemas']['ArtifactFile'][];
     };
     ProviderDefaults: {
       [key: string]: unknown;
