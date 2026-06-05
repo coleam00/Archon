@@ -167,6 +167,12 @@ mock.module('@earendil-works/pi-coding-agent', () => ({
 // Import AFTER mocks are set — module resolution freezes the mocks.
 import { PiProvider } from './provider';
 import { PI_CAPABILITIES } from './capabilities';
+// Same module instance the provider dynamic-imports, so clearing this cache
+// resets the loader the provider reuses across calls (issue #1877).
+import {
+  getOrCreateReloadedExtensionLoader,
+  resetReloadedExtensionLoaderCache,
+} from './resource-loader';
 
 // ─── Helpers ────────────────────────────────────────────────────────────
 
@@ -237,6 +243,10 @@ describe('PiProvider', () => {
     runtimeOverrides = {};
     delete process.env.GEMINI_API_KEY;
     delete process.env.ANTHROPIC_API_KEY;
+    // The extension-loader cache is module-level and persists across tests;
+    // clear it so each test starts with an empty cache and sees its own
+    // construct/reload calls (issue #1877).
+    resetReloadedExtensionLoaderCache();
   });
 
   test('getType returns "pi"', () => {
@@ -1755,5 +1765,139 @@ describe('PiProvider', () => {
       expect.objectContaining({ scope: 'global', err: loadError }),
       'pi.settings_load_error'
     );
+  });
+
+  // ─── Extension loader reuse (issue #1877) ─────────────────────────────────
+  //
+  // Pi's reload() re-invokes every installed extension factory; the 2nd reload
+  // in a process deadlocks on the first call's never-torn-down state. The fix
+  // loads the extension-bearing loader ONCE per process per input set and
+  // reuses it — so reload()/construct must run once across identical calls,
+  // while each call still gets its own session.
+  describe('extension loader reuse (issue #1877)', () => {
+    test('reload() and loader construction run once across two sequential calls with identical inputs', async () => {
+      process.env.GEMINI_API_KEY = 'sk-test';
+      resetScript(scriptedAgentEnd());
+
+      await consume(
+        new PiProvider().sendQuery('a', '/tmp', undefined, { model: 'google/gemini-2.5-pro' })
+      );
+      await consume(
+        new PiProvider().sendQuery('b', '/tmp', undefined, { model: 'google/gemini-2.5-pro' })
+      );
+
+      // The bug was reload() (and the extension factory it drives) running per
+      // call; after the fix the cached loader is built + reloaded exactly once.
+      expect(MockDefaultResourceLoader).toHaveBeenCalledTimes(1);
+      expect(mockResourceLoaderReload).toHaveBeenCalledTimes(1);
+      // Each call still gets its own session (correctness preserved).
+      expect(mockCreateAgentSession).toHaveBeenCalledTimes(2);
+      expect(mockDispose).toHaveBeenCalledTimes(2);
+    });
+
+    test('different cwd gets its own reloaded loader', async () => {
+      process.env.GEMINI_API_KEY = 'sk-test';
+      resetScript(scriptedAgentEnd());
+
+      await consume(
+        new PiProvider().sendQuery('a', '/tmp/one', undefined, { model: 'google/gemini-2.5-pro' })
+      );
+      await consume(
+        new PiProvider().sendQuery('b', '/tmp/two', undefined, { model: 'google/gemini-2.5-pro' })
+      );
+
+      expect(MockDefaultResourceLoader).toHaveBeenCalledTimes(2);
+      expect(mockResourceLoaderReload).toHaveBeenCalledTimes(2);
+    });
+
+    test('a distinct per-node systemPrompt gets its own reloaded loader (no silent prompt reuse)', async () => {
+      process.env.GEMINI_API_KEY = 'sk-test';
+      resetScript(scriptedAgentEnd());
+
+      await consume(
+        new PiProvider().sendQuery('a', '/tmp', undefined, {
+          model: 'google/gemini-2.5-pro',
+          systemPrompt: 'prompt A',
+        })
+      );
+      await consume(
+        new PiProvider().sendQuery('b', '/tmp', undefined, {
+          model: 'google/gemini-2.5-pro',
+          systemPrompt: 'prompt B',
+        })
+      );
+
+      expect(MockDefaultResourceLoader).toHaveBeenCalledTimes(2);
+      expect(mockResourceLoaderReload).toHaveBeenCalledTimes(2);
+    });
+
+    test('extensions disabled keeps a fresh loader per call and never reloads', async () => {
+      process.env.GEMINI_API_KEY = 'sk-test';
+      resetScript(scriptedAgentEnd());
+
+      const opts = {
+        model: 'google/gemini-2.5-pro',
+        assistantConfig: { enableExtensions: false },
+      };
+      await consume(new PiProvider().sendQuery('a', '/tmp', undefined, opts));
+      await consume(new PiProvider().sendQuery('b', '/tmp', undefined, opts));
+
+      // No caching on the extensions-off path: fresh loader each call, no reload.
+      expect(MockDefaultResourceLoader).toHaveBeenCalledTimes(2);
+      expect(mockResourceLoaderReload).not.toHaveBeenCalled();
+    });
+
+    test('distinct additionalSkillPaths get their own reloaded loader', async () => {
+      const a = await getOrCreateReloadedExtensionLoader('/tmp', {
+        additionalSkillPaths: ['/skills/x'],
+      });
+      const b = await getOrCreateReloadedExtensionLoader('/tmp', {
+        additionalSkillPaths: ['/skills/y'],
+      });
+      expect(a).not.toBe(b);
+      expect(MockDefaultResourceLoader).toHaveBeenCalledTimes(2);
+      expect(mockResourceLoaderReload).toHaveBeenCalledTimes(2);
+    });
+
+    test('concurrent callers (same key) share a single in-flight reload (the documented invariant)', async () => {
+      // Gate reload() so both callers are in-flight before either resolves — the
+      // exact race two parallel same-layer DAG nodes hit. Caching the resolved
+      // value instead of the Promise would construct/reload twice and fail this.
+      let releaseReload: (() => void) | undefined;
+      mockResourceLoaderReload.mockImplementationOnce(
+        () =>
+          new Promise<undefined>(resolve => {
+            releaseReload = (): void => resolve(undefined);
+          })
+      );
+
+      const p1 = getOrCreateReloadedExtensionLoader('/tmp', {});
+      const p2 = getOrCreateReloadedExtensionLoader('/tmp', {});
+      // Both subscribed before reload resolves.
+      releaseReload?.();
+      const [l1, l2] = await Promise.all([p1, p2]);
+
+      expect(l1).toBe(l2);
+      expect(MockDefaultResourceLoader).toHaveBeenCalledTimes(1);
+      expect(mockResourceLoaderReload).toHaveBeenCalledTimes(1);
+    });
+
+    test('a failed reload is evicted so the next call retries cleanly', async () => {
+      mockResourceLoaderReload.mockImplementationOnce(async () => {
+        throw new Error('broken extension');
+      });
+
+      await expect(getOrCreateReloadedExtensionLoader('/tmp', {})).rejects.toThrow(
+        /Pi extension load failed: broken extension/
+      );
+
+      // Entry was evicted on failure → the retry constructs + reloads again
+      // (rather than returning the poisoned rejected promise forever).
+      mockResourceLoaderReload.mockImplementationOnce(async () => undefined);
+      const loader = await getOrCreateReloadedExtensionLoader('/tmp', {});
+      expect(loader).toBeDefined();
+      expect(MockDefaultResourceLoader).toHaveBeenCalledTimes(2);
+      expect(mockResourceLoaderReload).toHaveBeenCalledTimes(2);
+    });
   });
 });
