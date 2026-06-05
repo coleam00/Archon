@@ -103,21 +103,20 @@ export function createNoopResourceLoader(
  * Pi's `DefaultResourceLoader.reload()` re-runs the entire extension-discovery
  * pipeline — `packageManager.resolve()` + `loadExtensions()` — and
  * `loadExtensions()` re-invokes every installed extension's factory from scratch
- * (jiti is created with `moduleCache: false`). Those factories construct
- * process-scoped singletons (e.g. agent-rooms builds a RoomManager +
- * SdkSessionFactory, which spin up nested AuthStorage/ModelRegistry instances).
- * That state is never torn down between Archon `sendQuery()` calls: Archon
- * disposes sessions via `session.dispose()`, which — unlike `session.reload()` —
- * does NOT emit `session_shutdown`. So the SECOND `reload()` in a process
- * deadlocks colliding with the first call's still-live state, and every Pi
- * workflow node after the first idle-times-out.
+ * (jiti is created with `moduleCache: false`). Those factories can construct
+ * process-scoped singletons (ports, file handles, nested SDK clients) in their
+ * setup or `session_start` handler. That state is never torn down between Archon
+ * `sendQuery()` calls: Archon disposes sessions via `session.dispose()`, which —
+ * unlike `session.reload()` — does NOT emit `session_shutdown`. So the SECOND
+ * `reload()` in a process deadlocks colliding with the first call's still-live
+ * state, and every Pi workflow node after the first idle-times-out.
  *
  * Fix: reload the extension-bearing loader ONCE per process per loader-affecting
  * input set and reuse it. `createAgentSession({ resourceLoader })` skips its own
- * internal `reload()` when a loader is supplied (Pi SDK `sdk.js`), and reads the
- * already-loaded extensions via `resourceLoader.getExtensions()` — so reuse is
- * safe. Each session still builds its own ExtensionRunner and fires
- * `session_start` via `bindExtensions()`, preserving per-node behavior.
+ * internal `reload()` when a loader is supplied, and reads the already-loaded
+ * extensions via `resourceLoader.getExtensions()` — so reuse is safe. Each
+ * session still builds its own ExtensionRunner and fires `session_start` via
+ * `bindExtensions()`, preserving per-node behavior.
  *
  * Growth & eviction: entries are keyed by `(cwd, systemPrompt, skillPaths)`, so
  * the cache grows by at most one small loader per distinct worktree/prompt combo
@@ -170,9 +169,25 @@ export async function getOrCreateReloadedExtensionLoader(
   if (!pending) {
     pending = (async (): Promise<DefaultResourceLoader> => {
       const loader = createNoopResourceLoader(cwd, { ...options, enableExtensions: true });
-      // Without reload(), session.extensionRunner is undefined and setFlagValue
-      // silently no-ops. createAgentSession skips this when a loader is supplied.
-      await loader.reload();
+      // reload() loads the extensions into the loader so createAgentSession can
+      // build session.extensionRunner. Without it the runner is undefined and the
+      // provider's `if (runner)` flag pass-through is skipped — extensionFlags
+      // would silently never apply.
+      try {
+        await loader.reload();
+      } catch (error) {
+        // Extensions execute arbitrary JS from ~/.pi/agent/extensions/ (and the
+        // repo's .pi/); a broken one fails here. Rethrow with an actionable
+        // pointer, preserving the original error as `cause`, so the operator
+        // isn't left with a bare Pi SDK message. The failed promise is evicted
+        // below, so the next call retries cleanly.
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `Pi extension load failed: ${message}. Check the extensions in ~/.pi/agent/extensions/ ` +
+            "(and the repo's .pi/), or set `assistants.pi.enableExtensions: false` to run without them.",
+          { cause: error }
+        );
+      }
       return loader;
     })();
     reloadedExtensionLoaderCache.set(key, pending);

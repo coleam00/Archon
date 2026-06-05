@@ -448,19 +448,14 @@ export class PiProvider implements IAgentProvider {
     // deadlocks on the first call's never-torn-down state (issue #1877 — see the
     // doc on getOrCreateReloadedExtensionLoader). When extensions are OFF there
     // is no reload() and thus no re-entrancy hazard, so a fresh per-call loader
-    // is fine.
-    let resourceLoader: DefaultResourceLoader;
-    if (enableExtensions) {
-      resourceLoader = await getOrCreateReloadedExtensionLoader(cwd, {
-        ...(systemPrompt !== undefined ? { systemPrompt } : {}),
-        ...(skillPaths.length > 0 ? { additionalSkillPaths: skillPaths } : {}),
-      });
-    } else {
-      resourceLoader = createNoopResourceLoader(cwd, {
-        ...(systemPrompt !== undefined ? { systemPrompt } : {}),
-        ...(skillPaths.length > 0 ? { additionalSkillPaths: skillPaths } : {}),
-      });
-    }
+    // is fine. Build the shared options once so the two paths can't drift.
+    const loaderOptions = {
+      ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+      ...(skillPaths.length > 0 ? { additionalSkillPaths: skillPaths } : {}),
+    };
+    const resourceLoader: DefaultResourceLoader = enableExtensions
+      ? await getOrCreateReloadedExtensionLoader(cwd, loaderOptions)
+      : createNoopResourceLoader(cwd, loaderOptions);
 
     getLog().info(
       {

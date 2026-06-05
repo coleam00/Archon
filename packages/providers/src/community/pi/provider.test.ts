@@ -169,7 +169,10 @@ import { PiProvider } from './provider';
 import { PI_CAPABILITIES } from './capabilities';
 // Same module instance the provider dynamic-imports, so clearing this cache
 // resets the loader the provider reuses across calls (issue #1877).
-import { resetReloadedExtensionLoaderCache } from './resource-loader';
+import {
+  getOrCreateReloadedExtensionLoader,
+  resetReloadedExtensionLoaderCache,
+} from './resource-loader';
 
 // ─── Helpers ────────────────────────────────────────────────────────────
 
@@ -1842,6 +1845,59 @@ describe('PiProvider', () => {
       // No caching on the extensions-off path: fresh loader each call, no reload.
       expect(MockDefaultResourceLoader).toHaveBeenCalledTimes(2);
       expect(mockResourceLoaderReload).not.toHaveBeenCalled();
+    });
+
+    test('distinct additionalSkillPaths get their own reloaded loader', async () => {
+      const a = await getOrCreateReloadedExtensionLoader('/tmp', {
+        additionalSkillPaths: ['/skills/x'],
+      });
+      const b = await getOrCreateReloadedExtensionLoader('/tmp', {
+        additionalSkillPaths: ['/skills/y'],
+      });
+      expect(a).not.toBe(b);
+      expect(MockDefaultResourceLoader).toHaveBeenCalledTimes(2);
+      expect(mockResourceLoaderReload).toHaveBeenCalledTimes(2);
+    });
+
+    test('concurrent callers (same key) share a single in-flight reload (the documented invariant)', async () => {
+      // Gate reload() so both callers are in-flight before either resolves — the
+      // exact race two parallel same-layer DAG nodes hit. Caching the resolved
+      // value instead of the Promise would construct/reload twice and fail this.
+      let releaseReload: (() => void) | undefined;
+      mockResourceLoaderReload.mockImplementationOnce(
+        () =>
+          new Promise<undefined>(resolve => {
+            releaseReload = (): void => resolve(undefined);
+          })
+      );
+
+      const p1 = getOrCreateReloadedExtensionLoader('/tmp', {});
+      const p2 = getOrCreateReloadedExtensionLoader('/tmp', {});
+      // Both subscribed before reload resolves.
+      releaseReload?.();
+      const [l1, l2] = await Promise.all([p1, p2]);
+
+      expect(l1).toBe(l2);
+      expect(MockDefaultResourceLoader).toHaveBeenCalledTimes(1);
+      expect(mockResourceLoaderReload).toHaveBeenCalledTimes(1);
+    });
+
+    test('a failed reload is evicted so the next call retries cleanly', async () => {
+      mockResourceLoaderReload.mockImplementationOnce(async () => {
+        throw new Error('broken extension');
+      });
+
+      await expect(getOrCreateReloadedExtensionLoader('/tmp', {})).rejects.toThrow(
+        /Pi extension load failed: broken extension/
+      );
+
+      // Entry was evicted on failure → the retry constructs + reloads again
+      // (rather than returning the poisoned rejected promise forever).
+      mockResourceLoaderReload.mockImplementationOnce(async () => undefined);
+      const loader = await getOrCreateReloadedExtensionLoader('/tmp', {});
+      expect(loader).toBeDefined();
+      expect(MockDefaultResourceLoader).toHaveBeenCalledTimes(2);
+      expect(mockResourceLoaderReload).toHaveBeenCalledTimes(2);
     });
   });
 });
