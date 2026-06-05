@@ -38,6 +38,12 @@ export interface WorkflowDispatchMeta {
   workerConversationId?: string;
 }
 
+/** Completion metadata on a `workflow_result` message — identifies the finished run. */
+export interface WorkflowResultMeta {
+  workflowName: string;
+  runId: string;
+}
+
 export interface Message {
   id: string;
   role: MessageRole;
@@ -45,10 +51,12 @@ export interface Message {
   timestamp: string;
   toolCalls: InlineToolCall[];
   error: InlineError | null;
-  /** Framework category from metadata (e.g. workflow_dispatch_status). */
+  /** Framework category from metadata (e.g. workflow_dispatch_status, workflow_result). */
   category: string | null;
   /** Parsed workflowDispatch payload, if present on this message. */
   dispatch: WorkflowDispatchMeta | null;
+  /** Parsed workflowResult payload — present on `workflow_result` messages. */
+  workflowResult: WorkflowResultMeta | null;
 }
 
 interface RawMessage {
@@ -71,6 +79,10 @@ interface ParsedMetadata {
   workflowDispatch?: {
     workflowName: string;
     workerConversationId?: string;
+  };
+  workflowResult?: {
+    workflowName: string;
+    runId: string;
   };
 }
 
@@ -110,6 +122,13 @@ export function toMessage(raw: RawMessage): Message {
           workerConversationId: meta.workflowDispatch.workerConversationId,
         }
       : null;
+  // Only a fully-formed payload yields a result (the hard-failure orchestrator path
+  // can omit it) — guard both fields so a partial object never half-renders a card.
+  const wr = meta.workflowResult;
+  const workflowResult: WorkflowResultMeta | null =
+    wr !== undefined && typeof wr.workflowName === 'string' && typeof wr.runId === 'string'
+      ? { workflowName: wr.workflowName, runId: wr.runId }
+      : null;
   return {
     id: raw.id,
     role: toMessageRole(raw.role),
@@ -119,5 +138,6 @@ export function toMessage(raw: RawMessage): Message {
     error,
     category: meta.category ?? null,
     dispatch,
+    workflowResult,
   };
 }
