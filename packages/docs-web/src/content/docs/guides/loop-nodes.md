@@ -150,7 +150,10 @@ loop:
 This is useful for deterministic completion criteria: test suites, lint checks,
 build success. The bash script supports the same variable substitution as
 `prompt` (`$ARTIFACTS_DIR`, `$nodeId.output`, etc.). Note: `$nodeId.output`
-values are shell-escaped when substituted into `until_bash`.
+values are shell-escaped when substituted into `until_bash`. The same
+double-quoting footgun that applies to `bash:` nodes applies here — see
+[Shell Quoting in `bash:` vs `script:`](/reference/variables#shell-quoting-in-bash-vs-script)
+for the unquoted idiom to use.
 
 ## Patterns
 

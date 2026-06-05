@@ -30,7 +30,7 @@ function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('workflow.validator');
   return cachedLog;
 }
-import { isScriptNode } from './schemas';
+import { isBashNode, isScriptNode } from './schemas';
 import type { WorkflowDefinition, DagNode, WorkflowSource } from './schemas';
 import type { ScriptRuntime } from './script-discovery';
 import { discoverScriptsForCwd } from './script-discovery';
@@ -585,6 +585,28 @@ export async function validateWorkflowResources(
           field: 'deps',
           message: "'deps' is ignored for bun runtime (bun auto-installs packages at runtime)",
           hint: 'Remove deps or switch to runtime: uv if you need explicit dependency management',
+        });
+      }
+    }
+
+    // In bash nodes, substituted values are injected pre-quoted by Archon (single-quoted
+    // inline for small values, or via $(cat ...) for large outputs >32 KB). Wrapping in
+    // double quotes corrupts both forms: for inline values it embeds the single quotes;
+    // for $(cat ...) it enables word-splitting on the command output.
+    //   wrong="$n.output.field" → wrong="'ok'" (inline) or word-splits $(cat ...) output
+    //   right=$n.output.field   → right='ok' → bash assigns: ok
+    if (isBashNode(node)) {
+      // [^"\n]* intentionally excludes newlines — a double-quote spanning lines is pathological
+      // in workflow bash prompts and not worth detecting.
+      const doubleQuotedOutputRef = /"[^"\n]*\$[a-zA-Z_][a-zA-Z0-9_-]*\.output/;
+      if (doubleQuotedOutputRef.test(node.bash)) {
+        issues.push({
+          level: 'warning',
+          nodeId: node.id,
+          field: 'bash',
+          message:
+            '`"$nodeId.output"` — double-quoting a substitution that is already single-quoted by Archon produces the wrong value',
+          hint: 'Remove the surrounding double quotes: use `var=$node.output.field` not `var="$node.output.field"`. The injected single-quotes are the quoting.',
         });
       }
     }
