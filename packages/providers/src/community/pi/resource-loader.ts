@@ -96,3 +96,86 @@ export function createNoopResourceLoader(
       : {}),
   });
 }
+
+/**
+ * Process-level cache of reloaded, extension-bearing ResourceLoaders (issue #1877).
+ *
+ * Pi's `DefaultResourceLoader.reload()` re-runs the entire extension-discovery
+ * pipeline — `packageManager.resolve()` + `loadExtensions()` — and
+ * `loadExtensions()` re-invokes every installed extension's factory from scratch
+ * (jiti is created with `moduleCache: false`). Those factories construct
+ * process-scoped singletons (e.g. agent-rooms builds a RoomManager +
+ * SdkSessionFactory, which spin up nested AuthStorage/ModelRegistry instances).
+ * That state is never torn down between Archon `sendQuery()` calls: Archon
+ * disposes sessions via `session.dispose()`, which — unlike `session.reload()` —
+ * does NOT emit `session_shutdown`. So the SECOND `reload()` in a process
+ * deadlocks colliding with the first call's still-live state, and every Pi
+ * workflow node after the first idle-times-out.
+ *
+ * Fix: reload the extension-bearing loader ONCE per process per loader-affecting
+ * input set and reuse it. `createAgentSession({ resourceLoader })` skips its own
+ * internal `reload()` when a loader is supplied (Pi SDK `sdk.js`), and reads the
+ * already-loaded extensions via `resourceLoader.getExtensions()` — so reuse is
+ * safe. Each session still builds its own ExtensionRunner and fires
+ * `session_start` via `bindExtensions()`, preserving per-node behavior.
+ */
+const reloadedExtensionLoaderCache = new Map<string, Promise<DefaultResourceLoader>>();
+
+/**
+ * Cache key over every input baked into the loader. `systemPrompt` and
+ * `additionalSkillPaths` are included so a per-node override never silently
+ * reuses a loader carrying a different prompt — a distinct prompt yields a
+ * distinct loader (which is reloaded once on its own). In the common case
+ * (uniform/absent prompt across nodes) all nodes share one cached loader.
+ */
+function extensionLoaderCacheKey(
+  cwd: string,
+  systemPrompt: string | undefined,
+  additionalSkillPaths: readonly string[]
+): string {
+  return JSON.stringify([cwd, systemPrompt ?? null, [...additionalSkillPaths].sort()]);
+}
+
+/**
+ * Return a process-cached, already-reloaded extension-bearing ResourceLoader,
+ * constructing + `reload()`ing it on first use for a given input set. Always
+ * loads with `enableExtensions: true` — this is the only path that runs the
+ * non-re-entrant `reload()`, so it is the only path that needs the cache.
+ *
+ * Concurrency: the cache stores the in-flight Promise (not the resolved loader)
+ * so concurrent same-layer nodes await a single shared `reload()` instead of
+ * racing into two. A failed reload is evicted so the next call retries cleanly.
+ */
+export async function getOrCreateReloadedExtensionLoader(
+  cwd: string,
+  options: Pick<NoopResourceLoaderOptions, 'systemPrompt' | 'additionalSkillPaths'> = {}
+): Promise<DefaultResourceLoader> {
+  const key = extensionLoaderCacheKey(
+    cwd,
+    options.systemPrompt,
+    options.additionalSkillPaths ?? []
+  );
+  let pending = reloadedExtensionLoaderCache.get(key);
+  if (!pending) {
+    pending = (async (): Promise<DefaultResourceLoader> => {
+      const loader = createNoopResourceLoader(cwd, { ...options, enableExtensions: true });
+      // Without reload(), session.extensionRunner is undefined and setFlagValue
+      // silently no-ops. createAgentSession skips this when a loader is supplied.
+      await loader.reload();
+      return loader;
+    })();
+    reloadedExtensionLoaderCache.set(key, pending);
+    // Evict on failure so a transient reload error doesn't poison the cache.
+    pending.catch(() => reloadedExtensionLoaderCache.delete(key));
+  }
+  return pending;
+}
+
+/**
+ * Test-only: clear the process-level loader cache so each test starts empty.
+ * The cache is module-level and would otherwise leak loaders (and their mocked
+ * reload/construct call counts) across tests in the same file.
+ */
+export function resetReloadedExtensionLoaderCache(): void {
+  reloadedExtensionLoaderCache.clear();
+}
