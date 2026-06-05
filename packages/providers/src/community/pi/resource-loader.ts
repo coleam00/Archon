@@ -118,6 +118,17 @@ export function createNoopResourceLoader(
  * already-loaded extensions via `resourceLoader.getExtensions()` — so reuse is
  * safe. Each session still builds its own ExtensionRunner and fires
  * `session_start` via `bindExtensions()`, preserving per-node behavior.
+ *
+ * Growth & eviction: entries are keyed by `(cwd, systemPrompt, skillPaths)`, so
+ * the cache grows by at most one small loader per distinct worktree/prompt combo
+ * the process ever runs with extensions on — bounded in practice by the number of
+ * worktrees touched, not by request volume. Eviction is deliberately limited to
+ * the failure path (below): size-capped/LRU eviction is NOT safe here because
+ * dropping a loader that a long-running workflow is still using would make that
+ * workflow's next node cache-miss and `reload()` a second copy of the same
+ * extensions while the first is still live — re-introducing the very deadlock
+ * this cache prevents. Time/idle-based reclamation belongs with isolation
+ * cleanup (a future cross-package hook), not a blind cap here.
  */
 const reloadedExtensionLoaderCache = new Map<string, Promise<DefaultResourceLoader>>();
 
