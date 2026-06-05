@@ -343,6 +343,8 @@ export async function validateWorkflowResources(
   }
 
   const validateModelRef = (ref: string, nodeId?: string): void => {
+    // aiProfile is undefined only when buildAiProfile() threw above (bad tiers/aliases config).
+    // Per-model-ref validation is skipped; the config error is already in issues.
     if (!aiProfile) return;
     try {
       resolveModelSpec(aiProfile, ref);
@@ -589,12 +591,15 @@ export async function validateWorkflowResources(
       }
     }
 
-    // --- Bash nodes: warn when a double-quoted $nodeId.output ref is detected ---
-    // In bash nodes, substituted values are already single-quoted by shellQuote().
-    // Wrapping in double quotes embeds the single quotes into the value:
-    //   wrong="$n.output.field" → wrong="'ok'" (broken comparison)
+    // In bash nodes, substituted values are injected pre-quoted by Archon (single-quoted
+    // inline for small values, or via $(cat ...) for large outputs >32 KB). Wrapping in
+    // double quotes corrupts both forms: for inline values it embeds the single quotes;
+    // for $(cat ...) it enables word-splitting on the command output.
+    //   wrong="$n.output.field" → wrong="'ok'" (inline) or word-splits $(cat ...) output
     //   right=$n.output.field   → right='ok' → bash assigns: ok
     if (isBashNode(node)) {
+      // [^"\n]* intentionally excludes newlines — a double-quote spanning lines is pathological
+      // in workflow bash prompts and not worth detecting.
       const doubleQuotedOutputRef = /"[^"\n]*\$[a-zA-Z_][a-zA-Z0-9_-]*\.output/;
       if (doubleQuotedOutputRef.test(node.bash)) {
         issues.push({

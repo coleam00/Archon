@@ -379,7 +379,7 @@ Variable substitution order:
 2. Node output references (`$nodeId.output`, `$nodeId.output.field`)
 
 :::caution[Double-quoting `$node.output` in `bash:` nodes is a silent footgun]
-In `bash:` nodes, `$nodeId.output` and `$nodeId.output.field` are injected as **shell-safe single-quoted literals** — the quoting is already provided by the substitution. Wrapping in double quotes embeds the single quotes into the variable value, breaking comparisons silently:
+In `bash:` nodes, `$nodeId.output` and `$nodeId.output.field` are injected pre-quoted by Archon. For small outputs, values are **single-quoted inline** — the quoting is already provided by the substitution. For outputs exceeding 32 KB, Archon spills to a temp file and substitutes `$(cat '/tmp/path')` instead. Wrapping in double quotes corrupts both forms: for inline values it embeds the single quotes; for `$(cat ...)` it enables word-splitting on the command output.
 
 ```bash
 # WRONG — produces status="'ok'" (single quotes become part of the value)
@@ -391,7 +391,7 @@ status=$emit.output.status
 [ "$status" = "ok" ]   # → true
 ```
 
-**Rule:** use `var=$node.output.field`, never `var="$node.output.field"`. Numeric and boolean fields are injected raw (without quotes), so double-quoting accidentally "works" for them — making the bug intermittent and hard to spot.
+**Rule:** use `var=$node.output.field`, never `var="$node.output.field"`. This applies whether the output is small (single-quoted inline) or large (`$(cat ...)`). Numeric and boolean fields are injected raw (without quotes), so double-quoting accidentally "works" for them — making the bug intermittent and hard to spot.
 :::
 
 ### `output_format` for Structured JSON

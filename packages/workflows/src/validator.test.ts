@@ -592,13 +592,25 @@ describe('validateWorkflowResources — bash double-quote lint', () => {
     expect(warnings).toHaveLength(1);
   });
 
-  test('no warning on script nodes with double-quoted $nodeId.output (check is bash-only)', async () => {
+  test('script nodes are exempt from the double-quote lint', async () => {
     const workflow = makeWorkflow('test', [
       {
         id: 'check',
         script: 'const status = "$emit.output.status";\nconsole.log(status);',
         runtime: 'bun',
       } as unknown as DagNode,
+    ]);
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    const warnings = issues.filter(i => i.level === 'warning' && i.field === 'bash');
+    expect(warnings).toHaveLength(0);
+  });
+
+  test('no warning when $nodeId.output is inside single quotes', async () => {
+    const workflow = makeWorkflow('test', [
+      {
+        id: 'check',
+        bash: "status='$emit.output.status'",
+      } as DagNode,
     ]);
     const issues = await validateWorkflowResources(workflow, tmpDir);
     const warnings = issues.filter(i => i.level === 'warning' && i.field === 'bash');
