@@ -38,9 +38,10 @@ const SECTIONS = [
 ];
 
 const KPIS = [
-  { label: 'Status', value: 'Active' },
-  { label: 'Brand role', value: 'PMC sub-brand' },
-  { label: 'Vault depth', value: 'overview only' },
+  { label: 'Phase', value: 'Build' },
+  { label: 'Partner', value: 'IHHT-CellIT' },
+  { label: 'Composite rank', value: 'Mid-tier sub-brand' },
+  { label: 'Top blocker', value: 'Clinical one-pager + demo script' },
 ];
 
 export function IHHTPage(): React.ReactElement {

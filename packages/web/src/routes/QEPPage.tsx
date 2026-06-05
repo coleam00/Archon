@@ -64,9 +64,10 @@ const SECTIONS = [
 ];
 
 const KPIS = [
-  { label: 'Status', value: 'Active' },
+  { label: 'Phase', value: 'Build' },
   { label: 'Anchor venue', value: 'The Fountain WPB' },
-  { label: 'Vault depth', value: 'overview only' },
+  { label: 'Composite rank', value: 'Mid-tier sub-brand' },
+  { label: 'Top blocker', value: 'Lock modules + pricing with Blake' },
 ];
 
 export function QEPPage(): React.ReactElement {
