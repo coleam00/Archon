@@ -39,6 +39,9 @@ export interface RawAliasEntry {
 /** The aliases map from config YAML — keyed by alias name */
 export type RawAliasesConfig = Record<string, RawAliasEntry>;
 
+/** Tier override map — fixed keyspace (small/medium/large). Cross-provider. */
+export type RawTierConfig = Record<TierName, RawAliasEntry>;
+
 /** The resolved AI profile — used by resolveModelSpec */
 export interface ResolvedAiProfile {
   defaultProvider: string;
@@ -78,6 +81,18 @@ function assertNotReserved(name: string): void {
   }
 }
 
+/**
+ * Inverse of `assertNotReserved` — for tier overrides, the key MUST be a
+ * reserved tier name. `@<name>` keys belong in the alias layer, not here.
+ */
+function assertIsTierName(name: string): asserts name is TierName {
+  if (!isTierName(name)) {
+    throw new Error(
+      `Tier override key '${name}' is not a reserved tier name (small/medium/large).`
+    );
+  }
+}
+
 function assertCustomAliasPrefix(name: string): void {
   if (!name.startsWith('@')) {
     throw new Error(
@@ -100,12 +115,30 @@ export interface BuildAiProfileOptions {
   globalAliases?: RawAliasesConfig;
   /** Aliases from .archon/config.yaml (repo) — override globalAliases on key collision */
   repoAliases?: RawAliasesConfig;
+  /**
+   * Tier overrides from ~/.archon/config.yaml — cross-provider remap of
+   * `small`/`medium`/`large`. Per-key override of the shipped tier seed.
+   */
+  globalTiers?: RawTierConfig;
+  /**
+   * Tier overrides from .archon/config.yaml (repo) — override globalTiers
+   * on key collision. Same keyspace as globalTiers.
+   */
+  repoTiers?: RawTierConfig;
 }
 
 /**
- * Build a ResolvedAiProfile by layering tier defaults → global aliases → repo aliases.
- * Throws if any alias name collides with a reserved tier name, or if an alias
- * entry has an empty provider or model string, or if an alias key lacks the `@` prefix.
+ * Build a ResolvedAiProfile by layering in this order:
+ *   1. tier-defaults.json[defaultProvider] — the shipped seed
+ *   2. globalTiers  (per-key override of seed; from ~/.archon/config.yaml)
+ *   3. repoTiers    (per-key override of globalTiers; from .archon/config.yaml)
+ *   4. globalAliases  (@custom aliases from ~/.archon/config.yaml)
+ *   5. repoAliases    (@custom aliases from .archon/config.yaml)
+ *
+ * Aliases and tiers are disjoint keyspaces (tier keys must be small/medium/large;
+ * alias keys must be @<name>), so they cannot collide. Aliases layer on top of
+ * tiers so a workflow can still resolve `@reasoning` to a `large`-class preset
+ * the operator hand-picked.
  */
 export function buildAiProfile(
   defaultProvider: string,
@@ -113,6 +146,7 @@ export function buildAiProfile(
 ): ResolvedAiProfile {
   const aliases: Record<string, ModelAliasPreset> = {};
 
+  // 1. Tier seed from defaults file
   const tierEntries = TIER_DEFAULTS[defaultProvider];
   if (tierEntries) {
     for (const tier of TIER_NAMES) {
@@ -127,6 +161,22 @@ export function buildAiProfile(
     }
   }
 
+  // 2-3. Tier overrides (global then repo) — must be TierName keys
+  for (const layer of [options.globalTiers, options.repoTiers]) {
+    if (!layer) continue;
+    for (const [name, entry] of Object.entries(layer)) {
+      assertIsTierName(name);
+      assertValidEntry(name, entry);
+      aliases[name] = {
+        provider: entry.provider,
+        model: entry.model,
+        ...(entry.effort !== undefined ? { effort: entry.effort } : {}),
+        ...(entry.thinking !== undefined ? { thinking: entry.thinking } : {}),
+      };
+    }
+  }
+
+  // 4-5. Custom alias overrides (global then repo) — must be @<name> keys
   for (const layer of [options.globalAliases, options.repoAliases]) {
     if (!layer) continue;
     for (const [name, entry] of Object.entries(layer)) {

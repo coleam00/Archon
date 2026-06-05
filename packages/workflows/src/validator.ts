@@ -678,3 +678,62 @@ export async function validateScript(
     issues,
   };
 }
+
+// =============================================================================
+// Bundled workflow model-portability gate
+// =============================================================================
+
+import { TIER_NAMES } from './model-validation';
+
+/**
+ * Validate that a workflow's node `model:` references are portable.
+ *
+ * Rules:
+ *   - Always rejected (bundled AND shared): `@<name>` custom aliases — they
+ *     are user-specific and break across installs. The bundled/shared
+ *     portability contract is: small/medium/large + literal model strings.
+ *   - Bundled-only rejected: literal model strings like `sonnet` or
+ *     `opus[1m]` that are NOT tier keywords. They pin a specific
+ *     provider's model, defeating the cross-provider tier-remap feature.
+ *     Bundled defaults must use tier keywords (or, for the exact-pin path,
+ *     be moved out of the bundled set).
+ *
+ * Pass `isBundled: true` for the bundled-default set; pass `false` for
+ * user-authored shared workflows (literals are allowed there for the
+ * benchmark/exact-pin path).
+ */
+export function validateBundledWorkflowModels(
+  workflow: WorkflowDefinition,
+  isBundled: boolean
+): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+
+  for (const node of workflow.nodes) {
+    if (!('model' in node)) continue;
+    const model = (node as { model?: string }).model;
+    if (typeof model !== 'string' || model.length === 0) continue;
+
+    if (model.startsWith('@')) {
+      issues.push({
+        level: 'error',
+        nodeId: node.id,
+        field: 'model',
+        message: `${isBundled ? 'Bundled' : 'Shared'} workflow node references @custom alias '${model}', which is not portable across installs`,
+        hint: 'Use a tier keyword (small/medium/large) or a literal model string. Custom @-aliases are user-specific and break cross-provider portability.',
+      });
+      continue;
+    }
+
+    if (isBundled && !(TIER_NAMES as readonly string[]).includes(model)) {
+      issues.push({
+        level: 'error',
+        nodeId: node.id,
+        field: 'model',
+        message: `Bundled workflow node pins literal model '${model}', which is not portable across providers`,
+        hint: "Use a tier keyword (small/medium/large) so the user's `tiers:` config controls the actual model.",
+      });
+    }
+  }
+
+  return issues;
+}

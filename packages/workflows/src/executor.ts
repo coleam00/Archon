@@ -308,6 +308,8 @@ export async function hydrateResumableRun(
  * call {@link hydrateResumableRun} first and spread its result into `opts` —
  * the executor does not perform resume detection on its own.
  */
+import { buildAiProfile } from './model-validation';
+
 export async function executeWorkflow(
   deps: WorkflowDeps,
   platform: IWorkflowPlatform,
@@ -388,6 +390,21 @@ export async function executeWorkflow(
   }
   const assistantDefaults = config.assistants[resolvedProvider];
   const resolvedModel = workflow.model ?? (assistantDefaults?.model as string | undefined);
+
+  // Build the resolved AI profile once for the entire workflow execution.
+  // The merged config has already layered global > repo for both aliases
+  // and tiers (config-loader is the merge layer; the resolver is the
+  // composition layer). Pass the merged values as globalAliases/globalTiers
+  // and `undefined` for the repo layer to preserve the per-layer shape.
+  // This is the single point where `userId` could enter the deep path
+  // (Phase 3 of the user-scoped AI setup PRD). For Phase 1, no per-user
+  // override layer exists.
+  const aiProfile = buildAiProfile(resolvedProvider, {
+    globalAliases: config.aliases,
+    repoAliases: undefined,
+    globalTiers: config.tiers,
+    repoTiers: undefined,
+  });
 
   getLog().info(
     {
@@ -736,7 +753,8 @@ export async function executeWorkflow(
       configuredCommandFolder,
       issueContext,
       dagPriorCompletedNodes,
-      source
+      source,
+      aiProfile
     );
 
     // executeDagWorkflow throws on fatal errors; check DB status for result

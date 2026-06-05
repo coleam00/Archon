@@ -43,7 +43,7 @@ nodes:
     depends_on: [confirm-plan]
     context: fresh
     provider: claude
-    model: opus[1m]
+    model: large
 
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 4: VALIDATE

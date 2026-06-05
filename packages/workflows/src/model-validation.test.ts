@@ -114,6 +114,103 @@ describe('buildAiProfile — alias layering', () => {
   });
 });
 
+describe('buildAiProfile — tier override layering', () => {
+  test('globalTiers override tier-defaults per key (claude large → codex)', () => {
+    const profile = buildAiProfile('claude', {
+      globalTiers: {
+        large: { provider: 'codex', model: 'gpt-5.5', effort: 'high' },
+      },
+    });
+    expect(profile.aliases.large).toEqual({
+      provider: 'codex',
+      model: 'gpt-5.5',
+      effort: 'high',
+    });
+    // small/medium untouched — still seed defaults
+    expect(profile.aliases.small?.model).toBe('haiku');
+    expect(profile.aliases.medium?.model).toBe('sonnet');
+  });
+
+  test('repoTiers override globalTiers per key (codex default, repo swaps medium)', () => {
+    const profile = buildAiProfile('codex', {
+      globalTiers: {
+        medium: { provider: 'claude', model: 'sonnet' },
+      },
+      repoTiers: {
+        medium: { provider: 'pi', model: 'anthropic/claude-sonnet-4-6' },
+      },
+    });
+    expect(profile.aliases.medium).toEqual({
+      provider: 'pi',
+      model: 'anthropic/claude-sonnet-4-6',
+    });
+  });
+
+  test('cross-provider tier override (default claude, large → codex)', () => {
+    const profile = buildAiProfile('claude', {
+      globalTiers: {
+        large: { provider: 'codex', model: 'gpt-5.5', effort: 'high' },
+      },
+    });
+    // The tier seed gave large=claude/opus. Override must point at codex.
+    expect(profile.aliases.large?.provider).toBe('codex');
+    expect(profile.aliases.large?.model).toBe('gpt-5.5');
+  });
+
+  test('tier override preserves effort and thinking fields', () => {
+    const profile = buildAiProfile('claude', {
+      globalTiers: {
+        small: { provider: 'codex', model: 'gpt-5.5', effort: 'minimal' },
+      },
+    });
+    expect(profile.aliases.small?.effort).toBe('minimal');
+
+    const profile2 = buildAiProfile('claude', {
+      globalTiers: {
+        large: {
+          provider: 'claude',
+          model: 'opus',
+          thinking: { type: 'enabled', budgetTokens: 20000 },
+        },
+      },
+    });
+    expect(profile2.aliases.large?.thinking).toEqual({
+      type: 'enabled',
+      budgetTokens: 20000,
+    });
+  });
+
+  test('rejects @custom key in globalTiers (inverse of alias rule)', () => {
+    expect(() =>
+      buildAiProfile('claude', {
+        // @ts-expect-error — testing runtime guard, types reject @custom here
+        globalTiers: { '@cheap': { provider: 'claude', model: 'haiku' } },
+      })
+    ).toThrow(/not a reserved tier name/);
+  });
+
+  test('rejects arbitrary key in globalTiers', () => {
+    expect(() =>
+      buildAiProfile('claude', {
+        // @ts-expect-error — testing runtime guard, types reject non-tier keys
+        globalTiers: { xl: { provider: 'claude', model: 'opus' } },
+      })
+    ).toThrow(/not a reserved tier name/);
+  });
+
+  test('buildAiProfile with no overrides produces seed-only profile (backward-compat snapshot)', () => {
+    const profile = buildAiProfile('claude');
+    expect(profile).toEqual({
+      defaultProvider: 'claude',
+      aliases: {
+        small: { provider: 'claude', model: 'haiku' },
+        medium: { provider: 'claude', model: 'sonnet' },
+        large: { provider: 'claude', model: 'opus' },
+      },
+    });
+  });
+});
+
 describe('buildAiProfile — reserved name validation', () => {
   test('rejects reserved "small" in globalAliases', () => {
     expect(() =>

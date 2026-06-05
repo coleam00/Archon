@@ -14,6 +14,7 @@ import {
   validateWorkflowResources,
   validateCommand,
   discoverAvailableCommands,
+  validateBundledWorkflowModels,
 } from './validator';
 import type { WorkflowDefinition, DagNode } from './schemas';
 
@@ -443,5 +444,82 @@ describe('validateWorkflowResources — agents capability', () => {
     const issues = await validateWorkflowResources(workflow, tmpDir);
     const warning = issues.find(i => i.level === 'warning' && i.field === 'agents');
     expect(warning).toBeUndefined();
+  });
+});
+
+describe('validateBundledWorkflowModels', () => {
+  test('bundled workflow with model: large returns []', () => {
+    const workflow = makeWorkflow('test', [
+      { id: 'a', prompt: 'p', model: 'large' } as unknown as DagNode,
+    ]);
+    expect(validateBundledWorkflowModels(workflow, true)).toEqual([]);
+  });
+
+  test('bundled workflow with model: small returns []', () => {
+    const workflow = makeWorkflow('test', [
+      { id: 'a', prompt: 'p', model: 'small' } as unknown as DagNode,
+    ]);
+    expect(validateBundledWorkflowModels(workflow, true)).toEqual([]);
+  });
+
+  test('bundled workflow with literal model: sonnet returns one error', () => {
+    const workflow = makeWorkflow('test', [
+      { id: 'a', prompt: 'p', model: 'sonnet' } as unknown as DagNode,
+    ]);
+    const issues = validateBundledWorkflowModels(workflow, true);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.level).toBe('error');
+    expect(issues[0]?.field).toBe('model');
+    expect(issues[0]?.message).toMatch(/sonnet/);
+    expect(issues[0]?.hint).toMatch(/tier keyword/);
+  });
+
+  test('bundled workflow with @custom alias returns one error', () => {
+    const workflow = makeWorkflow('test', [
+      { id: 'a', prompt: 'p', model: '@cheap' } as unknown as DagNode,
+    ]);
+    const issues = validateBundledWorkflowModels(workflow, true);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.message).toMatch(/@cheap/);
+    expect(issues[0]?.message).toMatch(/portable/);
+  });
+
+  test('shared workflow with literal model is allowed (no issue)', () => {
+    const workflow = makeWorkflow('test', [
+      { id: 'a', prompt: 'p', model: 'sonnet' } as unknown as DagNode,
+    ]);
+    expect(validateBundledWorkflowModels(workflow, false)).toEqual([]);
+  });
+
+  test('shared workflow with @custom alias is rejected', () => {
+    const workflow = makeWorkflow('test', [
+      { id: 'a', prompt: 'p', model: '@cheap' } as unknown as DagNode,
+    ]);
+    const issues = validateBundledWorkflowModels(workflow, false);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.level).toBe('error');
+    expect(issues[0]?.message).toMatch(/@cheap/);
+  });
+
+  test('mixed-nodes workflow: only literal nodes produce issues', () => {
+    const workflow = makeWorkflow('test', [
+      { id: 'a', prompt: 'p', model: 'large' } as unknown as DagNode,
+      { id: 'b', prompt: 'p', model: 'sonnet' } as unknown as DagNode,
+      { id: 'c', prompt: 'p', model: 'small' } as unknown as DagNode,
+      { id: 'd', prompt: 'p', model: 'opus[1m]' } as unknown as DagNode,
+    ]);
+    const issues = validateBundledWorkflowModels(workflow, true);
+    expect(issues).toHaveLength(2);
+    const nodeIds = issues.map(i => i.nodeId);
+    expect(nodeIds).toContain('b');
+    expect(nodeIds).toContain('d');
+  });
+
+  test('nodes without a model field produce no issues', () => {
+    const workflow = makeWorkflow('test', [
+      { id: 'a', prompt: 'p' } as unknown as DagNode,
+      { id: 'b', prompt: 'p', model: 'large' } as unknown as DagNode,
+    ]);
+    expect(validateBundledWorkflowModels(workflow, true)).toEqual([]);
   });
 });

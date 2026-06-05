@@ -99,7 +99,16 @@ function makePlatform(): IWorkflowPlatform {
   } as unknown as IWorkflowPlatform;
 }
 
-function makeDeps(store?: IWorkflowStore): WorkflowDeps {
+function makeDeps(
+  store?: IWorkflowStore,
+  configOverrides: {
+    aliases?: Record<string, { provider: string; model: string; effort?: string }>;
+    tiers?: Record<
+      'small' | 'medium' | 'large',
+      { provider: string; model: string; effort?: string }
+    >;
+  } = {}
+): WorkflowDeps {
   return {
     store: store ?? makeStore(),
     loadConfig: mock(
@@ -111,6 +120,8 @@ function makeDeps(store?: IWorkflowStore): WorkflowDeps {
         },
         baseBranch: '',
         commands: { folder: '' },
+        ...(configOverrides.aliases ? { aliases: configOverrides.aliases } : {}),
+        ...(configOverrides.tiers ? { tiers: configOverrides.tiers } : {}),
       })
     ),
     getAgentProvider: mock(() => ({
@@ -1037,5 +1048,86 @@ describe('hydrateResumableRun', () => {
     });
     const deps = makeDeps(store);
     await expect(hydrateResumableRun(deps, candidate)).rejects.toThrow('DB write failed');
+  });
+});
+
+// =============================================================================
+// Tier addressability — executeWorkflow threads the ResolvedAiProfile
+// =============================================================================
+describe('executeWorkflow -- tier addressability (Issue #1872)', () => {
+  beforeEach(() => {
+    mockLogFn.mockClear();
+    mockExecuteDagWorkflow.mockClear();
+    mockExecuteDagWorkflow.mockImplementation(async (): Promise<string | undefined> => undefined);
+  });
+
+  it('threads a built ResolvedAiProfile into executeDagWorkflow as the last arg', async () => {
+    const store = makeStore({});
+    const deps = makeDeps(store, {
+      aliases: {
+        '@reasoning': { provider: 'claude', model: 'opus' },
+      },
+      tiers: {
+        large: { provider: 'codex', model: 'gpt-5.5', effort: 'high' },
+      },
+    });
+    const workflow = {
+      name: 'tier-thread',
+      description: 'test',
+      nodes: [{ id: 'a', prompt: 'p' }],
+    } as Parameters<typeof executeWorkflow>[5];
+
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      workflow,
+      'user msg',
+      'db-id',
+      {}
+    );
+
+    expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
+    const lastArg = mockExecuteDagWorkflow.mock.calls[0][
+      mockExecuteDagWorkflow.mock.calls[0].length - 1
+    ] as { defaultProvider: string; aliases: Record<string, { provider: string; model: string }> };
+    // The profile must include the resolved aliases (seeded + global layer)
+    expect(lastArg.defaultProvider).toBe('claude');
+    expect(lastArg.aliases.large?.provider).toBe('codex'); // tier override
+    expect(lastArg.aliases.large?.model).toBe('gpt-5.5');
+    expect(lastArg.aliases['@reasoning']?.model).toBe('opus');
+  });
+
+  it('passes undefined for the aiProfile slot when no aliases or tiers are configured', async () => {
+    const store = makeStore({});
+    const deps = makeDeps(store); // no aliases/tiers
+    const workflow = {
+      name: 'no-config',
+      description: 'test',
+      nodes: [{ id: 'a', prompt: 'p' }],
+    } as Parameters<typeof executeWorkflow>[5];
+
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      workflow,
+      'user msg',
+      'db-id',
+      {}
+    );
+
+    expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
+    const lastArg = mockExecuteDagWorkflow.mock.calls[0][
+      mockExecuteDagWorkflow.mock.calls[0].length - 1
+    ] as { defaultProvider: string; aliases: Record<string, { provider: string; model: string }> };
+    // The profile is still built (with seeded defaults) — but it carries no
+    // global or repo overrides. The aliased tier set is the seed for the
+    // default provider.
+    expect(lastArg.defaultProvider).toBe('claude');
+    expect(lastArg.aliases.large?.provider).toBe('claude'); // seed
+    expect(lastArg.aliases.large?.model).toBe('opus');
   });
 });

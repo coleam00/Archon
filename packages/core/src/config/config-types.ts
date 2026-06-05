@@ -20,7 +20,7 @@ import type {
   PiProviderDefaults,
   ProviderDefaultsMap,
 } from '@archon/providers/types';
-import type { RawAliasesConfig } from '@archon/workflows/model-validation';
+import type { RawAliasEntry, RawAliasesConfig } from '@archon/workflows/model-validation';
 
 export type {
   ClaudeProviderDefaults,
@@ -29,7 +29,19 @@ export type {
   PiProviderDefaults,
   ProviderDefaultsMap,
 };
-export type { RawAliasesConfig };
+export type { RawAliasEntry, RawAliasesConfig };
+
+/**
+ * Cross-provider tier remap. Keys are the reserved tier names
+ * (`small` / `medium` / `large`) and values are full alias entries —
+ * they may point at ANY provider (not just the default), enabling
+ * one workflow YAML to run on different providers without edits.
+ *
+ * Reserved-name validation lives in `buildAiProfile()` (model-validation.ts),
+ * not in the config-loader. Type system enforces the keyspace at compile
+ * time; runtime parser allows extra keys through (logged as a warning).
+ */
+export type RawTiersConfig = Record<'small' | 'medium' | 'large', RawAliasEntry>;
 
 /**
  * Intersection type: generic `ProviderDefaultsMap` (any string key) with
@@ -89,6 +101,15 @@ export interface GlobalConfig {
   aliases?: RawAliasesConfig;
 
   /**
+   * Cross-provider tier remap. Each key (small/medium/large) is a reserved
+   * tier keyword; the value is a full alias entry that may point at any
+   * provider. This is the headline portability mechanism — one workflow
+   * YAML with `model: large` resolves to whatever the user's `large`
+   * tier is configured for, regardless of the default provider.
+   */
+  tiers?: RawTiersConfig;
+
+  /**
    * Platform streaming preferences (can be overridden per conversation)
    */
   streaming?: {
@@ -144,6 +165,13 @@ export interface RepoConfig {
 
   /** Repo-level model aliases — override global aliases with same name. */
   aliases?: RawAliasesConfig;
+
+  /**
+   * Repo-level tier overrides. Same keyspace as global `tiers` (small/medium/large).
+   * Per-key repo override beats the same key from global; the rest of the
+   * tier seed is preserved.
+   */
+  tiers?: RawTiersConfig;
 
   /**
    * Commands configuration
@@ -274,6 +302,12 @@ export interface MergedConfig {
    * Undefined when no aliases are configured anywhere.
    */
   aliases?: RawAliasesConfig;
+  /**
+   * Merged tier remap (repo > global > tier-defaults.json seed). Used by
+   * buildAiProfile at execution time. Undefined when no tiers are configured
+   * anywhere (the resolver then falls back to `tier-defaults.json[defaultProvider]`).
+   */
+  tiers?: RawTiersConfig;
   streaming: {
     telegram: 'stream' | 'batch';
     discord: 'stream' | 'batch';

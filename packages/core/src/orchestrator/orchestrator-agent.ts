@@ -1028,12 +1028,46 @@ export async function handleMessage(
     }
     const effectiveEnv = { ...(config.envVars ?? {}), ...dbEnvVars };
 
+    // Tier resolution for chat (Issue #1872): build a profile from the merged
+    // config and resolve the `large` tier. The preset's provider + effort
+    // override the conversation's defaults when the user has a `large` tier
+    // configured. Falls through to the assistantConfig/model defaults on
+    // failure (warn-once) — chat is user-facing, the warn-on-fallback UX
+    // is delivered in the response message after a successful completion.
+    let chatAssistantType = conversation.ai_assistant_type;
+    let chatAssistantConfig: Record<string, unknown> = config.assistants[providerKey] ?? {};
+    let chatModel: string | undefined;
+    try {
+      const { buildAiProfile, isLiteralSpec, resolveModelSpec } =
+        await import('@archon/workflows/model-validation');
+      const profile = buildAiProfile(providerKey, {
+        globalAliases: config.aliases,
+        globalTiers: config.tiers,
+      });
+      const spec = resolveModelSpec(profile, 'large');
+      if (!isLiteralSpec(spec)) {
+        chatAssistantType = spec.provider;
+        chatModel = spec.model;
+        if (spec.effort !== undefined) {
+          // Surface the preset's effort; per-provider field routing is the
+          // provider adapter's job (this is chat, not workflow — the routing
+          // paths in dag-executor don't apply here).
+          chatAssistantConfig = { ...chatAssistantConfig, effort: spec.effort };
+        }
+      }
+    } catch (resolverErr) {
+      getLog().warn(
+        { err: resolverErr as Error, conversationId },
+        'chat.tier_resolve_failed_falling_back'
+      );
+    }
+
     // Warn if provider doesn't support env injection but env vars are configured
     if (Object.keys(effectiveEnv).length > 0) {
-      const providerCaps = getProviderCapabilities(providerKey);
+      const providerCaps = getProviderCapabilities(chatAssistantType);
       if (!providerCaps.envInjection) {
         getLog().warn(
-          { provider: providerKey, envVarCount: Object.keys(effectiveEnv).length },
+          { provider: chatAssistantType, envVarCount: Object.keys(effectiveEnv).length },
           'orchestrator.unsupported_env_injection'
         );
       }
@@ -1058,15 +1092,18 @@ export async function handleMessage(
       systemAppend += `\n\n${buildRunManagementSection()}`;
     }
     const systemPrompt =
-      providerKey === 'claude'
+      chatAssistantType === 'claude'
         ? { type: 'preset' as const, preset: 'claude_code' as const, append: systemAppend }
         : systemAppend;
 
     const requestOptions: SendQueryOptions = {
-      assistantConfig: config.assistants[providerKey] ?? {},
+      assistantConfig: chatAssistantConfig,
       env: Object.keys(effectiveEnv).length > 0 ? effectiveEnv : undefined,
       systemPrompt,
     };
+    if (chatModel !== undefined) {
+      requestOptions.model = chatModel;
+    }
 
     // Project-scoped chats get the `manage_run` tool so the agent can see and
     // launch this project's workflow runs. Only when a codebase is scoped and

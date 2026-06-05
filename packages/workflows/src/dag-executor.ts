@@ -27,6 +27,7 @@ import {
   getRegisteredProviders,
   isRegisteredProvider,
 } from '@archon/providers';
+import { isLiteralSpec, resolveModelSpec, type ResolvedAiProfile } from './model-validation';
 import type {
   DagNode,
   ApprovalNode,
@@ -350,6 +351,13 @@ export function substituteNodeOutputRefs(
  * Provider-agnostic: builds universal base options + raw nodeConfig.
  * The provider internally translates nodeConfig to SDK-specific options.
  * Capability warnings inform users when features are unsupported.
+ *
+ * Tier/`@custom` resolution: when `aiProfile` is provided AND `node.model`
+ * is set AND it is not a literal spec, the resolver is consulted. The
+ * resolved preset's `provider` wins over `node.provider` (with a
+ * non-blocking warning on conflict); its `model` replaces the raw string;
+ * its `effort` is routed to the correct provider-specific field via
+ * `routeEffortToProvider`.
  */
 async function resolveNodeProviderAndModel(
   node: DagNode,
@@ -360,7 +368,8 @@ async function resolveNodeProviderAndModel(
   conversationId: string,
   workflowRunId: string,
   _cwd: string,
-  workflowLevelOptions: WorkflowLevelOptions
+  workflowLevelOptions: WorkflowLevelOptions,
+  aiProfile?: ResolvedAiProfile
 ): Promise<{
   provider: string;
   model: string | undefined;
@@ -368,7 +377,7 @@ async function resolveNodeProviderAndModel(
 }> {
   // Provider is explicit: node.provider ?? workflow.provider. Model never
   // influences provider selection. Model strings pass through to the SDK.
-  const provider: string = node.provider ?? workflowProvider;
+  let provider: string = node.provider ?? workflowProvider;
   if (!isRegisteredProvider(provider)) {
     throw new Error(
       `Node '${node.id}': unknown provider '${provider}'. ` +
@@ -379,11 +388,39 @@ async function resolveNodeProviderAndModel(
   }
 
   const providerAssistantConfig = config.assistants[provider];
-  const model: string | undefined =
+  let model: string | undefined =
     node.model ??
     (provider === workflowProvider
       ? workflowModel
       : (providerAssistantConfig?.model as string | undefined));
+
+  // Tier / @custom alias resolution (Issue #1872).
+  // When the resolved spec is a preset (not a literal), the preset's provider
+  // + model + effort override the defaults. A `node.provider` that disagrees
+  // with the resolved preset's provider produces a non-blocking warning —
+  // the alias wins (operator-defined cross-provider remap is the explicit
+  // intent), but the user is informed.
+  let resolvedEffort: string | undefined;
+  if (aiProfile && typeof node.model === 'string' && node.model.length > 0) {
+    const spec = resolveModelSpec(aiProfile, node.model);
+    if (!isLiteralSpec(spec)) {
+      if (node.provider !== undefined && node.provider !== spec.provider) {
+        getLog().warn(
+          { nodeId: node.id, nodeProvider: node.provider, aliasProvider: spec.provider },
+          'dag.alias_provider_conflict'
+        );
+        await safeSendMessage(
+          platform,
+          conversationId,
+          `Warning: Node '${node.id}' pins provider '${node.provider}' but model '${node.model}' resolves to provider '${spec.provider}'. Using '${spec.provider}' (per the resolved alias). Remove the explicit provider: field to silence this warning.`,
+          { workflowId: workflowRunId, nodeName: node.id }
+        );
+      }
+      provider = spec.provider;
+      model = spec.model;
+      resolvedEffort = spec.effort;
+    }
+  }
 
   // Get provider capabilities for capability warnings (static lookup, no instantiation)
   const caps = getProviderCapabilities(provider);
@@ -482,7 +519,21 @@ async function resolveNodeProviderAndModel(
   };
 
   // Pass assistantConfig from config — provider parses internally
-  const assistantConfig = config.assistants[provider] ?? {};
+  let assistantConfig: Record<string, unknown> = config.assistants[provider] ?? {};
+
+  // Per-provider effort routing from a resolved tier/`@custom` preset
+  // (Issue #1872). The routing decision lives here, not in the provider
+  // adapter — adapters (Pi/Copilot) own the value remap (max → xhigh);
+  // this function owns the field selection.
+  if (resolvedEffort !== undefined) {
+    const routed = routeEffortToProvider(resolvedEffort, provider);
+    if (routed.nodeConfigEffort !== undefined) {
+      nodeConfig.effort = routed.nodeConfigEffort;
+    }
+    if (routed.assistantConfigPatch) {
+      assistantConfig = { ...assistantConfig, ...routed.assistantConfigPatch };
+    }
+  }
 
   const options: SendQueryOptions = {
     ...baseOptions,
@@ -491,6 +542,52 @@ async function resolveNodeProviderAndModel(
   };
 
   return { provider, model, options };
+}
+
+/**
+ * Route a resolved preset's `effort` string into the correct provider-
+ * specific field. The value is a raw `low`/`medium`/`high`/`max`/`xhigh`
+ * string; adapters (Pi/Copilot) handle any further value remap
+ * (e.g. `max → xhigh`) downstream. This function is the ONLY place in
+ * the workflows package that decides which field to populate.
+ */
+function routeEffortToProvider(
+  effort: string,
+  provider: string
+): { nodeConfigEffort?: string; assistantConfigPatch?: Record<string, unknown> } {
+  switch (provider) {
+    case 'claude':
+      // Claude: nodeConfig.effort (Archon enum is a subset of Claude's).
+      return { nodeConfigEffort: effort };
+    case 'codex':
+      // Codex: assistantConfig.modelReasoningEffort. Codex has no `max`;
+      // remap to `xhigh` here so the SDK accepts it. Per OpenAI docs,
+      // `xhigh` is model-gated — the SDK will reject it for unsupported
+      // models, which is the correct failure mode.
+      return {
+        assistantConfigPatch: {
+          modelReasoningEffort: effort === 'max' ? 'xhigh' : effort,
+        },
+      };
+    case 'pi':
+      // Pi: nodeConfig.effort. The Pi provider's `resolvePiThinkingLevel`
+      // does the `max → xhigh` remap downstream.
+      return { nodeConfigEffort: effort };
+    case 'copilot':
+      // Copilot: assistantConfigPatch with `reasoningEffort` (camelCase).
+      // Copilot's `resolveCopilotReasoning` does the `max → xhigh` remap
+      // downstream. Use the assistantConfig channel because Copilot
+      // doesn't expose `effort` on its nodeConfig schema.
+      return {
+        assistantConfigPatch: {
+          reasoningEffort: effort === 'max' ? 'xhigh' : effort,
+        },
+      };
+    default:
+      // Unknown / community provider — fall through with nodeConfig.effort.
+      // Provider's own translator will decide what to do with it.
+      return { nodeConfigEffort: effort };
+  }
 }
 
 /** Evaluate trigger rule for a node given its upstream states */
@@ -2397,7 +2494,8 @@ async function executeApprovalNode(
   config: WorkflowConfig,
   workflowLevelOptions: WorkflowLevelOptions,
   configuredCommandFolder?: string,
-  issueContext?: string
+  issueContext?: string,
+  aiProfile?: ResolvedAiProfile
 ): Promise<NodeOutput> {
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
 
@@ -2487,7 +2585,8 @@ async function executeApprovalNode(
       conversationId,
       workflowRun.id,
       cwd,
-      workflowLevelOptions
+      workflowLevelOptions,
+      aiProfile
     );
 
     const output = await executeNodeInternal(
@@ -2587,7 +2686,9 @@ export async function executeDagWorkflow(
   issueContext?: string,
   priorCompletedNodes?: Map<string, string>,
   /** Discovery source — telemetry only (custom-vs-default + name redaction). */
-  source?: WorkflowSource
+  source?: WorkflowSource,
+  /** Resolved AI profile for tier / @custom alias resolution (Issue #1872). */
+  aiProfile?: ResolvedAiProfile
 ): Promise<string | undefined> {
   const dagStartTime = Date.now();
   const workflowLevelOptions = {
@@ -2920,7 +3021,8 @@ export async function executeDagWorkflow(
               config,
               workflowLevelOptions,
               configuredCommandFolder,
-              issueContext
+              issueContext,
+              aiProfile
             );
             return { nodeId: node.id, output };
           }
@@ -2987,7 +3089,8 @@ export async function executeDagWorkflow(
             conversationId,
             workflowRun.id,
             cwd,
-            workflowLevelOptions
+            workflowLevelOptions,
+            aiProfile
           );
 
           // 5. Determine session — parallel or context:fresh → always fresh

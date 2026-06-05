@@ -125,4 +125,4 @@ nodes:
     depends_on: [render-video]
     allowed_tools:
       - Read
-    model: haiku
+    model: small

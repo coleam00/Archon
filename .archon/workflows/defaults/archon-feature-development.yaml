@@ -9,7 +9,7 @@ nodes:
   - id: implement
     command: archon-implement
     provider: claude
-    model: opus[1m]
+    model: large
 
   - id: create-pr
     command: archon-create-pr

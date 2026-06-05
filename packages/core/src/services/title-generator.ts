@@ -2,10 +2,22 @@
  * AI-powered conversation title generator
  *
  * Generates concise 3-6 word titles using the configured AI assistant.
- * Optionally uses TITLE_GENERATION_MODEL env var for a cheaper/faster model.
+ * Resolution order (first match wins):
+ *   1. TITLE_GENERATION_MODEL env var — back-compat escape hatch.
+ *   2. Resolved `small` tier from a built ResolvedAiProfile (when merged
+ *      config is provided). Universal fallback chain handles missing `small`
+ *      via `medium → large`.
+ *   3. SDK default (no model passed).
+ *
  * Designed to be fire-and-forget — never throws, all errors logged internally.
  */
 import { getAgentProvider } from '@archon/providers';
+import {
+  buildAiProfile,
+  isLiteralSpec,
+  resolveModelSpec,
+} from '@archon/workflows/model-validation';
+import type { MergedConfig } from '../config/config-types';
 import * as conversationDb from '../db/conversations';
 import { createLogger } from '@archon/paths';
 
@@ -30,6 +42,11 @@ const MAX_TITLE_LENGTH = 100;
  * @param cwd - Working directory for the AI client
  * @param workflowName - Optional workflow name for additional context
  * @param assistantConfig - Optional provider-specific defaults for the selected assistant
+ * @param mergedConfig - Optional merged config for tier resolution (Issue #1872).
+ *                       When provided, the title generator resolves the `small`
+ *                       tier and uses its model + effort (per-provider routing
+ *                       is handled by the provider adapter). When absent, falls
+ *                       through to the env-var-then-SDK-default chain.
  */
 export async function generateAndSetTitle(
   conversationDbId: string,
@@ -37,24 +54,57 @@ export async function generateAndSetTitle(
   assistantType: string,
   cwd: string,
   workflowName?: string,
-  assistantConfig?: Record<string, unknown>
+  assistantConfig?: Record<string, unknown>,
+  mergedConfig?: MergedConfig
 ): Promise<void> {
   try {
     getLog().debug({ conversationDbId, assistantType }, 'title.generate_started');
 
-    // Model: use TITLE_GENERATION_MODEL env var if set, otherwise let SDK use its default
-    const titleModel = process.env.TITLE_GENERATION_MODEL || undefined;
+    // Resolve the title model with explicit precedence:
+    //   1. TITLE_GENERATION_MODEL env var (back-compat escape hatch)
+    //   2. Resolved `small` tier from merged config (Issue #1872)
+    //   3. SDK default (undefined)
+    let titleModel: string | undefined = process.env.TITLE_GENERATION_MODEL || undefined;
+    let titleAssistantConfig = assistantConfig;
+    let titleAssistantType = assistantType;
+
+    if (titleModel === undefined && mergedConfig) {
+      try {
+        const profile = buildAiProfile(assistantType, {
+          globalAliases: mergedConfig.aliases,
+          globalTiers: mergedConfig.tiers,
+        });
+        const spec = resolveModelSpec(profile, 'small');
+        if (!isLiteralSpec(spec)) {
+          titleModel = spec.model;
+          titleAssistantType = spec.provider;
+          // Surface the preset's effort into the assistantConfig so the
+          // provider can route it to the right field. For tier 'small' the
+          // user typically does not pin an effort, but the path is wired
+          // for forward-compat.
+          if (spec.effort !== undefined) {
+            titleAssistantConfig = { ...(assistantConfig ?? {}), effort: spec.effort };
+          }
+        }
+      } catch (resolverErr) {
+        // Resolver failure is non-fatal — fall through to SDK default.
+        getLog().warn(
+          { err: resolverErr as Error, conversationDbId },
+          'title.tier_resolve_failed_falling_back'
+        );
+      }
+    }
 
     // Build the title generation prompt
     const titlePrompt = buildTitlePrompt(userMessage, workflowName);
 
     // Use the configured AI client with no tools (pure text generation)
-    const client = getAgentProvider(assistantType);
+    const client = getAgentProvider(titleAssistantType);
     let generatedTitle = '';
 
     for await (const chunk of client.sendQuery(titlePrompt, cwd, undefined, {
       model: titleModel,
-      assistantConfig,
+      assistantConfig: titleAssistantConfig,
       nodeConfig: { allowed_tools: [] }, // No tool access — pure text generation
     })) {
       if (chunk.type === 'assistant') {

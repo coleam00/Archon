@@ -260,3 +260,101 @@ describe('title-generator', () => {
     expect(savedTitle).toEndWith('...');
   });
 });
+
+describe('title-generator — tier resolution (Issue #1872)', () => {
+  beforeEach(() => {
+    mockUpdateConversationTitle.mockClear();
+    mockSendQuery.mockClear();
+    mockGetAgentProvider.mockClear();
+    delete process.env.TITLE_GENERATION_MODEL;
+
+    mockSendQuery.mockImplementation(async function* (): AsyncGenerator<MessageChunk> {
+      yield { type: 'assistant', content: 'A Title' };
+      yield { type: 'result' };
+    });
+    mockGetAgentProvider.mockImplementation(() => ({
+      sendQuery: mockSendQuery,
+      getType: () => 'claude',
+    }));
+    mockUpdateConversationTitle.mockImplementation(() => Promise.resolve());
+  });
+
+  test('resolves `small` tier from merged config and forwards model', async () => {
+    const mergedConfig = {
+      assistant: 'claude',
+      assistants: { claude: {}, codex: {} },
+      streaming: {
+        telegram: 'stream' as const,
+        discord: 'batch' as const,
+        slack: 'batch' as const,
+      },
+      paths: { workspaces: '/tmp', worktrees: '/tmp' },
+      concurrency: { maxConversations: 1 },
+      commands: { autoLoad: true },
+      defaults: { copyDefaults: true, loadDefaultCommands: true, loadDefaultWorkflows: true },
+      tiers: {
+        small: { provider: 'codex', model: 'gpt-5.5', effort: 'minimal' },
+      },
+    };
+
+    await generateAndSetTitle(
+      'conv-tier',
+      'some message',
+      'claude',
+      '/tmp',
+      undefined,
+      undefined,
+      mergedConfig
+    );
+
+    // Should call getAgentProvider with the resolved tier's provider (codex)
+    expect(mockGetAgentProvider).toHaveBeenCalledWith('codex');
+    // Should pass the resolved model in options
+    const optionsArg = mockSendQuery.mock.calls[0][3] as { model?: string };
+    expect(optionsArg.model).toBe('gpt-5.5');
+  });
+
+  test('TITLE_GENERATION_MODEL env var wins over tier resolution', async () => {
+    process.env.TITLE_GENERATION_MODEL = 'haiku';
+
+    const mergedConfig = {
+      assistant: 'claude',
+      assistants: { claude: {}, codex: {} },
+      streaming: {
+        telegram: 'stream' as const,
+        discord: 'batch' as const,
+        slack: 'batch' as const,
+      },
+      paths: { workspaces: '/tmp', worktrees: '/tmp' },
+      concurrency: { maxConversations: 1 },
+      commands: { autoLoad: true },
+      defaults: { copyDefaults: true, loadDefaultCommands: true, loadDefaultWorkflows: true },
+      tiers: {
+        small: { provider: 'codex', model: 'gpt-5.5', effort: 'minimal' },
+      },
+    };
+
+    await generateAndSetTitle(
+      'conv-tier',
+      'some message',
+      'claude',
+      '/tmp',
+      undefined,
+      undefined,
+      mergedConfig
+    );
+
+    // Env var wins — provider stays claude, model stays 'haiku'
+    expect(mockGetAgentProvider).toHaveBeenCalledWith('claude');
+    const optionsArg = mockSendQuery.mock.calls[0][3] as { model?: string };
+    expect(optionsArg.model).toBe('haiku');
+  });
+
+  test('falls through to SDK default when no merged config provided', async () => {
+    await generateAndSetTitle('conv-no-config', 'some message', 'claude', '/tmp');
+
+    const optionsArg = mockSendQuery.mock.calls[0][3] as { model?: string };
+    expect(optionsArg.model).toBeUndefined();
+    expect(mockGetAgentProvider).toHaveBeenCalledWith('claude');
+  });
+});

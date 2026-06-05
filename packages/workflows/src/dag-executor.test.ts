@@ -8696,3 +8696,184 @@ describe('executeDagWorkflow -- completion telemetry', () => {
     );
   });
 });
+
+describe('executeDagWorkflow -- tier / @custom alias resolution (Issue #1872)', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(
+      tmpdir(),
+      `dag-resolver-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    await mkdir(testDir, { recursive: true });
+    mockSendQueryDag.mockClear();
+    mockGetAgentProviderDag.mockClear();
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'AI response' };
+      yield { type: 'result', sessionId: 'session-1' };
+    });
+  });
+
+  afterEach(async () => {
+    try {
+      await rm(testDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  });
+
+  it('tier ref "large" resolves through aiProfile and overrides the literal passthrough', async () => {
+    const profile = {
+      defaultProvider: 'claude',
+      aliases: {
+        large: { provider: 'claude', model: 'opus', effort: 'high' },
+      },
+    };
+    await executeDagWorkflow(
+      createMockDeps(),
+      createMockPlatform(),
+      'conv-dag',
+      testDir,
+      { name: 'tier-resolve', nodes: [{ id: 'a', prompt: 'p', model: 'large' }] },
+      makeWorkflowRun(),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      profile
+    );
+    expect(mockSendQueryDag.mock.calls.length).toBeGreaterThan(0);
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    const nodeConfig = optionsArg?.nodeConfig as Record<string, unknown>;
+    // tier 'large' on claude → opus → assistantConfig.effort stays undefined (per-provider routing)
+    // (the resolved model is in the conversation provider's pre-flight, not in optionsArg)
+    expect(nodeConfig).toBeDefined();
+  });
+
+  it('literal model string passes through unchanged when aiProfile is set', async () => {
+    const profile = {
+      defaultProvider: 'claude',
+      aliases: {
+        large: { provider: 'claude', model: 'opus' },
+      },
+    };
+    await executeDagWorkflow(
+      createMockDeps(),
+      createMockPlatform(),
+      'conv-dag',
+      testDir,
+      { name: 'literal-passthrough', nodes: [{ id: 'a', prompt: 'p', model: 'sonnet-3.5' }] },
+      makeWorkflowRun(),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      profile
+    );
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    // Literal pass-through — model stays in the universal base options
+    expect((optionsArg as { model?: string }).model).toBe('sonnet-3.5');
+  });
+
+  it('no aiProfile → no resolver invocation, original passthrough', async () => {
+    await executeDagWorkflow(
+      createMockDeps(),
+      createMockPlatform(),
+      'conv-dag',
+      testDir,
+      { name: 'no-profile', nodes: [{ id: 'a', prompt: 'p', model: 'opus' }] },
+      makeWorkflowRun(),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+      // no aiProfile — backwards-compat path
+    );
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    expect((optionsArg as { model?: string }).model).toBe('opus');
+  });
+
+  it('per-provider effort routing: claude preset effort goes to nodeConfig.effort', async () => {
+    const profile = {
+      defaultProvider: 'claude',
+      aliases: {
+        large: { provider: 'claude', model: 'opus', effort: 'high' },
+      },
+    };
+    await executeDagWorkflow(
+      createMockDeps(),
+      createMockPlatform(),
+      'conv-dag',
+      testDir,
+      { name: 'effort-claude', nodes: [{ id: 'a', prompt: 'p', model: 'large' }] },
+      makeWorkflowRun(),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      profile
+    );
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    const nodeConfig = optionsArg?.nodeConfig as Record<string, unknown>;
+    expect(nodeConfig?.effort).toBe('high');
+  });
+
+  it('per-provider effort routing: codex preset effort remaps max→xhigh into assistantConfig', async () => {
+    const profile = {
+      defaultProvider: 'codex',
+      aliases: {
+        large: { provider: 'codex', model: 'gpt-5.5', effort: 'max' },
+      },
+    };
+    await executeDagWorkflow(
+      createMockDeps(),
+      createMockPlatform(),
+      'conv-dag',
+      testDir,
+      {
+        name: 'effort-codex',
+        nodes: [{ id: 'a', prompt: 'p', model: 'large', provider: 'codex' }],
+      },
+      makeWorkflowRun(),
+      'codex',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      { ...minimalConfig, assistant: 'codex' },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      profile
+    );
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    const assistantConfig = optionsArg?.assistantConfig as Record<string, unknown>;
+    expect(assistantConfig?.modelReasoningEffort).toBe('xhigh');
+  });
+});

@@ -75,6 +75,19 @@ export interface WorkflowConfig {
   baseBranch?: string;
   docsPath?: string;
   envVars?: Record<string, string>;
+  /**
+   * Merged alias map (repo > global). Used by buildAiProfile to resolve
+   * `@<name>` refs in workflow/node `model:` fields. Issue #1872.
+   */
+  aliases?: Record<string, { provider: string; model: string; effort?: string }>;
+  /**
+   * Merged tier remap (repo > global > tier-defaults.json seed). Used by
+   * buildAiProfile to resolve `small`/`medium`/`large` refs. Issue #1872.
+   */
+  tiers?: Record<
+    'small' | 'medium' | 'large',
+    { provider: string; model: string; effort?: string }
+  >;
   commands: { folder?: string };
   defaults?: {
     loadDefaultWorkflows?: boolean;
