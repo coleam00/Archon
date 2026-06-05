@@ -817,16 +817,18 @@ async function executeNodeInternal(
       : 0;
   let accumulatedCostUsd: number | undefined;
 
-  // One sendQuery stream pass. Resets the per-attempt accumulators, then mutates
-  // the outer state. Throws on SDK error / budget cap (propagates to the outer
-  // catch — those failures are never reasked). Defined outside the try so the
-  // stream body keeps its indentation; it is *called* inside the try.
+  // One sendQuery stream pass. Resets the per-attempt accumulators it mutates
+  // (output text, structured output, the batched-message buffer, per-pass cost,
+  // idle-timeout flag) so a prior reask attempt's state never leaks into this one,
+  // then streams. Throws on SDK error / budget cap (propagates to the outer catch
+  // — those failures are never reasked).
   const runStreamPass = async (
     attemptPrompt: string,
     attemptResumeId: string | undefined
   ): Promise<void> => {
     nodeOutputText = '';
     structuredOutput = undefined;
+    batchMessages.length = 0; // else a failed attempt's prose flushes during reask
     nodeCostUsd = undefined;
     nodeIdleTimedOut = false;
     for await (const msg of withIdleTimeout(
@@ -1116,8 +1118,10 @@ async function executeNodeInternal(
     }
   };
 
-  // Build a reask prompt: the original prompt + the schema errors. The provider
-  // re-augments it with the schema, so we only append the correction feedback.
+  // Build a reask prompt: the original prompt + a correction block listing the
+  // schema errors. The provider still augments with the JSON schema itself
+  // (best-effort providers add their own JSON-only instruction), so this only
+  // appends the per-attempt feedback.
   const buildReaskPrompt = (errors: string[]): string =>
     `${finalPrompt}\n\n--- CORRECTION ---\n` +
     `Your previous response did not satisfy the required JSON schema: ${errors.join('; ')}. ` +
@@ -1147,6 +1151,12 @@ async function executeNodeInternal(
     // exhaustion (or a non-best-effort failure) throws → failed node.
     let reaskAttempt = 0;
     let reaskPrompt = finalPrompt;
+    // Set up the next reask attempt (increment, augment the prompt, notify).
+    const scheduleReask = async (errors: string[]): Promise<void> => {
+      reaskAttempt++;
+      reaskPrompt = buildReaskPrompt(errors);
+      await emitReask(reaskAttempt);
+    };
     while (true) {
       // Fresh session per reask attempt (resume only the original session on the
       // first pass) so a prior invalid turn isn't carried forward.
@@ -1154,6 +1164,10 @@ async function executeNodeInternal(
       if (nodeCostUsd !== undefined) {
         accumulatedCostUsd = (accumulatedCostUsd ?? 0) + nodeCostUsd;
       }
+      // Carry the running total onto nodeCostUsd every pass so the exhaustion throw
+      // paths (which jump straight to the outer catch) report cost across ALL reask
+      // attempts, not just the last pass. runStreamPass clears it next iteration.
+      nodeCostUsd = accumulatedCostUsd;
 
       // When output_format is set and the provider returned structured_output, use
       // it instead of the concatenated assistant text. Each provider normalizes its
@@ -1161,7 +1175,7 @@ async function executeNodeInternal(
       if (!nodeOptions?.outputFormat) break;
 
       // Don't reask after an idle-timeout/abort — those are genuine failures, not
-      // validation misses; the post-loop guards below handle them.
+      // validation misses; they fall through to a cause-specific throw below.
       const canReask =
         reaskAttempt < maxReasks && !nodeIdleTimedOut && !nodeAbortController.signal.aborted;
 
@@ -1210,9 +1224,7 @@ async function executeNodeInternal(
           'dag.structured_output_invalid'
         );
         if (canReask) {
-          reaskAttempt++;
-          reaskPrompt = buildReaskPrompt(validation.errors);
-          await emitReask(reaskAttempt);
+          await scheduleReask(validation.errors);
           continue;
         }
         throw new Error(
@@ -1220,25 +1232,27 @@ async function executeNodeInternal(
         );
       }
 
-      // No structured output at all (prose / refusal / parse miss).
+      // No structured output at all (prose / refusal / parse miss / timeout).
       getLog().warn(
         { nodeId: node.id, workflowRunId: workflowRun.id },
         'dag.structured_output_missing'
       );
       if (canReask) {
-        reaskAttempt++;
-        reaskPrompt = buildReaskPrompt(['no JSON object was found in the response']);
-        await emitReask(reaskAttempt);
+        await scheduleReask(['no JSON object was found in the response']);
         continue;
+      }
+      // Surface the real cause: a timeout/abort produces no structured output too,
+      // and reporting it as "the model replied with prose" would mislead.
+      if (nodeIdleTimedOut) {
+        throw new Error(
+          `Node '${node.id}': timed out (no output for ${String(effectiveIdleTimeout / 60000)} min) before producing the required structured output.`
+        );
       }
       throw new Error(
         `Node '${node.id}': output_format declared but the provider returned no schema-valid structured output. ` +
           'The model likely replied with prose, refused, or emitted unparseable JSON.'
       );
     }
-
-    // Cost is per-pass on nodeCostUsd; restore the accumulated total across reasks.
-    if (accumulatedCostUsd !== undefined) nodeCostUsd = accumulatedCostUsd;
 
     // Only post "completed via idle timeout" when output exists — zero-output timeout falls through to the empty-output guard below.
     if (nodeIdleTimedOut && (nodeOutputText.trim() !== '' || structuredOutput !== undefined)) {
