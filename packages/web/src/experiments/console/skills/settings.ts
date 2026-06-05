@@ -52,8 +52,12 @@ export interface AssistantConfigForm {
  * Pure form → PATCH-body transform. Omits a provider's `model` when blank (so we
  * never overwrite a saved model with `''`) and drops a provider entirely when it
  * contributes no fields. Codex additionally carries `modelReasoningEffort` /
- * `webSearchMode` when set. The server safe-filters per provider, so extra keys on
- * the wrong provider are harmless, but we keep the body minimal regardless.
+ * `webSearchMode` when set.
+ *
+ * Safety note: the PATCH route validates only provider *ids* and merges the body
+ * into config.yaml UNFILTERED — per-field safe-filtering runs on the read path, not
+ * the write path. So it matters that this function only ever attaches the codex-only
+ * fields to the `codex` entry (it does); it must not leak them onto other providers.
  */
 export function buildAssistantUpdate(form: AssistantConfigForm): UpdateAssistantConfigBody {
   const assistants: Record<string, Record<string, unknown>> = {};

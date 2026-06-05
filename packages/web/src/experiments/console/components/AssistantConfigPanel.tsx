@@ -3,12 +3,15 @@ import * as skill from '../skills';
 import type { SafeConfig, ProviderInfo, AssistantConfigForm } from '../skills';
 import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
+import { SettingsSection } from './SettingsSection';
 
 const REASONING_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh'] as const;
 const WEB_SEARCH_MODES = ['disabled', 'cached', 'live'] as const;
 
 const INPUT_CLASS =
   'w-full rounded border border-border bg-surface px-2 py-1 font-mono text-[12px] text-text-primary placeholder:text-text-tertiary focus:border-border-bright focus:outline-none';
+const SELECT_CLASS =
+  'rounded border border-border bg-surface px-2 py-1 font-mono text-[11px] text-text-primary focus:border-border-bright focus:outline-none';
 
 /** Read a string field off the open `ProviderDefaults` record, '' when absent/non-string. */
 function readStr(rec: SafeConfig['assistants'][string] | undefined, key: string): string {
@@ -56,16 +59,16 @@ export function AssistantConfigPanel(): ReactElement {
   const loadError = configError ?? providersError;
   if (loadError !== undefined) {
     return (
-      <Section title="Assistant">
+      <SettingsSection title="Assistant">
         <p className="font-mono text-[11px] text-error">{loadError.message}</p>
-      </Section>
+      </SettingsSection>
     );
   }
   if (form === null || providers === undefined) {
     return (
-      <Section title="Assistant">
+      <SettingsSection title="Assistant">
         <p className="font-mono text-[11px] text-text-tertiary">Loading…</p>
-      </Section>
+      </SettingsSection>
     );
   }
 
@@ -92,7 +95,7 @@ export function AssistantConfigPanel(): ReactElement {
   };
 
   return (
-    <Section title="Assistant">
+    <SettingsSection title="Assistant">
       <label className="mb-4 flex items-center gap-3 text-[12px]">
         <span className="w-32 shrink-0 text-text-secondary">Default assistant</span>
         <select
@@ -133,7 +136,7 @@ export function AssistantConfigPanel(): ReactElement {
                     onChange={e => {
                       patch({ modelReasoningEffort: e.target.value });
                     }}
-                    className="rounded border border-border bg-surface px-2 py-1 font-mono text-[11px] text-text-primary focus:border-border-bright focus:outline-none"
+                    className={SELECT_CLASS}
                   >
                     <option value="">inherit</option>
                     {REASONING_EFFORTS.map(o => (
@@ -150,7 +153,7 @@ export function AssistantConfigPanel(): ReactElement {
                     onChange={e => {
                       patch({ webSearchMode: e.target.value });
                     }}
-                    className="rounded border border-border bg-surface px-2 py-1 font-mono text-[11px] text-text-primary focus:border-border-bright focus:outline-none"
+                    className={SELECT_CLASS}
                   >
                     <option value="">inherit</option>
                     {WEB_SEARCH_MODES.map(o => (
@@ -179,21 +182,6 @@ export function AssistantConfigPanel(): ReactElement {
           {saving ? 'Saving…' : 'Save changes'}
         </button>
       </div>
-    </Section>
-  );
-}
-
-function Section({
-  title,
-  children,
-}: {
-  title: string;
-  children: ReactElement | ReactElement[];
-}): ReactElement {
-  return (
-    <section className="rounded-md border border-border bg-surface p-4">
-      <h2 className="mb-3 text-sm font-semibold text-text-primary">{title}</h2>
-      {children}
-    </section>
+    </SettingsSection>
   );
 }

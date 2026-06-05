@@ -22,8 +22,9 @@ export const K = {
   artifacts: (runId: string): string => `artifacts:${runId}`,
   // Installation-wide settings surfaces (static keys — one row each).
   config: 'config' as const,
-  // NOTE: must stay the literal 'health' — lib/health.ts already caches under
-  // this key, so the Settings SystemPanel and the IDE docker-check share one entry.
+  // Health has two consumers — the Settings SystemPanel and the IDE docker-check.
+  // Both must read via lib/health's useHealth() so they share this one cache entry
+  // instead of issuing duplicate /api/health fetches.
   health: 'health' as const,
   providers: 'providers' as const,
   updateCheck: 'update-check' as const,
