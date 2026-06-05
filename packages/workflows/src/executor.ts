@@ -201,8 +201,9 @@ async function resolveUserProviderEnvForWorkflow(
       await mkdir(dirname(f.path), { recursive: true });
       await writeFile(f.path, f.contents, { encoding: 'utf8', mode: 0o600 });
     }
-    if (Object.keys(env).length > 0) {
-      getLog().debug({ userId, keys: Object.keys(env) }, 'workflow.user_provider_env_injected');
+    const envKeys = Object.keys(env);
+    if (envKeys.length > 0) {
+      getLog().debug({ userId, keys: envKeys }, 'workflow.user_provider_env_injected');
     }
     return env;
   } catch (err) {
@@ -663,9 +664,7 @@ export async function executeWorkflow(
   // keeps the no-key path byte-for-byte unchanged (resolveUserProviderEnvForWorkflow
   // returns {} when the feature is disabled or no userId is present).
   const userProviderEnv = await resolveUserProviderEnvForWorkflow(deps, userId, artifactsDir);
-  if (Object.keys(userProviderEnv).length > 0) {
-    config.envVars = { ...config.envVars, ...userProviderEnv };
-  }
+  config.envVars = { ...config.envVars, ...userProviderEnv };
 
   // Wrap execution in try-catch to ensure workflow is marked as failed on any error
   try {
