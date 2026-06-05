@@ -232,6 +232,12 @@ If you want Codex to be the default AI assistant for new conversations without c
 DEFAULT_AI_ASSISTANT=codex
 ```
 
+### Skills
+
+Codex supports skills via filesystem auto-discovery from `.agents/skills/`. Run `archon skill install` (or `archon setup`) to install the bundled `archon` and `manage-run` skills for both Claude Code and Codex.
+
+See [Per-Node Skills](/guides/skills/#codex-compatibility) for behavior details and limitations.
+
 ## OpenCode (Community Provider)
 
 **SDK-backed community provider.** Archon's OpenCode adapter uses `@opencode-ai/sdk`, which provides a multi-provider AI coding agent with support for Anthropic, OpenAI, Google, and more through a unified interface.
@@ -480,6 +486,7 @@ nodes:
 | System prompt override | ✅ | `systemPrompt:` |
 | Codebase env vars (`envInjection`) | ✅ | `.archon/config.yaml` `env:` section |
 | MCP servers | ❌ | Pi rejects MCP by design |
+| In-process native tools | ✅ | none — Archon's `manage_run` tool is auto-injected in project-scoped chat via Pi `customTools` (distinct from MCP, which Pi rejects). Gated on the `nativeTools` provider capability. |
 | Claude-SDK hooks | ❌ | Claude-specific format |
 | Structured output | ✅ (best-effort) | `output_format:` — schema is appended to the prompt and JSON is parsed out of the assistant text. Handles bare JSON, ```json```-fenced, and reasoning-model prose preambles like `Let me evaluate... {...}` (Minimax M2.x pattern). Trailing-text-interleaved cases still degrade cleanly to the missing-structured-output warning. Not SDK-enforced like Claude/Codex. |
 | Cost limits (`maxBudgetUsd`) | ❌ | tracked in result chunk, not enforced |

@@ -1,5 +1,6 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
+import starlightLlmsTxt from 'starlight-llms-txt';
 
 export default defineConfig({
   site: 'https://archon.diy',
@@ -56,6 +57,55 @@ export default defineConfig({
         },
       ],
       customCss: ['./src/styles/custom.css'],
+      plugins: [
+        starlightLlmsTxt({
+          description:
+            'AI workflow engine -- package your coding workflows as YAML, run them anywhere.',
+          details: `Archon lets you define multi-step AI coding workflows (code review, bug fixes, features) in YAML and run them from CLI, Web UI, Slack, Telegram, GitHub, or Discord. Each workflow runs in an isolated git worktree.`,
+
+          // Make llms-small.txt actually small - core concepts only
+          exclude: [
+            'adapters/community/**', // Community adapters are reference material
+            'deployment/**', // Deployment is advanced
+            'contributing/**', // Not needed for using Archon
+            'reference/security', // Deep reference
+            'book/**', // Long-form content
+          ],
+
+          // Topic-based subsets for selective ingestion
+          customSets: [
+            {
+              label: 'Quick Start',
+              description: 'Essential docs to get running with Archon',
+              paths: ['index', 'getting-started/**'],
+            },
+            {
+              label: 'Adapters',
+              description: 'Platform integrations (GitHub, Slack, Discord, etc.)',
+              paths: ['adapters/**'],
+            },
+            {
+              label: 'Reference',
+              description: 'CLI commands, configuration, and API reference',
+              paths: ['reference/**'],
+            },
+          ],
+
+          // Control ordering - essentials first
+          promote: ['index', 'getting-started/**', 'guides/first-workflow'],
+          demote: ['reference/changelog', 'contributing/**'],
+
+          // Aggressive minification for small version
+          minify: {
+            note: true,
+            tip: true,
+            caution: false, // Keep warnings
+            danger: false, // Keep critical warnings
+            details: true,
+            whitespace: true,
+          },
+        }),
+      ],
     }),
   ],
 });

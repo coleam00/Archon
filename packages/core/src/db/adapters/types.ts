@@ -51,6 +51,27 @@ export interface IDatabase {
 }
 
 /**
+ * Optional capability for databases that support push notifications
+ * (Postgres `LISTEN/NOTIFY`). Kept as a NARROW interface separate from
+ * `IDatabase` — only the Postgres adapter implements it; SQLite has no
+ * equivalent, so callers feature-detect via `getDbNotificationListener()`.
+ */
+export interface DbNotificationListener {
+  /**
+   * Subscribe to a `LISTEN` channel on a dedicated held connection.
+   * @param channel - channel name (validated; not parameterizable in `LISTEN`)
+   * @param onNotify - called with each notification payload
+   * @param onError - called when the underlying connection drops (so the caller can reconnect)
+   * @returns an unsubscribe that stops listening and destroys the dedicated connection
+   */
+  listen(
+    channel: string,
+    onNotify: (payload: string) => void,
+    onError: (err: Error) => void
+  ): Promise<() => void>;
+}
+
+/**
  * SQL dialect helpers for building queries
  */
 export interface SqlDialect {

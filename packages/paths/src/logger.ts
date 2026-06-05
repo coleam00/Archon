@@ -8,12 +8,14 @@
  *   log.error({ err, conversationId }, 'session_failed');
  *
  * Log levels (standard Pino levels):
- *   fatal (60) - Process cannot continue
- *   error (50) - Failures needing immediate attention
- *   warn  (40) - Degraded behavior, fallbacks
- *   info  (30) - Key user-visible events (DEFAULT)
- *   debug (20) - Internal details, tool calls, state transitions
- *   trace (10) - Fine-grained diagnostic output
+ *   fatal  (60) - Process cannot continue
+ *   error  (50) - Failures needing immediate attention
+ *   warn   (40) - Degraded behavior, fallbacks
+ *   info   (30) - Key user-visible events (DEFAULT)
+ *   debug  (20) - Internal details, tool calls, state transitions
+ *   trace  (10) - Fine-grained diagnostic output
+ *   silent      - Disables all logging (used by the CLI in --json mode so no
+ *                 log line can interleave with the machine-readable payload)
  *
  * Configuration:
  *   LOG_LEVEL env var or setLogLevel() at startup
@@ -27,7 +29,9 @@ import pretty from 'pino-pretty';
 
 export type { Logger } from 'pino';
 
-const VALID_LEVELS = new Set(['fatal', 'error', 'warn', 'info', 'debug', 'trace']);
+// 'silent' is Pino's built-in level that disables all output. The CLI uses it
+// in --json mode to keep stdout to exactly the JSON payload.
+const VALID_LEVELS = new Set(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']);
 
 function getInitialLevel(): string {
   const envLevel = process.env.LOG_LEVEL?.toLowerCase();

@@ -20,6 +20,7 @@ import { SSE_BASE_URL } from './http';
 interface ParsedEvent {
   type?: string;
   runId?: string;
+  locked?: boolean;
 }
 
 function parse(raw: string): ParsedEvent | null {
@@ -32,7 +33,9 @@ function parse(raw: string): ParsedEvent | null {
 
 /**
  * Subscribe to the dashboard SSE stream and invalidate the runs feed on any
- * lifecycle change. Mount once at a high level (RunsPage).
+ * lifecycle change. Safe to mount from more than one route — RunsPage and the
+ * ChatPage WorkflowDock both do; each opens an independent connection and the
+ * invalidations are idempotent.
  *
  * Events we care about:
  *   workflow_status   — run created / status changed / completed / failed
@@ -155,4 +158,71 @@ export function useRunStreamSSE(conversationPlatformId: string | null, runId: st
       es.close();
     };
   }, [conversationPlatformId, runId]);
+}
+
+/**
+ * Subscribe to a conversation stream for a pure chat view (no associated run).
+ * Identical to {@link useRunStreamSSE} minus the run-detail branches: it only
+ * invalidates the message cache on text/tool events, and surfaces the
+ * conversation lock so the composer can disable while the agent is responding.
+ *
+ *   text / tool_call / tool_result → messages changed (debounced refetch)
+ *   conversation_lock              → onLockChange(locked)
+ */
+export function useConversationSSE(
+  conversationPlatformId: string | null,
+  onLockChange?: (locked: boolean) => void
+): void {
+  useEffect(() => {
+    if (conversationPlatformId === null) return;
+
+    const es = new EventSource(
+      `${SSE_BASE_URL}/api/stream/${encodeURIComponent(conversationPlatformId)}`
+    );
+
+    let messagesDirty = false;
+    let flushTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const scheduleFlush = (): void => {
+      if (flushTimer !== null) return;
+      flushTimer = setTimeout(() => {
+        flushTimer = null;
+        if (messagesDirty) {
+          invalidate(K.messages(conversationPlatformId));
+          messagesDirty = false;
+        }
+      }, 100);
+    };
+
+    es.onmessage = (e: MessageEvent<string>): void => {
+      const ev = parse(e.data);
+      if (ev?.type === undefined || ev.type === 'heartbeat') return;
+
+      switch (ev.type) {
+        case 'text':
+        case 'tool_call':
+        case 'tool_result':
+          messagesDirty = true;
+          scheduleFlush();
+          break;
+        case 'conversation_lock':
+          if (typeof ev.locked === 'boolean') onLockChange?.(ev.locked);
+          break;
+        // No run-detail cache here; ignore workflow_* and everything else.
+        default:
+          return;
+      }
+    };
+
+    es.onerror = (): void => {
+      if (es.readyState === EventSource.CLOSED) {
+        console.warn('[console-sse] conversation stream closed', { conversationPlatformId });
+      }
+    };
+
+    return (): void => {
+      if (flushTimer !== null) clearTimeout(flushTimer);
+      es.close();
+    };
+  }, [conversationPlatformId, onLockChange]);
 }

@@ -77,7 +77,7 @@ describe('CodexProvider', () => {
         sessionResume: true,
         mcp: true,
         hooks: false,
-        skills: false,
+        skills: true,
         agents: false,
         toolRestrictions: false,
         structuredOutput: true,
@@ -87,6 +87,7 @@ describe('CodexProvider', () => {
         thinkingControl: false,
         fallbackModel: false,
         sandbox: false,
+        nativeTools: false,
       });
     });
   });
@@ -759,7 +760,7 @@ describe('CodexProvider', () => {
       );
     });
 
-    test('passes outputFormat schema as outputSchema in TurnOptions', async () => {
+    test('normalizes outputFormat schema (adds additionalProperties:false) before sending as outputSchema', async () => {
       mockRunStreamed.mockResolvedValue({
         events: (async function* () {
           yield { type: 'turn.completed', usage: defaultUsage };
@@ -768,7 +769,10 @@ describe('CodexProvider', () => {
 
       const schema = {
         type: 'object',
-        properties: { summary: { type: 'string' } },
+        properties: {
+          summary: { type: 'string' },
+          meta: { type: 'object', properties: { tag: { type: 'string' } } },
+        },
         required: ['summary'],
       };
 
@@ -779,9 +783,70 @@ describe('CodexProvider', () => {
         chunks.push(chunk);
       }
 
+      // OpenAI strict-mode requires additionalProperties:false on every object,
+      // including the nested `meta` object — verifies recursion through the
+      // real provider path. See issue #1843.
       expect(mockRunStreamed).toHaveBeenCalledWith(
         'test prompt',
-        expect.objectContaining({ outputSchema: schema })
+        expect.objectContaining({
+          outputSchema: {
+            type: 'object',
+            properties: {
+              summary: { type: 'string' },
+              meta: {
+                type: 'object',
+                properties: { tag: { type: 'string' } },
+                additionalProperties: false,
+              },
+            },
+            required: ['summary'],
+            additionalProperties: false,
+          },
+        })
+      );
+    });
+
+    test('normalizes nodeConfig.output_format schema before sending as outputSchema', async () => {
+      // The DAG executor populates nodeConfig.output_format (not outputFormat),
+      // so this is the actual path from issue #1843. Pin the normalized schema
+      // at the SDK boundary, not just the downstream parse.
+      mockRunStreamed.mockResolvedValue({
+        events: (async function* () {
+          yield { type: 'turn.completed', usage: defaultUsage };
+        })(),
+      });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test prompt', '/workspace', undefined, {
+        nodeConfig: {
+          output_format: {
+            type: 'object',
+            properties: {
+              verdict: { type: 'string' },
+              meta: { type: 'object', properties: { score: { type: 'number' } } },
+            },
+          },
+        },
+      })) {
+        chunks.push(chunk);
+      }
+
+      expect(mockRunStreamed).toHaveBeenCalledWith(
+        'test prompt',
+        expect.objectContaining({
+          outputSchema: {
+            type: 'object',
+            properties: {
+              verdict: { type: 'string' },
+              meta: {
+                type: 'object',
+                properties: { score: { type: 'number' } },
+                additionalProperties: false,
+              },
+            },
+            additionalProperties: false,
+          },
+        })
       );
     });
 
@@ -1603,6 +1668,79 @@ describe('CodexProvider', () => {
         expect(resultChunk).toBeDefined();
         expect(resultChunk!.type === 'result' && resultChunk!.structuredOutput).toEqual(
           jsonPayload
+        );
+      });
+
+      test('uses last agent_message when multiple messages are emitted with output_format', async () => {
+        const preamble = { claims_accurate: 'false', reasoning: "I'll verify first" };
+        const finalAnswer = {
+          claims_accurate: 'true',
+          reasoning: 'Checked — claims are correct',
+        };
+        mockRunStreamed.mockResolvedValueOnce({
+          events: (async function* () {
+            yield {
+              type: 'item.completed',
+              item: { type: 'agent_message', id: 'msg-1', text: JSON.stringify(preamble) },
+            };
+            yield {
+              type: 'item.completed',
+              item: { type: 'agent_message', id: 'msg-2', text: JSON.stringify(finalAnswer) },
+            };
+            yield { type: 'turn.completed', usage: defaultUsage };
+          })(),
+        });
+
+        const chunks = [];
+        for await (const chunk of client.sendQuery('test', '/tmp', undefined, {
+          outputFormat: { type: 'json_schema', schema: { type: 'object' } },
+        })) {
+          chunks.push(chunk);
+        }
+
+        const assistantChunks = chunks.filter(c => c.type === 'assistant');
+        expect(assistantChunks).toHaveLength(2);
+
+        const resultChunk = chunks.find(c => c.type === 'result');
+        expect(resultChunk).toBeDefined();
+        expect(resultChunk!.type === 'result' && resultChunk!.structuredOutput).toEqual(
+          finalAnswer
+        );
+
+        const systemChunk = chunks.find(c => c.type === 'system');
+        expect(systemChunk).toBeUndefined();
+      });
+
+      test('uses last agent_message when multiple messages are emitted via nodeConfig.output_format', async () => {
+        // Workflow path: dag-executor sets nodeConfig.output_format from YAML
+        // output_format. Locks the same last-wins fix on this entry point.
+        const preamble = { claims_accurate: 'false', reasoning: 'draft' };
+        const finalAnswer = { claims_accurate: 'true', reasoning: 'verified' };
+        mockRunStreamed.mockResolvedValueOnce({
+          events: (async function* () {
+            yield {
+              type: 'item.completed',
+              item: { type: 'agent_message', id: 'msg-1', text: JSON.stringify(preamble) },
+            };
+            yield {
+              type: 'item.completed',
+              item: { type: 'agent_message', id: 'msg-2', text: JSON.stringify(finalAnswer) },
+            };
+            yield { type: 'turn.completed', usage: defaultUsage };
+          })(),
+        });
+
+        const chunks = [];
+        for await (const chunk of client.sendQuery('test', '/tmp', undefined, {
+          nodeConfig: { output_format: { type: 'object' } },
+        })) {
+          chunks.push(chunk);
+        }
+
+        const resultChunk = chunks.find(c => c.type === 'result');
+        expect(resultChunk).toBeDefined();
+        expect(resultChunk!.type === 'result' && resultChunk!.structuredOutput).toEqual(
+          finalAnswer
         );
       });
     });

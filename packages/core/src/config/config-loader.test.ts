@@ -382,6 +382,50 @@ worktree:
       expect(config.baseBranch).toBeUndefined();
     });
 
+    test('global aliases are propagated to merged config', async () => {
+      mockFsReadFile.mockResolvedValue(`
+aliases:
+  '@fast': { provider: claude, model: haiku }
+`);
+
+      const config = await loadConfig();
+      expect(config.aliases).toEqual({
+        '@fast': { provider: 'claude', model: 'haiku' },
+      });
+    });
+
+    test('repo aliases override global aliases with same key', async () => {
+      const pathMatches = (path: string, pattern: string): boolean =>
+        path.replace(/\\/g, '/').includes(pattern);
+
+      let globalRead = false;
+      mockFsReadFile.mockImplementation(async (path: string) => {
+        if (pathMatches(path, '/repo/.archon/config.yaml')) {
+          return `aliases:\n  '@fast': { provider: codex, model: gpt-5-mini }\n`;
+        }
+        if (pathMatches(path, '.archon/config.yaml') && !globalRead) {
+          globalRead = true;
+          return `aliases:\n  '@fast': { provider: claude, model: haiku }\n  '@deep': { provider: claude, model: opus }\n`;
+        }
+        const e = new Error('ENOENT') as NodeJS.ErrnoException;
+        e.code = 'ENOENT';
+        throw e;
+      });
+
+      const config = await loadConfig('/test/repo');
+      expect(config.aliases?.['@fast']).toEqual({ provider: 'codex', model: 'gpt-5-mini' });
+      expect(config.aliases?.['@deep']).toEqual({ provider: 'claude', model: 'opus' });
+    });
+
+    test('config.aliases is undefined when no aliases configured', async () => {
+      const error = new Error('ENOENT') as NodeJS.ErrnoException;
+      error.code = 'ENOENT';
+      mockFsReadFile.mockRejectedValue(error);
+
+      const config = await loadConfig();
+      expect(config.aliases).toBeUndefined();
+    });
+
     test('propagates docsPath from repo docs config', async () => {
       const pathMatches = (path: string, pattern: string): boolean => {
         const normalizedPath = path.replace(/\\/g, '/');

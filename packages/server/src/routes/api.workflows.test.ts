@@ -2,7 +2,7 @@ import { describe, test, expect, mock, spyOn } from 'bun:test';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
-import { mkdir, readFile, rm, writeFile } from 'fs/promises';
+import { mkdir, readFile, rm, writeFile, symlink as fsSymlink } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { validationErrorHook } from './openapi-defaults';
@@ -809,4 +809,43 @@ describe('GET /api/commands', () => {
     expect(archonAssist).toBeDefined();
     expect(archonAssist?.source).toBe('bundled');
   });
+
+  test.skipIf(process.platform === 'win32')(
+    'includes symlinked project command with source:project',
+    async () => {
+      const projectDir = join(
+        tmpdir(),
+        `archon-api-commands-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      );
+      const sourceDir = join(
+        tmpdir(),
+        `archon-api-commands-source-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      );
+
+      try {
+        await mkdir(join(projectDir, '.archon', 'commands'), { recursive: true });
+        await mkdir(sourceDir, { recursive: true });
+        await writeFile(join(sourceDir, 'linked.md'), '# Linked command');
+        await fsSymlink(
+          join(sourceDir, 'linked.md'),
+          join(projectDir, '.archon', 'commands', 'linked.md')
+        );
+        mockListCodebases.mockImplementationOnce(async () => [{ default_cwd: projectDir }]);
+
+        const app = createTestApp();
+        registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+        const response = await app.request(`/api/commands?cwd=${encodeURIComponent(projectDir)}`);
+
+        expect(response.status).toBe(200);
+        const body = (await response.json()) as {
+          commands: Array<{ name: string; source: string }>;
+        };
+        expect(body.commands).toContainEqual({ name: 'linked', source: 'project' });
+      } finally {
+        await rm(projectDir, { recursive: true, force: true });
+        await rm(sourceDir, { recursive: true, force: true });
+      }
+    }
+  );
 });

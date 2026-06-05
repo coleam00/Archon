@@ -44,6 +44,8 @@ import {
   workflowListCommand,
   workflowRunCommand,
   workflowStatusCommand,
+  workflowGetCommand,
+  workflowRunsCommand,
   workflowResumeCommand,
   workflowAbandonCommand,
   workflowApproveCommand,
@@ -106,7 +108,9 @@ Commands:
   setup                      Interactive setup wizard for credentials and config
   workflow list              List available workflows in current directory
   workflow run <name> [msg]  Run a workflow with optional message
-  workflow status            Show status of running workflows
+  workflow status            Show status of running/paused workflows
+  workflow runs              List recent runs (all statuses) for this project
+  workflow get <run-id>      Show detail for a single run (any status)
   workflow search [query]    Search the workflow marketplace
   workflow install <slug>    Install a workflow from the marketplace
   isolation list             List all active worktrees/environments
@@ -134,7 +138,11 @@ Options:
   --spawn                    Open setup wizard in a new terminal window (for setup command)
   --quiet, -q                Reduce log verbosity to warnings and errors only
   --verbose, -v              Show debug-level output
-  --json                     Output machine-readable JSON (for workflow list)
+  --json                     Output machine-readable JSON (list/status/get/runs/approve/reject/abandon/resume)
+  --detach                   Run 'workflow run' in a detached background child (returns immediately)
+  --all                      For 'workflow runs': list across all projects (ignore cwd scope)
+  --status <status>          For 'workflow runs': filter to one status (running, completed, failed, ...)
+  --limit <n>                For 'workflow runs': max rows (default 20)
   --workflow <name>          Workflow to run for 'continue' (default: archon-assist)
   --no-context               Skip context injection for 'continue'
   --conversation-id <id>     Reuse a stable conversation scope across runs (enables
@@ -150,6 +158,9 @@ Examples:
   archon workflow run plan --cwd /path/to/repo "Add dark mode"
   archon workflow run implement --branch feature-auth "Implement auth"
   archon workflow run quick-fix --no-worktree "Fix typo"
+  archon workflow run archon-assist --detach "Investigate the flaky test"
+  archon workflow runs --json
+  archon workflow get <run-id> --json
   archon continue fix/issue-42 --workflow archon-smart-pr-review "Review the changes"
   archon skill install
   archon skill install /path/to/project
@@ -262,6 +273,10 @@ async function main(): Promise<number> {
         yes: { type: 'boolean' },
         force: { type: 'boolean' },
         'conversation-id': { type: 'string' },
+        detach: { type: 'boolean' },
+        all: { type: 'boolean' },
+        status: { type: 'string' },
+        limit: { type: 'string' },
       },
       allowPositionals: true,
       strict: false, // Allow unknown flags to pass through
@@ -284,6 +299,7 @@ async function main(): Promise<number> {
   const resumeFlag = values.resume as boolean | undefined;
   const spawnFlag = values.spawn as boolean | undefined;
   const jsonFlag = values.json as boolean | undefined;
+  const detachFlag = values.detach as boolean | undefined;
   // Handle help flag
   if (values.help) {
     printUsage();
@@ -315,7 +331,15 @@ async function main(): Promise<number> {
     const isInteractiveCommand =
       command === 'setup' || command === 'doctor' || command === 'telemetry';
     const suppressByDefault = isInteractiveCommand && !values.verbose && !isVerboseBoot();
-    if (values.quiet || suppressByDefault) {
+    // --json must keep stdout to EXACTLY the machine-readable payload. Pino's
+    // default destination is stdout, so even one warn/error line would precede
+    // the JSON and break JSON.parse for a consuming agent. Silence logs entirely
+    // (not just lower to 'warn' — warnings still print at that level): every
+    // --json command surfaces failures inside its own { ok: false } envelope, so
+    // no diagnostic the caller needs is lost.
+    if (jsonFlag) {
+      setLogLevel('silent');
+    } else if (values.quiet || suppressByDefault) {
       setLogLevel('warn');
     } else if (values.verbose) {
       setLogLevel('debug');
@@ -451,6 +475,8 @@ async function main(): Promise<number> {
               // resume between runs (they only resume within chat/REST, which reuse a
               // conversation). Pass the same id on each run to opt into cross-run resume.
               conversationId: values['conversation-id'] as string | undefined,
+              detach: detachFlag,
+              json: jsonFlag,
             };
             await workflowRunCommand(effectiveCwd, workflowName, userMessage, options);
             break;
@@ -460,13 +486,47 @@ async function main(): Promise<number> {
             await workflowStatusCommand(jsonFlag, values.verbose as boolean | undefined);
             break;
 
+          case 'get': {
+            const getRunId = positionals[2];
+            if (!getRunId) {
+              console.error('Usage: archon workflow get <run-id> [--json] [--verbose]');
+              return 1;
+            }
+            // Propagate the command's exit code so `get <id> && ...` and CI
+            // pipelines see a non-zero status when the run is missing.
+            return await workflowGetCommand(
+              getRunId,
+              jsonFlag,
+              values.verbose as boolean | undefined
+            );
+          }
+
+          case 'runs': {
+            const rawLimit = values.limit as string | undefined;
+            let limit: number | undefined;
+            if (rawLimit !== undefined) {
+              limit = Number(rawLimit);
+              if (!Number.isInteger(limit) || limit < 1) {
+                console.error(`Error: --limit must be a positive integer, got '${rawLimit}'.`);
+                return 1;
+              }
+            }
+            await workflowRunsCommand(effectiveCwd, {
+              json: jsonFlag,
+              all: values.all as boolean | undefined,
+              status: values.status as string | undefined,
+              limit,
+            });
+            break;
+          }
+
           case 'resume': {
             const resumeRunId = positionals[2];
             if (!resumeRunId) {
               console.error('Usage: archon workflow resume <run-id>');
               return 1;
             }
-            await workflowResumeCommand(resumeRunId);
+            await workflowResumeCommand(resumeRunId, jsonFlag);
             break;
           }
 
@@ -476,7 +536,7 @@ async function main(): Promise<number> {
               console.error('Usage: archon workflow abandon <run-id>');
               return 1;
             }
-            await workflowAbandonCommand(abandonRunId);
+            await workflowAbandonCommand(abandonRunId, jsonFlag);
             break;
           }
 
@@ -489,7 +549,7 @@ async function main(): Promise<number> {
             // Accept comment as positional args (everything after run ID) or --comment flag
             const approveComment =
               (values.comment as string | undefined) || positionals.slice(3).join(' ') || undefined;
-            await workflowApproveCommand(approveRunId, approveComment);
+            await workflowApproveCommand(approveRunId, approveComment, jsonFlag);
             break;
           }
 
@@ -501,7 +561,7 @@ async function main(): Promise<number> {
             }
             const rejectReason =
               (values.reason as string | undefined) || positionals.slice(3).join(' ') || undefined;
-            await workflowRejectCommand(rejectRunId, rejectReason);
+            await workflowRejectCommand(rejectRunId, rejectReason, jsonFlag);
             break;
           }
 
@@ -614,7 +674,7 @@ async function main(): Promise<number> {
               console.error(`Unknown workflow subcommand: ${subcommand}`);
             }
             console.error(
-              'Available: list, run, status, resume, abandon, approve, reject, cleanup, event, search, install'
+              'Available: list, run, status, get, runs, resume, abandon, approve, reject, cleanup, event, search, install'
             );
             return 1;
         }

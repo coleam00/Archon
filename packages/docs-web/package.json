@@ -1,15 +1,17 @@
 {
   "name": "@archon/docs-web",
   "version": "0.4.1",
+  "type": "module",
   "private": true,
   "scripts": {
     "dev": "astro dev",
-    "build": "astro build",
+    "build": "astro build && bun run scripts/normalize-llms-txt.js",
     "preview": "astro preview"
   },
   "dependencies": {
     "astro": "^6.1.0",
     "@astrojs/starlight": "^0.38.0",
-    "sharp": "^0.33.0"
+    "sharp": "^0.33.0",
+    "starlight-llms-txt": "^0.10.0"
   }
 }

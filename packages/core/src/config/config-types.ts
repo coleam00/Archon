@@ -20,6 +20,7 @@ import type {
   PiProviderDefaults,
   ProviderDefaultsMap,
 } from '@archon/providers/types';
+import type { RawAliasesConfig } from '@archon/workflows/model-validation';
 
 export type {
   ClaudeProviderDefaults,
@@ -28,6 +29,7 @@ export type {
   PiProviderDefaults,
   ProviderDefaultsMap,
 };
+export type { RawAliasesConfig };
 
 /**
  * Intersection type: generic `ProviderDefaultsMap` (any string key) with
@@ -78,6 +80,13 @@ export interface GlobalConfig {
    * Assistant-specific defaults (model, reasoning effort, etc.)
    */
   assistants?: AssistantDefaultsConfig;
+
+  /**
+   * Named model aliases accessible in workflow/node `model:` fields.
+   * Keys must use `@<name>` prefix (e.g. `@cheap`) — bare names are not
+   * reachable as aliases. Reserved names (enforced at runtime): small, medium, large.
+   */
+  aliases?: RawAliasesConfig;
 
   /**
    * Platform streaming preferences (can be overridden per conversation)
@@ -132,6 +141,9 @@ export interface RepoConfig {
    * Assistant-specific defaults for this repository
    */
   assistants?: AssistantDefaultsConfig;
+
+  /** Repo-level model aliases — override global aliases with same name. */
+  aliases?: RawAliasesConfig;
 
   /**
    * Commands configuration
@@ -257,6 +269,11 @@ export interface MergedConfig {
   botName: string;
   assistant: string;
   assistants: AssistantDefaults;
+  /**
+   * Merged aliases (repo > global). Used by buildAiProfile at execution time.
+   * Undefined when no aliases are configured anywhere.
+   */
+  aliases?: RawAliasesConfig;
   streaming: {
     telegram: 'stream' | 'batch';
     discord: 'stream' | 'batch';

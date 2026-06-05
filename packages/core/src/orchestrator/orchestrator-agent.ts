@@ -25,12 +25,13 @@ import { formatToolCall } from '@archon/workflows/utils/tool-formatter';
 import { classifyAndFormatError } from '../utils/error-formatter';
 import { toError } from '../utils/error';
 import { getAgentProvider, getProviderCapabilities } from '@archon/providers';
+import { buildManageRunTool } from './manage-run-tool';
 import { getArchonWorkspacesPath, ensureArchonWorkspacesPath } from '@archon/paths';
 import { syncArchonToWorktree } from '../utils/worktree-sync';
 import { syncWorkspace, toRepoPath } from '@archon/git';
 import type { WorkspaceSyncResult } from '@archon/git';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
-import { findWorkflow } from '@archon/workflows/router';
+import { findWorkflow, resolveWorkflowName } from '@archon/workflows/router';
 import { executeWorkflow, hydrateResumableRun } from '@archon/workflows/executor';
 import {
   assertWorkflowRequirementsMet,
@@ -50,7 +51,11 @@ import type { MergedConfig } from '../config/config-types';
 import { generateAndSetTitle } from '../services/title-generator';
 import { validateAndResolveIsolation, dispatchBackgroundWorkflow } from './orchestrator';
 import { IsolationBlockedError } from '@archon/isolation';
-import { buildOrchestratorSystemAppend, formatWorkflowContextSection } from './prompt-builder';
+import {
+  buildOrchestratorSystemAppend,
+  buildRunManagementSection,
+  formatWorkflowContextSection,
+} from './prompt-builder';
 import type { WorkflowResultContext } from './prompt-builder';
 import * as messageDb from '../db/messages';
 import * as workflowDb from '../db/workflows';
@@ -1036,7 +1041,22 @@ export async function handleMessage(
 
     // Claude supports the preset object for prompt caching; other providers
     // need a plain string (Pi coerces non-string to undefined, Codex ignores it).
-    const systemAppend = buildOrchestratorSystemAppend(conversation, codebases, workflows);
+    let systemAppend = buildOrchestratorSystemAppend(conversation, codebases, workflows);
+    // Capabilities are only consulted for project-scoped chats (both the native tool
+    // and the CLI pointer are scoped features), so look them up lazily — this also
+    // avoids a registry lookup (and a throw for an unregistered provider) on the
+    // unscoped path.
+    const scopedCaps =
+      conversation.codebase_id !== null ? getProviderCapabilities(providerKey) : null;
+    // Providers WITHOUT the in-process manage_run tool (Codex/OpenCode/Copilot) get a
+    // system-prompt pointer to the `archon workflow …` CLI so they can still manage this
+    // project's runs over bash. Claude/Pi get the native tool below and are nudged to it
+    // — adding the CLI pointer there would be redundant and steer them onto a bash path
+    // that needs `archon` on PATH. Project-scoped only: the CLI commands require a
+    // git-repo cwd, which unscoped chats (cwd ~/.archon/workspaces) don't have.
+    if (scopedCaps !== null && !scopedCaps.nativeTools) {
+      systemAppend += `\n\n${buildRunManagementSection()}`;
+    }
     const systemPrompt =
       providerKey === 'claude'
         ? { type: 'preset' as const, preset: 'claude_code' as const, append: systemAppend }
@@ -1047,6 +1067,55 @@ export async function handleMessage(
       env: Object.keys(effectiveEnv).length > 0 ? effectiveEnv : undefined,
       systemPrompt,
     };
+
+    // Project-scoped chats get the `manage_run` tool so the agent can see and
+    // launch this project's workflow runs. Only when a codebase is scoped and
+    // the provider supports in-process native tools (Claude, Pi). The explicit
+    // codebase_id check (redundant with scopedCaps !== null) narrows it to string
+    // for the block below.
+    if (conversation.codebase_id !== null && scopedCaps?.nativeTools) {
+      const scopedCodebaseId = conversation.codebase_id;
+      requestOptions.nativeTools = [
+        buildManageRunTool({
+          codebaseId: scopedCodebaseId,
+          startWorkflow: async (workflowName, msg): Promise<string> => {
+            let wf: WorkflowDefinition | undefined;
+            try {
+              wf = resolveWorkflowName(workflowName, workflows);
+            } catch (e: unknown) {
+              return toError(e).message; // ambiguous-name error is user-facing
+            }
+            if (wf === undefined) {
+              const names = workflows.map(w => w.name).join(', ');
+              return `No workflow named "${workflowName}". Available: ${names}`;
+            }
+            try {
+              await dispatchBackgroundWorkflow(
+                {
+                  platform,
+                  conversationId,
+                  cwd,
+                  originalMessage: msg.length > 0 ? msg : `Run ${wf.name}`,
+                  conversationDbId: conversation.id,
+                  codebaseId: scopedCodebaseId,
+                  availableWorkflows: workflows,
+                  userId,
+                },
+                wf
+              );
+            } catch (e: unknown) {
+              const err = toError(e);
+              getLog().error(
+                { err, workflow: wf.name, codebaseId: scopedCodebaseId, conversationId },
+                'manage_run.start_failed'
+              );
+              return `Failed to start workflow "${wf.name}": ${err.message}`;
+            }
+            return `Started workflow "${wf.name}" in the background — it'll appear in the runs list and the workflow dock shortly.`;
+          },
+        }),
+      ];
+    }
 
     const mode = platform.getStreamingMode();
     if (mode === 'stream') {

@@ -132,6 +132,7 @@ describe('ClaudeProvider', () => {
         thinkingControl: true,
         fallbackModel: true,
         sandbox: true,
+        nativeTools: true,
       });
     });
   });

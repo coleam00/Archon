@@ -21,3 +21,11 @@ Technical reference documentation for Archon internals.
 - **[Configuration Reference](/reference/configuration/)** -- Full config.yaml options, environment variables, streaming modes
 - **[Security](/reference/security/)** -- Permission model, authorization, webhook verification, data privacy
 - **[Troubleshooting](/reference/troubleshooting/)** -- Common issues and solutions
+
+## For AI Tools
+
+Point your AI assistant at these URLs for accurate, up-to-date documentation:
+
+- [`/llms.txt`](https://archon.diy/llms.txt) -- Index of all documentation pages
+- [`/llms-full.txt`](https://archon.diy/llms-full.txt) -- Full documentation in a single file
+- [`/llms-small.txt`](https://archon.diy/llms-small.txt) -- Trimmed documentation variant

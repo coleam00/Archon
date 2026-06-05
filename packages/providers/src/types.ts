@@ -251,6 +251,33 @@ export interface AgentRequestOptions {
   forkSession?: boolean;
   /** When false, skip writing session transcript to disk. */
   persistSession?: boolean;
+  /**
+   * In-process tools the model may call this turn. Defined once by the caller
+   * (e.g. core's manage_run) and adapted per provider — Claude wraps each via
+   * `createSdkMcpServer`/`tool()`, Pi via `customTools`. Providers without an
+   * in-process tool path (Codex/OpenCode) ignore them. Gated on the
+   * `nativeTools` capability.
+   */
+  nativeTools?: NativeTool[];
+}
+
+/**
+ * A provider-neutral in-process tool. The handler runs in the host process and
+ * closes over whatever live context it needs (DB, operations, conversation), so
+ * `@archon/providers` never imports `@archon/core` — the tool crosses the
+ * boundary as data + a function on the request options.
+ *
+ * `inputSchema` is canonical JSON Schema (object). Each provider converts it to
+ * its SDK's schema form. The handler is expected to return a text result rather
+ * than throw — provider adapters add no safety net, so an uncaught throw would
+ * surface into the agent loop. (core's `buildManageRunTool` guarantees this with
+ * an outer try/catch around its dispatch.)
+ */
+export interface NativeTool {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  handler: (input: Record<string, unknown>) => Promise<string>;
 }
 
 /**
@@ -334,6 +361,8 @@ export interface ProviderCapabilities {
   thinkingControl: boolean;
   fallbackModel: boolean;
   sandbox: boolean;
+  /** Whether the provider can register in-process `NativeTool`s for a turn. */
+  nativeTools: boolean;
 }
 
 /**
