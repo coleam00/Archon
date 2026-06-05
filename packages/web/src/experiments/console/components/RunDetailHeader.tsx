@@ -140,9 +140,9 @@ export function RunDetailHeader({
       </div>
 
       {/* Provenance sub-row: the input that started this run. `w-full` forces its
-          own line in the flex-wrap header. (A link back to the originating
-          conversation is deferred until the console chat route supports
-          deep-linking to a specific conversation.) */}
+          own line in the flex-wrap header.
+          TODO(#1882): add a "from chat →" link back to the originating
+          conversation once the console chat route supports deep-linking. */}
       {run.userMessage !== '' ? (
         <div className="flex w-full min-w-0 items-baseline gap-2 text-[12px]">
           <span className="shrink-0 font-mono text-text-tertiary">input</span>

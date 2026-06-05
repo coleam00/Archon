@@ -69,4 +69,84 @@ describe('toRun — provenance', () => {
     const r = toRun(raw({ id: 'r1', workflow_name: 'plan', status: 'pending' }));
     expect(r.status).toBe('running');
   });
+
+  test('an unrecognised status falls back to running', () => {
+    const r = toRun(raw({ id: 'r1', workflow_name: 'plan', status: 'banana' }));
+    expect(r.status).toBe('running');
+  });
+});
+
+describe('toRun — cost', () => {
+  test('reads a positive total_cost_usd from metadata', () => {
+    const r = toRun(
+      raw({
+        id: 'r1',
+        workflow_name: 'plan',
+        status: 'completed',
+        metadata: { total_cost_usd: 1.5 },
+      })
+    );
+    expect(r.costUsd).toBe(1.5);
+  });
+
+  test('treats $0.00 (and non-positive) as null — the > 0 guard', () => {
+    const zero = toRun(
+      raw({ id: 'r1', workflow_name: 'plan', status: 'completed', metadata: { total_cost_usd: 0 } })
+    );
+    expect(zero.costUsd).toBeNull();
+  });
+
+  test('cost is null when metadata is absent or non-numeric', () => {
+    expect(toRun(raw({ id: 'r1', workflow_name: 'plan', status: 'completed' })).costUsd).toBeNull();
+    expect(
+      toRun(
+        raw({
+          id: 'r1',
+          workflow_name: 'plan',
+          status: 'completed',
+          metadata: { total_cost_usd: 'free' },
+        })
+      ).costUsd
+    ).toBeNull();
+  });
+});
+
+describe('toRun — approval parsing', () => {
+  test('parses a well-formed approval from metadata', () => {
+    const r = toRun(
+      raw({
+        id: 'r1',
+        workflow_name: 'review',
+        status: 'paused',
+        metadata: { approval: { nodeId: 'gate', message: 'Approve?' } },
+      })
+    );
+    expect(r.approval).toEqual({ nodeId: 'gate', message: 'Approve?' });
+  });
+
+  test('defaults message to empty string when only nodeId is present', () => {
+    const r = toRun(
+      raw({
+        id: 'r1',
+        workflow_name: 'review',
+        status: 'paused',
+        metadata: { approval: { nodeId: 'gate' } },
+      })
+    );
+    expect(r.approval).toEqual({ nodeId: 'gate', message: '' });
+  });
+
+  test('approval is null when absent or malformed (no string nodeId)', () => {
+    expect(toRun(raw({ id: 'r1', workflow_name: 'review', status: 'paused' })).approval).toBeNull();
+    expect(
+      toRun(
+        raw({
+          id: 'r1',
+          workflow_name: 'review',
+          status: 'paused',
+          metadata: { approval: { message: 'no node id' } },
+        })
+      ).approval
+    ).toBeNull();
+  });
 });

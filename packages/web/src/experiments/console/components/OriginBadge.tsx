@@ -12,8 +12,10 @@ const ORIGIN_LABEL: Record<RunOrigin, string> = {
   unknown: '—',
 };
 
-// One icon per platform so the source is recognisable at a glance (mirrors the
-// old dashboard's WorkflowRunCard PLATFORM_ICONS). `unknown` has no icon.
+// One icon per platform so the source is recognisable at a glance. Extends the
+// old dashboard's WorkflowRunCard PLATFORM_ICONS (which had 5 entries and fell
+// back to a Globe): this covers all 7 RunOrigin values, adding `discord` and
+// rendering no icon for `unknown` rather than a misleading default.
 const ORIGIN_ICON: Record<RunOrigin, ReactElement | null> = {
   web: <Globe className="h-3 w-3" />,
   cli: <Terminal className="h-3 w-3" />,
