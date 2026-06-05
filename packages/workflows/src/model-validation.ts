@@ -105,6 +105,15 @@ function assertValidTierName(name: string): asserts name is TierName {
   }
 }
 
+function toModelAliasPreset(entry: RawAliasEntry): ModelAliasPreset {
+  return {
+    provider: entry.provider,
+    model: entry.model,
+    ...(entry.effort !== undefined ? { effort: entry.effort } : {}),
+    ...(entry.thinking !== undefined ? { thinking: entry.thinking } : {}),
+  };
+}
+
 export interface BuildAiProfileOptions {
   /** Tier overrides from ~/.archon/config.yaml */
   globalTiers?: RawTiersConfig;
@@ -147,12 +156,7 @@ export function buildAiProfile(
     for (const [name, entry] of Object.entries(layer)) {
       assertValidTierName(name);
       assertValidEntry(name, entry);
-      aliases[name] = {
-        provider: entry.provider,
-        model: entry.model,
-        ...(entry.effort !== undefined ? { effort: entry.effort } : {}),
-        ...(entry.thinking !== undefined ? { thinking: entry.thinking } : {}),
-      };
+      aliases[name] = toModelAliasPreset(entry);
     }
   }
 
@@ -162,12 +166,7 @@ export function buildAiProfile(
       assertNotReserved(name);
       assertCustomAliasPrefix(name);
       assertValidEntry(name, entry);
-      aliases[name] = {
-        provider: entry.provider,
-        model: entry.model,
-        ...(entry.effort !== undefined ? { effort: entry.effort } : {}),
-        ...(entry.thinking !== undefined ? { thinking: entry.thinking } : {}),
-      };
+      aliases[name] = toModelAliasPreset(entry);
     }
   }
 

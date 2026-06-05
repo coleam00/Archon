@@ -109,6 +109,24 @@ function applyPresetToRequestOptions(
   }
 }
 
+interface ResolvedModelRequest {
+  provider: string;
+  model: string | undefined;
+  preset?: ModelAliasPreset;
+}
+
+function resolveModelRequest(
+  aiProfile: ReturnType<typeof buildAiProfile>,
+  modelRef: string,
+  fallbackProvider: string
+): ResolvedModelRequest {
+  const spec = resolveModelSpec(aiProfile, modelRef);
+  if (isLiteralSpec(spec)) {
+    return { provider: fallbackProvider, model: spec.literal };
+  }
+  return { provider: spec.provider, model: spec.model, preset: spec };
+}
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export interface WorkflowInvocation {
@@ -1037,17 +1055,8 @@ export async function handleMessage(
       repoTiers: config.tiers,
       repoAliases: config.aliases,
     });
-    const chatSpec = resolveModelSpec(aiProfile, 'large');
-    let providerKey = configuredProviderKey;
-    let chatPreset: ModelAliasPreset | undefined;
-    let chatModel: string | undefined;
-    if (isLiteralSpec(chatSpec)) {
-      chatModel = chatSpec.literal;
-    } else {
-      chatPreset = chatSpec;
-      providerKey = chatSpec.provider;
-      chatModel = chatSpec.model;
-    }
+    const chatRequest = resolveModelRequest(aiProfile, 'large', configuredProviderKey);
+    const providerKey = chatRequest.provider;
     let dbEnvVars: Record<string, string> = {};
     if (conversation.codebase_id) {
       try {
@@ -1098,36 +1107,26 @@ export async function handleMessage(
     const requestOptions: SendQueryOptions = {
       assistantConfig: { ...(config.assistants[providerKey] ?? {}) },
       env: Object.keys(effectiveEnv).length > 0 ? effectiveEnv : undefined,
-      model: chatModel,
+      model: chatRequest.model,
       systemPrompt,
     };
-    if (chatPreset) {
-      applyPresetToRequestOptions(providerKey, chatPreset, requestOptions);
+    if (chatRequest.preset) {
+      applyPresetToRequestOptions(providerKey, chatRequest.preset, requestOptions);
     }
 
     if (!conversation.title && !message.startsWith('/')) {
-      const titleSpec = resolveModelSpec(aiProfile, 'small');
-      let titleProvider = configuredProviderKey;
-      let titlePreset: ModelAliasPreset | undefined;
-      let titleModel: string | undefined;
-      if (isLiteralSpec(titleSpec)) {
-        titleModel = titleSpec.literal;
-      } else {
-        titlePreset = titleSpec;
-        titleProvider = titleSpec.provider;
-        titleModel = titleSpec.model;
-      }
+      const titleRequest = resolveModelRequest(aiProfile, 'small', configuredProviderKey);
       const titleOptions: SendQueryOptions = {
-        model: titleModel,
-        assistantConfig: { ...(config.assistants[titleProvider] ?? {}) },
+        model: titleRequest.model,
+        assistantConfig: { ...(config.assistants[titleRequest.provider] ?? {}) },
       };
-      if (titlePreset) {
-        applyPresetToRequestOptions(titleProvider, titlePreset, titleOptions);
+      if (titleRequest.preset) {
+        applyPresetToRequestOptions(titleRequest.provider, titleRequest.preset, titleOptions);
       }
       void generateAndSetTitle(
         conversation.id,
         message,
-        titleProvider,
+        titleRequest.provider,
         cwd,
         undefined,
         titleOptions.assistantConfig,
