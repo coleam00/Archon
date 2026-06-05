@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, mock, spyOn, type Mock } from 'bun:test';
-import { mkdir, writeFile, rm } from 'fs/promises';
+import { mkdir, writeFile, rm, readFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import * as git from '@archon/git';
@@ -7984,6 +7984,165 @@ describe('bundled opus nodes -- provider annotation invariant (#1610)', () => {
         }
       }
     }
+  });
+});
+
+describe('executeDagWorkflow -- typed artifacts (output_type)', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(tmpdir(), `dag-typed-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const commandsDir = join(testDir, '.archon', 'commands');
+    await mkdir(commandsDir, { recursive: true });
+    await writeFile(join(commandsDir, 'my-cmd.md'), 'My command prompt for $USER_MESSAGE');
+
+    mockSendQueryDag.mockClear();
+    mockGetAgentProviderDag.mockClear();
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'AI response' };
+      yield { type: 'result', sessionId: 'new-session-id' };
+    });
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+  });
+
+  afterEach(async () => {
+    try {
+      await rm(testDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  });
+
+  it('node with output_type writes nodes/<id>.md + .meta.json with the declared type', async () => {
+    await executeDagWorkflow(
+      createMockDeps(),
+      createMockPlatform(),
+      'conv-dag',
+      testDir,
+      {
+        name: 'typed-test',
+        nodes: [{ id: 'planner', command: 'my-cmd', output_type: 'plan' }],
+      },
+      makeWorkflowRun(),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const body = await readFile(join(testDir, 'artifacts', 'nodes', 'planner.md'), 'utf8');
+    expect(body).toBe('AI response');
+    const meta = JSON.parse(
+      await readFile(join(testDir, 'artifacts', 'nodes', 'planner.meta.json'), 'utf8')
+    ) as Record<string, unknown>;
+    expect(meta).toMatchObject({
+      nodeId: 'planner',
+      outputType: 'plan',
+      runId: 'dag-test-run-id',
+      path: join('nodes', 'planner.md'),
+      // sessionId is propagated from the node output into the metadata.
+      sessionId: 'new-session-id',
+    });
+    expect(typeof meta.producedAt).toBe('string');
+  });
+
+  it('bash node with output_type writes a sidecar with no sessionId', async () => {
+    await executeDagWorkflow(
+      createMockDeps(),
+      createMockPlatform(),
+      'conv-dag',
+      testDir,
+      {
+        name: 'bash-typed',
+        nodes: [{ id: 'metrics', bash: 'echo "result-data"', output_type: 'metrics' }],
+      },
+      makeWorkflowRun(),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const body = await readFile(join(testDir, 'artifacts', 'nodes', 'metrics.md'), 'utf8');
+    expect(body).toContain('result-data');
+    const meta = JSON.parse(
+      await readFile(join(testDir, 'artifacts', 'nodes', 'metrics.meta.json'), 'utf8')
+    ) as Record<string, unknown>;
+    expect(meta).toMatchObject({ nodeId: 'metrics', outputType: 'metrics' });
+    // Bash nodes have no provider session — the field is omitted, not null.
+    expect('sessionId' in meta).toBe(false);
+    // Bash node does not invoke the AI client.
+    expect(mockSendQueryDag.mock.calls.length).toBe(0);
+  });
+
+  it('artifact write failure is non-fatal — the node still completes', async () => {
+    // Force writeNodeArtifact to throw by putting a FILE where the nodes/ dir must
+    // go, so its mkdir fails. The node must still complete (best-effort write).
+    const artifactsDir = join(testDir, 'artifacts');
+    await mkdir(artifactsDir, { recursive: true });
+    await writeFile(join(artifactsDir, 'nodes'), 'not a directory', 'utf8');
+
+    // Resolves without throwing — the best-effort catch swallows the write failure.
+    await executeDagWorkflow(
+      createMockDeps(),
+      createMockPlatform(),
+      'conv-dag',
+      testDir,
+      {
+        name: 'typed-fail',
+        nodes: [{ id: 'planner', command: 'my-cmd', output_type: 'plan' }],
+      },
+      makeWorkflowRun(),
+      'claude',
+      undefined,
+      artifactsDir,
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    // The node executed despite the artifact write being impossible.
+    expect(mockSendQueryDag.mock.calls.length).toBeGreaterThan(0);
+  });
+
+  it('node without output_type writes no sidecar artifact', async () => {
+    await executeDagWorkflow(
+      createMockDeps(),
+      createMockPlatform(),
+      'conv-dag',
+      testDir,
+      {
+        name: 'untyped-test',
+        nodes: [{ id: 'planner', command: 'my-cmd' }],
+      },
+      makeWorkflowRun(),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    let wrote = true;
+    try {
+      await readFile(join(testDir, 'artifacts', 'nodes', 'planner.md'), 'utf8');
+    } catch {
+      wrote = false;
+    }
+    expect(wrote).toBe(false);
   });
 });
 

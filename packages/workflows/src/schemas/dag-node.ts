@@ -194,6 +194,13 @@ export const dagNodeBaseSchema = z.object({
   // a provider with sessionResume capability. Distinct from the Claude SDK's
   // AgentRequestOptions.persistSession (on-disk transcript persistence).
   persist_session: z.boolean().optional(),
+  // Declares the semantic type of this node's output (e.g. 'plan', 'findings',
+  // 'code', 'summary' — an open set). When set, the executor writes a typed
+  // sidecar artifact (`nodes/<id>.md` + `<id>.meta.json`) after the node
+  // completes, so other nodes and later runs can locate output by type instead
+  // of guessing filenames. Valid on every node type (bash/script produce typed
+  // outputs too) — not an AI-only field.
+  output_type: z.string().min(1).optional(),
 });
 
 export type DagNodeBase = z.infer<typeof dagNodeBaseSchema>;
@@ -571,6 +578,7 @@ export const dagNodeSchema = dagNodeBaseSchema
       ...(data.trigger_rule !== undefined ? { trigger_rule: data.trigger_rule } : {}),
       ...(data.idle_timeout !== undefined ? { idle_timeout: data.idle_timeout } : {}),
       ...(data.always_run !== undefined ? { always_run: data.always_run } : {}),
+      ...(data.output_type !== undefined ? { output_type: data.output_type } : {}),
     };
 
     // Shared optional fields (valid on AI and bash nodes)

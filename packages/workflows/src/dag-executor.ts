@@ -55,6 +55,7 @@ import { formatToolCall } from './utils/tool-formatter';
 import { createLogger, captureWorkflowCompleted } from '@archon/paths';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { evaluateCondition } from './condition-evaluator';
+import { writeNodeArtifact } from './artifacts-index';
 import {
   logNodeStart,
   logNodeComplete,
@@ -3232,12 +3233,40 @@ export async function executeDagWorkflow(
     );
 
     // Process layer results — store all outputs, track failures
+    const nodeById = new Map(layer.map(n => [n.id, n]));
     let layerHadFailure = false;
     for (const result of layerResults) {
       if (result.status === 'fulfilled') {
         const { nodeId, output } = result.value;
         if (output.costUsd !== undefined) totalCostUsd += output.costUsd;
         nodeOutputs.set(nodeId, output);
+        // Typed artifact: when a node declares `output_type`, persist its output
+        // as a typed sidecar (nodes/<id>.md + .meta.json) so other nodes and
+        // later runs can locate it by type. Best-effort — a metadata write must
+        // never fail an otherwise-successful node.
+        const completedNode = nodeById.get(nodeId);
+        if (output.state === 'completed' && completedNode?.output_type) {
+          try {
+            await writeNodeArtifact(
+              artifactsDir,
+              {
+                nodeId,
+                outputType: completedNode.output_type,
+                runId: workflowRun.id,
+                producedAt: new Date().toISOString(),
+                // `sessionId` may be undefined (e.g. bash/script nodes have no
+                // session); writeNodeArtifact omits it from the metadata when so.
+                sessionId: output.sessionId,
+              },
+              output.output
+            );
+          } catch (err) {
+            getLog().warn(
+              { err: err as Error, nodeId, workflowRunId: workflowRun.id },
+              'artifacts.write_failed'
+            );
+          }
+        }
         if (output.state === 'completed' && !isParallelLayer && output.sessionId !== undefined) {
           lastSequentialSessionId = output.sessionId;
         }

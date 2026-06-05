@@ -202,6 +202,7 @@ nodes:
 | `idle_timeout` | number | — | Kill node if idle for this many milliseconds |
 | `retry` | object | — | Per-node retry configuration. See [Retry Configuration](#retry-configuration) |
 | `always_run` | boolean | `false` | Opt out of resume caching: re-run this node on resume even if a prior run completed it. See [Opting Out of Resume Caching](#opting-out-of-resume-caching) |
+| `output_type` | string | — | Semantic label for this node's output (e.g. `'plan'`, `'findings'`, `'code'`). When set, the executor writes `$ARTIFACTS_DIR/nodes/<id>.md` + `<id>.meta.json` after the node completes (best-effort) so later nodes and runs can locate output by type instead of guessing filenames. See [The Artifact Chain](#the-artifact-chain) |
 
 **AI node options** — apply to `command` and `prompt` nodes:
 
@@ -696,6 +697,24 @@ Each command must know:
 - Where to find its input
 - Where to write its output
 - What format to use
+
+### Typed Artifacts (`output_type`)
+
+The chain above relies on each node knowing the exact filename its upstream wrote. To locate an output **by type** instead of by guessed filename, declare `output_type` on a node:
+
+```yaml
+nodes:
+  - id: planner
+    command: plan-feature
+    output_type: plan        # tag this node's output
+```
+
+When a node sets `output_type`, the executor writes a typed sidecar after the node completes:
+
+- `$ARTIFACTS_DIR/nodes/<id>.md` — the node's output text
+- `$ARTIFACTS_DIR/nodes/<id>.meta.json` — metadata (`outputType`, `runId`, `producedAt`, `size`, and `sessionId` when available)
+
+This works on **every** node type (`bash`/`script` produce typed outputs too, just without a `sessionId`). The write is **best-effort** — if it fails, the node still succeeds and a warning is logged; the typed sidecar may simply be absent. `output_type` is an open set of labels (`plan`, `findings`, `code`, `summary`, …) — pick a convention and keep casing consistent, since lookup is case-sensitive.
 
 ---
 
@@ -1302,6 +1321,7 @@ Before deploying a workflow:
 15. **`maxBudgetUsd`** — set a USD cost cap per node; fails with error if exceeded (Claude only)
 16. **`systemPrompt`** — override the default system prompt per node (Claude only)
 17. **`sandbox`** — OS-level filesystem/network restrictions per node or workflow (Claude only)
-18. **Loop nodes** — use `loop:` within a DAG node for iterative execution until completion signal
-19. **Defaults as templates** — browse `.archon/workflows/defaults/` for real examples to copy and modify
-20. **Test thoroughly** — each command, the artifact flow, and edge cases
+18. **`output_type`** — tag a node's output with a semantic type; the engine writes a typed sidecar (`$ARTIFACTS_DIR/nodes/<id>.md` + `.meta.json`) for cross-node/cross-run lookup by type (any node type)
+19. **Loop nodes** — use `loop:` within a DAG node for iterative execution until completion signal
+20. **Defaults as templates** — browse `.archon/workflows/defaults/` for real examples to copy and modify
+21. **Test thoroughly** — each command, the artifact flow, and edge cases
