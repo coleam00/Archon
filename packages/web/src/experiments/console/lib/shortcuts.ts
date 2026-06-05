@@ -7,6 +7,7 @@ export const SHORTCUTS: readonly KeymapGroup[] = [
     entries: [
       { keys: ['p'], label: 'Pick a project' },
       { keys: ['n'], label: 'Start a new run' },
+      { keys: [','], label: 'Open settings' },
       { keys: ['?'], label: 'Show this help' },
     ],
   },

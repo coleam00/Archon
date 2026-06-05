@@ -20,4 +20,11 @@ export const K = {
   pendingRuns: 'pendingRuns' as const,
   envVars: (projectId: string): string => `envVars:${projectId}`,
   artifacts: (runId: string): string => `artifacts:${runId}`,
+  // Installation-wide settings surfaces (static keys — one row each).
+  config: 'config' as const,
+  // NOTE: must stay the literal 'health' — lib/health.ts already caches under
+  // this key, so the Settings SystemPanel and the IDE docker-check share one entry.
+  health: 'health' as const,
+  providers: 'providers' as const,
+  updateCheck: 'update-check' as const,
 } as const;

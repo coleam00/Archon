@@ -1,5 +1,6 @@
 import { useMemo, useState, type ReactElement } from 'react';
 import { Routes, Route, Link, useNavigate } from 'react-router';
+import { Settings } from 'lucide-react';
 import { ProjectRail } from './components/ProjectRail';
 import { AddProjectDialog } from './components/AddProjectDialog';
 import { ProjectPalette } from './components/ProjectPalette';
@@ -8,6 +9,7 @@ import { RunsPage } from './routes/RunsPage';
 import { RunDetailPage } from './routes/RunDetailPage';
 import { ChatPage } from './routes/ChatPage';
 import { PreviewPage } from './routes/PreviewPage';
+import { SettingsPage } from './routes/SettingsPage';
 import { invalidate } from './store/cache';
 import { K } from './store/keys';
 import { useKeymap, type Binding } from './lib/keymap';
@@ -45,8 +47,15 @@ export function ConsoleApp(): ReactElement {
           setHelpOpen(v => !v);
         },
       },
+      {
+        keys: [','],
+        label: 'Open settings',
+        run: (): void => {
+          navigate('/console/settings');
+        },
+      },
     ],
-    []
+    [navigate]
   );
   useKeymap({
     bindings: globalBindings,
@@ -71,16 +80,26 @@ export function ConsoleApp(): ReactElement {
             console
           </span>
         </div>
-        <Link
-          to="/chat"
-          title="Switch back to the classic UI"
-          className="flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-[11px] text-text-secondary transition-colors hover:border-border-bright hover:bg-surface-hover hover:text-text-primary"
-        >
-          <span aria-hidden className="font-mono text-[11px] leading-none">
-            ←
-          </span>
-          Old UI
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link
+            to="/console/settings"
+            title="Settings ( , )"
+            className="flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-[11px] text-text-secondary transition-colors hover:border-border-bright hover:bg-surface-hover hover:text-text-primary"
+          >
+            <Settings aria-hidden className="h-3.5 w-3.5" />
+            Settings
+          </Link>
+          <Link
+            to="/chat"
+            title="Switch back to the classic UI"
+            className="flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-[11px] text-text-secondary transition-colors hover:border-border-bright hover:bg-surface-hover hover:text-text-primary"
+          >
+            <span aria-hidden className="font-mono text-[11px] leading-none">
+              ←
+            </span>
+            Old UI
+          </Link>
+        </div>
       </header>
 
       <div className="flex min-h-0 flex-1">
@@ -92,6 +111,7 @@ export function ConsoleApp(): ReactElement {
         <main className="flex min-w-0 flex-1 flex-col">
           <Routes>
             <Route index element={<RunsPage />} />
+            <Route path="settings" element={<SettingsPage />} />
             <Route path="_preview" element={<PreviewPage />} />
             <Route path="p/:projectId" element={<RunsPage />} />
             <Route path="p/:projectId/chat" element={<ChatPage />} />
