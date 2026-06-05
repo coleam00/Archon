@@ -86,8 +86,11 @@ export const CATEGORIES: CategoryDef[] = [
     ],
     quickLinks: [
       { label: 'IHHT tab (modality)', href: '/ihht' },
-      { label: 'NABA tab (modality)', href: '/naba' },
-      { label: 'QEP tab (modality)', href: '/qep' },
+      {
+        label: 'Quicksilver Scientific (Naba storefront)',
+        href: '/solutions/quicksilver-scientific',
+      },
+      { label: 'QEP — health-data governance', href: '/qep' },
     ],
   },
   {

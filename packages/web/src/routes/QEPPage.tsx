@@ -8,30 +8,36 @@ const PROSPECTS = (prospectsData.by_business as Record<string, BusinessProspect[
 
 const VALUE_PROPS = [
   {
-    title: 'Anchor at The Fountain',
-    body: 'QEP is the WPB Fountain partnership. Quantum executive protocols delivered in a premium clinical venue.',
+    title: 'Proprietary health-data governance',
+    body: 'A patient-data orchestration platform Blake is building with Plaud.ai. Treats encounters, notes, and protocol-tracking as first-class governed assets — not a longevity protocol.',
   },
   {
-    title: 'Bioenergetic medicine',
-    body: 'Cellular-energy modality positioning for functional medicine, executive performance, longevity buyers.',
+    title: 'White-label resale to physician practices',
+    body: 'PMC owns the resale channel. Same physician-practice ICP we already target with RCM and BRT; QEP is the recurring-revenue attach.',
   },
   {
-    title: 'Cross-brand carrier',
-    body: 'QEP gives BioReg/Cellcom a clinical context for the luxury-wellness ICP — protocols, not just devices.',
+    title: 'Multi-line per account economics',
+    body: 'RCM audit (one-time) + QEP white-label (recurring) + BRT/IHHT modalities (consumable). A single PMC engagement becomes a portfolio sale.',
   },
 ];
 
 const SECTIONS = [
   {
-    heading: 'Partnership',
+    heading: 'Build partnership',
     items: [
       {
-        slug: 'fountain',
-        title: 'The Fountain (WPB)',
-        description: 'QEP partner venue — now a core PMC client',
+        slug: 'blake',
+        title: 'Blake Baynham (The Fountain WPB)',
+        description: 'Platform builder + product owner. PMC is the GTM partner.',
         to: '/clients/fountain-wpb',
         badge: 'core client',
         badgeTone: 'emerald' as const,
+      },
+      {
+        slug: 'plaud',
+        title: 'Plaud.ai (capture layer)',
+        description: 'AI voice / capture / transcription. Distributorship in formation.',
+        to: '/solutions/plaud-ai',
       },
       {
         slug: 'website',
@@ -42,32 +48,32 @@ const SECTIONS = [
     ],
   },
   {
-    heading: 'ICP segments',
+    heading: 'White-label ICP',
     items: [
       {
-        slug: 'qep-practitioners',
-        title: 'Quantum Energy Practitioners',
-        description: 'Bioenergetic-medicine clinicians; emerging-modality early adopters',
+        slug: 'physician-owned',
+        title: 'Physician-owned small-to-mid practices',
+        description: 'Non-IDN. Need governance + AI capture, cannot build in-house.',
       },
       {
-        slug: 'functional-med',
-        title: 'Functional medicine practices',
-        description: 'Adjacent — diagnostic + protocol integration',
+        slug: 'concierge',
+        title: 'Concierge / cash-pay clinics',
+        description: 'High-touch capture as a differentiation tool. Co-sells with BRT / IHHT.',
       },
       {
-        slug: 'wellness-retreats',
-        title: 'Wellness retreats',
-        description: 'With diagnostic offerings — premium positioning',
+        slug: 'multi-loc',
+        title: 'Multi-location specialty groups',
+        description: 'Consistent data layer across sites; M&A consolidation prep.',
       },
     ],
   },
 ];
 
 const KPIS = [
-  { label: 'Phase', value: 'Build' },
-  { label: 'Anchor venue', value: 'The Fountain WPB' },
-  { label: 'Composite rank', value: 'Mid-tier sub-brand' },
-  { label: 'Top blocker', value: 'Lock modules + pricing with Blake' },
+  { label: 'Phase', value: 'Build (white-label scope)' },
+  { label: 'Build partner', value: 'Blake + Plaud.ai' },
+  { label: 'Composite rank', value: 'Potentially top-tier' },
+  { label: 'Top blocker', value: 'Lock white-label commercial structure' },
 ];
 
 export function QEPPage(): React.ReactElement {

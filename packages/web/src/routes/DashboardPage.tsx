@@ -304,7 +304,21 @@ export function DashboardPage(): React.ReactElement {
       <div className="flex-1 overflow-auto p-6 space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
-          <h1 className="text-lg font-semibold text-text-primary">Mission Control</h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-lg font-semibold text-text-primary">Mission Control</h1>
+            <a
+              href="/?q=jid5274"
+              onClick={e => {
+                e.preventDefault();
+                updateParams({ q: 'jid5274', page: null });
+                setSearchInput('jid5274');
+              }}
+              className="rounded-full border border-emerald-700/40 bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-800 transition-colors hover:bg-emerald-200"
+              title="Filter to PMC / jid5274-scoped runs"
+            >
+              ⛯ PMC runs only
+            </a>
+          </div>
           {dataUpdatedAt > 0 && (
             <span className="text-xs text-text-tertiary">
               Last updated {new Date(dataUpdatedAt).toLocaleTimeString()}

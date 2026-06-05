@@ -72,6 +72,26 @@ function buildPipelineFunnel(): { stage: string; count: number }[] {
   ];
 }
 
+// Dial-tracker funnel — produced by build-playground-json.py from dial_tracker_history.
+// Renders the call-funnel as a peer surface to the email funnel.
+const DIAL_FUNNEL_STAGE_LABELS: Record<string, string> = {
+  'total-dials': 'Dials placed',
+  connected: 'Connected (human)',
+  conversation: 'Real conversation',
+  'follow-up': 'Follow-up scheduled',
+  'meeting-booked': 'Meeting booked',
+};
+
+function buildDialFunnel(): { stage: string; count: number }[] {
+  const raw = (playgroundData as { outcome_funnel?: { stage: string; count: number }[] })
+    .outcome_funnel;
+  if (!raw || raw.length === 0) return [];
+  return raw.map(r => ({
+    stage: DIAL_FUNNEL_STAGE_LABELS[r.stage] ?? r.stage,
+    count: r.count,
+  }));
+}
+
 // Pillar mix — PMC service offering
 const PMC_PILLARS = [
   { name: 'Fractional C-Suite', value: 35, color: '#1e40af' },
@@ -144,6 +164,7 @@ export function PMCPage(): React.ReactElement {
 
   // Live pipeline funnel built from playground data + dial-tracker.
   const pipelineFunnel = buildPipelineFunnel();
+  const dialFunnel = buildDialFunnel();
 
   // Stale-data warning: if playground.generated_at older than 6h, surface it.
   const generatedAt = new Date(playgroundData.generated_at);
@@ -337,6 +358,56 @@ export function PMCPage(): React.ReactElement {
             </div>
           </div>
         </section>
+
+        {/* Data-viz row 1b: Dial-tracker funnel (only when dial data exists) */}
+        {dialFunnel.length > 0 && (
+          <section className="rounded-xl border border-border bg-card p-5">
+            <div className="mb-1 flex items-baseline justify-between">
+              <h3
+                className="text-sm font-semibold text-text-primary"
+                style={{ fontFamily: "'Playfair Display', serif" }}
+              >
+                Dial-tracker funnel — call cadence to meeting booked
+              </h3>
+              <span className="text-[10px] text-text-tertiary">
+                Live · sourced from dial_tracker_history
+              </span>
+            </div>
+            <p className="mb-3 text-[11px] text-text-tertiary">
+              Connected-to-conversation is where most calls fall off. Meeting booked is the north
+              star.
+            </p>
+            <div style={{ height: 220 }}>
+              <ResponsiveContainer>
+                <BarChart data={dialFunnel} layout="vertical" margin={{ left: 30 }}>
+                  <CartesianGrid stroke="oklch(0.88 0.012 88)" horizontal={false} />
+                  <XAxis type="number" stroke="oklch(0.55 0.018 255)" fontSize={11} />
+                  <YAxis
+                    dataKey="stage"
+                    type="category"
+                    stroke="oklch(0.22 0.04 255)"
+                    fontSize={11}
+                    width={140}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      background: 'oklch(0.985 0.012 88)',
+                      border: '1px solid oklch(0.78 0.018 88)',
+                      borderRadius: 8,
+                      fontSize: 12,
+                      color: 'oklch(0.22 0.04 255)',
+                    }}
+                  />
+                  <Bar dataKey="count" radius={[0, 6, 6, 0]}>
+                    {dialFunnel.map((_d, i) => (
+                      <Cell key={i} fill={`oklch(${0.62 - i * 0.05} 0.13 ${165 + i * 12})`} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </section>
+        )}
 
         {/* Data-viz row 2: Service-mix donut + first-meetings gauge */}
         <section className="grid gap-4 lg:grid-cols-2">
