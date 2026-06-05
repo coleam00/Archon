@@ -83,9 +83,9 @@ function mergeTiers(
   overrides: RawTiersConfig | undefined
 ): RawTiersConfig | undefined {
   if (!base && !overrides) return undefined;
-  // The Record<'small'|'medium'|'large', RawAliasEntry> keyspace is fixed;
-  // spread is safe but TS infers the result as partial. Cast through unknown
-  // to preserve the strict keyspace on the returned type.
+  // TS infers the spread of two `Record<'small'|'medium'|'large', _>`
+  // as a partial record (each key becomes optional); the cast restores
+  // the strict fixed keyspace on the return type.
   return { ...base, ...overrides } as RawTiersConfig;
 }
 

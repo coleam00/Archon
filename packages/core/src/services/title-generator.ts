@@ -88,17 +88,16 @@ export async function generateAndSetTitle(
           // key that codex silently ignores.
           if (spec.effort !== undefined) {
             const routed = routeEffortToProvider(spec.effort, spec.provider);
+            // Only assistantConfig patches are wired here — titles are a
+            // direct send with no nodeConfig, so providers whose effort
+            // lives on nodeConfig (claude, pi) silently drop the value.
+            // This matches the pre-#1872 behavior; a future per-tier
+            // effort UX for titles can wire it through nodeConfig.
             if (routed.assistantConfigPatch) {
               titleAssistantConfig = {
                 ...(assistantConfig ?? {}),
                 ...routed.assistantConfigPatch,
               };
-            } else if (routed.nodeConfigEffort !== undefined) {
-              // For providers whose effort lives on nodeConfig (claude, pi),
-              // we don't have a nodeConfig here (titles are a direct send),
-              // so the value is simply dropped. This matches the prior
-              // behavior; a future per-tier effort UX for titles can wire
-              // it through nodeConfig when warranted.
             }
           }
         }
