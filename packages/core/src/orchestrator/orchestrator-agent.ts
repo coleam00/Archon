@@ -66,6 +66,7 @@ import {
   buildAiProfile,
   isLiteralSpec,
   resolveModelSpec,
+  routePresetEffort,
   type ModelAliasPreset,
 } from '@archon/workflows/model-validation';
 
@@ -82,9 +83,6 @@ function getLog(): ReturnType<typeof createLogger> {
 const MAX_BATCH_ASSISTANT_CHUNKS = 20;
 /** Max total chunks (assistant + tool) to keep in batch mode */
 const MAX_BATCH_TOTAL_CHUNKS = 200;
-const CLAUDE_EFFORTS = new Set(['low', 'medium', 'high', 'max']);
-const MODEL_REASONING_EFFORTS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh']);
-
 function applyPresetToRequestOptions(
   provider: string,
   preset: ModelAliasPreset,
@@ -96,15 +94,18 @@ function applyPresetToRequestOptions(
 
   if (preset.effort === undefined) return;
 
-  if (provider === 'claude' && CLAUDE_EFFORTS.has(preset.effort)) {
-    options.nodeConfig = { ...(options.nodeConfig ?? {}), effort: preset.effort };
+  const routed = routePresetEffort(provider, preset.effort);
+  if (!routed) {
+    // Cross-provider effort mismatch — warn instead of silently dropping.
+    getLog().warn({ provider, effort: preset.effort }, 'orchestrator.preset_effort_unsupported');
     return;
   }
-
-  if (provider === 'codex' && MODEL_REASONING_EFFORTS.has(preset.effort)) {
+  if (routed.field === 'effort') {
+    options.nodeConfig = { ...(options.nodeConfig ?? {}), effort: routed.value };
+  } else {
     options.assistantConfig = {
       ...(options.assistantConfig ?? {}),
-      modelReasoningEffort: preset.effort,
+      modelReasoningEffort: routed.value,
     };
   }
 }

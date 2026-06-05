@@ -82,6 +82,7 @@ import {
 import {
   isLiteralSpec,
   resolveModelSpec,
+  routePresetEffort,
   type ModelAliasPreset,
   type ResolvedAiProfile,
 } from './model-validation';
@@ -94,8 +95,6 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 const MCP_FAILURE_PREFIX = 'MCP server connection failed: ';
-const CLAUDE_EFFORTS = new Set(['low', 'medium', 'high', 'max']);
-const MODEL_REASONING_EFFORTS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh']);
 
 /** A failed MCP server entry parsed from the SDK message. `segment` is the
  *  original substring (e.g. `"telegram (disconnected)"`) so callers can
@@ -131,13 +130,21 @@ function applyPresetOptions(
     return;
   }
 
-  if (provider === 'claude' && CLAUDE_EFFORTS.has(preset.effort)) {
-    nodeConfig.effort = preset.effort;
+  const routed = routePresetEffort(provider, preset.effort);
+  if (!routed) {
+    // Cross-provider effort mismatch (e.g. a `tiers:` entry sets `effort: max`
+    // on a Codex tier). Warn rather than silently drop it — fail-loud per the
+    // project's fail-fast guideline.
+    getLog().warn(
+      { provider, effort: preset.effort, nodeId: node.id },
+      'dag.preset_effort_unsupported'
+    );
     return;
   }
-
-  if (provider === 'codex' && MODEL_REASONING_EFFORTS.has(preset.effort)) {
-    assistantConfig.modelReasoningEffort = preset.effort;
+  if (routed.field === 'effort') {
+    nodeConfig.effort = routed.value;
+  } else {
+    assistantConfig.modelReasoningEffort = routed.value;
   }
 }
 

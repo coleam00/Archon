@@ -205,3 +205,37 @@ export function resolveModelSpec(profile: ResolvedAiProfile, ref: string): Resol
 export function isLiteralSpec(spec: ResolvedModelSpec): spec is { literal: string } {
   return 'literal' in spec;
 }
+
+/** Effort vocabularies per provider. Claude uses the generic node `effort`;
+ *  Codex uses `modelReasoningEffort` (distinct enum). */
+export const CLAUDE_EFFORTS: ReadonlySet<string> = new Set(['low', 'medium', 'high', 'max']);
+export const CODEX_REASONING_EFFORTS: ReadonlySet<string> = new Set([
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+]);
+
+/** Where a preset's `effort` should land for the resolved provider. */
+export type EffortRouting =
+  | { field: 'effort'; value: string }
+  | { field: 'modelReasoningEffort'; value: string };
+
+/**
+ * Route a preset's `effort` to the field the resolved provider understands —
+ * Claude's generic node `effort` or Codex's `modelReasoningEffort`. Returns
+ * `null` when the value isn't valid for that provider (e.g. a cross-provider
+ * mismatch like `effort: 'max'` on Codex); callers MUST surface that rather
+ * than silently dropping it. Single source of truth for both the DAG executor
+ * and the chat orchestrator.
+ */
+export function routePresetEffort(provider: string, effort: string): EffortRouting | null {
+  if (provider === 'claude' && CLAUDE_EFFORTS.has(effort)) {
+    return { field: 'effort', value: effort };
+  }
+  if (provider === 'codex' && CODEX_REASONING_EFFORTS.has(effort)) {
+    return { field: 'modelReasoningEffort', value: effort };
+  }
+  return null;
+}
