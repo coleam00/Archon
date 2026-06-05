@@ -58,13 +58,15 @@ export async function generateAndSetTitle(
 
     const options: SendQueryOptions = {
       ...(requestOptions ?? {}),
-      ...(titleModel ? { model: titleModel } : {}),
       assistantConfig: requestOptions?.assistantConfig ?? assistantConfig,
       nodeConfig: {
         ...(requestOptions?.nodeConfig ?? {}),
         allowed_tools: [], // No tool access — pure text generation
       },
     };
+    if (titleModel) {
+      options.model = titleModel;
+    }
 
     for await (const chunk of client.sendQuery(titlePrompt, cwd, undefined, options)) {
       if (chunk.type === 'assistant') {

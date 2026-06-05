@@ -106,12 +106,10 @@ function assertValidTierName(name: string): asserts name is TierName {
 }
 
 function toModelAliasPreset(entry: RawAliasEntry): ModelAliasPreset {
-  return {
-    provider: entry.provider,
-    model: entry.model,
-    ...(entry.effort !== undefined ? { effort: entry.effort } : {}),
-    ...(entry.thinking !== undefined ? { thinking: entry.thinking } : {}),
-  };
+  const preset: ModelAliasPreset = { provider: entry.provider, model: entry.model };
+  if (entry.effort !== undefined) preset.effort = entry.effort;
+  if (entry.thinking !== undefined) preset.thinking = entry.thinking;
+  return preset;
 }
 
 export interface BuildAiProfileOptions {
@@ -142,11 +140,9 @@ export function buildAiProfile(
     for (const tier of TIER_NAMES) {
       const entry = tierEntries[tier];
       if (entry) {
-        aliases[tier] = {
-          provider: defaultProvider,
-          model: entry.model,
-          ...(entry.effort !== undefined ? { effort: entry.effort } : {}),
-        };
+        const tierPreset: ModelAliasPreset = { provider: defaultProvider, model: entry.model };
+        if (entry.effort !== undefined) tierPreset.effort = entry.effort;
+        aliases[tier] = tierPreset;
       }
     }
   }

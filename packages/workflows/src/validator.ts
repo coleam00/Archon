@@ -366,8 +366,9 @@ export async function validateWorkflowResources(
       message: `Workflow '${workflow.name}' uses custom model alias '${workflow.model}', which is not portable for ${config.workflowSource} workflows`,
       hint: 'Use small, medium, large, or a literal provider model string. Reserve @custom aliases for project workflows.',
     });
+  } else if (workflow.model) {
+    validateModelRef(workflow.model);
   }
-  if (workflow.model) validateModelRef(workflow.model);
 
   for (const node of workflow.nodes) {
     const provider = resolveProvider(node, workflow.provider, defaultProvider);
@@ -380,8 +381,9 @@ export async function validateWorkflowResources(
         message: `Node '${node.id}' uses custom model alias '${node.model}', which is not portable for ${config.workflowSource} workflows`,
         hint: 'Use small, medium, large, or a literal provider model string. Reserve @custom aliases for project workflows.',
       });
+    } else if ('model' in node && node.model) {
+      validateModelRef(node.model, node.id);
     }
-    if ('model' in node && node.model) validateModelRef(node.model, node.id);
 
     // --- Command nodes: check file exists ---
     if ('command' in node && typeof node.command === 'string') {

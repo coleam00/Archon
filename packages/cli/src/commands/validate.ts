@@ -26,19 +26,11 @@ import { loadConfig, loadRepoConfig } from '@archon/core';
  * Build ValidationConfig from the repo's .archon/config.yaml
  */
 async function buildValidationConfig(cwd: string): Promise<ValidationConfig> {
-  try {
-    const repoConfig = await loadRepoConfig(cwd);
-    return {
-      loadDefaultCommands: repoConfig?.defaults?.loadDefaultCommands,
-      commandFolder: repoConfig?.commands?.folder,
-    };
-  } catch (e) {
-    const err = e as NodeJS.ErrnoException;
-    if (err.code === 'ENOENT') return {};
-    console.error(`Warning: failed to load .archon/config.yaml: ${(e as Error).message}`);
-    console.error('Validation will proceed with defaults (your config settings will not apply)');
-    return {};
-  }
+  const repoConfig = await loadRepoConfig(cwd);
+  return {
+    loadDefaultCommands: repoConfig?.defaults?.loadDefaultCommands,
+    commandFolder: repoConfig?.commands?.folder,
+  };
 }
 
 // =============================================================================

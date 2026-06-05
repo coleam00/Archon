@@ -68,6 +68,7 @@ import {
   resolveModelSpec,
   routePresetEffort,
   type ModelAliasPreset,
+  type ResolvedAiProfile,
 } from '@archon/workflows/model-validation';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -117,7 +118,7 @@ interface ResolvedModelRequest {
 }
 
 function resolveModelRequest(
-  aiProfile: ReturnType<typeof buildAiProfile>,
+  aiProfile: ResolvedAiProfile,
   modelRef: string,
   fallbackProvider: string
 ): ResolvedModelRequest {
