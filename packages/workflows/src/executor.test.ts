@@ -70,6 +70,7 @@ import { executeWorkflow, hydrateResumableRun } from './executor';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
 import type { WorkflowDefinition, WorkflowRun } from './schemas';
+import type { RawAliasEntry, RawTierConfig } from './model-validation';
 
 // --- Helpers ---
 
@@ -102,11 +103,8 @@ function makePlatform(): IWorkflowPlatform {
 function makeDeps(
   store?: IWorkflowStore,
   configOverrides: {
-    aliases?: Record<string, { provider: string; model: string; effort?: string }>;
-    tiers?: Record<
-      'small' | 'medium' | 'large',
-      { provider: string; model: string; effort?: string }
-    >;
+    aliases?: Record<string, RawAliasEntry>;
+    tiers?: RawTierConfig;
   } = {}
 ): WorkflowDeps {
   return {
@@ -1099,7 +1097,7 @@ describe('executeWorkflow -- tier addressability (Issue #1872)', () => {
     expect(lastArg.aliases['@reasoning']?.model).toBe('opus');
   });
 
-  it('passes undefined for the aiProfile slot when no aliases or tiers are configured', async () => {
+  it('builds a seed-only profile when no aliases or tiers are configured', async () => {
     const store = makeStore({});
     const deps = makeDeps(store); // no aliases/tiers
     const workflow = {

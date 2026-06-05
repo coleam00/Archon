@@ -7,6 +7,7 @@
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import {
   validateWorkflowResources,
+  validateBundledWorkflowModels,
   validateCommand,
   validateScript,
   discoverAvailableCommands,
@@ -106,9 +107,16 @@ export async function validateWorkflowsCommand(
   }
 
   // Validate successfully parsed workflows (Level 3)
-  for (const { workflow } of workflowEntries) {
+  for (const { workflow, source } of workflowEntries) {
     const issues = await validateWorkflowResources(workflow, cwd, config, defaultProvider);
-    results.push(makeWorkflowResult(workflow.name, issues));
+    // Bundled-defaults portability gate (Issue #1872). Runs only on the
+    // bundled set — shared workflows are allowed to use literal model
+    // strings (the "exact-pin" path). Without this gate, a future
+    // contributor could reintroduce `model: sonnet` to a bundled default
+    // and the existing `validateWorkflowResources` would not catch it.
+    const isBundled = source === 'bundled';
+    const bundledIssues = validateBundledWorkflowModels(workflow, isBundled);
+    results.push(makeWorkflowResult(workflow.name, [...issues, ...bundledIssues]));
   }
 
   // Filter to specific workflow if name provided

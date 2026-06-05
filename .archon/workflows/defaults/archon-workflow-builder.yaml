@@ -111,7 +111,8 @@ nodes:
 
       # Optional top-level settings:
       # provider: claude    (or codex)
-      # model: sonnet       (or haiku, opus, etc.)
+      # model: large        (or small, medium) — prefer tier keywords so the
+      #                      operator's `tiers:` config controls the actual model
       # interactive: true   (forces foreground execution in web UI)
 
       nodes:

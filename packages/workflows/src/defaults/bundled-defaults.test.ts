@@ -1,7 +1,19 @@
-import { describe, it, expect } from 'bun:test';
+import { describe, it, expect, beforeAll } from 'bun:test';
 import { readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { isBinaryBuild, BUNDLED_COMMANDS, BUNDLED_WORKFLOWS } from './bundled-defaults';
+import { registerBuiltinProviders, clearRegistry } from '@archon/providers';
+import { parseWorkflow } from '../loader';
+import { validateBundledWorkflowModels } from '../validator';
+
+// parseWorkflow runs the workflow schema, which validates the
+// `provider:` field against the provider registry. Bootstrap the
+// builtin providers here so the bundled-defaults portability test can
+// parse the actual bundled YAMLs end-to-end.
+beforeAll(() => {
+  clearRegistry();
+  registerBuiltinProviders();
+});
 
 // Resolve the on-disk defaults directories relative to this test file so the
 // tests work regardless of cwd. From packages/workflows/src/defaults go up
@@ -117,5 +129,29 @@ describe('bundled-defaults', () => {
         expect(content.includes('nodes:')).toBe(true);
       }
     });
+
+    // Bundled-defaults model-portability gate (Issue #1872). Every bundled
+    // workflow must (a) parse as a valid DAG workflow, and (b) pass
+    // `validateBundledWorkflowModels(workflow, true)` — no `@custom`
+    // aliases, no literal model strings (only tier keywords are allowed).
+    // This test fails loudly in CI if a contributor reintroduces a literal
+    // model reference like `model: sonnet` to a bundled default. Per the
+    // PR #1880 review (test-coverage F2), the gate was previously exported
+    // and unit-tested but never wired to the bundled set; this test is
+    // the wire-up.
+    it.each(Object.entries(BUNDLED_WORKFLOWS))(
+      '%s passes the bundled-defaults portability gate (no @custom, no literal models)',
+      (_name, yaml) => {
+        const parsed = parseWorkflow(yaml, _name);
+        expect(parsed.error).toBeNull();
+        if (!parsed.workflow) {
+          // Already asserted above — the type narrow keeps the rest safe.
+          throw new Error('Workflow did not parse; cannot run gate');
+        }
+        const issues = validateBundledWorkflowModels(parsed.workflow, true);
+        const errors = issues.filter(i => i.level === 'error');
+        expect(errors).toEqual([]);
+      }
+    );
   });
 });

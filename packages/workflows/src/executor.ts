@@ -15,6 +15,7 @@ import type {
   WorkflowSource,
 } from './schemas';
 import { isLoopNode, isApprovalNode, isScriptNode, isBashNode } from './schemas';
+import { buildAiProfile } from './model-validation';
 import { executeDagWorkflow } from './dag-executor';
 import { logWorkflowStart, logWorkflowError } from './logger';
 import { formatDuration, parseDbTimestamp } from './utils/duration';
@@ -308,8 +309,6 @@ export async function hydrateResumableRun(
  * call {@link hydrateResumableRun} first and spread its result into `opts` —
  * the executor does not perform resume detection on its own.
  */
-import { buildAiProfile } from './model-validation';
-
 export async function executeWorkflow(
   deps: WorkflowDeps,
   platform: IWorkflowPlatform,

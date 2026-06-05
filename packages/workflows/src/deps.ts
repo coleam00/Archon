@@ -9,6 +9,7 @@
  */
 import type { IWorkflowStore } from './store';
 import type { ModelReasoningEffort, WebSearchMode } from './schemas';
+import type { RawAliasEntry, RawTierConfig } from './model-validation';
 import type {
   IAgentProvider,
   MessageChunk,
@@ -79,15 +80,12 @@ export interface WorkflowConfig {
    * Merged alias map (repo > global). Used by buildAiProfile to resolve
    * `@<name>` refs in workflow/node `model:` fields. Issue #1872.
    */
-  aliases?: Record<string, { provider: string; model: string; effort?: string }>;
+  aliases?: Record<string, RawAliasEntry>;
   /**
    * Merged tier remap (repo > global > tier-defaults.json seed). Used by
    * buildAiProfile to resolve `small`/`medium`/`large` refs. Issue #1872.
    */
-  tiers?: Record<
-    'small' | 'medium' | 'large',
-    { provider: string; model: string; effort?: string }
-  >;
+  tiers?: RawTierConfig;
   commands: { folder?: string };
   defaults?: {
     loadDefaultWorkflows?: boolean;

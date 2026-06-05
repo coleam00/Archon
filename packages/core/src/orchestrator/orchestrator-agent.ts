@@ -25,6 +25,12 @@ import { formatToolCall } from '@archon/workflows/utils/tool-formatter';
 import { classifyAndFormatError } from '../utils/error-formatter';
 import { toError } from '../utils/error';
 import { getAgentProvider, getProviderCapabilities } from '@archon/providers';
+import {
+  buildAiProfile,
+  isLiteralSpec,
+  resolveModelSpec,
+  routeEffortToProvider,
+} from '@archon/workflows/model-validation';
 import { buildManageRunTool } from './manage-run-tool';
 import { getArchonWorkspacesPath, ensureArchonWorkspacesPath } from '@archon/paths';
 import { syncArchonToWorktree } from '../utils/worktree-sync';
@@ -733,13 +739,21 @@ export async function handleMessage(
       conversationId
     );
 
-    // 1c. Auto-generate title for untitled conversations (fire-and-forget)
+    // 1c. Auto-generate title for untitled conversations (fire-and-forget).
+    // Load config eagerly here so the title generator can resolve the
+    // `small` tier (Issue #1872). The config is also loaded again below
+    // for chat (it's cheap and avoids a circular ref to `discoveredConfig`
+    // which is declared further down).
     if (!conversation.title && !message.startsWith('/')) {
+      const titleConfig = await loadConfig();
       void generateAndSetTitle(
         conversation.id,
         message,
         conversation.ai_assistant_type,
-        getArchonWorkspacesPath()
+        getArchonWorkspacesPath(),
+        undefined,
+        undefined,
+        titleConfig
       );
     }
 
@@ -1007,9 +1021,12 @@ export async function handleMessage(
       });
     }
 
-    // 5. Send to AI provider
-    const aiClient = getAgentProvider(conversation.ai_assistant_type);
-    getLog().debug({ assistantType: conversation.ai_assistant_type }, 'sending_to_ai');
+    // 5. Send to AI provider — re-built below AFTER tier resolution so the
+    //    client matches the resolved provider (Issue #1872, see F1 in the
+    //    PR #1880 review: building the client before tier resolution made
+    //    the cross-provider tier remap non-functional for chat).
+    //    The old `const aiClient = getAgentProvider(conversation.ai_assistant_type)`
+    //    line was moved down so the client routes to the resolved provider.
 
     // Reuse the config already loaded during workflow discovery (avoids a second disk read).
     // Fall back to loadConfig only when no codebase is scoped (discoveredConfig is undefined).
@@ -1034,12 +1051,10 @@ export async function handleMessage(
     // configured. Falls through to the assistantConfig/model defaults on
     // failure (warn-once) — chat is user-facing, the warn-on-fallback UX
     // is delivered in the response message after a successful completion.
-    let chatAssistantType = conversation.ai_assistant_type;
+    let chatAssistantType: string = conversation.ai_assistant_type;
     let chatAssistantConfig: Record<string, unknown> = config.assistants[providerKey] ?? {};
     let chatModel: string | undefined;
     try {
-      const { buildAiProfile, isLiteralSpec, resolveModelSpec } =
-        await import('@archon/workflows/model-validation');
       const profile = buildAiProfile(providerKey, {
         globalAliases: config.aliases,
         globalTiers: config.tiers,
@@ -1048,11 +1063,15 @@ export async function handleMessage(
       if (!isLiteralSpec(spec)) {
         chatAssistantType = spec.provider;
         chatModel = spec.model;
+        // Per-provider field routing is shared with the workflow path
+        // (`routeEffortToProvider` in model-validation) so a codex-routed
+        // chat lands in assistantConfig.modelReasoningEffort (not the
+        // un-routed `effort` field, which codex silently ignores).
         if (spec.effort !== undefined) {
-          // Surface the preset's effort; per-provider field routing is the
-          // provider adapter's job (this is chat, not workflow — the routing
-          // paths in dag-executor don't apply here).
-          chatAssistantConfig = { ...chatAssistantConfig, effort: spec.effort };
+          const routed = routeEffortToProvider(spec.effort, spec.provider);
+          if (routed.assistantConfigPatch) {
+            chatAssistantConfig = { ...chatAssistantConfig, ...routed.assistantConfigPatch };
+          }
         }
       }
     } catch (resolverErr) {
@@ -1061,6 +1080,14 @@ export async function handleMessage(
         'chat.tier_resolve_failed_falling_back'
       );
     }
+
+    getLog().debug(
+      {
+        originalAssistantType: conversation.ai_assistant_type,
+        chatAssistantType,
+      },
+      'sending_to_ai'
+    );
 
     // Warn if provider doesn't support env injection but env vars are configured
     if (Object.keys(effectiveEnv).length > 0) {
@@ -1104,6 +1131,15 @@ export async function handleMessage(
     if (chatModel !== undefined) {
       requestOptions.model = chatModel;
     }
+
+    // Build the AI client AFTER tier resolution so the outbound call uses
+    // the resolved provider (Issue #1872 F1). Previously this was done at
+    // the top of `handleMessage` and bound to `conversation.ai_assistant_type`,
+    // which made the cross-provider tier remap non-functional: a user with
+    // `tiers.large.provider: 'codex'` on a `claude` conversation still hit
+    // the Claude SDK, which either rejected the foreign model string or
+    // silently picked its default.
+    const aiClient = getAgentProvider(chatAssistantType);
 
     // Project-scoped chats get the `manage_run` tool so the agent can see and
     // launch this project's workflow runs. Only when a codebase is scoped and

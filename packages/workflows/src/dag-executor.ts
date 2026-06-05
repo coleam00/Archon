@@ -27,7 +27,12 @@ import {
   getRegisteredProviders,
   isRegisteredProvider,
 } from '@archon/providers';
-import { isLiteralSpec, resolveModelSpec, type ResolvedAiProfile } from './model-validation';
+import {
+  isLiteralSpec,
+  resolveModelSpec,
+  routeEffortToProvider,
+  type ResolvedAiProfile,
+} from './model-validation';
 import type {
   DagNode,
   ApprovalNode,
@@ -401,6 +406,7 @@ async function resolveNodeProviderAndModel(
   // the alias wins (operator-defined cross-provider remap is the explicit
   // intent), but the user is informed.
   let resolvedEffort: string | undefined;
+  let resolvedThinking: ThinkingConfig | undefined;
   if (aiProfile && typeof node.model === 'string' && node.model.length > 0) {
     const spec = resolveModelSpec(aiProfile, node.model);
     if (!isLiteralSpec(spec)) {
@@ -409,21 +415,37 @@ async function resolveNodeProviderAndModel(
           { nodeId: node.id, nodeProvider: node.provider, aliasProvider: spec.provider },
           'dag.alias_provider_conflict'
         );
-        await safeSendMessage(
+        const delivered = await safeSendMessage(
           platform,
           conversationId,
           `Warning: Node '${node.id}' pins provider '${node.provider}' but model '${node.model}' resolves to provider '${spec.provider}'. Using '${spec.provider}' (per the resolved alias). Remove the explicit provider: field to silence this warning.`,
           { workflowId: workflowRunId, nodeName: node.id }
         );
+        if (!delivered) {
+          getLog().error(
+            { nodeId: node.id, workflowRunId, aliasProvider: spec.provider },
+            'dag.alias_provider_conflict_delivery_failed'
+          );
+        }
       }
       provider = spec.provider;
       model = spec.model;
       resolvedEffort = spec.effort;
+      resolvedThinking = spec.thinking;
     }
   }
 
   // Get provider capabilities for capability warnings (static lookup, no instantiation)
   const caps = getProviderCapabilities(provider);
+
+  // Effective effort/thinking — explicit (node > workflow) wins over the
+  // tier-resolved value (per CLAUDE.md "Configuration Priority"). We compute
+  // these once so the cap check, the routing block, and nodeConfig all use
+  // the same single source of truth.
+  const explicitEffort = node.effort ?? workflowLevelOptions.effort;
+  const explicitThinking = node.thinking ?? workflowLevelOptions.thinking;
+  const effectiveEffort = explicitEffort ?? resolvedEffort;
+  const effectiveThinking = explicitThinking ?? resolvedThinking;
 
   // Capability warnings — inform users when features are unsupported
   const capChecks: [string, keyof ProviderCapabilities, boolean][] = [
@@ -436,8 +458,8 @@ async function resolveNodeProviderAndModel(
     ['mcp', 'mcp', node.mcp !== undefined],
     ['skills', 'skills', node.skills !== undefined && node.skills.length > 0],
     ['agents', 'agents', node.agents !== undefined],
-    ['effort', 'effortControl', (node.effort ?? workflowLevelOptions.effort) !== undefined],
-    ['thinking', 'thinkingControl', (node.thinking ?? workflowLevelOptions.thinking) !== undefined],
+    ['effort', 'effortControl', effectiveEffort !== undefined],
+    ['thinking', 'thinkingControl', effectiveThinking !== undefined],
     ['maxBudgetUsd', 'costControl', node.maxBudgetUsd !== undefined],
     [
       'fallbackModel',
@@ -508,8 +530,8 @@ async function resolveNodeProviderAndModel(
     agents: node.agents,
     allowed_tools: node.allowed_tools,
     denied_tools: node.denied_tools,
-    effort: node.effort ?? workflowLevelOptions.effort,
-    thinking: node.thinking ?? workflowLevelOptions.thinking,
+    effort: effectiveEffort,
+    thinking: effectiveThinking,
     sandbox: node.sandbox ?? workflowLevelOptions.sandbox,
     betas: node.betas ?? workflowLevelOptions.betas,
     output_format: node.output_format,
@@ -522,11 +544,13 @@ async function resolveNodeProviderAndModel(
   let assistantConfig: Record<string, unknown> = config.assistants[provider] ?? {};
 
   // Per-provider effort routing from a resolved tier/`@custom` preset
-  // (Issue #1872). The routing decision lives here, not in the provider
-  // adapter — adapters (Pi/Copilot) own the value remap (max → xhigh);
-  // this function owns the field selection.
-  if (resolvedEffort !== undefined) {
-    const routed = routeEffortToProvider(resolvedEffort, provider);
+  // (Issue #1872). Explicit (node/workflow) values win over the resolved
+  // tier value (per CLAUDE.md "Configuration Priority"). The routing
+  // decision itself lives in `routeEffortToProvider` (model-validation) —
+  // adapters (Pi/Copilot) own the value remap (max → xhigh); this
+  // function owns the field selection.
+  if (effectiveEffort !== undefined && explicitEffort === undefined) {
+    const routed = routeEffortToProvider(effectiveEffort, provider);
     if (routed.nodeConfigEffort !== undefined) {
       nodeConfig.effort = routed.nodeConfigEffort;
     }
@@ -542,52 +566,6 @@ async function resolveNodeProviderAndModel(
   };
 
   return { provider, model, options };
-}
-
-/**
- * Route a resolved preset's `effort` string into the correct provider-
- * specific field. The value is a raw `low`/`medium`/`high`/`max`/`xhigh`
- * string; adapters (Pi/Copilot) handle any further value remap
- * (e.g. `max → xhigh`) downstream. This function is the ONLY place in
- * the workflows package that decides which field to populate.
- */
-function routeEffortToProvider(
-  effort: string,
-  provider: string
-): { nodeConfigEffort?: string; assistantConfigPatch?: Record<string, unknown> } {
-  switch (provider) {
-    case 'claude':
-      // Claude: nodeConfig.effort (Archon enum is a subset of Claude's).
-      return { nodeConfigEffort: effort };
-    case 'codex':
-      // Codex: assistantConfig.modelReasoningEffort. Codex has no `max`;
-      // remap to `xhigh` here so the SDK accepts it. Per OpenAI docs,
-      // `xhigh` is model-gated — the SDK will reject it for unsupported
-      // models, which is the correct failure mode.
-      return {
-        assistantConfigPatch: {
-          modelReasoningEffort: effort === 'max' ? 'xhigh' : effort,
-        },
-      };
-    case 'pi':
-      // Pi: nodeConfig.effort. The Pi provider's `resolvePiThinkingLevel`
-      // does the `max → xhigh` remap downstream.
-      return { nodeConfigEffort: effort };
-    case 'copilot':
-      // Copilot: assistantConfigPatch with `reasoningEffort` (camelCase).
-      // Copilot's `resolveCopilotReasoning` does the `max → xhigh` remap
-      // downstream. Use the assistantConfig channel because Copilot
-      // doesn't expose `effort` on its nodeConfig schema.
-      return {
-        assistantConfigPatch: {
-          reasoningEffort: effort === 'max' ? 'xhigh' : effort,
-        },
-      };
-    default:
-      // Unknown / community provider — fall through with nodeConfig.effort.
-      // Provider's own translator will decide what to do with it.
-      return { nodeConfigEffort: effort };
-  }
 }
 
 /** Evaluate trigger rule for a node given its upstream states */

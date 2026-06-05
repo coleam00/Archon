@@ -8752,9 +8752,14 @@ describe('executeDagWorkflow -- tier / @custom alias resolution (Issue #1872)', 
     expect(mockSendQueryDag.mock.calls.length).toBeGreaterThan(0);
     const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
     const nodeConfig = optionsArg?.nodeConfig as Record<string, unknown>;
-    // tier 'large' on claude → opus → assistantConfig.effort stays undefined (per-provider routing)
-    // (the resolved model is in the conversation provider's pre-flight, not in optionsArg)
-    expect(nodeConfig).toBeDefined();
+    // The resolver must run end-to-end. The alias's `effort: 'high'` is
+    // routed to nodeConfig.effort for the claude provider (per
+    // routeEffortToProvider), so we assert on that field as proof the
+    // tier-resolution + per-provider routing actually happened. The
+    // resolved model is in baseOptions.model (it is set there by
+    // resolveNodeProviderAndModel before the nodeConfig merge).
+    expect(nodeConfig?.effort).toBe('high');
+    expect((optionsArg as { model?: string }).model).toBe('opus');
   });
 
   it('literal model string passes through unchanged when aiProfile is set', async () => {
@@ -8875,5 +8880,146 @@ describe('executeDagWorkflow -- tier / @custom alias resolution (Issue #1872)', 
     const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
     const assistantConfig = optionsArg?.assistantConfig as Record<string, unknown>;
     expect(assistantConfig?.modelReasoningEffort).toBe('xhigh');
+  });
+
+  it('per-provider effort routing: pi preset effort goes to nodeConfig.effort without remap', async () => {
+    // Pi is a community provider — register it for this test only. The
+    // earlier test setup registers only builtin providers (claude, codex).
+    const { registerPiProvider, isRegisteredProvider } = await import('@archon/providers');
+    if (!isRegisteredProvider('pi')) registerPiProvider();
+    const profile = {
+      defaultProvider: 'pi',
+      aliases: {
+        large: { provider: 'pi', model: 'anthropic/claude-opus-4-7', effort: 'max' },
+      },
+    };
+    await executeDagWorkflow(
+      createMockDeps(),
+      createMockPlatform(),
+      'conv-dag',
+      testDir,
+      {
+        name: 'effort-pi',
+        nodes: [{ id: 'a', prompt: 'p', model: 'large', provider: 'pi' }],
+      },
+      makeWorkflowRun(),
+      'pi',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      { ...minimalConfig, assistant: 'pi' },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      profile
+    );
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    const nodeConfig = optionsArg?.nodeConfig as Record<string, unknown>;
+    // Pi: remap happens in resolvePiThinkingLevel downstream, not in the
+    // router. The router must pass 'max' through to nodeConfig.effort
+    // unchanged so the Pi provider's translator can handle it.
+    expect(nodeConfig?.effort).toBe('max');
+  });
+
+  it('per-provider effort routing: copilot preset effort remaps max→xhigh in assistantConfig', async () => {
+    // Copilot is a community provider — register it for this test only.
+    const { registerCopilotProvider, isRegisteredProvider } = await import('@archon/providers');
+    if (!isRegisteredProvider('copilot')) registerCopilotProvider();
+    const profile = {
+      defaultProvider: 'copilot',
+      aliases: {
+        large: { provider: 'copilot', model: 'gpt-5.5', effort: 'max' },
+      },
+    };
+    await executeDagWorkflow(
+      createMockDeps(),
+      createMockPlatform(),
+      'conv-dag',
+      testDir,
+      {
+        name: 'effort-copilot',
+        nodes: [{ id: 'a', prompt: 'p', model: 'large', provider: 'copilot' }],
+      },
+      makeWorkflowRun(),
+      'copilot',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      { ...minimalConfig, assistant: 'copilot' },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      profile
+    );
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    const assistantConfig = optionsArg?.assistantConfig as Record<string, unknown>;
+    // Copilot: remap happens in the router (not downstream like pi) and
+    // lands in assistantConfig.reasoningEffort because copilot does not
+    // expose `effort` on its nodeConfig schema.
+    expect(assistantConfig?.reasoningEffort).toBe('xhigh');
+  });
+
+  it('per-provider effort routing: unknown provider falls through to nodeConfig.effort', async () => {
+    // Hypothetical community provider that the workflows package does not
+    // know about (and is intentionally NOT registered — the default
+    // branch in `routeEffortToProvider` is what we want to exercise).
+    // The executor will throw earlier ("unknown provider") because the
+    // provider-registry check fires before routing, so we exercise the
+    // routing decision directly via the shared helper.
+    const { routeEffortToProvider } = await import('./model-validation');
+    const routed = routeEffortToProvider('high', 'opencode');
+    expect(routed).toEqual({ nodeConfigEffort: 'high' });
+    const routedMax = routeEffortToProvider('max', 'opencode');
+    expect(routedMax).toEqual({ nodeConfigEffort: 'max' });
+  });
+
+  it('warns and informs user when node.provider conflicts with resolved alias provider', async () => {
+    const profile = {
+      defaultProvider: 'claude',
+      aliases: {
+        large: { provider: 'codex', model: 'gpt-5.5' },
+      },
+    };
+    await executeDagWorkflow(
+      createMockDeps(),
+      createMockPlatform(),
+      'conv-dag',
+      testDir,
+      {
+        name: 'conflict',
+        nodes: [{ id: 'a', prompt: 'p', model: 'large', provider: 'claude' }],
+      },
+      makeWorkflowRun(),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      profile
+    );
+    // The conflict warning must fire — primary user-feedback mechanism
+    // for "your provider: field is being ignored". A regression that
+    // suppresses the warning would leave users confused about why their
+    // explicit provider: pin is being overridden.
+    expect(mockLogFn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nodeId: 'a',
+        nodeProvider: 'claude',
+        aliasProvider: 'codex',
+      }),
+      'dag.alias_provider_conflict'
+    );
   });
 });

@@ -4,6 +4,7 @@ import {
   buildAiProfile,
   isLiteralSpec,
   resolveModelSpec,
+  routeEffortToProvider,
   TIER_NAMES,
   type ModelAliasPreset,
   type ResolvedAiProfile,
@@ -438,5 +439,47 @@ describe('isLiteralSpec type guard', () => {
 
   test('returns false for a ModelAliasPreset', () => {
     expect(isLiteralSpec({ provider: 'claude', model: 'opus' })).toBe(false);
+  });
+});
+
+// routeEffortToProvider is the SHARED per-provider effort-routing
+// decision used by dag-executor, orchestrator-agent (chat), and
+// title-generator. Centralizing it here is the F4 fix; the per-provider
+// branches each have a test in dag-executor.test.ts already, but the
+// unit-level tests below are the lower-cost regression guard.
+describe('routeEffortToProvider — per-provider routing decisions', () => {
+  test('claude routes effort to nodeConfig.effort (no remap)', () => {
+    expect(routeEffortToProvider('high', 'claude')).toEqual({ nodeConfigEffort: 'high' });
+    // Claude accepts the full Archon enum verbatim, including 'max'.
+    expect(routeEffortToProvider('max', 'claude')).toEqual({ nodeConfigEffort: 'max' });
+  });
+
+  test('codex routes effort to assistantConfig.modelReasoningEffort and remaps max→xhigh', () => {
+    expect(routeEffortToProvider('high', 'codex')).toEqual({
+      assistantConfigPatch: { modelReasoningEffort: 'high' },
+    });
+    // Codex has no `max` — remap to `xhigh` (model-gated downstream).
+    expect(routeEffortToProvider('max', 'codex')).toEqual({
+      assistantConfigPatch: { modelReasoningEffort: 'xhigh' },
+    });
+  });
+
+  test('pi routes effort to nodeConfig.effort without remap (downstream remaps)', () => {
+    expect(routeEffortToProvider('max', 'pi')).toEqual({ nodeConfigEffort: 'max' });
+    expect(routeEffortToProvider('low', 'pi')).toEqual({ nodeConfigEffort: 'low' });
+  });
+
+  test('copilot routes effort to assistantConfig.reasoningEffort and remaps max→xhigh', () => {
+    expect(routeEffortToProvider('high', 'copilot')).toEqual({
+      assistantConfigPatch: { reasoningEffort: 'high' },
+    });
+    expect(routeEffortToProvider('max', 'copilot')).toEqual({
+      assistantConfigPatch: { reasoningEffort: 'xhigh' },
+    });
+  });
+
+  test('unknown provider falls through to nodeConfig.effort (default branch)', () => {
+    expect(routeEffortToProvider('high', 'opencode')).toEqual({ nodeConfigEffort: 'high' });
+    expect(routeEffortToProvider('max', 'opencode')).toEqual({ nodeConfigEffort: 'max' });
   });
 });

@@ -22,6 +22,7 @@ import {
 import { execFileAsync } from '@archon/git';
 import { BUNDLED_COMMANDS, isBinaryBuild } from './defaults/bundled-defaults';
 import { isValidCommandName } from './command-validation';
+import { TIER_NAMES } from './model-validation';
 import { getProviderCapabilities, isRegisteredProvider } from '@archon/providers';
 
 /** Lazy-initialized logger */
@@ -683,8 +684,6 @@ export async function validateScript(
 // Bundled workflow model-portability gate
 // =============================================================================
 
-import { TIER_NAMES } from './model-validation';
-
 /**
  * Validate that a workflow's node `model:` references are portable.
  *
@@ -733,6 +732,27 @@ export function validateBundledWorkflowModels(
         hint: "Use a tier keyword (small/medium/large) so the user's `tiers:` config controls the actual model.",
       });
     }
+  }
+
+  // Log the gate outcome so it is observable in production. Other
+  // validators in this file log their findings; this one is the new
+  // kid on the block and the original PR shipped without a log line,
+  // which left the gate silent if a caller dropped the result.
+  if (issues.length > 0) {
+    getLog().warn(
+      {
+        workflowName: workflow.name,
+        isBundled,
+        issueCount: issues.length,
+        nodeIds: issues.map(i => i.nodeId),
+      },
+      'validate.bundled_model_gate_failed'
+    );
+  } else {
+    getLog().debug(
+      { workflowName: workflow.name, isBundled },
+      'validate.bundled_model_gate_passed'
+    );
   }
 
   return issues;

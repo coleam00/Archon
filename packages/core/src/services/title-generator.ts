@@ -16,6 +16,7 @@ import {
   buildAiProfile,
   isLiteralSpec,
   resolveModelSpec,
+  routeEffortToProvider,
 } from '@archon/workflows/model-validation';
 import type { MergedConfig } from '../config/config-types';
 import * as conversationDb from '../db/conversations';
@@ -78,12 +79,27 @@ export async function generateAndSetTitle(
         if (!isLiteralSpec(spec)) {
           titleModel = spec.model;
           titleAssistantType = spec.provider;
-          // Surface the preset's effort into the assistantConfig so the
-          // provider can route it to the right field. For tier 'small' the
-          // user typically does not pin an effort, but the path is wired
-          // for forward-compat.
+          // Surface the preset's effort into the assistantConfig via the
+          // shared per-provider routing helper (model-validation). For tier
+          // 'small' the user typically does not pin an effort, but the path
+          // is wired for forward-compat — a codex-routed title with an
+          // effort override must land in assistantConfig.modelReasoningEffort
+          // (the field codex actually reads), not the un-routed `effort`
+          // key that codex silently ignores.
           if (spec.effort !== undefined) {
-            titleAssistantConfig = { ...(assistantConfig ?? {}), effort: spec.effort };
+            const routed = routeEffortToProvider(spec.effort, spec.provider);
+            if (routed.assistantConfigPatch) {
+              titleAssistantConfig = {
+                ...(assistantConfig ?? {}),
+                ...routed.assistantConfigPatch,
+              };
+            } else if (routed.nodeConfigEffort !== undefined) {
+              // For providers whose effort lives on nodeConfig (claude, pi),
+              // we don't have a nodeConfig here (titles are a direct send),
+              // so the value is simply dropped. This matches the prior
+              // behavior; a future per-tier effort UX for titles can wire
+              // it through nodeConfig when warranted.
+            }
           }
         }
       } catch (resolverErr) {

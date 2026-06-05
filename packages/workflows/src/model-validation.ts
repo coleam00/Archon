@@ -227,3 +227,59 @@ export function resolveModelSpec(profile: ResolvedAiProfile, ref: string): Resol
 export function isLiteralSpec(spec: ResolvedModelSpec): spec is { literal: string } {
   return 'literal' in spec;
 }
+
+/**
+ * Routing decision for where a resolved preset's `effort` value lands on the
+ * provider-specific request shape. Returned as a patch object the caller
+ * merges into `nodeConfig` / `assistantConfig` — keeps the caller free of
+ * provider-id switches.
+ *
+ * The value is a raw `low`/`medium`/`high`/`max`/`xhigh` string; adapters
+ * (Pi/Copilot) handle any further value remap (e.g. `max → xhigh`)
+ * downstream. This function is the ONLY place in the workflows package
+ * that decides which field to populate.
+ *
+ * Centralized here (model-validation.ts) so the workflow path
+ * (`dag-executor`), the chat path (`orchestrator-agent`), and the title path
+ * (`title-generator`) all share one source of truth — three callers with
+ * divergent effort-field choices would silently break cross-provider
+ * effort routing for some users.
+ */
+export function routeEffortToProvider(
+  effort: string,
+  provider: string
+): { nodeConfigEffort?: string; assistantConfigPatch?: Record<string, unknown> } {
+  switch (provider) {
+    case 'claude':
+      // Claude: nodeConfig.effort (Archon enum is a subset of Claude's).
+      return { nodeConfigEffort: effort };
+    case 'codex':
+      // Codex: assistantConfig.modelReasoningEffort. Codex has no `max`;
+      // remap to `xhigh` here so the SDK accepts it. Per OpenAI docs,
+      // `xhigh` is model-gated — the SDK will reject it for unsupported
+      // models, which is the correct failure mode.
+      return {
+        assistantConfigPatch: {
+          modelReasoningEffort: effort === 'max' ? 'xhigh' : effort,
+        },
+      };
+    case 'pi':
+      // Pi: nodeConfig.effort. The Pi provider's `resolvePiThinkingLevel`
+      // does the `max → xhigh` remap downstream.
+      return { nodeConfigEffort: effort };
+    case 'copilot':
+      // Copilot: assistantConfigPatch with `reasoningEffort` (camelCase).
+      // Copilot's `resolveCopilotReasoning` does the `max → xhigh` remap
+      // downstream. Use the assistantConfig channel because Copilot
+      // doesn't expose `effort` on its nodeConfig schema.
+      return {
+        assistantConfigPatch: {
+          reasoningEffort: effort === 'max' ? 'xhigh' : effort,
+        },
+      };
+    default:
+      // Unknown / community provider — fall through with nodeConfig.effort.
+      // Provider's own translator will decide what to do with it.
+      return { nodeConfigEffort: effort };
+  }
+}

@@ -1188,6 +1188,150 @@ describe('discoverAllWorkflows — remote sync', () => {
       capsMock.mockReturnValue({ envInjection: true });
     }
   });
+
+  // ─── Chat tier resolution (Issue #1872) ───────────────────────────────
+  // The PR adds a 35-line tier-resolution block to `handleMessage` that
+  // overrides the conversation's provider/model/effort with the values
+  // resolved from the user's `tiers:` config. These tests guard the four
+  // observable behaviors (per test-coverage F1).
+  describe('handleMessage — chat tier resolution (Issue #1872)', () => {
+    beforeEach(() => {
+      // Re-establish the safe defaults that the parent beforeEach sets up,
+      // THEN apply per-test overrides via mockResolvedValueOnce. We must
+      // NOT call mockReset() here — that wipes the parent's
+      // implementation and breaks subsequent test files in the run.
+      mockLoadConfig.mockImplementation(() =>
+        Promise.resolve({
+          assistants: { claude: {}, codex: {} },
+          envVars: {},
+        })
+      );
+      mockSendQuery.mockClear();
+    });
+
+    test('routes chat to the resolved tier provider/model (cross-provider remap)', async () => {
+      mockGetOrCreateConversation.mockReturnValueOnce(
+        Promise.resolve(makeConversation({ ai_assistant_type: 'claude' }))
+      );
+      // User has `tiers.large` overriding the conversation's claude default
+      // to codex/gpt-5.5 with effort 'high'. The chat must route to codex.
+      mockLoadConfig.mockResolvedValueOnce({
+        assistants: { claude: {}, codex: {} },
+        tiers: {
+          large: { provider: 'codex', model: 'gpt-5.5', effort: 'high' },
+        },
+      });
+
+      const platform = makePlatform();
+      await handleMessage(platform, 'conv-1', 'Hello');
+
+      // The client was built AFTER tier resolution (F1 fix). Verify the
+      // outbound call went through the resolved provider (codex), not
+      // the conversation's original provider (claude). The mock
+      // getAgentProvider returns the same `mockSendQuery` either way, so
+      // the assertion is on the request shape: model + assistantConfig.
+      expect(mockSendQuery).toHaveBeenCalled();
+      const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
+      expect(requestOptions.model).toBe('gpt-5.5');
+      // Codex routes effort into assistantConfig.modelReasoningEffort
+      // (per `routeEffortToProvider`), NOT the un-routed `effort` key.
+      const assistantConfig = requestOptions.assistantConfig as Record<string, unknown>;
+      expect(assistantConfig?.modelReasoningEffort).toBe('high');
+    });
+
+    test('falls through to conversation defaults when no tiers configured', async () => {
+      mockGetOrCreateConversation.mockReturnValueOnce(
+        Promise.resolve(makeConversation({ ai_assistant_type: 'claude' }))
+      );
+      // No `tiers:` in the config — the resolver still has the seed
+      // (tier-defaults.json), so `large` resolves to { claude, opus }.
+      // The user's `ai_assistant_type` is claude, and the resolved
+      // provider is also claude (no cross-provider remap), so the
+      // outbound request should match the conversation's defaults:
+      // no model override, no provider remap, no per-provider effort.
+      mockLoadConfig.mockResolvedValueOnce({ assistants: { claude: {}, codex: {} } });
+
+      const platform = makePlatform();
+      await handleMessage(platform, 'conv-1', 'Hello');
+
+      const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
+      // No per-provider effort patch (the seed tier has no effort) →
+      // assistantConfig does NOT carry the codex-only modelReasoningEffort
+      // key, which is the most direct evidence that the per-provider
+      // routing branch did not run. The seed's model is the conversation
+      // default — it lands via the provider's own default-model path,
+      // not via a requestOptions.model override.
+      const assistantConfig = requestOptions.assistantConfig as Record<string, unknown>;
+      expect(assistantConfig?.modelReasoningEffort).toBeUndefined();
+    });
+
+    test('warns and falls back when the resolver throws on malformed tiers', async () => {
+      mockGetOrCreateConversation.mockReturnValueOnce(
+        Promise.resolve(makeConversation({ ai_assistant_type: 'claude' }))
+      );
+      // A tier key that is not in TIER_NAMES triggers the resolver's
+      // named-error throw — exercises the warn-and-fallback path.
+      mockLoadConfig.mockResolvedValueOnce({
+        assistants: { claude: {}, codex: {} },
+        tiers: {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          invalid: { provider: 'claude', model: 'opus' },
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        } as any,
+      });
+
+      const platform = makePlatform();
+      await handleMessage(platform, 'conv-1', 'Hello');
+
+      // The warn log fires with the conversationId for post-mortem
+      // correlation. The chat then falls through to conversation defaults
+      // (no model override on the request).
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ conversationId: 'conv-1' }),
+        'chat.tier_resolve_failed_falling_back'
+      );
+      const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
+      expect(requestOptions.model).toBeUndefined();
+    });
+
+    test('uses resolved chatAssistantType (not providerKey) for env-injection capability check', async () => {
+      // Regression guard: when the tier remap routes a chat from claude
+      // to codex, the env-injection capability check must use the
+      // RESOLVED provider (codex), not the conversation's original
+      // provider (claude). codex has envInjection=false, claude has true.
+      // If the lookup used the wrong provider, the warning would not
+      // fire and a user setting env vars would silently have them ignored.
+      const providers = await import('@archon/providers');
+      const capsMock = providers.getProviderCapabilities as ReturnType<typeof mock>;
+      capsMock.mockImplementation((p: string) =>
+        p === 'claude' ? { envInjection: true } : { envInjection: false }
+      );
+      mockGetOrCreateConversation.mockReturnValueOnce(
+        Promise.resolve(makeConversation({ ai_assistant_type: 'claude' }))
+      );
+      mockLoadConfig.mockResolvedValueOnce({
+        assistants: { claude: {}, codex: {} },
+        envVars: { TEST_VAR: 'x' },
+        tiers: {
+          large: { provider: 'codex', model: 'gpt-5.5', effort: 'high' },
+        },
+      });
+
+      try {
+        const platform = makePlatform();
+        await handleMessage(platform, 'conv-1', 'Hello');
+
+        // Warning should fire for codex (the resolved provider, not the
+        // conversation's claude), proving the lookup used chatAssistantType.
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          expect.objectContaining({ provider: 'codex' }),
+          'orchestrator.unsupported_env_injection'
+        );
+      } finally {
+        capsMock.mockReturnValue({ envInjection: true });
+      }
+    });
+  });
 });
 
 // ─── Workflow dispatch routing — interactive flag ─────────────────────────────

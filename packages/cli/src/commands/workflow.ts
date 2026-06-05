@@ -846,7 +846,8 @@ export async function workflowRunCommand(
         titleAssistantType,
         workingCwd,
         workflowName,
-        titleAssistantConfig
+        titleAssistantConfig,
+        workflowConfig ?? undefined
       );
     } catch (error) {
       getLog().warn(

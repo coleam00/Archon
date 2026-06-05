@@ -1767,11 +1767,20 @@ export function registerApiRoutes(
 
         // Generate proper AI title for non-command messages (fire-and-forget, overwrites placeholder)
         if (!message.startsWith('/')) {
+          // Load config so the title generator can resolve the `small` tier
+          // (Issue #1872). Fire-and-forget, so we don't await — the call
+          // still happens asynchronously, but the merged config is captured
+          // eagerly on this tick to avoid a race where the chat path
+          // finishes before the title path loads its config.
+          const titleConfig = await loadConfig();
           void generateAndSetTitle(
             conversation.id,
             message,
             conversation.ai_assistant_type,
-            getArchonWorkspacesPath()
+            getArchonWorkspacesPath(),
+            undefined,
+            undefined,
+            titleConfig
           );
         }
 
@@ -2393,12 +2402,17 @@ export function registerApiRoutes(
         }
         webAdapter.setConversationDbId(conversationId, conv.id);
         if (!conv.title) {
+          // Load config so the title generator can resolve the `small` tier
+          // (Issue #1872). See matching comment in the /message handler above.
+          const titleConfig = await loadConfig();
           void generateAndSetTitle(
             conv.id,
             message,
             conv.ai_assistant_type,
             getArchonWorkspacesPath(),
-            workflowName
+            workflowName,
+            undefined,
+            titleConfig
           );
         }
       }
