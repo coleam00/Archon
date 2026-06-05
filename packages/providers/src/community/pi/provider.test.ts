@@ -1141,7 +1141,7 @@ describe('PiProvider', () => {
     expect(caps.sessionResume).toBe(true);
     expect(caps.envInjection).toBe(true);
     // Best-effort structured output via prompt engineering (not SDK-enforced).
-    expect(caps.structuredOutput).toBe(true);
+    expect(caps.structuredOutput).toBe('best-effort');
     // Still false:
     expect(caps.mcp).toBe(false);
     expect(caps.hooks).toBe(false);

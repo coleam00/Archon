@@ -490,9 +490,16 @@ describe('tryParseStructuredOutput', () => {
     expect(tryParseStructuredOutput(withExample)).toBeUndefined();
   });
 
-  test('returns undefined on malformed JSON', () => {
+  test('returns undefined on malformed JSON with no key/value structure', () => {
+    // No `:` → not object-shaped, so tier-3 repair is not attempted (stays undefined).
     expect(tryParseStructuredOutput('{not valid}')).toBeUndefined();
-    expect(tryParseStructuredOutput('{"unclosed":')).toBeUndefined();
+    expect(tryParseStructuredOutput('{"key" "value"}')).toBeUndefined();
+  });
+
+  test('tier 3 recovers a max_tokens-truncated object', () => {
+    // `{"unclosed":` is a token-capped tail; jsonrepair closes it with a null value.
+    // Wrong-but-object → the dag-executor's schema validation rejects it downstream.
+    expect(tryParseStructuredOutput('{"unclosed":')).toEqual({ unclosed: null });
   });
 
   test('preserves backticks inside JSON string values', () => {

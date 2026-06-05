@@ -33,6 +33,14 @@ export {
 // Error
 export { UnknownProviderError } from './errors';
 
+// Shared structured-output helpers (cross-provider; the dag-executor validates
+// every provider's output_format result against the declared schema).
+export {
+  validateStructuredOutput,
+  formatSchemaErrors,
+  type StructuredValidationResult,
+} from './shared/structured-output';
+
 // Provider classes
 export { ClaudeProvider } from './claude/provider';
 export { CodexProvider } from './codex/provider';

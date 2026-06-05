@@ -80,7 +80,7 @@ describe('CodexProvider', () => {
         skills: true,
         agents: false,
         toolRestrictions: false,
-        structuredOutput: true,
+        structuredOutput: 'enforced',
         envInjection: true,
         costControl: false,
         effortControl: false,

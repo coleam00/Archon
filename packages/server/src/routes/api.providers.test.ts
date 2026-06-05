@@ -213,12 +213,17 @@ describe('GET /api/providers', () => {
   test('capabilities have expected boolean fields', async () => {
     const response = await app.request('/api/providers');
     const body = (await response.json()) as {
-      providers: { capabilities: Record<string, boolean> }[];
+      providers: {
+        capabilities: Record<string, boolean> & {
+          structuredOutput: 'enforced' | 'best-effort' | false;
+        };
+      }[];
     };
     const caps = body.providers[0].capabilities;
     expect(typeof caps.sessionResume).toBe('boolean');
     expect(typeof caps.mcp).toBe('boolean');
     expect(typeof caps.hooks).toBe('boolean');
-    expect(typeof caps.structuredOutput).toBe('boolean');
+    // structuredOutput is the tiered union, not a boolean.
+    expect(['enforced', 'best-effort', false]).toContain(caps.structuredOutput);
   });
 });

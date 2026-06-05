@@ -33,6 +33,8 @@
     "@opencode-ai/sdk": "^1.14.20",
     "@openai/codex-sdk": "^0.125.0",
     "@sinclair/typebox": "^0.34.41",
+    "ajv": "^8.20.0",
+    "jsonrepair": "^3.14.0",
     "zod": "^4.0.0"
   },
   "devDependencies": {
