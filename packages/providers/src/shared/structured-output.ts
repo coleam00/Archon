@@ -9,16 +9,15 @@
  *   2. After the run completes, parse the accumulated assistant transcript
  *      (`tryParseStructuredOutput`).
  *
- * When parsing fails it returns `undefined`. The dag-executor treats a node that
- * declared `output_format` but produced no parseable structured output as a
- * FAILED node (fail-fast) — it no longer degrades silently to a warning. (A
- * bounded validate-and-reask loop for best-effort providers lands in PR 2; until
- * then both tiers fail fast.)
+ * When parsing fails it returns `undefined`. For a node that declared
+ * `output_format`, the dag-executor re-asks best-effort providers up to 3× (with
+ * the schema errors appended) and then FAILS the node — it no longer degrades
+ * silently to a warning. Enforced providers fail fast (no reask).
  *
  * This module also owns the cross-provider validation layer the dag-executor
  * runs for EVERY provider (enforced and best-effort): `validateStructuredOutput()`
  * checks a parsed value against the node's declared JSON Schema (ajv), and
- * `formatSchemaErrors()` renders the failures for logs (and PR 2's reask prompts).
+ * `formatSchemaErrors()` renders the failures for logs and the reask prompts.
  */
 // Direct `ajv` / `jsonrepair` imports (not via @hono/zod-openapi): @archon/providers
 // is an SDK-deps-only leaf package that must not pull in Hono. Precedent: the

@@ -402,7 +402,7 @@ nodes:
 
 - The output is captured as a JSON string and available via `$classify.output` (full JSON) or `$classify.output.type` (field access)
 - Use `output_format` when downstream nodes need to branch on specific values via `when:`
-- **Validated + fail-fast.** The parsed output is validated against your schema for *every* provider (a net for refusals / `max_tokens` truncation that bypass even SDK enforcement). A node that declares `output_format` but returns no schema-valid output **fails** — it no longer completes-with-prose and silently feeds `''` downstream.
+- **Validated + reask + fail-fast.** The parsed output is validated against your schema for *every* provider (a net for refusals / `max_tokens` truncation that bypass even SDK enforcement). On a miss, best-effort providers (Pi/Copilot) re-ask up to 3× with the schema errors appended; enforced providers fail immediately. A node that declares `output_format` but still has no schema-valid output **fails** — it no longer completes-with-prose and silently feeds `''` downstream.
 - **Field access is strict.** `$classify.output.type` resolves only when `type` is in the schema. A reference to a field **not declared** in the schema fails the consuming node (a typo no longer silently becomes `''`); a field you declared **optional** but the model omitted resolves to `''`. For schemaless `bash`/`script` nodes, a `.field` ref requires the output to be JSON containing that key — otherwise the consuming node fails, so always emit every key you reference (or use whole-text `$node.output`).
 
 ### `allowed_tools` and `denied_tools` for Tool Restrictions

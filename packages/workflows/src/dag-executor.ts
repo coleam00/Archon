@@ -249,6 +249,14 @@ const DEFAULT_NODE_MAX_RETRIES = 2;
 const DEFAULT_NODE_RETRY_DELAY_MS = 3000;
 
 /**
+ * Max validate-and-reask attempts for a `best-effort` provider whose structured
+ * output fails schema validation (separate from transient-error retries above).
+ * Enforced providers don't reask — a validation failure there is a genuine edge
+ * (refusal / max_tokens truncation) and fails fast.
+ */
+const STRUCTURED_OUTPUT_MAX_REASKS = 3;
+
+/**
  * Get effective retry config for a DAG node.
  */
 function getEffectiveNodeRetryConfig(node: DagNode): {
@@ -799,9 +807,32 @@ async function executeNodeInternal(
   const effectiveIdleTimeout = node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS;
   let lastToolStartedAt: { toolName: string; startedAt: number } | null = null;
 
-  try {
+  // Best-effort providers (Pi/Copilot) get a bounded validate-and-reask loop: on a
+  // structured-output validation miss, re-run the stream with the schema errors
+  // appended. Enforced providers and non-output_format nodes get 0 reasks.
+  const maxReasks =
+    getProviderCapabilities(provider).structuredOutput === 'best-effort' &&
+    nodeOptions?.outputFormat
+      ? STRUCTURED_OUTPUT_MAX_REASKS
+      : 0;
+  let accumulatedCostUsd: number | undefined;
+
+  // One sendQuery stream pass. Resets the per-attempt accumulators it mutates
+  // (output text, structured output, the batched-message buffer, per-pass cost,
+  // idle-timeout flag) so a prior reask attempt's state never leaks into this one,
+  // then streams. Throws on SDK error / budget cap (propagates to the outer catch
+  // — those failures are never reasked).
+  const runStreamPass = async (
+    attemptPrompt: string,
+    attemptResumeId: string | undefined
+  ): Promise<void> => {
+    nodeOutputText = '';
+    structuredOutput = undefined;
+    batchMessages.length = 0; // else a failed attempt's prose flushes during reask
+    nodeCostUsd = undefined;
+    nodeIdleTimedOut = false;
     for await (const msg of withIdleTimeout(
-      aiClient.sendQuery(finalPrompt, cwd, resumeSessionId, nodeOptionsWithAbort),
+      aiClient.sendQuery(attemptPrompt, cwd, attemptResumeId, nodeOptionsWithAbort),
       effectiveIdleTimeout,
       () => {
         nodeIdleTimedOut = true;
@@ -1085,23 +1116,73 @@ async function executeNodeInternal(
       }
       // rate_limit chunks: already log.warn'd in claude.ts; not surfaced to SSE per design
     }
+  };
 
-    // When output_format is set and the provider returned structured_output,
-    // use it instead of the concatenated assistant text (which includes prose).
-    // Each provider normalizes its own structured output onto the result chunk —
-    // no provider-specific branching here.
-    if (nodeOptions?.outputFormat) {
+  // Build a reask prompt: the original prompt + a correction block listing the
+  // schema errors. The provider still augments with the JSON schema itself
+  // (best-effort providers add their own JSON-only instruction), so this only
+  // appends the per-attempt feedback.
+  const buildReaskPrompt = (errors: string[]): string =>
+    `${finalPrompt}\n\n--- CORRECTION ---\n` +
+    `Your previous response did not satisfy the required JSON schema: ${errors.join('; ')}. ` +
+    'Respond again with ONLY a JSON object matching the schema — no prose, no code fences.';
+
+  // Observability: log every reask; notify the user once (first reask) so a
+  // best-effort provider being auto-corrected isn't invisible.
+  const emitReask = async (attempt: number): Promise<void> => {
+    getLog().warn(
+      { nodeId: node.id, workflowRunId: workflowRun.id, attempt, maxReasks },
+      'dag.structured_output_reask'
+    );
+    if (attempt === 1) {
+      await safeSendMessage(
+        platform,
+        conversationId,
+        `⚠️ Node \`${node.id}\`: structured output didn't match the schema — asking the model to correct it (up to ${maxReasks} attempt(s)).`,
+        nodeContext
+      );
+    }
+  };
+
+  try {
+    // Validate-and-reask loop. Enforced / non-output_format nodes run exactly once
+    // (maxReasks = 0). A best-effort node whose structured output is missing or
+    // schema-invalid is re-run with the errors appended, up to maxReasks times;
+    // exhaustion (or a non-best-effort failure) throws → failed node.
+    let reaskAttempt = 0;
+    let reaskPrompt = finalPrompt;
+    // Set up the next reask attempt (increment, augment the prompt, notify).
+    const scheduleReask = async (errors: string[]): Promise<void> => {
+      reaskAttempt++;
+      reaskPrompt = buildReaskPrompt(errors);
+      await emitReask(reaskAttempt);
+    };
+    while (true) {
+      // Fresh session per reask attempt (resume only the original session on the
+      // first pass) so a prior invalid turn isn't carried forward.
+      await runStreamPass(reaskPrompt, reaskAttempt === 0 ? resumeSessionId : undefined);
+      if (nodeCostUsd !== undefined) {
+        accumulatedCostUsd = (accumulatedCostUsd ?? 0) + nodeCostUsd;
+      }
+      // Carry the running total onto nodeCostUsd every pass so the exhaustion throw
+      // paths (which jump straight to the outer catch) report cost across ALL reask
+      // attempts, not just the last pass. runStreamPass clears it next iteration.
+      nodeCostUsd = accumulatedCostUsd;
+
+      // When output_format is set and the provider returned structured_output, use
+      // it instead of the concatenated assistant text. Each provider normalizes its
+      // own structured output onto the result chunk — no provider branching here.
+      if (!nodeOptions?.outputFormat) break;
+
+      // Don't reask after an idle-timeout/abort — those are genuine failures, not
+      // validation misses; they fall through to a cause-specific throw below.
+      const canReask =
+        reaskAttempt < maxReasks && !nodeIdleTimedOut && !nodeAbortController.signal.aborted;
+
       if (structuredOutput !== undefined) {
-        // Validate the parsed structured output against the declared schema for
-        // EVERY provider, not just best-effort ones. SDK-enforced providers
-        // (Claude/Codex/OpenCode) still bypass grammar-constrained decoding on a
-        // refusal or max_tokens truncation, so this is their net too. The
-        // author's schema is validated as written (optional stays optional;
-        // additionalProperties not required).
-        //
-        // If ajv can't compile the schema, validation fails SAFE (treated valid)
-        // — but a schema that can't be enforced is surfaced to the user, not
-        // just logged, so it doesn't pass silently.
+        // Validate against the declared schema for EVERY provider — SDK-enforced
+        // ones still bypass grammar-constrained decoding on a refusal / max_tokens
+        // truncation. Fail-SAFE on an uncompilable schema, but surface it.
         let schemaCompileError: string | undefined;
         const validation = validateStructuredOutput(
           structuredOutput,
@@ -1122,46 +1203,55 @@ async function executeNodeInternal(
             nodeContext
           );
         }
-        if (!validation.valid) {
-          // Fail loudly. No silent degrade. (The bounded reask loop for
-          // best-effort providers lands in PR 2; for now both tiers fail fast on
-          // an invalid payload, routed through the catch below → failed node.)
-          getLog().warn(
-            { nodeId: node.id, workflowRunId: workflowRun.id, errors: validation.errors },
-            'dag.structured_output_invalid'
-          );
-          throw new Error(
-            `Node '${node.id}': output_format declared but the provider's structured output failed schema validation: ${validation.errors.join('; ')}`
-          );
+        if (validation.valid) {
+          try {
+            nodeOutputText =
+              typeof structuredOutput === 'string'
+                ? structuredOutput
+                : JSON.stringify(structuredOutput);
+          } catch (serializeErr) {
+            const err = serializeErr as Error;
+            throw new Error(
+              `Node '${node.id}': failed to serialize structured_output to JSON: ${err.message}`
+            );
+          }
+          getLog().debug({ nodeId: node.id, streamingMode }, 'dag.structured_output_override');
+          break;
         }
-        try {
-          nodeOutputText =
-            typeof structuredOutput === 'string'
-              ? structuredOutput
-              : JSON.stringify(structuredOutput);
-        } catch (serializeErr) {
-          const err = serializeErr as Error;
-          throw new Error(
-            `Node '${node.id}': failed to serialize structured_output to JSON: ${err.message}`
-          );
-        }
-        getLog().debug({ nodeId: node.id, streamingMode }, 'dag.structured_output_override');
-      } else {
-        // Fail-fast: output_format was declared but the provider returned no
-        // structured payload at all (prose, refusal, parse miss). Previously this
-        // warned-and-completed, letting a poisoned-but-green node feed `''` to
-        // every downstream `$node.output.field`. That silent degrade is the bug
-        // this plan removes. Throw → routed to the catch below → failed node the
-        // author can see and fix.
+        // Invalid payload.
         getLog().warn(
-          { nodeId: node.id, workflowRunId: workflowRun.id },
-          'dag.structured_output_missing'
+          { nodeId: node.id, workflowRunId: workflowRun.id, errors: validation.errors },
+          'dag.structured_output_invalid'
         );
+        if (canReask) {
+          await scheduleReask(validation.errors);
+          continue;
+        }
         throw new Error(
-          `Node '${node.id}': output_format declared but the provider returned no schema-valid structured output. ` +
-            'The model likely replied with prose, refused, or emitted unparseable JSON.'
+          `Node '${node.id}': output_format declared but the provider's structured output failed schema validation: ${validation.errors.join('; ')}`
         );
       }
+
+      // No structured output at all (prose / refusal / parse miss / timeout).
+      getLog().warn(
+        { nodeId: node.id, workflowRunId: workflowRun.id },
+        'dag.structured_output_missing'
+      );
+      if (canReask) {
+        await scheduleReask(['no JSON object was found in the response']);
+        continue;
+      }
+      // Surface the real cause: a timeout/abort produces no structured output too,
+      // and reporting it as "the model replied with prose" would mislead.
+      if (nodeIdleTimedOut) {
+        throw new Error(
+          `Node '${node.id}': timed out (no output for ${String(effectiveIdleTimeout / 60000)} min) before producing the required structured output.`
+        );
+      }
+      throw new Error(
+        `Node '${node.id}': output_format declared but the provider returned no schema-valid structured output. ` +
+          'The model likely replied with prose, refused, or emitted unparseable JSON.'
+      );
     }
 
     // Only post "completed via idle timeout" when output exists — zero-output timeout falls through to the empty-output guard below.

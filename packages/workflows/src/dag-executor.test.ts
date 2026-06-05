@@ -38,9 +38,13 @@ mock.module('@archon/paths', () => ({
 }));
 
 // --- Bootstrap provider registry (after path mocks, before dag-executor import) ---
-import { registerBuiltinProviders, clearRegistry } from '@archon/providers';
+import { registerBuiltinProviders, registerPiProvider, clearRegistry } from '@archon/providers';
 clearRegistry();
 registerBuiltinProviders();
+// Pi is a community provider (best-effort structured output) — register it so the
+// reask-loop tests can resolve `getProviderCapabilities('pi')` to 'best-effort'.
+// deps.getAgentProvider is mocked, so the real Pi SDK is never loaded.
+registerPiProvider();
 
 // --- Imports (after mocks) ---
 import {
@@ -5839,6 +5843,301 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
     const errMsg = ((runmeFailed![0] as Record<string, unknown>).data as Record<string, unknown>)
       .error as string;
     expect(errMsg).toContain('not declared in node');
+  });
+
+  it('best-effort provider: malformed-then-fixed structured output recovers within reasks', async () => {
+    // Attempt 1 returns structured output missing the required `verdict`; the reask
+    // loop re-runs and attempt 2 returns valid output → node COMPLETES (not failed).
+    // Costs accumulate across both attempts.
+    mockSendQueryDag.mockImplementationOnce(function* () {
+      yield { type: 'result', sessionId: 's1', structuredOutput: { other: 'x' }, cost: 0.01 };
+    });
+    mockSendQueryDag.mockImplementation(function* () {
+      yield {
+        type: 'result',
+        sessionId: 's2',
+        structuredOutput: { verdict: 'review' },
+        cost: 0.02,
+      };
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'reask-recover',
+        nodes: [
+          {
+            id: 'classify',
+            prompt: 'decide',
+            provider: 'pi',
+            output_format: {
+              type: 'object',
+              properties: { verdict: { type: 'string' } },
+              required: ['verdict'],
+            },
+            retry: { max_attempts: 0 },
+          },
+        ],
+      },
+      workflowRun,
+      'pi',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      { ...minimalConfig, assistant: 'pi' }
+    );
+
+    // sendQuery ran twice (original + 1 reask); node completed, not failed.
+    expect(mockSendQueryDag.mock.calls.length).toBe(2);
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const completed = eventCalls.filter(
+      (call: unknown[]) =>
+        (call[0] as Record<string, unknown>).event_type === 'node_completed' &&
+        (call[0] as Record<string, unknown>).step_name === 'classify'
+    );
+    const failed = eventCalls.filter(
+      (call: unknown[]) => (call[0] as Record<string, unknown>).event_type === 'node_failed'
+    );
+    expect(completed.length).toBe(1);
+    expect(failed.length).toBe(0);
+    // Cost accumulates across both attempts (0.01 + 0.02), not just the last pass.
+    const cost = ((completed[0][0] as Record<string, unknown>).data as Record<string, unknown>)
+      .cost_usd as number;
+    expect(cost).toBeCloseTo(0.03, 5);
+  });
+
+  it('best-effort provider: reask exhaustion fails loudly', async () => {
+    // Every attempt returns invalid structured output → fail after 1 + maxReasks (3) tries.
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'result', sessionId: 's', structuredOutput: { other: 'x' } };
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'reask-exhaust',
+        nodes: [
+          {
+            id: 'classify',
+            prompt: 'decide',
+            provider: 'pi',
+            output_format: {
+              type: 'object',
+              properties: { verdict: { type: 'string' } },
+              required: ['verdict'],
+            },
+            retry: { max_attempts: 0 },
+          },
+        ],
+      },
+      workflowRun,
+      'pi',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      { ...minimalConfig, assistant: 'pi' }
+    );
+
+    // 1 initial + 3 reasks = 4 sendQuery calls, then fail-fast.
+    expect(mockSendQueryDag.mock.calls.length).toBe(4);
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const failed = eventCalls.find(
+      (call: unknown[]) => (call[0] as Record<string, unknown>).event_type === 'node_failed'
+    );
+    expect(failed).toBeDefined();
+    const errMsg = ((failed![0] as Record<string, unknown>).data as Record<string, unknown>)
+      .error as string;
+    expect(errMsg).toContain('failed schema validation');
+  });
+
+  it('enforced provider does NOT reask on a validation miss (exactly one sendQuery)', async () => {
+    // Claude is 'enforced' → maxReasks = 0. A validation miss must fail on the
+    // FIRST pass — a regressed gate would silently make 4 API calls per miss.
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'result', sessionId: 's', structuredOutput: { other: 'x' } };
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'enforced-no-reask',
+        nodes: [
+          {
+            id: 'classify',
+            prompt: 'decide',
+            provider: 'claude',
+            output_format: {
+              type: 'object',
+              properties: { verdict: { type: 'string' } },
+              required: ['verdict'],
+            },
+            retry: { max_attempts: 0 },
+          },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(mockSendQueryDag.mock.calls.length).toBe(1);
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const failed = eventCalls.find(
+      (call: unknown[]) => (call[0] as Record<string, unknown>).event_type === 'node_failed'
+    );
+    expect(failed).toBeDefined();
+  });
+
+  it('best-effort provider: MISSING structured output triggers reask and recovers', async () => {
+    // Attempt 1 returns prose with no structuredOutput; attempt 2 returns valid JSON.
+    mockSendQueryDag.mockImplementationOnce(function* () {
+      yield { type: 'assistant', content: 'Sure, here you go.' };
+      yield { type: 'result', sessionId: 's1' };
+    });
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'result', sessionId: 's2', structuredOutput: { verdict: 'review' } };
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'reask-missing',
+        nodes: [
+          {
+            id: 'classify',
+            prompt: 'decide',
+            provider: 'pi',
+            output_format: {
+              type: 'object',
+              properties: { verdict: { type: 'string' } },
+              required: ['verdict'],
+            },
+            retry: { max_attempts: 0 },
+          },
+        ],
+      },
+      workflowRun,
+      'pi',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      { ...minimalConfig, assistant: 'pi' }
+    );
+
+    expect(mockSendQueryDag.mock.calls.length).toBe(2);
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const completed = eventCalls.filter(
+      (call: unknown[]) =>
+        (call[0] as Record<string, unknown>).event_type === 'node_completed' &&
+        (call[0] as Record<string, unknown>).step_name === 'classify'
+    );
+    expect(completed.length).toBe(1);
+  });
+
+  it('best-effort provider: idle-timeout on an output_format node does NOT reask', async () => {
+    // Generator hangs → idle_timeout fires → abort. canReask is false (timed out),
+    // so exactly one sendQuery and the failure names the timeout, not "prose".
+    mockSendQueryDag.mockImplementation(async function* (
+      _prompt: string,
+      _cwd: string,
+      _resumeSessionId?: string,
+      options?: { abortSignal?: AbortSignal }
+    ) {
+      await new Promise<void>(resolve => {
+        if (options?.abortSignal?.aborted) resolve();
+        else options?.abortSignal?.addEventListener('abort', () => resolve(), { once: true });
+      });
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'reask-idle',
+        nodes: [
+          {
+            id: 'classify',
+            prompt: 'decide',
+            provider: 'pi',
+            idle_timeout: 50,
+            output_format: {
+              type: 'object',
+              properties: { verdict: { type: 'string' } },
+              required: ['verdict'],
+            },
+            retry: { max_attempts: 0 },
+          },
+        ],
+      },
+      workflowRun,
+      'pi',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      { ...minimalConfig, assistant: 'pi' }
+    );
+
+    expect(mockSendQueryDag.mock.calls.length).toBe(1);
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const failed = eventCalls.find(
+      (call: unknown[]) => (call[0] as Record<string, unknown>).event_type === 'node_failed'
+    );
+    expect(failed).toBeDefined();
+    const errMsg = ((failed![0] as Record<string, unknown>).data as Record<string, unknown>)
+      .error as string;
+    expect(errMsg).toContain('timed out');
   });
 
   it('idle-timeout WITH output produces node_completed and sends warning, not node_failed', async () => {
