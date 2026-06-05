@@ -46,14 +46,31 @@ const REVENUE_LINES = [
   { name: 'AccuFit', composite: 20, marketability: 6, readiness: 7, cycleSpeed: 7 },
 ];
 
-// Pipeline-stage funnel (synthesized from current state)
-const PIPELINE_FUNNEL = [
-  { stage: 'Sequence sent', count: 376 },
-  { stage: 'Opened', count: 103 },
-  { stage: 'Replied', count: 8 },
-  { stage: 'Discovery booked', count: 3 },
-  { stage: 'Audit closed', count: 0 },
-];
+// Pipeline-stage funnel — computed live from playgroundData.sequences + dial-tracker.
+// Audit closed is intentionally a manual roll-up — wire to a vault file once we lock format.
+function buildPipelineFunnel(): { stage: string; count: number }[] {
+  const seqs = (playgroundData.sequences ?? []) as {
+    sent?: number;
+    opened?: number;
+    replied?: number;
+  }[];
+  const sent = seqs.reduce((a, s) => a + (s.sent ?? 0), 0);
+  const opened = seqs.reduce((a, s) => a + (s.opened ?? 0), 0);
+  const replied = seqs.reduce((a, s) => a + (s.replied ?? 0), 0);
+  // Discovery booked: count of dial-tracker entries with `interested` outcome
+  // (sourced from playgroundData when present; fall back to KPI target ratio if absent).
+  const discoveryBooked =
+    (playgroundData.kpis as { discovery_booked?: number }).discovery_booked ??
+    playgroundData.kpis.meetings_this_week ??
+    0;
+  return [
+    { stage: 'Sequence sent', count: sent },
+    { stage: 'Opened', count: opened },
+    { stage: 'Replied', count: replied },
+    { stage: 'Discovery booked', count: discoveryBooked },
+    { stage: 'Audit closed', count: 0 },
+  ];
+}
 
 // Pillar mix — PMC service offering
 const PMC_PILLARS = [
@@ -124,6 +141,14 @@ export function PMCPage(): React.ReactElement {
   const pmcProspects: BusinessProspect[] = (
     (prospectsData.by_business as Record<string, BusinessProspect[]>).PMC ?? []
   ).slice(0, 9);
+
+  // Live pipeline funnel built from playground data + dial-tracker.
+  const pipelineFunnel = buildPipelineFunnel();
+
+  // Stale-data warning: if playground.generated_at older than 6h, surface it.
+  const generatedAt = new Date(playgroundData.generated_at);
+  const hoursStale = (Date.now() - generatedAt.getTime()) / (1000 * 60 * 60);
+  const isStale = hoursStale > 6;
 
   // Build a gauge value for the first-meetings target
   const meetingsGaugeData = [
@@ -274,14 +299,16 @@ export function PMCPage(): React.ReactElement {
               >
                 Pipeline funnel — Apollo to audit close
               </h3>
-              <span className="text-[10px] text-text-tertiary">Live Apollo + Calendly</span>
+              <span className="text-[10px] text-text-tertiary">
+                Live · {playgroundData.sequences?.length ?? 0} sequences aggregated
+              </span>
             </div>
             <p className="mb-3 text-[11px] text-text-tertiary">
               Stage drop-offs reveal the lever — opens-to-replies is the biggest gap.
             </p>
             <div style={{ height: 260 }}>
               <ResponsiveContainer>
-                <BarChart data={PIPELINE_FUNNEL} layout="vertical" margin={{ left: 20 }}>
+                <BarChart data={pipelineFunnel} layout="vertical" margin={{ left: 20 }}>
                   <CartesianGrid stroke="oklch(0.88 0.012 88)" horizontal={false} />
                   <XAxis type="number" stroke="oklch(0.55 0.018 255)" fontSize={11} />
                   <YAxis
@@ -301,7 +328,7 @@ export function PMCPage(): React.ReactElement {
                     }}
                   />
                   <Bar dataKey="count" radius={[0, 6, 6, 0]}>
-                    {PIPELINE_FUNNEL.map((_d, i) => (
+                    {pipelineFunnel.map((_d, i) => (
                       <Cell key={i} fill={`oklch(${0.65 - i * 0.06} 0.14 ${78 + i * 8})`} />
                     ))}
                   </Bar>
@@ -405,7 +432,16 @@ export function PMCPage(): React.ReactElement {
               Recent PMC workflow runs
             </h3>
             {pmcRuns.length === 0 ? (
-              <p className="text-xs text-text-tertiary">No PMC-scoped workflow runs yet.</p>
+              <div className="rounded-lg border border-dashed border-border bg-surface-inset p-4 text-xs">
+                <p className="text-text-secondary">No PMC-scoped workflow runs yet.</p>
+                <p className="mt-1 text-text-tertiary">
+                  Runs prefixed <code className="rounded bg-card px-1 font-mono">jid5274-</code> or{' '}
+                  <code className="rounded bg-card px-1 font-mono">pmc-</code> appear here.{' '}
+                  <Link to="/workflows" className="text-primary hover:underline">
+                    Browse all workflows →
+                  </Link>
+                </p>
+              </div>
             ) : (
               <ul className="space-y-2">
                 {pmcRuns.map(run => (
@@ -504,7 +540,12 @@ export function PMCPage(): React.ReactElement {
         <footer className="border-t border-border pt-4 text-[10px] text-text-tertiary">
           Source: <code className="font-mono">second-brain/businesses/pmc/overview.md</code> · Edit
           in Obsidian, save, dashboard hot-reloads · Last data refresh{' '}
-          {new Date(playgroundData.generated_at).toLocaleString()}
+          {generatedAt.toLocaleString()}
+          {isStale && (
+            <span className="ml-2 rounded-full border border-amber-700/40 bg-amber-100 px-2 py-0.5 font-medium text-amber-800">
+              ⚠ {Math.round(hoursStale)}h stale — playground refresh due
+            </span>
+          )}
         </footer>
       </div>
     </div>

@@ -85,7 +85,7 @@ export function StartHerePage(): React.ReactElement {
         </p>
         <div className="flex flex-wrap items-center gap-3 text-xs text-text-tertiary">
           <span>Single KPI:</span>
-          <span className="rounded-full bg-emerald-900/40 px-2 py-0.5 text-emerald-300">
+          <span className="rounded-full border border-emerald-700/40 bg-emerald-100 px-2 py-0.5 font-medium text-emerald-800">
             first meetings booked / week
           </span>
           <span>Day-30 target: 8/wk · Day-90 target: 15/wk</span>
