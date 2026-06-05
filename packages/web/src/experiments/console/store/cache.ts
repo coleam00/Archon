@@ -186,9 +186,11 @@ export function useEntity<T>(key: string, loader: () => Promise<T>): EntityView<
   // Snapshot the per-key version counter (a number bumped on every `notify`), not
   // the cached value: that way the component re-renders on the error transition too
   // — where `cache.get(key)` stays `undefined` and a value-identity snapshot would
-  // bail out, leaving `error` unread. `data`/`error`/`loading` are read from the
-  // maps below at render; the cache mutates synchronously before `notify`, so the
-  // version-triggered render always sees consistent values (no tearing).
+  // bail out, leaving `error` unread. `data`/`error`/`loading` are read fresh from
+  // the maps below on each (synchronous) render. They can briefly co-exist in
+  // intermediate states — e.g. `loading` is still true when an error first lands
+  // (`inflight` clears in a later `.finally`) — so consumers check `error` before
+  // `loading`, as the panels do.
   useSyncExternalStore(
     subscribe,
     () => versions.get(key) ?? 0,

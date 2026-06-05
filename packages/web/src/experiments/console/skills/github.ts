@@ -1,8 +1,9 @@
 import { requestJson } from '../lib/http';
 
 /**
- * Per-user GitHub identity (device flow). Multi-user installs only — `getConnection`
- * 401s when there's no web identity, which the panel reads as "solo install, hide".
+ * Per-user GitHub identity (device flow). `getConnection` 401s when there's no web
+ * identity (no Better Auth session and no X-Archon-User) — the solo-PAT state, and
+ * also a logged-out user on a web-auth install — which the panel reads as "hide".
  *
  * Response types are inlined (mirroring `server/.../auth.schemas.ts`) because the
  * device-flow schemas are not yet in `@/lib/api.generated`, and `@/lib/api` is
@@ -73,5 +74,9 @@ export function interpretPollStatus(res: GithubDevicePoll, interval: number): Po
       return res.detail !== undefined && res.detail !== ''
         ? { kind: 'failed', message: `GitHub connect failed: ${res.detail}` }
         : { kind: 'retry', nextInterval: interval + 2 };
+    default:
+      // Defensive: the inline type can lag the server. Treat an unrecognized status
+      // as a terminal failure rather than crashing the poll loop on `undefined.kind`.
+      return { kind: 'failed', message: `Unexpected GitHub poll status: ${String(res.status)}` };
   }
 }

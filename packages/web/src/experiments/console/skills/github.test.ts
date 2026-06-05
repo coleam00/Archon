@@ -55,4 +55,13 @@ describe('interpretPollStatus', () => {
       nextInterval: 7,
     });
   });
+
+  test('an unrecognized status (server/type drift) fails terminally, never undefined', () => {
+    // Simulate a server status the inlined union doesn't know about.
+    const drifted = { status: 'rate_limited' } as unknown as GithubDevicePoll;
+    expect(interpretPollStatus(drifted, 5)).toEqual({
+      kind: 'failed',
+      message: 'Unexpected GitHub poll status: rate_limited',
+    });
+  });
 });

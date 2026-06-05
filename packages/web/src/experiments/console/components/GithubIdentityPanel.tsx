@@ -8,10 +8,10 @@ import { SettingsSection } from './SettingsSection';
 type Phase = 'idle' | 'pending' | 'error';
 
 /**
- * Per-user GitHub identity, via the device flow. Multi-user installs only:
- * `GET /api/auth/github` 401s when there's no web identity (the universal
- * solo-PAT state), and we render NOTHING in that case so solo installs never see
- * an irrelevant panel. Any other error surfaces normally.
+ * Per-user GitHub identity, via the device flow. `GET /api/auth/github` 401s when
+ * there's no web identity (the solo-PAT state, and also a logged-out user on a
+ * web-auth install); we render NOTHING then so there's no irrelevant panel. Any
+ * other error surfaces normally.
  *
  * The connect flow ports the old UI's polling state machine into the console's
  * react-query-free cache: start → poll every `interval`s until connected / expired
@@ -53,7 +53,9 @@ export function GithubIdentityPanel(): ReactElement | null {
         const res = await skill.pollGithubDeviceFlow(start.device_code);
         const step = skill.interpretPollStatus(res, interval);
         if (step.kind === 'connected') {
-          setPhase('idle');
+          // Keep `phase = 'pending'` (button stays "Connecting…") until the
+          // invalidate refetch flips `status.connected` to true — otherwise the
+          // not-connected branch flashes "Connect GitHub" for one render.
           setUserCode(null);
           setVerificationUri(null);
           invalidate(K.githubConnection);
@@ -77,6 +79,7 @@ export function GithubIdentityPanel(): ReactElement | null {
   const disconnect = async (): Promise<void> => {
     setDisconnecting(true);
     setMessage(null);
+    setPhase('idle'); // clear any leftover 'pending' from a prior connect
     try {
       await skill.disconnectGithub();
       if (cancelledRef.current) return;
@@ -89,7 +92,9 @@ export function GithubIdentityPanel(): ReactElement | null {
     }
   };
 
-  // Solo-PAT install (no web identity) → 401 → hide the panel entirely.
+  // 401 = no web identity (no Better Auth session and no X-Archon-User): the solo-PAT
+  // state, and also a logged-out user on a web-auth install. Either way there's no
+  // per-user GitHub identity to manage, so hide the panel rather than error.
   if (error instanceof HttpError && error.status === 401) return null;
   if (error !== undefined) {
     return (
@@ -159,9 +164,10 @@ export function GithubIdentityPanel(): ReactElement | null {
           </div>
         ) : null}
 
-        {phase === 'error' && message !== null ? (
-          <p className="font-mono text-[11px] text-error">{message}</p>
-        ) : null}
+        {/* `message` is only ever set by a failed connect OR disconnect (both clear
+            it on start), so render it whenever present — gating on `phase === 'error'`
+            silently swallowed disconnect failures. */}
+        {message !== null ? <p className="font-mono text-[11px] text-error">{message}</p> : null}
       </div>
     </SettingsSection>
   );
