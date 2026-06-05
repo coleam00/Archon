@@ -19,25 +19,37 @@ mock.module('@archon/paths', () => ({
 // --- Imports (after mocks) ---
 
 import { evaluateCondition } from './condition-evaluator';
+import { OutputRefError } from './output-ref';
 import type { NodeOutput } from './schemas';
 
 /**
  * Build a NodeOutput fixture for condition tests.
  * Omits `structuredOutput` when undefined so the field's `'structuredOutput' in nodeOutput`
  * presence check in resolveOutputRef matches real producer behavior (only Pi/Codex/Claude
- * paths populate it; older providers leave it off).
+ * paths populate it; older providers leave it off). `declaredFields` marks a
+ * declared-schema producer (output_format with properties) for strict-resolution tests.
  */
 function makeOutput(
   output: string,
   state: 'completed' | 'failed' | 'skipped' = 'completed',
-  structuredOutput?: unknown
+  structuredOutput?: unknown,
+  declaredFields?: string[]
 ): NodeOutput {
   if (state === 'failed')
-    return structuredOutput !== undefined
-      ? { state, output, error: 'error', structuredOutput }
-      : { state, output, error: 'error' };
+    return {
+      state,
+      output,
+      error: 'error',
+      ...(structuredOutput !== undefined ? { structuredOutput } : {}),
+      ...(declaredFields !== undefined ? { declaredFields } : {}),
+    };
   if (state === 'skipped') return { state, output };
-  return structuredOutput !== undefined ? { state, output, structuredOutput } : { state, output };
+  return {
+    state,
+    output,
+    ...(structuredOutput !== undefined ? { structuredOutput } : {}),
+    ...(declaredFields !== undefined ? { declaredFields } : {}),
+  };
 }
 
 describe('evaluateCondition', () => {
@@ -84,10 +96,13 @@ describe('evaluateCondition', () => {
     const condition = "$setup.output.config == '" + expectedConfig + "'";
     expect(evaluateCondition(condition, outputs).result).toBe(true);
   });
-  it('dot notation: returns false on invalid JSON (fails gracefully)', () => {
+  it('dot notation: throws on a field ref when schemaless output is not JSON (no-silent-drop)', () => {
     const outputs = new Map([['classify', makeOutput('not-json')]]);
-    // Should not throw; JSON parse fails, resolves to '', so == 'BUG' is false
-    expect(evaluateCondition("$classify.output.type == 'BUG'", outputs).result).toBe(false);
+    // A `.field` ref on a schemaless node whose output is not a JSON object is a
+    // drop the author must see — it fails the node, not silently resolves to ''.
+    expect(() => evaluateCondition("$classify.output.type == 'BUG'", outputs)).toThrow(
+      OutputRefError
+    );
   });
 
   it('unknown node: treats missing node output as empty string and warns', () => {
@@ -477,13 +492,15 @@ describe('evaluateCondition', () => {
 
   // --- #1673: condition_json_parse_failed must surface as parsed:false ---
 
-  it('returns parsed:false when output text is not valid JSON and field is used', () => {
+  it('throws (not silent skip) when output text is not valid JSON and a field is used', () => {
     const outputs = new Map([
       ['gate', makeOutput('Let me think...\n\nSure, here is my analysis.')],
     ]);
-    const { result, parsed } = evaluateCondition("$gate.output.verdict == 'review'", outputs);
-    expect(result).toBe(false);
-    expect(parsed).toBe(false);
+    // #1673 previously fail-closed-skipped this; the no-silent-drop contract makes
+    // an unresolvable `.field` ref a visible node failure instead of a silent skip.
+    expect(() => evaluateCondition("$gate.output.verdict == 'review'", outputs)).toThrow(
+      OutputRefError
+    );
   });
 
   it('strips markdown fences and parses JSON inside them', () => {
@@ -499,17 +516,16 @@ describe('evaluateCondition', () => {
     expect(evaluateCondition("$gate.output.verdict == 'approve'", outputs).result).toBe(true);
   });
 
-  it('parsed:false propagates through compound AND expressions', () => {
+  it('throws when a compound expression references a field on non-JSON output', () => {
     const outputs = new Map([
       ['a', makeOutput('{"ok": "yes"}')],
       ['b', makeOutput('not json at all')],
     ]);
-    const { result, parsed } = evaluateCondition(
-      "$a.output.ok == 'yes' && $b.output.status == 'done'",
-      outputs
-    );
-    expect(result).toBe(false);
-    expect(parsed).toBe(false);
+    // `$a.output.ok` resolves fine; `$b.output.status` (b is non-JSON) throws,
+    // which propagates out of the compound evaluation to fail the node.
+    expect(() =>
+      evaluateCondition("$a.output.ok == 'yes' && $b.output.status == 'done'", outputs)
+    ).toThrow(OutputRefError);
   });
 
   // --- shorthand path ($nodeId.field) ---
@@ -545,14 +561,37 @@ describe('evaluateCondition', () => {
     expect(res.parsed).toBe(false);
   });
 
-  it('shorthand path: absent field resolves to empty string like the canonical form', () => {
-    // An absent shorthand field is not a parse error — it resolves to '' (parsed: true),
-    // mirroring the `$node.output.field` empty-string semantics.
+  it('shorthand path: throws on a missing key in a schemaless JSON node (no-silent-drop)', () => {
+    // Valid JSON output but no `missing` key, and no declared schema → the author
+    // referenced a key that isn't there. Strict for schemaless producers: throw
+    // rather than silently resolve to '' (matches the canonical `.output.field` form).
     const outputs = new Map([['n', makeOutput(JSON.stringify({ type: 'BUG' }))]]);
-    const res = evaluateCondition("$n.missing == 'x'", outputs);
-    expect(res.result).toBe(false);
-    expect(res.parsed).toBe(true);
-    expect(evaluateCondition("$n.missing == ''", outputs).result).toBe(true);
+    expect(() => evaluateCondition("$n.missing == 'x'", outputs)).toThrow(OutputRefError);
+  });
+
+  it('declared-optional field absent resolves to empty string (no throw)', () => {
+    // A producer that DECLARED the field in its output_format schema but left it
+    // absent (optional) is the one case that stays '' — not a drop, an intended gap.
+    const outputs = new Map([
+      [
+        'classify',
+        makeOutput(JSON.stringify({ type: 'BUG' }), 'completed', { type: 'BUG' }, ['type', 'note']),
+      ],
+    ]);
+    expect(evaluateCondition("$classify.output.note == ''", outputs).result).toBe(true);
+    expect(evaluateCondition("$classify.output.note == 'x'", outputs).result).toBe(false);
+  });
+
+  it('field not in the declared schema throws (typo, not a silent skip)', () => {
+    const outputs = new Map([
+      [
+        'classify',
+        makeOutput(JSON.stringify({ type: 'BUG' }), 'completed', { type: 'BUG' }, ['type']),
+      ],
+    ]);
+    expect(() => evaluateCondition("$classify.output.tpye == 'BUG'", outputs)).toThrow(
+      OutputRefError
+    );
   });
 
   // --- unquoted numeric/boolean RHS ---

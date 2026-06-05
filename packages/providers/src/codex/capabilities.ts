@@ -7,7 +7,7 @@ export const CODEX_CAPABILITIES: ProviderCapabilities = {
   skills: true, // filesystem autodiscovery from .agents/skills/ — not per-node injection; nodeConfig.skills is ignored
   agents: false,
   toolRestrictions: false,
-  structuredOutput: true,
+  structuredOutput: 'enforced', // SDK outputSchema grammar-constrains decoding
   envInjection: true,
   costControl: false,
   effortControl: false,

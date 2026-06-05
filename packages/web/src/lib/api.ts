@@ -55,7 +55,12 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
 export interface ProviderInfo {
   id: string;
   displayName: string;
-  capabilities: Record<string, boolean>;
+  // Derived from the OpenAPI spec so the string-union `structuredOutput`
+  // ('enforced' | 'best-effort' | false) is typed honestly rather than widened
+  // to boolean. `Partial` because SettingsPage synthesizes placeholder entries
+  // for config-only providers with unknown capabilities ({}); the web never
+  // reads individual capability fields, only the API populates the full shape.
+  capabilities: Partial<components['schemas']['ProviderCapabilities']>;
   builtIn: boolean;
 }
 

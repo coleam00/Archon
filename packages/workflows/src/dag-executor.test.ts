@@ -53,6 +53,7 @@ import { loadMcpConfig } from '@archon/providers/mcp/config';
 import type { DagNode, BashNode, ScriptNode, NodeOutput, WorkflowRun } from './schemas';
 import { discoverWorkflows } from './workflow-discovery';
 import { parseWorkflow } from './loader';
+import { OutputRefError } from './output-ref';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
 import { buildAiProfile } from './model-validation';
@@ -122,7 +123,7 @@ const mockClaudeCapabilities = () => ({
   skills: true,
   agents: true,
   toolRestrictions: true,
-  structuredOutput: true,
+  structuredOutput: 'enforced' as const,
   envInjection: true,
   costControl: true,
   effortControl: true,
@@ -138,7 +139,7 @@ const mockCodexCapabilities = () => ({
   skills: true,
   agents: false,
   toolRestrictions: false,
-  structuredOutput: true,
+  structuredOutput: 'enforced' as const,
   envInjection: true,
   costControl: false,
   effortControl: false,
@@ -206,19 +207,20 @@ function node(id: string, depends_on?: string[], opts?: Partial<DagNode>): DagNo
 function makeOutput(
   state: NodeOutput['state'],
   output = '',
-  structuredOutput?: unknown
+  structuredOutput?: unknown,
+  declaredFields?: string[]
 ): NodeOutput {
+  const extra = {
+    ...(structuredOutput !== undefined ? { structuredOutput } : {}),
+    ...(declaredFields !== undefined ? { declaredFields } : {}),
+  };
   if (state === 'failed') {
-    return structuredOutput !== undefined
-      ? { state, output, error: 'error', structuredOutput }
-      : { state, output, error: 'error' };
+    return { state, output, error: 'error', ...extra } as NodeOutput;
   }
   if (state === 'pending' || state === 'skipped') {
     return { state, output } as NodeOutput;
   }
-  return structuredOutput !== undefined
-    ? ({ state, output, structuredOutput } as NodeOutput)
-    : ({ state, output } as NodeOutput);
+  return { state, output, ...extra } as NodeOutput;
 }
 
 function makeWorkflowRun(id = 'dag-test-run-id', overrides?: Partial<WorkflowRun>): WorkflowRun {
@@ -745,9 +747,30 @@ describe('substituteNodeOutputRefs', () => {
     expect(substituteNodeOutputRefs('Fix $a.output.type issue', outputs)).toBe('Fix BUG issue');
   });
 
-  it('dot notation on invalid JSON returns empty string', () => {
+  it('dot notation on invalid JSON throws (no-silent-drop)', () => {
+    // Schemaless node, output is not a JSON object → a `.field` ref is a drop the
+    // author must see. Throws (propagates to fail the consuming node) instead of ''.
     const outputs = new Map([['a', makeOutput('completed', 'not-json')]]);
-    expect(substituteNodeOutputRefs('$a.output.field', outputs)).toBe('');
+    expect(() => substituteNodeOutputRefs('$a.output.field', outputs)).toThrow(OutputRefError);
+  });
+
+  it('declared-optional field absent resolves to empty (the one non-throw case)', () => {
+    const outputs = new Map([
+      ['a', makeOutput('completed', '{"type":"BUG"}', { type: 'BUG' }, ['type', 'note'])],
+    ]);
+    expect(substituteNodeOutputRefs('$a.output.note', outputs)).toBe('');
+  });
+
+  it('field not in the declared schema throws (typo)', () => {
+    const outputs = new Map([
+      ['a', makeOutput('completed', '{"type":"BUG"}', { type: 'BUG' }, ['type'])],
+    ]);
+    expect(() => substituteNodeOutputRefs('$a.output.tpye', outputs)).toThrow(OutputRefError);
+  });
+
+  it('schemaless JSON node missing a referenced key throws', () => {
+    const outputs = new Map([['a', makeOutput('completed', '{"type":"BUG"}')]]);
+    expect(() => substituteNodeOutputRefs('$a.output.missing', outputs)).toThrow(OutputRefError);
   });
 });
 
@@ -852,9 +875,11 @@ describe('substituteNodeOutputRefs -- shell escaping', () => {
     expect(substituteNodeOutputRefs('$a.output.config', outputs)).toBe('null');
   });
 
-  it('dot notation on invalid JSON returns quoted empty string when escapedForBash=true', () => {
+  it('dot notation on invalid JSON throws even when escapedForBash=true', () => {
     const outputs = new Map([['a', makeOutput('completed', 'not-json')]]);
-    expect(substituteNodeOutputRefs('$a.output.field', outputs, true)).toBe("''");
+    expect(() => substituteNodeOutputRefs('$a.output.field', outputs, true)).toThrow(
+      OutputRefError
+    );
   });
 });
 
@@ -5647,6 +5672,173 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
     );
     expect(nodeCompletedEvents.length).toBe(0);
     expect(store.failWorkflowRun).toHaveBeenCalled();
+  });
+
+  it('output_format set but provider returns no structured output → node_failed (Task 8 fail-fast)', async () => {
+    // Provider replied with prose only; no structuredOutput on the result chunk.
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'Sure, the verdict is review.' };
+      yield { type: 'result', sessionId: 's' };
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'outfmt-missing',
+        nodes: [
+          {
+            id: 'classify',
+            prompt: 'classify it',
+            output_format: {
+              type: 'object',
+              properties: { verdict: { type: 'string' } },
+              required: ['verdict'],
+            },
+            retry: { max_attempts: 0 },
+          },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const failed = eventCalls.filter(
+      (call: unknown[]) => (call[0] as Record<string, unknown>).event_type === 'node_failed'
+    );
+    expect(failed.length).toBeGreaterThan(0);
+    const errMsg = ((failed[0][0] as Record<string, unknown>).data as Record<string, unknown>)
+      .error as string;
+    expect(errMsg).toContain('no schema-valid structured output');
+  });
+
+  it('output_format structured output failing schema validation → node_failed (Task 7)', async () => {
+    // Provider returned a structured object missing the required `verdict` field.
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: '{"confidence":0.9}' };
+      yield { type: 'result', sessionId: 's', structuredOutput: { confidence: 0.9 } };
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'outfmt-invalid',
+        nodes: [
+          {
+            id: 'classify',
+            prompt: 'classify it',
+            output_format: {
+              type: 'object',
+              properties: { verdict: { type: 'string' }, confidence: { type: 'number' } },
+              required: ['verdict'],
+            },
+            retry: { max_attempts: 0 },
+          },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const failed = eventCalls.filter(
+      (call: unknown[]) => (call[0] as Record<string, unknown>).event_type === 'node_failed'
+    );
+    expect(failed.length).toBeGreaterThan(0);
+    const errMsg = ((failed[0][0] as Record<string, unknown>).data as Record<string, unknown>)
+      .error as string;
+    expect(errMsg).toContain('failed schema validation');
+  });
+
+  it('when: referencing a field not in the producer schema FAILS the node (not a silent skip)', async () => {
+    // Regression guard: an unresolvable `.field` ref in a `when:` must fail the
+    // dependent node (OutputRefError → node_failed), NOT fail-closed-skip it —
+    // the exact regression that would silently revert the no-silent-drop fix.
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: '{"verdict":"review"}' };
+      yield { type: 'result', sessionId: 's', structuredOutput: { verdict: 'review' } };
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'when-badref',
+        nodes: [
+          {
+            id: 'gate',
+            prompt: 'decide',
+            output_format: {
+              type: 'object',
+              properties: { verdict: { type: 'string' } },
+              required: ['verdict'],
+            },
+            retry: { max_attempts: 0 },
+          },
+          {
+            id: 'runme',
+            prompt: 'go',
+            depends_on: ['gate'],
+            when: "$gate.output.nonexistent == 'x'",
+            retry: { max_attempts: 0 },
+          },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const runmeFailed = eventCalls.find(
+      (call: unknown[]) =>
+        (call[0] as Record<string, unknown>).event_type === 'node_failed' &&
+        (call[0] as Record<string, unknown>).step_name === 'runme'
+    );
+    expect(runmeFailed).toBeDefined();
+    const errMsg = ((runmeFailed![0] as Record<string, unknown>).data as Record<string, unknown>)
+      .error as string;
+    expect(errMsg).toContain('not declared in node');
   });
 
   it('idle-timeout WITH output produces node_completed and sends warning, not node_failed', async () => {

@@ -22,7 +22,7 @@ export const OPENCODE_CAPABILITIES: ProviderCapabilities = {
   skills: true,
   agents: true,
   toolRestrictions: true,
-  structuredOutput: true,
+  structuredOutput: 'enforced', // sends format:{json_schema}; reads info.structured_output
   envInjection: true,
   costControl: false,
   effortControl: false,

@@ -2626,7 +2626,7 @@ export interface components {
       hooks: boolean;
       skills: boolean;
       toolRestrictions: boolean;
-      structuredOutput: boolean;
+      structuredOutput: 'enforced' | 'best-effort' | false;
       envInjection: boolean;
       costControl: boolean;
       effortControl: boolean;

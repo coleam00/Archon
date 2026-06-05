@@ -26,6 +26,7 @@ import {
   getProviderCapabilities,
   getRegisteredProviders,
   isRegisteredProvider,
+  validateStructuredOutput,
 } from '@archon/providers';
 import type {
   DagNode,
@@ -55,6 +56,7 @@ import { formatToolCall } from './utils/tool-formatter';
 import { createLogger, captureWorkflowCompleted } from '@archon/paths';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { evaluateCondition } from './condition-evaluator';
+import { declaredFieldsFromSchema, resolveNodeOutputField } from './output-ref';
 import { writeNodeArtifact } from './artifacts-index';
 import {
   logNodeStart,
@@ -342,51 +344,26 @@ export function substituteNodeOutputRefs(
           ? shellQuoteOrFile(nodeOutput.output, nodeId, undefined, outputFileDir)
           : nodeOutput.output;
       }
-      // Prefer the provider-supplied structured payload when present. Providers that emit
-      // fence-wrapped or preamble-prefixed JSON (Pi/Minimax) parse it onto the result chunk
-      // via tryParseStructuredOutput; consuming that object directly avoids re-parsing prose
-      // here. Falls back to JSON.parse on output for providers that don't normalize
-      // (or for older NodeOutput rows from before this field existed).
-      const structured = 'structuredOutput' in nodeOutput ? nodeOutput.structuredOutput : undefined;
-      if (
-        structured !== undefined &&
-        structured !== null &&
-        typeof structured === 'object' &&
-        !Array.isArray(structured)
-      ) {
-        const value = (structured as Record<string, unknown>)[field];
-        if (typeof value === 'string')
-          return escapedForBash ? shellQuoteOrFile(value, nodeId, field, outputFileDir) : value;
-        if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-        if (Array.isArray(value) || typeof value === 'object') {
-          const json = JSON.stringify(value);
-          return escapedForBash ? shellQuoteOrFile(json, nodeId, field, outputFileDir) : json;
-        }
-        return escapedForBash ? "''" : '';
-      }
-      try {
-        const parsed = JSON.parse(nodeOutput.output) as Record<string, unknown>;
-        const value = parsed[field];
-        if (typeof value === 'string')
-          return escapedForBash ? shellQuoteOrFile(value, nodeId, field, outputFileDir) : value;
-        // numbers and booleans from JSON.parse are shell-safe without quoting:
-        // JSON disallows NaN/Infinity, so String(number) contains only digits, sign, and '.'.
-        // String(boolean) is 'true' or 'false' — no shell metacharacters.
-        if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-        // arrays and objects: JSON-stringify. Bash passes substitution as a single
-        // argument, so downstream tools (jq, etc.) receive a JSON literal they can parse.
-        if (Array.isArray(value) || typeof value === 'object') {
-          const json = JSON.stringify(value);
-          return escapedForBash ? shellQuoteOrFile(json, nodeId, field, outputFileDir) : json;
-        }
-        return escapedForBash ? "''" : ''; // undefined, symbol, bigint → empty (null is caught above by typeof check)
-      } catch (jsonErr) {
-        getLog().warn(
-          { nodeId, field, outputPreview: nodeOutput.output.slice(0, 100), err: jsonErr as Error },
-          'dag_node_output_ref_json_parse_failed'
-        );
-        return escapedForBash ? "''" : '';
-      }
+      // No-silent-drop field access (resolveNodeOutputField): prefers the parsed
+      // structuredOutput payload, falls back to parsing `output`, and THROWS an
+      // OutputRefError for an unresolvable reference (field not in the producer's
+      // declared schema, or a schemaless node whose output isn't JSON / lacks the
+      // key). The throw propagates to the dag-executor's per-node catch → the
+      // consuming node fails visibly instead of receiving a poisoned ''. The only
+      // value that resolves to empty is an author-declared-optional field.
+      const resolution = resolveNodeOutputField(nodeOutput, nodeId, field);
+      if (resolution.kind === 'empty') return escapedForBash ? "''" : '';
+      const value = resolution.value;
+      if (typeof value === 'string')
+        return escapedForBash ? shellQuoteOrFile(value, nodeId, field, outputFileDir) : value;
+      // numbers and booleans are shell-safe without quoting: JSON disallows
+      // NaN/Infinity so String(number) is digits/sign/'.', and String(boolean) is
+      // 'true'/'false' — no shell metacharacters.
+      if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+      // arrays and objects: JSON-stringify so downstream tools (jq, etc.) get a
+      // single JSON literal argument.
+      const json = JSON.stringify(value);
+      return escapedForBash ? shellQuoteOrFile(json, nodeId, field, outputFileDir) : json;
     }
   );
 }
@@ -1115,6 +1092,48 @@ async function executeNodeInternal(
     // no provider-specific branching here.
     if (nodeOptions?.outputFormat) {
       if (structuredOutput !== undefined) {
+        // Validate the parsed structured output against the declared schema for
+        // EVERY provider, not just best-effort ones. SDK-enforced providers
+        // (Claude/Codex/OpenCode) still bypass grammar-constrained decoding on a
+        // refusal or max_tokens truncation, so this is their net too. The
+        // author's schema is validated as written (optional stays optional;
+        // additionalProperties not required).
+        //
+        // If ajv can't compile the schema, validation fails SAFE (treated valid)
+        // — but a schema that can't be enforced is surfaced to the user, not
+        // just logged, so it doesn't pass silently.
+        let schemaCompileError: string | undefined;
+        const validation = validateStructuredOutput(
+          structuredOutput,
+          node.output_format ?? {},
+          compileMsg => {
+            schemaCompileError = compileMsg;
+          }
+        );
+        if (schemaCompileError !== undefined) {
+          getLog().warn(
+            { nodeId: node.id, workflowRunId: workflowRun.id, compileMsg: schemaCompileError },
+            'dag.structured_output_schema_uncompilable'
+          );
+          await safeSendMessage(
+            platform,
+            conversationId,
+            `⚠️ Node '${node.id}': its \`output_format\` schema could not be compiled (${schemaCompileError}), so the structured output was NOT validated against it. Fix the schema to enforce it.`,
+            nodeContext
+          );
+        }
+        if (!validation.valid) {
+          // Fail loudly. No silent degrade. (The bounded reask loop for
+          // best-effort providers lands in PR 2; for now both tiers fail fast on
+          // an invalid payload, routed through the catch below → failed node.)
+          getLog().warn(
+            { nodeId: node.id, workflowRunId: workflowRun.id, errors: validation.errors },
+            'dag.structured_output_invalid'
+          );
+          throw new Error(
+            `Node '${node.id}': output_format declared but the provider's structured output failed schema validation: ${validation.errors.join('; ')}`
+          );
+        }
         try {
           nodeOutputText =
             typeof structuredOutput === 'string'
@@ -1128,17 +1147,19 @@ async function executeNodeInternal(
         }
         getLog().debug({ nodeId: node.id, streamingMode }, 'dag.structured_output_override');
       } else {
-        // Provider did not populate structuredOutput — warn the user.
-        // If the provider detected invalid output, it already yielded a system warning.
+        // Fail-fast: output_format was declared but the provider returned no
+        // structured payload at all (prose, refusal, parse miss). Previously this
+        // warned-and-completed, letting a poisoned-but-green node feed `''` to
+        // every downstream `$node.output.field`. That silent degrade is the bug
+        // this plan removes. Throw → routed to the catch below → failed node the
+        // author can see and fix.
         getLog().warn(
           { nodeId: node.id, workflowRunId: workflowRun.id },
           'dag.structured_output_missing'
         );
-        await safeSendMessage(
-          platform,
-          conversationId,
-          `Warning: Node '${node.id}' requested output_format but the provider did not return structured output. Downstream conditions may not evaluate correctly.`,
-          nodeContext
+        throw new Error(
+          `Node '${node.id}': output_format declared but the provider returned no schema-valid structured output. ` +
+            'The model likely replied with prose, refused, or emitted unparseable JSON.'
         );
       }
     }
@@ -1318,12 +1339,18 @@ async function executeNodeInternal(
     lastNodeCancelCheck.delete(`${workflowRun.id}:${node.id}`);
     lastNodeActivityUpdate.delete(`${workflowRun.id}:${node.id}`);
 
+    // Capture the producer's declared field set so downstream `$node.output.field`
+    // refs can tell a declared-optional-absent field ('') from a typo (throws).
+    // Only present when output_format declares an object with `properties`.
+    const declaredFields = declaredFieldsFromSchema(node.output_format);
+
     return {
       state: 'completed',
       output: nodeOutputText,
       sessionId: newSessionId,
       costUsd: nodeCostUsd,
       ...(structuredOutput !== undefined ? { structuredOutput } : {}),
+      ...(declaredFields !== undefined ? { declaredFields } : {}),
     };
   } catch (error) {
     const err = error as Error;
