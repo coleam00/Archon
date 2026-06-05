@@ -20,4 +20,12 @@ export const K = {
   pendingRuns: 'pendingRuns' as const,
   envVars: (projectId: string): string => `envVars:${projectId}`,
   artifacts: (runId: string): string => `artifacts:${runId}`,
+  // Installation-wide settings surfaces (static keys — one row each).
+  config: 'config' as const,
+  // Health has two consumers — the Settings SystemPanel and the IDE docker-check.
+  // Both must read via lib/health's useHealth() so they share this one cache entry
+  // instead of issuing duplicate /api/health fetches.
+  health: 'health' as const,
+  providers: 'providers' as const,
+  updateCheck: 'update-check' as const,
 } as const;
