@@ -97,6 +97,28 @@ describe('toRunEvent — node transitions', () => {
     expect(e.transition).toBe('skipped');
     expect(e.skipReason).toBe('prior_success');
   });
+
+  test('node_failed maps to a failed transition (guards the map vs the skipped default)', () => {
+    const e = toRunEvent(raw({ event_type: 'node_failed' }));
+    expect(e.kind).toBe('node_transition');
+    if (e.kind !== 'node_transition') throw new Error('unreachable');
+    // Must NOT fall through to the `?? 'skipped'` default.
+    expect(e.transition).toBe('failed');
+    expect(e.skipReason).toBeNull();
+    expect(e.outputPreview).toBeNull();
+  });
+
+  test('nodeName prefers data.name, falling back to step_name', () => {
+    const named = toRunEvent(
+      raw({ event_type: 'node_started', step_name: 'plan', data: { name: 'Plan the work' } })
+    );
+    if (named.kind !== 'node_transition') throw new Error('unreachable');
+    expect(named.nodeName).toBe('Plan the work');
+
+    const unnamed = toRunEvent(raw({ event_type: 'node_started', step_name: 'plan' }));
+    if (unnamed.kind !== 'node_transition') throw new Error('unreachable');
+    expect(unnamed.nodeName).toBe('plan');
+  });
 });
 
 describe('toRunEvent — tool calls (regression guard)', () => {
@@ -155,11 +177,55 @@ describe('toRunEvent — approvals (server writes approval_requested/approval_re
     });
   });
 
+  test('approval_received with a missing/unknown decision stays unresolved (never silently approved)', () => {
+    const missing = toRunEvent(raw({ event_type: 'approval_received', data: {} }));
+    if (missing.kind !== 'approval') throw new Error('unreachable');
+    expect(missing.resolution).toBeNull();
+
+    const garbage = toRunEvent(raw({ event_type: 'approval_received', data: { decision: '???' } }));
+    if (garbage.kind !== 'approval') throw new Error('unreachable');
+    expect(garbage.resolution).toBeNull();
+  });
+
   test('the old (never-written) approval_pending type is NOT treated as an approval', () => {
     // Guards against regressing to the pre-fix keys: approval_pending/approval_resolved
     // are not emitted by the server, so they must fall through, not render as approvals.
     const e = toRunEvent(raw({ event_type: 'approval_pending', data: { message: 'x' } }));
     expect(e.kind).not.toBe('approval');
+  });
+});
+
+describe('toRunEvent — error & workflow lifecycle', () => {
+  test('error prefers the `error` key over `message`', () => {
+    const e = toRunEvent(
+      raw({ event_type: 'error', data: { error: 'boom', message: 'ignored', recoverable: true } })
+    );
+    expect(e.kind).toBe('error');
+    if (e.kind !== 'error') throw new Error('unreachable');
+    expect(e.message).toBe('boom');
+    expect(e.recoverable).toBe(true);
+  });
+
+  test('error falls back to `message` when `error` is absent', () => {
+    const e = toRunEvent(raw({ event_type: 'error', data: { message: 'fallback' } }));
+    if (e.kind !== 'error') throw new Error('unreachable');
+    expect(e.message).toBe('fallback');
+    expect(e.recoverable).toBe(false);
+  });
+
+  test('workflow_completed → a system event with a label', () => {
+    const e = toRunEvent(raw({ event_type: 'workflow_completed', data: { name: 'deploy' } }));
+    expect(e.kind).toBe('system');
+    if (e.kind !== 'system') throw new Error('unreachable');
+    expect(e.label).toBe('Workflow completed');
+    expect(e.detail).toBe('deploy');
+  });
+
+  test('workflow_failed surfaces the error in `detail`', () => {
+    const e = toRunEvent(raw({ event_type: 'workflow_failed', data: { error: 'node X failed' } }));
+    if (e.kind !== 'system') throw new Error('unreachable');
+    expect(e.label).toBe('Workflow failed');
+    expect(e.detail).toBe('node X failed');
   });
 });
 

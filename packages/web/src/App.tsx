@@ -75,8 +75,9 @@ export function App(): React.ReactElement {
               {/*
                 Console mounts OUTSIDE Layout (so it does not inherit TopNav) but
                 still INSIDE SessionGate — otherwise /console would bypass web auth
-                that every other app route enforces. SessionGate is a passthrough
-                when web auth is disabled (the solo default), so this is a no-op there.
+                that every other app route enforces. When web auth is disabled (the
+                solo default) SessionGate passes children through unchanged after a
+                brief auth-status check (cached for the session) — no login required.
               */}
               <Route
                 path="/console/*"
