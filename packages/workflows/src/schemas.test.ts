@@ -9,6 +9,7 @@ import {
   LOOP_NODE_AI_FIELDS,
   approvalOnRejectSchema,
   dagNodeSchema,
+  workflowDefinitionSchema,
 } from './schemas';
 import type {
   WorkflowDefinition,
@@ -666,6 +667,108 @@ describe('SCRIPT_NODE_AI_FIELDS', () => {
 // ---------------------------------------------------------------------------
 // LOOP_NODE_AI_FIELDS constant
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// contextBudget wiring — node-level + workflow-level (Context Budget Visualizer)
+// ---------------------------------------------------------------------------
+
+describe('dagNodeSchema — contextBudget', () => {
+  test('parses a node-level contextBudget block and survives the transform', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'implement',
+      command: 'implement-issue',
+      contextBudget: { maxTokens: 50000 },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const node = result.data as CommandNode & {
+        contextBudget?: { maxTokens?: number };
+      };
+      expect(node.contextBudget).toEqual({ maxTokens: 50000 });
+    }
+  });
+
+  test('parses a full contextBudget block on a prompt node', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'n',
+      prompt: 'do it',
+      contextBudget: {
+        enabled: true,
+        maxTokens: 40000,
+        warnAtPercent: 80,
+        warnOnLowValueReads: true,
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const node = result.data as PromptNode & {
+        contextBudget?: { warnAtPercent?: number };
+      };
+      expect(node.contextBudget?.warnAtPercent).toBe(80);
+    }
+  });
+
+  test('contextBudget survives on a bash node (observability metadata, not AI-only)', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'b',
+      bash: 'echo hi',
+      contextBudget: { enabled: false },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const node = result.data as BashNode & { contextBudget?: { enabled?: boolean } };
+      expect(node.contextBudget).toEqual({ enabled: false });
+    }
+  });
+
+  test('a node without contextBudget is unchanged (field absent)', () => {
+    const result = dagNodeSchema.safeParse({ id: 'n', prompt: 'do it' });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect('contextBudget' in result.data).toBe(false);
+    }
+  });
+
+  test('rejects invalid contextBudget (warnAtPercent out of range)', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'n',
+      prompt: 'do it',
+      contextBudget: { warnAtPercent: 150 },
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe('workflowDefinitionSchema — contextBudget', () => {
+  test('parses a workflow-level contextBudget block', () => {
+    const result = workflowDefinitionSchema.safeParse({
+      name: 'bugfix',
+      description: 'Fix bugs',
+      contextBudget: { enabled: true, maxTokens: 40000, warnAtPercent: 80 },
+      nodes: [{ id: 'n1', prompt: 'do it' }],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.contextBudget).toEqual({
+        enabled: true,
+        maxTokens: 40000,
+        warnAtPercent: 80,
+      });
+    }
+  });
+
+  test('a workflow without contextBudget is unchanged (field absent)', () => {
+    const result = workflowDefinitionSchema.safeParse({
+      name: 'plain',
+      description: 'No budget',
+      nodes: [{ id: 'n1', prompt: 'do it' }],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect('contextBudget' in result.data).toBe(false);
+    }
+  });
+});
 
 describe('LOOP_NODE_AI_FIELDS', () => {
   test('excludes model and provider (loop nodes support them)', () => {

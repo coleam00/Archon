@@ -10,6 +10,7 @@ import {
   sandboxSettingsSchema,
   betasSchema,
 } from './dag-node';
+import { contextBudgetConfigSchema } from './context-budget';
 
 // ---------------------------------------------------------------------------
 // Shared enum schemas
@@ -91,6 +92,12 @@ export const workflowBaseSchema = z.object({
    * Requires the resolved provider to declare `sessionResume: true`.
    */
   persist_sessions: z.boolean().optional(),
+  /**
+   * Context Budget Visualizer (observability). Workflow-level default config for
+   * every node. Node-level `contextBudget` overrides this. Optional; absence
+   * preserves today's behavior exactly.
+   */
+  contextBudget: contextBudgetConfigSchema.optional(),
   tags: z.array(z.string().min(1)).optional(),
   /**
    * External capabilities this workflow needs. When it includes `github`, the

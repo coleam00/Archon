@@ -88,6 +88,32 @@ export type {
   WorkflowDefinition,
 } from './workflow';
 
+// Context budget (observability) — config + report data model
+export {
+  contextBudgetConfigSchema,
+  contextBudgetTokenUsageSchema,
+  contextBudgetLayerSchema,
+  contextBudgetSourceTypeSchema,
+  contextBudgetItemSchema,
+  contextBudgetWarningCodeSchema,
+  contextBudgetWarningSchema,
+  contextBudgetNodeReportSchema,
+  contextBudgetTotalsSchema,
+  contextBudgetReportSchema,
+} from './context-budget';
+export type {
+  ContextBudgetConfig,
+  ContextBudgetTokenUsage,
+  ContextBudgetLayer,
+  ContextBudgetSourceType,
+  ContextBudgetItem,
+  ContextBudgetWarningCode,
+  ContextBudgetWarning,
+  ContextBudgetNodeReport,
+  ContextBudgetTotals,
+  ContextBudgetReport,
+} from './context-budget';
+
 // Workflow run state
 export {
   workflowRunStatusSchema,

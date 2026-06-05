@@ -14,6 +14,7 @@ import { z } from '@hono/zod-openapi';
 import { stepRetryConfigSchema } from './retry';
 import { loopNodeConfigSchema } from './loop';
 import { workflowNodeHooksSchema } from './hooks';
+import { contextBudgetConfigSchema } from './context-budget';
 import { isValidCommandName } from '../command-validation';
 
 // ---------------------------------------------------------------------------
@@ -194,6 +195,11 @@ export const dagNodeBaseSchema = z.object({
   // a provider with sessionResume capability. Distinct from the Claude SDK's
   // AgentRequestOptions.persistSession (on-disk transcript persistence).
   persist_session: z.boolean().optional(),
+  // Context Budget Visualizer (observability). Optional per-node config block;
+  // node-level overrides the workflow-level default. Observability metadata, not
+  // AI-only — valid on every node type (a bash node simply has no prompt to
+  // measure), so it is intentionally NOT listed in BASH_NODE_AI_FIELDS.
+  contextBudget: contextBudgetConfigSchema.optional(),
 });
 
 export type DagNodeBase = z.infer<typeof dagNodeBaseSchema>;
@@ -576,6 +582,7 @@ export const dagNodeSchema = dagNodeBaseSchema
     // Shared optional fields (valid on AI and bash nodes)
     const shared = {
       ...(data.retry !== undefined ? { retry: data.retry } : {}),
+      ...(data.contextBudget !== undefined ? { contextBudget: data.contextBudget } : {}),
     };
 
     // AI-only fields (not applicable to bash/loop nodes)
