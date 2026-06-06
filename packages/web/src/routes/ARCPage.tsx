@@ -79,9 +79,9 @@ const OPEN_QUESTIONS = [
 ];
 
 function StatusIcon({ state }: { state: StatusItem['state'] }): React.ReactElement {
-  if (state === 'done') return <CheckCircle2 className="h-4 w-4 flex-shrink-0 text-green-400" />;
-  if (state === 'blocked') return <ShieldAlert className="h-4 w-4 flex-shrink-0 text-red-400" />;
-  return <Clock className="h-4 w-4 flex-shrink-0 text-amber-400" />;
+  if (state === 'done') return <CheckCircle2 className="h-4 w-4 flex-shrink-0 text-emerald-700" />;
+  if (state === 'blocked') return <ShieldAlert className="h-4 w-4 flex-shrink-0 text-rose-700" />;
+  return <Clock className="h-4 w-4 flex-shrink-0 text-amber-700" />;
 }
 
 export function ARCPage(): React.ReactElement {
@@ -91,10 +91,10 @@ export function ARCPage(): React.ReactElement {
       <div className="flex flex-col gap-2">
         <div className="flex items-center gap-2">
           <h1 className="text-2xl font-semibold text-text-primary">ARC Brand Agency</h1>
-          <span className="rounded bg-amber-950/40 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-300">
+          <span className="rounded border border-amber-700/40 bg-amber-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-800">
             external rep
           </span>
-          <span className="rounded bg-green-950/40 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-green-300">
+          <span className="rounded border border-emerald-700/40 bg-emerald-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-800">
             active trial
           </span>
         </div>
@@ -153,13 +153,13 @@ export function ARCPage(): React.ReactElement {
       </section>
 
       {/* Domain warning banner */}
-      <div className="flex items-start gap-3 rounded-md border border-red-700/40 bg-red-950/20 p-4">
-        <AlertCircle className="mt-0.5 h-5 w-5 flex-shrink-0 text-red-400" />
+      <div className="flex items-start gap-3 rounded-md border border-rose-700/40 bg-rose-100 p-4">
+        <AlertCircle className="mt-0.5 h-5 w-5 flex-shrink-0 text-rose-700" />
         <div className="flex flex-col gap-1">
-          <p className="text-sm font-medium text-red-200">
+          <p className="text-sm font-medium text-rose-900">
             Domain spelling needs confirmation before any outbound
           </p>
-          <p className="text-xs text-red-300/80">
+          <p className="text-xs text-rose-800">
             The intake doc has both{' '}
             <code className="rounded bg-surface-inset px-1 py-0.5">sales@arcbrandagency.com</code>{' '}
             (in the exec summary; matches the public site) and{' '}
@@ -243,20 +243,20 @@ export function ARCPage(): React.ReactElement {
         </div>
         <div className="grid gap-2 sm:grid-cols-3">
           <div className="rounded-md border border-border bg-surface-elevated p-3">
-            <p className="text-sm font-semibold text-green-400">Renegotiate</p>
+            <p className="text-sm font-semibold text-emerald-800">Renegotiate</p>
             <p className="mt-1 text-xs text-text-tertiary">
               Base + per-meeting bonus or % of first-month closed (if Jason booked &gt; X meetings
               that closed).
             </p>
           </div>
           <div className="rounded-md border border-border bg-surface-elevated p-3">
-            <p className="text-sm font-semibold text-amber-400">Extend on current terms</p>
+            <p className="text-sm font-semibold text-amber-800">Extend on current terms</p>
             <p className="mt-1 text-xs text-text-tertiary">
               Pipeline is warming but no closes yet.
             </p>
           </div>
           <div className="rounded-md border border-border bg-surface-elevated p-3">
-            <p className="text-sm font-semibold text-text-tertiary">Sunset cleanly</p>
+            <p className="text-sm font-semibold text-text-secondary">Sunset cleanly</p>
             <p className="mt-1 text-xs text-text-tertiary">
               Not converting and hours are pulling from PMC pipeline.
             </p>
