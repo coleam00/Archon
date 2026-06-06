@@ -84,10 +84,10 @@ export function SADNPage(): React.ReactElement {
       <div className="flex flex-col gap-2">
         <div className="flex items-center gap-2 flex-wrap">
           <h1 className="text-2xl font-semibold text-text-primary">SADN 2026</h1>
-          <span className="rounded bg-amber-950/40 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-300">
+          <span className="rounded border border-amber-700/40 bg-amber-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-800">
             external rep
           </span>
-          <span className="rounded bg-green-950/40 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-green-300">
+          <span className="rounded border border-emerald-700/40 bg-emerald-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-800">
             active
           </span>
           <span className="rounded bg-surface-inset px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-text-secondary">
@@ -102,29 +102,29 @@ export function SADNPage(): React.ReactElement {
       </div>
 
       {/* Event banner */}
-      <div className="rounded-md border border-purple-700/40 bg-purple-950/20 p-4">
+      <div className="rounded-md border border-purple-700/40 bg-purple-100 p-4">
         <div className="flex flex-wrap gap-x-6 gap-y-2">
           <div className="flex items-center gap-2">
-            <CalendarDays className="h-4 w-4 text-purple-300" />
-            <span className="text-sm font-semibold text-purple-200">November 15, 2026</span>
+            <CalendarDays className="h-4 w-4 text-purple-700" />
+            <span className="text-sm font-semibold text-purple-900">November 15, 2026</span>
           </div>
           <div className="flex items-center gap-2">
-            <MapPin className="h-4 w-4 text-purple-300" />
-            <span className="text-sm text-purple-200">Art Ovation Hotel, downtown Sarasota</span>
+            <MapPin className="h-4 w-4 text-purple-700" />
+            <span className="text-sm text-purple-900">Art Ovation Hotel, downtown Sarasota</span>
           </div>
           <div className="flex items-center gap-2">
-            <ExternalLink className="h-4 w-4 text-purple-300" />
+            <ExternalLink className="h-4 w-4 text-purple-700" />
             <a
               href="https://sarasotaartanddance.com"
               target="_blank"
               rel="noopener noreferrer"
-              className="text-sm text-purple-200 hover:text-purple-100 hover:underline"
+              className="text-sm text-purple-900 hover:text-purple-700 hover:underline"
             >
               sarasotaartanddance.com
             </a>
           </div>
         </div>
-        <p className="mt-3 text-xs text-purple-300/80 italic">
+        <p className="mt-3 text-xs text-purple-800 italic">
           Visual art + live music + performing arts + social dancing + artist recognition + curated
           networking. Benefits The Creative Bridge Foundation (501(c)(3)) and the Rising Star Award.
         </p>
@@ -174,13 +174,13 @@ export function SADNPage(): React.ReactElement {
       </section>
 
       {/* ARC overlap warning */}
-      <div className="flex items-start gap-3 rounded-md border border-red-700/40 bg-red-950/20 p-4">
-        <ShieldAlert className="mt-0.5 h-5 w-5 flex-shrink-0 text-red-400" />
+      <div className="flex items-start gap-3 rounded-md border border-rose-700/40 bg-rose-100 p-4">
+        <ShieldAlert className="mt-0.5 h-5 w-5 flex-shrink-0 text-rose-700" />
         <div className="flex flex-col gap-1">
-          <p className="text-sm font-medium text-red-200">
+          <p className="text-sm font-medium text-rose-900">
             Suppression risk: luxury auto dealerships overlap with ARC Brand Agency
           </p>
-          <p className="text-xs text-red-300/80">
+          <p className="text-xs text-rose-800">
             "Luxury automotive dealerships" is on Susan's SADN priority list AND on Adam Riley's ARC
             target list. Never send both an ARC cold pitch and an SADN partnership pitch to the same
             Sarasota luxury auto contact in the same week. Proposed split:{' '}
@@ -204,7 +204,7 @@ export function SADNPage(): React.ReactElement {
             <ul className="flex flex-col gap-1">
               {PRIORITY_CATEGORIES.map(cat => (
                 <li key={cat} className="flex items-start gap-2 text-xs text-text-secondary">
-                  <span className="text-green-400">+</span>
+                  <span className="text-emerald-700">+</span>
                   <span>{cat}</span>
                 </li>
               ))}
@@ -223,7 +223,7 @@ export function SADNPage(): React.ReactElement {
             <ul className="flex flex-col gap-1">
               {EXCLUSIONS.map(cat => (
                 <li key={cat} className="flex items-start gap-2 text-xs text-text-secondary">
-                  <span className="text-red-400">-</span>
+                  <span className="text-rose-700">-</span>
                   <span>{cat}</span>
                 </li>
               ))}
