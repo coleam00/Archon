@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactElement } from 'react';
+import { useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react';
 import * as skill from '../skills';
 import type { SafeConfig, ProviderInfo, AssistantConfigForm } from '../skills';
 import { useEntity, invalidate } from '../store/cache';
@@ -13,8 +13,42 @@ const WEB_SEARCH_MODES = ['disabled', 'cached', 'live'] as const;
 // the console scope's wildcard border-color rule repaints Tailwind utilities.
 const INPUT_CLASS =
   'w-full rounded-[9px] border border-border bg-surface px-3.5 py-[11px] font-mono text-[13px] text-text-primary placeholder:text-text-tertiary transition-all focus:border-accent-bright/50 focus:outline-none focus:shadow-[0_0_0_3px_color-mix(in_oklch,var(--brand-magenta),transparent_92%)]';
+// appearance-none kills the browser's edge-pinned arrow; SelectShell paints
+// the design's chevron at right:11px instead (.set-select / .set-select-chev).
 const SELECT_CLASS =
-  'cursor-pointer rounded-[9px] border border-border bg-surface-elevated px-3 py-[7px] font-mono text-[12.5px] font-semibold text-text-primary transition-all focus:border-accent-bright/50 focus:outline-none focus:shadow-[0_0_0_3px_color-mix(in_oklch,var(--brand-magenta),transparent_92%)]';
+  'w-full cursor-pointer appearance-none rounded-[9px] border border-border bg-surface-elevated py-[7px] pl-3 pr-8 font-mono text-[12.5px] font-semibold text-text-primary transition-all focus:border-accent-bright/50 focus:outline-none focus:shadow-[0_0_0_3px_color-mix(in_oklch,var(--brand-magenta),transparent_92%)]';
+
+/** Relative wrapper that overlays the design chevron on an appearance-none select. */
+function SelectShell({
+  children,
+  className = '',
+}: {
+  children: ReactNode;
+  className?: string;
+}): ReactElement {
+  return (
+    <span className={`relative inline-flex items-center ${className}`}>
+      {children}
+      <span
+        aria-hidden
+        className="pointer-events-none absolute right-[11px] flex text-text-tertiary"
+      >
+        <svg
+          width="13"
+          height="13"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M6 9l6 6 6-6" />
+        </svg>
+      </span>
+    </span>
+  );
+}
 
 /** Read a string field off the open `ProviderDefaults` record, '' when absent/non-string. */
 function readStr(rec: SafeConfig['assistants'][string] | undefined, key: string): string {
@@ -103,19 +137,21 @@ export function AssistantConfigPanel(): ReactElement {
         <span className="w-[150px] shrink-0 text-[13.5px] font-semibold text-text-secondary">
           Default assistant
         </span>
-        <select
-          value={form.assistant}
-          onChange={e => {
-            patch({ assistant: e.target.value });
-          }}
-          className={`flex-1 ${SELECT_CLASS} px-3.5 py-[11px] text-[13.5px]`}
-        >
-          {providers.map(p => (
-            <option key={p.id} value={p.id}>
-              {p.displayName}
-            </option>
-          ))}
-        </select>
+        <SelectShell className="flex-1">
+          <select
+            value={form.assistant}
+            onChange={e => {
+              patch({ assistant: e.target.value });
+            }}
+            className={`${SELECT_CLASS} py-[11px] pl-3.5 text-[13.5px]`}
+          >
+            {providers.map(p => (
+              <option key={p.id} value={p.id}>
+                {p.displayName}
+              </option>
+            ))}
+          </select>
+        </SelectShell>
       </label>
 
       <div className="flex flex-col gap-[11px]">
@@ -164,37 +200,41 @@ export function AssistantConfigPanel(): ReactElement {
                   <div className="mt-[11px] flex flex-wrap items-center justify-end gap-5">
                     <label className="flex items-center gap-[9px] font-mono text-[12px] text-text-tertiary">
                       <span>effort</span>
-                      <select
-                        value={form.modelReasoningEffort}
-                        onChange={e => {
-                          patch({ modelReasoningEffort: e.target.value });
-                        }}
-                        className={SELECT_CLASS}
-                      >
-                        <option value="">inherit</option>
-                        {REASONING_EFFORTS.map(o => (
-                          <option key={o} value={o}>
-                            {o}
-                          </option>
-                        ))}
-                      </select>
+                      <SelectShell>
+                        <select
+                          value={form.modelReasoningEffort}
+                          onChange={e => {
+                            patch({ modelReasoningEffort: e.target.value });
+                          }}
+                          className={SELECT_CLASS}
+                        >
+                          <option value="">inherit</option>
+                          {REASONING_EFFORTS.map(o => (
+                            <option key={o} value={o}>
+                              {o}
+                            </option>
+                          ))}
+                        </select>
+                      </SelectShell>
                     </label>
                     <label className="flex items-center gap-[9px] font-mono text-[12px] text-text-tertiary">
                       <span>web search</span>
-                      <select
-                        value={form.webSearchMode}
-                        onChange={e => {
-                          patch({ webSearchMode: e.target.value });
-                        }}
-                        className={SELECT_CLASS}
-                      >
-                        <option value="">inherit</option>
-                        {WEB_SEARCH_MODES.map(o => (
-                          <option key={o} value={o}>
-                            {o}
-                          </option>
-                        ))}
-                      </select>
+                      <SelectShell>
+                        <select
+                          value={form.webSearchMode}
+                          onChange={e => {
+                            patch({ webSearchMode: e.target.value });
+                          }}
+                          className={SELECT_CLASS}
+                        >
+                          <option value="">inherit</option>
+                          {WEB_SEARCH_MODES.map(o => (
+                            <option key={o} value={o}>
+                              {o}
+                            </option>
+                          ))}
+                        </select>
+                      </SelectShell>
                     </label>
                   </div>
                 ) : null}
