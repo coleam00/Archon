@@ -10,6 +10,44 @@ const REPO_ROOT = join(import.meta.dir, '..', '..', '..', '..');
 const COMMANDS_DIR = join(REPO_ROOT, '.archon/commands/defaults');
 const WORKFLOWS_DIR = join(REPO_ROOT, '.archon/workflows/defaults');
 
+interface VerifyPrBaseBlock {
+  workflowName: string;
+  block: string;
+}
+
+function extractVerifyPrBaseBlocks(workflowName: string, content: string): VerifyPrBaseBlock[] {
+  const nodeLinePattern = /^(\s*)-\s+id:\s+(.+)\s*$/;
+  const lines = content.split('\n');
+  const blocks: VerifyPrBaseBlock[] = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = nodeLinePattern.exec(lines[index]);
+    if (match === null || match[2] !== 'verify-pr-base') {
+      continue;
+    }
+
+    const nodeIndent = match[1].length;
+    let endIndex = index + 1;
+    while (endIndex < lines.length) {
+      const nextNodeMatch = nodeLinePattern.exec(lines[endIndex]);
+      if (nextNodeMatch !== null && nextNodeMatch[1].length === nodeIndent) {
+        break;
+      }
+      endIndex += 1;
+    }
+
+    blocks.push({ workflowName, block: lines.slice(index, endIndex).join('\n') });
+  }
+
+  return blocks;
+}
+
+function getBundledVerifyPrBaseBlocks(): VerifyPrBaseBlock[] {
+  return Object.entries(BUNDLED_WORKFLOWS).flatMap(([workflowName, content]) =>
+    extractVerifyPrBaseBlocks(workflowName, content)
+  );
+}
+
 describe('bundled-defaults', () => {
   describe('isBinaryBuild', () => {
     it('should return false in dev/test mode', () => {
@@ -108,6 +146,61 @@ describe('bundled-defaults', () => {
         'sed "s/SPRINT_COUNT_PLACEHOLDER/$SPRINT_COUNT/" "$ARTIFACTS/state.json" > "$STATE_TMP"'
       );
       expect(content).not.toContain('sed -i "s/SPRINT_COUNT_PLACEHOLDER/$SPRINT_COUNT/"');
+    });
+
+    it('verify-pr-base nodes should resolve and edit PRs explicitly', () => {
+      const blocks = getBundledVerifyPrBaseBlocks();
+      expect(blocks.length).toBeGreaterThan(0);
+
+      const failures = blocks.flatMap(({ workflowName, block }) => {
+        const blockFailures: string[] = [];
+        const artifactPrNumberIndex = block.indexOf('$ARTIFACTS_DIR/.pr-number');
+        const branchFallbackMatch =
+          /gh pr view\s+"(?:\$CURRENT_BRANCH|\$\{CURRENT_BRANCH\})"\s+--json\s+number/.exec(block);
+        const branchFallbackIndex = branchFallbackMatch?.index ?? -1;
+
+        if (block.includes('gh pr view --json baseRefName')) {
+          blockFailures.push(
+            `${workflowName}: verify-pr-base uses bare gh pr view --json baseRefName`
+          );
+        }
+        if (block.includes('gh pr view --json number')) {
+          blockFailures.push(`${workflowName}: verify-pr-base uses bare gh pr view --json number`);
+        }
+        if (artifactPrNumberIndex === -1) {
+          blockFailures.push(
+            `${workflowName}: verify-pr-base does not read $ARTIFACTS_DIR/.pr-number`
+          );
+        }
+        if (branchFallbackIndex === -1) {
+          blockFailures.push(
+            `${workflowName}: verify-pr-base does not fall back to gh pr view "$CURRENT_BRANCH" --json number`
+          );
+        }
+        if (
+          artifactPrNumberIndex !== -1 &&
+          branchFallbackIndex !== -1 &&
+          artifactPrNumberIndex > branchFallbackIndex
+        ) {
+          blockFailures.push(
+            `${workflowName}: verify-pr-base checks current branch before .pr-number`
+          );
+        }
+        if (
+          !/gh pr view\s+"(?:\$PR_NUMBER|\$\{PR_NUMBER\})"\s+--json\s+[^\n]*baseRefName/.test(block)
+        ) {
+          blockFailures.push(
+            `${workflowName}: verify-pr-base does not view baseRefName via "$PR_NUMBER"`
+          );
+        }
+        if (!/gh pr edit\s+"(?:\$PR_NUMBER|\$\{PR_NUMBER\})"\s+--base/.test(block)) {
+          blockFailures.push(`${workflowName}: verify-pr-base does not edit via "$PR_NUMBER"`);
+        }
+
+        return blockFailures;
+      });
+
+      expect(failures).toEqual([]);
     });
 
     it('should have valid YAML structure', () => {

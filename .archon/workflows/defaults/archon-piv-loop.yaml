@@ -773,12 +773,29 @@ nodes:
     bash: |
       set -euo pipefail
       EXPECTED="$BASE_BRANCH"
-      ACTUAL=$(gh pr view --json baseRefName -q '.baseRefName')
+
+      if [ -f "$ARTIFACTS_DIR/.pr-number" ]; then
+        PR_NUMBER=$(tr -d '[:space:]' < "$ARTIFACTS_DIR/.pr-number")
+      else
+        PR_NUMBER=""
+      fi
+
+      if [ -z "$PR_NUMBER" ]; then
+        CURRENT_BRANCH=$(git branch --show-current)
+        PR_NUMBER=$(gh pr view "$CURRENT_BRANCH" --json number -q '.number' 2>/dev/null || true)
+      fi
+
+      if [ -z "$PR_NUMBER" ]; then
+        CURRENT_BRANCH=${CURRENT_BRANCH:-$(git branch --show-current)}
+        echo "ERROR: Could not resolve PR for base verification. No .pr-number artifact and no PR found for current branch $CURRENT_BRANCH." >&2
+        exit 1
+      fi
+
+      ACTUAL=$(gh pr view "$PR_NUMBER" --json baseRefName -q '.baseRefName')
       if [ "$ACTUAL" != "$EXPECTED" ]; then
-        PR_NUMBER=$(gh pr view --json number -q '.number')
         echo "Base mismatch on PR #$PR_NUMBER: expected=$EXPECTED actual=$ACTUAL — re-targeting" >&2
         gh pr edit "$PR_NUMBER" --base "$EXPECTED"
       else
-        echo "PR base verified: $EXPECTED"
+        echo "PR #$PR_NUMBER base verified: $EXPECTED"
       fi
     depends_on: [finalize]
