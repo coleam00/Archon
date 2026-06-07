@@ -30,6 +30,7 @@ export const collections = {
          * - adapters: Platform adapter setup (Slack, Telegram, GitHub, Discord, Web)
          * - deployment: Running in production (Docker, cloud, Windows)
          * - reference: Technical reference (architecture, CLI, commands, database, API)
+         * - learning: Tutorial, curriculum, and workshop material
          * - contributing: Developer guides (internals, DX, releasing, testing)
          */
         category: z
@@ -39,6 +40,7 @@ export const collections = {
             'adapters',
             'deployment',
             'reference',
+            'learning',
             'contributing',
             'book',
           ])

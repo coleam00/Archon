@@ -48,6 +48,10 @@ export default defineConfig({
           autogenerate: { directory: 'reference' },
         },
         {
+          label: 'Learning',
+          autogenerate: { directory: 'learning' },
+        },
+        {
           label: 'Contributing',
           autogenerate: { directory: 'contributing' },
         },
