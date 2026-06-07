@@ -10,8 +10,9 @@ interface AgentAvatarProps {
  * CSS custom props reliably, so brand stops are hard-coded — same trade-off
  * the handoff takes.
  *
- * Inner fill is hard-coded `#15171d` per the handoff (sits on
- * `--surface-elevated` which resolves to the same family).
+ * Inner fill references `--surface-elevated` so the punched-hole effect
+ * tracks any future surface-token rebalance (handoff's `#15171d` resolves
+ * to the same family).
  */
 export function AgentAvatar({ size = 30 }: AgentAvatarProps): ReactElement {
   const gid = useId();
@@ -25,7 +26,7 @@ export function AgentAvatar({ size = 30 }: AgentAvatarProps): ReactElement {
         </linearGradient>
       </defs>
       <circle cx="16" cy="16" r="15" stroke={`url(#${gid})`} strokeWidth="1.6" />
-      <circle cx="16" cy="16" r="11.5" fill="#15171d" />
+      <circle cx="16" cy="16" r="11.5" fill="var(--surface-elevated)" />
       <path
         d="M16 8.5l6 10.6H10L16 8.5z"
         stroke={`url(#${gid})`}

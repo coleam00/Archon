@@ -112,7 +112,7 @@ export function MessageItem({ message }: MessageItemProps): ReactElement {
           style={{
             background: 'color-mix(in oklch, var(--brand-magenta), transparent 94%)',
             border: '1px solid color-mix(in oklch, var(--brand-magenta), transparent 50%)',
-            color: '#F6E9F6',
+            color: 'color-mix(in oklch, white, var(--brand-magenta) 12%)',
             boxShadow: '0 0 0 4px color-mix(in oklch, var(--brand-magenta), transparent 95%)',
           }}
         >
