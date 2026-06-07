@@ -129,7 +129,7 @@ export function DrivePage(): React.ReactElement {
             href="https://drive.google.com/drive/folders/1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN"
             target="_blank"
             rel="noreferrer"
-            className="inline-flex items-center gap-1 text-blue-400 hover:underline"
+            className="inline-flex items-center gap-1 text-blue-700 hover:underline"
           >
             open PMC Assets in Drive <ExternalLink className="h-3 w-3" />
           </a>
@@ -194,12 +194,12 @@ export function DrivePage(): React.ReactElement {
                   <h2 className="text-lg font-medium text-text-primary">{selected.name}</h2>
                   <div className="flex items-center gap-3 text-xs">
                     <span
-                      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 ${
+                      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 ${
                         selected.audience === 'all'
-                          ? 'bg-emerald-100 text-emerald-800'
+                          ? 'border-emerald-700/40 bg-emerald-100 text-emerald-800'
                           : selected.audience === 'internal'
-                            ? 'bg-amber-900/40 text-amber-300'
-                            : 'bg-rose-900/40 text-rose-300'
+                            ? 'border-amber-700/40 bg-amber-100 text-amber-800'
+                            : 'border-rose-700/40 bg-rose-100 text-rose-800'
                       }`}
                     >
                       <Eye className="h-3 w-3" />
@@ -210,7 +210,7 @@ export function DrivePage(): React.ReactElement {
                         href={selected.driveUrl}
                         target="_blank"
                         rel="noreferrer"
-                        className="inline-flex items-center gap-1 text-blue-400 hover:underline"
+                        className="inline-flex items-center gap-1 text-blue-700 hover:underline"
                       >
                         open in Drive <ExternalLink className="h-3 w-3" />
                       </a>
@@ -267,7 +267,7 @@ export function DrivePage(): React.ReactElement {
                                 href={file.link}
                                 target="_blank"
                                 rel="noreferrer"
-                                className="inline-flex items-center gap-1 text-blue-400 hover:underline"
+                                className="inline-flex items-center gap-1 text-blue-700 hover:underline"
                               >
                                 open <ExternalLink className="h-3 w-3" />
                               </a>
