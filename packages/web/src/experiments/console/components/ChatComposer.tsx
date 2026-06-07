@@ -15,6 +15,10 @@ const MAX_HEIGHT = 200;
  *
  * Reimplemented (not imported) from the old chat's MessageInput because the
  * console may not import production `@/components/**` (ESLint isolation rule).
+ *
+ * Direction-B `cbox` shell: rounded card with `:focus-within` magenta ring,
+ * decorative 📎 + `/` lead buttons (inert in MVP), gradient `.brand-bar`
+ * Send button + glow, kbd-hint row beneath.
  */
 export function ChatComposer({
   onSend,
@@ -54,33 +58,82 @@ export function ChatComposer({
   };
 
   return (
-    <div className="shrink-0 border-t border-border bg-surface px-6 py-3" title={disabledReason}>
-      <div className="flex items-end gap-2">
-        <textarea
-          ref={textareaRef}
-          value={value}
-          onChange={e => {
-            setValue(e.target.value);
-            grow(e.target);
-          }}
-          onKeyDown={onKeyDown}
-          rows={1}
-          placeholder={disabled ? (disabledReason ?? 'Waiting…') : 'Message the agent…'}
-          className="min-h-[40px] flex-1 resize-none rounded border border-border bg-surface-inset px-3 py-2 text-[13px] text-text-primary placeholder:text-text-tertiary focus:border-border-bright focus:outline-none disabled:opacity-50"
-          style={{ maxHeight: `${MAX_HEIGHT.toString()}px` }}
-        />
-        <button
-          type="button"
-          onClick={submit}
-          disabled={disabled || value.trim().length === 0}
-          title="Send · Enter"
-          className="flex h-9 shrink-0 items-center gap-1 rounded border border-accent-bright/40 bg-accent-bright/15 px-3 text-[12px] font-medium text-accent-bright transition-colors hover:bg-accent-bright/25 disabled:opacity-40"
+    <div
+      className="shrink-0 border-t border-border bg-surface px-[30px] py-[14px]"
+      title={disabledReason}
+    >
+      <div className="mx-auto max-w-[940px]">
+        <div
+          className="flex items-end gap-[10px] rounded-[14px] border bg-[color:var(--surface-elevated)] py-[8px] pl-[14px] pr-[8px] transition-[border-color,box-shadow] focus-within:border-[color:color-mix(in_oklch,var(--brand-magenta),transparent_40%)] focus-within:shadow-[0_0_0_4px_color-mix(in_oklch,var(--brand-magenta),transparent_92%)]"
+          style={{ borderColor: 'var(--border-bright)' }}
         >
-          Send
-          <span aria-hidden className="font-mono text-[10px] opacity-70">
-            ↵
+          <div className="flex shrink-0 items-end gap-[6px] pb-[7px] text-text-tertiary">
+            <button
+              type="button"
+              tabIndex={-1}
+              aria-label="Attach files"
+              disabled
+              title="Attach (coming soon)"
+              className="rounded-md p-[3px] transition-colors hover:bg-[color:var(--surface-hover)] hover:text-text-primary disabled:cursor-default disabled:opacity-50"
+            >
+              📎
+            </button>
+            <button
+              type="button"
+              tabIndex={-1}
+              aria-label="Commands"
+              disabled
+              title="Commands (coming soon)"
+              className="rounded-md p-[3px] transition-colors hover:bg-[color:var(--surface-hover)] hover:text-text-primary disabled:cursor-default disabled:opacity-50"
+            >
+              /
+            </button>
+          </div>
+          <textarea
+            ref={textareaRef}
+            value={value}
+            onChange={e => {
+              setValue(e.target.value);
+              grow(e.target);
+            }}
+            onKeyDown={onKeyDown}
+            rows={1}
+            placeholder={disabled ? (disabledReason ?? 'Waiting…') : 'Message the agent…'}
+            className="min-h-0 flex-1 resize-none bg-transparent py-[7px] text-[14.5px] leading-[1.5] text-text-primary placeholder:text-text-tertiary focus:outline-none disabled:opacity-50"
+            style={{ maxHeight: `${MAX_HEIGHT.toString()}px` }}
+          />
+          <button
+            type="button"
+            onClick={submit}
+            disabled={disabled || value.trim().length === 0}
+            title="Send · Enter"
+            className="brand-bar flex h-[36px] shrink-0 items-center gap-[7px] rounded-[10px] px-[15px] text-[13px] font-bold text-white shadow-[0_6px_18px_-8px_color-mix(in_oklch,var(--brand-magenta),transparent_30%)] transition-[filter,transform] hover:brightness-110 active:translate-y-[1px] disabled:opacity-45 disabled:shadow-none disabled:hover:brightness-100"
+          >
+            Send
+            <span aria-hidden className="font-mono text-[10px] opacity-70">
+              ↵
+            </span>
+          </button>
+        </div>
+        <div className="mt-[9px] flex items-center justify-between px-[2px] font-mono text-[11px] text-text-tertiary">
+          <span />
+          <span>
+            <span
+              className="mr-1 inline-flex items-center rounded border px-[5px] py-[1px] font-mono text-[10.5px] text-text-secondary"
+              style={{ borderColor: 'var(--border-bright)' }}
+            >
+              ↵
+            </span>
+            send{' '}
+            <span
+              className="ml-1 inline-flex items-center rounded border px-[5px] py-[1px] font-mono text-[10.5px] text-text-secondary"
+              style={{ borderColor: 'var(--border-bright)' }}
+            >
+              ⇧↵
+            </span>{' '}
+            newline
           </span>
-        </button>
+        </div>
       </div>
     </div>
   );
