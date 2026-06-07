@@ -11,6 +11,54 @@ interface ProjectRowProps {
   onEditEnv?: () => void;
 }
 
+function KeyIcon({ size = 16 }: { size?: number }): ReactElement {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0 3 3L22 7l-3-3m-3.5 3.5L19 4" />
+    </svg>
+  );
+}
+
+function DotsIcon({ size = 17 }: { size?: number }): ReactElement {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+      <circle cx="5" cy="12" r="1.7" />
+      <circle cx="12" cy="12" r="1.7" />
+      <circle cx="19" cy="12" r="1.7" />
+    </svg>
+  );
+}
+
+function TrashIcon({ size = 15 }: { size?: number }): ReactElement {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6h14z" />
+      <line x1="10" y1="11" x2="10" y2="17" />
+      <line x1="14" y1="11" x2="14" y2="17" />
+    </svg>
+  );
+}
+
 /**
  * Rail row, design v2: monogram tile + repo-only title (the owner lives in
  * the group header above) + locator path + hover actions. Selection is the
@@ -191,9 +239,9 @@ export function ProjectRow({
             }}
             title="Environment variables"
             aria-label="Environment variables"
-            className="rounded p-1 font-mono text-[11px] leading-none text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-primary"
+            className="flex h-[29px] w-[29px] items-center justify-center rounded-lg text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-primary"
           >
-            ⚙
+            <KeyIcon />
           </button>
         ) : null}
         {onRemove !== undefined ? (
@@ -207,9 +255,11 @@ export function ProjectRow({
               title="More actions"
               aria-label="More actions"
               aria-expanded={menuOpen}
-              className="rounded p-1 font-mono text-[11px] leading-none text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-primary"
+              className={`flex h-[29px] w-[29px] items-center justify-center rounded-lg transition-colors hover:bg-surface-hover hover:text-text-primary ${
+                menuOpen ? 'bg-surface-hover text-text-primary' : 'text-text-tertiary'
+              }`}
             >
-              ⋯
+              <DotsIcon />
             </button>
             {menuOpen ? (
               <div
@@ -217,7 +267,10 @@ export function ProjectRow({
                 onClick={e => {
                   e.stopPropagation();
                 }}
-                className="absolute right-0 top-full z-10 mt-1 min-w-[160px] rounded-md border border-border bg-surface-elevated p-1 shadow-lg"
+                className="absolute right-0 top-full z-30 mt-1 min-w-[178px] rounded-[11px] border bg-surface-hover p-[5px] shadow-[0_18px_44px_-18px_rgba(0,0,0,0.85)]"
+                // Inline because the console scope's wildcard border-color
+                // rule repaints Tailwind border utilities (see theme.css).
+                style={{ borderColor: 'var(--border-bright)' }}
               >
                 <button
                   type="button"
@@ -230,8 +283,9 @@ export function ProjectRow({
                     );
                     if (confirmed) onRemove();
                   }}
-                  className="block w-full rounded px-2 py-1 text-left text-[12px] text-error transition-colors hover:bg-error/10"
+                  className="flex w-full items-center gap-2.5 rounded-lg px-[11px] py-[9px] text-left text-[13px] font-semibold text-error transition-colors hover:bg-error/10"
                 >
+                  <TrashIcon />
                   Remove project
                 </button>
               </div>
