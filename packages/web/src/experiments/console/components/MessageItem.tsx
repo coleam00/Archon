@@ -102,7 +102,7 @@ export function MessageItem({ message }: MessageItemProps): ReactElement {
           <time
             dateTime={message.timestamp}
             title={clock}
-            className="text-[11px] tracking-[0.3em] text-text-tertiary"
+            className="text-[11px] tracking-[0.3px] text-text-tertiary"
           >
             {clock}
           </time>
@@ -140,7 +140,7 @@ export function MessageItem({ message }: MessageItemProps): ReactElement {
         <time
           dateTime={message.timestamp}
           title={clock}
-          className="text-[11px] tracking-[0.3em] text-text-tertiary"
+          className="text-[11px] tracking-[0.3px] text-text-tertiary"
         >
           {clock}
         </time>
