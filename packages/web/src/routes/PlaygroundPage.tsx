@@ -122,7 +122,7 @@ function ChartCard({
   height?: number;
 }): React.ReactElement {
   return (
-    <section className="rounded-lg border border-border bg-surface p-4">
+    <section className="rounded-lg border border-border bg-surface-elevated p-4">
       <header className="mb-3 flex items-baseline justify-between">
         <h3 className="text-sm font-semibold text-text-primary">{title}</h3>
         {subtitle && <span className="text-xs text-text-tertiary">{subtitle}</span>}
@@ -142,7 +142,7 @@ function KpiTile({
   hint?: string;
 }): React.ReactElement {
   return (
-    <div className="rounded-lg border border-border bg-surface p-3">
+    <div className="rounded-lg border border-border bg-surface-elevated p-3">
       <div className="text-[10px] uppercase tracking-wider text-text-tertiary">{label}</div>
       <div className="mt-1 text-lg font-semibold text-text-primary">{value}</div>
       {hint && <div className="mt-0.5 text-[10px] text-text-tertiary">{hint}</div>}
@@ -152,7 +152,9 @@ function KpiTile({
 
 export function PlaygroundPage(): React.ReactElement {
   const [highlightedBrand, setHighlightedBrand] = useState<string | null>(null);
-  const [sequenceMetric, setSequenceMetric] = useState<'sent' | 'replied' | 'reply_rate' | 'open_rate'>('sent');
+  const [sequenceMetric, setSequenceMetric] = useState<
+    'sent' | 'replied' | 'reply_rate' | 'open_rate'
+  >('sent');
 
   // Sequence reply-rate horizontal bar
   const seqChartData = useMemo(
@@ -186,9 +188,9 @@ export function PlaygroundPage(): React.ReactElement {
       byDate[d.date] ??= {};
       byDate[d.date][d.outcome] = d.count;
     }
-    const outcomeKeys = Array.from(
-      new Set(data.dials_by_day.map(d => d.outcome))
-    ).filter(o => o !== 'closed-test');
+    const outcomeKeys = Array.from(new Set(data.dials_by_day.map(d => d.outcome))).filter(
+      o => o !== 'closed-test'
+    );
     const rows = Object.entries(byDate)
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([date, outcomes]) => {
@@ -229,13 +231,12 @@ export function PlaygroundPage(): React.ReactElement {
             <div>
               <h1 className="text-lg font-semibold text-text-primary">Playground</h1>
               <p className="mt-0.5 text-xs text-text-secondary">
-                Live charts off Apollo + Dial Tracker + PMC pipeline. Hover, click a
-                brand chip to focus.
+                Live charts off Apollo + Dial Tracker + PMC pipeline. Hover, click a brand chip to
+                focus.
               </p>
             </div>
             <span className="text-[10px] text-text-tertiary">
-              Source generated:{' '}
-              <code className="font-mono">{data.generated_at.slice(0, 19)}Z</code>
+              Source generated: <code className="font-mono">{data.generated_at.slice(0, 19)}Z</code>
             </span>
           </div>
         </header>
@@ -263,7 +264,9 @@ export function PlaygroundPage(): React.ReactElement {
         {/* Brand-focus chips */}
         <section className="flex flex-wrap gap-2">
           <button
-            onClick={(): void => setHighlightedBrand(null)}
+            onClick={(): void => {
+              setHighlightedBrand(null);
+            }}
             className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
               highlightedBrand === null
                 ? 'border-primary text-primary'
@@ -275,17 +278,16 @@ export function PlaygroundPage(): React.ReactElement {
           {brands.map(b => (
             <button
               key={b}
-              onClick={(): void =>
-                setHighlightedBrand(highlightedBrand === b ? null : b)
-              }
+              onClick={(): void => {
+                setHighlightedBrand(highlightedBrand === b ? null : b);
+              }}
               className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
                 highlightedBrand === b
                   ? 'border-primary text-primary'
                   : 'border-border text-text-secondary hover:text-text-primary'
               }`}
               style={{
-                borderColor:
-                  highlightedBrand === b ? BRAND_COLOR[b] : undefined,
+                borderColor: highlightedBrand === b ? BRAND_COLOR[b] : undefined,
                 color: highlightedBrand === b ? BRAND_COLOR[b] : undefined,
               }}
             >
@@ -295,9 +297,7 @@ export function PlaygroundPage(): React.ReactElement {
         </section>
 
         {/* Apollo sequence health */}
-        <h2 className="text-sm font-semibold text-text-primary">
-          Apollo sequence health
-        </h2>
+        <h2 className="text-sm font-semibold text-text-primary">Apollo sequence health</h2>
         <div className="grid gap-3 lg:grid-cols-2">
           <ChartCard
             title={`Sequence ${SEQUENCE_METRIC_LABEL[sequenceMetric].toLowerCase()}`}
@@ -306,7 +306,9 @@ export function PlaygroundPage(): React.ReactElement {
                 {(['sent', 'replied', 'reply_rate', 'open_rate'] as const).map(m => (
                   <button
                     key={m}
-                    onClick={(): void => setSequenceMetric(m)}
+                    onClick={(): void => {
+                      setSequenceMetric(m);
+                    }}
                     className={`rounded border px-1.5 py-0.5 text-[10px] transition-colors ${
                       sequenceMetric === m
                         ? 'border-primary text-primary'
@@ -316,10 +318,10 @@ export function PlaygroundPage(): React.ReactElement {
                     {m === 'sent'
                       ? 'sent'
                       : m === 'replied'
-                      ? 'replies'
-                      : m === 'reply_rate'
-                      ? 'reply%'
-                      : 'open%'}
+                        ? 'replies'
+                        : m === 'reply_rate'
+                          ? 'reply%'
+                          : 'open%'}
                   </button>
                 ))}
               </span>
@@ -329,13 +331,7 @@ export function PlaygroundPage(): React.ReactElement {
               <BarChart data={seqChartData} layout="vertical" margin={{ left: 30 }}>
                 <CartesianGrid stroke="#27272a" horizontal={false} />
                 <XAxis type="number" stroke="#71717a" fontSize={11} />
-                <YAxis
-                  dataKey="name"
-                  type="category"
-                  stroke="#71717a"
-                  fontSize={11}
-                  width={180}
-                />
+                <YAxis dataKey="name" type="category" stroke="#71717a" fontSize={11} width={180} />
                 <Tooltip
                   contentStyle={{
                     background: '#18181b',
@@ -344,7 +340,17 @@ export function PlaygroundPage(): React.ReactElement {
                     fontSize: 12,
                   }}
                   formatter={(_v: unknown, _name: unknown, item: unknown): React.ReactNode => {
-                    const payload = (item as { payload?: { sent: number; replied: number; reply_rate?: number; replyRate?: number; openRate: number } }).payload;
+                    const payload = (
+                      item as {
+                        payload?: {
+                          sent: number;
+                          replied: number;
+                          reply_rate?: number;
+                          replyRate?: number;
+                          openRate: number;
+                        };
+                      }
+                    ).payload;
                     if (!payload) return '';
                     return [
                       `${payload.sent} sent`,
@@ -359,19 +365,15 @@ export function PlaygroundPage(): React.ReactElement {
                     sequenceMetric === 'sent'
                       ? 'sent'
                       : sequenceMetric === 'replied'
-                      ? 'replied'
-                      : sequenceMetric === 'reply_rate'
-                      ? 'replyRate'
-                      : 'openRate'
+                        ? 'replied'
+                        : sequenceMetric === 'reply_rate'
+                          ? 'replyRate'
+                          : 'openRate'
                   }
                   name={SEQUENCE_METRIC_LABEL[sequenceMetric]}
                 >
                   {seqChartData.map(d => (
-                    <rect
-                      key={d.name}
-                      fill={d.fill}
-                      opacity={d.dim ? 0.25 : 1}
-                    />
+                    <rect key={d.name} fill={d.fill} opacity={d.dim ? 0.25 : 1} />
                   ))}
                 </Bar>
               </BarChart>
@@ -386,13 +388,7 @@ export function PlaygroundPage(): React.ReactElement {
               <BarChart data={funnelData} layout="vertical" margin={{ left: 30 }}>
                 <CartesianGrid stroke="#27272a" horizontal={false} />
                 <XAxis type="number" stroke="#71717a" fontSize={11} />
-                <YAxis
-                  dataKey="stage"
-                  type="category"
-                  stroke="#71717a"
-                  fontSize={11}
-                  width={120}
-                />
+                <YAxis dataKey="stage" type="category" stroke="#71717a" fontSize={11} width={120} />
                 <Tooltip
                   contentStyle={{
                     background: '#18181b',
@@ -408,9 +404,7 @@ export function PlaygroundPage(): React.ReactElement {
         </div>
 
         {/* Dial tracker */}
-        <h2 className="text-sm font-semibold text-text-primary">
-          Dial Tracker — daily outcomes
-        </h2>
+        <h2 className="text-sm font-semibold text-text-primary">Dial Tracker — daily outcomes</h2>
         <ChartCard
           title="Outcomes by day (last 30d)"
           subtitle="Stacked by call outcome — click legend to toggle"
@@ -501,10 +495,10 @@ export function PlaygroundPage(): React.ReactElement {
         </ChartCard>
 
         <footer className="border-t border-border pt-4 text-[10px] text-text-tertiary">
-          Sources: <code className="font-mono">intelligence/briefs/2026-05-13-apollo-dial-list-all.csv</code>{' '}
-          ·{' '}
-          <code className="font-mono">~/.hermes/state/dial_tracker_history.json</code>{' '}
-          · Calendly + Gmail aggregator (Phase 2). Build script:{' '}
+          Sources:{' '}
+          <code className="font-mono">intelligence/briefs/2026-05-13-apollo-dial-list-all.csv</code>{' '}
+          · <code className="font-mono">~/.hermes/state/dial_tracker_history.json</code> · Calendly
+          + Gmail aggregator (Phase 2). Build script:{' '}
           <code className="font-mono">scripts/build-playground-json.py</code>
         </footer>
       </div>
