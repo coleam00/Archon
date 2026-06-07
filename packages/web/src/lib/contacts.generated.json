@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-06-04T02:40:16.589752Z",
+  "generated_at": "2026-06-07T14:02:58.240018Z",
   "vault_path": "second-brain/contacts",
-  "count": 16,
+  "count": 17,
   "contacts": [
     {
       "id": "team/andrea-redassich",
@@ -219,6 +219,29 @@
       "preview": "",
       "tags": [],
       "vaultPath": "contacts/prospects/cheryl-albright.md"
+    },
+    {
+      "id": "prospects/corrine-buchanan",
+      "slug": "corrine-buchanan",
+      "category": "prospects",
+      "name": "Corrine Buchanan",
+      "role": "",
+      "company": "",
+      "email": "",
+      "linkedin": "",
+      "phone": "(352) 647-9696",
+      "status": "pre-call (called 2026-06-04)",
+      "preview": "",
+      "tags": [
+        "prospect",
+        "bioreg",
+        "brt",
+        "mental-health",
+        "lgbtq",
+        "neurodivergent",
+        "client/jid5274"
+      ],
+      "vaultPath": "contacts/prospects/corrine-buchanan.md"
     },
     {
       "id": "prospects/jordan-sternberg",

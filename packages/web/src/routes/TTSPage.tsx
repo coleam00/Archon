@@ -50,6 +50,25 @@ const SECTIONS = [
     heading: 'Sub-pages in vault',
     items: [
       {
+        slug: 'rsvp-tracker',
+        title: 'RSVP & qualification tracker',
+        description: 'rsvp-tracker.md — live funnel vs 40-attendee target',
+        badge: 'live',
+        badgeTone: 'emerald' as const,
+      },
+      {
+        slug: 'phase-3-launch-decisions',
+        title: 'Phase 3 launch decisions',
+        description: 'phase-3-launch-decisions.md — 4 decisions pending Jason ratification',
+        badge: 'decide',
+        badgeTone: 'amber' as const,
+      },
+      {
+        slug: 'qualification-call-script',
+        title: '15-min qualification call script',
+        description: 'qualification-call-script.md — NEPQ-style soft-discovery + rubric',
+      },
+      {
         slug: 'content-roadmap',
         title: 'Content roadmap',
         description: 'content-roadmap.md — 10-week TTTS content plan',
