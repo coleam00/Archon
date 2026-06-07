@@ -12,11 +12,10 @@ interface ProjectRowProps {
 }
 
 /**
- * Rail row: title + locator (path) + hover actions. No avatar (the first
- * letter of `owner/repo` carried no information), no status indicator
- * (red-because-some-old-run-failed was noise, not signal). Selection is
- * the gradient strip + elevated background. Double-click the title to
- * rename; the path stays as a stable subtitle.
+ * Rail row, design v2: monogram tile + repo-only title (the owner lives in
+ * the group header above) + locator path + hover actions. Selection is the
+ * gradient strip, gradient monogram, elevated background, and a LIVE pulse.
+ * Double-click the title to rename; the path stays as a stable subtitle.
  */
 export function ProjectRow({
   project,
@@ -26,6 +25,13 @@ export function ProjectRow({
   onEditEnv,
 }: ProjectRowProps): ReactElement {
   const displayName = useDisplayName(project.id, project.name);
+  // Group headers already show the owner — strip it from the row label
+  // unless the user renamed the project (then show their name verbatim).
+  const label =
+    displayName === project.name && project.name.includes('/')
+      ? project.name.slice(project.name.indexOf('/') + 1)
+      : displayName;
+  const monogram = (label[0] ?? '?').toUpperCase();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(displayName);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -78,20 +84,32 @@ export function ProjectRow({
       }}
       aria-pressed={selected}
       title={`${displayName} · double-click to rename`}
-      className={`group relative flex w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left transition-colors ${
+      className={`group relative flex w-full cursor-pointer items-center gap-[11px] rounded-[10px] border px-2.5 py-2 text-left transition-colors ${
         selected ? 'bg-surface-elevated' : 'bg-transparent hover:bg-surface-hover'
       }`}
+      // Inline because the console scope's wildcard `border-color: var(--border)`
+      // rule repaints Tailwind border-color utilities (see theme.css).
+      style={{ borderColor: selected ? 'var(--border-bright)' : 'transparent' }}
     >
-      {/* Brand gradient strip — the unmistakable "this is selected" cue.
-          rounded-l matches the row's own corner radius so the strip blends
-          into the corners (no overflow-hidden needed; that would clip the
-          ⋯ dropdown menu below). */}
+      {/* Brand gradient strip — the unmistakable "this is selected" cue. */}
       {selected ? (
         <span
           aria-hidden
-          className="brand-bar pointer-events-none absolute left-0 top-0 bottom-0 w-1 rounded-l-md"
+          className="brand-bar pointer-events-none absolute -left-px bottom-[9px] top-[9px] w-[3px] rounded-r-[3px]"
         />
       ) : null}
+
+      {/* Monogram tile — gradient-filled when active */}
+      <span
+        aria-hidden
+        className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg font-mono text-[13px] font-bold transition-colors ${
+          selected
+            ? 'brand-bar text-white'
+            : 'border border-border bg-surface-elevated text-text-secondary group-hover:text-text-primary'
+        }`}
+      >
+        {monogram}
+      </span>
 
       <div className="flex min-w-0 flex-1 flex-col leading-tight">
         {editing ? (
@@ -127,11 +145,11 @@ export function ProjectRow({
               e.stopPropagation();
               setEditing(true);
             }}
-            className={`truncate text-[13px] font-medium ${
+            className={`truncate text-[13px] font-semibold tracking-[-0.1px] ${
               selected ? 'text-text-primary' : 'text-text-secondary group-hover:text-text-primary'
             }`}
           >
-            {displayName}
+            {label}
           </span>
         )}
         <span className="truncate font-mono text-[10.5px] text-text-tertiary">
@@ -139,12 +157,29 @@ export function ProjectRow({
         </span>
       </div>
 
-      {/* Hover actions: env vars + ⋯ menu. Always-visible on selected row
-          so power features (env, remove) are one click away in the active
-          context. */}
+      {/* LIVE pulse on the selected project — hidden while hovering so the
+          env/⋯ actions can take its slot. */}
+      {selected ? (
+        <span
+          title="Active project"
+          className="inline-flex shrink-0 items-center gap-[5px] font-mono text-[10px] font-semibold uppercase tracking-[0.05em] text-success group-hover:hidden"
+        >
+          <i
+            aria-hidden
+            className="h-1.5 w-1.5 animate-pulse rounded-full bg-success shadow-[0_0_0_3px_color-mix(in_oklch,var(--success),transparent_82%)]"
+          />
+          live
+        </span>
+      ) : null}
+
+      {/* Hover actions: env vars + ⋯ menu. */}
       <div
         className={`flex shrink-0 items-center gap-0.5 transition-opacity ${
-          selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+          selected
+            ? menuOpen
+              ? 'flex'
+              : 'hidden group-hover:flex'
+            : 'opacity-0 group-hover:opacity-100'
         }`}
       >
         {onEditEnv !== undefined ? (
