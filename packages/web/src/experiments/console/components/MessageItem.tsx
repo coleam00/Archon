@@ -9,6 +9,11 @@ import type { Message } from '../primitives/message';
 
 interface MessageItemProps {
   message: Message;
+  /**
+   * `chat` (default) — Direction-B chat card. `log` — run-log styling
+   * (design v3 .log-agent-card): violet left accent + mono body, no avatar.
+   */
+  variant?: 'chat' | 'log';
 }
 
 const MD_COMPONENTS: Components = {
@@ -81,10 +86,11 @@ const ERROR_BLOCK = (msg: string): ReactElement => (
  * border-utility colors otherwise (see `theme.css`, mirrored in
  * `StreamCard.tsx`).
  */
-export function MessageItem({ message }: MessageItemProps): ReactElement {
+export function MessageItem({ message, variant = 'chat' }: MessageItemProps): ReactElement {
   const kind = message.role;
   const content = message.content.trim();
   const clock = formatClock(message.timestamp);
+  const log = variant === 'log';
 
   if (kind === 'user') {
     return (
@@ -146,16 +152,31 @@ export function MessageItem({ message }: MessageItemProps): ReactElement {
         </time>
       </header>
       <div className="flex max-w-full items-start gap-[13px]">
-        <div className="shrink-0">
-          <AgentAvatar size={30} />
-        </div>
+        {log ? null : (
+          <div className="shrink-0">
+            <AgentAvatar size={30} />
+          </div>
+        )}
         <div className="min-w-0 flex-1">
           <div
             className="rounded-[12px] border bg-[color:var(--surface-elevated)] px-4 py-[14px]"
-            style={{ borderColor: 'var(--border)' }}
+            style={
+              log
+                ? {
+                    borderColor: 'var(--border)',
+                    borderLeft: '3px solid var(--brand-violet)',
+                  }
+                : { borderColor: 'var(--border)' }
+            }
           >
             {content.length > 0 ? (
-              <div className="max-w-none text-[14.5px] leading-[1.62] text-text-primary">
+              <div
+                className={
+                  log
+                    ? 'max-w-none font-mono text-[12px] leading-[1.7] text-text-secondary'
+                    : 'max-w-none text-[14.5px] leading-[1.62] text-text-primary'
+                }
+              >
                 <ReactMarkdown
                   remarkPlugins={[remarkGfm, remarkBreaks]}
                   rehypePlugins={[rehypeHighlight]}

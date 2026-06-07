@@ -238,10 +238,14 @@ export function RunStream({
   }
 
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="flex flex-col">
       {visible.map(entry => {
         if (entry.kind === 'message') {
-          return <MessageItem key={entry.key} message={entry.message} />;
+          return (
+            <div key={entry.key} className="py-4">
+              <MessageItem message={entry.message} variant="log" />
+            </div>
+          );
         }
         if (entry.kind === 'tool') {
           return <ToolCallItem key={entry.key} call={entry.call} timestamp={entry.timestamp} />;
@@ -266,41 +270,47 @@ export function RunStream({
           const label = isError ? 'Error' : ev.label;
           const detail = isError ? ev.message : ev.detail;
           return (
-            <StreamCard
-              key={entry.key}
-              timestamp={ev.timestamp}
-              kind={isError ? 'error' : 'system'}
-              compact
-              label={label}
-              headerRight={
-                detail.length > 0 ? (
-                  <span className="truncate font-mono text-[11px] text-text-secondary">
-                    {detail}
-                  </span>
-                ) : null
-              }
-            />
+            <div key={entry.key} className="py-1">
+              <StreamCard
+                timestamp={ev.timestamp}
+                kind={isError ? 'error' : 'system'}
+                compact
+                label={label}
+                headerRight={
+                  detail.length > 0 ? (
+                    <span className="truncate font-mono text-[11px] text-text-secondary">
+                      {detail}
+                    </span>
+                  ) : null
+                }
+              />
+            </div>
           );
         }
         if (entry.kind === 'system_row') {
           return (
-            <StreamCard
-              key={entry.key}
-              timestamp={entry.row.timestamp}
-              kind="system"
-              compact
-              label={entry.row.label}
-              headerRight={
-                entry.row.detail.length > 0 ? (
-                  <span className="truncate font-mono text-[11px] text-text-secondary">
-                    {entry.row.detail}
-                  </span>
-                ) : null
-              }
-            />
+            <div key={entry.key} className="py-1">
+              <StreamCard
+                timestamp={entry.row.timestamp}
+                kind="system"
+                compact
+                label={entry.row.label}
+                headerRight={
+                  entry.row.detail.length > 0 ? (
+                    <span className="truncate font-mono text-[11px] text-text-secondary">
+                      {entry.row.detail}
+                    </span>
+                  ) : null
+                }
+              />
+            </div>
           );
         }
-        return <ArtifactItem key={entry.key} event={entry.event} />;
+        return (
+          <div key={entry.key} className="py-1">
+            <ArtifactItem event={entry.event} />
+          </div>
+        );
       })}
     </div>
   );
