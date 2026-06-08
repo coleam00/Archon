@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-04T12:29:37+00:00",
+  "generated_at": "2026-06-08T20:00:08+00:00",
   "vault_path": "second-brain/resources/drive-index",
   "count": 19,
   "folders": [
@@ -1179,11 +1179,18 @@
       "folderId": "1VjVEqWlwmT7TLIfqLPTUWfBIQhuJR1S6",
       "parentId": "1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
       "audience": "internal",
-      "lastSynced": "2026-06-02T02:35:55+00:00",
-      "fileCount": 10,
+      "lastSynced": "2026-06-08T20:00:07+00:00",
+      "fileCount": 11,
       "vaultPath": "second-brain/resources/drive-index/meeting-notes.md",
       "driveUrl": "https://drive.google.com/drive/folders/1VjVEqWlwmT7TLIfqLPTUWfBIQhuJR1S6",
       "files": [
+        {
+          "name": "June 2026",
+          "type": "g-folder",
+          "modified": "2026-06-08",
+          "size": "",
+          "link": "https://drive.google.com/drive/folders/1kogyzjmbMQDM-GxeBJYDcRUI3UjWGQHi"
+        },
         {
           "name": "DRAFT \u2014 Follow-up email to Dr. Andre Melo (The Way Concierge) \u2014 2026-05-20",
           "type": "g-document",

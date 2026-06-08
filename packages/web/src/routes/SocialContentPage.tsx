@@ -208,13 +208,13 @@ export function SocialContentPage(): React.ReactElement {
       </div>
 
       {/* Active campaign banner */}
-      <div className="flex items-start gap-3 rounded-md border border-emerald-700/40 bg-emerald-950/30 p-4">
-        <Target className="mt-0.5 h-5 w-5 flex-shrink-0 text-emerald-400" />
+      <div className="flex items-start gap-3 rounded-md border border-emerald-700/40 bg-emerald-100 p-4">
+        <Target className="mt-0.5 h-5 w-5 flex-shrink-0 text-emerald-700" />
         <div className="flex flex-col gap-2">
-          <p className="text-sm font-medium text-emerald-200">
+          <p className="text-sm font-medium text-emerald-900">
             Active Campaign: 2026-05-31 → 2026-08-31 (60-90 day window)
           </p>
-          <p className="text-xs text-emerald-800/80">
+          <p className="text-xs text-emerald-800">
             <span className="font-medium">Two throughlines:</span>{' '}
             <span className="italic">
               "Your practice was the dream. Built for the physicians who refused to quit caring."
@@ -222,7 +222,7 @@ export function SocialContentPage(): React.ReactElement {
             (PMC LinkedIn primary) ·{' '}
             <span className="italic">"Independent medicine, reengineered."</span> (EWC IG primary).
           </p>
-          <p className="text-xs text-emerald-800/80">
+          <p className="text-xs text-emerald-800">
             We are subliminally challenging how readers see healthcare while championing the
             independent physician.{' '}
             <span className="font-semibold">
@@ -271,16 +271,16 @@ export function SocialContentPage(): React.ReactElement {
             4 Hard Compliance Gates (clear ALL 4 before submit)
           </h2>
         </div>
-        <div className="rounded-md border border-red-700/40 bg-red-950/20 p-4">
-          <ol className="flex flex-col gap-2 text-xs text-red-200">
+        <div className="rounded-md border border-rose-700/40 bg-rose-100 p-4">
+          <ol className="flex flex-col gap-2 text-xs text-rose-900">
             {COMPLIANCE_GATES.map((gate, i) => (
               <li key={i} className="flex gap-2">
-                <span className="font-semibold text-red-300">{i + 1}.</span>
+                <span className="font-semibold text-rose-700">{i + 1}.</span>
                 <span>{gate}</span>
               </li>
             ))}
           </ol>
-          <p className="mt-3 border-t border-red-700/30 pt-2 text-[11px] text-red-300/80">
+          <p className="mt-3 border-t border-rose-700/30 pt-2 text-[11px] text-rose-800">
             <span className="font-semibold">Universal voice rules:</span> No em-dashes (use{' '}
             <code className="rounded bg-surface-inset px-1 py-0.5">--</code>). Precise odd numbers
             only ($147,200, not $150K). Physician = hero, PMC/EWC = guide. One controlling idea per
@@ -341,13 +341,13 @@ export function SocialContentPage(): React.ReactElement {
       </div>
 
       {/* Apollo wiring notice */}
-      <div className="flex items-start gap-3 rounded-md border border-amber-700/40 bg-amber-950/30 p-4">
-        <AlertCircle className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-400" />
+      <div className="flex items-start gap-3 rounded-md border border-amber-700/40 bg-amber-100 p-4">
+        <AlertCircle className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-700" />
         <div className="flex flex-col gap-1">
-          <p className="text-sm font-medium text-amber-200">
+          <p className="text-sm font-medium text-amber-900">
             Live metrics pending — Apollo API wiring in progress
           </p>
-          <p className="text-xs text-amber-300/80">
+          <p className="text-xs text-amber-800">
             Sequence names, channels, and vault paths below are real and current. Performance
             metrics (sent, open, reply, booked) will populate once the Apollo plan-tier blocker is
             resolved.{' '}
@@ -355,7 +355,7 @@ export function SocialContentPage(): React.ReactElement {
               href="https://app.apollo.io/#/settings/plans"
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 font-medium text-amber-200 hover:text-amber-100"
+              className="inline-flex items-center gap-1 font-medium text-amber-900 hover:text-amber-700"
             >
               Apollo plan settings <ExternalLink className="h-3 w-3" />
             </a>
@@ -399,9 +399,9 @@ export function SocialContentPage(): React.ReactElement {
                       <span
                         className={`inline-flex w-fit items-center rounded px-2 py-0.5 text-[10px] font-medium ${
                           seq.status === 'live'
-                            ? 'bg-green-950/50 text-green-400'
+                            ? 'bg-emerald-100 text-emerald-800 border border-emerald-700/40'
                             : seq.status === 'drafting'
-                              ? 'bg-blue-950/50 text-blue-400'
+                              ? 'bg-blue-100 text-blue-800 border border-blue-700/40'
                               : 'bg-surface-inset text-text-secondary'
                         }`}
                       >

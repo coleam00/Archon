@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-06-07T14:02:58.240018Z",
+  "generated_at": "2026-06-08T19:20:30.439772Z",
   "vault_path": "second-brain/contacts",
-  "count": 17,
+  "count": 36,
   "contacts": [
     {
       "id": "team/andrea-redassich",
@@ -191,6 +191,28 @@
       "vaultPath": "contacts/prospects/adam-bruggeman.md"
     },
     {
+      "id": "prospects/alexander-smithers",
+      "slug": "alexander-smithers",
+      "category": "prospects",
+      "name": "Alexander Smithers, DOM, AP",
+      "role": "Acupuncture / Oriental medicine",
+      "company": "",
+      "email": "alex.smithers@advancedrejuvenation.us",
+      "linkedin": "?",
+      "phone": "(941) 330-9999 (shared main line)",
+      "status": "prospect-cold",
+      "preview": "",
+      "tags": [
+        "contact/prospect",
+        "client/jid5274",
+        "lead/acupuncture",
+        "lead/tcm",
+        "brand/bioreg",
+        "relationship/advanced-rejuvenation"
+      ],
+      "vaultPath": "contacts/prospects/alexander-smithers.md"
+    },
+    {
       "id": "prospects/andrew-lundquist",
       "slug": "andrew-lundquist",
       "category": "prospects",
@@ -204,6 +226,29 @@
       "preview": "",
       "tags": [],
       "vaultPath": "contacts/prospects/andrew-lundquist.md"
+    },
+    {
+      "id": "prospects/carolyn-bell",
+      "slug": "carolyn-bell",
+      "category": "prospects",
+      "name": "Carolyn Bell, M.Ed., LMHC, CCHt",
+      "role": "Psychotherapy + clinical hypnotherapy. FL Lic #MH13389, NPI 1093180002.",
+      "company": "",
+      "email": "?",
+      "linkedin": "?",
+      "phone": "941-358-9902 (OCR uncertain -- could be 954)",
+      "status": "prospect-cold",
+      "preview": "",
+      "tags": [
+        "contact/prospect",
+        "client/jid5274",
+        "lead/behavioral-health",
+        "lead/hypnotherapy",
+        "lead/anxiety",
+        "brand/bioreg",
+        "signal/high-fit"
+      ],
+      "vaultPath": "contacts/prospects/carolyn-bell.md"
     },
     {
       "id": "prospects/cheryl-albright",
@@ -244,6 +289,269 @@
       "vaultPath": "contacts/prospects/corrine-buchanan.md"
     },
     {
+      "id": "prospects/cory-lucas",
+      "slug": "cory-lucas",
+      "category": "prospects",
+      "name": "Cory Lucas, FNP-C, ENP",
+      "role": "Integrative / functional primary care, HRT, peptides",
+      "company": "",
+      "email": "Contact@GetMosaicMed.com (direct: ?)",
+      "linkedin": "?",
+      "phone": "(941) 777-5665 \u00b7 (941) 200-4264",
+      "status": "prospect-cold",
+      "preview": "",
+      "tags": [
+        "contact/prospect",
+        "client/jid5274",
+        "lead/integrative-primary-care",
+        "lead/hrt",
+        "brand/bioreg",
+        "brand/pmc",
+        "signal/high-fit"
+      ],
+      "vaultPath": "contacts/prospects/cory-lucas.md"
+    },
+    {
+      "id": "prospects/daniel-serpentelli",
+      "slug": "daniel-serpentelli",
+      "category": "prospects",
+      "name": "Daniel Serpentelli III, DC",
+      "role": "Integrated PM: chiro + regenerative + medical",
+      "company": "",
+      "email": "?",
+      "linkedin": "?",
+      "phone": "(941) 739-2225 \u00b7 Fax (941) 753-6821",
+      "status": "prospect-cold",
+      "preview": "",
+      "tags": [
+        "contact/prospect",
+        "client/jid5274",
+        "lead/chiropractic",
+        "lead/integrated-medical",
+        "brand/bioreg",
+        "signal/high-fit"
+      ],
+      "vaultPath": "contacts/prospects/daniel-serpentelli.md"
+    },
+    {
+      "id": "prospects/abe-kozma",
+      "slug": "abe-kozma",
+      "category": "prospects",
+      "name": "Dr. Abe Kozma",
+      "role": "Chiropractic + Physical Therapy integrated",
+      "company": "",
+      "email": "?",
+      "linkedin": "?",
+      "phone": "Office 941-924-9892 \u00b7 Fax 941-924-7283",
+      "status": "prospect-cold",
+      "preview": "",
+      "tags": [
+        "contact/prospect",
+        "client/jid5274",
+        "lead/chiropractic",
+        "lead/integrated-pt",
+        "brand/bioreg",
+        "signal/high-fit"
+      ],
+      "vaultPath": "contacts/prospects/abe-kozma.md"
+    },
+    {
+      "id": "prospects/alexander-telfair",
+      "slug": "alexander-telfair",
+      "category": "prospects",
+      "name": "Dr. Alexander Telfair",
+      "role": "Chiropractic, downtown Sarasota",
+      "company": "",
+      "email": "contact@telfairchiropractic.com (likely -- verify direct)",
+      "linkedin": "?",
+      "phone": "(941) 685-2445",
+      "status": "prospect-cold",
+      "preview": "",
+      "tags": [
+        "contact/prospect",
+        "client/jid5274",
+        "lead/chiropractic",
+        "brand/bioreg",
+        "signal/medium-fit"
+      ],
+      "vaultPath": "contacts/prospects/alexander-telfair.md"
+    },
+    {
+      "id": "prospects/allison-legere",
+      "slug": "allison-legere",
+      "category": "prospects",
+      "name": "Dr. Allison Legere",
+      "role": "Chiropractic",
+      "company": "",
+      "email": "?",
+      "linkedin": "?",
+      "phone": "941-225-8055",
+      "status": "prospect-cold",
+      "preview": "",
+      "tags": [
+        "contact/prospect",
+        "client/jid5274",
+        "lead/chiropractic",
+        "brand/bioreg",
+        "status/needs-verification"
+      ],
+      "vaultPath": "contacts/prospects/allison-legere.md"
+    },
+    {
+      "id": "prospects/cynthia-hornback",
+      "slug": "cynthia-hornback",
+      "category": "prospects",
+      "name": "Dr. Cynthia Hornback",
+      "role": "Chiropractic, 3+ FL locations",
+      "company": "",
+      "email": "?",
+      "linkedin": "?",
+      "phone": "941-744-1555 / 941-201-2008 / 941-815-2003 (verify primary)",
+      "status": "prospect-cold",
+      "preview": "",
+      "tags": [
+        "contact/prospect",
+        "client/jid5274",
+        "lead/chiropractic",
+        "lead/multi-site",
+        "lead/owner",
+        "brand/bioreg",
+        "signal/priority"
+      ],
+      "vaultPath": "contacts/prospects/cynthia-hornback.md"
+    },
+    {
+      "id": "prospects/kathryn-franchek-hornback",
+      "slug": "kathryn-franchek-hornback",
+      "category": "prospects",
+      "name": "Dr. Kathryn Franchek",
+      "role": "Chiropractic",
+      "company": "",
+      "email": "drkathryn@hornbackchiro.com",
+      "linkedin": "?",
+      "phone": "941-447-2069 \u00b7 Fax 941-447-2016 (verify -- OCR 944 vs 447)",
+      "status": "prospect-cold",
+      "preview": "",
+      "tags": [
+        "contact/prospect",
+        "client/jid5274",
+        "lead/chiropractic",
+        "brand/bioreg",
+        "relationship/hornback"
+      ],
+      "vaultPath": "contacts/prospects/kathryn-franchek-hornback.md"
+    },
+    {
+      "id": "prospects/kelly-schwemmer",
+      "slug": "kelly-schwemmer",
+      "category": "prospects",
+      "name": "Dr. Kelly M. Schwemmer, MD",
+      "role": "MD, regenerative / integrative (Stem Cell \u00b7 Prolotherapy \u00b7 PRP)",
+      "company": "",
+      "email": "kelly.schwemmer@advancedrejuvenation.us",
+      "linkedin": "?",
+      "phone": "(941) 330-9999 \u00b7 Cell (941) 200-3999",
+      "status": "prospect-cold",
+      "preview": "",
+      "tags": [
+        "contact/prospect",
+        "client/jid5274",
+        "lead/md",
+        "lead/regenerative",
+        "brand/bioreg",
+        "relationship/advanced-rejuvenation"
+      ],
+      "vaultPath": "contacts/prospects/kelly-schwemmer.md"
+    },
+    {
+      "id": "prospects/lee-fox",
+      "slug": "lee-fox",
+      "category": "prospects",
+      "name": "Dr. Lee Fox",
+      "role": "",
+      "company": "",
+      "email": "lfox@apn.com",
+      "linkedin": "",
+      "phone": "",
+      "status": "prospect-engaged",
+      "preview": "",
+      "tags": [
+        "contact/prospect",
+        "client/jid5274",
+        "brand/bioreg",
+        "signal/warm",
+        "lead/behavioral-health",
+        "lead/emdr"
+      ],
+      "vaultPath": "contacts/prospects/lee-fox.md"
+    },
+    {
+      "id": "prospects/miranda-torres-hornback",
+      "slug": "miranda-torres-hornback",
+      "category": "prospects",
+      "name": "Dr. Miranda Torres",
+      "role": "Chiropractic",
+      "company": "",
+      "email": "drmiranda@hornbackchiro.com",
+      "linkedin": "?",
+      "phone": "941-744-1555 (verify direct)",
+      "status": "prospect-cold",
+      "preview": "",
+      "tags": [
+        "contact/prospect",
+        "client/jid5274",
+        "lead/chiropractic",
+        "brand/bioreg",
+        "relationship/hornback"
+      ],
+      "vaultPath": "contacts/prospects/miranda-torres-hornback.md"
+    },
+    {
+      "id": "prospects/jessi-trifiletti",
+      "slug": "jessi-trifiletti",
+      "category": "prospects",
+      "name": "Jessi Trifiletti, LMT, CHES",
+      "role": "Neurofeedback / QEEG brain training",
+      "company": "",
+      "email": "jessi@centerforbrain.com",
+      "linkedin": "?",
+      "phone": "561-744-9110",
+      "status": "prospect-cold",
+      "preview": "",
+      "tags": [
+        "contact/prospect",
+        "client/jid5274",
+        "lead/neurofeedback",
+        "lead/behavioral-health",
+        "brand/bioreg",
+        "signal/high-fit"
+      ],
+      "vaultPath": "contacts/prospects/jessi-trifiletti.md"
+    },
+    {
+      "id": "prospects/john-lieurance",
+      "slug": "john-lieurance",
+      "category": "prospects",
+      "name": "John Lieurance, DC, ND, DACNB",
+      "role": "Regen medicine, methylene blue / melatonin protocols. KOL: author *It's All in Your Head*, MitoZen founder, biohacking podcast circuit.",
+      "company": "",
+      "email": "john@advancedrejuvenation.us",
+      "linkedin": "linkedin.com/in/johnlieurance",
+      "phone": "(941) 330-9999 \u00b7 Fax (941) 330-3536",
+      "status": "prospect-cold",
+      "preview": "",
+      "tags": [
+        "contact/prospect",
+        "client/jid5274",
+        "lead/regenerative",
+        "lead/kol",
+        "lead/podcast-host",
+        "brand/bioreg",
+        "signal/priority"
+      ],
+      "vaultPath": "contacts/prospects/john-lieurance.md"
+    },
+    {
       "id": "prospects/jordan-sternberg",
       "slug": "jordan-sternberg",
       "category": "prospects",
@@ -272,6 +580,115 @@
       "preview": "",
       "tags": ["prospect", "pmc", "salesnav", "warm", "client/jid5274"],
       "vaultPath": "contacts/prospects/jose-ramos-rrt-rpft.md"
+    },
+    {
+      "id": "prospects/kennedy-anderson-gapin",
+      "slug": "kennedy-anderson-gapin",
+      "category": "prospects",
+      "name": "Kennedy Anderson",
+      "role": "Ops at Gapin Institute",
+      "company": "",
+      "email": "kennedy@gapininstitute.com",
+      "linkedin": "?",
+      "phone": "(941) 444-1441",
+      "status": "prospect-cold",
+      "preview": "",
+      "tags": [
+        "contact/prospect",
+        "client/jid5274",
+        "lead/ops",
+        "lead/gatekeeper-path",
+        "brand/bioreg",
+        "relationship/gapin"
+      ],
+      "vaultPath": "contacts/prospects/kennedy-anderson-gapin.md"
+    },
+    {
+      "id": "prospects/sandra-hallote",
+      "slug": "sandra-hallote",
+      "category": "prospects",
+      "name": "Sandra Uller Hallote",
+      "role": "Mobile / concierge LMT",
+      "company": "",
+      "email": "sandybeach31000@yahoo.com",
+      "linkedin": "?",
+      "phone": "941-302-3??? (OCR partial -- needs verification)",
+      "status": "prospect-cold",
+      "preview": "",
+      "tags": [
+        "contact/prospect",
+        "client/jid5274",
+        "lead/lmt",
+        "brand/bioreg",
+        "signal/low-fit-cpp-only"
+      ],
+      "vaultPath": "contacts/prospects/sandra-hallote.md"
+    },
+    {
+      "id": "prospects/tara-smith-ar",
+      "slug": "tara-smith-ar",
+      "category": "prospects",
+      "name": "Tara Smith, CHHP",
+      "role": "Health coaching",
+      "company": "",
+      "email": "tara.smith@advancedrejuvenation.us",
+      "linkedin": "?",
+      "phone": "(941) 330-9999 \u00b7 Cell (941) 228-1120 (verify)",
+      "status": "prospect-cold",
+      "preview": "",
+      "tags": [
+        "contact/prospect",
+        "client/jid5274",
+        "lead/health-coach",
+        "brand/bioreg",
+        "relationship/advanced-rejuvenation"
+      ],
+      "vaultPath": "contacts/prospects/tara-smith-ar.md"
+    },
+    {
+      "id": "prospects/thorin-lindsey",
+      "slug": "thorin-lindsey",
+      "category": "prospects",
+      "name": "Thorin Lindsey",
+      "role": "IV therapy, ozone, hyperbaric, regenerative",
+      "company": "",
+      "email": "tlindsey@solwellness.com (inferred -- verify)",
+      "linkedin": "?",
+      "phone": "941.373.0765",
+      "status": "prospect-cold",
+      "preview": "",
+      "tags": [
+        "contact/prospect",
+        "client/jid5274",
+        "lead/wellness-clinic",
+        "lead/hbot",
+        "brand/bioreg",
+        "signal/high-fit"
+      ],
+      "vaultPath": "contacts/prospects/thorin-lindsey.md"
+    },
+    {
+      "id": "prospects/tracy-gapin",
+      "slug": "tracy-gapin",
+      "category": "prospects",
+      "name": "Tracy Gapin, MD",
+      "role": "Men's health, longevity, peptides, biohacking. KOL: author *Male 2.0*, podcast host.",
+      "company": "",
+      "email": "doctracy@gapininstitute.com (verify -- OCR had 'doctrocy')",
+      "linkedin": "linkedin.com/in/tracygapin",
+      "phone": "941-444-1441",
+      "status": "prospect-cold",
+      "preview": "",
+      "tags": [
+        "contact/prospect",
+        "client/jid5274",
+        "lead/longevity",
+        "lead/mens-health",
+        "lead/kol",
+        "brand/bioreg",
+        "signal/priority"
+      ],
+      "vaultPath": "contacts/prospects/tracy-gapin.md"
     }
   ]
 }
