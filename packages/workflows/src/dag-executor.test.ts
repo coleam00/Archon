@@ -4960,14 +4960,12 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       // gate, the first resumed iteration must use a fresh session (not the
       // potentially stale stored session id), so the SDK never receives an
       // expired session id that would trigger error_during_execution.
-      let callCount = 0;
       mockSendQueryDag.mockImplementation(function* () {
-        callCount++;
         yield {
           type: 'assistant',
           content: 'Updated plan with error handling. <promise>APPROVED</promise>',
         };
-        yield { type: 'result', sessionId: `fresh-session-${String(callCount)}` };
+        yield { type: 'result', sessionId: 'fresh-session-1' };
       });
 
       const store = createMockStore();
