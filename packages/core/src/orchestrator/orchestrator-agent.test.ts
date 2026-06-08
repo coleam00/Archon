@@ -1003,14 +1003,16 @@ describe('discoverAllWorkflows — remote sync', () => {
     const codebase = makeCodebaseForSync();
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
 
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', 'What is the latest commit?');
 
+    // Non-destructive default sync (#1864): 2-arg call, no explicit reset mode.
     expect(mockSyncWorkspace).toHaveBeenCalledWith('/repos/test-repo', undefined);
-    // Regression guard: orchestrator must resolve cwd through the ensure variant
-    // so the workspaces dir is created before the AI provider spawn (issue #1528).
-    expect(mockEnsureArchonWorkspacesPath).toHaveBeenCalled();
+    // cwd resolution behavior — scoped chat runs the provider in the repo's
+    // default_cwd (not the workspaces root) and skips ensureArchonWorkspacesPath
+    // — is covered by the 'provider cwd resolution' describe block (issue #1179).
   });
 
   test('does not pass reset mode for managed clones during chat sync', async () => {
@@ -1215,6 +1217,91 @@ describe('discoverAllWorkflows — remote sync', () => {
     } finally {
       capsMock.mockReturnValue({ envInjection: true });
     }
+  });
+});
+
+// ─── provider cwd resolution (issue #1179) ──────────────────────────────────
+
+describe('provider cwd resolution', () => {
+  function getSendQueryCwd(): string {
+    expect(mockSendQuery).toHaveBeenCalled();
+    return mockSendQuery.mock.calls[0][1] as string;
+  }
+
+  beforeEach(() => {
+    mockGetOrCreateConversation.mockReset();
+    mockGetCodebase.mockReset();
+    mockListCodebases.mockReset();
+    mockSendQuery.mockClear();
+    mockEnsureArchonWorkspacesPath.mockClear();
+    mockLogger.warn.mockClear();
+    mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(null));
+    mockGetCodebase.mockImplementation(() => Promise.resolve(null));
+    mockListCodebases.mockImplementation(() => Promise.resolve([]));
+    mockLoadConfig.mockImplementation(() =>
+      Promise.resolve({ assistants: { claude: {}, codex: {} }, envVars: {} })
+    );
+    mockGetCodebaseEnvVars.mockImplementation(() => Promise.resolve({}));
+  });
+
+  test('scoped chat uses codebase.default_cwd as provider cwd', async () => {
+    const codebase = makeCodebaseForSync();
+    const conversation = makeConversation({ codebase_id: 'codebase-1' });
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello');
+
+    expect(getSendQueryCwd()).toBe('/repos/test-repo');
+    expect(mockEnsureArchonWorkspacesPath).not.toHaveBeenCalled();
+  });
+
+  test('scoped chat uses conversation.cwd when set (active worktree path)', async () => {
+    const codebase = makeCodebaseForSync();
+    const conversation = makeConversation({
+      codebase_id: 'codebase-1',
+      cwd: '/worktrees/feature-branch',
+    });
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello');
+
+    expect(getSendQueryCwd()).toBe('/worktrees/feature-branch');
+    expect(mockEnsureArchonWorkspacesPath).not.toHaveBeenCalled();
+  });
+
+  test('unscoped chat uses ensureArchonWorkspacesPath result', async () => {
+    const conversation = makeConversation({ codebase_id: null });
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([]));
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello');
+
+    expect(getSendQueryCwd()).toBe('/home/test/.archon/workspaces');
+    expect(mockEnsureArchonWorkspacesPath).toHaveBeenCalled();
+  });
+
+  test('scoped chat falls back to workspaces root and warns when codebase not found (deleted)', async () => {
+    const conversation = makeConversation({ codebase_id: 'deleted-id' });
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(null));
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([]));
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello');
+
+    expect(getSendQueryCwd()).toBe('/home/test/.archon/workspaces');
+    expect(mockEnsureArchonWorkspacesPath).toHaveBeenCalled();
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ codebaseId: 'deleted-id' }),
+      'orchestrator.scoped_codebase_not_found'
+    );
   });
 });
 

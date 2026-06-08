@@ -1078,7 +1078,21 @@ export async function handleMessage(
       attachedFiles,
       workflowContext
     );
-    const cwd = await ensureArchonWorkspacesPath();
+    let cwd: string;
+    if (conversation.codebase_id !== null) {
+      const scopedCodebase = codebases.find(c => c.id === conversation.codebase_id);
+      if (scopedCodebase !== undefined) {
+        cwd = conversation.cwd ?? scopedCodebase.default_cwd;
+      } else {
+        getLog().warn(
+          { codebaseId: conversation.codebase_id },
+          'orchestrator.scoped_codebase_not_found'
+        );
+        cwd = await ensureArchonWorkspacesPath();
+      }
+    } else {
+      cwd = await ensureArchonWorkspacesPath();
+    }
 
     // 4. Update activity and get/create session
     await db.touchConversation(conversation.id);
