@@ -34,10 +34,9 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 // Resolve the base branch for a repo, preferring worktree.baseBranch from
-// .archon/config.yaml before falling back to runtime git detection. Without
-// this, repos that use 'master' as default branch (and don't set origin/HEAD)
-// hit getDefaultBranch's "set worktree.baseBranch" error — even when the user
-// already did, because the cleanup service never read it. See #1419.
+// .archon/config.yaml before falling back to runtime git detection. Repos
+// that use 'master' as default and don't have origin/HEAD set will fail
+// getDefaultBranch — reading the config first avoids that error.
 async function resolveBaseBranch(repoPath: RepoPath, cwd: string): Promise<BranchName> {
   const repoConfig = await loadRepoConfig(cwd);
   const configured = repoConfig.worktree?.baseBranch?.trim();
