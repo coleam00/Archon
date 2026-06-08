@@ -309,8 +309,11 @@ function resolveCodebaseName(name: string, codebases: readonly Codebase[]): Code
 
   const lowerName = name.toLowerCase();
 
-  function checkTier(matches: readonly Codebase[]): Codebase | undefined {
-    if (matches.length === 1) return matches[0];
+  function checkTier(matches: readonly Codebase[], logEvent: string): Codebase | undefined {
+    if (matches.length === 1) {
+      getLog().debug({ requested: name, matched: matches[0].name }, logEvent);
+      return matches[0];
+    }
     if (matches.length > 1) {
       const candidates = matches.map(c => `  - ${c.name}`).join('\n');
       throw new Error(`Ambiguous project name '${name}'. Did you mean:\n${candidates}`);
@@ -319,9 +322,18 @@ function resolveCodebaseName(name: string, codebases: readonly Codebase[]): Code
   }
 
   return (
-    checkTier(codebases.filter(c => c.name.toLowerCase() === lowerName)) ??
-    checkTier(codebases.filter(c => c.name.toLowerCase().startsWith(lowerName))) ??
-    checkTier(codebases.filter(c => c.name.toLowerCase().includes(lowerName)))
+    checkTier(
+      codebases.filter(c => c.name.toLowerCase() === lowerName),
+      'project.set_resolve_case_insensitive_match'
+    ) ??
+    checkTier(
+      codebases.filter(c => c.name.toLowerCase().startsWith(lowerName)),
+      'project.set_resolve_prefix_match'
+    ) ??
+    checkTier(
+      codebases.filter(c => c.name.toLowerCase().includes(lowerName)),
+      'project.set_resolve_substring_match'
+    )
   );
 }
 
@@ -2001,7 +2013,7 @@ async function handleSetProject(message: string, conversationId: string): Promis
 
   getLog().info(
     { conversationId, projectName: codebase.name, codebaseId: codebase.id },
-    'project.setproject_completed'
+    'project.set_completed'
   );
   return `Project set to **${codebase.name}**\nWorking directory: ${codebase.default_cwd}`;
 }
