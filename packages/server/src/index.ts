@@ -103,7 +103,14 @@ import {
   captureArchonStarted,
 } from '@archon/paths';
 import { selectGitHubAuthMode, parseGitCredentialPath } from './github-auth-bootstrap';
-import { getAuth, closeAuth, isWebAuthEnabled, assertWebAuthAtBoot, getSignupMode } from './auth';
+import {
+  getAuth,
+  closeAuth,
+  isWebAuthEnabled,
+  assertWebAuthAtBoot,
+  getSignupMode,
+  isArchonOwnedAuthPath,
+} from './auth';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -654,10 +661,10 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   // an external handler serving its own non-OpenAPI surface, like the webhooks.)
   const webAuth = getAuth();
   if (webAuth) {
-    const isArchonOwnedAuthPath = (path: string): boolean =>
-      path === '/api/auth/status' ||
-      path === '/api/auth/github' ||
-      path.startsWith('/api/auth/github/');
+    // isArchonOwnedAuthPath (in ./auth/config) is the single source of truth for
+    // which /api/auth/* paths fall through to Archon's own handlers vs. Better
+    // Auth. A guard test asserts every Archon-registered /api/auth/* route is in
+    // it, so adding a route without exempting it fails CI rather than 404ing live.
     app.on(['POST', 'GET'], '/api/auth/*', (c, next) => {
       if (isArchonOwnedAuthPath(c.req.path)) return next();
       return webAuth.handler(c.req.raw);

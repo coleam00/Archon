@@ -185,6 +185,8 @@ mock.module('@archon/core/utils/commands', () => ({
 }));
 
 import { registerApiRoutes } from './api';
+// Import the REAL exemption check (../auth barrel is mocked above; ../auth/config is not).
+import { isArchonOwnedAuthPath } from '../auth/config';
 
 function makeApp(): OpenAPIHono {
   const app = new OpenAPIHono({ defaultHook: validationErrorHook });
@@ -383,5 +385,23 @@ describe('DELETE /api/auth/providers/:provider', () => {
   test('no identity → 401', async () => {
     const res = await makeApp().request('/api/auth/providers/openrouter', { method: 'DELETE' });
     expect(res.status).toBe(401);
+  });
+});
+
+// Airtight guard for the Better Auth catch-all shadowing bug: when web auth is
+// on, Better Auth claims all of /api/auth/* and 404s anything it doesn't own.
+// EVERY Archon-registered /api/auth/* route must be in isArchonOwnedAuthPath or it
+// 404s live (this is exactly what bit GET /api/auth/providers). registerApiRoutes
+// registers only Archon routes (Better Auth mounts separately in index.ts), so
+// all /api/auth/* paths here are Archon's and must be exempted.
+describe('Better Auth catch-all exemption is exhaustive', () => {
+  test('every Archon-registered /api/auth/* route is exempted by isArchonOwnedAuthPath', () => {
+    const app = makeApp();
+    const authPaths = [
+      ...new Set(app.routes.map(r => r.path).filter(p => p.startsWith('/api/auth/'))),
+    ];
+    expect(authPaths.length).toBeGreaterThan(0); // sanity: we actually found auth routes
+    const notExempted = authPaths.filter(p => !isArchonOwnedAuthPath(p));
+    expect(notExempted).toEqual([]);
   });
 });
