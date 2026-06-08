@@ -74,9 +74,21 @@ export function ActiveRunCard({
             }
           : undefined
       }
-      className={`group relative overflow-hidden rounded border bg-surface transition-colors hover:bg-surface-hover ${
-        selected ? 'border-accent-bright/70 ring-2 ring-accent-bright/40' : 'border-border'
-      } ${canOpen ? 'cursor-pointer focus-visible:outline-none' : ''}`}
+      className={`group relative overflow-hidden rounded-[12px] border transition-colors hover:bg-surface-hover ${
+        run.status === 'running' ? 'bg-warning/[0.04]' : 'bg-surface'
+      } ${selected ? 'ring-2 ring-accent-bright/40' : ''} ${
+        canOpen ? 'cursor-pointer focus-visible:outline-none' : ''
+      }`}
+      // Inline because the console scope's wildcard border-color rule
+      // repaints Tailwind border utilities (see theme.css). Running cards
+      // get the design's amber tint.
+      style={{
+        borderColor: selected
+          ? 'color-mix(in oklch, var(--accent-bright), transparent 30%)'
+          : run.status === 'running'
+            ? 'color-mix(in oklch, var(--warning), transparent 70%)'
+            : 'var(--border)',
+      }}
     >
       <StatusStrip status={run.status} />
       <div className="pl-4 pr-4 py-3">

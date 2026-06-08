@@ -29,7 +29,7 @@ function Checkbox({ label, checked, onChange }: CheckboxProps): ReactElement {
         onChange={e => {
           onChange(e.target.checked);
         }}
-        className="h-3 w-3 cursor-pointer accent-[color:var(--accent-bright)]"
+        className="h-3.5 w-3.5 cursor-pointer accent-[color:var(--accent-bright)]"
       />
       <span>{label}</span>
     </label>
@@ -49,8 +49,8 @@ function Tab({ label, active, onClick, count }: TabProps): ReactElement {
       type="button"
       onClick={onClick}
       aria-pressed={active}
-      className={`relative px-3 py-1.5 text-[11px] font-medium uppercase tracking-wider transition-colors ${
-        active ? 'text-text-primary' : 'text-text-tertiary hover:text-text-primary'
+      className={`relative px-3 py-1.5 font-mono text-[11px] font-semibold uppercase tracking-[0.1em] transition-colors ${
+        active ? 'text-text-primary' : 'text-text-tertiary hover:text-text-secondary'
       }`}
     >
       {label}
@@ -80,7 +80,7 @@ export function StreamToolbar({
 }: StreamToolbarProps): ReactElement {
   const isLog = view === 'log';
   return (
-    <div className="flex items-center gap-3 border-b border-border/60 bg-surface py-1.5 text-[11px]">
+    <div className="flex items-center gap-3 border-b border-border/60 bg-surface py-2 text-[11px]">
       <div className="flex items-center gap-1">
         <Tab
           label="Log"
@@ -107,13 +107,13 @@ export function StreamToolbar({
       </div>
 
       {isLog ? (
-        <span className="ml-3 font-mono text-text-tertiary">
+        <span className="ml-3 font-mono text-[12px] text-text-tertiary">
           {messageCount.toString()} messages · {toolCallCount.toString()} tool calls
         </span>
       ) : null}
 
       {isLog ? (
-        <div className="ml-auto flex items-center gap-4">
+        <div className="ml-auto flex items-center gap-[18px] font-mono text-[12px]">
           <Checkbox label="Tool calls" checked={showToolCalls} onChange={onToggleToolCalls} />
           <Checkbox label="System" checked={showSystem} onChange={onToggleSystem} />
         </div>

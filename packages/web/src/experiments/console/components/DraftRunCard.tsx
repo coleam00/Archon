@@ -275,21 +275,18 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
         onClick={() => {
           setMode('expanded');
         }}
-        className="group flex items-center gap-3 rounded border border-dashed border-border px-3 py-2 text-left transition-colors hover:border-accent-bright/60 hover:bg-surface-hover"
+        className="group flex w-full items-center gap-[11px] rounded-[12px] border border-dashed border-border bg-surface px-[18px] py-[15px] text-left transition-colors hover:border-accent-bright/50 hover:bg-surface-elevated"
         title="Start a new run — press N"
       >
-        <span
-          aria-hidden
-          className="flex h-5 w-5 items-center justify-center rounded-full border border-border text-text-tertiary transition-colors group-hover:border-accent-bright/60 group-hover:text-accent-bright"
-        >
+        <span aria-hidden className="flex text-accent-bright">
           +
         </span>
-        <span className="text-[12px] text-text-tertiary transition-colors group-hover:text-text-primary">
+        <span className="text-[14px] font-semibold text-text-secondary transition-colors group-hover:text-text-primary">
           Start a new run
         </span>
         <span
           aria-hidden
-          className="ml-auto rounded border border-border px-1.5 py-0.5 font-mono text-[10px] tabular-nums text-text-tertiary"
+          className="ml-auto rounded border border-border px-1.5 py-0.5 font-mono text-[10.5px] tabular-nums text-text-secondary"
         >
           N
         </span>
@@ -299,13 +296,14 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
 
   return (
     <article
-      className="relative rounded border bg-surface"
+      className="relative rounded-[12px] border bg-surface-elevated"
       style={{
         // Soft-magenta hairline border on all four sides; the brand-gradient
         // strip is painted as an absolute child so the card can keep
         // `overflow: visible` (the workflow picker's dropdown escapes these
-        // bounds).
+        // bounds). Glow per design (.draft-card box-shadow).
         borderColor: 'color-mix(in oklch, var(--brand-magenta), transparent 60%)',
+        boxShadow: '0 10px 36px -18px color-mix(in oklch, var(--brand-magenta), transparent 50%)',
       }}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
@@ -313,7 +311,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
     >
       <span
         aria-hidden
-        className="brand-bar pointer-events-none absolute left-0 top-0 bottom-0 w-1 rounded-l"
+        className="brand-bar pointer-events-none absolute bottom-0 left-0 top-0 w-[3px] rounded-l-[12px]"
       />
       {dragOver ? (
         <div
@@ -376,7 +374,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
             }
             rows={2}
             disabled={submitting}
-            className="min-h-[52px] w-full resize-none rounded border border-border bg-surface-inset px-3 py-2 text-[13px] text-text-primary placeholder:text-text-tertiary focus:border-border-bright focus:outline-none disabled:opacity-50"
+            className="min-h-[74px] w-full resize-none rounded-[10px] border border-border bg-surface px-3.5 py-[13px] text-[14px] leading-normal text-text-primary placeholder:text-text-tertiary focus:border-accent-bright/50 focus:outline-none focus:ring-[3px] focus:ring-accent-bright/10 disabled:opacity-50"
           />
 
           {files.length > 0 ? (
@@ -439,19 +437,36 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
                   📎
                 </span>
               </button>
-              <span className="font-mono text-[10px] text-text-tertiary">
-                ↵ start · ⇧↵ newline · esc cancel
+              <span className="flex items-center gap-3.5 font-mono text-[11px] text-text-tertiary">
+                <span>
+                  <span className="rounded border border-border px-1.5 py-px text-text-secondary">
+                    ↵
+                  </span>{' '}
+                  start
+                </span>
+                <span>
+                  <span className="rounded border border-border px-1.5 py-px text-text-secondary">
+                    ⇧↵
+                  </span>{' '}
+                  newline
+                </span>
+                <span>
+                  <span className="rounded border border-border px-1.5 py-px text-text-secondary">
+                    esc
+                  </span>{' '}
+                  cancel
+                </span>
               </span>
             </div>
             <button
               type="button"
               onClick={() => void submit()}
               disabled={submitting || workflowName.length === 0}
-              className="brand-bar flex items-center gap-1 rounded px-3 py-1.5 text-[12px] font-semibold text-white shadow-sm transition-all hover:brightness-110 active:brightness-95 disabled:opacity-50"
+              className="brand-bar flex items-center gap-1.5 rounded-[9px] px-[15px] py-[9px] text-[13px] font-bold text-white shadow-[0_6px_18px_-8px_color-mix(in_oklch,var(--brand-magenta),transparent_30%)] transition-all hover:-translate-y-px hover:brightness-110 active:brightness-95 disabled:translate-y-0 disabled:opacity-50 disabled:shadow-none"
             >
               {submitting ? 'Starting…' : 'Start run'}
-              <span aria-hidden className="font-mono text-[10px] opacity-70">
-                ↵
+              <span aria-hidden className="text-[10px] leading-none opacity-80">
+                ▶
               </span>
             </button>
           </div>

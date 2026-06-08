@@ -243,26 +243,33 @@ export function ChatPage(): ReactElement {
       </header>
 
       <div className="relative min-h-0 flex-1">
-        <div ref={scrollRef} onScroll={handleScroll} className="h-full overflow-y-auto px-6 py-4">
-          {messageList.length === 0 && !busy ? (
-            <EmptyState
-              title="No messages yet."
-              hint="Ask the agent about this project, or tell it what to run."
-            />
-          ) : (
-            <StreamContextProvider value={{ runStartedAt: null }}>
-              <ChatStream messages={messageList} showTools={showTools} />
-              {busy ? (
-                <WorkingIndicator
-                  activity={currentActivity}
-                  expanded={showTools}
-                  onToggle={() => {
-                    setShowTools(v => !v);
-                  }}
-                />
-              ) : null}
-            </StreamContextProvider>
-          )}
+        <div
+          ref={scrollRef}
+          onScroll={handleScroll}
+          className="h-full overflow-y-auto px-[30px] pt-[26px] pb-[18px]"
+        >
+          {/* Match the composer's centered 940px column (design: .stream-inner) */}
+          <div className="mx-auto max-w-[940px]">
+            {messageList.length === 0 && !busy ? (
+              <EmptyState
+                title="No messages yet."
+                hint="Ask the agent about this project, or tell it what to run."
+              />
+            ) : (
+              <StreamContextProvider value={{ runStartedAt: null }}>
+                <ChatStream messages={messageList} showTools={showTools} />
+                {busy ? (
+                  <WorkingIndicator
+                    activity={currentActivity}
+                    expanded={showTools}
+                    onToggle={() => {
+                      setShowTools(v => !v);
+                    }}
+                  />
+                ) : null}
+              </StreamContextProvider>
+            )}
+          </div>
         </div>
         {!atBottom ? (
           <button

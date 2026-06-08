@@ -41,8 +41,8 @@ export function SystemPanel(): ReactElement {
 
   return (
     <SettingsSection title="System">
-      <div className="flex flex-col gap-2 text-[12px]">
-        <Row label="status" value={health.status} />
+      <div className="flex flex-col divide-y divide-border">
+        <Row label="status" value={health.status} ok={health.status === 'ok'} />
         <Row label="adapter" value={health.adapter} />
         <Row label="database" value={config?.database ?? '—'} />
         <Row label="version" value={health.version ?? '—'} />
@@ -52,16 +52,19 @@ export function SystemPanel(): ReactElement {
         />
         <Row label="running workflows" value={String(health.runningWorkflows)} />
 
-        <div className="flex items-baseline gap-3">
-          <span className="w-32 shrink-0 text-text-tertiary">platforms</span>
+        <div className="flex items-center gap-[18px] py-[9px]">
+          <span className="w-[170px] shrink-0 text-[13px] text-text-tertiary">platforms</span>
           <div className="flex flex-wrap gap-1.5">
             {platforms.length === 0 ? (
-              <span className="text-text-tertiary">none</span>
+              <span className="text-[13px] text-text-tertiary">none</span>
             ) : (
               platforms.map(pl => (
                 <span
                   key={pl}
-                  className="rounded border border-border px-1.5 py-0.5 font-mono text-[10px] text-text-secondary"
+                  className="rounded-md border bg-surface-elevated px-2 py-0.5 font-mono text-[11px] font-semibold text-text-secondary"
+                  // Inline because the console scope's wildcard border-color
+                  // rule repaints Tailwind border utilities (see theme.css).
+                  style={{ borderColor: 'var(--border-bright)' }}
                 >
                   {pl}
                 </span>
@@ -70,8 +73,8 @@ export function SystemPanel(): ReactElement {
           </div>
         </div>
 
-        <div className="mt-1 flex items-baseline gap-3">
-          <span className="w-32 shrink-0 text-text-tertiary">updates</span>
+        <div className="flex items-center gap-[18px] py-[9px]">
+          <span className="w-[170px] shrink-0 text-[13px] text-text-tertiary">updates</span>
           <UpdateStatus update={update} error={updateError} />
         </div>
       </div>
@@ -111,11 +114,21 @@ function UpdateStatus({
   return <span className="text-text-secondary">Up to date ({update.currentVersion})</span>;
 }
 
-function Row({ label, value }: { label: string; value: string }): ReactElement {
+function Row({
+  label,
+  value,
+  ok = false,
+}: {
+  label: string;
+  value: string;
+  ok?: boolean;
+}): ReactElement {
   return (
-    <div className="flex items-baseline gap-3">
-      <span className="w-32 shrink-0 text-text-tertiary">{label}</span>
-      <span className="font-mono text-text-primary">{value}</span>
+    <div className="flex items-center gap-[18px] py-[9px]">
+      <span className="w-[170px] shrink-0 text-[13px] text-text-tertiary">{label}</span>
+      <span className={`font-mono text-[13px] ${ok ? 'text-success' : 'text-text-primary'}`}>
+        {value}
+      </span>
     </div>
   );
 }

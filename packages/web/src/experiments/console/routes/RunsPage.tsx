@@ -172,12 +172,16 @@ interface SectionHeaderProps {
 
 function SectionHeader({ label, count }: SectionHeaderProps): ReactElement {
   return (
-    <div className="mb-2 flex items-center gap-3">
-      <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-text-tertiary">
+    <div className="mb-3 flex items-center gap-2.5 px-0.5">
+      <span className="font-mono text-[11px] font-bold uppercase tracking-[0.13em] text-text-tertiary">
         {label}
       </span>
-      <span className="font-mono text-[11px] tabular-nums text-text-tertiary">{count}</span>
-      <div className="h-px flex-1 bg-border/60" aria-hidden />
+      <span
+        className="rounded-full border bg-surface-elevated px-2 py-px font-mono text-[10.5px] tabular-nums text-text-secondary"
+        style={{ borderColor: 'var(--border)' }}
+      >
+        {count}
+      </span>
     </div>
   );
 }
@@ -216,7 +220,7 @@ function RunsFeed({
   const showActiveSection = active.length > 0 || draftProject !== null;
 
   return (
-    <div className="flex flex-col gap-8">
+    <div className="flex flex-col gap-[26px]">
       {showActiveSection ? (
         <section>
           <SectionHeader label="Active" count={active.length} />
@@ -240,7 +244,7 @@ function RunsFeed({
       {recent.length > 0 ? (
         <section>
           <SectionHeader label="Recent" count={recent.length} />
-          <div className="flex flex-col overflow-hidden rounded border border-border/60">
+          <div className="flex flex-col overflow-hidden rounded-[12px] border border-border bg-surface">
             {recent.map(run => (
               <RecentRunRow
                 key={run.id}
@@ -481,24 +485,35 @@ export function RunsPage(): ReactElement {
               ) : null}
             </p>
           </div>
-          <input
-            ref={searchRef}
-            type="text"
-            value={query}
-            onChange={e => {
-              setQuery(e.target.value);
-            }}
-            onKeyDown={e => {
-              // Esc unfocuses + clears so `/` → type → esc returns control
-              // to the global keymap without trapping the user in the box.
-              if (e.key === 'Escape') {
-                e.currentTarget.blur();
-                setQuery('');
-              }
-            }}
-            placeholder="Search workflow, project, run id…"
-            className="h-9 w-64 rounded border border-border bg-surface px-3 font-mono text-xs text-text-primary placeholder:text-text-tertiary focus:border-border-bright focus:outline-none"
-          />
+          <div
+            className="flex h-[38px] w-[300px] max-w-[34vw] shrink-0 items-center gap-2 rounded-[10px] border bg-surface-elevated px-3 text-text-tertiary transition-colors focus-within:text-text-secondary"
+            // Inline because the console scope's wildcard border-color rule
+            // repaints Tailwind border utilities (see theme.css).
+            style={{ borderColor: 'var(--border)' }}
+          >
+            <span aria-hidden className="font-mono text-[13px] leading-none">
+              ⌕
+            </span>
+            <input
+              ref={searchRef}
+              type="text"
+              value={query}
+              onChange={e => {
+                setQuery(e.target.value);
+              }}
+              onKeyDown={e => {
+                // Esc unfocuses + clears so `/` → type → esc returns control
+                // to the global keymap without trapping the user in the box.
+                if (e.key === 'Escape') {
+                  e.currentTarget.blur();
+                  setQuery('');
+                }
+              }}
+              placeholder="Search workflow, project, run id…"
+              spellCheck={false}
+              className="min-w-0 flex-1 bg-transparent font-mono text-[12.5px] text-text-primary outline-none placeholder:text-text-tertiary"
+            />
+          </div>
         </div>
 
         {scope === 'all' ? (
@@ -508,9 +523,13 @@ export function RunsPage(): ReactElement {
         ) : (
           <ProjectViewTabs projectId={scope} active="runs" />
         )}
-
-        <FilterChips value={filter} onChange={setFilter} counts={counts} />
       </header>
+
+      {/* Status sub-tabs — their own strip; the active underline overlaps the
+          hairline below (design: .subtabs). */}
+      <div className="border-b border-border px-6">
+        <FilterChips value={filter} onChange={setFilter} counts={counts} />
+      </div>
 
       <PendingInputBanner
         runs={visiblePending}
@@ -524,7 +543,7 @@ export function RunsPage(): ReactElement {
         }}
       />
 
-      <div className="flex-1 overflow-y-auto px-6 py-4">
+      <div className="flex-1 overflow-y-auto px-[30px] pb-[30px] pt-[22px]">
         {error !== undefined && !demoMode ? (
           <EmptyState title="Could not load runs." hint={error.message} />
         ) : loading && !demoMode ? (

@@ -23,7 +23,7 @@ const TRANSITION_LABEL: Record<NodeDividerProps['transition'], string> = {
 };
 
 const TRANSITION_COLOR: Record<NodeDividerProps['transition'], string> = {
-  started: 'text-[color:var(--running)]',
+  started: 'text-text-tertiary',
   completed: 'text-success',
   failed: 'text-error',
   skipped: 'text-text-tertiary',
@@ -68,23 +68,27 @@ export function NodeDivider({
   return (
     <div
       id={transition === 'started' ? `node-transition-${nodeName}` : undefined}
-      className="flex flex-col gap-1 py-3"
+      className="flex flex-col gap-1 border-b border-border/60 py-[11px]"
     >
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-4">
         <time
           dateTime={timestamp}
           title={wallClock}
-          className="w-14 shrink-0 font-mono text-[10px] tabular-nums text-text-tertiary"
+          className="w-14 shrink-0 font-mono text-[11.5px] tabular-nums text-text-tertiary"
         >
           {displayed}
         </time>
-        <span className="font-mono text-[11px] text-text-primary">{nodeName}</span>
+        <span className="font-mono text-[13px] font-semibold text-text-primary">{nodeName}</span>
+        {/* Dashed leader line (design v3 .log-line). */}
         <div
           className="h-px flex-1"
-          style={{ backgroundColor: 'color-mix(in oklch, var(--border), transparent 50%)' }}
+          style={{
+            background:
+              'repeating-linear-gradient(90deg, var(--border) 0 4px, transparent 4px 8px)',
+          }}
           aria-hidden
         />
-        <span className={`font-mono text-[11px] ${TRANSITION_COLOR[transition]}`}>
+        <span className={`font-mono text-[11.5px] ${TRANSITION_COLOR[transition]}`}>
           {TRANSITION_LABEL[transition]}
           {dur}
         </span>
