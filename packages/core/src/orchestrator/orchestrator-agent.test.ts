@@ -2406,3 +2406,131 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
     expect(mockListDecryptedUserProviderCredentials).not.toHaveBeenCalled();
   });
 });
+
+// ─── handleMessage — /setproject dispatch ─────────────────────────────────────
+
+describe('handleMessage — /setproject dispatch', () => {
+  beforeEach(() => {
+    mockGetOrCreateConversation.mockReset();
+    mockListCodebases.mockReset();
+    mockUpdateConversation.mockReset();
+    mockParseCommand.mockReset();
+
+    mockUpdateConversation.mockImplementation(() => Promise.resolve());
+    mockListCodebases.mockImplementation(() => Promise.resolve([]));
+    mockGetOrCreateConversation.mockImplementation(() =>
+      Promise.resolve(makeConversation({ codebase_id: null }))
+    );
+  });
+
+  test('binds conversation to exact-match codebase', async () => {
+    const cb = makeCodebase('my-app');
+    mockListCodebases.mockImplementation(() => Promise.resolve([cb]));
+    mockParseCommand.mockReturnValue({ command: 'setproject', args: ['my-app'] });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/setproject my-app');
+
+    expect(mockUpdateConversation).toHaveBeenCalledWith('conv-1', {
+      codebase_id: 'id-my-app',
+      cwd: '/repos/my-app',
+    });
+    expect(platform.sendMessage).toHaveBeenCalledWith('conv-1', expect.stringContaining('my-app'));
+  });
+
+  test('resolves by case-insensitive match', async () => {
+    const cb = makeCodebase('My-App');
+    mockListCodebases.mockImplementation(() => Promise.resolve([cb]));
+    mockParseCommand.mockReturnValue({ command: 'setproject', args: ['my-app'] });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/setproject my-app');
+
+    expect(mockUpdateConversation).toHaveBeenCalledWith('conv-1', {
+      codebase_id: 'id-My-App',
+      cwd: '/repos/My-App',
+    });
+  });
+
+  test('resolves by prefix match', async () => {
+    const cb = makeCodebase('my-website');
+    mockListCodebases.mockImplementation(() => Promise.resolve([cb]));
+    mockParseCommand.mockReturnValue({ command: 'setproject', args: ['my-web'] });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/setproject my-web');
+
+    expect(mockUpdateConversation).toHaveBeenCalledWith('conv-1', {
+      codebase_id: 'id-my-website',
+      cwd: '/repos/my-website',
+    });
+  });
+
+  test('resolves by substring match', async () => {
+    const cb = makeCodebase('archon-my-api');
+    mockListCodebases.mockImplementation(() => Promise.resolve([cb]));
+    mockParseCommand.mockReturnValue({ command: 'setproject', args: ['my-api'] });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/setproject my-api');
+
+    expect(mockUpdateConversation).toHaveBeenCalledWith('conv-1', {
+      codebase_id: 'id-archon-my-api',
+      cwd: '/repos/archon-my-api',
+    });
+  });
+
+  test('returns not-found message listing available projects', async () => {
+    mockListCodebases.mockImplementation(() =>
+      Promise.resolve([makeCodebase('project-a'), makeCodebase('project-b')])
+    );
+    mockParseCommand.mockReturnValue({ command: 'setproject', args: ['nonexistent'] });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/setproject nonexistent');
+
+    expect(mockUpdateConversation).not.toHaveBeenCalled();
+    const msg = (platform.sendMessage as ReturnType<typeof mock>).mock.calls[0]?.[1] as string;
+    expect(msg).toContain('nonexistent');
+    expect(msg).toContain('project-a');
+    expect(msg).toContain('project-b');
+  });
+
+  test('returns not-found with /register-project hint when no codebases registered', async () => {
+    mockListCodebases.mockImplementation(() => Promise.resolve([]));
+    mockParseCommand.mockReturnValue({ command: 'setproject', args: ['anything'] });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/setproject anything');
+
+    expect(mockUpdateConversation).not.toHaveBeenCalled();
+    const msg = (platform.sendMessage as ReturnType<typeof mock>).mock.calls[0]?.[1] as string;
+    expect(msg).toContain('/register-project');
+  });
+
+  test('returns ambiguity message on multiple prefix matches', async () => {
+    mockListCodebases.mockImplementation(() =>
+      Promise.resolve([makeCodebase('app-backend'), makeCodebase('app-frontend')])
+    );
+    mockParseCommand.mockReturnValue({ command: 'setproject', args: ['app'] });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/setproject app');
+
+    expect(mockUpdateConversation).not.toHaveBeenCalled();
+    const msg = (platform.sendMessage as ReturnType<typeof mock>).mock.calls[0]?.[1] as string;
+    expect(msg).toContain('Ambiguous');
+    expect(msg).toContain('app-backend');
+    expect(msg).toContain('app-frontend');
+  });
+
+  test('returns usage message when no args', async () => {
+    mockParseCommand.mockReturnValue({ command: 'setproject', args: [] });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/setproject');
+
+    expect(mockUpdateConversation).not.toHaveBeenCalled();
+    expect(platform.sendMessage).toHaveBeenCalledWith('conv-1', expect.stringContaining('Usage'));
+  });
+});

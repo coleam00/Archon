@@ -24,6 +24,7 @@ These commands are handled deterministically by the orchestrator — they always
 | `/register-project <path>` | Register a local directory as a project |
 | `/update-project <name> <path>` | Update a project's directory path |
 | `/remove-project <name>` | Remove a project registration |
+| `/setproject <name>` | Bind this conversation to a registered project |
 
 ## Workflows
 

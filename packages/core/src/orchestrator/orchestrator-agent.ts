@@ -295,6 +295,49 @@ function findCodebaseByName(
 }
 
 /**
+ * Resolve a codebase by name using 4-tier fuzzy matching.
+ * Tiers: exact → case-insensitive → prefix → substring.
+ * Returns undefined if not found; throws on ambiguity within a tier.
+ *
+ * Mirrors `resolveWorkflowName` (packages/workflows/src/router.ts) but uses
+ * prefix instead of suffix for tier 3 — project names don't follow the
+ * `archon-X` suffix convention workflows use.
+ */
+function resolveCodebaseName(name: string, codebases: readonly Codebase[]): Codebase | undefined {
+  const exact = codebases.find(c => c.name === name);
+  if (exact) return exact;
+
+  const lowerName = name.toLowerCase();
+
+  function checkTier(matches: readonly Codebase[], logEvent: string): Codebase | undefined {
+    if (matches.length === 1) {
+      getLog().debug({ requested: name, matched: matches[0].name }, logEvent);
+      return matches[0];
+    }
+    if (matches.length > 1) {
+      const candidates = matches.map(c => `  - ${c.name}`).join('\n');
+      throw new Error(`Ambiguous project name '${name}'. Did you mean:\n${candidates}`);
+    }
+    return undefined;
+  }
+
+  return (
+    checkTier(
+      codebases.filter(c => c.name.toLowerCase() === lowerName),
+      'project.set_resolve_case_insensitive_match'
+    ) ??
+    checkTier(
+      codebases.filter(c => c.name.toLowerCase().startsWith(lowerName)),
+      'project.set_resolve_prefix_match'
+    ) ??
+    checkTier(
+      codebases.filter(c => c.name.toLowerCase().includes(lowerName)),
+      'project.set_resolve_substring_match'
+    )
+  );
+}
+
+/**
  * Parse orchestrator commands from AI response text.
  * Scans for /invoke-workflow and /register-project patterns.
  */
@@ -947,6 +990,7 @@ export async function handleMessage(
         'register-project',
         'update-project',
         'remove-project',
+        'setproject',
         'commands',
         'init',
         'worktree',
@@ -970,6 +1014,13 @@ export async function handleMessage(
         if (command === 'remove-project') {
           getLog().debug({ command, conversationId }, 'deterministic_command');
           const result = await handleRemoveProject(message);
+          await platform.sendMessage(conversationId, result);
+          return;
+        }
+
+        if (command === 'setproject') {
+          getLog().debug({ command, conversationId }, 'deterministic_command');
+          const result = await handleSetProject(message, conversationId);
           await platform.sendMessage(conversationId, result);
           return;
         }
@@ -1945,6 +1996,47 @@ async function handleRemoveProject(message: string): Promise<string> {
   await codebaseDb.deleteCodebase(codebase.id);
   getLog().info({ name: projectName, id: codebase.id }, 'project.remove_completed');
   return `Project "${projectName}" removed.\nPath was: ${codebase.default_cwd}`;
+}
+
+/**
+ * Handle /setproject command.
+ * Binds the current conversation to a registered codebase by writing
+ * `codebase_id` and `cwd` to the conversations table. Uses 4-tier fuzzy
+ * name resolution (exact → case-insensitive → prefix → substring).
+ */
+async function handleSetProject(message: string, conversationId: string): Promise<string> {
+  const { args } = commandHandler.parseCommand(message);
+  if (args.length < 1) {
+    return 'Usage: /setproject <project-name>';
+  }
+
+  const projectName = args.join(' ');
+  const codebases = await codebaseDb.listCodebases();
+
+  let codebase: Codebase | undefined;
+  try {
+    codebase = resolveCodebaseName(projectName, codebases);
+  } catch (err) {
+    return (err as Error).message;
+  }
+
+  if (!codebase) {
+    const available = codebases.map(c => c.name).join(', ');
+    return available
+      ? `Project "${projectName}" not found.\nRegistered projects: ${available}`
+      : `Project "${projectName}" not found. No projects registered — use /register-project.`;
+  }
+
+  await db.updateConversation(conversationId, {
+    codebase_id: codebase.id,
+    cwd: codebase.default_cwd,
+  });
+
+  getLog().info(
+    { conversationId, projectName: codebase.name, codebaseId: codebase.id },
+    'project.set_completed'
+  );
+  return `Project set to **${codebase.name}**\nWorking directory: ${codebase.default_cwd}`;
 }
 
 /**
