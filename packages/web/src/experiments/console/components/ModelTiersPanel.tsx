@@ -85,6 +85,15 @@ export function ModelTiersPanel(): ReactElement {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
+  // Guard async setState after unmount (mirrors ProviderConnectionsPanel).
+  const cancelledRef = useRef(false);
+  useEffect(() => {
+    cancelledRef.current = false;
+    return (): void => {
+      cancelledRef.current = true;
+    };
+  }, []);
+
   const loadError = configError ?? providersError;
   if (loadError !== undefined) {
     return (
@@ -113,11 +122,13 @@ export function ModelTiersPanel(): ReactElement {
     setSaveError(null);
     try {
       await skill.updateTiers(skill.buildTiersUpdate(form));
+      if (cancelledRef.current) return;
       invalidate(K.config); // refetch re-seeds the form and clears `dirty`
     } catch (e: unknown) {
+      if (cancelledRef.current) return;
       setSaveError(e instanceof Error ? e.message : 'Failed to save tiers.');
     } finally {
-      setSaving(false);
+      if (!cancelledRef.current) setSaving(false);
     }
   };
 

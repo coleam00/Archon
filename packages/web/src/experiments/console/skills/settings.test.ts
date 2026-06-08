@@ -1,5 +1,11 @@
 import { describe, test, expect } from 'bun:test';
-import { buildAssistantUpdate, type AssistantConfigForm } from './settings';
+import {
+  buildAssistantUpdate,
+  buildTiersUpdate,
+  type AssistantConfigForm,
+  type TiersForm,
+  type TierRowForm,
+} from './settings';
 
 function form(over: Partial<AssistantConfigForm> = {}): AssistantConfigForm {
   return {
@@ -62,5 +68,54 @@ describe('buildAssistantUpdate', () => {
   test('everything blank → just the assistant, no assistants key', () => {
     const body = buildAssistantUpdate(form({ models: { claude: '', codex: '' } }));
     expect(body).toEqual({ assistant: 'claude' });
+  });
+});
+
+const BLANK: TierRowForm = { provider: '', model: '', effort: '' };
+function tierForm(
+  over: Partial<Record<'small' | 'medium' | 'large', Partial<TierRowForm>>>
+): TiersForm {
+  return {
+    small: { ...BLANK, ...over.small },
+    medium: { ...BLANK, ...over.medium },
+    large: { ...BLANK, ...over.large },
+  };
+}
+
+describe('buildTiersUpdate', () => {
+  test('a fully-set row → entry with provider/model/effort', () => {
+    const body = buildTiersUpdate(
+      tierForm({ large: { provider: 'claude', model: 'opus', effort: 'high' } })
+    );
+    expect(body.tiers.large).toEqual({ provider: 'claude', model: 'opus', effort: 'high' });
+  });
+
+  test('omits effort when blank', () => {
+    const body = buildTiersUpdate(tierForm({ large: { provider: 'claude', model: 'opus' } }));
+    expect(body.tiers.large).toEqual({ provider: 'claude', model: 'opus' });
+  });
+
+  test('blank provider → null (unset)', () => {
+    const body = buildTiersUpdate(tierForm({ large: { provider: '', model: 'opus' } }));
+    expect(body.tiers.large).toBeNull();
+  });
+
+  test('blank model → null (unset) — the OR-blank branch is not inverted', () => {
+    const body = buildTiersUpdate(tierForm({ large: { provider: 'claude', model: '' } }));
+    expect(body.tiers.large).toBeNull();
+  });
+
+  test('always sends all three tiers (set + null)', () => {
+    const body = buildTiersUpdate(tierForm({ small: { provider: 'claude', model: 'haiku' } }));
+    expect(body.tiers.small).toEqual({ provider: 'claude', model: 'haiku' });
+    expect(body.tiers.medium).toBeNull();
+    expect(body.tiers.large).toBeNull();
+  });
+
+  test('trims whitespace on every field', () => {
+    const body = buildTiersUpdate(
+      tierForm({ large: { provider: '  claude ', model: ' opus ', effort: ' high ' } })
+    );
+    expect(body.tiers.large).toEqual({ provider: 'claude', model: 'opus', effort: 'high' });
   });
 });

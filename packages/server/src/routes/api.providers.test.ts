@@ -263,6 +263,12 @@ describe('PATCH /api/config/tiers', () => {
     expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
   });
 
+  test('invalid effort for the provider → 400, no write (not silently dropped)', async () => {
+    const res = await patch({ large: { provider: 'claude', model: 'opus', effort: 'ultra' } });
+    expect(res.status).toBe(400);
+    expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
+  });
+
   test('null tier value unsets (passes null through)', async () => {
     const res = await patch({ large: null });
     expect(res.status).toBe(200);

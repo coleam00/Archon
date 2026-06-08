@@ -724,6 +724,21 @@ tiers:
       expect(written).not.toContain('opus');
     });
 
+    test('unsetting every tier collapses `tiers` to undefined (no empty tiers key)', async () => {
+      mockFsReadFile.mockResolvedValue(`
+defaultAssistant: claude
+tiers:
+  large:
+    provider: claude
+    model: opus
+`);
+      await updateGlobalConfig({ tiers: { small: null, medium: null, large: null } });
+      const written = mockFsWriteFile.mock.calls[0]?.[1] as string;
+      expect(written).not.toContain('opus');
+      // Collapsed to `undefined` → no serialized `tiers:` key at all.
+      expect(written).not.toMatch(/^tiers:/m);
+    });
+
     test('existing tiers survive an assistants-only update', async () => {
       mockFsReadFile.mockResolvedValue(`
 tiers:

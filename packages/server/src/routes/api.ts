@@ -150,7 +150,11 @@ import {
   updateTiersBodySchema,
   codebaseEnvironmentsResponseSchema,
 } from './schemas/config.schemas';
-import { TIER_NAMES } from '@archon/workflows/model-validation';
+import {
+  TIER_NAMES,
+  isEffortValidForProvider,
+  validEffortsForProvider,
+} from '@archon/workflows/model-validation';
 import { providerListResponseSchema } from './schemas/provider.schemas';
 import {
   authStatusResponseSchema,
@@ -3701,6 +3705,14 @@ export function registerApiRoutes(
             `Unknown provider '${entry.provider}' for tier '${tier}'. Available: ${getProviderInfoList()
               .map(p => p.id)
               .join(', ')}`
+          );
+        }
+        if (entry.effort !== undefined && !isEffortValidForProvider(entry.provider, entry.effort)) {
+          return apiError(
+            c,
+            400,
+            `Invalid effort '${entry.effort}' for provider '${entry.provider}' (tier '${tier}'). ` +
+              `Valid: ${validEffortsForProvider(entry.provider)?.join(', ') ?? '(none)'}`
           );
         }
         // Build a clean RawAliasEntry — drop `thinking` (no UI/CLI surface yet).

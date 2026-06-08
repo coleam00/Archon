@@ -9,7 +9,9 @@ const providerDefaultsSchema = z.record(z.string(), z.unknown()).openapi('Provid
 /**
  * A single model-tier preset — mirrors `RawAliasEntry` in
  * `@archon/workflows/model-validation` ({ provider, model, effort?, thinking? }).
- * `thinking` is structurally allowed (pass-through) but has no UI surface yet.
+ * `thinking` is accepted on READ so it round-trips an existing config.yaml, but
+ * the PATCH /api/config/tiers handler DROPS it on write (no UI/CLI surface yet) —
+ * so saving a tier in the UI/CLI clears any `thinking` previously set in YAML.
  */
 export const tierEntrySchema = z
   .object({

@@ -289,6 +289,12 @@ describe('aiTierSetCommand', () => {
     expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
   });
 
+  it('invalid effort for the provider → 1, no write', async () => {
+    expect(await aiTierSetCommand('large', 'claude', 'opus', 'ultra')).toBe(1);
+    expect(out()).toContain('Invalid effort');
+    expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
+  });
+
   it('missing model → 1', async () => {
     expect(await aiTierSetCommand('large', 'claude', undefined, undefined)).toBe(1);
     expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();

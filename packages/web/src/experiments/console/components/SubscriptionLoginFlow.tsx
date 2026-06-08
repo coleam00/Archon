@@ -3,33 +3,9 @@ import * as skill from '../skills';
 import type { ProviderOAuthStart } from '../skills';
 import { invalidate } from '../store/cache';
 import { K } from '../store/keys';
+import { normalizeOAuthCode } from '../lib/oauth-code';
 
 type Phase = 'starting' | 'manual' | 'device' | 'error';
-
-/**
- * Normalize whatever the user pastes from the manual (claude) flow into the
- * `code#state` form the bridge expects. The browser redirect on a HEADLESS
- * server lands on the *server's* `localhost:<port>/callback?code=…&state=…`
- * (unreachable from the user's machine → "site can't be reached"); the user
- * copies that URL or just the code. Accept a full URL, a bare `code=…&state=…`
- * query, an explicit `code#state`, or a bare code. (On a LOCAL install the
- * callback server resolves the login itself and no paste is needed.)
- */
-function normalizeCode(pasted: string): string {
-  const v = pasted.trim();
-  if (v.includes('code=')) {
-    try {
-      const query = v.includes('?') ? v.slice(v.indexOf('?')) : `?${v}`;
-      const params = new URLSearchParams(query);
-      const code = params.get('code');
-      const state = params.get('state');
-      if (code) return state ? `${code}#${state}` : code;
-    } catch {
-      // fall through — treat as already-normalized
-    }
-  }
-  return v;
-}
 
 /**
  * Drives one subscription (OAuth) login for `provider` through the held-session
@@ -53,6 +29,12 @@ export function SubscriptionLoginFlow({
 
   const cancelledRef = useRef(false);
   const pendingCodeRef = useRef<string | undefined>(undefined);
+  // Keep `onDone` in a ref so the start/poll effect depends only on `provider`.
+  // Otherwise the parent's inline `onDone={() => …}` is a fresh fn each render,
+  // and a mid-flow parent re-render would tear down the effect and RESTART the
+  // OAuth session (dropping the in-flight login + any pasted code). (#1926 I1)
+  const onDoneRef = useRef(onDone);
+  onDoneRef.current = onDone;
 
   useEffect(() => {
     cancelledRef.current = false;
@@ -76,7 +58,7 @@ export function SubscriptionLoginFlow({
           if (cancelledRef.current) return;
           if (res.status === 'connected') {
             invalidate(K.providerConnections);
-            onDone();
+            onDoneRef.current();
             return;
           }
           if (res.status === 'error') {
@@ -112,11 +94,11 @@ export function SubscriptionLoginFlow({
     return (): void => {
       cancelledRef.current = true;
     };
-  }, [provider, onDone]);
+  }, [provider]);
 
   const submitCode = (): void => {
     if (code.trim() === '') return;
-    pendingCodeRef.current = normalizeCode(code);
+    pendingCodeRef.current = normalizeOAuthCode(code);
     setCode('');
     setMessage('Submitting…');
   };

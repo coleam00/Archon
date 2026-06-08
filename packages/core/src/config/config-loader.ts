@@ -651,7 +651,8 @@ export async function updateGlobalConfig(
 /**
  * Built-in tier presets (small/medium/large) for a provider, from
  * tier-defaults.json via buildAiProfile. Lets the settings UI show what an
- * unset tier resolves to. Never throws — an unknown/odd provider yields {}.
+ * unset tier resolves to. Never throws — an unknown/odd provider (or a throw)
+ * yields `undefined` (every consumer uses optional chaining).
  */
 function tierDefaultsFor(provider: string): RawTiersConfig | undefined {
   try {

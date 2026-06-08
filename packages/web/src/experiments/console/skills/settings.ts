@@ -78,12 +78,18 @@ export function buildAssistantUpdate(form: AssistantConfigForm): UpdateAssistant
 }
 
 // ---------------------------------------------------------------------------
-// Model tiers (PR-3b). Types inlined (mirroring server/.../config.schemas.ts)
-// until a regen lands TiersConfig / UpdateTiersBody / SafeConfig.tiers in
+// Model tiers. Types inlined (mirroring server/.../config.schemas.ts) until a
+// regen lands TiersConfig / UpdateTiersBody / SafeConfig.tiers in
 // @/lib/api.generated — same convention as skills/github.ts. Migrate to
 // `components['schemas']['TiersConfig']` etc. once the spec is regenerated.
 // ---------------------------------------------------------------------------
 
+/**
+ * A tier preset as the UI handles it. `thinking` is intentionally omitted — there
+ * is no UI control for it, and the PATCH /api/config/tiers handler drops it on
+ * write, so saving a tier here clears any `thinking` set in config.yaml. Known
+ * limitation (advanced; rare).
+ */
 export interface TierEntry {
   provider: string;
   model: string;

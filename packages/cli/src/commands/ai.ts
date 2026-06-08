@@ -1,13 +1,17 @@
 /**
- * `archon ai` — manage the current CLI user's per-user AI-provider credentials.
+ * `archon ai` — per-user AI-provider credentials AND install-wide model config.
  *
  *   archon ai key set <provider>   Connect an API key (read from masked prompt or piped stdin)
  *   archon ai list                 List connected providers (metadata only, no secrets)
  *   archon ai logout <provider>    Disconnect a provider
- *   archon ai login <provider>     (reserved — OAuth subscription login ships in a later release)
+ *   archon ai login <provider>     Connect a subscription (claude/copilot) via OAuth
+ *   archon ai tier set|list|unset  Edit small/medium/large tier presets (config, not a credential)
+ *   archon ai default <provider>   Set the default assistant (config, not a credential)
  *
- * Gated on TOKEN_ENCRYPTION_KEY (isPerUserProviderKeysEnabled). Solo installs
- * keep reading provider keys from the environment unchanged.
+ * The CREDENTIAL commands (key/list/logout/login) are gated on
+ * TOKEN_ENCRYPTION_KEY (isPerUserProviderKeysEnabled); solo installs keep reading
+ * provider keys from the environment unchanged. The CONFIG commands (tier/default)
+ * write ~/.archon/config.yaml and are ungated — they work on every install.
  *
  * The API key is NEVER taken from argv (it would leak into shell history and the
  * process list). It is read from a masked `@clack/prompts` password input on a
@@ -33,7 +37,12 @@ import {
   type TiersPatch,
 } from '@archon/core';
 import { isRegisteredProvider, getProviderInfoList } from '@archon/providers';
-import { TIER_NAMES, buildAiProfile } from '@archon/workflows/model-validation';
+import {
+  TIER_NAMES,
+  buildAiProfile,
+  isEffortValidForProvider,
+  validEffortsForProvider,
+} from '@archon/workflows/model-validation';
 import type { TierName, RawAliasEntry } from '@archon/workflows/model-validation';
 import * as userDb from '@archon/core/db/users';
 import { resolveCliUserId } from './auth';
@@ -273,7 +282,7 @@ function isTierName(v: string | undefined): v is TierName {
   return v !== undefined && (TIER_NAMES as readonly string[]).includes(v);
 }
 
-function providerCatalog(): string {
+function registeredProvidersList(): string {
   return getProviderInfoList()
     .map(p => p.id)
     .join(', ');
@@ -293,7 +302,14 @@ export async function aiTierSetCommand(
     return 1;
   }
   if (!isRegisteredProvider(provider)) {
-    console.error(`Unknown provider '${provider}'. Available: ${providerCatalog()}.`);
+    console.error(`Unknown provider '${provider}'. Available: ${registeredProvidersList()}.`);
+    return 1;
+  }
+  if (effort !== undefined && !isEffortValidForProvider(provider, effort)) {
+    console.error(
+      `Invalid effort '${effort}' for provider '${provider}'. ` +
+        `Valid: ${validEffortsForProvider(provider)?.join(', ') ?? '(this provider has no effort setting)'}.`
+    );
     return 1;
   }
   const entry: RawAliasEntry = { provider, model, ...(effort ? { effort } : {}) };
@@ -337,7 +353,14 @@ export async function aiTierListCommand(json?: boolean): Promise<number> {
     const config = await loadConfig();
     const configured = config.tiers ?? {};
     // No options → just the built-in tier-defaults for the default provider.
-    const defaults = buildAiProfile(config.assistant).aliases;
+    // Degrade like the route's `tierDefaultsFor` (buildAiProfile ~never throws
+    // with no aliases, but a defaults lookup must not fail the whole listing).
+    let defaults: Record<string, RawAliasEntry> = {};
+    try {
+      defaults = buildAiProfile(config.assistant).aliases;
+    } catch (err) {
+      getLog().warn({ err: err as Error }, 'cli.ai_tier_list_defaults_failed');
+    }
     const rows = TIER_NAMES.map(tier => {
       const set = configured[tier];
       const def = defaults[tier];
@@ -377,11 +400,11 @@ export async function aiTierListCommand(json?: boolean): Promise<number> {
 export async function aiDefaultCommand(provider: string | undefined): Promise<number> {
   if (!provider) {
     console.error('Usage: archon ai default <provider>');
-    console.error(`Providers: ${providerCatalog()}`);
+    console.error(`Providers: ${registeredProvidersList()}`);
     return 1;
   }
   if (!isRegisteredProvider(provider)) {
-    console.error(`Unknown provider '${provider}'. Available: ${providerCatalog()}.`);
+    console.error(`Unknown provider '${provider}'. Available: ${registeredProvidersList()}.`);
     return 1;
   }
   try {

@@ -239,3 +239,26 @@ export function routePresetEffort(provider: string, effort: string): EffortRouti
   }
   return null;
 }
+
+/**
+ * The effort vocabulary for a provider, or `null` if the provider has no known
+ * effort concept (Pi/OpenRouter/Copilot/OpenCode — effort doesn't route there).
+ * Lets the tier-config write path (route + CLI) validate `effort` UP FRONT
+ * instead of letting `routePresetEffort` silently drop an unknown value at run
+ * time (so `--effort ultra` errors instead of succeeding with no effect).
+ */
+export function validEffortsForProvider(provider: string): readonly string[] | null {
+  if (provider === 'claude') return [...CLAUDE_EFFORTS];
+  if (provider === 'codex') return [...CODEX_REASONING_EFFORTS];
+  return null;
+}
+
+/**
+ * True if `effort` is acceptable for `provider`. Providers WITHOUT a known
+ * effort vocabulary accept any value (we don't block what we can't validate;
+ * it's a no-op for them, not an error).
+ */
+export function isEffortValidForProvider(provider: string, effort: string): boolean {
+  const valid = validEffortsForProvider(provider);
+  return valid === null || valid.includes(effort);
+}
