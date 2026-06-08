@@ -389,7 +389,7 @@ packages/
         ├── experiments/      # Isolated in-repo spikes; lint-guarded against
         │   │                 # importing production web modules. Drop-in or
         │   │                 # delete cleanly. See experiments/README.md.
-        │   └── console/      # Run-centric console UI mounted at /console
+        │   └── console/      # Run-centric console UI — the default at / (classic UI re-rooted under /legacy)
         └── App.tsx           # Router + layout
 ```
 

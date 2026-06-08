@@ -180,7 +180,7 @@ export function WorkflowCard({
         </div>
         <div className="flex items-center gap-1">
           <Link
-            to={`/workflows/builder?edit=${encodeURIComponent(workflow.name)}`}
+            to={`/legacy/workflows/builder?edit=${encodeURIComponent(workflow.name)}`}
             onClick={(e): void => {
               e.stopPropagation();
             }}

@@ -36,7 +36,7 @@ export function WorkflowRunGroup({
           <div className="h-px flex-1 bg-border" />
           <button
             onClick={(): void => {
-              navigate(`/chat/${encodeURIComponent(parentPlatformId)}`);
+              navigate(`/legacy/chat/${encodeURIComponent(parentPlatformId)}`);
             }}
             className="flex items-center gap-1.5 rounded-full border border-border bg-surface-elevated px-2.5 py-0.5 text-[11px] text-text-secondary hover:border-primary/40 hover:text-primary transition-colors shrink-0"
           >
