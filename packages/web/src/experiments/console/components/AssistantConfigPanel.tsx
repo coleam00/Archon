@@ -96,14 +96,14 @@ export function AssistantConfigPanel(): ReactElement {
   const loadError = configError ?? providersError;
   if (loadError !== undefined) {
     return (
-      <SettingsSection title="Assistant">
+      <SettingsSection title="Defaults">
         <p className="font-mono text-[11px] text-error">{loadError.message}</p>
       </SettingsSection>
     );
   }
   if (form === null || providers === undefined) {
     return (
-      <SettingsSection title="Assistant">
+      <SettingsSection title="Defaults">
         <p className="font-mono text-[11px] text-text-tertiary">Loading…</p>
       </SettingsSection>
     );
@@ -132,7 +132,7 @@ export function AssistantConfigPanel(): ReactElement {
   };
 
   return (
-    <SettingsSection title="Assistant">
+    <SettingsSection title="Defaults">
       <label className="mb-5 flex items-center gap-[18px]">
         <span className="w-[150px] shrink-0 text-[13.5px] font-semibold text-text-secondary">
           Default assistant
