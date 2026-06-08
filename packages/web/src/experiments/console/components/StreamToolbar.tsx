@@ -1,6 +1,11 @@
-import type { ReactElement } from 'react';
+import type { ReactElement, ReactNode } from 'react';
 
 export type DetailView = 'log' | 'graph' | 'artifacts';
+
+export interface NodeFilterOption {
+  id: string;
+  name: string;
+}
 
 interface StreamToolbarProps {
   view: DetailView;
@@ -12,6 +17,41 @@ interface StreamToolbarProps {
   toolCallCount: number;
   messageCount: number;
   artifactCount: number | null;
+  /** Distinct nodes in the run; empty hides the node filter. */
+  nodeOptions: NodeFilterOption[];
+  /** `'all'` or a nodeId. */
+  selectedNodeId: string;
+  onSelectNode: (next: string) => void;
+}
+
+// Compact native select styled with brand tokens — mirrors AssistantConfigPanel's
+// SelectShell/SELECT_CLASS, tuned for the toolbar row height.
+const SELECT_CLASS =
+  'max-w-[180px] cursor-pointer appearance-none truncate rounded-[7px] border border-border bg-surface-elevated py-[3px] pl-2.5 pr-7 font-mono text-[11.5px] font-medium text-text-primary transition-all focus:border-accent-bright/50 focus:outline-none focus:shadow-[0_0_0_3px_color-mix(in_oklch,var(--brand-magenta),transparent_92%)]';
+
+function SelectShell({ children }: { children: ReactNode }): ReactElement {
+  return (
+    <span className="relative inline-flex items-center">
+      {children}
+      <span
+        aria-hidden
+        className="pointer-events-none absolute right-[9px] flex text-text-tertiary"
+      >
+        <svg
+          width="12"
+          height="12"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M6 9l6 6 6-6" />
+        </svg>
+      </span>
+    </span>
+  );
 }
 
 interface CheckboxProps {
@@ -77,6 +117,9 @@ export function StreamToolbar({
   toolCallCount,
   messageCount,
   artifactCount,
+  nodeOptions,
+  selectedNodeId,
+  onSelectNode,
 }: StreamToolbarProps): ReactElement {
   const isLog = view === 'log';
   return (
@@ -114,6 +157,28 @@ export function StreamToolbar({
 
       {isLog ? (
         <div className="ml-auto flex items-center gap-[18px] font-mono text-[12px]">
+          {nodeOptions.length > 0 ? (
+            <label className="flex items-center gap-1.5 text-text-secondary">
+              <span className="text-text-tertiary">Node</span>
+              <SelectShell>
+                <select
+                  value={selectedNodeId}
+                  onChange={e => {
+                    onSelectNode(e.target.value);
+                  }}
+                  className={SELECT_CLASS}
+                  aria-label="Filter stream by node"
+                >
+                  <option value="all">All nodes</option>
+                  {nodeOptions.map(o => (
+                    <option key={o.id} value={o.id}>
+                      {o.name}
+                    </option>
+                  ))}
+                </select>
+              </SelectShell>
+            </label>
+          ) : null}
           <Checkbox label="Tool calls" checked={showToolCalls} onChange={onToggleToolCalls} />
           <Checkbox label="System" checked={showSystem} onChange={onToggleSystem} />
         </div>

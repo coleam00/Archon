@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactElement,
+} from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { useKeymap, type Binding } from '../lib/keymap';
 import { RunDetailHeader } from '../components/RunDetailHeader';
@@ -16,7 +24,7 @@ import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
 import * as skill from '../skills';
 import type { Run } from '../primitives/run';
-import type { RunEvent } from '../primitives/event';
+import { foldNodeRuns, type RunEvent } from '../primitives/event';
 import type { Message } from '../primitives/message';
 import type { Project } from '../primitives/project';
 import type { ArtifactFile } from '../skills/runs';
@@ -45,6 +53,7 @@ const TOGGLE_KEYS = {
   toolCalls: 'archon.console.showToolCalls',
   system: 'archon.console.showSystem',
   view: 'archon.console.detailView',
+  node: 'archon.console.runNodeFilter',
 } as const;
 
 function readToggle(key: string, defaultOn: boolean): boolean {
@@ -82,6 +91,22 @@ function writeView(v: DetailView): void {
   }
 }
 
+function readNodeFilter(): string {
+  try {
+    return localStorage.getItem(TOGGLE_KEYS.node) ?? 'all';
+  } catch {
+    return 'all';
+  }
+}
+
+function writeNodeFilter(v: string): void {
+  try {
+    localStorage.setItem(TOGGLE_KEYS.node, v);
+  } catch {
+    /* ignore */
+  }
+}
+
 export function RunDetailPage(): ReactElement {
   const { projectId, runId } = useParams<{ projectId: string; runId: string }>();
   const navigate = useNavigate();
@@ -93,6 +118,7 @@ export function RunDetailPage(): ReactElement {
     readToggle(TOGGLE_KEYS.system, false)
   );
   const [view, setView] = useState<DetailView>(() => readView());
+  const [selectedNodeId, setSelectedNodeId] = useState<string>(() => readNodeFilter());
 
   // Hoisted above any early returns so the hook order stays stable.
   const scrollToNode = useCallback((nodeId: string): void => {
@@ -165,6 +191,26 @@ export function RunDetailPage(): ReactElement {
     () =>
       runId !== undefined ? skill.listRunArtifacts(runId) : Promise.resolve([] as ArtifactFile[])
   );
+
+  // Distinct nodes drive the node-filter dropdown — derived from the same fold
+  // the stream renders, so the options match the dividers exactly.
+  const nodeOptions = useMemo(
+    () => foldNodeRuns(detail?.events ?? []).map(r => ({ id: r.nodeId, name: r.nodeName })),
+    [detail?.events]
+  );
+
+  // Drop a persisted node selection that doesn't apply to this run (e.g. after
+  // navigating to a different workflow). Guarded on the run being loaded so the
+  // empty list during loading can't clobber a still-valid stored selection.
+  // useLayoutEffect (not useEffect) so the reset lands before paint — navigating
+  // to a cached run whose node set lacks the selection never flashes an empty
+  // "Waiting for first event…" frame.
+  useLayoutEffect(() => {
+    if (detail === undefined || detail === null) return;
+    if (selectedNodeId !== 'all' && !nodeOptions.some(o => o.id === selectedNodeId)) {
+      setSelectedNodeId('all');
+    }
+  }, [detail, nodeOptions, selectedNodeId]);
 
   // Auto-scroll to bottom on new content IF user is already near the bottom.
   const lastBottomRef = useRef(true);
@@ -318,6 +364,12 @@ export function RunDetailPage(): ReactElement {
       toolCallCount={toolCallCount}
       messageCount={messageList.length}
       artifactCount={artifactFiles?.length ?? null}
+      nodeOptions={nodeOptions}
+      selectedNodeId={selectedNodeId}
+      onSelectNode={next => {
+        setSelectedNodeId(next);
+        writeNodeFilter(next);
+      }}
     />
   );
 
@@ -341,6 +393,7 @@ export function RunDetailPage(): ReactElement {
                       events={events}
                       showToolCalls={showToolCalls}
                       showSystem={showSystem}
+                      selectedNodeId={selectedNodeId}
                     />
                   </div>
 
