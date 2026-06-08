@@ -2478,8 +2478,7 @@ describe('handleMessage — /setproject dispatch', () => {
     await handleMessage(platform, 'conv-1', '/setproject nonexistent');
 
     expect(mockUpdateConversation).not.toHaveBeenCalled();
-    const sendMessageMock = platform.sendMessage as ReturnType<typeof mock>;
-    const msg = sendMessageMock.mock.calls[0]?.[1] as string;
+    const msg = (platform.sendMessage as ReturnType<typeof mock>).mock.calls[0]?.[1] as string;
     expect(msg).toContain('nonexistent');
     expect(msg).toContain('project-a');
     expect(msg).toContain('project-b');
@@ -2493,8 +2492,7 @@ describe('handleMessage — /setproject dispatch', () => {
     await handleMessage(platform, 'conv-1', '/setproject anything');
 
     expect(mockUpdateConversation).not.toHaveBeenCalled();
-    const sendMessageMock = platform.sendMessage as ReturnType<typeof mock>;
-    const msg = sendMessageMock.mock.calls[0]?.[1] as string;
+    const msg = (platform.sendMessage as ReturnType<typeof mock>).mock.calls[0]?.[1] as string;
     expect(msg).toContain('/register-project');
   });
 
@@ -2508,8 +2506,7 @@ describe('handleMessage — /setproject dispatch', () => {
     await handleMessage(platform, 'conv-1', '/setproject app');
 
     expect(mockUpdateConversation).not.toHaveBeenCalled();
-    const sendMessageMock = platform.sendMessage as ReturnType<typeof mock>;
-    const msg = sendMessageMock.mock.calls[0]?.[1] as string;
+    const msg = (platform.sendMessage as ReturnType<typeof mock>).mock.calls[0]?.[1] as string;
     expect(msg).toContain('Ambiguous');
     expect(msg).toContain('app-backend');
     expect(msg).toContain('app-frontend');
