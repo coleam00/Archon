@@ -72,6 +72,12 @@ import { validateWorkflowsCommand, validateCommandsCommand } from './commands/va
 import { serveCommand } from './commands/serve';
 import { doctorCommand } from './commands/doctor';
 import { authGithubCommand } from './commands/auth';
+import {
+  aiKeySetCommand,
+  aiListCommand,
+  aiLogoutCommand,
+  aiLoginNotImplemented,
+} from './commands/ai';
 import { telemetryStatusCommand, telemetryResetCommand } from './commands/telemetry';
 import { closeDatabase } from '@archon/core';
 import {
@@ -122,6 +128,9 @@ Commands:
   skill install [path]       Install the bundled Archon skill into .claude/skills/archon
   doctor                     Verify your Archon setup (Claude binary, gh auth, DB, adapters)
   auth github                Connect your GitHub identity via device flow (multi-user installs)
+  ai key set <provider>      Connect an AI provider API key (multi-user installs; key read from prompt/stdin)
+  ai list                    List your connected AI provider keys
+  ai logout <provider>       Disconnect an AI provider key
   telemetry status           Show anonymous telemetry state (enabled, reason, ID, host)
   telemetry reset            Rotate the anonymous install UUID
   validate workflows [name]  Validate workflow definitions and their references
@@ -323,6 +332,7 @@ async function main(): Promise<number> {
     'doctor',
     'telemetry',
     'auth',
+    'ai',
   ];
   const requiresGitRepo = !noGitCommands.includes(command ?? '');
 
@@ -780,6 +790,34 @@ async function main(): Promise<number> {
               console.error(`Unknown auth subcommand: ${subcommand}`);
             }
             console.error('Available: github');
+            return 1;
+        }
+      }
+
+      case 'ai': {
+        switch (subcommand) {
+          case 'key': {
+            const action = positionals[2];
+            if (action !== 'set') {
+              console.error('Usage: archon ai key set <provider>');
+              return 1;
+            }
+            return await aiKeySetCommand(positionals[3]);
+          }
+          case 'list':
+            return await aiListCommand();
+          case 'logout':
+            return await aiLogoutCommand(positionals[2]);
+          case 'login':
+            // Reserved for PR-3 (Pi OAuth subscription bridge).
+            return aiLoginNotImplemented();
+          default:
+            if (subcommand === undefined) {
+              console.error('Missing ai subcommand');
+            } else {
+              console.error(`Unknown ai subcommand: ${subcommand}`);
+            }
+            console.error('Available: key set <provider>, list, logout <provider>');
             return 1;
         }
       }

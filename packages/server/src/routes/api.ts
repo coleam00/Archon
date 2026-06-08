@@ -37,6 +37,11 @@ import {
   GithubIdentityConflictError,
   getUserGithubTokenRecord,
   deleteUserGithubToken,
+  isPerUserProviderKeysEnabled,
+  persistProviderApiKey,
+  listUserProviderKeys,
+  deleteUserProviderKey,
+  KNOWN_PROVIDERS,
 } from '@archon/core';
 import { removeWorktree, toRepoPath, toWorktreePath } from '@archon/git';
 import {
@@ -148,6 +153,13 @@ import {
   githubConnectionStatusSchema,
   githubDisconnectResponseSchema,
 } from './schemas/auth.schemas';
+import {
+  providerKeyListResponseSchema,
+  providerKeyParamsSchema,
+  providerKeySetBodySchema,
+  providerKeySetResponseSchema,
+  providerKeyDeleteResponseSchema,
+} from './schemas/provider-key.schemas';
 import { mapDeviceFlowErrorToPollStatus } from './auth-poll-status';
 import { getProviderInfoList, isRegisteredProvider } from '@archon/providers';
 import { messageSchema } from './schemas/conversation.schemas';
@@ -945,6 +957,57 @@ const githubDisconnectRoute = createRoute({
   },
 });
 
+// ---- Per-user AI-provider credential (API-key) connect endpoints ----
+const providerKeyListRoute = createRoute({
+  method: 'get',
+  path: '/api/auth/providers',
+  tags: ['Auth'],
+  summary: 'List the current web user’s connected AI-provider keys',
+  responses: {
+    200: {
+      content: { 'application/json': { schema: providerKeyListResponseSchema } },
+      description: 'Connections (metadata only) + connectable provider catalog',
+    },
+    401: jsonError('Web auth required (X-Archon-User header missing)'),
+  },
+});
+
+const providerKeySetRoute = createRoute({
+  method: 'put',
+  path: '/api/auth/providers/{provider}',
+  tags: ['Auth'],
+  summary: 'Connect (upsert) an API key for a provider for the current web user',
+  request: {
+    params: providerKeyParamsSchema,
+    body: { content: { 'application/json': { schema: providerKeySetBodySchema } } },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: providerKeySetResponseSchema } },
+      description: 'Key stored (encrypted); response carries no secret value',
+    },
+    400: jsonError('Unknown provider or empty key'),
+    401: jsonError('Web auth required (X-Archon-User header missing)'),
+    404: jsonError('Per-user provider keys not enabled on this install'),
+  },
+});
+
+const providerKeyDeleteRoute = createRoute({
+  method: 'delete',
+  path: '/api/auth/providers/{provider}',
+  tags: ['Auth'],
+  summary: 'Disconnect the current web user’s key for a provider',
+  request: { params: providerKeyParamsSchema },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: providerKeyDeleteResponseSchema } },
+      description: 'Disconnected (idempotent)',
+    },
+    401: jsonError('Web auth required (X-Archon-User header missing)'),
+    404: jsonError('Per-user provider keys not enabled on this install'),
+  },
+});
+
 const getCodebaseEnvironmentsRoute = createRoute({
   method: 'get',
   path: '/api/codebases/{id}/environments',
@@ -1268,6 +1331,66 @@ export function registerApiRoutes(
     } catch (err) {
       getLog().error({ err: err as Error, userId: web.userId }, 'auth.github_disconnect_failed');
       return apiError(c, 500, 'Failed to disconnect GitHub');
+    }
+  });
+
+  // ---- Per-user AI-provider credential (API-key) connect endpoints ----
+  // Gated on isPerUserProviderKeysEnabled() (TOKEN_ENCRYPTION_KEY). Responses
+  // never carry a secret value — list/set return provider/kind/label only.
+  registerOpenApiRoute(providerKeyListRoute, async c => {
+    const web = await requireWebUser(c, 'Web authentication required to manage provider keys');
+    if ('error' in web) return web.error;
+    const available = [...KNOWN_PROVIDERS].sort();
+    if (!isPerUserProviderKeysEnabled()) {
+      // Gate off: the console panel hides on `enabled:false`; skip the DB.
+      return c.json({ enabled: false, connections: [], available });
+    }
+    try {
+      const connections = await listUserProviderKeys(web.userId);
+      return c.json({ enabled: true, connections, available });
+    } catch (err) {
+      getLog().error({ err: err as Error, userId: web.userId }, 'auth.provider_keys_list_failed');
+      return apiError(c, 500, 'Failed to list provider keys');
+    }
+  });
+
+  registerOpenApiRoute(providerKeySetRoute, async c => {
+    const web = await requireWebUser(c, 'Web authentication required to manage provider keys');
+    if ('error' in web) return web.error;
+    if (!isPerUserProviderKeysEnabled()) {
+      return apiError(c, 404, 'Per-user provider keys are not enabled on this install');
+    }
+    const provider = c.req.param('provider') ?? '';
+    const { apiKey, label } = getValidatedBody(c, providerKeySetBodySchema);
+    try {
+      const result = await persistProviderApiKey(web.userId, provider, apiKey, label ?? null);
+      return c.json({ success: true, ...result });
+    } catch (err) {
+      // Unknown provider / blank key → client error. Message carries no secret.
+      getLog().warn(
+        { err: err as Error, userId: web.userId, provider },
+        'auth.provider_key_set_rejected'
+      );
+      return apiError(c, 400, (err as Error).message);
+    }
+  });
+
+  registerOpenApiRoute(providerKeyDeleteRoute, async c => {
+    const web = await requireWebUser(c, 'Web authentication required to manage provider keys');
+    if ('error' in web) return web.error;
+    if (!isPerUserProviderKeysEnabled()) {
+      return apiError(c, 404, 'Per-user provider keys are not enabled on this install');
+    }
+    const provider = c.req.param('provider') ?? '';
+    try {
+      await deleteUserProviderKey(web.userId, provider);
+      return c.json({ success: true });
+    } catch (err) {
+      getLog().error(
+        { err: err as Error, userId: web.userId, provider },
+        'auth.provider_key_delete_failed'
+      );
+      return apiError(c, 500, 'Failed to disconnect provider key');
     }
   });
 

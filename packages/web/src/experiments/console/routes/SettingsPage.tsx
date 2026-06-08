@@ -1,5 +1,6 @@
 import { type ReactElement } from 'react';
 import { AssistantConfigPanel } from '../components/AssistantConfigPanel';
+import { ProviderConnectionsPanel } from '../components/ProviderConnectionsPanel';
 import { SystemPanel } from '../components/SystemPanel';
 import { GithubIdentityPanel } from '../components/GithubIdentityPanel';
 
@@ -17,6 +18,7 @@ export function SettingsPage(): ReactElement {
       <div className="flex-1 overflow-y-auto px-10 pb-14 pt-5">
         <div className="mx-auto flex max-w-[680px] flex-col gap-[22px]">
           <AssistantConfigPanel />
+          <ProviderConnectionsPanel />
           <SystemPanel />
           <GithubIdentityPanel />
         </div>

@@ -200,10 +200,12 @@ export {
   assertProviderKeysKeyAtBoot,
   deliverCredential,
   KNOWN_PROVIDERS,
+  persistProviderApiKey,
   type ResolvedCredential,
   type DeliveryResult,
   type DeliveryOptions,
   type OAuthCredentials,
+  type PersistProviderApiKeyResult,
 } from './credentials';
 export {
   saveUserProviderKey,
