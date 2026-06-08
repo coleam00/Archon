@@ -369,6 +369,13 @@ function applyEnvOverrides(
             `Available providers: ${getRegisteredProviderNames().join(', ')}`
         );
       }
+    } else if (!isRegisteredProvider(envAssistant)) {
+      // Config file takes precedence, but warn that the env var value is unknown —
+      // a typo here would go undetected if we don't surface it.
+      getLog().warn(
+        { envAssistant, available: getRegisteredProviderNames() },
+        'config.env_assistant_unknown_ignored'
+      );
     }
   }
 

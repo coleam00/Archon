@@ -294,6 +294,15 @@ streaming:
       await expect(loadConfig()).rejects.toThrow(/not a registered provider/);
     });
 
+    test('invalid DEFAULT_AI_ASSISTANT env var is silently ignored when config file sets assistant', async () => {
+      mockFsReadFile.mockResolvedValue('defaultAssistant: claude\n');
+      process.env.DEFAULT_AI_ASSISTANT = 'nonexistent-provider';
+
+      // Must not throw — config file takes precedence and the invalid env var is skipped
+      const config = await loadConfig();
+      expect(config.assistant).toBe('claude');
+    });
+
     test('throws on unknown defaultAssistant in global config', async () => {
       mockFsReadFile.mockResolvedValue('defaultAssistant: nonexistent-provider');
 
