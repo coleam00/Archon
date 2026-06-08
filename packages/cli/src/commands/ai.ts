@@ -62,10 +62,19 @@ async function resolveUser(): Promise<{ id: string } | null> {
   return await userDb.findOrCreateUserByPlatformIdentity('cli', cliId, cliId);
 }
 
-/** Read the secret from piped stdin (non-TTY) or a masked prompt — never argv. */
+/**
+ * Read the secret from piped stdin (non-TTY) or a masked prompt — never argv.
+ * Returns `null` when there is no usable key (prompt cancelled, or empty stdin —
+ * the message is printed here); a non-null result is always a non-blank key.
+ */
 async function readApiKey(provider: string): Promise<string | null> {
   if (!process.stdin.isTTY) {
-    return (await Bun.stdin.text()).trim();
+    const piped = (await Bun.stdin.text()).trim();
+    if (!piped) {
+      console.error('No API key provided on stdin.');
+      return null;
+    }
+    return piped;
   }
   const entered = await password({
     message: `Paste your API key for '${provider}':`,
@@ -93,11 +102,7 @@ export async function aiKeySetCommand(provider: string | undefined): Promise<num
   if (!user) return 1;
 
   const apiKey = await readApiKey(provider);
-  if (apiKey === null) return 1; // cancelled
-  if (!apiKey) {
-    console.error('No API key provided.');
-    return 1;
-  }
+  if (apiKey === null) return 1; // cancelled or empty (message already printed)
 
   try {
     const result = await persistProviderApiKey(user.id, provider, apiKey);
@@ -118,17 +123,23 @@ export async function aiListCommand(): Promise<number> {
   const user = await resolveUser();
   if (!user) return 1;
 
-  const rows = await listUserProviderKeys(user.id);
-  if (rows.length === 0) {
-    console.log('No AI provider keys connected. Add one with: archon ai key set <provider>');
+  try {
+    const rows = await listUserProviderKeys(user.id);
+    if (rows.length === 0) {
+      console.log('No AI provider keys connected. Add one with: archon ai key set <provider>');
+      return 0;
+    }
+    console.log('Connected AI provider credentials:');
+    for (const r of rows) {
+      const label = r.label ? ` — ${r.label}` : '';
+      console.log(`  ${r.provider}  (${r.kind})${label}`);
+    }
     return 0;
+  } catch (err) {
+    getLog().error({ err: err as Error }, 'cli.ai_list_failed');
+    console.error(`✗ Failed to list provider keys: ${(err as Error).message}`);
+    return 1;
   }
-  console.log('Connected AI provider credentials:');
-  for (const r of rows) {
-    const label = r.label ? ` — ${r.label}` : '';
-    console.log(`  ${r.provider}  (${r.kind})${label}`);
-  }
-  return 0;
 }
 
 export async function aiLogoutCommand(provider: string | undefined): Promise<number> {
@@ -137,12 +148,24 @@ export async function aiLogoutCommand(provider: string | undefined): Promise<num
     console.error('Usage: archon ai logout <provider>');
     return 1;
   }
+  // Guard typos consistently with `key set` — a misspelled provider should be a
+  // visible error, not a no-op that prints "✓ Disconnected".
+  if (!KNOWN_PROVIDERS.has(provider)) {
+    console.error(`Unknown provider '${provider}'. Known: ${knownProvidersList()}.`);
+    return 1;
+  }
   const user = await resolveUser();
   if (!user) return 1;
 
-  await deleteUserProviderKey(user.id, provider);
-  console.log(`✓ Disconnected '${provider}'.`);
-  return 0;
+  try {
+    await deleteUserProviderKey(user.id, provider);
+    console.log(`✓ Disconnected '${provider}'.`);
+    return 0;
+  } catch (err) {
+    getLog().error({ err: err as Error, provider }, 'cli.ai_logout_failed');
+    console.error(`✗ Failed to disconnect '${provider}': ${(err as Error).message}`);
+    return 1;
+  }
 }
 
 /** Reserved for PR-3 (Pi OAuth subscription bridge). */

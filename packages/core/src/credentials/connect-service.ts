@@ -8,8 +8,8 @@
  * Deliberately far thinner than `github-auth/connect-service.ts` — there is no
  * external identity to fetch and no identity to link / conflict-guard. The row
  * is keyed `(user_id, provider)` and the upsert is idempotent, so re-connecting
- * a provider just replaces the stored key. OAuth subscription persistence
- * (`persistProviderOAuth`) lands with the Pi OAuth bridge in PR-3.
+ * a provider just replaces the stored key. OAuth subscription persistence lands
+ * with the Pi OAuth bridge in PR-3.
  */
 import { createLogger } from '@archon/paths';
 import { KNOWN_PROVIDERS } from './delivery';
@@ -21,6 +21,19 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
+/**
+ * A caller-supplied input was invalid (blank key or unknown provider). Distinct
+ * from a storage failure so the API layer can map it to a 400 with a safe,
+ * caller-facing message, while encryption/DB errors stay opaque 500s and never
+ * echo their internal message to the client.
+ */
+export class InvalidProviderKeyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'InvalidProviderKeyError';
+  }
+}
+
 /** Secret-free result of a successful API-key connect — safe to return from an API. */
 export interface PersistProviderApiKeyResult {
   provider: string;
@@ -29,9 +42,10 @@ export interface PersistProviderApiKeyResult {
 }
 
 /**
- * Validate and store a user's API key for `provider`. Throws (before any DB
- * write) when the key is blank or the provider is not in {@link KNOWN_PROVIDERS}.
- * The plaintext key is encrypted inside the store and is never logged.
+ * Validate and store a user's API key for `provider`. Throws
+ * {@link InvalidProviderKeyError} (before any DB write) when the key is blank or
+ * the provider is not in {@link KNOWN_PROVIDERS}; any other throw is a storage
+ * failure. The plaintext key is encrypted inside the store and is never logged.
  */
 export async function persistProviderApiKey(
   userId: string,
@@ -41,14 +55,14 @@ export async function persistProviderApiKey(
 ): Promise<PersistProviderApiKeyResult> {
   const trimmedKey = apiKey.trim();
   if (!trimmedKey) {
-    throw new Error('API key must not be empty.');
+    throw new InvalidProviderKeyError('API key must not be empty.');
   }
   if (!KNOWN_PROVIDERS.has(provider)) {
-    throw new Error(
+    throw new InvalidProviderKeyError(
       `Unknown provider '${provider}'. Known: ${[...KNOWN_PROVIDERS].sort().join(', ')}.`
     );
   }
-  const normalizedLabel = label?.trim() ? label.trim() : null;
+  const normalizedLabel = label?.trim() || null;
   await saveUserProviderKey({
     userId,
     provider,

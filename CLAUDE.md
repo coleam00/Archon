@@ -283,6 +283,14 @@ bun run cli doctor
 # App mode + TOKEN_ENCRYPTION_KEY). Identity from ARCHON_USER_ID or $USER.
 bun run cli auth github
 
+# Manage per-user AI-provider credentials (multi-user installs: TOKEN_ENCRYPTION_KEY).
+# Identity from ARCHON_USER_ID or $USER. The key is read from a masked prompt or
+# piped stdin — never from argv.
+bun run cli ai key set <provider>          # connect an API key (e.g. openrouter, claude, codex)
+echo "$MY_KEY" | bun run cli ai key set openrouter
+bun run cli ai list                        # list connected providers (no secrets)
+bun run cli ai logout <provider>           # disconnect a provider
+
 # Inspect or rotate the anonymous telemetry install UUID
 bun run cli telemetry status
 bun run cli telemetry reset
@@ -427,7 +435,7 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 
 ### Database Schema
 
-**16 Tables (all prefixed with `remote_agent_`):**
+**17 Tables (all prefixed with `remote_agent_`):**
 1. **`codebases`** - Repository metadata and commands (JSONB)
 2. **`conversations`** - Track platform conversations with titles and soft-delete support; nullable `user_id` records first creator
 3. **`sessions`** - Track AI SDK sessions with resume capability
@@ -440,7 +448,8 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 10. **`user_identities`** - Per-platform mapping (Slack U-id, Telegram chat id, Discord snowflake, GitHub login, Better Auth web user id) → `users.id`; `UNIQUE(platform, platform_user_id)`
 11. **`workflow_node_sessions`** - Per-node provider session IDs persisted across workflow re-runs (opt-in via `persist_session`); keyed by `(workflow_name, node_id, scope_key, provider)`; `scope_key` is typically the conversation UUID
 12. **`user_github_tokens`** - Per-user GitHub device-flow tokens encrypted at rest (AES-256-GCM); one row per Archon user (`UNIQUE(user_id)`), cascades on user deletion; numeric `github_user_id` anchors the commit no-reply email
-13–16. **`remote_agent_auth_user` / `remote_agent_auth_session` / `remote_agent_auth_account` / `remote_agent_auth_verification`** - Better Auth tables for opt-in web login (**PostgreSQL only**; always created on Postgres via the idempotent schema apply, but populated only when web auth is enabled — `DATABASE_URL` + `BETTER_AUTH_SECRET`). Owned and shaped by Better Auth (text ids, camelCase columns); Archon never queries them directly — a session maps to the canonical `users` row via `user_identities('web', <betterAuthUserId>)`
+13. **`user_provider_keys`** - Per-user AI-provider credentials encrypted at rest (AES-256-GCM, same `TOKEN_ENCRYPTION_KEY`); one row per `(user_id, provider)` (`UNIQUE(user_id, provider)`), cascades on user deletion; `kind` is `api_key` or `oauth`; resolved + injected into the user's runs/chat env at execution time. Gated on `TOKEN_ENCRYPTION_KEY`
+14–17. **`remote_agent_auth_user` / `remote_agent_auth_session` / `remote_agent_auth_account` / `remote_agent_auth_verification`** - Better Auth tables for opt-in web login (**PostgreSQL only**; always created on Postgres via the idempotent schema apply, but populated only when web auth is enabled — `DATABASE_URL` + `BETTER_AUTH_SECRET`). Owned and shaped by Better Auth (text ids, camelCase columns); Archon never queries them directly — a session maps to the canonical `users` row via `user_identities('web', <betterAuthUserId>)`
 
 **Key Patterns:**
 - Conversation ID format: Platform-specific (`thread_ts`, `chat_id`, `user/repo#123`)
@@ -891,6 +900,12 @@ Pattern: Use `classifyIsolationError()` (from `@archon/isolation`) to map git er
 - `POST /api/auth/github/device/poll` - Single non-blocking poll; body `{ device_code }`; returns `{ status: 'pending' | 'connected' | 'expired' | 'denied' | 'error', githubLogin?, detail? }`
 - `GET /api/auth/github` - Connection status for the current web user; returns `{ connected, githubLogin }`
 - `DELETE /api/auth/github` - Disconnect the current web user's GitHub identity
+
+**AI-Provider Keys (per-user; `TOKEN_ENCRYPTION_KEY`):**
+- `GET /api/auth/providers` - List the current web user's connected provider keys; returns `{ enabled, connections: [{ provider, kind, label }], available: string[] }` (no secret values; `available` is the server-owned connectable-provider catalog; `enabled:false` when the install has no `TOKEN_ENCRYPTION_KEY`). `requireWebUser` (401 without identity)
+- `PUT /api/auth/providers/:provider` - Connect (upsert) an API key; body `{ apiKey, label? }`; returns `{ success, provider, kind: 'api_key', label }` (never echoes the key). 400 on unknown provider / blank key, 404 when per-user keys disabled, 500 (opaque) on storage failure
+- `DELETE /api/auth/providers/:provider` - Disconnect a provider (idempotent); returns `{ success }`. 404 when disabled
+- Gated on `isPerUserProviderKeysEnabled()` (`TOKEN_ENCRYPTION_KEY`); injected into runs/chat env at execution time. OAuth subscription connect (`/oauth/start|poll`) is a later slice.
 
 **System:**
 - `GET /api/health` - Health check with adapter/system status

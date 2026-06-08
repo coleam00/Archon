@@ -11,12 +11,13 @@ const INPUT_CLASS =
 
 /**
  * Per-user AI-provider API keys. Mirrors `GithubIdentityPanel`: reads through
- * the console's react-query-free `useEntity` cache, hides itself when there's
- * nothing to manage, and guards every async setState with a `cancelledRef`.
+ * the console's react-query-free `useEntity` cache and guards every async
+ * setState with a `cancelledRef`.
  *
- * Hidden when `GET /api/auth/providers` 401s (no web identity — solo-PAT or
- * logged-out) OR when `enabled` is false (no TOKEN_ENCRYPTION_KEY): in both
- * cases there is no per-user credential surface to show.
+ * Renders `null` (no panel) when there is nothing to manage: a 401 from
+ * `GET /api/auth/providers` (no web identity — solo-PAT or logged-out) or
+ * `enabled: false` (no TOKEN_ENCRYPTION_KEY). Any OTHER load error still renders
+ * a visible error section rather than hiding it.
  *
  * API-key connect only (PR-2). OAuth subscription rows land with the Pi OAuth
  * bridge (PR-3).

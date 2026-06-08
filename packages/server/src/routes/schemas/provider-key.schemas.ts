@@ -2,10 +2,11 @@
  * Zod schemas for the per-user AI-provider credential ("AI Provider Keys")
  * endpoints — the API-key connect surface (Phase 2, PR-2).
  *
- * Filename carries a `provider-key` (not `credential`) stem to clear the local
- * secret-guard hook that blocks `credential./token./secret.` basenames. No
- * secret values appear in any of these shapes — list/responses are metadata
- * only. OAuth start/poll schemas land with the Pi OAuth bridge (PR-3).
+ * Filename carries a `provider-key` (not `credential`) stem to clear a
+ * user-global Write/Edit guard hook that blocks basenames matching
+ * `credential./secret./password./token.`. No secret values appear in any of
+ * these shapes — list/responses are metadata only. OAuth start/poll schemas
+ * land with the Pi OAuth bridge (PR-3).
  */
 import { z } from '@hono/zod-openapi';
 
@@ -37,7 +38,12 @@ export const providerKeyParamsSchema = z.object({ provider: z.string() });
 /** PUT /api/auth/providers/:provider request body. */
 export const providerKeySetBodySchema = z
   .object({
-    apiKey: z.string().min(1),
+    // `.refine` rejects whitespace-only keys at the validation layer (400)
+    // — defense in depth; the connect-service also trims + rejects blank.
+    apiKey: z
+      .string()
+      .min(1)
+      .refine(v => v.trim().length > 0, { message: 'apiKey must not be blank' }),
     label: z.string().optional(),
   })
   .openapi('ProviderKeySetBody');

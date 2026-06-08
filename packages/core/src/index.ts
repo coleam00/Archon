@@ -201,6 +201,7 @@ export {
   deliverCredential,
   KNOWN_PROVIDERS,
   persistProviderApiKey,
+  InvalidProviderKeyError,
   type ResolvedCredential,
   type DeliveryResult,
   type DeliveryOptions,

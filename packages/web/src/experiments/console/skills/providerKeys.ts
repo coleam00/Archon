@@ -10,8 +10,9 @@ import { requestJson } from '../lib/http';
  * eslint-blocked for the console. Migrate to
  * `components['schemas']['ProviderKey*']` once a regen lands them.
  *
- * Filename is `providerKeys` (not `credentials`) to clear the local secret-guard
- * hook that blocks `credential./token./secret.` basenames.
+ * Filename is `providerKeys` (not `credentials`) to clear a user-global
+ * Write/Edit guard hook that blocks basenames matching
+ * `credential./secret./password./token.`.
  */
 
 export interface ProviderKeyConnection {

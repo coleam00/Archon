@@ -63,15 +63,26 @@ const KNOWN = new Set<string>([
   'huggingface',
 ]);
 
+// Mirror core's typed validation error so the route's `instanceof` check (400 vs
+// opaque 500) is exercised: validation throws this; storage failures throw plain.
+class InvalidProviderKeyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'InvalidProviderKeyError';
+  }
+}
+
 let keysEnabled = true;
 let savedKeys: { userId: string; provider: string; apiKey: string; label: string | null }[] = [];
 
 const mockPersist = mock(
   async (userId: string, provider: string, apiKey: string, label?: string | null) => {
     const trimmed = apiKey.trim();
-    if (!trimmed) throw new Error('API key must not be empty.');
+    if (!trimmed) throw new InvalidProviderKeyError('API key must not be empty.');
     if (!KNOWN.has(provider)) {
-      throw new Error(`Unknown provider '${provider}'. Known: ${[...KNOWN].sort().join(', ')}.`);
+      throw new InvalidProviderKeyError(
+        `Unknown provider '${provider}'. Known: ${[...KNOWN].sort().join(', ')}.`
+      );
     }
     const normalizedLabel = label?.trim() ? label.trim() : null;
     savedKeys = savedKeys.filter(k => !(k.userId === userId && k.provider === provider));
@@ -102,6 +113,7 @@ mock.module('@archon/core', () => ({
   // Provider-key surface under test:
   isPerUserProviderKeysEnabled: () => keysEnabled,
   persistProviderApiKey: mockPersist,
+  InvalidProviderKeyError,
   listUserProviderKeys: mockList,
   deleteUserProviderKey: mockDelete,
   KNOWN_PROVIDERS: KNOWN,
@@ -295,6 +307,21 @@ describe('PUT /api/auth/providers/:provider', () => {
       body: JSON.stringify({ apiKey: '' }),
     });
     expect(res.status).toBe(400);
+  });
+
+  test('storage failure → opaque 500, internal message never leaks (C1)', async () => {
+    // A DB/encryption error is NOT an InvalidProviderKeyError → must be 500, and
+    // the internal error string must not reach the client body.
+    mockPersist.mockRejectedValueOnce(new Error('PG connection refused at 10.0.0.5'));
+    const res = await makeApp().request('/api/auth/providers/openrouter', {
+      method: 'PUT',
+      headers: { ...ALICE, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ apiKey: 'sk-x' }),
+    });
+    expect(res.status).toBe(500);
+    const raw = await res.text();
+    expect(raw).not.toContain('PG connection refused');
+    expect(raw).not.toContain('10.0.0.5');
   });
 
   test('gate off → 404', async () => {

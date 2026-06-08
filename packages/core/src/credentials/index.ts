@@ -18,4 +18,8 @@ export {
   type DeliveryOptions,
   type OAuthCredentials,
 } from './delivery';
-export { persistProviderApiKey, type PersistProviderApiKeyResult } from './connect-service';
+export {
+  persistProviderApiKey,
+  InvalidProviderKeyError,
+  type PersistProviderApiKeyResult,
+} from './connect-service';

@@ -39,6 +39,7 @@ import {
   deleteUserGithubToken,
   isPerUserProviderKeysEnabled,
   persistProviderApiKey,
+  InvalidProviderKeyError,
   listUserProviderKeys,
   deleteUserProviderKey,
   KNOWN_PROVIDERS,
@@ -1335,8 +1336,9 @@ export function registerApiRoutes(
   });
 
   // ---- Per-user AI-provider credential (API-key) connect endpoints ----
-  // Gated on isPerUserProviderKeysEnabled() (TOKEN_ENCRYPTION_KEY). Responses
-  // never carry a secret value — list/set return provider/kind/label only.
+  // Gated on isPerUserProviderKeysEnabled() (TOKEN_ENCRYPTION_KEY). No response
+  // carries a secret value: list/set return provider/kind/label only, delete
+  // returns { success }.
   registerOpenApiRoute(providerKeyListRoute, async c => {
     const web = await requireWebUser(c, 'Web authentication required to manage provider keys');
     if ('error' in web) return web.error;
@@ -1363,15 +1365,20 @@ export function registerApiRoutes(
     const provider = c.req.param('provider') ?? '';
     const { apiKey, label } = getValidatedBody(c, providerKeySetBodySchema);
     try {
-      const result = await persistProviderApiKey(web.userId, provider, apiKey, label ?? null);
+      const result = await persistProviderApiKey(web.userId, provider, apiKey, label);
       return c.json({ success: true, ...result });
     } catch (err) {
-      // Unknown provider / blank key → client error. Message carries no secret.
-      getLog().warn(
+      if (err instanceof InvalidProviderKeyError) {
+        // Caller error (unknown provider / blank key) — the validation message is
+        // safe to surface and carries no secret.
+        return apiError(c, 400, err.message);
+      }
+      // Encryption / DB failure — opaque 500, never echo the internal message.
+      getLog().error(
         { err: err as Error, userId: web.userId, provider },
-        'auth.provider_key_set_rejected'
+        'auth.provider_key_set_failed'
       );
-      return apiError(c, 400, (err as Error).message);
+      return apiError(c, 500, 'Failed to store provider key');
     }
   });
 
@@ -1382,6 +1389,8 @@ export function registerApiRoutes(
       return apiError(c, 404, 'Per-user provider keys are not enabled on this install');
     }
     const provider = c.req.param('provider') ?? '';
+    // No KNOWN_PROVIDERS check here (unlike PUT): delete is an idempotent no-op,
+    // so an unknown/misspelled provider id simply removes nothing and returns ok.
     try {
       await deleteUserProviderKey(web.userId, provider);
       return c.json({ success: true });
