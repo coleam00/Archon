@@ -12,7 +12,10 @@
 export { isPerUserProviderKeysEnabled, assertProviderKeysKeyAtBoot } from './config';
 export {
   deliverCredential,
+  buildPiAuthJson,
   KNOWN_PROVIDERS,
+  PI_AUTH_JSON_RELATIVE_PATH,
+  PI_AUTH_PATH_ENV,
   type ResolvedCredential,
   type DeliveryResult,
   type DeliveryOptions,
@@ -20,6 +23,16 @@ export {
 } from './delivery';
 export {
   persistProviderApiKey,
+  persistProviderOAuth,
   InvalidProviderKeyError,
   type PersistProviderApiKeyResult,
+  type PersistProviderOAuthResult,
 } from './connect-service';
+export { SUBSCRIPTION_PROVIDERS, ARCHON_TO_PI_OAUTH, piOAuthProviderFor } from './oauth-providers';
+export {
+  startOAuth,
+  pollOAuth,
+  cancelOAuth,
+  type StartOAuthResult,
+  type PollOAuthResult,
+} from './oauth-bridge';

@@ -6,10 +6,8 @@
  * Two credential kinds: `api_key` (a single bearer string) and `oauth` (an
  * opaque blob from `@earendil-works/pi-ai/oauth` provider `login()`). For
  * `api_key`, `getDecryptedProviderCredential` returns the decrypted bearer
- * directly. For `oauth`, refresh-on-read (delegating to Pi's
- * `getOAuthApiKey`) is the responsibility of a follow-up PR; in PR-1 the
- * OAuth read path returns `null` so the workflow inject is safe even when an
- * `oauth` row exists.
+ * directly. For `oauth`, it decrypts the blob, mints/refreshes a usable bearer
+ * via Pi's `getOAuthApiKey`, re-saves rotated creds, and returns it (PR-3).
  *
  * (Filename carries a `-store` suffix to satisfy a local secret-guard hook
  * that blocks basenames ending in `key(s).ts` / `token(s).ts`; the table is
@@ -17,9 +15,14 @@
  */
 import { pool, getDialect } from './connection';
 import { createLogger } from '@archon/paths';
+import {
+  getOAuthApiKey,
+  type OAuthCredentials as PiOAuthCredentials,
+} from '@archon/providers/oauth';
 import { encryptToken, decryptToken, getEncryptionKey } from '../utils/token-crypto';
 import type { UserProviderKeyRow } from '../schemas/user-provider-key-row';
 import type { OAuthCredentials, ResolvedCredential } from '../credentials/delivery';
+import { piOAuthProviderFor } from '../credentials/oauth-providers';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -116,15 +119,22 @@ export async function deleteUserProviderKey(userId: string, provider: string): P
 }
 
 /**
+ * Serializes concurrent OAuth reads per `(userId, provider)` so a burst of
+ * inject calls in one run never triggers (or races) more than one token
+ * refresh. Mirrors `getDecryptedAccessToken`'s inflight Map in the github store.
+ */
+const inflightOAuthReads = new Map<string, Promise<ResolvedCredential | null>>();
+
+/**
  * Decrypt the user's credential for a provider into a {@link ResolvedCredential}
- * ready for the delivery map. Returns `null` when:
- *   - the user has no row for this provider, OR
- *   - decryption fails (wrong key after rotation, tampered ciphertext), OR
- *   - the row is OAuth (refresh-on-read is deferred to a follow-up PR).
+ * ready for the delivery map. Returns `null` when the user has no row, the row
+ * can't be decrypted, or (for OAuth) Pi can't mint/refresh an API key. The null
+ * contract lets the inject path treat "no usable credential" and "not connected"
+ * identically — the run continues with whatever env inheritance was in place.
  *
- * The null contract lets the inject path treat "no usable credential" and
- * "not connected" identically — the workflow continues with whatever env
- * inheritance was already in place.
+ * For `oauth` rows: decrypt the stored Pi blob → `getOAuthApiKey` (auto-refresh)
+ * → re-save rotated creds → return a usable bearer. The native Claude/Codex
+ * providers (and Pi) then receive it via the delivery map.
  */
 export async function getDecryptedProviderCredential(
   userId: string,
@@ -148,11 +158,80 @@ export async function getDecryptedProviderCredential(
       return null;
     }
   }
-  // OAuth refresh-on-read lands with the OAuth connect PR (G4). Until then,
-  // OAuth rows can be stored and deleted but the delivery map never sees
-  // them — the workflow inject is safe.
-  getLog().debug({ userId, provider }, 'user_provider_key.oauth_read_deferred_pending_g4');
-  return null;
+
+  // OAuth: coalesce concurrent reads so we refresh at most once per (user, provider).
+  if (!row.oauth_creds_encrypted) {
+    getLog().warn({ userId, provider }, 'user_provider_key.missing_oauth_ciphertext');
+    return null;
+  }
+  const ciphertext = row.oauth_creds_encrypted;
+  const flightKey = `${userId}:${provider}`;
+  const existing = inflightOAuthReads.get(flightKey);
+  if (existing) return existing;
+  const promise = resolveOAuthCredential(userId, provider, ciphertext, key).finally(() =>
+    inflightOAuthReads.delete(flightKey)
+  );
+  inflightOAuthReads.set(flightKey, promise);
+  return promise;
+}
+
+/**
+ * Decrypt + refresh one OAuth credential via Pi's `getOAuthApiKey`. On rotation,
+ * re-save the new blob (best-effort; a failed re-save is non-fatal — the run
+ * still gets a usable key and the next read re-refreshes). Never throws.
+ */
+async function resolveOAuthCredential(
+  userId: string,
+  provider: string,
+  ciphertext: string,
+  key: Buffer
+): Promise<ResolvedCredential | null> {
+  const piProvider = piOAuthProviderFor(provider);
+  if (!piProvider) {
+    // An oauth row for a provider with no Pi OAuth flow (shouldn't happen — connect guards it).
+    getLog().warn({ userId, provider }, 'user_provider_key.oauth_no_pi_provider');
+    return null;
+  }
+  let creds: OAuthCredentials;
+  try {
+    creds = JSON.parse(decryptToken(ciphertext, key)) as OAuthCredentials;
+  } catch (err) {
+    getLog().error(
+      { err: err as Error, userId, provider },
+      'user_provider_key.oauth_decrypt_failed'
+    );
+    return null;
+  }
+  let result: { newCredentials: PiOAuthCredentials; apiKey: string } | null;
+  try {
+    result = await getOAuthApiKey(piProvider.id, {
+      [piProvider.id]: creds as unknown as PiOAuthCredentials,
+    });
+  } catch (err) {
+    getLog().error(
+      { err: err as Error, userId, provider },
+      'user_provider_key.oauth_refresh_failed'
+    );
+    return null;
+  }
+  if (!result) {
+    getLog().warn({ userId, provider }, 'user_provider_key.oauth_no_api_key');
+    return null;
+  }
+  const rawCreds = result.newCredentials as OAuthCredentials;
+  if (JSON.stringify(rawCreds) !== JSON.stringify(creds)) {
+    try {
+      await saveUserProviderKey({ userId, provider, kind: 'oauth', oauthCreds: rawCreds });
+      getLog().debug({ userId, provider }, 'user_provider_key.oauth_rotated_resaved');
+    } catch (err) {
+      // Non-fatal: we still return a usable key; next read re-refreshes from the old blob.
+      getLog().warn(
+        { err: err as Error, userId, provider },
+        'user_provider_key.oauth_resave_failed'
+      );
+    }
+  }
+  return { kind: 'oauth', oauthApiKey: result.apiKey, rawCreds };
 }
 
 /**

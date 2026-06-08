@@ -9,6 +9,22 @@ mock.module('./connection', () => ({
   getDialect: () => mockPostgresDialect,
 }));
 
+// Pi OAuth wrapper: mint a bearer from the stored blob (echoing the creds so the
+// store sees "no rotation" by default). Provider singletons stubbed with `.id`.
+const mockGetOAuthApiKey = mock(
+  async (_providerId: string, creds: Record<string, unknown>) =>
+    ({ newCredentials: Object.values(creds)[0] ?? {}, apiKey: 'minted-oauth-key' }) as {
+      newCredentials: Record<string, unknown>;
+      apiKey: string;
+    } | null
+);
+mock.module('@archon/providers/oauth', () => ({
+  getOAuthApiKey: mockGetOAuthApiKey,
+  anthropicOAuthProvider: { id: 'anthropic' },
+  openaiCodexOAuthProvider: { id: 'openaiCodex' },
+  githubCopilotOAuthProvider: { id: 'github-copilot' },
+}));
+
 import { encryptToken, getEncryptionKey } from '../utils/token-crypto';
 import {
   saveUserProviderKey,
@@ -168,14 +184,26 @@ describe('user-provider-key-store', () => {
       expect(await getDecryptedProviderCredential('user-1', 'openrouter')).toBeNull();
     });
 
-    test('OAuth read path is deferred to G4 — returns null even when row exists', async () => {
+    test('oauth row → mints a usable bearer via getOAuthApiKey', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([oauthRow()]));
+      const cred = await getDecryptedProviderCredential('user-1', 'codex');
+      expect(cred).toEqual({
+        kind: 'oauth',
+        oauthApiKey: 'minted-oauth-key',
+        rawCreds: { access: 'oauth-bearer' },
+      });
+      expect(mockGetOAuthApiKey).toHaveBeenCalled();
+    });
+
+    test('oauth row → null when getOAuthApiKey yields no key', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([oauthRow()]));
+      mockGetOAuthApiKey.mockResolvedValueOnce(null);
       expect(await getDecryptedProviderCredential('user-1', 'codex')).toBeNull();
     });
   });
 
   describe('listDecryptedUserProviderCredentials', () => {
-    test('decrypts api_key rows and skips OAuth rows (G4 pending)', async () => {
+    test('decrypts api_key rows AND oauth rows (oauth minted via getOAuthApiKey)', async () => {
       // First call: list metadata (api_key + oauth).
       mockQuery.mockResolvedValueOnce(
         createQueryResult([
@@ -185,14 +213,18 @@ describe('user-provider-key-store', () => {
       );
       // Second call: getDecryptedProviderCredential for openrouter → api_key row.
       mockQuery.mockResolvedValueOnce(createQueryResult([apiKeyRow()]));
-      // Third call: getDecryptedProviderCredential for codex → oauth row (returns null).
+      // Third call: getDecryptedProviderCredential for codex → oauth row (resolves now).
       mockQuery.mockResolvedValueOnce(createQueryResult([oauthRow()]));
 
       const out = await listDecryptedUserProviderCredentials('user-1');
-      expect(out).toHaveLength(1);
-      expect(out[0]).toEqual({
-        provider: 'openrouter',
-        cred: { kind: 'api_key', apiKey: 'sk-or-test' },
+      expect(out).toHaveLength(2);
+      expect(out.find(o => o.provider === 'openrouter')?.cred).toEqual({
+        kind: 'api_key',
+        apiKey: 'sk-or-test',
+      });
+      expect(out.find(o => o.provider === 'codex')?.cred).toMatchObject({
+        kind: 'oauth',
+        oauthApiKey: 'minted-oauth-key',
       });
     });
 

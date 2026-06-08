@@ -12,7 +12,8 @@
  * with the Pi OAuth bridge in PR-3.
  */
 import { createLogger } from '@archon/paths';
-import { KNOWN_PROVIDERS } from './delivery';
+import { KNOWN_PROVIDERS, type OAuthCredentials } from './delivery';
+import { SUBSCRIPTION_PROVIDERS } from './oauth-providers';
 import { saveUserProviderKey } from '../db/user-provider-key-store';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -73,4 +74,38 @@ export async function persistProviderApiKey(
   // Never log the key value — provider + user only.
   getLog().info({ userId, provider }, 'provider_api_key.persisted');
   return { provider, kind: 'api_key', label: normalizedLabel };
+}
+
+/** Secret-free result of a successful subscription (OAuth) connect. */
+export interface PersistProviderOAuthResult {
+  provider: string;
+  kind: 'oauth';
+}
+
+/**
+ * Store a user's OAuth subscription credential blob for `provider`. Throws
+ * {@link InvalidProviderKeyError} when the provider has no subscription flow
+ * (only `claude`/`codex`/`copilot` do). The blob is encrypted inside the store
+ * and never logged; it's refreshed on read by `getDecryptedProviderCredential`.
+ */
+export async function persistProviderOAuth(
+  userId: string,
+  provider: string,
+  oauthCreds: OAuthCredentials
+): Promise<PersistProviderOAuthResult> {
+  if (!SUBSCRIPTION_PROVIDERS.has(provider)) {
+    throw new InvalidProviderKeyError(
+      `Provider '${provider}' does not support subscription login. ` +
+        `Subscription providers: ${[...SUBSCRIPTION_PROVIDERS].sort().join(', ')}.`
+    );
+  }
+  await saveUserProviderKey({
+    userId,
+    provider,
+    kind: 'oauth',
+    oauthCreds,
+    label: 'subscription',
+  });
+  getLog().info({ userId, provider }, 'provider_oauth.persisted');
+  return { provider, kind: 'oauth' };
 }

@@ -72,12 +72,7 @@ import { validateWorkflowsCommand, validateCommandsCommand } from './commands/va
 import { serveCommand } from './commands/serve';
 import { doctorCommand } from './commands/doctor';
 import { authGithubCommand } from './commands/auth';
-import {
-  aiKeySetCommand,
-  aiListCommand,
-  aiLogoutCommand,
-  aiLoginNotImplemented,
-} from './commands/ai';
+import { aiKeySetCommand, aiListCommand, aiLogoutCommand, aiLoginCommand } from './commands/ai';
 import { telemetryStatusCommand, telemetryResetCommand } from './commands/telemetry';
 import { closeDatabase } from '@archon/core';
 import {
@@ -129,6 +124,7 @@ Commands:
   doctor                     Verify your Archon setup (Claude binary, gh auth, DB, adapters)
   auth github                Connect your GitHub identity via device flow (multi-user installs)
   ai key set <provider>      Connect an AI provider API key (multi-user installs; key read from prompt/stdin)
+  ai login <provider>        Connect a subscription (claude/codex/copilot) via OAuth
   ai list                    List your connected AI provider keys
   ai logout <provider>       Disconnect an AI provider key
   telemetry status           Show anonymous telemetry state (enabled, reason, ID, host)
@@ -809,8 +805,7 @@ async function main(): Promise<number> {
           case 'logout':
             return await aiLogoutCommand(positionals[2]);
           case 'login':
-            // Reserved for PR-3 (Pi OAuth subscription bridge).
-            return aiLoginNotImplemented();
+            return await aiLoginCommand(positionals[2]);
           default:
             if (subcommand === undefined) {
               console.error('Missing ai subcommand');
