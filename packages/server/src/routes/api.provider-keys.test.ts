@@ -99,6 +99,17 @@ const mockDelete = mock(async (userId: string, provider: string) => {
   savedKeys = savedKeys.filter(k => !(k.userId === userId && k.provider === provider));
 });
 
+const SUBSCRIPTION = new Set<string>(['claude', 'codex', 'copilot']);
+const mockStartOAuth = mock(async (_userId: string, provider: string) => ({
+  sessionId: 'sess-1',
+  mode: 'manual' as const,
+  url: `https://auth/${provider}`,
+  expiresIn: 600,
+}));
+const mockPollOAuth = mock((_sessionId: string, _userId: string, _code?: string) => ({
+  status: 'pending' as const,
+}));
+
 mock.module('@archon/core', () => ({
   handleMessage: mock(async () => {}),
   getDatabaseType: () => 'postgresql',
@@ -117,6 +128,9 @@ mock.module('@archon/core', () => ({
   listUserProviderKeys: mockList,
   deleteUserProviderKey: mockDelete,
   KNOWN_PROVIDERS: KNOWN,
+  SUBSCRIPTION_PROVIDERS: SUBSCRIPTION,
+  startOAuth: mockStartOAuth,
+  pollOAuth: mockPollOAuth,
 }));
 
 mock.module('@archon/paths', () => ({
@@ -384,6 +398,98 @@ describe('DELETE /api/auth/providers/:provider', () => {
 
   test('no identity → 401', async () => {
     const res = await makeApp().request('/api/auth/providers/openrouter', { method: 'DELETE' });
+    expect(res.status).toBe(401);
+  });
+});
+
+describe('POST /api/auth/providers/:provider/oauth/start', () => {
+  beforeEach(() => {
+    authInstance = null;
+    keysEnabled = true;
+    mockStartOAuth.mockClear();
+  });
+
+  test('starts a session for a subscription provider', async () => {
+    const res = await makeApp().request('/api/auth/providers/claude/oauth/start', {
+      method: 'POST',
+      headers: ALICE,
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ sessionId: 'sess-1', mode: 'manual' });
+    expect(mockStartOAuth).toHaveBeenCalledWith('user-from-alice', 'claude');
+  });
+
+  test('non-subscription provider → 400, bridge not started', async () => {
+    const res = await makeApp().request('/api/auth/providers/openrouter/oauth/start', {
+      method: 'POST',
+      headers: ALICE,
+    });
+    expect(res.status).toBe(400);
+    expect(mockStartOAuth).not.toHaveBeenCalled();
+  });
+
+  test('gate off → 404', async () => {
+    keysEnabled = false;
+    const res = await makeApp().request('/api/auth/providers/claude/oauth/start', {
+      method: 'POST',
+      headers: ALICE,
+    });
+    expect(res.status).toBe(404);
+  });
+
+  test('bridge throws → opaque 500 (no internal message leak)', async () => {
+    mockStartOAuth.mockRejectedValueOnce(new Error('callback server at 127.0.0.1:53999 failed'));
+    const res = await makeApp().request('/api/auth/providers/claude/oauth/start', {
+      method: 'POST',
+      headers: ALICE,
+    });
+    expect(res.status).toBe(500);
+    expect(await res.text()).not.toContain('53999');
+  });
+
+  test('no identity → 401', async () => {
+    const res = await makeApp().request('/api/auth/providers/claude/oauth/start', {
+      method: 'POST',
+    });
+    expect(res.status).toBe(401);
+  });
+});
+
+describe('POST /api/auth/providers/:provider/oauth/poll', () => {
+  beforeEach(() => {
+    authInstance = null;
+    keysEnabled = true;
+    mockPollOAuth.mockClear();
+  });
+
+  test('relays the bridge poll status (bound to the caller userId)', async () => {
+    mockPollOAuth.mockReturnValueOnce({ status: 'connected' });
+    const res = await makeApp().request('/api/auth/providers/claude/oauth/poll', {
+      method: 'POST',
+      headers: { ...ALICE, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'sess-1', code: 'CODE' }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ status: 'connected' });
+    expect(mockPollOAuth).toHaveBeenCalledWith('sess-1', 'user-from-alice', 'CODE');
+  });
+
+  test('gate off → 404', async () => {
+    keysEnabled = false;
+    const res = await makeApp().request('/api/auth/providers/claude/oauth/poll', {
+      method: 'POST',
+      headers: { ...ALICE, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 's' }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  test('no identity → 401', async () => {
+    const res = await makeApp().request('/api/auth/providers/claude/oauth/poll', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 's' }),
+    });
     expect(res.status).toBe(401);
   });
 });

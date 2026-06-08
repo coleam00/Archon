@@ -5,8 +5,7 @@
  * Filename carries a `provider-key` (not `credential`) stem to clear a
  * user-global Write/Edit guard hook that blocks basenames matching
  * `credential./secret./password./token.`. No secret values appear in any of
- * these shapes — list/responses are metadata only. OAuth start/poll schemas
- * land with the Pi OAuth bridge (PR-3).
+ * these shapes — list/responses are metadata only.
  */
 import { z } from '@hono/zod-openapi';
 
@@ -29,6 +28,8 @@ export const providerKeyListResponseSchema = z
     enabled: z.boolean(),
     connections: z.array(providerKeyConnectionSchema),
     available: z.array(z.string()),
+    /** Subset of providers that support subscription (OAuth) login. */
+    subscriptionAvailable: z.array(z.string()),
   })
   .openapi('ProviderKeyListResponse');
 
@@ -62,3 +63,41 @@ export const providerKeySetResponseSchema = z
 export const providerKeyDeleteResponseSchema = z
   .object({ success: z.boolean() })
   .openapi('ProviderKeyDeleteResponse');
+
+// ---- Subscription (OAuth) connect — start/poll (PR-3) ----
+
+/**
+ * POST /api/auth/providers/:provider/oauth/start response. `mode` is `manual`
+ * (Anthropic/Codex: show `url`, user pastes a code back via poll) or `device`
+ * (Copilot: show `userCode`+`verificationUri`, poll until connected).
+ */
+export const providerOAuthStartResponseSchema = z
+  .object({
+    sessionId: z.string(),
+    mode: z.enum(['manual', 'device']),
+    url: z.string().optional(),
+    userCode: z.string().optional(),
+    verificationUri: z.string().optional(),
+    expiresIn: z.number(),
+  })
+  .openapi('ProviderOAuthStartResponse');
+
+/** POST /api/auth/providers/:provider/oauth/poll request — `code` for manual flows. */
+export const providerOAuthPollBodySchema = z
+  .object({
+    sessionId: z.string().min(1),
+    code: z.string().optional(),
+  })
+  .openapi('ProviderOAuthPollBody');
+
+/** POST /api/auth/providers/:provider/oauth/poll response — no secret values. */
+export const providerOAuthPollResponseSchema = z
+  .object({
+    status: z.enum(['pending', 'connected', 'error']),
+    detail: z.string().optional(),
+    mode: z.enum(['manual', 'device']).optional(),
+    url: z.string().optional(),
+    userCode: z.string().optional(),
+    verificationUri: z.string().optional(),
+  })
+  .openapi('ProviderOAuthPollResponse');

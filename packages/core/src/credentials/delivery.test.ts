@@ -1,6 +1,11 @@
 import { describe, test, expect } from 'bun:test';
 import { join } from 'node:path';
-import { deliverCredential, KNOWN_PROVIDERS, type ResolvedCredential } from './delivery';
+import {
+  deliverCredential,
+  buildPiAuthJson,
+  KNOWN_PROVIDERS,
+  type ResolvedCredential,
+} from './delivery';
 
 const ART_DIR = '/tmp/archon-test-artifacts';
 
@@ -55,9 +60,72 @@ describe('credentials/delivery', () => {
       expect(r.files).toHaveLength(1);
       const file = r.files![0]!;
       expect(file.path).toBe(join(ART_DIR, 'codex-home', 'auth.json'));
-      // Contents is JSON of the raw creds blob (shape verification deferred to G5)
-      const parsed = JSON.parse(file.contents) as Record<string, unknown>;
-      expect(parsed.access).toBe('oauth-bearer');
+      // Contents maps onto the Codex CLI auth.json shape (server/.../setup-auth.ts):
+      // { OPENAI_API_KEY: null, tokens: { access_token, ... }, last_refresh }.
+      const parsed = JSON.parse(file.contents) as {
+        OPENAI_API_KEY: null;
+        tokens: { access_token: string };
+        last_refresh: string;
+      };
+      expect(parsed.OPENAI_API_KEY).toBeNull();
+      expect(parsed.tokens.access_token).toBe('oauth-bearer');
+      expect(typeof parsed.last_refresh).toBe('string');
+    });
+
+    test('codex oauth → full tokens shape; account_id from Pi `accountId`, id_token best-effort', () => {
+      const cred: ResolvedCredential = {
+        kind: 'oauth',
+        oauthApiKey: 'x',
+        rawCreds: { access: 'acc-tok', refresh: 'ref-tok', expires: 123, accountId: 'acct-9' },
+      };
+      const r = deliverCredential('codex', cred, { artifactsDir: ART_DIR });
+      const parsed = JSON.parse(r.files![0]!.contents) as {
+        OPENAI_API_KEY: null;
+        tokens: Record<string, string>;
+        last_refresh: string;
+      };
+      expect(parsed.OPENAI_API_KEY).toBeNull();
+      expect(parsed.tokens).toEqual({
+        id_token: '', // Pi does not surface one
+        access_token: 'acc-tok',
+        refresh_token: 'ref-tok',
+        account_id: 'acct-9', // mapped from Pi's camelCase `accountId`
+      });
+    });
+  });
+
+  describe('copilot', () => {
+    test('api_key → COPILOT_GITHUB_TOKEN', () => {
+      const r = deliverCredential('copilot', apiKey('pat-x'), { artifactsDir: ART_DIR });
+      expect(r.env).toEqual({ COPILOT_GITHUB_TOKEN: 'pat-x' });
+    });
+
+    test('oauth → COPILOT_GITHUB_TOKEN', () => {
+      const r = deliverCredential('copilot', oauth('cop-tok'), { artifactsDir: ART_DIR });
+      expect(r.env).toEqual({ COPILOT_GITHUB_TOKEN: 'cop-tok' });
+    });
+  });
+
+  describe('buildPiAuthJson', () => {
+    test('null when no credential maps to a Pi backend', () => {
+      expect(buildPiAuthJson([])).toBeNull();
+      expect(buildPiAuthJson([{ provider: 'totally-unknown', cred: apiKey('x') }])).toBeNull();
+    });
+
+    test('aggregates api keys + subscriptions keyed by Pi backend id', () => {
+      const json = buildPiAuthJson([
+        { provider: 'openrouter', cred: apiKey('sk-or') },
+        { provider: 'claude', cred: oauth('cl-tok') },
+      ]);
+      expect(json).not.toBeNull();
+      const data = JSON.parse(json!) as Record<
+        string,
+        { type: string; key?: string; access?: string }
+      >;
+      expect(data.openrouter).toEqual({ type: 'api_key', key: 'sk-or' });
+      // claude → Pi backend 'anthropic'; oauth blob spread under {type:'oauth', ...}
+      expect(data.anthropic?.type).toBe('oauth');
+      expect(data.anthropic?.access).toBe('cl-tok');
     });
   });
 
@@ -101,9 +169,9 @@ describe('credentials/delivery', () => {
       expect(r.env).toEqual({ XAI_API_KEY: 'x-key' });
     });
 
-    test('Pi backend oauth → throws (API-key only)', () => {
+    test('Pi backend oauth → throws (subscriptions reach Pi via auth.json, not env)', () => {
       expect(() => deliverCredential('openrouter', oauth(), { artifactsDir: ART_DIR })).toThrow(
-        /API-key only/
+        /auth\.json/
       );
     });
   });

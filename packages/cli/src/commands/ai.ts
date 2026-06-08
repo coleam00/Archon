@@ -17,7 +17,7 @@
  * $USER/$USERNAME, resolved to a stable Archon user via the 'cli' platform
  * identity so a connected key attaches to the same user across invocations.
  */
-import { password, isCancel, cancel } from '@clack/prompts';
+import { password, text, isCancel, cancel } from '@clack/prompts';
 import { createLogger } from '@archon/paths';
 import {
   isPerUserProviderKeysEnabled,
@@ -25,6 +25,9 @@ import {
   listUserProviderKeys,
   deleteUserProviderKey,
   KNOWN_PROVIDERS,
+  SUBSCRIPTION_PROVIDERS,
+  startOAuth,
+  pollOAuth,
 } from '@archon/core';
 import * as userDb from '@archon/core/db/users';
 import { resolveCliUserId } from './auth';
@@ -168,11 +171,88 @@ export async function aiLogoutCommand(provider: string | undefined): Promise<num
   }
 }
 
-/** Reserved for PR-3 (Pi OAuth subscription bridge). */
-export function aiLoginNotImplemented(): number {
-  console.error(
-    'OAuth subscription login (archon ai login) ships in a later release.\n' +
-      'For now connect an API key: archon ai key set <provider>'
-  );
+function subscriptionProvidersList(): string {
+  return [...SUBSCRIPTION_PROVIDERS].sort().join(', ');
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * `archon ai login <provider>` — connect a subscription (Claude Pro/Max,
+ * ChatGPT/Codex, GitHub Copilot) via Pi's OAuth, driven in-process through the
+ * bridge. Manual-code providers (claude/codex) print a URL and prompt for the
+ * pasted code; device-code (copilot) prints a user-code and polls.
+ */
+export async function aiLoginCommand(provider: string | undefined): Promise<number> {
+  if (!ensureEnabled()) return 1;
+  if (!provider) {
+    console.error('Usage: archon ai login <provider>');
+    console.error(`Subscription providers: ${subscriptionProvidersList()}`);
+    return 1;
+  }
+  if (!SUBSCRIPTION_PROVIDERS.has(provider)) {
+    console.error(
+      `Provider '${provider}' does not support subscription login. ` +
+        `Subscription providers: ${subscriptionProvidersList()}.`
+    );
+    return 1;
+  }
+  const user = await resolveUser();
+  if (!user) return 1;
+
+  try {
+    const start = await startOAuth(user.id, provider);
+    if (start.mode === 'device') {
+      console.log(
+        `\n→ Visit ${start.verificationUri ?? '(pending)'} and enter code: ${start.userCode ?? '(pending)'}`
+      );
+      console.log('→ Waiting for authorization…');
+      return await pollLoginLoop(start.sessionId, user.id, provider);
+    }
+    // manual-code (Anthropic / Codex)
+    if (start.url) console.log(`\n→ Visit: ${start.url}`);
+    console.log('→ Authorize in your browser, then paste the code shown back here.');
+    const code = await text({
+      message: 'Paste the authorization code:',
+      validate: v => (v?.trim() ? undefined : 'Authorization code is required.'),
+    });
+    if (isCancel(code)) {
+      cancel('Cancelled.');
+      return 1;
+    }
+    return await pollLoginLoop(start.sessionId, user.id, provider, code.trim());
+  } catch (err) {
+    getLog().error({ err: err as Error, provider }, 'cli.ai_login_failed');
+    console.error(`✗ ${(err as Error).message}`);
+    return 1;
+  }
+}
+
+/** Poll the in-process bridge until the login is connected/failed/timed out. */
+async function pollLoginLoop(
+  sessionId: string,
+  userId: string,
+  provider: string,
+  code?: string
+): Promise<number> {
+  const MAX_POLLS = 150; // ~5 min at 2s
+  // The pasted code is submitted on the first poll only; later polls just check status.
+  let pendingCode = code;
+  for (let i = 0; i < MAX_POLLS; i++) {
+    const res = pollOAuth(sessionId, userId, pendingCode);
+    pendingCode = undefined;
+    if (res.status === 'connected') {
+      console.log(`\n✓ Connected '${provider}' subscription. Stored encrypted in Archon's DB.`);
+      return 0;
+    }
+    if (res.status === 'error') {
+      console.error(`\n✗ ${res.detail ?? 'Subscription login failed.'}`);
+      return 1;
+    }
+    await sleep(2000);
+  }
+  console.error('\n✗ Subscription login timed out.');
   return 1;
 }

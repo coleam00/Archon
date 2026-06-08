@@ -18,10 +18,11 @@ import { join } from 'node:path';
 
 /**
  * Raw OAuth credential blob as returned by `@earendil-works/pi-ai/oauth`
- * provider `login()`. The exact shape varies per provider (Anthropic vs.
- * Codex vs. Copilot) but is always a JSON-serializable object. Phase 2 stores
- * it opaquely; the OAuth bridge (PR-3) is responsible for parsing the
- * provider-specific fields.
+ * provider `login()`. The exact shape varies per provider (Anthropic vs. Codex
+ * vs. Copilot) but is always a JSON-serializable object. It's stored opaquely
+ * and passed through verbatim: refresh is handled by Pi's `getOAuthApiKey`
+ * (keyed by Pi's provider id, e.g. `openai-codex` — not Archon's `codex`), and
+ * the only field-level parsing is `buildCodexAuthJson` below.
  */
 export type OAuthCredentials = Record<string, unknown>;
 
@@ -86,24 +87,42 @@ const PI_PROVIDER_ENV_VARS: Record<string, string> = {
 export const KNOWN_PROVIDERS: ReadonlySet<string> = new Set<string>([
   'claude',
   'codex',
+  'copilot',
   'anthropic',
   'openai',
   ...Object.keys(PI_PROVIDER_ENV_VARS),
 ]);
 
 /**
- * Codex ChatGPT-subscription `auth.json` shape verification is deferred to
- * the OAuth-delivery PR (G5 / T23–T24). For now this helper JSON-stringifies
- * the raw Pi credential blob verbatim — that is a placeholder; the field
- * mapping to the real Codex CLI `auth.json` is the work of T23/T24 and may
- * change.
+ * Map Pi's `openaiCodex` OAuth blob onto the Codex CLI `auth.json` shape
+ * (authoritative interface: `packages/server/src/scripts/setup-auth.ts`):
+ *   { OPENAI_API_KEY: null, tokens: { id_token, access_token, refresh_token,
+ *     account_id }, last_refresh }
+ *
+ * Pi's `OAuthCredentials` (verified against `pi-ai@0.76.0`
+ * `dist/utils/oauth/openai-codex.js:100-104,332`) is `{ access, refresh, expires,
+ * accountId }` — note `accountId` is camelCase, and **Pi does not surface an
+ * `id_token`** (`chatgpt_account_id` is only an internal JWT claim it reads to
+ * derive `accountId`). So `id_token` is best-effort (empty unless a future Pi
+ * version provides one).
+ *
+ * VERIFY (live smoke): whether the Codex CLI accepts an empty `id_token` for a
+ * ChatGPT subscription, or derives the account from the JWT `access_token` alone.
+ * The API-key Codex path (`OPENAI_API_KEY`) is unaffected.
  */
 function buildCodexAuthJson(rawCreds: OAuthCredentials): string {
-  // TODO(#1891 PR-3 / G5): verify Codex CLI auth.json field layout against
-  // ~/.codex/auth.json on a real subscription and map Pi's blob fields
-  // accordingly. Until then this is shape-unverified; the OAuth-Codex path
-  // is gated upstream (no OAuth connect surface ships in PR-1).
-  return JSON.stringify(rawCreds);
+  const c = rawCreds as Record<string, unknown>;
+  const str = (v: unknown): string => (typeof v === 'string' ? v : '');
+  return JSON.stringify({
+    OPENAI_API_KEY: null,
+    tokens: {
+      id_token: str(c.id_token), // Pi does not provide one today → ''
+      access_token: str(c.access),
+      refresh_token: str(c.refresh),
+      account_id: str(c.accountId),
+    },
+    last_refresh: new Date().toISOString(),
+  });
 }
 
 /**
@@ -140,6 +159,16 @@ export function deliverCredential(
         };
       }
 
+    case 'copilot':
+      // Copilot subscription (oauth) or a Copilot PAT (api_key) → the env var the
+      // native Copilot provider reads (COPILOT_GITHUB_TOKEN wins over generic GH
+      // tokens). VERIFY (live): the OAuth-minted Copilot token works as this PAT.
+      return {
+        env: {
+          COPILOT_GITHUB_TOKEN: cred.kind === 'api_key' ? cred.apiKey : cred.oauthApiKey,
+        },
+      };
+
     case 'anthropic':
       if (cred.kind === 'oauth') {
         throw new Error(
@@ -160,8 +189,12 @@ export function deliverCredential(
       const piEnvVar = PI_PROVIDER_ENV_VARS[provider];
       if (piEnvVar) {
         if (cred.kind === 'oauth') {
+          // Reached only if an oauth row exists under a Pi-backend id (connect
+          // guards against this — oauth is claude/codex/copilot only). The Pi
+          // runtime consumes subscriptions via the aggregate auth.json
+          // (buildPiAuthJson), not this per-provider env path.
           throw new Error(
-            `Provider '${provider}' (Pi backend) is API-key only; OAuth subscription delivery is not supported.`
+            `Provider '${provider}' (Pi backend) has no env-based OAuth delivery; subscriptions reach Pi via auth.json.`
           );
         }
         return { env: { [piEnvVar]: cred.apiKey } };
@@ -171,4 +204,54 @@ export function deliverCredential(
       );
     }
   }
+}
+
+/**
+ * A Pi `AuthStorage` `auth.json` entry (see `@earendil-works/pi-coding-agent`
+ * `core/auth-storage.d.ts`): an API key or an OAuth blob, keyed by Pi provider id.
+ */
+type PiAuthCredential = { type: 'api_key'; key: string } | ({ type: 'oauth' } & OAuthCredentials);
+
+/**
+ * Archon credential-provider id → Pi provider/backend id (the `auth.json` key Pi
+ * looks under when running that backend). Mostly identity for API-key backends;
+ * the runtime ids (`claude`/`codex`/`copilot`) map to Pi's backend names.
+ *
+ * VERIFY (T5b.0): the OAuth backend ids (`codex`→`openai`, `copilot`→`github-copilot`)
+ * against a real `~/.pi/agent/auth.json` after a local `pi` `/login`.
+ */
+const PI_BACKEND_ID: Record<string, string> = {
+  claude: 'anthropic',
+  codex: 'openai',
+  copilot: 'github-copilot',
+  anthropic: 'anthropic',
+  openai: 'openai',
+  ...Object.fromEntries(Object.keys(PI_PROVIDER_ENV_VARS).map(p => [p, p])),
+};
+
+/** Relative path (under the per-run artifacts dir) for the generated Pi auth.json. */
+export const PI_AUTH_JSON_RELATIVE_PATH = 'pi-home/auth.json';
+/** Env var the Pi provider reads to point `AuthStorage` at the per-run auth.json. */
+export const PI_AUTH_PATH_ENV = 'ARCHON_PI_AUTH_PATH';
+
+/**
+ * Build a per-run Pi `auth.json` from the user's FULL connected credential set so
+ * a `pi` node can use the user's API keys AND subscriptions. Returns `null` when
+ * no credential maps to a Pi backend. Delivered via a per-run auth path
+ * (`ARCHON_PI_AUTH_PATH`) — NOT by moving `PI_CODING_AGENT_DIR`, which would
+ * redirect Pi's whole home and drop the user's `models.json`/`settings.json`.
+ */
+export function buildPiAuthJson(
+  creds: { provider: string; cred: ResolvedCredential }[]
+): string | null {
+  const data: Record<string, PiAuthCredential> = {};
+  for (const { provider, cred } of creds) {
+    const piId = PI_BACKEND_ID[provider];
+    if (!piId) continue;
+    data[piId] =
+      cred.kind === 'api_key'
+        ? { type: 'api_key', key: cred.apiKey }
+        : { type: 'oauth', ...cred.rawCreds };
+  }
+  return Object.keys(data).length > 0 ? JSON.stringify(data, null, 2) : null;
 }

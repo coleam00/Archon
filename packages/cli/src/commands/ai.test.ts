@@ -39,12 +39,38 @@ const mockList = mock(
 );
 const mockDelete = mock(async (_userId: string, _provider: string) => {});
 
+const SUBSCRIPTION = new Set<string>(['claude', 'codex', 'copilot']);
+const mockStartOAuth = mock(
+  async (_userId: string, _provider: string) =>
+    ({
+      sessionId: 's1',
+      mode: 'device',
+      userCode: 'WXYZ',
+      verificationUri: 'https://x/dev',
+      expiresIn: 600,
+    }) as {
+      sessionId: string;
+      mode: 'manual' | 'device';
+      url?: string;
+      userCode?: string;
+      verificationUri?: string;
+      expiresIn: number;
+    }
+);
+const mockPollOAuth = mock(
+  (_sessionId: string, _userId: string, _code?: string) =>
+    ({ status: 'connected' }) as { status: 'pending' | 'connected' | 'error'; detail?: string }
+);
+
 mock.module('@archon/core', () => ({
   isPerUserProviderKeysEnabled: () => enabled,
   persistProviderApiKey: mockPersist,
   listUserProviderKeys: mockList,
   deleteUserProviderKey: mockDelete,
   KNOWN_PROVIDERS: KNOWN,
+  SUBSCRIPTION_PROVIDERS: SUBSCRIPTION,
+  startOAuth: mockStartOAuth,
+  pollOAuth: mockPollOAuth,
 }));
 mock.module('@archon/core/db/users', () => ({
   findOrCreateUserByPlatformIdentity: mock(async () => ({ id: 'u1' })),
@@ -52,7 +78,7 @@ mock.module('@archon/core/db/users', () => ({
 mock.module('./auth', () => ({ resolveCliUserId: () => 'cli-alice' }));
 mock.module('@archon/paths', () => ({ createLogger: noopLogger }));
 
-import { aiKeySetCommand, aiListCommand, aiLogoutCommand, aiLoginNotImplemented } from './ai';
+import { aiKeySetCommand, aiListCommand, aiLogoutCommand, aiLoginCommand } from './ai';
 
 let logSpy: ReturnType<typeof spyOn<Console, 'log'>>;
 let errSpy: ReturnType<typeof spyOn<Console, 'error'>>;
@@ -167,9 +193,53 @@ describe('aiLogoutCommand', () => {
   });
 });
 
-describe('aiLoginNotImplemented', () => {
-  it('returns 1 and points at `key set`', () => {
-    expect(aiLoginNotImplemented()).toBe(1);
-    expect(out()).toContain('archon ai key set');
+describe('aiLoginCommand', () => {
+  beforeEach(() => {
+    mockStartOAuth.mockClear();
+    mockPollOAuth.mockClear();
+  });
+
+  it('gate off → 1, no bridge call', async () => {
+    enabled = false;
+    expect(await aiLoginCommand('claude')).toBe(1);
+    expect(mockStartOAuth).not.toHaveBeenCalled();
+  });
+
+  it('missing provider → 1', async () => {
+    expect(await aiLoginCommand(undefined)).toBe(1);
+    expect(mockStartOAuth).not.toHaveBeenCalled();
+  });
+
+  it('non-subscription provider → 1, no bridge call', async () => {
+    expect(await aiLoginCommand('openrouter')).toBe(1);
+    expect(out()).toContain('does not support subscription login');
+    expect(mockStartOAuth).not.toHaveBeenCalled();
+  });
+
+  it('device flow → connected → 0', async () => {
+    mockStartOAuth.mockResolvedValueOnce({
+      sessionId: 's1',
+      mode: 'device',
+      userCode: 'WXYZ',
+      verificationUri: 'https://x/dev',
+      expiresIn: 600,
+    });
+    mockPollOAuth.mockReturnValueOnce({ status: 'connected' });
+    expect(await aiLoginCommand('copilot')).toBe(0);
+    expect(mockStartOAuth).toHaveBeenCalledWith('u1', 'copilot');
+    expect(out()).toContain('WXYZ');
+  });
+
+  it('device flow → error → 1', async () => {
+    mockStartOAuth.mockResolvedValueOnce({
+      sessionId: 's1',
+      mode: 'device',
+      userCode: 'WXYZ',
+      verificationUri: 'https://x/dev',
+      expiresIn: 600,
+    });
+    mockPollOAuth.mockReturnValueOnce({ status: 'error', detail: 'denied' });
+    expect(await aiLoginCommand('copilot')).toBe(1);
+    expect(out()).toContain('denied');
   });
 });

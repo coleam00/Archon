@@ -43,6 +43,9 @@ import {
   listUserProviderKeys,
   deleteUserProviderKey,
   KNOWN_PROVIDERS,
+  SUBSCRIPTION_PROVIDERS,
+  startOAuth,
+  pollOAuth,
 } from '@archon/core';
 import { removeWorktree, toRepoPath, toWorktreePath } from '@archon/git';
 import {
@@ -160,6 +163,9 @@ import {
   providerKeySetBodySchema,
   providerKeySetResponseSchema,
   providerKeyDeleteResponseSchema,
+  providerOAuthStartResponseSchema,
+  providerOAuthPollBodySchema,
+  providerOAuthPollResponseSchema,
 } from './schemas/provider-key.schemas';
 import { mapDeviceFlowErrorToPollStatus } from './auth-poll-status';
 import { getProviderInfoList, isRegisteredProvider } from '@archon/providers';
@@ -1009,6 +1015,42 @@ const providerKeyDeleteRoute = createRoute({
   },
 });
 
+const providerOAuthStartRoute = createRoute({
+  method: 'post',
+  path: '/api/auth/providers/{provider}/oauth/start',
+  tags: ['Auth'],
+  summary: 'Begin a subscription (OAuth) login for the current web user',
+  request: { params: providerKeyParamsSchema },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: providerOAuthStartResponseSchema } },
+      description: 'Login session started (mode + URL/user-code)',
+    },
+    400: jsonError('Provider does not support subscription login'),
+    401: jsonError('Web auth required (X-Archon-User header missing)'),
+    404: jsonError('Per-user provider keys not enabled on this install'),
+  },
+});
+
+const providerOAuthPollRoute = createRoute({
+  method: 'post',
+  path: '/api/auth/providers/{provider}/oauth/poll',
+  tags: ['Auth'],
+  summary: 'Poll a subscription login session (submit pasted code for manual flows)',
+  request: {
+    params: providerKeyParamsSchema,
+    body: { content: { 'application/json': { schema: providerOAuthPollBodySchema } } },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: providerOAuthPollResponseSchema } },
+      description: 'Poll status',
+    },
+    401: jsonError('Web auth required (X-Archon-User header missing)'),
+    404: jsonError('Per-user provider keys not enabled on this install'),
+  },
+});
+
 const getCodebaseEnvironmentsRoute = createRoute({
   method: 'get',
   path: '/api/codebases/{id}/environments',
@@ -1343,13 +1385,14 @@ export function registerApiRoutes(
     const web = await requireWebUser(c, 'Web authentication required to manage provider keys');
     if ('error' in web) return web.error;
     const available = [...KNOWN_PROVIDERS].sort();
+    const subscriptionAvailable = [...SUBSCRIPTION_PROVIDERS].sort();
     if (!isPerUserProviderKeysEnabled()) {
       // Gate off: the console panel hides on `enabled:false`; skip the DB.
-      return c.json({ enabled: false, connections: [], available });
+      return c.json({ enabled: false, connections: [], available, subscriptionAvailable });
     }
     try {
       const connections = await listUserProviderKeys(web.userId);
-      return c.json({ enabled: true, connections, available });
+      return c.json({ enabled: true, connections, available, subscriptionAvailable });
     } catch (err) {
       getLog().error({ err: err as Error, userId: web.userId }, 'auth.provider_keys_list_failed');
       return apiError(c, 500, 'Failed to list provider keys');
@@ -1401,6 +1444,54 @@ export function registerApiRoutes(
       );
       return apiError(c, 500, 'Failed to disconnect provider key');
     }
+  });
+
+  // ---- Subscription (OAuth) connect: start + poll ----
+  // The bridge holds Pi's in-flight login() server-side; start returns the URL/
+  // user-code, poll(code?) feeds a pasted code (manual flows) and reports status.
+  // No response carries a secret. Paths are under /api/auth/providers/ so they're
+  // already exempt from the Better Auth catch-all (isArchonOwnedAuthPath).
+  registerOpenApiRoute(providerOAuthStartRoute, async c => {
+    const web = await requireWebUser(c, 'Web authentication required to connect a subscription');
+    if ('error' in web) return web.error;
+    if (!isPerUserProviderKeysEnabled()) {
+      return apiError(c, 404, 'Per-user provider keys are not enabled on this install');
+    }
+    const provider = c.req.param('provider') ?? '';
+    if (!SUBSCRIPTION_PROVIDERS.has(provider)) {
+      return apiError(
+        c,
+        400,
+        `Provider '${provider}' does not support subscription login. ` +
+          `Subscription providers: ${[...SUBSCRIPTION_PROVIDERS].sort().join(', ')}.`
+      );
+    }
+    try {
+      const start = await startOAuth(web.userId, provider);
+      return c.json(start);
+    } catch (err) {
+      getLog().error(
+        { err: err as Error, userId: web.userId, provider },
+        'auth.provider_oauth_start_failed'
+      );
+      return apiError(c, 500, 'Failed to start subscription login');
+    }
+  });
+
+  registerOpenApiRoute(providerOAuthPollRoute, async c => {
+    const web = await requireWebUser(c, 'Web authentication required to connect a subscription');
+    if ('error' in web) return web.error;
+    if (!isPerUserProviderKeysEnabled()) {
+      return apiError(c, 404, 'Per-user provider keys are not enabled on this install');
+    }
+    // The `:provider` path segment only keeps the OAuth routes under one prefix
+    // (so they're exempt from the Better Auth catch-all); poll itself keys off
+    // sessionId + userId.
+    const { sessionId, code } = getValidatedBody(c, providerOAuthPollBodySchema);
+    // pollOAuth is bound to the session's userId, so a stranger's sessionId resolves
+    // to an error status rather than another user's login.
+    const result = pollOAuth(sessionId, web.userId, code);
+    return c.json(result);
   });
 
   // Shared lock/dispatch/error handling for message and workflow endpoints

@@ -18,7 +18,13 @@ import type { IGitHubAppAuthProvider } from '../github-auth';
 import { isPerUserGitHubEnabled } from '../github-auth/config';
 import { getDecryptedAccessToken } from '../db/user-github-token-store';
 import { isPerUserProviderKeysEnabled } from '../credentials/config';
-import { deliverCredential } from '../credentials/delivery';
+import { join } from 'node:path';
+import {
+  deliverCredential,
+  buildPiAuthJson,
+  PI_AUTH_JSON_RELATIVE_PATH,
+  PI_AUTH_PATH_ENV,
+} from '../credentials/delivery';
 import { listDecryptedUserProviderCredentials } from '../db/user-provider-key-store';
 
 // Compile-time assertion: MergedConfig must remain a structural subtype of WorkflowConfig.
@@ -151,13 +157,24 @@ export function createWorkflowDeps(): WorkflowDeps {
             Object.assign(env, result.env);
             if (result.files) files.push(...result.files);
           } catch (err) {
-            // Unknown provider / shape mismatch — log at ERROR (user has no
-            // feedback path until PR-2 adds credential_delivery_skipped events)
-            // and skip this credential rather than abort all delivery.
+            // Unknown provider / shape mismatch — log at ERROR (no per-credential
+            // user-facing skip event yet) and skip this credential rather than
+            // abort all delivery.
             getLog().error(
               { err: err as Error, userId, provider },
               'workflow_deps.provider_creds_deliver_failed'
             );
+          }
+        }
+        // Aggregate Pi auth.json (the user's keys + subscriptions) so a `pi` node
+        // consumes them via AuthStorage(authPath) without moving Pi's home. Needs
+        // a real artifactsDir (file delivery); the chat path is env-only.
+        if (artifactsDir) {
+          const piAuthJson = buildPiAuthJson(creds);
+          if (piAuthJson) {
+            const piAuthPath = join(artifactsDir, PI_AUTH_JSON_RELATIVE_PATH);
+            files.push({ path: piAuthPath, contents: piAuthJson });
+            env[PI_AUTH_PATH_ENV] = piAuthPath;
           }
         }
         return { env, files };
