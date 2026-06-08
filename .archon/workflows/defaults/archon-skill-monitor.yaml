@@ -1,0 +1,212 @@
+name: archon-skill-monitor
+description: |
+  Use when: User wants to monitor, trace, or unit-test an Archon skill (SKILL.md).
+  Triggers: "monitor the skill", "test the skill", "trace skill execution",
+            "skill monitor", "audit what the skill does", "does <skill> still work".
+  Does: Snapshots git state -> runs the skill against a scenario while tracing every
+        tool call -> audits files created/modified -> checks assertions -> writes a
+        structured JSON + Markdown execution report.
+  NOT for: Authoring skills/workflows, or running a skill for real work (this isolates
+           and inspects a skill run; use the skill directly for actual tasks).
+
+# Run in an isolated worktree (default) so the skill's file changes are cleanly
+# attributable in the file audit and never touch the caller's working tree.
+
+nodes:
+  # ── 1. Snapshot pre-run git state (deterministic baseline for the file audit) ──
+  - id: snapshot
+    bash: |
+      set -euo pipefail
+      mkdir -p "$ARTIFACTS_DIR"
+
+      # Record the commit + working-tree state BEFORE the skill runs so the audit
+      # node can attribute every change (committed or uncommitted) to the skill.
+      git rev-parse HEAD > "$ARTIFACTS_DIR/pre-run-head.txt" 2>/dev/null \
+        || echo "UNKNOWN" > "$ARTIFACTS_DIR/pre-run-head.txt"
+      git status --porcelain > "$ARTIFACTS_DIR/pre-run-status.txt" 2>/dev/null || true
+
+      echo "=== Pre-run HEAD ==="
+      cat "$ARTIFACTS_DIR/pre-run-head.txt"
+
+      echo ""
+      echo "=== Available skills ==="
+      for dir in .claude/skills ~/.claude/skills .archon/skills; do
+        if [ -d "$dir" ]; then
+          find "$dir" -maxdepth 2 -name "SKILL.md" 2>/dev/null
+        fi
+      done
+
+  # ── 2. Execute the skill under trace (tool-call log + execution notes) ──
+  - id: execute-skill
+    prompt: |
+      You are a **skill execution monitor**. Your job is to faithfully run an Archon
+      skill against a test scenario while recording exactly what it does. Do NOT
+      optimize or shortcut the skill's documented behavior — execute it as written so
+      the trace reflects real behavior.
+
+      ## Input
+      $ARGUMENTS
+
+      The input names a skill and (optionally, after a `|` or on the next line) a test
+      scenario / expected behavior. If no scenario is given, exercise the skill's
+      primary documented capability with a minimal, safe example.
+
+      ## Available skills (from snapshot)
+      $snapshot.output
+
+      ## Steps
+
+      1. **Resolve the skill.** Parse the skill name from the input. Locate its
+         `SKILL.md` (search `.claude/skills/<name>/SKILL.md`, then `~/.claude/skills/`,
+         then `.archon/skills/`). If you cannot find it, write a trace recording the
+         failure and stop — do not guess another skill.
+      2. **Load it.** Read the resolved `SKILL.md` fully so you follow its actual
+         instructions, not your prior assumptions about it.
+      3. **Execute it** against the scenario. Use whatever tools the skill calls for.
+         Keep the run minimal and reversible — prefer read-only / scratch operations
+         unless the scenario explicitly requires writes.
+      4. **Trace every tool call.** As you work, keep a precise log of each tool call:
+         the tool name, a one-line summary of its key arguments, and a one-line summary
+         of its result (or error). Number them in call order.
+
+      ## Required outputs (write these files with the Write tool)
+
+      - `$ARTIFACTS_DIR/skill-trace.jsonl` — one JSON object **per line**, one line per
+        tool call, in call order:
+        `{"seq": 1, "tool": "Read", "args": "SKILL.md", "result": "ok, 40 lines"}`
+        Write this LAST, in a single Write, after the run — do not append incrementally
+        (the appends would themselves pollute the trace).
+      - `$ARTIFACTS_DIR/execution-notes.md` — a short narrative: which skill was
+        resolved (name + path), the scenario you ran, what the skill did, and whether
+        it completed or errored.
+
+      ## Output (your final message)
+      A 2-4 sentence summary: skill name + resolved path, scenario, completion status,
+      and the number of tool calls traced.
+    depends_on: [snapshot]
+
+  # ── 3. File audit: what did the skill create / modify / delete? ──
+  - id: file-audit
+    bash: |
+      set -uo pipefail
+      BEFORE=$(cat "$ARTIFACTS_DIR/pre-run-head.txt" 2>/dev/null || echo "UNKNOWN")
+      AUDIT="$ARTIFACTS_DIR/file-audit.txt"
+
+      {
+        echo "=== File Audit ==="
+        echo "Baseline HEAD: $BEFORE"
+        echo ""
+
+        echo "--- Committed changes since baseline (name-status) ---"
+        if [ "$BEFORE" != "UNKNOWN" ]; then
+          git diff --name-status "$BEFORE" HEAD 2>/dev/null || echo "(none / unavailable)"
+        else
+          echo "(baseline HEAD unknown — skipped)"
+        fi
+
+        echo ""
+        echo "--- Uncommitted changes introduced during the run ---"
+        # Diff current porcelain against the pre-run snapshot so files that were
+        # already dirty before the skill ran are excluded from attribution.
+        git status --porcelain > "$ARTIFACTS_DIR/post-run-status.txt" 2>/dev/null || true
+        if command -v comm >/dev/null 2>&1; then
+          comm -13 \
+            <(sort "$ARTIFACTS_DIR/pre-run-status.txt" 2>/dev/null) \
+            <(sort "$ARTIFACTS_DIR/post-run-status.txt" 2>/dev/null) \
+            || echo "(none)"
+        else
+          cat "$ARTIFACTS_DIR/post-run-status.txt" 2>/dev/null || echo "(none)"
+        fi
+
+        echo ""
+        echo "--- Diff stat (uncommitted) ---"
+        git diff --stat 2>/dev/null || echo "(none)"
+      } | tee "$AUDIT"
+    depends_on: [execute-skill]
+
+  # ── 4. Test runner: assert the run matched expectations ──
+  - id: run-tests
+    prompt: |
+      You are a **skill test runner**. Evaluate the monitored run against expectations
+      and emit a structured pass/fail verdict.
+
+      ## Original request (scenario + any stated expectations)
+      $ARGUMENTS
+
+      ## Evidence
+      - Execution summary: $execute-skill.output
+      - Tool-call trace: read `$ARTIFACTS_DIR/skill-trace.jsonl`
+      - Execution notes: read `$ARTIFACTS_DIR/execution-notes.md`
+      - File audit: read `$ARTIFACTS_DIR/file-audit.txt`
+
+      ## Instructions
+
+      1. Read the three evidence files above.
+      2. Derive assertions from the scenario / the skill's documented purpose, e.g.:
+         - the expected tools were actually called (per the trace),
+         - the expected files were created/modified (per the audit) and nothing
+           destructive happened that the scenario did not call for,
+         - the skill completed without an unrecovered error.
+      3. Mark each assertion pass/fail with a one-line reason.
+      4. Also write the full result to `$ARTIFACTS_DIR/test-results.json` (Write tool).
+
+      Be strict: if the trace or audit is missing/empty, or the skill failed to
+      resolve, that is a FAIL — do not invent passing evidence.
+    output_format:
+      type: object
+      properties:
+        passed:
+          type: boolean
+          description: Overall verdict — true only if every assertion passed.
+        skill:
+          type: string
+          description: Resolved skill name.
+        tools_observed:
+          type: string
+          description: Comma-separated tool names seen in the trace.
+        files_changed:
+          type: string
+          description: Comma-separated files created/modified, or "none".
+        assertions:
+          type: string
+          description: One line per assertion, "PASS/FAIL — reason".
+        summary:
+          type: string
+          description: One-paragraph verdict summary.
+      required: [passed, skill, tools_observed, files_changed, assertions, summary]
+    depends_on: [execute-skill, file-audit]
+
+  # ── 5. Structured execution report (Markdown + JSON) ──
+  - id: report
+    prompt: |
+      You are a **report generator**. Assemble a complete, structured execution report
+      for this skill monitoring run.
+
+      ## Verdict
+      - Passed: $run-tests.output.passed
+      - Skill: $run-tests.output.skill
+      - Tools observed: $run-tests.output.tools_observed
+      - Files changed: $run-tests.output.files_changed
+      - Assertions: $run-tests.output.assertions
+      - Summary: $run-tests.output.summary
+
+      ## Source artifacts (read these for full detail)
+      - `$ARTIFACTS_DIR/skill-trace.jsonl`
+      - `$ARTIFACTS_DIR/execution-notes.md`
+      - `$ARTIFACTS_DIR/file-audit.txt`
+      - `$ARTIFACTS_DIR/test-results.json`
+
+      ## Instructions
+
+      Write TWO files with the Write tool:
+
+      1. `$ARTIFACTS_DIR/skill-monitor-report.json` — a single JSON object:
+         `{ "skill", "passed", "scenario", "tools": [...], "files_changed": [...],
+            "trace": [ ...the jsonl entries... ], "assertions": [...], "summary" }`
+      2. `$ARTIFACTS_DIR/skill-monitor-report.md` — a human-readable report with
+         sections: **Verdict** (✅/❌), **Skill & Scenario**, **Tool-Call Trace**
+         (a numbered table), **File Audit**, **Assertions**, **Summary**.
+
+      Then output the Markdown report as your final message so the user sees it inline.
+    output_type: skill-monitor-report
+    depends_on: [run-tests]
