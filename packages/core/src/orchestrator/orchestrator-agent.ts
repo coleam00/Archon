@@ -896,15 +896,16 @@ export async function handleMessage(
       conversationId
     );
 
-    // Persist inbound message for non-web platforms — the web adapter's API
-    // route saves the user row before invoking the orchestrator, so we only
-    // cover GitHub/Telegram/Discord/Slack/CLI here. Fire-and-forget: a DB
+    // Persist inbound message for non-web platforms — the web adapter's route
+    // already persists the user message, so we only cover
+    // GitHub/Telegram/Discord/Slack/CLI here. Fire-and-forget: a DB
     // failure must not break platform delivery (#1182).
     if (!isWebAdapter(platform)) {
-      const dbId = conversation.id;
-      messageDb.addMessage(dbId, 'user', message, undefined, userId).catch((e: unknown) => {
-        getLog().warn({ err: e, conversationId }, 'orchestrator.user_message_persist_failed');
-      });
+      messageDb
+        .addMessage(conversation.id, 'user', message, undefined, userId)
+        .catch((e: unknown) => {
+          getLog().warn({ err: e, conversationId }, 'orchestrator.user_message_persist_failed');
+        });
     }
 
     // Natural-language approval routing — if a workflow is paused in this

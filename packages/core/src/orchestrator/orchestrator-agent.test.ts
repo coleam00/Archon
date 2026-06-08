@@ -3082,7 +3082,8 @@ describe('per-user AI prefs in chat + tier-fallback nudge', () => {
 
 describe('message persistence for non-web platforms', () => {
   beforeEach(() => {
-    mockAddMessage.mockClear();
+    mockAddMessage.mockReset();
+    mockAddMessage.mockImplementation(() => Promise.resolve());
     mockGetOrCreateConversation.mockReset();
     mockGetCodebase.mockReset();
     mockGetCodebaseEnvVars.mockReset();
@@ -3171,5 +3172,34 @@ describe('message persistence for non-web platforms', () => {
 
     await expect(handleMessage(platform, 'conv-1', 'what is this repo?')).resolves.toBeUndefined();
     expect(platform.sendMessage).toHaveBeenCalled();
+  });
+
+  test('platform delivery is not blocked when persistence rejects (stream mode)', async () => {
+    const platform: IPlatformAdapter = {
+      ...makePlatform(),
+      getPlatformType: mock(() => 'telegram'),
+      getStreamingMode: mock(() => 'stream' as const),
+    };
+    mockAddMessage.mockImplementation(() => Promise.reject(new Error('db down')));
+
+    await expect(handleMessage(platform, 'conv-1', 'what is this repo?')).resolves.toBeUndefined();
+  });
+
+  test('passes userId to addMessage when context provides it', async () => {
+    const platform: IPlatformAdapter = {
+      ...makePlatform(),
+      getPlatformType: mock(() => 'github'),
+      getStreamingMode: mock(() => 'batch' as const),
+    };
+
+    await handleMessage(platform, 'conv-1', 'what is this repo?', { userId: 'user-abc' });
+
+    expect(mockAddMessage).toHaveBeenCalledWith(
+      'conv-db-id',
+      'user',
+      'what is this repo?',
+      undefined,
+      'user-abc'
+    );
   });
 });
