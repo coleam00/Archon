@@ -24,12 +24,27 @@ import type { RepoPath, BranchName } from '@archon/git';
 import { createLogger } from '@archon/paths';
 import type { IsolationEnvironmentRow } from '@archon/isolation';
 import { ConversationNotFoundError } from '../types';
+import { loadRepoConfig } from '../config/config-loader';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('cleanup');
   return cachedLog;
+}
+
+// Resolve the base branch for a repo, preferring worktree.baseBranch from
+// .archon/config.yaml before falling back to runtime git detection. Without
+// this, repos that use 'master' as default branch (and don't set origin/HEAD)
+// hit getDefaultBranch's "set worktree.baseBranch" error — even when the user
+// already did, because the cleanup service never read it. See #1419.
+async function resolveBaseBranch(repoPath: RepoPath, cwd: string): Promise<BranchName> {
+  const repoConfig = await loadRepoConfig(cwd);
+  const configured = repoConfig.worktree?.baseBranch?.trim();
+  if (configured) {
+    return toBranchName(configured);
+  }
+  return getDefaultBranch(repoPath);
 }
 
 // Configuration constants (configurable via env vars)
@@ -308,7 +323,7 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
 
         // Check if branch is merged
         const mainRepoPath = toRepoPath(env.codebase_default_cwd);
-        const mainBranch = await getDefaultBranch(mainRepoPath);
+        const mainBranch = await resolveBaseBranch(mainRepoPath, env.codebase_default_cwd);
         const merged = await isBranchMerged(
           mainRepoPath,
           toBranchName(env.branch_name),
@@ -462,7 +477,7 @@ export async function getWorktreeStatusBreakdown(
     activeEnvs: [],
   };
 
-  const mainBranch = await getDefaultBranch(repoPath);
+  const mainBranch = await resolveBaseBranch(repoPath, mainRepoPath);
 
   for (const env of environments) {
     // Skip Telegram (never shown as stale)
@@ -590,7 +605,7 @@ export async function cleanupMergedWorktrees(
   const result: CleanupOperationResult = { removed: [], skipped: [] };
   const environments = await isolationEnvDb.listByCodebase(codebaseId);
   const repoPath = toRepoPath(mainRepoPath);
-  const mainBranch = await getDefaultBranch(repoPath);
+  const mainBranch = await resolveBaseBranch(repoPath, mainRepoPath);
   const includeClosed = options.includeClosed ?? false;
   const prStateCache = new Map<string, PrState>();
 
