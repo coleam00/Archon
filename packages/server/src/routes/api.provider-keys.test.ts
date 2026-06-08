@@ -437,6 +437,16 @@ describe('POST /api/auth/providers/:provider/oauth/start', () => {
     expect(res.status).toBe(404);
   });
 
+  test('bridge throws → opaque 500 (no internal message leak)', async () => {
+    mockStartOAuth.mockRejectedValueOnce(new Error('callback server at 127.0.0.1:53999 failed'));
+    const res = await makeApp().request('/api/auth/providers/claude/oauth/start', {
+      method: 'POST',
+      headers: ALICE,
+    });
+    expect(res.status).toBe(500);
+    expect(await res.text()).not.toContain('53999');
+  });
+
   test('no identity → 401', async () => {
     const res = await makeApp().request('/api/auth/providers/claude/oauth/start', {
       method: 'POST',
@@ -462,6 +472,16 @@ describe('POST /api/auth/providers/:provider/oauth/poll', () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ status: 'connected' });
     expect(mockPollOAuth).toHaveBeenCalledWith('sess-1', 'user-from-alice', 'CODE');
+  });
+
+  test('gate off → 404', async () => {
+    keysEnabled = false;
+    const res = await makeApp().request('/api/auth/providers/claude/oauth/poll', {
+      method: 'POST',
+      headers: { ...ALICE, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 's' }),
+    });
+    expect(res.status).toBe(404);
   });
 
   test('no identity → 401', async () => {

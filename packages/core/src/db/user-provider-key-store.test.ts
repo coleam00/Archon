@@ -200,6 +200,49 @@ describe('user-provider-key-store', () => {
       mockGetOAuthApiKey.mockResolvedValueOnce(null);
       expect(await getDecryptedProviderCredential('user-1', 'codex')).toBeNull();
     });
+
+    test('oauth row → null on corrupt ciphertext (decrypt/parse fails), no refresh attempt', async () => {
+      mockGetOAuthApiKey.mockClear();
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([oauthRow({ oauth_creds_encrypted: 'not-a-valid-ciphertext' })])
+      );
+      expect(await getDecryptedProviderCredential('user-1', 'codex')).toBeNull();
+      expect(mockGetOAuthApiKey).not.toHaveBeenCalled();
+    });
+
+    test('oauth row → null when oauth ciphertext is missing (corrupt row)', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([oauthRow({ oauth_creds_encrypted: null })])
+      );
+      expect(await getDecryptedProviderCredential('user-1', 'codex')).toBeNull();
+    });
+
+    test('oauth rotation → re-saves the new blob', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([oauthRow()])); // record SELECT
+      mockGetOAuthApiKey.mockResolvedValueOnce({
+        newCredentials: { access: 'ROTATED', refresh: 'r2', expires: 999 },
+        apiKey: 'minted-after-rotate',
+      });
+      const cred = await getDecryptedProviderCredential('user-1', 'codex');
+      expect(cred).toMatchObject({ kind: 'oauth', oauthApiKey: 'minted-after-rotate' });
+      // 1 SELECT (record) + 1 INSERT (resave of the rotated blob).
+      expect(mockQuery).toHaveBeenCalledTimes(2);
+      const insertParams = mockQuery.mock.calls[1]?.[1] as unknown[];
+      expect(insertParams[2]).toBe('oauth');
+      expect(insertParams[4]).not.toContain('ROTATED'); // re-encrypted, not plaintext
+    });
+
+    test('coalesces concurrent oauth reads → a single refresh (inflight Map)', async () => {
+      mockGetOAuthApiKey.mockClear();
+      mockQuery.mockResolvedValueOnce(createQueryResult([oauthRow()]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([oauthRow()]));
+      const [a, b] = await Promise.all([
+        getDecryptedProviderCredential('user-1', 'codex'),
+        getDecryptedProviderCredential('user-1', 'codex'),
+      ]);
+      expect(a).toEqual(b);
+      expect(mockGetOAuthApiKey).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('listDecryptedUserProviderCredentials', () => {

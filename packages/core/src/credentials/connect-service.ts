@@ -8,8 +8,8 @@
  * Deliberately far thinner than `github-auth/connect-service.ts` — there is no
  * external identity to fetch and no identity to link / conflict-guard. The row
  * is keyed `(user_id, provider)` and the upsert is idempotent, so re-connecting
- * a provider just replaces the stored key. OAuth subscription persistence lands
- * with the Pi OAuth bridge in PR-3.
+ * a provider just replaces the stored key. `persistProviderOAuth` (below) stores
+ * the subscription credential blob the oauth-bridge mints.
  */
 import { createLogger } from '@archon/paths';
 import { KNOWN_PROVIDERS, type OAuthCredentials } from './delivery';

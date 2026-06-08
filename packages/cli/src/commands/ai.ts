@@ -238,8 +238,11 @@ async function pollLoginLoop(
   code?: string
 ): Promise<number> {
   const MAX_POLLS = 150; // ~5 min at 2s
+  // The pasted code is submitted on the first poll only; later polls just check status.
+  let pendingCode = code;
   for (let i = 0; i < MAX_POLLS; i++) {
-    const res = pollOAuth(sessionId, userId, i === 0 ? code : undefined);
+    const res = pollOAuth(sessionId, userId, pendingCode);
+    pendingCode = undefined;
     if (res.status === 'connected') {
       console.log(`\n✓ Connected '${provider}' subscription. Stored encrypted in Archon's DB.`);
       return 0;

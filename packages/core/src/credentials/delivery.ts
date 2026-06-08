@@ -18,10 +18,11 @@ import { join } from 'node:path';
 
 /**
  * Raw OAuth credential blob as returned by `@earendil-works/pi-ai/oauth`
- * provider `login()`. The exact shape varies per provider (Anthropic vs.
- * Codex vs. Copilot) but is always a JSON-serializable object. Phase 2 stores
- * it opaquely; the OAuth bridge (PR-3) is responsible for parsing the
- * provider-specific fields.
+ * provider `login()`. The exact shape varies per provider (Anthropic vs. Codex
+ * vs. Copilot) but is always a JSON-serializable object. It's stored opaquely
+ * and passed through verbatim: refresh is handled by Pi's `getOAuthApiKey`
+ * (keyed by Pi's provider id, e.g. `openai-codex` — not Archon's `codex`), and
+ * the only field-level parsing is `buildCodexAuthJson` below.
  */
 export type OAuthCredentials = Record<string, unknown>;
 
@@ -98,10 +99,16 @@ export const KNOWN_PROVIDERS: ReadonlySet<string> = new Set<string>([
  *   { OPENAI_API_KEY: null, tokens: { id_token, access_token, refresh_token,
  *     account_id }, last_refresh }
  *
- * Pi's `OAuthCredentials` carries `access` / `refresh` plus provider extras.
- * VERIFY (T4.0): confirm the extra field names (`id_token`, `chatgpt_account_id`)
- * against one real ChatGPT login blob before relying on the subscription path;
- * the API-key Codex path (`OPENAI_API_KEY`) is unaffected.
+ * Pi's `OAuthCredentials` (verified against `pi-ai@0.76.0`
+ * `dist/utils/oauth/openai-codex.js:100-104,332`) is `{ access, refresh, expires,
+ * accountId }` — note `accountId` is camelCase, and **Pi does not surface an
+ * `id_token`** (`chatgpt_account_id` is only an internal JWT claim it reads to
+ * derive `accountId`). So `id_token` is best-effort (empty unless a future Pi
+ * version provides one).
+ *
+ * VERIFY (live smoke): whether the Codex CLI accepts an empty `id_token` for a
+ * ChatGPT subscription, or derives the account from the JWT `access_token` alone.
+ * The API-key Codex path (`OPENAI_API_KEY`) is unaffected.
  */
 function buildCodexAuthJson(rawCreds: OAuthCredentials): string {
   const c = rawCreds as Record<string, unknown>;
@@ -109,10 +116,10 @@ function buildCodexAuthJson(rawCreds: OAuthCredentials): string {
   return JSON.stringify({
     OPENAI_API_KEY: null,
     tokens: {
-      id_token: str(c.id_token),
+      id_token: str(c.id_token), // Pi does not provide one today → ''
       access_token: str(c.access),
       refresh_token: str(c.refresh),
-      account_id: str(c.chatgpt_account_id ?? c.account_id),
+      account_id: str(c.accountId),
     },
     last_refresh: new Date().toISOString(),
   });

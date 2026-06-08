@@ -1484,6 +1484,9 @@ export function registerApiRoutes(
     if (!isPerUserProviderKeysEnabled()) {
       return apiError(c, 404, 'Per-user provider keys are not enabled on this install');
     }
+    // The `:provider` path segment only keeps the OAuth routes under one prefix
+    // (so they're exempt from the Better Auth catch-all); poll itself keys off
+    // sessionId + userId.
     const { sessionId, code } = getValidatedBody(c, providerOAuthPollBodySchema);
     // pollOAuth is bound to the session's userId, so a stranger's sessionId resolves
     // to an error status rather than another user's login.

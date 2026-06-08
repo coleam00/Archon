@@ -28,6 +28,7 @@ import type {
 } from '@archon/providers/oauth';
 import { piOAuthProviderFor } from './oauth-providers';
 import { persistProviderOAuth } from './connect-service';
+import { sanitizeCredentials, sanitizeError } from '../utils/credential-sanitizer';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -82,6 +83,11 @@ function sweepExpired(): void {
   }
 }
 
+/** Internal `'pending'` never surfaces past the boundary — default it to `'manual'`. */
+function externalMode(session: OAuthSession): 'manual' | 'device' {
+  return session.mode === 'device' ? 'device' : 'manual';
+}
+
 export interface StartOAuthResult {
   sessionId: string;
   mode: 'manual' | 'device';
@@ -111,6 +117,15 @@ export async function startOAuth(userId: string, provider: string): Promise<Star
   if (!piProvider) {
     throw new Error(`Provider '${provider}' does not support subscription login.`);
   }
+  // One in-flight login per user — abort a prior session so its callback server
+  // (claude/codex `usesCallbackServer`) is released; otherwise a fixed-port flow
+  // would EADDRINUSE a retry of the same user.
+  for (const [id, s] of sessions) {
+    if (s.userId === userId) {
+      s.abort.abort();
+      sessions.delete(id);
+    }
+  }
   const sessionId = randomUUID();
   const session: OAuthSession = {
     userId,
@@ -139,7 +154,9 @@ export async function startOAuth(userId: string, provider: string): Promise<Star
         session.mode = 'device';
         session.firstSignal.resolve(true);
       },
-      // Manual providers ask for the pasted code via one of these — wire both.
+      // Manual providers ask for the pasted code via onManualCodeInput (or onPrompt);
+      // wire both to the same deferred. NOTE: a future provider that used onPrompt for
+      // a DIFFERENT question would get handed the auth code — fine for claude/codex/copilot.
       onManualCodeInput: () => session.codeDeferred.promise,
       onPrompt: async () => session.codeDeferred.promise,
       // No interactive account picker on the web bridge — take the first option.
@@ -157,17 +174,35 @@ export async function startOAuth(userId: string, provider: string): Promise<Star
     .catch((err: unknown) => {
       if (session.status !== 'connected') {
         session.status = 'error';
-        session.detail = err instanceof Error ? err.message : 'OAuth login failed.';
+        // Genericize/strip secrets before this can reach a client: Pi's OAuth errors
+        // embed auth-endpoint URLs / HTTP response bodies (login bypasses the
+        // getOAuthApiKey wrapper). Truncate too (I4).
+        session.detail = sanitizeCredentials(
+          err instanceof Error ? err.message : 'OAuth login failed.'
+        ).slice(0, 200);
       }
-      getLog().warn({ err: err as Error, userId, provider }, 'oauth_bridge.login_failed');
+      // Unblock start()'s race on an early failure (rejection before any callback),
+      // so it doesn't wait the full timeout then return a bogus url-less result (I1).
+      session.firstSignal.resolve(true);
+      getLog().warn(
+        { err: sanitizeError(err as Error), userId, provider },
+        'oauth_bridge.login_failed'
+      );
     });
 
   // Wait for the first callback so the URL / user-code is available to return.
   await Promise.race([session.firstSignal.promise, sleep(START_FIRST_SIGNAL_MS)]);
 
+  // An early login() failure → throw (route returns 500, CLI prints the message)
+  // rather than returning a misleading { mode:'manual', url:undefined } (I1).
+  if (session.status === 'error') {
+    sessions.delete(sessionId);
+    throw new Error(session.detail ?? 'Subscription login failed to start.');
+  }
+
   return {
     sessionId,
-    mode: session.mode === 'device' ? 'device' : 'manual',
+    mode: externalMode(session),
     url: session.url,
     userCode: session.userCode,
     verificationUri: session.verificationUri,
@@ -181,6 +216,7 @@ export async function startOAuth(userId: string, provider: string): Promise<Star
  * success, `error` on failure/expiry, else `pending`.
  */
 export function pollOAuth(sessionId: string, userId: string, code?: string): PollOAuthResult {
+  sweepExpired(); // I3: don't leave abandoned sessions (and their callback servers) holding on
   const session = sessions.get(sessionId);
   if (session?.userId !== userId) {
     return { status: 'error', detail: 'Login session not found or expired.' };
@@ -204,7 +240,7 @@ export function pollOAuth(sessionId: string, userId: string, code?: string): Pol
   }
   return {
     status: 'pending',
-    mode: session.mode === 'device' ? 'device' : 'manual',
+    mode: externalMode(session),
     url: session.url,
     userCode: session.userCode,
     verificationUri: session.verificationUri,

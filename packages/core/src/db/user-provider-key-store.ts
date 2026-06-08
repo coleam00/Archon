@@ -219,16 +219,32 @@ async function resolveOAuthCredential(
     return null;
   }
   const rawCreds = result.newCredentials as OAuthCredentials;
-  if (JSON.stringify(rawCreds) !== JSON.stringify(creds)) {
-    try {
-      await saveUserProviderKey({ userId, provider, kind: 'oauth', oauthCreds: rawCreds });
-      getLog().debug({ userId, provider }, 'user_provider_key.oauth_rotated_resaved');
-    } catch (err) {
-      // Non-fatal: we still return a usable key; next read re-refreshes from the old blob.
-      getLog().warn(
-        { err: err as Error, userId, provider },
-        'user_provider_key.oauth_resave_failed'
-      );
+  // Compare the meaningful fields (not JSON, which is key-order-sensitive → needless
+  // writes on a reordered-but-equal blob).
+  const rotated =
+    rawCreds.access !== creds.access ||
+    rawCreds.refresh !== creds.refresh ||
+    rawCreds.expires !== creds.expires;
+  if (rotated) {
+    // IMPORTANT: Anthropic/Codex INVALIDATE the old refresh token on rotation. If
+    // this resave fails the DB keeps a now-dead token → every future refresh fails
+    // and the user silently falls back to the shared key (or the run fails). So
+    // retry once, and log at ERROR (the credential may need reconnecting) — NOT a
+    // benign "next read re-refreshes" case.
+    let resaved = false;
+    for (let attempt = 1; attempt <= 2 && !resaved; attempt++) {
+      try {
+        await saveUserProviderKey({ userId, provider, kind: 'oauth', oauthCreds: rawCreds });
+        resaved = true;
+        getLog().debug({ userId, provider, attempt }, 'user_provider_key.oauth_rotated_resaved');
+      } catch (err) {
+        if (attempt === 2) {
+          getLog().error(
+            { err: err as Error, userId, provider },
+            'user_provider_key.oauth_resave_failed'
+          );
+        }
+      }
     }
   }
   return { kind: 'oauth', oauthApiKey: result.apiKey, rawCreds };
@@ -241,7 +257,7 @@ async function resolveOAuthCredential(
  *
  * Never throws — returns [] on any failure so the workflow continues.
  *
- * TODO(#1891 PR-2): replace the 1+N query pattern (listUserProviderKeys +
+ * TODO(#1891 follow-up): replace the 1+N query pattern (listUserProviderKeys +
  * one getUserProviderKeyRecord per provider) with a single SELECT * so every
  * chat turn and workflow run pays only one round-trip to the DB.
  */

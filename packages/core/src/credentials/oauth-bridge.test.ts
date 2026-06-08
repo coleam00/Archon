@@ -43,7 +43,8 @@ mock.module('@archon/providers/oauth', () => ({
   githubCopilotOAuthProvider: copilot,
 }));
 
-const { startOAuth, pollOAuth, resetOAuthSessionsForTest } = await import('./oauth-bridge');
+const { startOAuth, pollOAuth, cancelOAuth, resetOAuthSessionsForTest } =
+  await import('./oauth-bridge');
 
 function tick(ms = 15): Promise<void> {
   return new Promise(r => setTimeout(r, ms));
@@ -92,12 +93,15 @@ describe('oauth-bridge', () => {
     expect(pollOAuth(start.sessionId, 'u1').status).toBe('connected');
   });
 
-  test('login() rejection → error status with detail', async () => {
+  test('login() rejects AFTER start (during the code wait) → poll surfaces error', async () => {
     loginImpl = async cb => {
       cb.onAuth({ url: 'https://auth.example/login' });
+      await cb.onManualCodeInput!(); // start returns first; reject only after the code is submitted
       throw new Error('user denied');
     };
     const start = await startOAuth('u1', 'claude');
+    expect(start.mode).toBe('manual');
+    pollOAuth(start.sessionId, 'u1', 'CODE'); // submit → login resumes → throws
     await tick();
     const res = pollOAuth(start.sessionId, 'u1');
     expect(res.status).toBe('error');
@@ -112,5 +116,35 @@ describe('oauth-bridge', () => {
     };
     const start = await startOAuth('alice', 'claude');
     expect(pollOAuth(start.sessionId, 'mallory').status).toBe('error');
+  });
+
+  test('login() rejects before any callback → startOAuth throws (I1, no silent url-less window)', async () => {
+    loginImpl = async () => {
+      throw new Error('boom early');
+    };
+    await expect(startOAuth('u1', 'claude')).rejects.toThrow(/boom early/);
+  });
+
+  test('cancelOAuth drops the session', async () => {
+    loginImpl = async cb => {
+      cb.onAuth({ url: 'https://x' });
+      await cb.onManualCodeInput!();
+      return { access: 'a' };
+    };
+    const start = await startOAuth('u1', 'claude');
+    cancelOAuth(start.sessionId, 'u1');
+    expect(pollOAuth(start.sessionId, 'u1').status).toBe('error');
+  });
+
+  test('a new login for the same user aborts the prior session (I3)', async () => {
+    loginImpl = async cb => {
+      cb.onAuth({ url: 'https://x' });
+      await cb.onManualCodeInput!();
+      return { access: 'a' };
+    };
+    const first = await startOAuth('u1', 'claude');
+    const second = await startOAuth('u1', 'codex');
+    expect(first.sessionId).not.toBe(second.sessionId);
+    expect(pollOAuth(first.sessionId, 'u1').status).toBe('error'); // prior session dropped
   });
 });

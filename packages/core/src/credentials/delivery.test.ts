@@ -71,6 +71,27 @@ describe('credentials/delivery', () => {
       expect(parsed.tokens.access_token).toBe('oauth-bearer');
       expect(typeof parsed.last_refresh).toBe('string');
     });
+
+    test('codex oauth → full tokens shape; account_id from Pi `accountId`, id_token best-effort', () => {
+      const cred: ResolvedCredential = {
+        kind: 'oauth',
+        oauthApiKey: 'x',
+        rawCreds: { access: 'acc-tok', refresh: 'ref-tok', expires: 123, accountId: 'acct-9' },
+      };
+      const r = deliverCredential('codex', cred, { artifactsDir: ART_DIR });
+      const parsed = JSON.parse(r.files![0]!.contents) as {
+        OPENAI_API_KEY: null;
+        tokens: Record<string, string>;
+        last_refresh: string;
+      };
+      expect(parsed.OPENAI_API_KEY).toBeNull();
+      expect(parsed.tokens).toEqual({
+        id_token: '', // Pi does not surface one
+        access_token: 'acc-tok',
+        refresh_token: 'ref-tok',
+        account_id: 'acct-9', // mapped from Pi's camelCase `accountId`
+      });
+    });
   });
 
   describe('copilot', () => {
