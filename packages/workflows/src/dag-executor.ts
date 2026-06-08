@@ -2049,8 +2049,14 @@ async function executeLoopNode(
         logEventStoreError(err, i);
       });
 
-    // Session threading
-    const needsFreshSession = loop.fresh_context || i === 1;
+    // Session threading. Force a fresh session on the first iteration of an
+    // interactive loop resume: the stored session id from the gate metadata
+    // may reference a Claude SDK session that expired during the human review
+    // wait, which would cause the SDK to return error_during_execution.
+    // User feedback is carried via $LOOP_USER_INPUT, so session continuity is
+    // not required for the first resumed iteration.
+    const needsFreshSession =
+      loop.fresh_context || i === 1 || (isLoopResume && i === startIteration);
     const resumeSessionId = needsFreshSession ? undefined : currentSessionId;
 
     // Stream AI response for this iteration
