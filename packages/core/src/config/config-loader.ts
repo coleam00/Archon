@@ -342,23 +342,33 @@ function getDefaults(): MergedConfig {
 /**
  * Apply environment variable overrides
  */
-function applyEnvOverrides(config: MergedConfig): MergedConfig {
+function applyEnvOverrides(
+  config: MergedConfig,
+  globalConfig?: GlobalConfig,
+  repoConfig?: RepoConfig
+): MergedConfig {
   // Bot name override
   const envBotName = process.env.BOT_DISPLAY_NAME;
   if (envBotName) {
     config.botName = envBotName;
   }
 
-  // Assistant override — validate against registry, error on unknown provider
+  // DEFAULT_AI_ASSISTANT is a fallback default: only applies when no config file
+  // has explicitly set the assistant. An explicit save via the Web UI (or a repo
+  // .archon/config.yaml) takes precedence over the env var.
   const envAssistant = process.env.DEFAULT_AI_ASSISTANT;
   if (envAssistant && envAssistant.length > 0) {
-    if (isRegisteredProvider(envAssistant)) {
-      config.assistant = envAssistant;
-    } else {
-      throw new Error(
-        `DEFAULT_AI_ASSISTANT='${envAssistant}' is not a registered provider. ` +
-          `Available providers: ${getRegisteredProviderNames().join(', ')}`
-      );
+    const hasExplicitConfig =
+      Boolean(globalConfig?.defaultAssistant) || Boolean(repoConfig?.assistant);
+    if (!hasExplicitConfig) {
+      if (isRegisteredProvider(envAssistant)) {
+        config.assistant = envAssistant;
+      } else {
+        throw new Error(
+          `DEFAULT_AI_ASSISTANT='${envAssistant}' is not a registered provider. ` +
+            `Available providers: ${getRegisteredProviderNames().join(', ')}`
+        );
+      }
     }
   }
 
@@ -533,13 +543,15 @@ export async function loadConfig(repoPath?: string): Promise<MergedConfig> {
   config = mergeGlobalConfig(config, globalConfig);
 
   // 3. Apply repo config if path provided
+  let repoConfig: RepoConfig | undefined;
   if (repoPath) {
-    const repoConfig = await loadRepoConfig(repoPath);
+    repoConfig = await loadRepoConfig(repoPath);
     config = mergeRepoConfig(config, repoConfig);
   }
 
-  // 4. Apply environment overrides (highest precedence)
-  config = applyEnvOverrides(config);
+  // 4. Apply environment overrides — DEFAULT_AI_ASSISTANT is a fallback:
+  //    explicit config-file settings take precedence over the env var.
+  config = applyEnvOverrides(config, globalConfig, repoConfig);
 
   return config;
 }
