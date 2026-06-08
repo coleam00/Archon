@@ -132,7 +132,10 @@ Controls session continuity between iterations:
 | `true` | Each iteration starts a fresh AI session. No memory of prior iterations. | Work state lives on disk (files, git). Prevents context window exhaustion on long loops. |
 | `false` (default) | Sessions thread — each iteration resumes the prior conversation. | Iterative refinement where the agent needs to remember what it tried before. |
 
-The first iteration is always fresh regardless of this setting.
+The first iteration is always fresh regardless of this setting. The first
+iteration executed after resuming from an interactive loop approval gate is
+also always fresh — the stored session id may have expired during the human
+review wait, and user feedback is carried via `$LOOP_USER_INPUT` instead.
 
 ### `until_bash`
 

@@ -2051,8 +2051,8 @@ async function executeLoopNode(
 
     // Session threading. Force a fresh session on the first iteration of an
     // interactive loop resume: the stored session id from the gate metadata
-    // may reference a Claude SDK session that expired during the human review
-    // wait, which would cause the SDK to return error_during_execution.
+    // may be stale after a human review wait — passing it to the SDK can
+    // trigger errors (e.g. error_during_execution on Claude SDK).
     // User feedback is carried via $LOOP_USER_INPUT, so session continuity is
     // not required for the first resumed iteration.
     const needsFreshSession =
