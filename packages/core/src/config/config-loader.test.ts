@@ -213,6 +213,55 @@ concurrency:
         'config_permission_denied'
       );
     });
+
+    test('parses recommendedWorkflows as an ordered string array', async () => {
+      mockFsReadFile.mockResolvedValue(`
+recommendedWorkflows:
+  - archon-fix-github-issue
+  - archon-idea-to-pr
+  - archon-plan
+`);
+
+      const config = await loadRepoConfig('/test/repo');
+
+      expect(config.recommendedWorkflows).toEqual([
+        'archon-fix-github-issue',
+        'archon-idea-to-pr',
+        'archon-plan',
+      ]);
+    });
+
+    test('omits recommendedWorkflows when key is absent', async () => {
+      mockFsReadFile.mockResolvedValue('assistant: codex');
+
+      const config = await loadRepoConfig('/test/repo');
+
+      expect(config.recommendedWorkflows).toBeUndefined();
+    });
+
+    test('trims entries and drops non-strings / empties without throwing', async () => {
+      mockFsReadFile.mockResolvedValue(`
+recommendedWorkflows:
+  - "  archon-plan  "
+  - ""
+  - 42
+  - archon-fix-github-issue
+`);
+
+      const config = await loadRepoConfig('/test/repo');
+
+      expect(config.recommendedWorkflows).toEqual(['archon-plan', 'archon-fix-github-issue']);
+    });
+
+    test('coerces non-array recommendedWorkflows to undefined without throwing', async () => {
+      mockFsReadFile.mockResolvedValue(`
+recommendedWorkflows: "archon-plan"
+`);
+
+      const config = await loadRepoConfig('/test/repo');
+
+      expect(config.recommendedWorkflows).toBeUndefined();
+    });
   });
 
   describe('loadConfig', () => {

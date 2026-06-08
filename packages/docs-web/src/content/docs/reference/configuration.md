@@ -156,6 +156,12 @@ defaults:
   loadDefaultCommands: true   # Load app's bundled default commands at runtime
   loadDefaultWorkflows: true  # Load app's bundled default workflows at runtime
 
+# Recommended workflows for this project (declared order = pin order in the UI)
+# recommendedWorkflows:
+#   - archon-fix-github-issue
+#   - archon-idea-to-pr
+#   - archon-plan
+
 # Per-project environment variables for workflow execution (Claude SDK only)
 # Injected into the Claude subprocess env. Use the Web UI Settings panel for secrets.
 # env:
@@ -235,6 +241,29 @@ worktree:
 3. If auto-detection fails and a workflow references `$BASE_BRANCH`: Fails with an error explaining the resolution chain.
 
 **Docs path behavior:** The `docs.path` setting controls where the `$DOCS_DIR` variable points. When not configured, `$DOCS_DIR` defaults to `docs/`. Unlike `$BASE_BRANCH`, this variable always has a safe default and never throws an error. Configure it when your documentation lives outside the standard `docs/` directory (e.g., `packages/docs-web/src/content/docs`).
+
+### Recommended workflows (`recommendedWorkflows`)
+
+Repo owners curate an **ordered list of recommended workflows** that lives inside the project's own `.archon/config.yaml`. The list is surfaced **pinned on top** of both UI surfaces under a fixed "Recommended for this project" header:
+
+- The **Workflows page** grid renders the pinned cards above a divider, then the rest of the workflows below.
+- The **sidebar run dropdown** renders two native `<optgroup>` blocks: `Recommended` (declared order) and `Other workflows`.
+
+```yaml
+recommendedWorkflows:
+  - archon-fix-github-issue
+  - archon-idea-to-pr
+  - archon-plan
+```
+
+**Semantics:**
+
+- **List order = pin order.** First entry appears first in both UIs.
+- Each entry is a **workflow name** matched against the discovered set (bundled + global + project).
+- A name that matches **no** discovered workflow is **silently ignored** (debug log). The list is advisory — a stale entry never breaks discovery.
+- Search and category filters apply to **both** partitions. If filtering hides all recommended cards, the header is not rendered.
+- Key **absent or empty** → flat list, no header, no divider. Zero-config safe.
+- The list lives **per-project only** — it is not part of global config (`~/.archon/config.yaml`) and is not per-user.
 
 **Worktree path behavior:** By default, every repo's worktrees live under `~/.archon/workspaces/<owner>/<repo>/worktrees/<branch>` — outside the repo, invisible to the IDE. Set `worktree.path` to opt in to a **repo-local** layout instead: worktrees are created at `<repoRoot>/<worktree.path>/<branch>` so they show up in the file tree and editor workspace. A common choice is `.worktrees`. Because worktrees now live inside the repository tree, you should add the directory to your `.gitignore` (Archon does not modify user-owned files). The configured path must be relative to the repo root; absolute paths and paths containing `..` segments fail loudly at worktree creation rather than silently falling back.
 
