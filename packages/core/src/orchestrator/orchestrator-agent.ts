@@ -1078,19 +1078,20 @@ export async function handleMessage(
       attachedFiles,
       workflowContext
     );
+    const scopedCodebase =
+      conversation.codebase_id !== null
+        ? codebases.find(c => c.id === conversation.codebase_id)
+        : undefined;
     let cwd: string;
-    if (conversation.codebase_id !== null) {
-      const scopedCodebase = codebases.find(c => c.id === conversation.codebase_id);
-      if (scopedCodebase !== undefined) {
-        cwd = conversation.cwd ?? scopedCodebase.default_cwd;
-      } else {
+    if (scopedCodebase !== undefined) {
+      cwd = conversation.cwd ?? scopedCodebase.default_cwd;
+    } else {
+      if (conversation.codebase_id !== null) {
         getLog().warn(
           { codebaseId: conversation.codebase_id },
           'orchestrator.scoped_codebase_not_found'
         );
-        cwd = await ensureArchonWorkspacesPath();
       }
-    } else {
       cwd = await ensureArchonWorkspacesPath();
     }
 
