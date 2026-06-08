@@ -243,6 +243,7 @@ describe('PiProvider', () => {
     runtimeOverrides = {};
     delete process.env.GEMINI_API_KEY;
     delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.ARCHON_PI_AUTH_PATH;
     // The extension-loader cache is module-level and persists across tests;
     // clear it so each test starts with an empty cache and sees its own
     // construct/reload calls (issue #1877).
@@ -337,6 +338,44 @@ describe('PiProvider', () => {
     expect(mockModelRegistryCreate).toHaveBeenCalledTimes(1);
     const authInstance = mockAuthCreate.mock.results[0]?.value;
     expect(mockModelRegistryCreate).toHaveBeenCalledWith(authInstance);
+  });
+
+  test('AuthStorage.create reads ARCHON_PI_AUTH_PATH from requestOptions.env (per-user channel)', async () => {
+    // The executor delivers per-user credentials — including the per-run
+    // auth.json PATH — on the per-call requestOptions.env channel, which it
+    // deliberately keeps OUT of process.env (subprocess-isolation). Pi runs
+    // in-process, so it must read the path from requestOptions.env or per-user
+    // subscription delivery silently no-ops (the auth.json is written but never
+    // loaded). Regression for the VPS smoke finding where a claude→anthropic
+    // subscription failed with "no credentials for provider 'anthropic'".
+    fileCreds.anthropic = { type: 'oauth' };
+    resetScript(scriptedAgentEnd());
+    const perRunAuthPath = '/run/abc123/pi-home/auth.json';
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'anthropic/claude-haiku-4-5',
+        env: { ARCHON_PI_AUTH_PATH: perRunAuthPath },
+      })
+    );
+
+    expect(mockAuthCreate).toHaveBeenCalledWith(perRunAuthPath);
+  });
+
+  test('AuthStorage.create falls back to process.env.ARCHON_PI_AUTH_PATH (shell override)', async () => {
+    // A shell-level ARCHON_PI_AUTH_PATH still applies when no per-call value is
+    // present, preserving the local-dev / manual override path.
+    fileCreds.anthropic = { type: 'oauth' };
+    resetScript(scriptedAgentEnd());
+    process.env.ARCHON_PI_AUTH_PATH = '/shell/override/auth.json';
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'anthropic/claude-haiku-4-5',
+      })
+    );
+
+    expect(mockAuthCreate).toHaveBeenCalledWith('/shell/override/auth.json');
   });
 
   test('AuthStorage.create() throwing surfaces a contextualized error', async () => {
