@@ -982,6 +982,7 @@ describe('discoverAllWorkflows — remote sync', () => {
     mockToRepoPath.mockClear();
     mockGetOrCreateConversation.mockReset();
     mockGetCodebase.mockReset();
+    mockListCodebases.mockReset();
     mockSendQuery.mockClear();
     mockGetCodebaseEnvVars.mockReset();
     mockLoadConfig.mockReset();
@@ -989,6 +990,7 @@ describe('discoverAllWorkflows — remote sync', () => {
     // Reset mocks between tests in this suite and restore safe defaults
     mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(null));
     mockGetCodebase.mockImplementation(() => Promise.resolve(null));
+    mockListCodebases.mockImplementation(() => Promise.resolve([]));
     mockGetCodebaseEnvVars.mockImplementation(() => Promise.resolve({}));
     mockLoadConfig.mockImplementation(() =>
       Promise.resolve({
@@ -1023,6 +1025,7 @@ describe('discoverAllWorkflows — remote sync', () => {
     };
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
 
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', 'What is the latest commit?');
@@ -1050,6 +1053,7 @@ describe('discoverAllWorkflows — remote sync', () => {
     const codebase = makeCodebaseForSync();
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
     mockSyncWorkspace.mockRejectedValueOnce(new Error('Network timeout'));
 
     const platform = makePlatform();
@@ -1075,6 +1079,7 @@ describe('discoverAllWorkflows — remote sync', () => {
     const codebase = makeCodebaseForSync();
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
     mockSyncWorkspace.mockRejectedValueOnce(new Error('Network timeout'));
 
     const platform = makePlatform();
@@ -1091,6 +1096,7 @@ describe('discoverAllWorkflows — remote sync', () => {
     const codebase = makeCodebaseForSync();
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
     mockGetCodebaseEnvVars.mockResolvedValueOnce({ DB_SECRET: 'db-value' });
     mockLoadConfig.mockResolvedValueOnce({
       assistants: { claude: {}, codex: {} },
@@ -1122,6 +1128,7 @@ describe('discoverAllWorkflows — remote sync', () => {
     const codebase = makeCodebaseForSync();
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
     mockGetCodebaseEnvVars.mockRejectedValueOnce(new Error('db unavailable'));
     mockLoadConfig.mockResolvedValueOnce({
       assistants: { claude: {}, codex: {} },
@@ -1175,10 +1182,12 @@ describe('discoverAllWorkflows — remote sync', () => {
     const providers = await import('@archon/providers');
     const capsMock = providers.getProviderCapabilities as ReturnType<typeof mock>;
     capsMock.mockReturnValue({ envInjection: true, nativeTools: false });
+    const codebase = makeCodebaseForSync();
     mockGetOrCreateConversation.mockReturnValueOnce(
       Promise.resolve(makeConversation({ ai_assistant_type: 'codex', codebase_id: 'codebase-1' }))
     );
-    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebaseForSync()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
 
     try {
       const platform = makePlatform();
@@ -1198,10 +1207,12 @@ describe('discoverAllWorkflows — remote sync', () => {
     const providers = await import('@archon/providers');
     const capsMock = providers.getProviderCapabilities as ReturnType<typeof mock>;
     capsMock.mockReturnValue({ envInjection: true, nativeTools: true });
+    const codebase = makeCodebaseForSync();
     mockGetOrCreateConversation.mockReturnValueOnce(
       Promise.resolve(makeConversation({ ai_assistant_type: 'claude', codebase_id: 'codebase-1' }))
     );
-    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebaseForSync()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
 
     try {
       const platform = makePlatform();
@@ -1290,7 +1301,6 @@ describe('provider cwd resolution', () => {
   test('scoped chat falls back to workspaces root and warns when codebase not found (deleted)', async () => {
     const conversation = makeConversation({ codebase_id: 'deleted-id' });
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
-    mockGetCodebase.mockReturnValueOnce(Promise.resolve(null));
     mockListCodebases.mockReturnValueOnce(Promise.resolve([]));
 
     const platform = makePlatform();
