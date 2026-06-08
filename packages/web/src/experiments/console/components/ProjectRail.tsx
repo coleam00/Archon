@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef, useState, type ReactElement } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router';
-import { Settings, Workflow, ArrowLeft } from 'lucide-react';
+import { Settings, Workflow, ArrowLeft, type LucideIcon } from 'lucide-react';
 import { ProjectRow } from './ProjectRow';
 import { EnvVarsDialog } from './EnvVarsDialog';
 import { useEntity, invalidate } from '../store/cache';
@@ -49,6 +49,29 @@ function writeRailWidth(w: number): void {
   } catch {
     /* ignore */
   }
+}
+
+const RAIL_NAV_LINK_CLASS =
+  'flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-1.5 text-left text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary';
+
+/** A row in the rail's bottom nav menu (Settings / Workflows / Old UI). */
+function RailNavLink({
+  to,
+  icon: Icon,
+  label,
+  title,
+}: {
+  to: string;
+  icon: LucideIcon;
+  label: string;
+  title?: string;
+}): ReactElement {
+  return (
+    <Link to={to} title={title} className={RAIL_NAV_LINK_CLASS}>
+      <Icon aria-hidden className="h-3.5 w-3.5 shrink-0" />
+      <span>{label}</span>
+    </Link>
+  );
 }
 
 /**
@@ -274,30 +297,24 @@ export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
       {/* Nav menu — settings + the classic-UI escape hatches, under Add project
           and separated from it by the border-t divider. */}
       <div className="flex flex-col gap-0.5 border-t border-border px-2.5 py-2">
-        <Link
+        <RailNavLink
           to="/console/settings"
+          icon={Settings}
+          label="Settings"
           title="Settings ( , )"
-          className="flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-1.5 text-left text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
-        >
-          <Settings aria-hidden className="h-3.5 w-3.5 shrink-0" />
-          <span>Settings</span>
-        </Link>
-        <Link
+        />
+        <RailNavLink
           to="/legacy/workflows"
+          icon={Workflow}
+          label="Workflows"
           title="Workflows (classic UI)"
-          className="flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-1.5 text-left text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
-        >
-          <Workflow aria-hidden className="h-3.5 w-3.5 shrink-0" />
-          <span>Workflows</span>
-        </Link>
-        <Link
+        />
+        <RailNavLink
           to="/legacy"
+          icon={ArrowLeft}
+          label="Old UI"
           title="Switch back to the classic UI"
-          className="flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-1.5 text-left text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
-        >
-          <ArrowLeft aria-hidden className="h-3.5 w-3.5 shrink-0" />
-          <span>Old UI</span>
-        </Link>
+        />
       </div>
 
       {/* Resize handle */}
