@@ -28,4 +28,5 @@ export const K = {
   health: 'health' as const,
   providers: 'providers' as const,
   updateCheck: 'update-check' as const,
+  githubConnection: 'github-connection' as const,
 } as const;
