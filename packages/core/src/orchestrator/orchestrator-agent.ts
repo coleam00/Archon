@@ -45,6 +45,9 @@ import type {
 } from '@archon/workflows/schemas/workflow';
 import { isPerUserGitHubEnabled } from '../github-auth/config';
 import { getDecryptedAccessToken } from '../db/user-github-token-store';
+import { isPerUserProviderKeysEnabled } from '../credentials/config';
+import { deliverCredential } from '../credentials/delivery';
+import { listDecryptedUserProviderCredentials } from '../db/user-provider-key-store';
 import { createWorkflowDeps } from '../workflows/store-adapter';
 import { loadConfig } from '../config/config-loader';
 import type { MergedConfig } from '../config/config-types';
@@ -241,6 +244,39 @@ function normalizeCommandText(text: string): string {
 function isCommandFullyParsed(accumulated: string): boolean {
   const normalized = normalizeCommandText(accumulated);
   return INVOKE_WORKFLOW_FULL_RE.test(normalized) || REGISTER_PROJECT_FULL_RE.test(normalized);
+}
+
+/**
+ * Resolve the env-only per-user AI-provider credential bag for a direct-chat
+ * turn (Phase 2). Drops deliveries that require file writes (Codex
+ * `CODEX_HOME/auth.json` for the ChatGPT subscription path) because chat has
+ * no per-call scratch directory — those rely on the workflow inject path that
+ * provides an `artifactsDir`.
+ *
+ * NEVER THROWS — returns `{}` on any failure so the chat turn falls back to
+ * whatever process-global env was already in place.
+ */
+async function resolveUserProviderEnvForChat(userId: string): Promise<Record<string, string>> {
+  try {
+    const creds = await listDecryptedUserProviderCredentials(userId);
+    const env: Record<string, string> = {};
+    for (const { provider, cred } of creds) {
+      try {
+        // artifactsDir intentionally empty: chat doesn't host file deliveries.
+        const result = deliverCredential(provider, cred, { artifactsDir: '' });
+        if (!result.files?.length) Object.assign(env, result.env);
+      } catch (err) {
+        getLog().error(
+          { err: err as Error, userId, provider },
+          'orchestrator.provider_creds_deliver_failed'
+        );
+      }
+    }
+    return env;
+  } catch (err) {
+    getLog().warn({ err: err as Error, userId }, 'orchestrator.user_provider_env_resolve_failed');
+    return {};
+  }
 }
 
 /**
@@ -1069,7 +1105,17 @@ export async function handleMessage(
         );
       }
     }
-    const effectiveEnv = { ...(config.envVars ?? {}), ...dbEnvVars };
+    // Per-user AI-provider credentials (Phase 2): env-only delivery in direct
+    // chat — there's no per-call artifacts directory, so deliveries that need
+    // file writes (Codex `CODEX_HOME/auth.json` for the ChatGPT subscription
+    // path) are dropped here and only apply to workflow runs. Merged LAST so
+    // a connected user's keys win over file/db env. No-op when the feature is
+    // disabled or the conversation has no originating user.
+    const userProviderEnv =
+      isPerUserProviderKeysEnabled() && conversation.user_id
+        ? await resolveUserProviderEnvForChat(conversation.user_id)
+        : {};
+    const effectiveEnv = { ...(config.envVars ?? {}), ...dbEnvVars, ...userProviderEnv };
 
     // Warn if provider doesn't support env injection but env vars are configured
     if (Object.keys(effectiveEnv).length > 0) {
@@ -1844,7 +1890,8 @@ async function handleUpdateProject(message: string): Promise<string> {
 
   try {
     await codebaseDb.updateCodebase(codebase.id, { default_cwd: newPath });
-  } catch {
+  } catch (err) {
+    getLog().warn({ err: err as Error, codebaseId: codebase.id, newPath }, 'project.update_failed');
     return `Project "${projectName}" could not be updated — it may have been removed.`;
   }
   getLog().info(

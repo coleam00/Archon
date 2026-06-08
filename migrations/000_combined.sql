@@ -2,7 +2,7 @@
 -- Version: Combined (final state after migrations 001-020)
 -- Description: Complete database schema (idempotent - safe to run multiple times)
 --
--- 12 Tables:
+-- 13 Tables:
 --   1. remote_agent_codebases
 --   1b. remote_agent_codebase_env_vars
 --   1c. remote_agent_users
@@ -15,6 +15,7 @@
 --   6b. remote_agent_workflow_node_sessions
 --   7. remote_agent_messages
 --   8. remote_agent_user_github_tokens
+--   9. remote_agent_user_provider_keys
 --
 -- Dropped tables (via migrations):
 --   - remote_agent_command_templates (017)
@@ -415,6 +416,24 @@ CREATE TABLE IF NOT EXISTS remote_agent_user_github_tokens (
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   UNIQUE(user_id)
+);
+
+-- Phase 2: per-user AI-provider credentials (BYO API key + subscription login),
+-- encrypted at rest with the existing token-crypto key. One row per
+-- (user_id, provider); cascades on user deletion. Exactly one of
+-- api_key_encrypted / oauth_creds_encrypted is populated per row; `kind`
+-- records which. Gated on TOKEN_ENCRYPTION_KEY at the application layer.
+CREATE TABLE IF NOT EXISTS remote_agent_user_provider_keys (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES remote_agent_users(id) ON DELETE CASCADE,
+  provider VARCHAR(64) NOT NULL,
+  kind VARCHAR(16) NOT NULL,
+  api_key_encrypted TEXT,
+  oauth_creds_encrypted TEXT,
+  label VARCHAR(255),
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  UNIQUE(user_id, provider)
 );
 
 -- ============================================================================

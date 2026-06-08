@@ -17,6 +17,9 @@ import { createLogger } from '@archon/paths';
 import type { IGitHubAppAuthProvider } from '../github-auth';
 import { isPerUserGitHubEnabled } from '../github-auth/config';
 import { getDecryptedAccessToken } from '../db/user-github-token-store';
+import { isPerUserProviderKeysEnabled } from '../credentials/config';
+import { deliverCredential } from '../credentials/delivery';
+import { listDecryptedUserProviderCredentials } from '../db/user-provider-key-store';
 
 // Compile-time assertion: MergedConfig must remain a structural subtype of WorkflowConfig.
 // If MergedConfig drifts from WorkflowConfig, this line becomes a type error.
@@ -123,6 +126,44 @@ export function createWorkflowDeps(): WorkflowDeps {
       } catch (err) {
         getLog().warn({ err: err as Error, userId }, 'workflow_deps.user_token_resolve_failed');
         return undefined;
+      }
+    },
+    // Per-user AI-provider credentials (Phase 2): list the user's decrypted
+    // credentials and translate each through the delivery map into an env bag
+    // (and optional file deliveries) for the run. Engine-facing contract is
+    // env+files only — the delivery map is owned here, not in @archon/workflows,
+    // so the workflow engine stays free of provider-specific knowledge.
+    isPerUserProviderKeysEnabled: () => isPerUserProviderKeysEnabled(),
+    getUserProviderEnv: async (
+      userId: string,
+      artifactsDir: string
+    ): Promise<{
+      env: Record<string, string>;
+      files: { path: string; contents: string }[];
+    }> => {
+      try {
+        const creds = await listDecryptedUserProviderCredentials(userId);
+        const env: Record<string, string> = {};
+        const files: { path: string; contents: string }[] = [];
+        for (const { provider, cred } of creds) {
+          try {
+            const result = deliverCredential(provider, cred, { artifactsDir });
+            Object.assign(env, result.env);
+            if (result.files) files.push(...result.files);
+          } catch (err) {
+            // Unknown provider / shape mismatch — log at ERROR (user has no
+            // feedback path until PR-2 adds credential_delivery_skipped events)
+            // and skip this credential rather than abort all delivery.
+            getLog().error(
+              { err: err as Error, userId, provider },
+              'workflow_deps.provider_creds_deliver_failed'
+            );
+          }
+        }
+        return { env, files };
+      } catch (err) {
+        getLog().warn({ err: err as Error, userId }, 'workflow_deps.provider_creds_resolve_failed');
+        return { env: {}, files: [] };
       }
     },
   };
