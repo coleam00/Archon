@@ -364,6 +364,36 @@ describe('foldNodeRuns', () => {
     expect(runs[0]?.durationMs).toBe(42);
   });
 
+  test('failed THEN a later completed (retry) folds to completed — duration/cost from the completion', () => {
+    const runs = foldNodeRuns([
+      node('build', 'node_started', { created_at: at('0') }),
+      node('build', 'node_failed', { created_at: at('2'), data: { duration_ms: 42 } }),
+      node('build', 'node_completed', {
+        created_at: at('8'),
+        data: { duration_ms: 900, cost_usd: 0.05, num_turns: 2 },
+      }),
+    ]);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({
+      status: 'completed',
+      durationMs: 900,
+      costUsd: 0.05,
+      numTurns: 2,
+    });
+  });
+
+  test('completed THEN a later failed still folds to completed (ever-completed wins)', () => {
+    const runs = foldNodeRuns([
+      node('build', 'node_completed', {
+        created_at: at('2'),
+        data: { duration_ms: 900, cost_usd: 0.05 },
+      }),
+      node('build', 'node_failed', { created_at: at('8'), data: { duration_ms: 10 } }),
+    ]);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ status: 'completed', durationMs: 900, costUsd: 0.05 });
+  });
+
   test('multiple nodes are returned sorted by startedAt', () => {
     const runs = foldNodeRuns([
       node('second', 'node_started', { created_at: at('5') }),

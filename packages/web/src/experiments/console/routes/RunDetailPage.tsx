@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactElement,
+} from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { useKeymap, type Binding } from '../lib/keymap';
 import { RunDetailHeader } from '../components/RunDetailHeader';
@@ -194,7 +202,10 @@ export function RunDetailPage(): ReactElement {
   // Drop a persisted node selection that doesn't apply to this run (e.g. after
   // navigating to a different workflow). Guarded on the run being loaded so the
   // empty list during loading can't clobber a still-valid stored selection.
-  useEffect(() => {
+  // useLayoutEffect (not useEffect) so the reset lands before paint — navigating
+  // to a cached run whose node set lacks the selection never flashes an empty
+  // "Waiting for first event…" frame.
+  useLayoutEffect(() => {
     if (detail === undefined || detail === null) return;
     if (selectedNodeId !== 'all' && !nodeOptions.some(o => o.id === selectedNodeId)) {
       setSelectedNodeId('all');

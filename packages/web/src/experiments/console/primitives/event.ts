@@ -311,7 +311,7 @@ export interface NodeRun {
   /** Terminal transition timestamp; null while still running. */
   endedAt: string | null;
   durationMs: number | null;
-  /** From the terminal `node_completed` payload; null for non-AI or non-terminal nodes. */
+  /** Written by the engine only on `node_completed`; null for non-AI nodes and any non-completed terminal. */
   costUsd: number | null;
   numTurns: number | null;
   stopReason: string | null;
@@ -351,24 +351,26 @@ export function foldNodeRuns(events: RunEvent[]): NodeRun[] {
       else if (t.transition === 'skipped') skipped = t;
     }
     const terminal = completed ?? failed ?? skipped;
-    const status: NodeRun['status'] =
-      completed !== null
-        ? 'completed'
-        : failed !== null
-          ? 'failed'
-          : skipped !== null
-            ? 'skipped'
-            : 'running';
+    // Precedence in documented order: ever-completed wins, then failed, then
+    // skipped, else still running.
+    let status: NodeRun['status'];
+    if (completed !== null) status = 'completed';
+    else if (failed !== null) status = 'failed';
+    else if (skipped !== null) status = 'skipped';
+    else status = 'running';
     runs.push({
       nodeId,
       nodeName: nodeName !== '' ? nodeName : nodeId,
       status,
       startedAt,
+      // Position/duration come from whichever terminal transition exists...
       endedAt: terminal?.timestamp ?? null,
       durationMs: terminal?.durationMs ?? null,
-      costUsd: terminal?.costUsd ?? null,
-      numTurns: terminal?.numTurns ?? null,
-      stopReason: terminal?.stopReason ?? null,
+      // ...but cost/turns/stop are only ever written on `node_completed`, so read
+      // them from that transition (a failed/skipped terminal carries none).
+      costUsd: completed?.costUsd ?? null,
+      numTurns: completed?.numTurns ?? null,
+      stopReason: completed?.stopReason ?? null,
       skipReason: skipped?.skipReason ?? null,
       skipExpr: skipped?.skipExpr ?? null,
     });

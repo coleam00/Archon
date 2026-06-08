@@ -138,6 +138,10 @@ export function RunStream({
   showSystem,
   selectedNodeId,
 }: RunStreamProps): ReactElement {
+  // Single source for the folded nodes — consumed by both the timeline (one
+  // divider per node) and the node-filter window so they can't drift.
+  const nodeRuns = useMemo(() => foldNodeRuns(events), [events]);
+
   const timeline = useMemo<TimelineEntry[]>(() => {
     const entries: TimelineEntry[] = [];
     let inlineToolCount = 0;
@@ -227,7 +231,7 @@ export function RunStream({
     // One divider per node: fold each node's 2–3 transitions (started + terminal,
     // plus a resume-time skipped_prior_success) into a single NodeRun, positioned
     // at its first transition so it heads that node's events in the stream.
-    for (const nr of foldNodeRuns(events)) {
+    for (const nr of nodeRuns) {
       entries.push({
         kind: 'node',
         key: `n:${nr.nodeId}`,
@@ -247,30 +251,30 @@ export function RunStream({
     }
     entries.sort((a, b) => a.at - b.at);
     return entries;
-  }, [messages, events, showSystem]);
+  }, [messages, events, nodeRuns, showSystem]);
 
   // The selected node's execution slice `[startedAt, nextNode.startedAt)`. Used as
-  // a positional fallback so node-blind entries (Claude message-inline tools and
-  // prose, which carry no nodeId) still resolve to a node when filtering — without
-  // it, selecting a node on a Claude run would blank the stream.
+  // a positional fallback so node-blind entries (message-inline tools, prose,
+  // artifacts, system rows — anything carrying no nodeId) still resolve to a node
+  // when filtering — without it, selecting a node on a message-inline-tool run
+  // (e.g. Claude) would blank the stream.
   const nodeWindow = useMemo<{ start: number; end: number } | null>(() => {
     if (selectedNodeId === 'all') return null;
-    const runs = foldNodeRuns(events);
-    const idx = runs.findIndex(r => r.nodeId === selectedNodeId);
+    const idx = nodeRuns.findIndex(r => r.nodeId === selectedNodeId);
     if (idx === -1) return null;
-    const start = new Date(runs[idx].startedAt).getTime();
-    const next = runs[idx + 1];
+    const start = new Date(nodeRuns[idx].startedAt).getTime();
+    const next = nodeRuns[idx + 1];
     return { start, end: next !== undefined ? new Date(next.startedAt).getTime() : Infinity };
-  }, [events, selectedNodeId]);
+  }, [nodeRuns, selectedNodeId]);
 
   const visible = timeline.filter(e => {
     if (e.kind === 'tool' && !showToolCalls) return false;
     if (e.kind === 'system' && !showSystem) return false;
     if (e.kind === 'system_row' && !showSystem) return false;
     // Node filter: isolate one node. Node markers and node-attributed (workflow-
-    // event) tools match by identity; everything node-blind (message-inline tools,
-    // prose, system) falls back to the node's time window so a node's whole slice
-    // of the timeline stays visible regardless of provider.
+    // event) tools match by identity; every node-blind entry (message-inline
+    // tools, prose, artifacts, system rows) falls back to the node's time window
+    // so a node's whole slice of the timeline stays visible regardless of provider.
     if (selectedNodeId !== 'all') {
       if (e.kind === 'node') return e.node.nodeId === selectedNodeId;
       if (e.kind === 'tool' && e.nodeId !== null) return e.nodeId === selectedNodeId;
