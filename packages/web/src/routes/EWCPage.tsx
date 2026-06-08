@@ -50,7 +50,8 @@ const SECTIONS = [
       {
         slug: 'aura-landing',
         title: 'Aura landing page',
-        description: 'jid5274.gbautomation.xyz — deploys from website-aura-landing branch via Amplify.',
+        description:
+          'jid5274.gbautomation.xyz — deploys from website-aura-landing branch via Amplify.',
         href: 'https://jid5274.gbautomation.xyz',
         badge: 'live',
         badgeTone: 'emerald' as const,
@@ -72,6 +73,22 @@ const SECTIONS = [
   {
     heading: 'Sub-pages in vault',
     items: [
+      {
+        slug: 'apollo-sequence-spec',
+        title: 'Apollo sequence spec',
+        description:
+          'apollo-sequence-spec.md — 5-step Lumnen Clinical Partner sequence, ready to launch',
+        badge: 'unstarted',
+        badgeTone: 'amber' as const,
+      },
+      {
+        slug: 'client-facing-one-pager',
+        title: 'Lumnen Clinical Partner one-pager',
+        description:
+          'client-facing-one-pager.md — outbound asset (also surfaced in Live assets above)',
+        badge: 'asset ready',
+        badgeTone: 'emerald' as const,
+      },
       {
         slug: 'brand-canon',
         title: 'Brand canon',
