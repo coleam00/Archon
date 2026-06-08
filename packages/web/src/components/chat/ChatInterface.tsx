@@ -628,7 +628,7 @@ export function ChatInterface({ conversationId }: ChatInterfaceProps): React.Rea
           // Cache messages under the new ID so the remounted ChatInterface picks them up
           // (navigate changes the key prop, causing unmount/remount — state is lost otherwise)
           setCachedMessages(newId, [userMsg, thinkingMsg]);
-          navigate(`/chat/${newId}`, { replace: true });
+          navigate(`/legacy/chat/${newId}`, { replace: true });
           // Trigger title + workflow refreshes after AI generates a proper title
           if (!hasTriggeredTitleRefresh.current && !message.startsWith('/')) {
             hasTriggeredTitleRefresh.current = true;

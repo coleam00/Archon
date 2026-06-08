@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useRef, useState, type ReactElement } from 'react';
-import { useNavigate, useLocation } from 'react-router';
+import { Link, useNavigate, useLocation } from 'react-router';
+import { Settings, Workflow, ArrowLeft } from 'lucide-react';
 import { ProjectRow } from './ProjectRow';
 import { EnvVarsDialog } from './EnvVarsDialog';
 import { useEntity, invalidate } from '../store/cache';
@@ -125,8 +126,23 @@ export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
       style={{ width, flexBasis: width }}
       className="relative flex h-full shrink-0 flex-col border-r border-border bg-surface-inset"
     >
-      {/* Header: label + count + filter */}
+      {/* Header: brand + label + count + filter */}
       <div className="px-3.5 pb-2.5 pt-4">
+        <div className="flex items-center gap-2.5 px-1 pb-4">
+          <img
+            src="/favicon.png"
+            alt=""
+            aria-hidden="true"
+            width={22}
+            height={22}
+            className="shrink-0 select-none"
+            draggable={false}
+          />
+          <span className="brand-text text-base font-semibold tracking-tight">Archon</span>
+          <span className="rounded-full border border-border px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest text-text-tertiary">
+            console
+          </span>
+        </div>
         <div className="flex items-center gap-2 px-1 pb-3">
           <span className="font-mono text-[11px] font-bold uppercase tracking-[0.14em] text-text-tertiary">
             Projects
@@ -253,6 +269,35 @@ export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
           </span>
           <span>Add project</span>
         </button>
+      </div>
+
+      {/* Nav menu — settings + the classic-UI escape hatches, under Add project
+          and separated from it by the border-t divider. */}
+      <div className="flex flex-col gap-0.5 border-t border-border px-2.5 py-2">
+        <Link
+          to="/console/settings"
+          title="Settings ( , )"
+          className="flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-1.5 text-left text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
+        >
+          <Settings aria-hidden className="h-3.5 w-3.5 shrink-0" />
+          <span>Settings</span>
+        </Link>
+        <Link
+          to="/legacy/workflows"
+          title="Workflows (classic UI)"
+          className="flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-1.5 text-left text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
+        >
+          <Workflow aria-hidden className="h-3.5 w-3.5 shrink-0" />
+          <span>Workflows</span>
+        </Link>
+        <Link
+          to="/legacy"
+          title="Switch back to the classic UI"
+          className="flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-1.5 text-left text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
+        >
+          <ArrowLeft aria-hidden className="h-3.5 w-3.5 shrink-0" />
+          <span>Old UI</span>
+        </Link>
       </div>
 
       {/* Resize handle */}

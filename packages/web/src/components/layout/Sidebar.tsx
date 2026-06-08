@@ -162,7 +162,7 @@ export function Sidebar(): React.ReactElement {
 
   const handleNewOrchestratorChat = useCallback((): void => {
     setSelectedProjectId(null);
-    navigate('/chat');
+    navigate('/legacy/chat');
   }, [navigate, setSelectedProjectId]);
 
   useKeyboardShortcuts(shortcuts);
@@ -174,7 +174,7 @@ export function Sidebar(): React.ReactElement {
     >
       {/* Logo */}
       <div className="flex flex-col gap-3 p-4">
-        <Link to="/" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
+        <Link to="/legacy" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
             <span className="text-sm font-semibold text-primary-foreground">A</span>
           </div>
