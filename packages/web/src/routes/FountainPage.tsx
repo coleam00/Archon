@@ -74,10 +74,10 @@ const PMC_PORTFOLIO_FIT = [
     note: 'Clinical wellness journey, recovery-room overlap',
   },
   {
-    name: 'Naba (wellness journeys)',
+    name: 'Quicksilver Scientific',
     value: 25,
     color: '#a855f7',
-    note: 'Anti-aging journey curation',
+    note: 'Practitioner-grade nutraceutical protocols attached to diagnostic + therapeutic deliverables (supersedes the legacy "Naba" framing per 2026-06-01 directive).',
   },
 ];
 
