@@ -1,3 +1,4 @@
+import { Paperclip } from 'lucide-react';
 import { useRef, useState, type KeyboardEvent, type ReactElement } from 'react';
 import {
   ACCEPTED_EXTENSIONS,
@@ -162,7 +163,7 @@ export function ChatComposer({
               title="Attach files"
               className="rounded-md p-[3px] transition-colors hover:bg-[color:var(--surface-hover)] hover:text-text-primary disabled:cursor-default disabled:opacity-50"
             >
-              📎
+              <Paperclip className="h-4 w-4" />
             </button>
             <input
               ref={fileInputRef}
