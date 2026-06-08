@@ -148,7 +148,7 @@ export function ChatPage(): ReactElement {
   // Reveal the raw tool trace inline (toggled from the working indicator).
   const [showTools, setShowTools] = useState(false);
 
-  const onSend = (text: string): void => {
+  const onSend = (text: string, files?: File[]): void => {
     if (projectId === undefined) return;
     setError(null);
     setBusy(true); // optimistic: disable the composer immediately
@@ -159,8 +159,16 @@ export function ChatPage(): ReactElement {
           setActiveConvId(conv.conversationId);
           invalidate(K.conversations(projectId));
           invalidate(K.messages(conv.conversationId));
+          // createConversation is JSON-only — files can't ride the first message.
+          // Surface it (not silently dropped) so the user can re-attach now that
+          // the conversation exists.
+          if (files !== undefined && files.length > 0) {
+            setError(
+              'Files are not attached to the first message — re-attach them now that the chat has started.'
+            );
+          }
         } else {
-          await skill.sendMessage(activeConvId, text);
+          await skill.sendMessage(activeConvId, text, files);
           invalidate(K.messages(activeConvId));
         }
       } catch (e: unknown) {

@@ -98,7 +98,7 @@ export function ToolCallItem({ call, timestamp }: ToolCallItemProps): ReactEleme
       {expanded && hasDetails ? (
         <div className="ml-[72px] mt-2 space-y-1.5">
           {Object.keys(call.input).length > 0 ? (
-            <pre className="overflow-x-auto rounded border border-border bg-surface-inset p-2 font-mono text-[11px] leading-relaxed text-text-secondary">
+            <pre className="max-h-[320px] overflow-auto rounded border border-border bg-surface-inset p-2 font-mono text-[11px] leading-relaxed text-text-secondary">
               {JSON.stringify(call.input, null, 2)}
             </pre>
           ) : null}
