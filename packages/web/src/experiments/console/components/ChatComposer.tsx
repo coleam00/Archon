@@ -1,4 +1,12 @@
 import { useRef, useState, type KeyboardEvent, type ReactElement } from 'react';
+import {
+  ACCEPTED_EXTENSIONS,
+  MAX_FILES,
+  MAX_FILE_BYTES,
+  MAX_FILE_MB,
+  formatBytes,
+  isAcceptedFileType,
+} from '../primitives/file';
 
 interface ChatComposerProps {
   onSend: (message: string, files?: File[]) => void;
@@ -7,60 +15,6 @@ interface ChatComposerProps {
 }
 
 const MAX_HEIGHT = 200;
-const MAX_FILES = 5;
-const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MB
-
-// Picker hint + a light client-side type guard. The server does the
-// authoritative validation; this is UX only. Mirrors the old MessageInput's
-// accepted set (copied, not imported — the console may not import @/components).
-const ACCEPTED_EXTENSIONS_LIST = [
-  '.png',
-  '.jpg',
-  '.jpeg',
-  '.gif',
-  '.webp',
-  '.pdf',
-  '.md',
-  '.txt',
-  '.csv',
-  '.json',
-  '.yaml',
-  '.yml',
-  '.toml',
-  '.log',
-  '.html',
-  '.css',
-  '.js',
-  '.jsx',
-  '.ts',
-  '.tsx',
-  '.py',
-  '.rb',
-  '.go',
-  '.rs',
-  '.java',
-  '.c',
-  '.cpp',
-  '.h',
-  '.sh',
-  '.sql',
-];
-const ACCEPTED_EXTENSIONS = ACCEPTED_EXTENSIONS_LIST.join(',');
-const ACCEPTED_SET = new Set(ACCEPTED_EXTENSIONS_LIST);
-
-function isAcceptedFileType(file: File): boolean {
-  if (file.type.startsWith('text/') || file.type.startsWith('image/')) return true;
-  if (file.type === 'application/pdf' || file.type === 'application/json') return true;
-  // Many code/config files report an empty MIME type — fall back to the extension.
-  const dot = file.name.lastIndexOf('.');
-  return dot !== -1 && ACCEPTED_SET.has(file.name.slice(dot).toLowerCase());
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${String(bytes)} B`;
-  if (bytes < 1024 * 1024) return `${String(Math.round(bytes / 1024))} KB`;
-  return `${String(Math.round(bytes / (1024 * 1024)))} MB`;
-}
 
 interface PickedFile {
   file: File;
@@ -99,25 +53,31 @@ export function ChatComposer({
   };
 
   const addFiles = (incoming: File[]): void => {
-    let err: string | null = null;
     const next = [...files];
+    // Accumulate every rejection reason (not just the last) so a mixed pick
+    // surfaces all of them.
+    const skipped: string[] = [];
     for (const file of incoming) {
       if (next.length >= MAX_FILES) {
-        err = `Up to ${String(MAX_FILES)} files.`;
-        break;
+        skipped.push(`${file.name}: over the ${String(MAX_FILES)}-file limit`);
+        continue;
       }
       if (file.size > MAX_FILE_BYTES) {
-        err = `${file.name} is larger than ${String(MAX_FILE_BYTES / (1024 * 1024))} MB.`;
+        skipped.push(`${file.name}: larger than ${String(MAX_FILE_MB)} MB`);
         continue;
       }
       if (!isAcceptedFileType(file)) {
-        err = `${file.name} is not a supported file type.`;
+        skipped.push(`${file.name}: unsupported type`);
         continue;
       }
       next.push({ file, id: String(idRef.current++) });
     }
     setFiles(next);
-    setFileError(err);
+    setFileError(
+      skipped.length > 0
+        ? `Skipped ${String(skipped.length)} file(s) — ${skipped.join('; ')}`
+        : null
+    );
   };
 
   const removeFile = (id: string): void => {

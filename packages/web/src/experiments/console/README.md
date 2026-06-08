@@ -14,6 +14,15 @@ Mounted at `/console/*`. Not part of the shipped product. Validates the mental m
 - `/console/p/:projectId/chat` → Project-scoped agent chat
 - `/console/p/:projectId/r/:runId` → Run detail
 
+## Chat uploads
+
+The composer's 📎 attaches files (≤5, ≤10 MB each, type-guarded client-side; the
+server validates authoritatively) and sends them via the existing multipart
+`sendMessage`. **Limitation:** files can't ride the *first* message of a brand-new
+conversation (`createConversation` is JSON-only) — the UI shows a notice to
+re-attach once the chat exists. Drag-drop / paste / optimistic chips are tracked
+in #1913.
+
 ## Constraints
 
 - **Isolated.** Forbidden imports from `packages/web/src/{components,stores,contexts,routes,hooks}` and `@tanstack/react-query`, `@/lib/api` (function exports). Enforced by ESLint. Type-only imports from `@/lib/api.generated` are allowed.
