@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS remote_agent_codebases (
   name VARCHAR(255) NOT NULL,
   repository_url VARCHAR(500),
   default_cwd VARCHAR(500) NOT NULL,
+  default_branch VARCHAR(255),
   ai_assistant_type VARCHAR(20) DEFAULT 'claude',
   allow_env_keys BOOLEAN NOT NULL DEFAULT FALSE,
   commands JSONB DEFAULT '{}'::jsonb,
@@ -42,7 +43,7 @@ CREATE TABLE IF NOT EXISTS remote_agent_codebases (
 );
 
 COMMENT ON TABLE remote_agent_codebases IS
-  'Repository metadata: name, URL, working directory, AI assistant type, and command paths (JSONB)';
+  'Repository metadata: name, URL, working directory, default branch, AI assistant type, and command paths (JSONB)';
 
 -- ============================================================================
 -- Table 1b: Codebase Env Vars
@@ -380,6 +381,10 @@ ALTER TABLE remote_agent_sessions
 -- From migration 021: allow_env_keys on codebases
 ALTER TABLE remote_agent_codebases
   ADD COLUMN IF NOT EXISTS allow_env_keys BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- From migration 023: detected default branch on codebases
+ALTER TABLE remote_agent_codebases
+  ADD COLUMN IF NOT EXISTS default_branch VARCHAR(255);
 
 -- User identity foreign keys (nullable on the four primary tables).
 -- All FKs use ON DELETE SET NULL so future user deletion never cascades destructively.

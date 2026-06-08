@@ -105,6 +105,7 @@ describe('core schemas', () => {
       name: 'my-project',
       repository_url: 'https://github.com/user/repo',
       default_cwd: '/home/user/projects/my-project',
+      default_branch: 'main',
       ai_assistant_type: 'claude',
       commands: { plan: { path: '/cmds/plan.md', description: 'Plan' } },
       created_at: new Date(),

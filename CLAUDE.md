@@ -48,7 +48,8 @@
 - Trust git's natural guardrails (e.g., refuse to remove worktree with uncommitted changes)
 - Use `@archon/git` functions for git operations; use `execFileAsync` (not `exec`) when calling git directly
 - Worktrees enable parallel development per conversation without branch conflicts
-- Workspaces automatically sync with origin before worktree creation (ensures latest code)
+- Workspace sync is non-destructive by default: fetch, classify state, and fast-forward only when safe
+- Use explicit `mode: 'reset'` only for Archon-owned checkout paths where the caller intentionally wants to hard-reset to `origin/<branch>` before creating a managed worktree
 - **NEVER run `git clean -fd`** - it permanently deletes untracked files (use `git checkout .` instead)
 
 ## Engineering Principles

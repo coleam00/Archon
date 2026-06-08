@@ -16,12 +16,19 @@ export async function createCodebase(data: {
   name: string;
   repository_url?: string;
   default_cwd: string;
+  default_branch?: string | null;
   ai_assistant_type?: string;
 }): Promise<Codebase> {
   const assistantType = data.ai_assistant_type ?? process.env.DEFAULT_AI_ASSISTANT ?? 'claude';
   const result = await pool.query<Codebase>(
-    'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, ai_assistant_type) VALUES ($1, $2, $3, $4) RETURNING *',
-    [data.name, data.repository_url ?? null, data.default_cwd, assistantType]
+    'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, default_branch, ai_assistant_type) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+    [
+      data.name,
+      data.repository_url ?? null,
+      data.default_cwd,
+      data.default_branch ?? null,
+      assistantType,
+    ]
   );
   if (!result.rows[0]) {
     throw new Error('Failed to create codebase: INSERT succeeded but no row returned');
@@ -128,7 +135,7 @@ export async function findCodebaseByName(name: string): Promise<Codebase | null>
 
 export async function updateCodebase(
   id: string,
-  data: { default_cwd?: string; repository_url?: string | null }
+  data: { default_cwd?: string; repository_url?: string | null; default_branch?: string | null }
 ): Promise<void> {
   const dialect = getDialect();
   const updates: string[] = [];
@@ -143,6 +150,11 @@ export async function updateCodebase(
   if (data.repository_url !== undefined) {
     updates.push(`repository_url = $${paramIndex++}`);
     values.push(data.repository_url);
+  }
+
+  if (data.default_branch !== undefined) {
+    updates.push(`default_branch = $${paramIndex++}`);
+    values.push(data.default_branch);
   }
 
   if (updates.length === 0) return;
