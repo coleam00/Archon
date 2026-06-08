@@ -262,10 +262,8 @@ streaming:
     });
 
     test('env var DEFAULT_AI_ASSISTANT does not override repo config assistant', async () => {
-      const pathMatches = (path: string, pattern: string): boolean => {
-        const normalizedPath = path.replace(/\\/g, '/');
-        return normalizedPath.includes(pattern);
-      };
+      const pathMatches = (path: string, pattern: string): boolean =>
+        path.replace(/\\/g, '/').includes(pattern);
 
       let globalRead = false;
       mockFsReadFile.mockImplementation(async (path: string) => {
