@@ -843,9 +843,11 @@ describe('getWorktreeStatusBreakdown', () => {
     mockGetDefaultBranch.mockClear();
     mockIsBranchMerged.mockClear();
     mockListByCodebaseWithAge.mockClear();
+    mockLoadRepoConfig.mockClear();
     // Reset defaults
     mockGetDefaultBranch.mockResolvedValue('main');
     mockIsBranchMerged.mockResolvedValue(false);
+    mockLoadRepoConfig.mockResolvedValue({});
   });
 
   test('returns correct breakdown with mixed environments', async () => {
@@ -920,7 +922,7 @@ describe('getWorktreeStatusBreakdown', () => {
 
   test('returns empty breakdown for empty codebase', async () => {
     mockListByCodebaseWithAge.mockResolvedValueOnce([]);
-    // getDefaultBranch returns 'main' (default from beforeEach)
+    // resolveBaseBranch returns 'main' (no config → getDefaultBranch fallback, default from beforeEach)
 
     const breakdown = await getWorktreeStatusBreakdown('codebase-1', '/workspace/repo');
 
@@ -944,9 +946,11 @@ describe('cleanupMergedWorktrees', () => {
     mockWorktreeExists.mockClear();
     mockGetCodebase.mockClear();
     mockUpdateStatus.mockClear();
+    mockLoadRepoConfig.mockClear();
     // Reset defaults
     mockGetDefaultBranch.mockResolvedValue('main');
     mockIsBranchMerged.mockResolvedValue(false);
+    mockLoadRepoConfig.mockResolvedValue({});
     mockIsPatchEquivalent.mockReset();
     mockIsPatchEquivalent.mockResolvedValue(false);
     mockGetPrState.mockReset();
@@ -965,7 +969,7 @@ describe('cleanupMergedWorktrees', () => {
       },
     ]);
 
-    // getDefaultBranch returns 'main' (default from beforeEach)
+    // resolveBaseBranch returns 'main' (no config → getDefaultBranch fallback, default from beforeEach)
     // isBranchMerged returns true for this branch
     mockIsBranchMerged.mockResolvedValueOnce(true);
     // hasUncommittedChanges returns false (default from beforeEach)
@@ -1002,7 +1006,7 @@ describe('cleanupMergedWorktrees', () => {
       },
     ]);
 
-    // getDefaultBranch returns 'main' (default from beforeEach)
+    // resolveBaseBranch returns 'main' (no config → getDefaultBranch fallback, default from beforeEach)
     // isBranchMerged returns true
     mockIsBranchMerged.mockResolvedValueOnce(true);
     // Has uncommitted changes
@@ -1027,7 +1031,7 @@ describe('cleanupMergedWorktrees', () => {
       },
     ]);
 
-    // getDefaultBranch returns 'main' (default from beforeEach)
+    // resolveBaseBranch returns 'main' (no config → getDefaultBranch fallback, default from beforeEach)
     // isBranchMerged returns true
     mockIsBranchMerged.mockResolvedValueOnce(true);
     // hasUncommittedChanges returns false (default from beforeEach)
