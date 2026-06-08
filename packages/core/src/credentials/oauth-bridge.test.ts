@@ -56,8 +56,11 @@ describe('oauth-bridge', () => {
     mockQuery.mockClear();
   });
 
-  test('unknown / non-subscription provider → throws', async () => {
+  test('unknown / non-subscription / disabled provider → throws', async () => {
     await expect(startOAuth('u1', 'openrouter')).rejects.toThrow(/does not support subscription/);
+    // codex is wired (ARCHON_TO_PI_OAUTH) but gated out of SUBSCRIPTION_PROVIDERS
+    // because Pi drops the OpenAI id_token → Codex CLI rejects it (#1924).
+    await expect(startOAuth('u1', 'codex')).rejects.toThrow(/does not support subscription/);
   });
 
   test('manual flow: start returns url, poll(code) unblocks login → connected', async () => {
@@ -143,7 +146,7 @@ describe('oauth-bridge', () => {
       return { access: 'a' };
     };
     const first = await startOAuth('u1', 'claude');
-    const second = await startOAuth('u1', 'codex');
+    const second = await startOAuth('u1', 'claude');
     expect(first.sessionId).not.toBe(second.sessionId);
     expect(pollOAuth(first.sessionId, 'u1').status).toBe('error'); // prior session dropped
   });

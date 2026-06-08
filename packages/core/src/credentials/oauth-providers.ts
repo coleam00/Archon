@@ -23,8 +23,24 @@ export const ARCHON_TO_PI_OAUTH: Readonly<Record<string, OAuthProviderInterface>
   copilot: githubCopilotOAuthProvider,
 };
 
+/**
+ * Archon provider ids whose subscription (OAuth) login is wired but NOT usable
+ * end-to-end, so we refuse to connect them (delivery/refresh code stays intact
+ * for re-enable).
+ *
+ * - `codex`: Pi's `openaiCodexOAuthProvider` drops the OpenAI `id_token` from the
+ *   token exchange (`openai-codex.js`), but the Codex CLI requires a valid
+ *   `id_token` in `auth.json` — otherwise it crashes with "invalid ID token
+ *   format". Verified broken on the VPS smoke (2026-06-08). API-key codex is
+ *   unaffected. Re-enable once Pi surfaces `id_token` (or we capture it directly /
+ *   support pasting a native `~/.codex/auth.json`). See #1924.
+ */
+const SUBSCRIPTION_DISABLED: ReadonlySet<string> = new Set(['codex']);
+
 /** Archon provider ids that support OAuth subscription login (vs API key only). */
-export const SUBSCRIPTION_PROVIDERS: ReadonlySet<string> = new Set(Object.keys(ARCHON_TO_PI_OAUTH));
+export const SUBSCRIPTION_PROVIDERS: ReadonlySet<string> = new Set(
+  Object.keys(ARCHON_TO_PI_OAUTH).filter(p => !SUBSCRIPTION_DISABLED.has(p))
+);
 
 /** The Pi OAuth provider for an Archon provider id, or undefined if it's API-key only. */
 export function piOAuthProviderFor(provider: string): OAuthProviderInterface | undefined {

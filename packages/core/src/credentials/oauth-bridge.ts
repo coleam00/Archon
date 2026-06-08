@@ -26,7 +26,7 @@ import type {
   OAuthAuthInfo,
   OAuthDeviceCodeInfo,
 } from '@archon/providers/oauth';
-import { piOAuthProviderFor } from './oauth-providers';
+import { piOAuthProviderFor, SUBSCRIPTION_PROVIDERS } from './oauth-providers';
 import { persistProviderOAuth } from './connect-service';
 import { sanitizeCredentials, sanitizeError } from '../utils/credential-sanitizer';
 
@@ -113,7 +113,14 @@ export interface PollOAuthResult {
  */
 export async function startOAuth(userId: string, provider: string): Promise<StartOAuthResult> {
   sweepExpired();
-  const piProvider = piOAuthProviderFor(provider);
+  // SUBSCRIPTION_PROVIDERS is the single source of truth for "connectable via
+  // subscription" — it excludes providers that are wired in ARCHON_TO_PI_OAUTH
+  // (so delivery/refresh still work) but gated off because the flow isn't usable
+  // end-to-end (e.g. codex: Pi drops the id_token, #1924). Gate here too so the
+  // bridge can't be driven past the route/CLI check.
+  const piProvider = SUBSCRIPTION_PROVIDERS.has(provider)
+    ? piOAuthProviderFor(provider)
+    : undefined;
   if (!piProvider) {
     throw new Error(`Provider '${provider}' does not support subscription login.`);
   }

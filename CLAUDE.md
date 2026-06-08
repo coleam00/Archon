@@ -288,7 +288,7 @@ bun run cli auth github
 # piped stdin — never from argv.
 bun run cli ai key set <provider>          # connect an API key (e.g. openrouter, claude, codex)
 echo "$MY_KEY" | bun run cli ai key set openrouter
-bun run cli ai login <provider>            # connect a SUBSCRIPTION (claude/codex/copilot) via OAuth
+bun run cli ai login <provider>            # connect a SUBSCRIPTION (claude/copilot) via OAuth — codex gated (#1924)
 bun run cli ai list                        # list connected providers (no secrets)
 bun run cli ai logout <provider>           # disconnect a provider
 
@@ -906,7 +906,7 @@ Pattern: Use `classifyIsolationError()` (from `@archon/isolation`) to map git er
 - `GET /api/auth/providers` - List the current web user's connected provider keys; returns `{ enabled, connections: [{ provider, kind, label }], available: string[], subscriptionAvailable: string[] }` (no secret values; `available` = connectable-provider catalog, `subscriptionAvailable` = subset that supports OAuth login; `enabled:false` when the install has no `TOKEN_ENCRYPTION_KEY`). `requireWebUser` (401 without identity)
 - `PUT /api/auth/providers/:provider` - Connect (upsert) an API key; body `{ apiKey, label? }`; returns `{ success, provider, kind: 'api_key', label }` (never echoes the key). 400 on unknown provider / blank key, 404 when per-user keys disabled, 500 (opaque) on storage failure
 - `DELETE /api/auth/providers/:provider` - Disconnect a provider (idempotent); returns `{ success }`. 404 when disabled
-- `POST /api/auth/providers/:provider/oauth/start` - Begin a subscription (OAuth) login (claude/codex/copilot); returns `{ sessionId, mode: 'manual'|'device', url?, userCode?, verificationUri?, expiresIn }` (no secret). 400 non-subscription provider, 404 disabled. Held server-side by the `oauth-bridge` (over Pi's `login()`).
+- `POST /api/auth/providers/:provider/oauth/start` - Begin a subscription (OAuth) login (claude/copilot; **codex gated** — Pi drops the OpenAI `id_token` so the Codex CLI rejects the auth.json, see #1924; codex stays API-key-only); returns `{ sessionId, mode: 'manual'|'device', url?, userCode?, verificationUri?, expiresIn }` (no secret). 400 non-subscription provider, 404 disabled. Held server-side by the `oauth-bridge` (over Pi's `login()`). `SUBSCRIPTION_PROVIDERS` (in `oauth-providers.ts`) is the single source of truth — it excludes providers wired in `ARCHON_TO_PI_OAUTH` but not usable end-to-end.
 - `POST /api/auth/providers/:provider/oauth/poll` - Poll the login session; body `{ sessionId, code? }` (`code` = pasted manual-code); returns `{ status: 'pending'|'connected'|'error', detail? }`. Session bound to the caller's userId.
 - Gated on `isPerUserProviderKeysEnabled()` (`TOKEN_ENCRYPTION_KEY`); credentials (API keys + subscriptions) injected into runs/chat env at execution time. Subscription tokens refresh-on-read and re-save on rotation. Subscriptions are delivered to native Claude/Codex (env / `CODEX_HOME/auth.json`) AND to Pi (per-run `auth.json` via `ARCHON_PI_AUTH_PATH`).
 
