@@ -293,6 +293,14 @@ bun run cli ai login <provider>            # connect a SUBSCRIPTION (claude/copi
 bun run cli ai list                        # list connected providers (no secrets)
 bun run cli ai logout <provider>           # disconnect a provider
 
+# Model tiers + default assistant (install-wide config; works on solo installs — these
+# write ~/.archon/config.yaml and need NO TOKEN_ENCRYPTION_KEY). Full parity with the
+# console "AI Settings" → Model Tiers / Defaults sections.
+bun run cli ai tier set <tier> <provider> <model> [--effort <e>]   # set small/medium/large → provider/model
+bun run cli ai tier list [--json]          # show configured tiers vs built-in defaults
+bun run cli ai tier unset <tier>           # reset a tier to its built-in default
+bun run cli ai default <provider>          # set the default assistant
+
 # Inspect or rotate the anonymous telemetry install UUID
 bun run cli telemetry status
 bun run cli telemetry reset
@@ -910,6 +918,11 @@ Pattern: Use `classifyIsolationError()` (from `@archon/isolation`) to map git er
 - `POST /api/auth/providers/:provider/oauth/start` - Begin a subscription (OAuth) login (claude/copilot; **codex gated** — Pi drops the OpenAI `id_token` so the Codex CLI rejects the auth.json, see #1924; codex stays API-key-only); returns `{ sessionId, mode: 'manual'|'device', url?, userCode?, verificationUri?, expiresIn }` (no secret). 400 non-subscription provider, 404 disabled. Held server-side by the `oauth-bridge` (over Pi's `login()`). `SUBSCRIPTION_PROVIDERS` (in `oauth-providers.ts`) is the single source of truth — it excludes providers wired in `ARCHON_TO_PI_OAUTH` but not usable end-to-end.
 - `POST /api/auth/providers/:provider/oauth/poll` - Poll the login session; body `{ sessionId, code? }` (`code` = pasted manual-code); returns `{ status: 'pending'|'connected'|'error', detail? }`. Session bound to the caller's userId.
 - Gated on `isPerUserProviderKeysEnabled()` (`TOKEN_ENCRYPTION_KEY`); credentials (API keys + subscriptions) injected into runs/chat env at execution time. Subscription tokens refresh-on-read and re-save on rotation. Subscriptions are delivered to native Claude/Codex (env / `CODEX_HOME/auth.json`) AND to Pi (per-run `auth.json` via `ARCHON_PI_AUTH_PATH`).
+
+**Config (System; ungated — works on solo installs, NOT `requireWebUser`):**
+- `GET /api/config` - Read-only safe config; returns `{ config, database }`. `config` includes `tiers` (configured small/medium/large presets) and `tierDefaults` (built-in presets for the default provider, computed via `buildAiProfile` — lets the UI show what an unset tier resolves to).
+- `PATCH /api/config/assistants` - Update default assistant + per-provider model defaults.
+- `PATCH /api/config/tiers` - Update model-tier presets; body `{ tiers: { small?, medium?, large? } }` where each tier is `{ provider, model, effort? }` or `null` (unset). Per-key merge; validates each `provider` via `isRegisteredProvider`. Writes `~/.archon/config.yaml`. Drives the console "AI Settings → Model Tiers" panel + `archon ai tier` CLI.
 
 **System:**
 - `GET /api/health` - Health check with adapter/system status

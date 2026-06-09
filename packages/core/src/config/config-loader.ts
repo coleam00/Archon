@@ -45,6 +45,15 @@ import {
   registerBuiltinProviders,
   registerCommunityProviders,
 } from '@archon/providers';
+import { buildAiProfile, TIER_NAMES } from '@archon/workflows/model-validation';
+import type { RawAliasEntry, TierName } from '@archon/workflows/model-validation';
+
+/**
+ * A per-key patch for the `tiers:` config. Unlike `RawTiersConfig`, a tier value
+ * may be `null` to explicitly UNSET it (RawTiersConfig can't express removal).
+ * Consumed by `updateGlobalConfig({ tiers })`.
+ */
+export type TiersPatch = Partial<Record<TierName, RawAliasEntry | null>>;
 
 /**
  * Pure read of registered provider IDs. Registration is guaranteed by
@@ -588,7 +597,9 @@ export function logConfig(config: MergedConfig): void {
  * Reads current config, deep-merges updates, and writes back to YAML.
  * Invalidates the cached config so next loadConfig() picks up changes.
  */
-export async function updateGlobalConfig(updates: Partial<GlobalConfig>): Promise<void> {
+export async function updateGlobalConfig(
+  updates: Partial<Omit<GlobalConfig, 'tiers'>> & { tiers?: TiersPatch }
+): Promise<void> {
   const configPath = getArchonConfigPath();
 
   try {
@@ -616,6 +627,24 @@ export async function updateGlobalConfig(updates: Partial<GlobalConfig>): Promis
       merged.concurrency = { ...current.concurrency, ...updates.concurrency };
     }
 
+    if (updates.tiers) {
+      // Per-key merge: `null` unsets a tier, a value sets it, and an absent key
+      // (`undefined`) preserves the existing tier — so a single-tier PATCH/CLI
+      // set doesn't wipe the others. Rebuilt fresh (no dynamic delete).
+      const nextTiers: RawTiersConfig = {};
+      for (const tier of TIER_NAMES) {
+        const incoming = updates.tiers[tier];
+        if (incoming === null) continue; // explicit unset → omit
+        if (incoming !== undefined) {
+          nextTiers[tier] = incoming;
+        } else {
+          const existing = current.tiers?.[tier];
+          if (existing) nextTiers[tier] = existing;
+        }
+      }
+      merged.tiers = Object.keys(nextTiers).length > 0 ? nextTiers : undefined;
+    }
+
     // Serialize to YAML and write
     const yaml = Bun.YAML.stringify(merged);
     await mkdir(dirname(configPath), { recursive: true });
@@ -639,6 +668,34 @@ export async function updateGlobalConfig(updates: Partial<GlobalConfig>): Promis
 }
 
 /**
+ * Built-in tier presets (small/medium/large) for a provider, from
+ * tier-defaults.json via buildAiProfile. Lets the settings UI show what an
+ * unset tier resolves to. Never throws — an unknown/odd provider (or a throw)
+ * yields `undefined` (every consumer uses optional chaining).
+ */
+function tierDefaultsFor(provider: string): RawTiersConfig | undefined {
+  try {
+    const profile = buildAiProfile(provider);
+    const out: RawTiersConfig = {};
+    for (const tier of TIER_NAMES) {
+      const preset = profile.aliases[tier];
+      if (preset) {
+        out[tier] = {
+          provider: preset.provider,
+          model: preset.model,
+          ...(preset.effort !== undefined ? { effort: preset.effort } : {}),
+          ...(preset.thinking !== undefined ? { thinking: preset.thinking } : {}),
+        };
+      }
+    }
+    return Object.keys(out).length > 0 ? out : undefined;
+  } catch (error) {
+    getLog().warn({ provider, err: error }, 'config.tier_defaults_failed');
+    return undefined;
+  }
+}
+
+/**
  * Project a MergedConfig to a SafeConfig suitable for sending to web clients.
  * Strips filesystem paths and any other server-internal fields.
  */
@@ -658,5 +715,7 @@ export function toSafeConfig(config: MergedConfig): SafeConfig {
       loadDefaultCommands: config.defaults.loadDefaultCommands,
       loadDefaultWorkflows: config.defaults.loadDefaultWorkflows,
     },
+    tiers: config.tiers,
+    tierDefaults: tierDefaultsFor(config.assistant),
   };
 }

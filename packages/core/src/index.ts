@@ -111,6 +111,7 @@ export {
   logConfig,
   toSafeConfig,
   updateGlobalConfig,
+  type TiersPatch,
 } from './config/config-loader';
 
 // =============================================================================

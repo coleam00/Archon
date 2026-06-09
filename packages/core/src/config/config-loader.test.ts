@@ -735,6 +735,70 @@ assistants:
         'Permission denied'
       );
     });
+
+    test('sets a model tier', async () => {
+      mockFsReadFile.mockResolvedValue('defaultAssistant: claude\n');
+      await updateGlobalConfig({ tiers: { large: { provider: 'claude', model: 'opus' } } });
+      const written = mockFsWriteFile.mock.calls[0]?.[1] as string;
+      expect(written).toContain('tiers');
+      expect(written).toContain('opus');
+    });
+
+    test('per-tier merge: setting one tier preserves the others', async () => {
+      mockFsReadFile.mockResolvedValue(`
+tiers:
+  small:
+    provider: claude
+    model: haiku
+`);
+      await updateGlobalConfig({ tiers: { large: { provider: 'codex', model: 'gpt-5.5' } } });
+      const written = mockFsWriteFile.mock.calls[0]?.[1] as string;
+      expect(written).toContain('haiku'); // small preserved
+      expect(written).toContain('gpt-5.5'); // large added
+    });
+
+    test('null tier value unsets that tier', async () => {
+      mockFsReadFile.mockResolvedValue(`
+tiers:
+  large:
+    provider: claude
+    model: opus
+`);
+      await updateGlobalConfig({ tiers: { large: null } });
+      const written = mockFsWriteFile.mock.calls[0]?.[1] as string;
+      expect(written).not.toContain('opus');
+    });
+
+    test('unsetting every tier collapses `tiers` to undefined (no empty tiers key)', async () => {
+      mockFsReadFile.mockResolvedValue(`
+defaultAssistant: claude
+tiers:
+  large:
+    provider: claude
+    model: opus
+`);
+      await updateGlobalConfig({ tiers: { small: null, medium: null, large: null } });
+      const written = mockFsWriteFile.mock.calls[0]?.[1] as string;
+      expect(written).not.toContain('opus');
+      // Collapsed to `undefined` → no serialized `tiers:` key at all.
+      expect(written).not.toMatch(/^tiers:/m);
+    });
+
+    test('existing tiers survive an assistants-only update', async () => {
+      mockFsReadFile.mockResolvedValue(`
+tiers:
+  large:
+    provider: claude
+    model: opus
+assistants:
+  claude:
+    model: sonnet
+`);
+      await updateGlobalConfig({ assistants: { claude: { model: 'haiku' } } });
+      const written = mockFsWriteFile.mock.calls[0]?.[1] as string;
+      expect(written).toContain('opus'); // tiers preserved via the {...current} spread
+      expect(written).toContain('haiku');
+    });
   });
 
   describe('toSafeConfig', () => {
@@ -777,6 +841,23 @@ assistants:
       expect(safe.assistants.claude).toBeDefined();
       expect(safe.assistants.codex).toBeDefined();
       expect(safe.assistants.codex).not.toHaveProperty('additionalDirectories');
+    });
+
+    test('exposes configured tiers and computed tierDefaults', async () => {
+      mockFsReadFile.mockResolvedValue(`
+defaultAssistant: claude
+tiers:
+  large:
+    provider: codex
+    model: gpt-5.5
+`);
+      const config = await loadConfig();
+      const safe = toSafeConfig(config);
+      // Configured tier round-trips.
+      expect(safe.tiers?.large).toEqual({ provider: 'codex', model: 'gpt-5.5' });
+      // tierDefaults = built-in presets for the default provider (claude → opus@large).
+      expect(safe.tierDefaults?.large).toEqual({ provider: 'claude', model: 'opus' });
+      expect(safe.tierDefaults?.small).toEqual({ provider: 'claude', model: 'haiku' });
     });
   });
 });

@@ -27,6 +27,11 @@ export interface ProviderKeyList {
   connections: ProviderKeyConnection[];
   /** Server-owned catalog of connectable provider ids (no client duplication). */
   available: string[];
+  /**
+   * Subset of `available` that supports subscription (OAuth) login. Codex is
+   * intentionally excluded (gated, #1924) so the UI shows it API-key-only.
+   */
+  subscriptionAvailable: string[];
 }
 
 export interface ProviderKeySetResult {
@@ -34,6 +39,53 @@ export interface ProviderKeySetResult {
   provider: string;
   kind: 'api_key';
   label: string | null;
+}
+
+/** POST /api/auth/providers/:provider/oauth/start response. */
+export interface ProviderOAuthStart {
+  sessionId: string;
+  mode: 'manual' | 'device';
+  url?: string;
+  userCode?: string;
+  verificationUri?: string;
+  expiresIn: number;
+}
+
+/** POST /api/auth/providers/:provider/oauth/poll response. */
+export interface ProviderOAuthPoll {
+  status: 'pending' | 'connected' | 'error';
+  mode?: 'manual' | 'device';
+  url?: string;
+  userCode?: string;
+  verificationUri?: string;
+  detail?: string;
+}
+
+/** Begin a subscription (OAuth) login — held server-side by the oauth-bridge. */
+export function startProviderOAuth(provider: string): Promise<ProviderOAuthStart> {
+  return requestJson<ProviderOAuthStart>(
+    `/api/auth/providers/${encodeURIComponent(provider)}/oauth/start`,
+    { method: 'POST' }
+  );
+}
+
+/**
+ * Poll a held login. For `manual` (claude) submit the pasted `code`; for
+ * `device` (copilot) call with no code and poll until `connected`. The `:provider`
+ * segment only keeps the route under the exempt prefix — poll keys off sessionId.
+ */
+export function pollProviderOAuth(
+  provider: string,
+  sessionId: string,
+  code?: string
+): Promise<ProviderOAuthPoll> {
+  return requestJson<ProviderOAuthPoll>(
+    `/api/auth/providers/${encodeURIComponent(provider)}/oauth/poll`,
+    {
+      method: 'POST',
+      body: JSON.stringify(code ? { sessionId, code } : { sessionId }),
+    }
+  );
 }
 
 /** GET /api/auth/providers — 401s when there's no web identity (panel reads as "hide"). */

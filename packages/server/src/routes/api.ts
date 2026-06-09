@@ -16,6 +16,7 @@ import type {
   AttachedFile,
   HandleMessageContext,
   GlobalConfig,
+  TiersPatch,
   UserRole,
 } from '@archon/core';
 import {
@@ -146,8 +147,14 @@ import {
   updateAssistantConfigBodySchema,
   updateAssistantConfigResponseSchema,
   configResponseSchema,
+  updateTiersBodySchema,
   codebaseEnvironmentsResponseSchema,
 } from './schemas/config.schemas';
+import {
+  TIER_NAMES,
+  isEffortValidForProvider,
+  validEffortsForProvider,
+} from '@archon/workflows/model-validation';
 import { providerListResponseSchema } from './schemas/provider.schemas';
 import {
   authStatusResponseSchema,
@@ -870,6 +877,30 @@ const patchAssistantConfigRoute = createRoute({
   responses: {
     200: {
       content: { 'application/json': { schema: updateAssistantConfigResponseSchema } },
+      description: 'Updated configuration',
+    },
+    400: jsonError('Invalid request body'),
+    500: jsonError('Server error'),
+  },
+});
+
+const patchTiersConfigRoute = createRoute({
+  method: 'patch',
+  path: '/api/config/tiers',
+  tags: ['System'],
+  summary: 'Update model-tier presets (small/medium/large)',
+  description:
+    'Writes the `tiers:` config to ~/.archon/config.yaml. Ungated (works on solo ' +
+    'installs). Per-tier merge; a `null` tier value unsets it.',
+  request: {
+    body: {
+      content: { 'application/json': { schema: updateTiersBodySchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: configResponseSchema } },
       description: 'Updated configuration',
     },
     400: jsonError('Invalid request body'),
@@ -3650,6 +3681,58 @@ export function registerApiRoutes(
     } catch (error) {
       getLog().error({ err: error }, 'config.assistants_update_failed');
       return apiError(c, 500, 'Failed to update assistant configuration');
+    }
+  });
+
+  // PATCH /api/config/tiers - Update model-tier presets (ungated — solo-OK, like /assistants)
+  registerOpenApiRoute(patchTiersConfigRoute, async c => {
+    try {
+      const body = getValidatedBody(c, updateTiersBodySchema);
+
+      // Validate the provider of each tier we're SETTING (null = unset, skip).
+      const tiers: TiersPatch = {};
+      for (const tier of TIER_NAMES) {
+        const entry = body.tiers[tier];
+        if (entry === undefined) continue;
+        if (entry === null) {
+          tiers[tier] = null;
+          continue;
+        }
+        if (!isRegisteredProvider(entry.provider)) {
+          return apiError(
+            c,
+            400,
+            `Unknown provider '${entry.provider}' for tier '${tier}'. Available: ${getProviderInfoList()
+              .map(p => p.id)
+              .join(', ')}`
+          );
+        }
+        if (entry.effort !== undefined && !isEffortValidForProvider(entry.provider, entry.effort)) {
+          return apiError(
+            c,
+            400,
+            `Invalid effort '${entry.effort}' for provider '${entry.provider}' (tier '${tier}'). ` +
+              `Valid: ${validEffortsForProvider(entry.provider)?.join(', ') ?? '(none)'}`
+          );
+        }
+        // Build a clean RawAliasEntry — drop `thinking` (no UI/CLI surface yet).
+        tiers[tier] = {
+          provider: entry.provider,
+          model: entry.model,
+          ...(entry.effort !== undefined ? { effort: entry.effort } : {}),
+        };
+      }
+
+      await updateGlobalConfig({ tiers });
+
+      const config = await loadConfig();
+      return c.json({
+        config: toSafeConfig(config),
+        database: getDatabaseType(),
+      });
+    } catch (error) {
+      getLog().error({ err: error }, 'config.tiers_update_failed');
+      return apiError(c, 500, 'Failed to update tier configuration');
     }
   });
 
