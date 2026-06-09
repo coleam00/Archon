@@ -2974,6 +2974,39 @@ describe('handleMessage — /setproject dispatch', () => {
     });
   });
 
+  test('writes to the DB conversation id, not the platform conversation id', async () => {
+    // Regression: on Telegram/GitHub the platform conversation id (chat id,
+    // owner/repo#n) differs from the conversations-table primary key. /setproject
+    // must update by the DB id, otherwise the UPDATE matches 0 rows and throws
+    // "Conversation not found: <platform-id>".
+    const cb = makeCodebase('my-app');
+    mockListCodebases.mockImplementation(() => Promise.resolve([cb]));
+    mockParseCommand.mockReturnValue({ command: 'setproject', args: ['my-app'] });
+    mockGetOrCreateConversation.mockImplementation(() =>
+      Promise.resolve(
+        makeConversation({
+          id: 'db-hex-id',
+          platform_type: 'telegram',
+          platform_conversation_id: '40865006',
+          codebase_id: null,
+        })
+      )
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, '40865006', '/setproject my-app');
+
+    expect(mockUpdateConversation).toHaveBeenCalledWith('db-hex-id', {
+      codebase_id: 'id-my-app',
+      cwd: '/repos/my-app',
+    });
+    // The reply still goes to the platform conversation id.
+    expect(platform.sendMessage).toHaveBeenCalledWith(
+      '40865006',
+      expect.stringContaining('my-app')
+    );
+  });
+
   test('returns not-found message listing available projects', async () => {
     mockListCodebases.mockImplementation(() =>
       Promise.resolve([makeCodebase('project-a'), makeCodebase('project-b')])

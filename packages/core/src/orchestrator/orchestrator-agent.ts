@@ -1178,7 +1178,9 @@ export async function handleMessage(
 
         if (command === 'setproject') {
           getLog().debug({ command, conversationId }, 'deterministic_command');
-          const result = await handleSetProject(message, conversationId);
+          // Pass the DB primary key (conversation.id), not the platform
+          // conversation id — updateConversation keys on `id`.
+          const result = await handleSetProject(message, conversation.id);
           await platform.sendMessage(conversationId, result);
           return;
         }
@@ -2422,7 +2424,7 @@ async function handleRemoveProject(message: string): Promise<string> {
  * `codebase_id` and `cwd` to the conversations table. Uses 4-tier fuzzy
  * name resolution (exact → case-insensitive → prefix → substring).
  */
-async function handleSetProject(message: string, conversationId: string): Promise<string> {
+async function handleSetProject(message: string, conversationDbId: string): Promise<string> {
   const { args } = commandHandler.parseCommand(message);
   if (args.length < 1) {
     return 'Usage: /setproject <project-name>';
@@ -2445,13 +2447,13 @@ async function handleSetProject(message: string, conversationId: string): Promis
       : `Project "${projectName}" not found. No projects registered — use /register-project.`;
   }
 
-  await db.updateConversation(conversationId, {
+  await db.updateConversation(conversationDbId, {
     codebase_id: codebase.id,
     cwd: codebase.default_cwd,
   });
 
   getLog().info(
-    { conversationId, projectName: codebase.name, codebaseId: codebase.id },
+    { conversationDbId, projectName: codebase.name, codebaseId: codebase.id },
     'project.set_completed'
   );
   return `Project set to **${codebase.name}**\nWorking directory: ${codebase.default_cwd}`;
