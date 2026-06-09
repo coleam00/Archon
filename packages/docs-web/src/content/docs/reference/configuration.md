@@ -109,6 +109,8 @@ aliases:
 
 ```
 
+The `tiers:` block above is no longer hand-edit-only -- you can also set the `small`/`medium`/`large` presets from the console **AI Settings** -> **Model Tiers** panel, or from the CLI with [`archon ai tier set`](/reference/cli/#ai). Connecting your own provider API key or subscription is covered in [Per-user credentials and AI Settings](/getting-started/ai-assistants/#per-user-credentials-and-ai-settings).
+
 ## Repository Configuration
 
 Create `.archon/config.yaml` in any repository for project-specific settings:
