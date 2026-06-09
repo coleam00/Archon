@@ -107,7 +107,7 @@ const KPI_TILES = [
 ];
 
 const BRT_PROSPECTS: BusinessProspect[] = (
-  (prospectsData.by_business as Record<string, BusinessProspect[]>).BRT ?? []
+  (prospectsData.by_business as Record<string, BusinessProspect[]> | undefined)?.BRT ?? []
 ).slice(0, 12);
 
 export function BRTPage(): React.ReactElement {
@@ -334,8 +334,8 @@ export function BRTPage(): React.ReactElement {
               Top engaged BRT contacts — Apollo replied
             </h3>
             <span className="text-[10px] text-text-tertiary">
-              {BRT_PROSPECTS.length} of {(prospectsData.totals as Record<string, number>).BRT ?? 0}{' '}
-              engaged
+              {BRT_PROSPECTS.length} of{' '}
+              {(prospectsData.totals as Record<string, number> | undefined)?.BRT ?? 0} engaged
             </span>
           </div>
           <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
