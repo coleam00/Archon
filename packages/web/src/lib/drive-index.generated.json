@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-08T20:00:08+00:00",
+  "generated_at": "2026-06-09T16:00:17+00:00",
   "vault_path": "second-brain/resources/drive-index",
   "count": 19,
   "folders": [
@@ -1179,11 +1179,18 @@
       "folderId": "1VjVEqWlwmT7TLIfqLPTUWfBIQhuJR1S6",
       "parentId": "1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
       "audience": "internal",
-      "lastSynced": "2026-06-08T20:00:07+00:00",
-      "fileCount": 11,
+      "lastSynced": "2026-06-09T16:00:16+00:00",
+      "fileCount": 12,
       "vaultPath": "second-brain/resources/drive-index/meeting-notes.md",
       "driveUrl": "https://drive.google.com/drive/folders/1VjVEqWlwmT7TLIfqLPTUWfBIQhuJR1S6",
       "files": [
+        {
+          "name": "SOP About Fathom and Meeting Minutes",
+          "type": "g-document",
+          "modified": "2026-06-09",
+          "size": "",
+          "link": "https://docs.google.com/document/d/17BXiLnTIaS_BOgwWmvhyCCW49kP-f7S6k_Ko6Gbp6LQ/edit?usp=drivesdk"
+        },
         {
           "name": "June 2026",
           "type": "g-folder",

@@ -122,9 +122,15 @@ const KPI_TILES: { label: string; value: string; sub: string; icon: typeof Trend
   {
     label: 'Engaged contacts',
     value: String(
-      Object.values(prospectsData.totals as Record<string, number>).reduce((a, b) => a + b, 0)
+      Object.values((prospectsData.totals as Record<string, number> | undefined) ?? {}).reduce(
+        (a, b) => a + b,
+        0
+      )
     ),
-    sub: `Across ${Object.keys(prospectsData.totals as Record<string, number>).join(' + ')}`,
+    sub: ((): string => {
+      const keys = Object.keys((prospectsData.totals as Record<string, number> | undefined) ?? {});
+      return keys.length > 0 ? `Across ${keys.join(' + ')}` : 'Awaiting prospects generator';
+    })(),
     icon: Users,
   },
 ];
