@@ -474,6 +474,20 @@ describe('CommandHandler', () => {
       expect(result.args).toEqual(['plan', '']);
     });
 
+    test('should unescape quoted workflow suggestions', () => {
+      const result = parseCommand(
+        '/workflow run test --force "fix \\\\ path \\"quoted\\" \\`tick\\`"'
+      );
+      expect(result.command).toBe('workflow');
+      expect(result.args).toEqual(['run', 'test', '--force', 'fix \\ path "quoted" `tick`']);
+    });
+
+    test('should unescape single quoted strings', () => {
+      const result = parseCommand("/command-invoke plan 'it\\'s \\\\ ready'");
+      expect(result.command).toBe('command-invoke');
+      expect(result.args).toEqual(['plan', "it's \\ ready"]);
+    });
+
     test('should return empty command for non-slash-prefixed input (Windows Git Bash path expansion)', () => {
       const result = parseCommand('C:/Program Files/Git/status');
       expect(result.command).toBe('');
@@ -1486,6 +1500,42 @@ describe('CommandHandler', () => {
 
         expect(result.success).toBe(false);
         expect(result.message).toContain('was not found');
+        expect(result.workflow).toBeUndefined();
+      });
+
+      test('should surface workflow load errors before not found during resume', async () => {
+        mockGetWorkflowRun.mockResolvedValueOnce({
+          id: 'run-bad-workflow',
+          workflow_name: 'bad-workflow',
+          conversation_id: 'conv-1',
+          parent_conversation_id: null,
+          codebase_id: null,
+          status: 'failed' as const,
+          user_message: 'test',
+          metadata: {},
+          started_at: new Date(),
+          completed_at: null,
+          last_activity_at: null,
+          working_path: '/workspace/wt',
+        });
+        spyDiscoverWorkflows.mockResolvedValueOnce({
+          workflows: [],
+          errors: [
+            {
+              filename: 'bad-workflow.yaml',
+              error: 'Invalid workflow YAML',
+              errorType: 'parse_error',
+            },
+          ],
+        });
+
+        const result = await handleCommand(baseConversation, '/workflow resume run-bad-workflow');
+
+        expect(result.success).toBe(false);
+        expect(result.message).toContain(
+          'Workflow `bad-workflow` failed to load: Invalid workflow YAML'
+        );
+        expect(result.message).toContain('Fix the YAML file and try again');
         expect(result.workflow).toBeUndefined();
       });
 

@@ -17,6 +17,7 @@ import { createMockLogger } from '../test/mocks/logger';
 import { makeTestWorkflow, makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 import type { Codebase, Conversation, IPlatformAdapter } from '../types';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
+import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 
 // ─── Mock setup (ALL mocks must come before the module under test import) ────
 
@@ -1366,7 +1367,7 @@ describe('workflow dispatch routing — interactive flag', () => {
 
   function makeWorkflowResult(
     interactive?: boolean,
-    options: { force?: boolean; resumeRunId?: string; args?: string } = {}
+    options: { force?: boolean; resumeRunId?: string; resumeRun?: WorkflowRun; args?: string } = {}
   ) {
     return {
       success: true,
@@ -1376,6 +1377,7 @@ describe('workflow dispatch routing — interactive flag', () => {
         args: options.args ?? 'test message',
         force: options.force,
         resumeRunId: options.resumeRunId,
+        resumeRun: options.resumeRun,
       },
     };
   }
@@ -1551,6 +1553,83 @@ describe('workflow dispatch routing — interactive flag', () => {
     expect(platform.sendMessage).not.toHaveBeenCalledWith(
       'conv-1',
       expect.stringContaining('Found a prior failed run')
+    );
+  });
+
+  test('resumeRun option: hydrates the requested run without latest-run lookup', async () => {
+    const requestedRun: WorkflowRun = {
+      id: 'old-run',
+      workflow_name: 'test-workflow',
+      conversation_id: 'conv-1',
+      parent_conversation_id: 'conv-1',
+      codebase_id: 'codebase-1',
+      status: 'failed',
+      user_message: 'requested prompt',
+      metadata: {},
+      started_at: new Date(),
+      completed_at: null,
+      last_activity_at: null,
+      working_path: '/repos/test-repo/worktrees/old',
+      user_id: null,
+    };
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve(
+        makeWorkflowResult(true, { resumeRunId: requestedRun.id, resumeRun: requestedRun })
+      )
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow resume old-run');
+
+    expect(mockFindResumableRunByParentConversation).not.toHaveBeenCalled();
+    expect(mockHydrateResumableRun).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ id: 'old-run' })
+    );
+    expect(mockExecuteWorkflow).toHaveBeenCalled();
+    const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
+    expect(callArgs[3]).toBe('/repos/test-repo/worktrees/old');
+    expect(platform.sendMessage).not.toHaveBeenCalledWith(
+      'conv-1',
+      expect.stringContaining('Found a prior failed run')
+    );
+  });
+
+  test('resumeRun option: reports requested run with missing working path', async () => {
+    const requestedRun: WorkflowRun = {
+      id: 'old-run-missing-path',
+      workflow_name: 'test-workflow',
+      conversation_id: 'conv-1',
+      parent_conversation_id: 'conv-1',
+      codebase_id: 'codebase-1',
+      status: 'failed',
+      user_message: 'requested prompt',
+      metadata: {},
+      started_at: new Date(),
+      completed_at: null,
+      last_activity_at: null,
+      working_path: null,
+      user_id: null,
+    };
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve(
+        makeWorkflowResult(true, { resumeRunId: requestedRun.id, resumeRun: requestedRun })
+      )
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow resume old-run-missing-path');
+
+    expect(mockFindResumableRunByParentConversation).not.toHaveBeenCalled();
+    expect(mockHydrateResumableRun).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(platform.sendMessage).toHaveBeenCalledWith(
+      'conv-1',
+      'Cannot resume old-run-missing-path: missing working path.'
     );
   });
 

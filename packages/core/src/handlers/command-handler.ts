@@ -177,8 +177,53 @@ async function formatRepoContext(
 }
 
 export function parseCommand(text: string): { command: string; args: string[] } {
-  // Match quoted strings or non-whitespace sequences
-  const matches = text.match(/"[^"]+"|'[^']+'|\S+/g) ?? [];
+  const matches: string[] = [];
+  let current = '';
+  let quote: '"' | "'" | null = null;
+  let escaping = false;
+  let hasToken = false;
+
+  for (const char of text.trim()) {
+    if (quote) {
+      hasToken = true;
+      if (escaping) {
+        current += char;
+        escaping = false;
+      } else if (char === '\\') {
+        escaping = true;
+      } else if (char === quote) {
+        quote = null;
+      } else {
+        current += char;
+      }
+      continue;
+    }
+
+    if (/\s/.test(char)) {
+      if (hasToken) {
+        matches.push(current);
+        current = '';
+        hasToken = false;
+      }
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      quote = char;
+      hasToken = true;
+      continue;
+    }
+
+    current += char;
+    hasToken = true;
+  }
+
+  if (escaping) {
+    current += '\\';
+  }
+  if (hasToken) {
+    matches.push(current);
+  }
 
   if (matches.length === 0 || !matches[0]) {
     return { command: '', args: [] };
@@ -189,13 +234,7 @@ export function parseCommand(text: string): { command: string; args: string[] } 
   }
 
   const command = matches[0].substring(1); // Remove leading '/'
-  const args = matches.slice(1).map(arg => {
-    // Remove surrounding quotes if present
-    if ((arg.startsWith('"') && arg.endsWith('"')) || (arg.startsWith("'") && arg.endsWith("'"))) {
-      return arg.slice(1, -1);
-    }
-    return arg;
-  });
+  const args = matches.slice(1);
 
   return { command, args };
 }
@@ -696,9 +735,11 @@ async function handleWorkflowCommand(
       try {
         const run = await resumeWorkflow(runId);
         let workflowEntries: readonly WorkflowWithSource[];
+        let loadErrors: readonly WorkflowLoadError[];
         try {
           const result = await discoverWorkflowsWithConfig(workflowCwd, loadConfig);
           workflowEntries = result.workflows;
+          loadErrors = result.errors;
         } catch (error) {
           const err = error as Error;
           getLog().error({ err, cwd: workflowCwd, runId }, 'cmd.workflow_resume_discovery_failed');
@@ -710,6 +751,18 @@ async function handleWorkflowCommand(
         const workflows = workflowEntries.map(ws => ws.workflow);
         const workflow = resolveWorkflowName(run.workflow_name, workflows);
         if (!workflow) {
+          const loadError = loadErrors.find(
+            e =>
+              e.filename.replace(/\.ya?ml$/, '') === run.workflow_name ||
+              e.filename === `${run.workflow_name}.yaml` ||
+              e.filename === `${run.workflow_name}.yml`
+          );
+          if (loadError) {
+            return {
+              success: false,
+              message: `Workflow \`${run.workflow_name}\` failed to load: ${loadError.error}\n\nFix the YAML file and try again.`,
+            };
+          }
           return {
             success: false,
             message:
@@ -724,6 +777,7 @@ async function handleWorkflowCommand(
             definition: workflow,
             args: run.user_message,
             resumeRunId: run.id,
+            resumeRun: run,
           },
         };
       } catch (error) {
