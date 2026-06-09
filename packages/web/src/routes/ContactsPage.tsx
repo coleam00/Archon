@@ -103,7 +103,9 @@ export function ContactsPage(): React.ReactElement {
         </p>
         <p className="text-xs text-text-tertiary">
           {allContacts.length} contacts · last refreshed{' '}
-          {new Date(contactsData.generated_at).toLocaleString()}
+          {typeof contactsData.generated_at === 'string' && contactsData.generated_at.length > 0
+            ? new Date(contactsData.generated_at).toLocaleString()
+            : '—'}
         </p>
       </div>
 

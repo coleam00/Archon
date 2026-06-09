@@ -236,7 +236,12 @@ export function PlaygroundPage(): React.ReactElement {
               </p>
             </div>
             <span className="text-[10px] text-text-tertiary">
-              Source generated: <code className="font-mono">{data.generated_at.slice(0, 19)}Z</code>
+              Source generated:{' '}
+              <code className="font-mono">
+                {typeof data.generated_at === 'string' && data.generated_at.length >= 19
+                  ? `${data.generated_at.slice(0, 19)}Z`
+                  : '—'}
+              </code>
             </span>
           </div>
         </header>

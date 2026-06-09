@@ -167,9 +167,18 @@ export function PMCPage(): React.ReactElement {
   const dialFunnel = buildDialFunnel();
 
   // Stale-data warning: if playground.generated_at older than 6h, surface it.
-  const generatedAt = new Date(playgroundData.generated_at);
-  const hoursStale = (Date.now() - generatedAt.getTime()) / (1000 * 60 * 60);
-  const isStale = hoursStale > 6;
+  // Defensive: tolerate a missing/invalid generated_at without rendering "Invalid Date"
+  // or silently swallowing the warning (NaN > 6 is false).
+  const rawGeneratedAt = (playgroundData as { generated_at?: string }).generated_at;
+  const generatedAt =
+    typeof rawGeneratedAt === 'string' && rawGeneratedAt.length > 0
+      ? new Date(rawGeneratedAt)
+      : null;
+  const generatedAtValid = generatedAt !== null && !Number.isNaN(generatedAt.getTime());
+  const hoursStale = generatedAtValid
+    ? (Date.now() - generatedAt.getTime()) / (1000 * 60 * 60)
+    : null;
+  const isStale = hoursStale !== null && hoursStale > 6;
 
   // Build a gauge value for the first-meetings target
   const meetingsGaugeData = [
@@ -611,8 +620,8 @@ export function PMCPage(): React.ReactElement {
         <footer className="border-t border-border pt-4 text-[10px] text-text-tertiary">
           Source: <code className="font-mono">second-brain/businesses/pmc/overview.md</code> · Edit
           in Obsidian, save, dashboard hot-reloads · Last data refresh{' '}
-          {generatedAt.toLocaleString()}
-          {isStale && (
+          {generatedAtValid ? generatedAt.toLocaleString() : '—'}
+          {isStale && hoursStale !== null && (
             <span className="ml-2 rounded-full border border-amber-700/40 bg-amber-100 px-2 py-0.5 font-medium text-amber-800">
               ⚠ {Math.round(hoursStale)}h stale — playground refresh due
             </span>
