@@ -239,6 +239,18 @@ export function parseCommand(text: string): { command: string; args: string[] } 
   return { command, args };
 }
 
+function findWorkflowLoadError(
+  loadErrors: readonly WorkflowLoadError[],
+  workflowName: string
+): WorkflowLoadError | undefined {
+  return loadErrors.find(
+    error =>
+      error.filename.replace(/\.ya?ml$/, '') === workflowName ||
+      error.filename === `${workflowName}.yaml` ||
+      error.filename === `${workflowName}.yml`
+  );
+}
+
 /**
  * Safely deactivate a session with TOCTOU race handling.
  * Between getActiveSession() and deactivateSession(), another process
@@ -751,12 +763,7 @@ async function handleWorkflowCommand(
         const workflows = workflowEntries.map(ws => ws.workflow);
         const workflow = resolveWorkflowName(run.workflow_name, workflows);
         if (!workflow) {
-          const loadError = loadErrors.find(
-            e =>
-              e.filename.replace(/\.ya?ml$/, '') === run.workflow_name ||
-              e.filename === `${run.workflow_name}.yaml` ||
-              e.filename === `${run.workflow_name}.yml`
-          );
+          const loadError = findWorkflowLoadError(loadErrors, run.workflow_name);
           if (loadError) {
             return {
               success: false,
@@ -957,12 +964,7 @@ async function handleWorkflowCommand(
 
       if (!workflow) {
         // Check if the requested workflow had a load error
-        const loadError = loadErrors.find(
-          e =>
-            e.filename.replace(/\.ya?ml$/, '') === workflowName ||
-            e.filename === `${workflowName}.yaml` ||
-            e.filename === `${workflowName}.yml`
-        );
+        const loadError = findWorkflowLoadError(loadErrors, workflowName);
         if (loadError) {
           return {
             success: false,

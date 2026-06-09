@@ -484,6 +484,66 @@ interface WorkflowDispatchOptions {
   resumeRun?: WorkflowRun;
 }
 
+const FAILED_RUN_PROMPT_PREVIEW_MAX = 160;
+
+function escapeWorkflowCommandArg(value: string): string {
+  return value.replace(/[\\"`]/g, '\\$&');
+}
+
+function formatPriorRunPromptPreview(message: string | null): string {
+  const normalized = (message ?? '').replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return '(no message stored)';
+  }
+  if (normalized.length <= FAILED_RUN_PROMPT_PREVIEW_MAX) {
+    return normalized;
+  }
+  return `${normalized.slice(0, FAILED_RUN_PROMPT_PREVIEW_MAX)}…`;
+}
+
+function buildFailedRunResumePrompt(
+  workflowName: string,
+  resumableRun: WorkflowRun,
+  userMessage: string
+): string {
+  const escapedMessage = escapeWorkflowCommandArg(userMessage);
+  const baseCommand = `/workflow run ${workflowName}`;
+  const priorPreview = formatPriorRunPromptPreview(resumableRun.user_message);
+
+  return [
+    '---',
+    '',
+    `Found a prior failed run of **${workflowName}** (run \`${resumableRun.id}\`).`,
+    '',
+    '**Run prompt was:**',
+    '',
+    `> ${priorPreview}`,
+    '',
+    '---',
+    '',
+    '**Choose how to proceed:**',
+    '',
+    '**1. Resume that run** (re-runs the prompt shown above, not your current message):',
+    '```',
+    `/workflow resume ${resumableRun.id}`,
+    '```',
+    '',
+    '**2. Discard the failed run, then start fresh with your current message:**',
+    '```',
+    `/workflow abandon ${resumableRun.id}`,
+    '```',
+    'then re-run your command:',
+    '```',
+    `${baseCommand} "${escapedMessage}"`,
+    '```',
+    '',
+    '**3. Start fresh with your current message, leave the failed run as-is** (skips the resume check):',
+    '```',
+    `${baseCommand} --force "${escapedMessage}"`,
+    '```',
+  ].join('\n');
+}
+
 /**
  * Dispatch a workflow after the orchestrator resolves a project.
  * Auto-attaches the project to the conversation, resolves isolation, and executes.
@@ -596,47 +656,6 @@ async function dispatchOrchestratorWorkflow(
   }
   if (resumableRun?.working_path) {
     if (resumableRun.status !== 'paused' && resumableRun.id !== options?.resumeRunId) {
-      const escapedMsg = userMessage.replace(/[\\"`]/g, '\\$&');
-      const baseCmd = `/workflow run ${workflow.name}`;
-      const PREVIEW_MAX = 160;
-      const priorMessage = (resumableRun.user_message ?? '').replace(/\s+/g, ' ').trim();
-      const priorPreview = priorMessage
-        ? priorMessage.length > PREVIEW_MAX
-          ? `${priorMessage.slice(0, PREVIEW_MAX)}…`
-          : priorMessage
-        : '(no message stored)';
-      const promptText = [
-        '---',
-        '',
-        `Found a prior failed run of **${workflow.name}** (run \`${resumableRun.id}\`).`,
-        '',
-        '**Run prompt was:**',
-        '',
-        `> ${priorPreview}`,
-        '',
-        '---',
-        '',
-        '**Choose how to proceed:**',
-        '',
-        '**1. Resume that run** (re-runs the prompt shown above, not your current message):',
-        '```',
-        `/workflow resume ${resumableRun.id}`,
-        '```',
-        '',
-        '**2. Discard the failed run, then start fresh with your current message:**',
-        '```',
-        `/workflow abandon ${resumableRun.id}`,
-        '```',
-        'then re-run your command:',
-        '```',
-        `${baseCmd} "${escapedMsg}"`,
-        '```',
-        '',
-        '**3. Start fresh with your current message, leave the failed run as-is** (skips the resume check):',
-        '```',
-        `${baseCmd} --force "${escapedMsg}"`,
-        '```',
-      ].join('\n');
       getLog().info(
         {
           workflowName: workflow.name,
@@ -645,7 +664,10 @@ async function dispatchOrchestratorWorkflow(
         },
         'orchestrator.failed_resume_user_prompted'
       );
-      await platform.sendMessage(conversationId, promptText);
+      await platform.sendMessage(
+        conversationId,
+        buildFailedRunResumePrompt(workflow.name, resumableRun, userMessage)
+      );
       return;
     }
 
