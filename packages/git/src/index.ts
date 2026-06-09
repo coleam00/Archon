@@ -5,6 +5,8 @@ export type {
   WorktreePath,
   GitResult,
   GitError,
+  WorkspaceSyncMode,
+  WorkspaceSyncState,
   WorkspaceSyncResult,
   WorktreeInfo,
 } from './types';

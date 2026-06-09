@@ -145,4 +145,28 @@ export interface WorkflowDeps {
    * token policy is a no-op and subprocesses keep inheriting `process.env`.
    */
   isPerUserGitHubEnabled?: () => boolean;
+  /**
+   * Optional: whether per-user AI-provider credentials are active for this
+   * install (TOKEN_ENCRYPTION_KEY set; independent of the GitHub App). When
+   * false/absent, no per-user provider env is injected and chats/runs keep
+   * the shared process-global keys.
+   */
+  isPerUserProviderKeysEnabled?: () => boolean;
+  /**
+   * Optional: resolve every connected provider credential for a user into a
+   * delivery bag (env vars + files to write under `artifactsDir`). Called
+   * once per run from `executeWorkflow`. Implementations own the delivery
+   * map — the engine just merges `env` into `config.envVars` and writes the
+   * `files` before any provider invocation.
+   *
+   * Must never throw — return `{ env: {}, files: [] }` on any failure so the
+   * workflow continues with whatever env inheritance was already in place.
+   */
+  getUserProviderEnv?: (
+    userId: string,
+    artifactsDir: string
+  ) => Promise<{
+    env: Record<string, string>;
+    files: { path: string; contents: string }[];
+  }>;
 }

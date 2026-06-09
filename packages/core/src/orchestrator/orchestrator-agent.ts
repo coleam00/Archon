@@ -28,7 +28,7 @@ import { getAgentProvider, getProviderCapabilities } from '@archon/providers';
 import { buildManageRunTool } from './manage-run-tool';
 import { getArchonWorkspacesPath, ensureArchonWorkspacesPath } from '@archon/paths';
 import { syncArchonToWorktree } from '../utils/worktree-sync';
-import { syncWorkspace, toRepoPath } from '@archon/git';
+import { execFileAsync, syncWorkspace, toBranchName, toRepoPath } from '@archon/git';
 import type { WorkspaceSyncResult } from '@archon/git';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { findWorkflow, resolveWorkflowName } from '@archon/workflows/router';
@@ -45,6 +45,9 @@ import type {
 } from '@archon/workflows/schemas/workflow';
 import { isPerUserGitHubEnabled } from '../github-auth/config';
 import { getDecryptedAccessToken } from '../db/user-github-token-store';
+import { isPerUserProviderKeysEnabled } from '../credentials/config';
+import { deliverCredential } from '../credentials/delivery';
+import { listDecryptedUserProviderCredentials } from '../db/user-provider-key-store';
 import { createWorkflowDeps } from '../workflows/store-adapter';
 import { loadConfig } from '../config/config-loader';
 import type { MergedConfig } from '../config/config-types';
@@ -244,6 +247,39 @@ function isCommandFullyParsed(accumulated: string): boolean {
 }
 
 /**
+ * Resolve the env-only per-user AI-provider credential bag for a direct-chat
+ * turn (Phase 2). Drops deliveries that require file writes (Codex
+ * `CODEX_HOME/auth.json` for the ChatGPT subscription path) because chat has
+ * no per-call scratch directory — those rely on the workflow inject path that
+ * provides an `artifactsDir`.
+ *
+ * NEVER THROWS — returns `{}` on any failure so the chat turn falls back to
+ * whatever process-global env was already in place.
+ */
+async function resolveUserProviderEnvForChat(userId: string): Promise<Record<string, string>> {
+  try {
+    const creds = await listDecryptedUserProviderCredentials(userId);
+    const env: Record<string, string> = {};
+    for (const { provider, cred } of creds) {
+      try {
+        // artifactsDir intentionally empty: chat doesn't host file deliveries.
+        const result = deliverCredential(provider, cred, { artifactsDir: '' });
+        if (!result.files?.length) Object.assign(env, result.env);
+      } catch (err) {
+        getLog().error(
+          { err: err as Error, userId, provider },
+          'orchestrator.provider_creds_deliver_failed'
+        );
+      }
+    }
+    return env;
+  } catch (err) {
+    getLog().warn({ err: err as Error, userId }, 'orchestrator.user_provider_env_resolve_failed');
+    return {};
+  }
+}
+
+/**
  * Find a codebase by exact name or by last path segment (e.g., "repo" matches "owner/repo").
  * Case-insensitive. Used in both the parse phase and the dispatch phase.
  */
@@ -256,6 +292,49 @@ function findCodebaseByName(
     const nameLower = c.name.toLowerCase();
     return nameLower === projectLower || nameLower.endsWith(`/${projectLower}`);
   });
+}
+
+/**
+ * Resolve a codebase by name using 4-tier fuzzy matching.
+ * Tiers: exact → case-insensitive → prefix → substring.
+ * Returns undefined if not found; throws on ambiguity within a tier.
+ *
+ * Mirrors `resolveWorkflowName` (packages/workflows/src/router.ts) but uses
+ * prefix instead of suffix for tier 3 — project names don't follow the
+ * `archon-X` suffix convention workflows use.
+ */
+function resolveCodebaseName(name: string, codebases: readonly Codebase[]): Codebase | undefined {
+  const exact = codebases.find(c => c.name === name);
+  if (exact) return exact;
+
+  const lowerName = name.toLowerCase();
+
+  function checkTier(matches: readonly Codebase[], logEvent: string): Codebase | undefined {
+    if (matches.length === 1) {
+      getLog().debug({ requested: name, matched: matches[0].name }, logEvent);
+      return matches[0];
+    }
+    if (matches.length > 1) {
+      const candidates = matches.map(c => `  - ${c.name}`).join('\n');
+      throw new Error(`Ambiguous project name '${name}'. Did you mean:\n${candidates}`);
+    }
+    return undefined;
+  }
+
+  return (
+    checkTier(
+      codebases.filter(c => c.name.toLowerCase() === lowerName),
+      'project.set_resolve_case_insensitive_match'
+    ) ??
+    checkTier(
+      codebases.filter(c => c.name.toLowerCase().startsWith(lowerName)),
+      'project.set_resolve_prefix_match'
+    ) ??
+    checkTier(
+      codebases.filter(c => c.name.toLowerCase().includes(lowerName)),
+      'project.set_resolve_substring_match'
+    )
+  );
 }
 
 /**
@@ -658,21 +737,17 @@ async function discoverAllWorkflows(conversation: Conversation): Promise<Discove
       const codebase = await codebaseDb.getCodebase(conversation.codebase_id);
       if (codebase) {
         // Sync canonical source with remote before the AI reads codebase state.
-        // Only hard-reset for Archon-managed clones (under ~/.archon/workspaces/).
-        // Locally-registered repos get fetch-only to avoid destroying uncommitted work.
+        // This path must remain non-destructive: users and agents can write to source/.
         // Non-fatal: if fetch fails (network, no remote), proceed with local state.
         try {
-          const isManagedClone = codebase.default_cwd
-            .replace(/\\/g, '/')
-            .startsWith(getArchonWorkspacesPath().replace(/\\/g, '/'));
-          syncResult = await syncWorkspace(toRepoPath(codebase.default_cwd), undefined, {
-            resetAfterFetch: isManagedClone,
-          });
+          syncResult = await syncWorkspace(
+            toRepoPath(codebase.default_cwd),
+            codebase.default_branch ? toBranchName(codebase.default_branch) : undefined
+          );
           getLog().debug(
             {
               codebaseId: codebase.id,
               repoPath: codebase.default_cwd,
-              isManagedClone,
               ...syncResult,
             },
             'workspace.sync_completed'
@@ -915,6 +990,7 @@ export async function handleMessage(
         'register-project',
         'update-project',
         'remove-project',
+        'setproject',
         'commands',
         'init',
         'worktree',
@@ -938,6 +1014,13 @@ export async function handleMessage(
         if (command === 'remove-project') {
           getLog().debug({ command, conversationId }, 'deterministic_command');
           const result = await handleRemoveProject(message);
+          await platform.sendMessage(conversationId, result);
+          return;
+        }
+
+        if (command === 'setproject') {
+          getLog().debug({ command, conversationId }, 'deterministic_command');
+          const result = await handleSetProject(message, conversationId);
           await platform.sendMessage(conversationId, result);
           return;
         }
@@ -985,10 +1068,19 @@ export async function handleMessage(
         type: 'system',
         content: 'Sync failed \u2014 using local state',
       });
-    } else if (syncResult?.updated && platform.sendStructuredEvent) {
+    } else if (syncResult?.state === 'diverged' && platform.sendStructuredEvent) {
       await platform.sendStructuredEvent(conversationId, {
         type: 'system',
-        content: `Synced with origin/${syncResult.branch} \u2014 updated ${syncResult.previousHead} \u2192 ${syncResult.newHead}`,
+        content: `Local source/ has diverged from origin/${syncResult.branch} \u2014 manual merge or rebase needed`,
+      });
+    } else if (
+      syncResult?.state === 'in_sync' &&
+      syncResult.updated &&
+      platform.sendStructuredEvent
+    ) {
+      await platform.sendStructuredEvent(conversationId, {
+        type: 'system',
+        content: `Fast-forwarded to origin/${syncResult.branch} \u2014 ${syncResult.previousHead} \u2192 ${syncResult.newHead}`,
       });
     }
 
@@ -1037,7 +1129,22 @@ export async function handleMessage(
       attachedFiles,
       workflowContext
     );
-    const cwd = await ensureArchonWorkspacesPath();
+    const scopedCodebase =
+      conversation.codebase_id !== null
+        ? codebases.find(c => c.id === conversation.codebase_id)
+        : undefined;
+    let cwd: string;
+    if (scopedCodebase !== undefined) {
+      cwd = conversation.cwd ?? scopedCodebase.default_cwd;
+    } else {
+      if (conversation.codebase_id !== null) {
+        getLog().warn(
+          { codebaseId: conversation.codebase_id },
+          'orchestrator.scoped_codebase_not_found'
+        );
+      }
+      cwd = await ensureArchonWorkspacesPath();
+    }
 
     // 4. Update activity and get/create session
     await db.touchConversation(conversation.id);
@@ -1069,7 +1176,17 @@ export async function handleMessage(
         );
       }
     }
-    const effectiveEnv = { ...(config.envVars ?? {}), ...dbEnvVars };
+    // Per-user AI-provider credentials (Phase 2): env-only delivery in direct
+    // chat — there's no per-call artifacts directory, so deliveries that need
+    // file writes (Codex `CODEX_HOME/auth.json` for the ChatGPT subscription
+    // path) are dropped here and only apply to workflow runs. Merged LAST so
+    // a connected user's keys win over file/db env. No-op when the feature is
+    // disabled or the conversation has no originating user.
+    const userProviderEnv =
+      isPerUserProviderKeysEnabled() && conversation.user_id
+        ? await resolveUserProviderEnvForChat(conversation.user_id)
+        : {};
+    const effectiveEnv = { ...(config.envVars ?? {}), ...dbEnvVars, ...userProviderEnv };
 
     // Warn if provider doesn't support env injection but env vars are configured
     if (Object.keys(effectiveEnv).length > 0) {
@@ -1803,9 +1920,11 @@ async function handleRegisterProject(
 
   // Use config default provider instead of hardcoding 'claude'
   const config = await loadConfig();
+  const detectedBranch = await detectCurrentGitBranch(projectPath);
   const codebase = await codebaseDb.createCodebase({
     name: projectName,
     default_cwd: projectPath,
+    default_branch: detectedBranch,
     ai_assistant_type: config.assistant,
   });
 
@@ -1814,6 +1933,20 @@ async function handleRegisterProject(
     'project.register_completed'
   );
   return `Project "${projectName}" registered successfully!\nPath: ${projectPath}\nID: ${codebase.id}`;
+}
+
+async function detectCurrentGitBranch(projectPath: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      ['-C', projectPath, 'rev-parse', '--abbrev-ref', 'HEAD'],
+      { timeout: 5000 }
+    );
+    const branch = stdout.trim();
+    return branch && branch !== 'HEAD' ? branch : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -1844,7 +1977,8 @@ async function handleUpdateProject(message: string): Promise<string> {
 
   try {
     await codebaseDb.updateCodebase(codebase.id, { default_cwd: newPath });
-  } catch {
+  } catch (err) {
+    getLog().warn({ err: err as Error, codebaseId: codebase.id, newPath }, 'project.update_failed');
     return `Project "${projectName}" could not be updated — it may have been removed.`;
   }
   getLog().info(
@@ -1877,6 +2011,47 @@ async function handleRemoveProject(message: string): Promise<string> {
   await codebaseDb.deleteCodebase(codebase.id);
   getLog().info({ name: projectName, id: codebase.id }, 'project.remove_completed');
   return `Project "${projectName}" removed.\nPath was: ${codebase.default_cwd}`;
+}
+
+/**
+ * Handle /setproject command.
+ * Binds the current conversation to a registered codebase by writing
+ * `codebase_id` and `cwd` to the conversations table. Uses 4-tier fuzzy
+ * name resolution (exact → case-insensitive → prefix → substring).
+ */
+async function handleSetProject(message: string, conversationId: string): Promise<string> {
+  const { args } = commandHandler.parseCommand(message);
+  if (args.length < 1) {
+    return 'Usage: /setproject <project-name>';
+  }
+
+  const projectName = args.join(' ');
+  const codebases = await codebaseDb.listCodebases();
+
+  let codebase: Codebase | undefined;
+  try {
+    codebase = resolveCodebaseName(projectName, codebases);
+  } catch (err) {
+    return (err as Error).message;
+  }
+
+  if (!codebase) {
+    const available = codebases.map(c => c.name).join(', ');
+    return available
+      ? `Project "${projectName}" not found.\nRegistered projects: ${available}`
+      : `Project "${projectName}" not found. No projects registered — use /register-project.`;
+  }
+
+  await db.updateConversation(conversationId, {
+    codebase_id: codebase.id,
+    cwd: codebase.default_cwd,
+  });
+
+  getLog().info(
+    { conversationId, projectName: codebase.name, codebaseId: codebase.id },
+    'project.set_completed'
+  );
+  return `Project set to **${codebase.name}**\nWorking directory: ${codebase.default_cwd}`;
 }
 
 /**

@@ -1,8 +1,8 @@
 /**
  * Workflow Executor - runs DAG-based workflows
  */
-import { mkdir } from 'fs/promises';
-import { join } from 'path';
+import { mkdir, writeFile } from 'fs/promises';
+import { dirname, join } from 'path';
 import type { IWorkflowPlatform, WorkflowMessageMetadata } from './deps';
 import type { WorkflowDeps, WorkflowConfig } from './deps';
 import * as archonPaths from '@archon/paths';
@@ -169,6 +169,47 @@ async function resolveUserGithubEnvForWorkflow(
     }
   }
   return resolveGithubTokenOverrides(perUserEnabled, userId, userToken);
+}
+
+/**
+ * Resolve per-user AI-provider credential env (Phase 2) for a run, and write
+ * any file-based deliveries (e.g. Codex `CODEX_HOME/auth.json`) under the
+ * run's artifacts directory. Returns the env bag to merge LAST into
+ * `config.envVars` so a connected user's keys win over file/db/bot-github
+ * env. Returns `{}` when per-user provider keys are disabled, no userId is
+ * present, or the deps adapter is absent.
+ *
+ * Contract: NEVER THROWS. Adapter failures are logged and yield `{}` so the
+ * workflow continues with whatever env inheritance was already in place.
+ */
+async function resolveUserProviderEnvForWorkflow(
+  deps: WorkflowDeps,
+  userId: string | undefined,
+  artifactsDir: string
+): Promise<Record<string, string>> {
+  const perUserEnabled = deps.isPerUserProviderKeysEnabled?.() ?? false;
+  if (!perUserEnabled || !userId || !deps.getUserProviderEnv) return {};
+  try {
+    // TODO(#1891 PR-3): when Codex OAuth delivery is enabled, file-write failures
+    // must drop only the affected provider's env keys, not all of them. Move file
+    // writes into getUserProviderEnv per-delivery so env + write are atomic
+    // per-provider, or wrap each write in a per-file try-catch that strips the
+    // matching env keys on failure. Currently safe: no OAuth rows can be created
+    // in PR-1 so `files` is always empty and this loop never executes.
+    const { env, files } = await deps.getUserProviderEnv(userId, artifactsDir);
+    for (const f of files) {
+      await mkdir(dirname(f.path), { recursive: true });
+      await writeFile(f.path, f.contents, { encoding: 'utf8', mode: 0o600 });
+    }
+    const envKeys = Object.keys(env);
+    if (envKeys.length > 0) {
+      getLog().debug({ userId, keys: envKeys }, 'workflow.user_provider_env_injected');
+    }
+    return env;
+  } catch (err) {
+    getLog().warn({ err: err as Error, userId }, 'workflow.user_provider_env_resolve_failed');
+    return {};
+  }
 }
 
 /**
@@ -615,6 +656,15 @@ export async function executeWorkflow(
     };
   }
   getLog().debug({ artifactsDir, logDir }, 'workflow_paths_resolved');
+
+  // Per-user AI-provider credentials (Phase 2). Resolved AFTER artifactsDir is
+  // created because file-based deliveries (Codex `CODEX_HOME/auth.json`) live
+  // under it. Merged LAST into config.envVars so the originating user's keys
+  // win over file/db/bot-github env — preserves the GitHub merge order and
+  // keeps the no-key path byte-for-byte unchanged (resolveUserProviderEnvForWorkflow
+  // returns {} when the feature is disabled or no userId is present).
+  const userProviderEnv = await resolveUserProviderEnvForWorkflow(deps, userId, artifactsDir);
+  config.envVars = { ...config.envVars, ...userProviderEnv };
 
   // Wrap execution in try-catch to ensure workflow is marked as failed on any error
   try {

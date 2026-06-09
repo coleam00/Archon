@@ -72,6 +72,7 @@ The database has 16 tables, all prefixed with `remote_agent_`:
    - Commands stored as JSONB: `{command_name: {path, description}}`
    - AI assistant type per codebase
    - Default working directory
+   - Nullable detected default branch, used as branch context for workspace sync when available
 
 2. **`remote_agent_conversations`** - Platform conversation tracking
    - Platform type + conversation ID (unique constraint)
@@ -163,5 +164,6 @@ The database has 16 tables, all prefixed with `remote_agent_`:
 | `020_codebase_env_vars.sql` | Per-project environment variables |
 | `021_add_allow_env_keys_to_codebases.sql` | Allow-listed env keys per codebase |
 | `022_workflow_node_sessions.sql` | Per-node provider session persistence |
+| `023_add_default_branch_to_codebases.sql` | Detected default branch on codebases |
 
 > The `remote_agent_users.role` column and the four `remote_agent_auth_*` Better Auth tables (opt-in web login) are applied inline in `000_combined.sql` rather than as numbered migrations, and converge on startup via the idempotent schema apply.

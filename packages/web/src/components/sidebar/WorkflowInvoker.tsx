@@ -43,7 +43,7 @@ export function WorkflowInvoker({ codebaseId }: WorkflowInvokerProps): React.Rea
       workflowStarted = true;
       setSelectedWorkflow(null);
       setMessage('');
-      navigate(`/chat/${conversationId}`);
+      navigate(`/legacy/chat/${conversationId}`);
     } catch (err) {
       console.error('[WorkflowInvoker] Failed to start workflow', { err });
       setError(err instanceof Error ? err.message : 'Failed to start workflow');

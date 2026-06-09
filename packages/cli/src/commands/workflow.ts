@@ -39,8 +39,10 @@ import * as messageDb from '@archon/core/db/messages';
 import * as workflowDb from '@archon/core/db/workflows';
 import * as workflowEventsDb from '@archon/core/db/workflow-events';
 import type { WorkflowEventRow } from '@archon/core/db/workflow-events';
+import * as userDb from '@archon/core/db/users';
 import * as git from '@archon/git';
 import { CLIAdapter } from '../adapters/cli-adapter';
+import { resolveCliUserId } from './auth';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -810,13 +812,25 @@ export async function workflowRunCommand(
   // Wire adapter for assistant message persistence
   adapter.setConversationDbId(conversationId, conversation.id);
 
+  // Resolve the CLI user once (ARCHON_USER_ID, else $USER/$USERNAME). When set,
+  // upsert via the `cli` platform identity so the same Archon user is reused
+  // across invocations — this is what attributes the workflow run to the human
+  // running the command and what `getUserProviderEnv` keys on for per-user
+  // AI-provider credentials (#1891 Phase 2).
+  const cliId = resolveCliUserId();
+  let cliUserId: string | undefined;
+  if (cliId) {
+    try {
+      const cliUser = await userDb.findOrCreateUserByPlatformIdentity('cli', cliId, cliId);
+      cliUserId = cliUser.id;
+    } catch (error) {
+      getLog().warn({ err: error as Error, cliId }, 'cli.user_identity_resolve_failed');
+    }
+  }
+
   // Persist user message for Web UI history.
-  // TODO: thread the CLI user id (resolveCliUserId() in commands/auth.ts —
-  // ARCHON_USER_ID / $USER) through to addMessage and executeWorkflow so CLI
-  // runs are attributed. `archon auth github` has landed; this is the remaining
-  // wiring.
   try {
-    await messageDb.addMessage(conversation.id, 'user', userMessage);
+    await messageDb.addMessage(conversation.id, 'user', userMessage, undefined, cliUserId);
   } catch (error) {
     getLog().warn(
       { err: error as Error, conversationId: conversation.id },
@@ -946,8 +960,8 @@ export async function workflowRunCommand(
   let result: Awaited<ReturnType<typeof executeWorkflow>>;
   try {
     const opts = prepared
-      ? { codebaseId: codebase?.id, source: workflowSource, ...prepared }
-      : { codebaseId: codebase?.id, source: workflowSource };
+      ? { codebaseId: codebase?.id, source: workflowSource, userId: cliUserId, ...prepared }
+      : { codebaseId: codebase?.id, source: workflowSource, userId: cliUserId };
     result = await executeWorkflow(
       deps,
       adapter,

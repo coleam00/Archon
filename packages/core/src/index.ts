@@ -111,6 +111,7 @@ export {
   logConfig,
   toSafeConfig,
   updateGlobalConfig,
+  type TiersPatch,
 } from './config/config-loader';
 
 // =============================================================================
@@ -191,6 +192,40 @@ export {
   linkGithubIdentity,
   GithubIdentityConflictError,
 } from './db/users';
+
+// Per-user AI-provider credentials (Phase 2, #1891 PR-1)
+// Public foundation: gate + delivery map. PR-2 will add connect-service /
+// route handlers; PR-3 will add the OAuth bridge.
+export {
+  isPerUserProviderKeysEnabled,
+  assertProviderKeysKeyAtBoot,
+  deliverCredential,
+  KNOWN_PROVIDERS,
+  persistProviderApiKey,
+  persistProviderOAuth,
+  InvalidProviderKeyError,
+  SUBSCRIPTION_PROVIDERS,
+  startOAuth,
+  pollOAuth,
+  cancelOAuth,
+  type ResolvedCredential,
+  type DeliveryResult,
+  type DeliveryOptions,
+  type OAuthCredentials,
+  type PersistProviderApiKeyResult,
+  type PersistProviderOAuthResult,
+  type StartOAuthResult,
+  type PollOAuthResult,
+} from './credentials';
+export {
+  saveUserProviderKey,
+  getUserProviderKeyRecord,
+  listUserProviderKeys,
+  deleteUserProviderKey,
+  getDecryptedProviderCredential,
+  listDecryptedUserProviderCredentials,
+  type SaveUserProviderKeyParams,
+} from './db/user-provider-key-store';
 
 // Path validation
 export { isPathWithinWorkspace, validateAndResolvePath } from './utils/path-validation';

@@ -233,7 +233,7 @@ concurrency:
       expect(config.concurrency.maxConversations).toBe(10);
     });
 
-    test('env vars override config files', async () => {
+    test('env var DEFAULT_AI_ASSISTANT is a fallback — config file assistant wins', async () => {
       mockFsReadFile.mockResolvedValue(`
 defaultAssistant: claude
 streaming:
@@ -245,8 +245,44 @@ streaming:
 
       const config = await loadConfig();
 
-      expect(config.assistant).toBe('codex');
+      // Config file explicitly set 'claude' — env var must NOT override it
+      expect(config.assistant).toBe('claude');
+      // Streaming env var still overrides (no config-file guard needed there)
       expect(config.streaming.telegram).toBe('batch');
+    });
+
+    test('env var DEFAULT_AI_ASSISTANT applies when no config file sets the assistant', async () => {
+      // Global config exists but does not set defaultAssistant
+      mockFsReadFile.mockResolvedValue('streaming:\n  telegram: stream\n');
+      process.env.DEFAULT_AI_ASSISTANT = 'codex';
+
+      const config = await loadConfig();
+
+      expect(config.assistant).toBe('codex');
+    });
+
+    test('env var DEFAULT_AI_ASSISTANT does not override repo config assistant', async () => {
+      const pathMatches = (path: string, pattern: string): boolean =>
+        path.replace(/\\/g, '/').includes(pattern);
+
+      let globalRead = false;
+      mockFsReadFile.mockImplementation(async (path: string) => {
+        if (pathMatches(path, '/repo/.archon/config.yaml')) {
+          return 'assistant: claude';
+        }
+        if (pathMatches(path, '.archon/config.yaml') && !globalRead) {
+          globalRead = true;
+          return ''; // global config has no assistant
+        }
+        const error = new Error('ENOENT') as NodeJS.ErrnoException;
+        error.code = 'ENOENT';
+        throw error;
+      });
+
+      process.env.DEFAULT_AI_ASSISTANT = 'codex';
+
+      const config = await loadConfig('/test/repo');
+      expect(config.assistant).toBe('claude');
     });
 
     test('throws on unknown DEFAULT_AI_ASSISTANT env var', async () => {
@@ -254,6 +290,15 @@ streaming:
       process.env.DEFAULT_AI_ASSISTANT = 'nonexistent-provider';
 
       await expect(loadConfig()).rejects.toThrow(/not a registered provider/);
+    });
+
+    test('invalid DEFAULT_AI_ASSISTANT env var is silently ignored when config file sets assistant', async () => {
+      mockFsReadFile.mockResolvedValue('defaultAssistant: claude\n');
+      process.env.DEFAULT_AI_ASSISTANT = 'nonexistent-provider';
+
+      // Must not throw — config file takes precedence and the invalid env var is skipped
+      const config = await loadConfig();
+      expect(config.assistant).toBe('claude');
     });
 
     test('throws on unknown defaultAssistant in global config', async () => {
@@ -690,6 +735,70 @@ assistants:
         'Permission denied'
       );
     });
+
+    test('sets a model tier', async () => {
+      mockFsReadFile.mockResolvedValue('defaultAssistant: claude\n');
+      await updateGlobalConfig({ tiers: { large: { provider: 'claude', model: 'opus' } } });
+      const written = mockFsWriteFile.mock.calls[0]?.[1] as string;
+      expect(written).toContain('tiers');
+      expect(written).toContain('opus');
+    });
+
+    test('per-tier merge: setting one tier preserves the others', async () => {
+      mockFsReadFile.mockResolvedValue(`
+tiers:
+  small:
+    provider: claude
+    model: haiku
+`);
+      await updateGlobalConfig({ tiers: { large: { provider: 'codex', model: 'gpt-5.5' } } });
+      const written = mockFsWriteFile.mock.calls[0]?.[1] as string;
+      expect(written).toContain('haiku'); // small preserved
+      expect(written).toContain('gpt-5.5'); // large added
+    });
+
+    test('null tier value unsets that tier', async () => {
+      mockFsReadFile.mockResolvedValue(`
+tiers:
+  large:
+    provider: claude
+    model: opus
+`);
+      await updateGlobalConfig({ tiers: { large: null } });
+      const written = mockFsWriteFile.mock.calls[0]?.[1] as string;
+      expect(written).not.toContain('opus');
+    });
+
+    test('unsetting every tier collapses `tiers` to undefined (no empty tiers key)', async () => {
+      mockFsReadFile.mockResolvedValue(`
+defaultAssistant: claude
+tiers:
+  large:
+    provider: claude
+    model: opus
+`);
+      await updateGlobalConfig({ tiers: { small: null, medium: null, large: null } });
+      const written = mockFsWriteFile.mock.calls[0]?.[1] as string;
+      expect(written).not.toContain('opus');
+      // Collapsed to `undefined` → no serialized `tiers:` key at all.
+      expect(written).not.toMatch(/^tiers:/m);
+    });
+
+    test('existing tiers survive an assistants-only update', async () => {
+      mockFsReadFile.mockResolvedValue(`
+tiers:
+  large:
+    provider: claude
+    model: opus
+assistants:
+  claude:
+    model: sonnet
+`);
+      await updateGlobalConfig({ assistants: { claude: { model: 'haiku' } } });
+      const written = mockFsWriteFile.mock.calls[0]?.[1] as string;
+      expect(written).toContain('opus'); // tiers preserved via the {...current} spread
+      expect(written).toContain('haiku');
+    });
   });
 
   describe('toSafeConfig', () => {
@@ -732,6 +841,23 @@ assistants:
       expect(safe.assistants.claude).toBeDefined();
       expect(safe.assistants.codex).toBeDefined();
       expect(safe.assistants.codex).not.toHaveProperty('additionalDirectories');
+    });
+
+    test('exposes configured tiers and computed tierDefaults', async () => {
+      mockFsReadFile.mockResolvedValue(`
+defaultAssistant: claude
+tiers:
+  large:
+    provider: codex
+    model: gpt-5.5
+`);
+      const config = await loadConfig();
+      const safe = toSafeConfig(config);
+      // Configured tier round-trips.
+      expect(safe.tiers?.large).toEqual({ provider: 'codex', model: 'gpt-5.5' });
+      // tierDefaults = built-in presets for the default provider (claude → opus@large).
+      expect(safe.tierDefaults?.large).toEqual({ provider: 'claude', model: 'opus' });
+      expect(safe.tierDefaults?.small).toEqual({ provider: 'claude', model: 'haiku' });
     });
   });
 });

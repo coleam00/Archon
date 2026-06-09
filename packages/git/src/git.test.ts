@@ -1335,15 +1335,29 @@ branch refs/heads/feature/auth
     });
 
     test('fetches origin branch and returns synced result', async () => {
-      execSpy.mockResolvedValue({ stdout: '', stderr: '' });
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('status')) return { stdout: '', stderr: '' };
+        if (args.includes('rev-parse') && args.includes('--short=8')) {
+          return { stdout: 'abc12345\n', stderr: '' };
+        }
+        if (args.includes('rev-parse') && args.includes('HEAD')) {
+          return { stdout: 'abc12345abcdef\n', stderr: '' };
+        }
+        if (args.includes('rev-parse') && args.includes('origin/main')) {
+          return { stdout: 'abc12345abcdef\n', stderr: '' };
+        }
+        return { stdout: '', stderr: '' };
+      });
 
       const result = await git.syncWorkspace('/workspace/repo', 'main');
 
       expect(result).toEqual({
         branch: 'main',
         synced: true,
-        previousHead: '',
-        newHead: '',
+        mode: 'fast-forward',
+        state: 'in_sync',
+        previousHead: 'abc12345',
+        newHead: 'abc12345',
         updated: false,
       });
 
@@ -1354,10 +1368,23 @@ branch refs/heads/feature/auth
       );
     });
 
-    test('hard-resets working tree to origin after fetch', async () => {
+    test('does not reset by default', async () => {
       execSpy.mockResolvedValue({ stdout: '', stderr: '' });
 
       await git.syncWorkspace('/workspace/repo', 'main');
+
+      const resetCalls = execSpy.mock.calls.filter((call: unknown[]) => {
+        const args = call[1] as string[];
+        return args.includes('reset');
+      });
+
+      expect(resetCalls).toHaveLength(0);
+    });
+
+    test('hard-resets working tree to origin in reset mode', async () => {
+      execSpy.mockResolvedValue({ stdout: '', stderr: '' });
+
+      await git.syncWorkspace('/workspace/repo', 'main', { mode: 'reset' });
 
       const resetCalls = execSpy.mock.calls.filter((call: unknown[]) => {
         const args = call[1] as string[];
@@ -1368,7 +1395,7 @@ branch refs/heads/feature/auth
       expect(resetCalls[0][1]).toEqual(['-C', '/workspace/repo', 'reset', '--hard', 'origin/main']);
     });
 
-    test('throws if reset fails after successful fetch', async () => {
+    test('throws if reset mode fails after successful fetch', async () => {
       execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
         if (args.includes('reset')) {
           throw new Error('fatal: Could not reset index file');
@@ -1376,7 +1403,7 @@ branch refs/heads/feature/auth
         return { stdout: '', stderr: '' };
       });
 
-      await expect(git.syncWorkspace('/workspace/repo', 'main')).rejects.toThrow(
+      await expect(git.syncWorkspace('/workspace/repo', 'main', { mode: 'reset' })).rejects.toThrow(
         'Reset to origin/main failed'
       );
     });
@@ -1391,6 +1418,31 @@ branch refs/heads/feature/auth
 
       await expect(git.syncWorkspace('/workspace/repo', 'main')).rejects.toThrow(
         'unable to access repository'
+      );
+    });
+
+    test('logs short SHA read failures without failing sync', async () => {
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('rev-parse') && args.includes('--short=8')) {
+          throw new Error('fatal: bad revision HEAD');
+        }
+        if (args.includes('status')) return { stdout: '', stderr: '' };
+        if (args.includes('rev-parse') && args.includes('HEAD')) {
+          return { stdout: 'abc12345abcdef\n', stderr: '' };
+        }
+        if (args.includes('rev-parse') && args.includes('origin/main')) {
+          return { stdout: 'abc12345abcdef\n', stderr: '' };
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      const result = await git.syncWorkspace('/workspace/repo', 'main');
+
+      expect(result.previousHead).toBe('');
+      expect(result.newHead).toBe('');
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ workspacePath: '/workspace/repo', ref: 'HEAD' }),
+        'workspace.short_sha_read_failed'
       );
     });
 
@@ -1420,7 +1472,19 @@ branch refs/heads/feature/auth
     });
 
     test('derives branch from getDefaultBranch when override not provided', async () => {
-      execSpy.mockResolvedValue({ stdout: '', stderr: '' });
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('status')) return { stdout: '', stderr: '' };
+        if (args.includes('rev-parse') && args.includes('--short=8')) {
+          return { stdout: 'abc12345\n', stderr: '' };
+        }
+        if (args.includes('rev-parse') && args.includes('HEAD')) {
+          return { stdout: 'abc12345abcdef\n', stderr: '' };
+        }
+        if (args.includes('rev-parse') && args.includes('origin/develop')) {
+          return { stdout: 'abc12345abcdef\n', stderr: '' };
+        }
+        return { stdout: '', stderr: '' };
+      });
       getDefaultBranchSpy.mockResolvedValue('develop');
 
       const result = await git.syncWorkspace('/workspace/repo');
@@ -1428,8 +1492,10 @@ branch refs/heads/feature/auth
       expect(result).toEqual({
         branch: 'develop',
         synced: true,
-        previousHead: '',
-        newHead: '',
+        mode: 'fast-forward',
+        state: 'in_sync',
+        previousHead: 'abc12345',
+        newHead: 'abc12345',
         updated: false,
       });
       expect(getDefaultBranchSpy).toHaveBeenCalledWith('/workspace/repo');
@@ -1466,20 +1532,31 @@ branch refs/heads/feature/auth
       await expect(git.syncWorkspace('/workspace/repo')).rejects.not.toThrow('worktree.baseBranch');
     });
 
-    test('skips reset when resetAfterFetch is false (fetch-only mode)', async () => {
-      execSpy.mockResolvedValue({ stdout: '', stderr: '' });
+    test('fetch-only mode fetches and does not reset or merge', async () => {
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('status')) return { stdout: '', stderr: '' };
+        if (args.includes('rev-parse') && args.includes('--short=8')) {
+          return { stdout: 'abc12345\n', stderr: '' };
+        }
+        if (args.includes('rev-parse') && args.includes('HEAD')) {
+          return { stdout: 'abc12345abcdef\n', stderr: '' };
+        }
+        if (args.includes('rev-parse') && args.includes('origin/main')) {
+          return { stdout: 'def67890abcdef\n', stderr: '' };
+        }
+        if (args.includes('merge-base')) {
+          throw Object.assign(new Error('not ancestor'), { code: 1 });
+        }
+        return { stdout: '', stderr: '' };
+      });
 
       const result = await git.syncWorkspace('/workspace/repo', 'main', {
-        resetAfterFetch: false,
+        mode: 'fetch-only',
       });
 
-      expect(result).toEqual({
-        branch: 'main',
-        synced: true,
-        previousHead: '',
-        newHead: '',
-        updated: false,
-      });
+      expect(result.mode).toBe('fetch-only');
+      expect(result.state).toBe('diverged');
+      expect(result.updated).toBe(false);
 
       // Fetch should still have been called
       const fetchCalls = execSpy.mock.calls.filter((call: unknown[]) => {
@@ -1494,6 +1571,193 @@ branch refs/heads/feature/auth
         return args.includes('reset');
       });
       expect(resetCalls).toHaveLength(0);
+      const mergeCalls = execSpy.mock.calls.filter((call: unknown[]) => {
+        const args = call[1] as string[];
+        return args.includes('merge');
+      });
+      expect(mergeCalls).toHaveLength(0);
+    });
+
+    test('dirty tracked files return dirty and do not merge or reset', async () => {
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('status')) return { stdout: ' M src/index.ts\n', stderr: '' };
+        if (args.includes('rev-parse') && args.includes('--short=8')) {
+          return { stdout: 'abc12345\n', stderr: '' };
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      const result = await git.syncWorkspace('/workspace/repo', 'main');
+
+      expect(result.state).toBe('dirty');
+      expect(
+        execSpy.mock.calls.some((call: unknown[]) => (call[1] as string[]).includes('merge'))
+      ).toBe(false);
+      expect(
+        execSpy.mock.calls.some((call: unknown[]) => (call[1] as string[]).includes('reset'))
+      ).toBe(false);
+    });
+
+    test('untracked files do not mark the checkout dirty', async () => {
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('status')) {
+          expect(args).toContain('--untracked-files=no');
+          return { stdout: '', stderr: '' };
+        }
+        if (args.includes('rev-parse') && args.includes('--short=8')) {
+          return { stdout: 'abc12345\n', stderr: '' };
+        }
+        if (args.includes('rev-parse') && args.includes('HEAD')) {
+          return { stdout: 'abc12345abcdef\n', stderr: '' };
+        }
+        if (args.includes('rev-parse') && args.includes('origin/main')) {
+          return { stdout: 'abc12345abcdef\n', stderr: '' };
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      const result = await git.syncWorkspace('/workspace/repo', 'main');
+
+      expect(result.state).toBe('in_sync');
+    });
+
+    test('behind on current target branch fast-forwards', async () => {
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('status')) return { stdout: '', stderr: '' };
+        if (args.includes('rev-parse') && args.includes('--short=8')) {
+          const shortCalls = execSpy.mock.calls.filter((call: unknown[]) =>
+            (call[1] as string[]).includes('--short=8')
+          );
+          return { stdout: shortCalls.length > 1 ? 'def67890\n' : 'abc12345\n', stderr: '' };
+        }
+        if (args.includes('rev-parse') && args.includes('--abbrev-ref')) {
+          return { stdout: 'main\n', stderr: '' };
+        }
+        if (args.includes('rev-parse') && args.includes('HEAD')) {
+          return { stdout: 'abc12345abcdef\n', stderr: '' };
+        }
+        if (args.includes('rev-parse') && args.includes('origin/main')) {
+          return { stdout: 'def67890abcdef\n', stderr: '' };
+        }
+        if (args.includes('merge-base')) {
+          if (args[4] === 'abc12345abcdef' && args[5] === 'def67890abcdef') {
+            return { stdout: '', stderr: '' };
+          }
+          throw Object.assign(new Error('not ancestor'), { code: 1 });
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      const result = await git.syncWorkspace('/workspace/repo', 'main');
+
+      expect(result.state).toBe('in_sync');
+      expect(result.updated).toBe(true);
+      expect(
+        execSpy.mock.calls.some((call: unknown[]) => (call[1] as string[]).includes('merge'))
+      ).toBe(true);
+    });
+
+    test('behind on non-target current branch does not fast-forward', async () => {
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('status')) return { stdout: '', stderr: '' };
+        if (args.includes('rev-parse') && args.includes('--short=8')) {
+          return { stdout: 'abc12345\n', stderr: '' };
+        }
+        if (args.includes('rev-parse') && args.includes('--abbrev-ref')) {
+          return { stdout: 'feature\n', stderr: '' };
+        }
+        if (args.includes('rev-parse') && args.includes('HEAD')) {
+          return { stdout: 'abc12345abcdef\n', stderr: '' };
+        }
+        if (args.includes('rev-parse') && args.includes('origin/main')) {
+          return { stdout: 'def67890abcdef\n', stderr: '' };
+        }
+        if (args.includes('merge-base')) {
+          if (args[4] === 'abc12345abcdef' && args[5] === 'def67890abcdef') {
+            return { stdout: '', stderr: '' };
+          }
+          throw Object.assign(new Error('not ancestor'), { code: 1 });
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      const result = await git.syncWorkspace('/workspace/repo', 'main');
+
+      expect(result.state).toBe('behind');
+      expect(result.updated).toBe(false);
+      expect(
+        execSpy.mock.calls.some((call: unknown[]) => (call[1] as string[]).includes('merge'))
+      ).toBe(false);
+    });
+
+    test('ahead and diverged preserve local state', async () => {
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('status')) return { stdout: '', stderr: '' };
+        if (args.includes('rev-parse') && args.includes('--short=8')) {
+          return { stdout: 'def67890\n', stderr: '' };
+        }
+        if (args.includes('rev-parse') && args.includes('HEAD')) {
+          return { stdout: 'def67890abcdef\n', stderr: '' };
+        }
+        if (args.includes('rev-parse') && args.includes('origin/main')) {
+          return { stdout: 'abc12345abcdef\n', stderr: '' };
+        }
+        if (args.includes('merge-base')) {
+          if (args[4] === 'abc12345abcdef' && args[5] === 'def67890abcdef') {
+            return { stdout: '', stderr: '' };
+          }
+          throw Object.assign(new Error('not ancestor'), { code: 1 });
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      const aheadResult = await git.syncWorkspace('/workspace/repo', 'main');
+      expect(aheadResult.state).toBe('ahead');
+      expect(
+        execSpy.mock.calls.some((call: unknown[]) => (call[1] as string[]).includes('merge'))
+      ).toBe(false);
+
+      execSpy.mockClear();
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('status')) return { stdout: '', stderr: '' };
+        if (args.includes('rev-parse')) return { stdout: `${args.at(-1)}-sha\n`, stderr: '' };
+        if (args.includes('merge-base'))
+          throw Object.assign(new Error('not ancestor'), { code: 1 });
+        return { stdout: '', stderr: '' };
+      });
+
+      const divergedResult = await git.syncWorkspace('/workspace/repo', 'main');
+      expect(divergedResult.state).toBe('diverged');
+      expect(
+        execSpy.mock.calls.some((call: unknown[]) => (call[1] as string[]).includes('merge'))
+      ).toBe(false);
+    });
+
+    test('throws unexpected merge-base failures instead of treating them as diverged', async () => {
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('status')) return { stdout: '', stderr: '' };
+        if (args.includes('rev-parse') && args.includes('--short=8')) {
+          return { stdout: 'abc12345\n', stderr: '' };
+        }
+        if (args.includes('rev-parse') && args.includes('HEAD')) {
+          return { stdout: 'local-sha\n', stderr: '' };
+        }
+        if (args.includes('rev-parse') && args.includes('origin/main')) {
+          return { stdout: 'remote-sha\n', stderr: '' };
+        }
+        if (args.includes('merge-base')) {
+          throw Object.assign(new Error('fatal: bad object'), { code: 128, stderr: 'bad object' });
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      await expect(git.syncWorkspace('/workspace/repo', 'main')).rejects.toThrow(
+        'Failed to compare git ancestry'
+      );
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ workspacePath: '/workspace/repo' }),
+        'workspace.merge_base_check_failed'
+      );
     });
   });
 

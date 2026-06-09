@@ -65,7 +65,7 @@ export function ConversationItem({
         setDeleteDialogOpen(false);
         void queryClient.invalidateQueries({ queryKey: ['conversations'] });
         if (params.conversationId === conversation.platform_conversation_id) {
-          void navigate('/');
+          void navigate('/legacy');
         }
       })
       .catch((err: unknown) => {
@@ -109,7 +109,7 @@ export function ConversationItem({
 
   return (
     <NavLink
-      to={`/chat/${encodeURIComponent(conversation.platform_conversation_id)}`}
+      to={`/legacy/chat/${encodeURIComponent(conversation.platform_conversation_id)}`}
       className={({ isActive }): string =>
         cn(
           'group relative flex min-h-[2.75rem] w-full items-start gap-2 rounded-md px-3 py-2 transition-colors duration-150',

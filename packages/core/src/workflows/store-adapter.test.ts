@@ -52,6 +52,38 @@ mock.module('../config/config-loader', () => ({
   loadConfig: mock(() => Promise.resolve({ assistant: 'claude' })),
 }));
 
+// Per-user provider credentials mocks
+const mockIsPerUserProviderKeysEnabled = mock(() => false);
+mock.module('../credentials/config', () => ({
+  isPerUserProviderKeysEnabled: mockIsPerUserProviderKeysEnabled,
+}));
+
+const mockListDecryptedUserProviderCredentials = mock(async () => []);
+mock.module('../db/user-provider-key-store', () => ({
+  listDecryptedUserProviderCredentials: mockListDecryptedUserProviderCredentials,
+  saveUserProviderKey: mock(() => Promise.resolve()),
+  getUserProviderKeyRecord: mock(() => Promise.resolve(null)),
+  listUserProviderKeys: mock(() => Promise.resolve([])),
+  deleteUserProviderKey: mock(() => Promise.resolve()),
+  getDecryptedProviderCredential: mock(() => Promise.resolve(null)),
+}));
+
+// github-auth mocks (required by store-adapter imports)
+mock.module('../github-auth/config', () => ({
+  isPerUserGitHubEnabled: mock(() => false),
+}));
+mock.module('../db/user-github-token-store', () => ({
+  getDecryptedAccessToken: mock(() => Promise.resolve(undefined)),
+}));
+mock.module('../db/env-vars', () => ({
+  getCodebaseEnvVars: mock(() => Promise.resolve({})),
+}));
+mock.module('../db/workflow-node-sessions', () => ({
+  getWorkflowNodeSession: mock(() => Promise.resolve(null)),
+  setWorkflowNodeSession: mock(() => Promise.resolve()),
+  deleteWorkflowNodeSessions: mock(() => Promise.resolve()),
+}));
+
 const { createWorkflowStore, createWorkflowDeps } = await import('./store-adapter');
 
 describe('createWorkflowStore', () => {
@@ -158,5 +190,37 @@ describe('createWorkflowDeps', () => {
     expect(typeof deps.store.getWorkflowRun).toBe('function');
     expect(typeof deps.store.createWorkflowEvent).toBe('function');
     expect(typeof deps.store.getCodebase).toBe('function');
+  });
+
+  describe('provider credential fields', () => {
+    beforeEach(() => {
+      mockListDecryptedUserProviderCredentials.mockReset();
+      mockListDecryptedUserProviderCredentials.mockImplementation(async () => []);
+      mockIsPerUserProviderKeysEnabled.mockReset();
+      mockIsPerUserProviderKeysEnabled.mockImplementation(() => false);
+    });
+
+    test('exposes isPerUserProviderKeysEnabled and getUserProviderEnv', () => {
+      const deps = createWorkflowDeps();
+      expect(typeof deps.isPerUserProviderKeysEnabled).toBe('function');
+      expect(typeof deps.getUserProviderEnv).toBe('function');
+    });
+
+    test('getUserProviderEnv returns { env: {}, files: [] } when list query throws', async () => {
+      mockListDecryptedUserProviderCredentials.mockRejectedValueOnce(new Error('db gone'));
+      const deps = createWorkflowDeps();
+      const result = await deps.getUserProviderEnv?.('u-1', '/tmp/art');
+      expect(result).toEqual({ env: {}, files: [] });
+    });
+
+    test('getUserProviderEnv aggregates env from multiple providers', async () => {
+      mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([
+        { provider: 'openrouter', cred: { kind: 'api_key', apiKey: 'or-k' } },
+        { provider: 'google', cred: { kind: 'api_key', apiKey: 'g-k' } },
+      ]);
+      const deps = createWorkflowDeps();
+      const result = await deps.getUserProviderEnv?.('u-1', '/tmp/art');
+      expect(result?.env).toMatchObject({ OPENROUTER_API_KEY: 'or-k', GEMINI_API_KEY: 'g-k' });
+    });
   });
 });

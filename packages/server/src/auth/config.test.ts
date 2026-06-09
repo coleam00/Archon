@@ -6,6 +6,7 @@ import {
   isEmailAllowed,
   getSignupMode,
   isApiGateEnabled,
+  isArchonOwnedAuthPath,
 } from './config';
 
 const VALID_SECRET = 'a'.repeat(32);
@@ -116,6 +117,36 @@ describe('auth/config', () => {
           ARCHON_WEB_AUTH_REQUIRED: 'false',
         })
       ).toBe(false);
+    });
+  });
+
+  describe('isArchonOwnedAuthPath', () => {
+    test('exempts Archon-owned /api/auth/* paths (fall through, not Better Auth)', () => {
+      for (const p of [
+        '/api/auth/status',
+        '/api/auth/github',
+        '/api/auth/github/device/start',
+        '/api/auth/github/device/poll',
+        '/api/auth/providers',
+        '/api/auth/providers/openrouter',
+        '/api/auth/providers/claude/oauth/start', // reserved for PR-3
+      ]) {
+        expect(isArchonOwnedAuthPath(p)).toBe(true);
+      }
+    });
+
+    test('does NOT exempt Better Auth-owned paths (those it must handle)', () => {
+      for (const p of [
+        '/api/auth/sign-in',
+        '/api/auth/sign-up',
+        '/api/auth/sign-out',
+        '/api/auth/get-session',
+        '/api/auth/providersX', // prefix guard: must be exact or under '/'
+        '/api/auth/githubbed',
+        '/api/auth',
+      ]) {
+        expect(isArchonOwnedAuthPath(p)).toBe(false);
+      }
     });
   });
 });

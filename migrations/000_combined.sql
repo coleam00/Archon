@@ -2,7 +2,7 @@
 -- Version: Combined (final state after migrations 001-020)
 -- Description: Complete database schema (idempotent - safe to run multiple times)
 --
--- 12 Tables:
+-- 13 Tables:
 --   1. remote_agent_codebases
 --   1b. remote_agent_codebase_env_vars
 --   1c. remote_agent_users
@@ -15,6 +15,7 @@
 --   6b. remote_agent_workflow_node_sessions
 --   7. remote_agent_messages
 --   8. remote_agent_user_github_tokens
+--   9. remote_agent_user_provider_keys
 --
 -- Dropped tables (via migrations):
 --   - remote_agent_command_templates (017)
@@ -33,6 +34,7 @@ CREATE TABLE IF NOT EXISTS remote_agent_codebases (
   name VARCHAR(255) NOT NULL,
   repository_url VARCHAR(500),
   default_cwd VARCHAR(500) NOT NULL,
+  default_branch VARCHAR(255),
   ai_assistant_type VARCHAR(20) DEFAULT 'claude',
   allow_env_keys BOOLEAN NOT NULL DEFAULT FALSE,
   commands JSONB DEFAULT '{}'::jsonb,
@@ -41,7 +43,7 @@ CREATE TABLE IF NOT EXISTS remote_agent_codebases (
 );
 
 COMMENT ON TABLE remote_agent_codebases IS
-  'Repository metadata: name, URL, working directory, AI assistant type, and command paths (JSONB)';
+  'Repository metadata: name, URL, working directory, default branch, AI assistant type, and command paths (JSONB)';
 
 -- ============================================================================
 -- Table 1b: Codebase Env Vars
@@ -380,6 +382,10 @@ ALTER TABLE remote_agent_sessions
 ALTER TABLE remote_agent_codebases
   ADD COLUMN IF NOT EXISTS allow_env_keys BOOLEAN NOT NULL DEFAULT FALSE;
 
+-- From migration 023: detected default branch on codebases
+ALTER TABLE remote_agent_codebases
+  ADD COLUMN IF NOT EXISTS default_branch VARCHAR(255);
+
 -- User identity foreign keys (nullable on the four primary tables).
 -- All FKs use ON DELETE SET NULL so future user deletion never cascades destructively.
 ALTER TABLE remote_agent_conversations
@@ -415,6 +421,24 @@ CREATE TABLE IF NOT EXISTS remote_agent_user_github_tokens (
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   UNIQUE(user_id)
+);
+
+-- Phase 2: per-user AI-provider credentials (BYO API key + subscription login),
+-- encrypted at rest with the existing token-crypto key. One row per
+-- (user_id, provider); cascades on user deletion. Exactly one of
+-- api_key_encrypted / oauth_creds_encrypted is populated per row; `kind`
+-- records which. Gated on TOKEN_ENCRYPTION_KEY at the application layer.
+CREATE TABLE IF NOT EXISTS remote_agent_user_provider_keys (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES remote_agent_users(id) ON DELETE CASCADE,
+  provider VARCHAR(64) NOT NULL,
+  kind VARCHAR(16) NOT NULL,
+  api_key_encrypted TEXT,
+  oauth_creds_encrypted TEXT,
+  label VARCHAR(255),
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  UNIQUE(user_id, provider)
 );
 
 -- ============================================================================

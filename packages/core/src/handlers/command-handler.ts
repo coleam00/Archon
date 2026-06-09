@@ -955,6 +955,7 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
 - \`/register-project <name> <path>\` — Register a local project
 - \`/update-project <name> <new-path>\` — Update a project's path
 - \`/remove-project <name>\` — Remove a registered project
+- \`/setproject <name>\` — Bind this conversation to a registered project
 
 **Session**
 - \`/status\` — Show current session and project info

@@ -294,22 +294,104 @@ export function toRunEvent(raw: RawWorkflowEvent): RunEvent {
 }
 
 /**
+ * One node's whole lifecycle, folded from its 2–3 `node_transition` events into a
+ * single record. A node emits `node_started` + a terminal (`node_completed` /
+ * `node_failed` / `node_skipped`), and a resumed run reuses one run id so the same
+ * node can ALSO carry a later `node_skipped_prior_success`. The run stream renders
+ * one `NodeRun` per node instead of one divider per raw transition.
+ */
+export interface NodeRun {
+  /** `step_name`. Null-id transitions can't be keyed and are excluded from the fold. */
+  nodeId: string;
+  nodeName: string;
+  /** `running` = only a `started` transition seen so far (in-flight). */
+  status: 'running' | 'completed' | 'failed' | 'skipped';
+  /** Earliest transition timestamp — positions the single divider in the stream. */
+  startedAt: string;
+  /** Terminal transition timestamp; null while still running. */
+  endedAt: string | null;
+  durationMs: number | null;
+  /** Written by the engine only on `node_completed`; null for non-AI nodes and any non-completed terminal. */
+  costUsd: number | null;
+  numTurns: number | null;
+  stopReason: string | null;
+  skipReason: string | null;
+  skipExpr: string | null;
+}
+
+/**
+ * Folds a run's `node_transition` events into one `NodeRun` per node, keyed by
+ * `nodeId`. Status precedence is `completed > failed > skipped > running` —
+ * "ever completed wins" (a completed-then-resume-skipped node stays `completed`),
+ * matching the dedup `countTerminalNodes` relies on. Null-`nodeId` transitions are
+ * skipped (can't be keyed). Returned sorted by `startedAt`.
+ */
+export function foldNodeRuns(events: RunEvent[]): NodeRun[] {
+  const byNode = new Map<string, NodeTransitionEvent[]>();
+  for (const e of events) {
+    if (e.kind !== 'node_transition' || e.nodeId === null) continue;
+    const list = byNode.get(e.nodeId) ?? [];
+    list.push(e);
+    byNode.set(e.nodeId, list);
+  }
+
+  const runs: NodeRun[] = [];
+  for (const [nodeId, transitions] of byNode) {
+    // Last-of-each-kind wins; precedence is applied below, not by event order.
+    let completed: NodeTransitionEvent | null = null;
+    let failed: NodeTransitionEvent | null = null;
+    let skipped: NodeTransitionEvent | null = null;
+    let nodeName = '';
+    let startedAt = transitions[0]?.timestamp ?? '';
+    for (const t of transitions) {
+      if (new Date(t.timestamp).getTime() < new Date(startedAt).getTime()) startedAt = t.timestamp;
+      if (nodeName === '' && t.nodeName !== '') nodeName = t.nodeName;
+      if (t.transition === 'completed') completed = t;
+      else if (t.transition === 'failed') failed = t;
+      else if (t.transition === 'skipped') skipped = t;
+    }
+    const terminal = completed ?? failed ?? skipped;
+    // Precedence in documented order: ever-completed wins, then failed, then
+    // skipped, else still running.
+    let status: NodeRun['status'];
+    if (completed !== null) status = 'completed';
+    else if (failed !== null) status = 'failed';
+    else if (skipped !== null) status = 'skipped';
+    else status = 'running';
+    runs.push({
+      nodeId,
+      nodeName: nodeName !== '' ? nodeName : nodeId,
+      status,
+      startedAt,
+      // Position/duration come from whichever terminal transition exists...
+      endedAt: terminal?.timestamp ?? null,
+      durationMs: terminal?.durationMs ?? null,
+      // ...but cost/turns/stop are only ever written on `node_completed`, so read
+      // them from that transition (a failed/skipped terminal carries none).
+      costUsd: completed?.costUsd ?? null,
+      numTurns: completed?.numTurns ?? null,
+      stopReason: completed?.stopReason ?? null,
+      skipReason: skipped?.skipReason ?? null,
+      skipExpr: skipped?.skipExpr ?? null,
+    });
+  }
+  return runs.sort((a, b) => new Date(a.startedAt).getTime() - new Date(b.startedAt).getTime());
+}
+
+/**
  * Per-node terminal tally for a run's node-count readout (e.g. `7/8 nodes`).
- * Deduped by `nodeId`: a resumed run reuses one run id, so a node can appear both
- * as its original `completed` AND a later `node_skipped_prior_success` (normalized
- * to a `skipped` transition) — counting raw events would double it. `total` =
- * distinct nodes that reached any terminal (non-`started`) state; `completed` =
- * distinct nodes that ever completed (so a completed-then-resume-skipped node
- * stays counted). Nodes with a null `nodeId` can't be deduped and are skipped.
+ * Derived from {@link foldNodeRuns} so the dedup is single-sourced: `total` =
+ * distinct nodes that reached a terminal (non-`running`) state; `completed` =
+ * distinct nodes that ever completed (a completed-then-resume-skipped node stays
+ * counted). Nodes with a null `nodeId` are excluded by the fold.
  */
 export function countTerminalNodes(events: RunEvent[]): { completed: number; total: number } {
-  const completedByNode = new Map<string, boolean>();
-  for (const e of events) {
-    if (e.kind !== 'node_transition' || e.transition === 'started' || e.nodeId === null) continue;
-    const everCompleted = (completedByNode.get(e.nodeId) ?? false) || e.transition === 'completed';
-    completedByNode.set(e.nodeId, everCompleted);
-  }
   let completed = 0;
-  for (const done of completedByNode.values()) if (done) completed += 1;
-  return { completed, total: completedByNode.size };
+  let total = 0;
+  for (const r of foldNodeRuns(events)) {
+    if (r.status === 'running') continue;
+    total += 1;
+    if (r.status === 'completed') completed += 1;
+  }
+  return { completed, total };
 }

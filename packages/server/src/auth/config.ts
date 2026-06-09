@@ -94,3 +94,29 @@ export function getSignupMode(
 export function isApiGateEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return isWebAuthEnabled(env) && env.ARCHON_WEB_AUTH_REQUIRED !== 'false';
 }
+
+/**
+ * Paths under `/api/auth/*` that Archon owns and the Better Auth catch-all must
+ * NOT handle. Better Auth's `basePath` is `/api/auth`, so when web auth is on its
+ * handler claims every path under that prefix and 404s any it doesn't recognize.
+ * The mount falls through (`next()`) for these so Archon's own route handlers
+ * (registered later in `registerApiRoutes`) run instead.
+ *
+ * Keep this in lockstep with the Archon-owned `/api/auth/*` routes:
+ *   - `/api/auth/status`            (web-auth status)
+ *   - `/api/auth/github` + sub      (per-user GitHub device flow)
+ *   - `/api/auth/providers` + sub   (per-user AI-provider keys; sub = PR-3 OAuth)
+ *
+ * NOTE: only GET/POST go through the catch-all, so PUT/DELETE on these paths are
+ * never intercepted regardless — but listing them here keeps the allow-list the
+ * single source of truth for "this prefix is Archon's, not Better Auth's".
+ */
+export function isArchonOwnedAuthPath(path: string): boolean {
+  return (
+    path === '/api/auth/status' ||
+    path === '/api/auth/github' ||
+    path.startsWith('/api/auth/github/') ||
+    path === '/api/auth/providers' ||
+    path.startsWith('/api/auth/providers/')
+  );
+}

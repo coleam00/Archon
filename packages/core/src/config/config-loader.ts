@@ -45,6 +45,15 @@ import {
   registerBuiltinProviders,
   registerCommunityProviders,
 } from '@archon/providers';
+import { buildAiProfile, TIER_NAMES } from '@archon/workflows/model-validation';
+import type { RawAliasEntry, TierName } from '@archon/workflows/model-validation';
+
+/**
+ * A per-key patch for the `tiers:` config. Unlike `RawTiersConfig`, a tier value
+ * may be `null` to explicitly UNSET it (RawTiersConfig can't express removal).
+ * Consumed by `updateGlobalConfig({ tiers })`.
+ */
+export type TiersPatch = Partial<Record<TierName, RawAliasEntry | null>>;
 
 /**
  * Pure read of registered provider IDs. Registration is guaranteed by
@@ -342,22 +351,39 @@ function getDefaults(): MergedConfig {
 /**
  * Apply environment variable overrides
  */
-function applyEnvOverrides(config: MergedConfig): MergedConfig {
+function applyEnvOverrides(
+  config: MergedConfig,
+  globalConfig?: GlobalConfig,
+  repoConfig?: RepoConfig
+): MergedConfig {
   // Bot name override
   const envBotName = process.env.BOT_DISPLAY_NAME;
   if (envBotName) {
     config.botName = envBotName;
   }
 
-  // Assistant override — validate against registry, error on unknown provider
+  // DEFAULT_AI_ASSISTANT is a fallback default: only applies when no config file
+  // has explicitly set the assistant. An explicit save via the Web UI (or a repo
+  // .archon/config.yaml) takes precedence over the env var.
   const envAssistant = process.env.DEFAULT_AI_ASSISTANT;
   if (envAssistant && envAssistant.length > 0) {
-    if (isRegisteredProvider(envAssistant)) {
-      config.assistant = envAssistant;
-    } else {
-      throw new Error(
-        `DEFAULT_AI_ASSISTANT='${envAssistant}' is not a registered provider. ` +
-          `Available providers: ${getRegisteredProviderNames().join(', ')}`
+    const hasExplicitConfig =
+      Boolean(globalConfig?.defaultAssistant) || Boolean(repoConfig?.assistant);
+    if (!hasExplicitConfig) {
+      if (isRegisteredProvider(envAssistant)) {
+        config.assistant = envAssistant;
+      } else {
+        throw new Error(
+          `DEFAULT_AI_ASSISTANT='${envAssistant}' is not a registered provider. ` +
+            `Available providers: ${getRegisteredProviderNames().join(', ')}`
+        );
+      }
+    } else if (!isRegisteredProvider(envAssistant)) {
+      // Config file takes precedence, but warn that the env var value is unknown —
+      // a typo here would go undetected if we don't surface it.
+      getLog().warn(
+        { envAssistant, available: getRegisteredProviderNames() },
+        'config.env_assistant_unknown_ignored'
       );
     }
   }
@@ -533,13 +559,15 @@ export async function loadConfig(repoPath?: string): Promise<MergedConfig> {
   config = mergeGlobalConfig(config, globalConfig);
 
   // 3. Apply repo config if path provided
+  let repoConfig: RepoConfig | undefined;
   if (repoPath) {
-    const repoConfig = await loadRepoConfig(repoPath);
+    repoConfig = await loadRepoConfig(repoPath);
     config = mergeRepoConfig(config, repoConfig);
   }
 
-  // 4. Apply environment overrides (highest precedence)
-  config = applyEnvOverrides(config);
+  // 4. Apply environment overrides — DEFAULT_AI_ASSISTANT is a fallback:
+  //    explicit config-file settings take precedence over the env var.
+  config = applyEnvOverrides(config, globalConfig, repoConfig);
 
   return config;
 }
@@ -569,7 +597,9 @@ export function logConfig(config: MergedConfig): void {
  * Reads current config, deep-merges updates, and writes back to YAML.
  * Invalidates the cached config so next loadConfig() picks up changes.
  */
-export async function updateGlobalConfig(updates: Partial<GlobalConfig>): Promise<void> {
+export async function updateGlobalConfig(
+  updates: Partial<Omit<GlobalConfig, 'tiers'>> & { tiers?: TiersPatch }
+): Promise<void> {
   const configPath = getArchonConfigPath();
 
   try {
@@ -597,6 +627,24 @@ export async function updateGlobalConfig(updates: Partial<GlobalConfig>): Promis
       merged.concurrency = { ...current.concurrency, ...updates.concurrency };
     }
 
+    if (updates.tiers) {
+      // Per-key merge: `null` unsets a tier, a value sets it, and an absent key
+      // (`undefined`) preserves the existing tier — so a single-tier PATCH/CLI
+      // set doesn't wipe the others. Rebuilt fresh (no dynamic delete).
+      const nextTiers: RawTiersConfig = {};
+      for (const tier of TIER_NAMES) {
+        const incoming = updates.tiers[tier];
+        if (incoming === null) continue; // explicit unset → omit
+        if (incoming !== undefined) {
+          nextTiers[tier] = incoming;
+        } else {
+          const existing = current.tiers?.[tier];
+          if (existing) nextTiers[tier] = existing;
+        }
+      }
+      merged.tiers = Object.keys(nextTiers).length > 0 ? nextTiers : undefined;
+    }
+
     // Serialize to YAML and write
     const yaml = Bun.YAML.stringify(merged);
     await mkdir(dirname(configPath), { recursive: true });
@@ -620,6 +668,34 @@ export async function updateGlobalConfig(updates: Partial<GlobalConfig>): Promis
 }
 
 /**
+ * Built-in tier presets (small/medium/large) for a provider, from
+ * tier-defaults.json via buildAiProfile. Lets the settings UI show what an
+ * unset tier resolves to. Never throws — an unknown/odd provider (or a throw)
+ * yields `undefined` (every consumer uses optional chaining).
+ */
+function tierDefaultsFor(provider: string): RawTiersConfig | undefined {
+  try {
+    const profile = buildAiProfile(provider);
+    const out: RawTiersConfig = {};
+    for (const tier of TIER_NAMES) {
+      const preset = profile.aliases[tier];
+      if (preset) {
+        out[tier] = {
+          provider: preset.provider,
+          model: preset.model,
+          ...(preset.effort !== undefined ? { effort: preset.effort } : {}),
+          ...(preset.thinking !== undefined ? { thinking: preset.thinking } : {}),
+        };
+      }
+    }
+    return Object.keys(out).length > 0 ? out : undefined;
+  } catch (error) {
+    getLog().warn({ provider, err: error }, 'config.tier_defaults_failed');
+    return undefined;
+  }
+}
+
+/**
  * Project a MergedConfig to a SafeConfig suitable for sending to web clients.
  * Strips filesystem paths and any other server-internal fields.
  */
@@ -639,5 +715,7 @@ export function toSafeConfig(config: MergedConfig): SafeConfig {
       loadDefaultCommands: config.defaults.loadDefaultCommands,
       loadDefaultWorkflows: config.defaults.loadDefaultWorkflows,
     },
+    tiers: config.tiers,
+    tierDefaults: tierDefaultsFor(config.assistant),
   };
 }

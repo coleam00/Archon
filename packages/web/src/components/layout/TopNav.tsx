@@ -6,10 +6,10 @@ import { useSession, signOut } from '@/lib/auth-client';
 import { cn } from '@/lib/utils';
 
 const tabs = [
-  { to: '/chat', end: false, icon: MessageSquare, label: 'Chat' },
-  { to: '/dashboard', end: true, icon: LayoutDashboard, label: 'Dashboard' },
-  { to: '/workflows', end: false, icon: Workflow, label: 'Workflows' },
-  { to: '/settings', end: false, icon: Settings, label: 'Settings' },
+  { to: '/legacy/chat', end: false, icon: MessageSquare, label: 'Chat' },
+  { to: '/legacy/dashboard', end: true, icon: LayoutDashboard, label: 'Dashboard' },
+  { to: '/legacy/workflows', end: false, icon: Workflow, label: 'Workflows' },
+  { to: '/legacy/settings', end: false, icon: Settings, label: 'Settings' },
 ] as const;
 
 export function TopNav(): React.ReactElement {
@@ -49,7 +49,10 @@ export function TopNav(): React.ReactElement {
   return (
     <nav className="flex items-center gap-1 border-b border-border bg-surface px-4">
       {/* Brand logo */}
-      <Link to="/chat" className="flex items-center gap-2 mr-4 hover:opacity-80 transition-opacity">
+      <Link
+        to="/legacy/chat"
+        className="flex items-center gap-2 mr-4 hover:opacity-80 transition-opacity"
+      >
         <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary">
           <span className="text-sm font-semibold text-primary-foreground">A</span>
         </div>
@@ -72,7 +75,7 @@ export function TopNav(): React.ReactElement {
         >
           <Icon className="h-4 w-4" />
           {label}
-          {to === '/dashboard' && runningCount > 0 && (
+          {to === '/legacy/dashboard' && runningCount > 0 && (
             <span
               className="ml-1 inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-medium text-primary-foreground"
               aria-label={`${runningCount} workflows running`}
