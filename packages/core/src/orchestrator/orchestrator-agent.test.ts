@@ -2630,4 +2630,32 @@ describe('handleMessage — /setproject dispatch', () => {
     expect(mockUpdateConversation).not.toHaveBeenCalled();
     expect(platform.sendMessage).toHaveBeenCalledWith('conv-1', expect.stringContaining('Usage'));
   });
+
+  // Regression: handleSetProject previously passed the platform conversation id
+  // (e.g. a Discord channel snowflake) to db.updateConversation, which queries
+  // by the DB primary-key id. The two diverge on Discord and the UPDATE matched
+  // zero rows, surfacing as "Conversation not found". Fix passes conversation.id.
+  test('updates by DB id, not platform conversation id', async () => {
+    const cb = makeCodebase('signals');
+    mockListCodebases.mockImplementation(() => Promise.resolve([cb]));
+    mockGetOrCreateConversation.mockImplementation(() =>
+      Promise.resolve(
+        makeConversation({
+          id: 'db-uuid-abc',
+          platform_conversation_id: '1513767625493184556',
+          platform_type: 'discord',
+          codebase_id: null,
+        })
+      )
+    );
+    mockParseCommand.mockReturnValue({ command: 'setproject', args: ['signals'] });
+
+    const platform = makePlatform();
+    await handleMessage(platform, '1513767625493184556', '/setproject signals');
+
+    expect(mockUpdateConversation).toHaveBeenCalledWith('db-uuid-abc', {
+      codebase_id: 'id-signals',
+      cwd: '/repos/signals',
+    });
+  });
 });

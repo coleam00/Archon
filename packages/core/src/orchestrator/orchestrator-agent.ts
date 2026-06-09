@@ -1020,7 +1020,7 @@ export async function handleMessage(
 
         if (command === 'setproject') {
           getLog().debug({ command, conversationId }, 'deterministic_command');
-          const result = await handleSetProject(message, conversationId);
+          const result = await handleSetProject(message, conversation);
           await platform.sendMessage(conversationId, result);
           return;
         }
@@ -2018,8 +2018,14 @@ async function handleRemoveProject(message: string): Promise<string> {
  * Binds the current conversation to a registered codebase by writing
  * `codebase_id` and `cwd` to the conversations table. Uses 4-tier fuzzy
  * name resolution (exact → case-insensitive → prefix → substring).
+ *
+ * Takes the loaded `conversation` so the UPDATE targets the DB primary key
+ * (`conversation.id`) rather than the platform conversation id — the two
+ * diverge on platforms like Discord where the platform id is a channel/thread
+ * snowflake and the DB row id is an internal UUID. Passing the platform id
+ * here made the UPDATE match zero rows and surface as `Conversation not found`.
  */
-async function handleSetProject(message: string, conversationId: string): Promise<string> {
+async function handleSetProject(message: string, conversation: Conversation): Promise<string> {
   const { args } = commandHandler.parseCommand(message);
   if (args.length < 1) {
     return 'Usage: /setproject <project-name>';
@@ -2042,13 +2048,13 @@ async function handleSetProject(message: string, conversationId: string): Promis
       : `Project "${projectName}" not found. No projects registered — use /register-project.`;
   }
 
-  await db.updateConversation(conversationId, {
+  await db.updateConversation(conversation.id, {
     codebase_id: codebase.id,
     cwd: codebase.default_cwd,
   });
 
   getLog().info(
-    { conversationId, projectName: codebase.name, codebaseId: codebase.id },
+    { conversationId: conversation.id, projectName: codebase.name, codebaseId: codebase.id },
     'project.set_completed'
   );
   return `Project set to **${codebase.name}**\nWorking directory: ${codebase.default_cwd}`;
