@@ -477,6 +477,11 @@ function filterToolIndicators(assistantMessages: string[]): string {
 
 // ─── Workflow Dispatch ──────────────────────────────────────────────────────
 
+interface WorkflowDispatchOptions {
+  force?: boolean;
+  resumeRunId?: string;
+}
+
 /**
  * Dispatch a workflow after the orchestrator resolves a project.
  * Auto-attaches the project to the conversation, resolves isolation, and executes.
@@ -498,7 +503,8 @@ async function dispatchOrchestratorWorkflow(
    * report their real name, custom ones report "custom"). Optional: callers
    * that don't have it readily in scope omit it and the run reports "custom".
    */
-  source?: WorkflowSource
+  source?: WorkflowSource,
+  options?: WorkflowDispatchOptions
 ): Promise<void> {
   // Capability gate: hard-fail before any worktree/clone/AI cost if the
   // workflow declares `requires: [github]` and the originating user hasn't
@@ -571,12 +577,68 @@ async function dispatchOrchestratorWorkflow(
   // is in a resumable state (paused/failed-by-approval) in this conversation+codebase
   // before dispatching fresh. This ensures chat platforms (slack, telegram, discord,
   // github) resume after approval gates just like web does.
-  const resumableRun = await workflowDb.findResumableRunByParentConversation(
-    workflow.name,
-    conversation.id,
-    codebase.id
-  );
+  const resumableRun = options?.force
+    ? null
+    : await workflowDb.findResumableRunByParentConversation(
+        workflow.name,
+        conversation.id,
+        codebase.id
+      );
   if (resumableRun?.working_path) {
+    if (resumableRun.status !== 'paused' && resumableRun.id !== options?.resumeRunId) {
+      const escapedMsg = userMessage.replace(/[\\"`]/g, '\\$&');
+      const baseCmd = `/workflow run ${workflow.name}`;
+      const PREVIEW_MAX = 160;
+      const priorMessage = (resumableRun.user_message ?? '').replace(/\s+/g, ' ').trim();
+      const priorPreview = priorMessage
+        ? priorMessage.length > PREVIEW_MAX
+          ? `${priorMessage.slice(0, PREVIEW_MAX)}…`
+          : priorMessage
+        : '(no message stored)';
+      const promptText = [
+        '---',
+        '',
+        `Found a prior failed run of **${workflow.name}** (run \`${resumableRun.id}\`).`,
+        '',
+        '**Run prompt was:**',
+        '',
+        `> ${priorPreview}`,
+        '',
+        '---',
+        '',
+        '**Choose how to proceed:**',
+        '',
+        '**1. Resume that run** (re-runs the prompt shown above, not your current message):',
+        '```',
+        `/workflow resume ${resumableRun.id}`,
+        '```',
+        '',
+        '**2. Discard the failed run, then start fresh with your current message:**',
+        '```',
+        `/workflow abandon ${resumableRun.id}`,
+        '```',
+        'then re-run your command:',
+        '```',
+        `${baseCmd} "${escapedMsg}"`,
+        '```',
+        '',
+        '**3. Start fresh with your current message, leave the failed run as-is** (skips the resume check):',
+        '```',
+        `${baseCmd} --force "${escapedMsg}"`,
+        '```',
+      ].join('\n');
+      getLog().info(
+        {
+          workflowName: workflow.name,
+          resumableRunId: resumableRun.id,
+          platformType: platform.getPlatformType(),
+        },
+        'orchestrator.failed_resume_user_prompted'
+      );
+      await platform.sendMessage(conversationId, promptText);
+      return;
+    }
+
     getLog().info(
       {
         workflowName: workflow.name,
@@ -998,7 +1060,8 @@ export async function handleMessage(
             pausedRun.user_message,
             isolationHints,
             userId,
-            workflowSource
+            workflowSource,
+            { resumeRunId: pausedRun.id }
           );
           getLog().info(
             { conversationId, workflowRunId: pausedRun.id, workflowName: pausedRun.workflow_name },
@@ -1077,7 +1140,11 @@ export async function handleMessage(
             result.workflow.definition,
             result.workflow.args ?? message,
             isolationHints,
-            userId
+            userId,
+            {
+              force: result.workflow.force,
+              resumeRunId: result.workflow.resumeRunId,
+            }
           );
         }
         return;
@@ -2237,7 +2304,8 @@ async function handleWorkflowRunCommand(
   workflow: WorkflowDefinition,
   userMessage: string,
   isolationHints?: HandleMessageContext['isolationHints'],
-  userId?: string
+  userId?: string,
+  options?: WorkflowDispatchOptions
 ): Promise<void> {
   // Check if conversation has a project
   if (conversation.codebase_id) {
@@ -2258,7 +2326,9 @@ async function handleWorkflowRunCommand(
       workflow,
       userMessage,
       isolationHints,
-      userId
+      userId,
+      undefined,
+      options
     );
     return;
   }
@@ -2337,7 +2407,8 @@ async function handleWorkflowRunCommand(
       userMessage,
       isolationHints,
       userId,
-      resolvedEntry?.source
+      resolvedEntry?.source,
+      options
     );
     return;
   }

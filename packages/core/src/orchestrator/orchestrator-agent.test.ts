@@ -165,10 +165,11 @@ mock.module('../workflows/store-adapter', () => ({
 
 const mockGetPausedWorkflowRun = mock(() => Promise.resolve(null as unknown));
 const mockFindResumableRunByParentConversation = mock(() => Promise.resolve(null as unknown));
+const mockUpdateWorkflowRun = mock(() => Promise.resolve());
 mock.module('../db/workflows', () => ({
   getPausedWorkflowRun: mockGetPausedWorkflowRun,
   findResumableRunByParentConversation: mockFindResumableRunByParentConversation,
-  updateWorkflowRun: mock(() => Promise.resolve()),
+  updateWorkflowRun: mockUpdateWorkflowRun,
 }));
 
 const mockCreateWorkflowEvent = mock(() => Promise.resolve());
@@ -1363,13 +1364,18 @@ describe('workflow dispatch routing — interactive flag', () => {
     };
   }
 
-  function makeWorkflowResult(interactive?: boolean) {
+  function makeWorkflowResult(
+    interactive?: boolean,
+    options: { force?: boolean; resumeRunId?: string; args?: string } = {}
+  ) {
     return {
       success: true,
       message: 'ok',
       workflow: {
         definition: makeTestWorkflow({ name: 'test-workflow', interactive }),
-        args: 'test message',
+        args: options.args ?? 'test message',
+        force: options.force,
+        resumeRunId: options.resumeRunId,
       },
     };
   }
@@ -1379,6 +1385,8 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockDispatchBackgroundWorkflow.mockClear();
     mockFindResumableRunByParentConversation.mockClear();
     mockHydrateResumableRun.mockClear();
+    mockUpdateWorkflowRun.mockClear();
+    mockUpdateWorkflowRun.mockImplementation(() => Promise.resolve());
     mockHandleCommand.mockReset();
     mockHandleCommand.mockImplementation(() =>
       Promise.resolve({ success: true, message: 'ok', workflow: undefined })
@@ -1407,7 +1415,146 @@ describe('workflow dispatch routing — interactive flag', () => {
     expect(opts.parentConversationId).toBe('conv-1');
   });
 
-  test('foreground_resume_detected: passes parentConversationId to executeWorkflow when a resumable run exists', async () => {
+  test('failed_resume_user_prompted: failed runs are not auto-resumed', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'resumable-run-1',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/feature',
+        parent_conversation_id: 'conv-1',
+        status: 'failed',
+        user_message: 'old failed prompt',
+      })
+    );
+
+    const platform = makePlatform(); // getPlatformType returns 'web'
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+
+    expect(mockHydrateResumableRun).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+    expect(platform.sendMessage).toHaveBeenCalledWith(
+      'conv-1',
+      expect.stringContaining('Found a prior failed run of **test-workflow**')
+    );
+    expect(platform.sendMessage).toHaveBeenCalledWith(
+      'conv-1',
+      expect.stringContaining('/workflow resume resumable-run-1')
+    );
+    expect(platform.sendMessage).toHaveBeenCalledWith(
+      'conv-1',
+      expect.stringContaining('/workflow abandon resumable-run-1')
+    );
+    expect(platform.sendMessage).toHaveBeenCalledWith(
+      'conv-1',
+      expect.stringContaining('/workflow run test-workflow --force "test message"')
+    );
+  });
+
+  test('failed_resume_user_prompted: prompt includes normalized truncated prior prompt preview', async () => {
+    const priorMessage = `line one\n${'x'.repeat(220)}`;
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'resumable-run-preview',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/feature',
+        parent_conversation_id: 'conv-1',
+        status: 'failed',
+        user_message: priorMessage,
+      })
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+
+    const prompt = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.at(-1)?.[1] as
+      | string
+      | undefined;
+    expect(prompt).toContain(`> line one ${'x'.repeat(151)}…`);
+    expect(prompt).not.toContain('\nline one\n');
+  });
+
+  test('failed_resume_user_prompted: escapes backslash, double quote, and backtick in suggested commands', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve(makeWorkflowResult(true, { args: 'fix \\ path "quoted" `tick`' }))
+    );
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'resumable-run-escape',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/feature',
+        parent_conversation_id: 'conv-1',
+        status: 'failed',
+        user_message: 'old failed prompt',
+      })
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+
+    const prompt = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.at(-1)?.[1] as
+      | string
+      | undefined;
+    expect(prompt).toContain('/workflow run test-workflow "fix \\\\ path \\"quoted\\" \\`tick\\`"');
+    expect(prompt).toContain(
+      '/workflow run test-workflow --force "fix \\\\ path \\"quoted\\" \\`tick\\`"'
+    );
+  });
+
+  test('--force flag: skips resume detection and dispatches a fresh run', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve(makeWorkflowResult(true, { force: true }))
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow --force');
+
+    expect(mockFindResumableRunByParentConversation).not.toHaveBeenCalled();
+    expect(mockHydrateResumableRun).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).toHaveBeenCalled();
+    const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
+    expect(callArgs[3]).toBe('/test/cwd');
+  });
+
+  test('resumeRunId option: failed run resumes when resumeRunId matches', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve(makeWorkflowResult(true, { resumeRunId: 'resumable-run-1' }))
+    );
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'resumable-run-1',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/feature',
+        parent_conversation_id: 'conv-1',
+        status: 'failed',
+        user_message: 'old failed prompt',
+      })
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow resume resumable-run-1');
+
+    expect(mockHydrateResumableRun).toHaveBeenCalled();
+    expect(mockExecuteWorkflow).toHaveBeenCalled();
+    expect(platform.sendMessage).not.toHaveBeenCalledWith(
+      'conv-1',
+      expect.stringContaining('Found a prior failed run')
+    );
+  });
+
+  test('foreground_resume_detected: passes parentConversationId to executeWorkflow when a paused run exists', async () => {
     // Regression for the foreground-resume branch: when
     // findResumableRunByParentConversation returns a paused run, the
     // orchestrator must hydrate it (single DB roundtrip — no second
@@ -1423,7 +1570,7 @@ describe('workflow dispatch routing — interactive flag', () => {
         workflow_name: 'test-workflow',
         working_path: '/repos/test-repo/worktrees/feature',
         parent_conversation_id: 'conv-1',
-        status: 'failed',
+        status: 'paused',
       })
     );
 
@@ -1460,7 +1607,7 @@ describe('workflow dispatch routing — interactive flag', () => {
         workflow_name: 'test-workflow',
         working_path: '/repos/test-repo/worktrees/feature',
         parent_conversation_id: 'conv-1',
-        status: 'failed',
+        status: 'paused',
       })
     );
     mockHydrateResumableRun.mockReturnValueOnce(Promise.resolve(null));
@@ -1674,6 +1821,11 @@ describe('natural-language approval routing', () => {
     mockGetCodebase.mockReset();
     mockGetCodebase.mockImplementation(() => Promise.resolve(null));
     mockExecuteWorkflow.mockClear();
+    mockFindResumableRunByParentConversation.mockReset();
+    mockFindResumableRunByParentConversation.mockImplementation(() => Promise.resolve(null));
+    mockHydrateResumableRun.mockClear();
+    mockUpdateWorkflowRun.mockClear();
+    mockUpdateWorkflowRun.mockImplementation(() => Promise.resolve());
     mockDiscoverWorkflowsWithConfig.mockReset();
     mockDiscoverWorkflowsWithConfig.mockImplementation(() =>
       Promise.resolve({ workflows: [], errors: [] })
@@ -1690,6 +1842,16 @@ describe('natural-language approval routing', () => {
     mockDiscoverWorkflowsWithConfig.mockImplementation(() =>
       Promise.resolve({ workflows: [{ workflow: approvalWorkflow }], errors: [] })
     );
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve(
+        makePausedRun({
+          id: 'run-1',
+          status: 'failed',
+          working_path: '/repos/test-repo',
+          parent_conversation_id: 'conv-1',
+        })
+      )
+    );
 
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', 'looks good, proceed with implementation');
@@ -1702,9 +1864,18 @@ describe('natural-language approval routing', () => {
       expect.stringContaining('Resuming')
     );
     // Workflow should be executed
+    expect(mockUpdateWorkflowRun).toHaveBeenCalledWith('run-1', {
+      status: 'failed',
+      metadata: { approval_response: 'approved', rejection_reason: '', rejection_count: 0 },
+    });
+    expect(mockHydrateResumableRun).toHaveBeenCalled();
     expect(mockExecuteWorkflow).toHaveBeenCalled();
     // NL approval path captures the binary resolution
     expect(mockCaptureApprovalResolved).toHaveBeenCalledWith({ resolution: 'approved' });
+    expect(platform.sendMessage).not.toHaveBeenCalledWith(
+      'conv-1',
+      expect.stringContaining('Found a prior failed run')
+    );
   });
 
   test('slash command bypasses approval interception — getPausedWorkflowRun not called', async () => {

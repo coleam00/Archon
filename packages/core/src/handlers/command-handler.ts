@@ -695,10 +695,36 @@ async function handleWorkflowCommand(
       }
       try {
         const run = await resumeWorkflow(runId);
-        const pathInfo = run.working_path ? `\nPath: \`${run.working_path}\`` : '';
+        let workflowEntries: readonly WorkflowWithSource[];
+        try {
+          const result = await discoverWorkflowsWithConfig(workflowCwd, loadConfig);
+          workflowEntries = result.workflows;
+        } catch (error) {
+          const err = error as Error;
+          getLog().error({ err, cwd: workflowCwd, runId }, 'cmd.workflow_resume_discovery_failed');
+          return {
+            success: false,
+            message: `Failed to load workflows: ${err.message}\n\nCheck .archon/workflows/ for YAML syntax issues.`,
+          };
+        }
+        const workflows = workflowEntries.map(ws => ws.workflow);
+        const workflow = resolveWorkflowName(run.workflow_name, workflows);
+        if (!workflow) {
+          return {
+            success: false,
+            message:
+              `Workflow \`${run.workflow_name}\` for run ${runId} was not found.\n\n` +
+              'Use /workflow list to check available workflows.',
+          };
+        }
         return {
           success: true,
-          message: `Workflow run \`${run.workflow_name}\` (${runId}) is ready to resume.${pathInfo}\nRun the same workflow again to auto-resume from completed nodes.`,
+          message: `Resuming workflow: \`${workflow.name}\``,
+          workflow: {
+            definition: workflow,
+            args: run.user_message,
+            resumeRunId: run.id,
+          },
         };
       } catch (error) {
         const err = error as Error;
@@ -817,7 +843,9 @@ async function handleWorkflowCommand(
     case 'run': {
       // Directly invoke a workflow by name (bypasses AI router)
       const workflowName = args[1];
-      const workflowArgs = args.slice(2).join(' ');
+      const restArgs = args.slice(2);
+      const force = restArgs.includes('--force');
+      const workflowArgs = restArgs.filter(arg => arg !== '--force').join(' ');
 
       if (!workflowName) {
         return {
@@ -906,6 +934,7 @@ async function handleWorkflowCommand(
         workflow: {
           definition: workflow,
           args: workflowArgs,
+          force: force ? true : undefined,
         },
       };
     }

@@ -332,11 +332,27 @@ describe('abandonWorkflow', () => {
     expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1');
   });
 
-  test('throws on terminal run', async () => {
+  test('cancels a failed run', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'failed' }));
+
+    const run = await abandonWorkflow('run-1');
+    expect(run.id).toBe('run-1');
+    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1');
+  });
+
+  test('throws on completed run', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'completed' }));
 
     await expect(abandonWorkflow('run-1')).rejects.toThrow(
       "Cannot abandon run with status 'completed'"
+    );
+  });
+
+  test('throws on cancelled run', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'cancelled' }));
+
+    await expect(abandonWorkflow('run-1')).rejects.toThrow(
+      "Cannot abandon run with status 'cancelled'"
     );
   });
 });

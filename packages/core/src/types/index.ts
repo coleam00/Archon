@@ -63,6 +63,8 @@ export interface CommandResult {
     // If set, orchestrator should execute this workflow
     definition: WorkflowDefinition;
     args: string;
+    force?: boolean;
+    resumeRunId?: string;
   };
 }
 

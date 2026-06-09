@@ -7,7 +7,6 @@
 import { createLogger, captureApprovalResolved } from '@archon/paths';
 import {
   RESUMABLE_WORKFLOW_STATUSES,
-  TERMINAL_WORKFLOW_STATUSES,
   isApprovalContext,
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun, ApprovalContext } from '@archon/workflows/schemas/workflow-run';
@@ -106,7 +105,7 @@ export async function resumeWorkflow(runId: string): Promise<WorkflowRun> {
  */
 export async function abandonWorkflow(runId: string): Promise<WorkflowRun> {
   const run = await getRunOrThrow(runId, 'operations.workflow_abandon_lookup_failed');
-  if (TERMINAL_WORKFLOW_STATUSES.includes(run.status)) {
+  if (run.status === 'completed' || run.status === 'cancelled') {
     throw new Error(`Cannot abandon run with status '${run.status}'. Run is already terminal.`);
   }
   try {
