@@ -323,7 +323,7 @@ Full documentation is available at **[archon.diy/docs](https://archon.diy/docs/)
 
 ## Telemetry
 
-Archon sends a few anonymous events so maintainers can see which workflows get real usage, on what platforms, and whether runs succeed — and prioritize accordingly. **No PII, ever.** Events: `archon_started` (once per CLI invocation / server boot), `workflow_invoked` (each workflow start), and `workflow_completed` / `workflow_failed` (each run outcome).
+Archon sends a few anonymous events so maintainers can see which workflows get real usage, on what platforms, and whether runs succeed — and prioritize accordingly. **No PII, ever.** Events: `archon_started` (once per CLI invocation / server boot), `archon_active` (daily heartbeat while a server is running, so long-running installs stay counted), `workflow_invoked` (each workflow start), and `workflow_completed` / `workflow_failed` (each run outcome).
 
 **What's collected (categorical only):**
 - **Workflow name** — the real name for *bundled* (Archon-authored) workflows; `"custom"` for your own workflows, so private names never leave your machine.

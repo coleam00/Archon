@@ -74,7 +74,7 @@ Archon uses structured logging (Pino) with explicit rules about what is and is n
 
 ## Anonymous Telemetry
 
-Separate from local logging, Archon sends a small set of **anonymous** usage events to PostHog (`archon_started`, `workflow_invoked`, `workflow_completed`/`workflow_failed`) so maintainers can see active installs, which workflows run, and run outcomes. Events are keyed by a random install UUID — never user identity.
+Separate from local logging, Archon sends a small set of **anonymous** usage events to PostHog (`archon_started`, `archon_active` daily server heartbeat, `workflow_invoked`, `workflow_completed`/`workflow_failed`) so maintainers can see active installs, which workflows run, and run outcomes. Events are keyed by a random install UUID — never user identity.
 
 Only categorical data is sent: bundled workflow name (user-authored workflows report `"custom"`), platform, provider/model id, node shape, run outcome/duration, and machine context (OS, arch, version, runtime). **Never sent:** code, prompts, file paths, IP (dropped at ingest), geolocation, error text, or custom workflow names. See the [Telemetry table in the configuration reference](/reference/configuration/) for the full field list and opt-out options (`DO_NOT_TRACK=1`, `ARCHON_TELEMETRY_DISABLED=1`, CI auto-disable, or `POSTHOG_API_KEY=off`).
 

@@ -7,6 +7,7 @@ import {
   isTelemetryDisabled,
   captureWorkflowInvoked,
   captureArchonStarted,
+  captureArchonActive,
   captureWorkflowCompleted,
   classifyWorkflowForTelemetry,
   sanitizeModelForTelemetry,
@@ -467,6 +468,27 @@ describe('new capture functions are fire-and-forget no-throw', () => {
     );
     try {
       expect(() => captureArchonStarted({ surface: 'server' })).not.toThrow();
+      await shutdownTelemetry();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  test('captureArchonActive does not throw (disabled)', () => {
+    process.env.ARCHON_TELEMETRY_DISABLED = '1';
+    expect(() => captureArchonActive({ surface: 'server' })).not.toThrow();
+  });
+
+  test('captureArchonActive does not throw (enabled)', async () => {
+    delete process.env.ARCHON_TELEMETRY_DISABLED;
+    delete process.env.DO_NOT_TRACK;
+    delete process.env.CI;
+    delete process.env.POSTHOG_API_KEY;
+    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('{"status":"ok"}', { status: 200 })
+    );
+    try {
+      expect(() => captureArchonActive({ surface: 'server' })).not.toThrow();
       await shutdownTelemetry();
     } finally {
       fetchSpy.mockRestore();

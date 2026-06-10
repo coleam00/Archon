@@ -2,9 +2,10 @@
  * Anonymous PostHog telemetry for Archon.
  *
  * Emits a small set of anonymous events — `archon_started` (once per process),
- * `workflow_invoked` (each workflow start), and `workflow_completed` /
- * `workflow_failed` (each terminal run) — so maintainers can see active
- * installs, which workflows run, and run outcomes. No PII, no user identity.
+ * `archon_active` (daily server heartbeat), `workflow_invoked` (each workflow
+ * start), and `workflow_completed` / `workflow_failed` (each terminal run) —
+ * so maintainers can see active installs, which workflows run, and run
+ * outcomes. No PII, no user identity.
  * A random UUID is persisted to `${ARCHON_HOME}/telemetry-id` so we can count
  * distinct installs.
  *
@@ -607,6 +608,32 @@ export function captureArchonStarted(props: ArchonStartedProperties): void {
     client.capture({
       distinctId: getTelemetryId(),
       event: 'archon_started',
+      properties: {
+        ...PRIVACY_INVARIANTS,
+        surface: props.surface,
+        schema_version: TELEMETRY_SCHEMA_VERSION,
+      },
+    });
+  });
+}
+
+/**
+ * Fire-and-forget capture of an `archon_active` heartbeat. Long-running
+ * servers emit `archon_started` once per boot and then go silent, which would
+ * make a server-only install drop out of active-install (DAU/WAU) metrics
+ * after day one. The server entrypoint calls this on a daily interval so
+ * "active installs" stays honest for the server surface. CLI invocations do
+ * NOT need this — each one already emits `archon_started`. Carries the same
+ * categorical properties as `archon_started`; no new data categories, so no
+ * notice re-show or schema bump. Intentionally does not show the first-run
+ * notice (heartbeats are background, never interactive).
+ */
+export function captureArchonActive(props: ArchonStartedProperties): void {
+  if (isTelemetryDisabled()) return;
+  fireAndForget(client => {
+    client.capture({
+      distinctId: getTelemetryId(),
+      event: 'archon_active',
       properties: {
         ...PRIVACY_INVARIANTS,
         surface: props.surface,

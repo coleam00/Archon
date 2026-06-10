@@ -101,6 +101,7 @@ import {
   validateAppDefaultsPaths,
   shutdownTelemetry,
   captureArchonStarted,
+  captureArchonActive,
 } from '@archon/paths';
 import { selectGitHubAuthMode, parseGitCredentialPath } from './github-auth-bootstrap';
 import {
@@ -214,6 +215,14 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   // Anonymous once-per-boot startup event (self-gates on opt-out). Flushed by
   // the shutdownTelemetry() call in the SIGINT/SIGTERM shutdown handler.
   captureArchonStarted({ surface: 'server' });
+
+  // Daily heartbeat so long-running servers stay visible in active-install
+  // metrics (a boot-only event undercounts server installs after day one).
+  // unref() so the timer never keeps the process alive on shutdown.
+  const TELEMETRY_HEARTBEAT_INTERVAL_MS = 24 * 60 * 60 * 1000;
+  setInterval(() => {
+    captureArchonActive({ surface: 'server' });
+  }, TELEMETRY_HEARTBEAT_INTERVAL_MS).unref();
 
   // Phase 2: validate the encryption key the moment per-user provider keys are
   // enabled, regardless of GitHub App configuration. TOKEN_ENCRYPTION_KEY alone

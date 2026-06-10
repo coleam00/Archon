@@ -58,6 +58,7 @@ export type { UpdateCheckResult } from './update-check';
 export {
   captureWorkflowInvoked,
   captureArchonStarted,
+  captureArchonActive,
   captureWorkflowCompleted,
   classifyWorkflowForTelemetry,
   TELEMETRY_SCHEMA_VERSION,
