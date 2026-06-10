@@ -87,6 +87,7 @@ function revalidate(key: string): void {
   if (loader === undefined) {
     cache.delete(key);
     errors.delete(key);
+    versions.delete(key); // fully release the key — nothing subscribes, so nothing snapshots it
     return;
   }
   if (inflight.has(key)) return; // a revalidation is already in flight
@@ -136,6 +137,50 @@ export function keysStartingWith(prefix: string): string[] {
   return out;
 }
 
+/**
+ * Module-level subscription primitive backing `useEntity`. A plain function
+ * (not a hook) so the subscribe/unsubscribe lifecycle is unit-testable — the
+ * same extraction shape as `handleBuilderKeydown` in `useBuilderKeyboard`.
+ */
+export function subscribeKey(
+  key: string,
+  onStoreChange: Listener,
+  loader: () => Promise<unknown>
+): () => void {
+  let subs = listeners.get(key);
+  if (subs === undefined) {
+    subs = new Set();
+    listeners.set(key, subs);
+  }
+  subs.add(onStoreChange);
+
+  loaders.set(key, loader);
+  ensureLoad(key);
+
+  return (): void => {
+    const s = listeners.get(key);
+    if (s === undefined) return;
+    s.delete(onStoreChange);
+    if (s.size === 0) {
+      listeners.delete(key);
+      loaders.delete(key);
+      // Drop the change counter too — with no subscribers nothing snapshots it,
+      // and `useSyncExternalStore` only compares snapshots for change, so a
+      // remount starting back at 0 behaves identically. Without this the
+      // `versions` Map grows unbounded across every key a session ever touches
+      // (#1933). `cache` and `errors` are deliberately retained so a remount
+      // reads warm (see the module contract above); `invalidate()` releases
+      // them for subscriber-less keys via `revalidate`'s no-loader branch.
+      versions.delete(key);
+    }
+  };
+}
+
+/** Snapshot of the per-key change counter — `useEntity`'s store snapshot. */
+export function versionOf(key: string): number {
+  return versions.get(key) ?? 0;
+}
+
 export interface EntityView<T> {
   data: T | undefined;
   error: Error | undefined;
@@ -159,27 +204,8 @@ export function useEntity<T>(key: string, loader: () => Promise<T>): EntityView<
   loaderRef.current = loader;
 
   const subscribe = useCallback(
-    (onStoreChange: () => void): (() => void) => {
-      let subs = listeners.get(key);
-      if (subs === undefined) {
-        subs = new Set();
-        listeners.set(key, subs);
-      }
-      subs.add(onStoreChange);
-
-      loaders.set(key, () => loaderRef.current());
-      ensureLoad(key);
-
-      return (): void => {
-        const s = listeners.get(key);
-        if (s === undefined) return;
-        s.delete(onStoreChange);
-        if (s.size === 0) {
-          listeners.delete(key);
-          loaders.delete(key);
-        }
-      };
-    },
+    (onStoreChange: () => void): (() => void) =>
+      subscribeKey(key, onStoreChange, () => loaderRef.current()),
     [key]
   );
 
@@ -193,8 +219,8 @@ export function useEntity<T>(key: string, loader: () => Promise<T>): EntityView<
   // `loading`, as the panels do.
   useSyncExternalStore(
     subscribe,
-    () => versions.get(key) ?? 0,
-    () => versions.get(key) ?? 0
+    () => versionOf(key),
+    () => versionOf(key)
   );
 
   return {
