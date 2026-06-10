@@ -214,28 +214,28 @@ export function RunDetailPage(): ReactElement {
     }
   }, [detail, nodeOptions, selectedNodeId]);
 
-  // Sticky-bottom follow-tail: ResizeObserver catches both new items AND
-  // intra-message streaming height growth. handleScroll detaches on scroll-up
-  // and re-attaches when the user scrolls back within NEAR_BOTTOM_PX of the end.
+  // Sticky-bottom follow-tail. `lastBottomRef` is the follow *intent*: start
+  // pinned, detach only when the user scrolls up (handleScroll), re-pin when they
+  // scroll back within NEAR_BOTTOM_PX of the end or hit the jump-to-bottom pill.
+  // A ResizeObserver snaps to the tail on any content growth while the intent
+  // holds — catching both new items and intra-message streaming height growth.
+  // Intent is driven purely by user action (scroll / pill), never by a post-commit
+  // position measurement: async content that arrives in multiple waves (events,
+  // then messages) must not be mistaken for the user having scrolled away.
   const lastBottomRef = useRef(true);
-  // Re-snapshot the near-bottom state after every commit so the ResizeObserver
-  // callback (which fires after subsequent content growth) sees whether the user
-  // was pinned to the tail *before* that growth.
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (el === null) return;
-    lastBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
-  });
-  // ResizeObserver: scroll to bottom on any content height change (new items OR
-  // intra-message streaming growth) when pinned to the tail. Attached via callback
-  // ref so it survives the loading early-return and log/graph view toggles — a
-  // mount-only effect would observe nothing on cold loads (first commit renders
-  // the loading screen, so the content div doesn't exist yet).
+  const [atBottom, setAtBottom] = useState(true);
+  // Attached via callback ref so the observer's lifetime tracks the content div's
+  // DOM lifetime — it survives the loading early-return and the log/graph view
+  // toggle, where the scroll container remounts. Each fresh mount re-pins to the
+  // tail so a run always opens at its newest output (cold load with content
+  // already taller than the viewport, or a graph→log round-trip).
   const roRef = useRef<ResizeObserver | null>(null);
   const contentRef = useCallback((node: HTMLDivElement | null): void => {
     roRef.current?.disconnect();
     roRef.current = null;
     if (node === null) return;
+    lastBottomRef.current = true;
+    setAtBottom(true);
     const ro = new ResizeObserver(() => {
       if (!lastBottomRef.current) return;
       const el = scrollRef.current;
@@ -244,7 +244,6 @@ export function RunDetailPage(): ReactElement {
     ro.observe(node);
     roRef.current = ro;
   }, []);
-  const [atBottom, setAtBottom] = useState(true);
   const handleScroll = useCallback((): void => {
     const el = scrollRef.current;
     if (el === null) return;
@@ -256,6 +255,7 @@ export function RunDetailPage(): ReactElement {
     const el = scrollRef.current;
     if (el === null) return;
     el.scrollTop = el.scrollHeight;
+    lastBottomRef.current = true;
     setAtBottom(true);
   }, []);
 
