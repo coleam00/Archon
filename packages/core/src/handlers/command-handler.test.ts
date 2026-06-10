@@ -1523,6 +1523,30 @@ describe('CommandHandler', () => {
         expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-123');
       });
 
+      test('should abandon a failed run — help text promises abandon discards failed runs', async () => {
+        const run = {
+          id: 'run-456',
+          workflow_name: 'implement',
+          conversation_id: 'conv-1',
+          parent_conversation_id: null,
+          codebase_id: null,
+          status: 'failed' as const,
+          user_message: 'test',
+          metadata: {},
+          started_at: new Date(),
+          completed_at: new Date(),
+          last_activity_at: null,
+          working_path: null,
+        };
+        mockGetWorkflowRun.mockResolvedValueOnce(run);
+
+        const result = await handleCommand(baseConversation, '/workflow abandon run-456');
+
+        expect(result.success).toBe(true);
+        expect(result.message).toContain('Abandoned');
+        expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-456');
+      });
+
       test('should reject abandon of already-terminal run', async () => {
         mockGetWorkflowRun.mockResolvedValueOnce({
           id: 'run-done',

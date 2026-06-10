@@ -117,7 +117,7 @@ const HELP_BY_ACTION: Record<Exclude<Action, 'help'>, string> = {
   cancel:
     'cancel — mark a running (non-terminal) run cancelled. Required: runId, confirm=true. Irreversible. A process already executing may finish its current step before it stops.',
   abandon:
-    'abandon — discard a paused/failed (non-terminal) run. Required: runId, confirm=true. Irreversible: the run becomes cancelled.',
+    'abandon — discard a paused/failed run. Required: runId, confirm=true. Irreversible: the run becomes cancelled.',
   approve:
     'approve — approve a paused human gate so the run can continue. Required: runId, confirm=true. Optional: message (comment recorded with the approval). Only paused runs with an approval gate.',
   reject:

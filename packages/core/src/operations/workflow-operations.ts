@@ -7,7 +7,7 @@
 import { createLogger } from '@archon/paths';
 import {
   RESUMABLE_WORKFLOW_STATUSES,
-  TERMINAL_WORKFLOW_STATUSES,
+  SETTLED_WORKFLOW_STATUSES,
   isApprovalContext,
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun, ApprovalContext } from '@archon/workflows/schemas/workflow-run';
@@ -102,11 +102,15 @@ export async function resumeWorkflow(runId: string): Promise<WorkflowRun> {
 }
 
 /**
- * Abandon a non-terminal workflow run (marks it as cancelled).
+ * Abandon a workflow run (marks it as cancelled).
+ *
+ * Failed runs ARE abandonable: 'failed' doubles as a resumable/approval state,
+ * and every help surface promises abandon discards failed runs. Only
+ * 'completed' and 'cancelled' are refused (see SETTLED_WORKFLOW_STATUSES).
  */
 export async function abandonWorkflow(runId: string): Promise<WorkflowRun> {
   const run = await getRunOrThrow(runId, 'operations.workflow_abandon_lookup_failed');
-  if (TERMINAL_WORKFLOW_STATUSES.includes(run.status)) {
+  if (SETTLED_WORKFLOW_STATUSES.includes(run.status)) {
     throw new Error(`Cannot abandon run with status '${run.status}'. Run is already terminal.`);
   }
   try {

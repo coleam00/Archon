@@ -98,6 +98,7 @@ export {
   artifactTypeSchema,
   TERMINAL_WORKFLOW_STATUSES,
   RESUMABLE_WORKFLOW_STATUSES,
+  SETTLED_WORKFLOW_STATUSES,
   isApprovalContext,
 } from './workflow-run';
 export type {

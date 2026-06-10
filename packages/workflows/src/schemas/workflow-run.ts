@@ -31,6 +31,18 @@ export const RESUMABLE_WORKFLOW_STATUSES: readonly WorkflowRunStatus[] = [
   'paused',
 ] as const;
 
+/**
+ * Terminal statuses that can never be cancelled or abandoned. 'failed' is
+ * deliberately NOT in this set: it is overloaded as a resumable/approval state,
+ * so abandoning a failed run (discarding it as 'cancelled') is a valid
+ * transition. Mirrors the guard inside cancelWorkflowRun, which only refuses
+ * 'completed' and 'cancelled'.
+ */
+export const SETTLED_WORKFLOW_STATUSES: readonly WorkflowRunStatus[] = [
+  'completed',
+  'cancelled',
+] as const;
+
 // ---------------------------------------------------------------------------
 // WorkflowStepStatus
 // ---------------------------------------------------------------------------
