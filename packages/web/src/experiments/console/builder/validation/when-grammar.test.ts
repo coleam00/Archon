@@ -50,11 +50,64 @@ describe('when-grammar parse', () => {
     }
   });
 
+  test('parses the $node.field shorthand (engine parity)', () => {
+    const r = parse('$build.exit_code == 0');
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.ast.or).toEqual([
+        [
+          {
+            nodeId: 'build',
+            field: 'exit_code',
+            op: '==',
+            value: '0',
+            shorthand: true,
+            bare: true,
+          },
+        ],
+      ]);
+    }
+  });
+
+  test('parses bare boolean and numeric RHS (engine parity)', () => {
+    const bool = parse('$check.passed == true');
+    expect(bool.ok).toBe(true);
+    if (bool.ok) {
+      expect(bool.ast.or[0][0]).toEqual({
+        nodeId: 'check',
+        field: 'passed',
+        op: '==',
+        value: 'true',
+        shorthand: true,
+        bare: true,
+      });
+    }
+    const num = parse('$score.output.value >= -0.5');
+    expect(num.ok).toBe(true);
+    if (num.ok) {
+      expect(num.ast.or[0][0]).toEqual({
+        nodeId: 'score',
+        field: 'value',
+        op: '>=',
+        value: '-0.5',
+        bare: true,
+      });
+    }
+  });
+
+  test('rejects a sub-field on the shorthand path (engine parity)', () => {
+    const r = parse("$a.field.sub == 'x'");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain('sub-field');
+  });
+
   test('errors on malformed input', () => {
     expect(parse('').ok).toBe(false);
     expect(parse('garbage').ok).toBe(false);
     expect(parse('$a.output ~~ 5').ok).toBe(false);
     expect(parse('$a.output == unquoted').ok).toBe(false);
+    // Bare RHS only covers numbers and booleans, not identifiers.
+    expect(parse('$a.output == yes').ok).toBe(false);
   });
 });
 
@@ -64,12 +117,24 @@ describe('when-grammar format', () => {
       "$classify.output == 'BUG'",
       "$classify.output.type != 'FEATURE'",
       "$a.output == 'X' && $b.output == 'Y' || $c.output == 'Z'",
+      // Shorthand paths and bare RHS keep their original spelling.
+      '$build.exit_code == 0',
+      '$check.passed == true',
+      "$score.output.value >= -0.5 && $gate.approved == 'yes'",
+      // A quoted numeral stays quoted (it is not rewritten to bare).
+      "$n.output == '-1'",
     ];
     for (const input of inputs) {
       const r = parse(input);
       expect(r.ok).toBe(true);
       if (r.ok) expect(format(r.ast)).toBe(input);
     }
+  });
+
+  test('quotes a non-numeric value even if a hand-built atom claims bare', () => {
+    expect(format({ or: [[{ nodeId: 'a', op: '==', value: 'hello', bare: true }]] })).toBe(
+      "$a.output == 'hello'"
+    );
   });
 });
 
