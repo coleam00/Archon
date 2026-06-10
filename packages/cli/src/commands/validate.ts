@@ -82,9 +82,13 @@ function formatWorkflowResult(result: WorkflowValidationResult): string {
 export async function validateWorkflowsCommand(
   cwd: string,
   name?: string,
-  json?: boolean
+  json?: boolean,
+  live?: boolean
 ): Promise<number> {
   const config = await buildValidationConfig(cwd);
+  if (live === true) {
+    config.liveModelCheck = true;
+  }
   const mergedConfig = await loadConfig(cwd);
   const defaultProvider = mergedConfig.assistant;
   const { workflows: workflowEntries, errors: loadErrors } = await discoverWorkflowsWithConfig(

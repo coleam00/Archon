@@ -84,6 +84,12 @@ export interface CommandValidationResult {
 export interface ValidationConfig {
   loadDefaultCommands?: boolean;
   commandFolder?: string;
+  /**
+   * Run live OMP model prompt probes (one real LLM request per unique model).
+   * Default false: cheap registry/credential resolution only.
+   * Set via `archon validate workflows --live`.
+   */
+  liveModelCheck?: boolean;
 }
 
 // =============================================================================
@@ -322,6 +328,26 @@ export async function validateWorkflowResources(
   for (const node of workflow.nodes) {
     const provider = resolveProvider(node, workflow.provider, defaultProvider);
 
+    // --- on_failure_model vs fallbackModel: warn when both are set ---
+    // They look like synonyms but differ: `on_failure_model` is Archon
+    // workflow-layer routing (switch model on failure / open breaker, any
+    // provider); `fallbackModel` is a Claude SDK passthrough option.
+    if (
+      'on_failure_model' in node &&
+      typeof node.on_failure_model === 'string' &&
+      'fallbackModel' in node &&
+      typeof node.fallbackModel === 'string'
+    ) {
+      issues.push({
+        level: 'warning',
+        nodeId: node.id,
+        field: 'on_failure_model',
+        message:
+          "Both 'on_failure_model' (Archon workflow-layer model routing) and 'fallbackModel' (Claude SDK passthrough) are set — these are different mechanisms and may interact in surprising ways",
+        hint: 'Keep one: on_failure_model for Archon-level failover across providers, fallbackModel for Claude SDK-internal fallback',
+      });
+    }
+
     // --- Command nodes: check file exists ---
     if ('command' in node && typeof node.command === 'string') {
       if (!isValidCommandName(node.command)) {
@@ -531,7 +557,9 @@ export async function validateWorkflowResources(
     }
   }
 
-  const modelIssues = await validateOmpModelLiveness(workflow, cwd, defaultProvider, undefined);
+  const modelIssues = await validateOmpModelLiveness(workflow, cwd, defaultProvider, undefined, {
+    live: config?.liveModelCheck === true,
+  });
   issues.push(...modelIssues);
 
   return issues;

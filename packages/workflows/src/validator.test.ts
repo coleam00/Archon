@@ -273,15 +273,41 @@ describe('discoverAvailableCommands', () => {
   });
 
   test('returns sorted list', async () => {
-    await createCommandFile('zebra');
-    await createCommandFile('alpha');
-    const commands = await discoverAvailableCommands(tmpDir, { loadDefaultCommands: false });
-    expect(commands).toEqual(['alpha', 'zebra']);
+    // Hermetic: a real ~/.archon/commands/ on the dev machine would leak extra
+    // command names into the result. Point ARCHON_HOME at an empty dir.
+    const homeDir = await mkdtemp(join(tmpdir(), 'validator-home-'));
+    const originalArchonHome = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = homeDir;
+    try {
+      await createCommandFile('zebra');
+      await createCommandFile('alpha');
+      const commands = await discoverAvailableCommands(tmpDir, { loadDefaultCommands: false });
+      expect(commands).toEqual(['alpha', 'zebra']);
+    } finally {
+      if (originalArchonHome === undefined) {
+        delete process.env.ARCHON_HOME;
+      } else {
+        process.env.ARCHON_HOME = originalArchonHome;
+      }
+      await rm(homeDir, { recursive: true, force: true });
+    }
   });
 
   test('returns empty array when no commands directory', async () => {
-    const commands = await discoverAvailableCommands(tmpDir, { loadDefaultCommands: false });
-    expect(commands).toEqual([]);
+    const homeDir = await mkdtemp(join(tmpdir(), 'validator-home-'));
+    const originalArchonHome = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = homeDir;
+    try {
+      const commands = await discoverAvailableCommands(tmpDir, { loadDefaultCommands: false });
+      expect(commands).toEqual([]);
+    } finally {
+      if (originalArchonHome === undefined) {
+        delete process.env.ARCHON_HOME;
+      } else {
+        process.env.ARCHON_HOME = originalArchonHome;
+      }
+      await rm(homeDir, { recursive: true, force: true });
+    }
   });
 
   test('loadDefaultCommands: false suppresses bundled commands', async () => {
@@ -441,5 +467,64 @@ describe('validateWorkflowResources — agents capability', () => {
     const issues = await validateWorkflowResources(workflow, tmpDir);
     const warning = issues.find(i => i.level === 'warning' && i.field === 'agents');
     expect(warning).toBeUndefined();
+  });
+});
+
+// =============================================================================
+// validateWorkflowResources — on_failure_model vs fallbackModel
+// =============================================================================
+
+describe('validateWorkflowResources — on_failure_model + fallbackModel both set', () => {
+  test('warns when both on_failure_model and fallbackModel are set on one node', async () => {
+    const workflow = makeWorkflow(
+      'test',
+      [
+        {
+          id: 'step1',
+          prompt: 'p',
+          on_failure_model: 'anthropic/claude-haiku-4-5',
+          fallbackModel: 'claude-haiku-4-5-20251001',
+        } as unknown as DagNode,
+      ],
+      'claude'
+    );
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    const warning = issues.find(i => i.level === 'warning' && i.field === 'on_failure_model');
+    expect(warning).toBeDefined();
+    expect(warning!.nodeId).toBe('step1');
+    expect(warning!.message).toContain('on_failure_model');
+    expect(warning!.message).toContain('fallbackModel');
+  });
+
+  test('no warning when only on_failure_model is set', async () => {
+    const workflow = makeWorkflow(
+      'test',
+      [
+        {
+          id: 'step1',
+          prompt: 'p',
+          on_failure_model: 'anthropic/claude-haiku-4-5',
+        } as unknown as DagNode,
+      ],
+      'claude'
+    );
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    expect(issues.find(i => i.field === 'on_failure_model')).toBeUndefined();
+  });
+
+  test('no warning when only fallbackModel is set', async () => {
+    const workflow = makeWorkflow(
+      'test',
+      [
+        {
+          id: 'step1',
+          prompt: 'p',
+          fallbackModel: 'claude-haiku-4-5-20251001',
+        } as unknown as DagNode,
+      ],
+      'claude'
+    );
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    expect(issues.find(i => i.field === 'on_failure_model')).toBeUndefined();
   });
 });

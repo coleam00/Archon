@@ -2,6 +2,19 @@
 // @archon/workflows and @archon/core import from this subpath (@archon/providers/types).
 // HARD RULE: This file must never import SDK packages or other @archon/* packages.
 
+// ─── Error Classification ───────────────────────────────────────────────────
+// Single classifier shared by providers (SDK-level retry) and @archon/workflows
+// (node retry + circuit-breaker accounting). Pure functions, zero SDK deps —
+// safe to expose through the contract layer.
+
+export {
+  classifyError,
+  matchesPattern,
+  FATAL_PATTERNS,
+  TRANSIENT_PATTERNS,
+} from './shared/classify-error';
+export type { ErrorType } from './shared/classify-error';
+
 // ─── Provider Config Defaults ──────────────────────────────────────────────
 // Canonical definitions — @archon/core/config/config-types.ts imports from here.
 // Single source of truth for provider-specific config shapes.

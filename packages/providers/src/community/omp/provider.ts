@@ -49,7 +49,8 @@ function ensureOmpPackageDirShim(): void {
   process.env.OMP_PACKAGE_DIR = shimDir;
 }
 
-const OMP_PROVIDER_ENV_VARS: Record<string, string> = {
+/** Env var name per OMP provider id — shared with model-preflight's credential check. */
+export const OMP_PROVIDER_ENV_VARS: Record<string, string> = {
   anthropic: 'ANTHROPIC_API_KEY',
   openai: 'OPENAI_API_KEY',
   google: 'GEMINI_API_KEY',
@@ -91,6 +92,26 @@ export class OmpProvider implements IAgentProvider {
 
     const assistantConfig = requestOptions?.assistantConfig ?? {};
     const ompConfig = parseOmpConfig(assistantConfig);
+
+    // Apply config-level env vars (assistants.omp.env) to process.env so
+    // OMP's auth/registry layers and extensions can read them. Shell env wins:
+    // only keys not already present are set. Request-level `requestOptions.env`
+    // remains a separate channel (per-provider credential override below).
+    // Mirrors the Pi provider (community/pi/provider.ts).
+    if (ompConfig.env) {
+      const applied: string[] = [];
+      for (const [key, value] of Object.entries(ompConfig.env)) {
+        if (process.env[key] === undefined) {
+          process.env[key] = value;
+          applied.push(key);
+        }
+      }
+      if (applied.length > 0) {
+        // Key names only — never log values (may be secrets).
+        getLog().debug({ keys: applied }, 'omp.config_env_applied');
+      }
+    }
+
     const nodeConfig = requestOptions?.nodeConfig;
     const modelRaw =
       requestOptions?.model ??

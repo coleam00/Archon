@@ -2984,7 +2984,9 @@ export async function executeDagWorkflow(
 
           const primaryModel = nodeOptions?.model ?? resolvedModel ?? node.model ?? workflowModel;
           const nodeFallback =
-            'fallback' in node && typeof node.fallback === 'string' ? node.fallback : undefined;
+            'on_failure_model' in node && typeof node.on_failure_model === 'string'
+              ? node.on_failure_model
+              : undefined;
           let activeOptions = nodeOptions;
           let activeModel = primaryModel;
           let usedFallback = false;
@@ -3057,7 +3059,17 @@ export async function executeDagWorkflow(
 
             if (output.state !== 'failed') break;
 
+            // Fallback engages on ANY error classification, including FATAL.
+            // Intentional: a different model often means a different upstream
+            // provider/credential set, so even auth/credit errors on the
+            // primary can be rescued by `on_failure_model`.
             if (!usedFallback && nodeFallback && activeModel === primaryModel) {
+              // Record the primary-model failure at the moment the fallback
+              // engages — otherwise nodes rescued by the fallback would never
+              // count against the primary and its breaker could never open.
+              if (primaryModel) {
+                modelCircuitBreaker.recordFailure(provider, primaryModel);
+              }
               activeModel = nodeFallback;
               activeOptions = { ...nodeOptions, model: nodeFallback };
               usedFallback = true;
@@ -3105,8 +3117,12 @@ export async function executeDagWorkflow(
           }
 
           if (output.state === 'failed') {
-            if (primaryModel) {
-              modelCircuitBreaker.recordFailure(provider, primaryModel);
+            // Attribute the terminal failure to the model that actually ran
+            // the last attempt (the fallback when it engaged, the primary
+            // otherwise) — the primary's failure was already recorded at the
+            // fallback-switch point above.
+            if (activeModel) {
+              modelCircuitBreaker.recordFailure(provider, activeModel);
             }
             const detail = buildNodeFailureDetail({
               nodeId: node.id,

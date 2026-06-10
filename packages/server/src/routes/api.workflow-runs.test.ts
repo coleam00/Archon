@@ -1497,26 +1497,35 @@ describe('approve/reject auto-resume', () => {
   });
 
   test('approve: skips dispatch when parent_conversation_id is null (CLI-dispatched run)', async () => {
+    // Run has a working_path, so the server falls back to a background CLI
+    // re-spawn ("Resuming from server.") instead of orchestrator dispatch.
+    // /bin/true keeps the fire-and-forget exec hermetic.
+    process.env.ARCHON_BIN = '/bin/true';
     mockGetWorkflowRun.mockResolvedValueOnce({
       ...MOCK_PAUSED_RUN,
       parent_conversation_id: null,
     });
 
-    const { app } = makeApp();
-    const response = await app.request('/api/workflows/runs/run-paused-1/approve', {
-      method: 'POST',
-      body: JSON.stringify({ comment: 'LGTM' }),
-      headers: { 'Content-Type': 'application/json' },
-    });
+    try {
+      const { app } = makeApp();
+      const response = await app.request('/api/workflows/runs/run-paused-1/approve', {
+        method: 'POST',
+        body: JSON.stringify({ comment: 'LGTM' }),
+        headers: { 'Content-Type': 'application/json' },
+      });
 
-    expect(response.status).toBe(200);
-    const body = (await response.json()) as { message: string };
-    expect(body.message).toContain('archon workflow resume run-paused-1');
-    expect(mockHandleMessage).not.toHaveBeenCalled();
-    expect(mockGetConversationById).not.toHaveBeenCalled();
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { message: string };
+      expect(body.message).toContain('Resuming from server');
+      expect(mockHandleMessage).not.toHaveBeenCalled();
+      expect(mockGetConversationById).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.ARCHON_BIN;
+    }
   });
 
   test('approve: skips dispatch when parent conversation no longer exists', async () => {
+    process.env.ARCHON_BIN = '/bin/true';
     mockGetWorkflowRun.mockResolvedValueOnce({
       ...MOCK_PAUSED_RUN,
       parent_conversation_id: 'deleted-conv-uuid',
@@ -1532,8 +1541,10 @@ describe('approve/reject auto-resume', () => {
 
     expect(response.status).toBe(200);
     const body = (await response.json()) as { message: string };
-    expect(body.message).toContain('archon workflow resume run-paused-1');
+    // Orchestrator dispatch skipped; server-side CLI re-spawn takes over.
+    expect(body.message).toContain('Resuming from server');
     expect(mockHandleMessage).not.toHaveBeenCalled();
+    delete process.env.ARCHON_BIN;
   });
 
   test('approve: skips dispatch when parent conversation is on a non-web platform', async () => {
@@ -1541,6 +1552,7 @@ describe('approve/reject auto-resume', () => {
     // must not route through dispatchToOrchestrator — that helper is wired
     // to the web adapter + lock manager, so dispatching a Slack thread_ts
     // or Telegram chat_id would misroute through the wrong adapter.
+    process.env.ARCHON_BIN = '/bin/true';
     mockGetWorkflowRun.mockResolvedValueOnce({
       ...MOCK_PAUSED_RUN,
       parent_conversation_id: 'slack-parent-conv-uuid',
@@ -1560,9 +1572,10 @@ describe('approve/reject auto-resume', () => {
 
     expect(response.status).toBe(200);
     const body = (await response.json()) as { message: string };
-    // Surfaces the exact CLI command so the web-UI user has a concrete next step.
-    expect(body.message).toContain('archon workflow resume run-paused-1');
+    // Orchestrator dispatch skipped; server-side CLI re-spawn takes over.
+    expect(body.message).toContain('Resuming from server');
     expect(mockHandleMessage).not.toHaveBeenCalled();
+    delete process.env.ARCHON_BIN;
   });
 
   test('reject: dispatches resume for on_reject flows when parent is set', async () => {

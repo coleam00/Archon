@@ -135,3 +135,73 @@ describe('bridgeSession thinking tag filtering', () => {
     ]);
   });
 });
+
+describe('bridgeSession terminal result chunk', () => {
+  async function collectWithSchema(
+    session: AgentSession,
+    schema?: Record<string, unknown>
+  ): Promise<MessageChunk[]> {
+    const chunks: MessageChunk[] = [];
+    for await (const chunk of bridgeSession(session, 'prompt', undefined, schema)) {
+      chunks.push(chunk);
+    }
+    return chunks;
+  }
+
+  test('yields exactly one result chunk with tokens AND structuredOutput when schema set', async () => {
+    const json = '{"verdict":"pass","score":9}';
+    const chunks = await collectWithSchema(makeSession([textDelta(json), agentEnd(json)]), {
+      type: 'object',
+    });
+
+    const results = chunks.filter(
+      (c): c is Extract<MessageChunk, { type: 'result' }> => c.type === 'result'
+    );
+    expect(results).toHaveLength(1);
+    const result = results[0];
+    // Tokens from agent_end usage preserved
+    expect(result.tokens).toEqual({ input: 1, output: 1, total: 2, cost: 0 });
+    // structuredOutput merged into the SAME terminal chunk
+    expect(result.structuredOutput).toEqual({ verdict: 'pass', score: 9 });
+    // Terminal result is the last chunk in the stream
+    expect(chunks[chunks.length - 1]).toBe(result);
+  });
+
+  test('non-schema path yields exactly one result chunk without structuredOutput', async () => {
+    const chunks = await collectWithSchema(makeSession([textDelta('hello'), agentEnd()]));
+
+    const results = chunks.filter(
+      (c): c is Extract<MessageChunk, { type: 'result' }> => c.type === 'result'
+    );
+    expect(results).toHaveLength(1);
+    expect(results[0].tokens).toEqual({ input: 1, output: 1, total: 2, cost: 0 });
+    expect('structuredOutput' in results[0]).toBe(false);
+  });
+
+  test('unparseable transcript with schema yields the single token result without structuredOutput', async () => {
+    const chunks = await collectWithSchema(
+      makeSession([textDelta('not json at all'), agentEnd()]),
+      { type: 'object' }
+    );
+
+    const results = chunks.filter(
+      (c): c is Extract<MessageChunk, { type: 'result' }> => c.type === 'result'
+    );
+    expect(results).toHaveLength(1);
+    expect(results[0].tokens).toBeDefined();
+    expect('structuredOutput' in results[0]).toBe(false);
+  });
+
+  test('preserves missing_assistant_message semantics on the single terminal result', async () => {
+    const chunks = await collectWithSchema(makeSession([{ type: 'agent_end', messages: [] }]), {
+      type: 'object',
+    });
+
+    const results = chunks.filter(
+      (c): c is Extract<MessageChunk, { type: 'result' }> => c.type === 'result'
+    );
+    expect(results).toHaveLength(1);
+    expect(results[0].isError).toBe(true);
+    expect(results[0].errorSubtype).toBe('missing_assistant_message');
+  });
+});

@@ -116,6 +116,8 @@ Commands:
   doctor                     Verify your Archon setup (Claude binary, gh auth, DB, adapters)
   migrate:sqlite-to-postgres  One-shot migration from SQLite to PostgreSQL
   validate workflows [name]  Validate workflow definitions and their references
+                             (--live: send real OMP model probes instead of the
+                             default registry/credential check)
   validate commands [name]   Validate command files
   help                       Show this help message
 
@@ -243,6 +245,7 @@ async function main(): Promise<number> {
         'download-only': { type: 'boolean' },
         scope: { type: 'string' },
         force: { type: 'boolean' },
+        live: { type: 'boolean' },
       },
       allowPositionals: true,
       strict: false, // Allow unknown flags to pass through
@@ -592,7 +595,8 @@ async function main(): Promise<number> {
         switch (subcommand) {
           case 'workflows': {
             const validateName = positionals[2];
-            return await validateWorkflowsCommand(effectiveCwd, validateName, jsonFlag);
+            const liveFlag = values.live as boolean | undefined;
+            return await validateWorkflowsCommand(effectiveCwd, validateName, jsonFlag, liveFlag);
           }
 
           case 'commands': {

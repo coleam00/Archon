@@ -396,6 +396,51 @@ describe('dagNodeSchema — new Claude SDK options', () => {
       expect((result.data as PromptNode).fallbackModel).toBe('claude-haiku-4-5-20251001');
   });
 
+  test('parses on_failure_model string (Archon workflow-layer model routing)', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'n',
+      prompt: 'do it',
+      model: 'minimax-token-plan/MiniMax-M3',
+      on_failure_model: 'anthropic/claude-haiku-4-5',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect((result.data as PromptNode).on_failure_model).toBe('anthropic/claude-haiku-4-5');
+    }
+  });
+
+  test('rejects empty on_failure_model string', () => {
+    const result = dagNodeSchema.safeParse({ id: 'n', prompt: 'do it', on_failure_model: '' });
+    expect(result.success).toBe(false);
+  });
+
+  test('the renamed legacy field `fallback` is no longer recognized (stripped)', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'n',
+      prompt: 'do it',
+      fallback: 'anthropic/claude-haiku-4-5',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect('fallback' in result.data).toBe(false);
+      expect('on_failure_model' in result.data).toBe(false);
+    }
+  });
+
+  test('on_failure_model and fallbackModel can coexist on a node (validator warns)', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'n',
+      prompt: 'do it',
+      on_failure_model: 'codex/gpt-5.3-codex',
+      fallbackModel: 'claude-haiku-4-5-20251001',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect((result.data as PromptNode).on_failure_model).toBe('codex/gpt-5.3-codex');
+      expect((result.data as PromptNode).fallbackModel).toBe('claude-haiku-4-5-20251001');
+    }
+  });
+
   test('strips AI-only fields from bash nodes', () => {
     const result = dagNodeSchema.safeParse({
       id: 'b',
@@ -653,6 +698,7 @@ describe('SCRIPT_NODE_AI_FIELDS', () => {
       'thinking',
       'maxBudgetUsd',
       'systemPrompt',
+      'on_failure_model',
       'fallbackModel',
       'betas',
       'sandbox',
@@ -686,6 +732,7 @@ describe('LOOP_NODE_AI_FIELDS', () => {
       'thinking',
       'maxBudgetUsd',
       'systemPrompt',
+      'on_failure_model',
       'fallbackModel',
       'betas',
       'sandbox',

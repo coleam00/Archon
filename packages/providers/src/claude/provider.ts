@@ -673,13 +673,11 @@ async function* withSubprocessDeathDetection<T extends { type: string }>(
     // If the subprocess is alive, .next() resolves with an event
     // (or {done: true} when the stream ends) before the timeout.
     // If the subprocess has died, .next() hangs and the timeout wins.
-    const timeoutId = setTimeout(() => {}, 0); // placeholder
+    // Holder for the death timer so it can be cancelled when .next() wins.
+    const deathTimer: { id?: ReturnType<typeof setTimeout> } = {};
     const deathPromise = new Promise<IteratorResult<T>>(resolve => {
-      const id = setTimeout(() => {
-        getLog().error(
-          { cwd, timeoutMs: deathTimeoutMs },
-          'claude.stream_death_timeout'
-        );
+      deathTimer.id = setTimeout(() => {
+        getLog().error({ cwd, timeoutMs: deathTimeoutMs }, 'claude.stream_death_timeout');
         abortController.abort();
         resolve({
           done: true,
@@ -689,7 +687,7 @@ async function* withSubprocessDeathDetection<T extends { type: string }>(
             isError: true,
             errorSubtype: 'subprocess_dead',
             errors: [
-              `Claude Code subprocess appears to have died. ` +
+              'Claude Code subprocess appears to have died. ' +
                 `No SDK events received within ${deathTimeoutMs / 1000}s. ` +
                 'The SDK async generator did not emit a result event before the process terminated.',
             ],
@@ -697,15 +695,12 @@ async function* withSubprocessDeathDetection<T extends { type: string }>(
           } as unknown as T,
         });
       }, deathTimeoutMs);
-      // Store the timeout ID so we can cancel it if .next() wins
-      (timeoutId as unknown as { _id: ReturnType<typeof setTimeout> })._id = id;
     });
 
     const result = await Promise.race([events.next(), deathPromise]);
 
     // Cancel the death timeout — .next() won the race
-    const storedId = (timeoutId as unknown as { _id: ReturnType<typeof setTimeout> })._id;
-    if (storedId) clearTimeout(storedId);
+    if (deathTimer.id !== undefined) clearTimeout(deathTimer.id);
 
     if (result.done) return;
     yield result.value;
@@ -1024,18 +1019,19 @@ export class ClaudeProvider implements IAgentProvider {
         // subprocess disappears without the SDK emitting a result event.
         // This prevents the DAG executor's `for await` loop from hanging
         // for 30 minutes (STEP_IDLE_TIMEOUT_MS) on a dead subprocess.
-        const deathAwareEvents = withSubprocessDeathDetection(
-          rawEvents,
-          cwd,
-          controller
-        );
+        const deathAwareEvents = withSubprocessDeathDetection(rawEvents, cwd, controller);
 
         const timeoutMs = getFirstEventTimeoutMs();
         const diagnostics = buildFirstEventHangDiagnostics(
           options.env as Record<string, string>,
           options.model
         );
-        const events = withFirstMessageTimeout(deathAwareEvents, controller, timeoutMs, diagnostics);
+        const events = withFirstMessageTimeout(
+          deathAwareEvents,
+          controller,
+          timeoutMs,
+          diagnostics
+        );
 
         // 5. Stream normalized events
         yield* streamClaudeMessages(events, toolResultQueue);

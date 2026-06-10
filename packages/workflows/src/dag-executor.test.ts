@@ -2237,6 +2237,182 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
   }, 5_000);
 });
 
+describe('executeDagWorkflow -- model circuit breaker + on_failure_model', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(
+      tmpdir(),
+      `dag-breaker-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    await mkdir(join(testDir, '.archon'), { recursive: true });
+
+    mockSendQueryDag.mockClear();
+    mockGetAgentProviderDag.mockClear();
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+  });
+
+  afterEach(async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+    try {
+      await rm(testDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  });
+
+  /** Prompt node with primary model + on_failure_model, chained for deterministic order. */
+  function failoverNode(id: string, dependsOn?: string[]): DagNode {
+    return {
+      id,
+      prompt: 'go',
+      model: 'primary-model',
+      on_failure_model: 'backup-model',
+      ...(dependsOn ? { depends_on: dependsOn, trigger_rule: 'all_done' as const } : {}),
+    } as DagNode;
+  }
+
+  it('opens the primary breaker after 3 fallback-rescued failures; 4th node routes straight to fallback', async () => {
+    // Primary always fails FATAL (no retry); backup always succeeds.
+    mockSendQueryDag.mockImplementation(function* (
+      _prompt: string,
+      _cwd: string,
+      _resume?: string,
+      options?: { model?: string }
+    ) {
+      if (options?.model === 'primary-model') {
+        throw new Error('401 unauthorized: bad api key');
+      }
+      yield { type: 'assistant', content: 'rescued by backup' };
+      yield { type: 'result', sessionId: 'backup-sess' };
+    });
+
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('dag-breaker-open-run');
+
+    const nodes: DagNode[] = [
+      failoverNode('n1'),
+      failoverNode('n2', ['n1']),
+      failoverNode('n3', ['n2']),
+      failoverNode('n4', ['n3']),
+    ];
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-breaker',
+      testDir,
+      { name: 'breaker-test', nodes },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    // Nodes 1-3: primary attempted (and failed) each time -> 3 recorded failures.
+    // Node 4: breaker open for primary -> provider never called with primary again.
+    const primaryCalls = mockSendQueryDag.mock.calls.filter(
+      call => (call[3] as { model?: string } | undefined)?.model === 'primary-model'
+    );
+    const backupCalls = mockSendQueryDag.mock.calls.filter(
+      call => (call[3] as { model?: string } | undefined)?.model === 'backup-model'
+    );
+    expect(primaryCalls.length).toBe(3);
+    expect(backupCalls.length).toBe(4);
+
+    // Node 4 announces breaker-open routing (not a primary failure).
+    const sendCalls = (platform.sendMessage as ReturnType<typeof mock>).mock.calls;
+    const breakerMessages = sendCalls.filter(
+      (call: unknown[]) =>
+        typeof call[1] === 'string' &&
+        (call[1] as string).includes('circuit breaker open') &&
+        (call[1] as string).includes('n4')
+    );
+    expect(breakerMessages.length).toBe(1);
+  });
+
+  it('attributes terminal failures to the model that ran the last attempt (fallback, not primary)', async () => {
+    // Both primary and backup fail FATAL on every node.
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'about to fail' };
+      throw new Error('403 forbidden: nope');
+    });
+
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('dag-breaker-attribution-run');
+
+    // Nodes 1-3: primary fails -> switch records primary; backup fails terminally
+    // -> records backup. After 3 nodes BOTH breakers are open.
+    // Node 4 uses backup-model as its PRIMARY: with correct attribution its
+    // breaker is open and the provider is never invoked for it.
+    const nodes: DagNode[] = [
+      failoverNode('n1'),
+      failoverNode('n2', ['n1']),
+      failoverNode('n3', ['n2']),
+      {
+        id: 'n4',
+        prompt: 'go',
+        model: 'backup-model',
+        depends_on: ['n3'],
+        trigger_rule: 'all_done',
+      } as DagNode,
+    ];
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-breaker-attr',
+      testDir,
+      { name: 'breaker-attr-test', nodes },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const backupCalls = mockSendQueryDag.mock.calls.filter(
+      call => (call[3] as { model?: string } | undefined)?.model === 'backup-model'
+    );
+    // backup ran once per nodes 1-3 (as fallback) but NOT for node 4 (breaker open)
+    expect(backupCalls.length).toBe(3);
+
+    // Node 4 failed with the circuit-breaker error, without execution.
+    const eventCalls = (mockDeps.store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const node4Breaker = eventCalls.filter((call: unknown[]) => {
+      const event = call[0] as {
+        event_type: string;
+        step_name?: string;
+        data?: { error?: string; circuit_breaker?: boolean };
+      };
+      return (
+        event.event_type === 'node_failed' &&
+        event.step_name === 'n4' &&
+        event.data?.circuit_breaker === true &&
+        (event.data.error ?? '').includes('backup-model')
+      );
+    });
+    expect(node4Breaker.length).toBeGreaterThan(0);
+  });
+});
+
 describe('executeDagWorkflow -- tool_called event persistence', () => {
   let testDir: string;
 
@@ -7806,7 +7982,8 @@ describe('bundled opus nodes -- provider annotation invariant (#1610)', () => {
     for (const file of files) {
       const src = await readFileFs(join(defaultsDir, file), 'utf-8');
       const result = parseWorkflow(src, file);
-      if (!('workflow' in result)) continue; // skip load errors
+      // parseWorkflow returns { workflow: null, error } on load errors — skip those
+      if (!result.workflow) continue;
 
       const wf = result.workflow;
       if (!('nodes' in wf) || !wf.nodes) continue; // skip non-DAG workflows

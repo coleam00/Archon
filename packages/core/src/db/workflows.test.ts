@@ -488,11 +488,14 @@ describe('workflows database', () => {
       expect(result).toEqual(failedRun);
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain("status IN ('failed', 'paused')");
-      expect(query).toContain('working_path = $2');
+      // Matches by codebase_id subquery (not exact working_path) since d0e24ec5 —
+      // CLI-spawned runs store the worktree path while --resume runs from the
+      // canonical codebase path.
+      expect(query).toContain('codebase_id = (');
       expect(query).not.toContain('conversation_id');
       expect(query).toContain('ORDER BY started_at DESC');
       expect(query).not.toMatch(/--.*\$\d/); // regression guard for #999: $N in SQL comments breaks convertPlaceholders
-      expect(params).toEqual(['feature-development', '/repo/path', 1]);
+      expect(params).toEqual(['feature-development', 'feature-development', 1]);
     });
 
     test('returns a stale running run (no activity for >1 day)', async () => {
@@ -511,7 +514,7 @@ describe('workflows database', () => {
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain("status = 'running'");
       expect(query).toContain('last_activity_at');
-      expect(params).toEqual(['feature-development', '/repo/path', 1]);
+      expect(params).toEqual(['feature-development', 'feature-development', 1]);
     });
 
     test('returns a running run with null last_activity_at (never recorded activity)', async () => {

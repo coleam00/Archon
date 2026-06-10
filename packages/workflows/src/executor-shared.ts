@@ -7,6 +7,7 @@
  */
 import { readFile } from 'fs/promises';
 import { join } from 'path';
+import { classifyError } from '@archon/providers/types';
 import type { IWorkflowPlatform, WorkflowDeps, WorkflowMessageMetadata } from './deps';
 import * as archonPaths from '@archon/paths';
 import { BUNDLED_COMMANDS, isBinaryBuild } from './defaults/bundled-defaults';
@@ -22,65 +23,17 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 // ─── Error Classification ────────────────────────────────────────────────────
+// Single implementation lives in @archon/providers (shared/classify-error.ts),
+// exposed through the contract layer. Re-exported here for existing internal
+// callers (executor.ts, dag-executor.ts, tests).
 
-/** Result of error classification */
-export type ErrorType = 'TRANSIENT' | 'FATAL' | 'UNKNOWN';
-
-/** Fatal error patterns - authentication/authorization issues that won't resolve with retry */
-export const FATAL_PATTERNS = [
-  'unauthorized',
-  'forbidden',
-  'invalid token',
-  'authentication failed',
-  'permission denied',
-  '401',
-  '403',
-  'credit balance',
-  'auth error',
-];
-
-/** Transient error patterns - temporary issues that may resolve with retry */
-export const TRANSIENT_PATTERNS = [
-  'timeout',
-  'econnrefused',
-  'econnreset',
-  'etimedout',
-  'rate limit',
-  'too many requests',
-  '429',
-  '503',
-  '502',
-  '529', // Anthropic HTTP 529 = service overloaded
-  'overloaded', // Anthropic/Minimax overload message text
-  'network error',
-  'socket hang up',
-  'exited with code',
-  'claude code crash',
-];
-
-/**
- * Check if error message matches any pattern in the list.
- */
-export function matchesPattern(message: string, patterns: string[]): boolean {
-  return patterns.some(pattern => message.includes(pattern));
-}
-
-/**
- * Classify an error to determine if it's transient (can retry) or fatal (should fail).
- * FATAL patterns take priority over TRANSIENT patterns to prevent an error message
- * containing both (e.g. "unauthorized: process exited with code 1") from being retried.
- */
-export function classifyError(error: Error): ErrorType {
-  const message = error.message.toLowerCase();
-
-  if (matchesPattern(message, FATAL_PATTERNS)) {
-    return 'FATAL';
-  }
-  if (matchesPattern(message, TRANSIENT_PATTERNS)) {
-    return 'TRANSIENT';
-  }
-  return 'UNKNOWN';
-}
+export {
+  classifyError,
+  matchesPattern,
+  FATAL_PATTERNS,
+  TRANSIENT_PATTERNS,
+} from '@archon/providers/types';
+export type { ErrorType } from '@archon/providers/types';
 
 // ─── Subprocess Failure Formatting ───────────────────────────────────────────
 

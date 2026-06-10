@@ -447,6 +447,11 @@ export async function* bridgeSession(
     }
   );
 
+  // Terminal result chunk from `agent_end` — held back and yielded exactly
+  // once after stream completion so structuredOutput can be merged into it
+  // (mirrors the Pi bridge: one terminal result with tokens + structuredOutput).
+  let terminalResult: Extract<MessageChunk, { type: 'result' }> | undefined;
+
   try {
     for await (const item of queue) {
       if (item.kind === 'done') {
@@ -464,6 +469,10 @@ export async function* bridgeSession(
         error = item.error;
         break;
       }
+      if (item.chunk.type === 'result') {
+        terminalResult = item.chunk;
+        continue;
+      }
       pendingChunks.push(item.chunk);
       yield item.chunk;
     }
@@ -477,7 +486,9 @@ export async function* bridgeSession(
 
   if (error) throw error;
 
-  // Attempt structured output parse if schema was requested
+  // Attempt structured output parse if schema was requested, then merge into
+  // the single terminal result chunk (preserves missing_assistant_message
+  // semantics — that error result is still the one terminal chunk).
   if (outputSchema) {
     const transcript = pendingChunks
       .filter(c => c.type === 'assistant')
@@ -485,7 +496,13 @@ export async function* bridgeSession(
       .join('');
     const parsed = tryParseStructuredOutput(transcript);
     if (parsed !== undefined) {
-      yield { type: 'result', structuredOutput: parsed };
+      terminalResult = terminalResult
+        ? { ...terminalResult, structuredOutput: parsed }
+        : { type: 'result', structuredOutput: parsed };
     }
+  }
+
+  if (terminalResult) {
+    yield terminalResult;
   }
 }

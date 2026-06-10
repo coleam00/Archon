@@ -135,8 +135,12 @@ export const dagNodeBaseSchema = z.object({
   when: z.string().optional(),
   trigger_rule: triggerRuleSchema.optional(),
   model: z.string().optional(),
-  /** Full provider/model path to use when primary model fails or breaker is open. */
-  fallback: z.string().min(1).optional(),
+  /**
+   * Archon workflow-layer model routing: full provider/model path to switch to
+   * when the primary model fails or its circuit breaker is open.
+   * Distinct from `fallbackModel` (Claude SDK passthrough option below).
+   */
+  on_failure_model: z.string().min(1).optional(),
   provider: z.string().trim().min(1).optional(),
   context: z.enum(['fresh', 'shared']).optional(),
   output_format: z.record(z.unknown()).optional(),
@@ -344,6 +348,7 @@ export const BASH_NODE_AI_FIELDS: readonly string[] = [
   'thinking',
   'maxBudgetUsd',
   'systemPrompt',
+  'on_failure_model',
   'fallbackModel',
   'betas',
   'sandbox',
@@ -569,7 +574,7 @@ export const dagNodeSchema = dagNodeBaseSchema
       ...(data.thinking !== undefined ? { thinking: data.thinking } : {}),
       ...(data.maxBudgetUsd !== undefined ? { maxBudgetUsd: data.maxBudgetUsd } : {}),
       ...(data.systemPrompt !== undefined ? { systemPrompt: data.systemPrompt } : {}),
-      ...(data.fallback !== undefined ? { fallback: data.fallback } : {}),
+      ...(data.on_failure_model !== undefined ? { on_failure_model: data.on_failure_model } : {}),
       ...(data.fallbackModel !== undefined ? { fallbackModel: data.fallbackModel } : {}),
       ...(data.betas !== undefined ? { betas: data.betas } : {}),
       ...(data.sandbox !== undefined ? { sandbox: data.sandbox } : {}),

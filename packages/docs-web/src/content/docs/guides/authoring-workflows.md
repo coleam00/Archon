@@ -213,7 +213,8 @@ nodes:
 | `thinking` | string \| object | — | Thinking mode: `'adaptive'`, `'disabled'`, or `{type:'enabled', budgetTokens:N}`. Claude only. Also settable at workflow level |
 | `maxBudgetUsd` | number | — | USD cost cap; node fails if exceeded. Claude only. Per-node only |
 | `systemPrompt` | string | — | Override the default `claude_code` system prompt for this node. Claude only. Per-node only |
-| `fallbackModel` | string | — | Model to use if primary model fails. Claude only. Also settable at workflow level |
+| `fallbackModel` | string | — | Model to use if primary model fails (Claude SDK-internal). Claude only. Also settable at workflow level |
+| `on_failure_model` | string | — | Archon-level model failover: full model path tried when the primary model fails or its per-run circuit breaker is open. Any provider. Per-node only |
 | `betas` | string[] | — | SDK beta feature flags (e.g., `'context-1m-2025-08-07'`). Claude only. Also settable at workflow level |
 | `sandbox` | object | — | OS-level filesystem/network restrictions for the Claude subprocess. Claude only. Also settable at workflow level |
 

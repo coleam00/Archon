@@ -260,3 +260,65 @@ describe('OmpProvider.sendQuery', () => {
     expect(error?.message).toContain('GEMINI_API_KEY');
   });
 });
+
+describe('OmpProvider assistants.omp.env application', () => {
+  beforeEach(() => {
+    mockLogger.debug.mockClear();
+    scriptedEvents.length = 0;
+    scriptedEvents.push(agentEnd());
+    mockFind.mockImplementation(() => ({
+      provider: 'google',
+      id: 'gemini-2.5-pro',
+      api: 'google',
+    }));
+    mockDiscoverAuthStorage.mockImplementation(async () => ({
+      setRuntimeApiKey: mock(() => undefined),
+      getApiKey: mock(async () => 'sk-test'),
+    }));
+    delete process.env.OMP_ENV_TEST_UNSET;
+    delete process.env.OMP_ENV_TEST_SHELL;
+    delete process.env.GEMINI_API_KEY;
+  });
+
+  test('applies config env for keys not present in the shell env', async () => {
+    const { error } = await consume(
+      new OmpProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        assistantConfig: { env: { OMP_ENV_TEST_UNSET: 'from-config' } },
+      })
+    );
+    expect(error).toBeUndefined();
+    expect(process.env.OMP_ENV_TEST_UNSET).toBe('from-config');
+    delete process.env.OMP_ENV_TEST_UNSET;
+  });
+
+  test('shell env wins — existing keys are never overwritten', async () => {
+    process.env.OMP_ENV_TEST_SHELL = 'from-shell';
+    const { error } = await consume(
+      new OmpProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        assistantConfig: { env: { OMP_ENV_TEST_SHELL: 'from-config' } },
+      })
+    );
+    expect(error).toBeUndefined();
+    expect(process.env.OMP_ENV_TEST_SHELL).toBe('from-shell');
+    delete process.env.OMP_ENV_TEST_SHELL;
+  });
+
+  test('logs applied key NAMES only — never values', async () => {
+    await consume(
+      new OmpProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        assistantConfig: { env: { OMP_ENV_TEST_UNSET: 'secret-value-xyz' } },
+      })
+    );
+    const envLogCalls = mockLogger.debug.mock.calls.filter(
+      call => call[1] === 'omp.config_env_applied'
+    );
+    expect(envLogCalls).toHaveLength(1);
+    expect(envLogCalls[0][0]).toEqual({ keys: ['OMP_ENV_TEST_UNSET'] });
+    const serialized = JSON.stringify(mockLogger.debug.mock.calls);
+    expect(serialized).not.toContain('secret-value-xyz');
+    delete process.env.OMP_ENV_TEST_UNSET;
+  });
+});
