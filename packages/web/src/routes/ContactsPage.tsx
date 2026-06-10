@@ -191,12 +191,12 @@ export function ContactsPage(): React.ReactElement {
                     )}
                   </div>
                   <span
-                    className={`shrink-0 rounded px-2 py-0.5 text-[10px] font-medium ${
+                    className={`shrink-0 rounded border px-2 py-0.5 text-[10px] font-medium ${
                       c.category === 'team'
-                        ? 'bg-blue-950/50 text-blue-300'
+                        ? 'border-blue-700/40 bg-blue-100 text-blue-800'
                         : c.category === 'clinical-partners'
-                          ? 'bg-emerald-950/50 text-emerald-800'
-                          : 'bg-amber-950/50 text-amber-300'
+                          ? 'border-emerald-700/40 bg-emerald-100 text-emerald-800'
+                          : 'border-amber-700/40 bg-amber-100 text-amber-800'
                     }`}
                   >
                     {c.category.replace('-', ' ')}
