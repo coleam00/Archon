@@ -281,6 +281,31 @@ export async function loadGlobalConfig(forceReload = false): Promise<GlobalConfi
 }
 
 /**
+ * Coerce `recommendedWorkflows` to a clean `string[]` of trimmed non-empty
+ * entries. Non-array values, non-string entries, and empties are dropped.
+ * Advisory data — never throws.
+ */
+function sanitizeRecommendedWorkflows(raw: unknown, configPath: string): string[] | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (!Array.isArray(raw)) {
+    getLog().debug(
+      { configPath, rawType: typeof raw },
+      'config.recommended_workflows_not_array_ignored'
+    );
+    return undefined;
+  }
+  const cleaned: string[] = [];
+  for (const entry of raw) {
+    if (typeof entry === 'string' && entry.trim().length > 0) {
+      cleaned.push(entry.trim());
+    } else {
+      getLog().debug({ configPath, entry }, 'config.recommended_workflows_entry_ignored');
+    }
+  }
+  return cleaned;
+}
+
+/**
  * Load repository config from .archon/config.yaml
  * Returns empty object if no config found
  */
@@ -289,7 +314,17 @@ export async function loadRepoConfig(repoPath: string): Promise<RepoConfig> {
 
   try {
     const content = await readConfigFile(configPath);
-    return (parseYaml(content) as RepoConfig) ?? {};
+    const parsed = (parseYaml(content) as RepoConfig) ?? {};
+    const recommendedWorkflows = sanitizeRecommendedWorkflows(
+      (parsed as { recommendedWorkflows?: unknown }).recommendedWorkflows,
+      configPath
+    );
+    if (recommendedWorkflows !== undefined) {
+      parsed.recommendedWorkflows = recommendedWorkflows;
+    } else {
+      delete parsed.recommendedWorkflows;
+    }
+    return parsed;
   } catch (error) {
     const err = error as { code?: string };
     if (err.code === 'ENOENT') {

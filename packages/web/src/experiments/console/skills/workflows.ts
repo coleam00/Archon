@@ -27,13 +27,21 @@ interface WorkflowListEntry {
 
 interface WorkflowsResponse {
   workflows: WorkflowListEntry[];
+  /** Repo-curated workflow names to pin on top, in declared order (PR #1929). */
+  recommended?: string[];
   errors?: unknown[];
 }
 
-export async function listWorkflows(cwd?: string): Promise<Workflow[]> {
+/** Discovered workflows plus the repo-curated recommended names (declared order). */
+export interface WorkflowListResult {
+  workflows: Workflow[];
+  recommended: string[];
+}
+
+export async function listWorkflows(cwd?: string): Promise<WorkflowListResult> {
   const qs = cwd !== undefined ? `?cwd=${encodeURIComponent(cwd)}` : '';
   const res = await requestJson<WorkflowsResponse>(`/api/workflows${qs}`);
-  return res.workflows.map(toWorkflow);
+  return { workflows: res.workflows.map(toWorkflow), recommended: res.recommended ?? [] };
 }
 
 function nodeKind(n: RawNode): WorkflowGraphNode['kind'] {
