@@ -271,6 +271,9 @@ describe('SqliteAdapter', () => {
       db = new SqliteAdapter(dbPath);
 
       // The migration should have added every user_id column.
+      const codebaseCols = raw_pragma(dbPath, 'remote_agent_codebases');
+      expect(codebaseCols).toContain('default_branch');
+
       const conversationCols = raw_pragma(dbPath, 'remote_agent_conversations');
       expect(conversationCols).toContain('user_id');
 

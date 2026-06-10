@@ -24,6 +24,8 @@ const mockSyncWorkspace = mock(() =>
   Promise.resolve({
     branch: 'main',
     synced: true,
+    mode: 'fast-forward',
+    state: 'in_sync',
     previousHead: 'abc12345',
     newHead: 'abc12345',
     updated: false,
@@ -210,6 +212,25 @@ mock.module('@archon/git', () => ({
 
 mock.module('fs', () => ({
   existsSync: mock(() => true),
+}));
+
+// Credential feature mocks (per-user AI-provider credentials).
+// Default: feature disabled — existing tests are unaffected.
+const mockIsPerUserProviderKeysEnabled = mock(() => false);
+mock.module('../credentials/config', () => ({
+  isPerUserProviderKeysEnabled: mockIsPerUserProviderKeysEnabled,
+}));
+
+const mockListDecryptedUserProviderCredentials = mock(
+  async () => [] as { provider: string; cred: { kind: 'api_key'; apiKey: string } }[]
+);
+mock.module('../db/user-provider-key-store', () => ({
+  listDecryptedUserProviderCredentials: mockListDecryptedUserProviderCredentials,
+  saveUserProviderKey: mock(() => Promise.resolve()),
+  getUserProviderKeyRecord: mock(() => Promise.resolve(null)),
+  listUserProviderKeys: mock(() => Promise.resolve([])),
+  deleteUserProviderKey: mock(() => Promise.resolve()),
+  getDecryptedProviderCredential: mock(() => Promise.resolve(null)),
 }));
 
 // ─── Import module under test (AFTER all mocks) ───────────────────────────────
@@ -891,6 +912,7 @@ function makeCodebaseForSync() {
     name: 'test-repo',
     repository_url: 'https://github.com/test/repo',
     default_cwd: '/repos/test-repo',
+    default_branch: null,
     ai_assistant_type: 'claude',
     commands: {},
     created_at: new Date(),
@@ -960,6 +982,7 @@ describe('discoverAllWorkflows — remote sync', () => {
     mockToRepoPath.mockClear();
     mockGetOrCreateConversation.mockReset();
     mockGetCodebase.mockReset();
+    mockListCodebases.mockReset();
     mockSendQuery.mockClear();
     mockGetCodebaseEnvVars.mockReset();
     mockLoadConfig.mockReset();
@@ -967,6 +990,7 @@ describe('discoverAllWorkflows — remote sync', () => {
     // Reset mocks between tests in this suite and restore safe defaults
     mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(null));
     mockGetCodebase.mockImplementation(() => Promise.resolve(null));
+    mockListCodebases.mockImplementation(() => Promise.resolve([]));
     mockGetCodebaseEnvVars.mockImplementation(() => Promise.resolve({}));
     mockLoadConfig.mockImplementation(() =>
       Promise.resolve({
@@ -981,20 +1005,19 @@ describe('discoverAllWorkflows — remote sync', () => {
     const codebase = makeCodebaseForSync();
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
 
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', 'What is the latest commit?');
 
-    // /repos/test-repo is NOT under ~/.archon/workspaces/ so resetAfterFetch=false
-    expect(mockSyncWorkspace).toHaveBeenCalledWith('/repos/test-repo', undefined, {
-      resetAfterFetch: false,
-    });
-    // Regression guard: orchestrator must resolve cwd through the ensure variant
-    // so the workspaces dir is created before the AI provider spawn (issue #1528).
-    expect(mockEnsureArchonWorkspacesPath).toHaveBeenCalled();
+    // Non-destructive default sync (#1864): 2-arg call, no explicit reset mode.
+    expect(mockSyncWorkspace).toHaveBeenCalledWith('/repos/test-repo', undefined);
+    // cwd resolution behavior — scoped chat runs the provider in the repo's
+    // default_cwd (not the workspaces root) and skips ensureArchonWorkspacesPath
+    // — is covered by the 'provider cwd resolution' describe block (issue #1179).
   });
 
-  test('passes resetAfterFetch=true for managed clones', async () => {
+  test('does not pass reset mode for managed clones during chat sync', async () => {
     const conversation = makeConversation({ codebase_id: 'codebase-1' });
     const codebase = {
       ...makeCodebaseForSync(),
@@ -1002,15 +1025,27 @@ describe('discoverAllWorkflows — remote sync', () => {
     };
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
 
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', 'What is the latest commit?');
 
     expect(mockSyncWorkspace).toHaveBeenCalledWith(
       '/home/test/.archon/workspaces/owner/repo/source',
-      undefined,
-      { resetAfterFetch: true }
+      undefined
     );
+  });
+
+  test('passes stored default_branch when present', async () => {
+    const conversation = makeConversation({ codebase_id: 'codebase-1' });
+    const codebase = { ...makeCodebaseForSync(), default_branch: 'develop' };
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'What is the latest commit?');
+
+    expect(mockSyncWorkspace).toHaveBeenCalledWith('/repos/test-repo', 'develop');
   });
 
   test('proceeds without throwing when syncWorkspace rejects', async () => {
@@ -1018,6 +1053,7 @@ describe('discoverAllWorkflows — remote sync', () => {
     const codebase = makeCodebaseForSync();
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
     mockSyncWorkspace.mockRejectedValueOnce(new Error('Network timeout'));
 
     const platform = makePlatform();
@@ -1025,9 +1061,7 @@ describe('discoverAllWorkflows — remote sync', () => {
     await expect(
       handleMessage(platform, 'conv-1', 'What is the latest commit?')
     ).resolves.toBeUndefined();
-    expect(mockSyncWorkspace).toHaveBeenCalledWith('/repos/test-repo', undefined, {
-      resetAfterFetch: false,
-    });
+    expect(mockSyncWorkspace).toHaveBeenCalledWith('/repos/test-repo', undefined);
   });
 
   test('does not call syncWorkspace when conversation has no codebase_id', async () => {
@@ -1045,6 +1079,7 @@ describe('discoverAllWorkflows — remote sync', () => {
     const codebase = makeCodebaseForSync();
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
     mockSyncWorkspace.mockRejectedValueOnce(new Error('Network timeout'));
 
     const platform = makePlatform();
@@ -1061,6 +1096,7 @@ describe('discoverAllWorkflows — remote sync', () => {
     const codebase = makeCodebaseForSync();
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
     mockGetCodebaseEnvVars.mockResolvedValueOnce({ DB_SECRET: 'db-value' });
     mockLoadConfig.mockResolvedValueOnce({
       assistants: { claude: {}, codex: {} },
@@ -1092,6 +1128,7 @@ describe('discoverAllWorkflows — remote sync', () => {
     const codebase = makeCodebaseForSync();
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
     mockGetCodebaseEnvVars.mockRejectedValueOnce(new Error('db unavailable'));
     mockLoadConfig.mockResolvedValueOnce({
       assistants: { claude: {}, codex: {} },
@@ -1145,10 +1182,12 @@ describe('discoverAllWorkflows — remote sync', () => {
     const providers = await import('@archon/providers');
     const capsMock = providers.getProviderCapabilities as ReturnType<typeof mock>;
     capsMock.mockReturnValue({ envInjection: true, nativeTools: false });
+    const codebase = makeCodebaseForSync();
     mockGetOrCreateConversation.mockReturnValueOnce(
       Promise.resolve(makeConversation({ ai_assistant_type: 'codex', codebase_id: 'codebase-1' }))
     );
-    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebaseForSync()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
 
     try {
       const platform = makePlatform();
@@ -1168,10 +1207,12 @@ describe('discoverAllWorkflows — remote sync', () => {
     const providers = await import('@archon/providers');
     const capsMock = providers.getProviderCapabilities as ReturnType<typeof mock>;
     capsMock.mockReturnValue({ envInjection: true, nativeTools: true });
+    const codebase = makeCodebaseForSync();
     mockGetOrCreateConversation.mockReturnValueOnce(
       Promise.resolve(makeConversation({ ai_assistant_type: 'claude', codebase_id: 'codebase-1' }))
     );
-    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebaseForSync()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
 
     try {
       const platform = makePlatform();
@@ -1187,6 +1228,90 @@ describe('discoverAllWorkflows — remote sync', () => {
     } finally {
       capsMock.mockReturnValue({ envInjection: true });
     }
+  });
+});
+
+// ─── provider cwd resolution (issue #1179) ──────────────────────────────────
+
+describe('provider cwd resolution', () => {
+  function getSendQueryCwd(): string {
+    expect(mockSendQuery).toHaveBeenCalled();
+    return mockSendQuery.mock.calls[0][1] as string;
+  }
+
+  beforeEach(() => {
+    mockGetOrCreateConversation.mockReset();
+    mockGetCodebase.mockReset();
+    mockListCodebases.mockReset();
+    mockSendQuery.mockClear();
+    mockEnsureArchonWorkspacesPath.mockClear();
+    mockLogger.warn.mockClear();
+    mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(null));
+    mockGetCodebase.mockImplementation(() => Promise.resolve(null));
+    mockListCodebases.mockImplementation(() => Promise.resolve([]));
+    mockLoadConfig.mockImplementation(() =>
+      Promise.resolve({ assistants: { claude: {}, codex: {} }, envVars: {} })
+    );
+    mockGetCodebaseEnvVars.mockImplementation(() => Promise.resolve({}));
+  });
+
+  test('scoped chat uses codebase.default_cwd as provider cwd', async () => {
+    const codebase = makeCodebaseForSync();
+    const conversation = makeConversation({ codebase_id: 'codebase-1' });
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello');
+
+    expect(getSendQueryCwd()).toBe('/repos/test-repo');
+    expect(mockEnsureArchonWorkspacesPath).not.toHaveBeenCalled();
+  });
+
+  test('scoped chat uses conversation.cwd when set (active worktree path)', async () => {
+    const codebase = makeCodebaseForSync();
+    const conversation = makeConversation({
+      codebase_id: 'codebase-1',
+      cwd: '/worktrees/feature-branch',
+    });
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello');
+
+    expect(getSendQueryCwd()).toBe('/worktrees/feature-branch');
+    expect(mockEnsureArchonWorkspacesPath).not.toHaveBeenCalled();
+  });
+
+  test('unscoped chat uses ensureArchonWorkspacesPath result', async () => {
+    const conversation = makeConversation({ codebase_id: null });
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([]));
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello');
+
+    expect(getSendQueryCwd()).toBe('/home/test/.archon/workspaces');
+    expect(mockEnsureArchonWorkspacesPath).toHaveBeenCalled();
+  });
+
+  test('scoped chat falls back to workspaces root and warns when codebase not found (deleted)', async () => {
+    const conversation = makeConversation({ codebase_id: 'deleted-id' });
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([]));
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello');
+
+    expect(getSendQueryCwd()).toBe('/home/test/.archon/workspaces');
+    expect(mockEnsureArchonWorkspacesPath).toHaveBeenCalled();
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ codebaseId: 'deleted-id' }),
+      'orchestrator.scoped_codebase_not_found'
+    );
   });
 });
 
@@ -2101,6 +2226,7 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
     expect(mockCreateCodebase).toHaveBeenCalledWith({
       name: 'ExampleProject',
       default_cwd: '/.archon/workspaces/owner/repo/source',
+      default_branch: null,
       ai_assistant_type: 'claude',
     });
     const allCalls = (platform.sendMessage as ReturnType<typeof mock>).mock.calls as [
@@ -2132,6 +2258,7 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
     expect(mockCreateCodebase).toHaveBeenCalledWith({
       name: 'ExampleProject',
       default_cwd: '/.archon/workspaces/owner/repo/source',
+      default_branch: null,
       ai_assistant_type: 'claude',
     });
     const allCalls = (platform.sendMessage as ReturnType<typeof mock>).mock.calls as [
@@ -2251,6 +2378,7 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
     expect(mockCreateCodebase).toHaveBeenCalledWith({
       name: 'MyApp',
       default_cwd: '/path/to/app',
+      default_branch: null,
       ai_assistant_type: 'claude',
     });
   });
@@ -2290,5 +2418,216 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
     expect(mockCreateCodebase).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'Foo', default_cwd: '/path' })
     );
+  });
+});
+
+// ─── resolveUserProviderEnvForChat — per-user credential injection ────────────
+
+describe('resolveUserProviderEnvForChat — chat env injection', () => {
+  beforeEach(() => {
+    mockSendQuery.mockReset();
+    mockSendQuery.mockImplementation(async function* () {
+      yield { type: 'assistant', content: 'ok' };
+      yield { type: 'result', sessionId: 'session-1' };
+    });
+    mockGetOrCreateConversation.mockReset();
+    mockGetOrCreateConversation.mockImplementation(() =>
+      Promise.resolve(makeConversation({ user_id: 'u-test' }))
+    );
+    mockGetRecentWorkflowResultMessages.mockReset();
+    mockGetRecentWorkflowResultMessages.mockImplementation(() => Promise.resolve([]));
+    mockDiscoverWorkflowsWithConfig.mockReset();
+    mockDiscoverWorkflowsWithConfig.mockImplementation(() =>
+      Promise.resolve({ workflows: [], errors: [] })
+    );
+    mockListCodebases.mockReset();
+    mockListCodebases.mockImplementation(() => Promise.resolve([]));
+    mockListDecryptedUserProviderCredentials.mockReset();
+    mockListDecryptedUserProviderCredentials.mockImplementation(async () => []);
+    mockIsPerUserProviderKeysEnabled.mockReset();
+    mockIsPerUserProviderKeysEnabled.mockImplementation(() => true);
+  });
+
+  test('injects api_key env vars from a connected provider', async () => {
+    mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([
+      { provider: 'openrouter', cred: { kind: 'api_key', apiKey: 'or-key' } },
+    ]);
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello');
+    // The env passed to sendQuery should contain the provider's env var.
+    const requestOptions = mockSendQuery.mock.calls[0]?.[3] as { env?: Record<string, string> };
+    expect(requestOptions?.env).toMatchObject({ OPENROUTER_API_KEY: 'or-key' });
+  });
+
+  test('drops file-based deliveries (Codex OAuth) — no CODEX_HOME in chat env', async () => {
+    mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([
+      {
+        provider: 'codex',
+        cred: { kind: 'oauth', oauthApiKey: 'tok', rawCreds: { access: 'tok' } },
+      },
+    ]);
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello');
+    const requestOptions = mockSendQuery.mock.calls[0]?.[3] as
+      | { env?: Record<string, string> }
+      | undefined;
+    // Codex OAuth would write auth.json + set CODEX_HOME — both must be absent in chat.
+    expect(requestOptions?.env?.CODEX_HOME).toBeUndefined();
+  });
+
+  test('skips one broken credential but includes remaining providers', async () => {
+    // 'mystery-broken' is not in KNOWN_PROVIDERS → deliverCredential throws.
+    mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([
+      { provider: 'mystery-broken', cred: { kind: 'api_key', apiKey: 'x' } },
+      { provider: 'openrouter', cred: { kind: 'api_key', apiKey: 'or-key' } },
+    ]);
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello');
+    const requestOptions = mockSendQuery.mock.calls[0]?.[3] as { env?: Record<string, string> };
+    expect(requestOptions?.env).toMatchObject({ OPENROUTER_API_KEY: 'or-key' });
+  });
+
+  test('does not throw when listDecryptedUserProviderCredentials rejects', async () => {
+    mockListDecryptedUserProviderCredentials.mockRejectedValueOnce(new Error('db gone'));
+    const platform = makePlatform();
+    await expect(handleMessage(platform, 'conv-1', 'hello')).resolves.toBeUndefined();
+  });
+
+  test('skips injection when feature is disabled', async () => {
+    mockIsPerUserProviderKeysEnabled.mockReturnValueOnce(false);
+    mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([
+      { provider: 'openrouter', cred: { kind: 'api_key', apiKey: 'or-key' } },
+    ]);
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello');
+    expect(mockListDecryptedUserProviderCredentials).not.toHaveBeenCalled();
+  });
+});
+
+// ─── handleMessage — /setproject dispatch ─────────────────────────────────────
+
+describe('handleMessage — /setproject dispatch', () => {
+  beforeEach(() => {
+    mockGetOrCreateConversation.mockReset();
+    mockListCodebases.mockReset();
+    mockUpdateConversation.mockReset();
+    mockParseCommand.mockReset();
+
+    mockUpdateConversation.mockImplementation(() => Promise.resolve());
+    mockListCodebases.mockImplementation(() => Promise.resolve([]));
+    mockGetOrCreateConversation.mockImplementation(() =>
+      Promise.resolve(makeConversation({ codebase_id: null }))
+    );
+  });
+
+  test('binds conversation to exact-match codebase', async () => {
+    const cb = makeCodebase('my-app');
+    mockListCodebases.mockImplementation(() => Promise.resolve([cb]));
+    mockParseCommand.mockReturnValue({ command: 'setproject', args: ['my-app'] });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/setproject my-app');
+
+    expect(mockUpdateConversation).toHaveBeenCalledWith('conv-1', {
+      codebase_id: 'id-my-app',
+      cwd: '/repos/my-app',
+    });
+    expect(platform.sendMessage).toHaveBeenCalledWith('conv-1', expect.stringContaining('my-app'));
+  });
+
+  test('resolves by case-insensitive match', async () => {
+    const cb = makeCodebase('My-App');
+    mockListCodebases.mockImplementation(() => Promise.resolve([cb]));
+    mockParseCommand.mockReturnValue({ command: 'setproject', args: ['my-app'] });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/setproject my-app');
+
+    expect(mockUpdateConversation).toHaveBeenCalledWith('conv-1', {
+      codebase_id: 'id-My-App',
+      cwd: '/repos/My-App',
+    });
+  });
+
+  test('resolves by prefix match', async () => {
+    const cb = makeCodebase('my-website');
+    mockListCodebases.mockImplementation(() => Promise.resolve([cb]));
+    mockParseCommand.mockReturnValue({ command: 'setproject', args: ['my-web'] });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/setproject my-web');
+
+    expect(mockUpdateConversation).toHaveBeenCalledWith('conv-1', {
+      codebase_id: 'id-my-website',
+      cwd: '/repos/my-website',
+    });
+  });
+
+  test('resolves by substring match', async () => {
+    const cb = makeCodebase('archon-my-api');
+    mockListCodebases.mockImplementation(() => Promise.resolve([cb]));
+    mockParseCommand.mockReturnValue({ command: 'setproject', args: ['my-api'] });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/setproject my-api');
+
+    expect(mockUpdateConversation).toHaveBeenCalledWith('conv-1', {
+      codebase_id: 'id-archon-my-api',
+      cwd: '/repos/archon-my-api',
+    });
+  });
+
+  test('returns not-found message listing available projects', async () => {
+    mockListCodebases.mockImplementation(() =>
+      Promise.resolve([makeCodebase('project-a'), makeCodebase('project-b')])
+    );
+    mockParseCommand.mockReturnValue({ command: 'setproject', args: ['nonexistent'] });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/setproject nonexistent');
+
+    expect(mockUpdateConversation).not.toHaveBeenCalled();
+    const msg = (platform.sendMessage as ReturnType<typeof mock>).mock.calls[0]?.[1] as string;
+    expect(msg).toContain('nonexistent');
+    expect(msg).toContain('project-a');
+    expect(msg).toContain('project-b');
+  });
+
+  test('returns not-found with /register-project hint when no codebases registered', async () => {
+    mockListCodebases.mockImplementation(() => Promise.resolve([]));
+    mockParseCommand.mockReturnValue({ command: 'setproject', args: ['anything'] });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/setproject anything');
+
+    expect(mockUpdateConversation).not.toHaveBeenCalled();
+    const msg = (platform.sendMessage as ReturnType<typeof mock>).mock.calls[0]?.[1] as string;
+    expect(msg).toContain('/register-project');
+  });
+
+  test('returns ambiguity message on multiple prefix matches', async () => {
+    mockListCodebases.mockImplementation(() =>
+      Promise.resolve([makeCodebase('app-backend'), makeCodebase('app-frontend')])
+    );
+    mockParseCommand.mockReturnValue({ command: 'setproject', args: ['app'] });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/setproject app');
+
+    expect(mockUpdateConversation).not.toHaveBeenCalled();
+    const msg = (platform.sendMessage as ReturnType<typeof mock>).mock.calls[0]?.[1] as string;
+    expect(msg).toContain('Ambiguous');
+    expect(msg).toContain('app-backend');
+    expect(msg).toContain('app-frontend');
+  });
+
+  test('returns usage message when no args', async () => {
+    mockParseCommand.mockReturnValue({ command: 'setproject', args: [] });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/setproject');
+
+    expect(mockUpdateConversation).not.toHaveBeenCalled();
+    expect(platform.sendMessage).toHaveBeenCalledWith('conv-1', expect.stringContaining('Usage'));
   });
 });

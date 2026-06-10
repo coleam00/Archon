@@ -239,7 +239,17 @@ export class PiProvider implements IAgentProvider {
     let authStorage: ReturnType<typeof piCodingAgent.AuthStorage.create>;
     let modelRegistry: ReturnType<typeof piCodingAgent.ModelRegistry.create>;
     try {
-      authStorage = piCodingAgent.AuthStorage.create();
+      // Archon delivers per-user credentials (API keys + subscriptions) as a
+      // per-run auth.json and points us at it via ARCHON_PI_AUTH_PATH — using an
+      // explicit authPath (not PI_CODING_AGENT_DIR) so the user's models.json /
+      // settings.json at ~/.pi/agent/ are untouched. The path arrives on the
+      // per-call `requestOptions.env` channel (the executor's per-user injection
+      // never writes to process.env — see the piConfig.env note above), so read it
+      // there first and fall back to process.env for a shell-level override.
+      const archonAuthPath =
+        (requestOptions?.env?.ARCHON_PI_AUTH_PATH ?? process.env.ARCHON_PI_AUTH_PATH)?.trim() ||
+        undefined;
+      authStorage = piCodingAgent.AuthStorage.create(archonAuthPath);
       modelRegistry = piCodingAgent.ModelRegistry.create(authStorage);
     } catch (err) {
       const e = err as Error;

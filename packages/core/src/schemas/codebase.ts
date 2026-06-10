@@ -12,6 +12,7 @@ export const codebaseRowSchema = z.object({
   name: z.string(),
   repository_url: z.string().nullable(),
   default_cwd: z.string(),
+  default_branch: z.string().nullable(),
   ai_assistant_type: z.string(),
   commands: z.record(z.string(), z.object({ path: z.string(), description: z.string() })),
   created_at: z.date(),

@@ -87,6 +87,7 @@ import {
   registerGitHubAppAuthProvider,
   isPerUserGitHubEnabled,
   assertEncryptionKeyAtBoot,
+  assertProviderKeysKeyAtBoot,
   getDecryptedAccessToken,
   type GitHubAuth,
   type IGitHubAppAuthProvider,
@@ -102,7 +103,14 @@ import {
   captureArchonStarted,
 } from '@archon/paths';
 import { selectGitHubAuthMode, parseGitCredentialPath } from './github-auth-bootstrap';
-import { getAuth, closeAuth, isWebAuthEnabled, assertWebAuthAtBoot, getSignupMode } from './auth';
+import {
+  getAuth,
+  closeAuth,
+  isWebAuthEnabled,
+  assertWebAuthAtBoot,
+  getSignupMode,
+  isArchonOwnedAuthPath,
+} from './auth';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -206,6 +214,13 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   // Anonymous once-per-boot startup event (self-gates on opt-out). Flushed by
   // the shutdownTelemetry() call in the SIGINT/SIGTERM shutdown handler.
   captureArchonStarted({ surface: 'server' });
+
+  // Phase 2: validate the encryption key the moment per-user provider keys are
+  // enabled, regardless of GitHub App configuration. TOKEN_ENCRYPTION_KEY alone
+  // is the gate — a malformed key must fail boot here rather than at the first
+  // PUT /api/auth/providers/* (when an operator is already wired in).
+  // No-op when the feature is disabled.
+  assertProviderKeysKeyAtBoot();
 
   // Database auto-detected: SQLite (default) or PostgreSQL (if DATABASE_URL set)
   // No required environment variables - SQLite works out of the box
@@ -646,10 +661,10 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   // an external handler serving its own non-OpenAPI surface, like the webhooks.)
   const webAuth = getAuth();
   if (webAuth) {
-    const isArchonOwnedAuthPath = (path: string): boolean =>
-      path === '/api/auth/status' ||
-      path === '/api/auth/github' ||
-      path.startsWith('/api/auth/github/');
+    // isArchonOwnedAuthPath (in ./auth/config) is the single source of truth for
+    // which /api/auth/* paths fall through to Archon's own handlers vs. Better
+    // Auth. A guard test asserts every Archon-registered /api/auth/* route is in
+    // it, so adding a route without exempting it fails CI rather than 404ing live.
     app.on(['POST', 'GET'], '/api/auth/*', (c, next) => {
       if (isArchonOwnedAuthPath(c.req.path)) return next();
       return webAuth.handler(c.req.raw);

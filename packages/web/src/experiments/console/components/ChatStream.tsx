@@ -36,7 +36,7 @@ export function ChatStream({ messages, showTools = false }: ChatStreamProps): Re
       );
 
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="flex flex-col gap-[14px]">
       {visible.map(message => (
         <Fragment key={message.id}>
           {message.category === 'workflow_result' && message.workflowResult !== null ? (

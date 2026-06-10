@@ -97,7 +97,7 @@ export function BuilderToolbar({
             <button
               type="button"
               onClick={(): void => {
-                navigate('/workflows');
+                navigate('/legacy/workflows');
               }}
               className="text-xs text-text-tertiary hover:text-text-secondary shrink-0"
             >

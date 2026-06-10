@@ -132,6 +132,10 @@ The GitHub and Gitea adapters verify webhook signatures to ensure payloads origi
 - Per-codebase env vars configured via `codebase_env_vars` or `.archon/config.yaml` `env:` are merged on top at workflow execution time.
 - `<cwd>/.env` is the **only** untrusted source. It belongs to the target project, not to Archon. Directory ownership (`.archon/`) is the security boundary — not the filename.
 
+**Per-user provider credentials:**
+- When `TOKEN_ENCRYPTION_KEY` (64-char hex) is set, each user can connect their own provider API key or subscription. These are encrypted at rest with **AES-256-GCM**, never logged, and **never returned by any endpoint** — responses carry only `provider`/`kind`/`label` metadata. See [AI Provider Credentials](/reference/api/#ai-provider-credentials).
+- The credential routes (`/api/auth/providers*`) require a resolved identity (the `X-Archon-User` header or a Better Auth session). The model-config routes (`/api/config/*`, including `tiers`) are intentionally **ungated** — they carry no secrets (just model strings) and must work on solo installs.
+
 ### Target repo `.env` isolation
 
 Archon prevents target repo `.env` from leaking into subprocesses through structural protection:

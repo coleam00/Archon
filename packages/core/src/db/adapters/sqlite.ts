@@ -177,6 +177,20 @@ export class SqliteAdapter implements IDatabase {
       getLog().warn({ err: e as Error }, 'db.sqlite_migration_users_columns_failed');
     }
 
+    // Codebases columns
+    try {
+      const codebaseCols = this.db.prepare("PRAGMA table_info('remote_agent_codebases')").all() as {
+        name: string;
+      }[];
+      const codebaseColNames = new Set(codebaseCols.map(c => c.name));
+
+      if (!codebaseColNames.has('default_branch')) {
+        this.db.run('ALTER TABLE remote_agent_codebases ADD COLUMN default_branch TEXT');
+      }
+    } catch (e: unknown) {
+      getLog().warn({ err: e as Error }, 'db.sqlite_migration_codebases_columns_failed');
+    }
+
     // Conversations columns
     try {
       const cols = this.db.prepare("PRAGMA table_info('remote_agent_conversations')").all() as {
@@ -336,13 +350,29 @@ export class SqliteAdapter implements IDatabase {
         UNIQUE(user_id)
       );
 
+      -- User AI-provider credentials (Phase 2): one row per (user_id, provider).
+      -- Exactly one of api_key_encrypted / oauth_creds_encrypted is populated;
+      -- the kind column records which. Encrypted at rest with TOKEN_ENCRYPTION_KEY.
+      CREATE TABLE IF NOT EXISTS remote_agent_user_provider_keys (
+        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+        user_id TEXT NOT NULL REFERENCES remote_agent_users(id) ON DELETE CASCADE,
+        provider TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        api_key_encrypted TEXT,
+        oauth_creds_encrypted TEXT,
+        label TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now')),
+        UNIQUE(user_id, provider)
+      );
+
       -- Codebases table
       CREATE TABLE IF NOT EXISTS remote_agent_codebases (
         id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
         name TEXT NOT NULL,
         repository_url TEXT,
         default_cwd TEXT NOT NULL,
-        default_branch TEXT DEFAULT 'main',
+        default_branch TEXT,
         ai_assistant_type TEXT DEFAULT 'claude',
         commands TEXT DEFAULT '{}',
         created_at TEXT DEFAULT (datetime('now')),

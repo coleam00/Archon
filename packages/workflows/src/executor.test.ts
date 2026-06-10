@@ -696,6 +696,98 @@ describe('executeWorkflow', () => {
   });
 
   // -------------------------------------------------------------------------
+  // User provider env injection (per-user AI-provider credentials)
+  // -------------------------------------------------------------------------
+
+  describe('user provider env injection', () => {
+    it('skips injection when isPerUserProviderKeysEnabled returns false', async () => {
+      const getUserProviderEnv = mock(async () => ({ env: { SHOULD_NOT_APPEAR: '1' }, files: [] }));
+      const deps: WorkflowDeps = {
+        ...makeDeps(makeStore()),
+        isPerUserProviderKeysEnabled: () => false,
+        getUserProviderEnv,
+      };
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'msg',
+        'db-c1',
+        { userId: 'u-1' }
+      );
+      expect(getUserProviderEnv).not.toHaveBeenCalled();
+    });
+
+    it('skips injection when userId is absent even if feature is enabled', async () => {
+      const getUserProviderEnv = mock(async () => ({ env: { SHOULD_NOT_APPEAR: '1' }, files: [] }));
+      const deps: WorkflowDeps = {
+        ...makeDeps(makeStore()),
+        isPerUserProviderKeysEnabled: () => true,
+        getUserProviderEnv,
+      };
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'msg',
+        'db-c1'
+        // no userId
+      );
+      expect(getUserProviderEnv).not.toHaveBeenCalled();
+    });
+
+    it('merges user provider env LAST so it overrides DB env', async () => {
+      const store = makeStore({
+        getCodebaseEnvVars: mock(async () => ({ DB_KEY: 'db_val', SHARED_KEY: 'db' })),
+      });
+      const getUserProviderEnv = mock(async () => ({
+        env: { SHARED_KEY: 'user_wins', USER_KEY: 'u_val' },
+        files: [] as { path: string; contents: string }[],
+      }));
+      const deps: WorkflowDeps = {
+        ...makeDeps(store),
+        isPerUserProviderKeysEnabled: () => true,
+        getUserProviderEnv,
+      };
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'msg',
+        'db-c1',
+        { codebaseId: 'codebase-1', userId: 'u-1' }
+      );
+      const configArg = mockExecuteDagWorkflow.mock.calls[0]?.[12] as WorkflowConfig | undefined;
+      expect(configArg?.envVars).toMatchObject({
+        DB_KEY: 'db_val',
+        SHARED_KEY: 'user_wins',
+        USER_KEY: 'u_val',
+      });
+    });
+
+    it('returns {} and does not throw when getUserProviderEnv rejects', async () => {
+      const deps: WorkflowDeps = {
+        ...makeDeps(makeStore()),
+        isPerUserProviderKeysEnabled: () => true,
+        getUserProviderEnv: mock(async () => {
+          throw new Error('network down');
+        }),
+      };
+      await expect(
+        executeWorkflow(deps, makePlatform(), 'conv-1', '/tmp', makeWorkflow(), 'msg', 'db-c1', {
+          userId: 'u-1',
+        })
+      ).resolves.toBeDefined();
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // Lock-token cleanup on pre-DAG failure paths (review #1)
   //
   // Any failure between row creation and DAG start that returns early must

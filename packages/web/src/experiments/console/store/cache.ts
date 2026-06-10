@@ -22,8 +22,14 @@ const listeners = new Map<string, Set<Listener>>();
 const errors = new Map<string, Error>();
 const inflight = new Map<string, Promise<unknown>>();
 const loaders = new Map<string, () => Promise<unknown>>();
+// Per-key change counter. `useEntity` snapshots THIS (not the cached value), so a
+// subscriber re-renders on every mutation — including the error transition, where
+// the value stays `undefined` and a value-identity snapshot would bail out and
+// never surface `error` (e.g. a 401 panel would hang on "Loading…").
+const versions = new Map<string, number>();
 
 function notify(key: string): void {
+  versions.set(key, (versions.get(key) ?? 0) + 1);
   const subs = listeners.get(key);
   if (subs === undefined) return;
   for (const l of subs) l();
@@ -145,7 +151,8 @@ export interface EntityView<T> {
  * the latest value — the previous manual `useState(n => n + 1)` subscription
  * could commit a stale render (the store mutates outside React's knowledge), so
  * a refetched value would land in the cache but never appear on screen until a
- * remount. `notify` is the store's change signal; `getSnapshot` reads the cache.
+ * remount. `notify` is the store's change signal; `getSnapshot` reads the per-key
+ * version counter (see below) so error transitions re-render too.
  */
 export function useEntity<T>(key: string, loader: () => Promise<T>): EntityView<T> {
   const loaderRef = useRef(loader);
@@ -176,17 +183,22 @@ export function useEntity<T>(key: string, loader: () => Promise<T>): EntityView<
     [key]
   );
 
-  // getSnapshot returns the cached value by reference. `cache.set` installs a
-  // fresh object on each load, so identity changes exactly when data changes —
-  // satisfying useSyncExternalStore's stable-snapshot requirement.
-  const data = useSyncExternalStore(
+  // Snapshot the per-key version counter (a number bumped on every `notify`), not
+  // the cached value: that way the component re-renders on the error transition too
+  // — where `cache.get(key)` stays `undefined` and a value-identity snapshot would
+  // bail out, leaving `error` unread. `data`/`error`/`loading` are read fresh from
+  // the maps below on each (synchronous) render. They can briefly co-exist in
+  // intermediate states — e.g. `loading` is still true when an error first lands
+  // (`inflight` clears in a later `.finally`) — so consumers check `error` before
+  // `loading`, as the panels do.
+  useSyncExternalStore(
     subscribe,
-    () => cache.get(key) as T | undefined,
-    () => cache.get(key) as T | undefined
+    () => versions.get(key) ?? 0,
+    () => versions.get(key) ?? 0
   );
 
   return {
-    data,
+    data: cache.get(key) as T | undefined,
     error: errors.get(key),
     loading: !cache.has(key) && inflight.has(key),
     refetch: (): void => {

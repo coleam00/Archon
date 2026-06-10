@@ -113,8 +113,10 @@ flaky) deserves hardening.
 
 ## 8. Smaller gaps worth tracking
 
-- **File attachments** in the composer (backend supports multipart; composer is
-  text-only).
+- ~~**File attachments** in the composer~~ — shipped (click-to-attach 📎 →
+  multipart send). Remaining: drag-drop / paste-image / optimistic chips on the
+  sent bubble (#1913), and first-message uploads (createConversation is
+  JSON-only — surfaced as a notice, not supported).
 - **Provider/model per conversation** — not selectable in chat.
 - **Keyboard shortcuts** for chat (new chat, focus composer, approve) — the rest
   of the console is keyboard-driven; chat isn't.

@@ -1,6 +1,5 @@
 import { useMemo, useState, type ReactElement } from 'react';
-import { Routes, Route, Link, useNavigate } from 'react-router';
-import { Settings } from 'lucide-react';
+import { Routes, Route, useNavigate } from 'react-router';
 import { ProjectRail } from './components/ProjectRail';
 import { AddProjectDialog } from './components/AddProjectDialog';
 import { ProjectPalette } from './components/ProjectPalette';
@@ -64,44 +63,6 @@ export function ConsoleApp(): ReactElement {
 
   return (
     <div className="console-root flex h-screen w-screen flex-col bg-surface text-text-primary">
-      <header className="flex h-12 shrink-0 items-center justify-between border-b border-border px-4">
-        <div className="flex items-center gap-2.5">
-          <img
-            src="/favicon.png"
-            alt=""
-            aria-hidden="true"
-            width={22}
-            height={22}
-            className="shrink-0 select-none"
-            draggable={false}
-          />
-          <span className="brand-text text-base font-semibold tracking-tight">Archon</span>
-          <span className="rounded-full border border-border px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest text-text-tertiary">
-            console
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <Link
-            to="/console/settings"
-            title="Settings ( , )"
-            className="flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-[11px] text-text-secondary transition-colors hover:border-border-bright hover:bg-surface-hover hover:text-text-primary"
-          >
-            <Settings aria-hidden className="h-3.5 w-3.5" />
-            Settings
-          </Link>
-          <Link
-            to="/chat"
-            title="Switch back to the classic UI"
-            className="flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-[11px] text-text-secondary transition-colors hover:border-border-bright hover:bg-surface-hover hover:text-text-primary"
-          >
-            <span aria-hidden className="font-mono text-[11px] leading-none">
-              ←
-            </span>
-            Old UI
-          </Link>
-        </div>
-      </header>
-
       <div className="flex min-h-0 flex-1">
         <ProjectRail
           onAddProject={() => {
