@@ -251,7 +251,7 @@ export function SolutionsPage(): React.ReactElement {
                       href={selected.website}
                       target="_blank"
                       rel="noreferrer"
-                      className="inline-flex items-center gap-1 text-blue-400 hover:underline"
+                      className="inline-flex items-center gap-1 text-blue-700 hover:underline"
                     >
                       {selected.website.replace(/^https?:\/\//, '')}
                       <ExternalLink className="h-3 w-3" />

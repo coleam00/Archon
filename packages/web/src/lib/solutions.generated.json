@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-06-04T12:29:37+00:00",
+  "generated_at": "2026-06-10T16:28:45+00:00",
   "vault_path": "second-brain/partners",
-  "count": 8,
+  "count": 9,
   "solutions": [
     {
       "id": "cmpse-ai",
@@ -42,6 +42,31 @@
         "rcm",
         "revenue-intelligence",
         "procurement",
+        "client/jid5274"
+      ]
+    },
+    {
+      "id": "neural-cloud-solutions",
+      "slug": "neural-cloud-solutions",
+      "name": "Neural Cloud Solutions Inc.",
+      "type": "solution",
+      "category": "solution",
+      "model": "strategic-partner-distributor",
+      "status": "active",
+      "audience": "all",
+      "website": "https://www.theneuralcloud.com",
+      "tagline": "AI-driven cardiology software partner. CardioYield (Holter analysis) + MaxYield (neural net). Strategic-partner / distribution opportunity for the cardiology vertical -- a sharper, narrower, more buyer-ready offer than the broader BRT modality positioning.",
+      "description": "AI-driven cardiology software partner \u2014 CardioYield (Holter analysis) and MaxYield neural network. CSE-listed (AIML). BRT distribution / strategic-partner opportunity for cardiology vertical.",
+      "keyContact": "Esmat Naikyar / (TBD \u2014 operator / business-development lead)",
+      "lastTouch": "2026-06-03",
+      "vaultPath": "second-brain/partners/neural-cloud-solutions/_neural-cloud-solutions.md",
+      "tags": [
+        "solution",
+        "partner",
+        "cardiology",
+        "ai",
+        "healthcare",
+        "distributorship",
         "client/jid5274"
       ]
     },
