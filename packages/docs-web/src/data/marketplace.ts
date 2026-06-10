@@ -160,7 +160,7 @@ export const marketplaceEntries: MarketplaceEntry[] = [
     name: 'Harness Score',
     author: 'seanrobertwright',
     description:
-      "Audit a repository's readiness for AI-agent-driven development. Runs 10 deterministic checks (agent instructions, README, build/test commands, CI, tests, lint/typecheck, .archon workflows, security scanning, sensitive paths) scored out of 100, then Claude synthesizes a markdown report with a rating and the top 3 fixes ranked by score gain.",
+      'Audit a repository for AI-agent readiness. A deterministic script runs 10 checks (agent instructions, README, build/test commands, CI, tests, lint/typecheck, .archon workflows, security scanning, sensitive paths) and computes a score out of 100; Claude then narrates the pre-computed results into a markdown report with a rating and the top 3 fixes ranked by score gain.',
     sourceUrl:
       'https://github.com/seanrobertwright/archon-harness-score/blob/main/harness-score.yaml',
     sha: '0a5b1406d9869e29507aed005df9456a2ea686e6',
