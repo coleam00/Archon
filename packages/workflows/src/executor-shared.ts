@@ -94,6 +94,12 @@ export function toTelemetryErrorClass(errorType: ErrorType): archonPaths.Workflo
       return 'transient';
     case 'UNKNOWN':
       return 'unknown';
+    default: {
+      // Exhaustiveness guard: a future ErrorType variant fails compilation
+      // here instead of silently sending `undefined` to the telemetry wire.
+      const exhaustive: never = errorType;
+      return exhaustive;
+    }
   }
 }
 

@@ -17,10 +17,11 @@
  * super-properties. What is collected is categorical only: workflow name (real
  * for bundled workflows, `"custom"` for user-authored), platform, provider,
  * model, node shape, run outcome/duration, a fixed-enum error class (never
- * raw error text), and deployment shape (which adapters are enabled, db kind,
- * auth mode — booleans/enums only). Never sent: code, prompts, message
- * content, file paths, IP, geo, error text, or custom workflow
- * names/descriptions.
+ * raw error text), chat-turn activity (platform + provider + outcome only),
+ * a bare project-registration count, and deployment shape (which adapters are
+ * enabled, db kind, auth mode — booleans/enums only). Never sent: code,
+ * prompts, message content, conversation ids, file paths, IP, geo, error
+ * text, or custom workflow names/descriptions.
  *
  * Opt-out (any one disables telemetry):
  *   - ARCHON_TELEMETRY_DISABLED=1
@@ -558,6 +559,12 @@ export interface ArchonStartedProperties extends DeploymentShapeProperties {
  * One completed direct-chat AI turn (NOT workflow execution — workflows emit
  * `workflow_invoked` instead). Carries only platform + provider; never
  * message content, conversation ids, or prompt/response data.
+ *
+ * `platform`/`provider` are open strings because this leaf package cannot
+ * import the adapter/provider unions without inverting the dependency graph.
+ * Callers MUST pass only registry identifiers (`platform.getPlatformType()`,
+ * `aiClient.getType()`) — both are structurally categorical (fixed literals
+ * per adapter/provider implementation), never user input.
  */
 export interface ChatTurnProperties {
   platform?: string;
@@ -720,9 +727,10 @@ export function captureArchonStarted(props: ArchonStartedProperties): void {
  * after day one. The server entrypoint calls this on a daily interval so
  * "active installs" stays honest for the server surface. CLI invocations do
  * NOT need this — each one already emits `archon_started`. Carries the same
- * categorical properties as `archon_started`; no new data categories, so no
- * notice re-show or schema bump. Intentionally does not show the first-run
- * notice (heartbeats are background, never interactive).
+ * categorical properties as `archon_started` (this event alone would not have
+ * justified a schema bump; the v3 bump covers the full revision it shipped
+ * with). Intentionally does not show the first-run notice (heartbeats are
+ * background, never interactive).
  */
 export function captureArchonActive(props: ArchonStartedProperties): void {
   if (isTelemetryDisabled()) return;

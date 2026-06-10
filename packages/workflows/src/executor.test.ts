@@ -994,6 +994,65 @@ describe('telemetry wiring', () => {
     );
   });
 
+  it('reports feature-adoption booleans on workflow_invoked', async () => {
+    mockCaptureWorkflowInvoked.mockClear();
+    const store = makeStore();
+    const deps = makeDeps(store);
+    const workflow = makeWorkflow({
+      persist_sessions: true,
+      nodes: [
+        { id: 'gen', prompt: 'Generate.', output_format: { type: 'object' }, mcp: 'mcp.json' },
+        {
+          id: 'iterate',
+          depends_on: ['gen'],
+          loop: { prompt: 'Iterate.', until: 'DONE', fresh_context: true },
+        },
+        { id: 'summarize', depends_on: ['iterate'], prompt: 'Summarize.', output_type: 'report' },
+      ],
+    } as Partial<WorkflowDefinition>);
+
+    await executeWorkflow(deps, makePlatform(), 'conv-1', '/tmp', workflow, 'msg', 'db-conv-1');
+
+    expect(mockCaptureWorkflowInvoked).toHaveBeenCalledTimes(1);
+    expect(mockCaptureWorkflowInvoked).toHaveBeenCalledWith(
+      expect.objectContaining({
+        usesOutputFormat: true,
+        usesOutputType: true,
+        usesPersistSession: true,
+        usesMcp: true,
+        usesFreshContext: true,
+        usesSkills: false,
+      })
+    );
+  });
+
+  it('reports adoption booleans as false for a plain single-prompt workflow', async () => {
+    mockCaptureWorkflowInvoked.mockClear();
+    const store = makeStore();
+    const deps = makeDeps(store);
+
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow(),
+      'msg',
+      'db-conv-1'
+    );
+
+    expect(mockCaptureWorkflowInvoked).toHaveBeenCalledWith(
+      expect.objectContaining({
+        usesOutputFormat: false,
+        usesOutputType: false,
+        usesPersistSession: false,
+        usesMcp: false,
+        usesSkills: false,
+        usesFreshContext: false,
+      })
+    );
+  });
+
   it('does not fire executor-level completion telemetry on the success path', async () => {
     // The DAG executor owns success/partial-failure telemetry; the executor's
     // own captureWorkflowCompleted must fire only from the unhandled-throw catch.

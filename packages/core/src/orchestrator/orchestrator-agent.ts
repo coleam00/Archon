@@ -1503,6 +1503,8 @@ async function handleStreamMode(
   }
 
   if (allMessages.length === 0) {
+    // Intentionally NOT counted in chat_turn_handled — an empty response is
+    // neither a completed nor a failed turn worth measuring.
     getLog().debug({ conversationId }, 'no_ai_response');
     return;
   }
@@ -1729,6 +1731,8 @@ async function handleBatchMode(
   const finalMessage = filterToolIndicators(assistantMessages);
 
   if (!finalMessage) {
+    // Intentionally NOT counted in chat_turn_handled — an empty response is
+    // neither a completed nor a failed turn worth measuring.
     getLog().debug({ conversationId }, 'no_ai_response');
     return;
   }
@@ -1776,10 +1780,8 @@ async function handleBatchMode(
   getLog().debug({ messageLength: finalMessage.length }, 'sending_final_message');
   await platform.sendMessage(conversationId, finalMessage);
   await maybeSendResultFooter(platform, conversationId, lastResult);
-  // Anonymous telemetry: one completed direct-chat turn. The workflow-invocation
-  // and project-registration paths return above without reaching this — those
-  // are covered by workflow_invoked / codebase_registered instead. Platform +
-  // provider only, never message content.
+  // Anonymous telemetry: one completed direct-chat turn (same exclusion
+  // rationale as the stream-mode capture in handleStreamMode above).
   captureChatTurn({
     platform: platform.getPlatformType(),
     provider: aiClient.getType(),

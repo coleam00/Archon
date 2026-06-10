@@ -238,6 +238,9 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   // Daily heartbeat so long-running servers stay visible in active-install
   // metrics (a boot-only event undercounts server installs after day one).
   // unref() so the timer never keeps the process alive on shutdown.
+  // captureArchonActive is synchronous fire-and-forget (errors swallowed
+  // internally) — if it ever becomes async, this callback must not return
+  // its promise unhandled.
   const TELEMETRY_HEARTBEAT_INTERVAL_MS = 24 * 60 * 60 * 1000;
   setInterval(() => {
     captureArchonActive({ surface: 'server', ...deploymentShape });

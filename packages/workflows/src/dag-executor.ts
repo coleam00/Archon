@@ -92,7 +92,12 @@ import {
   type ResolvedAiProfile,
 } from './model-validation';
 
-/** Closed-set node type for telemetry — mirrors the DagNode discriminators. */
+/**
+ * Closed-set node type for telemetry — mirrors the DagNode discriminators.
+ * The final `'prompt'` arm is the fallthrough: a future node type added to
+ * the schema without a guard here would be reported as `'prompt'` (a metrics
+ * misclassification, not a privacy issue) — extend this when adding node types.
+ */
 function dagNodeTelemetryType(node: DagNode): WorkflowNodeType {
   if (isBashNode(node)) return 'bash';
   if (isScriptNode(node)) return 'script';
@@ -116,10 +121,13 @@ function firstFailedNodeTaxonomy(
   for (const [nodeId, output] of nodeOutputs) {
     if (output.state !== 'failed') continue;
     const node = nodes.find(n => n.id === nodeId);
-    return {
+    const taxonomy: { errorClass: WorkflowErrorClass; failedNodeType?: WorkflowNodeType } = {
       errorClass: toTelemetryErrorClass(classifyError(new Error(output.error))),
-      ...(node ? { failedNodeType: dagNodeTelemetryType(node) } : {}),
     };
+    if (node) {
+      taxonomy.failedNodeType = dagNodeTelemetryType(node);
+    }
+    return taxonomy;
   }
   return {};
 }
@@ -3579,8 +3587,10 @@ export async function executeDagWorkflow(
   const anyCompleted = nodeCounts.completed > 0;
   const anyFailed = nodeCounts.failed > 0;
   // Categorical failure taxonomy for telemetry: type of the first failed node
-  // (Map iteration = insertion order = execution order) plus a fixed-enum error
-  // class derived from the stored node error. Raw error text never leaves.
+  // in stored (Map insertion) order — for parallel layers this is layer-array
+  // order, not completion order; any failed node is equally representative —
+  // plus a fixed-enum error class derived from the stored node error. Raw
+  // error text never leaves.
   const failureTaxonomy = firstFailedNodeTaxonomy(nodeOutputs, workflow.nodes);
 
   getLog().info(
