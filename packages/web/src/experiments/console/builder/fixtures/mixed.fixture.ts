@@ -15,6 +15,7 @@ export const mixedFixture: WireWorkflowDefinition = {
     {
       id: 'classify',
       prompt: 'Classify the issue as BUG or FEATURE. Reply with one word.',
+      output_type: 'classification',
     },
     {
       id: 'fix',
@@ -22,6 +23,7 @@ export const mixedFixture: WireWorkflowDefinition = {
       when: "$classify.output == 'BUG'",
       command: 'implement-fix',
       model: 'opus',
+      persist_session: true,
     },
     {
       id: 'report',

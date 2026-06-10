@@ -69,7 +69,10 @@ required) and is preserved verbatim.
 
 ## Known limitations (deferred)
 
-The generated `DagNode` omits `persist_session`; the generated
-`WorkflowDefinition` omits `persist_sessions` and `requires`. These advanced
-fields are not part of the four-variant MVP and are not exposed or partitioned
-here. Revisit via local type augmentation only if a later PR needs them.
+`timeout` is variant-specific (bash/script), not a base field, even though the
+flattened generated `DagNode` carries it top-level: the engine's transform emits
+`timeout` only on bash and script nodes, so a `timeout` on any other variant is
+not engine-producible wire input and is dropped (with an import warning) rather
+than carried. The earlier generated-type drift (`persist_session`, `output_type`,
+workflow-level `persist_sessions`/`requires` missing from the spec) was resolved
+by regenerating `api.generated.d.ts`; those fields now round-trip verbatim.

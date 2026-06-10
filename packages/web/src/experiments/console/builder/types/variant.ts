@@ -29,8 +29,12 @@ export type VariantId = WorkflowNodeKind | 'cancel';
  * (command/prompt/bash/script/loop/approval/cancel) plus their satellites
  * (runtime/deps/timeout). Picking from `WireDagNode` keeps `BaseFields` exactly
  * in sync with the generated spec.
+ *
+ * Exported so `variants/base-fields.ts` can derive its runtime key list from an
+ * exhaustive `Record<WireBaseKey, true>` — adding a key here without updating
+ * the record (or vice versa) is a compile error, not silent round-trip loss.
  */
-type WireBaseKey =
+export type WireBaseKey =
   | 'depends_on'
   | 'when'
   | 'trigger_rule'
@@ -53,7 +57,9 @@ type WireBaseKey =
   | 'fallbackModel'
   | 'betas'
   | 'sandbox'
-  | 'always_run';
+  | 'always_run'
+  | 'persist_session'
+  | 'output_type';
 
 /** Shared base fields carried verbatim across the round-trip. All optional. */
 export type BaseFields = Pick<WireDagNode, WireBaseKey>;

@@ -2,6 +2,7 @@
 export type { WireDagNode, WireWorkflowDefinition } from './wire';
 export type {
   VariantId,
+  WireBaseKey,
   BaseFields,
   LoopNodeData,
   ApprovalOnReject,
