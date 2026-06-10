@@ -56,6 +56,8 @@ const TOGGLE_KEYS = {
   node: 'archon.console.runNodeFilter',
 } as const;
 
+const NEAR_BOTTOM_PX = 120;
+
 function readToggle(key: string, defaultOn: boolean): boolean {
   try {
     const stored = localStorage.getItem(key);
@@ -212,20 +214,45 @@ export function RunDetailPage(): ReactElement {
     }
   }, [detail, nodeOptions, selectedNodeId]);
 
-  // Auto-scroll to bottom on new content IF user is already near the bottom.
+  // Sticky-bottom follow-tail: ResizeObserver catches both new items AND
+  // intra-message streaming height growth. handleScroll detaches on scroll-up.
   const lastBottomRef = useRef(true);
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  // Capture scroll position before every render so lastBottomRef stays current.
   useEffect(() => {
     const el = scrollRef.current;
     if (el === null) return;
-    // Near-bottom heuristic: within 120px of the end.
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-    lastBottomRef.current = atBottom;
+    lastBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
   });
+  // ResizeObserver: scroll to bottom on any content height change (new items OR
+  // intra-message streaming growth) when pinned to the tail.
   useEffect(() => {
+    const content = contentRef.current;
+    if (content === null) return;
+    const ro = new ResizeObserver(() => {
+      if (!lastBottomRef.current) return;
+      const el = scrollRef.current;
+      if (el !== null) el.scrollTop = el.scrollHeight;
+    });
+    ro.observe(content);
+    return (): void => {
+      ro.disconnect();
+    };
+  }, []);
+  const [atBottom, setAtBottom] = useState(true);
+  const handleScroll = useCallback((): void => {
     const el = scrollRef.current;
-    if (el === null || !lastBottomRef.current) return;
+    if (el === null) return;
+    const near = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
+    lastBottomRef.current = near;
+    setAtBottom(near);
+  }, []);
+  const scrollToBottom = useCallback((): void => {
+    const el = scrollRef.current;
+    if (el === null) return;
     el.scrollTop = el.scrollHeight;
-  }, [messages?.length, detail?.events.length]);
+    setAtBottom(true);
+  }, []);
 
   // Keymap bindings: hoisted above early returns so the hook order is stable
   // across all render paths (loading, error, ready).
@@ -380,46 +407,59 @@ export function RunDetailPage(): ReactElement {
 
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           {view === 'log' ? (
-            <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
-              <div className="w-full px-6">
-                <div className="sticky top-0 z-10 -mx-6 bg-surface px-6">{toolbar}</div>
+            <div className="relative min-h-0 flex-1">
+              <div ref={scrollRef} onScroll={handleScroll} className="h-full overflow-y-auto">
+                <div ref={contentRef} className="w-full px-6">
+                  <div className="sticky top-0 z-10 -mx-6 bg-surface px-6">{toolbar}</div>
 
-                <div className="py-4">
-                  <RunStartedLine run={run} />
+                  <div className="py-4">
+                    <RunStartedLine run={run} />
 
-                  <div className="mt-2">
-                    <RunStream
-                      messages={messageList}
-                      events={events}
-                      showToolCalls={showToolCalls}
-                      showSystem={showSystem}
-                      selectedNodeId={selectedNodeId}
-                    />
-                  </div>
-
-                  <RunFinishedLine run={run} />
-
-                  {run.status === 'paused' &&
-                  run.approval !== null &&
-                  run.approval !== undefined ? (
-                    <div className="mt-6 rounded border border-warning/30 bg-warning/[0.04] p-4">
-                      <div className="mb-2 flex items-center gap-2">
-                        <span
-                          aria-hidden
-                          className="h-2 w-2 animate-pulse rounded-full bg-warning"
-                        />
-                        <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-warning">
-                          Waiting for approval
-                        </span>
-                      </div>
-                      <ApprovalContext run={run} />
-                      <div className="mt-2">
-                        <ApprovalPanel run={run} />
-                      </div>
+                    <div className="mt-2">
+                      <RunStream
+                        messages={messageList}
+                        events={events}
+                        showToolCalls={showToolCalls}
+                        showSystem={showSystem}
+                        selectedNodeId={selectedNodeId}
+                      />
                     </div>
-                  ) : null}
+
+                    <RunFinishedLine run={run} />
+
+                    {run.status === 'paused' &&
+                    run.approval !== null &&
+                    run.approval !== undefined ? (
+                      <div className="mt-6 rounded border border-warning/30 bg-warning/[0.04] p-4">
+                        <div className="mb-2 flex items-center gap-2">
+                          <span
+                            aria-hidden
+                            className="h-2 w-2 animate-pulse rounded-full bg-warning"
+                          />
+                          <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-warning">
+                            Waiting for approval
+                          </span>
+                        </div>
+                        <ApprovalContext run={run} />
+                        <div className="mt-2">
+                          <ApprovalPanel run={run} />
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
               </div>
+              {!atBottom ? (
+                <button
+                  type="button"
+                  onClick={scrollToBottom}
+                  aria-label="Jump to bottom"
+                  className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full border border-border bg-surface-elevated px-3 py-1 text-[11px] text-text-secondary shadow-md transition-colors hover:text-text-primary"
+                >
+                  <span aria-hidden>↓</span>
+                  Jump to bottom
+                </button>
+              ) : null}
             </div>
           ) : view === 'graph' ? (
             <>
