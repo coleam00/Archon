@@ -44,4 +44,12 @@ describe('orderWithRecommended', () => {
     expect(ordered.map(w => w.name)).toEqual(['alpha', 'beta']);
     expect(ordered.filter(w => w.name === 'alpha')).toHaveLength(1);
   });
+
+  test('collapses duplicate recommended names to first occurrence', () => {
+    const workflows = [wf('alpha'), wf('beta'), wf('gamma')];
+    const { ordered, recommended } = orderWithRecommended(workflows, ['beta', 'alpha', 'beta']);
+    expect(recommended.map(w => w.name)).toEqual(['beta', 'alpha']);
+    expect(ordered.map(w => w.name)).toEqual(['beta', 'alpha', 'gamma']);
+    expect(ordered.filter(w => w.name === 'beta')).toHaveLength(1);
+  });
 });

@@ -38,4 +38,11 @@ describe('partitionWorkflows', () => {
     expect(result.recommended.map(w => w.name)).toEqual(['c']);
     expect(result.rest.map(w => w.name)).toEqual(['a', 'b', 'd', 'e']);
   });
+
+  test('collapses duplicate recommended names to first occurrence', () => {
+    const filtered = [wf('a'), wf('b'), wf('c')];
+    const result = partitionWorkflows(filtered, ['b', 'a', 'b']);
+    expect(result.recommended.map(w => w.name)).toEqual(['b', 'a']);
+    expect(result.rest.map(w => w.name)).toEqual(['c']);
+  });
 });

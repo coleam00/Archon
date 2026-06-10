@@ -4,7 +4,9 @@
  *
  * `recommendedNames` is the repo-owner-curated declared order from
  * `.archon/config.yaml`. Names not present in `filtered` are silently dropped.
- * When the input names list is empty, recommended is `[]` and rest === filtered.
+ * Duplicate names are collapsed to their first occurrence so a repeated entry
+ * never renders the same workflow twice (React key collision). When the input
+ * names list is empty, recommended is `[]` and rest === filtered.
  */
 export function partitionWorkflows<T extends { name: string }>(
   filtered: T[],
@@ -14,8 +16,9 @@ export function partitionWorkflows<T extends { name: string }>(
     return { recommended: [], rest: filtered };
   }
   const byName = new Map(filtered.map(wf => [wf.name, wf]));
-  const recommendedSet = new Set(recommendedNames);
-  const recommended = recommendedNames
+  const uniqueRecommendedNames = [...new Set(recommendedNames)];
+  const recommendedSet = new Set(uniqueRecommendedNames);
+  const recommended = uniqueRecommendedNames
     .map(name => byName.get(name))
     .filter((wf): wf is T => wf !== undefined);
   const rest = filtered.filter(wf => !recommendedSet.has(wf.name));
