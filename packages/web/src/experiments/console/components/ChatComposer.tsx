@@ -24,15 +24,16 @@ interface PickedFile {
 
 /**
  * Console-native chat composer. Auto-growing textarea, Enter sends,
- * Shift+Enter newline, Escape blurs. Click-to-attach files via 📎 (the send
- * skill builds the multipart upload).
+ * Shift+Enter newline, Escape blurs. Click-to-attach files via the paperclip
+ * icon (the send skill builds the multipart upload).
  *
  * Reimplemented (not imported) from the old chat's MessageInput because the
  * console may not import production `@/components/**` (ESLint isolation rule).
  *
  * Direction-B `cbox` shell: rounded card with `:focus-within` magenta ring,
- * 📎 attach + decorative `/` lead buttons, gradient `.brand-bar` Send button +
- * glow, kbd-hint row beneath. Attached files render as removable chips above.
+ * paperclip attach + decorative `/` lead buttons, gradient `.brand-bar` Send
+ * button + glow, kbd-hint row beneath. Attached files render as removable
+ * chips above.
  */
 export function ChatComposer({
   onSend,
