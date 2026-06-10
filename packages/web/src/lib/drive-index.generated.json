@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-06-09T16:00:17+00:00",
+  "generated_at": "2026-06-10T17:00:47+00:00",
   "vault_path": "second-brain/resources/drive-index",
-  "count": 19,
+  "count": 20,
   "folders": [
     {
       "id": "root",
@@ -1124,6 +1124,34 @@
       ]
     },
     {
+      "id": "local-maps-stop-by-lists",
+      "slug": "local-maps-stop-by-lists",
+      "name": "Local Maps & Stop-By Lists",
+      "folderId": "1mljCfJSUp4yUuoUkRrt51VSTJ0Nm1t5N",
+      "parentId": "1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
+      "audience": "all",
+      "lastSynced": "2026-06-10T15:00:36+00:00",
+      "fileCount": 2,
+      "vaultPath": "second-brain/resources/drive-index/local-maps-stop-by-lists.md",
+      "driveUrl": "https://drive.google.com/drive/folders/1mljCfJSUp4yUuoUkRrt51VSTJ0Nm1t5N",
+      "files": [
+        {
+          "name": "Consolidated Prospects List v9 (NC email 18\u219258%, NPI auth-official enrichment)",
+          "type": "g-spreadsheet",
+          "modified": "2026-06-10",
+          "size": "",
+          "link": "https://docs.google.com/spreadsheets/d/169TwztCkDKasKPCB7pdrYN2WmnDNFkNwYlzvxske9vU/edit?usp=drivesdk"
+        },
+        {
+          "name": "SRQ-4-9-26.kml",
+          "type": "vnd.google-earth.kml",
+          "modified": "2026-06-09",
+          "size": "",
+          "link": "https://drive.google.com/file/d/19oWWSeqeYULd15WXzTsIseV4HfBlBaiC/view?usp=drivesdk"
+        }
+      ]
+    },
+    {
       "id": "marketing",
       "slug": "marketing",
       "name": "Marketing",
@@ -1396,7 +1424,7 @@
       "folderId": "1XNWcwNujKK89JLmUeinjc69zVH2qjA0Z",
       "parentId": "1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
       "audience": "all",
-      "lastSynced": "2026-06-02T02:35:54+00:00",
+      "lastSynced": "2026-06-10T03:01:02+00:00",
       "fileCount": 4,
       "vaultPath": "second-brain/resources/drive-index/sarasota-art-dance-night.md",
       "driveUrl": "https://drive.google.com/drive/folders/1XNWcwNujKK89JLmUeinjc69zVH2qjA0Z",
@@ -1404,7 +1432,7 @@
         {
           "name": "Sarasota Art & Dance Night \u2014 Sponsor Prospect List (Tier 1, v2026-05-20)",
           "type": "g-spreadsheet",
-          "modified": "2026-05-21",
+          "modified": "2026-06-10",
           "size": "",
           "link": "https://docs.google.com/spreadsheets/d/1-6OlsU-LLJyWq86lSj3HoIzaa2iu1r6xgs9V827jZjQ/edit?usp=drivesdk"
         },
@@ -1487,11 +1515,18 @@
       "folderId": "1aO-IEBzPewrOx_sbvZWJtzSbo9k5Jgmv",
       "parentId": "1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
       "audience": "all",
-      "lastSynced": "2026-06-02T02:35:57+00:00",
-      "fileCount": 5,
+      "lastSynced": "2026-06-10T17:00:47+00:00",
+      "fileCount": 6,
       "vaultPath": "second-brain/resources/drive-index/social-media.md",
       "driveUrl": "https://drive.google.com/drive/folders/1aO-IEBzPewrOx_sbvZWJtzSbo9k5Jgmv",
       "files": [
+        {
+          "name": "Weave & PMC_ Campaign Messaging Draft_2026.06.09",
+          "type": "g-document",
+          "modified": "2026-06-10",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1froWbACykyg1-77Ny3JxI6wed1DbALtry7mExOh8MfQ/edit?usp=drivesdk"
+        },
         {
           "name": "PMC/BRT ASSETS",
           "type": "g-folder",

@@ -65,8 +65,6 @@ SADN_PROSPECTS = [
      "notes": "Existing Jason client relationship"},
     {"name": "Coral & Reef", "tier": "Warm", "category": "Lifestyle/Hospitality",
      "channel": "email", "ask": "$300-1500"},
-    {"name": "Lush Injectables", "tier": "Warm", "category": "Medspa",
-     "channel": "email", "ask": "$1500 Signature Showcase"},
     {"name": "Beem Light", "tier": "Warm", "category": "Wellness",
      "channel": "email", "ask": "$300-1500"},
     {"name": "Alvarado Hypnotherapy", "tier": "Warm", "category": "Mind-body",

@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-06-08T19:20:30.439772Z",
+  "generated_at": "2026-06-10T21:56:15.456823Z",
   "vault_path": "second-brain/contacts",
-  "count": 36,
+  "count": 39,
   "contacts": [
     {
       "id": "team/andrea-redassich",
@@ -71,6 +71,21 @@
       "vaultPath": "contacts/team/jason-diaz.md"
     },
     {
+      "id": "team/Jonathan-White",
+      "slug": "Jonathan-White",
+      "category": "team",
+      "name": "Jonathan White",
+      "role": "Business operations support (incoming hire)",
+      "company": "",
+      "email": "",
+      "linkedin": "",
+      "phone": "",
+      "status": "hiring-in-progress",
+      "preview": "25yo former colleague of Jason's from concierge primary care job. Lining up to handle Jason's business-operations support \u2014 campaign execution, manual research backstops, daily ops chores. NOT infra/AI (that lane is Sam Regal or Greg). Confirmed interest 2026-06-10 mid-call with text-back.",
+      "tags": ["contact", "hire", "business-ops", "client/jid5274"],
+      "vaultPath": "contacts/team/Jonathan-White.md"
+    },
+    {
       "id": "team/louise",
       "slug": "louise",
       "category": "team",
@@ -114,6 +129,21 @@
       "preview": "",
       "tags": [],
       "vaultPath": "contacts/team/sam.md"
+    },
+    {
+      "id": "team/Sam-Regal",
+      "slug": "Sam-Regal",
+      "category": "team",
+      "name": "Sam Regal",
+      "role": "Infrastructure consultant (B2B)",
+      "company": "",
+      "email": "",
+      "linkedin": "",
+      "phone": "",
+      "status": "in-evaluation",
+      "preview": "Infrastructure consultant Jason is evaluating as a competing/complementary builder to Greg's Hermes setup. Runs 3 Mac Minis at home with separate OpenClaw/Hermes agents. Walla Walla WA. Wife is ALS-research PhD founder. Built a HypeReel skill ~10 min after first call. Proposal incoming.",
+      "tags": ["contact", "vendor", "infra-consultant", "client/jid5274"],
+      "vaultPath": "contacts/team/Sam-Regal.md"
     },
     {
       "id": "team/trisha",
@@ -419,6 +449,27 @@
         "signal/priority"
       ],
       "vaultPath": "contacts/prospects/cynthia-hornback.md"
+    },
+    {
+      "id": "prospects/gordon-braun",
+      "slug": "gordon-braun",
+      "category": "prospects",
+      "name": "Dr. Gordon Braun",
+      "role": "Chiropractic",
+      "company": "",
+      "email": "?",
+      "linkedin": "https://www.linkedin.com/in/dr-gordon-braun-70447b20",
+      "phone": "?",
+      "status": "prospect-cold",
+      "preview": "",
+      "tags": [
+        "contact/prospect",
+        "client/jid5274",
+        "lead/chiropractic",
+        "brand/bioreg",
+        "geo/miami-beach"
+      ],
+      "vaultPath": "contacts/prospects/gordon-braun.md"
     },
     {
       "id": "prospects/kathryn-franchek-hornback",

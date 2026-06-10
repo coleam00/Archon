@@ -354,7 +354,7 @@ export function BusinessPage({
 
                   {/* Engagement label */}
                   {p.engagement && (
-                    <div className="mt-2 text-[10px] uppercase tracking-wider text-emerald-300">
+                    <div className="mt-2 text-[10px] uppercase tracking-wider text-emerald-700">
                       {p.engagement}
                     </div>
                   )}
