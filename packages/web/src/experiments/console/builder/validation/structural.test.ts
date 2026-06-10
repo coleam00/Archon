@@ -1,10 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 import { validateStructural } from './structural';
-import type { BuilderNode, BuilderWorkflow } from '../types';
-
-function wf(nodes: BuilderNode[]): BuilderWorkflow {
-  return { name: 's', description: 'd', meta: {}, nodes };
-}
+import { wf } from './test-helpers';
 
 describe('validateStructural', () => {
   test('clean workflow has no structural issues', () => {
@@ -86,5 +82,32 @@ describe('validateStructural', () => {
       wf([{ id: 'c', variant: 'cancel', base: {}, data: { reason: '' } }])
     );
     expect(issues.some(i => i.path.field === 'cancel')).toBe(true);
+  });
+
+  test('empty prompt, command, and bash bodies are flagged as missing', () => {
+    const issues = validateStructural(
+      wf([
+        { id: 'p', variant: 'prompt', base: {}, data: { prompt: '   ' } },
+        { id: 'c', variant: 'command', base: {}, data: { command: '' } },
+        { id: 'b', variant: 'bash', base: {}, data: { bash: '\n' } },
+      ])
+    );
+    const missing = issues.filter(i => i.rule === 'structural.field.missing');
+    expect(missing.map(i => ({ nodeId: i.path.nodeId, field: i.path.field }))).toEqual([
+      { nodeId: 'p', field: 'prompt' },
+      { nodeId: 'c', field: 'command' },
+      { nodeId: 'b', field: 'bash' },
+    ]);
+  });
+
+  test('non-empty prompt/command/bash bodies pass', () => {
+    const issues = validateStructural(
+      wf([
+        { id: 'p', variant: 'prompt', base: {}, data: { prompt: 'hi' } },
+        { id: 'c', variant: 'command', base: {}, data: { command: 'run-it' } },
+        { id: 'b', variant: 'bash', base: {}, data: { bash: 'echo hi' } },
+      ])
+    );
+    expect(issues).toEqual([]);
   });
 });

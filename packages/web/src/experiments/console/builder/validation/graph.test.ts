@@ -1,19 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 import { validateGraph } from './graph';
-import type { BuilderNode, BuilderWorkflow } from '../types';
-
-function promptNode(id: string, dependsOn?: string[]): BuilderNode {
-  return {
-    id,
-    variant: 'prompt',
-    base: dependsOn ? { depends_on: dependsOn } : {},
-    data: { prompt: 'x' },
-  };
-}
-
-function wf(nodes: BuilderNode[]): BuilderWorkflow {
-  return { name: 'g', description: 'd', meta: {}, nodes };
-}
+import { promptNode, wf } from './test-helpers';
 
 describe('validateGraph', () => {
   test('valid DAG produces no issues', () => {
