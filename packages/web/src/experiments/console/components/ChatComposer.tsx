@@ -161,9 +161,9 @@ export function ChatComposer({
               aria-label="Attach files"
               disabled={disabled || files.length >= MAX_FILES}
               title="Attach files"
-              className="rounded-md p-[3px] transition-colors hover:bg-[color:var(--surface-hover)] hover:text-text-primary disabled:cursor-default disabled:opacity-50"
+              className="flex h-[22px] w-[22px] cursor-pointer items-center justify-center rounded-md transition-colors hover:bg-[color:var(--surface-hover)] hover:text-text-primary disabled:cursor-default disabled:opacity-50"
             >
-              <Paperclip className="h-4 w-4" />
+              <Paperclip className="h-5 w-5" />
             </button>
             <input
               ref={fileInputRef}
@@ -181,7 +181,7 @@ export function ChatComposer({
               aria-label="Commands"
               disabled
               title="Commands (coming soon)"
-              className="rounded-md p-[3px] transition-colors hover:bg-[color:var(--surface-hover)] hover:text-text-primary disabled:cursor-default disabled:opacity-50"
+              className="flex h-[22px] items-center justify-center rounded-md px-[2px] text-[17px] leading-none transition-colors hover:bg-[color:var(--surface-hover)] hover:text-text-primary disabled:cursor-default disabled:opacity-50"
             >
               /
             </button>
