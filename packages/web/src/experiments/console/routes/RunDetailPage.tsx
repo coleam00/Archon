@@ -215,29 +215,34 @@ export function RunDetailPage(): ReactElement {
   }, [detail, nodeOptions, selectedNodeId]);
 
   // Sticky-bottom follow-tail: ResizeObserver catches both new items AND
-  // intra-message streaming height growth. handleScroll detaches on scroll-up.
+  // intra-message streaming height growth. handleScroll detaches on scroll-up
+  // and re-attaches when the user scrolls back within NEAR_BOTTOM_PX of the end.
   const lastBottomRef = useRef(true);
-  const contentRef = useRef<HTMLDivElement | null>(null);
-  // Capture scroll position before every render so lastBottomRef stays current.
+  // Re-snapshot the near-bottom state after every commit so the ResizeObserver
+  // callback (which fires after subsequent content growth) sees whether the user
+  // was pinned to the tail *before* that growth.
   useEffect(() => {
     const el = scrollRef.current;
     if (el === null) return;
     lastBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
   });
   // ResizeObserver: scroll to bottom on any content height change (new items OR
-  // intra-message streaming growth) when pinned to the tail.
-  useEffect(() => {
-    const content = contentRef.current;
-    if (content === null) return;
+  // intra-message streaming growth) when pinned to the tail. Attached via callback
+  // ref so it survives the loading early-return and log/graph view toggles — a
+  // mount-only effect would observe nothing on cold loads (first commit renders
+  // the loading screen, so the content div doesn't exist yet).
+  const roRef = useRef<ResizeObserver | null>(null);
+  const contentRef = useCallback((node: HTMLDivElement | null): void => {
+    roRef.current?.disconnect();
+    roRef.current = null;
+    if (node === null) return;
     const ro = new ResizeObserver(() => {
       if (!lastBottomRef.current) return;
       const el = scrollRef.current;
       if (el !== null) el.scrollTop = el.scrollHeight;
     });
-    ro.observe(content);
-    return (): void => {
-      ro.disconnect();
-    };
+    ro.observe(node);
+    roRef.current = ro;
   }, []);
   const [atBottom, setAtBottom] = useState(true);
   const handleScroll = useCallback((): void => {
