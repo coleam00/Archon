@@ -4,7 +4,8 @@ import prospectsData from '@/lib/business-prospects.generated.json';
 
 const VAULT_PATH = 'second-brain/businesses/pmc/ewc/overview.md';
 
-const PROSPECTS = (prospectsData.by_business as Record<string, BusinessProspect[]>).EWC ?? [];
+const PROSPECTS =
+  (prospectsData.by_business as Record<string, BusinessProspect[]> | undefined)?.EWC ?? [];
 
 const VALUE_PROPS = [
   {

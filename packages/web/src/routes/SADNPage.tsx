@@ -329,32 +329,31 @@ export function SADNPage(): React.ReactElement {
           dashes, sign-off "Jason / Call/text: 412.508.3539".
         </p>
         <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-          {((prospectsData.by_business as Record<string, BusinessProspect[]>).SADN ?? []).map(
-            (p, idx) => (
-              <article
-                key={`${p.name}-${idx}`}
-                className="rounded-md border border-border bg-surface-elevated p-3"
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <h3 className="text-sm font-medium text-text-primary">{p.name}</h3>
-                  {p.tier && (
-                    <span className="shrink-0 rounded-md border border-emerald-700/40 bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-800">
-                      {p.tier}
-                    </span>
-                  )}
-                </div>
-                {p.category && <p className="mt-1 text-[11px] text-text-tertiary">{p.category}</p>}
-                {p.ask && (
-                  <p className="mt-2 text-[11px] text-text-secondary">
-                    <span className="text-text-tertiary">Ask:</span> {p.ask}
-                  </p>
+          {(
+            (prospectsData.by_business as Record<string, BusinessProspect[]> | undefined)?.SADN ??
+            []
+          ).map((p, idx) => (
+            <article
+              key={`${p.name}-${idx}`}
+              className="rounded-md border border-border bg-surface-elevated p-3"
+            >
+              <div className="flex items-start justify-between gap-2">
+                <h3 className="text-sm font-medium text-text-primary">{p.name}</h3>
+                {p.tier && (
+                  <span className="shrink-0 rounded-md border border-emerald-700/40 bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-800">
+                    {p.tier}
+                  </span>
                 )}
-                {p.notes && (
-                  <p className="mt-1 text-[11px] italic text-text-secondary">{p.notes}</p>
-                )}
-              </article>
-            )
-          )}
+              </div>
+              {p.category && <p className="mt-1 text-[11px] text-text-tertiary">{p.category}</p>}
+              {p.ask && (
+                <p className="mt-2 text-[11px] text-text-secondary">
+                  <span className="text-text-tertiary">Ask:</span> {p.ask}
+                </p>
+              )}
+              {p.notes && <p className="mt-1 text-[11px] italic text-text-secondary">{p.notes}</p>}
+            </article>
+          ))}
         </div>
       </section>
 

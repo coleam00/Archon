@@ -4,7 +4,8 @@ import prospectsData from '@/lib/business-prospects.generated.json';
 
 const VAULT_PATH = 'second-brain/businesses/pmc/qep/overview.md';
 
-const PROSPECTS = (prospectsData.by_business as Record<string, BusinessProspect[]>).QEP ?? [];
+const PROSPECTS =
+  (prospectsData.by_business as Record<string, BusinessProspect[]> | undefined)?.QEP ?? [];
 
 const VALUE_PROPS = [
   {
