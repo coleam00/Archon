@@ -14,6 +14,7 @@ import type {
 import { augmentPromptForJsonSchema } from '../../shared/structured-output';
 import { OMP_CAPABILITIES } from './capabilities';
 import { parseOmpConfig } from './config';
+import { createOmpDiagnosticsContext, OmpEnrichedError } from './diagnostics';
 import { parseOmpModelRef } from './model-ref';
 import {
   formatOmpAuthInitFailedMessage,
@@ -203,6 +204,13 @@ export class OmpProvider implements IAgentProvider {
       };
     }
 
+    const diagnostics = createOmpDiagnosticsContext({
+      provider: parsed.provider,
+      modelId: parsed.modelId,
+      cwd,
+      resumed: resumeSessionId !== undefined && !resumeFailed,
+    });
+
     const skills =
       skillPaths.length > 0 ? (await omp.discoverSkills(cwd, undefined, {})).skills : undefined;
 
@@ -221,32 +229,60 @@ export class OmpProvider implements IAgentProvider {
       'omp.session_started'
     );
 
-    const { session, modelFallbackMessage } = await createAgentSession({
-      cwd,
-      model,
-      authStorage,
-      modelRegistry,
-      sessionManager,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      thinkingLevel: thinkingLevel as any,
-      skills,
-      disableExtensionDiscovery: !enableExtensions,
-      additionalExtensionPaths: [],
-      hasUI: interactive,
-    });
+    // Session creation lives in a factory so the retry layer can create a
+    // FRESH session per attempt (bridgeSession disposes its session in a
+    // finally — re-prompting a disposed session is the 70eaa443 bug).
+    let firstCreation = true;
+    let firstCreationFallbackMessage: string | undefined;
+    const createSession = async (): Promise<
+      Awaited<ReturnType<typeof createAgentSession>>['session']
+    > => {
+      const { session, modelFallbackMessage } = await createAgentSession({
+        cwd,
+        model,
+        authStorage,
+        modelRegistry,
+        sessionManager,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        thinkingLevel: thinkingLevel as any,
+        skills,
+        disableExtensionDiscovery: !enableExtensions,
+        additionalExtensionPaths: [],
+        hasUI: interactive,
+      });
 
-    if (modelFallbackMessage) {
-      yield { type: 'system', content: `⚠️ ${modelFallbackMessage}` };
-    }
+      if (firstCreation) {
+        firstCreation = false;
+        firstCreationFallbackMessage = modelFallbackMessage;
+      }
 
-    if (enableExtensions && ompConfig.extensionFlags) {
-      const runner = session.extensionRunner;
-      if (runner) {
-        for (const [name, value] of Object.entries(ompConfig.extensionFlags)) {
-          runner.setFlagValue(name, value);
+      if (enableExtensions && ompConfig.extensionFlags) {
+        const runner = session.extensionRunner;
+        if (runner) {
+          for (const [name, value] of Object.entries(ompConfig.extensionFlags)) {
+            runner.setFlagValue(name, value);
+          }
         }
       }
+
+      return session;
+    };
+
+    // Create the first session eagerly so model-fallback warnings surface
+    // before streaming starts; retries get fresh sessions from the factory.
+    let preCreatedSession: Awaited<ReturnType<typeof createSession>> | undefined =
+      await createSession();
+    if (firstCreationFallbackMessage) {
+      yield { type: 'system', content: `⚠️ ${firstCreationFallbackMessage}` };
     }
+    const sessionFactory = async (): Promise<Awaited<ReturnType<typeof createSession>>> => {
+      if (preCreatedSession) {
+        const session = preCreatedSession;
+        preCreatedSession = undefined;
+        return session;
+      }
+      return createSession();
+    };
 
     const outputFormat = requestOptions?.outputFormat;
     const effectivePrompt = outputFormat
@@ -255,15 +291,27 @@ export class OmpProvider implements IAgentProvider {
 
     try {
       yield* bridgeSessionWithRetry(
-        session,
+        sessionFactory,
         effectivePrompt,
         requestOptions?.abortSignal,
-        outputFormat?.schema
+        outputFormat?.schema,
+        undefined,
+        { diagnostics }
       );
       getLog().info({ ompProvider: parsed.provider }, 'omp.prompt_completed');
     } catch (err: unknown) {
-      getLog().error({ err, ompProvider: parsed.provider }, 'omp.prompt_failed');
-      throw err;
+      const error = err as Error;
+      getLog().error({ err: error, ...diagnostics.toLogSummary() }, 'omp.prompt_failed');
+      // Bridge errors already carry the bounded diagnostics summary; only
+      // append it for raw failures (e.g. session factory rejections).
+      const summary =
+        error instanceof OmpEnrichedError ? '' : ` ${diagnostics.formatForErrorMessage()}`;
+      throw new Error(
+        `OMP prompt failed (${parsed.provider}/${parsed.modelId}): ${error.message}.${summary} ` +
+          'Recovery: re-run the node or use /workflow resume; if this persists, check provider ' +
+          `credentials and model availability for '${parsed.provider}'.`,
+        { cause: error }
+      );
     }
   }
 

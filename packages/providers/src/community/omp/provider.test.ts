@@ -37,7 +37,7 @@ const mockSession = {
 
 const mockCreateAgentSession = mock(async () => ({
   session: mockSession,
-  modelFallbackMessage: undefined,
+  modelFallbackMessage: undefined as string | undefined,
 }));
 
 const mockDiscoverAuthStorage = mock(async () => ({
@@ -136,6 +136,10 @@ describe('OmpProvider.sendQuery', () => {
     mockRefreshProvider.mockClear();
     mockFind.mockClear();
     mockDiscoverAuthStorage.mockClear();
+    mockDiscoverAuthStorage.mockImplementation(async () => ({
+      setRuntimeApiKey: mock(() => undefined),
+      getApiKey: mock(async () => 'sk-test'),
+    }));
     mockCreateAgentSession.mockClear();
     scriptedEvents.length = 0;
     scriptedEvents.push(agentEnd());
@@ -259,6 +263,115 @@ describe('OmpProvider.sendQuery', () => {
     expect(error?.message).toContain('no credentials');
     expect(error?.message).toContain('GEMINI_API_KEY');
   });
+
+  test('prompt failure throws enriched error with recovery note, diagnostics, and cause', async () => {
+    mockPrompt.mockImplementationOnce(async () => {
+      throw new Error('boom failure'); // UNKNOWN classification → no retry
+    });
+
+    const { error } = await consume(
+      new OmpProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+      })
+    );
+
+    expect(error).toBeDefined();
+    expect(error?.message).toContain('OMP prompt failed (google/gemini-2.5-pro)');
+    expect(error?.message).toContain('boom failure');
+    expect(error?.message).toContain('Recovery:');
+    expect(error?.message).toContain('/workflow resume');
+    expect(error?.message).toContain('[omp diagnostics:');
+    expect(error?.cause).toBeDefined();
+    // original error preserved through the enrichment chain
+    let root: unknown = error?.cause;
+    while (root instanceof Error && root.cause !== undefined) root = root.cause;
+    expect(root).toBeInstanceOf(Error);
+    expect((root as Error).message).toBe('boom failure');
+  });
+
+  test('omp.prompt_failed log includes provider, modelId, cwd, and bounded ledger summary', async () => {
+    mockPrompt.mockImplementationOnce(async () => {
+      throw new Error('boom failure');
+    });
+
+    await consume(
+      new OmpProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+      })
+    );
+
+    expect(mockLogger.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ompProvider: 'google',
+        modelId: 'gemini-2.5-pro',
+        cwd: '/tmp',
+        toolAttempts: expect.any(Array),
+        toolAttemptCount: 0,
+      }),
+      'omp.prompt_failed'
+    );
+  });
+
+  test('transient pre-stream failure recreates the session via the factory (fresh session per attempt)', async () => {
+    mockPrompt.mockImplementationOnce(async () => {
+      throw new Error('socket hang up'); // TRANSIENT, zero chunks yielded
+    });
+
+    const { chunks, error } = await consume(
+      new OmpProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+      })
+    );
+
+    expect(error).toBeUndefined();
+    expect(mockCreateAgentSession).toHaveBeenCalledTimes(2);
+    expect(
+      chunks.some(
+        c =>
+          typeof c === 'object' &&
+          c !== null &&
+          (c as { type: string }).type === 'system' &&
+          (c as { content: string }).content.includes('OMP transient error')
+      )
+    ).toBe(true);
+    expect(
+      chunks.some(
+        c => typeof c === 'object' && c !== null && (c as { type: string }).type === 'result'
+      )
+    ).toBe(true);
+  }, 15_000);
+
+  test('model fallback warning is yielded only once even when retry recreates the session', async () => {
+    mockCreateAgentSession
+      .mockImplementationOnce(async () => ({
+        session: mockSession,
+        modelFallbackMessage: 'model fell back to gemini-2.5-flash' as string | undefined,
+      }))
+      .mockImplementationOnce(async () => ({
+        session: mockSession,
+        modelFallbackMessage: 'model fell back to gemini-2.5-flash' as string | undefined,
+      }));
+    mockPrompt.mockImplementationOnce(async () => {
+      throw new Error('socket hang up'); // force one retry → second creation
+    });
+
+    const { chunks, error } = await consume(
+      new OmpProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+      })
+    );
+
+    expect(error).toBeUndefined();
+    expect(mockCreateAgentSession).toHaveBeenCalledTimes(2);
+    const fallbackWarnings = chunks.filter(
+      c =>
+        typeof c === 'object' &&
+        c !== null &&
+        (c as { type: string }).type === 'system' &&
+        (c as { content: string }).content.includes('fell back to gemini-2.5-flash')
+    );
+    expect(fallbackWarnings).toHaveLength(1);
+  }, 15_000);
 });
 
 describe('OmpProvider assistants.omp.env application', () => {
