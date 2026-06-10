@@ -6,10 +6,18 @@ export function defaultLoopData(): LoopNodeData {
   return { prompt: '', until: 'COMPLETE', max_iterations: 10, fresh_context: false };
 }
 
-/** Build `LoopNodeData` from a partitioned wire node's variant-specific fields. */
+/**
+ * Build `LoopNodeData` from a partitioned wire node's variant-specific fields.
+ * Throws when the `loop` mode field is absent — importers must check field
+ * presence first; defaults for new nodes come from `defaultLoopData()`.
+ */
 export function loopFromDag(variantSpecific: Partial<WireDagNode>): LoopNodeData {
   const loop = variantSpecific.loop;
-  if (!loop) return defaultLoopData();
+  if (loop === undefined) {
+    throw new Error(
+      "loopFromDag: wire node has no 'loop' field — use defaultLoopData() for new nodes"
+    );
+  }
   return {
     prompt: loop.prompt,
     until: loop.until,

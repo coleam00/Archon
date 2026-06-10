@@ -6,10 +6,23 @@ export function defaultScriptData(): ScriptNodeData {
   return { script: '', runtime: 'bun' };
 }
 
-/** Build `ScriptNodeData` from a partitioned wire node's variant-specific fields. */
+/**
+ * Build `ScriptNodeData` from a partitioned wire node's variant-specific fields.
+ * Throws when the `script` mode field is absent — importers must check field
+ * presence first; defaults for new nodes come from `defaultScriptData()`.
+ *
+ * A missing `runtime` still defaults to `'bun'` so the node stays editable, but
+ * the importer flags it (the engine requires `runtime` on script nodes) — see
+ * `fromWorkflowDefinition`.
+ */
 export function scriptFromDag(variantSpecific: Partial<WireDagNode>): ScriptNodeData {
+  if (variantSpecific.script === undefined) {
+    throw new Error(
+      "scriptFromDag: wire node has no 'script' field — use defaultScriptData() for new nodes"
+    );
+  }
   return {
-    script: variantSpecific.script ?? '',
+    script: variantSpecific.script,
     runtime: variantSpecific.runtime ?? 'bun',
     ...(variantSpecific.deps !== undefined ? { deps: variantSpecific.deps } : {}),
     ...(variantSpecific.timeout !== undefined ? { timeout: variantSpecific.timeout } : {}),

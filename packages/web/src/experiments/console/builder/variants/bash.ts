@@ -6,10 +6,19 @@ export function defaultBashData(): BashNodeData {
   return { bash: '' };
 }
 
-/** Build `BashNodeData` from a partitioned wire node's variant-specific fields. */
+/**
+ * Build `BashNodeData` from a partitioned wire node's variant-specific fields.
+ * Throws when the `bash` mode field is absent — importers must check field
+ * presence first; defaults for new nodes come from `defaultBashData()`.
+ */
 export function bashFromDag(variantSpecific: Partial<WireDagNode>): BashNodeData {
+  if (variantSpecific.bash === undefined) {
+    throw new Error(
+      "bashFromDag: wire node has no 'bash' field — use defaultBashData() for new nodes"
+    );
+  }
   return {
-    bash: variantSpecific.bash ?? '',
+    bash: variantSpecific.bash,
     ...(variantSpecific.timeout !== undefined ? { timeout: variantSpecific.timeout } : {}),
   };
 }

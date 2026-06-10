@@ -36,6 +36,12 @@ export interface VariantRegistryEntry<K extends VariantId> {
   fromDag: (variantSpecific: Partial<WireDagNode>) => VariantDataMap[K];
   toDag: (data: VariantDataMap[K]) => Partial<WireDagNode>;
   capabilities: VariantCapabilities;
+  /**
+   * The wire keys this variant's converters consume from `variantSpecific`.
+   * The importer warns about (and drops) any other key that lands there, so a
+   * field the round-trip cannot carry is never lost silently.
+   */
+  wireKeys: readonly string[];
 }
 
 /** Per-variant registry. Strongly typed per key. */
@@ -45,6 +51,7 @@ export const VARIANT_REGISTRY: { [K in VariantId]: VariantRegistryEntry<K> } = {
     defaultData: defaultPromptData,
     fromDag: promptFromDag,
     toDag: promptToDag,
+    wireKeys: ['prompt'],
     capabilities: VARIANT_CAPABILITIES.prompt,
   },
   command: {
@@ -52,6 +59,7 @@ export const VARIANT_REGISTRY: { [K in VariantId]: VariantRegistryEntry<K> } = {
     defaultData: defaultCommandData,
     fromDag: commandFromDag,
     toDag: commandToDag,
+    wireKeys: ['command'],
     capabilities: VARIANT_CAPABILITIES.command,
   },
   bash: {
@@ -59,6 +67,7 @@ export const VARIANT_REGISTRY: { [K in VariantId]: VariantRegistryEntry<K> } = {
     defaultData: defaultBashData,
     fromDag: bashFromDag,
     toDag: bashToDag,
+    wireKeys: ['bash', 'timeout'],
     capabilities: VARIANT_CAPABILITIES.bash,
   },
   script: {
@@ -66,6 +75,7 @@ export const VARIANT_REGISTRY: { [K in VariantId]: VariantRegistryEntry<K> } = {
     defaultData: defaultScriptData,
     fromDag: scriptFromDag,
     toDag: scriptToDag,
+    wireKeys: ['script', 'runtime', 'deps', 'timeout'],
     capabilities: VARIANT_CAPABILITIES.script,
   },
   loop: {
@@ -73,6 +83,7 @@ export const VARIANT_REGISTRY: { [K in VariantId]: VariantRegistryEntry<K> } = {
     defaultData: defaultLoopData,
     fromDag: loopFromDag,
     toDag: loopToDag,
+    wireKeys: ['loop'],
     capabilities: VARIANT_CAPABILITIES.loop,
   },
   approval: {
@@ -80,6 +91,7 @@ export const VARIANT_REGISTRY: { [K in VariantId]: VariantRegistryEntry<K> } = {
     defaultData: defaultApprovalData,
     fromDag: approvalFromDag,
     toDag: approvalToDag,
+    wireKeys: ['approval'],
     capabilities: VARIANT_CAPABILITIES.approval,
   },
   cancel: {
@@ -87,6 +99,7 @@ export const VARIANT_REGISTRY: { [K in VariantId]: VariantRegistryEntry<K> } = {
     defaultData: defaultCancelData,
     fromDag: cancelFromDag,
     toDag: cancelToDag,
+    wireKeys: ['cancel'],
     capabilities: VARIANT_CAPABILITIES.cancel,
   },
 };

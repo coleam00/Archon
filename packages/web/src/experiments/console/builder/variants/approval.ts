@@ -6,10 +6,18 @@ export function defaultApprovalData(): ApprovalNodeData {
   return { message: 'Approve to continue?' };
 }
 
-/** Build `ApprovalNodeData` from a partitioned wire node's variant-specific fields. */
+/**
+ * Build `ApprovalNodeData` from a partitioned wire node's variant-specific fields.
+ * Throws when the `approval` mode field is absent — importers must check field
+ * presence first; defaults for new nodes come from `defaultApprovalData()`.
+ */
 export function approvalFromDag(variantSpecific: Partial<WireDagNode>): ApprovalNodeData {
   const approval = variantSpecific.approval;
-  if (!approval) return defaultApprovalData();
+  if (approval === undefined) {
+    throw new Error(
+      "approvalFromDag: wire node has no 'approval' field — use defaultApprovalData() for new nodes"
+    );
+  }
   return {
     message: approval.message,
     ...(approval.capture_response !== undefined

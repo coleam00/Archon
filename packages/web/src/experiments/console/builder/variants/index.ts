@@ -1,6 +1,6 @@
 /** Re-exports for the variants layer. */
 export { partitionNode } from './base-fields';
-export { detectVariant } from './detect';
+export { detectVariant, detectVariantOrNull } from './detect';
 export { VARIANT_CAPABILITIES, type VariantCapabilities } from './capabilities';
 export {
   VARIANTS,
