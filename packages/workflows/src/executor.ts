@@ -20,7 +20,12 @@ import { logWorkflowStart, logWorkflowError } from './logger';
 import { formatDuration, parseDbTimestamp } from './utils/duration';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { isRegisteredProvider, getRegisteredProviders } from '@archon/providers';
-import { classifyError, safeSendMessage, type SendMessageContext } from './executor-shared';
+import {
+  classifyError,
+  toTelemetryErrorClass,
+  safeSendMessage,
+  type SendMessageContext,
+} from './executor-shared';
 import { resolveGithubTokenOverrides } from './utils/github-token-policy';
 import { buildAiProfile, isLiteralSpec, resolveModelSpec } from './model-validation';
 import type { ModelAliasPreset } from './model-validation';
@@ -705,6 +710,13 @@ export async function executeWorkflow(
       usesApproval: workflow.nodes.some(isApprovalNode),
       usesScript: workflow.nodes.some(isScriptNode),
       usesBash: workflow.nodes.some(isBashNode),
+      usesOutputFormat: workflow.nodes.some(n => n.output_format !== undefined),
+      usesOutputType: workflow.nodes.some(n => n.output_type !== undefined),
+      usesPersistSession:
+        workflow.persist_sessions === true || workflow.nodes.some(n => n.persist_session === true),
+      usesMcp: workflow.nodes.some(n => n.mcp !== undefined),
+      usesSkills: workflow.nodes.some(n => n.skills !== undefined),
+      usesFreshContext: workflow.nodes.some(n => isLoopNode(n) && n.loop.fresh_context),
       interactive: workflow.interactive ?? false,
       usedIsolation: isolationContext !== undefined,
       isResume: dagPriorCompletedNodes !== undefined,
@@ -893,6 +905,8 @@ export async function executeWorkflow(
       workflowSource: source,
       provider: resolvedProvider,
       exitReason: 'unhandled_error',
+      // Categorical class only (fatal/transient/unknown) — err.message never leaves.
+      errorClass: toTelemetryErrorClass(classifyError(err)),
     });
     deps.store
       .createWorkflowEvent({

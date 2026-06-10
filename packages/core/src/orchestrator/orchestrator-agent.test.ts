@@ -54,11 +54,14 @@ const mockLoadConfig = mock(() =>
 const mockLogger = createMockLogger();
 
 const mockEnsureArchonWorkspacesPath = mock(() => Promise.resolve('/home/test/.archon/workspaces'));
+const mockCaptureChatTurn = mock(() => undefined);
 mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
   getArchonWorkspacesPath: mock(() => '/home/test/.archon/workspaces'),
   ensureArchonWorkspacesPath: mockEnsureArchonWorkspacesPath,
   getArchonHome: mock(() => '/home/test/.archon'),
+  captureChatTurn: mockCaptureChatTurn,
+  captureCodebaseRegistered: mock(() => undefined),
 }));
 
 const mockUpdateConversation = mock(() => Promise.resolve());
@@ -2629,5 +2632,98 @@ describe('handleMessage — /setproject dispatch', () => {
 
     expect(mockUpdateConversation).not.toHaveBeenCalled();
     expect(platform.sendMessage).toHaveBeenCalledWith('conv-1', expect.stringContaining('Usage'));
+  });
+});
+
+// ─── Chat turn telemetry (PR #1944 review T2) ────────────────────────────────
+
+describe('chat turn telemetry', () => {
+  beforeEach(() => {
+    mockCaptureChatTurn.mockClear();
+    mockGetOrCreateConversation.mockReset();
+    mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(null));
+    mockGetPausedWorkflowRun.mockReset();
+    mockGetPausedWorkflowRun.mockImplementation(() => Promise.resolve(null));
+    mockGetCodebase.mockReset();
+    mockGetCodebase.mockImplementation(() => Promise.resolve(null));
+    mockListCodebases.mockReset();
+    mockListCodebases.mockImplementation(() => Promise.resolve([]));
+    mockExecuteWorkflow.mockClear();
+    mockDiscoverWorkflowsWithConfig.mockReset();
+    mockDiscoverWorkflowsWithConfig.mockImplementation(() =>
+      Promise.resolve({ workflows: [], errors: [] })
+    );
+    mockSendQuery.mockClear();
+    mockUpdateConversation.mockClear();
+    // Restore the default plain-chat AI response
+    mockSendQuery.mockImplementation(async function* () {
+      yield { type: 'assistant', content: 'test response' };
+      yield { type: 'result', sessionId: 'session-1' };
+    });
+  });
+
+  test('captures exactly one completed chat turn for a plain conversation', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ codebase_id: null }))
+    );
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello there');
+
+    expect(mockCaptureChatTurn).toHaveBeenCalledTimes(1);
+    expect(mockCaptureChatTurn).toHaveBeenCalledWith({
+      platform: 'web',
+      provider: 'claude',
+      outcome: 'completed',
+    });
+  });
+
+  test('does NOT capture a chat turn when the AI routes to /invoke-workflow', async () => {
+    // Guard for the "excluded by construction" claim: the routing turn that
+    // dispatches a workflow must count as workflow_invoked, not as a chat turn.
+    const codebase = makeCodebase('my-project');
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ codebase_id: null }))
+    );
+    mockListCodebases.mockImplementation(() => Promise.resolve([codebase]));
+    mockDiscoverWorkflowsWithConfig.mockImplementation(() =>
+      Promise.resolve({
+        workflows: [{ workflow: makeTestWorkflow({ name: 'assist' }) }],
+        errors: [],
+      })
+    );
+    mockSendQuery.mockImplementation(async function* () {
+      yield { type: 'assistant', content: '/invoke-workflow assist --project my-project' };
+      yield { type: 'result', sessionId: 'session-1' };
+    });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'run assist on my project');
+
+    // Positive control: the routing path actually ran — dispatch auto-attaches
+    // the project to the conversation before isolation/execution.
+    expect(mockUpdateConversation).toHaveBeenCalledWith('conv-1', {
+      codebase_id: 'id-my-project',
+    });
+    // …and the routing turn was NOT counted as a chat turn.
+    expect(mockCaptureChatTurn).not.toHaveBeenCalled();
+  });
+
+  test('captures a failed chat turn when the AI returns an error result', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ codebase_id: null }))
+    );
+    mockSendQuery.mockImplementation(async function* () {
+      yield { type: 'result', isError: true, errorSubtype: 'error_max_turns' };
+    });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello');
+
+    expect(mockCaptureChatTurn).toHaveBeenCalledTimes(1);
+    expect(mockCaptureChatTurn).toHaveBeenCalledWith({
+      platform: 'web',
+      provider: 'claude',
+      outcome: 'failed',
+    });
   });
 });

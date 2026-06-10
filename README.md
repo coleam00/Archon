@@ -323,12 +323,14 @@ Full documentation is available at **[archon.diy/docs](https://archon.diy/docs/)
 
 ## Telemetry
 
-Archon sends a few anonymous events so maintainers can see which workflows get real usage, on what platforms, and whether runs succeed — and prioritize accordingly. **No PII, ever.** Events: `archon_started` (once per CLI invocation / server boot), `workflow_invoked` (each workflow start), and `workflow_completed` / `workflow_failed` (each run outcome).
+Archon sends a few anonymous events so maintainers can see which workflows get real usage, on what platforms, and whether runs succeed — and prioritize accordingly. **No PII, ever.** Events: `archon_started` (once per CLI invocation / server boot), `archon_active` (daily heartbeat while a server is running, so long-running installs stay counted), `chat_turn_handled` (each direct AI chat turn — platform and provider only, never message content), `workflow_invoked` (each workflow start), `workflow_completed` / `workflow_failed` (each run outcome), and `codebase_registered` (a pure count when a project is registered — no name, path, or URL).
 
 **What's collected (categorical only):**
 - **Workflow name** — the real name for *bundled* (Archon-authored) workflows; `"custom"` for your own workflows, so private names never leave your machine.
-- **Run shape & outcome** — platform (`cli`/`web`/`slack`/…), provider id (plus the model id on `workflow_invoked`), node count, which node types are used, success/failure, duration, and a categorical failure reason (never raw error text).
+- **Run shape & outcome** — platform (`cli`/`web`/`slack`/…), provider id (plus the model id on `workflow_invoked`), node count, which node types and features are used (loop/approval/script/bash, structured output, persisted sessions, MCP, skills, fresh-context loops), success/failure, duration, a categorical failure reason, and a fixed-enum failure class (`fatal`/`transient`/`unknown` — never raw error text) plus the failed node's type.
+- **Chat activity** — one event per direct-chat AI turn with platform, provider, and completed/failed. Message content, prompts, and conversation ids are never sent.
 - **Machine context** — OS, architecture, Archon version, runtime, whether it's a binary build, and a CI flag.
+- **Deployment shape** (server only) — which adapters are enabled (booleans), database kind (`sqlite`/`postgresql`), whether web auth and multi-user mode are on, and the GitHub auth mode. Configuration *values* (tokens, URLs, hosts) are never sent.
 - A random install UUID stored at `~/.archon/telemetry-id`. Nothing else.
 
 **What's *not* collected:** your code, prompts, messages, custom workflow names, workflow descriptions, git remotes, file paths, usernames, tokens, AI output, error message text, your IP address, your geographic location — none of it.

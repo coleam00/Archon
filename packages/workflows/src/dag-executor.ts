@@ -54,6 +54,7 @@ import {
 } from './schemas';
 import { formatToolCall } from './utils/tool-formatter';
 import { createLogger, captureWorkflowCompleted } from '@archon/paths';
+import type { WorkflowErrorClass, WorkflowNodeType } from '@archon/paths';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { evaluateCondition } from './condition-evaluator';
 import { declaredFieldsFromSchema, resolveNodeOutputField } from './output-ref';
@@ -71,6 +72,7 @@ import {
 import { withIdleTimeout, STEP_IDLE_TIMEOUT_MS } from './utils/idle-timeout';
 import {
   classifyError,
+  toTelemetryErrorClass,
   detectCreditExhaustion,
   loadCommandPrompt,
   substituteWorkflowVariables,
@@ -89,6 +91,46 @@ import {
   type ModelAliasPreset,
   type ResolvedAiProfile,
 } from './model-validation';
+
+/**
+ * Closed-set node type for telemetry — mirrors the DagNode discriminators.
+ * The final `'prompt'` arm is the fallthrough: a future node type added to
+ * the schema without a guard here would be reported as `'prompt'` (a metrics
+ * misclassification, not a privacy issue) — extend this when adding node types.
+ */
+function dagNodeTelemetryType(node: DagNode): WorkflowNodeType {
+  if (isBashNode(node)) return 'bash';
+  if (isScriptNode(node)) return 'script';
+  if (isLoopNode(node)) return 'loop';
+  if (isApprovalNode(node)) return 'approval';
+  if (isCancelNode(node)) return 'cancel';
+  if ('command' in node) return 'command';
+  return 'prompt';
+}
+
+/**
+ * Failure taxonomy for the terminal telemetry event: the first failed node's
+ * type and a fixed-enum error class derived from its stored error message.
+ * Returns {} when nothing failed. Categorical only — the error text itself
+ * is classified locally and never transmitted.
+ */
+function firstFailedNodeTaxonomy(
+  nodeOutputs: Map<string, NodeOutput>,
+  nodes: readonly DagNode[]
+): { errorClass?: WorkflowErrorClass; failedNodeType?: WorkflowNodeType } {
+  for (const [nodeId, output] of nodeOutputs) {
+    if (output.state !== 'failed') continue;
+    const node = nodes.find(n => n.id === nodeId);
+    const taxonomy: { errorClass: WorkflowErrorClass; failedNodeType?: WorkflowNodeType } = {
+      errorClass: toTelemetryErrorClass(classifyError(new Error(output.error))),
+    };
+    if (node) {
+      taxonomy.failedNodeType = dagNodeTelemetryType(node);
+    }
+    return taxonomy;
+  }
+  return {};
+}
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -3544,6 +3586,12 @@ export async function executeDagWorkflow(
   }
   const anyCompleted = nodeCounts.completed > 0;
   const anyFailed = nodeCounts.failed > 0;
+  // Categorical failure taxonomy for telemetry: type of the first failed node
+  // in stored (Map insertion) order — for parallel layers this is layer-array
+  // order, not completion order; any failed node is equally representative —
+  // plus a fixed-enum error class derived from the stored node error. Raw
+  // error text never leaves.
+  const failureTaxonomy = firstFailedNodeTaxonomy(nodeOutputs, workflow.nodes);
 
   getLog().info(
     { nodeCount: workflow.nodes.length, anyCompleted, anyFailed },
@@ -3575,6 +3623,7 @@ export async function executeDagWorkflow(
       nodesSkipped: nodeCounts.skipped,
       nodesTotal: nodeCounts.total,
       exitReason: 'no_nodes_completed',
+      ...failureTaxonomy,
     });
     // Note: nodeCounts not stored for failed runs — failWorkflowRun only stores { error }.
     // Frontend guards with isValidNodeCounts so missing node_counts is safe.
@@ -3621,6 +3670,7 @@ export async function executeDagWorkflow(
       nodesSkipped: nodeCounts.skipped,
       nodesTotal: nodeCounts.total,
       exitReason: 'node_error',
+      ...failureTaxonomy,
     });
     await deps.store.failWorkflowRun(workflowRun.id, failMsg).catch((dbErr: Error) => {
       getLog().error({ err: dbErr, workflowRunId: workflowRun.id }, 'dag_db_fail_failed');

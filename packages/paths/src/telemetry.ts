@@ -2,9 +2,11 @@
  * Anonymous PostHog telemetry for Archon.
  *
  * Emits a small set of anonymous events — `archon_started` (once per process),
- * `workflow_invoked` (each workflow start), and `workflow_completed` /
- * `workflow_failed` (each terminal run) — so maintainers can see active
- * installs, which workflows run, and run outcomes. No PII, no user identity.
+ * `archon_active` (daily server heartbeat), `chat_turn_handled` (each direct
+ * AI chat turn), `workflow_invoked` (each workflow start), `workflow_completed`
+ * / `workflow_failed` (each terminal run), and `codebase_registered` (count
+ * only) — so maintainers can see active installs, which surfaces and workflows
+ * get real usage, and run outcomes. No PII, no user identity.
  * A random UUID is persisted to `${ARCHON_HOME}/telemetry-id` so we can count
  * distinct installs.
  *
@@ -14,8 +16,12 @@
  * is_binary, runtime, is_ci, is_tty) rides along on every event via PostHog
  * super-properties. What is collected is categorical only: workflow name (real
  * for bundled workflows, `"custom"` for user-authored), platform, provider,
- * model, node shape, and run outcome/duration. Never sent: code, prompts, file
- * paths, IP, geo, error text, or custom workflow names/descriptions.
+ * model, node shape, run outcome/duration, a fixed-enum error class (never
+ * raw error text), chat-turn activity (platform + provider + outcome only),
+ * a bare project-registration count, and deployment shape (which adapters are
+ * enabled, db kind, auth mode — booleans/enums only). Never sent: code,
+ * prompts, message content, conversation ids, file paths, IP, geo, error
+ * text, or custom workflow names/descriptions.
  *
  * Opt-out (any one disables telemetry):
  *   - ARCHON_TELEMETRY_DISABLED=1
@@ -37,7 +43,7 @@ import { BUNDLED_IS_BINARY, BUNDLED_VERSION } from './bundled-build';
 import { createLogger } from './logger';
 
 /** Bumped when the captured property set changes (documented in README). */
-export const TELEMETRY_SCHEMA_VERSION = 2;
+export const TELEMETRY_SCHEMA_VERSION = 3;
 
 // Minimal shape of posthog-node's `fetch` option — copied from @posthog/core
 // (a transitive dep) to avoid pulling it in as a direct dependency.
@@ -70,9 +76,11 @@ const DEFAULT_POSTHOG_HOST = 'https://us.i.posthog.com';
  * means the first-run notice has been shown; absence means it hasn't.
  */
 // Bumped to `-v2` when the captured property set expanded (machine context +
-// run outcomes). Bumping re-shows the updated first-run notice once per install
-// so existing users re-consent rather than silently getting broader capture.
-const NOTICE_STAMP_FILENAME = 'telemetry-notice-shown-v2';
+// run outcomes), and to `-v3` when chat-turn activity, deployment shape, and
+// registration counts were added. Bumping re-shows the updated first-run
+// notice once per install so existing users re-consent rather than silently
+// getting broader capture.
+const NOTICE_STAMP_FILENAME = 'telemetry-notice-shown-v3';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -374,8 +382,10 @@ function maybeShowFirstRunNotice(): void {
   }
 
   const message =
-    'Archon collects anonymous usage telemetry — now also OS/arch and run\n' +
-    'outcome (success/failure), alongside workflow name, platform, and version.\n' +
+    'Archon collects anonymous usage telemetry — now also chat activity\n' +
+    '(platform + provider only, never message content), deployment shape\n' +
+    '(which adapters/db/auth are enabled), and a categorical failure class,\n' +
+    'alongside workflow name, run outcome, OS/arch, and version.\n' +
     'Still no code, prompts, file paths, IP, or personal data — see README "Telemetry".\n' +
     'Opt out anytime: DO_NOT_TRACK=1 or ARCHON_TELEMETRY_DISABLED=1\n';
   try {
@@ -508,18 +518,80 @@ export interface WorkflowInvokedProperties {
   usesApproval?: boolean;
   usesScript?: boolean;
   usesBash?: boolean;
+  // Advanced-feature adoption flags (presence on any node, categorical only) —
+  // these tell maintainers which features earn their maintenance cost.
+  usesOutputFormat?: boolean;
+  usesOutputType?: boolean;
+  usesPersistSession?: boolean;
+  usesMcp?: boolean;
+  usesSkills?: boolean;
+  usesFreshContext?: boolean;
   interactive?: boolean;
   usedIsolation?: boolean;
   isResume?: boolean;
 }
 
+/**
+ * Deployment-shape context for server installs. Categorical only — booleans
+ * and fixed enums derived from which integrations are configured, never the
+ * configuration values themselves. Distinguishes solo-laptop installs from
+ * team server deployments.
+ */
+export interface DeploymentShapeProperties {
+  dbKind?: 'sqlite' | 'postgresql';
+  webAuthEnabled?: boolean;
+  /** Per-user credentials mode (TOKEN_ENCRYPTION_KEY configured). */
+  multiUser?: boolean;
+  githubAuthMode?: 'app' | 'pat' | 'none' | 'conflict';
+  adapterSlack?: boolean;
+  adapterTelegram?: boolean;
+  adapterDiscord?: boolean;
+  adapterGitea?: boolean;
+  adapterGitlab?: boolean;
+}
+
 /** Once-per-process startup event — the basis for active-install counting. */
-export interface ArchonStartedProperties {
+export interface ArchonStartedProperties extends DeploymentShapeProperties {
   surface: 'cli' | 'server';
+}
+
+/**
+ * One completed direct-chat AI turn (NOT workflow execution — workflows emit
+ * `workflow_invoked` instead). Carries only platform + provider; never
+ * message content, conversation ids, or prompt/response data.
+ *
+ * `platform`/`provider` are open strings because this leaf package cannot
+ * import the adapter/provider unions without inverting the dependency graph.
+ * Callers MUST pass only registry identifiers (`platform.getPlatformType()`,
+ * `aiClient.getType()`) — both are structurally categorical (fixed literals
+ * per adapter/provider implementation), never user input.
+ */
+export interface ChatTurnProperties {
+  platform?: string;
+  provider?: string;
+  outcome: 'completed' | 'failed';
 }
 
 /** Categorical terminal exit reason — a fixed enum, never raw error text. */
 export type WorkflowExitReason = 'no_nodes_completed' | 'node_error' | 'unhandled_error';
+
+/**
+ * Categorical failure class derived from the engine's error classifier
+ * (`classifyError` in `@archon/workflows`): `fatal` = auth/permission/credit,
+ * `transient` = timeout/network/rate-limit, `unknown` = everything else.
+ * A fixed enum — raw error text never leaves the machine.
+ */
+export type WorkflowErrorClass = 'fatal' | 'transient' | 'unknown';
+
+/** Closed set of DAG node types, mirrored from `@archon/workflows` schemas. */
+export type WorkflowNodeType =
+  | 'command'
+  | 'prompt'
+  | 'bash'
+  | 'script'
+  | 'loop'
+  | 'approval'
+  | 'cancel';
 
 /**
  * Terminal workflow-run event (`workflow_completed` / `workflow_failed`).
@@ -538,6 +610,10 @@ export interface WorkflowCompletedProperties {
   nodesSkipped?: number;
   nodesTotal?: number;
   exitReason?: WorkflowExitReason;
+  /** Failure taxonomy (failed runs only): fixed-enum class, never error text. */
+  errorClass?: WorkflowErrorClass;
+  /** Type of the first failed node (failed runs only). */
+  failedNodeType?: WorkflowNodeType;
 }
 
 /**
@@ -583,12 +659,39 @@ export function captureWorkflowInvoked(props: WorkflowInvokedProperties): void {
         uses_approval: Boolean(props.usesApproval),
         uses_script: Boolean(props.usesScript),
         uses_bash: Boolean(props.usesBash),
+        uses_output_format: Boolean(props.usesOutputFormat),
+        uses_output_type: Boolean(props.usesOutputType),
+        uses_persist_session: Boolean(props.usesPersistSession),
+        uses_mcp: Boolean(props.usesMcp),
+        uses_skills: Boolean(props.usesSkills),
+        uses_fresh_context: Boolean(props.usesFreshContext),
         interactive: Boolean(props.interactive),
         used_isolation: Boolean(props.usedIsolation),
         is_resume: Boolean(props.isResume),
       },
     });
   });
+}
+
+/**
+ * Serialize deployment-shape fields to wire properties, omitting absent ones
+ * (the CLI surface passes none; the server surface passes all). Kept in one
+ * place so `archon_started` and `archon_active` can never drift apart.
+ */
+function deploymentShapeWireProps(
+  props: DeploymentShapeProperties
+): Record<string, string | boolean> {
+  return {
+    ...(props.dbKind !== undefined ? { db_kind: props.dbKind } : {}),
+    ...(props.webAuthEnabled !== undefined ? { web_auth_enabled: props.webAuthEnabled } : {}),
+    ...(props.multiUser !== undefined ? { multi_user: props.multiUser } : {}),
+    ...(props.githubAuthMode !== undefined ? { github_auth_mode: props.githubAuthMode } : {}),
+    ...(props.adapterSlack !== undefined ? { adapter_slack: props.adapterSlack } : {}),
+    ...(props.adapterTelegram !== undefined ? { adapter_telegram: props.adapterTelegram } : {}),
+    ...(props.adapterDiscord !== undefined ? { adapter_discord: props.adapterDiscord } : {}),
+    ...(props.adapterGitea !== undefined ? { adapter_gitea: props.adapterGitea } : {}),
+    ...(props.adapterGitlab !== undefined ? { adapter_gitlab: props.adapterGitlab } : {}),
+  };
 }
 
 /**
@@ -610,6 +713,80 @@ export function captureArchonStarted(props: ArchonStartedProperties): void {
       properties: {
         ...PRIVACY_INVARIANTS,
         surface: props.surface,
+        schema_version: TELEMETRY_SCHEMA_VERSION,
+        ...deploymentShapeWireProps(props),
+      },
+    });
+  });
+}
+
+/**
+ * Fire-and-forget capture of an `archon_active` heartbeat. Long-running
+ * servers emit `archon_started` once per boot and then go silent, which would
+ * make a server-only install drop out of active-install (DAU/WAU) metrics
+ * after day one. The server entrypoint calls this on a daily interval so
+ * "active installs" stays honest for the server surface. CLI invocations do
+ * NOT need this — each one already emits `archon_started`. Carries the same
+ * categorical properties as `archon_started` (this event alone would not have
+ * justified a schema bump; the v3 bump covers the full revision it shipped
+ * with). Intentionally does not show the first-run notice (heartbeats are
+ * background, never interactive).
+ */
+export function captureArchonActive(props: ArchonStartedProperties): void {
+  if (isTelemetryDisabled()) return;
+  fireAndForget(client => {
+    client.capture({
+      distinctId: getTelemetryId(),
+      event: 'archon_active',
+      properties: {
+        ...PRIVACY_INVARIANTS,
+        surface: props.surface,
+        schema_version: TELEMETRY_SCHEMA_VERSION,
+        ...deploymentShapeWireProps(props),
+      },
+    });
+  });
+}
+
+/**
+ * Fire-and-forget capture of a `chat_turn_handled` event — one per direct-chat
+ * AI turn across all platforms (slack/telegram/discord/github/web/cli).
+ * Workflow runs are excluded by construction (they emit `workflow_invoked`
+ * from the executor instead; the orchestrator capture sites sit on the
+ * chat-only completion paths). Carries platform + provider + outcome only —
+ * never message content or conversation ids.
+ */
+export function captureChatTurn(props: ChatTurnProperties): void {
+  if (isTelemetryDisabled()) return;
+  fireAndForget(client => {
+    client.capture({
+      distinctId: getTelemetryId(),
+      event: 'chat_turn_handled',
+      properties: {
+        ...PRIVACY_INVARIANTS,
+        outcome: props.outcome,
+        schema_version: TELEMETRY_SCHEMA_VERSION,
+        ...(props.platform ? { platform: props.platform } : {}),
+        ...(props.provider ? { provider: props.provider } : {}),
+      },
+    });
+  });
+}
+
+/**
+ * Fire-and-forget capture of a `codebase_registered` event — a pure count
+ * (no name, path, or remote URL ever) emitted when a new codebase row is
+ * created. Together with `archon_started` this gives the activation funnel:
+ * installed → registered a project → first workflow run.
+ */
+export function captureCodebaseRegistered(): void {
+  if (isTelemetryDisabled()) return;
+  fireAndForget(client => {
+    client.capture({
+      distinctId: getTelemetryId(),
+      event: 'codebase_registered',
+      properties: {
+        ...PRIVACY_INVARIANTS,
         schema_version: TELEMETRY_SCHEMA_VERSION,
       },
     });
@@ -641,6 +818,8 @@ export function captureWorkflowCompleted(props: WorkflowCompletedProperties): vo
         ...(props.nodesSkipped !== undefined ? { nodes_skipped: props.nodesSkipped } : {}),
         ...(props.nodesTotal !== undefined ? { nodes_total: props.nodesTotal } : {}),
         ...(props.exitReason ? { exit_reason: props.exitReason } : {}),
+        ...(props.errorClass ? { error_class: props.errorClass } : {}),
+        ...(props.failedNodeType ? { failed_node_type: props.failedNodeType } : {}),
       },
     });
   });

@@ -7,6 +7,9 @@ import {
   isTelemetryDisabled,
   captureWorkflowInvoked,
   captureArchonStarted,
+  captureArchonActive,
+  captureChatTurn,
+  captureCodebaseRegistered,
   captureWorkflowCompleted,
   classifyWorkflowForTelemetry,
   sanitizeModelForTelemetry,
@@ -254,7 +257,7 @@ describe('first-run notice (via captureWorkflowInvoked)', () => {
   let saved: Record<string, string | undefined>;
   let tmpHome: string;
   let originalIsTTY: boolean | undefined;
-  const stampPath = (): string => join(tmpHome, 'telemetry-notice-shown-v2');
+  const stampPath = (): string => join(tmpHome, 'telemetry-notice-shown-v3');
 
   beforeEach(() => {
     saved = saveEnv();
@@ -471,6 +474,149 @@ describe('new capture functions are fire-and-forget no-throw', () => {
     } finally {
       fetchSpy.mockRestore();
     }
+  });
+
+  test('captureArchonActive does not throw (disabled)', () => {
+    process.env.ARCHON_TELEMETRY_DISABLED = '1';
+    expect(() => captureArchonActive({ surface: 'server' })).not.toThrow();
+  });
+
+  test('captureArchonActive does not throw (enabled)', async () => {
+    delete process.env.ARCHON_TELEMETRY_DISABLED;
+    delete process.env.DO_NOT_TRACK;
+    delete process.env.CI;
+    delete process.env.POSTHOG_API_KEY;
+    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('{"status":"ok"}', { status: 200 })
+    );
+    try {
+      expect(() => captureArchonActive({ surface: 'server' })).not.toThrow();
+      await shutdownTelemetry();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  test('captureChatTurn does not throw (disabled)', () => {
+    process.env.ARCHON_TELEMETRY_DISABLED = '1';
+    expect(() =>
+      captureChatTurn({ platform: 'slack', provider: 'claude', outcome: 'completed' })
+    ).not.toThrow();
+    expect(() => captureChatTurn({ outcome: 'failed' })).not.toThrow();
+  });
+
+  test('captureChatTurn does not throw (enabled)', async () => {
+    delete process.env.ARCHON_TELEMETRY_DISABLED;
+    delete process.env.DO_NOT_TRACK;
+    delete process.env.CI;
+    delete process.env.POSTHOG_API_KEY;
+    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('{"status":"ok"}', { status: 200 })
+    );
+    try {
+      expect(() =>
+        captureChatTurn({ platform: 'web', provider: 'codex', outcome: 'completed' })
+      ).not.toThrow();
+      await shutdownTelemetry();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  test('captureCodebaseRegistered does not throw (disabled)', () => {
+    process.env.ARCHON_TELEMETRY_DISABLED = '1';
+    expect(() => captureCodebaseRegistered()).not.toThrow();
+  });
+
+  test('captureCodebaseRegistered does not throw (enabled)', async () => {
+    delete process.env.ARCHON_TELEMETRY_DISABLED;
+    delete process.env.DO_NOT_TRACK;
+    delete process.env.CI;
+    delete process.env.POSTHOG_API_KEY;
+    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('{"status":"ok"}', { status: 200 })
+    );
+    try {
+      expect(() => captureCodebaseRegistered()).not.toThrow();
+      await shutdownTelemetry();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  test('captureArchonStarted accepts deployment-shape props without throwing (disabled)', () => {
+    process.env.ARCHON_TELEMETRY_DISABLED = '1';
+    expect(() =>
+      captureArchonStarted({
+        surface: 'server',
+        dbKind: 'postgresql',
+        webAuthEnabled: true,
+        multiUser: false,
+        githubAuthMode: 'app',
+        adapterSlack: true,
+        adapterTelegram: false,
+        adapterDiscord: false,
+        adapterGitea: false,
+        adapterGitlab: false,
+      })
+    ).not.toThrow();
+  });
+
+  test('captureArchonStarted serializes deployment shape to wire properties (enabled)', async () => {
+    delete process.env.ARCHON_TELEMETRY_DISABLED;
+    delete process.env.DO_NOT_TRACK;
+    delete process.env.CI;
+    delete process.env.POSTHOG_API_KEY;
+    const bodies: (string | Blob)[] = [];
+    const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation((_url, options) => {
+      const body = (options as { body?: unknown } | undefined)?.body;
+      if (typeof body === 'string' || body instanceof Blob) bodies.push(body);
+      return Promise.resolve(new Response('{"status":"ok"}', { status: 200 }));
+    });
+    try {
+      captureArchonStarted({
+        surface: 'server',
+        dbKind: 'postgresql',
+        webAuthEnabled: true,
+        githubAuthMode: 'app',
+        adapterSlack: true,
+        // multiUser and the remaining adapter booleans intentionally omitted —
+        // absent fields must be omitted from the wire, not sent as undefined.
+      });
+      await shutdownTelemetry();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+
+    interface WireEvent {
+      event: string;
+      properties: Record<string, unknown>;
+    }
+    // posthog-node gzips the /batch/ body into a Blob; decompress to inspect.
+    const events: WireEvent[] = [];
+    for (const body of bodies) {
+      const text =
+        typeof body === 'string'
+          ? body
+          : new TextDecoder().decode(Bun.gunzipSync(new Uint8Array(await body.arrayBuffer())));
+      const payload = JSON.parse(text) as { batch?: WireEvent[] };
+      events.push(...(payload.batch ?? []));
+    }
+    const started = events.find(e => e.event === 'archon_started');
+    expect(started).toBeDefined();
+    const props = started!.properties;
+    expect(props.surface).toBe('server');
+    expect(props.db_kind).toBe('postgresql');
+    expect(props.web_auth_enabled).toBe(true);
+    expect(props.github_auth_mode).toBe('app');
+    expect(props.adapter_slack).toBe(true);
+    // Omitted fields must not appear on the wire at all
+    expect('multi_user' in props).toBe(false);
+    expect('adapter_telegram' in props).toBe(false);
+    expect('adapter_discord' in props).toBe(false);
+    // Privacy invariants ride on every event
+    expect(props.$process_person_profile).toBe(false);
+    expect(props.$ip).toBe('');
   });
 
   test('captureWorkflowCompleted does not throw for completed/failed (disabled)', () => {

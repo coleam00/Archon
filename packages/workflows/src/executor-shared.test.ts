@@ -28,6 +28,7 @@ import {
   isInlineScript,
   formatSubprocessFailure,
   classifyError,
+  toTelemetryErrorClass,
   safeSendMessage,
   type UnknownErrorTracker,
 } from './executor-shared';
@@ -660,6 +661,26 @@ describe('classifyError', () => {
 
   it('classifies unknown errors as UNKNOWN', () => {
     expect(classifyError(new Error('something completely unexpected happened'))).toBe('UNKNOWN');
+  });
+});
+
+describe('toTelemetryErrorClass', () => {
+  it('maps FATAL to fatal', () => {
+    expect(toTelemetryErrorClass('FATAL')).toBe('fatal');
+  });
+
+  it('maps TRANSIENT to transient', () => {
+    expect(toTelemetryErrorClass('TRANSIENT')).toBe('transient');
+  });
+
+  it('maps UNKNOWN to unknown', () => {
+    expect(toTelemetryErrorClass('UNKNOWN')).toBe('unknown');
+  });
+
+  it('round-trips classifyError output for every ErrorType', () => {
+    expect(toTelemetryErrorClass(classifyError(new Error('401 unauthorized')))).toBe('fatal');
+    expect(toTelemetryErrorClass(classifyError(new Error('rate limit: 429')))).toBe('transient');
+    expect(toTelemetryErrorClass(classifyError(new Error('mystery')))).toBe('unknown');
   });
 });
 

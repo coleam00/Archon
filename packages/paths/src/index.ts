@@ -58,6 +58,9 @@ export type { UpdateCheckResult } from './update-check';
 export {
   captureWorkflowInvoked,
   captureArchonStarted,
+  captureArchonActive,
+  captureChatTurn,
+  captureCodebaseRegistered,
   captureWorkflowCompleted,
   classifyWorkflowForTelemetry,
   TELEMETRY_SCHEMA_VERSION,
@@ -69,8 +72,12 @@ export {
 export type {
   WorkflowInvokedProperties,
   ArchonStartedProperties,
+  ChatTurnProperties,
+  DeploymentShapeProperties,
   WorkflowCompletedProperties,
   WorkflowExitReason,
+  WorkflowErrorClass,
+  WorkflowNodeType,
   WorkflowTelemetrySource,
   TelemetryStatus,
   TelemetryDisabledReason,

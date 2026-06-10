@@ -9453,6 +9453,10 @@ describe('executeDagWorkflow -- completion telemetry', () => {
         outcome: 'failed',
         workflowSource: 'bundled',
         exitReason: 'no_nodes_completed',
+        // Failure taxonomy: "produced no assistant output" matches no fatal/
+        // transient pattern → unknown; the failing node is a prompt node.
+        errorClass: 'unknown',
+        failedNodeType: 'prompt',
       })
     );
   });
@@ -9485,6 +9489,8 @@ describe('executeDagWorkflow -- completion telemetry', () => {
         outcome: 'failed',
         workflowSource: 'bundled',
         exitReason: 'node_error',
+        errorClass: 'unknown',
+        failedNodeType: 'prompt',
       })
     );
   });

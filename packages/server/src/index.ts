@@ -86,6 +86,8 @@ import {
   loadAppPrivateKey,
   registerGitHubAppAuthProvider,
   isPerUserGitHubEnabled,
+  isPerUserProviderKeysEnabled,
+  getDatabaseType,
   assertEncryptionKeyAtBoot,
   assertProviderKeysKeyAtBoot,
   getDecryptedAccessToken,
@@ -101,6 +103,7 @@ import {
   validateAppDefaultsPaths,
   shutdownTelemetry,
   captureArchonStarted,
+  captureArchonActive,
 } from '@archon/paths';
 import { selectGitHubAuthMode, parseGitCredentialPath } from './github-auth-bootstrap';
 import {
@@ -213,7 +216,35 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   getLog().info('server_starting');
   // Anonymous once-per-boot startup event (self-gates on opt-out). Flushed by
   // the shutdownTelemetry() call in the SIGINT/SIGTERM shutdown handler.
-  captureArchonStarted({ surface: 'server' });
+  // Deployment shape is categorical only — booleans/enums derived from which
+  // integrations are configured, never the config values themselves. The
+  // adapter gates mirror the env checks the adapter-init section below uses
+  // (loadArchonEnv() ran at module load, so process.env is final here).
+  const deploymentShape = {
+    dbKind: getDatabaseType(),
+    webAuthEnabled: isWebAuthEnabled(),
+    multiUser: isPerUserProviderKeysEnabled(),
+    githubAuthMode: selectGitHubAuthMode(process.env).kind,
+    adapterSlack: Boolean(process.env.SLACK_BOT_TOKEN && process.env.SLACK_APP_TOKEN),
+    adapterTelegram: Boolean(process.env.TELEGRAM_BOT_TOKEN),
+    adapterDiscord: Boolean(process.env.DISCORD_BOT_TOKEN),
+    adapterGitea: Boolean(
+      process.env.GITEA_URL && process.env.GITEA_TOKEN && process.env.GITEA_WEBHOOK_SECRET
+    ),
+    adapterGitlab: Boolean(process.env.GITLAB_TOKEN && process.env.GITLAB_WEBHOOK_SECRET),
+  };
+  captureArchonStarted({ surface: 'server', ...deploymentShape });
+
+  // Daily heartbeat so long-running servers stay visible in active-install
+  // metrics (a boot-only event undercounts server installs after day one).
+  // unref() so the timer never keeps the process alive on shutdown.
+  // captureArchonActive is synchronous fire-and-forget (errors swallowed
+  // internally) — if it ever becomes async, this callback must not return
+  // its promise unhandled.
+  const TELEMETRY_HEARTBEAT_INTERVAL_MS = 24 * 60 * 60 * 1000;
+  setInterval(() => {
+    captureArchonActive({ surface: 'server', ...deploymentShape });
+  }, TELEMETRY_HEARTBEAT_INTERVAL_MS).unref();
 
   // Phase 2: validate the encryption key the moment per-user provider keys are
   // enabled, regardless of GitHub App configuration. TOKEN_ENCRYPTION_KEY alone

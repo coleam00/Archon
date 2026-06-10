@@ -7,7 +7,7 @@
  * - Does NOT require a project to be selected before starting a conversation
  */
 import { existsSync } from 'fs';
-import { createLogger } from '@archon/paths';
+import { createLogger, captureChatTurn } from '@archon/paths';
 import type {
   IPlatformAdapter,
   HandleMessageContext,
@@ -1479,6 +1479,12 @@ async function handleStreamMode(
         if (newSessionId) {
           await tryPersistSessionId(session.id, newSessionId);
         }
+        // Anonymous telemetry: AI returned an error result for this chat turn.
+        captureChatTurn({
+          platform: platform.getPlatformType(),
+          provider: aiClient.getType(),
+          outcome: 'failed',
+        });
         return;
       }
       if (!commandDetected && platform.sendStructuredEvent) {
@@ -1497,6 +1503,8 @@ async function handleStreamMode(
   }
 
   if (allMessages.length === 0) {
+    // Intentionally NOT counted in chat_turn_handled — an empty response is
+    // neither a completed nor a failed turn worth measuring.
     getLog().debug({ conversationId }, 'no_ai_response');
     return;
   }
@@ -1539,6 +1547,15 @@ async function handleStreamMode(
 
   // Text was already streamed — nothing more to send
   await maybeSendResultFooter(platform, conversationId, lastResult);
+  // Anonymous telemetry: one completed direct-chat turn. The workflow-invocation
+  // and project-registration paths return above without reaching this — those
+  // are covered by workflow_invoked / codebase_registered instead. Platform +
+  // provider only, never message content.
+  captureChatTurn({
+    platform: platform.getPlatformType(),
+    provider: aiClient.getType(),
+    outcome: 'completed',
+  });
 }
 
 // ─── Batch Mode ─────────────────────────────────────────────────────────────
@@ -1666,6 +1683,12 @@ async function handleBatchMode(
         if (newSessionId) {
           await tryPersistSessionId(session.id, newSessionId);
         }
+        // Anonymous telemetry: AI returned an error result for this chat turn.
+        captureChatTurn({
+          platform: platform.getPlatformType(),
+          provider: aiClient.getType(),
+          outcome: 'failed',
+        });
         return;
       }
       lastResult = {
@@ -1708,6 +1731,8 @@ async function handleBatchMode(
   const finalMessage = filterToolIndicators(assistantMessages);
 
   if (!finalMessage) {
+    // Intentionally NOT counted in chat_turn_handled — an empty response is
+    // neither a completed nor a failed turn worth measuring.
     getLog().debug({ conversationId }, 'no_ai_response');
     return;
   }
@@ -1755,6 +1780,13 @@ async function handleBatchMode(
   getLog().debug({ messageLength: finalMessage.length }, 'sending_final_message');
   await platform.sendMessage(conversationId, finalMessage);
   await maybeSendResultFooter(platform, conversationId, lastResult);
+  // Anonymous telemetry: one completed direct-chat turn (same exclusion
+  // rationale as the stream-mode capture in handleStreamMode above).
+  captureChatTurn({
+    platform: platform.getPlatformType(),
+    provider: aiClient.getType(),
+    outcome: 'completed',
+  });
 }
 
 /**
