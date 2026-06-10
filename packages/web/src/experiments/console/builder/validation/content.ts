@@ -3,6 +3,14 @@
  * point outside the node's transitive upstream set, and verify each `when:`
  * expression parses. Code spans are stripped first so referenced ids inside
  * fenced/inline code are not flagged.
+ *
+ * `content.var.unknown` is a deliberately conservative heuristic: it requires
+ * the referenced node to be reachable via explicit `depends_on` edges. A
+ * shared-context workflow can legitimately reference a node that ran earlier in
+ * the topological order without declaring an edge — those references will warn
+ * (severity `warning`, never `error`) because the builder cannot distinguish an
+ * intentional shared-context read from a missing dependency. Declaring the edge
+ * silences the warning and makes the ordering guarantee explicit.
  */
 import type { BuilderNode, BuilderWorkflow, Issue } from '../types';
 import { makeIssue } from './make-issue';

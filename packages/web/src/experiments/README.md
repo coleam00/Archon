@@ -12,3 +12,4 @@ Rules:
 Current experiments:
 
 - `console/` — greenfield rebuild of the web UI around the 4-primitive mental model (Project, Run, Workflow, Worktree). Mounted at `/console`.
+- `console/builder/` — Archon Studio workflow-builder data layer (types, variant registry, round-trip model, validation). PR-1 of the builder chain; no route mount yet — canvas (PR-2) and persistence (PR-3) follow.

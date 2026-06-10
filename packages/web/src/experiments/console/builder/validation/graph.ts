@@ -1,6 +1,8 @@
 /**
  * Graph-structure validation: `depends_on` reference integrity and cycle
- * detection (three-color DFS over the dependency edges).
+ * detection. The three-color DFS is a builder-specific choice (good cycle-path
+ * reporting); the engine reaches the same acyclicity verdict via Kahn's
+ * algorithm in its loader — same contract, different algorithm.
  */
 import type { BuilderNode, BuilderWorkflow, Issue } from '../types';
 import { makeIssue } from './make-issue';

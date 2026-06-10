@@ -68,43 +68,36 @@ function checkRequiredFields(node: BuilderNode): Issue[] {
     );
   };
 
+  // Messages omit the node id — `path.nodeId` carries it, and display layers
+  // render the path, so an embedded prefix would double-print.
   switch (node.variant) {
     case 'prompt':
-      if (node.data.prompt.trim().length === 0)
-        missing('prompt', `node '${node.id}': prompt must not be empty`);
+      if (node.data.prompt.trim().length === 0) missing('prompt', 'prompt must not be empty');
       break;
     case 'command':
-      if (node.data.command.trim().length === 0)
-        missing('command', `node '${node.id}': command must not be empty`);
+      if (node.data.command.trim().length === 0) missing('command', 'command must not be empty');
       break;
     case 'bash':
-      if (node.data.bash.trim().length === 0)
-        missing('bash', `node '${node.id}': bash script must not be empty`);
+      if (node.data.bash.trim().length === 0) missing('bash', 'bash script must not be empty');
       break;
     case 'script':
-      if (node.data.script.trim().length === 0)
-        missing('script', `node '${node.id}': script must not be empty`);
+      if (node.data.script.trim().length === 0) missing('script', 'script must not be empty');
       if (node.data.runtime !== 'bun' && node.data.runtime !== 'uv')
-        invalid('runtime', `node '${node.id}': script requires runtime 'bun' or 'uv'`);
+        invalid('runtime', "script requires runtime 'bun' or 'uv'");
       break;
     case 'loop':
-      if (node.data.prompt.trim().length === 0)
-        missing('loop.prompt', `node '${node.id}': loop requires a prompt`);
+      if (node.data.prompt.trim().length === 0) missing('loop.prompt', 'loop requires a prompt');
       if (node.data.until.trim().length === 0)
-        missing('loop.until', `node '${node.id}': loop requires an 'until' signal`);
+        missing('loop.until', "loop requires an 'until' signal");
       if (!Number.isInteger(node.data.max_iterations) || node.data.max_iterations <= 0)
-        invalid(
-          'loop.max_iterations',
-          `node '${node.id}': loop requires a positive integer max_iterations`
-        );
+        invalid('loop.max_iterations', 'loop requires a positive integer max_iterations');
       break;
     case 'approval':
       if (node.data.message.trim().length === 0)
-        missing('approval.message', `node '${node.id}': approval requires a message`);
+        missing('approval.message', 'approval requires a message');
       break;
     case 'cancel':
-      if (node.data.reason.trim().length === 0)
-        missing('cancel', `node '${node.id}': cancel requires a reason`);
+      if (node.data.reason.trim().length === 0) missing('cancel', 'cancel requires a reason');
       break;
   }
   return issues;
