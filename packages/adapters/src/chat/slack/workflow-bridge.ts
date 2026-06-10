@@ -171,6 +171,8 @@ export class SlackWorkflowBridge {
         case 'tool_started':
         case 'tool_completed':
         case 'workflow_artifact':
+        case 'task_activity':
+        case 'hook_activity':
           break;
         default: {
           const exhaustive: never = event;
