@@ -18,5 +18,5 @@ export type {
   WorkflowMeta,
   BuilderWorkflow,
 } from './variant';
-export type { Severity, IssueSource, IssuePath, Issue } from './issue';
+export type { Severity, IssueSource, IssuePath, Issue, IssueId } from './issue';
 export type { WhenOp, AtomNode, WhenAst, ParseResult } from './when';

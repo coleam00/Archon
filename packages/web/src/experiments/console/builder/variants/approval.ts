@@ -1,5 +1,6 @@
 /** Approval variant: defaults + sparse fromDag/toDag conversion. */
-import type { ApprovalNodeData, WireDagNode } from '../types';
+import type { ApprovalNodeData, ApprovalOnReject, WireDagNode } from '../types';
+import { ifDefined } from './if-defined';
 
 /** Default approval config for a freshly-created approval node. */
 export function defaultApprovalData(): ApprovalNodeData {
@@ -20,19 +21,17 @@ export function approvalFromDag(variantSpecific: Partial<WireDagNode>): Approval
   }
   return {
     message: approval.message,
-    ...(approval.capture_response !== undefined
-      ? { capture_response: approval.capture_response }
-      : {}),
-    ...(approval.on_reject !== undefined
-      ? {
-          on_reject: {
-            prompt: approval.on_reject.prompt,
-            ...(approval.on_reject.max_attempts !== undefined
-              ? { max_attempts: approval.on_reject.max_attempts }
-              : {}),
-          },
-        }
-      : {}),
+    ...ifDefined('capture_response', approval.capture_response),
+    ...ifDefined('on_reject', onRejectFragment(approval.on_reject)),
+  };
+}
+
+/** Rebuild a sparse `on_reject` sub-object, or undefined when absent. */
+function onRejectFragment(onReject: ApprovalOnReject | undefined): ApprovalOnReject | undefined {
+  if (onReject === undefined) return undefined;
+  return {
+    prompt: onReject.prompt,
+    ...ifDefined('max_attempts', onReject.max_attempts),
   };
 }
 
@@ -41,17 +40,8 @@ export function approvalToDag(data: ApprovalNodeData): Partial<WireDagNode> {
   return {
     approval: {
       message: data.message,
-      ...(data.capture_response !== undefined ? { capture_response: data.capture_response } : {}),
-      ...(data.on_reject !== undefined
-        ? {
-            on_reject: {
-              prompt: data.on_reject.prompt,
-              ...(data.on_reject.max_attempts !== undefined
-                ? { max_attempts: data.on_reject.max_attempts }
-                : {}),
-            },
-          }
-        : {}),
+      ...ifDefined('capture_response', data.capture_response),
+      ...ifDefined('on_reject', onRejectFragment(data.on_reject)),
     },
   };
 }

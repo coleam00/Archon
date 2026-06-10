@@ -136,6 +136,15 @@ describe('when-grammar format', () => {
       "$a.output == 'hello'"
     );
   });
+
+  test('an empty AST formats to undefined (no when condition)', () => {
+    expect(format({ or: [] })).toBeUndefined();
+    expect(format({ or: [[], []] })).toBeUndefined();
+  });
+
+  test('empty AND-groups are dropped before formatting', () => {
+    expect(format({ or: [[{ nodeId: 'a', op: '==', value: 'X' }], []] })).toBe("$a.output == 'X'");
+  });
 });
 
 describe('when-grammar toDnf', () => {

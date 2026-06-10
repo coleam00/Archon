@@ -19,9 +19,18 @@ export interface IssuePath {
   atomIndex?: number;
 }
 
+declare const ISSUE_ID_BRAND: unique symbol;
+
+/**
+ * Branded issue id. Constructing one outside `makeIssue` is a compile error,
+ * so every `Issue.id` in the system is guaranteed to be the stable
+ * (rule, path, message) hash that dedup and cross-render identity rely on.
+ */
+export type IssueId = string & { readonly [ISSUE_ID_BRAND]: true };
+
 /** A single validation finding. `id` is a stable hash of (rule, path, message). */
 export interface Issue {
-  id: string;
+  id: IssueId;
   rule: string;
   severity: Severity;
   source: IssueSource;

@@ -1,5 +1,6 @@
 /** Script variant: defaults + sparse fromDag/toDag conversion. */
 import type { ScriptNodeData, WireDagNode } from '../types';
+import { ifDefined } from './if-defined';
 
 /** Default script config (empty body, bun runtime) for a freshly-created script node. */
 export function defaultScriptData(): ScriptNodeData {
@@ -24,8 +25,8 @@ export function scriptFromDag(variantSpecific: Partial<WireDagNode>): ScriptNode
   return {
     script: variantSpecific.script,
     runtime: variantSpecific.runtime ?? 'bun',
-    ...(variantSpecific.deps !== undefined ? { deps: variantSpecific.deps } : {}),
-    ...(variantSpecific.timeout !== undefined ? { timeout: variantSpecific.timeout } : {}),
+    ...ifDefined('deps', variantSpecific.deps),
+    ...ifDefined('timeout', variantSpecific.timeout),
   };
 }
 
@@ -34,7 +35,7 @@ export function scriptToDag(data: ScriptNodeData): Partial<WireDagNode> {
   return {
     script: data.script,
     runtime: data.runtime,
-    ...(data.deps !== undefined ? { deps: data.deps } : {}),
-    ...(data.timeout !== undefined ? { timeout: data.timeout } : {}),
+    ...ifDefined('deps', data.deps),
+    ...ifDefined('timeout', data.timeout),
   };
 }

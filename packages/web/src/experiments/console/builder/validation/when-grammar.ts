@@ -151,9 +151,16 @@ function formatAtom(atom: AtomNode): string {
   return `${path} ${atom.op} ${rhs}`;
 }
 
-/** Format a DNF AST back to a `when:` expression string. */
-export function format(ast: WhenAst): string {
-  return ast.or.map(group => group.map(formatAtom).join(' && ')).join(' || ');
+/**
+ * Format a DNF AST back to a `when:` expression string. Empty AND-groups are
+ * dropped first; an AST with no remaining atoms formats to `undefined` (an
+ * empty `when:` is "no condition" — never the empty string, which would write
+ * an unparseable `when: ''` to the wire).
+ */
+export function format(ast: WhenAst): string | undefined {
+  const dnf = toDnf(ast);
+  if (dnf.or.length === 0) return undefined;
+  return dnf.or.map(group => group.map(formatAtom).join(' && ')).join(' || ');
 }
 
 /**

@@ -1,8 +1,14 @@
 /**
- * Shared issue factory. Computes a stable `Issue.id` from (rule, path, message)
- * so the same finding keeps the same id across re-validations and can be deduped.
+ * Shared issue factory — the only construction site for `IssueId`. Computes a
+ * stable `Issue.id` from (rule, path, message) so the same finding keeps the
+ * same id across re-validations and can be deduped.
+ *
+ * Because `message` participates in the hash, editing an issue's message text
+ * changes its id. That is harmless while issues live only in client memory,
+ * but once issues are persisted or served by a server tier (PR-3), message
+ * copy edits will invalidate stored ids — coordinate copy changes accordingly.
  */
-import type { Issue } from '../types';
+import type { Issue, IssueId } from '../types';
 
 /** FNV-1a 32-bit hash → 8-hex-char string. Pure, deterministic, no deps. */
 function fnv1a(input: string): string {
@@ -25,5 +31,5 @@ export function makeIssue(input: Omit<Issue, 'id'>): Issue {
     path.atomIndex ?? '',
     message,
   ]);
-  return { ...input, id: `${rule}:${fnv1a(key)}` };
+  return { ...input, id: `${rule}:${fnv1a(key)}` as IssueId };
 }

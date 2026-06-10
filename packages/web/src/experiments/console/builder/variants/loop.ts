@@ -1,5 +1,6 @@
 /** Loop variant: defaults + sparse fromDag/toDag conversion. */
 import type { LoopNodeData, WireDagNode } from '../types';
+import { ifDefined } from './if-defined';
 
 /** Default loop config for a freshly-created loop node. */
 export function defaultLoopData(): LoopNodeData {
@@ -25,9 +26,9 @@ export function loopFromDag(variantSpecific: Partial<WireDagNode>): LoopNodeData
     // Engine default is false but the generated type makes it required, so it is
     // always present on the wire and must be carried verbatim across the round-trip.
     fresh_context: loop.fresh_context,
-    ...(loop.until_bash !== undefined ? { until_bash: loop.until_bash } : {}),
-    ...(loop.interactive !== undefined ? { interactive: loop.interactive } : {}),
-    ...(loop.gate_message !== undefined ? { gate_message: loop.gate_message } : {}),
+    ...ifDefined('until_bash', loop.until_bash),
+    ...ifDefined('interactive', loop.interactive),
+    ...ifDefined('gate_message', loop.gate_message),
   };
 }
 
@@ -39,9 +40,9 @@ export function loopToDag(data: LoopNodeData): Partial<WireDagNode> {
       until: data.until,
       max_iterations: data.max_iterations,
       fresh_context: data.fresh_context,
-      ...(data.until_bash !== undefined ? { until_bash: data.until_bash } : {}),
-      ...(data.interactive !== undefined ? { interactive: data.interactive } : {}),
-      ...(data.gate_message !== undefined ? { gate_message: data.gate_message } : {}),
+      ...ifDefined('until_bash', data.until_bash),
+      ...ifDefined('interactive', data.interactive),
+      ...ifDefined('gate_message', data.gate_message),
     },
   };
 }
