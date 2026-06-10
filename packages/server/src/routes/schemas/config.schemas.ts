@@ -6,6 +6,42 @@ import { z } from '@hono/zod-openapi';
 /** Schema for the safe config subset returned to web clients (mirrors SafeConfig in config-types.ts). */
 const providerDefaultsSchema = z.record(z.string(), z.unknown()).openapi('ProviderDefaults');
 
+/**
+ * A single model-tier preset — mirrors `RawAliasEntry` in
+ * `@archon/workflows/model-validation` ({ provider, model, effort?, thinking? }).
+ * `thinking` is accepted on READ so it round-trips an existing config.yaml, but
+ * the PATCH /api/config/tiers handler DROPS it on write (no UI/CLI surface yet) —
+ * so saving a tier in the UI/CLI clears any `thinking` previously set in YAML.
+ */
+export const tierEntrySchema = z
+  .object({
+    provider: z.string().min(1),
+    model: z.string().min(1),
+    effort: z.string().optional(),
+    thinking: z.unknown().optional(),
+  })
+  .openapi('TierEntry');
+
+/** The three reserved tiers, each optional — mirrors `RawTiersConfig`. */
+export const tiersConfigSchema = z
+  .object({
+    small: tierEntrySchema.optional(),
+    medium: tierEntrySchema.optional(),
+    large: tierEntrySchema.optional(),
+  })
+  .openapi('TiersConfig');
+
+/** PATCH /api/config/tiers body — each tier optional; `null` unsets that tier. */
+export const updateTiersBodySchema = z
+  .object({
+    tiers: z.object({
+      small: tierEntrySchema.nullable().optional(),
+      medium: tierEntrySchema.nullable().optional(),
+      large: tierEntrySchema.nullable().optional(),
+    }),
+  })
+  .openapi('UpdateTiersBody');
+
 export const safeConfigSchema = z
   .object({
     botName: z.string(),
@@ -23,6 +59,10 @@ export const safeConfigSchema = z
       loadDefaultCommands: z.boolean(),
       loadDefaultWorkflows: z.boolean(),
     }),
+    // Configured small/medium/large tiers (merged repo > global). Absent keys
+    // fall back to `tierDefaults` (built-in presets for the default provider).
+    tiers: tiersConfigSchema.optional(),
+    tierDefaults: tiersConfigSchema.optional(),
   })
   .openapi('SafeConfig');
 

@@ -1,13 +1,16 @@
 import { type ReactElement } from 'react';
-import { AssistantConfigPanel } from '../components/AssistantConfigPanel';
+import { ModelTiersPanel } from '../components/ModelTiersPanel';
 import { ProviderConnectionsPanel } from '../components/ProviderConnectionsPanel';
+import { AssistantConfigPanel } from '../components/AssistantConfigPanel';
 import { SystemPanel } from '../components/SystemPanel';
 import { GithubIdentityPanel } from '../components/GithubIdentityPanel';
 
 /**
- * Global (installation-wide) console settings — assistant config + system health.
- * Mounted at `/console/settings`, not under a project, because the write path
- * (PATCH /api/config/assistants → ~/.archon/config.yaml) is global only.
+ * Global (installation-wide) console "AI Settings" — sectioned: Model Tiers (the
+ * config tiers editor, ungated) → Provider Auth (per-user keys + subscription
+ * login) → Defaults (default assistant + per-provider model) → System → GitHub.
+ * Mounted at `/console/settings`; the config write paths (PATCH /api/config/*
+ * → ~/.archon/config.yaml) are install-wide.
  */
 export function SettingsPage(): ReactElement {
   return (
@@ -17,8 +20,9 @@ export function SettingsPage(): ReactElement {
       </header>
       <div className="flex-1 overflow-y-auto px-10 pb-14 pt-5">
         <div className="mx-auto flex max-w-[680px] flex-col gap-[22px]">
-          <AssistantConfigPanel />
+          <ModelTiersPanel />
           <ProviderConnectionsPanel />
+          <AssistantConfigPanel />
           <SystemPanel />
           <GithubIdentityPanel />
         </div>

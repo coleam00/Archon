@@ -18,6 +18,7 @@ const mockLoadConfig = mock(async () => ({
   worktree: { baseBranch: 'main' },
 }));
 const mockGetDatabaseType = mock(() => 'sqlite' as const);
+const mockUpdateGlobalConfig = mock(async (_updates: unknown) => {});
 
 mock.module('@archon/core', () => ({
   handleMessage: mock(async () => {}),
@@ -34,7 +35,7 @@ mock.module('@archon/core', () => ({
   getArchonWorkspacesPath: () => '/tmp/.archon/workspaces',
   toSafeConfig: (config: unknown) => config,
   generateAndSetTitle: mock(async () => {}),
-  updateGlobalConfig: mock(async () => {}),
+  updateGlobalConfig: mockUpdateGlobalConfig,
   createLogger: () => ({
     fatal: mock(() => undefined),
     error: mock(() => undefined),
@@ -225,5 +226,68 @@ describe('GET /api/providers', () => {
     expect(typeof caps.hooks).toBe('boolean');
     // structuredOutput is the tiered union, not a boolean.
     expect(['enforced', 'best-effort', false]).toContain(caps.structuredOutput);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: PATCH /api/config/tiers (ungated — solo-OK)
+// ---------------------------------------------------------------------------
+
+describe('PATCH /api/config/tiers', () => {
+  let app: Hono;
+
+  beforeEach(() => {
+    app = makeApp();
+    mockUpdateGlobalConfig.mockClear();
+  });
+
+  function patch(tiers: unknown): Promise<Response> {
+    return app.request('/api/config/tiers', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tiers }),
+    });
+  }
+
+  test('sets a tier → 200 and calls updateGlobalConfig with a clean RawAliasEntry', async () => {
+    const res = await patch({ large: { provider: 'claude', model: 'opus', effort: 'high' } });
+    expect(res.status).toBe(200);
+    expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(1);
+    const arg = mockUpdateGlobalConfig.mock.calls[0]?.[0] as { tiers: Record<string, unknown> };
+    expect(arg.tiers.large).toEqual({ provider: 'claude', model: 'opus', effort: 'high' });
+  });
+
+  test('unknown provider → 400, no write', async () => {
+    const res = await patch({ large: { provider: 'definitely-not-a-provider', model: 'x' } });
+    expect(res.status).toBe(400);
+    expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
+  });
+
+  test('invalid effort for the provider → 400, no write (not silently dropped)', async () => {
+    const res = await patch({ large: { provider: 'claude', model: 'opus', effort: 'ultra' } });
+    expect(res.status).toBe(400);
+    expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
+  });
+
+  test('null tier value unsets (passes null through)', async () => {
+    const res = await patch({ large: null });
+    expect(res.status).toBe(200);
+    const arg = mockUpdateGlobalConfig.mock.calls[0]?.[0] as { tiers: Record<string, unknown> };
+    expect(arg.tiers.large).toBeNull();
+  });
+
+  test('drops `thinking` from the written entry (no UI surface)', async () => {
+    const res = await patch({
+      small: { provider: 'claude', model: 'haiku', thinking: { level: 'high' } },
+    });
+    expect(res.status).toBe(200);
+    const arg = mockUpdateGlobalConfig.mock.calls[0]?.[0] as { tiers: Record<string, unknown> };
+    expect(arg.tiers.small).toEqual({ provider: 'claude', model: 'haiku' });
+  });
+
+  test('is ungated — succeeds with no auth identity', async () => {
+    // No X-Archon-User header, web auth disabled in the harness → still 200.
+    const res = await patch({ medium: { provider: 'claude', model: 'sonnet' } });
+    expect(res.status).toBe(200);
   });
 });

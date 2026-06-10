@@ -4,6 +4,7 @@ import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
 import { HttpError } from '../lib/http';
 import { SettingsSection } from './SettingsSection';
+import { SubscriptionLoginFlow } from './SubscriptionLoginFlow';
 
 // Mirrors AssistantConfigPanel's INPUT_CLASS so inputs match the console form style.
 const INPUT_CLASS =
@@ -19,8 +20,10 @@ const INPUT_CLASS =
  * `enabled: false` (no TOKEN_ENCRYPTION_KEY). Any OTHER load error still renders
  * a visible error section rather than hiding it.
  *
- * API-key connect only (PR-2). OAuth subscription rows land with the Pi OAuth
- * bridge (PR-3).
+ * Both connect paths: an API key for ANY provider (the non-subscription
+ * providers — openrouter/openai/codex/Pi backends — are API-key only), plus a
+ * subscription "Login" affordance for providers the server advertises in
+ * `subscriptionAvailable` (claude/copilot; codex is gated, #1924).
  */
 export function ProviderConnectionsPanel(): ReactElement | null {
   const { data, error } = useEntity(K.providerConnections, skill.listProviderKeys);
@@ -31,6 +34,7 @@ export function ProviderConnectionsPanel(): ReactElement | null {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [disconnecting, setDisconnecting] = useState<string | null>(null);
+  const [loginProvider, setLoginProvider] = useState<string | null>(null);
 
   const cancelledRef = useRef(false);
   useEffect(() => {
@@ -51,14 +55,14 @@ export function ProviderConnectionsPanel(): ReactElement | null {
   if (error instanceof HttpError && error.status === 401) return null;
   if (error !== undefined) {
     return (
-      <SettingsSection title="AI Provider Keys">
+      <SettingsSection title="Provider Auth">
         <p className="font-mono text-[11px] text-error">{error.message}</p>
       </SettingsSection>
     );
   }
   if (data === undefined) {
     return (
-      <SettingsSection title="AI Provider Keys">
+      <SettingsSection title="Provider Auth">
         <p className="font-mono text-[11px] text-text-tertiary">Loading…</p>
       </SettingsSection>
     );
@@ -103,7 +107,7 @@ export function ProviderConnectionsPanel(): ReactElement | null {
   };
 
   return (
-    <SettingsSection title="AI Provider Keys">
+    <SettingsSection title="Provider Auth">
       <div className="flex flex-col gap-4 text-[12px]">
         <p className="text-text-secondary">
           Connect your own provider API keys. Runs and chats you start bill to your key instead of
@@ -138,6 +142,53 @@ export function ProviderConnectionsPanel(): ReactElement | null {
         ) : (
           <p className="text-text-tertiary">No provider keys connected yet.</p>
         )}
+
+        {data.subscriptionAvailable.length > 0 ? (
+          <div className="flex flex-col gap-2 border-t border-border pt-3">
+            <p className="text-text-secondary">
+              Or connect a subscription — bills to your plan, no API key needed:
+            </p>
+            {data.subscriptionAvailable.map(p => {
+              const connected = data.connections.some(c => c.provider === p && c.kind === 'oauth');
+              if (loginProvider === p) {
+                return (
+                  <SubscriptionLoginFlow
+                    key={p}
+                    provider={p}
+                    onDone={() => {
+                      setLoginProvider(null);
+                    }}
+                  />
+                );
+              }
+              return (
+                <div
+                  key={p}
+                  className="flex items-center justify-between gap-3 rounded border border-border bg-surface-inset px-3 py-2"
+                >
+                  <span className="text-text-secondary">
+                    <span className="font-medium capitalize text-text-primary">{p}</span>
+                    {connected ? (
+                      <span className="ml-2 text-text-tertiary">· subscription connected</span>
+                    ) : null}
+                  </span>
+                  {!connected ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setLoginProvider(p);
+                      }}
+                      disabled={loginProvider !== null}
+                      className="brand-bar shrink-0 rounded px-3 py-0.5 text-[11px] font-medium text-white transition-all hover:brightness-110 disabled:opacity-40"
+                    >
+                      Login
+                    </button>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
 
         <div className="flex flex-col gap-2.5 border-t border-border pt-3">
           <div className="flex gap-2">

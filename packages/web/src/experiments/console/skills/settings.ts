@@ -76,3 +76,77 @@ export function buildAssistantUpdate(form: AssistantConfigForm): UpdateAssistant
   if (Object.keys(assistants).length > 0) body.assistants = assistants;
   return body;
 }
+
+// ---------------------------------------------------------------------------
+// Model tiers. Types inlined (mirroring server/.../config.schemas.ts) until a
+// regen lands TiersConfig / UpdateTiersBody / SafeConfig.tiers in
+// @/lib/api.generated — same convention as skills/github.ts. Migrate to
+// `components['schemas']['TiersConfig']` etc. once the spec is regenerated.
+// ---------------------------------------------------------------------------
+
+/**
+ * A tier preset as the UI handles it. `thinking` is intentionally omitted — there
+ * is no UI control for it, and the PATCH /api/config/tiers handler drops it on
+ * write, so saving a tier here clears any `thinking` set in config.yaml. Known
+ * limitation (advanced; rare).
+ */
+export interface TierEntry {
+  provider: string;
+  model: string;
+  effort?: string;
+}
+
+export interface TiersMap {
+  small?: TierEntry;
+  medium?: TierEntry;
+  large?: TierEntry;
+}
+
+/** `SafeConfig` + the tier fields not yet in the generated spec. */
+export type SafeConfigTiers = SafeConfig & { tiers?: TiersMap; tierDefaults?: TiersMap };
+
+export interface UpdateTiersBody {
+  tiers: { small?: TierEntry | null; medium?: TierEntry | null; large?: TierEntry | null };
+}
+
+export function updateTiers(body: UpdateTiersBody): Promise<ConfigResponse> {
+  return requestJson<ConfigResponse>('/api/config/tiers', {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  });
+}
+
+export type TierName = 'small' | 'medium' | 'large';
+export const TIER_ORDER: readonly TierName[] = ['small', 'medium', 'large'];
+
+export interface TierRowForm {
+  provider: string; // '' = unset (falls back to the built-in default)
+  model: string;
+  effort: string;
+}
+
+export type TiersForm = Record<TierName, TierRowForm>;
+
+/**
+ * Pure form → PATCH body. A row whose provider OR model is blank is sent as
+ * `null` (unset → built-in default); a fully-set row carries `effort` when
+ * present. The editor always sends all three tiers, so the per-key-merge route
+ * cleanly applies sets and unsets in one call.
+ */
+export function buildTiersUpdate(form: TiersForm): UpdateTiersBody {
+  const tiers: UpdateTiersBody['tiers'] = {};
+  for (const tier of TIER_ORDER) {
+    const row = form[tier];
+    const provider = row.provider.trim();
+    const model = row.model.trim();
+    if (provider && model) {
+      const entry: TierEntry = { provider, model };
+      const effort = row.effort.trim();
+      if (effort) entry.effort = effort;
+      tiers[tier] = entry;
+    } else {
+      tiers[tier] = null;
+    }
+  }
+  return { tiers };
+}

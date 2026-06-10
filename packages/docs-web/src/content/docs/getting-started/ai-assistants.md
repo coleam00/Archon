@@ -601,6 +601,53 @@ DEFAULT_AI_ASSISTANT=copilot
 - [Adding a Community Provider](../contributing/adding-a-community-provider/) — the contributor-facing guide for extending Archon with your own provider.
 - [`@github/copilot-sdk`](https://www.npmjs.com/package/@github/copilot-sdk) — upstream SDK.
 
+## Per-user credentials and AI Settings
+
+Everything above configures the **install-wide** assistant credentials (env vars, `claude /login`, etc.) — every run uses the same shared keys. On a **shared Archon box** where several people use the same server, each user can instead connect **their own** provider — by API key or subscription — so their runs and chats bill to them, not to the install's shared key.
+
+### When you need this
+
+- You run Archon for a team and want each person to bring their own provider key or Claude Pro/Max / Copilot subscription.
+- You want a personal key isolated from the shared install key.
+
+Solo users don't need any of this — the install-wide setup above is enough.
+
+### Enabling it
+
+Per-user credentials are gated on a single secret. Set `TOKEN_ENCRYPTION_KEY` (a 64-char hex string) so Archon can encrypt stored credentials at rest (AES-256-GCM):
+
+```ini
+# .env — generate with: openssl rand -hex 32
+TOKEN_ENCRYPTION_KEY=<64-char hex>
+```
+
+Without it, the per-user surface is inert (the settings panel hides, the routes report `enabled: false`) and Archon keeps reading provider keys from the environment as above.
+
+### Connecting from the console
+
+The console **AI Settings** page (Settings in the web UI) has three sections:
+
+- **Model Tiers** — map the `small` / `medium` / `large` tiers to a provider + model (and optional effort). This writes the install's `tiers:` config and works on **any** install, even without `TOKEN_ENCRYPTION_KEY` (it's non-secret config).
+- **Provider Auth** — connect a provider for *your* user. Every provider accepts an **API key**; **`claude`** and **`copilot`** additionally offer **subscription login** (an OAuth flow). `codex` is **API-key-only** — its subscription path is gated pending [#1924](https://github.com/coleam00/Archon/issues/1924).
+- **Defaults** — the default assistant and per-provider model defaults.
+
+### Connecting from the CLI
+
+The same actions are available headless via [`archon ai`](/reference/cli/#ai):
+
+```bash
+# Per-user credentials (need TOKEN_ENCRYPTION_KEY)
+echo "$MY_KEY" | archon ai key set openrouter   # API key for any provider
+archon ai login claude                           # subscription (claude or copilot)
+archon ai list                                   # what's connected
+
+# Model tiers + default (ungated config — solo-OK)
+archon ai tier set large claude opus
+archon ai default claude
+```
+
+The model-tier presets are the same ones you can hand-write in `~/.archon/config.yaml`; see [Configuration](/reference/configuration/) for the YAML format.
+
 ## How Assistant Selection Works
 
 - Assistant type is set per codebase via the `assistant` field in `.archon/config.yaml` or the `DEFAULT_AI_ASSISTANT` env var

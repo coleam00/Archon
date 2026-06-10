@@ -108,6 +108,30 @@ Only meaningful on **multi-user installs** running GitHub App mode (`GITHUB_APP_
 
 The command prints a `verification_uri` and a one-time `user_code`; visit the URL, enter the code, and authorize. On success the access/refresh tokens are stored encrypted (AES-256-GCM) in Archon's database. Exit code 0 on success; 1 if per-user GitHub is disabled, the identity can't be resolved, the code expires, or authorization is denied.
 
+### `ai`
+
+Manage **per-user AI-provider credentials** (API keys + subscriptions) and **model-tier config**. CLI identity is resolved from `ARCHON_USER_ID` (explicit override) or `$USER` / `$USERNAME`, mapped to a stable Archon user via the `cli` platform identity — the same as [`auth github`](#auth-github).
+
+The credential subcommands (`key set`, `login`, `list`, `logout`) only work on **multi-user installs** with `TOKEN_ENCRYPTION_KEY` set; on a solo install they exit with an explanatory error. The config subcommands (`tier`, `default`) are **ungated** — they write `~/.archon/config.yaml` and work everywhere.
+
+```bash
+# --- Provider credentials (require TOKEN_ENCRYPTION_KEY) ---
+archon ai key set <provider>     # connect an API key (masked prompt or piped stdin — never argv)
+archon ai login <provider>       # connect a subscription via OAuth (claude or copilot)
+archon ai list                   # list connected providers (metadata only, no secrets)
+archon ai logout <provider>      # disconnect a provider
+
+# --- Model tiers + default assistant (ungated config) ---
+archon ai tier set <small|medium|large> <provider> <model> [--effort <effort>]
+archon ai tier list [--json]     # show configured tiers vs built-in defaults
+archon ai tier unset <small|medium|large>   # reset a tier to its built-in default
+archon ai default <provider>     # set the default assistant
+```
+
+`ai login` supports subscription login for **`claude`** and **`copilot`** only — `codex` is API-key-only (use `ai key set codex`); its subscription path is gated pending [#1924](https://github.com/coleam00/Archon/issues/1924). The API key is never read from argv (it would leak into shell history): pipe it (`echo "$KEY" | archon ai key set openrouter`) or type it at the masked prompt.
+
+`ai tier` and `ai default` edit the same `tiers:` / `defaultAssistant` config you can hand-write in `~/.archon/config.yaml` (see [Configuration](/reference/configuration/)) or edit from the console **AI Settings** page. An unknown provider exits non-zero; `tier unset` removes the override so the tier falls back to its built-in preset. The full per-user setup walkthrough is in [Per-user credentials and AI Settings](/getting-started/ai-assistants/#per-user-credentials-and-ai-settings).
+
 ### `telemetry status`
 
 Show the current anonymous telemetry state: whether it is enabled, the opt-out reason if not, the install UUID, the active PostHog host, and the key source.
