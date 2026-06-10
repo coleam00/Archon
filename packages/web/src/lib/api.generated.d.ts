@@ -2807,6 +2807,7 @@ export interface components {
     };
     WorkflowListResponse: {
       workflows: components['schemas']['WorkflowListEntry'][];
+      recommended: string[];
       errors?: components['schemas']['WorkflowLoadError'][];
     };
     WorkflowListEntry: {

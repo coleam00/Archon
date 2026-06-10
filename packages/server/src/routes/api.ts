@@ -23,6 +23,7 @@ import {
   handleMessage,
   getDatabaseType,
   loadConfig,
+  loadRepoConfig,
   toSafeConfig,
   updateGlobalConfig,
   cloneRepository,
@@ -2526,8 +2527,31 @@ export function registerApiRoutes(
       // This avoids a misleading empty state on first run, before any project
       // is registered, when bundled defaults are present
       const result = await discoverWorkflowsWithConfig(workingDir ?? null, loadConfig);
+
+      // Resolve repo-owner-curated recommended list (per-project only).
+      // Filter to names present in the discovered set; preserve declared order.
+      // Stale names are silently ignored (advisory).
+      const recommended: string[] = [];
+      if (workingDir) {
+        const repoConfig = await loadRepoConfig(workingDir);
+        const declared = repoConfig.recommendedWorkflows ?? [];
+        if (declared.length > 0) {
+          const discoveredNames = new Set(result.workflows.map(ws => ws.workflow.name));
+          const seen = new Set<string>();
+          for (const name of declared) {
+            if (discoveredNames.has(name) && !seen.has(name)) {
+              recommended.push(name);
+              seen.add(name);
+            } else if (!discoveredNames.has(name)) {
+              getLog().debug({ workingDir, name }, 'workflows.recommended_workflow_not_found');
+            }
+          }
+        }
+      }
+
       return c.json({
         workflows: result.workflows.map(ws => ({ workflow: ws.workflow, source: ws.source })),
+        recommended,
         errors: result.errors.length > 0 ? result.errors : undefined,
       });
     } catch (error) {
