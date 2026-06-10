@@ -102,7 +102,19 @@ function buildSubprocessEnv(): NodeJS.ProcessEnv {
     { authMode },
     authMode === 'global' ? 'using_global_auth' : 'using_explicit_tokens'
   );
-  return { ...process.env };
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  // CLAUDE_API_KEY is Archon's variable name; the Claude Code CLI only reads
+  // ANTHROPIC_API_KEY. Mirror it so solo .env installs work (delivery.ts sets
+  // both for the per-user path). OAuth token takes precedence — do not inject
+  // an API key alongside it, and never clobber an explicit ANTHROPIC_API_KEY.
+  if (
+    process.env.CLAUDE_API_KEY &&
+    !process.env.ANTHROPIC_API_KEY &&
+    !process.env.CLAUDE_CODE_OAUTH_TOKEN
+  ) {
+    env.ANTHROPIC_API_KEY = process.env.CLAUDE_API_KEY;
+  }
+  return env;
 }
 
 /** Max retries for transient subprocess failures */

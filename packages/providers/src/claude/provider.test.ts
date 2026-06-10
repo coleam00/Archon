@@ -1,4 +1,4 @@
-import { describe, test, expect, mock, beforeEach, spyOn } from 'bun:test';
+import { describe, test, expect, mock, beforeEach, afterEach, spyOn } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
 
 const mockLogger = createMockLogger();
@@ -1124,6 +1124,134 @@ describe('ClaudeProvider', () => {
       const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
       const env = callArgs.options.env as Record<string, string>;
       expect(env.HOME).toBe('/custom/home');
+    });
+
+    describe('CLAUDE_API_KEY -> ANTHROPIC_API_KEY mapping', () => {
+      let originalClaudeApiKey: string | undefined;
+      let originalAnthropicApiKey: string | undefined;
+      let originalOAuthToken: string | undefined;
+
+      beforeEach(() => {
+        originalClaudeApiKey = process.env.CLAUDE_API_KEY;
+        originalAnthropicApiKey = process.env.ANTHROPIC_API_KEY;
+        originalOAuthToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+      });
+
+      afterEach(() => {
+        if (originalClaudeApiKey === undefined) {
+          delete process.env.CLAUDE_API_KEY;
+        } else {
+          process.env.CLAUDE_API_KEY = originalClaudeApiKey;
+        }
+        if (originalAnthropicApiKey === undefined) {
+          delete process.env.ANTHROPIC_API_KEY;
+        } else {
+          process.env.ANTHROPIC_API_KEY = originalAnthropicApiKey;
+        }
+        if (originalOAuthToken === undefined) {
+          delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+        } else {
+          process.env.CLAUDE_CODE_OAUTH_TOKEN = originalOAuthToken;
+        }
+      });
+
+      test('maps when only the API key is set', async () => {
+        mockQuery.mockImplementation(async function* () {
+          yield { type: 'result', session_id: 'sid' };
+        });
+
+        delete process.env.ANTHROPIC_API_KEY;
+        delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+        process.env.CLAUDE_API_KEY = 'sk-test';
+
+        for await (const _ of client.sendQuery('test', '/tmp')) {
+          // consume
+        }
+
+        expect(mockQuery).toHaveBeenCalledTimes(1);
+        const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
+        const env = callArgs.options.env as Record<string, string>;
+        expect(env.CLAUDE_API_KEY).toBe('sk-test');
+        expect(env.ANTHROPIC_API_KEY).toBe('sk-test');
+      });
+
+      test('does not clobber an explicit ANTHROPIC_API_KEY', async () => {
+        mockQuery.mockImplementation(async function* () {
+          yield { type: 'result', session_id: 'sid' };
+        });
+
+        delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+        process.env.CLAUDE_API_KEY = 'sk-a';
+        process.env.ANTHROPIC_API_KEY = 'sk-b';
+
+        for await (const _ of client.sendQuery('test', '/tmp')) {
+          // consume
+        }
+
+        expect(mockQuery).toHaveBeenCalledTimes(1);
+        const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
+        const env = callArgs.options.env as Record<string, string>;
+        expect(env.ANTHROPIC_API_KEY).toBe('sk-b');
+      });
+
+      test('OAuth token wins — no injection', async () => {
+        mockQuery.mockImplementation(async function* () {
+          yield { type: 'result', session_id: 'sid' };
+        });
+
+        delete process.env.ANTHROPIC_API_KEY;
+        process.env.CLAUDE_API_KEY = 'sk-a';
+        process.env.CLAUDE_CODE_OAUTH_TOKEN = 'sk-ant-oat01-x';
+
+        for await (const _ of client.sendQuery('test', '/tmp')) {
+          // consume
+        }
+
+        expect(mockQuery).toHaveBeenCalledTimes(1);
+        const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
+        const env = callArgs.options.env as Record<string, string>;
+        expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+      });
+
+      test('no key, no injection', async () => {
+        mockQuery.mockImplementation(async function* () {
+          yield { type: 'result', session_id: 'sid' };
+        });
+
+        delete process.env.CLAUDE_API_KEY;
+        delete process.env.ANTHROPIC_API_KEY;
+        delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+
+        for await (const _ of client.sendQuery('test', '/tmp')) {
+          // consume
+        }
+
+        expect(mockQuery).toHaveBeenCalledTimes(1);
+        const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
+        const env = callArgs.options.env as Record<string, string>;
+        expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+      });
+
+      test('requestOptions.env still wins over the mapping', async () => {
+        mockQuery.mockImplementation(async function* () {
+          yield { type: 'result', session_id: 'sid' };
+        });
+
+        delete process.env.ANTHROPIC_API_KEY;
+        delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+        process.env.CLAUDE_API_KEY = 'sk-a';
+
+        for await (const _ of client.sendQuery('test', '/tmp', undefined, {
+          env: { ANTHROPIC_API_KEY: 'sk-override' },
+        })) {
+          // consume
+        }
+
+        expect(mockQuery).toHaveBeenCalledTimes(1);
+        const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
+        const env = callArgs.options.env as Record<string, string>;
+        expect(env.ANTHROPIC_API_KEY).toBe('sk-override');
+      });
     });
 
     test('passes effort to SDK via nodeConfig', async () => {
