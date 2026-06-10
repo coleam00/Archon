@@ -158,6 +158,8 @@ function kindGlyph(k: WorkflowNodeKind): string {
       return '↻';
     case 'approval':
       return '◈';
+    case 'cancel':
+      return '⊘';
     case 'bash':
       return '$';
     case 'command':

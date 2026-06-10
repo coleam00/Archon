@@ -6,18 +6,18 @@
  *   - `base`     — shared base fields (depends_on, when, model, …) minus `id`
  *   - `data`     — variant-specific fields, discriminated by `variant`
  *
- * Wire shapes are reached only through `./wire`; the variant id reuses the
- * console's existing `WorkflowNodeKind` primitive plus the missing `'cancel'`.
+ * Wire shapes are reached only through `./wire`; the variant id is the
+ * console's existing `WorkflowNodeKind` primitive.
  */
 import type { WorkflowNodeKind } from '../../primitives/workflow-graph';
 import type { WireDagNode, WireWorkflowDefinition } from './wire';
 
 /**
- * The seven representable node variants. `WorkflowNodeKind` already covers
- * prompt/command/bash/script/approval/loop — the builder adds the one member
- * the console primitive is missing (`cancel`). We do not redefine the other six.
+ * The seven representable node variants — an alias of the console's
+ * `WorkflowNodeKind` primitive so the builder and the graph renderer share one
+ * union (the builder does not redefine the kinds).
  */
-export type VariantId = WorkflowNodeKind | 'cancel';
+export type VariantId = WorkflowNodeKind;
 
 // ---------------------------------------------------------------------------
 // Base fields — shared across every variant (the wire base keys minus `id`)
