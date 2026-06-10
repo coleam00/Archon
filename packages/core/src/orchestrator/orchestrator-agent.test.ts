@@ -59,6 +59,8 @@ mock.module('@archon/paths', () => ({
   getArchonWorkspacesPath: mock(() => '/home/test/.archon/workspaces'),
   ensureArchonWorkspacesPath: mockEnsureArchonWorkspacesPath,
   getArchonHome: mock(() => '/home/test/.archon'),
+  captureChatTurn: mock(() => undefined),
+  captureCodebaseRegistered: mock(() => undefined),
 }));
 
 const mockUpdateConversation = mock(() => Promise.resolve());

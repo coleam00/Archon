@@ -17,6 +17,8 @@ mock.module('@archon/paths', () => ({
   getArchonWorkspacesPath: mock(() => '/home/test/.archon/workspaces'),
   ensureArchonWorkspacesPath: mock(() => Promise.resolve('/home/test/.archon/workspaces')),
   getArchonHome: mock(() => '/home/test/.archon'),
+  captureChatTurn: mock(() => undefined),
+  captureCodebaseRegistered: mock(() => undefined),
 }));
 
 // DB mocks

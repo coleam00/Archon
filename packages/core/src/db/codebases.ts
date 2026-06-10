@@ -3,7 +3,7 @@
  */
 import { pool, getDialect } from './connection';
 import type { Codebase } from '../types';
-import { createLogger } from '@archon/paths';
+import { createLogger, captureCodebaseRegistered } from '@archon/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -33,6 +33,10 @@ export async function createCodebase(data: {
   if (!result.rows[0]) {
     throw new Error('Failed to create codebase: INSERT succeeded but no row returned');
   }
+  // Anonymous count-only telemetry (activation funnel: install → registered a
+  // project). Every registration surface (HTTP clone/register, /register-project
+  // chat command) funnels through this INSERT — no name/path/URL is ever sent.
+  captureCodebaseRegistered();
   return result.rows[0];
 }
 
