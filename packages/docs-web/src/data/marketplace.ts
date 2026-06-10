@@ -155,4 +155,16 @@ export const marketplaceEntries: MarketplaceEntry[] = [
     tags: ['development', 'planning', 'review'],
     archonVersionCompat: '>=0.3.0',
   },
+  {
+    slug: 'harness-score',
+    name: 'Harness Score',
+    author: 'seanrobertwright',
+    description:
+      "Audit a repository's readiness for AI-agent-driven development. Runs 10 deterministic checks (agent instructions, README, build/test commands, CI, tests, lint/typecheck, .archon workflows, security scanning, sensitive paths) scored out of 100, then Claude synthesizes a markdown report with a rating and the top 3 fixes ranked by score gain.",
+    sourceUrl:
+      'https://github.com/seanrobertwright/archon-harness-score/blob/main/harness-score.yaml',
+    sha: '0a5b1406d9869e29507aed005df9456a2ea686e6',
+    tags: ['review', 'automation'],
+    archonVersionCompat: '>=0.3.0',
+  },
 ];
