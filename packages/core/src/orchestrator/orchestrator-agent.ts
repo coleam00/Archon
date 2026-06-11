@@ -1198,13 +1198,29 @@ export async function handleMessage(
     const userAiPrefs = conversation.user_id
       ? await resolveUserAiPrefsForChat(conversation.user_id)
       : {};
-    const configuredProviderKey = userAiPrefs.defaultProvider ?? conversation.ai_assistant_type;
-    const aiProfile = buildAiProfile(configuredProviderKey, {
-      repoTiers: config.tiers,
-      repoAliases: config.aliases,
-      userTiers: userAiPrefs.tiers,
-      userAliases: userAiPrefs.aliases,
-    });
+    let configuredProviderKey = userAiPrefs.defaultProvider ?? conversation.ai_assistant_type;
+    let aiProfile: ReturnType<typeof buildAiProfile>;
+    try {
+      aiProfile = buildAiProfile(configuredProviderKey, {
+        repoTiers: config.tiers,
+        repoAliases: config.aliases,
+        userTiers: userAiPrefs.tiers,
+        userAliases: userAiPrefs.aliases,
+      });
+    } catch (profileErr) {
+      // Structurally invalid STORED prefs (corrupt DB row) must not break the
+      // user's chat — degrade to config-only. A broken config layer still
+      // fails fast: the rebuild rethrows the same error.
+      getLog().error(
+        { err: profileErr as Error, userId: conversation.user_id },
+        'orchestrator.user_ai_prefs_profile_invalid'
+      );
+      configuredProviderKey = conversation.ai_assistant_type;
+      aiProfile = buildAiProfile(configuredProviderKey, {
+        repoTiers: config.tiers,
+        repoAliases: config.aliases,
+      });
+    }
     const chatRequest = resolveModelRequest(aiProfile, 'large', configuredProviderKey);
     // Tier-fallback nudge (mirrors dag.model_provider_conflict): chat asks for
     // 'large'; when that tier is unset and a sibling preset answered, tell the

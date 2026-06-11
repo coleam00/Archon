@@ -2773,6 +2773,22 @@ describe('per-user AI prefs in chat + tier-fallback nudge', () => {
     expect(mockGetUserAiPrefsDb).not.toHaveBeenCalled();
   });
 
+  test('structurally invalid stored prefs degrade to config-only (chat still answers)', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ user_id: 'user-9' } as Partial<Conversation>))
+    );
+    // An alias without the '@' prefix makes buildAiProfile throw.
+    mockGetUserAiPrefsDb.mockImplementation(async () => ({
+      aliases: { fast: { provider: 'claude', model: 'haiku' } },
+    }));
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'Hello');
+
+    // Degraded to the config profile — the chat turn still reached the AI.
+    expect(mockSendQuery).toHaveBeenCalled();
+  });
+
   test('a prefs DB failure falls back to config-only (chat still answers)', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(
       Promise.resolve(makeConversation({ user_id: 'user-9' } as Partial<Conversation>))

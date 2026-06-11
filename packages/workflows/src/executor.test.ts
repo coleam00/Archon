@@ -1191,6 +1191,54 @@ describe('telemetry wiring', () => {
     expect(getUserAiPrefs).not.toHaveBeenCalled();
   });
 
+  it('a throwing getUserAiPrefs dep degrades to config-only (run still starts)', async () => {
+    const store = makeStore();
+    const deps = {
+      ...makeDeps(store),
+      getUserAiPrefs: mock(async () => {
+        throw new Error('db down');
+      }),
+    } as WorkflowDeps;
+
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow({ model: 'large' }),
+      'msg',
+      'db-conv-1',
+      { userId: 'user-1' }
+    );
+
+    // Config default is claude → built-in tier defaults resolve 'large'.
+    expect(mockExecuteDagWorkflow.mock.calls[0]?.[6]).toBe('claude');
+  });
+
+  it('structurally invalid stored prefs degrade to config-only (run still starts)', async () => {
+    const store = makeStore();
+    const deps = {
+      ...makeDeps(store),
+      // An alias without the '@' prefix makes buildAiProfile throw.
+      getUserAiPrefs: mock(async () => ({
+        aliases: { fast: { provider: 'claude', model: 'haiku' } },
+      })),
+    } as WorkflowDeps;
+
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow({ model: 'large' }),
+      'msg',
+      'db-conv-1',
+      { userId: 'user-1' }
+    );
+
+    expect(mockExecuteDagWorkflow.mock.calls[0]?.[6]).toBe('claude');
+  });
+
   it("per-user default provider rebases tier defaults for the run's profile", async () => {
     const store = makeStore();
     const deps = {
