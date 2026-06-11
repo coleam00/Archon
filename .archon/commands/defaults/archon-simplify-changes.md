@@ -50,7 +50,11 @@ Review ALL code changed on this branch and implement simplifications directly. Y
 ### Phase 1: ANALYZE
 
 1. Read CLAUDE.md for project conventions
-2. Get changed files: `git diff $BASE_BRANCH...HEAD --name-only`
+2. Get changed files — this is your **scope allow-list**; you may edit nothing outside it:
+   ```bash
+   git diff $BASE_BRANCH...HEAD --name-only | sort -u > /tmp/simplify-allowlist.txt
+   cat /tmp/simplify-allowlist.txt
+   ```
 3. Read each changed file
 4. Identify simplification opportunities per file
 
@@ -66,24 +70,29 @@ For each simplification:
 ### Phase 3: VALIDATE & COMMIT
 
 1. Run full validation: `bun run type-check && bun run lint`
-2. If simplifications were applied, stage **only** the files you edited in Phase 2 — never `git add -A`, `git add .`, or `git add -u`:
+2. **Scope gate (hard).** Confirm you edited nothing outside the allow-list — simplify never adds files and never touches anything outside the PR diff:
+   ```bash
+   comm -23 <(git diff --name-only | sort -u) /tmp/simplify-allowlist.txt
+   ```
+   This must print **nothing**. For any path it prints, revert it (`git checkout -- <path>`, or `rm` a stray new file) before continuing — a simplification that touched an out-of-scope file is a scope leak, not a simplification.
+3. If simplifications were applied, stage **only** the files you edited in Phase 2 — never `git add -A`, `git add .`, or `git add -u`:
    ```bash
    # Stage by name, using the list you tracked in Phase 2
    git add path/to/file1.ts path/to/file2.ts
    # Verify nothing else snuck in
    git status --porcelain
    ```
-3. **Never stage** report, scratch, or PR-body artifacts, even if they show up as untracked or modified in the worktree:
+4. **Never stage** report, scratch, or PR-body artifacts, even if they show up as untracked or modified in the worktree:
    - Anything under `$ARTIFACTS_DIR` (the artifacts directory normally lives outside the worktree, but copies/symlinks may exist)
    - `review/`, `simplify-report.md`, `*-report.md` at the repo root
    - `.pr-body.md`, `pr-body.md`, `*.scratch.md`, `*.tmp.md`
    - If `git status --porcelain` shows files you don't recognize as part of your simplifications, leave them unstaged
-4. Commit and push only the staged source edits:
+5. Commit and push only the staged source edits:
    ```bash
    git commit -m "simplify: reduce complexity in changed files"
    git push
    ```
-5. If no simplifications were applied, skip the commit entirely
+6. If no simplifications were applied, skip the commit entirely
 
 ### Phase 4: REPORT
 
