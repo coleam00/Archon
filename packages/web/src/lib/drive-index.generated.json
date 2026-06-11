@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-06-10T17:00:47+00:00",
+  "generated_at": "2026-06-11T20:00:37+00:00",
   "vault_path": "second-brain/resources/drive-index",
-  "count": 20,
+  "count": 22,
   "folders": [
     {
       "id": "root",
@@ -732,6 +732,27 @@
       ]
     },
     {
+      "id": "carlos",
+      "slug": "carlos",
+      "name": "Carlos",
+      "folderId": "1bK_Gsd_hSB3pjwG9r8Po7WM2iInO4Ss7",
+      "parentId": "1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
+      "audience": "all",
+      "lastSynced": "2026-06-11T20:00:36+00:00",
+      "fileCount": 1,
+      "vaultPath": "second-brain/resources/drive-index/carlos.md",
+      "driveUrl": "https://drive.google.com/drive/folders/1bK_Gsd_hSB3pjwG9r8Po7WM2iInO4Ss7",
+      "files": [
+        {
+          "name": "Inbox",
+          "type": "g-folder",
+          "modified": "2026-06-11",
+          "size": "",
+          "link": "https://drive.google.com/drive/folders/18-pRzdCNTcd2bfgfouBP2I_ckwtqd3Fu"
+        }
+      ]
+    },
+    {
       "id": "field-photos",
       "slug": "field-photos",
       "name": "Field Photos",
@@ -815,11 +836,18 @@
       "folderId": "1_2XY2Anjl6XtnvI81BT2cuvL7FEqKm48",
       "parentId": "1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
       "audience": "all",
-      "lastSynced": "2026-06-03T19:00:44+00:00",
-      "fileCount": 4,
+      "lastSynced": "2026-06-11T17:00:41+00:00",
+      "fileCount": 5,
       "vaultPath": "second-brain/resources/drive-index/hypeframes-hypereels.md",
       "driveUrl": "https://drive.google.com/drive/folders/1_2XY2Anjl6XtnvI81BT2cuvL7FEqKm48",
       "files": [
+        {
+          "name": "tammy-a-new-way-to-wellness-60s-v3.mov",
+          "type": "video/quicktime",
+          "modified": "2026-06-11",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1pAofk_AIXSXkDX1PhL-kvdvjMjKOdEU9/view?usp=drivesdk"
+        },
         {
           "name": "A New Way to Wellness.mov",
           "type": "video/quicktime",
@@ -847,6 +875,27 @@
           "modified": "2026-05-15",
           "size": "",
           "link": "https://drive.google.com/drive/folders/1fwbtuuGNQqU_6iyhu_PZdVZBxecCZJWX"
+        }
+      ]
+    },
+    {
+      "id": "inbox",
+      "slug": "inbox",
+      "name": "Inbox",
+      "folderId": "1wjEHhlOhq-8OU5UCMOZ7gMgU_S7zhcbc",
+      "parentId": "1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
+      "audience": "all",
+      "lastSynced": "2026-06-11T15:00:31+00:00",
+      "fileCount": 1,
+      "vaultPath": "second-brain/resources/drive-index/inbox.md",
+      "driveUrl": "https://drive.google.com/drive/folders/1wjEHhlOhq-8OU5UCMOZ7gMgU_S7zhcbc",
+      "files": [
+        {
+          "name": "2026-06",
+          "type": "g-folder",
+          "modified": "2026-06-11",
+          "size": "",
+          "link": "https://drive.google.com/drive/folders/1xE_N4_pKsi2M0lj9WiXkDveS3NeY9XM-"
         }
       ]
     },

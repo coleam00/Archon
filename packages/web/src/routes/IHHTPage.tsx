@@ -35,6 +35,19 @@ const SECTIONS = [
       },
     ],
   },
+  {
+    heading: 'Sub-pages in vault',
+    items: [
+      {
+        slug: 'clinical-evidence-one-pager',
+        title: 'Clinical evidence one-pager',
+        description:
+          'Peer-clinical brief: HIF-1α mechanism, indication-level PMIDs, protocol, safety, reimbursement reality, PMC partnership pathway',
+        badge: 'asset ready',
+        badgeTone: 'emerald' as const,
+      },
+    ],
+  },
 ];
 
 const KPIS = [
