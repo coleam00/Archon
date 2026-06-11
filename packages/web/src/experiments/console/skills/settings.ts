@@ -6,8 +6,9 @@ import type { components } from '@/lib/api.generated';
  *
  * Mirrors the envVars skill (requestJson + method). Types come from the generated
  * OpenAPI spec (`@/lib/api.generated`) — never `@/lib/api` — so the console stays
- * inside its isolation boundary. The write path is GLOBAL only: PATCH
- * /api/config/assistants persists to ~/.archon/config.yaml (no repo overrides).
+ * inside its isolation boundary. Two write scopes: the /api/config/* verbs
+ * persist install-wide to ~/.archon/config.yaml (no repo overrides), and the
+ * /api/auth/me/ai-prefs* verbs persist the caller's per-user prefs row.
  */
 
 export type SafeConfig = components['schemas']['SafeConfig'];
@@ -149,4 +150,106 @@ export function buildTiersUpdate(form: TiersForm): UpdateTiersBody {
     }
   }
   return { tiers };
+}
+
+// ---------------------------------------------------------------------------
+// @custom aliases (install scope) + per-user AI prefs (Phase 3). Types inlined
+// until a regen lands UserAiPrefs / UpdateAliasesBody in @/lib/api.generated —
+// same convention as the tiers block above.
+// ---------------------------------------------------------------------------
+
+/** `SafeConfig` + the alias field not yet in the generated spec. */
+export type SafeConfigAliases = SafeConfig & { aliases?: Record<string, TierEntry> };
+
+export interface UpdateAliasesBody {
+  aliases: Record<string, TierEntry | null>;
+}
+
+/** Install-wide @custom aliases — writes `aliases:` to ~/.archon/config.yaml. */
+export function updateAliases(body: UpdateAliasesBody): Promise<ConfigResponse> {
+  return requestJson<ConfigResponse>('/api/config/aliases', {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  });
+}
+
+/**
+ * The current web user's personal AI prefs (raw per-user layer, not merged
+ * with config). Reads 401 when no web identity resolves — panels use that to
+ * hide the "Just me" scope.
+ */
+export interface UserAiPrefs {
+  tiers?: TiersMap;
+  aliases?: Record<string, TierEntry>;
+  defaultProvider?: string;
+}
+
+export function getUserAiPrefs(): Promise<UserAiPrefs> {
+  return requestJson<UserAiPrefs>('/api/auth/me/ai-prefs');
+}
+
+export function updateUserTiers(body: UpdateTiersBody): Promise<UserAiPrefs> {
+  return requestJson<UserAiPrefs>('/api/auth/me/ai-prefs/tiers', {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  });
+}
+
+export function updateUserAliases(body: UpdateAliasesBody): Promise<UserAiPrefs> {
+  return requestJson<UserAiPrefs>('/api/auth/me/ai-prefs/aliases', {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  });
+}
+
+export function updateUserDefaultProvider(provider: string | null): Promise<UserAiPrefs> {
+  return requestJson<UserAiPrefs>('/api/auth/me/ai-prefs/default', {
+    method: 'PATCH',
+    body: JSON.stringify({ provider }),
+  });
+}
+
+/** The editable scope of a settings panel: install-wide config vs per-user DB prefs. */
+export type SettingsScope = 'install' | 'user';
+
+/** One editable alias row in the AliasesPanel. */
+export interface AliasRowForm {
+  name: string;
+  provider: string;
+  model: string;
+  effort: string;
+}
+
+/** Seed editable alias rows from a saved alias map (sorted by name). */
+export function seedAliasRows(map: Record<string, TierEntry> | undefined): AliasRowForm[] {
+  return Object.entries(map ?? {})
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([name, e]) => ({ name, provider: e.provider, model: e.model, effort: e.effort ?? '' }));
+}
+
+/**
+ * Pure form → PATCH body. Baseline names that no longer appear in the rows are
+ * sent as `null` (unset — covers both deletion and rename), complete rows are
+ * sent as entries, and incomplete rows (blank name/provider/model) are dropped.
+ */
+export function buildAliasesUpdate(
+  rows: AliasRowForm[],
+  baselineNames: readonly string[]
+): UpdateAliasesBody {
+  const aliases: UpdateAliasesBody['aliases'] = {};
+  const present = new Set(rows.map(r => r.name.trim()).filter(n => n !== ''));
+  for (const name of baselineNames) {
+    if (!present.has(name)) aliases[name] = null;
+  }
+  for (const row of rows) {
+    const name = row.name.trim();
+    const provider = row.provider.trim();
+    const model = row.model.trim();
+    if (!name || !provider || !model) continue;
+    const entry: TierEntry = { provider, model };
+    const effort = row.effort.trim();
+    if (effort) entry.effort = effort;
+    aliases[name] = entry;
+  }
+  return { aliases };
 }

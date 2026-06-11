@@ -70,7 +70,8 @@ const TIER_DEFAULTS = tierDefaults as Record<
   Record<TierName, { model: string; effort?: string }>
 >;
 
-function isTierName(value: string): value is TierName {
+/** True when `value` is one of the reserved tier keywords (small/medium/large). */
+export function isTierName(value: string): value is TierName {
   return (TIER_NAMES as readonly string[]).includes(value);
 }
 
@@ -123,11 +124,15 @@ export interface BuildAiProfileOptions {
   globalAliases?: RawAliasesConfig;
   /** Aliases from .archon/config.yaml (repo) — override globalAliases on key collision */
   repoAliases?: RawAliasesConfig;
+  /** Per-user tier overrides (DB) — highest precedence, override repoTiers on key collision */
+  userTiers?: RawTiersConfig;
+  /** Per-user aliases (DB) — highest precedence, override repoAliases on key collision */
+  userAliases?: RawAliasesConfig;
 }
 
 /**
  * Build a ResolvedAiProfile by layering tier defaults → global tiers → repo tiers
- * → global aliases → repo aliases.
+ * → per-user tiers → global aliases → repo aliases → per-user aliases.
  * Throws if any alias name collides with a reserved tier name, or if an alias
  * entry has an empty provider or model string, or if an alias key lacks the `@` prefix.
  */
@@ -151,7 +156,7 @@ export function buildAiProfile(
     }
   }
 
-  for (const layer of [options.globalTiers, options.repoTiers]) {
+  for (const layer of [options.globalTiers, options.repoTiers, options.userTiers]) {
     if (!layer) continue;
     for (const [name, entry] of Object.entries(layer)) {
       assertValidTierName(name);
@@ -160,7 +165,7 @@ export function buildAiProfile(
     }
   }
 
-  for (const layer of [options.globalAliases, options.repoAliases]) {
+  for (const layer of [options.globalAliases, options.repoAliases, options.userAliases]) {
     if (!layer) continue;
     for (const [name, entry] of Object.entries(layer)) {
       assertNotReserved(name);
@@ -174,6 +179,26 @@ export function buildAiProfile(
 }
 
 /**
+ * Resolve a tier ref against the profile, reporting WHICH tier in the
+ * fallback chain actually matched — `matchedTier !== requested` means the
+ * requested tier is unset and a sibling preset was used. Callers that want
+ * to surface a non-blocking "tier fell back" nudge use this; everything
+ * else keeps the simpler {@link resolveModelSpec}.
+ */
+export function resolveTierWithFallback(
+  profile: ResolvedAiProfile,
+  tier: TierName
+): { preset: ModelAliasPreset; matchedTier: TierName } {
+  for (const candidate of TIER_FALLBACK[tier]) {
+    const preset = profile.aliases[candidate];
+    if (preset) return { preset, matchedTier: candidate };
+  }
+  throw new Error(
+    `Tier '${tier}' has no configured preset and no built-in default for provider '${profile.defaultProvider}'. Configure 'tiers.small/medium/large' in .archon/config.yaml.`
+  );
+}
+
+/**
  * Classify a `model:` reference and resolve it against the profile.
  *   - tier ('small' | 'medium' | 'large') → preset via fallback chain
  *   - '@<name>' → preset from profile.aliases, or throw if unknown
@@ -181,13 +206,7 @@ export function buildAiProfile(
  */
 export function resolveModelSpec(profile: ResolvedAiProfile, ref: string): ResolvedModelSpec {
   if (isTierName(ref)) {
-    for (const tier of TIER_FALLBACK[ref]) {
-      const preset = profile.aliases[tier];
-      if (preset) return preset;
-    }
-    throw new Error(
-      `Tier '${ref}' has no configured preset and no built-in default for provider '${profile.defaultProvider}'. Configure 'tiers.small/medium/large' in .archon/config.yaml.`
-    );
+    return resolveTierWithFallback(profile, ref).preset;
   }
 
   if (ref.startsWith('@')) {

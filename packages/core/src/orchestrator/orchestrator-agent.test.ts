@@ -238,6 +238,16 @@ mock.module('../db/user-provider-key-store', () => ({
   getDecryptedProviderCredential: mock(() => Promise.resolve(null)),
 }));
 
+// Per-user AI prefs (Phase 3). Default: empty — config-only behavior.
+const mockGetUserAiPrefsDb = mock(async (_userId: string) => ({}) as Record<string, unknown>);
+mock.module('../db/user-ai-prefs-store', () => ({
+  getUserAiPrefs: mockGetUserAiPrefsDb,
+  setUserTiers: mock(() => Promise.resolve()),
+  setUserAliases: mock(() => Promise.resolve()),
+  setUserDefaultProvider: mock(() => Promise.resolve()),
+  clearUserAiPrefs: mock(() => Promise.resolve()),
+}));
+
 // ─── Import module under test (AFTER all mocks) ───────────────────────────────
 
 import { parseOrchestratorCommands, handleMessage } from './orchestrator-agent';
@@ -2777,5 +2787,156 @@ describe('chat turn telemetry', () => {
         durationMs: expect.any(Number),
       })
     );
+  });
+});
+
+// ─── Per-user AI prefs + tier-fallback nudge (Phase 3) ──────────────────────
+
+describe('per-user AI prefs in chat + tier-fallback nudge', () => {
+  beforeEach(() => {
+    mockGetUserAiPrefsDb.mockClear();
+    mockGetUserAiPrefsDb.mockImplementation(async () => ({}));
+    mockSendQuery.mockClear();
+    mockParseCommand.mockReturnValue(null);
+  });
+
+  test("a user's tier override wins for the chat model", async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ user_id: 'user-9' } as Partial<Conversation>))
+    );
+    mockGetUserAiPrefsDb.mockImplementation(async () => ({
+      tiers: { large: { provider: 'codex', model: 'gpt-5.5' } },
+    }));
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'Hello');
+
+    expect(mockGetUserAiPrefsDb).toHaveBeenCalledWith('user-9');
+    const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
+    expect(requestOptions.model).toBe('gpt-5.5');
+  });
+
+  test('prefs are not consulted when the conversation has no user_id', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeConversation()));
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'Hello');
+
+    expect(mockGetUserAiPrefsDb).not.toHaveBeenCalled();
+  });
+
+  test('structurally invalid stored prefs degrade to config-only (chat still answers)', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ user_id: 'user-9' } as Partial<Conversation>))
+    );
+    // An alias without the '@' prefix makes buildAiProfile throw.
+    mockGetUserAiPrefsDb.mockImplementation(async () => ({
+      aliases: { fast: { provider: 'claude', model: 'haiku' } },
+    }));
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'Hello');
+
+    // Degraded to the config profile — the chat turn still reached the AI.
+    expect(mockSendQuery).toHaveBeenCalled();
+  });
+
+  test('a prefs DB failure falls back to config-only (chat still answers)', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ user_id: 'user-9' } as Partial<Conversation>))
+    );
+    mockGetUserAiPrefsDb.mockImplementation(async () => {
+      throw new Error('db down');
+    });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'Hello');
+
+    expect(mockSendQuery).toHaveBeenCalled();
+  });
+
+  test("nudges once per conversation (not per message) when tier 'large' falls back", async () => {
+    // 'unknownprov' has no built-in tier defaults; config sets only `small`,
+    // so the chat's 'large' request resolves via the fallback chain. A distinct
+    // conversation id keeps the module-level dedup Set isolated from other tests.
+    const nudgeConversation = makeConversation({
+      id: 'conv-nudge-dedup',
+      platform_conversation_id: 'conv-nudge-dedup',
+      ai_assistant_type: 'unknownprov',
+    });
+    mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(nudgeConversation));
+    mockLoadConfig.mockImplementation(() =>
+      Promise.resolve({
+        assistants: { claude: {}, codex: {} },
+        envVars: {},
+        tiers: { small: { provider: 'claude', model: 'haiku' } },
+      })
+    );
+
+    try {
+      const platform = makePlatform();
+      await handleMessage(platform, 'conv-nudge-dedup', 'Hello');
+      await handleMessage(platform, 'conv-nudge-dedup', 'Hello again');
+
+      const sendCalls = (platform.sendMessage as ReturnType<typeof mock>).mock.calls as unknown as [
+        string,
+        string,
+      ][];
+      const nudges = sendCalls.filter(c => c[1].includes("tier 'large' isn't configured"));
+      // Review C1: exactly ONE nudge across BOTH messages — per-conversation dedup.
+      expect(nudges.length).toBe(1);
+      expect(nudges[0]?.[1]).toContain("'small' preset");
+      // Non-blocking: both chat turns still went to the AI.
+      expect(mockSendQuery.mock.calls.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(null as unknown));
+      mockLoadConfig.mockImplementation(() =>
+        Promise.resolve({ assistants: { claude: {}, codex: {} }, envVars: {} })
+      );
+    }
+  });
+
+  test("no nudge when the user's own 'large' tier satisfies the request", async () => {
+    // Provider with no built-in defaults + only the USER's large tier set:
+    // exact match through the per-user layer → no fallback, no nudge.
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(
+        makeConversation({
+          id: 'conv-user-large',
+          platform_conversation_id: 'conv-user-large',
+          ai_assistant_type: 'unknownprov',
+          user_id: 'user-9',
+        } as Partial<Conversation>)
+      )
+    );
+    mockGetUserAiPrefsDb.mockImplementation(async () => ({
+      tiers: { large: { provider: 'claude', model: 'opus' } },
+    }));
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-user-large', 'Hello');
+
+    const sendCalls = (platform.sendMessage as ReturnType<typeof mock>).mock.calls as unknown as [
+      string,
+      string,
+    ][];
+    expect(sendCalls.some(c => c[1].includes("isn't configured"))).toBe(false);
+    const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
+    expect(requestOptions.model).toBe('opus');
+  });
+
+  test('no nudge when the large tier resolves exactly', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ ai_assistant_type: 'claude' }))
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'Hello');
+
+    const sendCalls = (platform.sendMessage as ReturnType<typeof mock>).mock.calls as unknown as [
+      string,
+      string,
+    ][];
+    expect(sendCalls.some(c => c[1].includes("isn't configured"))).toBe(false);
   });
 });

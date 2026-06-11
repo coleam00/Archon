@@ -26,6 +26,7 @@ import {
   PI_AUTH_PATH_ENV,
 } from '../credentials/delivery';
 import { listDecryptedUserProviderCredentials } from '../db/user-provider-key-store';
+import { getUserAiPrefs, type UserAiPrefs } from '../db/user-ai-prefs-store';
 
 // Compile-time assertion: MergedConfig must remain a structural subtype of WorkflowConfig.
 // If MergedConfig drifts from WorkflowConfig, this line becomes a type error.
@@ -181,6 +182,17 @@ export function createWorkflowDeps(): WorkflowDeps {
       } catch (err) {
         getLog().warn({ err: err as Error, userId }, 'workflow_deps.provider_creds_resolve_failed');
         return { env: {}, files: [] };
+      }
+    },
+    // Per-user AI prefs (Phase 3): personal tiers/aliases/default-provider,
+    // folded into buildAiProfile as the highest-precedence layer. Non-throwing —
+    // a DB failure means the run falls back to install-wide config.
+    getUserAiPrefs: async (userId: string): Promise<UserAiPrefs> => {
+      try {
+        return await getUserAiPrefs(userId);
+      } catch (err) {
+        getLog().warn({ err: err as Error, userId }, 'workflow_deps.user_ai_prefs_resolve_failed');
+        return {};
       }
     },
   };

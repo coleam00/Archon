@@ -291,3 +291,77 @@ describe('PATCH /api/config/tiers', () => {
     expect(res.status).toBe(200);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Tests: PATCH /api/config/aliases (ungated — solo-OK; mirrors /tiers)
+// ---------------------------------------------------------------------------
+
+describe('PATCH /api/config/aliases', () => {
+  let app: Hono;
+
+  beforeEach(() => {
+    app = makeApp();
+    mockUpdateGlobalConfig.mockClear();
+  });
+
+  function patch(aliases: unknown): Promise<Response> {
+    return app.request('/api/config/aliases', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ aliases }),
+    });
+  }
+
+  test('sets an alias → 200 and calls updateGlobalConfig with a clean entry', async () => {
+    const res = await patch({ '@fast': { provider: 'claude', model: 'haiku', effort: 'low' } });
+    expect(res.status).toBe(200);
+    expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(1);
+    const arg = mockUpdateGlobalConfig.mock.calls[0]?.[0] as { aliases: Record<string, unknown> };
+    expect(arg.aliases['@fast']).toEqual({ provider: 'claude', model: 'haiku', effort: 'low' });
+  });
+
+  test('reserved tier name as alias → 400, no write', async () => {
+    const res = await patch({ large: { provider: 'claude', model: 'opus' } });
+    expect(res.status).toBe(400);
+    expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
+  });
+
+  test('alias without @ prefix → 400, no write', async () => {
+    const res = await patch({ fast: { provider: 'claude', model: 'haiku' } });
+    expect(res.status).toBe(400);
+    expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
+  });
+
+  test('unknown provider → 400, no write', async () => {
+    const res = await patch({ '@fast': { provider: 'definitely-not-a-provider', model: 'x' } });
+    expect(res.status).toBe(400);
+    expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
+  });
+
+  test('invalid effort for the provider → 400, no write', async () => {
+    const res = await patch({ '@fast': { provider: 'claude', model: 'haiku', effort: 'ultra' } });
+    expect(res.status).toBe(400);
+    expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
+  });
+
+  test('null alias value unsets (passes null through)', async () => {
+    const res = await patch({ '@fast': null });
+    expect(res.status).toBe(200);
+    const arg = mockUpdateGlobalConfig.mock.calls[0]?.[0] as { aliases: Record<string, unknown> };
+    expect(arg.aliases['@fast']).toBeNull();
+  });
+
+  test('drops `thinking` from the written entry (no UI surface)', async () => {
+    const res = await patch({
+      '@deep': { provider: 'claude', model: 'opus', thinking: { level: 'high' } },
+    });
+    expect(res.status).toBe(200);
+    const arg = mockUpdateGlobalConfig.mock.calls[0]?.[0] as { aliases: Record<string, unknown> };
+    expect(arg.aliases['@deep']).toEqual({ provider: 'claude', model: 'opus' });
+  });
+
+  test('is ungated — succeeds with no auth identity', async () => {
+    const res = await patch({ '@fast': { provider: 'claude', model: 'haiku' } });
+    expect(res.status).toBe(200);
+  });
+});

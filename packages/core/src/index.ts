@@ -112,6 +112,7 @@ export {
   toSafeConfig,
   updateGlobalConfig,
   type TiersPatch,
+  type AliasesPatch,
 } from './config/config-loader';
 
 // =============================================================================
@@ -226,6 +227,16 @@ export {
   listDecryptedUserProviderCredentials,
   type SaveUserProviderKeyParams,
 } from './db/user-provider-key-store';
+export {
+  getUserAiPrefs,
+  setUserTiers,
+  setUserAliases,
+  setUserDefaultProvider,
+  clearUserAiPrefs,
+  type UserAiPrefs,
+  type UserTiersPatch,
+  type UserAliasesPatch,
+} from './db/user-ai-prefs-store';
 
 // Path validation
 export { isPathWithinWorkspace, validateAndResolvePath } from './utils/path-validation';

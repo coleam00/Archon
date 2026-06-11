@@ -625,11 +625,18 @@ Without it, the per-user surface is inert (the settings panel hides, the routes 
 
 ### Connecting from the console
 
-The console **AI Settings** page (Settings in the web UI) has three sections:
+The console **AI Settings** page (Settings in the web UI) has four sections:
 
-- **Model Tiers** — map the `small` / `medium` / `large` tiers to a provider + model (and optional effort). This writes the install's `tiers:` config and works on **any** install, even without `TOKEN_ENCRYPTION_KEY` (it's non-secret config).
+- **Model Tiers** — map the `small` / `medium` / `large` tiers to a provider + model (and optional effort). This writes the install's `tiers:` config and works on **any** install, even without `TOKEN_ENCRYPTION_KEY` (it's non-secret config). Pi tier models show a cost/reasoning/context hint from Pi's model catalog.
+- **Model Aliases** — define `@custom` refs (e.g. `@fast`) usable in workflow `model:` fields, with the same scope toggle.
 - **Provider Auth** — connect a provider for *your* user. Every provider accepts an **API key**; **`claude`** and **`copilot`** additionally offer **subscription login** (an OAuth flow). `codex` is **API-key-only** — its subscription path is gated pending [#1924](https://github.com/coleam00/Archon/issues/1924).
-- **Defaults** — the default assistant and per-provider model defaults.
+- **Defaults** — the default assistant and per-provider model defaults, plus a "Your default" (just-me) assistant select.
+
+### Per-user model preferences ("Just me")
+
+When you're logged in (a web identity resolves), the **Model Tiers** and **Model Aliases** panels show a **"This install / Just me"** scope toggle, and **Defaults** gains a "Your default" select. The "Just me" scope stores your personal tiers/aliases/default assistant in Archon's database and applies them as the **highest-precedence** layer — your overrides win over the install config for runs and chats *you* start, without changing anyone else's. This needs an identity but **no** `TOKEN_ENCRYPTION_KEY` (model names aren't secrets); on a solo install without web auth the toggle simply doesn't appear and everything behaves exactly as before.
+
+If a chat asks for the `large` tier and only a different tier is configured, Archon uses the nearest preset and posts a one-line notice telling you which tier answered and where to set `large`.
 
 ### Connecting from the CLI
 
@@ -641,9 +648,14 @@ echo "$MY_KEY" | archon ai key set openrouter   # API key for any provider
 archon ai login claude                           # subscription (claude or copilot)
 archon ai list                                   # what's connected
 
-# Model tiers + default (ungated config — solo-OK)
+# Model tiers + aliases + default (ungated config — solo-OK)
 archon ai tier set large claude opus
+archon ai alias set @fast claude haiku
 archon ai default claude
+
+# The same, but just for YOU (per-user prefs; identity from ARCHON_USER_ID/$USER)
+archon ai tier set large claude opus --scope user
+archon ai default codex --scope user
 ```
 
 The model-tier presets are the same ones you can hand-write in `~/.archon/config.yaml`; see [Configuration](/reference/configuration/) for the YAML format.

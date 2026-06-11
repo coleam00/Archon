@@ -56,6 +56,12 @@ import type { RawAliasEntry, TierName } from '@archon/workflows/model-validation
 export type TiersPatch = Partial<Record<TierName, RawAliasEntry | null>>;
 
 /**
+ * A per-key patch for the `aliases:` config — `null` explicitly UNSETS an
+ * alias. Consumed by `updateGlobalConfig({ aliases })`.
+ */
+export type AliasesPatch = Record<string, RawAliasEntry | null>;
+
+/**
  * Pure read of registered provider IDs. Registration is guaranteed by
  * `loadConfig()`'s bootstrap call before any consumer can observe the
  * registry, so this helper must NOT trigger side-effecting registration
@@ -633,7 +639,10 @@ export function logConfig(config: MergedConfig): void {
  * Invalidates the cached config so next loadConfig() picks up changes.
  */
 export async function updateGlobalConfig(
-  updates: Partial<Omit<GlobalConfig, 'tiers'>> & { tiers?: TiersPatch }
+  updates: Partial<Omit<GlobalConfig, 'tiers' | 'aliases'>> & {
+    tiers?: TiersPatch;
+    aliases?: AliasesPatch;
+  }
 ): Promise<void> {
   const configPath = getArchonConfigPath();
 
@@ -678,6 +687,19 @@ export async function updateGlobalConfig(
         }
       }
       merged.tiers = Object.keys(nextTiers).length > 0 ? nextTiers : undefined;
+    }
+
+    if (updates.aliases) {
+      // Same per-key merge semantics as tiers: `null` unsets, a value sets,
+      // an absent key preserves the existing alias. Rebuilt fresh (no dynamic delete).
+      const nextAliases: RawAliasesConfig = {};
+      for (const [name, entry] of Object.entries(current.aliases ?? {})) {
+        if (updates.aliases[name] === undefined) nextAliases[name] = entry;
+      }
+      for (const [name, entry] of Object.entries(updates.aliases)) {
+        if (entry !== null && entry !== undefined) nextAliases[name] = entry;
+      }
+      merged.aliases = Object.keys(nextAliases).length > 0 ? nextAliases : undefined;
     }
 
     // Serialize to YAML and write
@@ -752,5 +774,6 @@ export function toSafeConfig(config: MergedConfig): SafeConfig {
     },
     tiers: config.tiers,
     tierDefaults: tierDefaultsFor(config.assistant),
+    aliases: config.aliases,
   };
 }

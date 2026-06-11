@@ -293,13 +293,19 @@ bun run cli ai login <provider>            # connect a SUBSCRIPTION (claude/copi
 bun run cli ai list                        # list connected providers (no secrets)
 bun run cli ai logout <provider>           # disconnect a provider
 
-# Model tiers + default assistant (install-wide config; works on solo installs — these
-# write ~/.archon/config.yaml and need NO TOKEN_ENCRYPTION_KEY). Full parity with the
-# console "AI Settings" → Model Tiers / Defaults sections.
-bun run cli ai tier set <tier> <provider> <model> [--effort <e>]   # set small/medium/large → provider/model
-bun run cli ai tier list [--json]          # show configured tiers vs built-in defaults
-bun run cli ai tier unset <tier>           # reset a tier to its built-in default
-bun run cli ai default <provider>          # set the default assistant
+# Model tiers + aliases + default assistant (install-wide config; works on solo
+# installs — these write ~/.archon/config.yaml and need NO TOKEN_ENCRYPTION_KEY).
+# Full parity with the console "AI Settings" → Model Tiers / Aliases / Defaults
+# sections. `--scope user` (Phase 3) instead writes the caller's per-user prefs
+# row (remote_agent_user_ai_prefs, identity from ARCHON_USER_ID/$USER) — the
+# highest-precedence resolver layer for that user's runs and chats.
+bun run cli ai tier set <tier> <provider> <model> [--effort <e>] [--scope user|install]
+bun run cli ai tier list [--json]          # show configured tiers (install + yours) vs built-in defaults
+bun run cli ai tier unset <tier> [--scope user|install]
+bun run cli ai alias set <@name> <provider> <model> [--effort <e>] [--scope user|install]
+bun run cli ai alias list [--json]         # show @custom aliases (install + yours)
+bun run cli ai alias unset <@name> [--scope user|install]
+bun run cli ai default <provider> [--scope user|install]   # set the default assistant
 
 # Inspect or rotate the anonymous telemetry install UUID
 bun run cli telemetry status
@@ -445,7 +451,7 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 
 ### Database Schema
 
-**17 Tables (all prefixed with `remote_agent_`):**
+**18 Tables (all prefixed with `remote_agent_`):**
 1. **`codebases`** - Repository metadata and commands (JSONB)
 2. **`conversations`** - Track platform conversations with titles and soft-delete support; nullable `user_id` records first creator
 3. **`sessions`** - Track AI SDK sessions with resume capability
@@ -459,7 +465,8 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 11. **`workflow_node_sessions`** - Per-node provider session IDs persisted across workflow re-runs (opt-in via `persist_session`); keyed by `(workflow_name, node_id, scope_key, provider)`; `scope_key` is typically the conversation UUID
 12. **`user_github_tokens`** - Per-user GitHub device-flow tokens encrypted at rest (AES-256-GCM); one row per Archon user (`UNIQUE(user_id)`), cascades on user deletion; numeric `github_user_id` anchors the commit no-reply email
 13. **`user_provider_keys`** - Per-user AI-provider credentials encrypted at rest (AES-256-GCM, same `TOKEN_ENCRYPTION_KEY`); one row per `(user_id, provider)` (`UNIQUE(user_id, provider)`), cascades on user deletion; `kind` is `api_key` or `oauth`; resolved + injected into the user's runs/chat env at execution time. Gated on `TOKEN_ENCRYPTION_KEY`
-14–17. **`remote_agent_auth_user` / `remote_agent_auth_session` / `remote_agent_auth_account` / `remote_agent_auth_verification`** - Better Auth tables for opt-in web login (**PostgreSQL only**; always created on Postgres via the idempotent schema apply, but populated only when web auth is enabled — `DATABASE_URL` + `BETTER_AUTH_SECRET`). Owned and shaped by Better Auth (text ids, camelCase columns); Archon never queries them directly — a session maps to the canonical `users` row via `user_identities('web', <betterAuthUserId>)`
+14. **`user_ai_prefs`** - Per-user AI preferences (Phase 3): personal model `tiers`/`aliases` (JSON-as-TEXT) + `default_provider`. NON-encrypted (model names aren't secrets — mirrors `codebase_env_vars`, not the provider-key store); one row per user (`UNIQUE(user_id)`), cascades on user deletion. Folded into `buildAiProfile` as the highest-precedence layer at the userId-aware seams (workflow executor + chat orchestrator); needs a web/CLI identity but NO `TOKEN_ENCRYPTION_KEY`
+15–18. **`remote_agent_auth_user` / `remote_agent_auth_session` / `remote_agent_auth_account` / `remote_agent_auth_verification`** - Better Auth tables for opt-in web login (**PostgreSQL only**; always created on Postgres via the idempotent schema apply, but populated only when web auth is enabled — `DATABASE_URL` + `BETTER_AUTH_SECRET`). Owned and shaped by Better Auth (text ids, camelCase columns); Archon never queries them directly — a session maps to the canonical `users` row via `user_identities('web', <betterAuthUserId>)`
 
 **Key Patterns:**
 - Conversation ID format: Platform-specific (`thread_ts`, `chat_id`, `user/repo#123`)
@@ -898,7 +905,7 @@ Pattern: Use `classifyIsolationError()` (from `@archon/isolation`) to map git er
 - `GET /api/providers` - List registered AI providers; returns `{ providers: [{ id, displayName, capabilities, builtIn }] }`. `capabilities.nativeTools` is `true` for providers that accept in-process native tools (Claude, Pi) — Archon's `manage_run` tool is auto-injected into project-scoped chat for those providers only. `capabilities.structuredOutput` is a tiered union `'enforced' | 'best-effort' | false` (not a boolean): `'enforced'` = SDK/backend grammar-constrained (Claude/Codex/OpenCode), `'best-effort'` = prompt-augmentation + validate (Pi/Copilot), `false` = unsupported.
 
 **Web Auth (opt-in Better Auth; Postgres + `BETTER_AUTH_SECRET`):**
-- Better Auth mounts email/password login at `/api/auth/*` (sign-up/sign-in/sign-out/get-session). Mounted only when enabled; the catch-all explicitly falls through (`isArchonOwnedAuthPath` in `auth/config.ts`, guard-tested) for Archon-owned `/api/auth/status` + `/api/auth/github*` + `/api/auth/providers*` paths so they aren't shadowed (a missing exemption 404s the route — see #1918).
+- Better Auth mounts email/password login at `/api/auth/*` (sign-up/sign-in/sign-out/get-session). Mounted only when enabled; the catch-all explicitly falls through (`isArchonOwnedAuthPath` in `auth/config.ts`, guard-tested) for Archon-owned `/api/auth/status` + `/api/auth/github*` + `/api/auth/providers*` + `/api/auth/me/ai-prefs*` paths so they aren't shadowed (a missing exemption 404s the route — see #1918).
 - `GET /api/auth/status` - Web auth availability + signup posture (no auth required); returns `{ enabled: boolean, signup: 'allowlist' | 'open' | 'disabled' }`. Drives the Web UI login gate.
 - The per-request identity seam is `resolveAuthContext(c): { userId, role } | undefined` (in `routes/api.ts`): Better Auth session first, then the `X-Archon-User` header, then undefined. `resolveWebUserId` delegates to it; `requireWebUser` is the session-aware strict variant (401 missing / 503 backend). `role` rides the canonical user row (default `admin`).
 - **Server-side API gate** (`isApiGateEnabled`): when web auth is enabled, every `/api/*` request must resolve to an identity or gets **401** — except `/api/auth/*` (login surface) and `/api/health*` (healthcheck must stay reachable). `/webhooks/*` and `/internal/*` are outside `/api/*` and untouched. On by default; `ARCHON_WEB_AUTH_REQUIRED=false` keeps login-UI-only. This is what lets Better Auth replace the Caddy `forward_auth` sidecar as the real access boundary.
@@ -919,10 +926,17 @@ Pattern: Use `classifyIsolationError()` (from `@archon/isolation`) to map git er
 - `POST /api/auth/providers/:provider/oauth/poll` - Poll the login session; body `{ sessionId, code? }` (`code` = pasted manual-code); returns `{ status: 'pending'|'connected'|'error', detail? }`. Session bound to the caller's userId.
 - Gated on `isPerUserProviderKeysEnabled()` (`TOKEN_ENCRYPTION_KEY`); credentials (API keys + subscriptions) injected into runs/chat env at execution time. Subscription tokens refresh-on-read and re-save on rotation. Subscriptions are delivered to native Claude/Codex (env / `CODEX_HOME/auth.json`) AND to Pi (per-run `auth.json` via `ARCHON_PI_AUTH_PATH`).
 
+**Per-User AI Prefs (Phase 3; `requireWebUser` — identity only, NO `TOKEN_ENCRYPTION_KEY`):**
+- `GET /api/auth/me/ai-prefs` - The current user's stored prefs (raw per-user layer, not merged with config); returns `{ tiers?, aliases?, defaultProvider? }`. 401 without identity — the console hides "Just me" on failure.
+- `PATCH /api/auth/me/ai-prefs/tiers` / `…/aliases` / `…/default` - Per-key merge writes (`null` unsets); validate provider via `isRegisteredProvider`, effort via `isEffortValidForProvider`, alias names (`@` prefix, not a reserved tier keyword). All return the updated prefs.
+- Stored in `remote_agent_user_ai_prefs` (non-encrypted); folded into `buildAiProfile` as the **highest-precedence** layer (global < repo < user) at the userId-aware seams — workflow executor (`deps.getUserAiPrefs`) and chat orchestrator (`conversation.user_id`). The per-user `defaultProvider` rebases tier defaults and the chat assistant. No identity → byte-for-byte config-only behavior (solo unchanged). A chat request for tier `large` that resolves via the fallback chain emits a one-line non-blocking nudge (`orchestrator.tier_fallback_nudge`).
+
 **Config (System; ungated — works on solo installs, NOT `requireWebUser`):**
-- `GET /api/config` - Read-only safe config; returns `{ config, database }`. `config` includes `tiers` (configured small/medium/large presets) and `tierDefaults` (built-in presets for the default provider, computed via `buildAiProfile` — lets the UI show what an unset tier resolves to).
+- `GET /api/config` - Read-only safe config; returns `{ config, database }`. `config` includes `tiers` (configured small/medium/large presets), `tierDefaults` (built-in presets for the default provider, computed via `buildAiProfile` — lets the UI show what an unset tier resolves to), and `aliases` (configured `@custom` aliases, merged repo > global).
 - `PATCH /api/config/assistants` - Update default assistant + per-provider model defaults.
 - `PATCH /api/config/tiers` - Update model-tier presets; body `{ tiers: { small?, medium?, large? } }` where each tier is `{ provider, model, effort? }` or `null` (unset). Per-key merge; validates each `provider` via `isRegisteredProvider`. Writes `~/.archon/config.yaml`. Drives the console "AI Settings → Model Tiers" panel + `archon ai tier` CLI.
+- `PATCH /api/config/aliases` - Update `@custom` model aliases; body `{ aliases: Record<'@name', entry | null> }`. Same per-key merge + validation as `/tiers`, plus alias-name checks (`@` prefix, not reserved). Drives the console "Model Aliases" panel + `archon ai alias` CLI.
+- `GET /api/providers/pi/models` - Pi's model catalog (`{ models: [{ ref, provider, id, name, reasoning, cost, contextWindow }] }`) for the tier picker's cost/reasoning hint. Best-effort: returns `{ models: [] }` on any catalog failure — never blocks tier/alias saves.
 
 **System:**
 - `GET /api/health` - Health check with adapter/system status

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react';
 import * as skill from '../skills';
-import type { SafeConfig, ProviderInfo, AssistantConfigForm } from '../skills';
+import type { SafeConfig, ProviderInfo, AssistantConfigForm, UserAiPrefs } from '../skills';
 import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
 import { SettingsSection } from './SettingsSection';
@@ -80,6 +80,40 @@ function seedForm(config: SafeConfig, providers: ProviderInfo[]): AssistantConfi
 export function AssistantConfigPanel(): ReactElement {
   const { data: config, error: configError } = useEntity(K.config, skill.getConfig);
   const { data: providers, error: providersError } = useEntity(K.providers, skill.listProviders);
+  // Per-user default assistant (Phase 3): a "Just me" select that overrides the
+  // install default for runs/chats this user starts. Hidden when the per-user
+  // prefs read fails (no web identity — solo-PAT or logged out).
+  const { data: userPrefs, error: userPrefsError } = useEntity<UserAiPrefs>(
+    K.userAiPrefs,
+    skill.getUserAiPrefs
+  );
+  const userScopeAvailable = userPrefsError === undefined;
+  const [savingUserDefault, setSavingUserDefault] = useState(false);
+  const [userDefaultError, setUserDefaultError] = useState<string | null>(null);
+
+  // Guard async setState after unmount (mirrors ModelTiersPanel/AliasesPanel).
+  const cancelledRef = useRef(false);
+  useEffect(() => {
+    cancelledRef.current = false;
+    return (): void => {
+      cancelledRef.current = true;
+    };
+  }, []);
+
+  const onUserDefaultChange = async (value: string): Promise<void> => {
+    setSavingUserDefault(true);
+    setUserDefaultError(null);
+    try {
+      await skill.updateUserDefaultProvider(value === '' ? null : value);
+      if (cancelledRef.current) return;
+      invalidate(K.userAiPrefs);
+    } catch (e: unknown) {
+      if (cancelledRef.current) return;
+      setUserDefaultError(e instanceof Error ? e.message : 'Failed to save your default.');
+    } finally {
+      if (!cancelledRef.current) setSavingUserDefault(false);
+    }
+  };
 
   const [form, setForm] = useState<AssistantConfigForm | null>(null);
   const baselineRef = useRef('');
@@ -153,6 +187,35 @@ export function AssistantConfigPanel(): ReactElement {
           </select>
         </SelectShell>
       </label>
+
+      {userScopeAvailable && userPrefs !== undefined ? (
+        <label className="mb-5 flex items-center gap-[18px]">
+          <span className="w-[150px] shrink-0 text-[13.5px] font-semibold text-text-secondary">
+            Your default{' '}
+            <span className="font-mono text-[10px] font-bold uppercase tracking-[0.06em] text-text-tertiary">
+              just me
+            </span>
+          </span>
+          <SelectShell className="flex-1">
+            <select
+              value={userPrefs.defaultProvider ?? ''}
+              onChange={e => void onUserDefaultChange(e.target.value)}
+              disabled={savingUserDefault}
+              className={`${SELECT_CLASS} py-[11px] pl-3.5 text-[13.5px]`}
+            >
+              <option value="">Inherit (this install)</option>
+              {providers.map(p => (
+                <option key={p.id} value={p.id}>
+                  {p.displayName}
+                </option>
+              ))}
+            </select>
+          </SelectShell>
+          {userDefaultError !== null ? (
+            <span className="font-mono text-[11px] text-error">{userDefaultError}</span>
+          ) : null}
+        </label>
+      ) : null}
 
       <div className="flex flex-col gap-[11px]">
         {providers.map(p => {

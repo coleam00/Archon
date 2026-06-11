@@ -353,8 +353,10 @@ Query parameters include status filters, date ranges, and pagination. Used by th
 | GET | `/api/config` | Get read-only configuration (safe subset) |
 | PATCH | `/api/config/assistants` | Update the default assistant and per-provider model defaults |
 | PATCH | `/api/config/tiers` | Update model-tier presets (`small`/`medium`/`large`) |
+| PATCH | `/api/config/aliases` | Update `@custom` model aliases (per-key merge; `null` unsets) |
+| GET | `/api/providers/pi/models` | Pi's model catalog (cost/reasoning metadata; best-effort, `[]` on failure) |
 
-`GET /api/config` returns the safe config subset, now including the configured `tiers` and the built-in `tierDefaults` for the current default provider (what an unset tier resolves to).
+`GET /api/config` returns the safe config subset, now including the configured `tiers`, the built-in `tierDefaults` for the current default provider (what an unset tier resolves to), and the configured `aliases`.
 
 These config routes are **ungated** -- they write non-secret model config to `~/.archon/config.yaml` and work on solo installs (no `TOKEN_ENCRYPTION_KEY` required). Contrast with the [AI Provider Credentials](#ai-provider-credentials) routes below, which require an identity.
 
@@ -376,7 +378,35 @@ curl -X PATCH http://localhost:3090/api/config/assistants \
 curl -X PATCH http://localhost:3090/api/config/tiers \
   -H "Content-Type: application/json" \
   -d '{"tiers": {"large": {"provider": "claude", "model": "opus"}}}'
+
+# Set a @custom alias (a `null` value unsets it)
+curl -X PATCH http://localhost:3090/api/config/aliases \
+  -H "Content-Type: application/json" \
+  -d '{"aliases": {"@fast": {"provider": "claude", "model": "haiku"}}}'
 ```
+
+---
+
+## Per-User AI Preferences
+
+Each user can override the install-wide model config with **personal** tiers, `@custom` aliases, and a default assistant — the highest-precedence resolver layer, applied to runs and chats *they* start. These routes require a resolved web identity (`X-Archon-User` header or a Better Auth session) but **no** `TOKEN_ENCRYPTION_KEY` — model names aren't secrets. Without an identity they return `401`, and model resolution stays config-only (solo installs are unchanged).
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/auth/me/ai-prefs` | The current user's stored prefs (raw layer, not merged) |
+| PATCH | `/api/auth/me/ai-prefs/tiers` | Update personal tier presets (per-key merge; `null` unsets) |
+| PATCH | `/api/auth/me/ai-prefs/aliases` | Update personal `@custom` aliases (per-key merge; `null` unsets) |
+| PATCH | `/api/auth/me/ai-prefs/default` | Set (or clear with `null`) the personal default assistant |
+
+```bash
+# Point YOUR `large` tier at opus without touching the install config
+curl -X PATCH http://localhost:3090/api/auth/me/ai-prefs/tiers \
+  -H "X-Archon-User: your-user-id" \
+  -H "Content-Type: application/json" \
+  -d '{"tiers": {"large": {"provider": "claude", "model": "opus"}}}'
+```
+
+All writes validate the provider (registered), effort (provider vocabulary), and alias names (`@` prefix, not a reserved tier keyword), and return the updated prefs. The console exposes the same scopes as the **"This install / Just me"** toggle on AI Settings; the CLI as `archon ai … --scope user`.
 
 ---
 

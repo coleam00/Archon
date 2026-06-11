@@ -6,12 +6,16 @@
  *   archon ai logout <provider>    Disconnect a provider
  *   archon ai login <provider>     Connect a subscription (claude/copilot) via OAuth
  *   archon ai tier set|list|unset  Edit small/medium/large tier presets (config, not a credential)
+ *   archon ai alias set|list|unset Edit @custom model aliases (config, not a credential)
  *   archon ai default <provider>   Set the default assistant (config, not a credential)
  *
  * The CREDENTIAL commands (key/list/logout/login) are gated on
  * TOKEN_ENCRYPTION_KEY (isPerUserProviderKeysEnabled); solo installs keep reading
- * provider keys from the environment unchanged. The CONFIG commands (tier/default)
- * write ~/.archon/config.yaml and are ungated — they work on every install.
+ * provider keys from the environment unchanged. The CONFIG commands
+ * (tier/alias/default) write ~/.archon/config.yaml and are ungated — they work on
+ * every install. With `--scope user` they instead write the caller's per-user
+ * prefs row (Phase 3) resolved via the CLI identity — needs no encryption key
+ * (prefs aren't secrets) but does need a resolvable ARCHON_USER_ID/$USER.
  *
  * The API key is NEVER taken from argv (it would leak into shell history and the
  * process list). It is read from a masked `@clack/prompts` password input on a
@@ -34,13 +38,19 @@ import {
   pollOAuth,
   loadConfig,
   updateGlobalConfig,
+  getUserAiPrefs,
+  setUserTiers,
+  setUserAliases,
+  setUserDefaultProvider,
   type TiersPatch,
+  type UserAiPrefs,
 } from '@archon/core';
 import { isRegisteredProvider, getProviderInfoList } from '@archon/providers';
 import {
   TIER_NAMES,
   buildAiProfile,
   isEffortValidForProvider,
+  isTierName as isTierNameStrict,
   validEffortsForProvider,
 } from '@archon/workflows/model-validation';
 import type { TierName, RawAliasEntry } from '@archon/workflows/model-validation';
@@ -77,7 +87,13 @@ async function resolveUser(): Promise<{ id: string } | null> {
     console.error('Could not determine your CLI identity. Set ARCHON_USER_ID (or $USER).');
     return null;
   }
-  return await userDb.findOrCreateUserByPlatformIdentity('cli', cliId, cliId);
+  try {
+    return await userDb.findOrCreateUserByPlatformIdentity('cli', cliId, cliId);
+  } catch (err) {
+    getLog().error({ err: err as Error }, 'cli.ai_resolve_user_failed');
+    console.error(`✗ Could not resolve your Archon user: ${(err as Error).message}`);
+    return null;
+  }
 }
 
 /**
@@ -273,13 +289,27 @@ async function pollLoginLoop(
 }
 
 // ---------------------------------------------------------------------------
-// Model tiers + default assistant — install-wide config (writes config.yaml).
-// These are NOT credentials, so there's NO `ensureEnabled`/`resolveUser` gate;
-// they work on every install (solo too), mirroring the ungated config routes.
+// Model tiers + aliases + default assistant — install-wide config (writes
+// config.yaml) OR per-user DB prefs via `--scope user` (Phase 3).
+// These are NOT credentials, so there's NO `ensureEnabled` gate; the install
+// scope works on every install (solo too), mirroring the ungated config routes.
+// The user scope resolves the CLI identity (like `ai key set`) but needs no
+// TOKEN_ENCRYPTION_KEY — prefs aren't secrets.
 // ---------------------------------------------------------------------------
 
+/** Where a tier/alias/default write should land. */
+export type PrefsScope = 'install' | 'user';
+
 function isTierName(v: string | undefined): v is TierName {
-  return v !== undefined && (TIER_NAMES as readonly string[]).includes(v);
+  return v !== undefined && isTierNameStrict(v);
+}
+
+/** Parse a `--scope` value; prints usage and returns null when invalid. */
+export function parsePrefsScope(scope: string | undefined): PrefsScope | null {
+  if (scope === undefined || scope === 'install') return 'install';
+  if (scope === 'user') return 'user';
+  console.error(`Invalid --scope '${scope}'. Use 'install' (default) or 'user'.`);
+  return null;
 }
 
 function registeredProvidersList(): string {
@@ -288,98 +318,170 @@ function registeredProvidersList(): string {
     .join(', ');
 }
 
-/** `archon ai tier set <small|medium|large> <provider> <model> [--effort <e>]` */
-export async function aiTierSetCommand(
-  tier: string | undefined,
-  provider: string | undefined,
-  model: string | undefined,
-  effort: string | undefined
-): Promise<number> {
-  if (!isTierName(tier) || !provider || !model) {
-    console.error(
-      'Usage: archon ai tier set <small|medium|large> <provider> <model> [--effort <effort>]'
-    );
-    return 1;
-  }
+/** Validate provider + effort for a tier/alias entry; prints and returns false on error. */
+function validateEntryInputs(provider: string, effort: string | undefined): boolean {
   if (!isRegisteredProvider(provider)) {
     console.error(`Unknown provider '${provider}'. Available: ${registeredProvidersList()}.`);
-    return 1;
+    return false;
   }
   if (effort !== undefined && !isEffortValidForProvider(provider, effort)) {
     console.error(
       `Invalid effort '${effort}' for provider '${provider}'. ` +
         `Valid: ${validEffortsForProvider(provider)?.join(', ') ?? '(this provider has no effort setting)'}.`
     );
+    return false;
+  }
+  return true;
+}
+
+/** `archon ai tier set <small|medium|large> <provider> <model> [--effort <e>] [--scope user|install]` */
+export async function aiTierSetCommand(
+  tier: string | undefined,
+  provider: string | undefined,
+  model: string | undefined,
+  effort: string | undefined,
+  scope?: string
+): Promise<number> {
+  const resolvedScope = parsePrefsScope(scope);
+  if (resolvedScope === null) return 1;
+  if (!isTierName(tier) || !provider || !model) {
+    console.error(
+      'Usage: archon ai tier set <small|medium|large> <provider> <model> [--effort <effort>] [--scope user|install]'
+    );
     return 1;
   }
+  if (!validateEntryInputs(provider, effort)) return 1;
   const entry: RawAliasEntry = { provider, model, ...(effort ? { effort } : {}) };
-  const tiers: TiersPatch = {};
-  tiers[tier] = entry;
   try {
-    await updateGlobalConfig({ tiers });
+    if (resolvedScope === 'user') {
+      const user = await resolveUser();
+      if (!user) return 1;
+      await setUserTiers(user.id, { [tier]: entry });
+    } else {
+      const tiers: TiersPatch = {};
+      tiers[tier] = entry;
+      await updateGlobalConfig({ tiers });
+    }
+    const scopeLabel = resolvedScope === 'user' ? ' (just you)' : '';
     console.log(
-      `✓ Set tier '${tier}' → ${provider}/${model}${effort ? ` (effort: ${effort})` : ''}.`
+      `✓ Set tier '${tier}' → ${provider}/${model}${effort ? ` (effort: ${effort})` : ''}${scopeLabel}.`
     );
     return 0;
   } catch (err) {
-    getLog().error({ err: err as Error, tier }, 'cli.ai_tier_set_failed');
+    getLog().error({ err: err as Error, tier, scope: resolvedScope }, 'cli.ai_tier_set_failed');
     console.error(`✗ ${(err as Error).message}`);
     return 1;
   }
 }
 
-/** `archon ai tier unset <small|medium|large>` — reset a tier to its built-in default. */
-export async function aiTierUnsetCommand(tier: string | undefined): Promise<number> {
+/** `archon ai tier unset <small|medium|large> [--scope user|install]` */
+export async function aiTierUnsetCommand(
+  tier: string | undefined,
+  scope?: string
+): Promise<number> {
+  const resolvedScope = parsePrefsScope(scope);
+  if (resolvedScope === null) return 1;
   if (!isTierName(tier)) {
-    console.error('Usage: archon ai tier unset <small|medium|large>');
+    console.error('Usage: archon ai tier unset <small|medium|large> [--scope user|install]');
     return 1;
   }
-  const tiers: TiersPatch = {};
-  tiers[tier] = null;
   try {
-    await updateGlobalConfig({ tiers });
-    console.log(`✓ Unset tier '${tier}' (falls back to the built-in default).`);
+    if (resolvedScope === 'user') {
+      const user = await resolveUser();
+      if (!user) return 1;
+      await setUserTiers(user.id, { [tier]: null });
+      console.log(`✓ Unset your tier '${tier}' (falls back to the install config).`);
+    } else {
+      const tiers: TiersPatch = {};
+      tiers[tier] = null;
+      await updateGlobalConfig({ tiers });
+      console.log(`✓ Unset tier '${tier}' (falls back to the built-in default).`);
+    }
     return 0;
   } catch (err) {
-    getLog().error({ err: err as Error, tier }, 'cli.ai_tier_unset_failed');
+    getLog().error({ err: err as Error, tier, scope: resolvedScope }, 'cli.ai_tier_unset_failed');
     console.error(`✗ ${(err as Error).message}`);
     return 1;
   }
 }
 
-/** `archon ai tier list [--json]` — show configured tiers vs built-in defaults. */
+/**
+ * Best-effort read of the CLI user's prefs for listings — `{}` when no CLI
+ * identity resolves or the DB read fails (solo installs just see config).
+ */
+async function readUserPrefsBestEffort(): Promise<UserAiPrefs> {
+  const cliId = resolveCliUserId();
+  if (!cliId) return {};
+  try {
+    const user = await userDb.findOrCreateUserByPlatformIdentity('cli', cliId, cliId);
+    return await getUserAiPrefs(user.id);
+  } catch (err) {
+    getLog().warn({ err: err as Error }, 'cli.ai_user_prefs_read_failed');
+    // Visible notice so the listing isn't mistaken for "you have no overrides".
+    console.error('(could not read your per-user prefs — showing install config only)');
+    return {};
+  }
+}
+
+/** `archon ai tier list [--json]` — show install + per-user scopes and the effective value. */
 export async function aiTierListCommand(json?: boolean): Promise<number> {
   try {
     const config = await loadConfig();
     const configured = config.tiers ?? {};
+    const userPrefs = await readUserPrefsBestEffort();
+    const userTiers = userPrefs.tiers ?? {};
+    const effectiveAssistant = userPrefs.defaultProvider ?? config.assistant;
     // No options → just the built-in tier-defaults for the default provider.
     // Degrade like the route's `tierDefaultsFor` (buildAiProfile ~never throws
     // with no aliases, but a defaults lookup must not fail the whole listing).
     let defaults: Record<string, RawAliasEntry> = {};
     try {
-      defaults = buildAiProfile(config.assistant).aliases;
+      defaults = buildAiProfile(effectiveAssistant).aliases;
     } catch (err) {
       getLog().warn({ err: err as Error }, 'cli.ai_tier_list_defaults_failed');
     }
+    const toEntry = (
+      set: RawAliasEntry | undefined
+    ): { provider: string; model: string; effort?: string } | null =>
+      set ? { provider: set.provider, model: set.model, effort: set.effort } : null;
     const rows = TIER_NAMES.map(tier => {
-      const set = configured[tier];
-      const def = defaults[tier];
+      const installEntry = toEntry(configured[tier]);
+      const userEntry = toEntry(userTiers[tier]);
+      const def = toEntry(defaults[tier]);
       return {
         tier,
-        configured: set ? { provider: set.provider, model: set.model, effort: set.effort } : null,
-        default: def ? { provider: def.provider, model: def.model, effort: def.effort } : null,
+        configured: installEntry,
+        user: userEntry,
+        default: def,
+        effective: userEntry ?? installEntry ?? def,
       };
     });
 
     if (json) {
-      console.log(JSON.stringify({ defaultAssistant: config.assistant, tiers: rows }, null, 2));
+      console.log(
+        JSON.stringify(
+          {
+            defaultAssistant: config.assistant,
+            userDefaultAssistant: userPrefs.defaultProvider ?? null,
+            tiers: rows,
+          },
+          null,
+          2
+        )
+      );
       return 0;
     }
 
-    console.log(`Model tiers (default assistant: ${config.assistant}):`);
+    const assistantSuffix = userPrefs.defaultProvider
+      ? `${config.assistant}; yours: ${userPrefs.defaultProvider}`
+      : config.assistant;
+    console.log(`Model tiers (default assistant: ${assistantSuffix}):`);
     for (const r of rows) {
       const label = r.tier.padEnd(7);
-      if (r.configured) {
+      if (r.user) {
+        const eff = r.user.effort ? ` (effort: ${r.user.effort})` : '';
+        console.log(`  ${label} ${r.user.provider}/${r.user.model}${eff} [just you]`);
+      } else if (r.configured) {
         const eff = r.configured.effort ? ` (effort: ${r.configured.effort})` : '';
         console.log(`  ${label} ${r.configured.provider}/${r.configured.model}${eff}`);
       } else if (r.default) {
@@ -396,10 +498,142 @@ export async function aiTierListCommand(json?: boolean): Promise<number> {
   }
 }
 
-/** `archon ai default <provider>` — set the default assistant (`defaultAssistant`). */
-export async function aiDefaultCommand(provider: string | undefined): Promise<number> {
+/** Validate a custom alias name: must start with '@' and not shadow a tier keyword. */
+function validateAliasName(name: string): boolean {
+  if ((TIER_NAMES as readonly string[]).includes(name)) {
+    console.error(
+      `Alias name '${name}' is reserved (small/medium/large are tier keywords). Use a different name.`
+    );
+    return false;
+  }
+  if (!name.startsWith('@')) {
+    console.error(`Alias name '${name}' must start with '@' (e.g. '@${name}').`);
+    return false;
+  }
+  return true;
+}
+
+/** `archon ai alias set <@name> <provider> <model> [--effort <e>] [--scope user|install]` */
+export async function aiAliasSetCommand(
+  name: string | undefined,
+  provider: string | undefined,
+  model: string | undefined,
+  effort: string | undefined,
+  scope?: string
+): Promise<number> {
+  const resolvedScope = parsePrefsScope(scope);
+  if (resolvedScope === null) return 1;
+  if (!name || !provider || !model) {
+    console.error(
+      'Usage: archon ai alias set <@name> <provider> <model> [--effort <effort>] [--scope user|install]'
+    );
+    return 1;
+  }
+  if (!validateAliasName(name)) return 1;
+  if (!validateEntryInputs(provider, effort)) return 1;
+  const entry: RawAliasEntry = { provider, model, ...(effort ? { effort } : {}) };
+  try {
+    if (resolvedScope === 'user') {
+      const user = await resolveUser();
+      if (!user) return 1;
+      await setUserAliases(user.id, { [name]: entry });
+    } else {
+      await updateGlobalConfig({ aliases: { [name]: entry } });
+    }
+    const scopeLabel = resolvedScope === 'user' ? ' (just you)' : '';
+    console.log(
+      `✓ Set alias '${name}' → ${provider}/${model}${effort ? ` (effort: ${effort})` : ''}${scopeLabel}.`
+    );
+    return 0;
+  } catch (err) {
+    getLog().error({ err: err as Error, name, scope: resolvedScope }, 'cli.ai_alias_set_failed');
+    console.error(`✗ ${(err as Error).message}`);
+    return 1;
+  }
+}
+
+/** `archon ai alias unset <@name> [--scope user|install]` */
+export async function aiAliasUnsetCommand(
+  name: string | undefined,
+  scope?: string
+): Promise<number> {
+  const resolvedScope = parsePrefsScope(scope);
+  if (resolvedScope === null) return 1;
+  if (!name) {
+    console.error('Usage: archon ai alias unset <@name> [--scope user|install]');
+    return 1;
+  }
+  try {
+    if (resolvedScope === 'user') {
+      const user = await resolveUser();
+      if (!user) return 1;
+      await setUserAliases(user.id, { [name]: null });
+      console.log(`✓ Unset your alias '${name}'.`);
+    } else {
+      await updateGlobalConfig({ aliases: { [name]: null } });
+      console.log(`✓ Unset alias '${name}'.`);
+    }
+    return 0;
+  } catch (err) {
+    getLog().error({ err: err as Error, name, scope: resolvedScope }, 'cli.ai_alias_unset_failed');
+    console.error(`✗ ${(err as Error).message}`);
+    return 1;
+  }
+}
+
+/** `archon ai alias list [--json]` — install (merged repo>global) + per-user aliases. */
+export async function aiAliasListCommand(json?: boolean): Promise<number> {
+  try {
+    const config = await loadConfig();
+    const installAliases = config.aliases ?? {};
+    const userPrefs = await readUserPrefsBestEffort();
+    const userAliases = userPrefs.aliases ?? {};
+    const names = [
+      ...new Set([...Object.keys(installAliases), ...Object.keys(userAliases)]),
+    ].sort();
+    const rows = names.map(name => ({
+      name,
+      install: installAliases[name] ?? null,
+      user: userAliases[name] ?? null,
+      effective: userAliases[name] ?? installAliases[name] ?? null,
+    }));
+
+    if (json) {
+      console.log(JSON.stringify({ aliases: rows }, null, 2));
+      return 0;
+    }
+
+    if (rows.length === 0) {
+      console.log(
+        'No @custom aliases configured. Add one with: archon ai alias set <@name> <provider> <model>'
+      );
+      return 0;
+    }
+    console.log('Model aliases:');
+    for (const r of rows) {
+      const e = r.effective;
+      if (!e) continue;
+      const eff = e.effort ? ` (effort: ${e.effort})` : '';
+      const scopeLabel = r.user ? ' [just you]' : '';
+      console.log(`  ${r.name.padEnd(12)} ${e.provider}/${e.model}${eff}${scopeLabel}`);
+    }
+    return 0;
+  } catch (err) {
+    getLog().error({ err: err as Error }, 'cli.ai_alias_list_failed');
+    console.error(`✗ Failed to list aliases: ${(err as Error).message}`);
+    return 1;
+  }
+}
+
+/** `archon ai default <provider> [--scope user|install]` — set the default assistant. */
+export async function aiDefaultCommand(
+  provider: string | undefined,
+  scope?: string
+): Promise<number> {
+  const resolvedScope = parsePrefsScope(scope);
+  if (resolvedScope === null) return 1;
   if (!provider) {
-    console.error('Usage: archon ai default <provider>');
+    console.error('Usage: archon ai default <provider> [--scope user|install]');
     console.error(`Providers: ${registeredProvidersList()}`);
     return 1;
   }
@@ -408,11 +642,18 @@ export async function aiDefaultCommand(provider: string | undefined): Promise<nu
     return 1;
   }
   try {
-    await updateGlobalConfig({ defaultAssistant: provider });
-    console.log(`✓ Default assistant set to '${provider}'.`);
+    if (resolvedScope === 'user') {
+      const user = await resolveUser();
+      if (!user) return 1;
+      await setUserDefaultProvider(user.id, provider);
+      console.log(`✓ Your default assistant set to '${provider}' (just you).`);
+    } else {
+      await updateGlobalConfig({ defaultAssistant: provider });
+      console.log(`✓ Default assistant set to '${provider}'.`);
+    }
     return 0;
   } catch (err) {
-    getLog().error({ err: err as Error, provider }, 'cli.ai_default_failed');
+    getLog().error({ err: err as Error, provider, scope: resolvedScope }, 'cli.ai_default_failed');
     console.error(`✗ ${(err as Error).message}`);
     return 1;
   }

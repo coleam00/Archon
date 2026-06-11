@@ -63,8 +63,17 @@ export const safeConfigSchema = z
     // fall back to `tierDefaults` (built-in presets for the default provider).
     tiers: tiersConfigSchema.optional(),
     tierDefaults: tiersConfigSchema.optional(),
+    // Configured @custom model aliases (merged repo > global). Not secrets.
+    aliases: z.record(z.string(), tierEntrySchema).optional(),
   })
   .openapi('SafeConfig');
+
+/** PATCH /api/config/aliases body — per-key merge; `null` unsets that alias. */
+export const updateAliasesBodySchema = z
+  .object({
+    aliases: z.record(z.string(), tierEntrySchema.nullable()),
+  })
+  .openapi('UpdateAliasesBody');
 
 /** Body for PATCH /api/config/assistants — all fields optional (partial update). */
 export const updateAssistantConfigBodySchema = z

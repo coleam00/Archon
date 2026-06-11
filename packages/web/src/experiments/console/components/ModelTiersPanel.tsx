@@ -1,10 +1,20 @@
 import { useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react';
 import * as skill from '../skills';
-import type { ProviderInfo, SafeConfigTiers, TiersForm, TierName, TierRowForm } from '../skills';
+import type {
+  PiModelInfo,
+  ProviderInfo,
+  SafeConfigTiers,
+  TiersForm,
+  TierName,
+  TierRowForm,
+  SettingsScope,
+  UserAiPrefs,
+} from '../skills';
 import { TIER_ORDER } from '../skills';
 import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
 import { SettingsSection } from './SettingsSection';
+import { ScopeToggle } from './ScopeToggle';
 
 // Field styling mirrors AssistantConfigPanel (design v5 .set-input / .set-select):
 // mono fields on the page surface with a magenta focus ring.
@@ -45,26 +55,37 @@ function SelectShell({
   );
 }
 
-/** Seed the editable tier form from the saved config (configured tiers only). */
-function seedTiers(cfg: SafeConfigTiers): TiersForm {
+/** Seed the editable tier form from a tier map (configured tiers only). */
+function seedTiers(tiers: SafeConfigTiers['tiers']): TiersForm {
   const row = (t: TierName): TierRowForm => {
-    const set = cfg.tiers?.[t];
+    const set = tiers?.[t];
     return { provider: set?.provider ?? '', model: set?.model ?? '', effort: set?.effort ?? '' };
   };
   return { small: row('small'), medium: row('medium'), large: row('large') };
 }
 
-/** "provider/model" hint for an unset tier's built-in default. */
-function defaultHint(cfg: SafeConfigTiers, t: TierName): string {
+/**
+ * "provider/model" hint for an unset tier. Install scope falls back to the
+ * built-in default; user scope falls back to the install tier first (that's
+ * what an unset per-user tier resolves to), then the built-in default.
+ */
+function defaultHint(cfg: SafeConfigTiers, t: TierName, scope: SettingsScope): string {
+  if (scope === 'user') {
+    const installSet = cfg.tiers?.[t];
+    if (installSet) return `${installSet.provider}/${installSet.model}`;
+  }
   const d = cfg.tierDefaults?.[t];
   return d ? `${d.provider}/${d.model}` : 'built-in default';
 }
 
 /**
- * Editor for the install-wide model tiers (small/medium/large → provider/model).
- * Writes PATCH /api/config/tiers → ~/.archon/config.yaml. Ungated, so it works on
- * solo installs too (unlike Provider Auth). A row left on "Default" is sent as an
- * unset and falls back to the built-in preset for the default provider.
+ * Editor for the model tiers (small/medium/large → provider/model) in two
+ * scopes: "This install" writes PATCH /api/config/tiers → ~/.archon/config.yaml
+ * (ungated; works on solo installs), "Just me" writes the caller's per-user
+ * prefs row via PATCH /api/auth/me/ai-prefs/tiers (highest precedence at run
+ * time). The "Just me" scope is hidden when GET /api/auth/me/ai-prefs 401s (no
+ * web identity — solo-PAT or logged out), mirroring ProviderConnectionsPanel.
+ * A row left on "Default" is sent as an unset and falls back to the next layer.
  */
 export function ModelTiersPanel(): ReactElement {
   const { data: config, error: configError } = useEntity(K.config, skill.getConfig);
@@ -72,15 +93,31 @@ export function ModelTiersPanel(): ReactElement {
     K.providers,
     skill.listProviders
   );
+  const { data: userPrefs, error: userPrefsError } = useEntity<UserAiPrefs>(
+    K.userAiPrefs,
+    skill.getUserAiPrefs
+  );
+  // Pi catalog for the cost/reasoning hint. Best-effort: the server returns []
+  // when the catalog can't load, and a fetch error simply means no hint.
+  const { data: piModels } = useEntity<PiModelInfo[]>(K.piModels, skill.listPiModels);
+
+  // No web identity (401) or any other prefs read failure → install scope only,
+  // so the editor never mislabels install values as "Just me".
+  const userScopeAvailable = userPrefsError === undefined;
+  const [scope, setScope] = useState<SettingsScope>('install');
 
   const [form, setForm] = useState<TiersForm | null>(null);
   const baselineRef = useRef('');
   useEffect(() => {
     if (config === undefined) return;
-    const seeded = seedTiers(config.config as SafeConfigTiers);
+    if (scope === 'user' && userPrefs === undefined) return;
+    const seeded =
+      scope === 'user'
+        ? seedTiers(userPrefs?.tiers)
+        : seedTiers((config.config as SafeConfigTiers).tiers);
     setForm(seeded);
     baselineRef.current = JSON.stringify(seeded);
-  }, [config]);
+  }, [config, userPrefs, scope]);
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -117,13 +154,28 @@ export function ModelTiersPanel(): ReactElement {
     setForm(f => (f === null ? f : { ...f, [t]: { ...f[t], ...partial } }));
   };
 
+  /** Cost/reasoning hint for a Pi tier model, or null when not applicable. */
+  const piHint = (row: TierRowForm): string | null => {
+    if (row.provider !== 'pi' || piModels === undefined) return null;
+    const m = piModels.find(x => x.ref === row.model.trim());
+    if (!m) return null;
+    const ctx = `${String(Math.round(m.contextWindow / 1000))}k ctx`;
+    return `$${String(m.cost.input)}/M in · $${String(m.cost.output)}/M out${m.reasoning ? ' · reasoning' : ''} · ${ctx}`;
+  };
+
   const onSave = async (): Promise<void> => {
     setSaving(true);
     setSaveError(null);
     try {
-      await skill.updateTiers(skill.buildTiersUpdate(form));
-      if (cancelledRef.current) return;
-      invalidate(K.config); // refetch re-seeds the form and clears `dirty`
+      if (scope === 'user') {
+        await skill.updateUserTiers(skill.buildTiersUpdate(form));
+        if (cancelledRef.current) return;
+        invalidate(K.userAiPrefs); // refetch re-seeds the form and clears `dirty`
+      } else {
+        await skill.updateTiers(skill.buildTiersUpdate(form));
+        if (cancelledRef.current) return;
+        invalidate(K.config); // refetch re-seeds the form and clears `dirty`
+      }
     } catch (e: unknown) {
       if (cancelledRef.current) return;
       setSaveError(e instanceof Error ? e.message : 'Failed to save tiers.');
@@ -134,16 +186,21 @@ export function ModelTiersPanel(): ReactElement {
 
   return (
     <SettingsSection title="Model Tiers">
-      <p className="mb-4 text-[12.5px] leading-relaxed text-text-tertiary">
-        Bundled workflows resolve <code className="font-mono">small</code> /{' '}
-        <code className="font-mono">medium</code> / <code className="font-mono">large</code> to
-        these models. Leave a row on “Default” to use the built-in preset.
-      </p>
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <p className="min-w-[260px] flex-1 text-[12.5px] leading-relaxed text-text-tertiary">
+          Bundled workflows resolve <code className="font-mono">small</code> /{' '}
+          <code className="font-mono">medium</code> / <code className="font-mono">large</code> to
+          these models. Leave a row on “Default” to use the next layer’s preset.
+          {scope === 'user' ? ' Your rows override the install rows for runs you start.' : ''}
+        </p>
+        {userScopeAvailable ? <ScopeToggle scope={scope} onChange={setScope} /> : null}
+      </div>
 
       <div className="flex flex-col gap-[11px]">
         {TIER_ORDER.map(tier => {
           const row = form[tier];
           const unset = row.provider === '';
+          const hint = piHint(row);
           return (
             <div
               key={tier}
@@ -160,7 +217,7 @@ export function ModelTiersPanel(): ReactElement {
                   }}
                   className={SELECT_CLASS}
                 >
-                  <option value="">Default ({defaultHint(cfg, tier)})</option>
+                  <option value="">Default ({defaultHint(cfg, tier, scope)})</option>
                   {providers.map(p => (
                     <option key={p.id} value={p.id}>
                       {p.displayName}
@@ -175,7 +232,7 @@ export function ModelTiersPanel(): ReactElement {
                 }}
                 disabled={unset}
                 placeholder={
-                  unset ? `default: ${defaultHint(cfg, tier)}` : 'model (e.g. opus, gpt-5.5)'
+                  unset ? `default: ${defaultHint(cfg, tier, scope)}` : 'model (e.g. opus, gpt-5.5)'
                 }
                 className={`${INPUT_CLASS} min-w-[160px] flex-1 ${unset ? 'opacity-50' : ''}`}
               />
@@ -188,10 +245,20 @@ export function ModelTiersPanel(): ReactElement {
                 placeholder="effort"
                 className={`${INPUT_CLASS} w-[110px] shrink-0 ${unset ? 'opacity-50' : ''}`}
               />
+              {hint !== null ? (
+                <p className="w-full font-mono text-[10.5px] text-text-tertiary">{hint}</p>
+              ) : null}
             </div>
           );
         })}
       </div>
+
+      {TIER_ORDER.filter(t => form[t].provider !== '').length === 1 ? (
+        <p className="mt-3 font-mono text-[11px] text-text-tertiary">
+          Heads up: only one tier is set{scope === 'user' ? ' for you' : ''} — runs asking for the
+          other tiers fall back to the nearest configured preset.
+        </p>
+      ) : null}
 
       <div className="mt-[18px] flex items-center justify-end gap-3">
         {saveError !== null ? (

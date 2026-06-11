@@ -4,6 +4,7 @@ import {
   buildAiProfile,
   isLiteralSpec,
   resolveModelSpec,
+  resolveTierWithFallback,
   TIER_NAMES,
   type ModelAliasPreset,
   type ResolvedAiProfile,
@@ -181,6 +182,115 @@ describe('buildAiProfile — alias layering', () => {
       type: 'enabled',
       budgetTokens: 10000,
     });
+  });
+});
+
+describe('buildAiProfile — per-user layer (highest precedence)', () => {
+  test('user tier overrides repo tier with same key', () => {
+    const profile = buildAiProfile('claude', {
+      repoTiers: {
+        large: { provider: 'claude', model: 'opus' },
+      },
+      userTiers: {
+        large: { provider: 'codex', model: 'gpt-5.5', effort: 'high' },
+      },
+    });
+    expect(profile.aliases.large).toEqual({
+      provider: 'codex',
+      model: 'gpt-5.5',
+      effort: 'high',
+    });
+  });
+
+  test('user alias overrides repo alias with same name', () => {
+    const profile = buildAiProfile('claude', {
+      repoAliases: {
+        '@cheap': { provider: 'claude', model: 'haiku' },
+      },
+      userAliases: {
+        '@cheap': { provider: 'pi', model: 'openrouter/qwen/qwen3-coder' },
+      },
+    });
+    expect(profile.aliases['@cheap']).toEqual({
+      provider: 'pi',
+      model: 'openrouter/qwen/qwen3-coder',
+    });
+  });
+
+  test('repo tier not overridden by user survives alongside user tier', () => {
+    const profile = buildAiProfile('claude', {
+      repoTiers: {
+        small: { provider: 'claude', model: 'haiku' },
+      },
+      userTiers: {
+        large: { provider: 'claude', model: 'opus' },
+      },
+    });
+    expect(profile.aliases.small).toEqual({ provider: 'claude', model: 'haiku' });
+    expect(profile.aliases.large).toEqual({ provider: 'claude', model: 'opus' });
+  });
+
+  test('per-user default provider rebases tier defaults', () => {
+    // The caller passes the user's defaultProvider as the first arg — the
+    // built-in tier defaults must follow it, not the install config's provider.
+    const profile = buildAiProfile('codex', {});
+    expect(profile.defaultProvider).toBe('codex');
+    expect(profile.aliases.medium?.provider).toBe('codex');
+  });
+
+  test('absent user layer behaves exactly as before', () => {
+    const withEmpty = buildAiProfile('claude', {
+      repoTiers: { medium: { provider: 'claude', model: 'sonnet' } },
+      userTiers: undefined,
+      userAliases: undefined,
+    });
+    const without = buildAiProfile('claude', {
+      repoTiers: { medium: { provider: 'claude', model: 'sonnet' } },
+    });
+    expect(withEmpty).toEqual(without);
+  });
+
+  test('user tiers validate tier names like other layers', () => {
+    expect(() =>
+      buildAiProfile('claude', {
+        userTiers: { tiny: { provider: 'claude', model: 'haiku' } } as never,
+      })
+    ).toThrow(/Tier name 'tiny' is invalid/);
+  });
+
+  test('resolveTierWithFallback reports the matched tier (exact match)', () => {
+    const profile = buildAiProfile('claude', {});
+    const { matchedTier, preset } = resolveTierWithFallback(profile, 'large');
+    expect(matchedTier).toBe('large');
+    expect(preset.provider).toBe('claude');
+  });
+
+  test('resolveTierWithFallback reports the matched tier (fallback)', () => {
+    // 'newprovider' has no built-in defaults, so only the configured tier exists.
+    const profile = buildAiProfile('newprovider', {
+      userTiers: { small: { provider: 'pi', model: 'minimax-m3' } },
+    });
+    const { matchedTier, preset } = resolveTierWithFallback(profile, 'large');
+    expect(matchedTier).toBe('small');
+    expect(preset).toEqual({ provider: 'pi', model: 'minimax-m3' });
+  });
+
+  test('resolveTierWithFallback throws when no tier preset exists at all', () => {
+    const profile = buildAiProfile('newprovider', {});
+    expect(() => resolveTierWithFallback(profile, 'large')).toThrow(/no configured preset/);
+  });
+
+  test('user aliases validate @ prefix and reserved names', () => {
+    expect(() =>
+      buildAiProfile('claude', {
+        userAliases: { large: { provider: 'claude', model: 'opus' } },
+      })
+    ).toThrow(/reserved/);
+    expect(() =>
+      buildAiProfile('claude', {
+        userAliases: { fast: { provider: 'claude', model: 'haiku' } },
+      })
+    ).toThrow(/must start with '@'/);
   });
 });
 

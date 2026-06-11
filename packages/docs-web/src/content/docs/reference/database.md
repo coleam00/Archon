@@ -66,7 +66,7 @@ psql $DATABASE_URL -c "\dt"
 
 ## Schema Overview
 
-The database has 16 tables, all prefixed with `remote_agent_`:
+The database has 18 tables, all prefixed with `remote_agent_`:
 
 1. **`remote_agent_codebases`** - Repository metadata
    - Commands stored as JSONB: `{command_name: {path, description}}`
@@ -133,7 +133,16 @@ The database has 16 tables, all prefixed with `remote_agent_`:
     - Encrypted at rest (AES-256-GCM); one row per Archon user (`UNIQUE(user_id)`), cascades on user deletion
     - Numeric `github_user_id` anchors the commit no-reply email
 
-13–16. **`remote_agent_auth_user` / `remote_agent_auth_session` / `remote_agent_auth_account` / `remote_agent_auth_verification`** - Better Auth tables for opt-in web login
+13. **`remote_agent_user_provider_keys`** - Per-user AI-provider credentials (API key or OAuth subscription blob)
+    - Encrypted at rest (AES-256-GCM, same `TOKEN_ENCRYPTION_KEY`); one row per `(user_id, provider)`, cascades on user deletion
+    - `kind` records `api_key` vs `oauth`; resolved + injected into the user's runs/chat env at execution time
+
+14. **`remote_agent_user_ai_prefs`** - Per-user AI preferences (personal model tiers, `@custom` aliases, default assistant)
+    - NON-encrypted (model names aren't secrets); one row per user (`UNIQUE(user_id)`), cascades on user deletion
+    - `tiers` / `aliases` are JSON-as-TEXT; folded into model resolution as the highest-precedence layer for runs/chats that user starts
+    - Editable via the console "Just me" scope, `archon ai … --scope user`, or `/api/auth/me/ai-prefs*`
+
+15–18. **`remote_agent_auth_user` / `remote_agent_auth_session` / `remote_agent_auth_account` / `remote_agent_auth_verification`** - Better Auth tables for opt-in web login
     - **PostgreSQL only.** Always created on Postgres via the idempotent schema apply, but populated only when web auth is enabled (`DATABASE_URL` + `BETTER_AUTH_SECRET`)
     - Owned and shaped by Better Auth (text ids, camelCase columns); Archon never queries them directly — a session maps to the canonical `users` row via `user_identities('web', <betterAuthUserId>)`
 

@@ -28,7 +28,10 @@ import {
 } from './executor-shared';
 import { resolveGithubTokenOverrides } from './utils/github-token-policy';
 import { buildAiProfile, isLiteralSpec, resolveModelSpec } from './model-validation';
-import type { ModelAliasPreset } from './model-validation';
+import type { ModelAliasPreset, ResolvedAiProfile } from './model-validation';
+
+/** The per-user prefs layer as returned by `WorkflowDeps.getUserAiPrefs`. */
+type UserAiPrefsLayer = Awaited<ReturnType<NonNullable<WorkflowDeps['getUserAiPrefs']>>>;
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -421,10 +424,47 @@ export async function executeWorkflow(
 
   const docsDir = config.docsPath ?? 'docs/';
 
-  const aiProfile = buildAiProfile(config.assistant, {
-    repoTiers: config.tiers,
-    repoAliases: config.aliases,
-  });
+  // Per-user AI prefs (Phase 3): the originating user's tiers/aliases/default-
+  // assistant override install config (highest precedence). The dep contract is
+  // non-throwing, but a third-party deps impl might throw anyway — guard so a
+  // prefs failure can never abort a run; `{}` keeps config-only behavior.
+  let userAiPrefs: UserAiPrefsLayer = {};
+  if (userId && deps.getUserAiPrefs) {
+    try {
+      userAiPrefs = await deps.getUserAiPrefs(userId);
+    } catch (error) {
+      getLog().warn({ err: error as Error, userId }, 'workflow.user_ai_prefs_resolve_failed');
+    }
+  }
+  if (userAiPrefs.tiers || userAiPrefs.aliases || userAiPrefs.defaultProvider) {
+    getLog().debug(
+      {
+        userId,
+        tierKeys: Object.keys(userAiPrefs.tiers ?? {}),
+        aliasKeys: Object.keys(userAiPrefs.aliases ?? {}),
+        defaultProvider: userAiPrefs.defaultProvider,
+      },
+      'workflow.user_ai_prefs_applied'
+    );
+  }
+  let aiProfile: ResolvedAiProfile;
+  try {
+    aiProfile = buildAiProfile(userAiPrefs.defaultProvider ?? config.assistant, {
+      repoTiers: config.tiers,
+      repoAliases: config.aliases,
+      userTiers: userAiPrefs.tiers,
+      userAliases: userAiPrefs.aliases,
+    });
+  } catch (error) {
+    // Structurally invalid STORED prefs (corrupt DB row) must not kill the run
+    // before its record exists — degrade to config-only. A broken config layer
+    // still fails fast: the rebuild below rethrows the same error.
+    getLog().error({ err: error as Error, userId }, 'workflow.user_ai_prefs_profile_invalid');
+    aiProfile = buildAiProfile(config.assistant, {
+      repoTiers: config.tiers,
+      repoAliases: config.aliases,
+    });
+  }
 
   // Resolve provider and model once (used by all nodes). Literal model strings
   // keep the existing workflow/provider/config chain; tier and @alias refs use

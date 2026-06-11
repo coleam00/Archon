@@ -48,6 +48,7 @@ import { getDecryptedAccessToken } from '../db/user-github-token-store';
 import { isPerUserProviderKeysEnabled } from '../credentials/config';
 import { deliverCredential } from '../credentials/delivery';
 import { listDecryptedUserProviderCredentials } from '../db/user-provider-key-store';
+import { getUserAiPrefs, type UserAiPrefs } from '../db/user-ai-prefs-store';
 import { createWorkflowDeps } from '../workflows/store-adapter';
 import { loadConfig } from '../config/config-loader';
 import type { MergedConfig } from '../config/config-types';
@@ -68,9 +69,12 @@ import type { ApprovalContext } from '@archon/workflows/schemas/workflow-run';
 import {
   buildAiProfile,
   isLiteralSpec,
+  isTierName,
   resolveModelSpec,
+  resolveTierWithFallback,
   routePresetEffort,
   type ModelAliasPreset,
+  type TierName,
 } from '@archon/workflows/model-validation';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -117,6 +121,8 @@ interface ResolvedModelRequest {
   provider: string;
   model: string | undefined;
   preset?: ModelAliasPreset;
+  /** When `modelRef` was a tier: which tier in the fallback chain matched. */
+  matchedTier?: TierName;
 }
 
 function resolveModelRequest(
@@ -124,6 +130,10 @@ function resolveModelRequest(
   modelRef: string,
   fallbackProvider: string
 ): ResolvedModelRequest {
+  if (isTierName(modelRef)) {
+    const { preset, matchedTier } = resolveTierWithFallback(aiProfile, modelRef);
+    return { provider: preset.provider, model: preset.model, preset, matchedTier };
+  }
   const spec = resolveModelSpec(aiProfile, modelRef);
   if (isLiteralSpec(spec)) {
     return { provider: fallbackProvider, model: spec.literal };
@@ -275,6 +285,30 @@ async function resolveUserProviderEnvForChat(userId: string): Promise<Record<str
     return env;
   } catch (err) {
     getLog().warn({ err: err as Error, userId }, 'orchestrator.user_provider_env_resolve_failed');
+    return {};
+  }
+}
+
+/**
+ * Conversations (DB ids) already nudged about a tier fallback. Process-lifetime
+ * memory is intentional and sufficient: the nudge is a discovery aid, not
+ * state — a server restart re-nudging once per conversation is acceptable.
+ */
+const tierFallbackNudgedConversations = new Set<string>();
+
+/**
+ * Resolve the user's personal AI prefs (tiers / aliases / default assistant)
+ * for a direct-chat turn (Phase 3). Folded into `buildAiProfile` as the
+ * highest-precedence layer.
+ *
+ * NEVER THROWS — returns `{}` on any failure so model resolution falls back
+ * to install-wide config exactly as before.
+ */
+async function resolveUserAiPrefsForChat(userId: string): Promise<UserAiPrefs> {
+  try {
+    return await getUserAiPrefs(userId);
+  } catch (err) {
+    getLog().warn({ err: err as Error, userId }, 'orchestrator.user_ai_prefs_resolve_failed');
     return {};
   }
 }
@@ -1161,12 +1195,73 @@ export async function handleMessage(
     // Reuse the config already loaded during workflow discovery (avoids a second disk read).
     // Fall back to loadConfig only when no codebase is scoped (discoveredConfig is undefined).
     const config = discoveredConfig ?? (await loadConfig());
-    const configuredProviderKey = conversation.ai_assistant_type;
-    const aiProfile = buildAiProfile(configuredProviderKey, {
-      repoTiers: config.tiers,
-      repoAliases: config.aliases,
-    });
+    // Per-user AI prefs (Phase 3): the user's tiers/aliases/default-assistant
+    // override install config (highest precedence). `{}` (no identity, no row,
+    // or DB failure) keeps config-only behavior byte-for-byte.
+    const userAiPrefs = conversation.user_id
+      ? await resolveUserAiPrefsForChat(conversation.user_id)
+      : {};
+    let configuredProviderKey = userAiPrefs.defaultProvider ?? conversation.ai_assistant_type;
+    let aiProfile: ReturnType<typeof buildAiProfile>;
+    try {
+      aiProfile = buildAiProfile(configuredProviderKey, {
+        repoTiers: config.tiers,
+        repoAliases: config.aliases,
+        userTiers: userAiPrefs.tiers,
+        userAliases: userAiPrefs.aliases,
+      });
+    } catch (profileErr) {
+      // Structurally invalid STORED prefs (corrupt DB row) must not break the
+      // user's chat — degrade to config-only. A broken config layer still
+      // fails fast: the rebuild rethrows the same error.
+      getLog().error(
+        { err: profileErr as Error, userId: conversation.user_id },
+        'orchestrator.user_ai_prefs_profile_invalid'
+      );
+      configuredProviderKey = conversation.ai_assistant_type;
+      aiProfile = buildAiProfile(configuredProviderKey, {
+        repoTiers: config.tiers,
+        repoAliases: config.aliases,
+      });
+    }
     const chatRequest = resolveModelRequest(aiProfile, 'large', configuredProviderKey);
+    // Tier-fallback nudge (mirrors dag.model_provider_conflict): chat asks for
+    // 'large'; when that tier is unset and a sibling preset answered, tell the
+    // user ONCE PER CONVERSATION, non-blocking — the dedup Set below is what
+    // keeps it from becoming a per-message banner (review C1). Only the main
+    // chat request nags — the background title model ('small') falls back
+    // silently. Delivery failure must never fail the chat turn.
+    if (
+      chatRequest.matchedTier !== undefined &&
+      chatRequest.matchedTier !== 'large' &&
+      !tierFallbackNudgedConversations.has(conversation.id)
+    ) {
+      // Mark BEFORE attempting delivery: a failed send shouldn't retry the
+      // nudge on every subsequent message either.
+      tierFallbackNudgedConversations.add(conversation.id);
+      getLog().warn(
+        {
+          requestedTier: 'large',
+          matchedTier: chatRequest.matchedTier,
+          provider: chatRequest.provider,
+          model: chatRequest.model,
+        },
+        'orchestrator.tier_fallback_nudge'
+      );
+      try {
+        await platform.sendMessage(
+          conversationId,
+          `ℹ️ Model tier 'large' isn't configured — using the '${chatRequest.matchedTier}' preset ` +
+            `(${chatRequest.provider}/${chatRequest.model ?? ''}). Set it in Settings → Model Tiers ` +
+            'or `archon ai tier set large <provider> <model>`.'
+        );
+      } catch (nudgeErr) {
+        getLog().warn(
+          { err: nudgeErr as Error, conversationId },
+          'orchestrator.tier_fallback_nudge_delivery_failed'
+        );
+      }
+    }
     const providerKey = chatRequest.provider;
     let dbEnvVars: Record<string, string> = {};
     if (conversation.codebase_id) {
