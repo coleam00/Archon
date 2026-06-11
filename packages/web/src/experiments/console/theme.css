@@ -81,6 +81,13 @@
   --error: oklch(0.68 0.215 18);
   --error-soft: oklch(0.68 0.215 18 / 0.14);
 
+  /* Node variant stripes — the builder renders all seven variants. The first
+     five tokens (--node-command/-prompt/-bash/-loop/-approval) inherit from
+     the production :root in index.css; script and cancel exist only here
+     (console-scoped) until the production palette needs them. */
+  --node-script: oklch(0.7 0.14 140);
+  --node-cancel: oklch(0.62 0.19 10);
+
   /* shadcn-compatible overrides */
   --background: oklch(0.145 0.006 265);
   --foreground: var(--text-primary);
