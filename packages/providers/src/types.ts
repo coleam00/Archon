@@ -381,8 +381,12 @@ export interface ProviderCapabilities {
  *  - `subscription` — an OAuth login (Claude Pro/Max, GitHub Copilot, ChatGPT).
  *  - `ambient`      — cloud credential chains detected from the environment
  *    (AWS for Bedrock, gcloud ADC for Vertex). Never stored, status-only.
+ *
+ * Exported as a const tuple so API schemas can derive `z.enum(CREDENTIAL_KINDS)`
+ * instead of re-listing the literals.
  */
-export type CredentialKind = 'api_key' | 'subscription' | 'ambient';
+export const CREDENTIAL_KINDS = ['api_key', 'subscription', 'ambient'] as const;
+export type CredentialKind = (typeof CREDENTIAL_KINDS)[number];
 
 /**
  * One upstream-vendor credential an agent provider can consume. `vendor` is the
@@ -397,8 +401,8 @@ export interface CredentialSpec {
   vendor: string;
   /** Human-readable vendor name for UI display (e.g. 'OpenRouter'). */
   displayName: string;
-  /** Which connection kinds this vendor supports for this agent. */
-  kinds: CredentialKind[];
+  /** Which connection kinds this vendor supports for this agent (at least one). */
+  kinds: [CredentialKind, ...CredentialKind[]];
 }
 
 /**

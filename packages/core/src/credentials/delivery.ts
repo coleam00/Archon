@@ -105,9 +105,11 @@ export const KNOWN_VENDORS: ReadonlySet<string> = new Set<string>(
  * derive `accountId`). So `id_token` is best-effort (empty unless a future Pi
  * version provides one).
  *
- * VERIFY (live smoke): whether the Codex CLI accepts an empty `id_token` for a
- * ChatGPT subscription, or derives the account from the JWT `access_token` alone.
- * The API-key Codex path (`OPENAI_API_KEY`) is unaffected.
+ * VERIFY (gated on #1924): whether the Codex CLI accepts an empty `id_token`
+ * for a ChatGPT subscription, or derives the account from the JWT
+ * `access_token` alone. Moot until the `openai` subscription connect gate
+ * (SUBSCRIPTION_DISABLED) is lifted — this path is unreachable from connect
+ * today. The API-key path (`OPENAI_API_KEY`) is unaffected.
  */
 function buildCodexAuthJson(rawCreds: OAuthCredentials): string {
   const c = rawCreds as Record<string, unknown>;
@@ -174,17 +176,11 @@ export function deliverCredential(
       };
 
     default: {
+      // Happy path first: any vendor in the generated env map delivers its
+      // API key. This includes google-vertex, which is BOTH api_key-capable
+      // and ambient — a stored Vertex key must deliver, so the env lookup
+      // takes precedence over the ambient check.
       const piEnvVar = PI_PROVIDER_ENV_VARS[vendor];
-      // Env-map lookup comes FIRST: google-vertex is both api_key-capable and
-      // ambient — a stored Vertex API key must deliver. Ambient-ONLY vendors
-      // (amazon-bedrock) have no env var and fall through to the throw below.
-      if (!piEnvVar && PI_AMBIENT_VENDORS.includes(vendor)) {
-        // Ambient chains are detected from the environment, never stored — a
-        // stored row for one is a connect bug.
-        throw new Error(
-          `Vendor '${vendor}' uses ambient cloud credentials and has no stored-credential delivery.`
-        );
-      }
       if (piEnvVar) {
         if (cred.kind === 'oauth') {
           // Reached only if an oauth row exists under a Pi-backend id (connect
@@ -196,6 +192,14 @@ export function deliverCredential(
           );
         }
         return { env: { [piEnvVar]: cred.apiKey } };
+      }
+      if (PI_AMBIENT_VENDORS.includes(vendor)) {
+        // Ambient-ONLY vendors (amazon-bedrock — no env var in the map):
+        // chains are detected from the environment, never stored — a stored
+        // row for one is a connect bug.
+        throw new Error(
+          `Vendor '${vendor}' uses ambient cloud credentials and has no stored-credential delivery.`
+        );
       }
       throw new Error(
         `Unknown credential vendor '${vendor}'. Known: ${[...KNOWN_VENDORS].sort().join(', ')}.`

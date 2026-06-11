@@ -105,7 +105,8 @@ const mockDelete = mock(async (userId: string, provider: string) => {
   savedKeys = savedKeys.filter(k => !(k.userId === userId && k.provider === provider));
 });
 
-const SUBSCRIPTION = new Set<string>(['claude', 'codex', 'copilot']);
+// Vendor-keyed like production (#1955); openai is gate-excluded there too.
+const SUBSCRIPTION = new Set<string>(['anthropic', 'github-copilot']);
 const mockStartOAuth = mock(async (_userId: string, provider: string) => ({
   sessionId: 'sess-1',
   mode: 'manual' as const,
@@ -268,14 +269,41 @@ describe('GET /api/auth/providers', () => {
     expect([...body.available]).toEqual([...body.available].sort());
   });
 
-  test('gate off → { enabled:false }, available still present, DB never queried', async () => {
+  test('gate off → { enabled:false }, available + agents still present, DB never queried', async () => {
     keysEnabled = false;
     const res = await makeApp().request('/api/auth/providers', { headers: ALICE });
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { enabled: boolean; available: string[] };
+    const body = (await res.json()) as {
+      enabled: boolean;
+      available: string[];
+      agents: { id: string; catalog: string; ready: boolean }[];
+    };
     expect(body.enabled).toBe(false);
     expect(body.available.length).toBeGreaterThan(0);
+    // The agent matrix renders even without per-user keys (solo installs rely
+    // on its installEnv/ambient detection) — built from an empty connection set.
+    expect(body.agents).toEqual([
+      {
+        id: 'claude',
+        displayName: 'Claude (Anthropic)',
+        catalog: 'static',
+        ready: false,
+        credentials: [],
+      },
+    ]);
     expect(mockList).not.toHaveBeenCalled();
+  });
+
+  test('agents matrix reflects the connected set (ready flips with a connection)', async () => {
+    savedKeys.push({
+      userId: 'user-from-alice',
+      provider: 'anthropic',
+      apiKey: 'sk-x',
+      label: null,
+    });
+    const res = await makeApp().request('/api/auth/providers', { headers: ALICE });
+    const body = (await res.json()) as { agents: { id: string; ready: boolean }[] };
+    expect(body.agents.find(a => a.id === 'claude')?.ready).toBe(true);
   });
 
   test('lists connected providers as metadata only (no secret fields)', async () => {
@@ -403,6 +431,15 @@ describe('DELETE /api/auth/providers/:provider', () => {
     expect(res2.status).toBe(200);
   });
 
+  test("legacy 'claude' id deletes the migrated 'anthropic' row", async () => {
+    const res = await makeApp().request('/api/auth/providers/claude', {
+      method: 'DELETE',
+      headers: ALICE,
+    });
+    expect(res.status).toBe(200);
+    expect(mockDelete).toHaveBeenCalledWith('user-from-alice', 'anthropic');
+  });
+
   test('gate off → 404', async () => {
     keysEnabled = false;
     const res = await makeApp().request('/api/auth/providers/openrouter', {
@@ -425,14 +462,23 @@ describe('POST /api/auth/providers/:provider/oauth/start', () => {
     mockStartOAuth.mockClear();
   });
 
-  test('starts a session for a subscription provider', async () => {
-    const res = await makeApp().request('/api/auth/providers/claude/oauth/start', {
+  test('starts a session for a subscription vendor', async () => {
+    const res = await makeApp().request('/api/auth/providers/anthropic/oauth/start', {
       method: 'POST',
       headers: ALICE,
     });
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ sessionId: 'sess-1', mode: 'manual' });
-    expect(mockStartOAuth).toHaveBeenCalledWith('user-from-alice', 'claude');
+    expect(mockStartOAuth).toHaveBeenCalledWith('user-from-alice', 'anthropic');
+  });
+
+  test("legacy 'claude' id normalizes to 'anthropic' (regression: raw-param 400)", async () => {
+    const res = await makeApp().request('/api/auth/providers/claude/oauth/start', {
+      method: 'POST',
+      headers: ALICE,
+    });
+    expect(res.status).toBe(200);
+    expect(mockStartOAuth).toHaveBeenCalledWith('user-from-alice', 'anthropic');
   });
 
   test('non-subscription provider → 400, bridge not started', async () => {

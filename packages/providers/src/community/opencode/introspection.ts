@@ -85,7 +85,16 @@ export async function introspectOpencodeCredentials(
       client.provider.list(),
       client.provider.auth(),
     ]);
-    const all = listResult.data?.all ?? [];
+    // A structurally partial response (missing `data.all`) must surface as a
+    // failure (→ 503 at the route), never as an empty-but-200 catalog. The
+    // per-provider `authMethods[p.id] ?? []` fallback below is fine — a
+    // provider without listed auth methods is a real upstream state.
+    const all = listResult.data?.all;
+    if (!Array.isArray(all)) {
+      throw new Error(
+        'Embedded OpenCode server returned a malformed provider list (missing data.all)'
+      );
+    }
     const connected = new Set(listResult.data?.connected ?? []);
     const authMethods = authResult.data ?? {};
     const providers = all

@@ -15,6 +15,7 @@ export type {
   CredentialSpec,
   ProviderCredentialCatalog,
 } from './types';
+export { CREDENTIAL_KINDS } from './types';
 
 // Provider config types (canonical definitions in ./types, re-exported via config modules)
 // Import from ./types directly or from the config modules — both work.
@@ -79,11 +80,9 @@ export {
 } from './community/pi';
 // Generated Pi backend → env-var map + ambient vendors (single source for the
 // Pi runtime bridge and @archon/core's credential delivery — see #1955).
-export {
-  PI_PROVIDER_ENV_VARS,
-  PI_AMBIENT_VENDORS,
-  PI_CREDENTIAL_SPECS,
-} from './community/pi/pi-vendor-map.generated';
+// PI_CREDENTIAL_SPECS is intentionally NOT re-exported: its only consumer is
+// the Pi registration, which imports the generated file directly.
+export { PI_PROVIDER_ENV_VARS, PI_AMBIENT_VENDORS } from './community/pi/pi-vendor-map.generated';
 
 export {
   CopilotProvider,

@@ -1668,7 +1668,9 @@ export function registerApiRoutes(
     if (!isPerUserProviderKeysEnabled()) {
       return apiError(c, 404, 'Per-user provider keys are not enabled on this install');
     }
-    const provider = c.req.param('provider') ?? '';
+    // Normalize legacy agent-keyed ids ('claude' → 'anthropic') like every
+    // other credential entry point — SUBSCRIPTION_PROVIDERS is vendor-keyed.
+    const provider = normalizeCredentialVendor(c.req.param('provider') ?? '');
     if (!SUBSCRIPTION_PROVIDERS.has(provider)) {
       return apiError(
         c,

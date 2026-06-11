@@ -57,6 +57,28 @@ describe('credentials/catalog', () => {
     expect(vendors).not.toContain('amazon-bedrock');
   });
 
+  test('throws when a registration declares an undeliverable api_key vendor', async () => {
+    const { registerProvider, clearRegistry } = await import('@archon/providers');
+    try {
+      registerProvider({
+        id: 'broken-test-agent',
+        displayName: 'Broken Test Agent',
+        builtIn: false,
+        capabilities: {} as never,
+        factory: () => ({}) as never,
+        credentials: {
+          kind: 'static',
+          specs: [{ vendor: 'no-such-vendor', displayName: 'Nope', kinds: ['api_key'] }],
+        },
+      });
+      expect(() => getVendorCatalog()).toThrow(/no-such-vendor/);
+    } finally {
+      clearRegistry();
+      registerBuiltinProviders();
+      registerCommunityProviders();
+    }
+  });
+
   test('isConnectableVendor accepts legacy ids via normalization', () => {
     expect(isConnectableVendor('claude')).toBe(true);
     expect(isConnectableVendor('codex')).toBe(true);

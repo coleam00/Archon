@@ -76,7 +76,7 @@ function knownProvidersList(): string {
  */
 function resolveVendorArg(provider: string): string {
   const vendor = normalizeCredentialVendor(provider);
-  if (vendor !== provider && provider in LEGACY_VENDOR_ALIASES) {
+  if (provider in LEGACY_VENDOR_ALIASES) {
     console.log(`(Credential ids are vendor-keyed now: '${provider}' → '${vendor}'.)`);
   }
   return vendor;

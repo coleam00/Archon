@@ -58,7 +58,13 @@ const AMBIENT_VENDORS = new Set(['amazon-bedrock', 'google-vertex']);
  */
 const COVERED_ELSEWHERE = new Set(['openai-codex']);
 
-/** Vendors that support subscription (OAuth) login in addition to API keys. */
+/**
+ * Vendors that support subscription (OAuth) login in addition to API keys.
+ * `openai` is listed because the capability EXISTS (ChatGPT OAuth via Pi);
+ * whether it is *connectable* is a separate runtime gate
+ * (SUBSCRIPTION_DISABLED in @archon/core oauth-providers — #1924). Specs
+ * declare capability; gates decide availability.
+ */
 const SUBSCRIPTION_VENDORS = new Set(['anthropic', 'openai', 'github-copilot']);
 
 /** Human display names. Fallback: title-case each dash token. */
@@ -199,26 +205,20 @@ async function main(): Promise<void> {
 
   const sortedVendors = Object.keys(envVars).sort();
 
-  const specs = [
-    ...sortedVendors.map(vendor => ({
-      vendor,
-      displayName: displayName(vendor),
-      kinds: [
-        'api_key',
-        ...(SUBSCRIPTION_VENDORS.has(vendor) ? ['subscription'] : []),
-        ...(AMBIENT_VENDORS.has(vendor) ? ['ambient'] : []),
-      ],
-    })),
-    // Ambient-only vendors (no pasteable key).
-    ...[...AMBIENT_VENDORS]
-      .filter(vendor => !(vendor in envVars))
-      .sort()
-      .map(vendor => ({
-        vendor,
-        displayName: displayName(vendor),
-        kinds: ['ambient'],
-      })),
-  ].sort((a, b) => a.vendor.localeCompare(b.vendor));
+  const keySpecs = sortedVendors.map(vendor => ({
+    vendor,
+    displayName: displayName(vendor),
+    kinds: [
+      'api_key',
+      ...(SUBSCRIPTION_VENDORS.has(vendor) ? ['subscription'] : []),
+      ...(AMBIENT_VENDORS.has(vendor) ? ['ambient'] : []),
+    ],
+  }));
+  // Ambient-only vendors (no pasteable key, absent from the env map).
+  const ambientOnlySpecs = [...AMBIENT_VENDORS]
+    .filter(vendor => !(vendor in envVars))
+    .map(vendor => ({ vendor, displayName: displayName(vendor), kinds: ['ambient'] }));
+  const specs = [...keySpecs, ...ambientOnlySpecs].sort((a, b) => a.vendor.localeCompare(b.vendor));
 
   const envVarLines = sortedVendors
     .map(vendor => `  ${JSON.stringify(vendor)}: ${JSON.stringify(envVars[vendor])},`)

@@ -87,7 +87,12 @@ export function isConnectableVendor(id: string): boolean {
 
 // ---- Agent → credential matrix (GET /api/auth/providers `agents`) ----------
 
-/** One credential a given agent consumes, with connection/detection state. */
+/**
+ * One credential a given agent consumes, with connection/detection state.
+ * Hand-synced with `agentCredentialStatusSchema` in
+ * `@archon/server/routes/schemas/provider-key.schemas.ts` (core can't own
+ * route schemas) — update both together.
+ */
 export interface AgentCredentialStatus {
   vendor: string;
   displayName: string;
@@ -102,7 +107,11 @@ export interface AgentCredentialStatus {
   ambientConfigured?: boolean;
 }
 
-/** One agent's credential surface + readiness. */
+/**
+ * One agent's credential surface + readiness.
+ * Hand-synced with `agentCredentialsSchema` in
+ * `@archon/server/routes/schemas/provider-key.schemas.ts` — update both together.
+ */
 export interface AgentCredentialMatrixEntry {
   id: string;
   displayName: string;
@@ -121,7 +130,10 @@ export interface AgentCredentialMatrixEntry {
  * install env already authenticates the vendor.
  */
 const EXTRA_INSTALL_ENV_VARS: Record<string, string[]> = {
-  anthropic: ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_OAUTH_TOKEN'],
+  // CLAUDE_API_KEY: read by the native Claude provider (and set by Archon's
+  // own anthropic api_key delivery) — an install configured with only this
+  // var is authenticated.
+  anthropic: ['CLAUDE_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_OAUTH_TOKEN'],
 };
 
 function hasInstallEnv(vendor: string): boolean {

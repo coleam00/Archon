@@ -200,6 +200,11 @@ describe('credentials/delivery', () => {
       expect(r.env).toEqual({ DEEPSEEK_API_KEY: 'ds-key' });
     });
 
+    test('google-vertex api_key delivers (dual-kind vendor takes the env path, not the ambient throw)', () => {
+      const r = deliverCredential('google-vertex', apiKey('gv-key'), { artifactsDir: ART_DIR });
+      expect(r.env).toEqual({ GOOGLE_CLOUD_API_KEY: 'gv-key' });
+    });
+
     test('Pi backend oauth → throws (subscriptions reach Pi via auth.json, not env)', () => {
       expect(() => deliverCredential('openrouter', oauth(), { artifactsDir: ART_DIR })).toThrow(
         /auth\.json/

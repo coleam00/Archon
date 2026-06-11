@@ -8,6 +8,7 @@
  * these shapes — list/responses are metadata only.
  */
 import { z } from '@hono/zod-openapi';
+import { CREDENTIAL_KINDS } from '@archon/providers';
 
 /** One connected provider — metadata only, never a secret value. */
 export const providerKeyConnectionSchema = z
@@ -21,12 +22,16 @@ export const providerKeyConnectionSchema = z
 /**
  * One credential a given agent can consume, with the caller's connection
  * state and server-side detection (install env / ambient). No secret values.
+ *
+ * Hand-synced with `AgentCredentialStatus` in
+ * `@archon/core/credentials/catalog.ts` — the type lives in core (which can't
+ * own route schemas) and the schema lives here; update both together.
  */
 export const agentCredentialStatusSchema = z
   .object({
     vendor: z.string(),
     displayName: z.string(),
-    kinds: z.array(z.enum(['api_key', 'subscription', 'ambient'])),
+    kinds: z.array(z.enum(CREDENTIAL_KINDS)),
     connected: z.enum(['api_key', 'oauth']).nullable(),
     subscriptionAvailable: z.boolean(),
     installEnv: z.boolean(),
@@ -38,6 +43,9 @@ export const agentCredentialStatusSchema = z
  * One agent's credential surface. `catalog: 'dynamic'` (OpenCode) means the
  * vendor set is resolved at runtime via the agent's own introspection
  * endpoint; `credentials` is empty and `ready` is always false for those.
+ *
+ * Hand-synced with `AgentCredentialMatrixEntry` in
+ * `@archon/core/credentials/catalog.ts` — update both together.
  */
 export const agentCredentialsSchema = z
   .object({
