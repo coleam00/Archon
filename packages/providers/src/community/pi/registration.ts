@@ -1,6 +1,7 @@
 import { isRegisteredProvider, registerProvider } from '../../registry';
 
 import { PI_CAPABILITIES } from './capabilities';
+import { PI_CREDENTIAL_SPECS } from './pi-vendor-map.generated';
 import { PiProvider } from './provider';
 
 /**
@@ -20,5 +21,7 @@ export function registerPiProvider(): void {
     factory: () => new PiProvider(),
     capabilities: PI_CAPABILITIES,
     builtIn: false,
+    // Generated from the installed pi-ai SDK — see generate:pi-vendor-map.
+    credentials: { kind: 'static', specs: PI_CREDENTIAL_SPECS },
   });
 }

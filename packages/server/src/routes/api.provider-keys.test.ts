@@ -49,11 +49,11 @@ mock.module('@archon/core/db/users', () => ({
 }));
 
 // --- Provider-key store/connect surface (the unit under test, via mocked core) ---
+// Vendor-canonical ids (#1955) — legacy claude/codex/copilot are aliases.
 const KNOWN = new Set<string>([
-  'claude',
-  'codex',
   'anthropic',
   'openai',
+  'github-copilot',
   'google',
   'groq',
   'mistral',
@@ -62,6 +62,12 @@ const KNOWN = new Set<string>([
   'openrouter',
   'huggingface',
 ]);
+const LEGACY_ALIASES: Record<string, string> = {
+  claude: 'anthropic',
+  codex: 'openai',
+  copilot: 'github-copilot',
+};
+const normalizeVendor = (id: string): string => LEGACY_ALIASES[id] ?? id;
 
 // Mirror core's typed validation error so the route's `instanceof` check (400 vs
 // opaque 500) is exercised: validation throws this; storage failures throw plain.
@@ -127,7 +133,17 @@ mock.module('@archon/core', () => ({
   InvalidProviderKeyError,
   listUserProviderKeys: mockList,
   deleteUserProviderKey: mockDelete,
-  KNOWN_PROVIDERS: KNOWN,
+  listConnectableVendors: () => [...KNOWN].sort(),
+  buildAgentCredentialMatrix: (connections: { provider: string; kind: string }[]) => [
+    {
+      id: 'claude',
+      displayName: 'Claude (Anthropic)',
+      catalog: 'static',
+      ready: connections.some(c => normalizeVendor(c.provider) === 'anthropic'),
+      credentials: [],
+    },
+  ],
+  normalizeCredentialVendor: normalizeVendor,
   SUBSCRIPTION_PROVIDERS: SUBSCRIPTION,
   startOAuth: mockStartOAuth,
   pollOAuth: mockPollOAuth,
@@ -247,7 +263,7 @@ describe('GET /api/auth/providers', () => {
     expect(body.enabled).toBe(true);
     expect(body.connections).toEqual([]);
     expect(body.available).toContain('openrouter');
-    expect(body.available).toContain('claude');
+    expect(body.available).toContain('anthropic'); // vendor-canonical since #1955
     // available is sorted
     expect([...body.available]).toEqual([...body.available].sort());
   });

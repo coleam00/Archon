@@ -11,6 +11,9 @@ export type {
   ProviderInfo,
   MessageChunk,
   TokenUsage,
+  CredentialKind,
+  CredentialSpec,
+  ProviderCredentialCatalog,
 } from './types';
 
 // Provider config types (canonical definitions in ./types, re-exported via config modules)
@@ -60,7 +63,11 @@ export {
   OpencodeProvider,
   parseOpencodeConfig,
   registerOpencodeProvider,
+  introspectOpencodeCredentials,
   type OpencodeProviderDefaults,
+  type OpencodeCredentialIntrospection,
+  type OpencodeCredentialProvider,
+  type OpencodeAuthMethod,
 } from './community/opencode';
 export {
   PiProvider,
@@ -70,6 +77,13 @@ export {
   type PiProviderDefaults,
   type PiModelInfo,
 } from './community/pi';
+// Generated Pi backend → env-var map + ambient vendors (single source for the
+// Pi runtime bridge and @archon/core's credential delivery — see #1955).
+export {
+  PI_PROVIDER_ENV_VARS,
+  PI_AMBIENT_VENDORS,
+  PI_CREDENTIAL_SPECS,
+} from './community/pi/pi-vendor-map.generated';
 
 export {
   CopilotProvider,

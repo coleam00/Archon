@@ -20,5 +20,15 @@ export function registerCopilotProvider(): void {
     factory: () => new CopilotProvider(),
     capabilities: COPILOT_CAPABILITIES,
     builtIn: false,
+    credentials: {
+      kind: 'static',
+      specs: [
+        {
+          vendor: 'github-copilot',
+          displayName: 'GitHub Copilot',
+          kinds: ['api_key', 'subscription'],
+        },
+      ],
+    },
   });
 }

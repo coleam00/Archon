@@ -61,6 +61,10 @@ mock.module('../handlers/command-handler', () => ({
 
 mock.module('@archon/providers', () => ({
   getAgentProvider: mock(() => null),
+  getRegisteredProviders: mock(() => []),
+  // credentials/delivery (#1955) imports these from '@archon/providers'.
+  PI_PROVIDER_ENV_VARS: { anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY' },
+  PI_AMBIENT_VENDORS: ['amazon-bedrock', 'google-vertex'],
 }));
 
 mock.module('../workflows/store-adapter', () => ({

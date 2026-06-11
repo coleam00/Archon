@@ -115,6 +115,16 @@ export function registerBuiltinProviders(): void {
       factory: () => new ClaudeProvider(),
       capabilities: CLAUDE_CAPABILITIES,
       builtIn: true,
+      credentials: {
+        kind: 'static',
+        specs: [
+          {
+            vendor: 'anthropic',
+            displayName: 'Anthropic',
+            kinds: ['api_key', 'subscription'],
+          },
+        ],
+      },
     },
     {
       id: 'codex',
@@ -122,6 +132,18 @@ export function registerBuiltinProviders(): void {
       factory: () => new CodexProvider(),
       capabilities: CODEX_CAPABILITIES,
       builtIn: true,
+      credentials: {
+        kind: 'static',
+        specs: [
+          {
+            // Subscription (ChatGPT) login is wired but connect-gated — see
+            // SUBSCRIPTION_DISABLED in @archon/core credentials (#1924).
+            vendor: 'openai',
+            displayName: 'OpenAI',
+            kinds: ['api_key', 'subscription'],
+          },
+        ],
+      },
     },
   ];
 

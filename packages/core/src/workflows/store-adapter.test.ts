@@ -46,6 +46,20 @@ mock.module('../db/codebases', () => ({
 
 mock.module('@archon/providers', () => ({
   getAgentProvider: mock(() => ({})),
+  getRegisteredProviders: mock(() => []),
+  // Vendor → env-var map consumed by credentials/delivery (#1955). A realistic
+  // subset of the generated map (incl. HF_TOKEN, the upstream var).
+  PI_PROVIDER_ENV_VARS: {
+    anthropic: 'ANTHROPIC_API_KEY',
+    openai: 'OPENAI_API_KEY',
+    'github-copilot': 'COPILOT_GITHUB_TOKEN',
+    openrouter: 'OPENROUTER_API_KEY',
+    google: 'GEMINI_API_KEY',
+    groq: 'GROQ_API_KEY',
+    huggingface: 'HF_TOKEN',
+    'google-vertex': 'GOOGLE_CLOUD_API_KEY',
+  },
+  PI_AMBIENT_VENDORS: ['amazon-bedrock', 'google-vertex'],
 }));
 
 mock.module('../config/config-loader', () => ({

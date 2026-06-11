@@ -24,7 +24,14 @@ const noopLogger = () => ({
 });
 
 let enabled = true;
-const KNOWN = new Set<string>(['claude', 'codex', 'openrouter', 'anthropic', 'openai']);
+// Vendor-canonical ids (#1955); legacy claude/codex/copilot normalize onto them.
+const KNOWN = new Set<string>(['anthropic', 'openai', 'github-copilot', 'openrouter']);
+const LEGACY_ALIASES: Record<string, string> = {
+  claude: 'anthropic',
+  codex: 'openai',
+  copilot: 'github-copilot',
+};
+const normalizeVendor = (id: string): string => LEGACY_ALIASES[id] ?? id;
 
 const mockPersist = mock(
   async (_userId: string, provider: string, _apiKey: string, label?: string | null) => ({
@@ -39,7 +46,7 @@ const mockList = mock(
 );
 const mockDelete = mock(async (_userId: string, _provider: string) => {});
 
-const SUBSCRIPTION = new Set<string>(['claude', 'codex', 'copilot']);
+const SUBSCRIPTION = new Set<string>(['anthropic', 'github-copilot']);
 const mockStartOAuth = mock(
   async (_userId: string, _provider: string) =>
     ({
@@ -85,7 +92,10 @@ mock.module('@archon/core', () => ({
   persistProviderApiKey: mockPersist,
   listUserProviderKeys: mockList,
   deleteUserProviderKey: mockDelete,
-  KNOWN_PROVIDERS: KNOWN,
+  listConnectableVendors: () => [...KNOWN].sort(),
+  isConnectableVendor: (id: string) => KNOWN.has(normalizeVendor(id)),
+  normalizeCredentialVendor: normalizeVendor,
+  LEGACY_VENDOR_ALIASES: LEGACY_ALIASES,
   SUBSCRIPTION_PROVIDERS: SUBSCRIPTION,
   startOAuth: mockStartOAuth,
   pollOAuth: mockPollOAuth,
@@ -275,7 +285,8 @@ describe('aiLoginCommand', () => {
     });
     mockPollOAuth.mockReturnValueOnce({ status: 'connected' });
     expect(await aiLoginCommand('copilot')).toBe(0);
-    expect(mockStartOAuth).toHaveBeenCalledWith('u1', 'copilot');
+    // Legacy 'copilot' arg normalizes to the vendor id before the bridge (#1955).
+    expect(mockStartOAuth).toHaveBeenCalledWith('u1', 'github-copilot');
     expect(out()).toContain('WXYZ');
   });
 
