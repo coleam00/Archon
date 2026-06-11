@@ -462,7 +462,7 @@ describe('CopilotProvider.sendQuery', () => {
     await first;
     await collect(gen);
 
-    expect(lastClientOpts?.githubToken).toBeUndefined();
+    expect(lastClientOpts?.gitHubToken).toBeUndefined();
     expect(lastClientOpts?.useLoggedInUser).toBe(true);
   });
 
@@ -481,7 +481,7 @@ describe('CopilotProvider.sendQuery', () => {
     await first;
     await collect(gen);
 
-    expect(lastClientOpts?.githubToken).toBe('ghp_copilot');
+    expect(lastClientOpts?.gitHubToken).toBe('ghp_copilot');
     expect(lastClientOpts?.useLoggedInUser).toBe(false);
   });
 
@@ -501,7 +501,7 @@ describe('CopilotProvider.sendQuery', () => {
     await first;
     await collect(gen);
 
-    expect(lastClientOpts?.githubToken).toBe('ghp_testtoken');
+    expect(lastClientOpts?.gitHubToken).toBe('ghp_testtoken');
     expect(lastClientOpts?.useLoggedInUser).toBe(false);
   });
 
@@ -521,7 +521,7 @@ describe('CopilotProvider.sendQuery', () => {
     await first;
     await collect(gen);
 
-    expect(lastClientOpts?.githubToken).toBeUndefined();
+    expect(lastClientOpts?.gitHubToken).toBeUndefined();
     expect(lastClientOpts?.useLoggedInUser).toBe(true);
   });
 

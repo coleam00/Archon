@@ -334,7 +334,9 @@ async function buildSessionConfig(
     model: resolvedModel,
     reasoningEffort: reasoning.effort,
     workingDirectory: cwd,
-    configDir: copilotConfig.configDir,
+    // configDir moved to the client level in copilot-sdk 1.0 (baseDirectory —
+    // sets COPILOT_HOME on the spawned runtime); applied in sendQuery's
+    // CopilotClientOptions, not here.
     streaming: true,
     systemMessage: resolveSystemMessage(requestOptions),
     enableConfigDiscovery: copilotConfig.enableConfigDiscovery ?? false,
@@ -494,19 +496,23 @@ export class CopilotProvider implements IAgentProvider {
       : prompt;
 
     const clientOpts: CopilotClientOptions = {
-      cwd,
+      workingDirectory: cwd,
       env: mergedEnv,
     };
-    if (cliPath) clientOpts.cliPath = cliPath;
+    // copilot-sdk 1.0: a custom CLI binary rides a stdio runtime connection
+    // (replaces the removed `cliPath` option).
+    if (cliPath) clientOpts.connection = { kind: 'stdio', path: cliPath };
+    // configDir override → baseDirectory (sets COPILOT_HOME on the runtime).
+    if (copilotConfig.configDir) clientOpts.baseDirectory = copilotConfig.configDir;
     // Auth precedence: see COPILOT_TOKEN_ENV_KEY / GENERIC_GITHUB_TOKEN_ENV_KEYS docs.
     let tokenSource: 'copilot-token' | 'generic-token' | 'logged-in-user';
     if (copilotToken) {
-      clientOpts.githubToken = copilotToken;
+      clientOpts.gitHubToken = copilotToken;
       clientOpts.useLoggedInUser = false;
       tokenSource = 'copilot-token';
     } else if (copilotConfig.useLoggedInUser === false) {
       if (genericGithubToken) {
-        clientOpts.githubToken = genericGithubToken;
+        clientOpts.gitHubToken = genericGithubToken;
         tokenSource = 'generic-token';
       } else {
         tokenSource = 'logged-in-user';

@@ -19,6 +19,7 @@ import type { CredentialSpec } from '../../types';
  * (and the var Archon's per-user delivery sets).
  */
 export const PI_PROVIDER_ENV_VARS: Record<string, string> = {
+  "ant-ling": "ANT_LING_API_KEY",
   "anthropic": "ANTHROPIC_API_KEY",
   "azure-openai-responses": "AZURE_OPENAI_API_KEY",
   "cerebras": "CEREBRAS_API_KEY",
@@ -37,6 +38,7 @@ export const PI_PROVIDER_ENV_VARS: Record<string, string> = {
   "mistral": "MISTRAL_API_KEY",
   "moonshotai": "MOONSHOT_API_KEY",
   "moonshotai-cn": "MOONSHOT_API_KEY",
+  "nvidia": "NVIDIA_API_KEY",
   "openai": "OPENAI_API_KEY",
   "opencode": "OPENCODE_API_KEY",
   "opencode-go": "OPENCODE_API_KEY",
@@ -49,6 +51,7 @@ export const PI_PROVIDER_ENV_VARS: Record<string, string> = {
   "xiaomi-token-plan-cn": "XIAOMI_TOKEN_PLAN_CN_API_KEY",
   "xiaomi-token-plan-sgp": "XIAOMI_TOKEN_PLAN_SGP_API_KEY",
   "zai": "ZAI_API_KEY",
+  "zai-coding-cn": "ZAI_CODING_CN_API_KEY",
 };
 
 /** Vendors authenticated via ambient cloud credential chains (status-only). */
@@ -57,6 +60,7 @@ export const PI_AMBIENT_VENDORS: readonly string[] = ["amazon-bedrock","google-v
 /** Credential specs for the Pi provider registration (consumption matrix). */
 export const PI_CREDENTIAL_SPECS: CredentialSpec[] = [
   { vendor: "amazon-bedrock", displayName: "Amazon Bedrock", kinds: ["ambient"] },
+  { vendor: "ant-ling", displayName: "Ant Ling", kinds: ["api_key"] },
   { vendor: "anthropic", displayName: "Anthropic", kinds: ["api_key", "subscription"] },
   { vendor: "azure-openai-responses", displayName: "Azure OpenAI", kinds: ["api_key"] },
   { vendor: "cerebras", displayName: "Cerebras", kinds: ["api_key"] },
@@ -75,6 +79,7 @@ export const PI_CREDENTIAL_SPECS: CredentialSpec[] = [
   { vendor: "mistral", displayName: "Mistral", kinds: ["api_key"] },
   { vendor: "moonshotai", displayName: "Moonshot AI", kinds: ["api_key"] },
   { vendor: "moonshotai-cn", displayName: "Moonshot AI (CN)", kinds: ["api_key"] },
+  { vendor: "nvidia", displayName: "Nvidia", kinds: ["api_key"] },
   { vendor: "openai", displayName: "OpenAI", kinds: ["api_key", "subscription"] },
   { vendor: "opencode", displayName: "OpenCode Zen", kinds: ["api_key"] },
   { vendor: "opencode-go", displayName: "OpenCode Zen (Go)", kinds: ["api_key"] },
@@ -87,4 +92,5 @@ export const PI_CREDENTIAL_SPECS: CredentialSpec[] = [
   { vendor: "xiaomi-token-plan-cn", displayName: "Xiaomi Token Plan (CN)", kinds: ["api_key"] },
   { vendor: "xiaomi-token-plan-sgp", displayName: "Xiaomi Token Plan (SGP)", kinds: ["api_key"] },
   { vendor: "zai", displayName: "Z.AI", kinds: ["api_key"] },
+  { vendor: "zai-coding-cn", displayName: "Zai Coding Cn", kinds: ["api_key"] },
 ];
