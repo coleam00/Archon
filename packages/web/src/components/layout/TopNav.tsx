@@ -1,7 +1,6 @@
 import { NavLink, Link } from 'react-router';
 import {
   Activity,
-  ClipboardList,
   Share2,
   Briefcase,
   Mail,
@@ -50,7 +49,7 @@ const coreTabs: readonly NavTab[] = [
   { to: '/fountain', end: false, icon: Droplet, label: 'Fountain WPB' },
   { to: '/ttts', end: false, icon: Calendar, label: 'TTTS' },
   { to: '/ihht', end: false, icon: Activity, label: 'IHHT' },
-  { to: '/qep', end: false, icon: ClipboardList, label: 'QEP' },
+  // QEP merged into Fountain WPB (2026-06-11). Nav entry removed; /qep redirects to /fountain.
   { to: '/accufit', end: false, icon: Zap, label: 'AccuFit' },
   { to: '/social-content', end: false, icon: Share2, label: 'Social Content' },
 ] as const;

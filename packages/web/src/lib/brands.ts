@@ -75,17 +75,6 @@ export const BRANDS: BrandDef[] = [
     ],
   },
   {
-    slug: 'naba',
-    label: 'NABA',
-    apolloPrefix: 'NABA',
-    icp: 'Wellness-journey buyers: high-net-worth individuals seeking curated multi-modality recovery and longevity programs.',
-    adjacentIcps: [
-      'Family office wellness coordinators',
-      'Executive concierge medicine clients',
-      'Longevity clinic patient pipelines',
-    ],
-  },
-  {
     slug: 'ihht',
     label: 'IHHT',
     apolloPrefix: 'IHHT',

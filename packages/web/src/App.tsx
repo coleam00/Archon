@@ -7,7 +7,9 @@ import { ProjectProvider } from '@/contexts/ProjectContext';
 import { queryClient } from '@/lib/query-client';
 import { BRTPage } from '@/routes/BRTPage';
 import { IHHTPage } from '@/routes/IHHTPage';
-import { QEPPage } from '@/routes/QEPPage';
+// QEPPage merged into FountainPage 2026-06-11 — kept as file for ~14d, route now redirects.
+// Re-enable import + route registration only if rollback needed.
+// import { QEPPage } from '@/routes/QEPPage';
 import { SocialContentPage } from '@/routes/SocialContentPage';
 import { PMCPage } from '@/routes/PMCPage';
 import { EWCPage } from '@/routes/EWCPage';
@@ -91,7 +93,10 @@ export function App(): React.ReactElement {
                 <Route path="/fountain" element={<FountainPage />} />
                 <Route path="/ttts" element={<TTSPage />} />
                 <Route path="/ihht" element={<IHHTPage />} />
-                <Route path="/qep" element={<QEPPage />} />
+                {/* QEP merged into Fountain WPB per 2026-06-11 decision
+                    (intelligence/decisions/2026-06-11-qep-fountain-merge.md).
+                    Route kept as redirect for ~14 days; QEPPage to be archived after. */}
+                <Route path="/qep" element={<Navigate to="/fountain" replace />} />
                 <Route path="/playground" element={<PlaygroundPage />} />
                 <Route path="/accufit" element={<AccuFitPage />} />
                 <Route path="/social-content" element={<SocialContentPage />} />
