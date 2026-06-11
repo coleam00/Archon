@@ -18,6 +18,8 @@ export { userRowSchema, userIdentityRowSchema, userRoleSchema } from './user';
 export type { User, UserIdentity, UserRole } from './user';
 export { userGithubTokenRowSchema } from './user-github-token-row';
 export type { UserGithubTokenRow } from './user-github-token-row';
+export { userAiPrefsRowSchema } from './user-ai-prefs-row';
+export type { UserAiPrefsRow } from './user-ai-prefs-row';
 
 // Codebase
 export { codebaseRowSchema } from './codebase';
