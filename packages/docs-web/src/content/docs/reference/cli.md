@@ -112,7 +112,7 @@ The command prints a `verification_uri` and a one-time `user_code`; visit the UR
 
 Manage **per-user AI-provider credentials** (API keys + subscriptions) and **model-tier config**. CLI identity is resolved from `ARCHON_USER_ID` (explicit override) or `$USER` / `$USERNAME`, mapped to a stable Archon user via the `cli` platform identity — the same as [`auth github`](#auth-github).
 
-The credential subcommands (`key set`, `login`, `list`, `logout`) only work on **multi-user installs** with `TOKEN_ENCRYPTION_KEY` set; on a solo install they exit with an explanatory error. The config subcommands (`tier`, `default`) are **ungated** — they write `~/.archon/config.yaml` and work everywhere.
+The credential subcommands (`key set`, `login`, `list`, `logout`) only work on **multi-user installs** with `TOKEN_ENCRYPTION_KEY` set; on a solo install they exit with an explanatory error. The config subcommands (`tier`, `alias`, `default`) are **ungated** — they write `~/.archon/config.yaml` and work everywhere.
 
 ```bash
 # --- Provider credentials (require TOKEN_ENCRYPTION_KEY) ---
@@ -121,16 +121,21 @@ archon ai login <provider>       # connect a subscription via OAuth (claude or c
 archon ai list                   # list connected providers (metadata only, no secrets)
 archon ai logout <provider>      # disconnect a provider
 
-# --- Model tiers + default assistant (ungated config) ---
-archon ai tier set <small|medium|large> <provider> <model> [--effort <effort>]
-archon ai tier list [--json]     # show configured tiers vs built-in defaults
-archon ai tier unset <small|medium|large>   # reset a tier to its built-in default
-archon ai default <provider>     # set the default assistant
+# --- Model tiers + aliases + default assistant (ungated config) ---
+archon ai tier set <small|medium|large> <provider> <model> [--effort <effort>] [--scope user|install]
+archon ai tier list [--json]     # show configured tiers (install + yours) vs built-in defaults
+archon ai tier unset <small|medium|large> [--scope user|install]
+archon ai alias set <@name> <provider> <model> [--effort <effort>] [--scope user|install]
+archon ai alias list [--json]    # show @custom aliases (install + yours)
+archon ai alias unset <@name> [--scope user|install]
+archon ai default <provider> [--scope user|install]   # set the default assistant
 ```
 
 `ai login` supports subscription login for **`claude`** and **`copilot`** only — `codex` is API-key-only (use `ai key set codex`); its subscription path is gated pending [#1924](https://github.com/coleam00/Archon/issues/1924). The API key is never read from argv (it would leak into shell history): pipe it (`echo "$KEY" | archon ai key set openrouter`) or type it at the masked prompt.
 
-`ai tier` and `ai default` edit the same `tiers:` / `defaultAssistant` config you can hand-write in `~/.archon/config.yaml` (see [Configuration](/reference/configuration/)) or edit from the console **AI Settings** page. An unknown provider exits non-zero; `tier unset` removes the override so the tier falls back to its built-in preset. The full per-user setup walkthrough is in [Per-user credentials and AI Settings](/getting-started/ai-assistants/#per-user-credentials-and-ai-settings).
+`ai tier`, `ai alias`, and `ai default` edit the same `tiers:` / `aliases:` / `defaultAssistant` config you can hand-write in `~/.archon/config.yaml` (see [Configuration](/reference/configuration/)) or edit from the console **AI Settings** page. An unknown provider exits non-zero; `tier unset` removes the override so the tier falls back to its built-in preset. The full per-user setup walkthrough is in [Per-user credentials and AI Settings](/getting-started/ai-assistants/#per-user-credentials-and-ai-settings).
+
+**`--scope user` (per-user overrides).** On any of the config subcommands, `--scope user` writes your **personal** prefs row in Archon's database instead of the shared `config.yaml`. Your tiers/aliases/default override the install config for runs and chats *you* start — nobody else's. It needs a resolvable CLI identity (`ARCHON_USER_ID` or `$USER`) but **no** `TOKEN_ENCRYPTION_KEY` (model names aren't secrets). `ai tier list` / `ai alias list` show both scopes, marking your overrides with `[just you]`. The same scopes are editable in the console as the "This install / Just me" toggle on **AI Settings**.
 
 ### `telemetry status`
 

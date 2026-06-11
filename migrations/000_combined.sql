@@ -2,7 +2,7 @@
 -- Version: Combined (final state after migrations 001-020)
 -- Description: Complete database schema (idempotent - safe to run multiple times)
 --
--- 13 Tables:
+-- 14 Tables (+ the remote_agent_auth_* Better Auth tables, listed inline below):
 --   1. remote_agent_codebases
 --   1b. remote_agent_codebase_env_vars
 --   1c. remote_agent_users
