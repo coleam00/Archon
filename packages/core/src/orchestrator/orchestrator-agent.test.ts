@@ -56,6 +56,7 @@ const mockLogger = createMockLogger();
 const mockEnsureArchonWorkspacesPath = mock(() => Promise.resolve('/home/test/.archon/workspaces'));
 const mockCaptureChatTurn = mock(() => undefined);
 mock.module('@archon/paths', () => ({
+  captureApprovalResolved: () => undefined,
   createLogger: mock(() => mockLogger),
   getArchonWorkspacesPath: mock(() => '/home/test/.archon/workspaces'),
   ensureArchonWorkspacesPath: mockEnsureArchonWorkspacesPath,
@@ -2670,11 +2671,14 @@ describe('chat turn telemetry', () => {
     await handleMessage(platform, 'conv-1', 'hello there');
 
     expect(mockCaptureChatTurn).toHaveBeenCalledTimes(1);
-    expect(mockCaptureChatTurn).toHaveBeenCalledWith({
-      platform: 'web',
-      provider: 'claude',
-      outcome: 'completed',
-    });
+    expect(mockCaptureChatTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        platform: 'web',
+        provider: 'claude',
+        outcome: 'completed',
+        durationMs: expect.any(Number),
+      })
+    );
   });
 
   test('does NOT capture a chat turn when the AI routes to /invoke-workflow', async () => {
@@ -2720,10 +2724,13 @@ describe('chat turn telemetry', () => {
     await handleMessage(platform, 'conv-1', 'hello');
 
     expect(mockCaptureChatTurn).toHaveBeenCalledTimes(1);
-    expect(mockCaptureChatTurn).toHaveBeenCalledWith({
-      platform: 'web',
-      provider: 'claude',
-      outcome: 'failed',
-    });
+    expect(mockCaptureChatTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        platform: 'web',
+        provider: 'claude',
+        outcome: 'failed',
+        durationMs: expect.any(Number),
+      })
+    );
   });
 });

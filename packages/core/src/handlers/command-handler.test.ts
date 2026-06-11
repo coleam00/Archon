@@ -205,6 +205,7 @@ mock.module('../services/cleanup-service', () => ({
 // Mock logger to suppress noisy output during tests
 const mockLogger = createMockLogger();
 mock.module('@archon/paths', () => ({
+  captureApprovalResolved: () => undefined,
   createLogger: mock(() => mockLogger),
   getArchonWorkspacesPath: mock(() => '/home/test/.archon/workspaces'),
   getCommandFolderSearchPaths: mock(() => ['.archon/commands']),

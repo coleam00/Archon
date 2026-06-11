@@ -256,7 +256,13 @@ interface WorkflowLevelOptions {
 }
 
 /** Internal node execution result — extends NodeOutput with cost data for aggregation. */
-type NodeExecutionResult = NodeOutput & { costUsd?: number };
+type NodeExecutionResult = NodeOutput & {
+  costUsd?: number;
+  /** Provider-reported token usage for the node (loop nodes: summed across iterations). */
+  tokens?: TokenUsage;
+  /** Loop nodes only: number of iterations executed. */
+  loopIterations?: number;
+};
 
 /** Throttle state for cancel checks (reads — no write contention in WAL mode) */
 const lastNodeCancelCheck = new Map<string, number>();
@@ -1481,6 +1487,7 @@ async function executeNodeInternal(
       output: nodeOutputText,
       sessionId: newSessionId,
       costUsd: nodeCostUsd,
+      ...(nodeTokens !== undefined ? { tokens: nodeTokens } : {}),
       ...(structuredOutput !== undefined ? { structuredOutput } : {}),
       ...(declaredFields !== undefined ? { declaredFields } : {}),
     };
@@ -1499,6 +1506,7 @@ async function executeNodeInternal(
         output: nodeOutputText,
         error: 'Cancelled by user',
         costUsd: nodeCostUsd,
+        ...(nodeTokens !== undefined ? { tokens: nodeTokens } : {}),
       };
     }
 
@@ -1527,7 +1535,13 @@ async function executeNodeInternal(
       error: err.message,
     });
 
-    return { state: 'failed', output: '', error: err.message, costUsd: nodeCostUsd };
+    return {
+      state: 'failed',
+      output: '',
+      error: err.message,
+      costUsd: nodeCostUsd,
+      ...(nodeTokens !== undefined ? { tokens: nodeTokens } : {}),
+    };
   }
 }
 
@@ -2043,6 +2057,7 @@ async function executeLoopNode(
   let loopTotalCostUsd: number | undefined;
   let loopFinalStopReason: string | undefined;
   let loopTotalNumTurns: number | undefined;
+  let loopTotalTokens: TokenUsage | undefined;
   // Helper to log event store errors consistently
   const logEventStoreError = (err: Error, iteration: number): void => {
     getLog().error({ err, nodeId: node.id, iteration }, 'loop_node.iteration_event_failed');
@@ -2185,6 +2200,12 @@ async function executeLoopNode(
           if (msg.cost !== undefined) {
             loopTotalCostUsd = (loopTotalCostUsd ?? 0) + msg.cost;
           }
+          if (msg.tokens !== undefined) {
+            loopTotalTokens = {
+              input: (loopTotalTokens?.input ?? 0) + msg.tokens.input,
+              output: (loopTotalTokens?.output ?? 0) + msg.tokens.output,
+            };
+          }
           if (msg.stopReason !== undefined) loopFinalStopReason = msg.stopReason;
           if (msg.numTurns !== undefined) {
             loopTotalNumTurns = (loopTotalNumTurns ?? 0) + msg.numTurns;
@@ -2317,6 +2338,8 @@ async function executeLoopNode(
         output: '',
         error: `Loop iteration ${i} failed: ${err.message}`,
         costUsd: loopTotalCostUsd,
+        ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+        loopIterations: i,
       };
     }
 
@@ -2373,6 +2396,8 @@ async function executeLoopNode(
         output: '',
         error: `Loop iteration ${i} failed: ${emptyError}`,
         costUsd: loopTotalCostUsd,
+        ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+        loopIterations: i,
       };
     }
 
@@ -2528,6 +2553,8 @@ async function executeLoopNode(
         output: lastIterationOutput,
         sessionId: currentSessionId,
         costUsd: loopTotalCostUsd,
+        ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+        loopIterations: i,
         ...(lastIterationStructuredOutput !== undefined
           ? { structuredOutput: lastIterationStructuredOutput }
           : {}),
@@ -2586,7 +2613,13 @@ async function executeLoopNode(
       // This mirrors the approval-node pattern, preventing false "DAG nodes failed" warnings
       // in multi-node workflows. Resume correctness relies on the 'paused' DB status, not
       // on the node's output state.
-      return { state: 'completed', output: lastIterationOutput, costUsd: loopTotalCostUsd };
+      return {
+        state: 'completed',
+        output: lastIterationOutput,
+        costUsd: loopTotalCostUsd,
+        ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+        loopIterations: i,
+      };
     }
   }
 
@@ -2602,6 +2635,8 @@ async function executeLoopNode(
     output: lastIterationOutput,
     error: errorMsg,
     costUsd: loopTotalCostUsd,
+    ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+    loopIterations: loop.max_iterations,
   };
 }
 
@@ -2876,6 +2911,9 @@ export async function executeDagWorkflow(
   // Note: accumulates cost for this invocation only. If this is a resume, nodes skipped
   // from the prior run are not included — total_cost_usd will reflect resumed-portion cost only.
   let totalCostUsd = 0;
+  let totalTokensIn = 0;
+  let totalTokensOut = 0;
+  let totalLoopIterations = 0;
 
   // Per-node session persistence across workflow re-runs. Scope = the DB conversation
   // UUID. The `?? undefined` guard keeps an empty/missing conversation_id from keying
@@ -3473,6 +3511,11 @@ export async function executeDagWorkflow(
       if (result.status === 'fulfilled') {
         const { nodeId, output } = result.value;
         if (output.costUsd !== undefined) totalCostUsd += output.costUsd;
+        if (output.tokens !== undefined) {
+          totalTokensIn += output.tokens.input;
+          totalTokensOut += output.tokens.output;
+        }
+        if (output.loopIterations !== undefined) totalLoopIterations += output.loopIterations;
         nodeOutputs.set(nodeId, output);
         // Typed artifact: when a node declares `output_type`, persist its output
         // as a typed sidecar (nodes/<id>.md + .meta.json) so other nodes and
@@ -3624,6 +3667,11 @@ export async function executeDagWorkflow(
       nodesTotal: nodeCounts.total,
       exitReason: 'no_nodes_completed',
       ...failureTaxonomy,
+      ...(totalCostUsd > 0 ? { costUsd: totalCostUsd } : {}),
+      ...(totalTokensIn > 0 || totalTokensOut > 0
+        ? { tokensIn: totalTokensIn, tokensOut: totalTokensOut }
+        : {}),
+      ...(totalLoopIterations > 0 ? { loopIterations: totalLoopIterations } : {}),
     });
     // Note: nodeCounts not stored for failed runs — failWorkflowRun only stores { error }.
     // Frontend guards with isValidNodeCounts so missing node_counts is safe.
@@ -3671,6 +3719,11 @@ export async function executeDagWorkflow(
       nodesTotal: nodeCounts.total,
       exitReason: 'node_error',
       ...failureTaxonomy,
+      ...(totalCostUsd > 0 ? { costUsd: totalCostUsd } : {}),
+      ...(totalTokensIn > 0 || totalTokensOut > 0
+        ? { tokensIn: totalTokensIn, tokensOut: totalTokensOut }
+        : {}),
+      ...(totalLoopIterations > 0 ? { loopIterations: totalLoopIterations } : {}),
     });
     await deps.store.failWorkflowRun(workflowRun.id, failMsg).catch((dbErr: Error) => {
       getLog().error({ err: dbErr, workflowRunId: workflowRun.id }, 'dag_db_fail_failed');
@@ -3738,6 +3791,11 @@ export async function executeDagWorkflow(
     nodesFailed: nodeCounts.failed,
     nodesSkipped: nodeCounts.skipped,
     nodesTotal: nodeCounts.total,
+    ...(totalCostUsd > 0 ? { costUsd: totalCostUsd } : {}),
+    ...(totalTokensIn > 0 || totalTokensOut > 0
+      ? { tokensIn: totalTokensIn, tokensOut: totalTokensOut }
+      : {}),
+    ...(totalLoopIterations > 0 ? { loopIterations: totalLoopIterations } : {}),
   });
   deps.store
     .createWorkflowEvent({

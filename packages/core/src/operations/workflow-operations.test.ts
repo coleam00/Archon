@@ -37,6 +37,7 @@ const mockLogger = {
   trace: mock(() => undefined),
 };
 mock.module('@archon/paths', () => ({
+  captureApprovalResolved: () => undefined,
   createLogger: mock(() => mockLogger),
 }));
 

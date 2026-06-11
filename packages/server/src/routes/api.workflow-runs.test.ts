@@ -107,6 +107,7 @@ mock.module('@archon/core', () => ({
 }));
 
 mock.module('@archon/paths', () => ({
+  captureApprovalResolved: () => undefined,
   createLogger: () => ({
     fatal: mock(() => undefined),
     error: mock(() => undefined),
