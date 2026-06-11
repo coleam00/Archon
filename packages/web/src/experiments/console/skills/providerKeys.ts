@@ -21,17 +21,67 @@ export interface ProviderKeyConnection {
   label: string | null;
 }
 
+/** How a credential can authenticate (mirrors CREDENTIAL_KINDS in @archon/providers). */
+export type CredentialKindOption = 'api_key' | 'subscription' | 'ambient';
+
+/**
+ * One credential a given agent can consume, with the caller's connection
+ * state and server-side detection (install env / ambient). Mirrors
+ * `agentCredentialStatusSchema` in `server/.../provider-key.schemas.ts`.
+ */
+export interface AgentCredentialStatus {
+  /** Vendor-canonical credential id (e.g. 'anthropic', 'openrouter'). */
+  vendor: string;
+  displayName: string;
+  kinds: CredentialKindOption[];
+  /** The calling user's stored connection for this vendor, or null. */
+  connected: 'api_key' | 'oauth' | null;
+  /** Whether subscription (OAuth) login is currently connectable (gates included). */
+  subscriptionAvailable: boolean;
+  /** Whether the server process env already carries this vendor's key. */
+  installEnv: boolean;
+  /** Ambient chains only (bedrock/vertex): detected in the server environment. */
+  ambientConfigured?: boolean;
+}
+
+/**
+ * One agent's credential surface (#1955 grouped API). `catalog: 'dynamic'`
+ * (OpenCode) means the vendor set is resolved at runtime via
+ * GET /api/providers/opencode/credentials; `credentials` is empty and `ready`
+ * is always false for those.
+ */
+export interface AgentCredentials {
+  /** Agent provider id (registry order preserved by the server). */
+  id: string;
+  displayName: string;
+  catalog: 'static' | 'dynamic';
+  /**
+   * Whether at least one credential is usable (connected / install env /
+   * ambient). Server-computed source of truth for the card readiness verdict
+   * (`agentReadiness` in lib/agent-status.ts reads it; the client only
+   * derives the human reason label from `credentials`).
+   */
+  ready: boolean;
+  credentials: AgentCredentialStatus[];
+}
+
 export interface ProviderKeyList {
-  /** False when the install has no TOKEN_ENCRYPTION_KEY — the panel hides. */
+  /** False when the install has no TOKEN_ENCRYPTION_KEY — connect affordances hide. */
   enabled: boolean;
   connections: ProviderKeyConnection[];
-  /** Server-owned catalog of connectable provider ids (no client duplication). */
+  /** Server-owned catalog of connectable vendor ids (no client duplication). */
   available: string[];
   /**
    * Subset of `available` that supports subscription (OAuth) login. Codex is
    * intentionally excluded (gated, #1924) so the UI shows it API-key-only.
    */
   subscriptionAvailable: string[];
+  /**
+   * Agent → credential matrix (#1955). Two consumers: the Settings → Agents
+   * cards and the readiness hints in the Model Tiers / Aliases provider
+   * dropdowns (both read the shared `K.providerConnections` cache entry).
+   */
+  agents: AgentCredentials[];
 }
 
 export interface ProviderKeySetResult {

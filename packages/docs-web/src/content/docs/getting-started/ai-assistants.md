@@ -621,7 +621,7 @@ Per-user credentials are gated on a single secret. Set `TOKEN_ENCRYPTION_KEY` (a
 TOKEN_ENCRYPTION_KEY=<64-char hex>
 ```
 
-Without it, the per-user surface is inert (the settings panel hides, the routes report `enabled: false`) and Archon keeps reading provider keys from the environment as above.
+Without it, the per-user surface is inert (the routes report `enabled: false`) and Archon keeps reading provider keys from the environment as above. The console's **Agents** section still renders in that state — each agent card shows install-level status (which keys the server environment already carries, plus ambient cloud-chain detection) with the connect/login/disconnect affordances hidden, so a solo install can see *what's authenticated* even though there's nothing per-user to manage.
 
 ### Connecting from the console
 
@@ -629,7 +629,7 @@ The console **AI Settings** page (Settings in the web UI) has four sections:
 
 - **Model Tiers** — map the `small` / `medium` / `large` tiers to a provider + model (and optional effort). This writes the install's `tiers:` config and works on **any** install, even without `TOKEN_ENCRYPTION_KEY` (it's non-secret config). Pi tier models show a cost/reasoning/context hint from Pi's model catalog.
 - **Model Aliases** — define `@custom` refs (e.g. `@fast`) usable in workflow `model:` fields, with the same scope toggle.
-- **Provider Auth** — connect a credential for *your* user. Credentials are keyed by **vendor** (`anthropic`, `openai`, `github-copilot`, `openrouter`, …), and one credential serves every agent that consumes it (an `anthropic` key powers Claude Code, Pi's anthropic backend, and OpenCode). Every vendor accepts an **API key**; **`anthropic`** and **`github-copilot`** additionally offer **subscription login** (an OAuth flow). `openai` is **API-key-only** — the ChatGPT subscription path is gated pending [#1924](https://github.com/coleam00/Archon/issues/1924). Legacy ids (`claude`/`codex`/`copilot`) are accepted and normalized.
+- **Agents** — one card per agent (Claude Code, Codex, Pi, OpenCode, Copilot) with the credentials it can spend nested inside, each card showing a readiness state (ready / needs credential). Connect a credential for *your* user inside the agent that uses it. Credentials are keyed by **vendor** (`anthropic`, `openai`, `github-copilot`, `openrouter`, …), and one credential serves every agent that consumes it (an `anthropic` key powers Claude Code and Pi's anthropic backend — both cards reflect it). Every vendor accepts an **API key**; **`anthropic`** and **`github-copilot`** additionally offer **subscription login** (an OAuth flow). `openai` is **API-key-only** — the ChatGPT subscription path is gated pending [#1924](https://github.com/coleam00/Archon/issues/1924). Legacy ids (`claude`/`codex`/`copilot`) are accepted and normalized. The **Pi** card keeps its 30+ backends behind a searchable "Add backend…" picker (with model counts from Pi's catalog) and shows ambient chains (Amazon Bedrock, Google Vertex) as status-only rows; the **OpenCode** card loads its backend catalog on demand from the embedded runtime — its connections are install-wide, not per-user.
 - **Defaults** — the default assistant and per-provider model defaults, plus a "Your default" (just-me) assistant select.
 
 ### Per-user model preferences ("Just me")

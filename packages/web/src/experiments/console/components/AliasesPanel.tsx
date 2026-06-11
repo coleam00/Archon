@@ -3,12 +3,15 @@ import * as skill from '../skills';
 import type {
   AliasRowForm,
   ProviderInfo,
+  ProviderKeyList,
   SafeConfigAliases,
   SettingsScope,
   UserAiPrefs,
 } from '../skills';
 import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
+import { providerOptionHint } from '../lib/agent-status';
+import { useCancelledRef } from '../lib/use-cancelled-ref';
 import { SettingsSection } from './SettingsSection';
 import { ScopeToggle } from './ScopeToggle';
 
@@ -68,6 +71,12 @@ export function AliasesPanel(): ReactElement {
     K.userAiPrefs,
     skill.getUserAiPrefs
   );
+  // Agent credential matrix for readiness hints in the provider dropdowns.
+  // Shares the AgentsPanel cache key (one fetch); a 401/error means no hints.
+  const { data: keyData } = useEntity<ProviderKeyList>(
+    K.providerConnections,
+    skill.listProviderKeys
+  );
 
   const userScopeAvailable = userPrefsError === undefined;
   const [scope, setScope] = useState<SettingsScope>('install');
@@ -89,13 +98,8 @@ export function AliasesPanel(): ReactElement {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
-  const cancelledRef = useRef(false);
-  useEffect(() => {
-    cancelledRef.current = false;
-    return (): void => {
-      cancelledRef.current = true;
-    };
-  }, []);
+  // Guard async setState after unmount (mirrors AgentsPanel's cards).
+  const cancelledRef = useCancelledRef();
 
   const loadError = configError ?? providersError;
   if (loadError !== undefined) {
@@ -197,6 +201,7 @@ export function AliasesPanel(): ReactElement {
                   {providers.map(p => (
                     <option key={p.id} value={p.id}>
                       {p.displayName}
+                      {providerOptionHint(keyData?.agents, p.id)}
                     </option>
                   ))}
                 </select>

@@ -3,6 +3,7 @@ import * as skill from '../skills';
 import type {
   PiModelInfo,
   ProviderInfo,
+  ProviderKeyList,
   SafeConfigTiers,
   TiersForm,
   TierName,
@@ -13,6 +14,8 @@ import type {
 import { TIER_ORDER } from '../skills';
 import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
+import { providerOptionHint } from '../lib/agent-status';
+import { useCancelledRef } from '../lib/use-cancelled-ref';
 import { SettingsSection } from './SettingsSection';
 import { ScopeToggle } from './ScopeToggle';
 
@@ -84,7 +87,7 @@ function defaultHint(cfg: SafeConfigTiers, t: TierName, scope: SettingsScope): s
  * (ungated; works on solo installs), "Just me" writes the caller's per-user
  * prefs row via PATCH /api/auth/me/ai-prefs/tiers (highest precedence at run
  * time). The "Just me" scope is hidden when GET /api/auth/me/ai-prefs 401s (no
- * web identity — solo-PAT or logged out), mirroring ProviderConnectionsPanel.
+ * web identity — solo-PAT or logged out), mirroring AgentsPanel.
  * A row left on "Default" is sent as an unset and falls back to the next layer.
  */
 export function ModelTiersPanel(): ReactElement {
@@ -100,6 +103,12 @@ export function ModelTiersPanel(): ReactElement {
   // Pi catalog for the cost/reasoning hint. Best-effort: the server returns []
   // when the catalog can't load, and a fetch error simply means no hint.
   const { data: piModels } = useEntity<PiModelInfo[]>(K.piModels, skill.listPiModels);
+  // Agent credential matrix for readiness hints in the provider dropdowns.
+  // Shares the AgentsPanel cache key (one fetch); a 401/error means no hints.
+  const { data: keyData } = useEntity<ProviderKeyList>(
+    K.providerConnections,
+    skill.listProviderKeys
+  );
 
   // No web identity (401) or any other prefs read failure → install scope only,
   // so the editor never mislabels install values as "Just me".
@@ -122,14 +131,8 @@ export function ModelTiersPanel(): ReactElement {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
-  // Guard async setState after unmount (mirrors ProviderConnectionsPanel).
-  const cancelledRef = useRef(false);
-  useEffect(() => {
-    cancelledRef.current = false;
-    return (): void => {
-      cancelledRef.current = true;
-    };
-  }, []);
+  // Guard async setState after unmount (mirrors AgentsPanel's cards).
+  const cancelledRef = useCancelledRef();
 
   const loadError = configError ?? providersError;
   if (loadError !== undefined) {
@@ -221,6 +224,7 @@ export function ModelTiersPanel(): ReactElement {
                   {providers.map(p => (
                     <option key={p.id} value={p.id}>
                       {p.displayName}
+                      {providerOptionHint(keyData?.agents, p.id)}
                     </option>
                   ))}
                 </select>

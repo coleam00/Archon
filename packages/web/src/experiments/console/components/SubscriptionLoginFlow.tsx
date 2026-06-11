@@ -4,6 +4,7 @@ import type { ProviderOAuthStart } from '../skills';
 import { invalidate } from '../store/cache';
 import { K } from '../store/keys';
 import { normalizeOAuthCode } from '../lib/oauth-code';
+import { useCancelledRef } from '../lib/use-cancelled-ref';
 
 type Phase = 'starting' | 'manual' | 'device' | 'error';
 
@@ -17,9 +18,12 @@ type Phase = 'starting' | 'manual' | 'device' | 'error';
  */
 export function SubscriptionLoginFlow({
   provider,
+  displayName,
   onDone,
 }: {
   provider: string;
+  /** Human label for the heading; falls back to the raw provider id. */
+  displayName?: string;
   onDone: () => void;
 }): ReactElement {
   const [phase, setPhase] = useState<Phase>('starting');
@@ -27,7 +31,10 @@ export function SubscriptionLoginFlow({
   const [code, setCode] = useState('');
   const [message, setMessage] = useState<string | null>(null);
 
-  const cancelledRef = useRef(false);
+  // Unmount guard. The hook's ref is mount-scoped, so a `provider` change
+  // would NOT flip it — the effect below adds a per-run `superseded` flag for
+  // that case (old poll loop must stop when a new provider's flow starts).
+  const cancelledRef = useCancelledRef();
   const pendingCodeRef = useRef<string | undefined>(undefined);
   // Keep `onDone` in a ref so the start/poll effect depends only on `provider`.
   // Otherwise the parent's inline `onDone={() => …}` is a fresh fn each render,
@@ -37,25 +44,28 @@ export function SubscriptionLoginFlow({
   onDoneRef.current = onDone;
 
   useEffect(() => {
-    cancelledRef.current = false;
+    // `superseded` covers the provider-change case (effect cleanup re-runs but
+    // the component stays mounted); `cancelledRef` covers unmount.
+    let superseded = false;
+    const stale = (): boolean => superseded || cancelledRef.current;
     let started = false;
 
     const pollLoop = async (sessionId: string): Promise<void> => {
       const deadline = Date.now() + 10 * 60 * 1000; // bridge SESSION_TTL_MS
       for (;;) {
-        if (cancelledRef.current) return;
+        if (stale()) return;
         if (Date.now() > deadline) {
           setPhase('error');
           setMessage('Login timed out — close and try again.');
           return;
         }
         await new Promise(r => setTimeout(r, 2000));
-        if (cancelledRef.current) return;
+        if (stale()) return;
         try {
           const submit = pendingCodeRef.current;
           pendingCodeRef.current = undefined;
           const res = await skill.pollProviderOAuth(provider, sessionId, submit);
-          if (cancelledRef.current) return;
+          if (stale()) return;
           if (res.status === 'connected') {
             invalidate(K.providerConnections);
             onDoneRef.current();
@@ -68,7 +78,7 @@ export function SubscriptionLoginFlow({
           }
           // 'pending' → keep polling
         } catch (e: unknown) {
-          if (cancelledRef.current) return;
+          if (stale()) return;
           setPhase('error');
           setMessage(e instanceof Error ? e.message : 'Login poll failed.');
           return;
@@ -79,22 +89,22 @@ export function SubscriptionLoginFlow({
     void (async (): Promise<void> => {
       try {
         const s = await skill.startProviderOAuth(provider);
-        if (cancelledRef.current || started) return;
+        if (stale() || started) return;
         started = true;
         setStart(s);
         setPhase(s.mode === 'device' ? 'device' : 'manual');
         void pollLoop(s.sessionId);
       } catch (e: unknown) {
-        if (cancelledRef.current) return;
+        if (stale()) return;
         setPhase('error');
         setMessage(e instanceof Error ? e.message : 'Failed to start login.');
       }
     })();
 
     return (): void => {
-      cancelledRef.current = true;
+      superseded = true;
     };
-  }, [provider]);
+  }, [provider, cancelledRef]);
 
   const submitCode = (): void => {
     if (code.trim() === '') return;
@@ -107,7 +117,7 @@ export function SubscriptionLoginFlow({
     <div className="flex flex-col gap-2 rounded border border-border bg-surface-inset p-3 text-[12px] text-text-secondary">
       <div className="flex items-center justify-between gap-3">
         <span className="font-medium text-text-primary capitalize">
-          {provider} subscription login
+          {displayName ?? provider} subscription login
         </span>
         <button
           type="button"

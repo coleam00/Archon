@@ -1,17 +1,17 @@
 import { type ReactElement } from 'react';
 import { ModelTiersPanel } from '../components/ModelTiersPanel';
 import { AliasesPanel } from '../components/AliasesPanel';
-import { ProviderConnectionsPanel } from '../components/ProviderConnectionsPanel';
+import { AgentsPanel } from '../components/AgentsPanel';
 import { AssistantConfigPanel } from '../components/AssistantConfigPanel';
 import { SystemPanel } from '../components/SystemPanel';
 import { GithubIdentityPanel } from '../components/GithubIdentityPanel';
 
 /**
  * Global (installation-wide) console "AI Settings" — sectioned: Model Tiers (the
- * config tiers editor, ungated) → Provider Auth (per-user keys + subscription
- * login) → Defaults (default assistant + per-provider model) → System → GitHub.
- * Mounted at `/console/settings`; the config write paths (PATCH /api/config/*
- * → ~/.archon/config.yaml) are install-wide.
+ * config tiers editor, ungated) → Agents (per-agent credential cards: keys +
+ * subscription login, #1956) → Defaults (default assistant + per-provider
+ * model) → System → GitHub. Mounted at `/console/settings`; the config write
+ * paths (PATCH /api/config/* → ~/.archon/config.yaml) are install-wide.
  */
 export function SettingsPage(): ReactElement {
   return (
@@ -23,7 +23,7 @@ export function SettingsPage(): ReactElement {
         <div className="mx-auto flex max-w-[680px] flex-col gap-[22px]">
           <ModelTiersPanel />
           <AliasesPanel />
-          <ProviderConnectionsPanel />
+          <AgentsPanel />
           <AssistantConfigPanel />
           <SystemPanel />
           <GithubIdentityPanel />
