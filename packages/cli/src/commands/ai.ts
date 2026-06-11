@@ -50,6 +50,7 @@ import {
   TIER_NAMES,
   buildAiProfile,
   isEffortValidForProvider,
+  isTierName as isTierNameStrict,
   validEffortsForProvider,
 } from '@archon/workflows/model-validation';
 import type { TierName, RawAliasEntry } from '@archon/workflows/model-validation';
@@ -86,7 +87,13 @@ async function resolveUser(): Promise<{ id: string } | null> {
     console.error('Could not determine your CLI identity. Set ARCHON_USER_ID (or $USER).');
     return null;
   }
-  return await userDb.findOrCreateUserByPlatformIdentity('cli', cliId, cliId);
+  try {
+    return await userDb.findOrCreateUserByPlatformIdentity('cli', cliId, cliId);
+  } catch (err) {
+    getLog().error({ err: err as Error }, 'cli.ai_resolve_user_failed');
+    console.error(`✗ Could not resolve your Archon user: ${(err as Error).message}`);
+    return null;
+  }
 }
 
 /**
@@ -294,7 +301,7 @@ async function pollLoginLoop(
 export type PrefsScope = 'install' | 'user';
 
 function isTierName(v: string | undefined): v is TierName {
-  return v !== undefined && (TIER_NAMES as readonly string[]).includes(v);
+  return v !== undefined && isTierNameStrict(v);
 }
 
 /** Parse a `--scope` value; prints usage and returns null when invalid. */
@@ -410,6 +417,8 @@ async function readUserPrefsBestEffort(): Promise<UserAiPrefs> {
     return await getUserAiPrefs(user.id);
   } catch (err) {
     getLog().warn({ err: err as Error }, 'cli.ai_user_prefs_read_failed');
+    // Visible notice so the listing isn't mistaken for "you have no overrides".
+    console.error('(could not read your per-user prefs — showing install config only)');
     return {};
   }
 }

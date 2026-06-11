@@ -6,8 +6,9 @@ import type { components } from '@/lib/api.generated';
  *
  * Mirrors the envVars skill (requestJson + method). Types come from the generated
  * OpenAPI spec (`@/lib/api.generated`) — never `@/lib/api` — so the console stays
- * inside its isolation boundary. The write path is GLOBAL only: PATCH
- * /api/config/assistants persists to ~/.archon/config.yaml (no repo overrides).
+ * inside its isolation boundary. Two write scopes: the /api/config/* verbs
+ * persist install-wide to ~/.archon/config.yaml (no repo overrides), and the
+ * /api/auth/me/ai-prefs* verbs persist the caller's per-user prefs row.
  */
 
 export type SafeConfig = components['schemas']['SafeConfig'];

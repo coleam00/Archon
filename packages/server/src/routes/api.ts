@@ -1146,6 +1146,7 @@ const userAiPrefsGetRoute = createRoute({
       description: 'The user’s stored prefs (raw per-user layer, not merged with config)',
     },
     401: jsonError('Web auth required'),
+    500: jsonError('Server error'),
   },
 });
 
@@ -1167,6 +1168,7 @@ const userAiPrefsTiersRoute = createRoute({
     },
     400: jsonError('Unknown provider or invalid effort'),
     401: jsonError('Web auth required'),
+    500: jsonError('Server error'),
   },
 });
 
@@ -1188,6 +1190,7 @@ const userAiPrefsAliasesRoute = createRoute({
     },
     400: jsonError('Invalid alias name, unknown provider, or invalid effort'),
     401: jsonError('Web auth required'),
+    500: jsonError('Server error'),
   },
 });
 
@@ -1209,6 +1212,7 @@ const userAiPrefsDefaultRoute = createRoute({
     },
     400: jsonError('Unknown provider'),
     401: jsonError('Web auth required'),
+    500: jsonError('Server error'),
   },
 });
 
@@ -1678,6 +1682,17 @@ export function registerApiRoutes(
     return null;
   }
 
+  /** Validate a custom alias name: must start with '@' and not shadow a tier keyword. */
+  function validateAliasName(name: string): string | null {
+    if ((TIER_NAMES as readonly string[]).includes(name)) {
+      return `Alias name '${name}' is reserved (small/medium/large are tier keywords). Use a different name.`;
+    }
+    if (!name.startsWith('@')) {
+      return `Alias name '${name}' must start with '@' (e.g. '@${name}').`;
+    }
+    return null;
+  }
+
   /** Clean a validated entry — drop `thinking` (no UI/CLI surface), keep effort. */
   function toCleanEntry(entry: { provider: string; model: string; effort?: string }): {
     provider: string;
@@ -1733,16 +1748,8 @@ export function registerApiRoutes(
     const body = getValidatedBody(c, updateUserAliasesBodySchema);
     const patch: UserAliasesPatch = {};
     for (const [name, entry] of Object.entries(body.aliases)) {
-      if ((TIER_NAMES as readonly string[]).includes(name)) {
-        return apiError(
-          c,
-          400,
-          `Alias name '${name}' is reserved (small/medium/large are tier keywords). Use a different name.`
-        );
-      }
-      if (!name.startsWith('@')) {
-        return apiError(c, 400, `Alias name '${name}' must start with '@' (e.g. '@${name}').`);
-      }
+      const nameErr = validateAliasName(name);
+      if (nameErr) return apiError(c, 400, nameErr);
       if (entry === null) {
         patch[name] = null;
         continue;
@@ -3984,29 +3991,10 @@ export function registerApiRoutes(
           tiers[tier] = null;
           continue;
         }
-        if (!isRegisteredProvider(entry.provider)) {
-          return apiError(
-            c,
-            400,
-            `Unknown provider '${entry.provider}' for tier '${tier}'. Available: ${getProviderInfoList()
-              .map(p => p.id)
-              .join(', ')}`
-          );
-        }
-        if (entry.effort !== undefined && !isEffortValidForProvider(entry.provider, entry.effort)) {
-          return apiError(
-            c,
-            400,
-            `Invalid effort '${entry.effort}' for provider '${entry.provider}' (tier '${tier}'). ` +
-              `Valid: ${validEffortsForProvider(entry.provider)?.join(', ') ?? '(none)'}`
-          );
-        }
-        // Build a clean RawAliasEntry — drop `thinking` (no UI/CLI surface yet).
-        tiers[tier] = {
-          provider: entry.provider,
-          model: entry.model,
-          ...(entry.effort !== undefined ? { effort: entry.effort } : {}),
-        };
+        const errMsg = validatePresetEntry(`tier '${tier}'`, entry);
+        if (errMsg) return apiError(c, 400, errMsg);
+        // Clean RawAliasEntry — drops `thinking` (no UI/CLI surface yet).
+        tiers[tier] = toCleanEntry(entry);
       }
 
       await updateGlobalConfig({ tiers });
@@ -4028,16 +4016,8 @@ export function registerApiRoutes(
       const body = getValidatedBody(c, updateAliasesBodySchema);
       const aliases: AliasesPatch = {};
       for (const [name, entry] of Object.entries(body.aliases)) {
-        if ((TIER_NAMES as readonly string[]).includes(name)) {
-          return apiError(
-            c,
-            400,
-            `Alias name '${name}' is reserved (small/medium/large are tier keywords). Use a different name.`
-          );
-        }
-        if (!name.startsWith('@')) {
-          return apiError(c, 400, `Alias name '${name}' must start with '@' (e.g. '@${name}').`);
-        }
+        const nameErr = validateAliasName(name);
+        if (nameErr) return apiError(c, 400, nameErr);
         if (entry === null) {
           aliases[name] = null;
           continue;
@@ -4067,7 +4047,14 @@ export function registerApiRoutes(
 
   // GET /api/providers/pi/models - Pi model catalog (best-effort hint; [] on failure)
   registerOpenApiRoute(getPiModelsRoute, async c => {
-    return c.json({ models: await listPiModels() });
+    try {
+      return c.json({ models: await listPiModels() });
+    } catch (error) {
+      // listPiModels already degrades internally; this belt-and-suspenders
+      // keeps the documented "never errors" contract at the route boundary.
+      getLog().warn({ err: error }, 'providers.pi_models_list_failed');
+      return c.json({ models: [] });
+    }
   });
 
   // GET /api/codebases/:id/environments - List isolation environments for a codebase

@@ -91,16 +91,27 @@ export function AssistantConfigPanel(): ReactElement {
   const [savingUserDefault, setSavingUserDefault] = useState(false);
   const [userDefaultError, setUserDefaultError] = useState<string | null>(null);
 
+  // Guard async setState after unmount (mirrors ModelTiersPanel/AliasesPanel).
+  const cancelledRef = useRef(false);
+  useEffect(() => {
+    cancelledRef.current = false;
+    return (): void => {
+      cancelledRef.current = true;
+    };
+  }, []);
+
   const onUserDefaultChange = async (value: string): Promise<void> => {
     setSavingUserDefault(true);
     setUserDefaultError(null);
     try {
       await skill.updateUserDefaultProvider(value === '' ? null : value);
+      if (cancelledRef.current) return;
       invalidate(K.userAiPrefs);
     } catch (e: unknown) {
+      if (cancelledRef.current) return;
       setUserDefaultError(e instanceof Error ? e.message : 'Failed to save your default.');
     } finally {
-      setSavingUserDefault(false);
+      if (!cancelledRef.current) setSavingUserDefault(false);
     }
   };
 

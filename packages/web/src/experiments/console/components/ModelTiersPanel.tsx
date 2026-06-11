@@ -200,6 +200,7 @@ export function ModelTiersPanel(): ReactElement {
         {TIER_ORDER.map(tier => {
           const row = form[tier];
           const unset = row.provider === '';
+          const hint = piHint(row);
           return (
             <div
               key={tier}
@@ -244,8 +245,8 @@ export function ModelTiersPanel(): ReactElement {
                 placeholder="effort"
                 className={`${INPUT_CLASS} w-[110px] shrink-0 ${unset ? 'opacity-50' : ''}`}
               />
-              {piHint(row) !== null ? (
-                <p className="w-full font-mono text-[10.5px] text-text-tertiary">{piHint(row)}</p>
+              {hint !== null ? (
+                <p className="w-full font-mono text-[10.5px] text-text-tertiary">{hint}</p>
               ) : null}
             </div>
           );

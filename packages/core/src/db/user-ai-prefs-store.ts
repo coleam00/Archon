@@ -51,10 +51,18 @@ function parseJsonColumn(userId: string, column: string, raw: string | null): un
 
 /** Fetch a user's AI prefs. Returns `{}` when the user has no row. */
 export async function getUserAiPrefs(userId: string): Promise<UserAiPrefs> {
-  const result = await pool.query<UserAiPrefsRow>(
-    'SELECT * FROM remote_agent_user_ai_prefs WHERE user_id = $1',
-    [userId]
-  );
+  let result: Awaited<ReturnType<typeof pool.query<UserAiPrefsRow>>>;
+  try {
+    result = await pool.query<UserAiPrefsRow>(
+      'SELECT * FROM remote_agent_user_ai_prefs WHERE user_id = $1',
+      [userId]
+    );
+  } catch (err) {
+    // Log here so a query failure is distinguishable from a parse failure
+    // in caller logs; callers own the fallback policy (rethrow).
+    getLog().error({ err: err as Error, userId }, 'db.user_ai_prefs_read_failed');
+    throw err;
+  }
   const row = result.rows[0];
   if (!row) return {};
   const tiers = parseJsonColumn(userId, 'tiers', row.tiers) as RawTiersConfig | undefined;
@@ -74,13 +82,18 @@ async function upsertPrefsColumn(
 ): Promise<void> {
   const dialect = getDialect();
   const id = dialect.generateUuid();
-  // `column` is a closed literal union — never user input.
-  await pool.query(
-    `INSERT INTO remote_agent_user_ai_prefs (id, user_id, ${column})
-     VALUES ($1, $2, $3)
-     ON CONFLICT (user_id) DO UPDATE SET ${column} = $3, updated_at = ${dialect.now()}`,
-    [id, userId, value]
-  );
+  try {
+    // `column` is a closed literal union — never user input.
+    await pool.query(
+      `INSERT INTO remote_agent_user_ai_prefs (id, user_id, ${column})
+       VALUES ($1, $2, $3)
+       ON CONFLICT (user_id) DO UPDATE SET ${column} = $3, updated_at = ${dialect.now()}`,
+      [id, userId, value]
+    );
+  } catch (err) {
+    getLog().error({ err: err as Error, userId, column }, 'db.user_ai_prefs_write_failed');
+    throw err;
+  }
   getLog().debug({ userId, column }, 'db.user_ai_prefs_set_completed');
 }
 
@@ -104,14 +117,25 @@ function applyPatch(
   return merged;
 }
 
-/** Per-key merge of the user's tier overrides (`null` unsets a tier). */
+/**
+ * Per-key merge of the user's tier overrides (`null` unsets a tier).
+ *
+ * KNOWN LIMITATION: the merge is a non-atomic read-modify-write — two
+ * concurrent saves by the SAME user (double-click, two tabs) can drop the
+ * other write's keys. Last-write-wins on a single user's own preferences is
+ * an acceptable failure mode for now; revisit with a transaction/`FOR UPDATE`
+ * (or SQL-side JSON merge on Postgres) if the multi-user smoke surfaces it.
+ */
 export async function setUserTiers(userId: string, patch: UserTiersPatch): Promise<void> {
   const current = (await getUserAiPrefs(userId)).tiers ?? {};
   const merged = applyPatch(current as Record<string, RawAliasEntry>, patch);
   await upsertPrefsColumn(userId, 'tiers', toJsonOrNull(merged));
 }
 
-/** Per-key merge of the user's `@custom` aliases (`null` unsets an alias). */
+/**
+ * Per-key merge of the user's `@custom` aliases (`null` unsets an alias).
+ * Same non-atomic read-modify-write caveat as {@link setUserTiers}.
+ */
 export async function setUserAliases(userId: string, patch: UserAliasesPatch): Promise<void> {
   const current = (await getUserAiPrefs(userId)).aliases ?? {};
   const merged = applyPatch(current, patch);
