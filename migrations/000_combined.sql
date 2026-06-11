@@ -442,6 +442,30 @@ CREATE TABLE IF NOT EXISTS remote_agent_user_provider_keys (
   UNIQUE(user_id, provider)
 );
 
+-- #1955: credential rows are vendor-keyed (claude→anthropic, codex→openai,
+-- copilot→github-copilot) so one credential can serve every agent that
+-- consumes the vendor. Idempotent data fix: where both a legacy and a vendor
+-- row exist for the same user, the vendor row wins (rare — requires having
+-- connected both ids pre-rename); then legacy rows are renamed in place.
+-- Tested on SQLite (adapters/sqlite.test.ts covers rename, conflict, and
+-- idempotency); the Postgres DML below is the same statements but is NOT
+-- covered by an automated test — verified manually on the multi-user smoke.
+-- Survivable either way: reads normalize legacy ids (normalizeCredentialVendor).
+DELETE FROM remote_agent_user_provider_keys
+WHERE provider IN ('claude', 'codex', 'copilot')
+  AND EXISTS (
+    SELECT 1 FROM remote_agent_user_provider_keys v
+    WHERE v.user_id = remote_agent_user_provider_keys.user_id
+      AND v.provider = CASE remote_agent_user_provider_keys.provider
+        WHEN 'claude' THEN 'anthropic'
+        WHEN 'codex' THEN 'openai'
+        WHEN 'copilot' THEN 'github-copilot'
+      END
+  );
+UPDATE remote_agent_user_provider_keys SET provider = 'anthropic' WHERE provider = 'claude';
+UPDATE remote_agent_user_provider_keys SET provider = 'openai' WHERE provider = 'codex';
+UPDATE remote_agent_user_provider_keys SET provider = 'github-copilot' WHERE provider = 'copilot';
+
 -- Phase 3: per-user AI preferences (model tiers, @custom aliases, default
 -- assistant). NON-encrypted — model names are not secrets (mirrors
 -- codebase_env_vars, not the provider-key store). One row per user; cascades

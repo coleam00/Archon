@@ -116,10 +116,10 @@ The credential subcommands (`key set`, `login`, `list`, `logout`) only work on *
 
 ```bash
 # --- Provider credentials (require TOKEN_ENCRYPTION_KEY) ---
-archon ai key set <provider>     # connect an API key (masked prompt or piped stdin — never argv)
-archon ai login <provider>       # connect a subscription via OAuth (claude or copilot)
-archon ai list                   # list connected providers (metadata only, no secrets)
-archon ai logout <provider>      # disconnect a provider
+archon ai key set <vendor>       # connect an API key (masked prompt or piped stdin — never argv)
+archon ai login <vendor>         # connect a subscription via OAuth (anthropic or github-copilot)
+archon ai list                   # list connected credentials (metadata only, no secrets)
+archon ai logout <vendor>        # disconnect a credential
 
 # --- Model tiers + aliases + default assistant (ungated config) ---
 archon ai tier set <small|medium|large> <provider> <model> [--effort <effort>] [--scope user|install]
@@ -131,7 +131,7 @@ archon ai alias unset <@name> [--scope user|install]
 archon ai default <provider> [--scope user|install]   # set the default assistant
 ```
 
-`ai login` supports subscription login for **`claude`** and **`copilot`** only — `codex` is API-key-only (use `ai key set codex`); its subscription path is gated pending [#1924](https://github.com/coleam00/Archon/issues/1924). The API key is never read from argv (it would leak into shell history): pipe it (`echo "$KEY" | archon ai key set openrouter`) or type it at the masked prompt.
+Credential ids are **vendor-keyed** (`anthropic`, `openai`, `github-copilot`, plus the Pi backends like `openrouter`); legacy `claude`/`codex`/`copilot` are accepted and normalized with a printed notice. `ai login` supports subscription login for **`anthropic`** and **`github-copilot`** only — `openai` is API-key-only (use `ai key set openai`); the ChatGPT subscription path is gated pending [#1924](https://github.com/coleam00/Archon/issues/1924). The API key is never read from argv (it would leak into shell history): pipe it (`echo "$KEY" | archon ai key set openrouter`) or type it at the masked prompt.
 
 `ai tier`, `ai alias`, and `ai default` edit the same `tiers:` / `aliases:` / `defaultAssistant` config you can hand-write in `~/.archon/config.yaml` (see [Configuration](/reference/configuration/)) or edit from the console **AI Settings** page. An unknown provider exits non-zero; `tier unset` removes the override so the tier falls back to its built-in preset. The full per-user setup walkthrough is in [Per-user credentials and AI Settings](/getting-started/ai-assistants/#per-user-credentials-and-ai-settings).
 

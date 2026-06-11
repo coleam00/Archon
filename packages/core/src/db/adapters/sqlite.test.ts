@@ -299,6 +299,48 @@ describe('SqliteAdapter', () => {
       expect(probe).toEqual([{ n: 0 }]);
     });
   });
+
+  describe('provider-key vendor-id migration (#1955)', () => {
+    test('renames legacy rows and lets an existing vendor row win on conflict', async () => {
+      db = createTestDb();
+      const dbPath = currentDbPath;
+      // Seed users + legacy/vendor credential rows post-construction…
+      await db.query(`INSERT INTO remote_agent_users (id) VALUES ('u1'), ('u2')`, []);
+      await db.query(
+        `INSERT INTO remote_agent_user_provider_keys (id, user_id, provider, kind, api_key_encrypted, label)
+         VALUES
+           ('k1', 'u1', 'claude',  'api_key', 'enc-legacy-claude', 'legacy'),
+           ('k2', 'u1', 'anthropic', 'api_key', 'enc-vendor-anthropic', 'vendor'),
+           ('k3', 'u2', 'codex',   'api_key', 'enc-legacy-codex', NULL),
+           ('k4', 'u2', 'copilot', 'oauth',   NULL, 'subscription')`,
+        []
+      );
+      await db.close();
+
+      // …then reopen: migrateColumns() runs the idempotent vendor-id data fix.
+      db = new SqliteAdapter(dbPath);
+      const rows = raw_query(
+        dbPath,
+        'SELECT user_id, provider, label FROM remote_agent_user_provider_keys ORDER BY user_id, provider'
+      ) as { user_id: string; provider: string; label: string | null }[];
+      expect(rows).toEqual([
+        // u1: legacy 'claude' row dropped — the explicit 'anthropic' row wins.
+        { user_id: 'u1', provider: 'anthropic', label: 'vendor' },
+        // u2: no conflicts — legacy ids renamed in place.
+        { user_id: 'u2', provider: 'github-copilot', label: 'subscription' },
+        { user_id: 'u2', provider: 'openai', label: null },
+      ]);
+
+      // Idempotent: a third open changes nothing.
+      await db.close();
+      db = new SqliteAdapter(dbPath);
+      const again = raw_query(
+        dbPath,
+        'SELECT COUNT(*) AS n FROM remote_agent_user_provider_keys'
+      ) as { n: number }[];
+      expect(again).toEqual([{ n: 3 }]);
+    });
+  });
 });
 
 function raw_pragma(dbPath: string, table: string): string[] {

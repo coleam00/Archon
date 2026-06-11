@@ -58,3 +58,23 @@ export const piModelListResponseSchema = z
     models: z.array(piModelInfoSchema),
   })
   .openapi('PiModelListResponse');
+
+/** One OpenCode backend provider, introspected from the embedded server (#1955). */
+export const opencodeCredentialProviderSchema = z
+  .object({
+    id: z.string(),
+    name: z.string(),
+    env: z.array(z.string()),
+    /** Install-wide: OpenCode's auth store is server-global, not per-user. */
+    connected: z.boolean(),
+    modelCount: z.number(),
+    authMethods: z.array(z.object({ type: z.enum(['oauth', 'api']), label: z.string() })),
+  })
+  .openapi('OpencodeCredentialProvider');
+
+/** Response for GET /api/providers/opencode/credentials. */
+export const opencodeCredentialListResponseSchema = z
+  .object({
+    providers: z.array(opencodeCredentialProviderSchema),
+  })
+  .openapi('OpencodeCredentialListResponse');

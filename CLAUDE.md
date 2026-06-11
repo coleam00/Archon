@@ -155,7 +155,7 @@ bun run format:check
 bun run validate
 ```
 
-This runs `check:bundled`, `check:bundled-skill`, `check:bundled-schema`, type-check, lint, format check, and tests. All seven must pass for CI to succeed.
+This runs `check:bundled`, `check:bundled-skill`, `check:bundled-schema`, `check:pi-vendor-map`, type-check, lint, format check, and tests. All eight must pass for CI to succeed.
 
 ### ESLint Guidelines
 
@@ -287,11 +287,12 @@ bun run cli auth github
 # Manage per-user AI-provider credentials (multi-user installs: TOKEN_ENCRYPTION_KEY).
 # Identity from ARCHON_USER_ID or $USER. The key is read from a masked prompt or
 # piped stdin — never from argv.
-bun run cli ai key set <provider>          # connect an API key (e.g. openrouter, claude, codex)
+bun run cli ai key set <vendor>            # connect an API key by VENDOR id (e.g. openrouter, anthropic, openai;
+                                           # legacy claude/codex/copilot accepted and normalized — #1955)
 echo "$MY_KEY" | bun run cli ai key set openrouter
-bun run cli ai login <provider>            # connect a SUBSCRIPTION (claude/copilot) via OAuth — codex gated (#1924)
+bun run cli ai login <vendor>              # connect a SUBSCRIPTION (anthropic/github-copilot) via OAuth — openai/ChatGPT gated (#1924)
 bun run cli ai list                        # list connected providers (no secrets)
-bun run cli ai logout <provider>           # disconnect a provider
+bun run cli ai logout <vendor>             # disconnect a credential
 
 # Model tiers + aliases + default assistant (install-wide config; works on solo
 # installs — these write ~/.archon/config.yaml and need NO TOKEN_ENCRYPTION_KEY).
@@ -464,7 +465,7 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 10. **`user_identities`** - Per-platform mapping (Slack U-id, Telegram chat id, Discord snowflake, GitHub login, Better Auth web user id) → `users.id`; `UNIQUE(platform, platform_user_id)`
 11. **`workflow_node_sessions`** - Per-node provider session IDs persisted across workflow re-runs (opt-in via `persist_session`); keyed by `(workflow_name, node_id, scope_key, provider)`; `scope_key` is typically the conversation UUID
 12. **`user_github_tokens`** - Per-user GitHub device-flow tokens encrypted at rest (AES-256-GCM); one row per Archon user (`UNIQUE(user_id)`), cascades on user deletion; numeric `github_user_id` anchors the commit no-reply email
-13. **`user_provider_keys`** - Per-user AI-provider credentials encrypted at rest (AES-256-GCM, same `TOKEN_ENCRYPTION_KEY`); one row per `(user_id, provider)` (`UNIQUE(user_id, provider)`), cascades on user deletion; `kind` is `api_key` or `oauth`; resolved + injected into the user's runs/chat env at execution time. Gated on `TOKEN_ENCRYPTION_KEY`
+13. **`user_provider_keys`** - Per-user AI-provider credentials encrypted at rest (AES-256-GCM, same `TOKEN_ENCRYPTION_KEY`); one row per `(user_id, provider)` (`UNIQUE(user_id, provider)`), cascades on user deletion; `kind` is `api_key` or `oauth`; resolved + injected into the user's runs/chat env at execution time. Gated on `TOKEN_ENCRYPTION_KEY`. Since #1955 the `provider` column holds **vendor-canonical credential ids** (`anthropic`, `openai`, `github-copilot`, plus the Pi backend vendors) — NOT agent ids; legacy `claude`/`codex`/`copilot` rows are renamed by an idempotent startup data fix (vendor row wins on conflict), and the connectable catalog is derived from provider registrations (`acceptedCredentials` via `credentials:` on `ProviderRegistration`), never hand-listed
 14. **`user_ai_prefs`** - Per-user AI preferences (Phase 3): personal model `tiers`/`aliases` (JSON-as-TEXT) + `default_provider`. NON-encrypted (model names aren't secrets — mirrors `codebase_env_vars`, not the provider-key store); one row per user (`UNIQUE(user_id)`), cascades on user deletion. Folded into `buildAiProfile` as the highest-precedence layer at the userId-aware seams (workflow executor + chat orchestrator); needs a web/CLI identity but NO `TOKEN_ENCRYPTION_KEY`
 15–18. **`remote_agent_auth_user` / `remote_agent_auth_session` / `remote_agent_auth_account` / `remote_agent_auth_verification`** - Better Auth tables for opt-in web login (**PostgreSQL only**; always created on Postgres via the idempotent schema apply, but populated only when web auth is enabled — `DATABASE_URL` + `BETTER_AUTH_SECRET`). Owned and shaped by Better Auth (text ids, camelCase columns); Archon never queries them directly — a session maps to the canonical `users` row via `user_identities('web', <betterAuthUserId>)`
 
@@ -819,7 +820,7 @@ async function createSession(conversationId: string, codebaseId: string) {
 - Source builds: Loaded from filesystem at runtime
 - Merged with repo-specific commands/workflows (repo overrides defaults by name)
 - Opt-out: Set `defaults.loadDefaultCommands: false` or `defaults.loadDefaultWorkflows: false` in `.archon/config.yaml`
-- **After adding, removing, or editing a default file, run `bun run generate:bundled`** to refresh the embedded bundle. After editing `migrations/000_combined.sql`, run `bun run generate:bundled-schema` to keep the embedded schema in sync. `bun run validate` (and CI) run `check:bundled`, `check:bundled-skill`, and `check:bundled-schema` and will fail loudly if any generated file is stale.
+- **After adding, removing, or editing a default file, run `bun run generate:bundled`** to refresh the embedded bundle. After editing `migrations/000_combined.sql`, run `bun run generate:bundled-schema` to keep the embedded schema in sync. After a `@earendil-works/pi-ai` upgrade, run `bun run generate:pi-vendor-map` to regenerate the Pi backend → env-var map + credential specs from the installed SDK (a new upstream backend must be classified in `scripts/generate-pi-vendor-map.ts`). `bun run validate` (and CI) run `check:bundled`, `check:bundled-skill`, `check:bundled-schema`, and `check:pi-vendor-map` and will fail loudly if any generated file is stale.
 
 **Home-scoped ("global") workflows, commands, and scripts** (user-level, applies to every project):
 - Workflows: `~/.archon/workflows/` (or `$ARCHON_HOME/workflows/`)
@@ -919,10 +920,10 @@ Pattern: Use `classifyIsolationError()` (from `@archon/isolation`) to map git er
 - `DELETE /api/auth/github` - Disconnect the current web user's GitHub identity
 
 **AI-Provider Keys (per-user; `TOKEN_ENCRYPTION_KEY`):**
-- `GET /api/auth/providers` - List the current web user's connected provider keys; returns `{ enabled, connections: [{ provider, kind, label }], available: string[], subscriptionAvailable: string[] }` (no secret values; `available` = connectable-provider catalog, `subscriptionAvailable` = subset that supports OAuth login; `enabled:false` when the install has no `TOKEN_ENCRYPTION_KEY`). `requireWebUser` (401 without identity)
-- `PUT /api/auth/providers/:provider` - Connect (upsert) an API key; body `{ apiKey, label? }`; returns `{ success, provider, kind: 'api_key', label }` (never echoes the key). 400 on unknown provider / blank key, 404 when per-user keys disabled, 500 (opaque) on storage failure
-- `DELETE /api/auth/providers/:provider` - Disconnect a provider (idempotent); returns `{ success }`. 404 when disabled
-- `POST /api/auth/providers/:provider/oauth/start` - Begin a subscription (OAuth) login (claude/copilot; **codex gated** — Pi drops the OpenAI `id_token` so the Codex CLI rejects the auth.json, see #1924; codex stays API-key-only); returns `{ sessionId, mode: 'manual'|'device', url?, userCode?, verificationUri?, expiresIn }` (no secret). 400 non-subscription provider, 404 disabled. Held server-side by the `oauth-bridge` (over Pi's `login()`). `SUBSCRIPTION_PROVIDERS` (in `oauth-providers.ts`) is the single source of truth — it excludes providers wired in `ARCHON_TO_PI_OAUTH` but not usable end-to-end.
+- `GET /api/auth/providers` - List the current web user's connected provider keys; returns `{ enabled, connections: [{ provider, kind, label }], available: string[], subscriptionAvailable: string[], agents: [...] }` (no secret values; `available` = registry-derived connectable **vendor** catalog, `subscriptionAvailable` = subset that supports OAuth login; `enabled:false` when the install has no `TOKEN_ENCRYPTION_KEY`). `agents` (#1955) is the agent → credential matrix: per registered agent `{ id, displayName, catalog: 'static'|'dynamic', ready, credentials: [{ vendor, displayName, kinds, connected, subscriptionAvailable, installEnv, ambientConfigured? }] }` — `installEnv`/`ambientConfigured` report server-env detection so readiness works on solo installs too; OpenCode is `catalog:'dynamic'` (introspect via the endpoint below). `requireWebUser` (401 without identity)
+- `PUT /api/auth/providers/:provider` - Connect (upsert) an API key by **vendor id** (legacy `claude`/`codex`/`copilot` accepted + normalized); body `{ apiKey, label? }`; returns `{ success, provider: <vendor>, kind: 'api_key', label }` (never echoes the key). 400 on unknown vendor / blank key, 404 when per-user keys disabled, 500 (opaque) on storage failure
+- `DELETE /api/auth/providers/:provider` - Disconnect a credential (idempotent, vendor-normalized); returns `{ success }`. 404 when disabled
+- `POST /api/auth/providers/:provider/oauth/start` - Begin a subscription (OAuth) login (`anthropic`/`github-copilot`; **openai/ChatGPT gated** — Pi drops the OpenAI `id_token` so the Codex CLI rejects the auth.json, see #1924; openai stays API-key-only); returns `{ sessionId, mode: 'manual'|'device', url?, userCode?, verificationUri?, expiresIn }` (no secret). 400 non-subscription vendor, 404 disabled. Held server-side by the `oauth-bridge` (over Pi's `login()`). `SUBSCRIPTION_PROVIDERS` (in `oauth-providers.ts`) is the single source of truth — it excludes vendors wired in `ARCHON_TO_PI_OAUTH` but not usable end-to-end.
 - `POST /api/auth/providers/:provider/oauth/poll` - Poll the login session; body `{ sessionId, code? }` (`code` = pasted manual-code); returns `{ status: 'pending'|'connected'|'error', detail? }`. Session bound to the caller's userId.
 - Gated on `isPerUserProviderKeysEnabled()` (`TOKEN_ENCRYPTION_KEY`); credentials (API keys + subscriptions) injected into runs/chat env at execution time. Subscription tokens refresh-on-read and re-save on rotation. Subscriptions are delivered to native Claude/Codex (env / `CODEX_HOME/auth.json`) AND to Pi (per-run `auth.json` via `ARCHON_PI_AUTH_PATH`).
 
@@ -937,6 +938,7 @@ Pattern: Use `classifyIsolationError()` (from `@archon/isolation`) to map git er
 - `PATCH /api/config/tiers` - Update model-tier presets; body `{ tiers: { small?, medium?, large? } }` where each tier is `{ provider, model, effort? }` or `null` (unset). Per-key merge; validates each `provider` via `isRegisteredProvider`. Writes `~/.archon/config.yaml`. Drives the console "AI Settings → Model Tiers" panel + `archon ai tier` CLI.
 - `PATCH /api/config/aliases` - Update `@custom` model aliases; body `{ aliases: Record<'@name', entry | null> }`. Same per-key merge + validation as `/tiers`, plus alias-name checks (`@` prefix, not reserved). Drives the console "Model Aliases" panel + `archon ai alias` CLI.
 - `GET /api/providers/pi/models` - Pi's model catalog (`{ models: [{ ref, provider, id, name, reasoning, cost, contextWindow }] }`) for the tier picker's cost/reasoning hint. Best-effort: returns `{ models: [] }` on any catalog failure — never blocks tier/alias saves.
+- `GET /api/providers/opencode/credentials` - Introspect OpenCode's backend providers (#1955): proxies the embedded server's `GET /provider` + `/provider/auth`; returns `{ providers: [{ id, name, env, connected, modelCount, authMethods }] }` (metadata only; `connected` is install-wide — OpenCode's auth store is server-global). **Heavyweight**: starts the embedded OpenCode runtime when not already running — call on demand from the settings card, never on passive page load. 503 (never a silent `[]`) when the runtime is unavailable.
 
 **System:**
 - `GET /api/health` - Health check with adapter/system status

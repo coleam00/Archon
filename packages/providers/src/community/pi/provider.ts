@@ -116,27 +116,10 @@ export function ensurePiPackageDirShim(): void {
   process.env.PI_PACKAGE_DIR = shimDir;
 }
 
-/**
- * Map Pi provider id → env var name used by pi-ai's getEnvApiKey().
- * Kept small and explicit: v1 supports the most common API-key providers.
- * OAuth flows (Anthropic subscription, Google Gemini CLI, etc.) are out of
- * scope — Archon is a server-side platform and doesn't drive interactive
- * login. Extend only when a provider is actually exercised.
- *
- * Cross-reference (authoritative mapping maintained upstream in Pi):
- *   https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/env-api-keys.ts
- */
-const PI_PROVIDER_ENV_VARS: Record<string, string> = {
-  anthropic: 'ANTHROPIC_API_KEY',
-  openai: 'OPENAI_API_KEY',
-  google: 'GEMINI_API_KEY',
-  groq: 'GROQ_API_KEY',
-  mistral: 'MISTRAL_API_KEY',
-  cerebras: 'CEREBRAS_API_KEY',
-  xai: 'XAI_API_KEY',
-  openrouter: 'OPENROUTER_API_KEY',
-  huggingface: 'HUGGINGFACE_API_KEY',
-};
+// Pi provider id → env var name used by pi-ai's getEnvApiKey(). Generated
+// from the installed pi-ai SDK (full backend coverage) — see
+// scripts/generate-pi-vendor-map.ts; `bun run check:pi-vendor-map` guards drift.
+import { PI_PROVIDER_ENV_VARS } from './pi-vendor-map.generated';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {

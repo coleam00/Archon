@@ -133,6 +133,18 @@ mock.module('@archon/providers', () => ({
     getCapabilities: mock(() => ({})),
   })),
   getProviderCapabilities: mock(() => ({ envInjection: true })),
+  getRegisteredProviders: mock(() => []),
+  // Vendor → env-var map consumed by credentials/delivery (#1955). A realistic
+  // subset of the generated map (the chat inject tests deliver through it).
+  PI_PROVIDER_ENV_VARS: {
+    anthropic: 'ANTHROPIC_API_KEY',
+    openai: 'OPENAI_API_KEY',
+    'github-copilot': 'COPILOT_GITHUB_TOKEN',
+    openrouter: 'OPENROUTER_API_KEY',
+    google: 'GEMINI_API_KEY',
+    huggingface: 'HF_TOKEN',
+  },
+  PI_AMBIENT_VENDORS: ['amazon-bedrock', 'google-vertex'],
 }));
 
 mock.module('../db/env-vars', () => ({

@@ -370,9 +370,9 @@ Pi supports both OAuth subscriptions and API keys. Archon's adapter reads your e
 | `cerebras` | `CEREBRAS_API_KEY` |
 | `xai` | `XAI_API_KEY` |
 | `openrouter` | `OPENROUTER_API_KEY` |
-| `huggingface` | `HUGGINGFACE_API_KEY` |
+| `huggingface` | `HF_TOKEN` |
 
-Additional cloud backends exist (Azure, Bedrock, Vertex, etc.) — file an issue if you need an env-var shortcut wired for them.
+The full backend → env-var map is generated from the installed Pi SDK (`bun run generate:pi-vendor-map`) and covers every key-based backend (DeepSeek, Together, Fireworks, Azure OpenAI, Vercel AI Gateway, Cloudflare, MiniMax, Moonshot, Z.AI, Xiaomi, …). Amazon Bedrock and Google Vertex authenticate via ambient cloud credentials (AWS chain / gcloud ADC) instead of a pasted key.
 
 **Local / custom providers (no credentials needed):**
 
@@ -629,7 +629,7 @@ The console **AI Settings** page (Settings in the web UI) has four sections:
 
 - **Model Tiers** — map the `small` / `medium` / `large` tiers to a provider + model (and optional effort). This writes the install's `tiers:` config and works on **any** install, even without `TOKEN_ENCRYPTION_KEY` (it's non-secret config). Pi tier models show a cost/reasoning/context hint from Pi's model catalog.
 - **Model Aliases** — define `@custom` refs (e.g. `@fast`) usable in workflow `model:` fields, with the same scope toggle.
-- **Provider Auth** — connect a provider for *your* user. Every provider accepts an **API key**; **`claude`** and **`copilot`** additionally offer **subscription login** (an OAuth flow). `codex` is **API-key-only** — its subscription path is gated pending [#1924](https://github.com/coleam00/Archon/issues/1924).
+- **Provider Auth** — connect a credential for *your* user. Credentials are keyed by **vendor** (`anthropic`, `openai`, `github-copilot`, `openrouter`, …), and one credential serves every agent that consumes it (an `anthropic` key powers Claude Code, Pi's anthropic backend, and OpenCode). Every vendor accepts an **API key**; **`anthropic`** and **`github-copilot`** additionally offer **subscription login** (an OAuth flow). `openai` is **API-key-only** — the ChatGPT subscription path is gated pending [#1924](https://github.com/coleam00/Archon/issues/1924). Legacy ids (`claude`/`codex`/`copilot`) are accepted and normalized.
 - **Defaults** — the default assistant and per-provider model defaults, plus a "Your default" (just-me) assistant select.
 
 ### Per-user model preferences ("Just me")
@@ -644,8 +644,8 @@ The same actions are available headless via [`archon ai`](/reference/cli/#ai):
 
 ```bash
 # Per-user credentials (need TOKEN_ENCRYPTION_KEY)
-echo "$MY_KEY" | archon ai key set openrouter   # API key for any provider
-archon ai login claude                           # subscription (claude or copilot)
+echo "$MY_KEY" | archon ai key set openrouter   # API key for any vendor
+archon ai login anthropic                        # subscription (anthropic or github-copilot)
 archon ai list                                   # what's connected
 
 # Model tiers + aliases + default (ungated config — solo-OK)

@@ -32,7 +32,10 @@ import {
   persistProviderApiKey,
   listUserProviderKeys,
   deleteUserProviderKey,
-  KNOWN_PROVIDERS,
+  listConnectableVendors,
+  isConnectableVendor,
+  normalizeCredentialVendor,
+  LEGACY_VENDOR_ALIASES,
   SUBSCRIPTION_PROVIDERS,
   startOAuth,
   pollOAuth,
@@ -64,7 +67,19 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 function knownProvidersList(): string {
-  return [...KNOWN_PROVIDERS].sort().join(', ');
+  return listConnectableVendors().join(', ');
+}
+
+/**
+ * Normalize a (possibly legacy agent-keyed) credential id and tell the user
+ * when the stored id differs from what they typed (`claude` → `anthropic`).
+ */
+function resolveVendorArg(provider: string): string {
+  const vendor = normalizeCredentialVendor(provider);
+  if (provider in LEGACY_VENDOR_ALIASES) {
+    console.log(`(Credential ids are vendor-keyed now: '${provider}' → '${vendor}'.)`);
+  }
+  return vendor;
 }
 
 /** Print the gate explanation and return false when per-user keys are off. */
@@ -128,18 +143,19 @@ export async function aiKeySetCommand(provider: string | undefined): Promise<num
     console.error(`Providers: ${knownProvidersList()}`);
     return 1;
   }
-  if (!KNOWN_PROVIDERS.has(provider)) {
+  const vendor = resolveVendorArg(provider);
+  if (!isConnectableVendor(vendor)) {
     console.error(`Unknown provider '${provider}'. Known: ${knownProvidersList()}.`);
     return 1;
   }
   const user = await resolveUser();
   if (!user) return 1;
 
-  const apiKey = await readApiKey(provider);
+  const apiKey = await readApiKey(vendor);
   if (apiKey === null) return 1; // cancelled or empty (message already printed)
 
   try {
-    const result = await persistProviderApiKey(user.id, provider, apiKey);
+    const result = await persistProviderApiKey(user.id, vendor, apiKey);
     console.log(
       `✓ Stored an ${result.kind} for '${result.provider}' (encrypted). ` +
         'It will be injected into your runs and chats.'
@@ -184,7 +200,8 @@ export async function aiLogoutCommand(provider: string | undefined): Promise<num
   }
   // Guard typos consistently with `key set` — a misspelled provider should be a
   // visible error, not a no-op that prints "✓ Disconnected".
-  if (!KNOWN_PROVIDERS.has(provider)) {
+  const vendor = resolveVendorArg(provider);
+  if (!isConnectableVendor(vendor)) {
     console.error(`Unknown provider '${provider}'. Known: ${knownProvidersList()}.`);
     return 1;
   }
@@ -192,12 +209,12 @@ export async function aiLogoutCommand(provider: string | undefined): Promise<num
   if (!user) return 1;
 
   try {
-    await deleteUserProviderKey(user.id, provider);
-    console.log(`✓ Disconnected '${provider}'.`);
+    await deleteUserProviderKey(user.id, vendor);
+    console.log(`✓ Disconnected '${vendor}'.`);
     return 0;
   } catch (err) {
-    getLog().error({ err: err as Error, provider }, 'cli.ai_logout_failed');
-    console.error(`✗ Failed to disconnect '${provider}': ${(err as Error).message}`);
+    getLog().error({ err: err as Error, provider: vendor }, 'cli.ai_logout_failed');
+    console.error(`✗ Failed to disconnect '${vendor}': ${(err as Error).message}`);
     return 1;
   }
 }
@@ -216,16 +233,17 @@ function sleep(ms: number): Promise<void> {
  * bridge. Manual-code providers (claude/codex) print a URL and prompt for the
  * pasted code; device-code (copilot) prints a user-code and polls.
  */
-export async function aiLoginCommand(provider: string | undefined): Promise<number> {
+export async function aiLoginCommand(providerArg: string | undefined): Promise<number> {
   if (!ensureEnabled()) return 1;
-  if (!provider) {
+  if (!providerArg) {
     console.error('Usage: archon ai login <provider>');
     console.error(`Subscription providers: ${subscriptionProvidersList()}`);
     return 1;
   }
+  const provider = resolveVendorArg(providerArg);
   if (!SUBSCRIPTION_PROVIDERS.has(provider)) {
     console.error(
-      `Provider '${provider}' does not support subscription login. ` +
+      `Provider '${providerArg}' does not support subscription login. ` +
         `Subscription providers: ${subscriptionProvidersList()}.`
     );
     return 1;

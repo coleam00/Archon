@@ -3,7 +3,9 @@ import { join } from 'node:path';
 import {
   deliverCredential,
   buildPiAuthJson,
-  KNOWN_PROVIDERS,
+  KNOWN_VENDORS,
+  LEGACY_VENDOR_ALIASES,
+  normalizeCredentialVendor,
   type ResolvedCredential,
 } from './delivery';
 
@@ -18,43 +20,75 @@ function oauth(token = 'oauth-bearer'): ResolvedCredential {
 }
 
 describe('credentials/delivery', () => {
-  describe('KNOWN_PROVIDERS', () => {
-    test('includes the Archon-level provider ids', () => {
-      for (const id of ['claude', 'codex', 'anthropic', 'openai']) {
-        expect(KNOWN_PROVIDERS.has(id)).toBe(true);
+  describe('KNOWN_VENDORS', () => {
+    test('includes the vendor-canonical agent credential ids', () => {
+      for (const id of ['anthropic', 'openai', 'github-copilot']) {
+        expect(KNOWN_VENDORS.has(id)).toBe(true);
       }
     });
 
-    test('includes the Pi backend provider ids', () => {
-      for (const id of ['openrouter', 'google', 'groq', 'xai']) {
-        expect(KNOWN_PROVIDERS.has(id)).toBe(true);
+    test('includes the Pi backend vendor ids (full generated coverage)', () => {
+      for (const id of ['openrouter', 'google', 'groq', 'xai', 'deepseek', 'together', 'zai']) {
+        expect(KNOWN_VENDORS.has(id)).toBe(true);
+      }
+    });
+
+    test('excludes legacy agent-keyed ids and ambient vendors', () => {
+      for (const id of ['claude', 'codex', 'copilot', 'amazon-bedrock']) {
+        expect(KNOWN_VENDORS.has(id)).toBe(false);
       }
     });
   });
 
-  describe('claude', () => {
-    test('api_key → CLAUDE_API_KEY + ANTHROPIC_API_KEY (same value)', () => {
-      const r = deliverCredential('claude', apiKey('sk-ant-xyz'), { artifactsDir: ART_DIR });
-      expect(r.env).toEqual({ CLAUDE_API_KEY: 'sk-ant-xyz', ANTHROPIC_API_KEY: 'sk-ant-xyz' });
+  describe('normalizeCredentialVendor', () => {
+    test('maps legacy agent-keyed ids to vendor ids', () => {
+      expect(normalizeCredentialVendor('claude')).toBe('anthropic');
+      expect(normalizeCredentialVendor('codex')).toBe('openai');
+      expect(normalizeCredentialVendor('copilot')).toBe('github-copilot');
+    });
+
+    test('passes vendor ids through unchanged', () => {
+      for (const id of ['anthropic', 'openai', 'github-copilot', 'openrouter', 'mystery']) {
+        expect(normalizeCredentialVendor(id)).toBe(id);
+      }
+    });
+
+    test('alias table covers exactly the three pre-#1955 ids', () => {
+      expect(Object.keys(LEGACY_VENDOR_ALIASES).sort()).toEqual(['claude', 'codex', 'copilot']);
+    });
+  });
+
+  describe('anthropic', () => {
+    test('api_key → ANTHROPIC_API_KEY + CLAUDE_API_KEY (same value)', () => {
+      const r = deliverCredential('anthropic', apiKey('sk-ant-xyz'), { artifactsDir: ART_DIR });
+      expect(r.env).toEqual({ ANTHROPIC_API_KEY: 'sk-ant-xyz', CLAUDE_API_KEY: 'sk-ant-xyz' });
       expect(r.files).toBeUndefined();
     });
 
-    test('oauth → CLAUDE_CODE_OAUTH_TOKEN', () => {
-      const r = deliverCredential('claude', oauth('claude-oauth-tok'), { artifactsDir: ART_DIR });
+    test('oauth (Claude Pro/Max subscription) → CLAUDE_CODE_OAUTH_TOKEN', () => {
+      const r = deliverCredential('anthropic', oauth('claude-oauth-tok'), {
+        artifactsDir: ART_DIR,
+      });
       expect(r.env).toEqual({ CLAUDE_CODE_OAUTH_TOKEN: 'claude-oauth-tok' });
       expect(r.files).toBeUndefined();
     });
+
+    test("legacy 'claude' id normalizes to the same delivery", () => {
+      const viaLegacy = deliverCredential('claude', apiKey('k'), { artifactsDir: ART_DIR });
+      const viaVendor = deliverCredential('anthropic', apiKey('k'), { artifactsDir: ART_DIR });
+      expect(viaLegacy).toEqual(viaVendor);
+    });
   });
 
-  describe('codex', () => {
+  describe('openai', () => {
     test('api_key → OPENAI_API_KEY', () => {
-      const r = deliverCredential('codex', apiKey('sk-codex'), { artifactsDir: ART_DIR });
+      const r = deliverCredential('openai', apiKey('sk-codex'), { artifactsDir: ART_DIR });
       expect(r.env).toEqual({ OPENAI_API_KEY: 'sk-codex' });
       expect(r.files).toBeUndefined();
     });
 
-    test('oauth → CODEX_HOME env + auth.json file under artifactsDir', () => {
-      const r = deliverCredential('codex', oauth(), { artifactsDir: ART_DIR });
+    test('oauth (ChatGPT subscription) → CODEX_HOME env + auth.json file under artifactsDir', () => {
+      const r = deliverCredential('openai', oauth(), { artifactsDir: ART_DIR });
       expect(r.env.CODEX_HOME).toBe(join(ART_DIR, 'codex-home'));
       expect(r.files).toBeDefined();
       expect(r.files).toHaveLength(1);
@@ -72,7 +106,7 @@ describe('credentials/delivery', () => {
       expect(typeof parsed.last_refresh).toBe('string');
     });
 
-    test('codex oauth → full tokens shape; account_id from Pi `accountId`, id_token best-effort', () => {
+    test('oauth → full tokens shape; account_id from Pi `accountId`, id_token best-effort', () => {
       const cred: ResolvedCredential = {
         kind: 'oauth',
         oauthApiKey: 'x',
@@ -94,15 +128,20 @@ describe('credentials/delivery', () => {
     });
   });
 
-  describe('copilot', () => {
+  describe('github-copilot', () => {
     test('api_key → COPILOT_GITHUB_TOKEN', () => {
-      const r = deliverCredential('copilot', apiKey('pat-x'), { artifactsDir: ART_DIR });
+      const r = deliverCredential('github-copilot', apiKey('pat-x'), { artifactsDir: ART_DIR });
       expect(r.env).toEqual({ COPILOT_GITHUB_TOKEN: 'pat-x' });
     });
 
     test('oauth → COPILOT_GITHUB_TOKEN', () => {
-      const r = deliverCredential('copilot', oauth('cop-tok'), { artifactsDir: ART_DIR });
+      const r = deliverCredential('github-copilot', oauth('cop-tok'), { artifactsDir: ART_DIR });
       expect(r.env).toEqual({ COPILOT_GITHUB_TOKEN: 'cop-tok' });
+    });
+
+    test("legacy 'copilot' id normalizes to the same delivery", () => {
+      const r = deliverCredential('copilot', apiKey('pat-y'), { artifactsDir: ART_DIR });
+      expect(r.env).toEqual({ COPILOT_GITHUB_TOKEN: 'pat-y' });
     });
   });
 
@@ -115,7 +154,7 @@ describe('credentials/delivery', () => {
     test('aggregates api keys + subscriptions keyed by Pi backend id', () => {
       const json = buildPiAuthJson([
         { provider: 'openrouter', cred: apiKey('sk-or') },
-        { provider: 'claude', cred: oauth('cl-tok') },
+        { provider: 'anthropic', cred: oauth('cl-tok') },
       ]);
       expect(json).not.toBeNull();
       const data = JSON.parse(json!) as Record<
@@ -123,33 +162,18 @@ describe('credentials/delivery', () => {
         { type: string; key?: string; access?: string }
       >;
       expect(data.openrouter).toEqual({ type: 'api_key', key: 'sk-or' });
-      // claude → Pi backend 'anthropic'; oauth blob spread under {type:'oauth', ...}
       expect(data.anthropic?.type).toBe('oauth');
       expect(data.anthropic?.access).toBe('cl-tok');
     });
-  });
 
-  describe('anthropic / openai (api-key-only)', () => {
-    test('anthropic api_key → ANTHROPIC_API_KEY', () => {
-      const r = deliverCredential('anthropic', apiKey('sk-ant-direct'), { artifactsDir: ART_DIR });
-      expect(r.env).toEqual({ ANTHROPIC_API_KEY: 'sk-ant-direct' });
-    });
-
-    test('openai api_key → OPENAI_API_KEY', () => {
-      const r = deliverCredential('openai', apiKey('sk-openai-direct'), { artifactsDir: ART_DIR });
-      expect(r.env).toEqual({ OPENAI_API_KEY: 'sk-openai-direct' });
-    });
-
-    test('anthropic oauth → throws (use claude instead)', () => {
-      expect(() => deliverCredential('anthropic', oauth(), { artifactsDir: ART_DIR })).toThrow(
-        /use provider 'claude'/
-      );
-    });
-
-    test('openai oauth → throws (use codex instead)', () => {
-      expect(() => deliverCredential('openai', oauth(), { artifactsDir: ART_DIR })).toThrow(
-        /use provider 'codex'/
-      );
+    test('legacy agent-keyed rows normalize onto Pi backend ids', () => {
+      const json = buildPiAuthJson([
+        { provider: 'claude', cred: oauth('cl-tok') },
+        { provider: 'codex', cred: apiKey('sk-oa') },
+      ]);
+      const data = JSON.parse(json!) as Record<string, { type: string }>;
+      expect(data.anthropic?.type).toBe('oauth');
+      expect(data.openai?.type).toBe('api_key');
     });
   });
 
@@ -164,9 +188,21 @@ describe('credentials/delivery', () => {
       expect(r.env).toEqual({ GEMINI_API_KEY: 'g-key' });
     });
 
-    test('xai api_key → XAI_API_KEY', () => {
-      const r = deliverCredential('xai', apiKey('x-key'), { artifactsDir: ART_DIR });
-      expect(r.env).toEqual({ XAI_API_KEY: 'x-key' });
+    test('huggingface api_key → HF_TOKEN (pi-ai upstream var, not HUGGINGFACE_API_KEY)', () => {
+      // Regression: the hand-maintained map drifted to HUGGINGFACE_API_KEY,
+      // which pi-ai never reads. The generated map fixed it (#1955).
+      const r = deliverCredential('huggingface', apiKey('hf-key'), { artifactsDir: ART_DIR });
+      expect(r.env).toEqual({ HF_TOKEN: 'hf-key' });
+    });
+
+    test('newly covered backends deliver their env var (deepseek)', () => {
+      const r = deliverCredential('deepseek', apiKey('ds-key'), { artifactsDir: ART_DIR });
+      expect(r.env).toEqual({ DEEPSEEK_API_KEY: 'ds-key' });
+    });
+
+    test('google-vertex api_key delivers (dual-kind vendor takes the env path, not the ambient throw)', () => {
+      const r = deliverCredential('google-vertex', apiKey('gv-key'), { artifactsDir: ART_DIR });
+      expect(r.env).toEqual({ GOOGLE_CLOUD_API_KEY: 'gv-key' });
     });
 
     test('Pi backend oauth → throws (subscriptions reach Pi via auth.json, not env)', () => {
@@ -176,10 +212,18 @@ describe('credentials/delivery', () => {
     });
   });
 
-  describe('unknown provider', () => {
-    test('throws with the list of known providers', () => {
+  describe('ambient vendors', () => {
+    test('amazon-bedrock → throws (ambient chains are never stored)', () => {
+      expect(() =>
+        deliverCredential('amazon-bedrock', apiKey(), { artifactsDir: ART_DIR })
+      ).toThrow(/ambient/);
+    });
+  });
+
+  describe('unknown vendor', () => {
+    test('throws with the list of known vendors', () => {
       expect(() => deliverCredential('mystery', apiKey(), { artifactsDir: ART_DIR })).toThrow(
-        /Unknown credential provider 'mystery'/
+        /Unknown credential vendor 'mystery'/
       );
     });
   });

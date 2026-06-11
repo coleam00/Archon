@@ -2787,6 +2787,7 @@ nodes:
         id: 'no-resume-skip-test',
         displayName: 'No Resume Skip Test',
         builtIn: false,
+        credentials: { kind: 'static', specs: [] },
         capabilities: {
           sessionResume: false,
           mcp: false,
@@ -2849,6 +2850,7 @@ nodes:
         id: 'no-resume-test',
         displayName: 'No Resume Test',
         builtIn: false,
+        credentials: { kind: 'static', specs: [] },
         capabilities: {
           sessionResume: false,
           mcp: false,

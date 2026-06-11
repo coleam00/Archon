@@ -8,6 +8,7 @@
  * these shapes — list/responses are metadata only.
  */
 import { z } from '@hono/zod-openapi';
+import { CREDENTIAL_KINDS } from '@archon/providers';
 
 /** One connected provider — metadata only, never a secret value. */
 export const providerKeyConnectionSchema = z
@@ -19,17 +20,58 @@ export const providerKeyConnectionSchema = z
   .openapi('ProviderKeyConnection');
 
 /**
+ * One credential a given agent can consume, with the caller's connection
+ * state and server-side detection (install env / ambient). No secret values.
+ *
+ * Hand-synced with `AgentCredentialStatus` in
+ * `@archon/core/credentials/catalog.ts` — the type lives in core (which can't
+ * own route schemas) and the schema lives here; update both together.
+ */
+export const agentCredentialStatusSchema = z
+  .object({
+    vendor: z.string(),
+    displayName: z.string(),
+    kinds: z.array(z.enum(CREDENTIAL_KINDS)),
+    connected: z.enum(['api_key', 'oauth']).nullable(),
+    subscriptionAvailable: z.boolean(),
+    installEnv: z.boolean(),
+    ambientConfigured: z.boolean().optional(),
+  })
+  .openapi('AgentCredentialStatus');
+
+/**
+ * One agent's credential surface. `catalog: 'dynamic'` (OpenCode) means the
+ * vendor set is resolved at runtime via the agent's own introspection
+ * endpoint; `credentials` is empty and `ready` is always false for those.
+ *
+ * Hand-synced with `AgentCredentialMatrixEntry` in
+ * `@archon/core/credentials/catalog.ts` — update both together.
+ */
+export const agentCredentialsSchema = z
+  .object({
+    id: z.string(),
+    displayName: z.string(),
+    catalog: z.enum(['static', 'dynamic']),
+    ready: z.boolean(),
+    credentials: z.array(agentCredentialStatusSchema),
+  })
+  .openapi('AgentCredentials');
+
+/**
  * GET /api/auth/providers response. `enabled` reflects the per-user-keys gate
  * (TOKEN_ENCRYPTION_KEY); `available` is the server-owned catalog of
- * connectable provider ids so the client never duplicates `KNOWN_PROVIDERS`.
+ * connectable vendor ids (registry-derived) so the client never duplicates
+ * it; `agents` is the agent → credential matrix (#1955) the console settings
+ * cards render from.
  */
 export const providerKeyListResponseSchema = z
   .object({
     enabled: z.boolean(),
     connections: z.array(providerKeyConnectionSchema),
     available: z.array(z.string()),
-    /** Subset of providers that support subscription (OAuth) login. */
+    /** Subset of vendors that support subscription (OAuth) login. */
     subscriptionAvailable: z.array(z.string()),
+    agents: z.array(agentCredentialsSchema),
   })
   .openapi('ProviderKeyListResponse');
 

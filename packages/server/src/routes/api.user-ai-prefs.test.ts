@@ -107,8 +107,10 @@ mock.module('@archon/core', () => ({
   InvalidProviderKeyError: class InvalidProviderKeyError extends Error {},
   listUserProviderKeys: mock(async () => []),
   deleteUserProviderKey: mock(async () => {}),
-  KNOWN_PROVIDERS: new Set<string>(['claude']),
-  SUBSCRIPTION_PROVIDERS: new Set<string>(['claude']),
+  listConnectableVendors: () => ['anthropic'],
+  buildAgentCredentialMatrix: () => [],
+  normalizeCredentialVendor: (id: string) => id,
+  SUBSCRIPTION_PROVIDERS: new Set<string>(['anthropic']),
   startOAuth: mock(async () => ({})),
   pollOAuth: mock(() => ({ status: 'pending' })),
   // Per-user AI prefs surface under test:

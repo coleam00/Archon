@@ -27,6 +27,7 @@ import type {
   OAuthDeviceCodeInfo,
 } from '@archon/providers/oauth';
 import { piOAuthProviderFor, SUBSCRIPTION_PROVIDERS } from './oauth-providers';
+import { normalizeCredentialVendor } from './delivery';
 import { persistProviderOAuth } from './connect-service';
 import { sanitizeCredentials, sanitizeError } from '../utils/credential-sanitizer';
 
@@ -107,22 +108,24 @@ export interface PollOAuthResult {
 }
 
 /**
- * Begin a subscription login for `provider` (claude/codex/copilot). Kicks off
- * Pi's `login()` (held server-side) and returns once the first callback has
- * populated the URL (manual) or user-code (device), or a short timeout elapses.
+ * Begin a subscription login for a vendor (anthropic/github-copilot; legacy
+ * claude/copilot ids accepted). Kicks off Pi's `login()` (held server-side)
+ * and returns once the first callback has populated the URL (manual) or
+ * user-code (device), or a short timeout elapses.
  */
-export async function startOAuth(userId: string, provider: string): Promise<StartOAuthResult> {
+export async function startOAuth(userId: string, providerId: string): Promise<StartOAuthResult> {
   sweepExpired();
+  const provider = normalizeCredentialVendor(providerId);
   // SUBSCRIPTION_PROVIDERS is the single source of truth for "connectable via
-  // subscription" — it excludes providers that are wired in ARCHON_TO_PI_OAUTH
+  // subscription" — it excludes vendors that are wired in ARCHON_TO_PI_OAUTH
   // (so delivery/refresh still work) but gated off because the flow isn't usable
-  // end-to-end (e.g. codex: Pi drops the id_token, #1924). Gate here too so the
-  // bridge can't be driven past the route/CLI check.
+  // end-to-end (e.g. openai/ChatGPT: Pi drops the id_token, #1924). Gate here
+  // too so the bridge can't be driven past the route/CLI check.
   const piProvider = SUBSCRIPTION_PROVIDERS.has(provider)
     ? piOAuthProviderFor(provider)
     : undefined;
   if (!piProvider) {
-    throw new Error(`Provider '${provider}' does not support subscription login.`);
+    throw new Error(`Provider '${providerId}' does not support subscription login.`);
   }
   // One in-flight login per user — abort a prior session so its callback server
   // (claude/codex `usesCallbackServer`) is released; otherwise a fixed-port flow

@@ -44,7 +44,9 @@ import {
   InvalidProviderKeyError,
   listUserProviderKeys,
   deleteUserProviderKey,
-  KNOWN_PROVIDERS,
+  listConnectableVendors,
+  buildAgentCredentialMatrix,
+  normalizeCredentialVendor,
   SUBSCRIPTION_PROVIDERS,
   startOAuth,
   pollOAuth,
@@ -163,7 +165,11 @@ import {
   isEffortValidForProvider,
   validEffortsForProvider,
 } from '@archon/workflows/model-validation';
-import { providerListResponseSchema, piModelListResponseSchema } from './schemas/provider.schemas';
+import {
+  providerListResponseSchema,
+  piModelListResponseSchema,
+  opencodeCredentialListResponseSchema,
+} from './schemas/provider.schemas';
 import {
   authStatusResponseSchema,
   deviceStartResponseSchema,
@@ -189,7 +195,12 @@ import {
   updateUserDefaultProviderBodySchema,
 } from './schemas/user-ai-prefs.schemas';
 import { mapDeviceFlowErrorToPollStatus } from './auth-poll-status';
-import { getProviderInfoList, isRegisteredProvider, listPiModels } from '@archon/providers';
+import {
+  getProviderInfoList,
+  isRegisteredProvider,
+  listPiModels,
+  introspectOpencodeCredentials,
+} from '@archon/providers';
 import { messageSchema } from './schemas/conversation.schemas';
 import {
   workflowRunSchema,
@@ -975,6 +986,25 @@ const getProvidersRoute = createRoute({
   },
 });
 
+const getOpencodeCredentialsRoute = createRoute({
+  method: 'get',
+  path: '/api/providers/opencode/credentials',
+  tags: ['System'],
+  summary: "Introspect OpenCode's backend providers and auth state",
+  description:
+    "Proxies the embedded OpenCode server's provider introspection (catalog, " +
+    'env var names, install-wide connected state). Heavyweight: starts the ' +
+    'embedded server when not already running — call on demand from the ' +
+    'settings card, never on passive page load (#1955).',
+  responses: {
+    200: {
+      content: { 'application/json': { schema: opencodeCredentialListResponseSchema } },
+      description: 'OpenCode backend providers (metadata only, no secrets)',
+    },
+    503: jsonError('Embedded OpenCode runtime unavailable'),
+  },
+});
+
 const authStatusRoute = createRoute({
   method: 'get',
   path: '/api/auth/status',
@@ -1550,15 +1580,28 @@ export function registerApiRoutes(
   registerOpenApiRoute(providerKeyListRoute, async c => {
     const web = await requireWebUser(c, 'Web authentication required to manage provider keys');
     if ('error' in web) return web.error;
-    const available = [...KNOWN_PROVIDERS].sort();
+    const available = listConnectableVendors();
     const subscriptionAvailable = [...SUBSCRIPTION_PROVIDERS].sort();
     if (!isPerUserProviderKeysEnabled()) {
-      // Gate off: the console panel hides on `enabled:false`; skip the DB.
-      return c.json({ enabled: false, connections: [], available, subscriptionAvailable });
+      // Gate off: the console hides connect affordances on `enabled:false`;
+      // the agents matrix still reports install-env/ambient readiness.
+      return c.json({
+        enabled: false,
+        connections: [],
+        available,
+        subscriptionAvailable,
+        agents: buildAgentCredentialMatrix([]),
+      });
     }
     try {
       const connections = await listUserProviderKeys(web.userId);
-      return c.json({ enabled: true, connections, available, subscriptionAvailable });
+      return c.json({
+        enabled: true,
+        connections,
+        available,
+        subscriptionAvailable,
+        agents: buildAgentCredentialMatrix(connections),
+      });
     } catch (err) {
       getLog().error({ err: err as Error, userId: web.userId }, 'auth.provider_keys_list_failed');
       return apiError(c, 500, 'Failed to list provider keys');
@@ -1597,9 +1640,11 @@ export function registerApiRoutes(
     if (!isPerUserProviderKeysEnabled()) {
       return apiError(c, 404, 'Per-user provider keys are not enabled on this install');
     }
-    const provider = c.req.param('provider') ?? '';
-    // No KNOWN_PROVIDERS check here (unlike PUT): delete is an idempotent no-op,
-    // so an unknown/misspelled provider id simply removes nothing and returns ok.
+    const provider = normalizeCredentialVendor(c.req.param('provider') ?? '');
+    // No catalog check here (unlike PUT): delete is an idempotent no-op, so an
+    // unknown/misspelled vendor id simply removes nothing and returns ok.
+    // Legacy agent-keyed ids normalize so `DELETE .../claude` removes the
+    // migrated `anthropic` row.
     try {
       await deleteUserProviderKey(web.userId, provider);
       return c.json({ success: true });
@@ -1623,7 +1668,9 @@ export function registerApiRoutes(
     if (!isPerUserProviderKeysEnabled()) {
       return apiError(c, 404, 'Per-user provider keys are not enabled on this install');
     }
-    const provider = c.req.param('provider') ?? '';
+    // Normalize legacy agent-keyed ids ('claude' → 'anthropic') like every
+    // other credential entry point — SUBSCRIPTION_PROVIDERS is vendor-keyed.
+    const provider = normalizeCredentialVendor(c.req.param('provider') ?? '');
     if (!SUBSCRIPTION_PROVIDERS.has(provider)) {
       return apiError(
         c,
@@ -4060,6 +4107,18 @@ export function registerApiRoutes(
       // keeps the documented "never errors" contract at the route boundary.
       getLog().warn({ err: error }, 'providers.pi_models_list_failed');
       return c.json({ models: [] });
+    }
+  });
+
+  // GET /api/providers/opencode/credentials - OpenCode backend introspection
+  // (on-demand; starts the embedded runtime). 503 on failure — never a silent [].
+  registerOpenApiRoute(getOpencodeCredentialsRoute, async c => {
+    try {
+      const result = await introspectOpencodeCredentials();
+      return c.json(result);
+    } catch (error) {
+      getLog().error({ err: error }, 'providers.opencode_credentials_introspect_failed');
+      return apiError(c, 503, 'Embedded OpenCode runtime unavailable');
     }
   });
 

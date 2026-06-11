@@ -48,10 +48,15 @@ if (
 }
 
 import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
+import { getVendorCatalog } from '@archon/core';
 
 // Bootstrap provider registry before any provider lookups
 registerBuiltinProviders();
 registerCommunityProviders();
+// Fail fast at boot (not on first API request) if any registration declares a
+// credential vendor the delivery map can't deliver — that's a provider bug
+// that must block startup, not surface as a runtime 500 (#1955).
+getVendorCatalog();
 
 import { OpenAPIHono, z } from '@hono/zod-openapi';
 import { validationErrorHook } from './routes/openapi-defaults';

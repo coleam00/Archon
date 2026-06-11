@@ -431,9 +431,10 @@ curl http://localhost:3090/api/auth/providers \
   -H "X-Archon-User: your-user-id"
 ```
 
-Returns `{ enabled, connections: [{ provider, kind, label }], available, subscriptionAvailable }`:
-- `available` -- every provider id you can connect an API key for.
-- `subscriptionAvailable` -- the subset that supports subscription (OAuth) login: **`claude`** and **`copilot`**. (`codex` is API-key-only; its subscription path is gated -- see [#1924](https://github.com/coleam00/Archon/issues/1924).)
+Returns `{ enabled, connections: [{ provider, kind, label }], available, subscriptionAvailable, agents }`:
+- `available` -- every **vendor** id you can connect an API key for (`anthropic`, `openai`, `github-copilot`, plus the Pi backends). Legacy `claude`/`codex`/`copilot` ids are accepted on writes and normalized.
+- `subscriptionAvailable` -- the subset that supports subscription (OAuth) login: **`anthropic`** and **`github-copilot`**. (`openai` is API-key-only; the ChatGPT subscription path is gated -- see [#1924](https://github.com/coleam00/Archon/issues/1924).)
+- `agents` -- the agent -> credential matrix: per registered agent `{ id, displayName, catalog: 'static'|'dynamic', ready, credentials: [{ vendor, displayName, kinds, connected, subscriptionAvailable, installEnv, ambientConfigured? }] }`. `installEnv`/`ambientConfigured` report server-side detection so readiness renders on solo installs too; OpenCode is `catalog:'dynamic'` (introspect via `GET /api/providers/opencode/credentials`).
 
 ### Connect an API Key
 
@@ -458,17 +459,17 @@ Idempotent -- disconnecting a provider that was never connected still returns `{
 ### Subscription Login (OAuth)
 
 Subscription login is a two-step `start` -> `poll` flow held server-side. `start` returns a `mode`:
-- `manual` (Claude) -- show the returned `url`; the user authorizes in a browser and pastes the resulting code back via `poll`.
-- `device` (Copilot) -- show `userCode` + `verificationUri`; `poll` until connected.
+- `manual` (`anthropic`, Claude Pro/Max) -- show the returned `url`; the user authorizes in a browser and pastes the resulting code back via `poll`.
+- `device` (`github-copilot`) -- show `userCode` + `verificationUri`; `poll` until connected.
 
 ```bash
 # 1. Start a login session
-curl -X POST http://localhost:3090/api/auth/providers/claude/oauth/start \
+curl -X POST http://localhost:3090/api/auth/providers/anthropic/oauth/start \
   -H "X-Archon-User: your-user-id"
 # {"sessionId":"...","mode":"manual","url":"https://...","expiresIn":600}
 
 # 2. Poll (pass the pasted `code` once, for manual flows)
-curl -X POST http://localhost:3090/api/auth/providers/claude/oauth/poll \
+curl -X POST http://localhost:3090/api/auth/providers/anthropic/oauth/poll \
   -H "X-Archon-User: your-user-id" \
   -H "Content-Type: application/json" \
   -d '{"sessionId": "...", "code": "the-pasted-code"}'
