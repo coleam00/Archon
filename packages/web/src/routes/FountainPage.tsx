@@ -95,8 +95,8 @@ const KPI_TILES = [
     value: 'BodyView MRI',
     sub: '13 organs · 500+ conditions · 1 hour',
   },
-  { label: 'Engagement scope', value: 'INTAKE', sub: 'Pending Jason debrief' },
-  { label: 'Portfolio fit', value: 'High', sub: 'Cross-sell into BRT + AccuFit + EWC' },
+  { label: 'Client tier', value: 'Core', sub: 'Elevated 2026-06-03 · same tier as BioReg' },
+  { label: 'Key contact', value: 'Blake Baynham', sub: 'Warm relationship via QEP partnership' },
 ];
 
 export function FountainPage(): React.ReactElement {
@@ -357,30 +357,52 @@ export function FountainPage(): React.ReactElement {
           </div>
         </section>
 
-        {/* Intake-pending block */}
+        {/* Engagement status — sourced from vault */}
         <section className="rounded-xl border border-dashed border-primary/40 bg-card p-5">
           <h3
             className="text-sm font-semibold text-text-primary"
             style={{ fontFamily: "'Playfair Display', serif" }}
           >
-            🟡 Intake pending
+            🟢 Core client · build phase
           </h3>
           <p className="mt-2 text-sm text-text-secondary">
-            Jason to debrief on: key_contact, engagement scope, deliverable cadence, current
-            pipeline, and revenue model (membership pricing not public on the site). Until then,
-            this tab reflects public-facing scope only.
+            Elevated to core client tier 2026-06-03 (same tier as BioReg). Phase: build — engagement
+            scope and module composition still forming. Top blocker: lock the intake conversation
+            with Blake to nail down contract structure (retainer vs equipment placement vs
+            rev-share) and QEP protocol composition.
           </p>
-          <ul className="mt-3 list-inside list-disc space-y-1 text-xs text-text-secondary">
-            <li>Owner-DM contact at Fountain</li>
-            <li>Engagement structure (consult ticket vs. retainer)</li>
-            <li>Universal Wellness Package pricing tiers</li>
-            <li>Pipeline / target-account list</li>
-          </ul>
+          <div className="mt-3 grid gap-2 md:grid-cols-2">
+            <div className="rounded-md border border-border bg-background p-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-text-tertiary">
+                Cross-brand pull-through (vault)
+              </p>
+              <ul className="mt-1 list-inside list-disc space-y-0.5 text-xs text-text-secondary">
+                <li>BRT — core in-clinic device + session protocol</li>
+                <li>IHHT — co-delivered cellular regeneration modality</li>
+                <li>QEP — packaged executive program the stack ladders into</li>
+                <li>PMC advisory — positioning, pricing, ops consulting</li>
+              </ul>
+            </div>
+            <div className="rounded-md border border-border bg-background p-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-text-tertiary">
+                Open questions still pending intake
+              </p>
+              <ul className="mt-1 list-inside list-disc space-y-0.5 text-xs text-text-secondary">
+                <li>Contract structure (retainer / equipment / rev-share / hybrid)</li>
+                <li>WPB / South FL exclusivity terms</li>
+                <li>First-patient timeline for QEP</li>
+                <li>Marketing collaboration scope</li>
+              </ul>
+            </div>
+          </div>
+          <p className="mt-3 text-[11px] text-text-tertiary">
+            Source: <code>second-brain/businesses/pmc/clients/fountain-wpb/overview.md</code>
+          </p>
         </section>
 
         <footer className="border-t border-border pt-4 text-[10px] text-text-tertiary">
-          Source: public site (thefountainwpb.com) · Last sync 2026-06-03 · Pending Jason intake to
-          enrich
+          Source: public site (thefountainwpb.com) + vault overview (
+          <code>clients/fountain-wpb/overview.md</code>) · Engagement status synced 2026-06-04
         </footer>
       </div>
     </div>
