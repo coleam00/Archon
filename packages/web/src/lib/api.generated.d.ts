@@ -226,6 +226,285 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/auth/providers': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List the current web user’s connected AI-provider keys */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Connections (metadata only) + connectable provider catalog */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ProviderKeyListResponse'];
+          };
+        };
+        /** @description Web auth required (X-Archon-User header missing) */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/auth/providers/{provider}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    /** Connect (upsert) an API key for a provider for the current web user */
+    put: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          provider: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: {
+        content: {
+          'application/json': components['schemas']['ProviderKeySetBody'];
+        };
+      };
+      responses: {
+        /** @description Key stored (encrypted); response carries no secret value */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ProviderKeySetResponse'];
+          };
+        };
+        /** @description Unknown provider or empty key */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Web auth required (X-Archon-User header missing) */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Per-user provider keys not enabled on this install */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    post?: never;
+    /** Disconnect the current web user’s key for a provider */
+    delete: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          provider: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Disconnected (idempotent) */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ProviderKeyDeleteResponse'];
+          };
+        };
+        /** @description Web auth required (X-Archon-User header missing) */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Per-user provider keys not enabled on this install */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/auth/providers/{provider}/oauth/start': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Begin a subscription (OAuth) login for the current web user */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          provider: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Login session started (mode + URL/user-code) */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ProviderOAuthStartResponse'];
+          };
+        };
+        /** @description Provider does not support subscription login */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Web auth required (X-Archon-User header missing) */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Per-user provider keys not enabled on this install */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/auth/providers/{provider}/oauth/poll': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Poll a subscription login session (submit pasted code for manual flows) */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          provider: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: {
+        content: {
+          'application/json': components['schemas']['ProviderOAuthPollBody'];
+        };
+      };
+      responses: {
+        /** @description Poll status */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ProviderOAuthPollResponse'];
+          };
+        };
+        /** @description Web auth required (X-Archon-User header missing) */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Per-user provider keys not enabled on this install */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/conversations': {
     parameters: {
       query?: never;
@@ -2129,6 +2408,67 @@ export interface paths {
     };
     trace?: never;
   };
+  '/api/config/tiers': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /**
+     * Update model-tier presets (small/medium/large)
+     * @description Writes the `tiers:` config to ~/.archon/config.yaml. Ungated (works on solo installs). Per-tier merge; a `null` tier value unsets it.
+     */
+    patch: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['UpdateTiersBody'];
+        };
+      };
+      responses: {
+        /** @description Updated configuration */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ConfigResponse'];
+          };
+        };
+        /** @description Invalid request body */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    trace?: never;
+  };
   '/api/providers': {
     parameters: {
       query?: never;
@@ -2328,6 +2668,55 @@ export interface components {
     GithubDisconnectResponse: {
       success: boolean;
     };
+    ProviderKeyListResponse: {
+      enabled: boolean;
+      connections: components['schemas']['ProviderKeyConnection'][];
+      available: string[];
+      subscriptionAvailable: string[];
+    };
+    ProviderKeyConnection: {
+      provider: string;
+      /** @enum {string} */
+      kind: 'api_key' | 'oauth';
+      label: string | null;
+    };
+    ProviderKeySetResponse: {
+      success: boolean;
+      provider: string;
+      /** @enum {string} */
+      kind: 'api_key';
+      label: string | null;
+    };
+    ProviderKeySetBody: {
+      apiKey: string;
+      label?: string;
+    };
+    ProviderKeyDeleteResponse: {
+      success: boolean;
+    };
+    ProviderOAuthStartResponse: {
+      sessionId: string;
+      /** @enum {string} */
+      mode: 'manual' | 'device';
+      url?: string;
+      userCode?: string;
+      verificationUri?: string;
+      expiresIn: number;
+    };
+    ProviderOAuthPollResponse: {
+      /** @enum {string} */
+      status: 'pending' | 'connected' | 'error';
+      detail?: string;
+      /** @enum {string} */
+      mode?: 'manual' | 'device';
+      url?: string;
+      userCode?: string;
+      verificationUri?: string;
+    };
+    ProviderOAuthPollBody: {
+      sessionId: string;
+      code?: string;
+    };
     ConversationListResponse: components['schemas']['Conversation'][];
     Conversation: {
       id: string;
@@ -2386,6 +2775,7 @@ export interface components {
       name: string;
       repository_url: string | null;
       default_cwd: string;
+      default_branch: string | null;
       ai_assistant_type: string;
       commands: {
         [key: string]: {
@@ -2935,14 +3325,34 @@ export interface components {
         loadDefaultCommands: boolean;
         loadDefaultWorkflows: boolean;
       };
+      tiers?: components['schemas']['TiersConfig'];
+      tierDefaults?: components['schemas']['TiersConfig'];
     };
     ProviderDefaults: {
       [key: string]: unknown;
+    };
+    TiersConfig: {
+      small?: components['schemas']['TierEntry'];
+      medium?: components['schemas']['TierEntry'];
+      large?: components['schemas']['TierEntry'];
+    };
+    TierEntry: {
+      provider: string;
+      model: string;
+      effort?: string;
+      thinking?: unknown;
     };
     UpdateAssistantConfigBody: {
       assistant?: string;
       assistants?: {
         [key: string]: components['schemas']['ProviderDefaults'];
+      };
+    };
+    UpdateTiersBody: {
+      tiers: {
+        small?: components['schemas']['TierEntry'] & unknown;
+        medium?: components['schemas']['TierEntry'] & unknown;
+        large?: components['schemas']['TierEntry'] & unknown;
       };
     };
     ProviderListResponse: {

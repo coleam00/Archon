@@ -8,6 +8,7 @@ interface RawNode {
   prompt?: string;
   bash?: string;
   command?: string;
+  cancel?: string;
   approval?: unknown;
   loop?: unknown;
   script?: unknown;
@@ -47,6 +48,7 @@ export async function listWorkflows(cwd?: string): Promise<WorkflowListResult> {
 function nodeKind(n: RawNode): WorkflowGraphNode['kind'] {
   if (n.loop !== undefined) return 'loop';
   if (n.approval !== undefined) return 'approval';
+  if (n.cancel !== undefined) return 'cancel';
   if (n.bash !== undefined) return 'bash';
   if (n.command !== undefined) return 'command';
   if (n.script !== undefined) return 'script';
