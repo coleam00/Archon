@@ -18,6 +18,18 @@
  * logged. GOTCHA (verify on a live run): Anthropic/Codex `login()` may also try a
  * localhost callback server (`usesCallbackServer`) — on a headless host the
  * manual-code path (`onManualCodeInput`/`onPrompt`) must be the one taken.
+ *
+ * CANCEL SEMANTICS (#1963): pi-ai 0.79.1 ignores `options.signal` in its
+ * callback-server login flows (verified against `dist/utils/oauth/anthropic.js`
+ * — the provider's `login()` doesn't even forward the signal), so aborting the
+ * AbortController alone leaks the fixed-port (53692) callback server forever
+ * and wedges every later login install-wide. The one cancel handle pi exposes
+ * is the `onManualCodeInput()` promise: when it REJECTS, pi's login calls
+ * `server.cancelWait()`, unblocks `waitForCode()`, rethrows, and runs
+ * `finally { server.close() }` — releasing the port. `abortSession` therefore
+ * rejects the bridge-owned `codeDeferred` in addition to firing the abort
+ * signal, and `startOAuth` waits (bounded) for superseded logins to settle
+ * before binding a new one.
  */
 import { randomUUID } from 'node:crypto';
 import { createLogger } from '@archon/paths';
@@ -40,6 +52,38 @@ function getLog(): ReturnType<typeof createLogger> {
 const SESSION_TTL_MS = 10 * 60 * 1000; // 10 minutes
 /** How long `start` waits for the first onAuth/onDeviceCode callback before returning. */
 const START_FIRST_SIGNAL_MS = 8000;
+/**
+ * How long `start` waits for superseded logins to settle (i.e. pi's
+ * `finally { server.close() }` to run) before binding the new login's callback
+ * server. Real unwinds settle in microtasks; this bound only matters for a
+ * login impl that ignores the cancel entirely — it then costs one wait and the
+ * port-busy classification below turns any residual collision into an
+ * actionable error instead of a permanent wedge.
+ */
+const ABORT_SETTLE_MS = 1500;
+
+/** Matches the failure modes of a leaked fixed-port callback server. */
+const PORT_BUSY_RE = /EADDRINUSE|address already in use|is port .+ in use/i;
+
+/**
+ * A subscription-login start failed because the OAuth callback port is still
+ * held (a previous attempt's callback server has not released it yet). Mapped
+ * to a 503 by the API route — retryable, unlike an opaque 500.
+ */
+export class OAuthCallbackPortBusyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'OAuthCallbackPortBusyError';
+  }
+}
+
+/** Internal: injected into an aborted session's manual-code deferred (see header). */
+class OAuthLoginAbortedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'OAuthLoginAbortedError';
+  }
+}
 
 type OAuthMode = 'manual' | 'device' | 'pending';
 type OAuthStatus = 'pending' | 'connected' | 'error';
@@ -47,13 +91,16 @@ type OAuthStatus = 'pending' | 'connected' | 'error';
 interface Deferred<T> {
   promise: Promise<T>;
   resolve: (v: T) => void;
+  reject: (err: Error) => void;
 }
 function deferred<T>(): Deferred<T> {
   let resolve!: (v: T) => void;
-  const promise = new Promise<T>(res => {
+  let reject!: (err: Error) => void;
+  const promise = new Promise<T>((res, rej) => {
     resolve = res;
+    reject = rej;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 interface OAuthSession {
@@ -70,18 +117,39 @@ interface OAuthSession {
   firstSignal: Deferred<true>;
   abort: AbortController;
   expiresAt: number;
+  /** Resolves when the held `login()` call has settled (never rejects). */
+  settled: Promise<void>;
+  /** Set when `login()` failed because the callback port was already bound. */
+  portBusy?: boolean;
 }
 
 const sessions = new Map<string, OAuthSession>();
 
-function sweepExpired(): void {
+/**
+ * Hard-cancel a session's in-flight `login()`: fire the abort signal (honored
+ * by well-behaved flows) AND reject the manual-code deferred — the only handle
+ * pi-ai 0.79.1 actually reacts to. The rejection drives pi's callback-server
+ * flows through their error path into `finally { server.close() }`, releasing
+ * the fixed callback port (#1963). Rejecting an already-resolved deferred is a
+ * no-op, so this is safe after a code was submitted.
+ */
+function abortSession(session: OAuthSession, reason: string): void {
+  session.abort.abort();
+  session.codeDeferred.reject(new OAuthLoginAbortedError(reason));
+}
+
+/** Abort + drop expired sessions; returns their settled promises so `start` can wait. */
+function sweepExpired(): Promise<void>[] {
   const now = Date.now();
+  const sweptSettled: Promise<void>[] = [];
   for (const [id, s] of sessions) {
     if (now > s.expiresAt) {
-      s.abort.abort();
+      abortSession(s, 'Login session expired.');
+      sweptSettled.push(s.settled);
       sessions.delete(id);
     }
   }
+  return sweptSettled;
 }
 
 /** Internal `'pending'` never surfaces past the boundary — default it to `'manual'`. */
@@ -114,7 +182,9 @@ export interface PollOAuthResult {
  * user-code (device), or a short timeout elapses.
  */
 export async function startOAuth(userId: string, providerId: string): Promise<StartOAuthResult> {
-  sweepExpired();
+  // Expired sessions may also hold a callback server — include them in the
+  // settle-wait below so the port is free before the new login binds it.
+  const supersededSettled: Promise<void>[] = sweepExpired();
   const provider = normalizeCredentialVendor(providerId);
   // SUBSCRIPTION_PROVIDERS is the single source of truth for "connectable via
   // subscription" — it excludes vendors that are wired in ARCHON_TO_PI_OAUTH
@@ -127,14 +197,27 @@ export async function startOAuth(userId: string, providerId: string): Promise<St
   if (!piProvider) {
     throw new Error(`Provider '${providerId}' does not support subscription login.`);
   }
-  // One in-flight login per user — abort a prior session so its callback server
-  // (claude/codex `usesCallbackServer`) is released; otherwise a fixed-port flow
-  // would EADDRINUSE a retry of the same user.
+  // Hard-cancel prior in-flight logins that would collide with this one:
+  //   - same user (one login per user — the original I3 behavior), and
+  //   - same vendor when the flow binds a local fixed-port callback server
+  //     (anthropic: 53692). Two such logins can't coexist in one process, and
+  //     an abandoned one would otherwise EADDRINUSE every later start for ANY
+  //     user until restart (#1963). The newest interactive request wins; a
+  //     superseded session's user sees "session not found" on their next poll
+  //     and can simply restart — recoverable, so the heuristic is acceptable.
   for (const [id, s] of sessions) {
-    if (s.userId === userId) {
-      s.abort.abort();
+    const callbackPortConflict = piProvider.usesCallbackServer === true && s.provider === provider;
+    if (s.userId === userId || callbackPortConflict) {
+      abortSession(s, 'Login superseded by a newer attempt.');
+      supersededSettled.push(s.settled);
       sessions.delete(id);
     }
+  }
+  // Wait (bounded) for the cancelled logins to settle — settling means pi's
+  // `finally { server.close() }` has run, so the callback port is free before
+  // the new login binds it.
+  if (supersededSettled.length > 0) {
+    await Promise.race([Promise.all(supersededSettled), sleep(ABORT_SETTLE_MS)]);
   }
   const sessionId = randomUUID();
   const session: OAuthSession = {
@@ -147,11 +230,15 @@ export async function startOAuth(userId: string, providerId: string): Promise<St
     firstSignal: deferred<true>(),
     abort: new AbortController(),
     expiresAt: Date.now() + SESSION_TTL_MS,
+    settled: Promise.resolve(), // replaced with the real login chain below
   };
+  // Device flows never consume the manual-code deferred — keep its abort-path
+  // rejection from surfacing as an unhandled rejection.
+  session.codeDeferred.promise.catch(() => undefined);
   sessions.set(sessionId, session);
 
   // Kick off login() WITHOUT awaiting — it blocks on the callbacks below.
-  void piProvider
+  session.settled = piProvider
     .login({
       onAuth: (info: OAuthAuthInfo) => {
         session.url = info.url;
@@ -182,14 +269,24 @@ export async function startOAuth(userId: string, providerId: string): Promise<St
       getLog().info({ userId, provider }, 'oauth_bridge.connected');
     })
     .catch((err: unknown) => {
+      // An intentional cancel (supersede / expiry sweep / cancelOAuth) unwinding
+      // through pi's login is expected — log quietly and don't mark error state.
+      if (err instanceof OAuthLoginAbortedError) {
+        session.firstSignal.resolve(true);
+        getLog().info({ userId, provider }, 'oauth_bridge.login_aborted');
+        return;
+      }
+      const rawMessage = err instanceof Error ? err.message : 'OAuth login failed.';
       if (session.status !== 'connected') {
         session.status = 'error';
+        // A leaked callback server from a previous attempt (EADDRINUSE on the
+        // fixed port) is retryable — classify it so start() can surface an
+        // actionable error instead of an opaque failure (#1963).
+        session.portBusy = PORT_BUSY_RE.test(rawMessage);
         // Genericize/strip secrets before this can reach a client: Pi's OAuth errors
         // embed auth-endpoint URLs / HTTP response bodies (login bypasses the
         // getOAuthApiKey wrapper). Truncate too (I4).
-        session.detail = sanitizeCredentials(
-          err instanceof Error ? err.message : 'OAuth login failed.'
-        ).slice(0, 200);
+        session.detail = sanitizeCredentials(rawMessage).slice(0, 200);
       }
       // Unblock start()'s race on an early failure (rejection before any callback),
       // so it doesn't wait the full timeout then return a bogus url-less result (I1).
@@ -207,6 +304,15 @@ export async function startOAuth(userId: string, providerId: string): Promise<St
   // rather than returning a misleading { mode:'manual', url:undefined } (I1).
   if (session.status === 'error') {
     sessions.delete(sessionId);
+    if (session.portBusy) {
+      // Retryable: the cancel above releases the port as soon as the previous
+      // login unwinds (microtasks for pi flows), so "retry shortly" is honest
+      // advice — and a restart always clears it (#1963).
+      throw new OAuthCallbackPortBusyError(
+        `A previous '${provider}' login attempt is still holding the OAuth callback port. ` +
+          'Wait a few seconds and retry; if it persists, restart the Archon server.'
+      );
+    }
     throw new Error(session.detail ?? 'Subscription login failed to start.');
   }
 
@@ -232,7 +338,7 @@ export function pollOAuth(sessionId: string, userId: string, code?: string): Pol
     return { status: 'error', detail: 'Login session not found or expired.' };
   }
   if (Date.now() > session.expiresAt) {
-    session.abort.abort();
+    abortSession(session, 'Login session expired.');
     sessions.delete(sessionId);
     return { status: 'error', detail: 'Login session expired.' };
   }
@@ -261,7 +367,7 @@ export function pollOAuth(sessionId: string, userId: string, code?: string): Pol
 export function cancelOAuth(sessionId: string, userId: string): void {
   const session = sessions.get(sessionId);
   if (session?.userId === userId) {
-    session.abort.abort();
+    abortSession(session, 'Login cancelled.');
     sessions.delete(sessionId);
   }
 }
@@ -272,6 +378,6 @@ function sleep(ms: number): Promise<void> {
 
 /** Test-only: drop all in-flight sessions. */
 export function resetOAuthSessionsForTest(): void {
-  for (const s of sessions.values()) s.abort.abort();
+  for (const s of sessions.values()) abortSession(s, 'Test reset.');
   sessions.clear();
 }
