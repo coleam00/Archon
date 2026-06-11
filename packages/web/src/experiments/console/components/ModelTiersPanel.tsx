@@ -15,6 +15,7 @@ import { TIER_ORDER } from '../skills';
 import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
 import { providerOptionHint } from '../lib/agent-status';
+import { useCancelledRef } from '../lib/use-cancelled-ref';
 import { SettingsSection } from './SettingsSection';
 import { ScopeToggle } from './ScopeToggle';
 
@@ -131,13 +132,7 @@ export function ModelTiersPanel(): ReactElement {
   const [saveError, setSaveError] = useState<string | null>(null);
 
   // Guard async setState after unmount (mirrors AgentsPanel's cards).
-  const cancelledRef = useRef(false);
-  useEffect(() => {
-    cancelledRef.current = false;
-    return (): void => {
-      cancelledRef.current = true;
-    };
-  }, []);
+  const cancelledRef = useCancelledRef();
 
   const loadError = configError ?? providersError;
   if (loadError !== undefined) {

@@ -46,6 +46,10 @@ export function AgentsPanel(): ReactElement | null {
   }
 
   const piModelCounts = modelCountByBackend(piModels);
+  // Defensive: a server predating the #1958 grouped API can 200 without
+  // `agents`. The skew window is narrow (web dist ships with the server) but
+  // the failure mode would be an opaque crash instead of an empty panel (I2).
+  const agents = data.agents ?? [];
 
   return (
     <SettingsSection title="Agents">
@@ -61,10 +65,10 @@ export function AgentsPanel(): ReactElement | null {
             install-level status only.
           </p>
         ) : null}
-        {data.agents.length === 0 ? (
+        {agents.length === 0 ? (
           <p className="text-text-tertiary">No agents registered.</p>
         ) : (
-          data.agents.map(agent => (
+          agents.map(agent => (
             <AgentCredentialCard
               key={agent.id}
               agent={agent}

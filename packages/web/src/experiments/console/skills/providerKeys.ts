@@ -55,7 +55,12 @@ export interface AgentCredentials {
   id: string;
   displayName: string;
   catalog: 'static' | 'dynamic';
-  /** Whether at least one credential is usable (connected / install env / ambient). */
+  /**
+   * Whether at least one credential is usable (connected / install env /
+   * ambient). Server-computed source of truth for the card readiness verdict
+   * (`agentReadiness` in lib/agent-status.ts reads it; the client only
+   * derives the human reason label from `credentials`).
+   */
   ready: boolean;
   credentials: AgentCredentialStatus[];
 }
@@ -71,7 +76,11 @@ export interface ProviderKeyList {
    * intentionally excluded (gated, #1924) so the UI shows it API-key-only.
    */
   subscriptionAvailable: string[];
-  /** Agent → credential matrix (#1955) the settings cards render from. */
+  /**
+   * Agent → credential matrix (#1955). Two consumers: the Settings → Agents
+   * cards and the readiness hints in the Model Tiers / Aliases provider
+   * dropdowns (both read the shared `K.providerConnections` cache entry).
+   */
   agents: AgentCredentials[];
 }
 

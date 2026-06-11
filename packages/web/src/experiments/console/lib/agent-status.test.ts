@@ -47,11 +47,20 @@ describe('isCredentialUsable', () => {
 
 describe('agentReadiness', () => {
   test('dynamic catalog → dynamic state regardless of credentials', () => {
-    const r = agentReadiness(agent({ id: 'opencode', catalog: 'dynamic' }));
+    // Realistic fixture: even if a future server populated credentials on a
+    // dynamic agent, the catalog kind must win.
+    const r = agentReadiness(
+      agent({
+        id: 'opencode',
+        catalog: 'dynamic',
+        ready: true,
+        credentials: [cred({ vendor: 'opencode', connected: 'api_key' })],
+      })
+    );
     expect(r.state).toBe('dynamic');
   });
 
-  test('static with no usable credential → needs-credential', () => {
+  test('server ready:false → needs-credential', () => {
     const r = agentReadiness(agent({ id: 'codex', credentials: [cred({ vendor: 'openai' })] }));
     expect(r).toEqual({ state: 'needs-credential', detail: 'needs credential' });
   });
@@ -61,6 +70,7 @@ describe('agentReadiness', () => {
       agentReadiness(
         agent({
           id: 'claude',
+          ready: true,
           credentials: [
             cred({ vendor: 'anthropic', displayName: 'Anthropic', connected: 'api_key' }),
           ],
@@ -71,20 +81,40 @@ describe('agentReadiness', () => {
       agentReadiness(
         agent({
           id: 'copilot',
+          ready: true,
           credentials: [cred({ vendor: 'github-copilot', connected: 'oauth' })],
         })
       ).detail
     ).toBe('subscription connected');
     expect(
       agentReadiness(
-        agent({ id: 'claude', credentials: [cred({ vendor: 'anthropic', installEnv: true })] })
+        agent({
+          id: 'claude',
+          ready: true,
+          credentials: [cred({ vendor: 'anthropic', installEnv: true })],
+        })
       ).detail
     ).toBe('using install env');
+  });
+
+  test('single-credential agent ready via ambient detection names the chain', () => {
+    expect(
+      agentReadiness(
+        agent({
+          id: 'pi-bedrock-only',
+          ready: true,
+          credentials: [
+            cred({ vendor: 'amazon-bedrock', kinds: ['ambient'], ambientConfigured: true }),
+          ],
+        })
+      ).detail
+    ).toBe('ambient credentials detected');
   });
 
   test('multi-credential agent counts usable backends (connected + env + ambient)', () => {
     const pi = agent({
       id: 'pi',
+      ready: true,
       credentials: [
         cred({ vendor: 'anthropic', connected: 'api_key' }),
         cred({ vendor: 'openrouter', installEnv: true }),
@@ -98,9 +128,19 @@ describe('agentReadiness', () => {
   test('multi-credential agent with one usable backend uses singular', () => {
     const pi = agent({
       id: 'pi',
+      ready: true,
       credentials: [cred({ vendor: 'anthropic', connected: 'api_key' }), cred({ vendor: 'groq' })],
     });
     expect(agentReadiness(pi).detail).toBe('1 backend connected');
+  });
+
+  test('drift guard: server ready:true with no client-detectable credential → generic label', () => {
+    // The server verdict wins; the client falls back to a generic 'ready'
+    // rather than contradicting it when it can't name the credential.
+    const r = agentReadiness(
+      agent({ id: 'claude', ready: true, credentials: [cred({ vendor: 'anthropic' })] })
+    );
+    expect(r).toEqual({ state: 'ready', detail: 'ready' });
   });
 });
 
@@ -108,6 +148,7 @@ describe('providerOptionHint', () => {
   const agents = [
     agent({
       id: 'pi',
+      ready: true,
       credentials: [
         cred({ vendor: 'anthropic', connected: 'api_key' }),
         cred({ vendor: 'openrouter', connected: 'api_key' }),
@@ -117,6 +158,7 @@ describe('providerOptionHint', () => {
     agent({ id: 'codex', credentials: [cred({ vendor: 'openai' })] }),
     agent({
       id: 'claude',
+      ready: true,
       credentials: [cred({ vendor: 'anthropic', connected: 'api_key' })],
     }),
     agent({ id: 'opencode', catalog: 'dynamic' }),
@@ -160,6 +202,21 @@ describe('splitPiCredentials', () => {
     expect(groups.active.map(c => c.vendor)).toEqual(['anthropic', 'openrouter']);
     expect(groups.addable.map(c => c.vendor)).toEqual(['groq']);
     expect(groups.ambient.map(c => c.vendor)).toEqual(['google-vertex', 'amazon-bedrock']);
+  });
+
+  test('subscription-only credential lands in no group until connected (intentional)', () => {
+    // A backend with no api_key kind can't be key-connected via the picker;
+    // it only surfaces once a subscription connect makes it active.
+    const sub = cred({ vendor: 'sub-only', kinds: ['subscription'] });
+    const before = splitPiCredentials(agent({ id: 'pi', credentials: [sub] }));
+    expect(before.active).toEqual([]);
+    expect(before.addable).toEqual([]);
+    expect(before.ambient).toEqual([]);
+
+    const after = splitPiCredentials(
+      agent({ id: 'pi', credentials: [{ ...sub, connected: 'oauth' }] })
+    );
+    expect(after.active.map(c => c.vendor)).toEqual(['sub-only']);
   });
 });
 

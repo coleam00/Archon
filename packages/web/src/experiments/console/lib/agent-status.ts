@@ -14,8 +14,11 @@ import type {
 
 /**
  * A credential counts as "usable" when the calling user connected it, the
- * install env already carries it, or the ambient chain is detected. Mirrors
- * the server's `ready` computation per credential.
+ * install env already carries it, or the ambient chain is detected. Matches
+ * the per-credential check in the server's `buildAgentCredentialMatrix`
+ * (expressed there with falsy coercion rather than `=== true`). Used for the
+ * per-row display and backend counts; the boolean ready/not-ready verdict
+ * itself comes from the server's `ready` field (see `agentReadiness`).
  */
 export function isCredentialUsable(c: AgentCredentialStatus): boolean {
   return c.connected !== null || c.installEnv || c.ambientConfigured === true;
@@ -38,26 +41,32 @@ function usableCredentialDetail(c: AgentCredentialStatus): string {
 }
 
 /**
- * Readiness summary for one agent card header. Multi-credential agents (Pi)
- * summarize as a backend count; single-credential agents name the credential.
- * Dynamic agents (OpenCode) can only be introspected at runtime.
+ * Readiness summary for one agent card header. The ready/not-ready verdict is
+ * the server's `ready` field (the source of truth — if its computation gains
+ * a dimension, the UI follows automatically, I3); the helpers here only
+ * derive the human *reason* label from the per-credential state.
+ * Multi-credential agents (Pi) summarize as a backend count; single-credential
+ * agents name the credential. Dynamic agents (OpenCode) can only be
+ * introspected at runtime.
  */
 export function agentReadiness(agent: AgentCredentials): AgentReadiness {
   if (agent.catalog === 'dynamic') {
     return { state: 'dynamic', detail: 'catalog loaded on demand' };
   }
-  const usable = agent.credentials.filter(isCredentialUsable);
-  if (usable.length === 0) {
+  if (!agent.ready) {
     return { state: 'needs-credential', detail: 'needs credential' };
   }
+  const usable = agent.credentials.filter(isCredentialUsable);
   if (agent.credentials.length > 1) {
     return {
       state: 'ready',
       detail: `${String(usable.length)} backend${usable.length === 1 ? '' : 's'} connected`,
     };
   }
-  // Single-credential agent: usable[0] exists (length checked above).
   const first = usable[0];
+  // Drift guard (live, not dead code): the server said ready but the client's
+  // per-credential detection found nothing nameable — fall back to a generic
+  // label rather than contradicting the server's verdict.
   return { state: 'ready', detail: first ? usableCredentialDetail(first) : 'ready' };
 }
 

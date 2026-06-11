@@ -11,6 +11,7 @@ import type {
 import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
 import { providerOptionHint } from '../lib/agent-status';
+import { useCancelledRef } from '../lib/use-cancelled-ref';
 import { SettingsSection } from './SettingsSection';
 import { ScopeToggle } from './ScopeToggle';
 
@@ -97,13 +98,8 @@ export function AliasesPanel(): ReactElement {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
-  const cancelledRef = useRef(false);
-  useEffect(() => {
-    cancelledRef.current = false;
-    return (): void => {
-      cancelledRef.current = true;
-    };
-  }, []);
+  // Guard async setState after unmount (mirrors AgentsPanel's cards).
+  const cancelledRef = useCancelledRef();
 
   const loadError = configError ?? providersError;
   if (loadError !== undefined) {

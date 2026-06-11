@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactElement } from 'react';
+import { useState, type ReactElement } from 'react';
 import * as skill from '../skills';
 import type {
   AgentCredentialStatus,
@@ -15,6 +15,7 @@ import {
   splitPiCredentials,
   type AgentReadinessState,
 } from '../lib/agent-status';
+import { useCancelledRef } from '../lib/use-cancelled-ref';
 import { SubscriptionLoginFlow } from './SubscriptionLoginFlow';
 
 // Mirrors AssistantConfigPanel's INPUT_CLASS so inputs match the console form style.
@@ -74,20 +75,19 @@ export function AgentCredentialCard({
   const [loginVendor, setLoginVendor] = useState<string | null>(null);
   const [disconnecting, setDisconnecting] = useState<string | null>(null);
 
-  const cancelledRef = useRef(false);
-  useEffect(() => {
-    cancelledRef.current = false;
-    return (): void => {
-      cancelledRef.current = true;
-    };
-  }, []);
+  // Guards only the card's own async action (disconnect). KeyConnectForm and
+  // OpencodeBackends carry their own refs — their lifetimes are shorter than
+  // the card's (they unmount when the inline flow closes).
+  const cancelledRef = useCancelledRef();
 
   const disconnect = async (vendor: string): Promise<void> => {
     setDisconnecting(vendor);
     setMessage(null);
     try {
       await skill.deleteProviderKey(vendor);
-      if (cancelledRef.current) return;
+      // Invalidation only touches the cache Map (no React state), so it is
+      // unmount-safe — never gate it behind the cancelled guard, or a
+      // mid-flight unmount leaves stale connection state in the cache (I1).
       invalidate(K.providerConnections);
     } catch (e: unknown) {
       if (cancelledRef.current) return;
@@ -101,6 +101,9 @@ export function AgentCredentialCard({
   const isMultiBackend = agent.catalog === 'static' && agent.credentials.length > 1;
   const groups = isMultiBackend ? splitPiCredentials(agent) : null;
   const inlineRows = groups ? groups.active : agent.credentials;
+  // The picker-selected backend (not yet connected) whose key form is open.
+  const pickedAddable =
+    groups && keyVendor !== null ? groups.addable.find(c => c.vendor === keyVendor) : undefined;
 
   const row = (cred: AgentCredentialStatus): ReactElement => (
     <CredentialRow
@@ -171,9 +174,7 @@ export function AgentCredentialCard({
             />
           ) : null}
 
-          {groups && keyVendor !== null && groups.addable.some(c => c.vendor === keyVendor)
-            ? groups.addable.filter(c => c.vendor === keyVendor).map(row)
-            : null}
+          {pickedAddable ? row(pickedAddable) : null}
 
           {groups && groups.ambient.length > 0 ? (
             <div className="flex flex-col gap-1.5 border-t border-border pt-2.5">
@@ -238,6 +239,10 @@ function CredentialRow({
   onCloseLogin: () => void;
   onDisconnect: () => void;
 }): ReactElement {
+  // Deliberate gating asymmetry: key connect derives from the declared
+  // `kinds`, but login uses `subscriptionAvailable` — the server-evaluated
+  // runtime gate (e.g. Codex declares the 'subscription' kind yet its OAuth
+  // stays disabled, #1924). Don't "fix" login to follow the `kinds` pattern.
   const canConnectKey = connectEnabled && cred.kinds.includes('api_key') && cred.connected === null;
   const canLogin = connectEnabled && cred.subscriptionAvailable && cred.connected !== 'oauth';
   const canDisconnect = connectEnabled && cred.connected !== null;
@@ -319,13 +324,7 @@ function KeyConnectForm({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const cancelledRef = useRef(false);
-  useEffect(() => {
-    cancelledRef.current = false;
-    return (): void => {
-      cancelledRef.current = true;
-    };
-  }, []);
+  const cancelledRef = useCancelledRef();
 
   const save = async (): Promise<void> => {
     if (apiKey.trim() === '') return;
@@ -333,8 +332,11 @@ function KeyConnectForm({
     setError(null);
     try {
       await skill.setProviderKey(cred.vendor, apiKey.trim(), label.trim() || undefined);
-      if (cancelledRef.current) return;
+      // Invalidation only touches the cache Map (no React state), so it is
+      // unmount-safe — run it BEFORE the cancelled guard, or a mid-save
+      // unmount leaves a stored key rendered as "not connected" (I1).
       invalidate(K.providerConnections);
+      if (cancelledRef.current) return;
       onDone();
     } catch (e: unknown) {
       if (cancelledRef.current) return;
@@ -397,6 +399,7 @@ function BackendPicker({
 }): ReactElement | null {
   const [query, setQuery] = useState('');
   if (addable.length === 0) return null;
+  const searching = query.trim() !== '';
   const matches = filterCredentials(addable, query);
 
   return (
@@ -411,37 +414,36 @@ function BackendPicker({
         aria-label="Search backends to connect"
         className={INPUT_CLASS}
       />
-      {query.trim() !== '' ? (
-        matches.length > 0 ? (
-          <div className="max-h-52 overflow-y-auto rounded border border-border bg-surface-inset">
-            {matches.map(c => {
-              const count = modelCounts.get(c.vendor);
-              return (
-                <button
-                  key={c.vendor}
-                  type="button"
-                  onClick={() => {
-                    setQuery('');
-                    onPick(c.vendor);
-                  }}
-                  className="flex w-full items-baseline justify-between gap-3 px-3 py-2 text-left text-[12px] transition-colors hover:bg-surface-hover"
-                >
-                  <span className="flex min-w-0 items-baseline gap-2">
-                    <span className="text-text-primary">{c.displayName}</span>
-                    <span className="font-mono text-[10px] text-text-tertiary">{c.vendor}</span>
+      {searching && matches.length > 0 ? (
+        <div className="max-h-52 overflow-y-auto rounded border border-border bg-surface-inset">
+          {matches.map(c => {
+            const count = modelCounts.get(c.vendor);
+            return (
+              <button
+                key={c.vendor}
+                type="button"
+                onClick={() => {
+                  setQuery('');
+                  onPick(c.vendor);
+                }}
+                className="flex w-full items-baseline justify-between gap-3 px-3 py-2 text-left text-[12px] transition-colors hover:bg-surface-hover"
+              >
+                <span className="flex min-w-0 items-baseline gap-2">
+                  <span className="text-text-primary">{c.displayName}</span>
+                  <span className="font-mono text-[10px] text-text-tertiary">{c.vendor}</span>
+                </span>
+                {count !== undefined ? (
+                  <span className="shrink-0 font-mono text-[10px] text-text-tertiary">
+                    {count} model{count === 1 ? '' : 's'}
                   </span>
-                  {count !== undefined ? (
-                    <span className="shrink-0 font-mono text-[10px] text-text-tertiary">
-                      {count} model{count === 1 ? '' : 's'}
-                    </span>
-                  ) : null}
-                </button>
-              );
-            })}
-          </div>
-        ) : (
-          <p className="px-1 font-mono text-[11px] text-text-tertiary">No backend matches.</p>
-        )
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+      {searching && matches.length === 0 ? (
+        <p className="px-1 font-mono text-[11px] text-text-tertiary">No backend matches.</p>
       ) : null}
     </div>
   );
@@ -450,28 +452,38 @@ function BackendPicker({
 type OpencodePhase = 'idle' | 'loading' | 'loaded' | 'error';
 
 /**
+ * Booting the embedded OpenCode runtime is the slow path; give it a generous
+ * minute before declaring the load hung so the user always gets the Retry
+ * escape (I4) instead of a permanent "Loading…".
+ */
+const OPENCODE_LOAD_TIMEOUT_MS = 60_000;
+
+/**
  * OpenCode's dynamic backend list. The introspection endpoint is heavyweight
  * (it boots the embedded runtime), so nothing loads until the user explicitly
- * asks; a 503 gets a retry affordance instead of a dead card.
+ * asks; any load failure (503 runtime-unavailable, network error, timeout)
+ * gets a retry affordance instead of a dead card.
  */
 function OpencodeBackends(): ReactElement {
   const [phase, setPhase] = useState<OpencodePhase>('idle');
   const [providers, setProviders] = useState<OpencodeCredentialProvider[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  const cancelledRef = useRef(false);
-  useEffect(() => {
-    cancelledRef.current = false;
-    return (): void => {
-      cancelledRef.current = true;
-    };
-  }, []);
+  const cancelledRef = useCancelledRef();
 
   const load = async (): Promise<void> => {
     setPhase('loading');
     setError(null);
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const result = await skill.listOpencodeCredentials();
+      const result = await Promise.race([
+        skill.listOpencodeCredentials(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            reject(new Error('Timed out waiting for the OpenCode runtime — retry.'));
+          }, OPENCODE_LOAD_TIMEOUT_MS);
+        }),
+      ]);
       if (cancelledRef.current) return;
       setProviders(result);
       setPhase('loaded');
@@ -479,6 +491,8 @@ function OpencodeBackends(): ReactElement {
       if (cancelledRef.current) return;
       setError(e instanceof Error ? e.message : 'Failed to load OpenCode backends.');
       setPhase('error');
+    } finally {
+      clearTimeout(timer);
     }
   };
 
