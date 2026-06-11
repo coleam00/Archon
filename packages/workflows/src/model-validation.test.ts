@@ -4,6 +4,7 @@ import {
   buildAiProfile,
   isLiteralSpec,
   resolveModelSpec,
+  resolveTierWithFallback,
   TIER_NAMES,
   type ModelAliasPreset,
   type ResolvedAiProfile,
@@ -255,6 +256,28 @@ describe('buildAiProfile — per-user layer (highest precedence)', () => {
         userTiers: { tiny: { provider: 'claude', model: 'haiku' } } as never,
       })
     ).toThrow(/Tier name 'tiny' is invalid/);
+  });
+
+  test('resolveTierWithFallback reports the matched tier (exact match)', () => {
+    const profile = buildAiProfile('claude', {});
+    const { matchedTier, preset } = resolveTierWithFallback(profile, 'large');
+    expect(matchedTier).toBe('large');
+    expect(preset.provider).toBe('claude');
+  });
+
+  test('resolveTierWithFallback reports the matched tier (fallback)', () => {
+    // 'newprovider' has no built-in defaults, so only the configured tier exists.
+    const profile = buildAiProfile('newprovider', {
+      userTiers: { small: { provider: 'pi', model: 'minimax-m3' } },
+    });
+    const { matchedTier, preset } = resolveTierWithFallback(profile, 'large');
+    expect(matchedTier).toBe('small');
+    expect(preset).toEqual({ provider: 'pi', model: 'minimax-m3' });
+  });
+
+  test('resolveTierWithFallback throws when no tier preset exists at all', () => {
+    const profile = buildAiProfile('newprovider', {});
+    expect(() => resolveTierWithFallback(profile, 'large')).toThrow(/no configured preset/);
   });
 
   test('user aliases validate @ prefix and reserved names', () => {

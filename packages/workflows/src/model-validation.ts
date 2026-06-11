@@ -70,7 +70,8 @@ const TIER_DEFAULTS = tierDefaults as Record<
   Record<TierName, { model: string; effort?: string }>
 >;
 
-function isTierName(value: string): value is TierName {
+/** True when `value` is one of the reserved tier keywords (small/medium/large). */
+export function isTierName(value: string): value is TierName {
   return (TIER_NAMES as readonly string[]).includes(value);
 }
 
@@ -178,6 +179,26 @@ export function buildAiProfile(
 }
 
 /**
+ * Resolve a tier ref against the profile, reporting WHICH tier in the
+ * fallback chain actually matched — `matchedTier !== requested` means the
+ * requested tier is unset and a sibling preset was used. Callers that want
+ * to surface a non-blocking "tier fell back" nudge use this; everything
+ * else keeps the simpler {@link resolveModelSpec}.
+ */
+export function resolveTierWithFallback(
+  profile: ResolvedAiProfile,
+  tier: TierName
+): { preset: ModelAliasPreset; matchedTier: TierName } {
+  for (const candidate of TIER_FALLBACK[tier]) {
+    const preset = profile.aliases[candidate];
+    if (preset) return { preset, matchedTier: candidate };
+  }
+  throw new Error(
+    `Tier '${tier}' has no configured preset and no built-in default for provider '${profile.defaultProvider}'. Configure 'tiers.small/medium/large' in .archon/config.yaml.`
+  );
+}
+
+/**
  * Classify a `model:` reference and resolve it against the profile.
  *   - tier ('small' | 'medium' | 'large') → preset via fallback chain
  *   - '@<name>' → preset from profile.aliases, or throw if unknown
@@ -185,13 +206,7 @@ export function buildAiProfile(
  */
 export function resolveModelSpec(profile: ResolvedAiProfile, ref: string): ResolvedModelSpec {
   if (isTierName(ref)) {
-    for (const tier of TIER_FALLBACK[ref]) {
-      const preset = profile.aliases[tier];
-      if (preset) return preset;
-    }
-    throw new Error(
-      `Tier '${ref}' has no configured preset and no built-in default for provider '${profile.defaultProvider}'. Configure 'tiers.small/medium/large' in .archon/config.yaml.`
-    );
+    return resolveTierWithFallback(profile, ref).preset;
   }
 
   if (ref.startsWith('@')) {

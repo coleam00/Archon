@@ -236,6 +236,13 @@ export function ModelTiersPanel(): ReactElement {
         })}
       </div>
 
+      {TIER_ORDER.filter(t => form[t].provider !== '').length === 1 ? (
+        <p className="mt-3 font-mono text-[11px] text-text-tertiary">
+          Heads up: only one tier is set{scope === 'user' ? ' for you' : ''} — runs asking for the
+          other tiers fall back to the nearest configured preset.
+        </p>
+      ) : null}
+
       <div className="mt-[18px] flex items-center justify-end gap-3">
         {saveError !== null ? (
           <span className="font-mono text-[11px] text-error">{saveError}</span>

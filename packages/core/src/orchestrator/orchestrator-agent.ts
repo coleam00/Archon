@@ -69,9 +69,12 @@ import type { ApprovalContext } from '@archon/workflows/schemas/workflow-run';
 import {
   buildAiProfile,
   isLiteralSpec,
+  isTierName,
   resolveModelSpec,
+  resolveTierWithFallback,
   routePresetEffort,
   type ModelAliasPreset,
+  type TierName,
 } from '@archon/workflows/model-validation';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -118,6 +121,8 @@ interface ResolvedModelRequest {
   provider: string;
   model: string | undefined;
   preset?: ModelAliasPreset;
+  /** When `modelRef` was a tier: which tier in the fallback chain matched. */
+  matchedTier?: TierName;
 }
 
 function resolveModelRequest(
@@ -125,6 +130,10 @@ function resolveModelRequest(
   modelRef: string,
   fallbackProvider: string
 ): ResolvedModelRequest {
+  if (isTierName(modelRef)) {
+    const { preset, matchedTier } = resolveTierWithFallback(aiProfile, modelRef);
+    return { provider: preset.provider, model: preset.model, preset, matchedTier };
+  }
   const spec = resolveModelSpec(aiProfile, modelRef);
   if (isLiteralSpec(spec)) {
     return { provider: fallbackProvider, model: spec.literal };
@@ -1190,6 +1199,35 @@ export async function handleMessage(
       userAliases: userAiPrefs.aliases,
     });
     const chatRequest = resolveModelRequest(aiProfile, 'large', configuredProviderKey);
+    // Tier-fallback nudge (mirrors dag.model_provider_conflict): chat asks for
+    // 'large'; when that tier is unset and a sibling preset answered, tell the
+    // user once, non-blocking. Only the main chat request nags — the background
+    // title model ('small') falls back silently. Delivery failure must never
+    // fail the chat turn.
+    if (chatRequest.matchedTier !== undefined && chatRequest.matchedTier !== 'large') {
+      getLog().warn(
+        {
+          requestedTier: 'large',
+          matchedTier: chatRequest.matchedTier,
+          provider: chatRequest.provider,
+          model: chatRequest.model,
+        },
+        'orchestrator.tier_fallback_nudge'
+      );
+      try {
+        await platform.sendMessage(
+          conversationId,
+          `ℹ️ Model tier 'large' isn't configured — using the '${chatRequest.matchedTier}' preset ` +
+            `(${chatRequest.provider}/${chatRequest.model ?? ''}). Set it in Settings → Model Tiers ` +
+            'or `archon ai tier set large <provider> <model>`.'
+        );
+      } catch (nudgeErr) {
+        getLog().warn(
+          { err: nudgeErr as Error, conversationId },
+          'orchestrator.tier_fallback_nudge_delivery_failed'
+        );
+      }
+    }
     const providerKey = chatRequest.provider;
     let dbEnvVars: Record<string, string> = {};
     if (conversation.codebase_id) {
