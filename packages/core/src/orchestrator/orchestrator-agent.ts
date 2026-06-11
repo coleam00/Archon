@@ -290,6 +290,13 @@ async function resolveUserProviderEnvForChat(userId: string): Promise<Record<str
 }
 
 /**
+ * Conversations (DB ids) already nudged about a tier fallback. Process-lifetime
+ * memory is intentional and sufficient: the nudge is a discovery aid, not
+ * state — a server restart re-nudging once per conversation is acceptable.
+ */
+const tierFallbackNudgedConversations = new Set<string>();
+
+/**
  * Resolve the user's personal AI prefs (tiers / aliases / default assistant)
  * for a direct-chat turn (Phase 3). Folded into `buildAiProfile` as the
  * highest-precedence layer.
@@ -1201,10 +1208,18 @@ export async function handleMessage(
     const chatRequest = resolveModelRequest(aiProfile, 'large', configuredProviderKey);
     // Tier-fallback nudge (mirrors dag.model_provider_conflict): chat asks for
     // 'large'; when that tier is unset and a sibling preset answered, tell the
-    // user once, non-blocking. Only the main chat request nags — the background
-    // title model ('small') falls back silently. Delivery failure must never
-    // fail the chat turn.
-    if (chatRequest.matchedTier !== undefined && chatRequest.matchedTier !== 'large') {
+    // user ONCE PER CONVERSATION, non-blocking — the dedup Set below is what
+    // keeps it from becoming a per-message banner (review C1). Only the main
+    // chat request nags — the background title model ('small') falls back
+    // silently. Delivery failure must never fail the chat turn.
+    if (
+      chatRequest.matchedTier !== undefined &&
+      chatRequest.matchedTier !== 'large' &&
+      !tierFallbackNudgedConversations.has(conversation.id)
+    ) {
+      // Mark BEFORE attempting delivery: a failed send shouldn't retry the
+      // nudge on every subsequent message either.
+      tierFallbackNudgedConversations.add(conversation.id);
       getLog().warn(
         {
           requestedTier: 'large',

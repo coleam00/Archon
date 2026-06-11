@@ -2787,13 +2787,17 @@ describe('per-user AI prefs in chat + tier-fallback nudge', () => {
     expect(mockSendQuery).toHaveBeenCalled();
   });
 
-  test("nudges once (non-blocking) when tier 'large' falls back to a sibling", async () => {
+  test("nudges once per conversation (not per message) when tier 'large' falls back", async () => {
     // 'unknownprov' has no built-in tier defaults; config sets only `small`,
-    // so the chat's 'large' request resolves via the fallback chain.
-    mockGetOrCreateConversation.mockReturnValueOnce(
-      Promise.resolve(makeConversation({ ai_assistant_type: 'unknownprov' }))
-    );
-    mockLoadConfig.mockReturnValueOnce(
+    // so the chat's 'large' request resolves via the fallback chain. A distinct
+    // conversation id keeps the module-level dedup Set isolated from other tests.
+    const nudgeConversation = makeConversation({
+      id: 'conv-nudge-dedup',
+      platform_conversation_id: 'conv-nudge-dedup',
+      ai_assistant_type: 'unknownprov',
+    });
+    mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(nudgeConversation));
+    mockLoadConfig.mockImplementation(() =>
       Promise.resolve({
         assistants: { claude: {}, codex: {} },
         envVars: {},
@@ -2801,18 +2805,27 @@ describe('per-user AI prefs in chat + tier-fallback nudge', () => {
       })
     );
 
-    const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'Hello');
+    try {
+      const platform = makePlatform();
+      await handleMessage(platform, 'conv-nudge-dedup', 'Hello');
+      await handleMessage(platform, 'conv-nudge-dedup', 'Hello again');
 
-    const sendCalls = (platform.sendMessage as ReturnType<typeof mock>).mock.calls as unknown as [
-      string,
-      string,
-    ][];
-    const nudges = sendCalls.filter(c => c[1].includes("tier 'large' isn't configured"));
-    expect(nudges.length).toBe(1);
-    expect(nudges[0]?.[1]).toContain("'small' preset");
-    // Non-blocking: the chat turn still went to the AI.
-    expect(mockSendQuery).toHaveBeenCalled();
+      const sendCalls = (platform.sendMessage as ReturnType<typeof mock>).mock.calls as unknown as [
+        string,
+        string,
+      ][];
+      const nudges = sendCalls.filter(c => c[1].includes("tier 'large' isn't configured"));
+      // Review C1: exactly ONE nudge across BOTH messages — per-conversation dedup.
+      expect(nudges.length).toBe(1);
+      expect(nudges[0]?.[1]).toContain("'small' preset");
+      // Non-blocking: both chat turns still went to the AI.
+      expect(mockSendQuery.mock.calls.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(null as unknown));
+      mockLoadConfig.mockImplementation(() =>
+        Promise.resolve({ assistants: { claude: {}, codex: {} }, envVars: {} })
+      );
+    }
   });
 
   test('no nudge when the large tier resolves exactly', async () => {
