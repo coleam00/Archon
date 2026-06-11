@@ -84,7 +84,6 @@ const BRAND_COLOR: Record<string, string> = {
   TTTS: '#a78bfa', // violet-400
   QEP: '#f472b6', // pink-400
   IHHT: '#22d3ee', // cyan-400
-  'SG INK': '#fb923c', // orange-400
   Unassigned: '#71717a', // zinc-500
 };
 

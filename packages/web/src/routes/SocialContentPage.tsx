@@ -134,7 +134,6 @@ const ACTIVE_SEQUENCES: Record<string, ActiveSequence[]> = {
         'Demoted from top objective 2026-05-13. Pivoted to invitation-only Sarasota session. BD asset feeding PMC + EWC pipelines.',
     },
   ],
-  'sg-ink': [],
   naba: [],
   ihht: [],
   qep: [],

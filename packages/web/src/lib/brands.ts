@@ -75,17 +75,6 @@ export const BRANDS: BrandDef[] = [
     ],
   },
   {
-    slug: 'sg-ink',
-    label: 'SG INK',
-    apolloPrefix: 'SGINK',
-    icp: 'Founders and operators in healthcare / wellness who need a content engine: ghostwritten LinkedIn, blogs, thought leadership.',
-    adjacentIcps: [
-      'Solo medical practice owners building personal brand',
-      'Coach / consultant hybrid offerings',
-      'Healthcare SaaS founders pre-Series A',
-    ],
-  },
-  {
     slug: 'naba',
     label: 'NABA',
     apolloPrefix: 'NABA',

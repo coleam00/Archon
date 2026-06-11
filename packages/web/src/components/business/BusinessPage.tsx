@@ -113,7 +113,7 @@ const STATUS_STYLE: Record<NonNullable<BusinessPageProps['statusTone']>, string>
 
 /**
  * Shared layout for per-business tabs (PMC, BRT, EWC, Fountain WPB, IHHT,
- * QEP, SG INK, TTS, etc.). Renders:
+ * QEP, TTS, etc.). Renders:
  *
  *   header     — name + status pill + website link
  *   kpi strip  — one-glance metrics (optional)

@@ -286,7 +286,7 @@ export function SolutionsPage(): React.ReactElement {
 
       <p className="text-[11px] text-text-tertiary">
         Sourced from <code>second-brain/partners/</code>. PMC sub-brands (BRT, EWC, TTTS, IHHT, QEP,
-        SG INK, bioreg.tech) live separately under <code>businesses/pmc/</code>. Client engagements
+        bioreg.tech) live separately under <code>businesses/pmc/</code>. Client engagements
         (Cleveland Clinic, Precision Health) live under <code>clients-engagements/</code>.{' '}
         <HardDrive className="mb-0.5 inline h-3 w-3" /> Drive assets at /drive.
       </p>

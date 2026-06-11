@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-06-10T16:28:45+00:00",
+  "generated_at": "2026-06-11T13:54:40+00:00",
   "vault_path": "second-brain/partners",
-  "count": 9,
+  "count": 8,
   "solutions": [
     {
       "id": "cmpse-ai",
@@ -86,23 +86,6 @@
       "lastTouch": "2026-06-01",
       "vaultPath": "second-brain/partners/quicksilver-scientific/_quicksilver-scientific.md",
       "tags": ["solution", "partner", "client/jid5274"]
-    },
-    {
-      "id": "thinksgink",
-      "slug": "thinksgink",
-      "name": "ThinkSgink / SG INK",
-      "type": "partner",
-      "category": "services",
-      "model": "services",
-      "status": "active",
-      "audience": "internal",
-      "website": "https://thinksgink.com",
-      "tagline": "Strategic extension for PMC/BioReg ecosystem. Handles marketing, systems architecture, and branding. Also: Sam is a standup comedian.",
-      "description": "Sam's marketing + systems + branding agency. Strategic partner / services vendor for PMC and BRT. Sam (sam@thinksgink.com) is also a standup comedian.",
-      "keyContact": "Sam",
-      "lastTouch": "2026-06-01",
-      "vaultPath": "second-brain/partners/thinksgink.md",
-      "tags": ["solution", "partner", "services", "marketing", "client/jid5274"]
     },
     {
       "id": "weave",
