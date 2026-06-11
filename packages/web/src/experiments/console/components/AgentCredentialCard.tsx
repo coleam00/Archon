@@ -17,10 +17,8 @@ import {
 } from '../lib/agent-status';
 import { useCancelledRef } from '../lib/use-cancelled-ref';
 import { SubscriptionLoginFlow } from './SubscriptionLoginFlow';
+import { INPUT_CLASS } from './SettingsFormPrimitives';
 
-// Mirrors AssistantConfigPanel's INPUT_CLASS so inputs match the console form style.
-const INPUT_CLASS =
-  'w-full rounded-[9px] border border-border bg-surface px-3.5 py-[11px] font-mono text-[13px] text-text-primary placeholder:text-text-tertiary transition-all focus:border-accent-bright/50 focus:outline-none focus:shadow-[0_0_0_3px_color-mix(in_oklch,var(--brand-magenta),transparent_92%)]';
 const GHOST_BUTTON =
   'shrink-0 rounded border border-border px-2.5 py-1 text-[11px] text-text-secondary transition-colors hover:border-border-bright hover:text-text-primary disabled:opacity-40';
 const BRAND_BUTTON =
