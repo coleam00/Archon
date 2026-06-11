@@ -2844,6 +2844,35 @@ describe('per-user AI prefs in chat + tier-fallback nudge', () => {
     }
   });
 
+  test("no nudge when the user's own 'large' tier satisfies the request", async () => {
+    // Provider with no built-in defaults + only the USER's large tier set:
+    // exact match through the per-user layer → no fallback, no nudge.
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(
+        makeConversation({
+          id: 'conv-user-large',
+          platform_conversation_id: 'conv-user-large',
+          ai_assistant_type: 'unknownprov',
+          user_id: 'user-9',
+        } as Partial<Conversation>)
+      )
+    );
+    mockGetUserAiPrefsDb.mockImplementation(async () => ({
+      tiers: { large: { provider: 'claude', model: 'opus' } },
+    }));
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-user-large', 'Hello');
+
+    const sendCalls = (platform.sendMessage as ReturnType<typeof mock>).mock.calls as unknown as [
+      string,
+      string,
+    ][];
+    expect(sendCalls.some(c => c[1].includes("isn't configured"))).toBe(false);
+    const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
+    expect(requestOptions.model).toBe('opus');
+  });
+
   test('no nudge when the large tier resolves exactly', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(
       Promise.resolve(makeConversation({ ai_assistant_type: 'claude' }))
