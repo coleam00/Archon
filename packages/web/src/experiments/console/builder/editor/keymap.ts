@@ -5,9 +5,11 @@
  *
  * The console keymap is deliberately modifier-free (Cmd/Ctrl combos bypass it
  * so browser shortcuts keep working), so the bindings are vim-flavored single
- * keys and `g`-chords. `p` / `?` / `,` are owned by the ConsoleApp-level
- * keymap (palette / help / settings) and must not be bound here — both
- * keymaps listen on the same window.
+ * keys and `g`-chords. Prefix contract (see lib/keymap.ts header): `p` / `?`
+ * / `,` are owned by the ConsoleApp-level keymap (palette / help / settings)
+ * and must not be bound here — both keymaps listen on the same window. The
+ * builder owns the `g` chord prefix on this route; ConsoleApp must not add a
+ * `g*` binding without first unifying the chord buffers.
  */
 import type { Binding } from '../../lib/keymap';
 import type { KeymapGroup } from '../../components/KeymapHelp';

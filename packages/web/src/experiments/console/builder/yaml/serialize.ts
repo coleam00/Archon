@@ -13,14 +13,27 @@
  */
 import type { WireDagNode, WireWorkflowDefinition } from '../types';
 
+/**
+ * Word scalars a YAML parser may re-type, matched case-insensitively. Includes
+ * the YAML 1.1 boolean spellings (yes/no/on/off) so the output stays a string
+ * under either schema.
+ */
+const AMBIGUOUS_WORDS = new Set(['true', 'false', 'null', '~', 'yes', 'no', 'on', 'off', 'nan']);
+
+/**
+ * Number-like spellings YAML re-types: plain ints/floats, scientific notation
+ * (1e5), hex (0x1A), octal (0o17), and infinity/NaN (.inf/.nan), with an
+ * optional sign. Multi-dot strings like 1.2.3 are NOT numbers and stay plain.
+ */
+const NUMERIC_LIKE =
+  /^[+-]?(?:\d[\d_]*(?:\.\d*)?(?:[eE][+-]?\d+)?|\.\d+(?:[eE][+-]?\d+)?|0x[0-9a-fA-F]+|0o[0-7]+|\.(?:inf|nan))$/i;
+
 /** Scalars that must be quoted to avoid being re-parsed as a different type. */
 function quoteIfAmbiguous(value: string): string {
   if (
     value === '' ||
-    value === 'true' ||
-    value === 'false' ||
-    value === 'null' ||
-    /^[\d.]+$/.test(value) ||
+    AMBIGUOUS_WORDS.has(value.toLowerCase()) ||
+    NUMERIC_LIKE.test(value) ||
     value.includes(':') ||
     value.includes('#') ||
     value.includes('"') ||
@@ -30,6 +43,12 @@ function quoteIfAmbiguous(value: string): string {
     value.startsWith('&') ||
     value.startsWith('*') ||
     value.startsWith('-') ||
+    value.startsWith('+') ||
+    value.startsWith('?') ||
+    value.startsWith('!') ||
+    value.startsWith('%') ||
+    value.startsWith('@') ||
+    value.startsWith('`') ||
     value !== value.trim()
   ) {
     return JSON.stringify(value);

@@ -5,8 +5,9 @@
  * state of its own (id renames are committed on blur/Enter via a keyed
  * uncontrolled input so half-typed ids don't thrash the graph).
  */
-import { useRef, type KeyboardEvent, type ReactElement } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactElement } from 'react';
 import { VARIANT_REGISTRY } from '../variants';
+import { NODE_ID_PATTERN } from '../editor/state';
 import type { BaseFields, BuilderNode } from '../types';
 import { CheckboxField, Field, SelectField, TextField } from './inspector/fields';
 import { PromptFields } from './inspector/PromptFields';
@@ -117,6 +118,13 @@ export function Inspector({
   onRename,
 }: InspectorProps): ReactElement {
   const idRef = useRef<HTMLInputElement | null>(null);
+  const [renameError, setRenameError] = useState<string | null>(null);
+
+  // A stale error must not follow the selection to a different node.
+  const nodeId = node?.id;
+  useEffect(() => {
+    setRenameError(null);
+  }, [nodeId]);
 
   if (node === null) {
     return (
@@ -135,7 +143,16 @@ export function Inspector({
 
   const commitRename = (): void => {
     const next = idRef.current?.value.trim() ?? '';
-    if (next.length > 0 && next !== node.id) onRename(node.id, next);
+    if (next.length === 0 || next === node.id) {
+      setRenameError(null);
+      return;
+    }
+    if (!NODE_ID_PATTERN.test(next)) {
+      setRenameError('Ids use letters, digits, _ and - (no leading digit).');
+      return;
+    }
+    setRenameError(null);
+    onRename(node.id, next);
   };
 
   return (
@@ -167,6 +184,7 @@ export function Inspector({
           }}
           className="w-full rounded-[8px] border border-border bg-surface px-2 py-1.5 font-mono text-[12.5px] text-text-primary outline-none focus:border-accent-bright/60"
         />
+        {renameError !== null ? <p className="text-[11px] text-error">{renameError}</p> : null}
       </Field>
 
       <VariantFields node={node} onPatch={onPatch} />

@@ -114,6 +114,37 @@ describe('serializeToYaml', () => {
     }
   });
 
+  test('scalars a YAML parser would re-type are quoted', () => {
+    const cases: [string, string][] = [
+      ['1e5', '"1e5"'], // scientific notation → float
+      ['0x1A', '"0x1A"'], // hex → int
+      ['0o17', '"0o17"'], // octal → int
+      ['+5', '"+5"'], // signed int
+      ['.inf', '".inf"'], // infinity
+      ['.NaN', '".NaN"'], // not-a-number
+      ['True', '"True"'], // YAML 1.2 boolean spelling
+      ['NULL', '"NULL"'], // null spelling
+      ['~', '"~"'], // null shorthand
+      ['yes', '"yes"'], // YAML 1.1 boolean (other parsers)
+      ['Off', '"Off"'],
+    ];
+    for (const [raw, quoted] of cases) {
+      const yaml = serializeToYaml({
+        name: 'quoting',
+        description: '',
+        nodes: [{ id: 'n', prompt: 'p', output_type: raw }],
+      });
+      expect(yaml).toContain(`output_type: ${quoted}`);
+    }
+    // Non-ambiguous strings stay plain.
+    const plain = serializeToYaml({
+      name: 'quoting',
+      description: '',
+      nodes: [{ id: 'n', prompt: 'p', output_type: '1.2.3-beta' }],
+    });
+    expect(plain).toContain('output_type: 1.2.3-beta');
+  });
+
   test('empty arrays and objects render inline', () => {
     const def: WireWorkflowDefinition = {
       name: 'edge-cases',

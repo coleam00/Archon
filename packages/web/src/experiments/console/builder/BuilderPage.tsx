@@ -33,6 +33,7 @@ import {
   createEditorState,
   editorReducer,
   type EditorAction,
+  type NodeSize,
 } from './editor/state';
 import { buildBuilderBindings, builderKeymapGroups } from './editor/keymap';
 import type { AlignMode } from './editor/align';
@@ -86,12 +87,13 @@ export function BuilderPage({ initialWorkflow, onChange }: BuilderPageProps): Re
   }, [state.workflow]);
 
   // Report workflow edits (not position/selection churn) to the wrapper.
-  const initialRef = useRef(true);
+  // Compare against the last-reported value instead of a fired-once flag:
+  // StrictMode double-invokes effects with refs preserved, so a skip-once
+  // guard would fire a spurious onChange(initialWorkflow) on the re-run.
+  const lastReported = useRef(initialWorkflow);
   useEffect(() => {
-    if (initialRef.current) {
-      initialRef.current = false;
-      return;
-    }
+    if (state.workflow === lastReported.current) return;
+    lastReported.current = state.workflow;
     onChange?.(state.workflow);
   }, [state.workflow, onChange]);
 
@@ -155,31 +157,42 @@ export function BuilderPage({ initialWorkflow, onChange }: BuilderPageProps): Re
     [stamped, state.workflow.nodes.length]
   );
 
+  // The reducer reads the selection itself, so this callback (and therefore
+  // the keymap bindings below) stays referentially stable across selection
+  // changes — re-creating bindings would make useKeymap re-register and wipe
+  // an in-progress chord buffer.
   const removeSelection = useCallback((): void => {
-    if (state.selectedEdges.size > 0) {
-      stamped({ type: 'remove-edges', edgeIds: [...state.selectedEdges] });
-    }
-    if (state.selectedNodes.size > 0) {
-      stamped({ type: 'remove-nodes', ids: [...state.selectedNodes] });
-    }
-  }, [stamped, state.selectedEdges, state.selectedNodes]);
+    stamped({ type: 'remove-selection' });
+  }, [stamped]);
 
   const fitView = useCallback((): void => {
     void flowRef.current?.fitView({ padding: 0.2, duration: 200 });
   }, []);
 
+  /** Measured node sizes from the live canvas, so align/distribute use the
+   *  same geometry as smart-guide snapping (constants are the fallback). */
+  const measuredSizes = useCallback((): ReadonlyMap<string, NodeSize> => {
+    const sizes = new Map<string, NodeSize>();
+    for (const node of flowRef.current?.getNodes() ?? []) {
+      if (node.measured?.width !== undefined && node.measured.height !== undefined) {
+        sizes.set(node.id, { width: node.measured.width, height: node.measured.height });
+      }
+    }
+    return sizes;
+  }, []);
+
   const alignSelection = useCallback(
     (mode: AlignMode): void => {
-      stamped({ type: 'align', mode });
+      stamped({ type: 'align', mode, sizes: measuredSizes() });
     },
-    [stamped]
+    [stamped, measuredSizes]
   );
 
   const distributeSelection = useCallback(
     (axis: 'h' | 'v'): void => {
-      stamped({ type: 'distribute', axis });
+      stamped({ type: 'distribute', axis, sizes: measuredSizes() });
     },
-    [stamped]
+    [stamped, measuredSizes]
   );
 
   const bindings = useMemo(

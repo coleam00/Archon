@@ -1,11 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import {
-  CLIPBOARD_VERSION,
-  copySelection,
-  parseEnvelope,
-  pasteEnvelope,
-  serializeEnvelope,
-} from './clipboard';
+import { copySelection, pasteEnvelope } from './clipboard';
 import { FIXTURES } from '../fixtures';
 import { fromWorkflowDefinition } from '../model';
 import type { BuilderWorkflow } from '../types';
@@ -38,22 +32,6 @@ describe('copySelection', () => {
   test('captures positions for the copied nodes only', () => {
     const envelope = copySelection(mixed, new Set(['fix']), positions);
     expect(envelope?.positions).toEqual({ fix: { x: 100, y: 160 } });
-  });
-});
-
-describe('envelope serialization', () => {
-  test('JSON round-trip preserves the envelope', () => {
-    const envelope = copySelection(mixed, new Set(['fix', 'report']), positions);
-    expect(envelope).not.toBeNull();
-    if (envelope === null) return;
-    expect(parseEnvelope(serializeEnvelope(envelope))).toEqual(envelope);
-  });
-
-  test('rejects foreign or malformed payloads', () => {
-    expect(parseEnvelope('')).toBeNull();
-    expect(parseEnvelope('not json')).toBeNull();
-    expect(parseEnvelope('{"version":"other","nodes":[]}')).toBeNull();
-    expect(parseEnvelope(JSON.stringify({ version: CLIPBOARD_VERSION, nodes: 'x' }))).toBeNull();
   });
 });
 

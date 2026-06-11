@@ -7,7 +7,9 @@
  * self-contained. Paste remaps colliding ids, rewires internal deps through
  * the remap, and offsets positions. External deps are dropped at copy time —
  * a pasted fragment never points back at nodes that may not exist in the
- * target. Pure functions; the envelope lives in editor state (in-memory).
+ * target. Pure functions; the envelope lives in editor state (in-memory only —
+ * the `version` field exists so a future system-clipboard integration can
+ * recognize its own payloads, but no JSON codec ships until one is needed).
  */
 import type { BuilderNode, BuilderWorkflow } from '../types';
 import type { XYPosition } from '../flow/types';
@@ -52,27 +54,6 @@ export function copySelection(
   }
 
   return { version: CLIPBOARD_VERSION, nodes, positions: copiedPositions };
-}
-
-/** JSON-encode an envelope (for round-tripping through a string clipboard). */
-export function serializeEnvelope(envelope: ClipboardEnvelope): string {
-  return JSON.stringify(envelope);
-}
-
-/** Parse a JSON envelope; `null` for anything that is not ours. */
-export function parseEnvelope(text: string): ClipboardEnvelope | null {
-  if (text.length === 0) return null;
-  try {
-    const parsed: unknown = JSON.parse(text);
-    if (typeof parsed !== 'object' || parsed === null) return null;
-    const candidate = parsed as Partial<ClipboardEnvelope>;
-    if (candidate.version !== CLIPBOARD_VERSION) return null;
-    if (!Array.isArray(candidate.nodes)) return null;
-    if (typeof candidate.positions !== 'object' || candidate.positions === null) return null;
-    return candidate as ClipboardEnvelope;
-  } catch {
-    return null;
-  }
 }
 
 /** `id` if free, else `id-copy`, `id-copy-2`, … */

@@ -11,7 +11,7 @@
 import { VARIANT_REGISTRY } from '../variants';
 import type { BuilderNode, BuilderWorkflow, VariantId } from '../types';
 import { NODE_HEIGHT, NODE_WIDTH, layoutWithDagre } from '../flow/layout';
-import { builderToFlowEdges } from '../flow/to-flow';
+import { builderToFlowEdges, edgeId } from '../flow/to-flow';
 import type { XYPosition } from '../flow/types';
 import {
   canRedo,
@@ -35,21 +35,35 @@ export interface EditorState {
   clipboard: ClipboardEnvelope | null;
 }
 
+/** Measured node dimensions, passed by the page from the live canvas. */
+export interface NodeSize {
+  width: number;
+  height: number;
+}
+
+/**
+ * Valid node ids — mirrors the engine's id grammar (the `when:` atom pattern
+ * in validation/when-grammar.ts): letters/digits/underscore/hyphen, no leading
+ * digit. Enforced on rename so an id can never contain the `->` edge-id
+ * separator or break `$<id>.output` references.
+ */
+export const NODE_ID_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_-]*$/;
+
 export type EditorAction =
   | { type: 'add-node'; variant: VariantId; position: XYPosition; at: number }
   | { type: 'patch-node'; node: BuilderNode; at: number }
   | { type: 'rename-node'; id: string; nextId: string; at: number }
   | { type: 'remove-nodes'; ids: readonly string[]; at: number }
   | { type: 'add-edge'; source: string; target: string; at: number }
-  | { type: 'remove-edges'; edgeIds: readonly string[]; at: number }
+  | { type: 'remove-selection'; at: number }
   | { type: 'move-nodes'; moves: readonly { id: string; position: XYPosition }[]; at: number }
   | { type: 'set-selection'; nodeIds: ReadonlySet<string>; edgeIds: ReadonlySet<string> }
   | { type: 'select-all' }
   | { type: 'copy' }
   | { type: 'cut'; at: number }
   | { type: 'paste'; at: number }
-  | { type: 'align'; mode: AlignMode; at: number }
-  | { type: 'distribute'; axis: 'h' | 'v'; at: number }
+  | { type: 'align'; mode: AlignMode; sizes?: ReadonlyMap<string, NodeSize>; at: number }
+  | { type: 'distribute'; axis: 'h' | 'v'; sizes?: ReadonlyMap<string, NodeSize>; at: number }
   | { type: 'auto-arrange'; at: number }
   | { type: 'undo' }
   | { type: 'redo' };
@@ -90,13 +104,22 @@ function nodeIds(workflow: BuilderWorkflow): Set<string> {
   return new Set(workflow.nodes.map(n => n.id));
 }
 
-/** Selected nodes as fixed-size rects for the alignment kernels. */
-function selectionRects(state: EditorState): NodeRect[] {
+/**
+ * Selected nodes as rects for the alignment kernels. Measured sizes from the
+ * live canvas take precedence so align/distribute agree with smart-guide
+ * snapping; the fixed constants are the pre-measurement fallback.
+ */
+function selectionRects(state: EditorState, sizes?: ReadonlyMap<string, NodeSize>): NodeRect[] {
   const rects: NodeRect[] = [];
   for (const id of state.selectedNodes) {
     const position = state.positions.get(id);
     if (position === undefined) continue;
-    rects.push({ id, position, width: NODE_WIDTH, height: NODE_HEIGHT });
+    rects.push({
+      id,
+      position,
+      width: sizes?.get(id)?.width ?? NODE_WIDTH,
+      height: sizes?.get(id)?.height ?? NODE_HEIGHT,
+    });
   }
   return rects;
 }
@@ -160,6 +183,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     case 'rename-node': {
       const nextId = action.nextId.trim();
       if (nextId.length === 0 || nextId === action.id) return state;
+      if (!NODE_ID_PATTERN.test(nextId)) return state;
       if (nodeIds(state.workflow).has(nextId)) return state;
       const nodes = state.workflow.nodes.map(node => {
         if (node.id === action.id) return { ...node, id: nextId } as BuilderNode;
@@ -231,34 +255,43 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       };
     }
 
-    case 'remove-edges': {
-      if (action.edgeIds.length === 0) return state;
-      // Edge ids are `${source}->${target}`; node ids cannot contain `>`.
-      const pairs = action.edgeIds
-        .map(id => id.split('->'))
-        .filter((p): p is [string, string] => p.length === 2);
-      if (pairs.length === 0) return state;
-      const bySource = new Map<string, Set<string>>();
-      for (const [source, target] of pairs) {
-        const set = bySource.get(target) ?? new Set<string>();
-        set.add(source);
-        bySource.set(target, set);
-      }
-      const nodes = state.workflow.nodes.map(node => {
-        const drop = bySource.get(node.id);
+    case 'remove-selection': {
+      const removedNodes = state.selectedNodes;
+      const removedEdges = state.selectedEdges;
+      if (removedNodes.size === 0 && removedEdges.size === 0) return state;
+
+      const kept = state.workflow.nodes.filter(n => !removedNodes.has(n.id));
+      // One pass drops deps pointing at removed nodes AND the explicitly
+      // selected edges. Edges are matched by CONSTRUCTING the edge id from
+      // each (dep, node) pair — ids are never parsed, so no id spelling can
+      // make a removal silently no-op.
+      const nodes = kept.map(node => {
         const deps = node.base.depends_on;
-        if (drop === undefined || deps === undefined) return node;
-        const filtered = deps.filter(d => !drop.has(d));
+        if (deps === undefined) return node;
+        const filtered = deps.filter(
+          dep => !removedNodes.has(dep) && !removedEdges.has(edgeId(dep, node.id))
+        );
         if (filtered.length === deps.length) return node;
         return {
           ...node,
           base: { ...node.base, depends_on: filtered.length > 0 ? filtered : undefined },
         } as BuilderNode;
       });
+
+      const anyNodeRemoved = kept.length !== state.workflow.nodes.length;
+      const anyDepRemoved = nodes.some((n, i) => n !== kept[i]);
+      if (!anyNodeRemoved && !anyDepRemoved) return state;
+
+      const positions = new Map(state.positions);
+      for (const id of removedNodes) positions.delete(id);
       return {
         ...state,
-        history: remember(state, 'remove-edges', action.at),
+        // One snapshot for the whole deletion — a single undo restores
+        // nodes and edges together.
+        history: remember(state, 'remove-selection', action.at),
         workflow: { ...state.workflow, nodes },
+        positions,
+        selectedNodes: new Set(),
         selectedEdges: new Set(),
       };
     }
@@ -318,7 +351,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     }
 
     case 'align': {
-      const rects = selectionRects(state);
+      const rects = selectionRects(state, action.sizes);
       if (rects.length < 2) return state;
       return {
         ...state,
@@ -328,7 +361,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     }
 
     case 'distribute': {
-      const rects = selectionRects(state);
+      const rects = selectionRects(state, action.sizes);
       if (rects.length < 3) return state;
       const next = action.axis === 'h' ? distributeH(rects) : distributeV(rects);
       return {
