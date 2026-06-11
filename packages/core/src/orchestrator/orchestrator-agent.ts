@@ -7,7 +7,7 @@
  * - Does NOT require a project to be selected before starting a conversation
  */
 import { existsSync } from 'fs';
-import { createLogger, captureChatTurn } from '@archon/paths';
+import { createLogger, captureChatTurn, captureApprovalResolved } from '@archon/paths';
 import type {
   IPlatformAdapter,
   HandleMessageContext,
@@ -911,6 +911,9 @@ export async function handleMessage(
             step_name: approval.nodeId,
             data: { decision: 'approved', comment: message },
           });
+          // Anonymous telemetry: NL approval path inlines the approve logic
+          // (does not go through approveWorkflow), so capture here too.
+          captureApprovalResolved({ resolution: 'approved' });
           // For interactive loops, store user input; for standard approvals, mark as approved
           // and clear any rejection state.
           const metadataUpdate: Record<string, unknown> =
@@ -1380,6 +1383,7 @@ async function handleStreamMode(
   requestOptions?: SendQueryOptions,
   userId?: string
 ): Promise<void> {
+  const turnStartedAt = Date.now();
   const allMessages: string[] = [];
   let newSessionId: string | undefined;
   let commandDetected = false;
@@ -1483,6 +1487,8 @@ async function handleStreamMode(
         captureChatTurn({
           platform: platform.getPlatformType(),
           provider: aiClient.getType(),
+          model: requestOptions?.model,
+          durationMs: Date.now() - turnStartedAt,
           outcome: 'failed',
         });
         return;
@@ -1554,6 +1560,13 @@ async function handleStreamMode(
   captureChatTurn({
     platform: platform.getPlatformType(),
     provider: aiClient.getType(),
+    model: requestOptions?.model,
+    // durationMs deliberately measures from mode-handler entry — it includes
+    // pre-AI setup, i.e. "time the user waited", not pure model latency.
+    durationMs: Date.now() - turnStartedAt,
+    costUsd: lastResult?.cost,
+    tokensIn: lastResult?.tokens?.input,
+    tokensOut: lastResult?.tokens?.output,
     outcome: 'completed',
   });
 }
@@ -1580,6 +1593,7 @@ async function handleBatchMode(
   requestOptions?: SendQueryOptions,
   userId?: string
 ): Promise<void> {
+  const turnStartedAt = Date.now();
   const allChunks: { type: string; content: string }[] = [];
   const assistantMessages: string[] = [];
   let assistantChunksTruncated = false;
@@ -1687,6 +1701,8 @@ async function handleBatchMode(
         captureChatTurn({
           platform: platform.getPlatformType(),
           provider: aiClient.getType(),
+          model: requestOptions?.model,
+          durationMs: Date.now() - turnStartedAt,
           outcome: 'failed',
         });
         return;
@@ -1785,6 +1801,13 @@ async function handleBatchMode(
   captureChatTurn({
     platform: platform.getPlatformType(),
     provider: aiClient.getType(),
+    model: requestOptions?.model,
+    // durationMs deliberately measures from mode-handler entry — it includes
+    // pre-AI setup, i.e. "time the user waited", not pure model latency.
+    durationMs: Date.now() - turnStartedAt,
+    costUsd: lastResult?.cost,
+    tokensIn: lastResult?.tokens?.input,
+    tokensOut: lastResult?.tokens?.output,
     outcome: 'completed',
   });
 }

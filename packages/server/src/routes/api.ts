@@ -65,6 +65,7 @@ import {
   checkForUpdate,
   BUNDLED_IS_BINARY,
   BUNDLED_VERSION,
+  captureApprovalResolved,
 } from '@archon/paths';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { parseWorkflow } from '@archon/workflows/loader';
@@ -2865,6 +2866,9 @@ export function registerApiRoutes(
         step_name: approval.nodeId,
         data: { decision: 'approved', comment },
       });
+      // Anonymous telemetry: binary resolution only (web API inlines the
+      // approve logic rather than calling approveWorkflow).
+      captureApprovalResolved({ resolution: 'approved' });
       // For interactive loops, store user input; for standard approvals, mark as approved
       // and clear any rejection state.
       const metadataUpdate =
@@ -2916,6 +2920,8 @@ export function registerApiRoutes(
         step_name: approval?.nodeId ?? 'unknown',
         data: { decision: 'rejected', reason },
       });
+      // Anonymous telemetry: binary resolution only — no ids/reasons/names.
+      captureApprovalResolved({ resolution: 'rejected' });
 
       const hasOnReject = approval?.onRejectPrompt !== undefined;
       if (hasOnReject) {

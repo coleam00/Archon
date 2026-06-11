@@ -20,6 +20,7 @@ const mockLogger = {
   level: 'info',
 };
 mock.module('@archon/paths', () => ({
+  captureApprovalResolved: () => undefined,
   createLogger: mock(() => mockLogger),
 }));
 

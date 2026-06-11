@@ -106,7 +106,9 @@ mock.module('@archon/core', () => ({
   }),
 }));
 
+const mockCaptureApprovalResolved = mock(() => undefined);
 mock.module('@archon/paths', () => ({
+  captureApprovalResolved: mockCaptureApprovalResolved,
   createLogger: () => ({
     fatal: mock(() => undefined),
     error: mock(() => undefined),
@@ -1378,6 +1380,7 @@ describe('POST /api/workflows/runs/:runId/approve', () => {
     expect(nodeCompletedCall?.[0]).toMatchObject({
       data: { node_output: '', approval_decision: 'approved' },
     });
+    expect(mockCaptureApprovalResolved).toHaveBeenCalledWith({ resolution: 'approved' });
   });
 });
 
@@ -1427,6 +1430,7 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
     const body = (await response.json()) as { success: boolean; message: string };
     expect(body.success).toBe(true);
     expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-paused-1');
+    expect(mockCaptureApprovalResolved).toHaveBeenCalledWith({ resolution: 'rejected' });
   });
 
   test('records rejection and increments count when on_reject configured and under limit', async () => {

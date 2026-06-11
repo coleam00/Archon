@@ -55,7 +55,9 @@ const mockLogger = createMockLogger();
 
 const mockEnsureArchonWorkspacesPath = mock(() => Promise.resolve('/home/test/.archon/workspaces'));
 const mockCaptureChatTurn = mock(() => undefined);
+const mockCaptureApprovalResolved = mock(() => undefined);
 mock.module('@archon/paths', () => ({
+  captureApprovalResolved: mockCaptureApprovalResolved,
   createLogger: mock(() => mockLogger),
   getArchonWorkspacesPath: mock(() => '/home/test/.archon/workspaces'),
   ensureArchonWorkspacesPath: mockEnsureArchonWorkspacesPath,
@@ -1678,6 +1680,8 @@ describe('natural-language approval routing', () => {
     );
     // Workflow should be executed
     expect(mockExecuteWorkflow).toHaveBeenCalled();
+    // NL approval path captures the binary resolution
+    expect(mockCaptureApprovalResolved).toHaveBeenCalledWith({ resolution: 'approved' });
   });
 
   test('slash command bypasses approval interception — getPausedWorkflowRun not called', async () => {
@@ -2670,11 +2674,14 @@ describe('chat turn telemetry', () => {
     await handleMessage(platform, 'conv-1', 'hello there');
 
     expect(mockCaptureChatTurn).toHaveBeenCalledTimes(1);
-    expect(mockCaptureChatTurn).toHaveBeenCalledWith({
-      platform: 'web',
-      provider: 'claude',
-      outcome: 'completed',
-    });
+    expect(mockCaptureChatTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        platform: 'web',
+        provider: 'claude',
+        outcome: 'completed',
+        durationMs: expect.any(Number),
+      })
+    );
   });
 
   test('does NOT capture a chat turn when the AI routes to /invoke-workflow', async () => {
@@ -2708,6 +2715,48 @@ describe('chat turn telemetry', () => {
     expect(mockCaptureChatTurn).not.toHaveBeenCalled();
   });
 
+  test('passes provider-reported usage through to the chat turn capture', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ codebase_id: null }))
+    );
+    mockSendQuery.mockImplementation(async function* () {
+      yield { type: 'assistant', content: 'answer' };
+      yield {
+        type: 'result',
+        sessionId: 'session-1',
+        cost: 0.042,
+        tokens: { input: 1200, output: 340 },
+      };
+    });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello');
+
+    expect(mockCaptureChatTurn).toHaveBeenCalledTimes(1);
+    expect(mockCaptureChatTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: 'completed',
+        costUsd: 0.042,
+        tokensIn: 1200,
+        tokensOut: 340,
+      })
+    );
+  });
+
+  test('omits usage on the chat turn capture when the provider reports none', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ codebase_id: null }))
+    );
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello again');
+
+    expect(mockCaptureChatTurn).toHaveBeenCalledTimes(1);
+    const arg = mockCaptureChatTurn.mock.calls[0][0] as Record<string, unknown>;
+    expect(arg.costUsd).toBeUndefined();
+    expect(arg.tokensIn).toBeUndefined();
+    expect(arg.tokensOut).toBeUndefined();
+  });
+
   test('captures a failed chat turn when the AI returns an error result', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(
       Promise.resolve(makeConversation({ codebase_id: null }))
@@ -2720,10 +2769,13 @@ describe('chat turn telemetry', () => {
     await handleMessage(platform, 'conv-1', 'hello');
 
     expect(mockCaptureChatTurn).toHaveBeenCalledTimes(1);
-    expect(mockCaptureChatTurn).toHaveBeenCalledWith({
-      platform: 'web',
-      provider: 'claude',
-      outcome: 'failed',
-    });
+    expect(mockCaptureChatTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        platform: 'web',
+        provider: 'claude',
+        outcome: 'failed',
+        durationMs: expect.any(Number),
+      })
+    );
   });
 });

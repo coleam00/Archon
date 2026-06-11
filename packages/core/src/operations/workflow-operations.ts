@@ -4,7 +4,7 @@
  * Both CLI and command-handler are thin formatting adapters over these functions.
  * Operations throw on errors; callers catch and format for their platform.
  */
-import { createLogger } from '@archon/paths';
+import { createLogger, captureApprovalResolved } from '@archon/paths';
 import {
   RESUMABLE_WORKFLOW_STATUSES,
   TERMINAL_WORKFLOW_STATUSES,
@@ -161,6 +161,8 @@ export async function approveWorkflow(
         step_name: approval.nodeId,
         data: { decision: 'approved', comment: approvalComment, iteration: approval.iteration },
       });
+      // Anonymous telemetry: binary resolution only — no ids/comments/names.
+      captureApprovalResolved({ resolution: 'approved' });
       // Transition to 'failed' so findResumableRun picks it up.
       // IMPORTANT: metadata is MERGED (not replaced) — the approval context must survive
       // intact so the resumed executor can detect the correct startIteration.
@@ -192,6 +194,8 @@ export async function approveWorkflow(
       step_name: approval.nodeId,
       data: { decision: 'approved', comment: approvalComment },
     });
+    // Anonymous telemetry: binary resolution only — no ids/comments/names.
+    captureApprovalResolved({ resolution: 'approved' });
     // Transition to 'failed' so findResumableRun picks it up. Clear any rejection state.
     await workflowDb.updateWorkflowRun(runId, {
       status: 'failed',
@@ -246,6 +250,8 @@ export async function rejectWorkflow(
       step_name: approval?.nodeId ?? 'unknown',
       data: { decision: 'rejected', reason: rejectReason },
     });
+    // Anonymous telemetry: binary resolution only — no ids/reasons/names.
+    captureApprovalResolved({ resolution: 'rejected' });
 
     if (approval?.onRejectPrompt !== undefined) {
       if (currentCount + 1 >= maxAttempts) {

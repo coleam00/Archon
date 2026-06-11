@@ -4,9 +4,10 @@
  * Emits a small set of anonymous events — `archon_started` (once per process),
  * `archon_active` (daily server heartbeat), `chat_turn_handled` (each direct
  * AI chat turn), `workflow_invoked` (each workflow start), `workflow_completed`
- * / `workflow_failed` (each terminal run), and `codebase_registered` (count
- * only) — so maintainers can see active installs, which surfaces and workflows
- * get real usage, and run outcomes. No PII, no user identity.
+ * / `workflow_failed` (each terminal run), `workflow_approval_resolved` (each
+ * human approve/reject decision), and `codebase_registered` (count only) — so
+ * maintainers can see active installs, which surfaces and workflows get real
+ * usage, and run outcomes. No PII, no user identity.
  * A random UUID is persisted to `${ARCHON_HOME}/telemetry-id` so we can count
  * distinct installs.
  *
@@ -17,11 +18,13 @@
  * super-properties. What is collected is categorical only: workflow name (real
  * for bundled workflows, `"custom"` for user-authored), platform, provider,
  * model, node shape, run outcome/duration, a fixed-enum error class (never
- * raw error text), chat-turn activity (platform + provider + outcome only),
- * a bare project-registration count, and deployment shape (which adapters are
- * enabled, db kind, auth mode — booleans/enums only). Never sent: code,
- * prompts, message content, conversation ids, file paths, IP, geo, error
- * text, or custom workflow names/descriptions.
+ * raw error text), chat-turn activity (platform + provider + model + outcome),
+ * aggregate usage numbers (token counts, cost USD, turn/run duration, loop
+ * iterations — numeric totals only), approval decisions (approved/rejected,
+ * nothing else), a bare project-registration count, and deployment shape
+ * (which adapters are enabled, db kind, auth mode — booleans/enums only).
+ * Never sent: code, prompts, message content, conversation ids, file paths,
+ * IP, geo, error text, or custom workflow names/descriptions.
  *
  * Opt-out (any one disables telemetry):
  *   - ARCHON_TELEMETRY_DISABLED=1
@@ -43,7 +46,7 @@ import { BUNDLED_IS_BINARY, BUNDLED_VERSION } from './bundled-build';
 import { createLogger } from './logger';
 
 /** Bumped when the captured property set changes (documented in README). */
-export const TELEMETRY_SCHEMA_VERSION = 3;
+export const TELEMETRY_SCHEMA_VERSION = 4;
 
 // Minimal shape of posthog-node's `fetch` option — copied from @posthog/core
 // (a transitive dep) to avoid pulling it in as a direct dependency.
@@ -76,11 +79,12 @@ const DEFAULT_POSTHOG_HOST = 'https://us.i.posthog.com';
  * means the first-run notice has been shown; absence means it hasn't.
  */
 // Bumped to `-v2` when the captured property set expanded (machine context +
-// run outcomes), and to `-v3` when chat-turn activity, deployment shape, and
-// registration counts were added. Bumping re-shows the updated first-run
-// notice once per install so existing users re-consent rather than silently
-// getting broader capture.
-const NOTICE_STAMP_FILENAME = 'telemetry-notice-shown-v3';
+// run outcomes), to `-v3` when chat-turn activity, deployment shape, and
+// registration counts were added, and to `-v4` when aggregate usage totals
+// (tokens/cost/duration/loop iterations) and approval decisions were added.
+// Bumping re-shows the updated first-run notice once per install so existing
+// users re-consent rather than silently getting broader capture.
+const NOTICE_STAMP_FILENAME = 'telemetry-notice-shown-v4';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -383,9 +387,10 @@ function maybeShowFirstRunNotice(): void {
 
   const message =
     'Archon collects anonymous usage telemetry — now also chat activity\n' +
-    '(platform + provider only, never message content), deployment shape\n' +
-    '(which adapters/db/auth are enabled), and a categorical failure class,\n' +
-    'alongside workflow name, run outcome, OS/arch, and version.\n' +
+    '(platform/provider/model, never message content), aggregate usage totals\n' +
+    '(token counts, cost, durations, loop iterations), approval decisions\n' +
+    '(approved/rejected only), deployment shape, and a categorical failure\n' +
+    'class, alongside workflow name, run outcome, OS/arch, and version.\n' +
     'Still no code, prompts, file paths, IP, or personal data — see README "Telemetry".\n' +
     'Opt out anytime: DO_NOT_TRACK=1 or ARCHON_TELEMETRY_DISABLED=1\n';
   try {
@@ -569,7 +574,14 @@ export interface ArchonStartedProperties extends DeploymentShapeProperties {
 export interface ChatTurnProperties {
   platform?: string;
   provider?: string;
+  /** Resolved model ref — passed through {@link sanitizeModelForTelemetry}. */
+  model?: string;
   outcome: 'completed' | 'failed';
+  durationMs?: number;
+  /** Provider-reported aggregate usage for the turn. Numbers only. */
+  costUsd?: number;
+  tokensIn?: number;
+  tokensOut?: number;
 }
 
 /** Categorical terminal exit reason — a fixed enum, never raw error text. */
@@ -614,6 +626,14 @@ export interface WorkflowCompletedProperties {
   errorClass?: WorkflowErrorClass;
   /** Type of the first failed node (failed runs only). */
   failedNodeType?: WorkflowNodeType;
+  /** Aggregate provider-reported cost (USD) for the run. Numeric total only. */
+  costUsd?: number;
+  /** Aggregate provider-reported input tokens for the run. */
+  tokensIn?: number;
+  /** Aggregate provider-reported output tokens for the run. */
+  tokensOut?: number;
+  /** Total loop iterations across all loop nodes in the run. */
+  loopIterations?: number;
 }
 
 /**
@@ -758,6 +778,7 @@ export function captureArchonActive(props: ArchonStartedProperties): void {
  */
 export function captureChatTurn(props: ChatTurnProperties): void {
   if (isTelemetryDisabled()) return;
+  const chatModel = sanitizeModelForTelemetry(props.model);
   fireAndForget(client => {
     client.capture({
       distinctId: getTelemetryId(),
@@ -768,6 +789,33 @@ export function captureChatTurn(props: ChatTurnProperties): void {
         schema_version: TELEMETRY_SCHEMA_VERSION,
         ...(props.platform ? { platform: props.platform } : {}),
         ...(props.provider ? { provider: props.provider } : {}),
+        ...(chatModel ? { model: chatModel } : {}),
+        ...(props.durationMs !== undefined ? { duration_ms: props.durationMs } : {}),
+        ...(props.costUsd !== undefined ? { cost_usd: props.costUsd } : {}),
+        ...(props.tokensIn !== undefined ? { tokens_in: props.tokensIn } : {}),
+        ...(props.tokensOut !== undefined ? { tokens_out: props.tokensOut } : {}),
+      },
+    });
+  });
+}
+
+/**
+ * Fire-and-forget capture of a `workflow_approval_resolved` event — one per
+ * human approve/reject decision at an approval gate, across every surface
+ * (chat command, CLI, web API, Slack buttons, manage_run tool, natural
+ * language). Carries ONLY the binary resolution — no run ids, workflow
+ * names, comments, or rejection reasons.
+ */
+export function captureApprovalResolved(props: { resolution: 'approved' | 'rejected' }): void {
+  if (isTelemetryDisabled()) return;
+  fireAndForget(client => {
+    client.capture({
+      distinctId: getTelemetryId(),
+      event: 'workflow_approval_resolved',
+      properties: {
+        ...PRIVACY_INVARIANTS,
+        resolution: props.resolution,
+        schema_version: TELEMETRY_SCHEMA_VERSION,
       },
     });
   });
@@ -820,6 +868,10 @@ export function captureWorkflowCompleted(props: WorkflowCompletedProperties): vo
         ...(props.exitReason ? { exit_reason: props.exitReason } : {}),
         ...(props.errorClass ? { error_class: props.errorClass } : {}),
         ...(props.failedNodeType ? { failed_node_type: props.failedNodeType } : {}),
+        ...(props.costUsd !== undefined ? { cost_usd: props.costUsd } : {}),
+        ...(props.tokensIn !== undefined ? { tokens_in: props.tokensIn } : {}),
+        ...(props.tokensOut !== undefined ? { tokens_out: props.tokensOut } : {}),
+        ...(props.loopIterations !== undefined ? { loop_iterations: props.loopIterations } : {}),
       },
     });
   });

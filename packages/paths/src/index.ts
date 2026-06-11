@@ -60,6 +60,7 @@ export {
   captureArchonStarted,
   captureArchonActive,
   captureChatTurn,
+  captureApprovalResolved,
   captureCodebaseRegistered,
   captureWorkflowCompleted,
   classifyWorkflowForTelemetry,
