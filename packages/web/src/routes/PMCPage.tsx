@@ -165,7 +165,7 @@ export function PMCPage(): React.ReactElement {
   const tagline = pmcOverview.frontmatter.description ?? 'Break Through Your Revenue Ceiling.';
 
   const pmcProspects: BusinessProspect[] = (
-    (prospectsData.by_business as Record<string, BusinessProspect[]>).PMC ?? []
+    (prospectsData.by_business as Record<string, BusinessProspect[]> | undefined)?.PMC ?? []
   ).slice(0, 9);
 
   // Live pipeline funnel built from playground data + dial-tracker.
