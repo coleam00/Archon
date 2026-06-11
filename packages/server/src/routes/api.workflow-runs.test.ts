@@ -1223,6 +1223,7 @@ describe('POST /api/workflows/runs/:runId/abandon', () => {
 
   test('returns 200 and calls cancelWorkflowRun for running run', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(MOCK_RUNNING_RUN);
+    mockCancelWorkflowRun.mockImplementationOnce(async () => ({ cancelled: true }));
     const { app } = makeApp();
     const response = await app.request('/api/workflows/runs/run-uuid-1/abandon', {
       method: 'POST',
@@ -1236,6 +1237,7 @@ describe('POST /api/workflows/runs/:runId/abandon', () => {
 
   test('returns 200 and calls cancelWorkflowRun for failed run', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(MOCK_FAILED_RUN);
+    mockCancelWorkflowRun.mockImplementationOnce(async () => ({ cancelled: true }));
     const { app } = makeApp();
     const response = await app.request('/api/workflows/runs/run-uuid-4/abandon', {
       method: 'POST',
@@ -1245,6 +1247,23 @@ describe('POST /api/workflows/runs/:runId/abandon', () => {
     expect(body.success).toBe(true);
     expect(body.message).toContain('Abandoned');
     expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-uuid-4');
+  });
+
+  test('reports "nothing to abandon" when the run settled in the abandon TOCTOU window', async () => {
+    // Run passes the status pre-check (failed), but cancelWorkflowRun no-ops
+    // because the run reached a settled state first — the route must not claim
+    // a false "Abandoned" (same shape as the cancel route, #1830 I1).
+    mockGetWorkflowRun.mockResolvedValueOnce(MOCK_FAILED_RUN);
+    mockCancelWorkflowRun.mockImplementationOnce(async () => ({ cancelled: false }));
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-4/abandon', {
+      method: 'POST',
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { success: boolean; message: string };
+    expect(body.success).toBe(true);
+    expect(body.message).toContain('nothing to abandon');
   });
 });
 

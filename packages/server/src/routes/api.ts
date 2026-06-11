@@ -2825,8 +2825,13 @@ export function registerApiRoutes(
       if (SETTLED_WORKFLOW_STATUSES.includes(run.status)) {
         return apiError(c, 400, `Cannot abandon workflow in '${run.status}' status`);
       }
-      await workflowDb.cancelWorkflowRun(runId);
-      return c.json({ success: true, message: `Abandoned workflow: ${run.workflow_name}` });
+      const { cancelled } = await workflowDb.cancelWorkflowRun(runId);
+      return c.json({
+        success: true,
+        message: cancelled
+          ? `Abandoned workflow: ${run.workflow_name}`
+          : `Workflow ${run.workflow_name} already finished — nothing to abandon.`,
+      });
     } catch (error) {
       getLog().error({ err: error, runId }, 'api.workflow_run_abandon_failed');
       return apiError(c, 500, 'Failed to abandon workflow run');
