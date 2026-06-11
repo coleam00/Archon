@@ -17,9 +17,12 @@ type Phase = 'starting' | 'manual' | 'device' | 'error';
  */
 export function SubscriptionLoginFlow({
   provider,
+  displayName,
   onDone,
 }: {
   provider: string;
+  /** Human label for the heading; falls back to the raw provider id. */
+  displayName?: string;
   onDone: () => void;
 }): ReactElement {
   const [phase, setPhase] = useState<Phase>('starting');
@@ -107,7 +110,7 @@ export function SubscriptionLoginFlow({
     <div className="flex flex-col gap-2 rounded border border-border bg-surface-inset p-3 text-[12px] text-text-secondary">
       <div className="flex items-center justify-between gap-3">
         <span className="font-medium text-text-primary capitalize">
-          {provider} subscription login
+          {displayName ?? provider} subscription login
         </span>
         <button
           type="button"
