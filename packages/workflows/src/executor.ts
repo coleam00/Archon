@@ -421,9 +421,26 @@ export async function executeWorkflow(
 
   const docsDir = config.docsPath ?? 'docs/';
 
-  const aiProfile = buildAiProfile(config.assistant, {
+  // Per-user AI prefs (Phase 3): the originating user's tiers/aliases/default-
+  // assistant override install config (highest precedence). The dep contract is
+  // non-throwing; `{}` (no userId, no dep, no row) keeps config-only behavior.
+  const userAiPrefs = userId && deps.getUserAiPrefs ? await deps.getUserAiPrefs(userId) : {};
+  if (userAiPrefs.tiers || userAiPrefs.aliases || userAiPrefs.defaultProvider) {
+    getLog().debug(
+      {
+        userId,
+        tierKeys: Object.keys(userAiPrefs.tiers ?? {}),
+        aliasKeys: Object.keys(userAiPrefs.aliases ?? {}),
+        defaultProvider: userAiPrefs.defaultProvider,
+      },
+      'workflow.user_ai_prefs_applied'
+    );
+  }
+  const aiProfile = buildAiProfile(userAiPrefs.defaultProvider ?? config.assistant, {
     repoTiers: config.tiers,
     repoAliases: config.aliases,
+    userTiers: userAiPrefs.tiers,
+    userAliases: userAiPrefs.aliases,
   });
 
   // Resolve provider and model once (used by all nodes). Literal model strings

@@ -48,6 +48,7 @@ import { getDecryptedAccessToken } from '../db/user-github-token-store';
 import { isPerUserProviderKeysEnabled } from '../credentials/config';
 import { deliverCredential } from '../credentials/delivery';
 import { listDecryptedUserProviderCredentials } from '../db/user-provider-key-store';
+import { getUserAiPrefs, type UserAiPrefs } from '../db/user-ai-prefs-store';
 import { createWorkflowDeps } from '../workflows/store-adapter';
 import { loadConfig } from '../config/config-loader';
 import type { MergedConfig } from '../config/config-types';
@@ -275,6 +276,23 @@ async function resolveUserProviderEnvForChat(userId: string): Promise<Record<str
     return env;
   } catch (err) {
     getLog().warn({ err: err as Error, userId }, 'orchestrator.user_provider_env_resolve_failed');
+    return {};
+  }
+}
+
+/**
+ * Resolve the user's personal AI prefs (tiers / aliases / default assistant)
+ * for a direct-chat turn (Phase 3). Folded into `buildAiProfile` as the
+ * highest-precedence layer.
+ *
+ * NEVER THROWS — returns `{}` on any failure so model resolution falls back
+ * to install-wide config exactly as before.
+ */
+async function resolveUserAiPrefsForChat(userId: string): Promise<UserAiPrefs> {
+  try {
+    return await getUserAiPrefs(userId);
+  } catch (err) {
+    getLog().warn({ err: err as Error, userId }, 'orchestrator.user_ai_prefs_resolve_failed');
     return {};
   }
 }
@@ -1158,10 +1176,18 @@ export async function handleMessage(
     // Reuse the config already loaded during workflow discovery (avoids a second disk read).
     // Fall back to loadConfig only when no codebase is scoped (discoveredConfig is undefined).
     const config = discoveredConfig ?? (await loadConfig());
-    const configuredProviderKey = conversation.ai_assistant_type;
+    // Per-user AI prefs (Phase 3): the user's tiers/aliases/default-assistant
+    // override install config (highest precedence). `{}` (no identity, no row,
+    // or DB failure) keeps config-only behavior byte-for-byte.
+    const userAiPrefs = conversation.user_id
+      ? await resolveUserAiPrefsForChat(conversation.user_id)
+      : {};
+    const configuredProviderKey = userAiPrefs.defaultProvider ?? conversation.ai_assistant_type;
     const aiProfile = buildAiProfile(configuredProviderKey, {
       repoTiers: config.tiers,
       repoAliases: config.aliases,
+      userTiers: userAiPrefs.tiers,
+      userAliases: userAiPrefs.aliases,
     });
     const chatRequest = resolveModelRequest(aiProfile, 'large', configuredProviderKey);
     const providerKey = chatRequest.provider;
