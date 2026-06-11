@@ -112,6 +112,7 @@ export {
   toSafeConfig,
   updateGlobalConfig,
   type TiersPatch,
+  type AliasesPatch,
 } from './config/config-loader';
 
 // =============================================================================

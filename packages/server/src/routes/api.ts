@@ -48,7 +48,12 @@ import {
   SUBSCRIPTION_PROVIDERS,
   startOAuth,
   pollOAuth,
+  getUserAiPrefs,
+  setUserTiers,
+  setUserAliases,
+  setUserDefaultProvider,
 } from '@archon/core';
+import type { UserTiersPatch, UserAliasesPatch } from '@archon/core';
 import { removeWorktree, toRepoPath, toWorktreePath } from '@archon/git';
 import {
   createLogger,
@@ -175,6 +180,12 @@ import {
   providerOAuthPollBodySchema,
   providerOAuthPollResponseSchema,
 } from './schemas/provider-key.schemas';
+import {
+  userAiPrefsResponseSchema,
+  updateUserTiersBodySchema,
+  updateUserAliasesBodySchema,
+  updateUserDefaultProviderBodySchema,
+} from './schemas/user-ai-prefs.schemas';
 import { mapDeviceFlowErrorToPollStatus } from './auth-poll-status';
 import { getProviderInfoList, isRegisteredProvider } from '@archon/providers';
 import { messageSchema } from './schemas/conversation.schemas';
@@ -1083,6 +1094,83 @@ const providerOAuthPollRoute = createRoute({
   },
 });
 
+const userAiPrefsGetRoute = createRoute({
+  method: 'get',
+  path: '/api/auth/me/ai-prefs',
+  tags: ['Auth'],
+  summary: 'Get the current web user’s AI preferences (tiers/aliases/default assistant)',
+  responses: {
+    200: {
+      content: { 'application/json': { schema: userAiPrefsResponseSchema } },
+      description: 'The user’s stored prefs (raw per-user layer, not merged with config)',
+    },
+    401: jsonError('Web auth required'),
+  },
+});
+
+const userAiPrefsTiersRoute = createRoute({
+  method: 'patch',
+  path: '/api/auth/me/ai-prefs/tiers',
+  tags: ['Auth'],
+  summary: 'Update the current web user’s model-tier presets (per-key merge; null unsets)',
+  request: {
+    body: {
+      content: { 'application/json': { schema: updateUserTiersBodySchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: userAiPrefsResponseSchema } },
+      description: 'Updated prefs',
+    },
+    400: jsonError('Unknown provider or invalid effort'),
+    401: jsonError('Web auth required'),
+  },
+});
+
+const userAiPrefsAliasesRoute = createRoute({
+  method: 'patch',
+  path: '/api/auth/me/ai-prefs/aliases',
+  tags: ['Auth'],
+  summary: 'Update the current web user’s @custom aliases (per-key merge; null unsets)',
+  request: {
+    body: {
+      content: { 'application/json': { schema: updateUserAliasesBodySchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: userAiPrefsResponseSchema } },
+      description: 'Updated prefs',
+    },
+    400: jsonError('Invalid alias name, unknown provider, or invalid effort'),
+    401: jsonError('Web auth required'),
+  },
+});
+
+const userAiPrefsDefaultRoute = createRoute({
+  method: 'patch',
+  path: '/api/auth/me/ai-prefs/default',
+  tags: ['Auth'],
+  summary: 'Set (or clear with null) the current web user’s default assistant',
+  request: {
+    body: {
+      content: { 'application/json': { schema: updateUserDefaultProviderBodySchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: userAiPrefsResponseSchema } },
+      description: 'Updated prefs',
+    },
+    400: jsonError('Unknown provider'),
+    401: jsonError('Web auth required'),
+  },
+});
+
 const getCodebaseEnvironmentsRoute = createRoute({
   method: 'get',
   path: '/api/codebases/{id}/environments',
@@ -1524,6 +1612,139 @@ export function registerApiRoutes(
     // to an error status rather than another user's login.
     const result = pollOAuth(sessionId, web.userId, code);
     return c.json(result);
+  });
+
+  // ---- Per-user AI preferences (Phase 3) ----
+  // Identity-gated (requireWebUser) but NOT gated on TOKEN_ENCRYPTION_KEY —
+  // prefs are model names, not secrets. Highest-precedence resolver layer.
+
+  /** Validate a tier/alias entry's provider + effort. Returns an error message or null. */
+  function validatePresetEntry(
+    label: string,
+    entry: { provider: string; model: string; effort?: string }
+  ): string | null {
+    if (!isRegisteredProvider(entry.provider)) {
+      return `Unknown provider '${entry.provider}' for ${label}. Available: ${getProviderInfoList()
+        .map(p => p.id)
+        .join(', ')}`;
+    }
+    if (entry.effort !== undefined && !isEffortValidForProvider(entry.provider, entry.effort)) {
+      return (
+        `Invalid effort '${entry.effort}' for provider '${entry.provider}' (${label}). ` +
+        `Valid: ${validEffortsForProvider(entry.provider)?.join(', ') ?? '(none)'}`
+      );
+    }
+    return null;
+  }
+
+  /** Clean a validated entry — drop `thinking` (no UI/CLI surface), keep effort. */
+  function toCleanEntry(entry: { provider: string; model: string; effort?: string }): {
+    provider: string;
+    model: string;
+    effort?: string;
+  } {
+    return {
+      provider: entry.provider,
+      model: entry.model,
+      ...(entry.effort !== undefined ? { effort: entry.effort } : {}),
+    };
+  }
+
+  registerOpenApiRoute(userAiPrefsGetRoute, async c => {
+    const web = await requireWebUser(c, 'Web authentication required to read AI preferences');
+    if ('error' in web) return web.error;
+    try {
+      return c.json(await getUserAiPrefs(web.userId));
+    } catch (err) {
+      getLog().error({ err: err as Error, userId: web.userId }, 'auth.user_ai_prefs_get_failed');
+      return apiError(c, 500, 'Failed to read AI preferences');
+    }
+  });
+
+  registerOpenApiRoute(userAiPrefsTiersRoute, async c => {
+    const web = await requireWebUser(c, 'Web authentication required to update AI preferences');
+    if ('error' in web) return web.error;
+    const body = getValidatedBody(c, updateUserTiersBodySchema);
+    const patch: UserTiersPatch = {};
+    for (const tier of TIER_NAMES) {
+      const entry = body.tiers[tier];
+      if (entry === undefined) continue;
+      if (entry === null) {
+        patch[tier] = null;
+        continue;
+      }
+      const errMsg = validatePresetEntry(`tier '${tier}'`, entry);
+      if (errMsg) return apiError(c, 400, errMsg);
+      patch[tier] = toCleanEntry(entry);
+    }
+    try {
+      await setUserTiers(web.userId, patch);
+      return c.json(await getUserAiPrefs(web.userId));
+    } catch (err) {
+      getLog().error({ err: err as Error, userId: web.userId }, 'auth.user_ai_prefs_tiers_failed');
+      return apiError(c, 500, 'Failed to update AI tier preferences');
+    }
+  });
+
+  registerOpenApiRoute(userAiPrefsAliasesRoute, async c => {
+    const web = await requireWebUser(c, 'Web authentication required to update AI preferences');
+    if ('error' in web) return web.error;
+    const body = getValidatedBody(c, updateUserAliasesBodySchema);
+    const patch: UserAliasesPatch = {};
+    for (const [name, entry] of Object.entries(body.aliases)) {
+      if ((TIER_NAMES as readonly string[]).includes(name)) {
+        return apiError(
+          c,
+          400,
+          `Alias name '${name}' is reserved (small/medium/large are tier keywords). Use a different name.`
+        );
+      }
+      if (!name.startsWith('@')) {
+        return apiError(c, 400, `Alias name '${name}' must start with '@' (e.g. '@${name}').`);
+      }
+      if (entry === null) {
+        patch[name] = null;
+        continue;
+      }
+      const errMsg = validatePresetEntry(`alias '${name}'`, entry);
+      if (errMsg) return apiError(c, 400, errMsg);
+      patch[name] = toCleanEntry(entry);
+    }
+    try {
+      await setUserAliases(web.userId, patch);
+      return c.json(await getUserAiPrefs(web.userId));
+    } catch (err) {
+      getLog().error(
+        { err: err as Error, userId: web.userId },
+        'auth.user_ai_prefs_aliases_failed'
+      );
+      return apiError(c, 500, 'Failed to update AI alias preferences');
+    }
+  });
+
+  registerOpenApiRoute(userAiPrefsDefaultRoute, async c => {
+    const web = await requireWebUser(c, 'Web authentication required to update AI preferences');
+    if ('error' in web) return web.error;
+    const { provider } = getValidatedBody(c, updateUserDefaultProviderBodySchema);
+    if (provider !== null && !isRegisteredProvider(provider)) {
+      return apiError(
+        c,
+        400,
+        `Unknown provider '${provider}'. Available: ${getProviderInfoList()
+          .map(p => p.id)
+          .join(', ')}`
+      );
+    }
+    try {
+      await setUserDefaultProvider(web.userId, provider);
+      return c.json(await getUserAiPrefs(web.userId));
+    } catch (err) {
+      getLog().error(
+        { err: err as Error, userId: web.userId },
+        'auth.user_ai_prefs_default_failed'
+      );
+      return apiError(c, 500, 'Failed to update default assistant preference');
+    }
   });
 
   // Shared lock/dispatch/error handling for message and workflow endpoints
