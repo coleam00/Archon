@@ -97,7 +97,9 @@ nodes:
   # 10. when: conditional on AI structured output (proves output_format
   #     parsed and dot-access works on the resulting object).
   - id: structured-check
-    bash: "echo \"structured.status=$structured-node.output.status\""
+    bash: |
+      structured_status=$structured-node.output.status
+      echo "structured.status=$structured_status"
     depends_on: [structured-node]
     when: "$structured-node.output.status == 'ok'"
 
@@ -129,17 +131,28 @@ nodes:
           fail=1
         fi
       }
-      check prompt-node       "$prompt-node.output"
-      check command-node      "$command-node.output"
-      check loop-node         "$loop-node.output"
-      check bash-json-node    "$bash-json-node.output"
-      check script-bun-node   "$script-bun-node.output"
-      check script-python-node "$script-python-node.output"
-      check downstream        "$downstream.output"
-      check gated             "$gated.output"
-      check merge             "$merge.output"
-      check structured.status "$structured-node.output.status"
-      check structured.value  "$structured-node.output.value"
+      prompt_output=$prompt-node.output
+      command_output=$command-node.output
+      loop_output=$loop-node.output
+      bash_json_output=$bash-json-node.output
+      script_bun_output=$script-bun-node.output
+      script_python_output=$script-python-node.output
+      downstream_output=$downstream.output
+      gated_output=$gated.output
+      merge_output=$merge.output
+      structured_status=$structured-node.output.status
+      structured_value=$structured-node.output.value
+      check prompt-node       "$prompt_output"
+      check command-node      "$command_output"
+      check loop-node         "$loop_output"
+      check bash-json-node    "$bash_json_output"
+      check script-bun-node   "$script_bun_output"
+      check script-python-node "$script_python_output"
+      check downstream        "$downstream_output"
+      check gated             "$gated_output"
+      check merge             "$merge_output"
+      check structured.status "$structured_status"
+      check structured.value  "$structured_value"
 
       if [ "$fail" -eq 1 ]; then exit 1; fi
       echo "PASS: all node types + structured output verified"

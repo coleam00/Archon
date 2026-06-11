@@ -82,7 +82,9 @@ nodes:
   # 8. depends_on + $nodeId.output substitution
   #    Use printf to safely handle multi-line output with special chars
   - id: downstream
-    bash: "printf \"downstream got: %s\\n\" \"$prompt-node.output\""
+    bash: |
+      prompt_output=$prompt-node.output
+      printf "downstream got: %s\n" "$prompt_output"
     depends_on: [ prompt-node ]
 
   # 9. when: conditional (JSON dot-access on upstream output)

@@ -61,10 +61,10 @@ nodes:
 
   - id: fetch-issue
     bash: |
-      # Strip quotes, whitespace, markdown backticks from AI output
-      ISSUE_NUM=$(echo "$extract-issue-number.output" | tr -d "'\"\`\n " | grep -oE '[0-9]+' | head -1)
+      RAW_ISSUE_NUM=$extract-issue-number.output
+      ISSUE_NUM=$(echo "$RAW_ISSUE_NUM" | grep -oE '[0-9]+' | head -1)
       if [ -z "$ISSUE_NUM" ]; then
-        echo "Failed to extract issue number from: $extract-issue-number.output" >&2
+        echo "Failed to extract issue number from: $RAW_ISSUE_NUM" >&2
         exit 1
       fi
       gh issue view "$ISSUE_NUM" --json title,body,labels,comments,state,url,author
