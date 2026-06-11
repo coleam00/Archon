@@ -114,8 +114,8 @@ const mockDelete = mock(async (userId: string, provider: string) => {
   savedKeys = savedKeys.filter(k => !(k.userId === userId && k.provider === provider));
 });
 
-// Vendor-keyed like production (#1955); openai is gate-excluded there too.
-const SUBSCRIPTION = new Set<string>(['anthropic', 'github-copilot']);
+// Vendor-keyed like production (#1955); all three subscription vendors (#1924 lifted).
+const SUBSCRIPTION = new Set<string>(['anthropic', 'openai', 'github-copilot']);
 const mockStartOAuth = mock(async (_userId: string, provider: string) => ({
   sessionId: 'sess-1',
   mode: 'manual' as const,
