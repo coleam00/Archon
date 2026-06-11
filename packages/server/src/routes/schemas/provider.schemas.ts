@@ -38,3 +38,23 @@ export const providerListResponseSchema = z
     providers: z.array(providerInfoSchema),
   })
   .openapi('ProviderListResponse');
+
+/** One Pi catalog model — metadata only (no credentials). */
+export const piModelInfoSchema = z
+  .object({
+    ref: z.string(),
+    provider: z.string(),
+    id: z.string(),
+    name: z.string(),
+    reasoning: z.boolean(),
+    cost: z.object({ input: z.number(), output: z.number() }),
+    contextWindow: z.number(),
+  })
+  .openapi('PiModelInfo');
+
+/** Response for GET /api/providers/pi/models — `[]` when the catalog can't load. */
+export const piModelListResponseSchema = z
+  .object({
+    models: z.array(piModelInfoSchema),
+  })
+  .openapi('PiModelListResponse');

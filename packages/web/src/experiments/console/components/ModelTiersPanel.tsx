@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react';
 import * as skill from '../skills';
 import type {
+  PiModelInfo,
   ProviderInfo,
   SafeConfigTiers,
   TiersForm,
@@ -96,6 +97,9 @@ export function ModelTiersPanel(): ReactElement {
     K.userAiPrefs,
     skill.getUserAiPrefs
   );
+  // Pi catalog for the cost/reasoning hint. Best-effort: the server returns []
+  // when the catalog can't load, and a fetch error simply means no hint.
+  const { data: piModels } = useEntity<PiModelInfo[]>(K.piModels, skill.listPiModels);
 
   // No web identity (401) or any other prefs read failure → install scope only,
   // so the editor never mislabels install values as "Just me".
@@ -148,6 +152,15 @@ export function ModelTiersPanel(): ReactElement {
 
   const setRow = (t: TierName, partial: Partial<TierRowForm>): void => {
     setForm(f => (f === null ? f : { ...f, [t]: { ...f[t], ...partial } }));
+  };
+
+  /** Cost/reasoning hint for a Pi tier model, or null when not applicable. */
+  const piHint = (row: TierRowForm): string | null => {
+    if (row.provider !== 'pi' || piModels === undefined) return null;
+    const m = piModels.find(x => x.ref === row.model.trim());
+    if (!m) return null;
+    const ctx = `${String(Math.round(m.contextWindow / 1000))}k ctx`;
+    return `$${String(m.cost.input)}/M in · $${String(m.cost.output)}/M out${m.reasoning ? ' · reasoning' : ''} · ${ctx}`;
   };
 
   const onSave = async (): Promise<void> => {
@@ -231,6 +244,9 @@ export function ModelTiersPanel(): ReactElement {
                 placeholder="effort"
                 className={`${INPUT_CLASS} w-[110px] shrink-0 ${unset ? 'opacity-50' : ''}`}
               />
+              {piHint(row) !== null ? (
+                <p className="w-full font-mono text-[10.5px] text-text-tertiary">{piHint(row)}</p>
+              ) : null}
             </div>
           );
         })}

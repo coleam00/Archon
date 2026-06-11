@@ -31,4 +31,5 @@ export const K = {
   githubConnection: 'github-connection' as const,
   providerConnections: 'provider-connections' as const,
   userAiPrefs: 'user-ai-prefs' as const,
+  piModels: 'pi-models' as const,
 } as const;

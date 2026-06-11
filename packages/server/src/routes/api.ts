@@ -162,7 +162,7 @@ import {
   isEffortValidForProvider,
   validEffortsForProvider,
 } from '@archon/workflows/model-validation';
-import { providerListResponseSchema } from './schemas/provider.schemas';
+import { providerListResponseSchema, piModelListResponseSchema } from './schemas/provider.schemas';
 import {
   authStatusResponseSchema,
   deviceStartResponseSchema,
@@ -188,7 +188,7 @@ import {
   updateUserDefaultProviderBodySchema,
 } from './schemas/user-ai-prefs.schemas';
 import { mapDeviceFlowErrorToPollStatus } from './auth-poll-status';
-import { getProviderInfoList, isRegisteredProvider } from '@archon/providers';
+import { getProviderInfoList, isRegisteredProvider, listPiModels } from '@archon/providers';
 import { messageSchema } from './schemas/conversation.schemas';
 import {
   workflowRunSchema,
@@ -942,6 +942,22 @@ const patchAliasesConfigRoute = createRoute({
     },
     400: jsonError('Invalid alias name, unknown provider, or invalid effort'),
     500: jsonError('Server error'),
+  },
+});
+
+const getPiModelsRoute = createRoute({
+  method: 'get',
+  path: '/api/providers/pi/models',
+  tags: ['System'],
+  summary: "List Pi's model catalog (cost/reasoning metadata for the tier picker)",
+  description:
+    'Best-effort hint surface: returns `{ models: [] }` when the Pi catalog ' +
+    'cannot be loaded, never an error — tier/alias saves must not depend on it.',
+  responses: {
+    200: {
+      content: { 'application/json': { schema: piModelListResponseSchema } },
+      description: 'Pi model catalog (metadata only)',
+    },
   },
 });
 
@@ -4047,6 +4063,11 @@ export function registerApiRoutes(
   // GET /api/providers - List registered AI providers
   registerOpenApiRoute(getProvidersRoute, c => {
     return c.json({ providers: getProviderInfoList() });
+  });
+
+  // GET /api/providers/pi/models - Pi model catalog (best-effort hint; [] on failure)
+  registerOpenApiRoute(getPiModelsRoute, async c => {
+    return c.json({ models: await listPiModels() });
   });
 
   // GET /api/codebases/:id/environments - List isolation environments for a codebase

@@ -66,7 +66,9 @@ export {
   PiProvider,
   parsePiConfig,
   registerPiProvider,
+  listPiModels,
   type PiProviderDefaults,
+  type PiModelInfo,
 } from './community/pi';
 
 export {

@@ -90,7 +90,7 @@ let piSemaphore: Semaphore | undefined;
  * is paid only when Pi is actually used, and (b) the env var can't get
  * clobbered between registration and invocation.
  */
-function ensurePiPackageDirShim(): void {
+export function ensurePiPackageDirShim(): void {
   const shimDir = join(tmpdir(), 'archon-pi-shim');
   const shimPkgJson = join(shimDir, 'package.json');
   if (!existsSync(shimPkgJson)) {

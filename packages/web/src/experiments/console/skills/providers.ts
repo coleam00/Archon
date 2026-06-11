@@ -9,3 +9,25 @@ export function listProviders(): Promise<ProviderInfo[]> {
     r => r.providers
   );
 }
+
+/**
+ * One Pi catalog model — drives the cost/reasoning hint next to Pi tier
+ * models. Inline-typed until a regen lands PiModelInfo in api.generated
+ * (same convention as the tiers block in skills/settings.ts).
+ */
+export interface PiModelInfo {
+  /** Full model ref as used in `model:` fields: '<pi-provider>/<model-id>' */
+  ref: string;
+  provider: string;
+  id: string;
+  name: string;
+  reasoning: boolean;
+  /** USD per million tokens. */
+  cost: { input: number; output: number };
+  contextWindow: number;
+}
+
+/** Best-effort: the server returns `{ models: [] }` when the catalog can't load. */
+export function listPiModels(): Promise<PiModelInfo[]> {
+  return requestJson<{ models: PiModelInfo[] }>('/api/providers/pi/models').then(r => r.models);
+}
