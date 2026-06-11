@@ -40,12 +40,14 @@ export function normalizeCredentialVendor(id: string): string {
 }
 
 /**
- * Raw OAuth credential blob as returned by `@earendil-works/pi-ai/oauth`
- * provider `login()`. The exact shape varies per provider (Anthropic vs. Codex
- * vs. Copilot) but is always a JSON-serializable object. It's stored opaquely
- * and passed through verbatim: refresh is handled by Pi's `getOAuthApiKey`
- * (keyed by Pi's provider id, e.g. `openai-codex` — not Archon's `codex`), and
- * the only field-level parsing is `buildCodexAuthJson` below.
+ * Raw OAuth credential blob minted at login — by `@earendil-works/pi-ai/oauth`
+ * provider `login()` for anthropic/github-copilot, or by Archon's own OpenAI
+ * PKCE flow (`openai-oauth.ts`, which additionally captures the `id_token`
+ * Pi drops, #1924). The exact shape varies per vendor but is always a
+ * JSON-serializable object. It's stored opaquely and passed through verbatim:
+ * refresh is handled by Pi's `getOAuthApiKey` (keyed by Pi's provider id) or
+ * the Archon OpenAI refresh, and the only field-level parsing is
+ * `buildCodexAuthJson` below.
  */
 export type OAuthCredentials = Record<string, unknown>;
 
@@ -93,23 +95,19 @@ export const KNOWN_VENDORS: ReadonlySet<string> = new Set<string>(
 );
 
 /**
- * Map Pi's `openaiCodex` OAuth blob onto the Codex CLI `auth.json` shape
+ * Map the stored OpenAI subscription blob onto the Codex CLI `auth.json` shape
  * (authoritative interface: `packages/server/src/scripts/setup-auth.ts`):
  *   { OPENAI_API_KEY: null, tokens: { id_token, access_token, refresh_token,
  *     account_id }, last_refresh }
  *
- * Pi's `OAuthCredentials` (verified against `pi-ai@0.76.0`
- * `dist/utils/oauth/openai-codex.js:100-104,332`) is `{ access, refresh, expires,
- * accountId }` — note `accountId` is camelCase, and **Pi does not surface an
- * `id_token`** (`chatgpt_account_id` is only an internal JWT claim it reads to
- * derive `accountId`). So `id_token` is best-effort (empty unless a future Pi
- * version provides one).
- *
- * VERIFY (gated on #1924): whether the Codex CLI accepts an empty `id_token`
- * for a ChatGPT subscription, or derives the account from the JWT
- * `access_token` alone. Moot until the `openai` subscription connect gate
- * (SUBSCRIPTION_DISABLED) is lifted — this path is unreachable from connect
- * today. The API-key path (`OPENAI_API_KEY`) is unaffected.
+ * The blob comes from Archon's own OpenAI PKCE flow (`openai-oauth.ts`, #1924)
+ * and is `{ access, refresh, expires, accountId, id_token }` — `accountId` is
+ * camelCase, and `id_token` is a REAL OpenID JWT captured at exchange/refresh
+ * (the Codex CLI rejects an empty one with "invalid ID token format", which is
+ * why this flow no longer goes through Pi — Pi drops the field). Legacy blobs
+ * minted by Pi before the gate lift lack `id_token`; `str()` maps that to ''
+ * and the run fails with the known Codex error — reconnecting the
+ * subscription mints a complete blob.
  */
 function buildCodexAuthJson(rawCreds: OAuthCredentials): string {
   const c = rawCreds as Record<string, unknown>;
@@ -117,7 +115,7 @@ function buildCodexAuthJson(rawCreds: OAuthCredentials): string {
   return JSON.stringify({
     OPENAI_API_KEY: null,
     tokens: {
-      id_token: str(c.id_token), // Pi does not provide one today → ''
+      id_token: str(c.id_token),
       access_token: str(c.access),
       refresh_token: str(c.refresh),
       account_id: str(c.accountId),
@@ -155,7 +153,7 @@ export function deliverCredential(
         return { env: { OPENAI_API_KEY: cred.apiKey } };
       }
       {
-        // ChatGPT subscription → Codex CLI auth.json (connect-gated, #1924).
+        // ChatGPT subscription → Codex CLI auth.json (real id_token since #1924).
         const codexHome = join(opts.artifactsDir, 'codex-home');
         return {
           env: { CODEX_HOME: codexHome },
@@ -236,6 +234,10 @@ export function buildPiAuthJson(
     //
     // VERIFY (T5b.0): the OAuth backend ids (`openai`, `github-copilot`)
     // against a real `~/.pi/agent/auth.json` after a local `pi` `/login`.
+    // NOTE: the `openai` oauth blob carries an extra `id_token` field (Archon's
+    // own flow, #1924) — Pi tolerates it: its `OAuthCredentials` type is
+    // index-signature open (`[key: string]: unknown`) and its refresh/getApiKey
+    // only read access/refresh/expires/accountId.
     const piId = normalizeCredentialVendor(provider);
     if (!(piId in PI_PROVIDER_ENV_VARS)) continue;
     data[piId] =

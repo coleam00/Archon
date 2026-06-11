@@ -46,7 +46,7 @@ const mockList = mock(
 );
 const mockDelete = mock(async (_userId: string, _provider: string) => {});
 
-const SUBSCRIPTION = new Set<string>(['anthropic', 'github-copilot']);
+const SUBSCRIPTION = new Set<string>(['anthropic', 'openai', 'github-copilot']);
 const mockStartOAuth = mock(
   async (_userId: string, _provider: string) =>
     ({

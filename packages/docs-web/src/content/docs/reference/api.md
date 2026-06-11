@@ -433,7 +433,7 @@ curl http://localhost:3090/api/auth/providers \
 
 Returns `{ enabled, connections: [{ provider, kind, label }], available, subscriptionAvailable, agents }`:
 - `available` -- every **vendor** id you can connect an API key for (`anthropic`, `openai`, `github-copilot`, plus the Pi backends). Legacy `claude`/`codex`/`copilot` ids are accepted on writes and normalized.
-- `subscriptionAvailable` -- the subset that supports subscription (OAuth) login: **`anthropic`** and **`github-copilot`**. (`openai` is API-key-only; the ChatGPT subscription path is gated -- see [#1924](https://github.com/coleam00/Archon/issues/1924).)
+- `subscriptionAvailable` -- the subset that supports subscription (OAuth) login: **`anthropic`**, **`openai`**, and **`github-copilot`**. (The ChatGPT/Codex subscription runs an Archon-owned PKCE flow that captures the `id_token` the Codex CLI requires -- see [#1924](https://github.com/coleam00/Archon/issues/1924).)
 - `agents` -- the agent -> credential matrix: per registered agent `{ id, displayName, catalog: 'static'|'dynamic', ready, credentials: [{ vendor, displayName, kinds, connected, subscriptionAvailable, installEnv, ambientConfigured? }] }`. `installEnv`/`ambientConfigured` report server-side detection so readiness renders on solo installs too; OpenCode is `catalog:'dynamic'` (introspect via `GET /api/providers/opencode/credentials`).
 
 ### Connect an API Key
