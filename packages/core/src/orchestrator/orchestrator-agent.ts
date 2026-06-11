@@ -1561,6 +1561,8 @@ async function handleStreamMode(
     platform: platform.getPlatformType(),
     provider: aiClient.getType(),
     model: requestOptions?.model,
+    // durationMs deliberately measures from mode-handler entry — it includes
+    // pre-AI setup, i.e. "time the user waited", not pure model latency.
     durationMs: Date.now() - turnStartedAt,
     costUsd: lastResult?.cost,
     tokensIn: lastResult?.tokens?.input,
@@ -1800,6 +1802,8 @@ async function handleBatchMode(
     platform: platform.getPlatformType(),
     provider: aiClient.getType(),
     model: requestOptions?.model,
+    // durationMs deliberately measures from mode-handler entry — it includes
+    // pre-AI setup, i.e. "time the user waited", not pure model latency.
     durationMs: Date.now() - turnStartedAt,
     costUsd: lastResult?.cost,
     tokensIn: lastResult?.tokens?.input,

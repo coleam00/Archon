@@ -676,6 +676,58 @@ describe('new capture functions are fire-and-forget no-throw', () => {
     expect(props.$ip).toBe('');
   });
 
+  test('captureChatTurn serializes v4 usage fields to snake_case wire keys (enabled)', async () => {
+    delete process.env.ARCHON_TELEMETRY_DISABLED;
+    delete process.env.DO_NOT_TRACK;
+    delete process.env.CI;
+    delete process.env.POSTHOG_API_KEY;
+    const bodies: (string | Blob)[] = [];
+    const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation((_url, options) => {
+      const body = (options as { body?: unknown } | undefined)?.body;
+      if (typeof body === 'string' || body instanceof Blob) bodies.push(body);
+      return Promise.resolve(new Response('{"status":"ok"}', { status: 200 }));
+    });
+    try {
+      captureChatTurn({
+        platform: 'web',
+        provider: 'claude',
+        model: 'sonnet',
+        outcome: 'completed',
+        durationMs: 5120,
+        costUsd: 0.03,
+        tokensIn: 900,
+        tokensOut: 210,
+      });
+      await shutdownTelemetry();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+
+    interface WireEvent {
+      event: string;
+      properties: Record<string, unknown>;
+    }
+    const events: WireEvent[] = [];
+    for (const body of bodies) {
+      const text =
+        typeof body === 'string'
+          ? body
+          : new TextDecoder().decode(Bun.gunzipSync(new Uint8Array(await body.arrayBuffer())));
+      const payload = JSON.parse(text) as { batch?: WireEvent[] };
+      events.push(...(payload.batch ?? []));
+    }
+    const turn = events.find(e => e.event === 'chat_turn_handled');
+    expect(turn).toBeDefined();
+    const props = turn!.properties;
+    expect(props.model).toBe('sonnet');
+    expect(props.duration_ms).toBe(5120);
+    expect(props.cost_usd).toBe(0.03);
+    expect(props.tokens_in).toBe(900);
+    expect(props.tokens_out).toBe(210);
+    expect(props.$process_person_profile).toBe(false);
+    expect(props.$ip).toBe('');
+  });
+
   test('captureWorkflowCompleted does not throw for completed/failed (disabled)', () => {
     process.env.ARCHON_TELEMETRY_DISABLED = '1';
     expect(() =>

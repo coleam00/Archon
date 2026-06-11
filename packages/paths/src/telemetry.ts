@@ -23,9 +23,8 @@
  * iterations — numeric totals only), approval decisions (approved/rejected,
  * nothing else), a bare project-registration count, and deployment shape
  * (which adapters are enabled, db kind, auth mode — booleans/enums only).
- * Never sent: code,
- * prompts, message content, conversation ids, file paths, IP, geo, error
- * text, or custom workflow names/descriptions.
+ * Never sent: code, prompts, message content, conversation ids, file paths,
+ * IP, geo, error text, or custom workflow names/descriptions.
  *
  * Opt-out (any one disables telemetry):
  *   - ARCHON_TELEMETRY_DISABLED=1
@@ -627,9 +626,11 @@ export interface WorkflowCompletedProperties {
   errorClass?: WorkflowErrorClass;
   /** Type of the first failed node (failed runs only). */
   failedNodeType?: WorkflowNodeType;
-  /** Aggregate provider-reported usage for the run. Numeric totals only. */
+  /** Aggregate provider-reported cost (USD) for the run. Numeric total only. */
   costUsd?: number;
+  /** Aggregate provider-reported input tokens for the run. */
   tokensIn?: number;
+  /** Aggregate provider-reported output tokens for the run. */
   tokensOut?: number;
   /** Total loop iterations across all loop nodes in the run. */
   loopIterations?: number;

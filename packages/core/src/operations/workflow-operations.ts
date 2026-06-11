@@ -194,6 +194,7 @@ export async function approveWorkflow(
       step_name: approval.nodeId,
       data: { decision: 'approved', comment: approvalComment },
     });
+    // Anonymous telemetry: binary resolution only — no ids/comments/names.
     captureApprovalResolved({ resolution: 'approved' });
     // Transition to 'failed' so findResumableRun picks it up. Clear any rejection state.
     await workflowDb.updateWorkflowRun(runId, {

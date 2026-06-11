@@ -9436,6 +9436,62 @@ describe('executeDagWorkflow -- completion telemetry', () => {
         nodesTotal: 1,
       })
     );
+    // No node reported usage — the fields must be OMITTED, not sent as zero.
+    const captured = mockCaptureWorkflowCompleted.mock.calls[0][0] as Record<string, unknown>;
+    expect('costUsd' in captured).toBe(false);
+    expect('tokensIn' in captured).toBe(false);
+    expect('tokensOut' in captured).toBe(false);
+    expect('loopIterations' in captured).toBe(false);
+  });
+
+  it('threads provider-reported cost and tokens into the completion telemetry', async () => {
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'done' };
+      yield {
+        type: 'result',
+        sessionId: 'sid-usage',
+        cost: 0.25,
+        tokens: { input: 5000, output: 1200 },
+      };
+    });
+
+    await runDag({ name: 'dag-usage', nodes: [{ id: 'step', prompt: 'Do thing.' }] });
+
+    expect(mockCaptureWorkflowCompleted).toHaveBeenCalledTimes(1);
+    expect(mockCaptureWorkflowCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: 'completed',
+        costUsd: 0.25,
+        tokensIn: 5000,
+        tokensOut: 1200,
+      })
+    );
+  });
+
+  it('ignores non-finite token values without poisoning the run totals', async () => {
+    let call = 0;
+    mockSendQueryDag.mockImplementation(function* () {
+      call++;
+      yield { type: 'assistant', content: `ok ${call}` };
+      if (call === 1) {
+        // Misbehaving provider: NaN tokens must be ignored (and warned), not summed.
+        yield { type: 'result', sessionId: 'sid-bad', tokens: { input: NaN, output: 100 } };
+      } else {
+        yield { type: 'result', sessionId: 'sid-good', tokens: { input: 700, output: 50 } };
+      }
+    });
+
+    await runDag({
+      name: 'dag-nan',
+      nodes: [
+        { id: 'node1', prompt: 'First.' },
+        { id: 'node2', prompt: 'Second.', depends_on: ['node1'] },
+      ],
+    });
+
+    expect(mockCaptureWorkflowCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: 'completed', tokensIn: 700, tokensOut: 50 })
+    );
   });
 
   it('emits outcome=failed exit_reason=no_nodes_completed when the only node fails', async () => {

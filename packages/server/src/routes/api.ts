@@ -2920,6 +2920,7 @@ export function registerApiRoutes(
         step_name: approval?.nodeId ?? 'unknown',
         data: { decision: 'rejected', reason },
       });
+      // Anonymous telemetry: binary resolution only — no ids/reasons/names.
       captureApprovalResolved({ resolution: 'rejected' });
 
       const hasOnReject = approval?.onRejectPrompt !== undefined;
