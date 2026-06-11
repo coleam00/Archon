@@ -370,4 +370,6 @@ export interface SafeConfig {
    * unset tier resolves to without the web bundle importing @archon/workflows.
    */
   tierDefaults?: RawTiersConfig;
+  /** Configured @custom model aliases (merged repo > global). Not secrets. */
+  aliases?: RawAliasesConfig;
 }

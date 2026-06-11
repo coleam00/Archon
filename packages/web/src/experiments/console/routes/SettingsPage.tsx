@@ -1,5 +1,6 @@
 import { type ReactElement } from 'react';
 import { ModelTiersPanel } from '../components/ModelTiersPanel';
+import { AliasesPanel } from '../components/AliasesPanel';
 import { ProviderConnectionsPanel } from '../components/ProviderConnectionsPanel';
 import { AssistantConfigPanel } from '../components/AssistantConfigPanel';
 import { SystemPanel } from '../components/SystemPanel';
@@ -21,6 +22,7 @@ export function SettingsPage(): ReactElement {
       <div className="flex-1 overflow-y-auto px-10 pb-14 pt-5">
         <div className="mx-auto flex max-w-[680px] flex-col gap-[22px]">
           <ModelTiersPanel />
+          <AliasesPanel />
           <ProviderConnectionsPanel />
           <AssistantConfigPanel />
           <SystemPanel />

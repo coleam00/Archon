@@ -774,5 +774,6 @@ export function toSafeConfig(config: MergedConfig): SafeConfig {
     },
     tiers: config.tiers,
     tierDefaults: tierDefaultsFor(config.assistant),
+    aliases: config.aliases,
   };
 }

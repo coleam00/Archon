@@ -53,7 +53,7 @@ import {
   setUserAliases,
   setUserDefaultProvider,
 } from '@archon/core';
-import type { UserTiersPatch, UserAliasesPatch } from '@archon/core';
+import type { UserTiersPatch, UserAliasesPatch, AliasesPatch } from '@archon/core';
 import { removeWorktree, toRepoPath, toWorktreePath } from '@archon/git';
 import {
   createLogger,
@@ -154,6 +154,7 @@ import {
   updateAssistantConfigResponseSchema,
   configResponseSchema,
   updateTiersBodySchema,
+  updateAliasesBodySchema,
   codebaseEnvironmentsResponseSchema,
 } from './schemas/config.schemas';
 import {
@@ -916,6 +917,30 @@ const patchTiersConfigRoute = createRoute({
       description: 'Updated configuration',
     },
     400: jsonError('Invalid request body'),
+    500: jsonError('Server error'),
+  },
+});
+
+const patchAliasesConfigRoute = createRoute({
+  method: 'patch',
+  path: '/api/config/aliases',
+  tags: ['System'],
+  summary: 'Update @custom model aliases',
+  description:
+    'Writes the `aliases:` config to ~/.archon/config.yaml. Ungated (works on solo ' +
+    'installs). Per-alias merge; a `null` alias value unsets it.',
+  request: {
+    body: {
+      content: { 'application/json': { schema: updateAliasesBodySchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: configResponseSchema } },
+      description: 'Updated configuration',
+    },
+    400: jsonError('Invalid alias name, unknown provider, or invalid effort'),
     500: jsonError('Server error'),
   },
 });
@@ -3978,6 +4003,44 @@ export function registerApiRoutes(
     } catch (error) {
       getLog().error({ err: error }, 'config.tiers_update_failed');
       return apiError(c, 500, 'Failed to update tier configuration');
+    }
+  });
+
+  // PATCH /api/config/aliases - Update @custom aliases (ungated — solo-OK, like /tiers)
+  registerOpenApiRoute(patchAliasesConfigRoute, async c => {
+    try {
+      const body = getValidatedBody(c, updateAliasesBodySchema);
+      const aliases: AliasesPatch = {};
+      for (const [name, entry] of Object.entries(body.aliases)) {
+        if ((TIER_NAMES as readonly string[]).includes(name)) {
+          return apiError(
+            c,
+            400,
+            `Alias name '${name}' is reserved (small/medium/large are tier keywords). Use a different name.`
+          );
+        }
+        if (!name.startsWith('@')) {
+          return apiError(c, 400, `Alias name '${name}' must start with '@' (e.g. '@${name}').`);
+        }
+        if (entry === null) {
+          aliases[name] = null;
+          continue;
+        }
+        const errMsg = validatePresetEntry(`alias '${name}'`, entry);
+        if (errMsg) return apiError(c, 400, errMsg);
+        aliases[name] = toCleanEntry(entry);
+      }
+
+      await updateGlobalConfig({ aliases });
+
+      const config = await loadConfig();
+      return c.json({
+        config: toSafeConfig(config),
+        database: getDatabaseType(),
+      });
+    } catch (error) {
+      getLog().error({ err: error }, 'config.aliases_update_failed');
+      return apiError(c, 500, 'Failed to update alias configuration');
     }
   });
 

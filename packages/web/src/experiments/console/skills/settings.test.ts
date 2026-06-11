@@ -2,6 +2,8 @@ import { describe, test, expect } from 'bun:test';
 import {
   buildAssistantUpdate,
   buildTiersUpdate,
+  buildAliasesUpdate,
+  seedAliasRows,
   type AssistantConfigForm,
   type TiersForm,
   type TierRowForm,
@@ -117,5 +119,54 @@ describe('buildTiersUpdate', () => {
       tierForm({ large: { provider: '  claude ', model: ' opus ', effort: ' high ' } })
     );
     expect(body.tiers.large).toEqual({ provider: 'claude', model: 'opus', effort: 'high' });
+  });
+});
+
+describe('buildAliasesUpdate / seedAliasRows', () => {
+  test('complete rows become entries, effort optional', () => {
+    const body = buildAliasesUpdate(
+      [
+        { name: '@fast', provider: 'claude', model: 'haiku', effort: '' },
+        { name: '@deep', provider: 'codex', model: 'gpt-5.5', effort: 'high' },
+      ],
+      []
+    );
+    expect(body.aliases['@fast']).toEqual({ provider: 'claude', model: 'haiku' });
+    expect(body.aliases['@deep']).toEqual({ provider: 'codex', model: 'gpt-5.5', effort: 'high' });
+  });
+
+  test('baseline names missing from the rows are sent as null (delete)', () => {
+    const body = buildAliasesUpdate([], ['@fast']);
+    expect(body.aliases['@fast']).toBeNull();
+  });
+
+  test('rename = old name null + new name set', () => {
+    const body = buildAliasesUpdate(
+      [{ name: '@quick', provider: 'claude', model: 'haiku', effort: '' }],
+      ['@fast']
+    );
+    expect(body.aliases['@fast']).toBeNull();
+    expect(body.aliases['@quick']).toEqual({ provider: 'claude', model: 'haiku' });
+  });
+
+  test('incomplete rows are dropped (no accidental writes)', () => {
+    const body = buildAliasesUpdate(
+      [
+        { name: '@', provider: 'claude', model: '', effort: '' },
+        { name: '', provider: 'claude', model: 'haiku', effort: '' },
+      ],
+      []
+    );
+    expect(Object.keys(body.aliases)).toEqual([]);
+  });
+
+  test('seedAliasRows sorts by name and fills effort with empty string', () => {
+    const rows = seedAliasRows({
+      '@z': { provider: 'codex', model: 'gpt-5.5' },
+      '@a': { provider: 'claude', model: 'haiku', effort: 'low' },
+    });
+    expect(rows.map(r => r.name)).toEqual(['@a', '@z']);
+    expect(rows[0]).toEqual({ name: '@a', provider: 'claude', model: 'haiku', effort: 'low' });
+    expect(rows[1]?.effort).toBe('');
   });
 });

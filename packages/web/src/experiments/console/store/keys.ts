@@ -30,4 +30,5 @@ export const K = {
   updateCheck: 'update-check' as const,
   githubConnection: 'github-connection' as const,
   providerConnections: 'provider-connections' as const,
+  userAiPrefs: 'user-ai-prefs' as const,
 } as const;
