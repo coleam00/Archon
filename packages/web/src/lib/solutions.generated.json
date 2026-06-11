@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-06-11T14:42:28+00:00",
+  "generated_at": "2026-06-11T23:01:13+00:00",
   "vault_path": "second-brain/partners",
-  "count": 8,
+  "count": 9,
   "solutions": [
     {
       "id": "cmpse-ai",
@@ -19,6 +19,23 @@
       "lastTouch": "2026-06-01",
       "vaultPath": "second-brain/partners/cmpse-ai/_cmpse-ai.md",
       "tags": ["solution", "partner", "services", "ai", "build-partner", "client/jid5274"]
+    },
+    {
+      "id": "experience-onward",
+      "slug": "experience-onward",
+      "name": "Experience Onward",
+      "type": "partner",
+      "category": "solution",
+      "model": "",
+      "status": "active",
+      "audience": "all",
+      "website": "https://experienceonward.com",
+      "tagline": "US-domestic licensed-psilocybin retreat operator (Oregon + Colorado) targeting athletes, veterans, and first-responders for TBI and trauma recovery. Founder Daniel Carcillo's own TBI-recovery story anchors the brand. Multi-day, in-person, high-touch ($4K-$10K+ per guest).",
+      "description": "Licensed psilocybin retreat operator (OR + CO) founded by NHL alum Daniel Carcillo. Athletes / veterans / first-responders avatar for TBI + trauma recovery.",
+      "keyContact": "",
+      "lastTouch": "",
+      "vaultPath": "second-brain/partners/experience-onward/_experience-onward.md",
+      "tags": ["partner", "client/jid5274", "psychedelic", "retreat", "tbi", "athletes"]
     },
     {
       "id": "medvectis",

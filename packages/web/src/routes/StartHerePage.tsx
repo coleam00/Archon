@@ -193,21 +193,15 @@ export function StartHerePage(): React.ReactElement {
           />
           <Card
             to="/fountain"
-            icon={Activity}
-            title="The Fountain"
-            description="Premium wellness venue; QEP delivery site. WPB."
+            icon={ClipboardList}
+            title="Fountain WPB / QEP"
+            description="Boutique anti-aging venue + Quantum Executive Protocol packaged program. WPB."
           />
           <Card
             to="/ihht"
             icon={Activity}
             title="IHHT"
             description="Intermittent Hypoxia-Hyperoxia Therapy program."
-          />
-          <Card
-            to="/qep"
-            icon={ClipboardList}
-            title="QEP"
-            description="Quantum Executive Protocol -- The Fountain venue."
           />
           <Card
             to="/accufit"

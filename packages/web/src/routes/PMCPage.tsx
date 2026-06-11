@@ -240,7 +240,7 @@ export function PMCPage(): React.ReactElement {
                 className="group rounded-xl border border-border bg-card p-4 transition-all hover:border-primary/50 hover:shadow-md"
               >
                 <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-semibold uppercase tracking-wider text-text-tertiary">
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-text-secondary">
                     {k.label}
                   </span>
                   <Icon className="h-3.5 w-3.5 text-text-tertiary group-hover:text-primary" />
@@ -251,7 +251,7 @@ export function PMCPage(): React.ReactElement {
                 >
                   {k.value}
                 </div>
-                <p className="mt-1 text-[11px] text-text-tertiary">{k.sub}</p>
+                <p className="mt-1 text-[11px] text-text-secondary">{k.sub}</p>
               </div>
             );
           })}
@@ -268,12 +268,7 @@ export function PMCPage(): React.ReactElement {
                 className="rounded-xl border-2 border-primary/20 bg-card p-5 transition-all hover:border-primary/60"
               >
                 <Icon className="mb-3 h-5 w-5 text-primary" />
-                <h3
-                  className="text-base font-semibold text-text-primary"
-                  style={{ fontFamily: "'Playfair Display', serif" }}
-                >
-                  {v.title}
-                </h3>
+                <h3 className="text-base font-semibold text-text-primary">{v.title}</h3>
                 <p className="mt-2 text-sm text-text-secondary">{v.body}</p>
               </div>
             );
@@ -284,10 +279,7 @@ export function PMCPage(): React.ReactElement {
         <section className="grid gap-4 lg:grid-cols-2">
           <div className="rounded-xl border border-border bg-card p-5">
             <div className="mb-1 flex items-baseline justify-between">
-              <h3
-                className="text-sm font-semibold text-text-primary"
-                style={{ fontFamily: "'Playfair Display', serif" }}
-              >
+              <h3 className="text-sm font-semibold text-text-primary">
                 Revenue lines — composite score (marketability × readiness × cycle)
               </h3>
               <span className="text-[10px] text-text-tertiary">PRD 2026-05-13</span>
@@ -329,10 +321,7 @@ export function PMCPage(): React.ReactElement {
 
           <div className="rounded-xl border border-border bg-card p-5">
             <div className="mb-1 flex items-baseline justify-between">
-              <h3
-                className="text-sm font-semibold text-text-primary"
-                style={{ fontFamily: "'Playfair Display', serif" }}
-              >
+              <h3 className="text-sm font-semibold text-text-primary">
                 Pipeline funnel — Apollo to audit close
               </h3>
               <span className="text-[10px] text-text-tertiary">
@@ -378,10 +367,7 @@ export function PMCPage(): React.ReactElement {
         {dialFunnel.length > 0 && (
           <section className="rounded-xl border border-border bg-card p-5">
             <div className="mb-1 flex items-baseline justify-between">
-              <h3
-                className="text-sm font-semibold text-text-primary"
-                style={{ fontFamily: "'Playfair Display', serif" }}
-              >
+              <h3 className="text-sm font-semibold text-text-primary">
                 Dial-tracker funnel — call cadence to meeting booked
               </h3>
               <span className="text-[10px] text-text-tertiary">
@@ -428,10 +414,7 @@ export function PMCPage(): React.ReactElement {
         <section className="grid gap-4 lg:grid-cols-2">
           <div className="rounded-xl border border-border bg-card p-5">
             <div className="mb-1 flex items-baseline justify-between">
-              <h3
-                className="text-sm font-semibold text-text-primary"
-                style={{ fontFamily: "'Playfair Display', serif" }}
-              >
+              <h3 className="text-sm font-semibold text-text-primary">
                 PMC service mix — pillar weight
               </h3>
               <span className="text-[10px] text-text-tertiary">Brochure positioning</span>
@@ -471,10 +454,7 @@ export function PMCPage(): React.ReactElement {
 
           <div className="rounded-xl border border-border bg-card p-5">
             <div className="mb-1 flex items-baseline justify-between">
-              <h3
-                className="text-sm font-semibold text-text-primary"
-                style={{ fontFamily: "'Playfair Display', serif" }}
-              >
+              <h3 className="text-sm font-semibold text-text-primary">
                 North Star: first meetings booked this week
               </h3>
               <span className="text-[10px] text-text-tertiary">Live</span>
@@ -511,10 +491,7 @@ export function PMCPage(): React.ReactElement {
         {/* Recent runs + Top prospects */}
         <section className="grid gap-4 lg:grid-cols-3">
           <div className="rounded-xl border border-border bg-card p-5 lg:col-span-1">
-            <h3
-              className="mb-3 text-sm font-semibold text-text-primary"
-              style={{ fontFamily: "'Playfair Display', serif" }}
-            >
+            <h3 className="mb-3 text-sm font-semibold text-text-primary">
               Recent PMC workflow runs
             </h3>
             {pmcRuns.length === 0 ? (
@@ -552,10 +529,7 @@ export function PMCPage(): React.ReactElement {
 
           <div className="rounded-xl border border-border bg-card p-5 lg:col-span-2">
             <div className="mb-3 flex items-baseline justify-between">
-              <h3
-                className="text-sm font-semibold text-text-primary"
-                style={{ fontFamily: "'Playfair Display', serif" }}
-              >
+              <h3 className="text-sm font-semibold text-text-primary">
                 Top engaged PMC ICP prospects
               </h3>
               <span className="text-[10px] text-text-tertiary">

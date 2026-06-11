@@ -10,7 +10,17 @@ import {
   Pie,
   Cell,
 } from 'recharts';
-import { MapPin, Phone, Activity, Microscope, Heart, Dna, Sparkles, Pill } from 'lucide-react';
+import {
+  MapPin,
+  Phone,
+  Activity,
+  Microscope,
+  Heart,
+  Dna,
+  Sparkles,
+  Pill,
+  Award,
+} from 'lucide-react';
 
 /* ------------------------------------------------------------------ */
 /* The Fountain WPB — Boutique anti-aging + wellness center             */
@@ -97,6 +107,30 @@ const KPI_TILES = [
   },
   { label: 'Client tier', value: 'Core', sub: 'Elevated 2026-06-03 · same tier as BioReg' },
   { label: 'Key contact', value: 'Blake Baynham', sub: 'Warm relationship via QEP partnership' },
+];
+
+// QEP — Quantum Executive Protocol. Packaged executive program delivered at The Fountain.
+// Merged into FountainPage 2026-06-11 per QEP/Fountain consolidation decision.
+const QEP_VALUE_PROPS = [
+  {
+    title: 'Proprietary health-data governance',
+    body: 'A patient-data orchestration platform Blake is building with Plaud.ai. Treats encounters, notes, and protocol-tracking as first-class governed assets — not a longevity protocol.',
+  },
+  {
+    title: 'White-label resale to physician practices',
+    body: 'PMC owns the resale channel. Same physician-practice ICP we already target with RCM and BRT; QEP is the recurring-revenue attach.',
+  },
+  {
+    title: 'Multi-line per account economics',
+    body: 'RCM audit (one-time) + QEP white-label (recurring) + BRT/IHHT modalities (consumable). A single PMC engagement becomes a portfolio sale.',
+  },
+];
+
+const QEP_FACTS = [
+  { label: 'Phase', value: 'Build (white-label scope)' },
+  { label: 'Build partner', value: 'Blake + Plaud.ai' },
+  { label: 'Top blocker', value: 'Lock white-label commercial structure' },
+  { label: 'Website', value: 'quantumexecprotocol.com', href: 'https://quantumexecprotocol.com' },
 ];
 
 export function FountainPage(): React.ReactElement {
@@ -187,6 +221,64 @@ export function FountainPage(): React.ReactElement {
             “Inside-out: diagnostics first, optimization second, aesthetics third — never the
             reverse.”
           </p>
+        </section>
+
+        {/* QEP — Quantum Executive Protocol (merged from /qep on 2026-06-11) */}
+        <section className="rounded-xl border border-border bg-card p-6">
+          <div className="mb-4 flex items-baseline justify-between gap-3">
+            <div className="flex items-baseline gap-2">
+              <Award className="h-4 w-4 self-center text-primary" />
+              <h2
+                className="text-xl font-semibold text-text-primary"
+                style={{ fontFamily: "'Playfair Display', serif" }}
+              >
+                QEP — Quantum Executive Protocol
+              </h2>
+            </div>
+            <span className="text-[10px] uppercase tracking-wider text-text-secondary">
+              Packaged executive program · delivered at The Fountain
+            </span>
+          </div>
+          <p className="mb-4 text-sm text-text-secondary">
+            QEP is the packaged executive program the Fountain stack ladders into. White-label scope
+            in build; PMC owns the physician-practice resale channel.
+          </p>
+
+          <div className="grid gap-3 md:grid-cols-3">
+            {QEP_VALUE_PROPS.map(v => (
+              <div key={v.title} className="rounded-lg border border-border bg-background p-4">
+                <h3 className="text-sm font-semibold text-text-primary">{v.title}</h3>
+                <p className="mt-1.5 text-xs text-text-secondary">{v.body}</p>
+              </div>
+            ))}
+          </div>
+
+          <dl className="mt-5 grid gap-2 text-xs sm:grid-cols-2 md:grid-cols-4">
+            {QEP_FACTS.map(f => (
+              <div
+                key={f.label}
+                className="rounded-md border border-border bg-background px-3 py-2"
+              >
+                <dt className="text-[10px] font-semibold uppercase tracking-wider text-text-secondary">
+                  {f.label}
+                </dt>
+                <dd className="mt-1 text-text-primary">
+                  {f.href ? (
+                    <a
+                      href={f.href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary hover:underline"
+                    >
+                      {f.value} ↗
+                    </a>
+                  ) : (
+                    f.value
+                  )}
+                </dd>
+              </div>
+            ))}
+          </dl>
         </section>
 
         {/* Functional Diagnostics — the lead line */}
