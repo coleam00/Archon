@@ -123,11 +123,15 @@ export interface BuildAiProfileOptions {
   globalAliases?: RawAliasesConfig;
   /** Aliases from .archon/config.yaml (repo) — override globalAliases on key collision */
   repoAliases?: RawAliasesConfig;
+  /** Per-user tier overrides (DB) — highest precedence, override repoTiers on key collision */
+  userTiers?: RawTiersConfig;
+  /** Per-user aliases (DB) — highest precedence, override repoAliases on key collision */
+  userAliases?: RawAliasesConfig;
 }
 
 /**
  * Build a ResolvedAiProfile by layering tier defaults → global tiers → repo tiers
- * → global aliases → repo aliases.
+ * → per-user tiers → global aliases → repo aliases → per-user aliases.
  * Throws if any alias name collides with a reserved tier name, or if an alias
  * entry has an empty provider or model string, or if an alias key lacks the `@` prefix.
  */
@@ -151,7 +155,7 @@ export function buildAiProfile(
     }
   }
 
-  for (const layer of [options.globalTiers, options.repoTiers]) {
+  for (const layer of [options.globalTiers, options.repoTiers, options.userTiers]) {
     if (!layer) continue;
     for (const [name, entry] of Object.entries(layer)) {
       assertValidTierName(name);
@@ -160,7 +164,7 @@ export function buildAiProfile(
     }
   }
 
-  for (const layer of [options.globalAliases, options.repoAliases]) {
+  for (const layer of [options.globalAliases, options.repoAliases, options.userAliases]) {
     if (!layer) continue;
     for (const [name, entry] of Object.entries(layer)) {
       assertNotReserved(name);
