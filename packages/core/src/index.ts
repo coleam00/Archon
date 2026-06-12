@@ -215,6 +215,7 @@ export {
   startOAuth,
   pollOAuth,
   cancelOAuth,
+  OAuthCallbackPortBusyError,
   type ResolvedCredential,
   type DeliveryResult,
   type DeliveryOptions,

@@ -22,17 +22,19 @@ type Callbacks = {
   signal?: AbortSignal;
 };
 let loginImpl: (cb: Callbacks) => Promise<Record<string, unknown>>;
-function makeProvider(id: string) {
+function makeProvider(id: string, usesCallbackServer?: boolean) {
   return {
     id,
     name: id,
+    ...(usesCallbackServer ? { usesCallbackServer } : {}),
     login: (cb: Callbacks) => loginImpl(cb),
     refreshToken: async (c: Record<string, unknown>) => c,
     getApiKey: () => 'k',
   };
 }
-const anthropic = makeProvider('anthropic');
-const codex = makeProvider('openaiCodex');
+// anthropic/codex bind a local fixed-port callback server in pi (#1963).
+const anthropic = makeProvider('anthropic', true);
+const codex = makeProvider('openaiCodex', true);
 const copilot = makeProvider('github-copilot');
 mock.module('@archon/providers/oauth', () => ({
   getOAuthProvider: (id: string) =>
@@ -43,8 +45,13 @@ mock.module('@archon/providers/oauth', () => ({
   githubCopilotOAuthProvider: copilot,
 }));
 
-const { startOAuth, pollOAuth, cancelOAuth, resetOAuthSessionsForTest } =
-  await import('./oauth-bridge');
+const {
+  startOAuth,
+  pollOAuth,
+  cancelOAuth,
+  resetOAuthSessionsForTest,
+  OAuthCallbackPortBusyError,
+} = await import('./oauth-bridge');
 
 function tick(ms = 15): Promise<void> {
   return new Promise(r => setTimeout(r, ms));
@@ -149,5 +156,159 @@ describe('oauth-bridge', () => {
     const second = await startOAuth('u1', 'claude');
     expect(first.sessionId).not.toBe(second.sessionId);
     expect(pollOAuth(first.sessionId, 'u1').status).toBe('error'); // prior session dropped
+  });
+
+  // ---- #1963: abandoned logins must not wedge the fixed callback port ----
+
+  test('aborting a session rejects the manual-code deferred so a pi-style login releases its callback server (#1963)', async () => {
+    // Mirror pi-ai 0.79.1 loginAnthropic: the callback server only closes in a
+    // `finally` reached after onManualCodeInput() settles — pi ignores the
+    // abort signal, so the deferred rejection is the only path there.
+    let serverClosed = false;
+    loginImpl = async cb => {
+      cb.onAuth({ url: 'https://x' });
+      try {
+        await cb.onManualCodeInput!();
+      } finally {
+        serverClosed = true; // pi's `finally { server.close() }`
+      }
+      return { access: 'a' };
+    };
+    const start = await startOAuth('u1', 'claude');
+    expect(serverClosed).toBe(false);
+    cancelOAuth(start.sessionId, 'u1');
+    await tick();
+    expect(serverClosed).toBe(true);
+  });
+
+  test("a callback-server vendor start supersedes another user's abandoned session (#1963)", async () => {
+    let serversClosed = 0;
+    loginImpl = async cb => {
+      cb.onAuth({ url: 'https://x' });
+      try {
+        await cb.onManualCodeInput!();
+      } finally {
+        serversClosed++;
+      }
+      return { access: 'a' };
+    };
+    // alice starts an anthropic login and abandons it (no poll, no code).
+    const a = await startOAuth('alice', 'claude');
+    // bob's anthropic login must not 500 on the held port: it cancels alice's
+    // flow (releasing the server) and proceeds.
+    const b = await startOAuth('bob', 'claude');
+    expect(serversClosed).toBe(1);
+    // S2: the superseded user's poll detail is user-visible in the console
+    // retry UX — pin the exact message.
+    const supersededPoll = pollOAuth(a.sessionId, 'alice');
+    expect(supersededPoll.status).toBe('error');
+    expect(supersededPoll.detail).toBe('Login session not found or expired.');
+    // bob's flow still completes end-to-end.
+    pollOAuth(b.sessionId, 'bob', 'CODE');
+    await tick();
+    expect(pollOAuth(b.sessionId, 'bob').status).toBe('connected');
+  });
+
+  test('cancel AFTER the code was submitted → the credential persists exactly once (S1)', async () => {
+    // abortSession claims rejecting an already-resolved deferred is a no-op;
+    // pin that a post-submit cancel can neither lose nor double-persist.
+    loginImpl = async cb => {
+      cb.onAuth({ url: 'https://x' });
+      const code = await cb.onManualCodeInput!();
+      return { access: `a-${code}`, refresh: 'r', expires: 1 };
+    };
+    const start = await startOAuth('u1', 'claude');
+    mockQuery.mockClear();
+    pollOAuth(start.sessionId, 'u1', 'CODE'); // resolves the deferred
+    cancelOAuth(start.sessionId, 'u1'); // cancel races the in-flight login
+    await tick();
+    // persistProviderOAuth → saveUserProviderKey → exactly one INSERT.
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+    const sql = mockQuery.mock.calls[0]?.[0] as string;
+    expect(sql).toContain('INSERT INTO remote_agent_user_provider_keys');
+  });
+
+  test('superseded while start is still awaiting the first signal → start throws, not a url-less 200 (S4)', async () => {
+    // First login never signals onAuth; it unblocks only when the supersede
+    // rejects the manual-code deferred.
+    loginImpl = async cb => {
+      await cb.onManualCodeInput!();
+      return { access: 'a' };
+    };
+    const first = startOAuth('u1', 'claude');
+    await tick(1); // let the first session register
+    loginImpl = async cb => {
+      cb.onAuth({ url: 'https://second' });
+      await cb.onManualCodeInput!();
+      return { access: 'a' };
+    };
+    const second = await startOAuth('u1', 'claude');
+    expect(second.url).toBe('https://second');
+    await expect(first).rejects.toThrow(/superseded/i);
+  });
+
+  test('device-flow logins (no callback server) for different users coexist', async () => {
+    let resolveFirst!: () => void;
+    const firstGate = new Promise<void>(r => {
+      resolveFirst = r;
+    });
+    loginImpl = async cb => {
+      cb.onDeviceCode({ userCode: 'AAAA', verificationUri: 'https://dev' });
+      await firstGate;
+      return { access: 'a' };
+    };
+    const a = await startOAuth('alice', 'copilot');
+    loginImpl = async cb => {
+      cb.onDeviceCode({ userCode: 'BBBB', verificationUri: 'https://dev' });
+      return { access: 'b' };
+    };
+    const b = await startOAuth('bob', 'copilot');
+    // alice's pending device login was NOT superseded by bob's.
+    expect(pollOAuth(a.sessionId, 'alice').status).toBe('pending');
+    resolveFirst();
+    await tick();
+    expect(pollOAuth(a.sessionId, 'alice').status).toBe('connected');
+    expect(pollOAuth(b.sessionId, 'bob').status).toBe('connected');
+  });
+
+  test('a login impl that ignores the cancel entirely cannot permanently break later starts (#1963 regression)', async () => {
+    // Worst case: login neither honors the abort signal nor consumes the
+    // manual-code deferred, and never settles. The bridge waits a bounded
+    // settle window, then proceeds with the new login.
+    loginImpl = async cb => {
+      cb.onAuth({ url: 'https://wedged' });
+      await new Promise<never>(() => {}); // never settles
+      return {};
+    };
+    const first = await startOAuth('u1', 'claude');
+    expect(first.url).toBe('https://wedged');
+
+    let received: string | undefined;
+    loginImpl = async cb => {
+      cb.onAuth({ url: 'https://fresh' });
+      received = await cb.onManualCodeInput!();
+      return { access: 'a', refresh: 'r', expires: 1 };
+    };
+    const second = await startOAuth('u2', 'claude');
+    expect(second.url).toBe('https://fresh');
+    pollOAuth(second.sessionId, 'u2', 'CODE');
+    await tick();
+    expect(received).toBe('CODE');
+    expect(pollOAuth(second.sessionId, 'u2').status).toBe('connected');
+  }, 10000);
+
+  test('EADDRINUSE at start surfaces an actionable retryable error, not an opaque failure (#1963)', async () => {
+    loginImpl = async () => {
+      throw new Error('listen EADDRINUSE: address already in use 127.0.0.1:53692');
+    };
+    let thrown: unknown;
+    try {
+      await startOAuth('u1', 'claude');
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(OAuthCallbackPortBusyError);
+    expect((thrown as Error).message).toMatch(/callback port/i);
+    expect((thrown as Error).message).toMatch(/retry/i);
   });
 });

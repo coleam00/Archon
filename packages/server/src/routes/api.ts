@@ -50,6 +50,7 @@ import {
   SUBSCRIPTION_PROVIDERS,
   startOAuth,
   pollOAuth,
+  OAuthCallbackPortBusyError,
   getUserAiPrefs,
   setUserTiers,
   setUserAliases,
@@ -1144,6 +1145,7 @@ const providerOAuthStartRoute = createRoute({
     400: jsonError('Provider does not support subscription login'),
     401: jsonError('Web auth required (X-Archon-User header missing)'),
     404: jsonError('Per-user provider keys not enabled on this install'),
+    503: jsonError('OAuth callback port still held by a previous login attempt — retry shortly'),
   },
 });
 
@@ -1683,6 +1685,15 @@ export function registerApiRoutes(
       const start = await startOAuth(web.userId, provider);
       return c.json(start);
     } catch (err) {
+      // A leaked callback port from a previous attempt is an expected,
+      // retryable condition — log it at warn under its own event (an
+      // error-level `…_failed` would pollute error dashboards on multi-user
+      // installs) and surface the actionable message as a 503 instead of an
+      // opaque 500 (#1963).
+      if (err instanceof OAuthCallbackPortBusyError) {
+        getLog().warn({ userId: web.userId, provider }, 'auth.provider_oauth_start_port_busy');
+        return apiError(c, 503, err.message);
+      }
       getLog().error(
         { err: err as Error, userId: web.userId, provider },
         'auth.provider_oauth_start_failed'

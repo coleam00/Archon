@@ -42,6 +42,7 @@ export {
   startOAuth,
   pollOAuth,
   cancelOAuth,
+  OAuthCallbackPortBusyError,
   type StartOAuthResult,
   type PollOAuthResult,
 } from './oauth-bridge';
