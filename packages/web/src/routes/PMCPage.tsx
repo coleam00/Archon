@@ -41,7 +41,13 @@ const REVENUE_LINES = [
   { name: 'PMC (RCM Audit)', composite: 22, marketability: 7, readiness: 7, cycleSpeed: 8 },
   { name: 'BRT (BH-Therapy)', composite: 25, marketability: 9, readiness: 9, cycleSpeed: 7 },
   { name: 'BRT (Chiro+Medspa)', composite: 22, marketability: 8, readiness: 8, cycleSpeed: 6 },
-  { name: 'EWC (Lumnen)', composite: 19, marketability: 6, readiness: 8, cycleSpeed: 5 },
+  {
+    name: "EWC + Lumnen (Jason's LLC)",
+    composite: 19,
+    marketability: 6,
+    readiness: 8,
+    cycleSpeed: 5,
+  },
   { name: 'Fountain WPB', composite: 24, marketability: 8, readiness: 7, cycleSpeed: 8 },
   { name: 'AccuFit', composite: 20, marketability: 6, readiness: 7, cycleSpeed: 7 },
 ];

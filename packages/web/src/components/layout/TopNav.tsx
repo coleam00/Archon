@@ -38,7 +38,7 @@ const coreTabs: readonly NavTab[] = [
   { to: '/welcome', end: true, icon: Home, label: 'Welcome' },
   { to: '/playground', end: false, icon: LineChartIcon, label: 'Playground' },
   { to: '/category/writing-comms', end: false, icon: Mail, label: 'Writing' },
-  { to: '/category/research-learning', end: false, icon: FlaskConical, label: 'Research' },
+  { to: '/research', end: false, icon: FlaskConical, label: 'Research' },
   { to: '/category/techbase', end: false, icon: Wrench, label: 'Techbase' },
   { to: '/category/work-daily-ops', end: false, icon: CheckSquare, label: 'Daily Ops' },
   { to: '/drive', end: false, icon: HardDrive, label: 'Drive' },

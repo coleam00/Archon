@@ -94,46 +94,55 @@ export function StartHerePage(): React.ReactElement {
 
       {/* Three audience views explainer */}
       <div className="rounded-lg border border-border bg-surface-elevated p-4">
-        <h2 className="mb-2 text-base font-semibold text-text-primary">Three audience views</h2>
-        <p className="mb-3 text-xs text-text-secondary">
-          Append{' '}
-          <code className="rounded bg-surface-inset px-1 font-mono text-text-primary">
-            ?view=jason
-          </code>{' '}
-          (default),{' '}
-          <code className="rounded bg-surface-inset px-1 font-mono text-text-primary">
-            ?view=va
-          </code>
-          , or{' '}
-          <code className="rounded bg-surface-inset px-1 font-mono text-text-primary">
-            ?view=partner
-          </code>{' '}
-          to any Drive or Solutions URL to filter what's visible. Folder-level{' '}
-          <code className="rounded bg-surface-inset px-1 font-mono text-text-primary">
-            audience:
-          </code>{' '}
-          tags in the vault are curator-controlled.
-        </p>
+        <div className="mb-3 flex items-baseline justify-between">
+          <h2 className="text-base font-semibold text-text-primary">Audience view</h2>
+          <span className="text-[10px] uppercase tracking-wider text-text-tertiary">
+            Switches visibility across Drive &amp; Solutions
+          </span>
+        </div>
         <div className="grid grid-cols-1 gap-2 text-xs md:grid-cols-3">
-          <div className="rounded border border-border bg-surface-inset p-2">
-            <strong className="text-text-primary">view=jason</strong>{' '}
-            <span className="text-text-secondary">
-              -- sees everything. The default for Jason and Carlos.
-            </span>
-          </div>
-          <div className="rounded border border-border bg-surface-inset p-2">
-            <strong className="text-text-primary">view=va</strong>{' '}
-            <span className="text-text-secondary">
-              -- sees <em>all</em> + <em>internal</em>. For Louise, James, Trisha, Vincent, Ed.
-            </span>
-          </div>
-          <div className="rounded border border-border bg-surface-inset p-2">
-            <strong className="text-text-primary">view=partner</strong>{' '}
-            <span className="text-text-secondary">
-              -- sees <em>all</em> + <em>partner-only</em>. For strategic partners on specific
-              portals.
-            </span>
-          </div>
+          <a
+            href="?view=jason"
+            className="group rounded-md border border-border bg-surface-inset p-3 transition-all hover:border-primary/60 hover:shadow-sm"
+          >
+            <div className="flex items-center justify-between">
+              <strong className="text-sm text-text-primary">Jason</strong>
+              <span className="rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
+                default
+              </span>
+            </div>
+            <p className="mt-1 text-text-secondary">
+              Sees everything. The operator view for Jason and Carlos.
+            </p>
+          </a>
+          <a
+            href="?view=va"
+            className="group rounded-md border border-border bg-surface-inset p-3 transition-all hover:border-primary/60 hover:shadow-sm"
+          >
+            <div className="flex items-center justify-between">
+              <strong className="text-sm text-text-primary">VA team</strong>
+              <span className="rounded-full border border-amber-700/40 bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-800">
+                internal
+              </span>
+            </div>
+            <p className="mt-1 text-text-secondary">
+              Sees all + internal. For Louise, James, Trisha, Vincent, Ed.
+            </p>
+          </a>
+          <a
+            href="?view=partner"
+            className="group rounded-md border border-border bg-surface-inset p-3 transition-all hover:border-primary/60 hover:shadow-sm"
+          >
+            <div className="flex items-center justify-between">
+              <strong className="text-sm text-text-primary">Strategic partner</strong>
+              <span className="rounded-full border border-emerald-700/40 bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-800">
+                external
+              </span>
+            </div>
+            <p className="mt-1 text-text-secondary">
+              Sees all + partner-only. Cleaned of internal context for outside meetings.
+            </p>
+          </a>
         </div>
       </div>
 
@@ -189,7 +198,7 @@ export function StartHerePage(): React.ReactElement {
             to="/ewc"
             icon={Sparkles}
             title="EWC"
-            description="Elevated Wellness Center / public landing brand. jid5274.gbautomation.xyz."
+            description="Jason's personal LLC -- Lumnen Clinical Partner Program live; online-store build pending. jid5274.gbautomation.xyz."
           />
           <Card
             to="/fountain"

@@ -9,16 +9,16 @@ const PROSPECTS =
 
 const VALUE_PROPS = [
   {
-    title: 'Three-pillar premium stack',
-    body: 'Wellness products + FDA-cleared Lumnen/Avologi laser + AI practice automation. Sticky multi-line revenue per partner.',
+    title: 'Jason-owned LLC (online-store vehicle)',
+    body: "EWC is Jason Diaz's personal LLC -- the planned online-store front for the wellness / device / automation stack. Not a client. The Lumnen Clinical Partner Program is the first launched layer; the storefront build is still gated on bandwidth.",
   },
   {
     title: 'Lumnen Clinical Partner Program',
-    body: 'Co-branded laser partnership — one-pager and reel shipped, ready for outbound launch to 50-contact pilot list.',
+    body: 'Co-branded FDA-cleared laser partnership -- one-pager and reel shipped, ready for outbound launch to a 50-contact pilot list. This is the active revenue line under the EWC umbrella.',
   },
   {
-    title: 'Cash-pay practice pivot',
-    body: 'Concierge, DPC, medspa, functional med — high-LTV cash-pay practices evaluating premium service+device+automation bundle.',
+    title: 'Three-pillar premium stack (build target)',
+    body: 'Wellness products + FDA-cleared Lumnen/Avologi laser + AI practice automation -- the eventual e-commerce + service bundle once the storefront launches. Sticky multi-line revenue per partner.',
   },
 ];
 
