@@ -351,17 +351,134 @@ Query parameters include status filters, date ranges, and pagination. Used by th
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/config` | Get read-only configuration (safe subset) |
-| PATCH | `/api/config/assistants` | Update assistant configuration |
+| PATCH | `/api/config/assistants` | Update the default assistant and per-provider model defaults |
+| PATCH | `/api/config/tiers` | Update model-tier presets (`small`/`medium`/`large`) |
+| PATCH | `/api/config/aliases` | Update `@custom` model aliases (per-key merge; `null` unsets) |
+| GET | `/api/providers/pi/models` | Pi's model catalog (cost/reasoning metadata; best-effort, `[]` on failure) |
+
+`GET /api/config` returns the safe config subset, now including the configured `tiers`, the built-in `tierDefaults` for the current default provider (what an unset tier resolves to), and the configured `aliases`.
+
+These config routes are **ungated** -- they write non-secret model config to `~/.archon/config.yaml` and work on solo installs (no `TOKEN_ENCRYPTION_KEY` required). Contrast with the [AI Provider Credentials](#ai-provider-credentials) routes below, which require an identity.
 
 ```bash
-# Read current config
+# Read current config (includes `tiers` + `tierDefaults`)
 curl http://localhost:3090/api/config
 
-# Update assistant defaults
+# Set the default assistant
 curl -X PATCH http://localhost:3090/api/config/assistants \
   -H "Content-Type: application/json" \
-  -d '{"claude": {"model": "opus"}}'
+  -d '{"assistant": "claude"}'
+
+# Or update per-provider model defaults
+curl -X PATCH http://localhost:3090/api/config/assistants \
+  -H "Content-Type: application/json" \
+  -d '{"assistants": {"claude": {"model": "opus"}}}'
+
+# Set a model tier (a `null` tier value unsets it, falling back to the built-in default)
+curl -X PATCH http://localhost:3090/api/config/tiers \
+  -H "Content-Type: application/json" \
+  -d '{"tiers": {"large": {"provider": "claude", "model": "opus"}}}'
+
+# Set a @custom alias (a `null` value unsets it)
+curl -X PATCH http://localhost:3090/api/config/aliases \
+  -H "Content-Type: application/json" \
+  -d '{"aliases": {"@fast": {"provider": "claude", "model": "haiku"}}}'
 ```
+
+---
+
+## Per-User AI Preferences
+
+Each user can override the install-wide model config with **personal** tiers, `@custom` aliases, and a default assistant — the highest-precedence resolver layer, applied to runs and chats *they* start. These routes require a resolved web identity (`X-Archon-User` header or a Better Auth session) but **no** `TOKEN_ENCRYPTION_KEY` — model names aren't secrets. Without an identity they return `401`, and model resolution stays config-only (solo installs are unchanged).
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/auth/me/ai-prefs` | The current user's stored prefs (raw layer, not merged) |
+| PATCH | `/api/auth/me/ai-prefs/tiers` | Update personal tier presets (per-key merge; `null` unsets) |
+| PATCH | `/api/auth/me/ai-prefs/aliases` | Update personal `@custom` aliases (per-key merge; `null` unsets) |
+| PATCH | `/api/auth/me/ai-prefs/default` | Set (or clear with `null`) the personal default assistant |
+
+```bash
+# Point YOUR `large` tier at opus without touching the install config
+curl -X PATCH http://localhost:3090/api/auth/me/ai-prefs/tiers \
+  -H "X-Archon-User: your-user-id" \
+  -H "Content-Type: application/json" \
+  -d '{"tiers": {"large": {"provider": "claude", "model": "opus"}}}'
+```
+
+All writes validate the provider (registered), effort (provider vocabulary), and alias names (`@` prefix, not a reserved tier keyword), and return the updated prefs. The console exposes the same scopes as the **"This install / Just me"** toggle on AI Settings; the CLI as `archon ai … --scope user`.
+
+---
+
+## AI Provider Credentials
+
+Per-user provider credentials let each user bill their runs and chats to **their own** API key or subscription instead of the shared install key. Unlike the config routes above, these endpoints are **gated**: they require `TOKEN_ENCRYPTION_KEY` (a 64-char hex secret) to be set *and* a resolved web identity (the `X-Archon-User` header, or a Better Auth session). On a solo install with no `TOKEN_ENCRYPTION_KEY`, `GET /api/auth/providers` returns `enabled: false` and the write routes return `404`.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/auth/providers` | List the current user's connected credentials (metadata only) |
+| PUT | `/api/auth/providers/{provider}` | Connect (upsert) an API key for a provider |
+| DELETE | `/api/auth/providers/{provider}` | Disconnect a provider credential (idempotent) |
+| POST | `/api/auth/providers/{provider}/oauth/start` | Begin a subscription (OAuth) login |
+| POST | `/api/auth/providers/{provider}/oauth/poll` | Poll a subscription login session |
+
+Credentials are encrypted at rest; **no endpoint ever returns a secret value** -- responses carry only `provider`/`kind`/`label` metadata.
+
+### List Connected Providers
+
+```bash
+curl http://localhost:3090/api/auth/providers \
+  -H "X-Archon-User: your-user-id"
+```
+
+Returns `{ enabled, connections: [{ provider, kind, label }], available, subscriptionAvailable, agents }`:
+- `available` -- every **vendor** id you can connect an API key for (`anthropic`, `openai`, `github-copilot`, plus the Pi backends). Legacy `claude`/`codex`/`copilot` ids are accepted on writes and normalized.
+- `subscriptionAvailable` -- the subset that supports subscription (OAuth) login: **`anthropic`**, **`openai`**, and **`github-copilot`**. (The ChatGPT/Codex subscription runs an Archon-owned PKCE flow that captures the `id_token` the Codex CLI requires -- see [#1924](https://github.com/coleam00/Archon/issues/1924).)
+- `agents` -- the agent -> credential matrix: per registered agent `{ id, displayName, catalog: 'static'|'dynamic', ready, credentials: [{ vendor, displayName, kinds, connected, subscriptionAvailable, installEnv, ambientConfigured? }] }`. `installEnv`/`ambientConfigured` report server-side detection so readiness renders on solo installs too; OpenCode is `catalog:'dynamic'` (introspect via `GET /api/providers/opencode/credentials`).
+
+### Connect an API Key
+
+```bash
+curl -X PUT http://localhost:3090/api/auth/providers/openrouter \
+  -H "X-Archon-User: your-user-id" \
+  -H "Content-Type: application/json" \
+  -d '{"apiKey": "sk-...", "label": "personal"}'
+```
+
+Returns `{ success, provider, kind: "api_key", label }`. An unknown provider or a blank key returns `400`.
+
+### Disconnect a Provider
+
+```bash
+curl -X DELETE http://localhost:3090/api/auth/providers/openrouter \
+  -H "X-Archon-User: your-user-id"
+```
+
+Idempotent -- disconnecting a provider that was never connected still returns `{ success: true }`.
+
+### Subscription Login (OAuth)
+
+Subscription login is a two-step `start` -> `poll` flow held server-side. `start` returns a `mode`:
+- `manual` (`anthropic`, Claude Pro/Max) -- show the returned `url`; the user authorizes in a browser and pastes the resulting code back via `poll`.
+- `device` (`github-copilot`) -- show `userCode` + `verificationUri`; `poll` until connected.
+
+```bash
+# 1. Start a login session
+curl -X POST http://localhost:3090/api/auth/providers/anthropic/oauth/start \
+  -H "X-Archon-User: your-user-id"
+# {"sessionId":"...","mode":"manual","url":"https://...","expiresIn":600}
+
+# 2. Poll (pass the pasted `code` once, for manual flows)
+curl -X POST http://localhost:3090/api/auth/providers/anthropic/oauth/poll \
+  -H "X-Archon-User: your-user-id" \
+  -H "Content-Type: application/json" \
+  -d '{"sessionId": "...", "code": "the-pasted-code"}'
+# {"status":"connected"}
+```
+
+`poll` returns `{ status: "pending" | "connected" | "error", detail? }`. A provider that does not support subscription login returns `400` on `start`.
+
+The CLI equivalent of this whole surface is [`archon ai`](/reference/cli/#ai). For the end-to-end setup walkthrough, see [Per-user credentials and AI Settings](/getting-started/ai-assistants/#per-user-credentials-and-ai-settings).
 
 ---
 

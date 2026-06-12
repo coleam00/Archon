@@ -54,6 +54,7 @@ import {
 } from './schemas';
 import { formatToolCall } from './utils/tool-formatter';
 import { createLogger, captureWorkflowCompleted } from '@archon/paths';
+import type { WorkflowErrorClass, WorkflowNodeType } from '@archon/paths';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { evaluateCondition } from './condition-evaluator';
 import { declaredFieldsFromSchema, resolveNodeOutputField } from './output-ref';
@@ -71,6 +72,7 @@ import {
 import { withIdleTimeout, STEP_IDLE_TIMEOUT_MS } from './utils/idle-timeout';
 import {
   classifyError,
+  toTelemetryErrorClass,
   detectCreditExhaustion,
   loadCommandPrompt,
   substituteWorkflowVariables,
@@ -89,6 +91,66 @@ import {
   type ModelAliasPreset,
   type ResolvedAiProfile,
 } from './model-validation';
+
+/**
+ * Closed-set node type for telemetry — mirrors the DagNode discriminators.
+ * The final `'prompt'` arm is the fallthrough: a future node type added to
+ * the schema without a guard here would be reported as `'prompt'` (a metrics
+ * misclassification, not a privacy issue) — extend this when adding node types.
+ */
+function dagNodeTelemetryType(node: DagNode): WorkflowNodeType {
+  if (isBashNode(node)) return 'bash';
+  if (isScriptNode(node)) return 'script';
+  if (isLoopNode(node)) return 'loop';
+  if (isApprovalNode(node)) return 'approval';
+  if (isCancelNode(node)) return 'cancel';
+  if ('command' in node) return 'command';
+  return 'prompt';
+}
+
+/**
+ * Usage totals for the terminal telemetry event. Fields are omitted (not sent
+ * as zero) when nothing was reported, so absence in PostHog means "providers
+ * reported no usage", never "zero spend".
+ */
+function buildRunUsageProps(totals: {
+  costUsd: number;
+  tokensIn: number;
+  tokensOut: number;
+  loopIterations: number;
+}): { costUsd?: number; tokensIn?: number; tokensOut?: number; loopIterations?: number } {
+  return {
+    ...(totals.costUsd > 0 ? { costUsd: totals.costUsd } : {}),
+    ...(totals.tokensIn > 0 || totals.tokensOut > 0
+      ? { tokensIn: totals.tokensIn, tokensOut: totals.tokensOut }
+      : {}),
+    ...(totals.loopIterations > 0 ? { loopIterations: totals.loopIterations } : {}),
+  };
+}
+
+/**
+ * Failure taxonomy for the terminal telemetry event: the first failed node's
+ * type and a fixed-enum error class derived from its stored error message.
+ * Returns {} when nothing failed. Categorical only — the error text itself
+ * is classified locally and never transmitted.
+ */
+function firstFailedNodeTaxonomy(
+  nodeOutputs: Map<string, NodeOutput>,
+  nodes: readonly DagNode[]
+): { errorClass?: WorkflowErrorClass; failedNodeType?: WorkflowNodeType } {
+  for (const [nodeId, output] of nodeOutputs) {
+    if (output.state !== 'failed') continue;
+    const node = nodes.find(n => n.id === nodeId);
+    const taxonomy: { errorClass: WorkflowErrorClass; failedNodeType?: WorkflowNodeType } = {
+      errorClass: toTelemetryErrorClass(classifyError(new Error(output.error))),
+    };
+    if (node) {
+      taxonomy.failedNodeType = dagNodeTelemetryType(node);
+    }
+    return taxonomy;
+  }
+  return {};
+}
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -214,7 +276,13 @@ interface WorkflowLevelOptions {
 }
 
 /** Internal node execution result — extends NodeOutput with cost data for aggregation. */
-type NodeExecutionResult = NodeOutput & { costUsd?: number };
+type NodeExecutionResult = NodeOutput & {
+  costUsd?: number;
+  /** Provider-reported token usage for the node (loop nodes: summed across iterations). */
+  tokens?: TokenUsage;
+  /** Loop nodes only: number of iterations executed. */
+  loopIterations?: number;
+};
 
 /** Throttle state for cancel checks (reads — no write contention in WAL mode) */
 const lastNodeCancelCheck = new Map<string, number>();
@@ -1439,6 +1507,7 @@ async function executeNodeInternal(
       output: nodeOutputText,
       sessionId: newSessionId,
       costUsd: nodeCostUsd,
+      ...(nodeTokens !== undefined ? { tokens: nodeTokens } : {}),
       ...(structuredOutput !== undefined ? { structuredOutput } : {}),
       ...(declaredFields !== undefined ? { declaredFields } : {}),
     };
@@ -1457,6 +1526,7 @@ async function executeNodeInternal(
         output: nodeOutputText,
         error: 'Cancelled by user',
         costUsd: nodeCostUsd,
+        ...(nodeTokens !== undefined ? { tokens: nodeTokens } : {}),
       };
     }
 
@@ -1485,7 +1555,13 @@ async function executeNodeInternal(
       error: err.message,
     });
 
-    return { state: 'failed', output: '', error: err.message, costUsd: nodeCostUsd };
+    return {
+      state: 'failed',
+      output: '',
+      error: err.message,
+      costUsd: nodeCostUsd,
+      ...(nodeTokens !== undefined ? { tokens: nodeTokens } : {}),
+    };
   }
 }
 
@@ -2001,6 +2077,7 @@ async function executeLoopNode(
   let loopTotalCostUsd: number | undefined;
   let loopFinalStopReason: string | undefined;
   let loopTotalNumTurns: number | undefined;
+  let loopTotalTokens: TokenUsage | undefined;
   // Helper to log event store errors consistently
   const logEventStoreError = (err: Error, iteration: number): void => {
     getLog().error({ err, nodeId: node.id, iteration }, 'loop_node.iteration_event_failed');
@@ -2143,6 +2220,21 @@ async function executeLoopNode(
           if (msg.cost !== undefined) {
             loopTotalCostUsd = (loopTotalCostUsd ?? 0) + msg.cost;
           }
+          if (msg.tokens !== undefined) {
+            // Provider-supplied numbers — see the NaN guard rationale at the
+            // DAG-level accumulator.
+            if (Number.isFinite(msg.tokens.input) && Number.isFinite(msg.tokens.output)) {
+              loopTotalTokens = {
+                input: (loopTotalTokens?.input ?? 0) + msg.tokens.input,
+                output: (loopTotalTokens?.output ?? 0) + msg.tokens.output,
+              };
+            } else {
+              getLog().warn(
+                { nodeId: node.id, tokens: msg.tokens },
+                'loop_node.usage_tokens_non_finite_ignored'
+              );
+            }
+          }
           if (msg.stopReason !== undefined) loopFinalStopReason = msg.stopReason;
           if (msg.numTurns !== undefined) {
             loopTotalNumTurns = (loopTotalNumTurns ?? 0) + msg.numTurns;
@@ -2275,6 +2367,8 @@ async function executeLoopNode(
         output: '',
         error: `Loop iteration ${i} failed: ${err.message}`,
         costUsd: loopTotalCostUsd,
+        ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+        loopIterations: i,
       };
     }
 
@@ -2331,6 +2425,8 @@ async function executeLoopNode(
         output: '',
         error: `Loop iteration ${i} failed: ${emptyError}`,
         costUsd: loopTotalCostUsd,
+        ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+        loopIterations: i,
       };
     }
 
@@ -2486,6 +2582,8 @@ async function executeLoopNode(
         output: lastIterationOutput,
         sessionId: currentSessionId,
         costUsd: loopTotalCostUsd,
+        ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+        loopIterations: i,
         ...(lastIterationStructuredOutput !== undefined
           ? { structuredOutput: lastIterationStructuredOutput }
           : {}),
@@ -2544,7 +2642,13 @@ async function executeLoopNode(
       // This mirrors the approval-node pattern, preventing false "DAG nodes failed" warnings
       // in multi-node workflows. Resume correctness relies on the 'paused' DB status, not
       // on the node's output state.
-      return { state: 'completed', output: lastIterationOutput, costUsd: loopTotalCostUsd };
+      return {
+        state: 'completed',
+        output: lastIterationOutput,
+        costUsd: loopTotalCostUsd,
+        ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+        loopIterations: i,
+      };
     }
   }
 
@@ -2560,6 +2664,8 @@ async function executeLoopNode(
     output: lastIterationOutput,
     error: errorMsg,
     costUsd: loopTotalCostUsd,
+    ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+    loopIterations: loop.max_iterations,
   };
 }
 
@@ -2831,9 +2937,13 @@ export async function executeDagWorkflow(
   // Session threading: for sequential single-node layers, thread the session forward.
   // For parallel layers (>1 node), always fresh (can't share a session).
   let lastSequentialSessionId: string | undefined;
-  // Note: accumulates cost for this invocation only. If this is a resume, nodes skipped
-  // from the prior run are not included — total_cost_usd will reflect resumed-portion cost only.
+  // Note: all four usage accumulators cover this invocation only. If this is a
+  // resume, nodes skipped from the prior run are not included — cost, tokens,
+  // and loop iterations all reflect the resumed portion only.
   let totalCostUsd = 0;
+  let totalTokensIn = 0;
+  let totalTokensOut = 0;
+  let totalLoopIterations = 0;
 
   // Per-node session persistence across workflow re-runs. Scope = the DB conversation
   // UUID. The `?? undefined` guard keeps an empty/missing conversation_id from keying
@@ -3430,7 +3540,23 @@ export async function executeDagWorkflow(
     for (const result of layerResults) {
       if (result.status === 'fulfilled') {
         const { nodeId, output } = result.value;
+        // SINGLE aggregation point for run-level usage telemetry. Per-node
+        // cost/tokens must be summed here and ONLY here — adding a per-node
+        // telemetry capture elsewhere would double-count against the totals
+        // sent on workflow_completed/workflow_failed.
         if (output.costUsd !== undefined) totalCostUsd += output.costUsd;
+        if (output.tokens !== undefined) {
+          // Token values come from providers (incl. community ones) — guard so
+          // a NaN can't silently poison the totals (NaN > 0 is false, which
+          // would silently drop the fields from telemetry with no trace).
+          if (Number.isFinite(output.tokens.input) && Number.isFinite(output.tokens.output)) {
+            totalTokensIn += output.tokens.input;
+            totalTokensOut += output.tokens.output;
+          } else {
+            getLog().warn({ nodeId, tokens: output.tokens }, 'dag.usage_tokens_non_finite_ignored');
+          }
+        }
+        if (output.loopIterations !== undefined) totalLoopIterations += output.loopIterations;
         nodeOutputs.set(nodeId, output);
         // Typed artifact: when a node declares `output_type`, persist its output
         // as a typed sidecar (nodes/<id>.md + .meta.json) so other nodes and
@@ -3544,6 +3670,18 @@ export async function executeDagWorkflow(
   }
   const anyCompleted = nodeCounts.completed > 0;
   const anyFailed = nodeCounts.failed > 0;
+  // Categorical failure taxonomy for telemetry: type of the first failed node
+  // in stored (Map insertion) order — for parallel layers this is layer-array
+  // order, not completion order; any failed node is equally representative —
+  // plus a fixed-enum error class derived from the stored node error. Raw
+  // error text never leaves.
+  const failureTaxonomy = firstFailedNodeTaxonomy(nodeOutputs, workflow.nodes);
+  const runUsageProps = buildRunUsageProps({
+    costUsd: totalCostUsd,
+    tokensIn: totalTokensIn,
+    tokensOut: totalTokensOut,
+    loopIterations: totalLoopIterations,
+  });
 
   getLog().info(
     { nodeCount: workflow.nodes.length, anyCompleted, anyFailed },
@@ -3575,6 +3713,8 @@ export async function executeDagWorkflow(
       nodesSkipped: nodeCounts.skipped,
       nodesTotal: nodeCounts.total,
       exitReason: 'no_nodes_completed',
+      ...failureTaxonomy,
+      ...runUsageProps,
     });
     // Note: nodeCounts not stored for failed runs — failWorkflowRun only stores { error }.
     // Frontend guards with isValidNodeCounts so missing node_counts is safe.
@@ -3621,6 +3761,8 @@ export async function executeDagWorkflow(
       nodesSkipped: nodeCounts.skipped,
       nodesTotal: nodeCounts.total,
       exitReason: 'node_error',
+      ...failureTaxonomy,
+      ...runUsageProps,
     });
     await deps.store.failWorkflowRun(workflowRun.id, failMsg).catch((dbErr: Error) => {
       getLog().error({ err: dbErr, workflowRunId: workflowRun.id }, 'dag_db_fail_failed');
@@ -3688,6 +3830,7 @@ export async function executeDagWorkflow(
     nodesFailed: nodeCounts.failed,
     nodesSkipped: nodeCounts.skipped,
     nodesTotal: nodeCounts.total,
+    ...runUsageProps,
   });
   deps.store
     .createWorkflowEvent({

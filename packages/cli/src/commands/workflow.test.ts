@@ -31,6 +31,7 @@ const mockLogger = {
 
 // Mock @archon/paths (createLogger moved here from @archon/core)
 mock.module('@archon/paths', () => ({
+  captureApprovalResolved: () => undefined,
   createLogger: mock(() => mockLogger),
   getArchonHome: mock(() => '/home/test/.archon'),
   BUNDLED_IS_BINARY: false,

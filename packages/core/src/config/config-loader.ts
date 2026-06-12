@@ -56,6 +56,12 @@ import type { RawAliasEntry, TierName } from '@archon/workflows/model-validation
 export type TiersPatch = Partial<Record<TierName, RawAliasEntry | null>>;
 
 /**
+ * A per-key patch for the `aliases:` config — `null` explicitly UNSETS an
+ * alias. Consumed by `updateGlobalConfig({ aliases })`.
+ */
+export type AliasesPatch = Record<string, RawAliasEntry | null>;
+
+/**
  * Pure read of registered provider IDs. Registration is guaranteed by
  * `loadConfig()`'s bootstrap call before any consumer can observe the
  * registry, so this helper must NOT trigger side-effecting registration
@@ -281,6 +287,31 @@ export async function loadGlobalConfig(forceReload = false): Promise<GlobalConfi
 }
 
 /**
+ * Coerce `recommendedWorkflows` to a clean `string[]` of trimmed non-empty
+ * entries. Non-array values, non-string entries, and empties are dropped.
+ * Advisory data — never throws.
+ */
+function sanitizeRecommendedWorkflows(raw: unknown, configPath: string): string[] | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (!Array.isArray(raw)) {
+    getLog().debug(
+      { configPath, rawType: typeof raw },
+      'config.recommended_workflows_not_array_ignored'
+    );
+    return undefined;
+  }
+  const cleaned: string[] = [];
+  for (const entry of raw) {
+    if (typeof entry === 'string' && entry.trim().length > 0) {
+      cleaned.push(entry.trim());
+    } else {
+      getLog().debug({ configPath, entry }, 'config.recommended_workflows_entry_ignored');
+    }
+  }
+  return cleaned;
+}
+
+/**
  * Load repository config from .archon/config.yaml
  * Returns empty object if no config found
  */
@@ -289,7 +320,17 @@ export async function loadRepoConfig(repoPath: string): Promise<RepoConfig> {
 
   try {
     const content = await readConfigFile(configPath);
-    return (parseYaml(content) as RepoConfig) ?? {};
+    const parsed = (parseYaml(content) as RepoConfig) ?? {};
+    const recommendedWorkflows = sanitizeRecommendedWorkflows(
+      (parsed as { recommendedWorkflows?: unknown }).recommendedWorkflows,
+      configPath
+    );
+    if (recommendedWorkflows !== undefined) {
+      parsed.recommendedWorkflows = recommendedWorkflows;
+    } else {
+      delete parsed.recommendedWorkflows;
+    }
+    return parsed;
   } catch (error) {
     const err = error as { code?: string };
     if (err.code === 'ENOENT') {
@@ -598,7 +639,10 @@ export function logConfig(config: MergedConfig): void {
  * Invalidates the cached config so next loadConfig() picks up changes.
  */
 export async function updateGlobalConfig(
-  updates: Partial<Omit<GlobalConfig, 'tiers'>> & { tiers?: TiersPatch }
+  updates: Partial<Omit<GlobalConfig, 'tiers' | 'aliases'>> & {
+    tiers?: TiersPatch;
+    aliases?: AliasesPatch;
+  }
 ): Promise<void> {
   const configPath = getArchonConfigPath();
 
@@ -643,6 +687,19 @@ export async function updateGlobalConfig(
         }
       }
       merged.tiers = Object.keys(nextTiers).length > 0 ? nextTiers : undefined;
+    }
+
+    if (updates.aliases) {
+      // Same per-key merge semantics as tiers: `null` unsets, a value sets,
+      // an absent key preserves the existing alias. Rebuilt fresh (no dynamic delete).
+      const nextAliases: RawAliasesConfig = {};
+      for (const [name, entry] of Object.entries(current.aliases ?? {})) {
+        if (updates.aliases[name] === undefined) nextAliases[name] = entry;
+      }
+      for (const [name, entry] of Object.entries(updates.aliases)) {
+        if (entry !== null && entry !== undefined) nextAliases[name] = entry;
+      }
+      merged.aliases = Object.keys(nextAliases).length > 0 ? nextAliases : undefined;
     }
 
     // Serialize to YAML and write
@@ -717,5 +774,6 @@ export function toSafeConfig(config: MergedConfig): SafeConfig {
     },
     tiers: config.tiers,
     tierDefaults: tierDefaultsFor(config.assistant),
+    aliases: config.aliases,
   };
 }

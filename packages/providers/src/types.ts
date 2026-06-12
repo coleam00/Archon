@@ -376,6 +376,46 @@ export interface ProviderCapabilities {
 }
 
 /**
+ * How a credential of a given vendor can be connected / detected.
+ *  - `api_key`      — a pasteable bearer string, stored encrypted per user.
+ *  - `subscription` — an OAuth login (Claude Pro/Max, GitHub Copilot, ChatGPT).
+ *  - `ambient`      — cloud credential chains detected from the environment
+ *    (AWS for Bedrock, gcloud ADC for Vertex). Never stored, status-only.
+ *
+ * Exported as a const tuple so API schemas can derive `z.enum(CREDENTIAL_KINDS)`
+ * instead of re-listing the literals.
+ */
+export const CREDENTIAL_KINDS = ['api_key', 'subscription', 'ambient'] as const;
+export type CredentialKind = (typeof CREDENTIAL_KINDS)[number];
+
+/**
+ * One upstream-vendor credential an agent provider can consume. `vendor` is the
+ * canonical credential id (e.g. 'anthropic', 'openrouter', 'github-copilot') —
+ * deliberately NOT the agent provider id: one credential can serve multiple
+ * agents (an 'anthropic' key powers Claude Code, Pi's anthropic backend, and
+ * OpenCode). Delivery (vendor → env vars / files) is owned by
+ * @archon/core/credentials — this spec is only the consumption matrix.
+ */
+export interface CredentialSpec {
+  /** Canonical vendor id — used as the storage key in user_provider_keys. */
+  vendor: string;
+  /** Human-readable vendor name for UI display (e.g. 'OpenRouter'). */
+  displayName: string;
+  /** Which connection kinds this vendor supports for this agent (at least one). */
+  kinds: [CredentialKind, ...CredentialKind[]];
+}
+
+/**
+ * An agent's credential catalog. `static` lists the vendors up front
+ * (Claude/Codex/Copilot/Pi); `dynamic` means the set is only knowable at
+ * runtime (OpenCode resolves its models.dev catalog via the embedded server's
+ * introspection API and exposes it through a dedicated endpoint).
+ */
+export type ProviderCredentialCatalog =
+  | { kind: 'static'; specs: CredentialSpec[] }
+  | { kind: 'dynamic' };
+
+/**
  * Registration entry for a provider in the provider registry.
  * Each entry carries metadata, a factory, and model-compatibility logic.
  * The registry is the source of truth for provider identity, capabilities, and display.
@@ -395,6 +435,14 @@ export interface ProviderRegistration {
 
   /** Whether this is a built-in (maintained by core team) or community provider */
   builtIn: boolean;
+
+  /**
+   * Credentials this agent can consume. Required: registering an agent without
+   * declaring its credential surface is a bug, not a default (#1955) — the
+   * connectable-vendor catalog and the agent→credential matrix in
+   * GET /api/auth/providers are derived from these declarations.
+   */
+  credentials: ProviderCredentialCatalog;
 }
 
 /**

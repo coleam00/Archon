@@ -169,4 +169,19 @@ export interface WorkflowDeps {
     env: Record<string, string>;
     files: { path: string; contents: string }[];
   }>;
+  /**
+   * Optional: resolve the originating user's personal AI preferences (model
+   * tiers, `@custom` aliases, default assistant) from the DB. Folded into
+   * `buildAiProfile` as the highest-precedence layer at the userId-aware
+   * seams (executor + chat orchestrator) — the deep execution path only ever
+   * sees the resolved profile.
+   *
+   * Must never throw — return `{}` on any failure so model resolution falls
+   * back to install-wide config exactly as before.
+   */
+  getUserAiPrefs?: (userId: string) => Promise<{
+    tiers?: RawTiersConfig;
+    aliases?: RawAliasesConfig;
+    defaultProvider?: string;
+  }>;
 }

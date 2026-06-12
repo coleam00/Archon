@@ -112,6 +112,7 @@ export {
   toSafeConfig,
   updateGlobalConfig,
   type TiersPatch,
+  type AliasesPatch,
 } from './config/config-loader';
 
 // =============================================================================
@@ -200,7 +201,13 @@ export {
   isPerUserProviderKeysEnabled,
   assertProviderKeysKeyAtBoot,
   deliverCredential,
-  KNOWN_PROVIDERS,
+  KNOWN_VENDORS,
+  LEGACY_VENDOR_ALIASES,
+  normalizeCredentialVendor,
+  getVendorCatalog,
+  listConnectableVendors,
+  isConnectableVendor,
+  buildAgentCredentialMatrix,
   persistProviderApiKey,
   persistProviderOAuth,
   InvalidProviderKeyError,
@@ -208,10 +215,14 @@ export {
   startOAuth,
   pollOAuth,
   cancelOAuth,
+  OAuthCallbackPortBusyError,
   type ResolvedCredential,
   type DeliveryResult,
   type DeliveryOptions,
   type OAuthCredentials,
+  type VendorCatalogEntry,
+  type AgentCredentialStatus,
+  type AgentCredentialMatrixEntry,
   type PersistProviderApiKeyResult,
   type PersistProviderOAuthResult,
   type StartOAuthResult,
@@ -226,6 +237,16 @@ export {
   listDecryptedUserProviderCredentials,
   type SaveUserProviderKeyParams,
 } from './db/user-provider-key-store';
+export {
+  getUserAiPrefs,
+  setUserTiers,
+  setUserAliases,
+  setUserDefaultProvider,
+  clearUserAiPrefs,
+  type UserAiPrefs,
+  type UserTiersPatch,
+  type UserAliasesPatch,
+} from './db/user-ai-prefs-store';
 
 // Path validation
 export { isPathWithinWorkspace, validateAndResolvePath } from './utils/path-validation';

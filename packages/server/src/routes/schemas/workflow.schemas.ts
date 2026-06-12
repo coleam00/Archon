@@ -40,6 +40,12 @@ export const workflowListEntrySchema = z
 export const workflowListResponseSchema = z
   .object({
     workflows: z.array(workflowListEntrySchema),
+    /**
+     * Repo-owner-curated workflow names from `.archon/config.yaml`
+     * `recommendedWorkflows`, filtered to names present in `workflows` and
+     * preserved in declared order. Empty when no project context or no key.
+     */
+    recommended: z.array(z.string()),
     errors: z.array(workflowLoadErrorSchema).optional(),
   })
   .openapi('WorkflowListResponse');

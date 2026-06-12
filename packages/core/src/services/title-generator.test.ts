@@ -39,6 +39,10 @@ const mockGetAgentProvider = mock(() => ({
 
 mock.module('@archon/providers', () => ({
   getAgentProvider: mockGetAgentProvider,
+  getRegisteredProviders: mock(() => []),
+  // credentials/delivery (#1955) imports these from '@archon/providers'.
+  PI_PROVIDER_ENV_VARS: { anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY' },
+  PI_AMBIENT_VENDORS: ['amazon-bedrock', 'google-vertex'],
 }));
 
 // ─── Import module under test (AFTER all mocks) ─────────────────────────────

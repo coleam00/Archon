@@ -12,7 +12,7 @@ import { WorkflowPicker } from './WorkflowPicker';
 import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
 import * as skill from '../skills';
-import type { Workflow } from '../primitives/workflow';
+import { orderWithRecommended } from '../lib/recommended';
 
 interface DraftRunCardProps {
   projectId: string;
@@ -123,15 +123,16 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
     setFiles(prev => prev.filter((_, i) => i !== idx));
   };
 
-  const { data: workflows } = useEntity<Workflow[]>(K.workflows(projectCwd), () =>
+  const { data: workflowData } = useEntity(K.workflows(projectCwd), () =>
     skill.listWorkflows(projectCwd)
   );
 
-  // Sort project-scoped first, then global, then bundled; alpha within each.
-  const sortedWorkflows = (workflows ?? []).slice().sort((a, b) => {
-    const rank = { project: 0, global: 1, bundled: 2 } as const;
-    return rank[a.source] - rank[b.source] || a.name.localeCompare(b.name);
-  });
+  const allWorkflows = workflowData?.workflows ?? [];
+  const recommendedNames = workflowData?.recommended ?? [];
+
+  // Recommended workflows pinned on top in declared order, then the rest by
+  // source/name. The picker draws a divider between the groups.
+  const { ordered: sortedWorkflows } = orderWithRecommended(allWorkflows, recommendedNames);
 
   // Default workflow: last-used if still valid, else first available.
   useEffect(() => {
@@ -333,6 +334,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
           <span className="mx-1 h-3 w-px shrink-0 bg-border" aria-hidden />
           <WorkflowPicker
             workflows={sortedWorkflows}
+            recommendedNames={recommendedNames}
             value={workflowName}
             onChange={setWorkflowName}
             disabled={submitting}

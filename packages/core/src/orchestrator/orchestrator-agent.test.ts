@@ -54,11 +54,16 @@ const mockLoadConfig = mock(() =>
 const mockLogger = createMockLogger();
 
 const mockEnsureArchonWorkspacesPath = mock(() => Promise.resolve('/home/test/.archon/workspaces'));
+const mockCaptureChatTurn = mock(() => undefined);
+const mockCaptureApprovalResolved = mock(() => undefined);
 mock.module('@archon/paths', () => ({
+  captureApprovalResolved: mockCaptureApprovalResolved,
   createLogger: mock(() => mockLogger),
   getArchonWorkspacesPath: mock(() => '/home/test/.archon/workspaces'),
   ensureArchonWorkspacesPath: mockEnsureArchonWorkspacesPath,
   getArchonHome: mock(() => '/home/test/.archon'),
+  captureChatTurn: mockCaptureChatTurn,
+  captureCodebaseRegistered: mock(() => undefined),
 }));
 
 const mockUpdateConversation = mock(() => Promise.resolve());
@@ -128,6 +133,18 @@ mock.module('@archon/providers', () => ({
     getCapabilities: mock(() => ({})),
   })),
   getProviderCapabilities: mock(() => ({ envInjection: true })),
+  getRegisteredProviders: mock(() => []),
+  // Vendor → env-var map consumed by credentials/delivery (#1955). A realistic
+  // subset of the generated map (the chat inject tests deliver through it).
+  PI_PROVIDER_ENV_VARS: {
+    anthropic: 'ANTHROPIC_API_KEY',
+    openai: 'OPENAI_API_KEY',
+    'github-copilot': 'COPILOT_GITHUB_TOKEN',
+    openrouter: 'OPENROUTER_API_KEY',
+    google: 'GEMINI_API_KEY',
+    huggingface: 'HF_TOKEN',
+  },
+  PI_AMBIENT_VENDORS: ['amazon-bedrock', 'google-vertex'],
 }));
 
 mock.module('../db/env-vars', () => ({
@@ -231,6 +248,16 @@ mock.module('../db/user-provider-key-store', () => ({
   listUserProviderKeys: mock(() => Promise.resolve([])),
   deleteUserProviderKey: mock(() => Promise.resolve()),
   getDecryptedProviderCredential: mock(() => Promise.resolve(null)),
+}));
+
+// Per-user AI prefs (Phase 3). Default: empty — config-only behavior.
+const mockGetUserAiPrefsDb = mock(async (_userId: string) => ({}) as Record<string, unknown>);
+mock.module('../db/user-ai-prefs-store', () => ({
+  getUserAiPrefs: mockGetUserAiPrefsDb,
+  setUserTiers: mock(() => Promise.resolve()),
+  setUserAliases: mock(() => Promise.resolve()),
+  setUserDefaultProvider: mock(() => Promise.resolve()),
+  clearUserAiPrefs: mock(() => Promise.resolve()),
 }));
 
 // ─── Import module under test (AFTER all mocks) ───────────────────────────────
@@ -1675,6 +1702,8 @@ describe('natural-language approval routing', () => {
     );
     // Workflow should be executed
     expect(mockExecuteWorkflow).toHaveBeenCalled();
+    // NL approval path captures the binary resolution
+    expect(mockCaptureApprovalResolved).toHaveBeenCalledWith({ resolution: 'approved' });
   });
 
   test('slash command bypasses approval interception — getPausedWorkflowRun not called', async () => {
@@ -2629,5 +2658,297 @@ describe('handleMessage — /setproject dispatch', () => {
 
     expect(mockUpdateConversation).not.toHaveBeenCalled();
     expect(platform.sendMessage).toHaveBeenCalledWith('conv-1', expect.stringContaining('Usage'));
+  });
+});
+
+// ─── Chat turn telemetry (PR #1944 review T2) ────────────────────────────────
+
+describe('chat turn telemetry', () => {
+  beforeEach(() => {
+    mockCaptureChatTurn.mockClear();
+    mockGetOrCreateConversation.mockReset();
+    mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(null));
+    mockGetPausedWorkflowRun.mockReset();
+    mockGetPausedWorkflowRun.mockImplementation(() => Promise.resolve(null));
+    mockGetCodebase.mockReset();
+    mockGetCodebase.mockImplementation(() => Promise.resolve(null));
+    mockListCodebases.mockReset();
+    mockListCodebases.mockImplementation(() => Promise.resolve([]));
+    mockExecuteWorkflow.mockClear();
+    mockDiscoverWorkflowsWithConfig.mockReset();
+    mockDiscoverWorkflowsWithConfig.mockImplementation(() =>
+      Promise.resolve({ workflows: [], errors: [] })
+    );
+    mockSendQuery.mockClear();
+    mockUpdateConversation.mockClear();
+    // Restore the default plain-chat AI response
+    mockSendQuery.mockImplementation(async function* () {
+      yield { type: 'assistant', content: 'test response' };
+      yield { type: 'result', sessionId: 'session-1' };
+    });
+  });
+
+  test('captures exactly one completed chat turn for a plain conversation', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ codebase_id: null }))
+    );
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello there');
+
+    expect(mockCaptureChatTurn).toHaveBeenCalledTimes(1);
+    expect(mockCaptureChatTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        platform: 'web',
+        provider: 'claude',
+        outcome: 'completed',
+        durationMs: expect.any(Number),
+      })
+    );
+  });
+
+  test('does NOT capture a chat turn when the AI routes to /invoke-workflow', async () => {
+    // Guard for the "excluded by construction" claim: the routing turn that
+    // dispatches a workflow must count as workflow_invoked, not as a chat turn.
+    const codebase = makeCodebase('my-project');
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ codebase_id: null }))
+    );
+    mockListCodebases.mockImplementation(() => Promise.resolve([codebase]));
+    mockDiscoverWorkflowsWithConfig.mockImplementation(() =>
+      Promise.resolve({
+        workflows: [{ workflow: makeTestWorkflow({ name: 'assist' }) }],
+        errors: [],
+      })
+    );
+    mockSendQuery.mockImplementation(async function* () {
+      yield { type: 'assistant', content: '/invoke-workflow assist --project my-project' };
+      yield { type: 'result', sessionId: 'session-1' };
+    });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'run assist on my project');
+
+    // Positive control: the routing path actually ran — dispatch auto-attaches
+    // the project to the conversation before isolation/execution.
+    expect(mockUpdateConversation).toHaveBeenCalledWith('conv-1', {
+      codebase_id: 'id-my-project',
+    });
+    // …and the routing turn was NOT counted as a chat turn.
+    expect(mockCaptureChatTurn).not.toHaveBeenCalled();
+  });
+
+  test('passes provider-reported usage through to the chat turn capture', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ codebase_id: null }))
+    );
+    mockSendQuery.mockImplementation(async function* () {
+      yield { type: 'assistant', content: 'answer' };
+      yield {
+        type: 'result',
+        sessionId: 'session-1',
+        cost: 0.042,
+        tokens: { input: 1200, output: 340 },
+      };
+    });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello');
+
+    expect(mockCaptureChatTurn).toHaveBeenCalledTimes(1);
+    expect(mockCaptureChatTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: 'completed',
+        costUsd: 0.042,
+        tokensIn: 1200,
+        tokensOut: 340,
+      })
+    );
+  });
+
+  test('omits usage on the chat turn capture when the provider reports none', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ codebase_id: null }))
+    );
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello again');
+
+    expect(mockCaptureChatTurn).toHaveBeenCalledTimes(1);
+    const arg = mockCaptureChatTurn.mock.calls[0][0] as Record<string, unknown>;
+    expect(arg.costUsd).toBeUndefined();
+    expect(arg.tokensIn).toBeUndefined();
+    expect(arg.tokensOut).toBeUndefined();
+  });
+
+  test('captures a failed chat turn when the AI returns an error result', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ codebase_id: null }))
+    );
+    mockSendQuery.mockImplementation(async function* () {
+      yield { type: 'result', isError: true, errorSubtype: 'error_max_turns' };
+    });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello');
+
+    expect(mockCaptureChatTurn).toHaveBeenCalledTimes(1);
+    expect(mockCaptureChatTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        platform: 'web',
+        provider: 'claude',
+        outcome: 'failed',
+        durationMs: expect.any(Number),
+      })
+    );
+  });
+});
+
+// ─── Per-user AI prefs + tier-fallback nudge (Phase 3) ──────────────────────
+
+describe('per-user AI prefs in chat + tier-fallback nudge', () => {
+  beforeEach(() => {
+    mockGetUserAiPrefsDb.mockClear();
+    mockGetUserAiPrefsDb.mockImplementation(async () => ({}));
+    mockSendQuery.mockClear();
+    mockParseCommand.mockReturnValue(null);
+  });
+
+  test("a user's tier override wins for the chat model", async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ user_id: 'user-9' } as Partial<Conversation>))
+    );
+    mockGetUserAiPrefsDb.mockImplementation(async () => ({
+      tiers: { large: { provider: 'codex', model: 'gpt-5.5' } },
+    }));
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'Hello');
+
+    expect(mockGetUserAiPrefsDb).toHaveBeenCalledWith('user-9');
+    const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
+    expect(requestOptions.model).toBe('gpt-5.5');
+  });
+
+  test('prefs are not consulted when the conversation has no user_id', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeConversation()));
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'Hello');
+
+    expect(mockGetUserAiPrefsDb).not.toHaveBeenCalled();
+  });
+
+  test('structurally invalid stored prefs degrade to config-only (chat still answers)', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ user_id: 'user-9' } as Partial<Conversation>))
+    );
+    // An alias without the '@' prefix makes buildAiProfile throw.
+    mockGetUserAiPrefsDb.mockImplementation(async () => ({
+      aliases: { fast: { provider: 'claude', model: 'haiku' } },
+    }));
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'Hello');
+
+    // Degraded to the config profile — the chat turn still reached the AI.
+    expect(mockSendQuery).toHaveBeenCalled();
+  });
+
+  test('a prefs DB failure falls back to config-only (chat still answers)', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ user_id: 'user-9' } as Partial<Conversation>))
+    );
+    mockGetUserAiPrefsDb.mockImplementation(async () => {
+      throw new Error('db down');
+    });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'Hello');
+
+    expect(mockSendQuery).toHaveBeenCalled();
+  });
+
+  test("nudges once per conversation (not per message) when tier 'large' falls back", async () => {
+    // 'unknownprov' has no built-in tier defaults; config sets only `small`,
+    // so the chat's 'large' request resolves via the fallback chain. A distinct
+    // conversation id keeps the module-level dedup Set isolated from other tests.
+    const nudgeConversation = makeConversation({
+      id: 'conv-nudge-dedup',
+      platform_conversation_id: 'conv-nudge-dedup',
+      ai_assistant_type: 'unknownprov',
+    });
+    mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(nudgeConversation));
+    mockLoadConfig.mockImplementation(() =>
+      Promise.resolve({
+        assistants: { claude: {}, codex: {} },
+        envVars: {},
+        tiers: { small: { provider: 'claude', model: 'haiku' } },
+      })
+    );
+
+    try {
+      const platform = makePlatform();
+      await handleMessage(platform, 'conv-nudge-dedup', 'Hello');
+      await handleMessage(platform, 'conv-nudge-dedup', 'Hello again');
+
+      const sendCalls = (platform.sendMessage as ReturnType<typeof mock>).mock.calls as unknown as [
+        string,
+        string,
+      ][];
+      const nudges = sendCalls.filter(c => c[1].includes("tier 'large' isn't configured"));
+      // Review C1: exactly ONE nudge across BOTH messages — per-conversation dedup.
+      expect(nudges.length).toBe(1);
+      expect(nudges[0]?.[1]).toContain("'small' preset");
+      // Non-blocking: both chat turns still went to the AI.
+      expect(mockSendQuery.mock.calls.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(null as unknown));
+      mockLoadConfig.mockImplementation(() =>
+        Promise.resolve({ assistants: { claude: {}, codex: {} }, envVars: {} })
+      );
+    }
+  });
+
+  test("no nudge when the user's own 'large' tier satisfies the request", async () => {
+    // Provider with no built-in defaults + only the USER's large tier set:
+    // exact match through the per-user layer → no fallback, no nudge.
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(
+        makeConversation({
+          id: 'conv-user-large',
+          platform_conversation_id: 'conv-user-large',
+          ai_assistant_type: 'unknownprov',
+          user_id: 'user-9',
+        } as Partial<Conversation>)
+      )
+    );
+    mockGetUserAiPrefsDb.mockImplementation(async () => ({
+      tiers: { large: { provider: 'claude', model: 'opus' } },
+    }));
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-user-large', 'Hello');
+
+    const sendCalls = (platform.sendMessage as ReturnType<typeof mock>).mock.calls as unknown as [
+      string,
+      string,
+    ][];
+    expect(sendCalls.some(c => c[1].includes("isn't configured"))).toBe(false);
+    const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
+    expect(requestOptions.model).toBe('opus');
+  });
+
+  test('no nudge when the large tier resolves exactly', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ ai_assistant_type: 'claude' }))
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'Hello');
+
+    const sendCalls = (platform.sendMessage as ReturnType<typeof mock>).mock.calls as unknown as [
+      string,
+      string,
+    ][];
+    expect(sendCalls.some(c => c[1].includes("isn't configured"))).toBe(false);
   });
 });

@@ -19,6 +19,8 @@
     "check:bundled-skill": "bun run scripts/check-bundled-skill.ts --check",
     "generate:bundled-schema": "bun run scripts/generate-bundled-schema.ts",
     "check:bundled-schema": "bun run scripts/generate-bundled-schema.ts --check",
+    "generate:pi-vendor-map": "bun run scripts/generate-pi-vendor-map.ts",
+    "check:pi-vendor-map": "bun run scripts/generate-pi-vendor-map.ts --check",
     "test": "bun --filter '*' --parallel test",
     "test:watch": "bun --filter @archon/server test:watch",
     "type-check": "bun --filter '*' type-check && bun x tsc --noEmit -p scripts/tsconfig.json",
@@ -30,7 +32,7 @@
     "build:web": "bun --filter @archon/web build",
     "dev:docs": "bun --filter @archon/docs-web dev",
     "build:docs": "bun --filter @archon/docs-web build",
-    "validate": "bun run check:bundled && bun run check:bundled-skill && bun run check:bundled-schema && bun run type-check && bun run lint --max-warnings 0 && bun run format:check && bun run test",
+    "validate": "bun run check:bundled && bun run check:bundled-skill && bun run check:bundled-schema && bun run check:pi-vendor-map && bun run type-check && bun run lint --max-warnings 0 && bun run format:check && bun run test",
     "prepare": "husky",
     "setup-auth": "bun --filter @archon/server setup-auth"
   },
@@ -60,7 +62,7 @@
     "@hono/node-server": "^1.19.13"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.121",
-    "@opencode-ai/sdk": "^1.14.20"
+    "@anthropic-ai/claude-agent-sdk": "^0.3.173",
+    "@opencode-ai/sdk": "^1.17.3"
   }
 }

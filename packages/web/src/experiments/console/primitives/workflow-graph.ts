@@ -4,7 +4,14 @@
  * production API; we only care about id + dependencies + kind + status.
  */
 
-export type WorkflowNodeKind = 'prompt' | 'command' | 'bash' | 'script' | 'approval' | 'loop';
+export type WorkflowNodeKind =
+  | 'prompt'
+  | 'command'
+  | 'bash'
+  | 'script'
+  | 'approval'
+  | 'loop'
+  | 'cancel';
 
 export type WorkflowNodeStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
 

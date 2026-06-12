@@ -108,6 +108,35 @@ Only meaningful on **multi-user installs** running GitHub App mode (`GITHUB_APP_
 
 The command prints a `verification_uri` and a one-time `user_code`; visit the URL, enter the code, and authorize. On success the access/refresh tokens are stored encrypted (AES-256-GCM) in Archon's database. Exit code 0 on success; 1 if per-user GitHub is disabled, the identity can't be resolved, the code expires, or authorization is denied.
 
+### `ai`
+
+Manage **per-user AI-provider credentials** (API keys + subscriptions) and **model-tier config**. CLI identity is resolved from `ARCHON_USER_ID` (explicit override) or `$USER` / `$USERNAME`, mapped to a stable Archon user via the `cli` platform identity — the same as [`auth github`](#auth-github).
+
+The credential subcommands (`key set`, `login`, `list`, `logout`) only work on **multi-user installs** with `TOKEN_ENCRYPTION_KEY` set; on a solo install they exit with an explanatory error. The config subcommands (`tier`, `alias`, `default`) are **ungated** — they write `~/.archon/config.yaml` and work everywhere.
+
+```bash
+# --- Provider credentials (require TOKEN_ENCRYPTION_KEY) ---
+archon ai key set <vendor>       # connect an API key (masked prompt or piped stdin — never argv)
+archon ai login <vendor>         # connect a subscription via OAuth (anthropic, openai, or github-copilot)
+archon ai list                   # list connected credentials (metadata only, no secrets)
+archon ai logout <vendor>        # disconnect a credential
+
+# --- Model tiers + aliases + default assistant (ungated config) ---
+archon ai tier set <small|medium|large> <provider> <model> [--effort <effort>] [--scope user|install]
+archon ai tier list [--json]     # show configured tiers (install + yours) vs built-in defaults
+archon ai tier unset <small|medium|large> [--scope user|install]
+archon ai alias set <@name> <provider> <model> [--effort <effort>] [--scope user|install]
+archon ai alias list [--json]    # show @custom aliases (install + yours)
+archon ai alias unset <@name> [--scope user|install]
+archon ai default <provider> [--scope user|install]   # set the default assistant
+```
+
+Credential ids are **vendor-keyed** (`anthropic`, `openai`, `github-copilot`, plus the Pi backends like `openrouter`); legacy `claude`/`codex`/`copilot` are accepted and normalized with a printed notice. `ai login` supports subscription login for **`anthropic`**, **`openai`** (ChatGPT/Codex), and **`github-copilot`**. The `openai` login is an Archon-owned PKCE flow ([#1924](https://github.com/coleam00/Archon/issues/1924)): authorize in the browser, then paste the authorization code or the full `localhost:1455` redirect URL back at the prompt — nothing needs to listen on that port. The API key is never read from argv (it would leak into shell history): pipe it (`echo "$KEY" | archon ai key set openrouter`) or type it at the masked prompt.
+
+`ai tier`, `ai alias`, and `ai default` edit the same `tiers:` / `aliases:` / `defaultAssistant` config you can hand-write in `~/.archon/config.yaml` (see [Configuration](/reference/configuration/)) or edit from the console **AI Settings** page. An unknown provider exits non-zero; `tier unset` removes the override so the tier falls back to its built-in preset. The full per-user setup walkthrough is in [Per-user credentials and AI Settings](/getting-started/ai-assistants/#per-user-credentials-and-ai-settings).
+
+**`--scope user` (per-user overrides).** On any of the config subcommands, `--scope user` writes your **personal** prefs row in Archon's database instead of the shared `config.yaml`. Your tiers/aliases/default override the install config for runs and chats *you* start — nobody else's. It needs a resolvable CLI identity (`ARCHON_USER_ID` or `$USER`) but **no** `TOKEN_ENCRYPTION_KEY` (model names aren't secrets). `ai tier list` / `ai alias list` show both scopes, marking your overrides with `[just you]`. The same scopes are editable in the console as the "This install / Just me" toggle on **AI Settings**.
+
 ### `telemetry status`
 
 Show the current anonymous telemetry state: whether it is enabled, the opt-out reason if not, the install UUID, the active PostHog host, and the key source.

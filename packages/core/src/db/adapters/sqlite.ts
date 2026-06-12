@@ -301,6 +301,47 @@ export class SqliteAdapter implements IDatabase {
         'db.sqlite_migration_isolation_environments_columns_failed'
       );
     }
+
+    // #1955: credential rows are vendor-keyed (claude→anthropic, codex→openai,
+    // copilot→github-copilot). Idempotent data fix mirroring
+    // migrations/000_combined.sql: where both a legacy and a vendor row exist
+    // for the same user, the vendor row wins; then legacy rows are renamed.
+    // Transactional so a mid-sequence failure can't leave partial renames
+    // (matches the Postgres path, which runs inside the schema-apply txn);
+    // a failed run is also survivable — reads normalize legacy ids.
+    try {
+      this.db.run('BEGIN');
+      try {
+        this.db.run(
+          `DELETE FROM remote_agent_user_provider_keys
+           WHERE provider IN ('claude', 'codex', 'copilot')
+             AND EXISTS (
+               SELECT 1 FROM remote_agent_user_provider_keys v
+               WHERE v.user_id = remote_agent_user_provider_keys.user_id
+                 AND v.provider = CASE remote_agent_user_provider_keys.provider
+                   WHEN 'claude' THEN 'anthropic'
+                   WHEN 'codex' THEN 'openai'
+                   WHEN 'copilot' THEN 'github-copilot'
+                 END
+             )`
+        );
+        this.db.run(
+          "UPDATE remote_agent_user_provider_keys SET provider = 'anthropic' WHERE provider = 'claude'"
+        );
+        this.db.run(
+          "UPDATE remote_agent_user_provider_keys SET provider = 'openai' WHERE provider = 'codex'"
+        );
+        this.db.run(
+          "UPDATE remote_agent_user_provider_keys SET provider = 'github-copilot' WHERE provider = 'copilot'"
+        );
+        this.db.run('COMMIT');
+      } catch (inner: unknown) {
+        this.db.run('ROLLBACK');
+        throw inner;
+      }
+    } catch (e: unknown) {
+      getLog().warn({ err: e as Error }, 'db.sqlite_migration_provider_key_vendor_ids_failed');
+    }
   }
 
   /**

@@ -80,6 +80,9 @@ import {
   aiTierSetCommand,
   aiTierListCommand,
   aiTierUnsetCommand,
+  aiAliasSetCommand,
+  aiAliasListCommand,
+  aiAliasUnsetCommand,
   aiDefaultCommand,
 } from './commands/ai';
 import { telemetryStatusCommand, telemetryResetCommand } from './commands/telemetry';
@@ -136,10 +139,13 @@ Commands:
   ai login <provider>        Connect a subscription (claude/copilot) via OAuth — codex is API-key only
   ai list                    List your connected AI provider keys
   ai logout <provider>       Disconnect an AI provider key
-  ai tier set <t> <p> <m>    Set a model tier (small/medium/large) → provider/model [--effort <e>]
-  ai tier list [--json]      Show configured tiers vs built-in defaults
-  ai tier unset <tier>       Reset a tier to its built-in default
-  ai default <provider>      Set the default assistant
+  ai tier set <t> <p> <m>    Set a model tier (small/medium/large) → provider/model [--effort <e>] [--scope user|install]
+  ai tier list [--json]      Show configured tiers (install + yours) vs built-in defaults
+  ai tier unset <tier>       Reset a tier to its built-in default [--scope user|install]
+  ai alias set <@n> <p> <m>  Set a @custom model alias [--effort <e>] [--scope user|install]
+  ai alias list [--json]     Show configured @custom aliases (install + yours)
+  ai alias unset <@name>     Remove a @custom alias [--scope user|install]
+  ai default <provider>      Set the default assistant [--scope user|install]
   telemetry status           Show anonymous telemetry state (enabled, reason, ID, host)
   telemetry reset            Rotate the anonymous install UUID
   validate workflows [name]  Validate workflow definitions and their references
@@ -822,27 +828,52 @@ async function main(): Promise<number> {
             return await aiLoginCommand(positionals[2]);
           case 'tier': {
             const action = positionals[2];
+            const scopeFlag = values.scope as string | undefined;
             switch (action) {
               case 'set':
                 return await aiTierSetCommand(
                   positionals[3],
                   positionals[4],
                   positionals[5],
-                  values.effort as string | undefined
+                  values.effort as string | undefined,
+                  scopeFlag
                 );
               case 'list':
                 return await aiTierListCommand(jsonFlag);
               case 'unset':
-                return await aiTierUnsetCommand(positionals[3]);
+                return await aiTierUnsetCommand(positionals[3], scopeFlag);
               default:
                 console.error(
-                  'Usage: archon ai tier set <small|medium|large> <provider> <model> [--effort <e>] | tier list [--json] | tier unset <tier>'
+                  'Usage: archon ai tier set <small|medium|large> <provider> <model> [--effort <e>] [--scope user|install] | tier list [--json] | tier unset <tier> [--scope user|install]'
+                );
+                return 1;
+            }
+          }
+          case 'alias': {
+            const action = positionals[2];
+            const scopeFlag = values.scope as string | undefined;
+            switch (action) {
+              case 'set':
+                return await aiAliasSetCommand(
+                  positionals[3],
+                  positionals[4],
+                  positionals[5],
+                  values.effort as string | undefined,
+                  scopeFlag
+                );
+              case 'list':
+                return await aiAliasListCommand(jsonFlag);
+              case 'unset':
+                return await aiAliasUnsetCommand(positionals[3], scopeFlag);
+              default:
+                console.error(
+                  'Usage: archon ai alias set <@name> <provider> <model> [--effort <e>] [--scope user|install] | alias list [--json] | alias unset <@name> [--scope user|install]'
                 );
                 return 1;
             }
           }
           case 'default':
-            return await aiDefaultCommand(positionals[2]);
+            return await aiDefaultCommand(positionals[2], values.scope as string | undefined);
           default:
             if (subcommand === undefined) {
               console.error('Missing ai subcommand');
@@ -850,7 +881,7 @@ async function main(): Promise<number> {
               console.error(`Unknown ai subcommand: ${subcommand}`);
             }
             console.error(
-              'Available: key set <provider>, login <provider>, list, logout <provider>, tier set|list|unset, default <provider>'
+              'Available: key set <provider>, login <provider>, list, logout <provider>, tier set|list|unset, alias set|list|unset, default <provider>'
             );
             return 1;
         }

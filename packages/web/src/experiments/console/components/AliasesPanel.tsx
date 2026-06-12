@@ -1,0 +1,260 @@
+import { useEffect, useRef, useState, type ReactElement } from 'react';
+import * as skill from '../skills';
+import type {
+  AliasRowForm,
+  PiModelInfo,
+  ProviderInfo,
+  ProviderKeyList,
+  SafeConfigAliases,
+  SettingsScope,
+  UserAiPrefs,
+} from '../skills';
+import { useEntity, invalidate } from '../store/cache';
+import { K } from '../store/keys';
+import { providerOptionHint } from '../lib/agent-status';
+import { effortOptionsForAgent, normalizeEffortForAgent } from '../lib/model-options';
+import { useCancelledRef } from '../lib/use-cancelled-ref';
+import { SettingsSection } from './SettingsSection';
+import { ScopeToggle } from './ScopeToggle';
+import { INPUT_CLASS, SELECT_CLASS, SelectShell } from './SettingsFormPrimitives';
+import { ModelPickerField } from './ModelPickerField';
+
+/**
+ * Editor for `@custom` model aliases in two scopes: "This install" writes
+ * PATCH /api/config/aliases → ~/.archon/config.yaml (ungated), "Just me"
+ * writes the caller's per-user prefs row via PATCH /api/auth/me/ai-prefs/aliases.
+ * The "Just me" scope is hidden when the per-user prefs read fails (no web
+ * identity), mirroring ModelTiersPanel. Removing a row (or renaming) sends a
+ * `null` for the old name — the routes apply a per-key merge.
+ */
+export function AliasesPanel(): ReactElement {
+  const { data: config, error: configError } = useEntity(K.config, skill.getConfig);
+  const { data: providers, error: providersError } = useEntity<ProviderInfo[]>(
+    K.providers,
+    skill.listProviders
+  );
+  const { data: userPrefs, error: userPrefsError } = useEntity<UserAiPrefs>(
+    K.userAiPrefs,
+    skill.getUserAiPrefs
+  );
+  // Agent credential matrix for readiness hints in the provider dropdowns.
+  // Shares the AgentsPanel cache key (one fetch); a 401/error means no hints.
+  const { data: keyData } = useEntity<ProviderKeyList>(
+    K.providerConnections,
+    skill.listProviderKeys
+  );
+  // Pi catalog for the model picker's suggestions + cost hints. Best-effort:
+  // the server returns [] when the catalog can't load; an error means no hints.
+  const { data: piModels } = useEntity<PiModelInfo[]>(K.piModels, skill.listPiModels);
+
+  const userScopeAvailable = userPrefsError === undefined;
+  const [scope, setScope] = useState<SettingsScope>('install');
+
+  const [rows, setRows] = useState<AliasRowForm[] | null>(null);
+  const baselineRef = useRef('');
+  const baselineNamesRef = useRef<string[]>([]);
+  useEffect(() => {
+    if (config === undefined) return;
+    if (scope === 'user' && userPrefs === undefined) return;
+    const map =
+      scope === 'user' ? userPrefs?.aliases : (config.config as SafeConfigAliases).aliases;
+    const seeded = skill.seedAliasRows(map);
+    setRows(seeded);
+    baselineRef.current = JSON.stringify(seeded);
+    baselineNamesRef.current = Object.keys(map ?? {});
+  }, [config, userPrefs, scope]);
+
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  // Guard async setState after unmount (mirrors AgentsPanel's cards).
+  const cancelledRef = useCancelledRef();
+
+  const loadError = configError ?? providersError;
+  if (loadError !== undefined) {
+    return (
+      <SettingsSection title="Model Aliases">
+        <p className="font-mono text-[11px] text-error">{loadError.message}</p>
+      </SettingsSection>
+    );
+  }
+  if (rows === null || providers === undefined || config === undefined) {
+    return (
+      <SettingsSection title="Model Aliases">
+        <p className="font-mono text-[11px] text-text-tertiary">Loading…</p>
+      </SettingsSection>
+    );
+  }
+
+  const dirty = JSON.stringify(rows) !== baselineRef.current;
+
+  const setRow = (index: number, partial: Partial<AliasRowForm>): void => {
+    setRows(rs => (rs === null ? rs : rs.map((r, i) => (i === index ? { ...r, ...partial } : r))));
+  };
+  const removeRow = (index: number): void => {
+    setRows(rs => (rs === null ? rs : rs.filter((_, i) => i !== index)));
+  };
+  const addRow = (): void => {
+    setRows(rs =>
+      rs === null
+        ? rs
+        : [...rs, { name: '@', provider: providers[0]?.id ?? '', model: '', effort: '' }]
+    );
+  };
+
+  const onSave = async (): Promise<void> => {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const body = skill.buildAliasesUpdate(rows, baselineNamesRef.current);
+      if (scope === 'user') {
+        await skill.updateUserAliases(body);
+        if (cancelledRef.current) return;
+        invalidate(K.userAiPrefs);
+      } else {
+        await skill.updateAliases(body);
+        if (cancelledRef.current) return;
+        invalidate(K.config);
+      }
+    } catch (e: unknown) {
+      if (cancelledRef.current) return;
+      setSaveError(e instanceof Error ? e.message : 'Failed to save aliases.');
+    } finally {
+      if (!cancelledRef.current) setSaving(false);
+    }
+  };
+
+  return (
+    <SettingsSection title="Model Aliases">
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <p className="min-w-[260px] flex-1 text-[12.5px] leading-relaxed text-text-tertiary">
+          Custom <code className="font-mono">@name</code> refs usable in workflow{' '}
+          <code className="font-mono">model:</code> fields (e.g.{' '}
+          <code className="font-mono">@fast</code>).
+          {scope === 'user' ? ' Your aliases override install aliases with the same name.' : ''}
+        </p>
+        {userScopeAvailable ? <ScopeToggle scope={scope} onChange={setScope} /> : null}
+      </div>
+
+      {rows.length === 0 ? (
+        <p className="mb-3 font-mono text-[11px] text-text-tertiary">
+          No aliases yet{scope === 'user' ? ' (just you)' : ''}.
+        </p>
+      ) : (
+        <div className="flex flex-col gap-[11px]">
+          {rows.map((row, i) => {
+            const effortOptions = effortOptionsForAgent(row.provider);
+            return (
+              <div
+                // Index key is intentional: rows are positional edit buffers and
+                // names are editable (a name key would remount mid-keystroke).
+                key={i}
+                className="flex flex-wrap items-center gap-[14px] rounded-xl border border-border bg-surface-elevated p-4"
+              >
+                <input
+                  value={row.name}
+                  onChange={e => {
+                    setRow(i, { name: e.target.value });
+                  }}
+                  placeholder="@fast"
+                  aria-label="Alias name"
+                  className={`${INPUT_CLASS} w-[120px] shrink-0`}
+                />
+                <SelectShell className="w-[150px] shrink-0">
+                  <select
+                    value={row.provider}
+                    onChange={e => {
+                      // Carry effort across the switch only when the new agent's
+                      // vocabulary accepts it (see ModelTiersPanel).
+                      const provider = e.target.value;
+                      setRow(i, {
+                        provider,
+                        effort: normalizeEffortForAgent(provider, row.effort),
+                      });
+                    }}
+                    aria-label="Provider"
+                    className={SELECT_CLASS}
+                  >
+                    {providers.map(p => (
+                      <option key={p.id} value={p.id}>
+                        {p.displayName}
+                        {providerOptionHint(keyData?.agents, p.id)}
+                      </option>
+                    ))}
+                  </select>
+                </SelectShell>
+                <ModelPickerField
+                  // Re-key per agent so picker-internal state never bleeds
+                  // across a provider switch.
+                  key={row.provider}
+                  agentId={row.provider}
+                  value={row.model}
+                  onChange={v => {
+                    setRow(i, { model: v });
+                  }}
+                  placeholder="model (e.g. opus, gpt-5.5)"
+                  ariaLabel="Model"
+                  className="min-w-[140px] flex-1"
+                  agents={keyData?.agents}
+                  piModels={piModels}
+                />
+                {effortOptions !== null ? (
+                  <SelectShell className="w-[110px] shrink-0">
+                    <select
+                      value={row.effort}
+                      onChange={e => {
+                        setRow(i, { effort: e.target.value });
+                      }}
+                      aria-label="Effort"
+                      className={SELECT_CLASS}
+                    >
+                      <option value="">effort</option>
+                      {effortOptions.map(o => (
+                        <option key={o} value={o}>
+                          {o}
+                        </option>
+                      ))}
+                    </select>
+                  </SelectShell>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => {
+                    removeRow(i);
+                  }}
+                  aria-label={`Remove alias ${row.name}`}
+                  className="shrink-0 rounded border border-border px-2.5 py-1.5 text-[11px] text-text-secondary transition-colors hover:border-border-bright hover:text-text-primary"
+                >
+                  Remove
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <div className="mt-[18px] flex items-center justify-between gap-3">
+        <button
+          type="button"
+          onClick={addRow}
+          className="rounded-[9px] border border-border px-3 py-1.5 font-mono text-[11.5px] font-semibold text-text-secondary transition-colors hover:border-border-bright hover:text-text-primary"
+        >
+          + Add alias
+        </button>
+        <div className="flex items-center gap-3">
+          {saveError !== null ? (
+            <span className="font-mono text-[11px] text-error">{saveError}</span>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => void onSave()}
+            disabled={!dirty || saving}
+            className="brand-bar rounded-[10px] px-[18px] py-2.5 text-[13px] font-bold text-white shadow-[0_8px_22px_-10px_color-mix(in_oklch,var(--brand-magenta),transparent_20%)] transition-all hover:-translate-y-px hover:brightness-110 disabled:translate-y-0 disabled:opacity-40 disabled:shadow-none"
+          >
+            {saving ? 'Saving…' : 'Save changes'}
+          </button>
+        </div>
+      </div>
+    </SettingsSection>
+  );
+}

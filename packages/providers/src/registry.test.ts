@@ -53,6 +53,7 @@ function makeMockRegistration(
     factory: () => makeMockProvider(id),
     capabilities: makeMockProvider(id).getCapabilities(),
     builtIn: false,
+    credentials: { kind: 'static', specs: [] },
     ...overrides,
   };
 }

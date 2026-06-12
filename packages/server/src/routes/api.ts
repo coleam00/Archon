@@ -23,6 +23,7 @@ import {
   handleMessage,
   getDatabaseType,
   loadConfig,
+  loadRepoConfig,
   toSafeConfig,
   updateGlobalConfig,
   cloneRepository,
@@ -43,11 +44,19 @@ import {
   InvalidProviderKeyError,
   listUserProviderKeys,
   deleteUserProviderKey,
-  KNOWN_PROVIDERS,
+  listConnectableVendors,
+  buildAgentCredentialMatrix,
+  normalizeCredentialVendor,
   SUBSCRIPTION_PROVIDERS,
   startOAuth,
   pollOAuth,
+  OAuthCallbackPortBusyError,
+  getUserAiPrefs,
+  setUserTiers,
+  setUserAliases,
+  setUserDefaultProvider,
 } from '@archon/core';
+import type { UserTiersPatch, UserAliasesPatch, AliasesPatch } from '@archon/core';
 import { removeWorktree, toRepoPath, toWorktreePath } from '@archon/git';
 import {
   createLogger,
@@ -66,6 +75,7 @@ import {
   checkForUpdate,
   BUNDLED_IS_BINARY,
   BUNDLED_VERSION,
+  captureApprovalResolved,
 } from '@archon/paths';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { parseWorkflow } from '@archon/workflows/loader';
@@ -150,6 +160,7 @@ import {
   updateAssistantConfigResponseSchema,
   configResponseSchema,
   updateTiersBodySchema,
+  updateAliasesBodySchema,
   codebaseEnvironmentsResponseSchema,
 } from './schemas/config.schemas';
 import {
@@ -157,7 +168,11 @@ import {
   isEffortValidForProvider,
   validEffortsForProvider,
 } from '@archon/workflows/model-validation';
-import { providerListResponseSchema } from './schemas/provider.schemas';
+import {
+  providerListResponseSchema,
+  piModelListResponseSchema,
+  opencodeCredentialListResponseSchema,
+} from './schemas/provider.schemas';
 import {
   authStatusResponseSchema,
   deviceStartResponseSchema,
@@ -176,8 +191,19 @@ import {
   providerOAuthPollBodySchema,
   providerOAuthPollResponseSchema,
 } from './schemas/provider-key.schemas';
+import {
+  userAiPrefsResponseSchema,
+  updateUserTiersBodySchema,
+  updateUserAliasesBodySchema,
+  updateUserDefaultProviderBodySchema,
+} from './schemas/user-ai-prefs.schemas';
 import { mapDeviceFlowErrorToPollStatus } from './auth-poll-status';
-import { getProviderInfoList, isRegisteredProvider } from '@archon/providers';
+import {
+  getProviderInfoList,
+  isRegisteredProvider,
+  listPiModels,
+  introspectOpencodeCredentials,
+} from '@archon/providers';
 import { messageSchema } from './schemas/conversation.schemas';
 import {
   workflowRunSchema,
@@ -910,6 +936,46 @@ const patchTiersConfigRoute = createRoute({
   },
 });
 
+const patchAliasesConfigRoute = createRoute({
+  method: 'patch',
+  path: '/api/config/aliases',
+  tags: ['System'],
+  summary: 'Update @custom model aliases',
+  description:
+    'Writes the `aliases:` config to ~/.archon/config.yaml. Ungated (works on solo ' +
+    'installs). Per-alias merge; a `null` alias value unsets it.',
+  request: {
+    body: {
+      content: { 'application/json': { schema: updateAliasesBodySchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: configResponseSchema } },
+      description: 'Updated configuration',
+    },
+    400: jsonError('Invalid alias name, unknown provider, or invalid effort'),
+    500: jsonError('Server error'),
+  },
+});
+
+const getPiModelsRoute = createRoute({
+  method: 'get',
+  path: '/api/providers/pi/models',
+  tags: ['System'],
+  summary: "List Pi's model catalog (cost/reasoning metadata for the tier picker)",
+  description:
+    'Best-effort hint surface: returns `{ models: [] }` when the Pi catalog ' +
+    'cannot be loaded, never an error — tier/alias saves must not depend on it.',
+  responses: {
+    200: {
+      content: { 'application/json': { schema: piModelListResponseSchema } },
+      description: 'Pi model catalog (metadata only)',
+    },
+  },
+});
+
 const getProvidersRoute = createRoute({
   method: 'get',
   path: '/api/providers',
@@ -920,6 +986,25 @@ const getProvidersRoute = createRoute({
       content: { 'application/json': { schema: providerListResponseSchema } },
       description: 'List of registered providers',
     },
+  },
+});
+
+const getOpencodeCredentialsRoute = createRoute({
+  method: 'get',
+  path: '/api/providers/opencode/credentials',
+  tags: ['System'],
+  summary: "Introspect OpenCode's backend providers and auth state",
+  description:
+    "Proxies the embedded OpenCode server's provider introspection (catalog, " +
+    'env var names, install-wide connected state). Heavyweight: starts the ' +
+    'embedded server when not already running — call on demand from the ' +
+    'settings card, never on passive page load (#1955).',
+  responses: {
+    200: {
+      content: { 'application/json': { schema: opencodeCredentialListResponseSchema } },
+      description: 'OpenCode backend providers (metadata only, no secrets)',
+    },
+    503: jsonError('Embedded OpenCode runtime unavailable'),
   },
 });
 
@@ -1062,6 +1147,7 @@ const providerOAuthStartRoute = createRoute({
     400: jsonError('Provider does not support subscription login'),
     401: jsonError('Web auth required (X-Archon-User header missing)'),
     404: jsonError('Per-user provider keys not enabled on this install'),
+    503: jsonError('OAuth callback port still held by a previous login attempt — retry shortly'),
   },
 });
 
@@ -1081,6 +1167,87 @@ const providerOAuthPollRoute = createRoute({
     },
     401: jsonError('Web auth required (X-Archon-User header missing)'),
     404: jsonError('Per-user provider keys not enabled on this install'),
+  },
+});
+
+const userAiPrefsGetRoute = createRoute({
+  method: 'get',
+  path: '/api/auth/me/ai-prefs',
+  tags: ['Auth'],
+  summary: 'Get the current web user’s AI preferences (tiers/aliases/default assistant)',
+  responses: {
+    200: {
+      content: { 'application/json': { schema: userAiPrefsResponseSchema } },
+      description: 'The user’s stored prefs (raw per-user layer, not merged with config)',
+    },
+    401: jsonError('Web auth required'),
+    500: jsonError('Server error'),
+  },
+});
+
+const userAiPrefsTiersRoute = createRoute({
+  method: 'patch',
+  path: '/api/auth/me/ai-prefs/tiers',
+  tags: ['Auth'],
+  summary: 'Update the current web user’s model-tier presets (per-key merge; null unsets)',
+  request: {
+    body: {
+      content: { 'application/json': { schema: updateUserTiersBodySchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: userAiPrefsResponseSchema } },
+      description: 'Updated prefs',
+    },
+    400: jsonError('Unknown provider or invalid effort'),
+    401: jsonError('Web auth required'),
+    500: jsonError('Server error'),
+  },
+});
+
+const userAiPrefsAliasesRoute = createRoute({
+  method: 'patch',
+  path: '/api/auth/me/ai-prefs/aliases',
+  tags: ['Auth'],
+  summary: 'Update the current web user’s @custom aliases (per-key merge; null unsets)',
+  request: {
+    body: {
+      content: { 'application/json': { schema: updateUserAliasesBodySchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: userAiPrefsResponseSchema } },
+      description: 'Updated prefs',
+    },
+    400: jsonError('Invalid alias name, unknown provider, or invalid effort'),
+    401: jsonError('Web auth required'),
+    500: jsonError('Server error'),
+  },
+});
+
+const userAiPrefsDefaultRoute = createRoute({
+  method: 'patch',
+  path: '/api/auth/me/ai-prefs/default',
+  tags: ['Auth'],
+  summary: 'Set (or clear with null) the current web user’s default assistant',
+  request: {
+    body: {
+      content: { 'application/json': { schema: updateUserDefaultProviderBodySchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: userAiPrefsResponseSchema } },
+      description: 'Updated prefs',
+    },
+    400: jsonError('Unknown provider'),
+    401: jsonError('Web auth required'),
+    500: jsonError('Server error'),
   },
 });
 
@@ -1419,15 +1586,28 @@ export function registerApiRoutes(
   registerOpenApiRoute(providerKeyListRoute, async c => {
     const web = await requireWebUser(c, 'Web authentication required to manage provider keys');
     if ('error' in web) return web.error;
-    const available = [...KNOWN_PROVIDERS].sort();
+    const available = listConnectableVendors();
     const subscriptionAvailable = [...SUBSCRIPTION_PROVIDERS].sort();
     if (!isPerUserProviderKeysEnabled()) {
-      // Gate off: the console panel hides on `enabled:false`; skip the DB.
-      return c.json({ enabled: false, connections: [], available, subscriptionAvailable });
+      // Gate off: the console hides connect affordances on `enabled:false`;
+      // the agents matrix still reports install-env/ambient readiness.
+      return c.json({
+        enabled: false,
+        connections: [],
+        available,
+        subscriptionAvailable,
+        agents: buildAgentCredentialMatrix([]),
+      });
     }
     try {
       const connections = await listUserProviderKeys(web.userId);
-      return c.json({ enabled: true, connections, available, subscriptionAvailable });
+      return c.json({
+        enabled: true,
+        connections,
+        available,
+        subscriptionAvailable,
+        agents: buildAgentCredentialMatrix(connections),
+      });
     } catch (err) {
       getLog().error({ err: err as Error, userId: web.userId }, 'auth.provider_keys_list_failed');
       return apiError(c, 500, 'Failed to list provider keys');
@@ -1466,9 +1646,11 @@ export function registerApiRoutes(
     if (!isPerUserProviderKeysEnabled()) {
       return apiError(c, 404, 'Per-user provider keys are not enabled on this install');
     }
-    const provider = c.req.param('provider') ?? '';
-    // No KNOWN_PROVIDERS check here (unlike PUT): delete is an idempotent no-op,
-    // so an unknown/misspelled provider id simply removes nothing and returns ok.
+    const provider = normalizeCredentialVendor(c.req.param('provider') ?? '');
+    // No catalog check here (unlike PUT): delete is an idempotent no-op, so an
+    // unknown/misspelled vendor id simply removes nothing and returns ok.
+    // Legacy agent-keyed ids normalize so `DELETE .../claude` removes the
+    // migrated `anthropic` row.
     try {
       await deleteUserProviderKey(web.userId, provider);
       return c.json({ success: true });
@@ -1492,7 +1674,9 @@ export function registerApiRoutes(
     if (!isPerUserProviderKeysEnabled()) {
       return apiError(c, 404, 'Per-user provider keys are not enabled on this install');
     }
-    const provider = c.req.param('provider') ?? '';
+    // Normalize legacy agent-keyed ids ('claude' → 'anthropic') like every
+    // other credential entry point — SUBSCRIPTION_PROVIDERS is vendor-keyed.
+    const provider = normalizeCredentialVendor(c.req.param('provider') ?? '');
     if (!SUBSCRIPTION_PROVIDERS.has(provider)) {
       return apiError(
         c,
@@ -1505,6 +1689,15 @@ export function registerApiRoutes(
       const start = await startOAuth(web.userId, provider);
       return c.json(start);
     } catch (err) {
+      // A leaked callback port from a previous attempt is an expected,
+      // retryable condition — log it at warn under its own event (an
+      // error-level `…_failed` would pollute error dashboards on multi-user
+      // installs) and surface the actionable message as a 503 instead of an
+      // opaque 500 (#1963).
+      if (err instanceof OAuthCallbackPortBusyError) {
+        getLog().warn({ userId: web.userId, provider }, 'auth.provider_oauth_start_port_busy');
+        return apiError(c, 503, err.message);
+      }
       getLog().error(
         { err: err as Error, userId: web.userId, provider },
         'auth.provider_oauth_start_failed'
@@ -1527,6 +1720,142 @@ export function registerApiRoutes(
     // to an error status rather than another user's login.
     const result = pollOAuth(sessionId, web.userId, code);
     return c.json(result);
+  });
+
+  // ---- Per-user AI preferences (Phase 3) ----
+  // Identity-gated (requireWebUser) but NOT gated on TOKEN_ENCRYPTION_KEY —
+  // prefs are model names, not secrets. Highest-precedence resolver layer.
+
+  /** Validate a tier/alias entry's provider + effort. Returns an error message or null. */
+  function validatePresetEntry(
+    label: string,
+    entry: { provider: string; model: string; effort?: string }
+  ): string | null {
+    if (!isRegisteredProvider(entry.provider)) {
+      return `Unknown provider '${entry.provider}' for ${label}. Available: ${getProviderInfoList()
+        .map(p => p.id)
+        .join(', ')}`;
+    }
+    if (entry.effort !== undefined && !isEffortValidForProvider(entry.provider, entry.effort)) {
+      return (
+        `Invalid effort '${entry.effort}' for provider '${entry.provider}' (${label}). ` +
+        `Valid: ${validEffortsForProvider(entry.provider)?.join(', ') ?? '(none)'}`
+      );
+    }
+    return null;
+  }
+
+  /** Validate a custom alias name: must start with '@' and not shadow a tier keyword. */
+  function validateAliasName(name: string): string | null {
+    if ((TIER_NAMES as readonly string[]).includes(name)) {
+      return `Alias name '${name}' is reserved (small/medium/large are tier keywords). Use a different name.`;
+    }
+    if (!name.startsWith('@')) {
+      return `Alias name '${name}' must start with '@' (e.g. '@${name}').`;
+    }
+    return null;
+  }
+
+  /** Clean a validated entry — drop `thinking` (no UI/CLI surface), keep effort. */
+  function toCleanEntry(entry: { provider: string; model: string; effort?: string }): {
+    provider: string;
+    model: string;
+    effort?: string;
+  } {
+    return {
+      provider: entry.provider,
+      model: entry.model,
+      ...(entry.effort !== undefined ? { effort: entry.effort } : {}),
+    };
+  }
+
+  registerOpenApiRoute(userAiPrefsGetRoute, async c => {
+    const web = await requireWebUser(c, 'Web authentication required to read AI preferences');
+    if ('error' in web) return web.error;
+    try {
+      return c.json(await getUserAiPrefs(web.userId));
+    } catch (err) {
+      getLog().error({ err: err as Error, userId: web.userId }, 'auth.user_ai_prefs_get_failed');
+      return apiError(c, 500, 'Failed to read AI preferences');
+    }
+  });
+
+  registerOpenApiRoute(userAiPrefsTiersRoute, async c => {
+    const web = await requireWebUser(c, 'Web authentication required to update AI preferences');
+    if ('error' in web) return web.error;
+    const body = getValidatedBody(c, updateUserTiersBodySchema);
+    const patch: UserTiersPatch = {};
+    for (const tier of TIER_NAMES) {
+      const entry = body.tiers[tier];
+      if (entry === undefined) continue;
+      if (entry === null) {
+        patch[tier] = null;
+        continue;
+      }
+      const errMsg = validatePresetEntry(`tier '${tier}'`, entry);
+      if (errMsg) return apiError(c, 400, errMsg);
+      patch[tier] = toCleanEntry(entry);
+    }
+    try {
+      await setUserTiers(web.userId, patch);
+      return c.json(await getUserAiPrefs(web.userId));
+    } catch (err) {
+      getLog().error({ err: err as Error, userId: web.userId }, 'auth.user_ai_prefs_tiers_failed');
+      return apiError(c, 500, 'Failed to update AI tier preferences');
+    }
+  });
+
+  registerOpenApiRoute(userAiPrefsAliasesRoute, async c => {
+    const web = await requireWebUser(c, 'Web authentication required to update AI preferences');
+    if ('error' in web) return web.error;
+    const body = getValidatedBody(c, updateUserAliasesBodySchema);
+    const patch: UserAliasesPatch = {};
+    for (const [name, entry] of Object.entries(body.aliases)) {
+      const nameErr = validateAliasName(name);
+      if (nameErr) return apiError(c, 400, nameErr);
+      if (entry === null) {
+        patch[name] = null;
+        continue;
+      }
+      const errMsg = validatePresetEntry(`alias '${name}'`, entry);
+      if (errMsg) return apiError(c, 400, errMsg);
+      patch[name] = toCleanEntry(entry);
+    }
+    try {
+      await setUserAliases(web.userId, patch);
+      return c.json(await getUserAiPrefs(web.userId));
+    } catch (err) {
+      getLog().error(
+        { err: err as Error, userId: web.userId },
+        'auth.user_ai_prefs_aliases_failed'
+      );
+      return apiError(c, 500, 'Failed to update AI alias preferences');
+    }
+  });
+
+  registerOpenApiRoute(userAiPrefsDefaultRoute, async c => {
+    const web = await requireWebUser(c, 'Web authentication required to update AI preferences');
+    if ('error' in web) return web.error;
+    const { provider } = getValidatedBody(c, updateUserDefaultProviderBodySchema);
+    if (provider !== null && !isRegisteredProvider(provider)) {
+      return apiError(
+        c,
+        400,
+        `Unknown provider '${provider}'. Available: ${getProviderInfoList()
+          .map(p => p.id)
+          .join(', ')}`
+      );
+    }
+    try {
+      await setUserDefaultProvider(web.userId, provider);
+      return c.json(await getUserAiPrefs(web.userId));
+    } catch (err) {
+      getLog().error(
+        { err: err as Error, userId: web.userId },
+        'auth.user_ai_prefs_default_failed'
+      );
+      return apiError(c, 500, 'Failed to update default assistant preference');
+    }
   });
 
   // Shared lock/dispatch/error handling for message and workflow endpoints
@@ -2530,8 +2859,31 @@ export function registerApiRoutes(
       // This avoids a misleading empty state on first run, before any project
       // is registered, when bundled defaults are present
       const result = await discoverWorkflowsWithConfig(workingDir ?? null, loadConfig);
+
+      // Resolve repo-owner-curated recommended list (per-project only).
+      // Filter to names present in the discovered set; preserve declared order.
+      // Stale names are silently ignored (advisory).
+      const recommended: string[] = [];
+      if (workingDir) {
+        const repoConfig = await loadRepoConfig(workingDir);
+        const declared = repoConfig.recommendedWorkflows ?? [];
+        if (declared.length > 0) {
+          const discoveredNames = new Set(result.workflows.map(ws => ws.workflow.name));
+          const seen = new Set<string>();
+          for (const name of declared) {
+            if (discoveredNames.has(name) && !seen.has(name)) {
+              recommended.push(name);
+              seen.add(name);
+            } else if (!discoveredNames.has(name)) {
+              getLog().debug({ workingDir, name }, 'workflows.recommended_workflow_not_found');
+            }
+          }
+        }
+      }
+
       return c.json({
         workflows: result.workflows.map(ws => ({ workflow: ws.workflow, source: ws.source })),
+        recommended,
         errors: result.errors.length > 0 ? result.errors : undefined,
       });
     } catch (error) {
@@ -2845,6 +3197,9 @@ export function registerApiRoutes(
         step_name: approval.nodeId,
         data: { decision: 'approved', comment },
       });
+      // Anonymous telemetry: binary resolution only (web API inlines the
+      // approve logic rather than calling approveWorkflow).
+      captureApprovalResolved({ resolution: 'approved' });
       // For interactive loops, store user input; for standard approvals, mark as approved
       // and clear any rejection state.
       const metadataUpdate =
@@ -2896,6 +3251,8 @@ export function registerApiRoutes(
         step_name: approval?.nodeId ?? 'unknown',
         data: { decision: 'rejected', reason },
       });
+      // Anonymous telemetry: binary resolution only — no ids/reasons/names.
+      captureApprovalResolved({ resolution: 'rejected' });
 
       const hasOnReject = approval?.onRejectPrompt !== undefined;
       if (hasOnReject) {
@@ -3702,29 +4059,10 @@ export function registerApiRoutes(
           tiers[tier] = null;
           continue;
         }
-        if (!isRegisteredProvider(entry.provider)) {
-          return apiError(
-            c,
-            400,
-            `Unknown provider '${entry.provider}' for tier '${tier}'. Available: ${getProviderInfoList()
-              .map(p => p.id)
-              .join(', ')}`
-          );
-        }
-        if (entry.effort !== undefined && !isEffortValidForProvider(entry.provider, entry.effort)) {
-          return apiError(
-            c,
-            400,
-            `Invalid effort '${entry.effort}' for provider '${entry.provider}' (tier '${tier}'). ` +
-              `Valid: ${validEffortsForProvider(entry.provider)?.join(', ') ?? '(none)'}`
-          );
-        }
-        // Build a clean RawAliasEntry — drop `thinking` (no UI/CLI surface yet).
-        tiers[tier] = {
-          provider: entry.provider,
-          model: entry.model,
-          ...(entry.effort !== undefined ? { effort: entry.effort } : {}),
-        };
+        const errMsg = validatePresetEntry(`tier '${tier}'`, entry);
+        if (errMsg) return apiError(c, 400, errMsg);
+        // Clean RawAliasEntry — drops `thinking` (no UI/CLI surface yet).
+        tiers[tier] = toCleanEntry(entry);
       }
 
       await updateGlobalConfig({ tiers });
@@ -3740,9 +4078,63 @@ export function registerApiRoutes(
     }
   });
 
+  // PATCH /api/config/aliases - Update @custom aliases (ungated — solo-OK, like /tiers)
+  registerOpenApiRoute(patchAliasesConfigRoute, async c => {
+    try {
+      const body = getValidatedBody(c, updateAliasesBodySchema);
+      const aliases: AliasesPatch = {};
+      for (const [name, entry] of Object.entries(body.aliases)) {
+        const nameErr = validateAliasName(name);
+        if (nameErr) return apiError(c, 400, nameErr);
+        if (entry === null) {
+          aliases[name] = null;
+          continue;
+        }
+        const errMsg = validatePresetEntry(`alias '${name}'`, entry);
+        if (errMsg) return apiError(c, 400, errMsg);
+        aliases[name] = toCleanEntry(entry);
+      }
+
+      await updateGlobalConfig({ aliases });
+
+      const config = await loadConfig();
+      return c.json({
+        config: toSafeConfig(config),
+        database: getDatabaseType(),
+      });
+    } catch (error) {
+      getLog().error({ err: error }, 'config.aliases_update_failed');
+      return apiError(c, 500, 'Failed to update alias configuration');
+    }
+  });
+
   // GET /api/providers - List registered AI providers
   registerOpenApiRoute(getProvidersRoute, c => {
     return c.json({ providers: getProviderInfoList() });
+  });
+
+  // GET /api/providers/pi/models - Pi model catalog (best-effort hint; [] on failure)
+  registerOpenApiRoute(getPiModelsRoute, async c => {
+    try {
+      return c.json({ models: await listPiModels() });
+    } catch (error) {
+      // listPiModels already degrades internally; this belt-and-suspenders
+      // keeps the documented "never errors" contract at the route boundary.
+      getLog().warn({ err: error }, 'providers.pi_models_list_failed');
+      return c.json({ models: [] });
+    }
+  });
+
+  // GET /api/providers/opencode/credentials - OpenCode backend introspection
+  // (on-demand; starts the embedded runtime). 503 on failure — never a silent [].
+  registerOpenApiRoute(getOpencodeCredentialsRoute, async c => {
+    try {
+      const result = await introspectOpencodeCredentials();
+      return c.json(result);
+    } catch (error) {
+      getLog().error({ err: error }, 'providers.opencode_credentials_introspect_failed');
+      return apiError(c, 503, 'Embedded OpenCode runtime unavailable');
+    }
   });
 
   // GET /api/codebases/:id/environments - List isolation environments for a codebase

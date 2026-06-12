@@ -49,3 +49,8 @@ Active experiment under `/console`. The original milestoned plan (`M1`–`M4`)
 that scaffolded this surface has been completed; ongoing work is driven by
 user feedback during dogfooding rather than a milestone roadmap. Issues and
 ideas land via the PR template's UX Journey section.
+
+In progress: the `builder/` subtree (Archon Studio workflow builder). PR-1
+ships the data layer — types, variant registry, round-trip model, validation —
+with no route mount; PR-2 adds the canvas UI and PR-3 wires saving through the
+workflow API. See `builder/README.md`.

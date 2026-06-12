@@ -130,6 +130,8 @@ describe('auth/config', () => {
         '/api/auth/providers',
         '/api/auth/providers/openrouter',
         '/api/auth/providers/claude/oauth/start', // reserved for PR-3
+        '/api/auth/me/ai-prefs',
+        '/api/auth/me/ai-prefs/tiers',
       ]) {
         expect(isArchonOwnedAuthPath(p)).toBe(true);
       }
@@ -143,6 +145,7 @@ describe('auth/config', () => {
         '/api/auth/get-session',
         '/api/auth/providersX', // prefix guard: must be exact or under '/'
         '/api/auth/githubbed',
+        '/api/auth/me/ai-prefsX',
         '/api/auth',
       ]) {
         expect(isArchonOwnedAuthPath(p)).toBe(false);

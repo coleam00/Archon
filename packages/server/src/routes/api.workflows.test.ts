@@ -26,10 +26,15 @@ const mockParseWorkflow = mock((_content: string, _filename: string) => ({
   error: null,
 }));
 
+const mockLoadRepoConfig = mock(
+  async (_repoPath: string) => ({}) as { recommendedWorkflows?: string[] }
+);
+
 mock.module('@archon/core', () => ({
   handleMessage: mock(async () => {}),
   getDatabaseType: () => 'sqlite',
   loadConfig: mock(async () => ({})),
+  loadRepoConfig: mockLoadRepoConfig,
   getWorkflowFolderSearchPaths: mock(() => ['.archon/workflows']),
   getCommandFolderSearchPaths: mock(() => ['.archon/commands', '.archon/commands/defaults']),
   getDefaultCommandsPath: mock(() => '/tmp/.archon-test-nonexistent/commands/defaults'),
@@ -134,6 +139,7 @@ describe('GET /api/workflows', () => {
 
     const body = (await response.json()) as {
       workflows: Array<{ workflow: { name: string }; source: string }>;
+      recommended: string[];
     };
 
     // Discovery is invoked with null (not skipped), so bundled defaults can surface.
@@ -143,6 +149,46 @@ describe('GET /api/workflows', () => {
     expect(Array.isArray(body.workflows)).toBe(true);
     expect(body.workflows.length).toBeGreaterThan(0);
     expect(body.workflows[0]?.source).toBe('bundled');
+    // No project context → recommended is always empty
+    expect(body.recommended).toEqual([]);
+  });
+
+  test('returns recommended = [] when project has no recommendedWorkflows key', async () => {
+    const app = createTestApp();
+    registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+    mockLoadRepoConfig.mockResolvedValueOnce({});
+
+    const response = await app.request('/api/workflows');
+    expect(response.status).toBe(200);
+
+    const body = (await response.json()) as { recommended: string[] };
+    expect(body.recommended).toEqual([]);
+  });
+
+  test('returns recommended filtered to discovered names in declared order', async () => {
+    const app = createTestApp();
+    registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+    // Discovery returns three workflows; recommendedWorkflows references two of them
+    // (in a non-discovery order) plus one stale name that must be filtered out.
+    mockDiscoverWorkflows.mockResolvedValueOnce({
+      workflows: [
+        makeTestWorkflowWithSource({ name: 'deploy' }, 'bundled'),
+        makeTestWorkflowWithSource({ name: 'plan' }, 'project'),
+        makeTestWorkflowWithSource({ name: 'fix' }, 'bundled'),
+      ],
+      errors: [],
+    });
+    mockLoadRepoConfig.mockResolvedValueOnce({
+      recommendedWorkflows: ['fix', 'stale-name', 'plan'],
+    });
+
+    const response = await app.request('/api/workflows');
+    expect(response.status).toBe(200);
+
+    const body = (await response.json()) as { recommended: string[] };
+    expect(body.recommended).toEqual(['fix', 'plan']);
   });
 });
 

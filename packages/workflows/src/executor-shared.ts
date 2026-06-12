@@ -82,6 +82,27 @@ export function classifyError(error: Error): ErrorType {
   return 'UNKNOWN';
 }
 
+/**
+ * Map the retry-oriented {@link ErrorType} to the telemetry wire enum. The
+ * telemetry event carries ONLY this fixed-enum class — never error text.
+ */
+export function toTelemetryErrorClass(errorType: ErrorType): archonPaths.WorkflowErrorClass {
+  switch (errorType) {
+    case 'FATAL':
+      return 'fatal';
+    case 'TRANSIENT':
+      return 'transient';
+    case 'UNKNOWN':
+      return 'unknown';
+    default: {
+      // Exhaustiveness guard: a future ErrorType variant fails compilation
+      // here instead of silently sending `undefined` to the telemetry wire.
+      const exhaustive: never = errorType;
+      return exhaustive;
+    }
+  }
+}
+
 // ─── Subprocess Failure Formatting ───────────────────────────────────────────
 
 /** Max characters of stderr/message we keep in user-facing and logged fields. */

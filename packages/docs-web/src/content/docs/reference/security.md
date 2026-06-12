@@ -74,9 +74,9 @@ Archon uses structured logging (Pino) with explicit rules about what is and is n
 
 ## Anonymous Telemetry
 
-Separate from local logging, Archon sends a small set of **anonymous** usage events to PostHog (`archon_started`, `workflow_invoked`, `workflow_completed`/`workflow_failed`) so maintainers can see active installs, which workflows run, and run outcomes. Events are keyed by a random install UUID — never user identity.
+Separate from local logging, Archon sends a small set of **anonymous** usage events to PostHog (`archon_started`, `archon_active` daily server heartbeat, `chat_turn_handled` — platform, provider, model, duration, and usage totals; never message content, `workflow_invoked`, `workflow_completed`/`workflow_failed`, `workflow_approval_resolved` — binary approve/reject only, `codebase_registered` — a pure count, no name/path/URL) so maintainers can see active installs, which workflows run, and run outcomes. Events are keyed by a random install UUID — never user identity.
 
-Only categorical data is sent: bundled workflow name (user-authored workflows report `"custom"`), platform, provider/model id, node shape, run outcome/duration, and machine context (OS, arch, version, runtime). **Never sent:** code, prompts, file paths, IP (dropped at ingest), geolocation, error text, or custom workflow names. See the [Telemetry table in the configuration reference](/reference/configuration/) for the full field list and opt-out options (`DO_NOT_TRACK=1`, `ARCHON_TELEMETRY_DISABLED=1`, CI auto-disable, or `POSTHOG_API_KEY=off`).
+Only categorical data is sent: bundled workflow name (user-authored workflows report `"custom"`), platform, provider/model id, node shape and feature-adoption flags, run outcome/duration, aggregate usage totals (token counts, cost USD, loop iterations — numbers only), a fixed-enum failure class (`fatal`/`transient`/`unknown` — derived locally, never the error text itself), deployment shape (which adapters/db/auth modes are enabled — booleans and enums, never configuration values), and machine context (OS, arch, version, runtime). **Never sent:** code, prompts, chat message content, conversation ids, file paths, IP (dropped at ingest), geolocation, error text, or custom workflow names. See the [Telemetry table in the configuration reference](/reference/configuration/) for the full field list and opt-out options (`DO_NOT_TRACK=1`, `ARCHON_TELEMETRY_DISABLED=1`, CI auto-disable, or `POSTHOG_API_KEY=off`).
 
 ## Adapter Authorization
 
@@ -131,6 +131,10 @@ The GitHub and Gitea adapters verify webhook signatures to ensure payloads origi
 - Then `loadArchonEnv(cwd)` loads archon-owned env from `~/.archon/.env` (user scope) and `<cwd>/.archon/.env` (repo scope, wins over user) with `override: true`. Both are trusted sources — the user controls them and all keys are intentional.
 - Per-codebase env vars configured via `codebase_env_vars` or `.archon/config.yaml` `env:` are merged on top at workflow execution time.
 - `<cwd>/.env` is the **only** untrusted source. It belongs to the target project, not to Archon. Directory ownership (`.archon/`) is the security boundary — not the filename.
+
+**Per-user provider credentials:**
+- When `TOKEN_ENCRYPTION_KEY` (64-char hex) is set, each user can connect their own provider API key or subscription. These are encrypted at rest with **AES-256-GCM**, never logged, and **never returned by any endpoint** — responses carry only `provider`/`kind`/`label` metadata. See [AI Provider Credentials](/reference/api/#ai-provider-credentials).
+- The credential routes (`/api/auth/providers*`) require a resolved identity (the `X-Archon-User` header or a Better Auth session). The model-config routes (`/api/config/*`, including `tiers`) are intentionally **ungated** — they carry no secrets (just model strings) and must work on solo installs.
 
 ### Target repo `.env` isolation
 

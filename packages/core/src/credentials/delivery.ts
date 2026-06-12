@@ -1,28 +1,53 @@
 /**
- * Per-user AI-provider credential delivery map (Phase 2).
+ * Per-user AI-provider credential delivery map (Phase 2, vendor-canonical
+ * since #1955).
  *
- * Pure-function "how to hand a credential to provider X" table. Given a
- * provider id and a decrypted credential (`api_key` or `oauth`), returns the
- * env vars to merge into the workflow / chat env and, optionally, files to
- * write under `artifactsDir` (e.g. Codex `CODEX_HOME/auth.json` for ChatGPT
- * subscription delivery).
+ * Pure-function "how to hand a credential to vendor X" table. Given a
+ * vendor-canonical credential id and a decrypted credential (`api_key` or
+ * `oauth`), returns the env vars to merge into the workflow / chat env and,
+ * optionally, files to write under `artifactsDir` (e.g. Codex
+ * `CODEX_HOME/auth.json` for ChatGPT subscription delivery).
  *
- * Single source of truth — extend this map when adding a new provider rather
- * than forking per-provider branches in the executor or orchestrator.
+ * Credential ids are upstream-vendor keyed (`anthropic`, `openai`,
+ * `github-copilot`, plus the Pi backend ids) — NOT agent ids: one credential
+ * can serve multiple agents (an `anthropic` key powers Claude Code, Pi's
+ * anthropic backend, and OpenCode). Legacy agent-keyed ids (`claude`/`codex`/
+ * `copilot`) are normalized via {@link normalizeCredentialVendor}; stored rows
+ * are migrated at startup (see migrations/000_combined.sql + the SQLite
+ * adapter's migrateColumns).
  *
- * Env var names for Pi backends are sourced from
- * `packages/providers/src/community/pi/provider.ts:PI_PROVIDER_ENV_VARS`
- * (kept in sync with pi-ai's upstream env-api-keys map).
+ * Env var names for Pi backends come from the generated
+ * `PI_PROVIDER_ENV_VARS` (@archon/providers, regenerated from the installed
+ * pi-ai SDK — `bun run check:pi-vendor-map` guards drift).
  */
 import { join } from 'node:path';
+import { PI_PROVIDER_ENV_VARS, PI_AMBIENT_VENDORS } from '@archon/providers';
 
 /**
- * Raw OAuth credential blob as returned by `@earendil-works/pi-ai/oauth`
- * provider `login()`. The exact shape varies per provider (Anthropic vs. Codex
- * vs. Copilot) but is always a JSON-serializable object. It's stored opaquely
- * and passed through verbatim: refresh is handled by Pi's `getOAuthApiKey`
- * (keyed by Pi's provider id, e.g. `openai-codex` — not Archon's `codex`), and
- * the only field-level parsing is `buildCodexAuthJson` below.
+ * Pre-#1955 agent-keyed credential ids → vendor-canonical ids. Accepted at
+ * every entry point (connect, delivery, CLI) so in-flight callers and
+ * not-yet-migrated rows keep working; storage always uses the vendor id.
+ */
+export const LEGACY_VENDOR_ALIASES: Readonly<Record<string, string>> = {
+  claude: 'anthropic',
+  codex: 'openai',
+  copilot: 'github-copilot',
+};
+
+/** Map a (possibly legacy agent-keyed) credential id to its vendor-canonical id. */
+export function normalizeCredentialVendor(id: string): string {
+  return LEGACY_VENDOR_ALIASES[id] ?? id;
+}
+
+/**
+ * Raw OAuth credential blob minted at login — by `@earendil-works/pi-ai/oauth`
+ * provider `login()` for anthropic/github-copilot, or by Archon's own OpenAI
+ * PKCE flow (`openai-oauth.ts`, which additionally captures the `id_token`
+ * Pi drops, #1924). The exact shape varies per vendor but is always a
+ * JSON-serializable object. It's stored opaquely and passed through verbatim:
+ * refresh is handled by Pi's `getOAuthApiKey` (keyed by Pi's provider id) or
+ * the Archon OpenAI refresh, and the only field-level parsing is
+ * `buildCodexAuthJson` below.
  */
 export type OAuthCredentials = Record<string, unknown>;
 
@@ -54,61 +79,35 @@ export interface DeliveryOptions {
 }
 
 /**
- * Pi backend providers → env var name. Kept in lockstep with
- * `PI_PROVIDER_ENV_VARS` in `packages/providers/src/community/pi/provider.ts`.
- * When updating one, update both (intentional small duplication to avoid a
- * cross-package import from `@archon/core` into `@archon/providers`).
- *
- * Note: `anthropic` and `openai` are intentionally absent here — they are
- * handled by explicit `case` branches in `deliverCredential` (they reject
- * OAuth and map the same env vars, but the switch path is authoritative).
+ * The set of vendor ids the delivery map can turn into env/files — i.e. the
+ * connectable catalog. Derived from the generated Pi backend map (which
+ * already includes `anthropic`, `openai`, and `github-copilot`); ambient
+ * vendors (AWS Bedrock, Vertex ADC) are detection-only and excluded. Used at
+ * connect time to fail fast on typos before encrypting and persisting a key
+ * we could never deliver. Legacy agent-keyed ids are accepted via
+ * {@link normalizeCredentialVendor}, not listed here.
  */
-const PI_PROVIDER_ENV_VARS: Record<string, string> = {
-  google: 'GEMINI_API_KEY',
-  groq: 'GROQ_API_KEY',
-  mistral: 'MISTRAL_API_KEY',
-  cerebras: 'CEREBRAS_API_KEY',
-  xai: 'XAI_API_KEY',
-  openrouter: 'OPENROUTER_API_KEY',
-  huggingface: 'HUGGINGFACE_API_KEY',
-};
+export const KNOWN_VENDORS: ReadonlySet<string> = new Set<string>(
+  // Every key-vendor in the generated map is deliverable. Ambient-ONLY vendors
+  // (amazon-bedrock) are absent from the env map by construction; google-vertex
+  // appears in both (API key OR ambient ADC) and stays connectable.
+  Object.keys(PI_PROVIDER_ENV_VARS)
+);
 
 /**
- * The set of provider ids the delivery map understands. Used at connect time
- * to fail fast on typos before encrypting and persisting a key for a
- * provider we can't actually deliver.
- *
- * Note: `claude` / `codex` are the Archon-level provider ids. `anthropic` /
- * `openai` are alias providers handled by explicit switch cases in
- * `deliverCredential` — they map the same env vars as the Pi backends but
- * reject OAuth (direct subscription is routed through `claude` / `codex`).
- * All remaining entries are Pi-backend ids sourced from PI_PROVIDER_ENV_VARS.
- */
-export const KNOWN_PROVIDERS: ReadonlySet<string> = new Set<string>([
-  'claude',
-  'codex',
-  'copilot',
-  'anthropic',
-  'openai',
-  ...Object.keys(PI_PROVIDER_ENV_VARS),
-]);
-
-/**
- * Map Pi's `openaiCodex` OAuth blob onto the Codex CLI `auth.json` shape
+ * Map the stored OpenAI subscription blob onto the Codex CLI `auth.json` shape
  * (authoritative interface: `packages/server/src/scripts/setup-auth.ts`):
  *   { OPENAI_API_KEY: null, tokens: { id_token, access_token, refresh_token,
  *     account_id }, last_refresh }
  *
- * Pi's `OAuthCredentials` (verified against `pi-ai@0.76.0`
- * `dist/utils/oauth/openai-codex.js:100-104,332`) is `{ access, refresh, expires,
- * accountId }` — note `accountId` is camelCase, and **Pi does not surface an
- * `id_token`** (`chatgpt_account_id` is only an internal JWT claim it reads to
- * derive `accountId`). So `id_token` is best-effort (empty unless a future Pi
- * version provides one).
- *
- * VERIFY (live smoke): whether the Codex CLI accepts an empty `id_token` for a
- * ChatGPT subscription, or derives the account from the JWT `access_token` alone.
- * The API-key Codex path (`OPENAI_API_KEY`) is unaffected.
+ * The blob comes from Archon's own OpenAI PKCE flow (`openai-oauth.ts`, #1924)
+ * and is `{ access, refresh, expires, accountId, id_token }` — `accountId` is
+ * camelCase, and `id_token` is a REAL OpenID JWT captured at exchange/refresh
+ * (the Codex CLI rejects an empty one with "invalid ID token format", which is
+ * why this flow no longer goes through Pi — Pi drops the field). Legacy blobs
+ * minted by Pi before the gate lift lack `id_token`; `str()` maps that to ''
+ * and the run fails with the known Codex error — reconnecting the
+ * subscription mints a complete blob.
  */
 function buildCodexAuthJson(rawCreds: OAuthCredentials): string {
   const c = rawCreds as Record<string, unknown>;
@@ -116,7 +115,7 @@ function buildCodexAuthJson(rawCreds: OAuthCredentials): string {
   return JSON.stringify({
     OPENAI_API_KEY: null,
     tokens: {
-      id_token: str(c.id_token), // Pi does not provide one today → ''
+      id_token: str(c.id_token),
       access_token: str(c.access),
       refresh_token: str(c.refresh),
       account_id: str(c.accountId),
@@ -138,18 +137,23 @@ export function deliverCredential(
   cred: ResolvedCredential,
   opts: DeliveryOptions
 ): DeliveryResult {
-  switch (provider) {
-    case 'claude':
+  const vendor = normalizeCredentialVendor(provider);
+  switch (vendor) {
+    case 'anthropic':
       if (cred.kind === 'api_key') {
-        return { env: { CLAUDE_API_KEY: cred.apiKey, ANTHROPIC_API_KEY: cred.apiKey } };
+        // CLAUDE_API_KEY kept alongside ANTHROPIC_API_KEY for parity with the
+        // pre-#1955 'claude' delivery (harmless superset).
+        return { env: { ANTHROPIC_API_KEY: cred.apiKey, CLAUDE_API_KEY: cred.apiKey } };
       }
+      // Claude Pro/Max subscription → the token var the Claude SDK reads.
       return { env: { CLAUDE_CODE_OAUTH_TOKEN: cred.oauthApiKey } };
 
-    case 'codex':
+    case 'openai':
       if (cred.kind === 'api_key') {
         return { env: { OPENAI_API_KEY: cred.apiKey } };
       }
       {
+        // ChatGPT subscription → Codex CLI auth.json (real id_token since #1924).
         const codexHome = join(opts.artifactsDir, 'codex-home');
         return {
           env: { CODEX_HOME: codexHome },
@@ -159,7 +163,7 @@ export function deliverCredential(
         };
       }
 
-    case 'copilot':
+    case 'github-copilot':
       // Copilot subscription (oauth) or a Copilot PAT (api_key) → the env var the
       // native Copilot provider reads (COPILOT_GITHUB_TOKEN wins over generic GH
       // tokens). VERIFY (live): the OAuth-minted Copilot token works as this PAT.
@@ -169,38 +173,34 @@ export function deliverCredential(
         },
       };
 
-    case 'anthropic':
-      if (cred.kind === 'oauth') {
-        throw new Error(
-          "Provider 'anthropic' does not support OAuth subscription delivery — use provider 'claude' for the Claude Pro/Max subscription path."
-        );
-      }
-      return { env: { ANTHROPIC_API_KEY: cred.apiKey } };
-
-    case 'openai':
-      if (cred.kind === 'oauth') {
-        throw new Error(
-          "Provider 'openai' does not support OAuth subscription delivery — use provider 'codex' for the ChatGPT subscription path."
-        );
-      }
-      return { env: { OPENAI_API_KEY: cred.apiKey } };
-
     default: {
-      const piEnvVar = PI_PROVIDER_ENV_VARS[provider];
+      // Happy path first: any vendor in the generated env map delivers its
+      // API key. This includes google-vertex, which is BOTH api_key-capable
+      // and ambient — a stored Vertex key must deliver, so the env lookup
+      // takes precedence over the ambient check.
+      const piEnvVar = PI_PROVIDER_ENV_VARS[vendor];
       if (piEnvVar) {
         if (cred.kind === 'oauth') {
           // Reached only if an oauth row exists under a Pi-backend id (connect
-          // guards against this — oauth is claude/codex/copilot only). The Pi
-          // runtime consumes subscriptions via the aggregate auth.json
-          // (buildPiAuthJson), not this per-provider env path.
+          // guards against this — oauth is anthropic/openai/github-copilot
+          // only). The Pi runtime consumes subscriptions via the aggregate
+          // auth.json (buildPiAuthJson), not this per-vendor env path.
           throw new Error(
-            `Provider '${provider}' (Pi backend) has no env-based OAuth delivery; subscriptions reach Pi via auth.json.`
+            `Vendor '${vendor}' (Pi backend) has no env-based OAuth delivery; subscriptions reach Pi via auth.json.`
           );
         }
         return { env: { [piEnvVar]: cred.apiKey } };
       }
+      if (PI_AMBIENT_VENDORS.includes(vendor)) {
+        // Ambient-ONLY vendors (amazon-bedrock — no env var in the map):
+        // chains are detected from the environment, never stored — a stored
+        // row for one is a connect bug.
+        throw new Error(
+          `Vendor '${vendor}' uses ambient cloud credentials and has no stored-credential delivery.`
+        );
+      }
       throw new Error(
-        `Unknown credential provider '${provider}'. Known: ${[...KNOWN_PROVIDERS].sort().join(', ')}.`
+        `Unknown credential vendor '${vendor}'. Known: ${[...KNOWN_VENDORS].sort().join(', ')}.`
       );
     }
   }
@@ -211,23 +211,6 @@ export function deliverCredential(
  * `core/auth-storage.d.ts`): an API key or an OAuth blob, keyed by Pi provider id.
  */
 type PiAuthCredential = { type: 'api_key'; key: string } | ({ type: 'oauth' } & OAuthCredentials);
-
-/**
- * Archon credential-provider id → Pi provider/backend id (the `auth.json` key Pi
- * looks under when running that backend). Mostly identity for API-key backends;
- * the runtime ids (`claude`/`codex`/`copilot`) map to Pi's backend names.
- *
- * VERIFY (T5b.0): the OAuth backend ids (`codex`→`openai`, `copilot`→`github-copilot`)
- * against a real `~/.pi/agent/auth.json` after a local `pi` `/login`.
- */
-const PI_BACKEND_ID: Record<string, string> = {
-  claude: 'anthropic',
-  codex: 'openai',
-  copilot: 'github-copilot',
-  anthropic: 'anthropic',
-  openai: 'openai',
-  ...Object.fromEntries(Object.keys(PI_PROVIDER_ENV_VARS).map(p => [p, p])),
-};
 
 /** Relative path (under the per-run artifacts dir) for the generated Pi auth.json. */
 export const PI_AUTH_JSON_RELATIVE_PATH = 'pi-home/auth.json';
@@ -246,8 +229,17 @@ export function buildPiAuthJson(
 ): string | null {
   const data: Record<string, PiAuthCredential> = {};
   for (const { provider, cred } of creds) {
-    const piId = PI_BACKEND_ID[provider];
-    if (!piId) continue;
+    // Vendor ids ARE Pi backend ids since #1955 (legacy agent-keyed rows are
+    // normalized); anything not in the generated map isn't a Pi backend.
+    //
+    // VERIFY (T5b.0): the OAuth backend ids (`openai`, `github-copilot`)
+    // against a real `~/.pi/agent/auth.json` after a local `pi` `/login`.
+    // NOTE: the `openai` oauth blob carries an extra `id_token` field (Archon's
+    // own flow, #1924) — Pi tolerates it: its `OAuthCredentials` type is
+    // index-signature open (`[key: string]: unknown`) and its refresh/getApiKey
+    // only read access/refresh/expires/accountId.
+    const piId = normalizeCredentialVendor(provider);
+    if (!(piId in PI_PROVIDER_ENV_VARS)) continue;
     data[piId] =
       cred.kind === 'api_key'
         ? { type: 'api_key', key: cred.apiKey }
