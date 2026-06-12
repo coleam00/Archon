@@ -366,6 +366,7 @@ describe('workflowRunCommand', () => {
   beforeEach(() => {
     consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
     mockLogger.warn.mockClear();
+    mockLogger.error.mockClear();
     mockLogger.info.mockClear();
   });
 
@@ -383,6 +384,80 @@ describe('workflowRunCommand', () => {
     await expect(workflowRunCommand('/test/path', 'assist', 'hello')).rejects.toThrow(
       'No workflows found in .archon/workflows/'
     );
+  });
+
+  it('logs effective discovery root and source breakdown for every run', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [
+        makeTestWorkflowWithSource({ name: 'assist' }, 'bundled'),
+        makeTestWorkflowWithSource({ name: 'home-helper' }, 'global'),
+        makeTestWorkflowWithSource({ name: 'project-flow' }, 'project'),
+      ],
+      errors: [],
+    });
+
+    await workflowRunCommand('/repo/root', 'assist', 'hello', { noWorktree: true });
+
+    expect(consoleSpy).toHaveBeenCalledWith(
+      'Discovery: root=/repo/root workflows=3 bundled=1 global=1 project=1'
+    );
+  });
+
+  it('uses discoveryCwd in the discovery diagnostic when supplied', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist' }, 'project')],
+      errors: [],
+    });
+
+    await workflowRunCommand('/tmp/worktree', 'assist', 'hello', {
+      noWorktree: true,
+      discoveryCwd: '/repo/source',
+    });
+
+    expect(discoverWorkflowsWithConfig).toHaveBeenCalledWith('/repo/source', expect.any(Function));
+    expect(consoleSpy).toHaveBeenCalledWith(
+      'Discovery: root=/repo/source workflows=1 bundled=0 global=0 project=1'
+    );
+  });
+
+  it('does not print discovery diagnostic in json mode', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist' }, 'project')],
+      errors: [],
+    });
+
+    try {
+      await workflowRunCommand('/repo/root', 'assist', 'hello', {
+        json: true,
+        noWorktree: true,
+      });
+    } catch {
+      // Downstream failure is acceptable; this test only verifies diagnostic suppression.
+    }
+
+    expect(consoleSpy).not.toHaveBeenCalledWith(expect.stringContaining('Discovery: root='));
+  });
+
+  it('does not print discovery diagnostic in quiet mode', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist' }, 'project')],
+      errors: [],
+    });
+
+    try {
+      await workflowRunCommand('/repo/root', 'assist', 'hello', {
+        quiet: true,
+        noWorktree: true,
+      });
+    } catch {
+      // Downstream failure is acceptable; this test only verifies diagnostic suppression.
+    }
+
+    expect(consoleSpy).not.toHaveBeenCalledWith(expect.stringContaining('Discovery: root='));
   });
 
   it('should throw error when workflow not found', async () => {
@@ -2172,12 +2247,12 @@ describe('workflowRunCommand — detach', () => {
     // Capture call data BEFORE mockRestore() — restoring a spy clears its recorded calls.
     let spawnCallCount = 0;
     let spawnCmd: string[] = [];
+    let spawnOptions: { cwd: string; cmd: string[] } | undefined;
     try {
       await workflowRunCommand('/test/path', 'assist', 'hello', { detach: true });
       spawnCallCount = spawnSpy.mock.calls.length;
-      spawnCmd = (
-        (spawnSpy.mock.calls[0]?.[0] as { cmd: string[] } | undefined)?.cmd ?? []
-      ).slice();
+      spawnOptions = spawnSpy.mock.calls[0]?.[0] as { cwd: string; cmd: string[] } | undefined;
+      spawnCmd = (spawnOptions?.cmd ?? []).slice();
     } finally {
       process.argv = savedArgv;
       spawnSpy.mockRestore();
@@ -2188,6 +2263,9 @@ describe('workflowRunCommand — detach', () => {
     expect(spawnCmd).toContain('--branch');
     expect(spawnCmd).toContain('--conversation-id');
     expect(spawnCmd).toContain('--cwd');
+    const cwdIdx = spawnCmd.indexOf('--cwd');
+    expect(spawnCmd[cwdIdx + 1]).toBe('/test/path');
+    expect(spawnOptions?.cwd).toBe('/test/path');
     // Generated branch is `assist-<timestamp>`
     const branchIdx = spawnCmd.indexOf('--branch');
     expect(spawnCmd[branchIdx + 1]).toMatch(/^assist-\d+$/);
@@ -2287,6 +2365,7 @@ describe('workflowResumeCommand', () => {
 
   beforeEach(() => {
     consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    mockLogger.error.mockClear();
   });
 
   afterEach(() => {
@@ -2392,7 +2471,7 @@ describe('workflowResumeCommand', () => {
     expect(codebaseDb.getCodebase).toHaveBeenCalledWith('cb-existing');
   });
 
-  it('should warn and fall back to working_path when getCodebase throws during resume', async () => {
+  it('fails loudly when getCodebase throws during resume', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const codebaseDb = await import('@archon/core/db/codebases');
     const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
@@ -2411,26 +2490,42 @@ describe('workflowResumeCommand', () => {
       new Error('connection refused')
     );
 
-    (
-      workflowDiscovery.discoverWorkflowsWithConfig as ReturnType<typeof mock>
-    ).mockResolvedValueOnce({
-      workflows: [makeTestWorkflowWithSource({ name: 'implement' })],
-      errors: [],
-    });
+    const discoverSpy = workflowDiscovery.discoverWorkflowsWithConfig as ReturnType<typeof mock>;
+    discoverSpy.mockClear();
 
-    try {
-      await workflowResumeCommand('run-err');
-    } catch {
-      // downstream failure is acceptable
-    }
+    await expect(workflowResumeCommand('run-err')).rejects.toThrow(
+      "Failed to load codebase 'cb-bad' for workflow run 'run-err'"
+    );
 
-    // Verify warn was called (not error — it's a soft fallback). The resume
-    // layer now does its own codebase lookup for `discoveryCwd`, so the warn
-    // is emitted with the resume-specific event name.
-    expect(mockLogger.warn).toHaveBeenCalledWith(
+    expect(mockLogger.error).toHaveBeenCalledWith(
       expect.objectContaining({ codebaseId: 'cb-bad' }),
       'cli.workflow_resume_codebase_lookup_failed'
     );
+    expect(discoverSpy).not.toHaveBeenCalledWith('/tmp/test-worktree', expect.any(Function));
+  });
+
+  it('fails loudly when codebase row is missing during resume', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
+
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-missing-codebase',
+      workflow_name: 'implement',
+      status: 'failed',
+      user_message: 'add auth',
+      working_path: '/tmp/test-worktree',
+      codebase_id: 'cb-missing',
+    });
+    (codebaseDb.getCodebase as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+
+    const discoverSpy = workflowDiscovery.discoverWorkflowsWithConfig as ReturnType<typeof mock>;
+    discoverSpy.mockClear();
+
+    await expect(workflowResumeCommand('run-missing-codebase')).rejects.toThrow(
+      "references codebase 'cb-missing', but that codebase no longer exists"
+    );
+    expect(discoverSpy).not.toHaveBeenCalledWith('/tmp/test-worktree', expect.any(Function));
   });
 
   it('should discover workflows from codebase.default_cwd, not working_path', async () => {
@@ -2506,6 +2601,7 @@ describe('workflowApproveCommand', () => {
 
   beforeEach(() => {
     consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    mockLogger.error.mockClear();
   });
 
   afterEach(() => {
@@ -2561,6 +2657,81 @@ describe('workflowApproveCommand', () => {
     }
 
     expect(codebaseDb.getCodebase).toHaveBeenCalledWith('cb-existing');
+  });
+
+  it('fails loudly when codebase row is missing during approve auto-resume', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
+    const core = await import('@archon/core');
+
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-approve-missing-codebase',
+      workflow_name: 'implement',
+      status: 'paused',
+      user_message: 'add auth',
+      working_path: '/tmp/test-worktree',
+      codebase_id: 'cb-missing',
+      metadata: { approval: { type: 'approval', nodeId: 'review-node', message: 'Approve?' } },
+    });
+    (workflowDb.updateWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
+    (core.createWorkflowStore as ReturnType<typeof mock>).mockReturnValueOnce({
+      createWorkflowEvent: mock(() => Promise.resolve()),
+    });
+    const getCodebaseMock = codebaseDb.getCodebase as ReturnType<typeof mock>;
+    getCodebaseMock.mockReset();
+    getCodebaseMock.mockResolvedValueOnce(null);
+
+    const discoverSpy = workflowDiscovery.discoverWorkflowsWithConfig as ReturnType<typeof mock>;
+    discoverSpy.mockClear();
+
+    await expect(workflowApproveCommand('run-approve-missing-codebase')).rejects.toThrow(
+      "Approved but failed to resume workflow 'implement': Workflow run 'run-approve-missing-codebase' references codebase 'cb-missing', but that codebase no longer exists"
+    );
+    expect(discoverSpy).not.toHaveBeenCalledWith('/tmp/test-worktree', expect.any(Function));
+  });
+
+  it('fails with recorded-approval recovery when getCodebase throws during approve auto-resume', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
+    const core = await import('@archon/core');
+
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-approve-codebase-error',
+      workflow_name: 'implement',
+      status: 'paused',
+      user_message: 'add auth',
+      working_path: '/tmp/test-worktree',
+      codebase_id: 'cb-bad',
+      metadata: { approval: { type: 'approval', nodeId: 'review-node', message: 'Approve?' } },
+    });
+    (workflowDb.updateWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
+    (core.createWorkflowStore as ReturnType<typeof mock>).mockReturnValueOnce({
+      createWorkflowEvent: mock(() => Promise.resolve()),
+    });
+    const getCodebaseMock = codebaseDb.getCodebase as ReturnType<typeof mock>;
+    getCodebaseMock.mockReset();
+    getCodebaseMock.mockRejectedValueOnce(new Error('database offline'));
+
+    const discoverSpy = workflowDiscovery.discoverWorkflowsWithConfig as ReturnType<typeof mock>;
+    discoverSpy.mockClear();
+
+    await expect(workflowApproveCommand('run-approve-codebase-error')).rejects.toThrow(
+      "Approved but failed to resume workflow 'implement': Failed to load codebase 'cb-bad' for workflow run 'run-approve-codebase-error': database offline\n" +
+        'Cannot safely discover workflows from the run worktree because project workflow files may be missing.\n' +
+        'Fix the codebase lookup problem, then retry.\n' +
+        "The approval was recorded. Run 'bun run cli workflow resume run-approve-codebase-error' to retry."
+    );
+    expect(mockLogger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ codebaseId: 'cb-bad' }),
+      'cli.workflow_approve_codebase_lookup_failed'
+    );
+    expect(mockLogger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: 'run-approve-codebase-error' }),
+      'cli.workflow_approve_resume_failed'
+    );
+    expect(discoverSpy).not.toHaveBeenCalledWith('/tmp/test-worktree', expect.any(Function));
   });
 
   it('should pass original platform conversation ID through to workflowRunCommand', async () => {
@@ -2760,6 +2931,7 @@ describe('workflowRejectCommand', () => {
 
   beforeEach(() => {
     consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    mockLogger.error.mockClear();
   });
 
   afterEach(() => {
@@ -3005,6 +3177,105 @@ describe('workflowRejectCommand', () => {
     // Discovery must use the codebase source path, NOT working_path
     expect(discoverSpy).toHaveBeenCalledWith(
       '/users/me/source-repo-with-yaml',
+      expect.any(Function)
+    );
+  });
+
+  it('fails loudly when getCodebase throws during reject auto-resume', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
+
+    const runData = {
+      id: 'run-reject-codebase-error',
+      workflow_name: 'my-approval-workflow',
+      status: 'paused',
+      user_message: 'go',
+      working_path: '/tmp/worktree-without-yaml',
+      codebase_id: 'cb-bad',
+      metadata: {
+        approval: {
+          type: 'approval',
+          nodeId: 'gate',
+          message: 'Approve?',
+          onRejectPrompt: 'Fix: $REJECTION_REASON',
+          onRejectMaxAttempts: 3,
+        },
+        rejection_count: 0,
+      },
+    };
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(runData);
+    (workflowDb.updateWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
+    const getCodebaseMock = codebaseDb.getCodebase as ReturnType<typeof mock>;
+    getCodebaseMock.mockReset();
+    getCodebaseMock.mockRejectedValueOnce(new Error('database offline'));
+
+    const discoverSpy = workflowDiscovery.discoverWorkflowsWithConfig as ReturnType<typeof mock>;
+    discoverSpy.mockClear();
+
+    await expect(workflowRejectCommand('run-reject-codebase-error', 'needs work')).rejects.toThrow(
+      "Rejected but failed to resume workflow 'my-approval-workflow': Failed to load codebase 'cb-bad' for workflow run 'run-reject-codebase-error'"
+    );
+    expect(mockLogger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ codebaseId: 'cb-bad' }),
+      'cli.workflow_reject_codebase_lookup_failed'
+    );
+    expect(mockLogger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: 'run-reject-codebase-error' }),
+      'cli.workflow_reject_resume_failed'
+    );
+    expect(discoverSpy).not.toHaveBeenCalledWith(
+      '/tmp/worktree-without-yaml',
+      expect.any(Function)
+    );
+  });
+
+  it('fails with recorded-rejection recovery when codebase row is missing during reject auto-resume', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
+
+    const runData = {
+      id: 'run-reject-missing-codebase',
+      workflow_name: 'my-approval-workflow',
+      status: 'paused',
+      user_message: 'go',
+      working_path: '/tmp/worktree-without-yaml',
+      codebase_id: 'cb-missing',
+      metadata: {
+        approval: {
+          type: 'approval',
+          nodeId: 'gate',
+          message: 'Approve?',
+          onRejectPrompt: 'Fix: $REJECTION_REASON',
+          onRejectMaxAttempts: 3,
+        },
+        rejection_count: 0,
+      },
+    };
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(runData);
+    (workflowDb.updateWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
+    const getCodebaseMock = codebaseDb.getCodebase as ReturnType<typeof mock>;
+    getCodebaseMock.mockReset();
+    getCodebaseMock.mockResolvedValueOnce(null);
+
+    const discoverSpy = workflowDiscovery.discoverWorkflowsWithConfig as ReturnType<typeof mock>;
+    discoverSpy.mockClear();
+
+    await expect(
+      workflowRejectCommand('run-reject-missing-codebase', 'needs work')
+    ).rejects.toThrow(
+      "Rejected but failed to resume workflow 'my-approval-workflow': Workflow run 'run-reject-missing-codebase' references codebase 'cb-missing', but that codebase no longer exists.\n" +
+        'Cannot safely discover workflows from the run worktree because project workflow files may be missing.\n' +
+        'Re-register the project or restore the codebase row, then retry.\n' +
+        "The rejection was recorded. Run 'bun run cli workflow resume run-reject-missing-codebase' to retry."
+    );
+    expect(mockLogger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: 'run-reject-missing-codebase' }),
+      'cli.workflow_reject_resume_failed'
+    );
+    expect(discoverSpy).not.toHaveBeenCalledWith(
+      '/tmp/worktree-without-yaml',
       expect.any(Function)
     );
   });
