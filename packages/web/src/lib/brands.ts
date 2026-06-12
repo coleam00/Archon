@@ -89,11 +89,12 @@ export const BRANDS: BrandDef[] = [
     slug: 'qep',
     label: 'QEP',
     apolloPrefix: 'QEP',
-    icp: 'Quantum Energy Practitioners and bioenergetic-medicine clinicians; emerging-modality early adopters.',
+    icp: 'Physician practices evaluating a white-labeled health-data-governance platform (built by Blake Baynham with Plaud.ai as capture layer). Solves encounter-capture, cross-modality protocol tracking, and HIPAA/audit governance for cash-pay and concierge clinics. NOT outbound-named yet per Jason 2026-06-05.',
     adjacentIcps: [
-      'Functional medicine practices',
-      'Energy healers transitioning to clinical credibility',
-      'Wellness retreats with diagnostic offerings',
+      'Concierge / DPC practices running multi-modality stacks (BRT + IHHT + IV + peptides)',
+      'Cash-pay clinics looking to package their own branded patient-data system',
+      'Multi-location physician groups needing governed protocol data across sites',
+      'Functional medicine practices with audit / compliance exposure',
     ],
   },
 ];
