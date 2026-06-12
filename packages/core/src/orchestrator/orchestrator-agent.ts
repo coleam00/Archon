@@ -878,7 +878,10 @@ export async function handleMessage(
 
     // 1. Get/create conversation and inherit thread context.
     // userId is recorded on the conversation row only on first creation —
-    // first-user-wins. Per-message attribution happens on workflow_runs.
+    // first-user-wins. The row's user_id is provenance plus a fallback for
+    // execution identity; each turn's prefs/credentials resolve from the
+    // SENDER when the adapter supplied one (see executionUserId below).
+    // Per-message attribution happens on workflow_runs.
     let conversation = await db.getOrCreateConversation(
       platform.getPlatformType(),
       conversationId,
@@ -1195,12 +1198,26 @@ export async function handleMessage(
     // Reuse the config already loaded during workflow discovery (avoids a second disk read).
     // Fall back to loadConfig only when no codebase is scoped (discoveredConfig is undefined).
     const config = discoveredConfig ?? (await loadConfig());
+    // Execution identity: the message sender when the adapter resolved one,
+    // else the conversation creator (solo installs / legacy rows / surfaces
+    // without auth). Sender-first mirrors the workflow executor, which
+    // resolves prefs from the run starter — without it, a multi-user thread
+    // would execute every turn on the creator's credentials (#1976).
+    const executionUserId = userId ?? conversation.user_id ?? undefined;
+    if (!userId && conversation.user_id && isPerUserProviderKeysEnabled()) {
+      // No sender identity arrived with this turn while per-user credentials
+      // are active — the turn executes (and bills) as the conversation
+      // CREATOR. Distinguishes a degraded auth resolution from the normal
+      // solo-install path (where per-user keys are off and this stays silent).
+      getLog().warn(
+        { conversationId, fallbackUserId: conversation.user_id },
+        'orchestrator.execution_identity_creator_fallback'
+      );
+    }
     // Per-user AI prefs (Phase 3): the user's tiers/aliases/default-assistant
     // override install config (highest precedence). `{}` (no identity, no row,
     // or DB failure) keeps config-only behavior byte-for-byte.
-    const userAiPrefs = conversation.user_id
-      ? await resolveUserAiPrefsForChat(conversation.user_id)
-      : {};
+    const userAiPrefs = executionUserId ? await resolveUserAiPrefsForChat(executionUserId) : {};
     let configuredProviderKey = userAiPrefs.defaultProvider ?? conversation.ai_assistant_type;
     let aiProfile: ReturnType<typeof buildAiProfile>;
     try {
@@ -1215,7 +1232,7 @@ export async function handleMessage(
       // user's chat — degrade to config-only. A broken config layer still
       // fails fast: the rebuild rethrows the same error.
       getLog().error(
-        { err: profileErr as Error, userId: conversation.user_id },
+        { err: profileErr as Error, userId: executionUserId },
         'orchestrator.user_ai_prefs_profile_invalid'
       );
       configuredProviderKey = conversation.ai_assistant_type;
@@ -1279,10 +1296,10 @@ export async function handleMessage(
     // file writes (Codex `CODEX_HOME/auth.json` for the ChatGPT subscription
     // path) are dropped here and only apply to workflow runs. Merged LAST so
     // a connected user's keys win over file/db env. No-op when the feature is
-    // disabled or the conversation has no originating user.
+    // disabled or no execution identity resolved (sender, else creator).
     const userProviderEnv =
-      isPerUserProviderKeysEnabled() && conversation.user_id
-        ? await resolveUserProviderEnvForChat(conversation.user_id)
+      isPerUserProviderKeysEnabled() && executionUserId
+        ? await resolveUserProviderEnvForChat(executionUserId)
         : {};
     const effectiveEnv = { ...(config.envVars ?? {}), ...dbEnvVars, ...userProviderEnv };
 
