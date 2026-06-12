@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Sparkles, ExternalLink, Calendar, Tag } from 'lucide-react';
+import { Sparkles, Copy, Check, Calendar, Tag } from 'lucide-react';
 
 // Vite raw-glob over all dated brief / decision / spec markdown in the vault.
 // Pulls everything matching YYYY-MM-DD-*.md in the intelligence subfolders.
@@ -210,8 +210,8 @@ export function ResearchFirehosePage(): React.ReactElement {
           />
         </div>
         <p className="text-[10px] text-text-tertiary">
-          Showing {filtered.length} of {ITEMS.length} entries. Click any row to open the source file
-          path in the vault.
+          Showing {filtered.length} of {ITEMS.length} entries. Click the copy icon on any row to
+          copy its vault path.
         </p>
       </div>
 
@@ -231,6 +231,17 @@ export function ResearchFirehosePage(): React.ReactElement {
 }
 
 function FeaturedCard({ item }: { item: FirehoseItem }): React.ReactElement {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = (): void => {
+    void navigator.clipboard
+      ?.writeText(`second-brain/${item.path.replace(/^.*?second-brain\//, '')}`)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => {
+          setCopied(false);
+        }, 1500);
+      });
+  };
   return (
     <div className="group flex h-full flex-col gap-2 rounded-lg border border-border bg-card p-4 transition-all hover:border-primary/50 hover:shadow-md">
       <div className="flex items-center justify-between">
@@ -255,12 +266,32 @@ function FeaturedCard({ item }: { item: FirehoseItem }): React.ReactElement {
         <code className="rounded bg-surface-inset px-1.5 py-0.5 font-mono text-[10px] text-text-tertiary">
           {item.filename}
         </code>
+        <button
+          type="button"
+          onClick={handleCopy}
+          title={copied ? 'Copied!' : `Copy vault path: ${item.path}`}
+          className="ml-auto flex items-center gap-1 rounded border border-border bg-surface-inset px-1.5 py-0.5 text-[10px] text-text-tertiary transition-colors hover:border-primary/40 hover:text-primary"
+        >
+          {copied ? <Check className="h-3 w-3 text-emerald-700" /> : <Copy className="h-3 w-3" />}
+          {copied ? 'copied' : 'copy path'}
+        </button>
       </div>
     </div>
   );
 }
 
 function ListRow({ item }: { item: FirehoseItem }): React.ReactElement {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = (): void => {
+    void navigator.clipboard
+      ?.writeText(`second-brain/${item.path.replace(/^.*?second-brain\//, '')}`)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => {
+          setCopied(false);
+        }, 1500);
+      });
+  };
   return (
     <div className="flex flex-col gap-1 rounded-md border border-border bg-card p-3 transition-all hover:border-primary/40 hover:shadow-sm">
       <div className="flex items-center gap-3">
@@ -276,7 +307,15 @@ function ListRow({ item }: { item: FirehoseItem }): React.ReactElement {
           </span>
         )}
         <h4 className="flex-1 truncate text-sm font-medium text-text-primary">{item.title}</h4>
-        <ExternalLink className="h-3 w-3 text-text-tertiary" />
+        <button
+          type="button"
+          onClick={handleCopy}
+          title={copied ? 'Copied!' : `Copy vault path: ${item.path}`}
+          className="flex items-center gap-1 rounded border border-border bg-surface-inset px-1.5 py-0.5 text-[10px] text-text-tertiary transition-colors hover:border-primary/40 hover:text-primary"
+        >
+          {copied ? <Check className="h-3 w-3 text-emerald-700" /> : <Copy className="h-3 w-3" />}
+          {copied ? 'copied' : 'copy path'}
+        </button>
       </div>
       {(item.description || item.preview) && (
         <p className="text-xs text-text-secondary line-clamp-2">
