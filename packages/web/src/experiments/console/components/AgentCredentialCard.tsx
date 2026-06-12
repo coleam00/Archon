@@ -241,8 +241,8 @@ function CredentialRow({
 }): ReactElement {
   // Deliberate gating asymmetry: key connect derives from the declared
   // `kinds`, but login uses `subscriptionAvailable` — the server-evaluated
-  // runtime gate (e.g. Codex declares the 'subscription' kind yet its OAuth
-  // stays disabled, #1924). Don't "fix" login to follow the `kinds` pattern.
+  // runtime gate (it can disable a declared 'subscription' kind, as it did
+  // for Codex until #1924). Don't "fix" login to follow the `kinds` pattern.
   const canConnectKey = connectEnabled && cred.kinds.includes('api_key') && cred.connected === null;
   const canLogin = connectEnabled && cred.subscriptionAvailable && cred.connected !== 'oauth';
   const canDisconnect = connectEnabled && cred.connected !== null;

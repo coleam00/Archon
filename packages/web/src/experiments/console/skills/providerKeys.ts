@@ -72,8 +72,8 @@ export interface ProviderKeyList {
   /** Server-owned catalog of connectable vendor ids (no client duplication). */
   available: string[];
   /**
-   * Subset of `available` that supports subscription (OAuth) login. Codex is
-   * intentionally excluded (gated, #1924) so the UI shows it API-key-only.
+   * Subset of `available` that supports subscription (OAuth) login
+   * (anthropic, openai, github-copilot since the #1924 gate lift).
    */
   subscriptionAvailable: string[];
   /**

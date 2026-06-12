@@ -45,6 +45,35 @@ mock.module('@archon/providers/oauth', () => ({
   githubCopilotOAuthProvider: copilot,
 }));
 
+// The openai (ChatGPT/Codex) flow is Archon-owned (#1924) — drive its exchange
+// and paste parsing via controllable impls; the authorize flow is stubbed thin.
+let exchangeImpl: (code: string, verifier: string) => Promise<Record<string, unknown>>;
+const defaultParseImpl = (input: string): { code?: string; state?: string } => {
+  const v = input.trim();
+  if (v.includes('#')) {
+    const [code, state] = v.split('#', 2);
+    return { code, state };
+  }
+  return { code: v };
+};
+let parseImpl = defaultParseImpl;
+mock.module('./openai-oauth', () => ({
+  createOpenAiAuthorizeFlow: () => ({
+    url: 'https://auth.openai.com/oauth/authorize?mock=1',
+    verifier: 'pkce-verifier-1',
+    state: 'state-1',
+  }),
+  parseOpenAiAuthorizationInput: (input: string) => parseImpl(input),
+  exchangeOpenAiAuthorizationCode: (code: string, verifier: string) => exchangeImpl(code, verifier),
+  // Imported by user-provider-key-store (loaded transitively via connect-service);
+  // unused by the bridge itself.
+  mintOpenAiOAuthApiKey: async (creds: Record<string, unknown>) => ({
+    newCredentials: creds,
+    apiKey: 'k',
+  }),
+  refreshOpenAiOAuthCredentials: async (creds: Record<string, unknown>) => creds,
+}));
+
 const {
   startOAuth,
   pollOAuth,
@@ -61,13 +90,11 @@ describe('oauth-bridge', () => {
   beforeEach(() => {
     resetOAuthSessionsForTest();
     mockQuery.mockClear();
+    parseImpl = defaultParseImpl;
   });
 
-  test('unknown / non-subscription / disabled provider → throws', async () => {
+  test('unknown / non-subscription provider → throws', async () => {
     await expect(startOAuth('u1', 'openrouter')).rejects.toThrow(/does not support subscription/);
-    // codex is wired (ARCHON_TO_PI_OAUTH) but gated out of SUBSCRIPTION_PROVIDERS
-    // because Pi drops the OpenAI id_token → Codex CLI rejects it (#1924).
-    await expect(startOAuth('u1', 'codex')).rejects.toThrow(/does not support subscription/);
   });
 
   test('manual flow: start returns url, poll(code) unblocks login → connected', async () => {
@@ -310,5 +337,90 @@ describe('oauth-bridge', () => {
     expect(thrown).toBeInstanceOf(OAuthCallbackPortBusyError);
     expect((thrown as Error).message).toMatch(/callback port/i);
     expect((thrown as Error).message).toMatch(/retry/i);
+  });
+
+  // ---- #1924: openai (ChatGPT/Codex) runs the Archon-owned PKCE flow ----
+
+  test('openai manual flow: start returns the authorize URL, poll(code) exchanges → connected', async () => {
+    let exchanged: { code: string; verifier: string } | undefined;
+    exchangeImpl = async (code, verifier) => {
+      exchanged = { code, verifier };
+      return { access: 'at', refresh: 'rt', expires: 9, accountId: 'acct-1', id_token: 'idt' };
+    };
+    const start = await startOAuth('u1', 'openai');
+    expect(start.mode).toBe('manual');
+    expect(start.url).toBe('https://auth.openai.com/oauth/authorize?mock=1');
+
+    expect(pollOAuth(start.sessionId, 'u1', 'AUTHCODE').status).toBe('pending');
+    await tick();
+    // The pasted code is exchanged with the per-attempt PKCE verifier.
+    expect(exchanged).toEqual({ code: 'AUTHCODE', verifier: 'pkce-verifier-1' });
+    expect(pollOAuth(start.sessionId, 'u1').status).toBe('connected');
+  });
+
+  test("legacy 'codex' id runs the openai flow (gate lifted, #1924)", async () => {
+    exchangeImpl = async () => ({ access: 'a', refresh: 'r', expires: 1, id_token: 'idt' });
+    const start = await startOAuth('u1', 'codex');
+    expect(start.mode).toBe('manual');
+    expect(start.url).toContain('auth.openai.com');
+  });
+
+  test('openai flow: pasted state mismatch → error, no exchange', async () => {
+    let exchangeCalls = 0;
+    exchangeImpl = async () => {
+      exchangeCalls++;
+      return {};
+    };
+    const start = await startOAuth('u1', 'openai');
+    pollOAuth(start.sessionId, 'u1', 'CODE#wrong-state');
+    await tick();
+    const res = pollOAuth(start.sessionId, 'u1');
+    expect(res.status).toBe('error');
+    expect(res.detail).toMatch(/state mismatch/i);
+    expect(exchangeCalls).toBe(0);
+  });
+
+  test('openai flow: exchange failure surfaces via poll', async () => {
+    exchangeImpl = async () => {
+      throw new Error('OpenAI token exchange failed (400): invalid_grant');
+    };
+    const start = await startOAuth('u1', 'openai');
+    pollOAuth(start.sessionId, 'u1', 'BADCODE');
+    await tick();
+    const res = pollOAuth(start.sessionId, 'u1');
+    expect(res.status).toBe('error');
+    expect(res.detail).toContain('invalid_grant');
+  });
+
+  test('openai flow: abort cancels cleanly (no callback server involved)', async () => {
+    exchangeImpl = async () => ({ access: 'a' });
+    const start = await startOAuth('u1', 'openai');
+    cancelOAuth(start.sessionId, 'u1');
+    await tick();
+    expect(pollOAuth(start.sessionId, 'u1').status).toBe('error'); // session dropped
+  });
+
+  test('openai flow: state-only paste (no code) → Missing authorization code, no exchange (S1)', async () => {
+    parseImpl = () => ({ state: 'state-1' }); // e.g. a redirect URL the user copied before authorizing
+    let exchangeCalls = 0;
+    exchangeImpl = async () => {
+      exchangeCalls++;
+      return {};
+    };
+    const start = await startOAuth('u1', 'openai');
+    pollOAuth(start.sessionId, 'u1', 'http://localhost:1455/auth/callback?state=state-1');
+    await tick();
+    const res = pollOAuth(start.sessionId, 'u1');
+    expect(res.status).toBe('error');
+    expect(res.detail).toMatch(/missing authorization code/i);
+    expect(exchangeCalls).toBe(0);
+  });
+
+  test('a second openai login for the same user supersedes the first (S1)', async () => {
+    exchangeImpl = async () => ({ access: 'a', refresh: 'r', expires: 1, id_token: 'idt' });
+    const first = await startOAuth('u1', 'openai');
+    const second = await startOAuth('u1', 'openai');
+    expect(first.sessionId).not.toBe(second.sessionId);
+    expect(pollOAuth(first.sessionId, 'u1').status).toBe('error'); // dropped
   });
 });

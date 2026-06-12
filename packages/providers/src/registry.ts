@@ -136,8 +136,8 @@ export function registerBuiltinProviders(): void {
         kind: 'static',
         specs: [
           {
-            // Subscription (ChatGPT) login is wired but connect-gated — see
-            // SUBSCRIPTION_DISABLED in @archon/core credentials (#1924).
+            // Subscription (ChatGPT) login runs Archon's own PKCE flow —
+            // see @archon/core credentials/openai-oauth.ts (#1924).
             vendor: 'openai',
             displayName: 'OpenAI',
             kinds: ['api_key', 'subscription'],

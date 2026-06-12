@@ -6,10 +6,11 @@
  * bridge holds the in-flight `login()` promise in a server-side session and
  * feeds it through `start` → `poll(code?)`:
  *
- *   - **manual-code** (Anthropic / OpenAI-Codex): `login()` fires `onAuth(url)`;
- *     the user authorizes in a browser and gets a code; the client submits it via
- *     `poll(code)`, which resolves the callback Pi is awaiting; `login()` then
- *     completes and we persist.
+ *   - **manual-code** (Anthropic via Pi; OpenAI/ChatGPT via the Archon-owned
+ *     PKCE flow in `openai-oauth.ts`, #1924): the flow surfaces an authorize
+ *     URL; the user authorizes in a browser and gets a code; the client submits
+ *     it via `poll(code)`, which resolves the deferred the flow is awaiting;
+ *     the login then completes and we persist.
  *   - **device-code** (GitHub Copilot): `login()` fires `onDeviceCode(userCode,
  *     verificationUri)` and polls internally; the bridge just waits for `login()`
  *     to resolve.
@@ -47,7 +48,17 @@ import type {
   OAuthAuthInfo,
   OAuthDeviceCodeInfo,
 } from '@archon/providers/oauth';
-import { piOAuthProviderFor, SUBSCRIPTION_PROVIDERS } from './oauth-providers';
+import {
+  piOAuthProviderFor,
+  SUBSCRIPTION_PROVIDERS,
+  OPENAI_SUBSCRIPTION_VENDOR,
+} from './oauth-providers';
+import {
+  createOpenAiAuthorizeFlow,
+  parseOpenAiAuthorizationInput,
+  exchangeOpenAiAuthorizationCode,
+  type OpenAiOAuthCredentials,
+} from './openai-oauth';
 import { normalizeCredentialVendor } from './delivery';
 import { persistProviderOAuth } from './connect-service';
 import { sanitizeCredentials, sanitizeError } from '../utils/credential-sanitizer';
@@ -190,10 +201,38 @@ export interface PollOAuthResult {
 }
 
 /**
- * Begin a subscription login for a vendor (anthropic/github-copilot; legacy
- * claude/copilot ids accepted). Kicks off Pi's `login()` (held server-side)
- * and returns once the first callback has populated the URL (manual) or
- * user-code (device), or a short timeout elapses.
+ * The Archon-owned ChatGPT/Codex manual login (#1924): build the authorize
+ * URL (PKCE), surface it on the session, wait for the pasted redirect URL /
+ * code via the same `codeDeferred` the Pi manual flows use (so poll(code) and
+ * abort semantics are identical), then exchange it directly — capturing the
+ * `id_token` Pi drops. Runs NO local callback server (the #1963 wedge
+ * pattern); the user pastes the final redirect URL or code back instead.
+ */
+async function runOpenAiManualLogin(session: OAuthSession): Promise<OpenAiOAuthCredentials> {
+  const flow = createOpenAiAuthorizeFlow();
+  session.url = flow.url;
+  if (session.mode === 'pending') session.mode = 'manual';
+  session.firstSignal.resolve(true);
+  // Rejected by abortSession on cancel/supersede/expiry — same as Pi flows.
+  const input = await session.codeDeferred.promise;
+  const parsed = parseOpenAiAuthorizationInput(input);
+  if (parsed.state && parsed.state !== flow.state) {
+    throw new Error('OAuth state mismatch.');
+  }
+  if (!parsed.code) {
+    throw new Error('Missing authorization code.');
+  }
+  // Returns its true type — structurally assignable to PiOAuthCredentials
+  // (access/refresh/expires plus extras), so no cast at the loginPromise join.
+  return exchangeOpenAiAuthorizationCode(parsed.code, flow.verifier, session.abort.signal);
+}
+
+/**
+ * Begin a subscription login for a vendor (anthropic/openai/github-copilot;
+ * legacy claude/codex/copilot ids accepted). Kicks off the held login —
+ * Pi's `login()` for anthropic/github-copilot, the Archon-owned PKCE flow for
+ * openai — and returns once the first signal has populated the URL (manual)
+ * or user-code (device), or a short timeout elapses.
  */
 export async function startOAuth(userId: string, providerId: string): Promise<StartOAuthResult> {
   // Expired sessions may also hold a callback server — include them in the
@@ -201,14 +240,18 @@ export async function startOAuth(userId: string, providerId: string): Promise<St
   const supersededSettled: Promise<void>[] = sweepExpired();
   const provider = normalizeCredentialVendor(providerId);
   // SUBSCRIPTION_PROVIDERS is the single source of truth for "connectable via
-  // subscription" — it excludes vendors that are wired in ARCHON_TO_PI_OAUTH
-  // (so delivery/refresh still work) but gated off because the flow isn't usable
-  // end-to-end (e.g. openai/ChatGPT: Pi drops the id_token, #1924). Gate here
-  // too so the bridge can't be driven past the route/CLI check.
-  const piProvider = SUBSCRIPTION_PROVIDERS.has(provider)
-    ? piOAuthProviderFor(provider)
-    : undefined;
-  if (!piProvider) {
+  // subscription". Gate here too so the bridge can't be driven past the
+  // route/CLI check.
+  if (!SUBSCRIPTION_PROVIDERS.has(provider)) {
+    throw new Error(`Provider '${providerId}' does not support subscription login.`);
+  }
+  // `openai` (ChatGPT/Codex) runs the Archon-OWNED PKCE flow (openai-oauth.ts)
+  // instead of Pi's: Pi drops the id_token the Codex CLI requires (#1924), and
+  // Pi's flow would also bind a local fixed-port callback server — the #1963
+  // wedge pattern this bridge just escaped. piProvider stays undefined for it.
+  const piProvider =
+    provider === OPENAI_SUBSCRIPTION_VENDOR ? undefined : piOAuthProviderFor(provider);
+  if (provider !== OPENAI_SUBSCRIPTION_VENDOR && !piProvider) {
     throw new Error(`Provider '${providerId}' does not support subscription login.`);
   }
   // Hard-cancel prior in-flight logins that would collide with this one:
@@ -220,7 +263,7 @@ export async function startOAuth(userId: string, providerId: string): Promise<St
   //     superseded session's user sees "session not found" on their next poll
   //     and can simply restart — recoverable, so the heuristic is acceptable.
   for (const [id, s] of sessions) {
-    const callbackPortConflict = piProvider.usesCallbackServer === true && s.provider === provider;
+    const callbackPortConflict = piProvider?.usesCallbackServer === true && s.provider === provider;
     if (s.userId === userId || callbackPortConflict) {
       abortSession(s, 'Login superseded by a newer attempt.');
       supersededSettled.push(s.settled);
@@ -251,32 +294,34 @@ export async function startOAuth(userId: string, providerId: string): Promise<St
   session.codeDeferred.promise.catch(() => undefined);
   sessions.set(sessionId, session);
 
-  // Kick off login() WITHOUT awaiting — it blocks on the callbacks below.
-  session.settled = piProvider
-    .login({
-      onAuth: (info: OAuthAuthInfo) => {
-        session.url = info.url;
-        if (session.mode === 'pending') session.mode = 'manual';
-        session.firstSignal.resolve(true);
-      },
-      onDeviceCode: (info: OAuthDeviceCodeInfo) => {
-        session.userCode = info.userCode;
-        session.verificationUri = info.verificationUri;
-        session.mode = 'device';
-        session.firstSignal.resolve(true);
-      },
-      // Manual providers ask for the pasted code via onManualCodeInput (or onPrompt);
-      // wire both to the same deferred. NOTE: a future provider that used onPrompt for
-      // a DIFFERENT question would get handed the auth code — fine for claude/codex/copilot.
-      onManualCodeInput: () => session.codeDeferred.promise,
-      onPrompt: async () => session.codeDeferred.promise,
-      // No interactive account picker on the web bridge — take the first option.
-      onSelect: async prompt => prompt.options[0]?.id,
-      onProgress: (message: string) => {
-        getLog().debug({ provider, message }, 'oauth_bridge.progress');
-      },
-      signal: session.abort.signal,
-    })
+  // Kick off the login WITHOUT awaiting — it blocks on the callbacks/deferred.
+  const loginPromise: Promise<PiOAuthCredentials> = piProvider
+    ? piProvider.login({
+        onAuth: (info: OAuthAuthInfo) => {
+          session.url = info.url;
+          if (session.mode === 'pending') session.mode = 'manual';
+          session.firstSignal.resolve(true);
+        },
+        onDeviceCode: (info: OAuthDeviceCodeInfo) => {
+          session.userCode = info.userCode;
+          session.verificationUri = info.verificationUri;
+          session.mode = 'device';
+          session.firstSignal.resolve(true);
+        },
+        // Manual providers ask for the pasted code via onManualCodeInput (or onPrompt);
+        // wire both to the same deferred. NOTE: a future provider that used onPrompt for
+        // a DIFFERENT question would get handed the auth code — fine for claude/copilot.
+        onManualCodeInput: () => session.codeDeferred.promise,
+        onPrompt: async () => session.codeDeferred.promise,
+        // No interactive account picker on the web bridge — take the first option.
+        onSelect: async prompt => prompt.options[0]?.id,
+        onProgress: (message: string) => {
+          getLog().debug({ provider, message }, 'oauth_bridge.progress');
+        },
+        signal: session.abort.signal,
+      })
+    : runOpenAiManualLogin(session);
+  session.settled = loginPromise
     .then(async (creds: PiOAuthCredentials) => {
       await persistProviderOAuth(userId, provider, creds);
       session.status = 'connected';

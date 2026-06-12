@@ -89,10 +89,10 @@ export interface PersistProviderOAuthResult {
 /**
  * Store a user's OAuth subscription credential blob for a vendor. Accepts
  * legacy agent-keyed ids and stores under the vendor-canonical id. Throws
- * {@link InvalidProviderKeyError} when the vendor has no usable subscription
- * flow (only `anthropic`/`github-copilot` today — `openai` is gated, #1924).
- * The blob is encrypted inside the store and never logged; it's refreshed on
- * read by `getDecryptedProviderCredential`.
+ * {@link InvalidProviderKeyError} when the vendor has no subscription flow
+ * (`anthropic`/`openai`/`github-copilot` today). The blob is encrypted inside
+ * the store and never logged; it's refreshed on read by
+ * `getDecryptedProviderCredential`.
  */
 export async function persistProviderOAuth(
   userId: string,
