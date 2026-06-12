@@ -22,6 +22,14 @@ import {
 import { ArrowUpRight, TrendingUp, Users, DollarSign, Target } from 'lucide-react';
 import { listDashboardRuns } from '@/lib/api';
 import { pmcOverview } from '@/lib/pmc-content';
+import {
+  PMC_PILLARS,
+  PMC_PILLARS_LAST_REVIEWED,
+  PMC_REVENUE_LINES,
+  PMC_REVENUE_LINES_LAST_REVIEWED,
+  PMC_VALUE_PROPS,
+  type PmcValuePropIconName,
+} from '@/lib/pmc-strategy';
 import prospectsData from '@/lib/business-prospects.generated.json';
 import playgroundData from '@/lib/playground.generated.json';
 import type { BusinessProspect } from '@/components/business/BusinessPage';
@@ -36,21 +44,7 @@ function isPmcScoped(workflowName: string): boolean {
 // Brand-aligned palette (matches CSS chart-1..5 tokens)
 // (REVENUE_LINE_COLOR map retired — composite-score bars now use --primary)
 
-const REVENUE_LINES = [
-  // Composite scores from the 2026-05-13 multi-line revenue PRD
-  { name: 'PMC (RCM Audit)', composite: 22, marketability: 7, readiness: 7, cycleSpeed: 8 },
-  { name: 'BRT (BH-Therapy)', composite: 25, marketability: 9, readiness: 9, cycleSpeed: 7 },
-  { name: 'BRT (Chiro+Medspa)', composite: 22, marketability: 8, readiness: 8, cycleSpeed: 6 },
-  {
-    name: "EWC + Lumnen (Jason's LLC)",
-    composite: 19,
-    marketability: 6,
-    readiness: 8,
-    cycleSpeed: 5,
-  },
-  { name: 'Fountain WPB', composite: 24, marketability: 8, readiness: 7, cycleSpeed: 8 },
-  { name: 'AccuFit', composite: 20, marketability: 6, readiness: 7, cycleSpeed: 7 },
-];
+const REVENUE_LINES = PMC_REVENUE_LINES;
 
 // Pipeline-stage funnel — computed live from playgroundData.sequences + dial-tracker.
 // Audit closed is intentionally a manual roll-up — wire to a vault file once we lock format.
@@ -98,13 +92,18 @@ function buildDialFunnel(): { stage: string; count: number }[] {
   }));
 }
 
-// Pillar mix — PMC service offering
-const PMC_PILLARS = [
-  { name: 'Fractional C-Suite', value: 35, color: '#1e40af' },
-  { name: 'Systems & Automation', value: 25, color: '#c9a84c' },
-  { name: 'RCM Optimization', value: 30, color: '#10b981' },
-  { name: 'Talent Acquisition', value: 10, color: '#f59e0b' },
-];
+// Pillar mix — PMC service offering (vault-sourced from
+// `second-brain/businesses/pmc/strategy/service-mix.md`)
+// PMC_PILLARS is imported from `@/lib/pmc-strategy`.
+
+// Icon-name → lucide-react component map for vault-sourced VALUE_PROPS.
+const VALUE_PROP_ICONS: Record<PmcValuePropIconName, typeof TrendingUp> = {
+  DollarSign,
+  Target,
+  TrendingUp,
+  Users,
+  ArrowUpRight,
+};
 
 const KPI_TILES: { label: string; value: string; sub: string; icon: typeof TrendingUp }[] = [
   {
@@ -141,23 +140,9 @@ const KPI_TILES: { label: string; value: string; sub: string; icon: typeof Trend
   },
 ];
 
-const VALUE_PROPS = [
-  {
-    title: 'Grand Slam RCM Audit',
-    body: 'Recover 8-15% of leaked revenue from coding, denials, and AR-aging gaps. Audit ticket $7.5K-$15K, >70% margin, 30-60 day close cycle.',
-    icon: DollarSign,
-  },
-  {
-    title: 'Cash-pay practice transformation',
-    body: 'Fractional VP-Sales / BD leadership for clinics pivoting from insurance to concierge, DPC, and cash-pay. Proven playbook + outbound systems.',
-    icon: Target,
-  },
-  {
-    title: 'Portfolio cross-sell',
-    body: 'A single PMC engagement opens BRT, EWC, Fountain, and AccuFit upsell paths. One advisory contract → multi-line recurring revenue.',
-    icon: TrendingUp,
-  },
-];
+// Value props — vault-sourced from
+// `second-brain/businesses/pmc/strategy/value-props.md`.
+// PMC_VALUE_PROPS is imported from `@/lib/pmc-strategy`.
 
 export function PMCPage(): React.ReactElement {
   const { data: runsData } = useQuery({
@@ -265,9 +250,9 @@ export function PMCPage(): React.ReactElement {
 
         {/* Value prop tiles */}
         <section className="grid gap-4 md:grid-cols-3">
-          {VALUE_PROPS.map(v => {
+          {PMC_VALUE_PROPS.map(v => {
             // eslint-disable-next-line @typescript-eslint/naming-convention
-            const Icon = v.icon;
+            const Icon = VALUE_PROP_ICONS[v.icon];
             return (
               <div
                 key={v.title}
@@ -288,7 +273,11 @@ export function PMCPage(): React.ReactElement {
               <h3 className="text-sm font-semibold text-text-primary">
                 Revenue lines — composite score (marketability × readiness × cycle)
               </h3>
-              <span className="text-[10px] text-text-tertiary">PRD 2026-05-13</span>
+              <span className="text-[10px] text-text-tertiary">
+                {PMC_REVENUE_LINES_LAST_REVIEWED
+                  ? `Vault · reviewed ${PMC_REVENUE_LINES_LAST_REVIEWED}`
+                  : 'PRD 2026-05-13'}
+              </span>
             </div>
             <p className="mb-3 text-[11px] text-text-tertiary">
               Higher = closer to revenue. BH-Therapy leads; Fountain WPB now elevated.
@@ -423,7 +412,11 @@ export function PMCPage(): React.ReactElement {
               <h3 className="text-sm font-semibold text-text-primary">
                 PMC service mix — pillar weight
               </h3>
-              <span className="text-[10px] text-text-tertiary">Brochure positioning</span>
+              <span className="text-[10px] text-text-tertiary">
+                {PMC_PILLARS_LAST_REVIEWED
+                  ? `Vault · reviewed ${PMC_PILLARS_LAST_REVIEWED}`
+                  : 'Brochure positioning'}
+              </span>
             </div>
             <p className="mb-3 text-[11px] text-text-tertiary">
               How PMC packages its advisory: 4 pillars, balanced for full-spectrum embeds.
