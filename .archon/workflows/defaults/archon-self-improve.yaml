@@ -1,0 +1,291 @@
+name: archon-self-improve
+description: |
+  Analyzes a prior Archon workflow run (JSONL logs + node artifacts)
+  and proposes targeted improvements to the YAML definition and command files.
+  Routes suggestions through a human approval gate before applying any changes.
+
+  Use when: you want Archon to review and improve one of its own workflows
+  Triggers: archon-self-improve, self improve, improve workflow, bootstrap
+  Does: load run logs → parallel analysis → synthesize → approve → apply+validate
+  NOT for: implementing new features (use archon-workflow-builder for that)
+
+provider: claude
+model: sonnet
+
+nodes:
+  # ─── Phase 1: Load Run Data ─────────────────────────────────────────
+  - id: load-run-data
+    bash: |
+      set -euo pipefail
+
+      RUN_ID="$ARGUMENTS"
+      if [ -z "$RUN_ID" ]; then
+        echo "ERROR: No run ID provided. Usage: archon workflow run archon-self-improve <run-id>"
+        exit 1
+      fi
+
+      # Search for the run's artifact directory
+      ARTIFACTS_BASE="$HOME/.archon/workspaces"
+      RUN_DIR=""
+      for dir in "$ARTIFACTS_BASE"/*/artifacts/runs/"$RUN_ID"; do
+        if [ -d "$dir" ]; then
+          RUN_DIR="$dir"
+          break
+        fi
+      done
+
+      if [ -z "$RUN_DIR" ]; then
+        echo "ERROR: No artifact directory found for run ID '$RUN_ID'"
+        echo "Searched: $ARTIFACTS_BASE/*/artifacts/runs/$RUN_ID"
+        exit 1
+      fi
+
+      echo "=== RUN DIRECTORY ==="
+      echo "$RUN_DIR"
+
+      # Find and cat the JSONL log
+      LOGS_BASE="$(dirname "$(dirname "$RUN_DIR")")/../logs"
+      LOG_FILE=""
+      if [ -d "$LOGS_BASE" ]; then
+        LOG_FILE=$(find "$LOGS_BASE" -name "${RUN_ID}*.jsonl" -type f 2>/dev/null | head -1)
+      fi
+
+      echo ""
+      echo "=== JSONL LOG ==="
+      if [ -n "$LOG_FILE" ] && [ -f "$LOG_FILE" ]; then
+        cat "$LOG_FILE"
+      else
+        echo "WARNING: No JSONL log found for run $RUN_ID"
+        echo "Searched: $LOGS_BASE/${RUN_ID}*.jsonl"
+      fi
+
+      echo ""
+      echo "=== NODE ARTIFACTS ==="
+      NODES_DIR="$RUN_DIR/nodes"
+      if [ -d "$NODES_DIR" ]; then
+        for f in "$NODES_DIR"/*; do
+          if [ -f "$f" ]; then
+            echo "--- $(basename "$f") ---"
+            cat "$f"
+            echo ""
+          fi
+        done
+      else
+        echo "No node artifacts found."
+      fi
+
+      echo ""
+      echo "=== WORKFLOW YAML ==="
+      # Try to find the workflow name from meta files
+      WORKFLOW_NAME=""
+      for meta in "$NODES_DIR"/*.meta.json 2>/dev/null; do
+        if [ -f "$meta" ]; then
+          WORKFLOW_NAME=$(grep -o '"workflow_name":"[^"]*"' "$meta" 2>/dev/null | head -1 | cut -d'"' -f4)
+          if [ -n "$WORKFLOW_NAME" ]; then break; fi
+        fi
+      done
+
+      if [ -n "$WORKFLOW_NAME" ]; then
+        echo "Workflow: $WORKFLOW_NAME"
+        # Try to find and output the workflow YAML
+        for yaml_path in ".archon/workflows/defaults/${WORKFLOW_NAME}.yaml" ".archon/workflows/${WORKFLOW_NAME}.yaml"; do
+          if [ -f "$yaml_path" ]; then
+            echo "Source: $yaml_path"
+            cat "$yaml_path"
+            break
+          fi
+        done
+      else
+        echo "Could not determine workflow name from artifacts."
+      fi
+    timeout: 30000
+
+  # ─── Phase 2: Parallel Analysis ─────────────────────────────────────
+  - id: analyze-efficiency
+    depends_on: [load-run-data]
+    model: haiku
+    allowed_tools: []
+    output_format:
+      type: object
+      properties:
+        findings:
+          type: array
+          items:
+            type: object
+            properties:
+              node_id:
+                type: string
+              issue:
+                type: string
+              evidence:
+                type: string
+              suggestion:
+                type: string
+            required: [node_id, issue, evidence, suggestion]
+        summary:
+          type: string
+      required: [findings, summary]
+    prompt: |
+      You are an efficiency analyst for Archon workflow runs. Analyze the run data
+      below and identify performance bottlenecks or resource waste.
+
+      ## Run Data
+
+      $load-run-data.output
+
+      ## Analysis Criteria
+
+      Flag any node that:
+      - Took more than 120 seconds to complete
+      - Used more than 10,000 tokens (input + output)
+      - Had excessive retries or tool call loops
+      - Could be replaced with a simpler node type (e.g., a bash node instead of an AI prompt)
+      - Used a more expensive model than necessary for a simple task
+
+      For each finding, provide:
+      - The node ID
+      - What the issue is
+      - Evidence from the logs (specific log lines or metrics)
+      - A concrete suggestion for improvement
+
+      If no issues found, return an empty findings array with a summary noting the run was efficient.
+
+  - id: analyze-info-flow
+    depends_on: [load-run-data]
+    model: haiku
+    allowed_tools: []
+    output_format:
+      type: object
+      properties:
+        findings:
+          type: array
+          items:
+            type: object
+            properties:
+              source_node:
+                type: string
+              target_node:
+                type: string
+              issue:
+                type: string
+              evidence:
+                type: string
+              suggestion:
+                type: string
+            required: [source_node, target_node, issue, evidence, suggestion]
+        summary:
+          type: string
+      required: [findings, summary]
+    prompt: |
+      You are an information flow analyst for Archon workflow runs. Analyze the run data
+      below and identify data completeness issues between nodes.
+
+      ## Run Data
+
+      $load-run-data.output
+
+      ## Analysis Criteria
+
+      For each pair of connected nodes (via depends_on), check:
+      - Does the upstream node produce all the data the downstream node needs?
+      - Is there redundant data being passed that could be trimmed?
+      - Are there nodes that re-derive information already computed upstream?
+      - Could node output substitution be used more effectively?
+      - Are prompt instructions clear enough for the AI to produce useful output?
+
+      For each finding, provide:
+      - The source and target node IDs
+      - What the information flow issue is
+      - Evidence from the logs
+      - A concrete suggestion for improvement
+
+      If no issues found, return an empty findings array with a summary noting the data flow is clean.
+
+  # ─── Phase 3: Synthesize ────────────────────────────────────────────
+  - id: synthesize
+    depends_on: [analyze-efficiency, analyze-info-flow]
+    model: sonnet
+    allowed_tools: []
+    prompt: |
+      You are a workflow improvement synthesizer. Combine the analysis findings
+      into concrete, actionable improvement suggestions for the workflow YAML
+      and command files.
+
+      ## Efficiency Analysis
+
+      $analyze-efficiency.output
+
+      ## Information Flow Analysis
+
+      $analyze-info-flow.output
+
+      ## Original Run Data
+
+      $load-run-data.output
+
+      ## Your Task
+
+      Synthesize the findings into a prioritized list of improvements. For each suggestion:
+
+      1. **What to change**: The specific YAML or command file edit (include file path and what to modify)
+      2. **Why**: Which analysis finding(s) support this change
+      3. **Impact**: Expected improvement (faster execution, lower cost, better output quality)
+      4. **Risk**: What could go wrong if this change is applied incorrectly
+
+      Rules:
+      - Only suggest changes to files in `.archon/workflows/defaults/` and `.archon/commands/defaults/`
+      - Never suggest changes to TypeScript source code
+      - Each suggestion must cite specific evidence from the analysis
+      - Prefer minimal, targeted edits over broad rewrites
+      - Include the exact YAML diff or markdown change for each suggestion
+
+      Format your response as a clear, numbered list that a human reviewer can quickly assess.
+
+  # ─── Phase 4: Human Approval ────────────────────────────────────────
+  - id: approve-changes
+    approval:
+      message: |
+        Review the proposed workflow improvements above.
+        Approve to apply changes, or reject to discard.
+        You may add comments with your approval/rejection.
+    capture_response: true
+    depends_on: [synthesize]
+
+  # ─── Phase 5: Apply and Validate ────────────────────────────────────
+  - id: apply-and-validate
+    depends_on: [approve-changes]
+    model: sonnet
+    prompt: |
+      You are a careful workflow editor. Apply the approved improvements to the
+      workflow YAML and command files.
+
+      ## Approved Suggestions
+
+      $synthesize.output
+
+      ## Reviewer Comments
+
+      $approve-changes.output
+
+      ## Instructions
+
+      1. Read each file that needs to be modified
+      2. Apply the suggested changes using the Edit tool
+      3. After all edits, run validation:
+         ```bash
+         bun run validate
+         ```
+      4. If validation passes, regenerate bundled defaults:
+         ```bash
+         bun run generate:bundled
+         ```
+      5. If validation fails, revert the problematic change and try again
+
+      Rules:
+      - Only modify files in `.archon/workflows/defaults/` and `.archon/commands/defaults/`
+      - Never modify TypeScript source code
+      - If the reviewer commented with specific guidance, follow it
+      - If a change causes validation to fail, revert it and note it as skipped
+      - After all changes, run `bun run validate` one final time to confirm everything passes
+
+      Report what was applied, what was skipped, and the final validation result.
