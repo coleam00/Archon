@@ -8,19 +8,23 @@ mkdir -p /.archon/workspaces /.archon/worktrees
 
 # Determine if we need to use gosu for privilege dropping
 if [ "$(id -u)" = "0" ]; then
-  # Running as root: fix volume permissions, then drop to appuser
-  if ! chown -Rh appuser:appuser /.archon 2>/dev/null; then
-    echo "ERROR: Failed to fix ownership of /.archon — volume may be read-only or mounted with incompatible options" >&2
-    exit 1
-  fi
+  # Running as root: fix volume permissions, then drop to appuser.
+  # Only files with wrong ownership are touched — a blanket `chown -R` rewrites
+  # metadata for every inode and can take tens of minutes on large volumes (#1970).
+  # find lstats by default and chown -h targets the symlink itself, preserving the
+  # old `chown -Rh` no-dereference semantics.
+  fix_ownership() {
+    if ! find "$1" \( ! -user appuser -o ! -group appuser \) -exec chown -h appuser:appuser {} + 2>/dev/null; then
+      echo "ERROR: Failed to fix ownership of $1 — volume may be read-only or mounted with incompatible options" >&2
+      exit 1
+    fi
+  }
+  fix_ownership /.archon
   # /home/appuser is persisted to a named volume (or bind-mounted via
   # ARCHON_USER_HOME) so Claude/Codex/Pi config, ~/.gitconfig, shell history,
   # and other user-specific state survive rebuilds. On bind mounts, host UIDs
   # don't map to appuser (1001), so fix ownership the same way we do /.archon.
-  if ! chown -Rh appuser:appuser /home/appuser 2>/dev/null; then
-    echo "ERROR: Failed to fix ownership of /home/appuser — volume may be read-only or mounted with incompatible options" >&2
-    exit 1
-  fi
+  fix_ownership /home/appuser
   RUNNER="gosu appuser"
 else
   # Already running as non-root (e.g., --user flag or Kubernetes)
