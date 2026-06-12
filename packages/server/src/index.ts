@@ -739,7 +739,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         // Process async (fire-and-forget for fast webhook response)
         // Note: github.handleWebhook() has internal error handling that notifies users
         // This catch is a fallback for truly unexpected errors (e.g., signature verification bugs)
-        github.handleWebhook(payload, signature).catch((error: unknown) => {
+        github.handleWebhook(payload, signature, deliveryId).catch((error: unknown) => {
           getLog().error({ err: error, eventType, deliveryId }, 'webhook_processing_error');
         });
 

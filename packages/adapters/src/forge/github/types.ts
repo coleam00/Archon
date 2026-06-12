@@ -21,8 +21,12 @@ export interface WebhookEvent {
     deletions?: number;
   };
   comment?: {
+    /** GitHub's stable comment id — same across duplicate deliveries of one comment */
+    id?: number;
     body: string;
     user: { login: string };
+    /** Bumped on edit, so an edited comment forms a new idempotency key */
+    updated_at?: string;
   };
   repository: {
     owner: { login: string };

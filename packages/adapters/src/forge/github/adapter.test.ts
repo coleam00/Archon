@@ -464,6 +464,151 @@ describe('GitHubAdapter', () => {
     });
   });
 
+  describe('webhook delivery dedup', () => {
+    let originalAllowedUsers: string | undefined;
+
+    function createDedupAdapter(): GitHubAdapter {
+      const adapter = new GitHubAdapter(
+        { kind: 'pat', token: 'fake-token-for-testing' },
+        'fake-webhook-secret',
+        mockLockManager,
+        'archon'
+      );
+      // @ts-expect-error - accessing private method for testing
+      adapter.verifySignature = mock(() => true);
+      return adapter;
+    }
+
+    /**
+     * Comment payload carrying GitHub's comment identity (id + updated_at),
+     * as real issue_comment deliveries do.
+     */
+    function createIdentifiedCommentPayload(
+      commentBody: string,
+      commentId: number | undefined,
+      updatedAt: string | undefined
+    ): string {
+      const comment: {
+        id?: number;
+        body: string;
+        user: { login: string };
+        updated_at?: string;
+      } = { body: commentBody, user: { login: 'user123' } };
+      if (commentId !== undefined) comment.id = commentId;
+      if (updatedAt !== undefined) comment.updated_at = updatedAt;
+      return JSON.stringify({
+        action: 'created',
+        issue: {
+          number: 42,
+          title: 'Test Issue',
+          body: 'Description',
+          user: { login: 'user123' },
+          labels: [],
+          state: 'open',
+        },
+        comment,
+        repository: {
+          owner: { login: 'testuser' },
+          name: 'testrepo',
+          full_name: 'testuser/testrepo',
+          html_url: 'https://github.com/testuser/testrepo',
+          default_branch: 'main',
+        },
+        sender: { login: 'user123' },
+      });
+    }
+
+    async function deliver(adapter: GitHubAdapter, payload: string, deliveryId?: string) {
+      try {
+        await adapter.handleWebhook(payload, 'mock-signature', deliveryId);
+      } catch {
+        // Expected - Octokit API not mocked for the downstream message path.
+      }
+    }
+
+    beforeEach(() => {
+      originalAllowedUsers = process.env.GITHUB_ALLOWED_USERS;
+      delete process.env.GITHUB_ALLOWED_USERS;
+      mockLockManager.acquireLock.mockClear();
+      mockGetOrCreateConversation.mockClear();
+    });
+
+    afterEach(() => {
+      if (originalAllowedUsers !== undefined) {
+        process.env.GITHUB_ALLOWED_USERS = originalAllowedUsers;
+      }
+    });
+
+    test('drops a repeat delivery of the same comment (same GUID)', async () => {
+      const adapter = createDedupAdapter();
+      const payload = createIdentifiedCommentPayload('@archon help', 1001, '2026-06-12T21:00:00Z');
+
+      await deliver(adapter, payload, 'guid-1');
+      await deliver(adapter, payload, 'guid-1');
+
+      expect(mockGetOrCreateConversation).toHaveBeenCalledTimes(1);
+    });
+
+    test('drops a dual-subscription duplicate (same comment, different GUIDs)', async () => {
+      const adapter = createDedupAdapter();
+      const payload = createIdentifiedCommentPayload('@archon help', 1001, '2026-06-12T21:00:00Z');
+
+      // Repo webhook and App webhook deliver the same comment under different
+      // delivery GUIDs — the #1951 incident shape.
+      await deliver(adapter, payload, 'guid-repo-hook');
+      await deliver(adapter, payload, 'guid-app-hook');
+
+      expect(mockGetOrCreateConversation).toHaveBeenCalledTimes(1);
+    });
+
+    test('processes an edited comment again (new updated_at)', async () => {
+      const adapter = createDedupAdapter();
+      const original = createIdentifiedCommentPayload('@archon help', 1001, '2026-06-12T21:00:00Z');
+      const edited = createIdentifiedCommentPayload(
+        '@archon help please',
+        1001,
+        '2026-06-12T21:05:00Z'
+      );
+
+      await deliver(adapter, original, 'guid-1');
+      await deliver(adapter, edited, 'guid-2');
+
+      expect(mockGetOrCreateConversation).toHaveBeenCalledTimes(2);
+    });
+
+    test('processes distinct comments independently', async () => {
+      const adapter = createDedupAdapter();
+      const first = createIdentifiedCommentPayload('@archon help', 1001, '2026-06-12T21:00:00Z');
+      const second = createIdentifiedCommentPayload('@archon also', 1002, '2026-06-12T21:00:30Z');
+
+      await deliver(adapter, first, 'guid-1');
+      await deliver(adapter, second, 'guid-2');
+
+      expect(mockGetOrCreateConversation).toHaveBeenCalledTimes(2);
+    });
+
+    test('falls back to delivery GUID when payload lacks comment id', async () => {
+      const adapter = createDedupAdapter();
+      const payload = createIdentifiedCommentPayload('@archon help', undefined, undefined);
+
+      await deliver(adapter, payload, 'guid-1');
+      await deliver(adapter, payload, 'guid-1');
+
+      expect(mockGetOrCreateConversation).toHaveBeenCalledTimes(1);
+    });
+
+    test('fails open when neither comment id nor delivery GUID is available', async () => {
+      const adapter = createDedupAdapter();
+      const payload = createIdentifiedCommentPayload('@archon help', undefined, undefined);
+
+      await deliver(adapter, payload, undefined);
+      await deliver(adapter, payload, undefined);
+
+      // No key to dedup on — both deliveries process rather than risk drops.
+      expect(mockGetOrCreateConversation).toHaveBeenCalledTimes(2);
+    });
+  });
+
   describe('conversationId format', () => {
     test('should parse valid owner/repo#number format', async () => {
       const mockCreateComment = mock(() => Promise.resolve({ data: {} }));
