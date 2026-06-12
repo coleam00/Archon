@@ -16,6 +16,8 @@ description: |
 
   NOT for: Creating plans from scratch (use archon-idea-to-pr), quick fixes, standalone reviews.
 
+provider: claude
+
 nodes:
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 1: SETUP
@@ -42,8 +44,7 @@ nodes:
     command: archon-implement-tasks
     depends_on: [confirm-plan]
     context: fresh
-    provider: claude
-    model: large
+    model: claude-opus-4-6[1m]
 
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 4: VALIDATE
@@ -67,23 +68,9 @@ nodes:
   # PHASE 6: CODE REVIEW
   # ═══════════════════════════════════════════════════════════════════
 
-  - id: verify-pr-base
-    bash: |
-      set -euo pipefail
-      EXPECTED="$BASE_BRANCH"
-      ACTUAL=$(gh pr view --json baseRefName -q '.baseRefName')
-      if [ "$ACTUAL" != "$EXPECTED" ]; then
-        PR_NUMBER=$(gh pr view --json number -q '.number')
-        echo "Base mismatch on PR #$PR_NUMBER: expected=$EXPECTED actual=$ACTUAL — re-targeting" >&2
-        gh pr edit "$PR_NUMBER" --base "$EXPECTED"
-      else
-        echo "PR base verified: $EXPECTED"
-      fi
-    depends_on: [finalize-pr]
-
   - id: review-scope
     command: archon-pr-review-scope
-    depends_on: [verify-pr-base]
+    depends_on: [finalize-pr]
     context: fresh
 
   - id: sync
