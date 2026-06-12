@@ -30,6 +30,14 @@ import {
   PMC_VALUE_PROPS,
   type PmcValuePropIconName,
 } from '@/lib/pmc-strategy';
+import {
+  KPIS,
+  buildPipelineFunnelData,
+  computeWeeklyPace,
+  computeD90Trajectory,
+  meetingsWeekDelta,
+  biggestDropInFunnel,
+} from '@/lib/pmc-derived';
 import prospectsData from '@/lib/business-prospects.generated.json';
 import playgroundData from '@/lib/playground.generated.json';
 import type { BusinessProspect } from '@/components/business/BusinessPage';
@@ -46,31 +54,11 @@ function isPmcScoped(workflowName: string): boolean {
 
 const REVENUE_LINES = PMC_REVENUE_LINES;
 
-// Pipeline-stage funnel — computed live from playgroundData.sequences + dial-tracker.
-// Audit closed is intentionally a manual roll-up — wire to a vault file once we lock format.
-function buildPipelineFunnel(): { stage: string; count: number }[] {
-  const seqs = (playgroundData.sequences ?? []) as {
-    sent?: number;
-    opened?: number;
-    replied?: number;
-  }[];
-  const sent = seqs.reduce((a, s) => a + (s.sent ?? 0), 0);
-  const opened = seqs.reduce((a, s) => a + (s.opened ?? 0), 0);
-  const replied = seqs.reduce((a, s) => a + (s.replied ?? 0), 0);
-  // Discovery booked: count of dial-tracker entries with `interested` outcome
-  // (sourced from playgroundData when present; fall back to KPI target ratio if absent).
-  const discoveryBooked =
-    (playgroundData.kpis as { discovery_booked?: number }).discovery_booked ??
-    playgroundData.kpis.meetings_this_week ??
-    0;
-  return [
-    { stage: 'Sequence sent', count: sent },
-    { stage: 'Opened', count: opened },
-    { stage: 'Replied', count: replied },
-    { stage: 'Discovery booked', count: discoveryBooked },
-    { stage: 'Audit closed', count: 0 },
-  ];
-}
+// Pipeline-stage funnel — see `@/lib/pmc-derived.buildPipelineFunnelData`.
+// `Audit closed (proxy)` now uses the outcome_funnel `meeting-booked` count
+// instead of a hard-coded 0 (vault-driven audits-closed file is the eventual
+// upgrade path).
+const buildPipelineFunnel = buildPipelineFunnelData;
 
 // Dial-tracker funnel — produced by build-playground-json.py from dial_tracker_history.
 // Renders the call-funnel as a peer surface to the email funnel.
@@ -105,40 +93,60 @@ const VALUE_PROP_ICONS: Record<PmcValuePropIconName, typeof TrendingUp> = {
   ArrowUpRight,
 };
 
-const KPI_TILES: { label: string; value: string; sub: string; icon: typeof TrendingUp }[] = [
-  {
-    label: 'First mtgs / wk (target)',
-    value: `${playgroundData.kpis.meetings_this_week} / ${playgroundData.kpis.target_30d_meetings}`,
-    sub: 'Day-30 target — North Star KPI',
-    icon: Target,
-  },
-  {
-    label: 'Active sequences',
-    value: String(playgroundData.kpis.active_sequences),
-    sub: `${playgroundData.kpis.total_delivered} delivered · ${playgroundData.kpis.total_replied} replied`,
-    icon: TrendingUp,
-  },
-  {
-    label: 'Reply rate (14d)',
-    value: `${playgroundData.kpis.reply_rate_14d}%`,
-    sub: `Open rate: ${playgroundData.kpis.open_rate_14d}%`,
-    icon: ArrowUpRight,
-  },
-  {
-    label: 'Engaged contacts',
-    value: String(
-      Object.values((prospectsData.totals as Record<string, number> | undefined) ?? {}).reduce(
-        (a, b) => a + b,
-        0
-      )
-    ),
-    sub: ((): string => {
-      const keys = Object.keys((prospectsData.totals as Record<string, number> | undefined) ?? {});
-      return keys.length > 0 ? `Across ${keys.join(' + ')}` : 'Awaiting prospects generator';
-    })(),
-    icon: Users,
-  },
-];
+interface KpiTile {
+  label: string;
+  value: string;
+  sub: string;
+  delta?: string; // e.g. "▲ 3 vs last wk"
+  deltaDirection?: 'up' | 'down' | 'flat';
+  icon: typeof TrendingUp;
+}
+
+function buildKpiTiles(meetingsDelta: ReturnType<typeof meetingsWeekDelta>): KpiTile[] {
+  const meetingsDeltaLabel =
+    meetingsDelta.delta !== 0
+      ? `${meetingsDelta.direction === 'up' ? '▲' : '▼'} ${Math.abs(meetingsDelta.delta)} vs last wk`
+      : 'flat vs last wk';
+
+  return [
+    {
+      label: 'First mtgs / wk (target)',
+      value: `${playgroundData.kpis.meetings_this_week} / ${playgroundData.kpis.target_30d_meetings}`,
+      sub: 'Day-30 target — North Star KPI',
+      delta: meetingsDeltaLabel,
+      deltaDirection: meetingsDelta.direction,
+      icon: Target,
+    },
+    {
+      label: 'Active sequences',
+      value: String(playgroundData.kpis.active_sequences),
+      sub: `${playgroundData.kpis.total_delivered} delivered · ${playgroundData.kpis.total_replied} replied`,
+      icon: TrendingUp,
+    },
+    {
+      label: 'Reply rate (14d)',
+      value: `${playgroundData.kpis.reply_rate_14d}%`,
+      sub: `Open rate: ${playgroundData.kpis.open_rate_14d}%`,
+      icon: ArrowUpRight,
+    },
+    {
+      label: 'Engaged contacts',
+      value: String(
+        Object.values((prospectsData.totals as Record<string, number> | undefined) ?? {}).reduce(
+          (a, b) => a + b,
+          0
+        )
+      ),
+      sub: ((): string => {
+        const keys = Object.keys(
+          (prospectsData.totals as Record<string, number> | undefined) ?? {}
+        );
+        return keys.length > 0 ? `Across ${keys.join(' + ')}` : 'Awaiting prospects generator';
+      })(),
+      icon: Users,
+    },
+  ];
+}
 
 // Value props — vault-sourced from
 // `second-brain/businesses/pmc/strategy/value-props.md`.
@@ -162,6 +170,12 @@ export function PMCPage(): React.ReactElement {
   // Live pipeline funnel built from playground data + dial-tracker.
   const pipelineFunnel = buildPipelineFunnel();
   const dialFunnel = buildDialFunnel();
+
+  // P1 derived metrics (pace, D90 trajectory, weekly delta, biggest funnel drop)
+  const pace = computeWeeklyPace();
+  const d90 = computeD90Trajectory();
+  const meetingsDelta = meetingsWeekDelta();
+  const biggestDrop = biggestDropInFunnel(pipelineFunnel);
 
   // Stale-data warning: if playground.generated_at older than 6h, surface it.
   // Defensive: tolerate a missing/invalid generated_at without rendering "Invalid Date"
@@ -222,7 +236,7 @@ export function PMCPage(): React.ReactElement {
       <div className="mx-auto w-full max-w-7xl space-y-8 px-8 py-8">
         {/* KPI strip */}
         <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
-          {KPI_TILES.map(k => {
+          {buildKpiTiles(meetingsDelta).map(k => {
             // eslint-disable-next-line @typescript-eslint/naming-convention
             const Icon = k.icon;
             return (
@@ -243,6 +257,19 @@ export function PMCPage(): React.ReactElement {
                   {k.value}
                 </div>
                 <p className="mt-1 text-[11px] text-text-secondary">{k.sub}</p>
+                {k.delta && (
+                  <p
+                    className={`mt-1 text-[10px] font-medium ${
+                      k.deltaDirection === 'up'
+                        ? 'text-emerald-700'
+                        : k.deltaDirection === 'down'
+                          ? 'text-amber-700'
+                          : 'text-text-tertiary'
+                    }`}
+                  >
+                    {k.delta}
+                  </p>
+                )}
               </div>
             );
           })}
@@ -326,6 +353,13 @@ export function PMCPage(): React.ReactElement {
             <p className="mb-3 text-[11px] text-text-tertiary">
               Stage drop-offs reveal the lever — opens-to-replies is the biggest gap.
             </p>
+            {biggestDrop && (
+              <div className="mb-3 rounded-md border border-amber-700/30 bg-amber-50 px-3 py-2 text-[11px] text-amber-900">
+                <span className="font-semibold">Biggest drop:</span> {biggestDrop.fromStage} →{' '}
+                {biggestDrop.toStage} · {Math.round(biggestDrop.conversion * 100)}% conversion (
+                {biggestDrop.toCount} of {biggestDrop.fromCount})
+              </div>
+            )}
             <div style={{ height: 260 }}>
               <ResponsiveContainer>
                 <BarChart data={pipelineFunnel} layout="vertical" margin={{ left: 20 }}>
@@ -459,9 +493,10 @@ export function PMCPage(): React.ReactElement {
               <span className="text-[10px] text-text-tertiary">Live</span>
             </div>
             <p className="mb-3 text-[11px] text-text-tertiary">
-              Day-30 target: 8/wk · Day-90: 15/wk · the single number that matters.
+              Day-30 target: {KPIS.target_30d_meetings}/wk · Day-90: {KPIS.target_90d_meetings}/wk ·
+              the single number that matters.
             </p>
-            <div style={{ height: 260 }}>
+            <div style={{ height: 220 }}>
               <ResponsiveContainer>
                 <RadialBarChart
                   data={meetingsGaugeData}
@@ -474,7 +509,7 @@ export function PMCPage(): React.ReactElement {
                   <RadialBar dataKey="value" cornerRadius={12} background />
                 </RadialBarChart>
               </ResponsiveContainer>
-              <div className="-mt-44 flex flex-col items-center">
+              <div className="-mt-40 flex flex-col items-center">
                 <div
                   className="text-4xl font-bold text-text-primary"
                   style={{ fontFamily: "'Playfair Display', serif" }}
@@ -482,6 +517,72 @@ export function PMCPage(): React.ReactElement {
                   {playgroundData.kpis.meetings_this_week}
                 </div>
                 <div className="text-[11px] text-text-tertiary">of {meetingsTarget}</div>
+              </div>
+            </div>
+            {/* P1.1 — pace pill */}
+            <div className="mt-2 flex items-center justify-center gap-2">
+              <span
+                className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${
+                  pace.status === 'ahead'
+                    ? 'border-emerald-700/40 bg-emerald-100 text-emerald-800'
+                    : pace.status === 'on-pace'
+                      ? 'border-sky-700/40 bg-sky-100 text-sky-800'
+                      : pace.status === 'behind'
+                        ? 'border-amber-700/40 bg-amber-100 text-amber-800'
+                        : 'border-border bg-card text-text-tertiary'
+                }`}
+              >
+                {pace.label}
+              </span>
+              {meetingsDelta.delta !== 0 && (
+                <span
+                  className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${
+                    meetingsDelta.direction === 'up'
+                      ? 'border-emerald-700/40 bg-emerald-100 text-emerald-800'
+                      : 'border-amber-700/40 bg-amber-100 text-amber-800'
+                  }`}
+                >
+                  {meetingsDelta.direction === 'up' ? '▲' : '▼'} {Math.abs(meetingsDelta.delta)} vs
+                  last wk
+                </span>
+              )}
+            </div>
+            {/* P1.2 — D90 trajectory sparkline */}
+            <div className="mt-3 border-t border-border pt-3">
+              <div className="mb-1 flex items-baseline justify-between">
+                <span className="text-[10px] uppercase tracking-wider text-text-tertiary">
+                  D90 trajectory · last 4 wks
+                </span>
+                <span
+                  className={`text-[10px] font-medium ${d90.weeklyGap >= 0 ? 'text-emerald-700' : 'text-amber-700'}`}
+                >
+                  {d90.avgPerWeek.toFixed(1)}/wk avg · target {d90.target}
+                </span>
+              </div>
+              <div className="flex items-end gap-1" style={{ height: 32 }}>
+                {d90.trendSeries.length === 0 ? (
+                  <span className="text-[10px] text-text-tertiary">No weekly history yet.</span>
+                ) : (
+                  d90.trendSeries.map((w, i) => {
+                    const max = Math.max(d90.target, ...d90.trendSeries.map(t => t.total));
+                    const heightPct = max > 0 ? (w.total / max) * 100 : 0;
+                    return (
+                      <div
+                        key={w.week}
+                        className="flex flex-1 flex-col items-center justify-end"
+                        title={`${w.week}: ${w.total} meetings`}
+                      >
+                        <div
+                          className="w-full rounded-sm bg-[var(--primary)] opacity-70"
+                          style={{ height: `${Math.max(heightPct, 4)}%` }}
+                        />
+                        <span className="mt-0.5 text-[8px] text-text-tertiary">
+                          {i === d90.trendSeries.length - 1 ? 'now' : w.week.slice(5)}
+                        </span>
+                      </div>
+                    );
+                  })
+                )}
               </div>
             </div>
           </div>
@@ -529,65 +630,94 @@ export function PMCPage(): React.ReactElement {
           <div className="rounded-xl border border-border bg-card p-5 lg:col-span-2">
             <div className="mb-3 flex items-baseline justify-between">
               <h3 className="text-sm font-semibold text-text-primary">
-                Top engaged PMC ICP prospects
+                Top PMC ICP prospects — worklist
               </h3>
               <span className="text-[10px] text-text-tertiary">
                 {pmcProspects.length} of {(prospectsData.totals as Record<string, number>).PMC ?? 0}{' '}
-                · Apollo replied filter
+                · sorted by engagement signal
               </span>
             </div>
             <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-              {pmcProspects.map((p, idx) => (
-                <article
-                  key={`${p.name}-${idx}`}
-                  className="rounded-lg border border-border bg-background p-3 transition-colors hover:border-primary/50"
-                >
-                  <h4 className="truncate text-sm font-medium text-text-primary">{p.name}</h4>
-                  {p.title && (
-                    <p className="mt-0.5 truncate text-[11px] text-text-secondary">{p.title}</p>
-                  )}
-                  {p.company && (
-                    <p className="mt-0.5 truncate text-[11px] text-text-tertiary">{p.company}</p>
-                  )}
-                  <div className="mt-2 flex flex-wrap gap-x-2 gap-y-1 text-[10px]">
-                    {p.email && (
-                      <a href={`mailto:${p.email}`} className="text-primary hover:underline">
-                        ✉ email
-                      </a>
+              {pmcProspects.map((p, idx) => {
+                const tier = p.tier?.toLowerCase() ?? '';
+                const tierTone =
+                  tier.includes('replied') || tier.includes('warm')
+                    ? 'border-emerald-700/40 bg-emerald-50 text-emerald-800'
+                    : tier.includes('key')
+                      ? 'border-sky-700/40 bg-sky-50 text-sky-800'
+                      : 'border-border bg-card text-text-tertiary';
+                return (
+                  <article
+                    key={`${p.name}-${idx}`}
+                    className="rounded-lg border border-border bg-background p-3 transition-colors hover:border-primary/50"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <h4 className="truncate text-sm font-medium text-text-primary">{p.name}</h4>
+                      {p.tier && (
+                        <span
+                          className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] font-medium ${tierTone}`}
+                        >
+                          {p.tier}
+                        </span>
+                      )}
+                    </div>
+                    {p.title && (
+                      <p className="mt-0.5 truncate text-[11px] text-text-secondary">{p.title}</p>
                     )}
-                    {p.phone && (
-                      <a
-                        href={`tel:${p.phone.replace(/[^+0-9]/g, '')}`}
-                        className="text-primary hover:underline"
-                      >
-                        ☏ call
-                      </a>
+                    {p.company && (
+                      <p className="mt-0.5 truncate text-[11px] text-text-tertiary">{p.company}</p>
                     )}
-                    {p.linkedin_url && (
-                      <a
-                        href={p.linkedin_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-primary hover:underline"
-                      >
-                        in/
-                      </a>
+                    {(p.source_campaign ?? p.channel ?? p.engagement) && (
+                      <p className="mt-1 truncate text-[10px] text-text-tertiary">
+                        {[p.source_campaign, p.channel, p.engagement].filter(Boolean).join(' · ')}
+                      </p>
                     )}
-                  </div>
-                </article>
-              ))}
+                    <div className="mt-2 flex flex-wrap gap-x-2 gap-y-1 text-[10px]">
+                      {p.email && (
+                        <a href={`mailto:${p.email}`} className="text-primary hover:underline">
+                          ✉ email
+                        </a>
+                      )}
+                      {p.phone && (
+                        <a
+                          href={`tel:${p.phone.replace(/[^+0-9]/g, '')}`}
+                          className="text-primary hover:underline"
+                        >
+                          ☏ call
+                        </a>
+                      )}
+                      {p.linkedin_url && (
+                        <a
+                          href={p.linkedin_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-primary hover:underline"
+                        >
+                          in/
+                        </a>
+                      )}
+                    </div>
+                  </article>
+                );
+              })}
             </div>
           </div>
         </section>
 
         {/* Editorial overview from vault */}
         <section className="rounded-xl border border-border bg-card p-6">
-          <h2
-            className="mb-3 text-sm font-semibold text-text-primary"
-            style={{ fontFamily: "'Playfair Display', serif" }}
-          >
-            From the vault · positioning + brand guide
-          </h2>
+          <div className="mb-3 flex items-baseline justify-between">
+            <h2
+              className="text-sm font-semibold text-text-primary"
+              style={{ fontFamily: "'Playfair Display', serif" }}
+            >
+              From the vault · positioning + brand guide
+            </h2>
+            <span className="text-[10px] text-text-tertiary">
+              Source: <code className="font-mono">businesses/pmc/overview.md</code> · edit in
+              Obsidian, save, hot-reloads
+            </span>
+          </div>
           <div className="chat-markdown max-w-none text-sm text-text-primary">
             <ReactMarkdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={REHYPE_PLUGINS}>
               {pmcOverview.body}
@@ -595,11 +725,49 @@ export function PMCPage(): React.ReactElement {
           </div>
         </section>
 
+        {/* P3.1 — portfolio cross-sell strip */}
+        <section className="rounded-xl border border-border bg-card p-5">
+          <div className="mb-3 flex items-baseline justify-between">
+            <h3 className="text-sm font-semibold text-text-primary">
+              Cross-sell paths from a PMC engagement
+            </h3>
+            <span className="text-[10px] text-text-tertiary">Portfolio thesis</span>
+          </div>
+          <p className="mb-4 text-[11px] text-text-tertiary">
+            One advisory contract opens multi-line recurring revenue. Click through to the live
+            brand dashboards.
+          </p>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {[
+              { name: 'BRT', to: '/brt', tagline: 'BH-Therapy + Chiro+Medspa · composite 25/22' },
+              { name: 'EWC', to: '/ewc', tagline: 'Elevated Wellness Co · Aura landing site' },
+              { name: 'Fountain WPB', to: '/fountain', tagline: 'Wellness clinic · composite 24' },
+              {
+                name: 'AccuFit',
+                to: '/accufit',
+                tagline: 'Partner-coordinated · body-composition tech',
+              },
+            ].map(p => (
+              <Link
+                key={p.name}
+                to={p.to}
+                className="group rounded-lg border border-border bg-background p-3 transition-all hover:border-primary/60 hover:shadow-sm"
+              >
+                <div className="flex items-center justify-between">
+                  <h4 className="text-sm font-semibold text-text-primary group-hover:text-primary">
+                    {p.name}
+                  </h4>
+                  <ArrowUpRight className="h-3.5 w-3.5 text-text-tertiary group-hover:text-primary" />
+                </div>
+                <p className="mt-1 text-[11px] text-text-secondary">{p.tagline}</p>
+              </Link>
+            ))}
+          </div>
+        </section>
+
         {/* Footer */}
         <footer className="border-t border-border pt-4 text-[10px] text-text-tertiary">
-          Source: <code className="font-mono">second-brain/businesses/pmc/overview.md</code> · Edit
-          in Obsidian, save, dashboard hot-reloads · Last data refresh{' '}
-          {generatedAtValid ? generatedAt.toLocaleString() : '—'}
+          Last data refresh {generatedAtValid ? generatedAt.toLocaleString() : '—'}
           {isStale && hoursStale !== null && (
             <span className="ml-2 rounded-full border border-amber-700/40 bg-amber-100 px-2 py-0.5 font-medium text-amber-800">
               ⚠ {Math.round(hoursStale)}h stale — playground refresh due
