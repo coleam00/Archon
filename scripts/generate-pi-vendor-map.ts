@@ -60,10 +60,11 @@ const COVERED_ELSEWHERE = new Set(['openai-codex']);
 
 /**
  * Vendors that support subscription (OAuth) login in addition to API keys.
- * `openai` is listed because the capability EXISTS (ChatGPT OAuth via Pi);
- * whether it is *connectable* is a separate runtime gate
- * (SUBSCRIPTION_DISABLED in @archon/core oauth-providers — #1924). Specs
- * declare capability; gates decide availability.
+ * All three are connectable: anthropic and github-copilot log in via Pi's
+ * OAuth flows; `openai` (ChatGPT/Codex) via Archon's own PKCE flow
+ * (@archon/core credentials/openai-oauth.ts — it captures the `id_token` Pi
+ * drops, #1924). Specs declare capability; `SUBSCRIPTION_PROVIDERS` in
+ * @archon/core oauth-providers is the runtime source of truth.
  */
 const SUBSCRIPTION_VENDORS = new Set(['anthropic', 'openai', 'github-copilot']);
 

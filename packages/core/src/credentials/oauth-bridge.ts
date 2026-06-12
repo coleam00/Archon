@@ -57,6 +57,7 @@ import {
   createOpenAiAuthorizeFlow,
   parseOpenAiAuthorizationInput,
   exchangeOpenAiAuthorizationCode,
+  type OpenAiOAuthCredentials,
 } from './openai-oauth';
 import { normalizeCredentialVendor } from './delivery';
 import { persistProviderOAuth } from './connect-service';
@@ -207,7 +208,7 @@ export interface PollOAuthResult {
  * `id_token` Pi drops. Runs NO local callback server (the #1963 wedge
  * pattern); the user pastes the final redirect URL or code back instead.
  */
-async function runOpenAiManualLogin(session: OAuthSession): Promise<PiOAuthCredentials> {
+async function runOpenAiManualLogin(session: OAuthSession): Promise<OpenAiOAuthCredentials> {
   const flow = createOpenAiAuthorizeFlow();
   session.url = flow.url;
   if (session.mode === 'pending') session.mode = 'manual';
@@ -221,12 +222,9 @@ async function runOpenAiManualLogin(session: OAuthSession): Promise<PiOAuthCrede
   if (!parsed.code) {
     throw new Error('Missing authorization code.');
   }
-  const creds = await exchangeOpenAiAuthorizationCode(
-    parsed.code,
-    flow.verifier,
-    session.abort.signal
-  );
-  return creds as PiOAuthCredentials;
+  // Returns its true type — structurally assignable to PiOAuthCredentials
+  // (access/refresh/expires plus extras), so no cast at the loginPromise join.
+  return exchangeOpenAiAuthorizationCode(parsed.code, flow.verifier, session.abort.signal);
 }
 
 /**

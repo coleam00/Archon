@@ -29,7 +29,7 @@ import {
   type ResolvedCredential,
 } from '../credentials/delivery';
 import { piOAuthProviderFor, OPENAI_SUBSCRIPTION_VENDOR } from '../credentials/oauth-providers';
-import { mintOpenAiOAuthApiKey } from '../credentials/openai-oauth';
+import { mintOpenAiOAuthApiKey, type OpenAiOAuthCredentials } from '../credentials/openai-oauth';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -219,7 +219,10 @@ async function resolveOAuthCredential(
       ? await getOAuthApiKey(piProvider.id, {
           [piProvider.id]: creds as unknown as PiOAuthCredentials,
         })
-      : await mintOpenAiOAuthApiKey(creds);
+      : // Assertion to the narrow openai shape: rows under vendor 'openai' are
+        // minted exclusively by openai-oauth.ts, which validates every field at
+        // write time; mint's runtime guards still tolerate legacy/corrupt rows.
+        await mintOpenAiOAuthApiKey(creds as OpenAiOAuthCredentials);
   } catch (err) {
     getLog().error(
       { err: err as Error, userId, provider },

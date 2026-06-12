@@ -46,22 +46,24 @@ mock.module('@archon/providers/oauth', () => ({
 }));
 
 // The openai (ChatGPT/Codex) flow is Archon-owned (#1924) — drive its exchange
-// via a controllable impl; the authorize flow / paste parsing are stubbed thin.
+// and paste parsing via controllable impls; the authorize flow is stubbed thin.
 let exchangeImpl: (code: string, verifier: string) => Promise<Record<string, unknown>>;
+const defaultParseImpl = (input: string): { code?: string; state?: string } => {
+  const v = input.trim();
+  if (v.includes('#')) {
+    const [code, state] = v.split('#', 2);
+    return { code, state };
+  }
+  return { code: v };
+};
+let parseImpl = defaultParseImpl;
 mock.module('./openai-oauth', () => ({
   createOpenAiAuthorizeFlow: () => ({
     url: 'https://auth.openai.com/oauth/authorize?mock=1',
     verifier: 'pkce-verifier-1',
     state: 'state-1',
   }),
-  parseOpenAiAuthorizationInput: (input: string) => {
-    const v = input.trim();
-    if (v.includes('#')) {
-      const [code, state] = v.split('#', 2);
-      return { code, state };
-    }
-    return { code: v };
-  },
+  parseOpenAiAuthorizationInput: (input: string) => parseImpl(input),
   exchangeOpenAiAuthorizationCode: (code: string, verifier: string) => exchangeImpl(code, verifier),
   // Imported by user-provider-key-store (loaded transitively via connect-service);
   // unused by the bridge itself.
@@ -88,6 +90,7 @@ describe('oauth-bridge', () => {
   beforeEach(() => {
     resetOAuthSessionsForTest();
     mockQuery.mockClear();
+    parseImpl = defaultParseImpl;
   });
 
   test('unknown / non-subscription provider → throws', async () => {
@@ -395,5 +398,29 @@ describe('oauth-bridge', () => {
     cancelOAuth(start.sessionId, 'u1');
     await tick();
     expect(pollOAuth(start.sessionId, 'u1').status).toBe('error'); // session dropped
+  });
+
+  test('openai flow: state-only paste (no code) → Missing authorization code, no exchange (S1)', async () => {
+    parseImpl = () => ({ state: 'state-1' }); // e.g. a redirect URL the user copied before authorizing
+    let exchangeCalls = 0;
+    exchangeImpl = async () => {
+      exchangeCalls++;
+      return {};
+    };
+    const start = await startOAuth('u1', 'openai');
+    pollOAuth(start.sessionId, 'u1', 'http://localhost:1455/auth/callback?state=state-1');
+    await tick();
+    const res = pollOAuth(start.sessionId, 'u1');
+    expect(res.status).toBe('error');
+    expect(res.detail).toMatch(/missing authorization code/i);
+    expect(exchangeCalls).toBe(0);
+  });
+
+  test('a second openai login for the same user supersedes the first (S1)', async () => {
+    exchangeImpl = async () => ({ access: 'a', refresh: 'r', expires: 1, id_token: 'idt' });
+    const first = await startOAuth('u1', 'openai');
+    const second = await startOAuth('u1', 'openai');
+    expect(first.sessionId).not.toBe(second.sessionId);
+    expect(pollOAuth(first.sessionId, 'u1').status).toBe('error'); // dropped
   });
 });
