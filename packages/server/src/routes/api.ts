@@ -1685,15 +1685,19 @@ export function registerApiRoutes(
       const start = await startOAuth(web.userId, provider);
       return c.json(start);
     } catch (err) {
+      // A leaked callback port from a previous attempt is an expected,
+      // retryable condition — log it at warn under its own event (an
+      // error-level `…_failed` would pollute error dashboards on multi-user
+      // installs) and surface the actionable message as a 503 instead of an
+      // opaque 500 (#1963).
+      if (err instanceof OAuthCallbackPortBusyError) {
+        getLog().warn({ userId: web.userId, provider }, 'auth.provider_oauth_start_port_busy');
+        return apiError(c, 503, err.message);
+      }
       getLog().error(
         { err: err as Error, userId: web.userId, provider },
         'auth.provider_oauth_start_failed'
       );
-      // A leaked callback port from a previous attempt is retryable — surface
-      // the actionable message as a 503 instead of an opaque 500 (#1963).
-      if (err instanceof OAuthCallbackPortBusyError) {
-        return apiError(c, 503, err.message);
-      }
       return apiError(c, 500, 'Failed to start subscription login');
     }
   });

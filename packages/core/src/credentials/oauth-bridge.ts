@@ -15,21 +15,30 @@
  *     to resolve.
  *
  * Sessions are bound to `userId`, short-TTL, and abortable; credentials are never
- * logged. GOTCHA (verify on a live run): Anthropic/Codex `login()` may also try a
- * localhost callback server (`usesCallbackServer`) — on a headless host the
- * manual-code path (`onManualCodeInput`/`onPrompt`) must be the one taken.
+ * logged. On a headless host the callback-server flows must complete via the
+ * manual-code path (`onManualCodeInput`/`onPrompt`) — nothing can reach their
+ * localhost callback server (see CANCEL SEMANTICS for the abort side of this).
  *
  * CANCEL SEMANTICS (#1963): pi-ai 0.79.1 ignores `options.signal` in its
- * callback-server login flows (verified against `dist/utils/oauth/anthropic.js`
- * — the provider's `login()` doesn't even forward the signal), so aborting the
- * AbortController alone leaks the fixed-port (53692) callback server forever
- * and wedges every later login install-wide. The one cancel handle pi exposes
- * is the `onManualCodeInput()` promise: when it REJECTS, pi's login calls
- * `server.cancelWait()`, unblocks `waitForCode()`, rethrows, and runs
- * `finally { server.close() }` — releasing the port. `abortSession` therefore
- * rejects the bridge-owned `codeDeferred` in addition to firing the abort
- * signal, and `startOAuth` waits (bounded) for superseded logins to settle
- * before binding a new one.
+ * CALLBACK-SERVER login flows — `loginAnthropic` never reads it (verified
+ * against `dist/utils/oauth/anthropic.js`; the provider's `login()` doesn't
+ * even forward the signal) and `loginOpenAICodex`'s browser flow never closes
+ * its server on abort. (`loginGitHubCopilot`, device-code, DOES honor
+ * `callbacks.signal` — the narrow claim matters if you add a provider.) So
+ * aborting the AbortController alone leaks the fixed-port callback server
+ * forever — each flow binds its own fixed port (anthropic 53692, openai-codex
+ * 1455), which is also why the supersede logic below keys on provider
+ * identity — and wedges every later login for that vendor install-wide. The
+ * one cancel handle pi exposes is the `onManualCodeInput()` promise: when it
+ * REJECTS, pi's login calls `server.cancelWait()`, unblocks `waitForCode()`,
+ * rethrows, and runs `finally { server.close() }` — releasing the port.
+ * `abortSession` therefore rejects the bridge-owned `codeDeferred` in
+ * addition to firing the abort signal, and `startOAuth` waits (bounded) for
+ * superseded logins to settle before binding a new one.
+ *
+ * Upstream fix requested: https://github.com/earendil-works/pi/issues/5649
+ * (honor `options.signal` / bind an ephemeral port). Re-evaluate the
+ * deferred-rejection workaround when that lands.
  */
 import { randomUUID } from 'node:crypto';
 import { createLogger } from '@archon/paths';
@@ -117,7 +126,11 @@ interface OAuthSession {
   firstSignal: Deferred<true>;
   abort: AbortController;
   expiresAt: number;
-  /** Resolves when the held `login()` call has settled (never rejects). */
+  /**
+   * Resolves when the held `login()` call has settled. Never rejects: it is
+   * the full `.then().catch()` chain built in `startOAuth`, whose terminal
+   * `.catch()` swallows every failure into session state.
+   */
   settled: Promise<void>;
   /** Set when `login()` failed because the callback port was already bound. */
   portBusy?: boolean;
@@ -127,11 +140,12 @@ const sessions = new Map<string, OAuthSession>();
 
 /**
  * Hard-cancel a session's in-flight `login()`: fire the abort signal (honored
- * by well-behaved flows) AND reject the manual-code deferred — the only handle
- * pi-ai 0.79.1 actually reacts to. The rejection drives pi's callback-server
- * flows through their error path into `finally { server.close() }`, releasing
- * the fixed callback port (#1963). Rejecting an already-resolved deferred is a
- * no-op, so this is safe after a code was submitted.
+ * by the device-code flow) AND reject the manual-code deferred — the only
+ * handle pi-ai 0.79.1's callback-server flows actually react to. The rejection
+ * drives those flows through their error path into `finally { server.close() }`,
+ * releasing the flow's fixed callback port (anthropic 53692, openai-codex
+ * 1455; #1963). Rejecting an already-resolved deferred is a no-op, so this is
+ * safe after a code was submitted.
  */
 function abortSession(session: OAuthSession, reason: string): void {
   session.abort.abort();
@@ -316,6 +330,14 @@ export async function startOAuth(userId: string, providerId: string): Promise<St
     throw new Error(session.detail ?? 'Subscription login failed to start.');
   }
 
+  // Superseded (or cancelled) while still waiting for the first signal — the
+  // session is already gone from the map, so a 200 here would hand back a
+  // url-less session the first poll immediately reports as "not found".
+  // Throw the honest answer instead (S4).
+  if (!sessions.has(sessionId)) {
+    throw new Error('Login attempt was superseded by a newer one. Retry to start a fresh login.');
+  }
+
   return {
     sessionId,
     mode: externalMode(session),
@@ -332,7 +354,10 @@ export async function startOAuth(userId: string, providerId: string): Promise<St
  * success, `error` on failure/expiry, else `pending`.
  */
 export function pollOAuth(sessionId: string, userId: string, code?: string): PollOAuthResult {
-  sweepExpired(); // I3: don't leave abandoned sessions (and their callback servers) holding on
+  // I3: don't leave abandoned sessions (and their callback servers) holding on.
+  // `void`: poll has no reason to await port release — only `start` (which is
+  // about to bind the port) waits on the swept sessions' settle promises.
+  void sweepExpired();
   const session = sessions.get(sessionId);
   if (session?.userId !== userId) {
     return { status: 'error', detail: 'Login session not found or expired.' };

@@ -198,11 +198,53 @@ describe('oauth-bridge', () => {
     // flow (releasing the server) and proceeds.
     const b = await startOAuth('bob', 'claude');
     expect(serversClosed).toBe(1);
-    expect(pollOAuth(a.sessionId, 'alice').status).toBe('error'); // superseded
+    // S2: the superseded user's poll detail is user-visible in the console
+    // retry UX — pin the exact message.
+    const supersededPoll = pollOAuth(a.sessionId, 'alice');
+    expect(supersededPoll.status).toBe('error');
+    expect(supersededPoll.detail).toBe('Login session not found or expired.');
     // bob's flow still completes end-to-end.
     pollOAuth(b.sessionId, 'bob', 'CODE');
     await tick();
     expect(pollOAuth(b.sessionId, 'bob').status).toBe('connected');
+  });
+
+  test('cancel AFTER the code was submitted → the credential persists exactly once (S1)', async () => {
+    // abortSession claims rejecting an already-resolved deferred is a no-op;
+    // pin that a post-submit cancel can neither lose nor double-persist.
+    loginImpl = async cb => {
+      cb.onAuth({ url: 'https://x' });
+      const code = await cb.onManualCodeInput!();
+      return { access: `a-${code}`, refresh: 'r', expires: 1 };
+    };
+    const start = await startOAuth('u1', 'claude');
+    mockQuery.mockClear();
+    pollOAuth(start.sessionId, 'u1', 'CODE'); // resolves the deferred
+    cancelOAuth(start.sessionId, 'u1'); // cancel races the in-flight login
+    await tick();
+    // persistProviderOAuth → saveUserProviderKey → exactly one INSERT.
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+    const sql = mockQuery.mock.calls[0]?.[0] as string;
+    expect(sql).toContain('INSERT INTO remote_agent_user_provider_keys');
+  });
+
+  test('superseded while start is still awaiting the first signal → start throws, not a url-less 200 (S4)', async () => {
+    // First login never signals onAuth; it unblocks only when the supersede
+    // rejects the manual-code deferred.
+    loginImpl = async cb => {
+      await cb.onManualCodeInput!();
+      return { access: 'a' };
+    };
+    const first = startOAuth('u1', 'claude');
+    await tick(1); // let the first session register
+    loginImpl = async cb => {
+      cb.onAuth({ url: 'https://second' });
+      await cb.onManualCodeInput!();
+      return { access: 'a' };
+    };
+    const second = await startOAuth('u1', 'claude');
+    expect(second.url).toBe('https://second');
+    await expect(first).rejects.toThrow(/superseded/i);
   });
 
   test('device-flow logins (no callback server) for different users coexist', async () => {
