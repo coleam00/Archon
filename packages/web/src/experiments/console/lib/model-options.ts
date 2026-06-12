@@ -191,18 +191,14 @@ export function piModelOptions(
 ): PiPickerResult {
   const q = query.trim().toLowerCase();
   const all = models ?? [];
-  let queryMatches = all;
-  if (q !== '') {
-    queryMatches = all.filter(
-      m => m.ref.toLowerCase().includes(q) || m.name.toLowerCase().includes(q)
-    );
-  }
-
-  let filtered = queryMatches;
-  if (!showAll && backends !== null) {
-    filtered = queryMatches.filter(m => backends.has(m.provider));
-  }
-
+  const queryMatches =
+    q === ''
+      ? all
+      : all.filter(m => m.ref.toLowerCase().includes(q) || m.name.toLowerCase().includes(q));
+  const filtered =
+    showAll || backends === null
+      ? queryMatches
+      : queryMatches.filter(m => backends.has(m.provider));
   return {
     options: filtered.slice(0, limit).map(m => ({ value: m.ref, hint: piModelHint(m) })),
     matchTotal: filtered.length,
@@ -272,12 +268,6 @@ export function opencodeBackendOptions(providers: OpencodeCredentialProvider[]):
     .map(p => ({
       value: `${p.id}/`,
       prefix: true,
-      hint: opencodeBackendHint(p),
+      hint: `${p.name} · ${p.modelCount} model${p.modelCount === 1 ? '' : 's'}${p.connected ? ' · connected' : ''}`,
     }));
-}
-
-function opencodeBackendHint(provider: OpencodeCredentialProvider): string {
-  const modelLabel = provider.modelCount === 1 ? 'model' : 'models';
-  const connection = provider.connected ? ' · connected' : '';
-  return `${provider.name} · ${provider.modelCount} ${modelLabel}${connection}`;
 }

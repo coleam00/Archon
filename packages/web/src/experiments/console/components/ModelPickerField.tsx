@@ -29,12 +29,6 @@ const OPTION_CLASS =
 const FOOTER_BUTTON_CLASS =
   'w-full border-t border-border px-3 py-2 text-left font-mono text-[11px] text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary';
 
-function showAllBackendsLabel(showAll: boolean, hiddenByFilter: number): string {
-  if (showAll) return 'Show connected backends only';
-  const suffix = hiddenByFilter > 0 ? ` (${String(hiddenByFilter)} more match)` : '';
-  return `Show all backends${suffix}`;
-}
-
 interface ModelPickerFieldProps {
   /** Agent provider id ('' renders plain free text — e.g. an unset tier row). */
   agentId: string;
@@ -246,7 +240,9 @@ function ModelCombobox({
                   }}
                   className={FOOTER_BUTTON_CLASS}
                 >
-                  {showAllBackendsLabel(showAll, pi.hiddenByFilter)}
+                  {showAll
+                    ? 'Show connected backends only'
+                    : `Show all backends${pi.hiddenByFilter > 0 ? ` (${String(pi.hiddenByFilter)} more match)` : ''}`}
                 </button>
               ) : null}
             </>
