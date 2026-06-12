@@ -163,23 +163,56 @@ async function postTokenRequest(
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body,
-      signal: signal ?? AbortSignal.timeout(30_000),
+      // The 30s ceiling applies ALWAYS — combined with the caller's session
+      // signal when present. Without it, a hung token endpoint would leave a
+      // bridge login reporting `pending` for the session's full 10-minute TTL.
+      signal: signal
+        ? AbortSignal.any([signal, AbortSignal.timeout(30_000)])
+        : AbortSignal.timeout(30_000),
     });
   } catch (error) {
     if (signal?.aborted) {
       throw new Error('Login cancelled');
+    }
+    if (error instanceof Error && error.name === 'TimeoutError') {
+      throw new Error(`OpenAI token ${operation} request timed out.`);
     }
     throw new Error(
       `OpenAI token ${operation} request failed: ${error instanceof Error ? error.message : String(error)}`
     );
   }
   if (!response.ok) {
+    // Strip the error body down to the OAuth `error` code: this message flows
+    // into the bridge's session.detail (and on to the browser/CLI), and OpenAI
+    // error bodies can carry account identifiers. Never include the raw body.
     const text = await response.text().catch(() => '');
+    let errorCode = '';
+    try {
+      const parsed = JSON.parse(text) as { error?: unknown };
+      if (typeof parsed.error === 'string') {
+        errorCode = parsed.error;
+      } else if (parsed.error && typeof parsed.error === 'object') {
+        const code = (parsed.error as { code?: unknown }).code;
+        if (typeof code === 'string') errorCode = code;
+      }
+    } catch {
+      // Non-JSON error body — drop it entirely; the status code must suffice.
+    }
     throw new Error(
-      `OpenAI token ${operation} failed (${response.status}): ${text || response.statusText}`
+      `OpenAI token ${operation} failed (${response.status})${errorCode ? `: ${errorCode}` : ''}`
     );
   }
-  return (await response.json()) as OpenAiTokenResponse;
+  let raw: unknown;
+  try {
+    raw = await response.json();
+  } catch {
+    // An HTTP 200 with a non-JSON body (proxy/maintenance page) must surface
+    // as a labeled error, not a raw SyntaxError mistaken for an Archon bug.
+    throw new Error(
+      `OpenAI token ${operation} returned a non-JSON response (HTTP ${response.status}).`
+    );
+  }
+  return raw as OpenAiTokenResponse;
 }
 
 /**
@@ -281,9 +314,14 @@ export async function refreshOpenAiOAuthCredentials(
  * when expired. Same contract as Pi's `getOAuthApiKey` (`{ newCredentials,
  * apiKey } | null`) so the store's shared rotation/resave logic applies
  * unchanged. Throws when a needed refresh fails.
+ *
+ * Accepts the narrow {@link OpenAiOAuthCredentials} so the compiler enforces
+ * the vendor routing (only openai blobs reach this path). The runtime guards
+ * stay anyway: stored rows are decrypted JSON, so the static shape is a
+ * write-time promise, not a read-time guarantee.
  */
 export async function mintOpenAiOAuthApiKey(
-  creds: OAuthCredentials
+  creds: OpenAiOAuthCredentials
 ): Promise<{ newCredentials: OAuthCredentials; apiKey: string } | null> {
   let current: OAuthCredentials = creds;
   if (typeof creds.expires === 'number' && Date.now() >= creds.expires) {

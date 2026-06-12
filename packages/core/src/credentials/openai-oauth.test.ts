@@ -137,7 +137,30 @@ describe('exchangeOpenAiAuthorizationCode', () => {
   test('non-2xx token response → descriptive error', async () => {
     stubTokenEndpoint(400, { error: 'invalid_grant' });
     await expect(exchangeOpenAiAuthorizationCode('C', 'V')).rejects.toThrow(
-      /exchange failed \(400\)/
+      /exchange failed \(400\): invalid_grant/
+    );
+  });
+
+  test('error body is stripped to the OAuth error code — nothing else leaks (S2)', async () => {
+    stubTokenEndpoint(400, {
+      error: { code: 'invalid_grant', message: 'account chatgpt-acct-SECRET is not allowed' },
+    });
+    let thrown: Error | undefined;
+    try {
+      await exchangeOpenAiAuthorizationCode('C', 'V');
+    } catch (err) {
+      thrown = err as Error;
+    }
+    expect(thrown!.message).toContain('invalid_grant');
+    expect(thrown!.message).not.toContain('SECRET');
+    expect(thrown!.message).not.toContain('account');
+  });
+
+  test('HTTP 200 with a non-JSON body → labeled error, not a raw SyntaxError (I2)', async () => {
+    globalThis.fetch = (async () =>
+      new Response('<html>maintenance</html>', { status: 200 })) as typeof fetch;
+    await expect(exchangeOpenAiAuthorizationCode('C', 'V')).rejects.toThrow(
+      /non-JSON response \(HTTP 200\)/
     );
   });
 });
@@ -182,6 +205,13 @@ describe('refreshOpenAiOAuthCredentials', () => {
       /no refresh token/
     );
   });
+
+  test('non-2xx refresh (expired/revoked refresh token) → descriptive, stripped error (S1)', async () => {
+    stubTokenEndpoint(401, { error: 'invalid_grant' });
+    await expect(refreshOpenAiOAuthCredentials(stored)).rejects.toThrow(
+      /refresh failed \(401\): invalid_grant/
+    );
+  });
 });
 
 describe('mintOpenAiOAuthApiKey', () => {
@@ -191,10 +221,25 @@ describe('mintOpenAiOAuthApiKey', () => {
       fetched++;
       return new Response('{}');
     }) as typeof fetch;
-    const creds = { access: 'a1', refresh: 'r1', expires: Date.now() + 60_000, id_token: 'i1' };
+    const creds = {
+      access: 'a1',
+      refresh: 'r1',
+      expires: Date.now() + 60_000,
+      accountId: 'acct-42',
+      id_token: 'i1',
+    };
     const out = await mintOpenAiOAuthApiKey(creds);
     expect(out).toEqual({ newCredentials: creds, apiKey: 'a1' });
     expect(fetched).toBe(0);
+  });
+
+  test('legacy/corrupt row with no usable access token → null, no throw (S1)', async () => {
+    // The narrow parameter type is a write-time promise; decrypted rows can
+    // still be junk — simulate one via the same assertion the store performs.
+    const corrupt = { expires: Date.now() + 60_000 } as unknown as Parameters<
+      typeof mintOpenAiOAuthApiKey
+    >[0];
+    expect(await mintOpenAiOAuthApiKey(corrupt)).toBeNull();
   });
 
   test('expired blob → refreshes first (id_token preserved through rotation)', async () => {
