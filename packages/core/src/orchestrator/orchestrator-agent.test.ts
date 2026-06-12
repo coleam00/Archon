@@ -225,6 +225,12 @@ mock.module('../utils/worktree-sync', () => ({
 mock.module('@archon/git', () => ({
   syncWorkspace: mockSyncWorkspace,
   toRepoPath: mockToRepoPath,
+  toBranchName: mock((b: string) => b),
+  // Stubs for post-message-reminder (loaded transitively by orchestrator-agent).
+  // Return null/0/false so the reminder short-circuits without emitting an event.
+  getCurrentBranch: mock(() => Promise.resolve(null)),
+  countCommitsAhead: mock(() => Promise.resolve(0)),
+  hasUncommittedChanges: mock(() => Promise.resolve(false)),
 }));
 
 mock.module('fs', () => ({
