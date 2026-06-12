@@ -139,12 +139,12 @@ export function parse(input: string): ParseResult {
 
 /** Format a single atom back to wire syntax, preserving the author's spelling. */
 function formatAtom(atom: AtomNode): string {
-  const path =
-    atom.shorthand && atom.field !== undefined
+  let path = `$${atom.nodeId}.output`;
+  if (atom.field !== undefined) {
+    path = atom.shorthand
       ? `$${atom.nodeId}.${atom.field}`
-      : atom.field !== undefined
-        ? `$${atom.nodeId}.output.${atom.field}`
-        : `$${atom.nodeId}.output`;
+      : `$${atom.nodeId}.output.${atom.field}`;
+  }
   // Bare spelling is only valid for number/boolean RHS — quote anything else so a
   // hand-built AST cannot format to an unparseable expression.
   const rhs = atom.bare && BARE_VALUE_PATTERN.test(atom.value) ? atom.value : `'${atom.value}'`;
