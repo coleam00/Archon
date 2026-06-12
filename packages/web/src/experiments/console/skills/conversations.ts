@@ -12,7 +12,11 @@ import { toConversationSummary, type ConversationSummary } from '../primitives/c
  *     the backend dispatches it to the orchestrator atomically and the response
  *     also carries dispatch fields (ignored here). `conversationId` is the
  *     platform id used by every other conversation route.
- *   - listConversations:  GET /api/conversations?codebaseId=<id> (JSON array).
+ *   - listConversations:  GET /api/conversations?codebaseId=<id>&mine=true
+ *     (JSON array). `mine=true` is non-enforcing: it narrows to the signed-in
+ *     user's conversations when an identity resolves (Better Auth cookie or
+ *     X-Archon-User), so each user gets their own per-project chat on
+ *     multi-user installs; with no identity (solo installs) nothing narrows.
  *   - sendMessage:        POST /api/conversations/:id/message. JSON, or
  *     multipart when files are attached (mirrors startRun's multipart path).
  */
@@ -36,7 +40,7 @@ export async function createConversation(
 
 export async function listConversations(projectId: string): Promise<ConversationSummary[]> {
   const raw = await requestJson<Parameters<typeof toConversationSummary>[0][]>(
-    `/api/conversations?codebaseId=${encodeURIComponent(projectId)}`
+    `/api/conversations?codebaseId=${encodeURIComponent(projectId)}&mine=true`
   );
   return raw.map(toConversationSummary);
 }

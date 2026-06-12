@@ -2531,6 +2531,19 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
     await handleMessage(platform, 'conv-1', 'hello');
     expect(mockListDecryptedUserProviderCredentials).not.toHaveBeenCalled();
   });
+
+  test('resolves credentials from the SENDER, not the conversation creator (#1976)', async () => {
+    // beforeEach sets the conversation row's user_id to 'u-test' (the creator).
+    // A different sender on this turn must use their OWN credentials — never
+    // the creator's.
+    mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([
+      { provider: 'openrouter', cred: { kind: 'api_key', apiKey: 'sender-key' } },
+    ]);
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello', { userId: 'sender-2' });
+    expect(mockListDecryptedUserProviderCredentials).toHaveBeenCalledWith('sender-2');
+    expect(mockListDecryptedUserProviderCredentials).not.toHaveBeenCalledWith('u-test');
+  });
 });
 
 // ─── handleMessage — /setproject dispatch ─────────────────────────────────────
@@ -2835,6 +2848,32 @@ describe('per-user AI prefs in chat + tier-fallback nudge', () => {
     await handleMessage(platform, 'conv-1', 'Hello');
 
     expect(mockGetUserAiPrefsDb).not.toHaveBeenCalled();
+  });
+
+  test("the sender's prefs win over the conversation creator's (#1976)", async () => {
+    // Multi-user thread: the conversation row carries the FIRST creator, but
+    // the turn must execute with the SENDER's prefs (mirrors the workflow
+    // executor's run-starter resolution).
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ user_id: 'creator-1' } as Partial<Conversation>))
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'Hello', { userId: 'sender-2' });
+
+    expect(mockGetUserAiPrefsDb).toHaveBeenCalledWith('sender-2');
+    expect(mockGetUserAiPrefsDb).not.toHaveBeenCalledWith('creator-1');
+  });
+
+  test('falls back to conversation.user_id when the context has no sender', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ user_id: 'creator-1' } as Partial<Conversation>))
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'Hello', {});
+
+    expect(mockGetUserAiPrefsDb).toHaveBeenCalledWith('creator-1');
   });
 
   test('structurally invalid stored prefs degrade to config-only (chat still answers)', async () => {
