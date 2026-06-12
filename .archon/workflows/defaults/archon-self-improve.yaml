@@ -11,6 +11,7 @@ description: |
 
 provider: claude
 model: sonnet
+interactive: true    # required: approval gate must be surfaced in web UI
 
 nodes:
   # ─── Phase 1: Load Run Data ─────────────────────────────────────────

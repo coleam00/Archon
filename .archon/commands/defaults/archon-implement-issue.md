@@ -367,7 +367,8 @@ Write the prepared body to `$ARTIFACTS_DIR/pr-body.md`, then:
 
 ```bash
 gh pr create --title "Fix: {title} (#{number})" \
-  --body-file $ARTIFACTS_DIR/pr-body.md
+  --body-file $ARTIFACTS_DIR/pr-body.md \
+  --base $BASE_BRANCH
 ```
 
 ### 8.3 Get PR Number

@@ -44,6 +44,9 @@ What do you want to do?
 ├── Improve codebase architecture
 │   └── archon-architect
 │
+├── Improve an existing workflow's YAML
+│   └── archon-self-improve
+│
 ├── Safely refactor or extract code
 │   └── archon-refactor-safely
 │
@@ -309,6 +312,22 @@ archon workflow run archon-ralph-dag "Implement .archon/ralph/notifications/prd.
 
 ---
 
+### For Workflow Improvement
+
+#### `archon-self-improve`
+
+Loads the JSONL logs and node artifacts from a previous workflow run, runs parallel analysis nodes (efficiency + information flow), synthesizes findings, routes them through a human approval gate, then applies the approved edits to `.archon/workflows/defaults/` or `.archon/commands/defaults/` and re-validates.
+
+**When to use it**: After a workflow run that felt slow, produced poor output, or had awkward data passing between nodes — and you want Archon to propose concrete YAML improvements rather than do it manually.
+
+```bash
+archon workflow run archon-self-improve <run-id>
+```
+
+**What it produces**: A prioritized list of improvement suggestions (human-reviewed before anything is written), applied YAML/command edits, and a final `bun run validate` confirmation.
+
+---
+
 ### For Merge Conflicts
 
 #### `archon-resolve-conflicts`
@@ -378,6 +397,7 @@ archon workflow run archon-remotion-generate "A 10-second animated title card wi
 | `archon-ralph-dag` | PRD implementation loop | Yes | Yes |
 | `archon-workflow-builder` | Generate a new Archon workflow YAML | No | No |
 | `archon-remotion-generate` | Generate a Remotion video (existing project required) | No | No |
+| `archon-self-improve` | Improve a prior workflow run via analysis + human approval | No | No |
 | `archon-resolve-conflicts` | Resolve merge conflicts | No | No |
 
 ---
