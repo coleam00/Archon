@@ -1620,14 +1620,14 @@ export async function workflowApproveCommand(
     );
   }
 
-  // Use the codebase's source path for workflow YAML discovery so the file is
-  // found even when working_path is a worktree or workspace clone that does
-  // not contain the user's local (often untracked) workflow YAML.
-  const discoveryCwd = result.codebaseId
-    ? await resolveDiscoveryCwdForCodebase(runId, result.codebaseId, 'approve')
-    : undefined;
-
   try {
+    // Use the codebase's source path for workflow YAML discovery so the file is
+    // found even when working_path is a worktree or workspace clone that does
+    // not contain the user's local (often untracked) workflow YAML.
+    const discoveryCwd = result.codebaseId
+      ? await resolveDiscoveryCwdForCodebase(runId, result.codebaseId, 'approve')
+      : undefined;
+
     await workflowRunCommand(result.workingPath, result.workflowName, result.userMessage ?? '', {
       resume: true,
       codebaseId: result.codebaseId ?? undefined,
@@ -1722,14 +1722,14 @@ export async function workflowRejectCommand(
     );
   }
 
-  // Use the codebase's source path for workflow YAML discovery so the file is
-  // found even when working_path is a worktree or workspace clone that does
-  // not contain the user's local (often untracked) workflow YAML.
-  const discoveryCwd = result.codebaseId
-    ? await resolveDiscoveryCwdForCodebase(runId, result.codebaseId, 'reject')
-    : undefined;
-
   try {
+    // Use the codebase's source path for workflow YAML discovery so the file is
+    // found even when working_path is a worktree or workspace clone that does
+    // not contain the user's local (often untracked) workflow YAML.
+    const discoveryCwd = result.codebaseId
+      ? await resolveDiscoveryCwdForCodebase(runId, result.codebaseId, 'reject')
+      : undefined;
+
     await workflowRunCommand(result.workingPath, result.workflowName, result.userMessage ?? '', {
       resume: true,
       codebaseId: result.codebaseId ?? undefined,
