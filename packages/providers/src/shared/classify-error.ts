@@ -52,6 +52,8 @@ export const TRANSIENT_PATTERNS = [
   'extension error',
   'handler timed out',
   'claude code crash',
+  'produced no assistant output',
+  'stream closed without yielding',
 ];
 
 /** Check if error message matches any pattern in the list. */
