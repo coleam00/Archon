@@ -140,7 +140,7 @@ The database has 18 tables, all prefixed with `remote_agent_`:
 
 14. **`remote_agent_user_ai_prefs`** - Per-user AI preferences (personal model tiers, `@custom` aliases, default assistant)
     - NON-encrypted (model names aren't secrets); one row per user (`UNIQUE(user_id)`), cascades on user deletion
-    - `tiers` / `aliases` are JSON-as-TEXT; folded into model resolution as the highest-precedence layer for runs/chats that user starts
+    - `tiers` / `aliases` are JSON-as-TEXT; folded into model resolution as the highest-precedence layer. Resolution follows the **acting user**: workflow runs use the run starter; chat turns use the message **sender** (the conversation creator's row is only a fallback when no sender identity resolves)
     - Editable via the console "Just me" scope, `archon ai … --scope user`, or `/api/auth/me/ai-prefs*`
 
 15–18. **`remote_agent_auth_user` / `remote_agent_auth_session` / `remote_agent_auth_account` / `remote_agent_auth_verification`** - Better Auth tables for opt-in web login
