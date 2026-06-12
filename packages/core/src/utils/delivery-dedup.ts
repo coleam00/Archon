@@ -35,16 +35,23 @@ export class DeliveryDeduplicator {
   private entries: Map<string, number>;
   private ttlMs: number;
   private maxEntries: number;
+  private nowFn: () => number;
 
   /**
    * Creates a new DeliveryDeduplicator
    * @param ttlMs - How long a key counts as a duplicate (default: 10 minutes)
    * @param maxEntries - Maximum tracked keys before oldest-first eviction (default: 10,000)
+   * @param nowFn - Clock source, injectable for deterministic tests (default: Date.now)
    */
-  constructor(ttlMs = DEFAULT_TTL_MS, maxEntries = DEFAULT_MAX_ENTRIES) {
+  constructor(
+    ttlMs = DEFAULT_TTL_MS,
+    maxEntries = DEFAULT_MAX_ENTRIES,
+    nowFn: () => number = Date.now
+  ) {
     this.entries = new Map<string, number>();
     this.ttlMs = ttlMs;
     this.maxEntries = maxEntries;
+    this.nowFn = nowFn;
   }
 
   /**
@@ -53,7 +60,7 @@ export class DeliveryDeduplicator {
    * @returns true if the key is a duplicate (caller should drop), false if first-seen
    */
   seen(key: string): boolean {
-    const now = Date.now();
+    const now = this.nowFn();
     const firstSeen = this.entries.get(key);
 
     if (firstSeen !== undefined && now - firstSeen < this.ttlMs) {

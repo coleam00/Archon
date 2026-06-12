@@ -587,6 +587,20 @@ describe('GitHubAdapter', () => {
       expect(mockGetOrCreateConversation).toHaveBeenCalledTimes(2);
     });
 
+    test('requires both id and updated_at for the comment key (id alone uses GUID fallback)', async () => {
+      const adapter = createDedupAdapter();
+      // id present but updated_at missing — keying on id alone would dedup a
+      // later edit against the original, so this must use the GUID fallback.
+      const payload = createIdentifiedCommentPayload('@archon help', 1001, undefined);
+
+      await deliver(adapter, payload, 'guid-1');
+      await deliver(adapter, payload, 'guid-1');
+      await deliver(adapter, payload, 'guid-2');
+
+      // Same GUID deduped, different GUID processed (no comment-identity key).
+      expect(mockGetOrCreateConversation).toHaveBeenCalledTimes(2);
+    });
+
     test('falls back to delivery GUID when payload lacks comment id', async () => {
       const adapter = createDedupAdapter();
       const payload = createIdentifiedCommentPayload('@archon help', undefined, undefined);

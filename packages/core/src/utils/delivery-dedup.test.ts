@@ -1,6 +1,15 @@
 import { DeliveryDeduplicator } from './delivery-dedup';
 
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+/** Deterministic clock: tests advance time explicitly instead of sleeping. */
+function createClock(start = 0) {
+  let now = start;
+  return {
+    now: () => now,
+    advance: (ms: number) => {
+      now += ms;
+    },
+  };
+}
 
 describe('DeliveryDeduplicator', () => {
   test('first sighting of a key is not a duplicate', () => {
@@ -29,25 +38,37 @@ describe('DeliveryDeduplicator', () => {
     expect(dedup.seen('comment:owner/repo#42:100:2026-06-12T00:05:00Z')).toBe(false);
   });
 
-  test('key expires after TTL and may run again', async () => {
-    const dedup = new DeliveryDeduplicator(20);
+  test('key expires after TTL and may run again', () => {
+    const clock = createClock();
+    const dedup = new DeliveryDeduplicator(20, 10_000, clock.now);
     const key = 'delivery:guid-1';
     expect(dedup.seen(key)).toBe(false);
     expect(dedup.seen(key)).toBe(true);
 
-    await sleep(30);
+    clock.advance(30);
 
     expect(dedup.seen(key)).toBe(false);
     expect(dedup.seen(key)).toBe(true);
   });
 
-  test('expired entries are pruned on insert', async () => {
-    const dedup = new DeliveryDeduplicator(20);
+  test('key just inside the TTL window is still a duplicate', () => {
+    const clock = createClock();
+    const dedup = new DeliveryDeduplicator(20, 10_000, clock.now);
+    expect(dedup.seen('k')).toBe(false);
+
+    clock.advance(19);
+
+    expect(dedup.seen('k')).toBe(true);
+  });
+
+  test('expired entries are pruned on insert', () => {
+    const clock = createClock();
+    const dedup = new DeliveryDeduplicator(20, 10_000, clock.now);
     dedup.seen('a');
     dedup.seen('b');
     expect(dedup.size).toBe(2);
 
-    await sleep(30);
+    clock.advance(30);
 
     dedup.seen('c');
     expect(dedup.size).toBe(1); // a and b expired and pruned
@@ -65,10 +86,11 @@ describe('DeliveryDeduplicator', () => {
     expect(dedup.seen('d')).toBe(true); // still tracked
   });
 
-  test('re-seeing a key after expiry refreshes its eviction position', async () => {
-    const dedup = new DeliveryDeduplicator(20, 10);
+  test('re-seeing a key after expiry refreshes its eviction position', () => {
+    const clock = createClock();
+    const dedup = new DeliveryDeduplicator(20, 10, clock.now);
     dedup.seen('a');
-    await sleep(30);
+    clock.advance(30);
     dedup.seen('b');
     dedup.seen('a'); // expired -> refreshed, moves behind b
 

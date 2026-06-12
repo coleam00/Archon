@@ -1000,11 +1000,12 @@ ${userComment}`;
     // rather than the delivery GUID: dual subscriptions (repo webhook + App
     // webhook) deliver the same comment under different GUIDs, so GUID-only
     // dedup misses the common duplicate source. An edited comment gets a new
-    // updated_at and forms a new key, so edit re-triggers still run. Falls
-    // back to the delivery GUID when the payload lacks comment identity.
+    // updated_at and forms a new key, so edit re-triggers still run. Both
+    // fields are required — keying on id alone would dedup an edit against
+    // the original. Falls back to the delivery GUID when either is absent.
     const dedupKey =
-      event.comment?.id !== undefined
-        ? `comment:${owner}/${repo}#${String(number)}:${String(event.comment.id)}:${event.comment.updated_at ?? ''}`
+      event.comment?.id !== undefined && event.comment.updated_at
+        ? `comment:${owner}/${repo}#${String(number)}:${String(event.comment.id)}:${event.comment.updated_at}`
         : deliveryId
           ? `delivery:${deliveryId}`
           : undefined;
