@@ -1,0 +1,390 @@
+# Experimental GSD port (#1696) — part of the gsd-* suite.
+# Source: github.com/open-gsd/gsd-core (MIT), gsd-core/workflows/discuss-phase.md.
+# Provider: claude (default) — runs in the live checkout; no inline agents on loop nodes.
+#   Cross-runtime: change `provider: claude` to `provider: pi` (one line);
+#   agent spawning then runs in-context.
+# Install: copy .archon/workflows/experimental/gsd-*.yaml into <repo>/.archon/workflows/
+#   and .archon/commands/gsd/ into <repo>/.archon/commands/gsd/
+# State: .planning/ in-repo, committed to git (scratch excluded by .planning/.gitignore).
+# Runs in the live checkout (worktree disabled): GSD state accumulates on current branch.
+# Promotion to bundled defaults is gated on real-world full cycles — tracked in #1696.
+#
+# Dropped from GSD source (--auto/--power/--batch/--analyze/--text/--chain flags,
+# advisor mode, SPEC.md gate, todo cross-referencing, checkpoint JSON files,
+# DISCUSSION-LOG.md — Archon run history is the audit trail):
+# this workflow captures implementation decisions in CONTEXT.md for downstream
+# research and planning.
+
+name: gsd-discuss-phase
+description: |
+  Use when: User wants to capture implementation decisions for a specific phase
+           before research and planning begin.
+  Triggers: "discuss phase", "phase context", "capture decisions",
+            "discuss phase N", "context for phase N".
+  Does: Interactive conversation to clarify gray areas in a roadmap phase,
+        writing a CONTEXT.md that downstream agents (researcher, planner)
+        consume. One question at a time with concrete options + recommendation.
+  NOT for: Planning or implementing the phase (use gsd-plan-phase /
+           gsd-execute-phase after). NOT for initial project setup
+           (use gsd-new-project first). NOT for creating a PRD (use
+           archon-interactive-prd).
+  Input: Phase number (e.g. "1") as argument, or run without args to target
+         the first unchecked phase in ROADMAP.md.
+  Output: .planning/phases/{NN}-{slug}/NN-CONTEXT.md committed to git.
+
+provider: claude
+interactive: true
+worktree:
+  enabled: false
+
+nodes:
+  # ═══════════════════════════════════════════════════════════════
+  # GUARD — Validate prerequisites
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: guard
+    bash: |
+      if [ ! -f .planning/ROADMAP.md ]; then
+        echo "ERROR: .planning/ROADMAP.md not found. Run gsd-new-project first to initialize the project and create a roadmap."
+        exit 1
+      fi
+      echo "Ready to discuss phase context. ROADMAP.md found."
+
+  # ═══════════════════════════════════════════════════════════════
+  # DISCUSS — Iterative gray-area exploration
+  # One question at a time; converge until user says ready.
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: discuss
+    depends_on: [guard]
+    loop:
+      prompt: |
+        # GSD Discuss Phase — Capture Implementation Decisions
+
+        You are a thinking partner, not an interviewer. The user is the visionary;
+        you are the builder. Your job is to capture decisions that will guide
+        downstream research and planning — not to figure out implementation yourself.
+
+        **User's argument (phase number or description)**: $ARGUMENTS
+        **User's latest input**: $LOOP_USER_INPUT
+        **Previous iteration output** (if any): $LOOP_PREV_OUTPUT
+
+        ---
+
+        ## Scope Guardrail
+
+        **CRITICAL: No scope creep.** The phase boundary comes from ROADMAP.md and is
+        FIXED. Discussion clarifies HOW to implement what's scoped, never WHETHER to
+        add new capabilities.
+
+        **Allowed (clarifying ambiguity):** "How should posts be displayed?" (layout),
+        "What happens on empty state?" (within the feature), "Pull to refresh or
+        manual?" (behavior choice).
+
+        **Not allowed (scope creep):** "Should we also add comments?" / "What about
+        search/filtering?" / "Maybe include bookmarking?" — those are new capabilities
+        and belong in their own phase.
+
+        **When user suggests scope creep:**
+        ```
+        "[Feature X] would be a new capability — that's its own phase.
+        I'll note it as a deferred idea. For now, let's focus on [current area]."
+        ```
+
+        Capture the idea in a "Deferred Ideas" section. Don't lose it, don't act on it.
+
+        ---
+
+        ## Philosophy
+
+        The user knows: how they imagine it working, what it should look/feel like,
+        what's essential vs nice-to-have, specific behaviors or references they have
+        in mind.
+
+        The user doesn't know (and shouldn't be asked): codebase patterns (researcher
+        reads the code), technical risks (researcher identifies these), implementation
+        approach (planner figures this out), success metrics (inferred from the work).
+
+        Ask about vision and implementation choices. Capture decisions for downstream
+        agents.
+
+        ---
+
+        ## If this is the FIRST iteration (no user input yet):
+
+        ### Step 1: Resolve the Phase
+
+        If $ARGUMENTS contains a number (e.g. "1", "3"):
+        - Parse it as the phase number
+        - Read `.planning/ROADMAP.md` and find the matching phase
+        - If not found, exit with: "Phase [N] not found in ROADMAP.md. Check available phases."
+
+        If $ARGUMENTS is empty or not a number:
+        - Read `.planning/ROADMAP.md` and find the first unchecked phase in the
+          Phases checklist (the first `- [ ]` item)
+        - If all phases are checked: "All roadmap phases are complete. Use gsd-new-milestone
+          to define the next milestone."
+
+        Once the phase is identified:
+        - Derive the phase slug: lowercase the phase name, replace spaces/special chars
+          with hyphens, collapse consecutive hyphens
+        - Determine the phase directory: `.planning/phases/{NN}-{slug}/`
+          (zero-pad the phase number to 2 digits, e.g. `01`, `07`, `15`)
+        - Create the directory if it doesn't exist:
+          ```bash
+          mkdir -p .planning/phases/<NN>-<slug>
+          ```
+
+        ### Step 2: Load State
+
+        Read these files (they exist — guard verified ROADMAP.md):
+        - `.planning/PROJECT.md` — project-level decisions, constraints, vision
+        - `.planning/REQUIREMENTS.md` — v1/v2/out-of-scope requirements
+        - `.planning/STATE.md` — session continuity, prior phase outcomes
+
+        Read prior context (≤3 most recent CONTEXT.md files before this phase):
+        ```bash
+        find .planning/phases -name "*-CONTEXT.md" | sort -r | head -3
+        ```
+        For each: extract `<decisions>` (locked preferences), `<specifics>` (particular
+        references), and patterns (e.g., "user prefers minimal UI"). Do NOT re-ask
+        questions already decided.
+
+        ### Step 3: Scout the Codebase
+
+        Check for existing codebase maps:
+        ```bash
+        ls .planning/codebase/*.md 2>/dev/null || true
+        ```
+        If maps exist, read 2-3 most relevant to this phase (ARCHITECTURE.md +
+        STRUCTURE.md at minimum; CONVENTIONS.md if style decisions are relevant).
+        Extract: reusable assets, established patterns, integration points.
+        If no maps exist, skip — note in output that running gsd-map-codebase first
+        would improve context quality.
+
+        ### Step 4: Analyze Gray Areas
+
+        Gray areas are **implementation decisions the user cares about** — things that
+        could go multiple ways and would change the result.
+
+        1. Restate the phase goal from ROADMAP.md clearly ("This phase delivers: …")
+        2. Understand the domain — something users SEE / CALL / RUN / READ / something
+           being ORGANIZED — and let that drive what kinds of decisions matter
+        3. Check prior decisions from Step 2 — mark already-decided areas as pre-answered
+        4. Generate 3-4 phase-specific gray areas (NOT generic "UI", "UX", "Behavior")
+        5. Annotate each with codebase context when available
+
+        **Don't use generic category labels.** Generate specific gray areas:
+        ```
+        Phase: "User authentication"  → Session handling, Error responses,
+                                         Multi-device policy, Recovery flow
+        Phase: "Organize photo library" → Grouping criteria, Duplicate handling,
+                                           Naming convention, Folder structure
+        ```
+
+        **Claude handles these (don't ask):** technical implementation details,
+        architecture patterns, performance optimization, scope (roadmap defines this).
+
+        ### Step 5: Present to User
+
+        Present:
+        ```
+        ## Phase {N}: {Name}
+        **Domain:** {What this phase delivers — clear scope anchor}
+
+        We'll clarify HOW to implement this. (New capabilities belong in other phases.)
+
+        [If prior decisions apply:]
+        **Carrying forward from earlier phases:**
+        - {Decision from Phase N that applies here}
+
+        **Gray areas to resolve:**
+        1. **{Area 1}** — {Specific question} (Context: {codebase insight})
+        2. **{Area 2}** — {Specific question}
+        3. **{Area 3}** — {Specific question}
+        4. **{Area 4}** — {Specific question}
+
+        Which area should we discuss first?
+        ```
+
+        Then STOP. Let the user respond with their preferred area or first answer.
+
+        ---
+
+        ## If the user has provided input (subsequent iterations):
+
+        ### Step 1: Process Their Response
+
+        Read their answer carefully. Identify:
+        - Which area they're addressing
+        - Decisions they've made (record these!)
+        - What they want clarified
+        - Whether they're answering a question, asking a new one, or saying "ready"
+
+        ### Step 2: Continue the Discussion
+
+        **For each area currently being discussed:**
+        - Announce the area: "Let's talk about [Area]."
+        - Ask ONE question at a time with 2-3 concrete options plus a recommendation.
+          Annotate options with code context when relevant:
+          ```
+          "How should posts be displayed?"
+          - Cards — reuses existing Card component (consistent with Messages)
+          - List — simpler, would be a new pattern
+          - Timeline — needs new Timeline component (none exists yet)
+          Recommendation: Cards — reuses what's built and keeps UX consistent.
+          ```
+        - Include "You decide" as an option when reasonable — captures Claude discretion.
+        - After the answer, ask ONE follow-up question that builds on what was learned.
+        - When the area feels resolved, confirm the captured decisions and move to the
+          next unvisited gray area.
+        - Announce the new area and repeat.
+
+        **Canonical refs:** If the user references a doc, spec, or ADR during any
+        answer — e.g., "read adr-014", "check the MCP spec" — immediately read it
+        and add it to the canonical references list. These are often more important
+        than ROADMAP.md refs because the user specifically wants downstream agents
+        to follow them.
+
+        **Scope creep:** If the user mentions something outside the phase domain,
+        capture it as a deferred idea and redirect back to the current area.
+
+        ### Step 3: After All Areas Are Discussed
+
+        If all gray areas have been resolved, present a summary:
+        ```
+        ## Summary
+
+        We've discussed: {list areas}
+
+        **Decisions captured:**
+        - D-01: {decision}
+        - D-02: {decision}
+        …
+
+        **Deferred ideas:** {list if any, or "None — stayed within scope"}
+
+        I'm ready to write CONTEXT.md with these decisions.
+        Say **ready** and I'll create it.
+        ```
+
+        ---
+
+        ## Completion — Writing CONTEXT.md
+
+        When the user explicitly says "ready", "done", "proceed", "create context",
+        or "write it":
+
+        Write `.planning/phases/{NN}-{slug}/{NN}-CONTEXT.md` with this EXACT
+        6-section structure (substitute all `{…}` placeholders):
+
+        ```markdown
+        # Phase {NN}: {Phase Name} - Context
+
+        **Gathered:** {today's ISO date}
+        **Status:** Ready for planning
+
+        ## Phase Boundary
+
+        {Clear statement of what this phase delivers — the scope anchor from ROADMAP.md}
+
+        ## Implementation Decisions
+
+        ### {Category 1 that was discussed}
+        - **D-01:** {Decision or preference captured}
+        - **D-02:** {Another decision if applicable}
+
+        ### {Category 2 that was discussed}
+        - **D-03:** {Decision or preference captured}
+
+        ### Claude's Discretion
+        {Areas where user said "you decide" — note that Claude has flexibility here}
+
+        ## Canonical References
+
+        **Downstream agents MUST read these before planning or implementing.**
+
+        {Full relative paths to every spec/ADR/doc referenced. Group by topic area.
+        Sources: ROADMAP.md refs + REQUIREMENTS.md refs + user-referenced docs +
+        docs discovered during codebase scout.}
+
+        ### {Topic area 1}
+        - `path/to/doc.md` — {What it decides/defines that's relevant}
+
+        {If no external specs: "No external specs — requirements fully captured in decisions above"}
+
+        ## Existing Code Insights
+
+        ### Reusable Assets
+        - {Component/hook/utility}: {How it could be used in this phase}
+
+        ### Established Patterns
+        - {Pattern}: {How it constrains/enables this phase}
+
+        ### Integration Points
+        - {Where new code connects to existing system}
+
+        ## Specific Ideas
+
+        {Any particular references, examples, or "I want it like X" moments from discussion}
+        {If none: "No specific requirements — open to standard approaches"}
+
+        ## Deferred Ideas
+
+        {Ideas that came up but belong in other phases. Don't lose them.}
+        {If none: "None — discussion stayed within phase scope"}
+
+        ---
+
+        *Phase: {NN}-{Phase Name}*
+        *Context gathered: {today's ISO date}*
+        ```
+
+        Then commit:
+        ```bash
+        git add .planning/phases/{NN}-{slug}/{NN}-CONTEXT.md && git commit -m "docs({NN}): capture phase context"
+        ```
+
+        Then update STATE.md with session info: open `.planning/STATE.md`, find
+        or add a `## Session Continuity` section, and record:
+        ```markdown
+        - {today's ISO date} — Phase {NN} context gathered → `.planning/phases/{NN}-{slug}/{NN}-CONTEXT.md`
+        ```
+
+        Commit the state update:
+        ```bash
+        git add .planning/STATE.md && git commit -m "docs(state): record phase {NN} context session"
+        ```
+
+        Finally, output:
+        ```
+        ## Created: .planning/phases/{NN}-{slug}/{NN}-CONTEXT.md
+
+        **Phase {NN}: {Name}**
+        **Decisions captured:** {N}
+        **Next:** archon workflow run gsd-plan-phase {phase number}
+        ```
+
+        Then emit `<promise>CONTEXT_COMPLETE</promise>`.
+
+        ---
+
+        **CRITICAL — READ THIS CAREFULLY:**
+        - NEVER output `<promise>CONTEXT_COMPLETE</promise>` unless the user's
+          LATEST message contains an EXPLICIT phrase like "ready", "done", "proceed",
+          "create the plan", "write it", or "I'm ready for context".
+        - If the user asked a question → do NOT emit the signal. Answer the question.
+        - If the user gave feedback or requested changes → do NOT emit the signal.
+          Address it.
+        - If the user said "also check X" or "one more thing" → do NOT emit the
+          signal. Explore it.
+        - If you are unsure whether the user is approving → do NOT emit the signal.
+          Ask: "Ready to write CONTEXT.md, or would you like to discuss anything else?"
+        - The ONLY correct time to emit the signal is when the user's message
+          CLEARLY means "stop discussing, write the context document."
+      until: CONTEXT_COMPLETE
+      max_iterations: 20
+      interactive: true
+      gate_message: |
+        Answer the question above, tell me which gray area to discuss,
+        or say "ready" when context is complete and ready to write CONTEXT.md.

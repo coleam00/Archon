@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Added
+
+- **Experimental GSD workflow suite** under `.archon/workflows/experimental/` — 11 workflows porting the GSD core loop (map-codebase, new-project, discuss/plan/execute/verify phases, ship, milestones) plus `gsd-quick` and `gsd-debug`, with shared role prompts in `.archon/commands/gsd/` and in-repo `.planning/` state (#1696)
+
 
 ### Fixed
 

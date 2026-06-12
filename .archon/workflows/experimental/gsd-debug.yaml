@@ -1,0 +1,308 @@
+# Experimental GSD port (#1696) — part of the gsd-* suite.
+# Source: github.com/open-gsd/gsd-core (MIT) — workflows/debug.md + agents/gsd-debug-session-manager.md.
+# Provider: claude (default) — uses inline agents/Task-tool spawning where noted.
+#   Cross-runtime: change `provider: claude` to `provider: pi` (one line);
+#   agent spawning then runs in-context.
+# Install: copy .archon/workflows/experimental/gsd-*.yaml into <repo>/.archon/workflows/
+#   and .archon/commands/gsd/ into <repo>/.archon/commands/gsd/
+# State: .planning/ in-repo, committed to git (scratch excluded by .planning/.gitignore).
+# Runs in the live checkout (worktree disabled): GSD state accumulates on current branch.
+# Promotion to bundled defaults is gated on real-world full cycles — tracked in #1696.
+#
+# NOT for (GSD features intentionally dropped):
+#   - --diagnose flag — covered conversationally at the fix/diagnose gate
+#   - list/status/continue subcommands — sessions live in .planning/debug/;
+#     re-run with the same description to continue or resume
+#   - TDD mode — not ported
+#   - Specialist dispatch — agent routing not ported
+#   - Cross-AI delegation — not ported
+
+name: gsd-debug
+description: |
+  Use when: User wants to investigate and fix a bug using the scientific method.
+  Triggers: "debug this bug", "why is X broken", "find root cause",
+            "investigate the crash", "debug <symptoms>", "fix this bug".
+  NOT for: General code questions (use gsd-quick), feature work (use gsd-new-project),
+           phase execution (use gsd-execute-phase), code review (use gsd-verify-work).
+
+  Debug workflow that:
+  1. Creates a persistent debug session file in .planning/debug/{slug}.md
+  2. Runs scientific-method investigation cycles (hypothesis → evidence → evaluate)
+  3. Pauses at root cause for user decision: fix it, or diagnose only
+  4. On fix: applies the fix, verifies, commits, archives the session
+  5. Survives interruption — re-run with the same description to resume
+
+  Input: A description of the bug — symptoms, errors, what's broken.
+  Output: Root cause diagnosis with evidence, optional fix, archived debug session.
+
+provider: claude
+interactive: true
+worktree:
+  enabled: false
+
+nodes:
+  # ═══════════════════════════════════════════════════════════════
+  # NODE 1: SETUP — prepare debug directory and derive session slug
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: setup
+    bash: |
+      set -e
+
+      # Require a bug description
+      if [ -z "$ARGUMENTS" ]; then
+        echo "ERROR: Describe the bug you want to debug."
+        echo "Usage: archon workflow run gsd-debug \"<symptoms>\""
+        echo ""
+        echo "Examples:"
+        echo '  archon workflow run gsd-debug "login returns 500 when email has a plus sign"'
+        echo '  archon workflow run gsd-debug "export CSV drops rows when over 1000 entries"'
+        exit 1
+      fi
+
+      # Ensure debug directories exist
+      mkdir -p .planning/debug/resolved
+      mkdir -p .planning
+
+      # Create .planning/.gitignore if missing
+      if [ ! -f .planning/.gitignore ]; then
+        printf '# GSD scratch files — never committed (see issue #1696)\nFALLOW.json\n*-DISCUSS-CHECKPOINT.json\n.continue-here.md\n' > .planning/.gitignore
+        echo ".planning/.gitignore created"
+      fi
+
+      # Derive slug: lowercase, replace non-alnum with hyphens, collapse, strip, truncate 30
+      SLUG=$(echo "$ARGUMENTS" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | tr -s '-' | sed 's/^-//;s/-$//' | cut -c1-30)
+
+      echo "slug=$SLUG"
+
+      if [ -f ".planning/debug/$SLUG.md" ]; then
+        echo "resume=true — existing session found at .planning/debug/$SLUG.md"
+      else
+        echo "resume=false — new debug session"
+      fi
+
+    timeout: 30
+
+  # ═══════════════════════════════════════════════════════════════
+  # NODE 2: DEBUG — scientific-method investigation loop
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: debug
+    depends_on: [setup]
+    loop:
+      prompt: |
+        # GSD Debug — Scientific Method Investigation Loop
+
+        You are a debugging agent using the scientific method. You manage a persistent
+        debug session file at `.planning/debug/{slug}.md` that survives context resets.
+        Read `.archon/commands/gsd/gsd-debugger.md` and follow it exactly for every
+        investigation cycle.
+
+        **Bug description (trigger):** $ARGUMENTS
+        **User's latest input:** $LOOP_USER_INPUT
+        **Setup output:** $setup.output
+
+        ---
+
+        ## Iteration 1 — Session Initialization
+
+        Extract the slug from `$setup.output` (the line starting `slug=`). Verify it:
+        slug is lowercase, ≤30 chars, kebab-case, derived from the trigger text.
+
+        ### If the session file already exists (resume=true in setup output):
+
+        1. Read `.planning/debug/{slug}.md` completely
+        2. Parse the YAML frontmatter to know: `status`, `goal`, `cycles`
+        3. Read `Current Focus` — know exactly what was happening and what `next_action` is
+        4. Read `Evidence` — know what's been learned
+        5. Read `Eliminated` — know what NOT to retry
+        6. Start from `next_action` — do NOT re-investigate eliminated hypotheses
+
+        ### If this is a new session:
+
+        1. Create `.planning/debug/{slug}.md` with this frontmatter and structure:
+
+        ```yaml
+        ---
+        status: investigating
+        trigger: "$ARGUMENTS"
+        goal: find_and_fix
+        created: [current ISO timestamp]
+        updated: [current ISO timestamp]
+        cycles: 0
+        ---
+
+        ## Symptoms
+
+        expected: [derive from description — what should happen]
+        actual: [what the user reports actually happens]
+        errors: [any error messages visible in the description]
+        reproduction: [derive if described; otherwise "to be determined"]
+        started: [unknown unless user mentioned]
+
+        ## Current Focus
+
+        hypothesis: [initial theory from symptoms]
+        test: [how you will test it]
+        expecting: [what result would mean if hypothesis is correct]
+        next_action: [immediate concrete next step]
+
+        ## Evidence
+        (append findings here)
+
+        ## Eliminated
+        (append disproven hypotheses here)
+
+        ## Resolution
+
+        root_cause: ""
+        fix: ""
+        verification: ""
+        files_changed: []
+        ```
+
+        2. Do NOT ask the user to gather symptoms — the trigger text IS the symptom report.
+           Fill the Symptoms section from the user's description. Only ask clarification
+           questions if the description is genuinely too vague to proceed (e.g., "it's broken"
+           with no further detail).
+
+        3. For `next_action`, pick an IMMEDIATE concrete step: search for the error text,
+           read the file at the reported stack trace, run the reproduction steps, or
+           instrument the suspect code with logging. NEVER use vague steps like "look at the code."
+
+        ---
+
+        ## Every iteration — Investigation Protocol
+
+        Before ANY action, update the debug session file:
+        - OVERWRITE `Current Focus` with hypothesis, test, expecting, next_action
+        - UPDATE frontmatter `updated` timestamp and INCREMENT `cycles`
+        - APPEND to `Evidence` after EVERY finding (never batch — one entry per discovery)
+        - APPEND to `Eliminated` when a hypothesis is disproven (with the disconfirming evidence)
+
+        ### Follow the scientific method from gsd-debugger.md:
+
+        1. **Gather evidence**: search codebase for error text, read suspect files, run tests/app to observe
+        2. **Form hypothesis**: SPECIFIC and FALSIFIABLE — "X causes Y because Z", not "something is wrong with state"
+        3. **Test one hypothesis at a time**: change one variable, observe one result
+        4. **Evaluate**: confirmed → proceed to root cause checkpoint | eliminated → append to Eliminated, form new hypothesis
+        5. **Observability first**: add logging/instrumentation BEFORE changing behavior
+
+        ### NEVER:
+        - Test multiple hypotheses at once — you won't know which one matters
+        - Install new packages — surface the need as a finding instead
+        - Act on weak evidence — wait for strong, unambiguous, repeatable evidence
+        - Change behavior before adding observability — see the problem before you fix it
+        - Ask the user to do investigation work — you have the codebase, search it yourself
+
+        ---
+
+        ## When ROOT CAUSE is confirmed — Pause at the Gate
+
+        When you have confirmed the root cause with strong, repeatable evidence,
+        write the mandatory reasoning checkpoint to `Current Focus`:
+
+        ```yaml
+        reasoning_checkpoint:
+          hypothesis: "[exact statement — X causes Y because Z]"
+          confirming_evidence:
+            - "[specific item 1]"
+            - "[specific item 2]"
+          falsification_test: "[what observation would prove this hypothesis wrong]"
+          fix_rationale: "[why the fix addresses the root cause, not the symptom]"
+          blind_spots: "[what you haven't tested that could invalidate this]"
+        ```
+
+        If you CANNOT fill all five fields concretely, you do NOT have a confirmed root cause.
+        Return to investigation.
+
+        When all five fields ARE filled, PRESENT your findings to the user clearly:
+
+        ```
+        ## Root Cause Found
+
+        **What's wrong:** {mechanism — not just "what" but "why"}
+
+        **Evidence:**
+        - {key finding 1 with file:line}
+        - {key finding 2 with file:line}
+        - {key finding 3 with file:line}
+
+        **Proposed Fix:** {minimal, specific change — exactly what file, exactly what to change}
+
+        **Verification Plan:** {how you'll confirm the fix works and doesn't break anything}
+
+        Reply with:
+        - "fix it" or "yes" — I'll apply the fix, verify, commit, and archive the session
+        - "diagnose only" or "no" — I'll stop here and record the diagnosis without fixing
+        - "stop" — end the session as-is
+        ```
+
+        **DO NOT emit <promise>DEBUG_COMPLETE</promise> at this stage.**
+        Wait for the user's response at the gate.
+
+        ---
+
+        ## Handling User Input at the Gate
+
+        ### If user says "fix it" / "yes" / "apply the fix" / "go ahead":
+
+        1. Apply the SMALLEST change that addresses the root cause — one file if possible
+        2. Update Resolution: `root_cause`, `fix` (description), `files_changed` (list), `status: fixing`
+        3. Verify: reproduce original issue → fixed; run related tests; check adjacent functionality
+        4. Update `status: verified` and fill Resolution.verification
+        5. Auto-commit the fix: `git add <explicit-files> && git commit -m "fix({slug}): {short description}"`
+        6. Archive: `mkdir -p .planning/debug && git mv .planning/debug/{slug}.md .planning/debug/resolved/`
+        7. Commit the archive: `git add .planning/debug/resolved/{slug}.md && git commit -m "docs: resolve debug session {slug}"`
+        8. Output `## DEBUG COMPLETE` summary (from gsd-debugger.md format)
+        9. **Emit** `<promise>DEBUG_COMPLETE</promise>`
+
+        ### If user says "diagnose only" / "no" / "just the diagnosis":
+
+        1. Update frontmatter `goal: find_root_cause_only`
+        2. Fill Resolution.root_cause with the confirmed finding
+        3. Output `## ROOT CAUSE FOUND` summary (from gsd-debugger.md format)
+        4. **Emit** `<promise>DEBUG_COMPLETE</promise>`
+
+        ### If user says "stop" / "end" / "quit":
+
+        1. Update frontmatter `status: investigating` (leave unresolved)
+        2. Fill Resolution with what's known so far
+        3. Output `## INVESTIGATION INCONCLUSIVE` summary (from gsd-debugger.md format)
+        4. **Emit** `<promise>DEBUG_COMPLETE</promise>`
+
+        ---
+
+        ## If Investigation is Inconclusive After Exhausting Approaches
+
+        When you have tested all viable hypotheses, eliminated them all, and cannot
+        determine the root cause:
+
+        1. Update frontmatter `status: investigating`
+        2. Fill Resolution with what was checked and remaining possibilities
+        3. Output `## INVESTIGATION INCONCLUSIVE` summary (from gsd-debugger.md format)
+        4. **Emit** `<promise>DEBUG_COMPLETE</promise>`
+
+        ---
+
+        ## CRITICAL — Signal Discipline
+
+        - NEVER emit `<promise>DEBUG_COMPLETE</promise>` unless:
+          - You have presented a root cause AND the user has responded at the gate, OR
+          - You have exhausted all approaches and produced an INVESTIGATION INCONCLUSIVE report, OR
+          - The user explicitly said "stop" / "end"
+        - NEVER emit the signal when you still have testable hypotheses to investigate
+        - NEVER emit the signal mid-investigation — each iteration continues silently
+        - NEVER emit the signal after finding root cause but BEFORE presenting to the user
+        - The ONLY correct times to emit the signal are the gates described above
+
+      until: DEBUG_COMPLETE
+      max_iterations: 20
+      interactive: true
+      fresh_context: false
+      idle_timeout: 600000
+      gate_message: |
+        Answer the debugger's question, or say:
+        - "fix it" / "yes" — apply the proposed fix and archive the session
+        - "diagnose only" / "no" — record the diagnosis without fixing
+        - "stop" / "end" — end the session as-is

@@ -1,0 +1,376 @@
+# Experimental GSD port (#1696) — part of the gsd-* suite.
+# Source: github.com/open-gsd/gsd-core (MIT), workflows/new-milestone.md.
+# Provider: claude (default) — uses inline agents/Task-tool spawning where noted.
+#   Cross-runtime: change `provider: claude` to `provider: pi` (one line);
+#   agent spawning then runs in-context.
+# Install: copy .archon/workflows/experimental/gsd-*.yaml into <repo>/.archon/workflows/
+#   and .archon/commands/gsd/ into <repo>/.archon/commands/gsd/
+# State: .planning/ in-repo, committed to git (scratch excluded by .planning/.gitignore).
+# Runs in the live checkout (worktree disabled): GSD state accumulates on current branch.
+# Promotion to bundled defaults is gated on real-world full cycles — tracked in #1696.
+#
+# NOT for: --reset-phase-numbers (phase numbering always continues from the archived
+#   milestone). New project initialization (use gsd-new-project). Single-phase execution
+#   (use gsd-execute-phase).
+# Opt-in: after archiving a milestone (gsd-complete-milestone), run this to define the
+#   next one through guided questioning.
+
+name: gsd-new-milestone
+description: |
+  Use when: User wants to start the next development milestone after archiving a
+            previous one, or define a new milestone for an existing project.
+  Triggers: "new milestone", "start next milestone", "define milestone",
+            "gsd new milestone", "plan milestone".
+  Does: Guides the user through milestone definition via interactive questioning
+        (what worked/didn't, new features, priorities, constraints). Then spawns
+        the roadmapper subagent to write REQUIREMENTS.md scoped to this milestone,
+        a new ROADMAP.md continuing phase numbering from the archived milestone,
+        and a reset STATE.md. Human approves the roadmap before committing.
+  NOT for: First project setup (use gsd-new-project). Single-phase execution
+           (use gsd-execute-phase). Milestone archival (use gsd-complete-milestone).
+           --reset-phase-numbers flag (phase numbering always continues from the
+           archived milestone — this port drops that flag).
+  Input: Milestone name or version as $ARGUMENTS (e.g. "v2.0" or "performance
+         milestone"), or empty to be asked.
+
+provider: claude
+interactive: true
+
+worktree:
+  enabled: false
+
+nodes:
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 1 — Guard: verify project state
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: guard
+    bash: |
+      set -e
+
+      # Ensure project has been initialized
+      if [ ! -f ".planning/PROJECT.md" ]; then
+        echo "ERROR: .planning/PROJECT.md not found — run gsd-new-project first."
+        exit 1
+      fi
+
+      MILESTONE_NAME="$ARGUMENTS"
+      if [ -n "$MILESTONE_NAME" ]; then
+        echo "MILESTONE_NAME=$MILESTONE_NAME"
+      else
+        echo "MILESTONE_NAME=(will be defined during questioning)"
+      fi
+
+      echo "OK: project initialized. Ready to define the next milestone."
+    timeout: 15000
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 2 — Discover: interactive milestone questioning
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: discover
+    depends_on: [guard]
+    loop:
+      prompt: |
+        # GSD — Define Next Milestone
+
+        You are a product-minded engineering lead helping the user define the next
+        development milestone. Your job is to guide them through a structured
+        conversation that surfaces what worked, what didn't, and what matters most
+        right now.
+
+        **Milestone hint (from $ARGUMENTS)**: $ARGUMENTS
+        **User's latest input**: $LOOP_USER_INPUT
+
+        ---
+
+        ## Context: read the current project state
+
+        Before engaging with the user, load the project reality:
+
+        1. Read `.planning/PROJECT.md` — understand the overall project, current
+           state, past milestones, and Evolution section.
+        2. Read `.planning/STATE.md` — check completion state of the last
+           milestone: which phases shipped, what was deferred or blocked.
+        3. If `.planning/milestones/` exists, read the most recent
+           `v*-ROADMAP.md` for what was achieved and what was left for later.
+        4. Read `.planning/ROADMAP.md` if it still exists (archived milestones
+           collapse it to a link — handle both cases).
+        5. `git tag --sort=-creatordate | head -5` — recent release tags.
+
+        ---
+
+        ## If this is the FIRST iteration (no user input yet):
+
+        ### Step 1: Summarize where we are
+
+        ```
+        ## Current State
+
+        **Project**: {from PROJECT.md}
+        **Last milestone**: {from git tags / milestone archive}
+        **What shipped**: {key accomplishments}
+        **Deferred / open**: {from STATE.md or prior ROADMAP.md}
+        ```
+
+        ### Step 2: Ask the opening questions
+
+        Present 3–4 questions that probe what should happen next:
+
+        1. **What worked well** in the last milestone that you want to keep doing?
+        2. **What didn't work** or was painful? (Process, architecture, tooling,
+           scope creep — anything.)
+        3. **What features or changes** are most important for the next
+           milestone? Be specific.
+        4. **What constraints** do we have? (Time, team, budget, dependencies
+           on external systems or other teams.)
+
+        If the user passed a milestone name in $ARGUMENTS, acknowledge it:
+        "You mentioned {name} — is that the milestone we're defining?"
+
+        ---
+
+        ## If the user has provided input (subsequent iterations):
+
+        ### Step 1: Process their answers
+
+        Fold the user's responses into your understanding. Track:
+        - Confirmed priorities
+        - Explicit exclusions
+        - Constraints that limit scope
+        - Open questions they haven't answered yet
+
+        ### Step 2: Follow the thread
+
+        For areas the user mentioned, dig deeper:
+        - Vague priorities → "What would success look like for that? How would
+          you test that it's working?"
+        - Pain points → "Can you give a concrete example? What would fix it?"
+        - Constraints → "Is that a hard deadline, or aspirational? What happens
+          if we miss it?"
+
+        Default mode: one question at a time, with concrete options where possible,
+        and your own recommendation.
+
+        ### Step 3: Converge when the picture is clear
+
+        Present the milestone definition summary:
+
+        ```
+        ## Milestone: {name/version}
+
+        ### What We're Building
+        {Clear, specific scope — features, changes, improvements}
+
+        ### What We're NOT Building
+        {Explicit exclusions and deferrals}
+
+        ### Priority Order
+        1. {highest priority — why}
+        2. {next priority — why}
+        3. ...
+
+        ### Constraints
+        - {constraint — impact}
+
+        ### Success Looks Like
+        - [ ] {measurable, testable outcome}
+        - [ ] {measurable, testable outcome}
+        ```
+
+        ### Step 4: On readiness — write and commit
+
+        When the user EXPLICITLY says "ready", "done", or "let's go":
+
+        1. Read `.planning/PROJECT.md` fully.
+        2. Edit the PROJECT.md file:
+           - Update the **Current State** section to describe this new milestone.
+           - Append a new entry to the **Evolution** section recording the
+             completion of the previous milestone (if not already recorded)
+             and the start of this one.
+           - Add the new milestone goals under a clear heading.
+           - DO NOT remove historical entries — Evolution is an append-only log.
+        3. `git add .planning/PROJECT.md`
+        4. `git commit -m "docs: define next milestone"`
+        5. Output `<promise>MILESTONE_DEFINED</promise>`
+
+        **CRITICAL — READ THIS CAREFULLY**:
+        - NEVER emit <promise>MILESTONE_DEFINED</promise> unless the user's LATEST
+          message contains an EXPLICIT phrase like "ready", "done", "let's go",
+          "looks good", or "proceed".
+        - If the user asked a question → do NOT emit the signal. Answer it.
+        - If the user gave feedback or suggested changes → do NOT emit the signal.
+          Address it and re-present the summary.
+        - If the user said "one more thing" or "also" → do NOT emit the signal.
+          Explore it.
+        - If you are unsure whether the user is done → do NOT emit the signal.
+          Ask them: "Ready to define this milestone, or should we refine further?"
+        - The ONLY correct time to emit the signal is when the user's message
+          CLEARLY means "I'm done defining, record the milestone."
+      until: MILESTONE_DEFINED
+      max_iterations: 12
+      interactive: true
+      gate_message: |
+        Answer the questions above, say "ready" when the milestone is defined,
+        or "done" to finalize and commit.
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 3 — Plan the milestone roadmap
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: plan-milestone
+    depends_on: [discover]
+    prompt: |
+      # GSD — Plan the Milestone Roadmap
+
+      You are creating the phased roadmap for the newly defined milestone.
+
+      **Project state**: read `.planning/PROJECT.md` for the milestone definition
+      just committed.
+
+      **Exploration summary** (the milestone conversation):
+      $discover.output
+
+      ---
+
+      ## Step 1: Understand the starting point
+
+      1. Read `.planning/PROJECT.md` — extract the new milestone goals and context.
+      2. Check `.planning/milestones/` — find the most recent archived
+         `v*-ROADMAP.md` to determine the LAST phase number used.
+      3. If `.planning/REQUIREMENTS.md` exists from a previous milestone, note
+         which REQ-IDs were completed.
+
+      ## Step 2: Spawn the roadmapper
+
+      Delegate to the roadmapper subagent:
+
+      ```yaml
+      agents:
+        roadmapper:
+          description: Creates phased roadmap for milestone
+          prompt: |
+            Read .archon/commands/gsd/gsd-roadmapper.md and follow it.
+
+            Write for the new milestone defined in .planning/PROJECT.md.
+
+            Key rules:
+            - Write a fresh `.planning/REQUIREMENTS.md` scoped ONLY to this
+              milestone. New REQ-IDs start fresh. Reference the archived
+              milestone's REQ-IDs in a Traceability section noting what was
+              completed vs carried forward.
+            - Write a new `.planning/ROADMAP.md` with phases. Phase numbering
+              MUST continue from the last archived milestone. If the last
+              archived phase was 05, the new phases start at 06.
+            - Reset `.planning/STATE.md` position fields — this is a new
+              milestone, so Session Continuity starts fresh. Preserve the
+              gsd_state_version frontmatter field.
+            - Every REQ-ID in REQUIREMENTS.md must map to at least one phase
+              in ROADMAP.md (100% coverage).
+            - Goal-backward success criteria: each phase's Success Criteria
+              must derive from the milestone goals in PROJECT.md.
+      ```
+
+      ## Step 3: Report
+
+      After the roadmapper finishes, present:
+
+      ```
+      ## Milestone Roadmap Created
+
+      **Milestone**: {version/name}
+      **Phases**: {count} ({NN}–{NN} — continuing from archived milestone)
+      **REQ-IDs**: {count} defined
+      **STATE.md**: reset for new milestone
+
+      Phase summary:
+      | Phase | Goal | REQ-IDs | Plans |
+      |-------|------|---------|-------|
+      | {NN}  | ...  | ...     | ...   |
+
+      Review .planning/ROADMAP.md and approve or reject with adjustments.
+      ```
+    agents:
+      roadmapper:
+        description: Creates phased roadmap for milestone
+        prompt: |
+          Read .archon/commands/gsd/gsd-roadmapper.md and follow it.
+
+          Write for the new milestone defined in .planning/PROJECT.md.
+
+          Key rules:
+          - Write a fresh .planning/REQUIREMENTS.md scoped ONLY to this milestone.
+            New REQ-IDs start fresh. Include a Traceability section noting what was
+            completed in archived milestones vs carried forward.
+          - Write a new .planning/ROADMAP.md with phases. Phase numbering MUST
+            continue from the last archived milestone. If the last archived phase
+            was e.g. 05, new phases start at 06. Check .planning/milestones/ for
+            the most recent v*-ROADMAP.md to find the last phase number.
+          - Reset .planning/STATE.md — new milestone, fresh Session Continuity.
+            Preserve only the gsd_state_version frontmatter field.
+          - Every REQ-ID must map to at least one phase (100% coverage).
+          - Goal-backward: each phase's Success Criteria must derive from the
+            milestone goals in PROJECT.md.
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 4 — Review and approve the roadmap
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: roadmap-gate
+    depends_on: [plan-milestone]
+    approval:
+      message: |
+        Review .planning/ROADMAP.md — approve to commit, or reject with
+        adjustments (specific changes needed).
+      capture_response: true
+      on_reject:
+        prompt: |
+          Revise the roadmap per the user's feedback: $REJECTION_REASON
+
+          Re-read .archon/commands/gsd/gsd-roadmapper.md and apply the
+          requested adjustments to .planning/ROADMAP.md, .planning/REQUIREMENTS.md,
+          and .planning/STATE.md as needed. Preserve the contracts:
+          - 100% REQ coverage
+          - Continuing phase numbering from archived milestone
+          - Goal-backward success criteria
+        max_attempts: 3
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 5 — Commit the roadmap
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: finalize
+    depends_on: [roadmap-gate]
+    bash: |
+      set -e
+
+      # Verify the required files exist
+      if [ ! -f ".planning/ROADMAP.md" ]; then
+        echo "ERROR: .planning/ROADMAP.md not found — plan-milestone may have failed."
+        exit 1
+      fi
+      if [ ! -f ".planning/STATE.md" ]; then
+        echo "ERROR: .planning/STATE.md not found."
+        exit 1
+      fi
+      if [ ! -f ".planning/REQUIREMENTS.md" ]; then
+        echo "ERROR: .planning/REQUIREMENTS.md not found."
+        exit 1
+      fi
+
+      git add .planning/ROADMAP.md .planning/STATE.md .planning/REQUIREMENTS.md
+      git commit -m "docs: create roadmap for new milestone"
+
+      # Determine the first phase number for next steps
+      PHASE_DIR=$(ls -d .planning/phases/*/ 2>/dev/null | sort -V | tail -1 || echo "")
+      if [ -n "$PHASE_DIR" ]; then
+        PHASE_NUM=$(basename "$PHASE_DIR" | grep -o '^[0-9]*' || echo "1")
+        echo ""
+        echo "Roadmap committed. Next phase: $PHASE_NUM"
+        echo "Next step: archon workflow run gsd-discuss-phase $PHASE_NUM"
+      else
+        echo ""
+        echo "Roadmap committed. No phases found yet — roadmapper should have created them."
+        echo "Next step: archon workflow run gsd-discuss-phase 1"
+      fi
+    timeout: 30000

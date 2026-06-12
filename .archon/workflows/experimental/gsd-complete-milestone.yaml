@@ -1,0 +1,444 @@
+# Experimental GSD port (#1696) — part of the gsd-* suite. Source: github.com/open-gsd/gsd-core (MIT).
+# Provider: claude (default) — direct prompt execution, no inline agents.
+#   Cross-runtime: change `provider: claude` to `provider: pi` (one line).
+# Install in your own repo: copy .archon/workflows/experimental/gsd-*.yaml into <repo>/.archon/workflows/
+#   and .archon/commands/gsd/ into <repo>/.archon/commands/gsd/  (or use ~/.archon/{workflows,commands}/).
+# State: .planning/ in-repo, committed to git (scratch excluded by .planning/.gitignore).
+# Runs in the live checkout (worktree disabled): GSD state accumulates on your current branch across runs.
+# Promotion to bundled defaults is gated on real-world full cycles — tracked in #1696.
+# NOT for: individual phase completion (use gsd-execute-phase + gsd-verify-work), starting new milestones
+#   (use gsd-new-milestone). Drops: audit-milestone pre-flight file (subsumed by the audit node here),
+#   gsd-tools orchestration, auto/--yolo modes, interactive gating removed from execution (approval node replaces).
+name: gsd-complete-milestone
+description: |
+  Use when: User wants to archive a completed milestone, create historical records, and tag a release.
+  Triggers: "complete milestone", "archive milestone", "close milestone", "ship milestone",
+            "tag release", "complete v1.0", "archive v1.0".
+  NOT for: Individual phase completion (use gsd-execute-phase + gsd-verify-work),
+           Starting a new milestone (use gsd-new-milestone),
+           Creating PRs for a phase (use gsd-ship).
+  Does:
+    1. Audits phase completion — verifies every phase dir has SUMMARY.md for all PLAN.md files
+    2. Gathers stats (git log, diff stat, lines of code, timeline)
+    3. Extracts 4-6 key accomplishments from phase summaries
+    4. Human approval gate to review the milestone report
+    5. Archives milestone: creates .planning/milestones/v{X}-ROADMAP.md and v{X}-REQUIREMENTS.md
+    6. Collapses ROADMAP.md to a one-line link, deletes .planning/REQUIREMENTS.md
+    7. Updates PROJECT.md, MILESTONES.md, and STATE.md
+    8. Tags the release (git tag -a), does NOT push the tag
+  Input: Version number (e.g. "1.0", "2.0" — "v" prefix stripped if present)
+
+provider: claude
+interactive: true
+worktree:
+  enabled: false
+
+nodes:
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 1: AUDIT — Verify readiness, gather stats, extract accomplishments
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: audit
+    prompt: |
+      # GSD Complete Milestone — Audit
+
+      You are archiving a completed GSD milestone. Your job: verify readiness, gather
+      statistics, and present a milestone report for human approval.
+
+      **Version**: `$ARGUMENTS` (strip any leading `v` — use bare number like `1.0`)
+
+      ---
+
+      ## Step 1: Verify Readiness
+
+      ### Check .planning/ directory exists
+      Read `.planning/ROADMAP.md`. If it doesn't exist, stop: "No .planning/ROADMAP.md found.
+      This project hasn't been initialized. Run gsd-new-project first."
+
+      ### Identify phases belonging to this milestone
+      Parse ROADMAP.md to find which phases belong to the milestone `$ARGUMENTS`.
+      Look at the Phases table/section — each phase row includes its version/milestone column.
+
+      ### Verify every phase has complete SUMMARYs
+      For each phase directory `.planning/phases/{NN}-*/`:
+      1. List all `*-PLAN.md` files in the directory
+      2. For each PLAN.md file, check if a matching `*-SUMMARY.md` exists
+      3. If any plan is missing its SUMMARY, list it as incomplete
+
+      If ANY plans are incomplete, present the list and say:
+      "The milestone is NOT ready. These plans lack SUMMARY.md files:
+      - `.planning/phases/{NN}-{slug}/{NN}-{MM}-PLAN.md`
+      Run gsd-execute-phase to complete them, then re-run this workflow."
+
+      Then STOP — do not proceed to stats.
+
+      ### Requirements check
+      Parse `.planning/REQUIREMENTS.md` traceability table:
+      - Count total v1 (or milestone-scoped) requirements vs checked-off (`[x]`)
+      - Identify any non-Complete rows
+
+      Note any gaps — present them but don't block (the human gate handles this).
+
+      ### Phase status summary
+      Present:
+      ```
+      ## Milestone: v{VERSION}
+
+      ### Phase Status
+      | Phase | Plans | Complete |
+      |-------|-------|----------|
+      | {NN}: {name} | {M} plans | {N}/{M} ✓ |
+      ...
+
+      Total: {phase_count} phases, {total_plans} plans
+      Requirements: {checked}/{total} checked off
+      ```
+
+      If requirements incomplete, add:
+      ```
+      ### ⚠ Unchecked Requirements
+      - [ ] {REQ-ID}: {description} (Phase {X})
+      ...
+      ```
+
+      ---
+
+      ## Step 2: Gather Stats
+
+      Run these commands (using Bash tool):
+
+      1. Find the first commit after the previous tag (or first commit of the repo if no prior tag):
+         ```bash
+         PREV_TAG=$(git tag --sort=-version:refname | grep '^v' | head -1)
+         if [ -n "$PREV_TAG" ]; then
+           FIRST_COMMIT=$(git rev-list --max-parents=0 HEAD)
+           LAST_PREV=$(git rev-parse "$PREV_TAG")
+           echo "Range: $LAST_PREV..HEAD"
+         else
+           echo "Range: entire repo history"
+         fi
+         ```
+
+      2. Get commit log and diff stats:
+         ```bash
+         git log --oneline -30
+         git diff --stat ${LAST_PREV:-$(git rev-list --max-parents=0 HEAD)}..HEAD | tail -1
+         ```
+
+      3. Get timeline:
+         ```bash
+         git log --format="%ai" ${LAST_PREV:-$(git rev-list --max-parents=0 HEAD)}..HEAD | tail -1
+         git log --format="%ai" HEAD -1
+         ```
+
+      4. Count lines of code (adapt extensions to the project — check what files exist):
+         ```bash
+         find . -name "*.ts" -o -name "*.tsx" -o -name "*.py" -o -name "*.swift" -o -name "*.rs" | head -5
+         # Then do targeted wc -l on the dominant extensions found
+         ```
+
+      Present:
+      ```
+      ### Milestone Stats
+      - Phases: {first_phase}-{last_phase}
+      - Plans: {total} total
+      - Tasks: {counted from SUMMARY files}
+      - Files modified: {count} (git diff --stat summary)
+      - Lines of code: {LOC} ({dominant language})
+      - Timeline: {days} days ({start_date} → {end_date})
+      - Git range: {first_commit_msg} → {last_commit_msg}
+      ```
+
+      ---
+
+      ## Step 3: Extract Key Accomplishments
+
+      Read each phase directory's SUMMARY.md files. Extract the one-liner/summary from each.
+
+      For each summary file at `.planning/phases/{NN}-*/{NN}-*-SUMMARY.md`:
+      - Read the file
+      - Extract the "One-liner" or first sentence of the summary section
+      - Group by phase
+
+      Synthesize 4-6 key accomplishments from these summaries. Present:
+      ```
+      ### Key Accomplishments
+      1. {Achievement from phase X}
+      2. {Achievement from phase Y}
+      3. {Achievement from phase Z}
+      4. {Achievement from phase W}
+      5. {Achievement from across phases — big picture}
+      ```
+
+      ---
+
+      ## Step 4: Present the Full Report
+
+      Combine all sections into one milestone report:
+      ```
+      ## Milestone Report — v{VERSION}
+
+      {Phase status table}
+
+      {Requirements status — with warnings if any}
+
+      {Milestone Stats}
+
+      {Key Accomplishments}
+
+      ---
+      The next step will archive this milestone, update all planning documents,
+      tag the release, and prepare the repo for the next milestone.
+      ```
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════
+  # GATE 1: Human review
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: confirm
+    approval:
+      message: |
+        Review the milestone report above. Approve to archive v{VERSION} and tag the release; reject to abort.
+    capture_response: true
+    depends_on: [audit]
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 2: ARCHIVE — Write archive files, collapse roadmap, tag release
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: archive
+    prompt: |
+      # GSD Complete Milestone — Archive
+
+      You are completing the milestone archive. The human approved the report.
+      Now execute the archival steps.
+
+      **Version**: `$ARGUMENTS` (bare number, e.g. `1.0` — strip any leading `v`)
+
+      **Reviewer's approval message** (may contain notes):
+      $confirm.output
+
+      ---
+
+      ## Step 1: Create `.planning/milestones/` directory
+
+      ```bash
+      mkdir -p .planning/milestones
+      ```
+
+      ## Step 2: Write the ROADMAP archive
+
+      Read `.planning/ROADMAP.md` to extract all phase details for this milestone.
+
+      Create `.planning/milestones/v{VERSION}-ROADMAP.md` with this structure:
+
+      ```markdown
+      # Milestone v{VERSION}: {MILESTONE_NAME}
+
+      **Status:** ✅ SHIPPED {TODAYS_DATE}
+      **Phases:** {FIRST_PHASE}-{LAST_PHASE}
+      **Total Plans:** {TOTAL_PLANS}
+
+      ## Overview
+      {One paragraph describing what this milestone delivered — synthesize from phase goals in ROADMAP.md}
+
+      ## Phases
+
+      {For EACH phase in this milestone, include:}
+
+      ### Phase {NN}: {PHASE_NAME}
+
+      **Goal**: {from ROADMAP.md}
+      **Depends on**: {from ROADMAP.md}
+      **Plans**: {count} plans
+
+      Plans:
+      {for each plan in the phase directory}
+
+      - [x] {NN}-{MM}: {one-liner from SUMMARY.md}
+      ```
+
+      **For the Phases section**, read each phase directory's SUMMARY.md files to get
+      accurate one-liners. Use the actual shipped plan descriptions, not the ROADMAP's
+      original plan titles (which may have shifted during execution).
+
+      ## Step 3: Write the REQUIREMENTS archive
+
+      Read `.planning/REQUIREMENTS.md`.
+
+      Create `.planning/milestones/v{VERSION}-REQUIREMENTS.md`:
+
+      ```markdown
+      # Requirements Archive — v{VERSION}
+
+      ## Requirements at Ship
+
+      | REQ-ID | Description | Status | Outcome |
+      |--------|-------------|--------|---------|
+      {every requirement from REQUIREMENTS.md}
+      ```
+
+      For each requirement:
+      - If checked off → Status: `✅ Complete`, Outcome: "Shipped in this milestone"
+      - If unchecked → Status: `⚠ Not completed`, Outcome: "Deferred to next milestone"
+      - For requirements that were dropped/scoped out, note in Outcome
+
+      Include the full traceability table.
+
+      ## Step 4: Collapse ROADMAP.md
+
+      Read `.planning/ROADMAP.md`. Replace the milestone's phase details with a one-line link:
+
+      ```markdown
+      ## v{VERSION} — {MILESTONE_NAME} ✅ SHIPPED {DATE}
+
+      Full details: [milestones/v{VERSION}-ROADMAP.md](milestones/v{VERSION}-ROADMAP.md)
+      ```
+
+      The rest of ROADMAP.md (Backlog, future milestones, project header) is preserved as-is.
+      Only the phases belonging to this milestone are collapsed.
+
+      ## Step 5: DELETE `.planning/REQUIREMENTS.md`
+
+      ```bash
+      git rm .planning/REQUIREMENTS.md
+      ```
+
+      The requirements archive is in milestones/ — this frees REQUIREMENTS.md to be
+      recreated fresh for the next milestone by gsd-new-milestone.
+
+      ## Step 6: Update PROJECT.md
+
+      Read `.planning/PROJECT.md`.
+
+      ### Add/Update "Current State" section:
+      ```markdown
+      ## Current State
+
+      **Shipped:** v{VERSION} — {DATE}
+      **Phase range:** {FIRST}-{LAST}
+      **Key deliverables:** {2-3 sentence summary of what was built}
+      ```
+
+      ### Add/Update "Next Milestone Goals" section:
+      ```markdown
+      ## Next Milestone Goals
+
+      {If any unchecked requirements remain, list them here as candidate goals}
+      {If the reviewer's approval message mentions specific goals, include them}
+      {Otherwise: "TBD — run gsd-new-milestone to define"}
+      ```
+
+      ### Update "Evolution" section
+      Append to the Evolution / Key Decisions section:
+      ```markdown
+      ### v{VERSION} (Shipped {DATE})
+      - {key decision or lesson learned from phase summaries}
+      ```
+
+      ### Update footer
+      ```markdown
+      ---
+      *Last updated: {today} after v{VERSION} milestone*
+      ```
+
+      ## Step 7: Update MILESTONES.md
+
+      Read or create `.planning/MILESTONES.md` (at repo root, not under .planning/).
+
+      If it doesn't exist, create with header:
+      ```markdown
+      # Project Milestones: {PROJECT_NAME from PROJECT.md}
+      ```
+
+      Add entry at the TOP (newest first):
+      ```markdown
+      ## v{VERSION} {MILESTONE_NAME} (Shipped: {TODAY})
+
+      **Delivered:** {one sentence from REPORT's key accomplishments}
+
+      **Phases completed:** {FIRST}-{LAST} ({TOTAL_PLANS} plans total)
+
+      **Key accomplishments:**
+      {the 4-6 accomplishments from the audit report}
+
+      **Stats:**
+      - {files} files modified
+      - {LOC} lines of code ({language})
+      - {phase_count} phases, {plan_count} plans
+      - {days} days ({start} → {end})
+
+      **Git range:** {first commit msg} → {last commit msg}
+
+      **What's next:** {from PROJECT.md Next Milestone Goals}
+      ```
+
+      ## Step 8: Update STATE.md
+
+      Read `.planning/STATE.md`.
+
+      Append to Session Continuity:
+      ```markdown
+      ### v{VERSION} shipped {TODAY}
+      - Milestone archived to .planning/milestones/v{VERSION}-ROADMAP.md
+      - Requirements archived to .planning/milestones/v{VERSION}-REQUIREMENTS.md
+      - REQUIREMENTS.md deleted (fresh for next milestone)
+      - ROADMAP.md collapsed to one-line link
+      ```
+
+      If the audit uncovered uncompleted requirements that were accepted, add:
+      ```markdown
+      ## Known Gaps at v{VERSION} Close
+      | REQ-ID | Description |
+      |--------|-------------|
+      {unchecked requirements}
+      ```
+
+      ## Step 9: Stage, commit, and tag
+
+      ```bash
+      # Stage ONLY the files we've changed — explicit list, NEVER git add -A or git add .
+      git add .planning/milestones/v{VERSION}-ROADMAP.md
+      git add .planning/milestones/v{VERSION}-REQUIREMENTS.md
+      git add .planning/ROADMAP.md
+      git add .planning/PROJECT.md
+      git add .planning/STATE.md
+      git add MILESTONES.md
+      # REQUIREMENTS.md was git rm'd in step 5
+
+      git commit -m "chore: archive v{VERSION} milestone"
+
+      git tag -a v{VERSION} -m "{ONE_LINE_MILESTONE_SUMMARY}"
+      ```
+
+      **DO NOT push the tag.** Print:
+      ```
+      ## Milestone v{VERSION} Archived ✅
+
+      **Commit:** chore: archive v{VERSION} milestone
+      **Tag:** v{VERSION}
+
+      ### To push the tag to remote:
+      ```
+      git push origin v{VERSION}
+      ```
+
+      ### Next steps:
+      - Run `gsd-new-milestone` to define the next milestone
+      - Or run `gsd-discuss-phase {N}` to start work on the next phase
+      ```
+
+      ---
+
+      ## CRITICAL RULES
+
+      - Delete `.planning/REQUIREMENTS.md` with `git rm` — it is replaced by the archive
+      - NEVER use `git add -A`, `git add .`, or `git add -u` — stage explicit file paths only
+      - NEVER push the tag — print the push command for the user to run manually
+      - Archive files go in `.planning/milestones/` — always create the directory first
+      - ROADMAP.md is edited in place (collapse milestone), not replaced entirely
+      - Phase numbering in the archive must match the actual directory names
+      - Use actual SUMMARY.md content for plan descriptions, not ROADMAP.md's original titles
+    depends_on: [confirm]
+    context: fresh

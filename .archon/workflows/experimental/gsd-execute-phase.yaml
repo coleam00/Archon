@@ -1,0 +1,340 @@
+# Experimental GSD port (#1696) — part of the gsd-* suite.
+# Source: github.com/open-gsd/gsd-core (MIT).
+# Provider: claude (default) — uses inline agents/Task-tool spawning where noted.
+#   Cross-runtime: change `provider: claude` to `provider: pi` (one line);
+#   agent spawning then runs in-context.
+# Install: copy .archon/workflows/experimental/gsd-*.yaml into <repo>/.archon/workflows/
+#   and .archon/commands/gsd/ into <repo>/.archon/commands/gsd/
+# State: .planning/ in-repo, committed to git (scratch excluded by .planning/.gitignore).
+# Runs in the live checkout (worktree disabled): GSD state accumulates on current branch.
+# Promotion to bundled defaults is gated on real-world full cycles — tracked in #1696.
+#
+# NOT for: --wave (executes the natural wave order from lowest up), --interactive (fully
+# autonomous — review gap plans then re-run), --cross-ai delegation, per-plan isolation
+# worktrees (execution is serial in the live checkout so state accumulates across runs).
+#
+# Gap re-run semantics: if gsd-verify-work creates gap PLAN.md files (no matching SUMMARY.md),
+# re-running gsd-execute-phase <N> picks them up automatically — they are unmatched plans
+# and the execute loop processes them, then re-verifies via the mtime-driven verifier step.
+
+name: gsd-execute-phase
+description: |
+  Use when: User wants to autonomously execute phase plans in .planning/ one at a time.
+  Triggers: "execute phase", "run phase", "implement phase", "do the work".
+  Does: Picks plans in wave order (respecting depends_on), executes each via the executor
+  role, verifies the whole phase once all plans complete, and routes to the next step.
+  NOT for: Creating plans (use gsd-plan-phase), interactive human-in-the-loop review
+  (use gsd-verify-work), single-task quick fixes (use gsd-quick).
+  Input: Phase number (e.g. "1") as $ARGUMENTS. Defaults to the lowest-numbered phase
+  dir containing *-PLAN.md files.
+  Output: Each plan commits its work; VERIFICATION.md committed on pass; routing printed
+  to the next workflow (gsd-verify-work <N> or re-run gsd-execute-phase <N>).
+
+provider: claude
+worktree:
+  enabled: false
+
+nodes:
+  # ═══════════════════════════════════════════════════════════════
+  # GUARD — Resolve phase directory and enforce prerequisites
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: guard
+    bash: |
+      # GSD Execute Phase — Guard
+      # Resolve the phase directory from $ARGUMENTS (phase number).
+
+      PHASE_NUM="$ARGUMENTS"
+      PHASE_DIR=""
+
+      if [ -n "$PHASE_NUM" ]; then
+        # Try exact match first (e.g. "1" → "01-*")
+        PHASE_DIR=$(ls -d .planning/phases/${PHASE_NUM}-* 2>/dev/null | head -1)
+
+        # Try zero-padded (e.g. "1" → "01-*", "2" → "02-*")
+        if [ -z "$PHASE_DIR" ] && echo "$PHASE_NUM" | grep -qE '^[0-9]+$'; then
+          PADDED=$(printf "%02d" "$PHASE_NUM")
+          PHASE_DIR=$(ls -d .planning/phases/${PADDED}-* 2>/dev/null | head -1)
+        fi
+      else
+        # No argument: pick the first phase dir that has PLAN files
+        PHASE_DIR=$(ls -d .planning/phases/*/ 2>/dev/null | while read d; do
+          if ls "$d"*-PLAN.md >/dev/null 2>&1; then
+            echo "$d"
+            break
+          fi
+        done)
+      fi
+
+      if [ -z "$PHASE_DIR" ]; then
+        if [ -z "$PHASE_NUM" ]; then
+          echo "ERROR: No phase directory with *-PLAN.md files found in .planning/phases/"
+        else
+          echo "ERROR: No phase directory matching \"$PHASE_NUM\" found in .planning/phases/"
+        fi
+        echo "Run gsd-plan-phase first to create plans."
+        exit 1
+      fi
+
+      if ! ls "$PHASE_DIR"*-PLAN.md >/dev/null 2>&1; then
+        echo "ERROR: No *-PLAN.md files found in $PHASE_DIR."
+        echo "Run gsd-plan-phase first to create plans."
+        exit 1
+      fi
+
+      echo "PHASE_DIR=${PHASE_DIR}"
+      echo "PHASE_NUM=$(basename "$PHASE_DIR" | grep -oE '^[0-9]+')"
+      echo ""
+      echo "## Plan Inventory"
+      ls -1 "$PHASE_DIR"*-PLAN.md 2>/dev/null | while read plan; do
+        basename "$plan"
+      done
+
+  # ═══════════════════════════════════════════════════════════════
+  # EXECUTE — Fresh-context loop: one plan or verification per iteration
+  # Each iteration is a fresh session that reads state from disk.
+  # No agents: field — instruct the model to read role files instead.
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: execute
+    depends_on: [guard]
+    idle_timeout: 600000
+    loop:
+      prompt: |
+        # GSD Execute Phase — Execution Agent
+
+        You are an autonomous execution agent in a FRESH session — no memory of prior iterations.
+        Your job: Read phase state from disk, execute exactly ONE unit of work (one plan OR
+        one phase-verification), commit the results, and end. The loop engine will start a
+        fresh iteration if more work remains.
+
+        **Phase context from the guard node**:
+        $guard.output
+
+        ---
+
+        ## Phase 0: LOAD STATE
+
+        Re-derive the phase directory. Extract the phase number from the guard output above
+        (the `PHASE_NUM=` line) and resolve the directory:
+
+        ```bash
+        PHASE_NUM={from guard output}
+        ls -d .planning/phases/${PHASE_NUM}-* 2>/dev/null | head -1
+        ```
+
+        If you can't parse it from guard output, read it directly:
+        ```bash
+        ls -d .planning/phases/0*-* 2>/dev/null | sort | head -1
+        ```
+
+        Set `PHASE_DIR` to the result. List all plan files:
+        ```bash
+        ls "$PHASE_DIR"/*-PLAN.md 2>/dev/null
+        ```
+
+        Read `.planning/ROADMAP.md` and `.planning/STATE.md` for dep/status context.
+
+        ---
+
+        ## Phase 1: SELECT NEXT WORK UNIT
+
+        For each `*-PLAN.md` in `$PHASE_DIR`, determine its status:
+
+        - **DONE**: a matching `*-SUMMARY.md` exists.
+          - `*.plan.md` → look for `*SUMMARY.md` (strip the plan number suffix)
+          - Example: `01-02-PLAN.md` → check for `01-02-SUMMARY.md`
+          - A plan's matching SUMMARY is found by replacing `-PLAN.md` with `-SUMMARY.md`
+            in the original filename, OR by looking for any SUMMARY whose basename starts
+            with the same `{NN}-{MM}` prefix.
+
+        - **BLOCKED**: the matching SUMMARY.md has frontmatter `status: blocked`.
+          Read the SUMMARY.md and check its YAML frontmatter.
+
+        If every plan is DONE or BLOCKED → skip to Phase 4 (Verification Check).
+
+        **Picking the next plan**:
+        1. Among unfinished, unblocked plans, read each plan's YAML frontmatter for:
+           - `wave:` (numeric; lower waves execute first)
+           - `depends_on:` (a plan number `MM` — the dependency must have a completed
+             SUMMARY.md before this plan can run)
+        2. Pick the plan with the **lowest wave** that has all dependencies satisfied.
+           Within the same wave, pick the **lowest plan number** (the `MM` in `{NN}-{MM}-PLAN.md`).
+        3. If no eligible plans remain (all are blocked or have unmet dependencies),
+           skip to Phase 4 (Verification Check).
+
+        Announce your selection:
+
+        ```
+        -- Plan Selected ------------------------------------------------
+        Plan: {NN}-{MM}-PLAN.md
+        Wave: {wave number}
+        Phase: {phase goal from ROADMAP.md}
+        ----------------------------------------------------------------
+        ```
+
+        ---
+
+        ## Phase 2: EXECUTE THE PLAN
+
+        Read `.archon/commands/gsd/gsd-executor.md` and follow it exactly.
+
+        Execute THIS ONE PLAN only. The executor role file tells you how to:
+        - Make atomic per-task commits (`{type}({phase}-{plan}): {task description}`)
+        - Stage only the files you edit (NEVER `git add -A`, `git add .`, `git add -u`)
+        - Follow the deviation rules (auto-fix bugs, add missing critical, fix blockers
+          EXCEPT new dependencies, stop on architectural change)
+        - Apply the 3-attempt fix cap, then record in Deferred Issues
+        - Write the matching `{NN}-{MM}-SUMMARY.md` with full contract:
+          - YAML frontmatter: `phase`, `plan`, `status: complete|blocked`, `wave`,
+            `files_modified`, `requirements`
+          - `## One-liner` — what was accomplished
+          - `## Tasks` — table of task / status / commit / notes
+          - `## Deviations` — any intentional departures from plan
+          - `## Self-Check` — did you do what was planned?
+          - `## Blocked` (if applicable) — exact unblock steps
+        - Update `.planning/STATE.md` (progress tables, decisions, blockers)
+        - Update `.planning/ROADMAP.md` (plan progress checkbox)
+        - Update `.planning/REQUIREMENTS.md` (check off REQ-IDs satisfied)
+        - Commit the metadata: `git add .planning/ && git commit -m "docs: record phase {NN} plan {MM} execution"`
+
+        **When done**: End normally (no signal). The loop will start a fresh iteration.
+
+        ---
+
+        ## Phase 3: (Handled in Phase 2 — continue to Phase 4)
+
+        ---
+
+        ## Phase 4: VERIFICATION CHECK
+
+        This phase is reached when every `*-PLAN.md` is either DONE (has matching SUMMARY.md
+        with `status: complete`) or BLOCKED (has matching SUMMARY.md with `status: blocked`).
+
+        Determine whether verification is needed:
+
+        ```bash
+        # Check if VERIFICATION.md exists
+        if [ ! -f "$PHASE_DIR/VERIFICATION.md" ]; then
+          echo "MISSING"
+          exit 0
+        fi
+
+        # Check if any SUMMARY is newer than VERIFICATION.md
+        if find "$PHASE_DIR" -name "*-SUMMARY.md" -newer "$PHASE_DIR/VERIFICATION.md" 2>/dev/null | grep -q .; then
+          echo "STALE"
+        else
+          echo "CURRENT"
+        fi
+        ```
+
+        - **If MISSING or STALE**: Read `.archon/commands/gsd/gsd-verifier.md` and follow it
+          exactly. The verifier role tells you how to:
+          - Check the codebase against phase Success Criteria (from ROADMAP.md) and REQ-IDs
+          - Audit test quality (disabled tests, weak assertions)
+          - Write or refresh `VERIFICATION.md` with:
+            - YAML frontmatter: `status: PASS|FAIL`, `requirements: total/covered`,
+              `phase`, `verified_at`
+            - REQ coverage table
+            - Test quality notes
+            - Summary
+          - Commit: `git add "$PHASE_DIR/VERIFICATION.md" && git commit -m "docs({NN}): verify phase"`
+          End normally (no signal). The loop will start a fresh iteration.
+
+        - **If CURRENT** (VERIFICATION.md exists and is up to date): EMIT the signal.
+          ```
+          <promise>PHASE_COMPLETE</promise>
+          ```
+
+        **CRITICAL — SIGNAL RULE**:
+        - NEVER emit `<promise>PHASE_COMPLETE</promise>` unless you have confirmed that
+          VERIFICATION.md exists AND is newer than all SUMMARY.md files.
+        - NEVER emit the signal mid-plan-execution. Only at the verification-gate step.
+      until: PHASE_COMPLETE
+      max_iterations: 25
+      fresh_context: true
+
+  # ═══════════════════════════════════════════════════════════════
+  # REPORT — Summarize phase outcome and route to next step
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: report
+    depends_on: [execute]
+    bash: |
+      # GSD Execute Phase — Report
+      # Extract phase directory from the guard output captured in the execution context.
+      # We derive it fresh since report runs after the loop completes.
+
+      PHASE_NUM="$ARGUMENTS"
+      if [ -z "$PHASE_NUM" ]; then
+        # Best-effort: find the highest-numbered phase dir with a VERIFICATION.md
+        PHASE_DIR=$(ls -d .planning/phases/*/ 2>/dev/null | sort -V | while read d; do
+          if [ -f "${d}VERIFICATION.md" ]; then PHASE_DIR="$d"; fi
+        done)
+        if [ -n "$PHASE_DIR" ]; then
+          PHASE_NUM=$(basename "$PHASE_DIR" | grep -oE '^[0-9]+')
+        fi
+      else
+        PHASE_DIR=$(ls -d .planning/phases/${PHASE_NUM}-* 2>/dev/null | head -1)
+        if [ -z "$PHASE_DIR" ]; then
+          PADDED=$(printf "%02d" "$PHASE_NUM" 2>/dev/null)
+          PHASE_DIR=$(ls -d .planning/phases/${PADDED}-* 2>/dev/null | head -1)
+        fi
+      fi
+
+      if [ -z "$PHASE_DIR" ] || [ -z "$PHASE_NUM" ]; then
+        echo "WARNING: Could not resolve phase directory. Check .planning/phases/ manually."
+        exit 0
+      fi
+
+      echo "=============================================="
+      echo " Phase $PHASE_NUM Execution Complete"
+      echo "=============================================="
+      echo ""
+
+      # Extract verification status
+      if [ -f "$PHASE_DIR/VERIFICATION.md" ]; then
+        VER_STATUS=$(grep -m1 '^status:' "$PHASE_DIR/VERIFICATION.md" | sed 's/status:\s*//' | tr -d '[:space:]')
+        echo "Verification: ${VER_STATUS:-UNKNOWN}"
+      else
+        echo "Verification: MISSING (VERIFICATION.md not found)"
+        VER_STATUS="MISSING"
+      fi
+
+      # List blocked summaries
+      echo ""
+      echo "Blocked Plans:"
+      BLOCKED_COUNT=0
+      for summary in "$PHASE_DIR"/*-SUMMARY.md; do
+        if [ -f "$summary" ]; then
+          if grep -q '^status:\s*blocked' "$summary" 2>/dev/null; then
+            BLOCKED_COUNT=$((BLOCKED_COUNT + 1))
+            echo "  - $(basename "$summary"): blocked"
+          fi
+        fi
+      done
+      if [ "$BLOCKED_COUNT" -eq 0 ]; then
+        echo "  (none)"
+      fi
+
+      echo ""
+
+      # Route
+      if [ "$VER_STATUS" = "PASS" ] && [ "$BLOCKED_COUNT" -eq 0 ]; then
+        echo "## All plans passed verification."
+        echo ""
+        echo "Next: archon workflow run gsd-verify-work $PHASE_NUM"
+      else
+        if [ "$VER_STATUS" = "FAIL" ]; then
+          echo "## Verification FAIL: issues found in phase $PHASE_NUM."
+        fi
+        if [ "$BLOCKED_COUNT" -gt 0 ]; then
+          echo "## $BLOCKED_COUNT plan(s) are blocked."
+        fi
+        echo ""
+        echo "Run gsd-verify-work $PHASE_NUM to diagnose gaps, then re-run"
+        echo "gsd-execute-phase $PHASE_NUM (gap plans are picked up automatically)."
+      fi
+
+      # Always succeed — FAIL is an expected routable outcome, not a workflow error.
+      exit 0

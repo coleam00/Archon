@@ -1,0 +1,256 @@
+# Experimental GSD port (#1696) — part of the gsd-* suite.
+# Source: github.com/open-gsd/gsd-core (MIT).
+# Provider: claude (default) — no inline agents; all work done in-prompt.
+#   Cross-runtime: change `provider: claude` to `provider: pi` (one line).
+# Install: copy .archon/workflows/experimental/gsd-*.yaml into <repo>/.archon/workflows/
+#   and .archon/commands/gsd/ into <repo>/.archon/commands/gsd/
+# State: .planning/ in-repo, committed to git (scratch excluded by .planning/.gitignore).
+# Runs in the live checkout (worktree disabled): GSD state accumulates on current branch.
+# Promotion to bundled defaults is gated on real-world full cycles — tracked in #1696.
+#
+# NOT for: draft PRs (`--draft` flag dropped — set as default in gh config if needed),
+#   automated code-review trigger (use archon-review or external CI),
+#   merge tracking (verify merge manually).
+
+name: gsd-ship
+description: |
+  Use when: User wants to ship completed phase work as a pull request.
+  Triggers: "ship it", "ship phase", "create PR for phase", "gsd ship",
+            "open a PR for phase N", "gsd-ship".
+  Does: Creates a rich pull request from planning artifacts (ROADMAP.md,
+        SUMMARY.md files, VERIFICATION.md, CONTEXT.md, REQUIREMENTS.md,
+        STATE.md). Generates PR body with summary, changes, requirements,
+        verification, and key decisions sections. Pushes branch and
+        runs `gh pr create`.
+  NOT for: Draft PRs or WIP branches (the workflow always creates a
+           ready-for-review PR), automated code review, merge tracking,
+           shipping without completed verification.
+  Input: Optional phase number (e.g. "1"). If empty, resolves from the
+         highest-numbered phase dir containing a VERIFICATION.md.
+  Output: PR URL and summary of what was shipped.
+
+provider: claude
+worktree:
+  enabled: false
+requires: [github]
+
+nodes:
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 1: PREFLIGHT — validate readiness
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: preflight
+    bash: |
+      set -e
+
+      # ── Block shipping from main/master ──
+      CURRENT_BRANCH="$(git branch --show-current)"
+      if [ -z "$CURRENT_BRANCH" ] || [ "$CURRENT_BRANCH" = "main" ] || [ "$CURRENT_BRANCH" = "master" ]; then
+        echo "ERROR: Create a feature branch before shipping (current: '${CURRENT_BRANCH:-detached HEAD}')" >&2
+        exit 1
+      fi
+
+      # ── Resolve phase dir ──
+      PHASE_ARG="${1:-}"
+      if [ -n "$PHASE_ARG" ]; then
+        # Zero-pad and glob match
+        PADDED="$(printf '%02d' "$PHASE_ARG" 2>/dev/null || echo "$PHASE_ARG")"
+        PHASE_DIR="$(ls -d .planning/phases/${PADDED}-* 2>/dev/null | head -1 || true)"
+        if [ -z "$PHASE_DIR" ]; then
+          # Try raw argument as glob
+          PHASE_DIR="$(ls -d .planning/phases/${PHASE_ARG}-* 2>/dev/null | head -1 || true)"
+        fi
+      else
+        # Default: highest-numbered dir with a VERIFICATION.md
+        PHASE_DIR="$(ls -d .planning/phases/*/ 2>/dev/null | sort -t/ -k3 -V | while read d; do
+          [ -f "${d}VERIFICATION.md" ] && echo "$d"
+        done | tail -1 || true)"
+      fi
+      if [ -z "$PHASE_DIR" ]; then
+        echo "ERROR: No phase directory with VERIFICATION.md found. Run gsd-verify-work first." >&2
+        exit 1
+      fi
+      PHASE_DIR="${PHASE_DIR%/}"
+      PHASE_N="$(basename "$PHASE_DIR" | grep -oE '^[0-9]+')"
+
+      # ── Check VERIFICATION.md ──
+      VFILE="${PHASE_DIR}/VERIFICATION.md"
+      if [ ! -f "$VFILE" ]; then
+        echo "ERROR: ${VFILE} not found — run gsd-verify-work first." >&2
+        exit 1
+      fi
+      VSTATUS="$(grep -oP 'status:\s*\K\S+' "$VFILE" 2>/dev/null || echo "unknown")"
+      if [ "$VSTATUS" != "PASS" ] && [ "$VSTATUS" != "pass" ]; then
+        echo "WARNING: VERIFICATION.md status = ${VSTATUS} (expected PASS). Proceed with caution."
+      fi
+
+      # ── Guard: gh CLI ──
+      if ! command -v gh >/dev/null 2>&1; then
+        echo "ERROR: gh CLI not found. Install: https://cli.github.com/" >&2
+        exit 1
+      fi
+      if ! gh auth status >/dev/null 2>&1; then
+        echo "ERROR: gh not authenticated. Run: gh auth login" >&2
+        exit 1
+      fi
+
+      # ── Guard: remote ──
+      if ! git remote get-url origin >/dev/null 2>&1; then
+        echo "ERROR: No 'origin' remote configured — cannot push or create PR." >&2
+        exit 1
+      fi
+
+      echo "preflight: branch=${CURRENT_BRANCH} phase=${PHASE_N} dir=${PHASE_DIR} verification=${VSTATUS}"
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 2: SHIP — push, generate PR body, create PR, record
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: ship
+    depends_on: [preflight]
+    prompt: |
+      You are shipping completed phase work as a pull request. You work entirely
+      in the live checkout — the current branch already holds all the commits from
+      gsd-execute-phase and gsd-verify-work runs.
+
+      ## Phase context from preflight
+      $preflight.output
+
+      Extract: `branch`, `phase` (N), `dir` (path), `verification` (status) from that output.
+
+      ## Step 1: Gather planning artifacts
+
+      Read these files from the phase directory and from `.planning/`:
+
+      1. `.planning/ROADMAP.md` — extract the goal/description for this phase (look for
+         the Phases checklist or the phase section matching phase N).
+      2. `${dir}/VERIFICATION.md` — status, REQ coverage table, any manual checks.
+      3. `${dir}/*-SUMMARY.md` (one per plan) — from each:
+         - Frontmatter `one_liner` (or first heading sentence)
+         - Frontmatter `files_modified` / `files_created` lists
+         - Frontmatter `requirements` (REQ-IDs addressed)
+      4. `${dir}/*-UAT.md` — if it exists, extract the test results table.
+      5. `${dir}/*-CONTEXT.md` — extract key decisions (D-XX entries) from the
+         `<decisions>` section.
+      6. `.planning/REQUIREMENTS.md` — for each REQ-ID found in the SUMMARY files,
+         look up the requirement description to include in the PR body.
+      7. `.planning/STATE.md` — Session Continuity section for decisions/context.
+
+      ## Step 2: Generate PR body
+
+      Write the PR body to `$ARTIFACTS_DIR/pr-body.md` (NEVER in the repo).
+
+      Use these sections (omit only if no data exists for them):
+
+      ```markdown
+      ## Summary
+
+      **Phase {N}: {name from ROADMAP}**
+      **Goal:** {goal from ROADMAP}
+      **Status:** Verified ✓
+
+      {One paragraph synthesized from SUMMARY.md one-liners — what was built,
+       the key capability delivered, and how it was verified.}
+
+      ## Changes
+
+      {For each SUMMARY.md:}
+
+      ### Plan {plan-id}: {plan name or one-liner}
+
+      {one_liner from SUMMARY.md}
+
+      **Key files:**
+      {bulleted list from files_modified/files_created frontmatter fields}
+
+      ## Requirements Addressed
+
+      | REQ-ID | Description | Status |
+      |--------|-------------|--------|
+      {rows from REQUIREMENTS.md for each REQ-ID in the phase plans}
+
+      ## Verification
+
+      {from VERIFICATION.md:}
+      - [x] Automated verification: {pass/fail status}
+      {bullet points from any manual/human checks}
+
+      {If UAT.md exists:}
+      ### User Acceptance Testing
+      {summary of UAT results: N/N passed, any gaps}
+
+      ## Key Decisions
+
+      {D-XX decisions from CONTEXT.md, plus any relevant session continuity
+       notes from STATE.md}
+      ```
+
+      ## Step 3: Push branch
+
+      ```bash
+      git push -u origin HEAD
+      ```
+
+      If push fails because the remote already has the branch, that's fine —
+      the PR step will surface the existing PR.
+
+      ## Step 4: Create PR
+
+      Detect the base branch:
+      ```bash
+      BASE=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|^refs/remotes/origin/||' || echo "main")
+      ```
+
+      Check if a PR already exists for this branch:
+      ```bash
+      gh pr list --head "$CURRENT_BRANCH" --json url,number --jq '.[0].url' 2>/dev/null
+      ```
+
+      If an existing PR is found, output its URL and skip creation:
+
+      > PR already exists: {url}
+
+      Otherwise, create the PR:
+      ```bash
+      gh pr create \
+        --title "feat(phase-{N}): {goal from ROADMAP}" \
+        --body-file "$ARTIFACTS_DIR/pr-body.md" \
+        --base "$BASE"
+      ```
+
+      Output the PR URL.
+
+      ## Step 5: Record in STATE.md
+
+      Read `.planning/STATE.md`. Find the `## Session Continuity` section (create it
+      if it doesn't exist). Append a ship record:
+
+      ```markdown
+      - **Shipped phase {N}** ({date}): PR {url} — {one-line summary of what shipped}
+      ```
+
+      Commit the update:
+      ```bash
+      git add .planning/STATE.md && git commit -m "docs: record ship of phase {N}"
+      ```
+
+      Push the state update:
+      ```bash
+      git push
+      ```
+
+      ## Step 6: Final output
+
+      Print a clear summary:
+
+      ```
+      ## Phase {N} shipped
+
+      **PR:** {url}
+      **Branch:** {branch}
+      **Verification:** {PASS/FAIL/WARN}
+      **Plans completed:** {N}
+
+      Merge the PR to close this phase.
+      Next milestone prep: archon workflow run gsd-new-milestone
+      ```

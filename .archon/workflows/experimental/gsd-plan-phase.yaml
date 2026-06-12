@@ -1,0 +1,251 @@
+# Experimental GSD port (#1696) — part of the gsd-* suite.
+# Source: github.com/open-gsd/gsd-core (MIT).
+# Provider: claude (default) — uses inline agents/Task-tool spawning where noted.
+#   Cross-runtime: change `provider: claude` to `provider: pi` (one line);
+#   agent spawning then runs in-context.
+# Install: copy .archon/workflows/experimental/gsd-*.yaml into <repo>/.archon/workflows/
+#   and .archon/commands/gsd/ into <repo>/.archon/commands/gsd/
+# State: .planning/ in-repo, committed to git (scratch excluded by .planning/.gitignore).
+# Runs in the live checkout (worktree disabled): GSD state accumulates on current branch.
+# Promotion to bundled defaults is gated on real-world full cycles — tracked in #1696.
+#
+# Drops from the GSD source (workflows/plan-phase.md):
+#   --prd, --ingest, --gaps, --reviews, --mvp, --tdd, --granularity, --bounce,
+#   --chunked flags; closed-phase gate; decision-coverage tooling gate.
+#   Research is spawned once per phase (skip-gate omitted — re-run the workflow
+#   to re-research). Checkpoint pauses are not ported — the plan checker's warnings
+#   serve the same role and execution continues without blocking.
+
+name: gsd-plan-phase
+description: |
+  Use when: You have captured phase context (gsd-discuss-phase) and want to
+           create implementation plans for a phase.
+  Triggers: "plan the phase", "create plans for phase 1", "plan phase 2",
+            "gsd-plan-phase", "phase plans".
+  Does: Researches tech decisions for the phase, creates PLAN.md files with
+        <tasks><task><files><action><verify><done> shape, adversarial-checker
+        review with revision loop (up to 3 iterations), then commits plans.
+  NOT for: Executing plans (use gsd-execute-phase), discussing phase context
+           (use gsd-discuss-phase), quick single-task work (use gsd-quick).
+  Input: Phase number (e.g. "1") — defaults to next phase whose dir lacks
+         *-PLAN.md files. Requires .planning/ROADMAP.md from gsd-new-project.
+  Output: .planning/phases/{NN}-{slug}/{NN}-RESEARCH.md, {NN}-{MM}-PLAN.md
+          files committed under "docs: create phase plans".
+
+provider: claude
+interactive: true
+worktree:
+  enabled: false
+
+nodes:
+  # ═══════════════════════════════════════════════════════════════
+  # Preflight: ensure the project is initialized
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: guard
+    bash: |
+      if [ ! -f .planning/ROADMAP.md ]; then
+        echo "ERROR: .planning/ROADMAP.md not found — run gsd-new-project first" >&2
+        exit 1
+      fi
+      echo "Project initialized. Resolving target phase..."
+
+  # ═══════════════════════════════════════════════════════════════
+  # Plan: research → plan → check → revise → output
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: plan
+    prompt: |
+      You are orchestrating phase planning for GSD. You spawn three subagents in
+      sequence: phase-researcher, planner, and plan-checker — with a revision loop
+      that re-runs the planner+checker up to 3 total iterations.
+
+      ## 1. Resolve the target phase
+
+      User input: $ARGUMENTS
+
+      If $ARGUMENTS is a number (e.g. "1"), use that phase number.
+      If empty, find the next phase whose directory (`.planning/phases/{NN}-*/`)
+      has NO `*-PLAN.md` files:
+      ```bash
+      for d in .planning/phases/[0-9][0-9]-*/; do
+        [ -d "$d" ] || continue
+        ls "$d"/*-PLAN.md >/dev/null 2>&1 || { echo "$d"; break; }
+      done
+      ```
+
+      Derive: `PHASE_DIR` (e.g. `.planning/phases/01-calculator-cli`),
+      `PHASE_NUM` (e.g. `01`), `PHASE_SLUG`.
+
+      ## 2. Pre-flight warnings (non-blocking)
+
+      Check if `$PHASE_DIR/{NN}-CONTEXT.md` exists. If missing, output:
+      ```
+      ⚠ WARNING: No CONTEXT.md found for this phase.
+      Plans may lack key context — consider running gsd-discuss-phase first.
+      ```
+      Do NOT block — proceed anyway.
+
+      ## 3. Phase research
+
+      If `$PHASE_DIR/{NN}-RESEARCH.md` already exists, skip this step and
+      output: "Research already exists at $PHASE_DIR/{NN}-RESEARCH.md — skipping."
+
+      Otherwise, spawn the phase-researcher agent:
+      ```
+      Task: phase-researcher
+      Input files:
+        - .planning/PROJECT.md
+        - .planning/REQUIREMENTS.md
+        - .planning/ROADMAP.md
+        - .planning/STATE.md
+        - $PHASE_DIR/{NN}-CONTEXT.md (if it exists)
+        - .planning/research/SUMMARY.md (if it exists)
+        - .planning/codebase/*.md (if directory exists)
+      Output: $PHASE_DIR/{NN}-RESEARCH.md
+      ```
+
+      The researcher will evaluate tech decisions, library choices, and
+      architectural patterns. Wait for confirmation before proceeding.
+
+      ## 4. Create plans
+
+      Spawn the planner agent with inputs:
+      ```
+      Task: planner
+      Input files:
+        - .planning/STATE.md
+        - .planning/ROADMAP.md
+        - .planning/REQUIREMENTS.md
+        - $PHASE_DIR/{NN}-CONTEXT.md
+        - $PHASE_DIR/{NN}-RESEARCH.md
+      Output: $PHASE_DIR/{NN}-{MM}-PLAN.md files (one plan per unit, 2-3 tasks each)
+      Parameters:
+        - phase_number: PHASE_NUM
+        - phase_slug: PHASE_SLUG
+        - mode: create
+      ```
+
+      Wait for the planner to finish producing all PLAN.md files.
+
+      ## 5. Check plans
+
+      Spawn the plan-checker agent:
+      ```
+      Task: plan-checker
+      Input: all $PHASE_DIR/*-PLAN.md files
+      Output: issues list or "## VERIFICATION PASSED"
+      ```
+
+      ## 6. Revision loop (if issues found)
+
+      Track `iteration = 1` and `prev_issue_count = <initial count>`.
+
+      While the checker returned "ISSUES FOUND" AND `iteration < 3`:
+        - Count current issues.
+        - If `prev_issue_count` is not decreasing (current ≥ previous):
+          output "⚠ Issue count not decreasing — stopping revision loop with
+          remaining issues listed below." and break.
+        - Otherwise, re-spawn the planner in revision mode:
+          ```
+          Task: planner
+          Input files: (same as Step 4)
+          Parameters:
+            - phase_number: PHASE_NUM
+            - phase_slug: PHASE_SLUG
+            - mode: revise
+            - issues: <checker's issue list from previous iteration>
+          Output: revised PLAN.md files
+          ```
+        - Re-spawn the plan-checker with the revised plans.
+        - Increment `iteration`.
+
+      If the loop exits with `iteration >= 3` and issues remain, note:
+      "⚠ Plan checker completed 3 iterations — remaining warnings below."
+
+      ## 7. Output summary
+
+      Produce:
+      1. A wave/plan table:
+      ```
+      | Wave | Plan    | Tasks | Key Files                     |
+      |------|---------|-------|-------------------------------|
+      | 1    | 01-data | 2     | schema.ts, store.ts           |
+      | 1    | 02-api  | 3     | routes.ts, handlers.ts        |
+      | 2    | 03-ui   | 2     | Calculator.tsx, tests         |
+      ```
+      2. Checker verdict: PASSED or warnings list.
+      3. If CONTEXT.md was missing, repeat the warning.
+
+      This node's output feeds into the plan-gate approval node.
+    depends_on: [guard]
+    agents:
+      phase-researcher:
+        description: Researches tech decisions, libraries, and architecture for a phase
+        prompt: |
+          You are a GSD phase researcher. Read `.archon/commands/gsd/gsd-phase-researcher.md`
+          and follow it exactly.
+
+          Research phase PHASE_NUM (${PHASE_NUM} - ${PHASE_SLUG}).
+          Write your findings to .planning/phases/${PHASE_NUM}-${PHASE_SLUG}/${PHASE_NUM}-RESEARCH.md.
+          Return confirmation with the file path and section summary.
+      planner:
+        description: Creates implementation plan files with tasks, files, verification steps
+        prompt: |
+          You are a GSD planner. Read `.archon/commands/gsd/gsd-planner.md`
+          and follow it exactly.
+
+          Create PLAN.md files for phase PHASE_NUM (${PHASE_NUM} - ${PHASE_SLUG}).
+          When mode is "revise", incorporate the supplied issues list into the plans.
+          Return a summary of each plan file created or revised.
+      plan-checker:
+        description: Adversarially reviews plans for completeness, correctness, and scope creep
+        prompt: |
+          You are a GSD plan checker. Read `.archon/commands/gsd/gsd-plan-checker.md`
+          and follow it exactly.
+
+          Review ALL PLAN.md files in .planning/phases/${PHASE_NUM}-${PHASE_SLUG}/.
+          Return exactly "## VERIFICATION PASSED" or "## ISSUES FOUND" followed by
+          the structured issues list (BLOCKER/WARNING/INFO per issue).
+
+  # ═══════════════════════════════════════════════════════════════
+  # Gate: approve plans before committing
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: plan-gate
+    approval:
+      message: >
+        Review the PLAN.md files in .planning/phases/<dir>/.
+        Approve to commit the plans and proceed, or reject with required changes.
+      capture_response: true
+      on_reject:
+        prompt: |
+          Revise the plans per the reviewer's feedback:
+
+          $REJECTION_REASON
+
+          Re-read `.archon/commands/gsd/gsd-planner.md` and apply the requested
+          changes to all PLAN.md files. Then re-read `.archon/commands/gsd/gsd-plan-checker.md`
+          and re-check the revised plans. Output the final plan summary and any
+          remaining checker warnings.
+        max_attempts: 3
+    depends_on: [plan]
+
+  # ═══════════════════════════════════════════════════════════════
+  # Commit plans
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: commit
+    bash: |
+      # Find the phase directory that was just planned
+      # (most recently modified phase dir with PLAN.md files)
+      PHASE_DIR=$(find .planning/phases -name '*-PLAN.md' -printf '%h\n' 2>/dev/null | sort -u | tail -1)
+
+      git add .planning && \
+      git commit -m "docs: create phase plans" && \
+      echo "Plans committed successfully."
+
+      echo ""
+      echo "Next: archon workflow run gsd-execute-phase ${PHASE_DIR##*/}" | sed 's/^\(..\)-.*/\1/'
+      echo "  (copy the phase number from above, e.g. 'archon workflow run gsd-execute-phase 01')"
+    depends_on: [plan-gate]

@@ -1,0 +1,502 @@
+# Experimental GSD port (#1696) — part of the gsd-* suite.
+# Source: github.com/open-gsd/gsd-core (MIT).
+# Provider: claude (default) — uses inline agents/Task-tool spawning where noted.
+#   Cross-runtime: change `provider: claude` to `provider: pi` (one line);
+#   agent spawning then runs in-context.
+# Install: copy .archon/workflows/experimental/gsd-*.yaml into <repo>/.archon/workflows/
+#   and .archon/commands/gsd/ into <repo>/.archon/commands/gsd/
+# State: .planning/ in-repo, committed to git (scratch excluded by .planning/.gitignore).
+# Runs in the live checkout (worktree disabled): GSD state accumulates on current branch.
+# Promotion to bundled defaults is gated on real-world full cycles — tracked in #1696.
+#
+# Drops vs upstream GSD: --auto @doc, workflow-preference wizard, sub-repo detection,
+# CLAUDE.md generation. GSD's skip-research gate also dropped — always-research.
+# Fixed config.json replaces the runtime preference wizard.
+#
+name: gsd-new-project
+description: |
+  Use when: You want to initialize a new GSD-driven project — from raw idea
+           through v1 scope selection and phased roadmap.
+  Triggers: "start a new project", "plan my app", "gsd new project",
+            "initialize project with gsd".
+  Does:
+    1. Guards against double-initialization; ensures a git repo exists
+    2. Interactive deep questioning to define the project
+    3. Research (stack, features, architecture, pitfalls) with synthesis
+    4. Interactive requirements scoping (v1 vs v2 vs out-of-scope)
+    5. Automated roadmap generation with approval gate
+  NOT for: Existing initialized projects — use gsd-new-milestone instead.
+           Adding features to a running project — use gsd-discuss-phase.
+           Quick one-off tasks — use gsd-quick.
+  Input: A project idea (free text). Omit to start the conversation.
+  Output: .planning/PROJECT.md, config.json, research/*.md, REQUIREMENTS.md,
+          ROADMAP.md, STATE.md — all committed.
+
+provider: claude
+interactive: true
+worktree:
+  enabled: false
+
+nodes:
+  # ═══════════════════════════════════════════════════════════════
+  # GUARD — Verify preconditions and prepare .planning/
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: guard
+    bash: |
+      set -e
+
+      if [ -f ".planning/PROJECT.md" ]; then
+        echo "ERROR: Project already initialized (.planning/PROJECT.md exists)."
+        echo "Use gsd-new-milestone for the next milestone, or gsd-discuss-phase to add features."
+        exit 1
+      fi
+
+      # Ensure we're in a git repo (init if not)
+      if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        echo "No git repo detected. Initializing..."
+        git init -b main
+      fi
+
+      # Prepare .planning/ directory and scratch .gitignore
+      mkdir -p .planning
+      if [ ! -f ".planning/.gitignore" ]; then
+        printf '# GSD scratch files — never committed (see issue #1696)\nFALLOW.json\n*-DISCUSS-CHECKPOINT.json\n.continue-here.md\n' > .planning/.gitignore
+        echo "Created .planning/.gitignore"
+      fi
+
+      # Warn if source files exist but no codebase map yet (non-blocking)
+      if [ -n "$(find . -maxdepth 3 \( -name '*.ts' -o -name '*.tsx' -o -name '*.js' -o -name '*.jsx' -o -name '*.py' -o -name '*.rs' -o -name '*.go' \) -print -quit 2>/dev/null)" ] && [ ! -d ".planning/codebase" ]; then
+        echo "WARN: Source files detected but no codebase map found."
+        echo "Consider running 'archon workflow run gsd-map-codebase' first to build understanding of the existing code."
+      fi
+
+      echo "guard: ok"
+
+  # ═══════════════════════════════════════════════════════════════
+  # DISCOVER — Interactive deep questioning to define the project
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: discover
+    depends_on: [guard]
+    loop:
+      prompt: |
+        # GSD — Project Discovery
+
+        You are a sharp product engineer helping someone define a new project.
+        Your goal: deeply understand WHAT to build, FOR WHOM, and WHY — before any code.
+
+        ## Context
+
+        **User's initial idea**: $ARGUMENTS
+        **User's latest input**: $LOOP_USER_INPUT
+
+        If `.planning/codebase/` exists, skim STACK.md and ARCHITECTURE.md to ground the conversation in what already exists.
+
+        ---
+
+        ## First iteration (no user input yet)
+
+        Restate what you heard in 2–3 sentences:
+        "I understand you want to build: {restated}. Is this about right?"
+
+        Then begin questioning. Never use a checklist or canned questions. Follow these principles
+        (compressed from GSD's questioning methodology):
+
+        **Start open** — "What does it do for the person using it?" not "What stack?"
+        **Follow energy** — the topic they talk about longest is what matters most
+        **Challenge vagueness** — "easy to use" → "what's one concrete action the user takes?"
+        **Make abstract concrete** — "faster" → "what's the current time and what would you consider fast?"
+        **Clarify ambiguity** — when two interpretations are possible, name both and ask which
+        **Know when to stop** — once you have clean answers on: core problem, target user, what v1 must do, what is explicitly out, and the biggest risk, you have enough
+
+        Aim for one question at a time. Offer concrete options with a lean recommendation when
+        the fork is architectural or high-impact.
+
+        ---
+
+        ## Subsequent iterations
+
+        Fold in the user's answer. If they made a decision, lock it in and move to the next
+        open area. If they evaded or gave a half-answer, follow up once — then make a reasoned
+        assumption and state it so they can correct you.
+
+        ---
+
+        ## When the user indicates readiness
+
+        The user's latest message contains an EXPLICIT phrase like "ready", "create the project",
+        "let's go", or "I'm done". When that happens:
+
+        1. Write `.planning/PROJECT.md` using this template:
+
+        ```markdown
+        # {Project Name}
+
+        ## What This Is
+        {2–3 sentence plain-English description}
+
+        ## Core Value
+        {The one thing that makes this worth building}
+
+        ## Requirements
+        ### Validated
+        - {facts confirmed during discovery}
+
+        ### Active
+        - {decisions still being explored}
+
+        ### Out of Scope (v1)
+        - {explicitly deferred}
+
+        ## Context
+        - {relevant background — existing systems, user context, market landscape}
+
+        ## Constraints
+        - {hard constraints — time, budget, technical, regulatory}
+
+        ## Key Decisions
+        - {D-01}: {decision and rationale}
+        - {D-02}: {decision and rationale}
+
+        ## Evolution
+        - Initialized: {today's date}
+        - Milestones: v1 in progress
+        ```
+
+        2. Write `.planning/config.json` with these fixed GSD-compatible defaults:
+        ```json
+        {
+          "mode": "interactive",
+          "granularity": "standard",
+          "workflow": {
+            "research": true,
+            "plan_check": true,
+            "verifier": true,
+            "auto_advance": false
+          },
+          "planning": {
+            "commit_docs": true
+          },
+          "gates": {
+            "confirm_project": true,
+            "confirm_roadmap": true,
+            "confirm_plan": true
+          }
+        }
+        ```
+
+        3. Commit both files:
+        ```bash
+        git add .planning/PROJECT.md .planning/config.json .planning/.gitignore && git commit -m "docs: initialize project"
+        ```
+
+        4. Output a brief summary of what was captured and emit the signal:
+        ```
+        ## Project Initialized
+
+        I've written `.planning/PROJECT.md` and `.planning/config.json`.
+
+        Next step: research will run automatically, then we'll scope v1 requirements.
+        ```
+
+        Emit: <promise>PROJECT_READY</promise>
+
+        **CRITICAL**:
+        - NEVER emit <promise>PROJECT_READY</promise> unless the user's LATEST message contains
+          an EXPLICIT phrase like "ready", "create the project", "let's go", or "I'm done".
+        - If the user asked a question → do NOT emit. Answer it.
+        - If the user gave feedback or requested changes → do NOT emit. Address it.
+        - If you are unsure whether the user is approving → do NOT emit. Ask them.
+        - The ONLY correct time to emit is when the user CLEARLY means
+          "stop exploring, I'm ready for you to create the project file."
+      until: PROJECT_READY
+      max_iterations: 15
+      interactive: true
+      gate_message: |
+        Answer the question above, ask me to explore a specific angle,
+        or say "ready" when you're satisfied with the project definition.
+
+  # ═══════════════════════════════════════════════════════════════
+  # RESEARCH — Parallel research across 4 focus areas
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: research
+    depends_on: [discover]
+    prompt: |
+      # GSD — Project Research
+
+      You are running the project research phase. The project has been defined in
+      `.planning/PROJECT.md` and your job is to research the technical landscape.
+
+      ## Step 1: Read project context
+
+      Read `.planning/PROJECT.md` and `.planning/config.json` to understand what
+      we're building and the constraints.
+
+      ## Step 2: Spawn parallel researchers
+
+      Launch 4 parallel Task invocations using the `task` tool, one per focus area.
+      Each researcher reads `.archon/commands/gsd/gsd-project-researcher.md` and
+      writes its output to `.planning/research/{FOCUS}.md`.
+
+      | Focus       | What it researches                        |
+      |-------------|-------------------------------------------|
+      | STACK       | Languages, frameworks, hosting, tooling   |
+      | FEATURES    | Feature landscape, competitors, gaps      |
+      | ARCHITECTURE| High-level design, patterns, data flow    |
+      | PITFALLS    | Known gotchas, security risks, scale issues|
+
+      Create the research directory first:
+      ```bash
+      mkdir -p .planning/research
+      ```
+
+      For each Task, use an inline agent stub pointing to the role file.
+      Example for STACK:
+      ```
+      agents: {
+        stack-researcher: {
+          description: "Researches stack decisions for the project",
+          prompt: "Focus: STACK. Description: research the best language, framework, hosting, and tooling choices. Read .archon/commands/gsd/gsd-project-researcher.md. Research and write .planning/research/STACK.md. Return confirmation with path and line count."
+        }
+      }
+      ```
+
+      Do 4 Tasks in parallel. Wait for all to complete.
+
+      ## Step 3: Synthesize
+
+      Launch 1 Task that reads all 4 research files and produces a summary:
+      ```
+      agents: {
+        synthesizer: {
+          description: "Synthesizes research findings across all focus areas",
+          prompt: "Read all .planning/research/*.md files. Read .archon/commands/gsd/gsd-research-synthesizer.md. Write .planning/research/SUMMARY.md. Return confirmation."
+        }
+      }
+      ```
+
+      ## Step 4: Commit
+
+      ```bash
+      git add .planning/research/ && git commit -m "docs: complete project research"
+      ```
+
+      ## Output
+
+      Print a table of research files produced with line counts, and the synthesizer's key findings.
+    agents:
+      stack-researcher:
+        description: "Researches stack decisions for the project"
+        prompt: |
+          Focus: STACK. Description: research the best language, framework, hosting, and tooling choices for this project. Read .archon/commands/gsd/gsd-project-researcher.md. Follow it exactly. Research and write .planning/research/STACK.md. Return confirmation with file path and line count.
+      features-researcher:
+        description: "Researches feature landscape and competitors"
+        prompt: |
+          Focus: FEATURES. Description: research the feature landscape, competitors, and gaps for this project. Read .archon/commands/gsd/gsd-project-researcher.md. Follow it exactly. Research and write .planning/research/FEATURES.md. Return confirmation with file path and line count.
+      architecture-researcher:
+        description: "Researches high-level architecture and patterns"
+        prompt: |
+          Focus: ARCHITECTURE. Description: research high-level design, patterns, and data flow for this project. Read .archon/commands/gsd/gsd-project-researcher.md. Follow it exactly. Research and write .planning/research/ARCHITECTURE.md. Return confirmation with file path and line count.
+      pitfalls-researcher:
+        description: "Researches known pitfalls and risks"
+        prompt: |
+          Focus: PITFALLS. Description: research known gotchas, security risks, and scale issues relevant to this project. Read .archon/commands/gsd/gsd-project-researcher.md. Follow it exactly. Research and write .planning/research/PITFALLS.md. Return confirmation with file path and line count.
+      synthesizer:
+        description: "Synthesizes all research findings into a summary"
+        prompt: |
+          Read all .planning/research/STACK.md, FEATURES.md, ARCHITECTURE.md, and PITFALLS.md. Read .archon/commands/gsd/gsd-research-synthesizer.md. Follow it exactly. Write .planning/research/SUMMARY.md. Return confirmation with file path and line count.
+
+  # ═══════════════════════════════════════════════════════════════
+  # REQUIREMENTS — Interactive v1 scoping
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: requirements
+    depends_on: [research]
+    loop:
+      prompt: |
+        # GSD — Requirements Scoping
+
+        You are helping the user scope v1 requirements from the research.
+
+        ## Context
+
+        Read `.planning/PROJECT.md` and `.planning/research/FEATURES.md` to build a
+        categorized feature inventory.
+
+        **User's latest input**: $LOOP_USER_INPUT
+
+        ---
+
+        ## First iteration
+
+        Present features grouped by category (from FEATURES.md) in three columns:
+
+        | Feature | Category | v1? | Notes |
+        |---------|----------|-----|-------|
+
+        Mark your defaults: features that seem essential for v1 get a tentative "✓",
+        nice-to-haves get "v2", things that don't fit get "Out". Explain WHY for any
+        that might be controversial.
+
+        Ask the user to confirm or adjust the v1 selections.
+
+        ---
+
+        ## Subsequent iterations
+
+        Process the user's adjustments. When they say "approved", "looks good",
+        "that's v1", or similar:
+
+        1. Write `.planning/REQUIREMENTS.md`:
+
+        ```markdown
+        # Requirements
+
+        ## v1 Scope
+
+        | REQ-ID  | Description                          | Category  | Notes |
+        |---------|--------------------------------------|-----------|-------|
+        | {CAT}-01 | {description}                       | {category}|       |
+        | {CAT}-02 | {description}                       | {category}|       |
+
+        ## v2 (Follow-on)
+
+        | REQ-ID  | Description                          | Category  |
+        |---------|--------------------------------------|-----------|
+        | {CAT}-NN | {description}                       | {category}|
+
+        ## Out of Scope
+
+        | Item    | Rationale                           |
+        |---------|-------------------------------------|
+        | {item}  | {why not}                           |
+
+        ## Traceability
+
+        - Each REQ-ID links to a plan task (filled during roadmap/plan phase)
+        ```
+
+        REQ-IDs use category prefix + sequential number: `STK-01`, `FEAT-01`, `ARC-01`,
+        `PIT-01`, etc.
+
+        2. Commit:
+        ```bash
+        git add .planning/REQUIREMENTS.md && git commit -m "docs: define v1 requirements"
+        ```
+
+        3. Emit:
+        <promise>REQUIREMENTS_APPROVED</promise>
+
+        **CRITICAL**: NEVER emit the signal unless the user's latest message CLEARLY
+        approves the v1 scope (e.g. "approved", "looks good", "that's v1", "ship it").
+      until: REQUIREMENTS_APPROVED
+      max_iterations: 10
+      interactive: true
+      gate_message: |
+        Select v1 features (reply with line numbers or feature names to toggle),
+        ask questions about specific features, or say "approved" when satisfied.
+
+  # ═══════════════════════════════════════════════════════════════
+  # ROADMAP — Automated roadmap generation
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: roadmap
+    depends_on: [requirements]
+    prompt: |
+      # GSD — Roadmap Generation
+
+      You are generating the phased implementation roadmap.
+
+      Read `.archon/commands/gsd/gsd-roadmapper.md` and follow it exactly.
+
+      Input files:
+      - `.planning/PROJECT.md` — what we're building and key decisions
+      - `.planning/REQUIREMENTS.md` — v1 scope and REQ-IDs
+      - `.planning/research/SUMMARY.md` — synthesizer findings
+
+      The roadmapper role file will instruct you to write:
+      - `.planning/ROADMAP.md` — phased plan with success criteria
+      - `.planning/STATE.md` — session state and progress tracking
+      - Update `.planning/REQUIREMENTS.md` — wire traceability from REQ-IDs to phases
+
+      After the roadmapper completes, output a phase table summary:
+
+      ```
+      ## Roadmap Created
+
+      | Phase | Goal | Plans | REQs Covered |
+      |-------|------|-------|--------------|
+      | 1     | ...  | N     |              |
+      | 2     | ...  | N     |              |
+      ```
+
+      Do NOT commit — the approval gate is next.
+    agents:
+      roadmapper:
+        description: "Creates phased roadmap from requirements and research"
+        prompt: |
+          Read .archon/commands/gsd/gsd-roadmapper.md and follow it exactly.
+          Read .planning/PROJECT.md, .planning/REQUIREMENTS.md, and .planning/research/SUMMARY.md.
+          Write .planning/ROADMAP.md and .planning/STATE.md, and update REQUIREMENTS.md traceability.
+          Return a summary of phases, plan counts, and REQ coverage.
+
+  # ═══════════════════════════════════════════════════════════════
+  # ROADMAP-GATE — Human review of the roadmap
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: roadmap-gate
+    depends_on: [roadmap]
+    approval:
+      message: |
+        Review `.planning/ROADMAP.md` — does the phase breakdown, plan structure,
+        and success criteria look right?
+
+        Reply with "approved" to commit, or describe what needs to change.
+      capture_response: true
+      on_reject:
+        prompt: |
+          Revise the roadmap based on this feedback: $REJECTION_REASON
+
+          Read `.archon/commands/gsd/gsd-roadmapper.md` again, then update
+          `.planning/ROADMAP.md`, `.planning/STATE.md`, and `.planning/REQUIREMENTS.md`
+          traceability accordingly.
+
+          Return a summary of changes made.
+        max_attempts: 3
+
+  # ═══════════════════════════════════════════════════════════════
+  # FINALIZE — Commit the roadmap and route to next step
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: finalize
+    depends_on: [roadmap-gate]
+    bash: |
+      set -e
+
+      if [ ! -f ".planning/ROADMAP.md" ]; then
+        echo "ERROR: .planning/ROADMAP.md not found — roadmap-gate should have verified it"
+        exit 1
+      fi
+
+      if [ ! -f ".planning/STATE.md" ]; then
+        echo "ERROR: .planning/STATE.md not found — roadmap-gate should have verified it"
+        exit 1
+      fi
+
+      git add .planning/ROADMAP.md .planning/STATE.md .planning/REQUIREMENTS.md
+      git commit -m "docs: create roadmap"
+
+      echo ""
+      echo "=== Project initialized ==="
+      echo ""
+      echo "What's been created:"
+      echo "  .planning/PROJECT.md       — project definition"
+      echo "  .planning/config.json       — workflow configuration"
+      echo "  .planning/research/         — tech landscape (5 files)"
+      echo "  .planning/REQUIREMENTS.md   — v1 scope"
+      echo "  .planning/ROADMAP.md        — phased plan"
+      echo "  .planning/STATE.md          — session state"
+      echo ""
+      echo "Next: archon workflow run gsd-discuss-phase 1"

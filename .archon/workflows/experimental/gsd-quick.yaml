@@ -1,0 +1,253 @@
+# Experimental GSD port (#1696) — part of the gsd-* suite.
+# Source: github.com/open-gsd/gsd-core (MIT), workflows/quick.md (default RUN path only).
+# Provider: claude (default) — uses inline agents/Task-tool spawning where noted.
+#   Cross-runtime: change `provider: claude` to `provider: pi` (one line);
+#   agent spawning then runs in-context.
+# Install: copy .archon/workflows/experimental/gsd-*.yaml into <repo>/.archon/workflows/
+#   and .archon/commands/gsd/ into <repo>/.archon/commands/gsd/
+# State: .planning/ in-repo, committed to git (scratch excluded by .planning/.gitignore).
+# Runs in the live checkout (worktree disabled): GSD state accumulates on current branch.
+# Promotion to bundled defaults is gated on real-world full cycles — tracked in #1696.
+#
+# NOT for: --discuss/--research/--validate/--full flags (use the phase loop for full pipeline:
+#   gsd-new-project → gsd-discuss-phase → gsd-plan-phase → gsd-execute-phase → gsd-verify-work).
+# NOT for: list/status/resume subcommands (use `archon workflow runs`, `archon workflow resume`,
+#   or read `.planning/quick/` directly).
+
+name: gsd-quick
+description: |
+  Use when: User wants to quickly implement a small, self-contained change with
+            automatic planning, execution, and a summary commit — no gates, no
+            interactive approval.
+  Triggers: "quick task", "quickly add", "small change", "one-off fix",
+            "quick: add X", "gsd quick".
+  NOT for: Multi-step features that need research or stakeholder discussion
+           (use gsd-new-project + the phase loop).
+  NOT for: Changes that modify architecture or cross multiple modules without
+           context (run gsd-map-codebase and gsd-discuss-phase first).
+
+  Single-pass workflow:
+  1. PLAN: Derive a slug from $ARGUMENTS, create .planning/quick/<date>-<slug>/,
+     write one quick-mode PLAN.md (2–3 tasks, wave: 1, standard GSD frontmatter).
+  2. EXECUTE: Execute each task atomically, commit per task as `quick: <slug> - <task>`,
+     write SUMMARY.md, optionally update STATE.md.
+
+  Input: A description of what to build (free text). Examples:
+    "add a modulo function with a test"
+    "fix the login redirect to preserve query params"
+
+provider: claude
+worktree:
+  enabled: false
+
+nodes:
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 1: PLAN — Set up quick directory and write the plan
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: plan
+    prompt: |
+      # GSD Quick — Plan
+
+      You are creating a quick, single-plan execution unit. Your job: set up the
+      quick directory and write exactly ONE PLAN.md with 2–3 tasks.
+
+      **User request**: $ARGUMENTS
+
+      ---
+
+      ## Step 1: Derive the slug
+
+      Extract a short kebab-case slug from the user's request (≤5 words max).
+      Example: "add a modulo function with a test" → `add-modulo-function`
+
+      Derive the date: use today's date in YYYYMMDD format (if you cannot determine
+      the date from context, use `date` command or read the system).
+
+      Compute the plan directory:
+        `.planning/quick/<YYYYMMDD>-<slug>/`
+
+      ## Step 2: Ensure .planning/ infrastructure
+
+      ```
+      mkdir -p .planning/quick/<YYYYMMDD>-<slug>
+      ```
+
+      Ensure `.planning/.gitignore` exists. If it's missing, create it with:
+      ```
+      # GSD scratch files — never committed (see issue #1696)
+      FALLOW.json
+      *-DISCUSS-CHECKPOINT.json
+      .continue-here.md
+      ```
+
+      ## Step 3: Write the quick-mode PLAN.md
+
+      Read `.archon/commands/gsd/gsd-planner.md` for the PLAN.md format contract
+      (frontmatter fields, task XML structure). Note: you are writing a QUICK plan,
+      NOT a full phase plan. Adapt accordingly:
+
+      - **Tight scope**: 2–3 tasks total. Each task is atomic — one logical change
+        that can be committed independently.
+      - **wave: 1** in frontmatter (there is only one wave).
+      - **type: feat** or **type: fix** depending on the request.
+      - **depends_on: []** (no cross-plan dependencies in quick mode).
+      - **requirements: []** (quick plans don't trace to REQ-IDs unless
+        REQUIREMENTS.md already exists and a relevant REQ-ID is obvious).
+      - **phase: 0** and **plan: 1** (quick mode convention).
+
+      Write the file at:
+        `.planning/quick/<YYYYMMDD>-<slug>/01-01-PLAN.md`
+
+      Each task MUST include:
+      - `<name>` — short descriptive name
+      - `<action>` — step-by-step instructions (no gsd-tools — use direct commands)
+      - `<files>` — exact files to create or modify
+      - `<verify>` — how to confirm the task is done correctly
+      - `<done>` — always `false` initially
+
+      ## Step 4: Output
+
+      Print a summary table:
+
+      ```
+      ## Quick Plan
+
+      **Slug**: <slug>
+      **Directory**: .planning/quick/<YYYYMMDD>-<slug>/
+      **PLAN.md**: .planning/quick/<YYYYMMDD>-<slug>/01-01-PLAN.md
+
+      ### Tasks
+      1. <task 1 name>
+      2. <task 2 name>
+      3. <task 3 name> (if present)
+      ```
+
+      CRITICAL: Do NOT execute any tasks. Only create the directory, .gitignore
+      (if needed), and the PLAN.md. The execution node handles the rest.
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 2: EXECUTE — Run the quick plan atomically
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: execute
+    prompt: |
+      # GSD Quick — Execute
+
+      You are executing a quick-mode PLAN.md. Read `.archon/commands/gsd/gsd-executor.md`
+      and follow its execution protocol, adapted for quick mode as described below.
+
+      **Plan output from previous node**: $plan.output
+
+      Identify the plan directory and PLAN.md path from the plan node's output.
+      If you cannot determine them, search: `find .planning/quick -name '*-PLAN.md' -mmin -5`.
+
+      ---
+
+      ## Execution Protocol (Quick Mode)
+
+      ### 1. Load the PLAN.md
+
+      Parse the YAML frontmatter and task list. Confirm the directory exists.
+
+      ### 2. Execute Tasks Sequentially
+
+      For each task in order (1, 2, 3):
+
+      a. **Implement** the task exactly as described in `<action>`. Follow the
+         executor's deviation rules (auto-fix bugs, add missing critical items,
+         fix blockers except new dependencies; stop on architectural change).
+
+      b. **Verify** the task using `<verify>` instructions. Run tests if the task
+         includes them. If verification fails, fix and retry up to 3 attempts,
+         then record as a Deferred Issue.
+
+      c. **Commit atomically**:
+         ```
+         git add <explicit files modified/created by this task>
+         git commit -m "quick: <slug> - <task name>"
+         ```
+         NEVER use `git add -A`, `.`, or `-u`. Stage ONLY the files you touched.
+
+      d. **Update the PLAN.md**: change `<done>false</done>` to `<done>true</done>`
+         for the completed task.
+
+      ### 3. Write SUMMARY.md
+
+      After all tasks complete, write `.planning/quick/<YYYYMMDD>-<slug>/01-01-SUMMARY.md`
+      with the standard GSD SUMMARY.md contract:
+
+      ```yaml
+      ---
+      phase: 0
+      plan: 1
+      type: <feat | fix>
+      status: complete    # or: blocked (see Checkpoints below)
+      ---
+      ```
+
+      Then:
+      - **One-liner**: a single sentence describing what was done.
+      - **Tasks table**: each task with status (completed | deferred), files changed,
+        and deviations (if any).
+      - **Deviations**: document any auto-fixes or blocks per the executor rules.
+      - **Self-Check**: confirm the verify steps passed or explain gaps.
+
+      ### 4. Update STATE.md (if it exists)
+
+      If `.planning/STATE.md` exists:
+      - Look for a `## Quick Tasks Completed` section.
+      - If it does NOT exist, create it: append `## Quick Tasks Completed` with a
+        markdown table header:
+        ```
+        | Date | Slug | Description | Commits |
+        |------|------|-------------|---------|
+        ```
+      - Append a row: `| <YYYYMMDD> | <slug> | <one-liner> | <commit hashes> |`
+      - Commit: `git add .planning/STATE.md && git commit -m "docs: update state for quick task <slug>"`
+
+      If STATE.md does not exist, skip this step silently (quick mode works on
+      uninitialized repos too).
+
+      ### 5. Commit remaining artifacts
+
+      ```
+      git add .planning/quick/<YYYYMMDD>-<slug>/ .planning/.gitignore
+      git commit -m "quick: <slug> - complete"
+      ```
+
+      ### 6. Checkpoints
+
+      If the plan hits a blocker (executor checkpoint: human-verify, human-action,
+      decision) — do NOT pause. Record the blocker in SUMMARY.md frontmatter:
+      `status: blocked`, add a `## Blocked` section with exact unblock steps,
+      commit what you have, and stop.
+
+      ---
+
+      ## Output
+
+      Print a completion summary:
+
+      ```
+      ## Quick Execution Complete
+
+      **Slug**: <slug>
+      **Status**: complete (or blocked)
+
+      ### Tasks
+      | # | Task | Status | Commits |
+      |---|------|--------|---------|
+      | 1 | <name> | completed | <hash> |
+      | 2 | <name> | completed | <hash> |
+      | 3 | <name> | deferred  | —       |
+
+      ### Files Changed
+      - <file> — <what changed>
+
+      ### Next Steps
+      (if complete) "Done. Review .planning/quick/<date>-<slug>/SUMMARY.md."
+      (if blocked) "Blocked. Read SUMMARY.md ## Blocked for unblock instructions."
+      ```
+
+    depends_on: [plan]

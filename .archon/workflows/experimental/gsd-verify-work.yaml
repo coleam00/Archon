@@ -1,0 +1,314 @@
+# Experimental GSD port (#1696) — part of the gsd-* suite.
+# Source: github.com/open-gsd/gsd-core (MIT).
+# Provider: claude (default) — uses inline agents/Task-tool spawning where noted.
+#   Cross-runtime: change `provider: claude` to `provider: pi` (one line);
+#   agent spawning then runs in-context.
+# Install: copy .archon/workflows/experimental/gsd-*.yaml into <repo>/.archon/workflows/
+#   and .archon/commands/gsd/ into <repo>/.archon/commands/gsd/
+# State: .planning/ in-repo, committed to git (scratch excluded by .planning/.gitignore).
+# Runs in the live checkout (worktree disabled): GSD state accumulates on current branch.
+# Promotion to bundled defaults is gated on real-world full cycles — tracked in #1696.
+
+name: gsd-verify-work
+description: |
+  Use when: An execute-phase has completed and you need to VERIFY the work
+           with a human at the keyboard — running through each acceptance test
+           one at a time, debugging failures, and writing gap plans for fixes.
+  Triggers: "verify phase 1", "verify work", "acceptance test", "UAT",
+            "confirm it works", "did phase 2 pass".
+  NOT for: Automated test runs without human judgment (the verifier in
+           gsd-execute-phase already ran), skipping the UAT walkthrough,
+           phases that haven't been executed yet.
+  Does:
+    1. Resolves the target phase (by number, or the most recently executed one)
+    2. Walks you through every UAT test one-at-a-time — you answer yes/no
+       or describe actual behavior for each
+    3. On any test failure, invokes the debugger (find root cause only) and
+       writes a gap plan (type: fix, gap_closure: true) so re-running
+       gsd-execute-phase picks it up
+    4. Finalizes {NN}-UAT.md with all results and commits it
+  NOT for: Phases without executed plans (no SUMMARY.md → abort),
+           skipping human verification, running without a phase number.
+  Input: Phase number (e.g. "1") or empty for the most recently executed phase.
+  Output: .planning/phases/{NN}-*/{NN}-UAT.md with full test table; gap plans
+          written for each failure; routing to gsd-ship or gsd-execute-phase.
+  Dropped: --auto mode, auto-fix behavior (diagnosis only at UAT failure;
+           gap plans are executed by re-running gsd-execute-phase).
+
+provider: claude
+interactive: true
+worktree:
+  enabled: false
+
+nodes:
+  # ═══════════════════════════════════════════════════════════════
+  # GUARD — Resolve phase directory
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: guard
+    bash: |
+      set -e
+
+      if [ -n "$ARGUMENTS" ]; then
+        # Zero-pad single-digit input (1 → 01, 2 → 02, etc.)
+        PHASE_NUM="$ARGUMENTS"
+        case ${#PHASE_NUM} in
+          1) PAD="0${PHASE_NUM}" ;;
+          *) PAD="${PHASE_NUM}" ;;
+        esac
+        DIR=$(ls -d .planning/phases/${PAD}-* 2>/dev/null | head -1)
+        if [ -z "$DIR" ]; then
+          # Try without padding (handle "01" passed as-is)
+          DIR=$(ls -d .planning/phases/${PHASE_NUM}-* 2>/dev/null | head -1)
+        fi
+      else
+        # Default: highest-numbered phase with at least one *-SUMMARY.md
+        DIR=$(find .planning/phases/ -maxdepth 2 -name "*-SUMMARY.md" 2>/dev/null | sort -t/ -k3,3 | tail -1 | xargs dirname)
+      fi
+
+      if [ -z "$DIR" ]; then
+        echo "ERROR: No executed phase found."
+        echo "Provide a phase number (e.g. '1') or run gsd-execute-phase first."
+        exit 1
+      fi
+
+      if [ ! -d "$DIR" ]; then
+        echo "ERROR: Phase directory '$DIR' does not exist."
+        exit 1
+      fi
+
+      PHASE_BASE=$(basename "$DIR")
+      UAT_FILE="$DIR/$PHASE_BASE-UAT.md"
+      VERIFY_FILE="$DIR/VERIFICATION.md"
+
+      echo "PHASE_DIR=$DIR"
+      echo "PHASE_BASE=$PHASE_BASE"
+      echo "UAT_FILE=$UAT_FILE"
+      echo "VERIFY_FILE=$VERIFY_FILE"
+
+      if [ ! -f "$VERIFY_FILE" ]; then
+        echo "WARNING: VERIFICATION.md not found in $DIR — continuing anyway."
+      fi
+
+      # Count plans for the test inventory
+      PLAN_COUNT=$(ls "$DIR"/*-PLAN.md 2>/dev/null | wc -l)
+      SUMMARY_COUNT=$(ls "$DIR"/*-SUMMARY.md 2>/dev/null | wc -l)
+      echo "Plans: $PLAN_COUNT | Summaries: $SUMMARY_COUNT"
+
+  # ═══════════════════════════════════════════════════════════════
+  # UAT — Interactive walkthrough of every test
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: uat
+    depends_on: [guard]
+    loop:
+      prompt: |
+        # GSD Verify Work — UAT Walkthrough
+
+        You are walking a human through user acceptance testing one test at a time.
+        Phase: `$guard.output.PHASE_BASE`  Dir: `$guard.output.PHASE_DIR`
+        UAT file: `$guard.output.UAT_FILE`
+        User's latest answer: $LOOP_USER_INPUT
+        Previous iteration output: $LOOP_PREV_OUTPUT
+
+        ## Core Rules
+
+        1. **NEVER skip a test.** Every test in the queue must be answered by the user.
+        2. **NEVER auto-pass or auto-fail.** You record what the user says — nothing else.
+        3. **NEVER apply a fix.** On failure, diagnose root cause and write a gap plan — do NOT change source code. The gap plan is picked up by re-running gsd-execute-phase.
+        4. **NEVER emit the signal unless the queue is fully exhausted and UAT.md is finalized.** If even one test remains, present it.
+
+        ---
+
+        ## If this is the FIRST iteration (no user input yet):
+
+        ### Step 1: Build the Test Queue
+
+        Read every file in `$guard.output.PHASE_DIR` ending in `-PLAN.md`. For each plan, extract:
+        - Its `<verification>` block (inside `<tasks><task><verify>`).
+        - Its `must_haves.truths` from YAML frontmatter (fields under `must_haves:` → `truths:`).
+        - If `$guard.output.VERIFY_FILE` exists: read it for the REQ coverage table (rows with REQ-ID + status).
+
+        Build a flat test queue. Each entry is one concrete, answerable yes/no question:
+        ```
+        # | Source | Test (what to verify)
+        1 | Plan 01-01, truth 1 | The calculator returns 4 for add(2, 2)
+        2 | Plan 01-01, verify | The `/calc` endpoint responds in under 200ms
+        3 | VERIFICATION.md    | REQ-CALC-01: Calculator API is fully covered by tests
+        ```
+
+        ### Step 2: Create the UAT Skeleton
+
+        Write `$guard.output.UAT_FILE` (using the Write tool):
+
+        ```markdown
+        ---
+        phase: "$guard.output.PHASE_BASE"
+        status: in_progress
+        started: "$TODAY_DATE"
+        ---
+
+        # Phase $guard.output.PHASE_BASE — User Acceptance Tests
+
+        | # | Test | Expected | Actual | Status | Diagnosis |
+        |---|------|----------|--------|--------|-----------|
+        | 1 | {test description} | {expected behavior} |       | PENDING |           |
+        | 2 | {test description} | {expected behavior} |       | PENDING |           |
+        ```
+
+        Leave the Actual, Status, and Diagnosis columns blank for now.
+
+        ### Step 3: Present Test 1
+
+        ```
+        ## Test 1 of {N}
+
+        **Source**: {plan file or VERIFICATION.md}
+        **Can you confirm**: {expected behavior}?
+
+        Reply:
+        - **yes** — the behavior matches
+        - **no** — describe what actually happens
+        - **skip** — this test doesn't apply (explain why)
+        ```
+
+        Do NOT emit the signal. The loop gate will collect the user's answer for the next iteration.
+
+        ---
+
+        ## If the user has provided input (subsequent iterations):
+
+        ### Step 1: Record the Answer
+
+        Parse `$LOOP_USER_INPUT`. From `$LOOP_PREV_OUTPUT` (your own previous output), identify which test number you just presented.
+
+        - **yes** → record in UAT.md: `Actual: as expected`, `Status: PASS`
+        - **no** + description → record: `Actual: {description}`, `Status: FAIL`
+        - **skip** + reason → record: `Actual: skipped`, `Status: SKIPPED`, `Diagnosis: {reason}`
+
+        Edit `$guard.output.UAT_FILE` to fill in the row for the current test.
+
+        ### Step 2: On FAIL — Diagnose and Write a Gap Plan
+
+        If the test FAILED:
+
+        1. **Diagnose root cause.** Read `.archon/commands/gsd/gsd-debugger.md` and follow it in **find_root_cause_only** mode. Create a debug session file at `.planning/debug/{slug}.md` (slug = kebab-case from the test description, ≤5 words). Do NOT apply any fix — diagnosis only.
+
+        2. **Write a gap plan.** Determine the next available plan number (MM) by listing `$guard.output.PHASE_DIR/*-PLAN.md` and finding the highest MM + 1. Write `$guard.output.PHASE_DIR/{NN}-{next-MM}-PLAN.md`:
+
+        ```markdown
+        ---
+        phase: {NN}
+        plan: {next-MM}
+        type: fix
+        wave: 1
+        depends_on: []
+        gap_closure: true
+        requirements: []
+        must_haves:
+          truths:
+            - "{the test description}"
+          artifacts:
+            - "{the file or behavior that should change}"
+          key_links: []
+        ---
+
+        # Plan {NN}-{next-MM}: Fix — {brief description}
+
+        ## Root Cause
+
+        {Findings from the debug session}
+
+        ## Tasks
+
+        <tasks>
+        <task>
+        <description>{What to change}</description>
+        <files>
+        <file>{path}</file>
+        </files>
+        <action>{Specific fix steps}</action>
+        <verify>{How to verify it's fixed}</verify>
+        </task>
+        </tasks>
+        ```
+
+        3. Record in UAT.md's Diagnosis column: "Gap plan {NN}-{next-MM}-PLAN.md written."
+
+        ### Step 3: Present the Next Test (or Finalize)
+
+        **If tests remain:** present the next test in the queue exactly as in Step 3 of the first-iteration instructions above. Include the test number, source, and the yes/no/skip prompt.
+
+        **If the queue is exhausted (all tests have an answer):**
+
+        1. Update the UAT.md frontmatter: `status: complete`.
+        2. Add a summary section at the bottom:
+
+        ```markdown
+        ## Summary
+
+        - Total tests: {N}
+        - Passed: {P}
+        - Failed: {F}
+        - Skipped: {S}
+        - Gap plans written: {G}
+        ```
+
+        3. Commit the UAT file and any new gap plans:
+        ```bash
+        git add "$guard.output.UAT_FILE"
+        # Stage any new gap plans
+        for f in "$guard.output.PHASE_DIR"/*-PLAN.md; do
+          [ -f "$f" ] && git add "$f"
+        done
+        git add .planning/debug/ 2>/dev/null || true
+        git commit -m "docs($guard.output.PHASE_BASE): record UAT results"
+        ```
+
+        4. Emit `<promise>UAT_COMPLETE</promise>`.
+
+        **CRITICAL — READ THIS CAREFULLY:**
+        - NEVER emit `<promise>UAT_COMPLETE</promise>` unless EVERY test in the queue has been answered and UAT.md has been finalized and committed.
+        - If a test was just recorded and more remain → present the next test. Do NOT emit the signal.
+        - If you are mid-diagnosis → finish the diagnosis, write the gap plan, present the next test. Do NOT emit the signal.
+        - The ONLY correct time to emit the signal is after the final test is recorded, UAT.md finalized, and committed.
+      until: UAT_COMPLETE
+      max_iterations: 30
+      interactive: true
+      gate_message: |
+        Answer the current test (yes / no / describe behavior).
+        You can also say "skip" if the test doesn't apply.
+
+  # ═══════════════════════════════════════════════════════════════
+  # ROUTE — Direct user to the next workflow
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: route
+    depends_on: [uat]
+    bash: |
+      DIR=$guard.output.PHASE_DIR
+      PHASE_BASE=$guard.output.PHASE_BASE
+
+      # Count failures from UAT summary
+      UAT_FILE=$guard.output.UAT_FILE
+      FAILED=$(grep -c '| FAIL ' "$UAT_FILE" 2>/dev/null || echo 0)
+
+      if [ "$FAILED" -gt 0 ]; then
+        echo ""
+        echo "═══════════════════════════════════════════════════════"
+        echo "  $FAILED test(s) failed — gap plans written in:"
+        echo "  $DIR/"
+        echo ""
+        echo "  → Re-run to apply fixes:"
+        echo "    archon workflow run gsd-execute-phase ${PHASE_BASE%%-*}"
+        echo "═══════════════════════════════════════════════════════"
+        echo ""
+      else
+        echo ""
+        echo "═══════════════════════════════════════════════════════"
+        echo "  All tests passed — ready to ship!"
+        echo ""
+        echo "  → Next: archon workflow run gsd-ship ${PHASE_BASE%%-*}"
+        echo "═══════════════════════════════════════════════════════"
+        echo ""
+      fi

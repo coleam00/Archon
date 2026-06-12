@@ -1,0 +1,176 @@
+# Experimental GSD port (#1696) — part of the gsd-* suite.
+# Source: github.com/open-gsd/gsd-core (MIT).
+# Provider: claude (default) — uses inline agents/Task-tool spawning where noted.
+#   Cross-runtime: change `provider: claude` to `provider: pi` (one line);
+#   agent spawning then runs in-context.
+# Install: copy .archon/workflows/experimental/gsd-*.yaml into <repo>/.archon/workflows/
+#   and .archon/commands/gsd/ into <repo>/.archon/commands/gsd/
+# State: .planning/ in-repo, committed to git (scratch excluded by .planning/.gitignore).
+# Runs in the live checkout (worktree disabled): GSD state accumulates on current branch.
+# Promotion to bundled defaults is gated on real-world full cycles — tracked in #1696.
+#
+# Drops from GSD source: --fast, --query, --paths flags.
+# Map always overwrites — re-running IS the refresh intent.
+name: gsd-map-codebase
+description: |
+  Use when: You want to map an existing codebase into the GSD .planning/ structure
+           for the first time, or refresh an existing map to reflect current state.
+  Triggers: "map the codebase", "gsd-map-codebase", "codebase mapping",
+            "generate codebase docs".
+  Does: Analyzes the project in four parallel focus areas (tech, arch, quality,
+        concerns) and writes 7 structured knowledge documents under .planning/codebase/
+        (STACK, INTEGRATIONS, ARCHITECTURE, STRUCTURE, CONVENTIONS, TESTING, CONCERNS).
+        Verifies all docs are substantive and free of secret leaks, then commits.
+  NOT for: Capturing project vision or requirements (use gsd-new-project),
+           phase-level planning or execution (use gsd-discuss/plan/execute-phase).
+  Input: Optional focus-area hint in $ARGUMENTS (e.g. "auth system", "database layer").
+         Empty $ARGUMENTS maps the entire codebase.
+  Output: 7 committed .planning/codebase/*.md documents + a summary table.
+
+provider: claude
+worktree:
+  enabled: false
+
+nodes:
+  # ═══════════════════════════════════════════════════════════════
+  # SETUP — ensure .planning/ directory and .gitignore exist
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: setup
+    bash: |
+      mkdir -p .planning/codebase
+      if [ ! -f .planning/.gitignore ]; then
+        printf '# GSD scratch files — never committed (see issue #1696)\nFALLOW.json\n*-DISCUSS-CHECKPOINT.json\n.continue-here.md\n' > .planning/.gitignore
+        echo "Created .planning/.gitignore"
+      fi
+      echo "Mapping codebase into .planning/codebase/ (existing maps will be overwritten)"
+
+  # ═══════════════════════════════════════════════════════════════
+  # MAP — spawn 4 parallel mappers, one per focus area
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: map
+    depends_on: [setup]
+    prompt: |
+      # GSD Map Codebase — Orchestrator
+
+      You are the codebase mapping orchestrator. Your job: spawn 4 parallel
+      codebase-mapper subagents, one per focus area, then collect confirmations.
+
+      **User hint** (optional): $ARGUMENTS
+      **Today's date**: <insert today's date in YYYY-MM-DD format>
+
+      ---
+
+      ## Step 1: Determine the date
+
+      Use today's date. If you cannot determine it, use the date from the
+      most recent git commit: `git log -1 --format=%ai | cut -d' ' -f1`
+
+      ## Step 2: Spawn 4 parallel mappers
+
+      Use the Task tool to launch these four invocations simultaneously.
+      Each invocation passes its focus area in the task assignment.
+      The codebase-mapper agent reads `.archon/commands/gsd/gsd-codebase-mapper.md`
+      and writes its documents to `.planning/codebase/`.
+
+      | Focus | Task assignment |
+      |-------|-----------------|
+      | tech | "Map the codebase with focus: tech. Write STACK.md and INTEGRATIONS.md to .planning/codebase/. Today's date: {date}." |
+      | arch | "Map the codebase with focus: arch. Write ARCHITECTURE.md and STRUCTURE.md to .planning/codebase/. Today's date: {date}." |
+      | quality | "Map the codebase with focus: quality. Write TESTING.md and CONVENTIONS.md to .planning/codebase/. Today's date: {date}." |
+      | concerns | "Map the codebase with focus: concerns. Write CONCERNS.md to .planning/codebase/. Today's date: {date}." |
+
+      If $ARGUMENTS is non-empty, include it as an additional hint in EACH task
+      assignment: "Additional context: $ARGUMENTS."
+
+      ## Step 3: Collect confirmations
+
+      Wait for all 4 mappers to complete. Each returns a confirmation with
+      the file paths and line counts written. Do not read or modify any
+      documents — just collect the confirmations.
+
+      ## Step 4: Output a summary table
+
+      If all 4 succeeded, output:
+
+      ```
+      ## Codebase Map Complete
+
+      | Document | Focus | Path |
+      |----------|-------|------|
+      | STACK.md | tech | .planning/codebase/STACK.md |
+      | INTEGRATIONS.md | tech | .planning/codebase/INTEGRATIONS.md |
+      | ARCHITECTURE.md | arch | .planning/codebase/ARCHITECTURE.md |
+      | STRUCTURE.md | arch | .planning/codebase/STRUCTURE.md |
+      | TESTING.md | quality | .planning/codebase/TESTING.md |
+      | CONVENTIONS.md | quality | .planning/codebase/CONVENTIONS.md |
+      | CONCERNS.md | concerns | .planning/codebase/CONCERNS.md |
+      ```
+
+      If any mapper failed, report which focus area and the error.
+
+    agents:
+      codebase-mapper:
+        description: Maps a codebase for a specific focus area
+        prompt: |
+          You are a codebase mapper agent.
+
+          Read `.archon/commands/gsd/gsd-codebase-mapper.md` and follow it exactly.
+
+          Your task assignment specifies the focus area and which documents to write.
+          Write all documents directly to `.planning/codebase/`.
+
+          Return a confirmation listing each file path and its line count.
+          Do NOT return the document contents — only paths and line counts.
+
+  # ═══════════════════════════════════════════════════════════════
+  # VERIFY-COMMIT — validate all 7 docs exist and are substantive,
+  # scan for secrets, then commit atomically
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: verify-commit
+    depends_on: [map]
+    bash: |
+      DOCS="STACK.md INTEGRATIONS.md ARCHITECTURE.md STRUCTURE.md CONVENTIONS.md TESTING.md CONCERNS.md"
+      ALL_OK=0
+
+      echo "=== Codebase Map Verification ==="
+      echo ""
+
+      for doc in $DOCS; do
+        path=".planning/codebase/$doc"
+        if [ ! -f "$path" ]; then
+          echo "FAIL: $path does not exist"
+          ALL_OK=1
+          continue
+        fi
+        lines=$(wc -l < "$path" | tr -d ' ')
+        if [ "$lines" -le 20 ]; then
+          echo "FAIL: $path has only $lines lines (need >20)"
+          ALL_OK=1
+        else
+          echo "PASS: $path — $lines lines"
+        fi
+      done
+
+      echo ""
+
+      if grep -qPn "(api[_-]?key|token|secret)\s*[:=]\s*['\"][A-Za-z0-9]" .planning/codebase/*.md 2>/dev/null; then
+        echo "FAIL: Secret patterns detected in codebase documents"
+        ALL_OK=1
+      fi
+
+      if [ "$ALL_OK" -ne 0 ]; then
+        echo ""
+        echo "One or more checks failed — aborting commit. Fix the documents and re-run."
+        exit 1
+      fi
+
+      echo "All documents pass. Committing..."
+      git add .planning/codebase .planning/.gitignore
+      git commit -m "docs: map existing codebase"
+
+      echo ""
+      echo "=== Next Steps ==="
+      echo "Next: archon workflow run gsd-new-project"
