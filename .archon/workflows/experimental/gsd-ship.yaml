@@ -79,7 +79,8 @@ nodes:
         echo "ERROR: ${VFILE} not found — run gsd-verify-work first." >&2
         exit 1
       fi
-      VSTATUS="$(grep -oP 'status:\s*\K\S+' "$VFILE" 2>/dev/null || echo "unknown")"
+      VSTATUS="$(awk '/status:/ { gsub(/.*status:[[:space:]]*/, ""); print $1; exit }' "$VFILE" 2>/dev/null)"
+      VSTATUS="${VSTATUS:-unknown}"
       if [ "$VSTATUS" != "PASS" ] && [ "$VSTATUS" != "pass" ]; then
         echo "WARNING: VERIFICATION.md status = ${VSTATUS} (expected PASS). Proceed with caution."
       fi

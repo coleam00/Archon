@@ -59,7 +59,7 @@ nodes:
       else
         # No argument: pick the first phase dir that has PLAN files
         PHASE_DIR=$(ls -d .planning/phases/*/ 2>/dev/null | while read d; do
-          if ls "$d"*-PLAN.md >/dev/null 2>&1; then
+          if ls "$d"/*-PLAN.md >/dev/null 2>&1; then
             echo "$d"
             break
           fi
@@ -76,7 +76,7 @@ nodes:
         exit 1
       fi
 
-      if ! ls "$PHASE_DIR"*-PLAN.md >/dev/null 2>&1; then
+      if ! ls "$PHASE_DIR"/*-PLAN.md >/dev/null 2>&1; then
         echo "ERROR: No *-PLAN.md files found in $PHASE_DIR."
         echo "Run gsd-plan-phase first to create plans."
         exit 1
@@ -86,7 +86,7 @@ nodes:
       echo "PHASE_NUM=$(basename "$PHASE_DIR" | grep -oE '^[0-9]+')"
       echo ""
       echo "## Plan Inventory"
-      ls -1 "$PHASE_DIR"*-PLAN.md 2>/dev/null | while read plan; do
+      ls -1 "$PHASE_DIR"/*-PLAN.md 2>/dev/null | while read plan; do
         basename "$plan"
       done
 
@@ -268,9 +268,12 @@ nodes:
       PHASE_NUM="$ARGUMENTS"
       if [ -z "$PHASE_NUM" ]; then
         # Best-effort: find the highest-numbered phase dir with a VERIFICATION.md
-        PHASE_DIR=$(ls -d .planning/phases/*/ 2>/dev/null | sort -V | while read d; do
-          if [ -f "${d}VERIFICATION.md" ]; then PHASE_DIR="$d"; fi
-        done)
+        PHASE_DIR=""
+        for d in $(ls -d .planning/phases/*/ 2>/dev/null | sort -V); do
+          if [ -f "${d}VERIFICATION.md" ]; then
+            PHASE_DIR="$d"
+          fi
+        done
         if [ -n "$PHASE_DIR" ]; then
           PHASE_NUM=$(basename "$PHASE_DIR" | grep -oE '^[0-9]+')
         fi

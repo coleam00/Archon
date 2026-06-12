@@ -70,8 +70,14 @@ nodes:
         echo ".planning/.gitignore created"
       fi
 
-      # Derive slug: lowercase, replace non-alnum with hyphens, collapse, strip, truncate 30
-      SLUG=$(echo "$ARGUMENTS" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | tr -s '-' | sed 's/^-//;s/-$//' | cut -c1-30)
+      # Derive slug: lowercase, non-alnum→hyphens, collapse, strip; append short fingerprint for uniqueness
+      BASE_SLUG=$(echo "$ARGUMENTS" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | tr -s '-' | sed 's/^-//;s/-$//')
+      if [ -z "$BASE_SLUG" ]; then
+        echo "ERROR: Bug description must contain at least one letter or number."
+        exit 1
+      fi
+      HASH=$(printf '%s' "$ARGUMENTS" | git hash-object --stdin | cut -c1-8)
+      SLUG="$(printf '%.21s' "$BASE_SLUG")-$HASH"
 
       echo "slug=$SLUG"
 

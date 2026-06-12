@@ -246,6 +246,7 @@ nodes:
       echo "Plans committed successfully."
 
       echo ""
-      echo "Next: archon workflow run gsd-execute-phase ${PHASE_DIR##*/}" | sed 's/^\(..\)-.*/\1/'
+      PHASE_NUM=$(basename "$PHASE_DIR" | grep -oE '^[0-9]+')
+      echo "Next: archon workflow run gsd-execute-phase $PHASE_NUM"
       echo "  (copy the phase number from above, e.g. 'archon workflow run gsd-execute-phase 01')"
     depends_on: [plan-gate]

@@ -81,19 +81,19 @@ nodes:
       UAT_FILE="$DIR/$PHASE_BASE-UAT.md"
       VERIFY_FILE="$DIR/VERIFICATION.md"
 
-      echo "PHASE_DIR=$DIR"
-      echo "PHASE_BASE=$PHASE_BASE"
-      echo "UAT_FILE=$UAT_FILE"
-      echo "VERIFY_FILE=$VERIFY_FILE"
-
+      # Diagnostics → stderr so stdout stays a single JSON object. Downstream
+      # nodes read $guard.output.PHASE_DIR / .PHASE_BASE / .UAT_FILE / .VERIFY_FILE,
+      # which the engine resolves only when this (schemaless bash) node's stdout
+      # is valid JSON (see resolveNodeOutputField in output-ref.ts).
       if [ ! -f "$VERIFY_FILE" ]; then
-        echo "WARNING: VERIFICATION.md not found in $DIR — continuing anyway."
+        echo "WARNING: VERIFICATION.md not found in $DIR — continuing anyway." >&2
       fi
-
-      # Count plans for the test inventory
       PLAN_COUNT=$(ls "$DIR"/*-PLAN.md 2>/dev/null | wc -l)
       SUMMARY_COUNT=$(ls "$DIR"/*-SUMMARY.md 2>/dev/null | wc -l)
-      echo "Plans: $PLAN_COUNT | Summaries: $SUMMARY_COUNT"
+      echo "Plans: $PLAN_COUNT | Summaries: $SUMMARY_COUNT" >&2
+
+      printf '{"PHASE_DIR":"%s","PHASE_BASE":"%s","UAT_FILE":"%s","VERIFY_FILE":"%s"}\n' \
+        "$DIR" "$PHASE_BASE" "$UAT_FILE" "$VERIFY_FILE"
 
   # ═══════════════════════════════════════════════════════════════
   # UAT — Interactive walkthrough of every test

@@ -345,7 +345,7 @@ nodes:
 
       ## Step 7: Update MILESTONES.md
 
-      Read or create `.planning/MILESTONES.md` (at repo root, not under .planning/).
+      Read or create `MILESTONES.md` at the repo root.
 
       If it doesn't exist, create with header:
       ```markdown

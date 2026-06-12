@@ -48,7 +48,7 @@ Each phase delivers a coherent, verifiable capability.
 **Bad boundaries:** arbitrary technical layers (all models, then all APIs), partial features (half of auth), artificial splits.
 
 **Anti-pattern — Horizontal layers:**
-```
+```text
 Phase 1: All database models ← Too coupled
 Phase 2: All API endpoints ← Can't verify independently
 Phase 3: All UI components ← Nothing works until end
@@ -102,7 +102,7 @@ For "Users can securely access their accounts":
 ## Coverage Validation
 
 Build an explicit coverage map before writing files:
-```
+```text
 AUTH-01 → Phase 2
 AUTH-02 → Phase 2
 PROF-01 → Phase 3
@@ -202,17 +202,13 @@ If REQUIREMENTS.md already has a `## Traceability` section, replace it. Otherwis
 ...
 ```
 
-## Commit
+## Committing
 
-After writing all three files:
-```bash
-git add .planning/ROADMAP.md .planning/STATE.md .planning/REQUIREMENTS.md
-git commit -m "docs: create roadmap"
-```
+Do NOT commit. The calling workflow commits the roadmap files after its approval gate — the `finalize` node in gsd-new-project / gsd-new-milestone runs `git add` + `git commit`. Write the files and return; never run `git commit` yourself.
 
 ## Return Format
 
-After writing files and committing, return:
+After writing the files, return:
 
 ```markdown
 ## ROADMAP CREATED
@@ -257,8 +253,7 @@ If the orchestrator provides revision feedback (e.g. from an approval gate rejec
 1. Parse the specific concerns from the feedback
 2. Update files in-place using the Edit tool (not rewrite from scratch)
 3. Re-validate coverage
-4. Commit with `git add <changed files> && git commit -m "docs: revise roadmap per feedback"`
-5. Return `## ROADMAP REVISED` with changes made and updated summary
+4. Return `## ROADMAP REVISED` with changes made and updated summary
 
 ## Anti-Patterns
 

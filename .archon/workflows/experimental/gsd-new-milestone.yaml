@@ -361,16 +361,16 @@ nodes:
       git add .planning/ROADMAP.md .planning/STATE.md .planning/REQUIREMENTS.md
       git commit -m "docs: create roadmap for new milestone"
 
-      # Determine the first phase number for next steps
-      PHASE_DIR=$(ls -d .planning/phases/*/ 2>/dev/null | sort -V | tail -1 || echo "")
-      if [ -n "$PHASE_DIR" ]; then
-        PHASE_NUM=$(basename "$PHASE_DIR" | grep -o '^[0-9]*' || echo "1")
-        echo ""
-        echo "Roadmap committed. Next phase: $PHASE_NUM"
-        echo "Next step: archon workflow run gsd-discuss-phase $PHASE_NUM"
+      # Determine the first phase of the new milestone from the fresh roadmap
+      # (phases continue from the archived milestone, so do NOT infer from
+      # .planning/phases/, which may hold prior-milestone dirs or none yet).
+      NEXT_PHASE=$(grep -oE 'Phase[[:space:]]+[0-9]+' .planning/ROADMAP.md 2>/dev/null | grep -oE '[0-9]+' | sort -n | head -1)
+      echo ""
+      if [ -n "$NEXT_PHASE" ]; then
+        echo "Roadmap committed. Next phase: $NEXT_PHASE"
+        echo "Next step: archon workflow run gsd-discuss-phase $NEXT_PHASE"
       else
-        echo ""
-        echo "Roadmap committed. No phases found yet — roadmapper should have created them."
-        echo "Next step: archon workflow run gsd-discuss-phase 1"
+        echo "Roadmap committed. Could not parse the first phase number from .planning/ROADMAP.md."
+        echo "Inspect .planning/ROADMAP.md, then run: archon workflow run gsd-discuss-phase <N>"
       fi
     timeout: 30000

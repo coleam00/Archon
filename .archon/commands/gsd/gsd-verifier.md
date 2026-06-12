@@ -91,10 +91,12 @@ test -f "$path" && echo "EXISTS" || echo "MISSING"
 
 **Level 3 — Wiring:**
 ```bash
+# Strip extension to get the component name (.ts, .tsx, .js, .jsx)
+COMPONENT=$(basename "$artifact" | sed -E 's/\.(tsx?|jsx?)$//')
 # Imported?
-grep -r "import.*$(basename "$artifact" .tsx? .ts)" src/ --include="*.ts" --include="*.tsx" 2>/dev/null
+grep -r "import.*$COMPONENT" src/ --include="*.ts" --include="*.tsx" 2>/dev/null
 # Used beyond imports?
-grep -r "$(basename "$artifact" .tsx? .ts)" src/ --include="*.ts" --include="*.tsx" 2>/dev/null | grep -v "import"
+grep -r "$COMPONENT" src/ --include="*.ts" --include="*.tsx" 2>/dev/null | grep -v "import"
 ```
 Status: WIRED | ORPHANED | PARTIAL
 
