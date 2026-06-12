@@ -1204,6 +1204,16 @@ export async function handleMessage(
     // resolves prefs from the run starter — without it, a multi-user thread
     // would execute every turn on the creator's credentials (#1976).
     const executionUserId = userId ?? conversation.user_id ?? undefined;
+    if (!userId && conversation.user_id && isPerUserProviderKeysEnabled()) {
+      // No sender identity arrived with this turn while per-user credentials
+      // are active — the turn executes (and bills) as the conversation
+      // CREATOR. Distinguishes a degraded auth resolution from the normal
+      // solo-install path (where per-user keys are off and this stays silent).
+      getLog().warn(
+        { conversationId, fallbackUserId: conversation.user_id },
+        'orchestrator.execution_identity_creator_fallback'
+      );
+    }
     // Per-user AI prefs (Phase 3): the user's tiers/aliases/default-assistant
     // override install config (highest precedence). `{}` (no identity, no row,
     // or DB failure) keeps config-only behavior byte-for-byte.

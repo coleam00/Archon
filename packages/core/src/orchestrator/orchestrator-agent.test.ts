@@ -2523,7 +2523,9 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
   });
 
   test('skips injection when feature is disabled', async () => {
-    mockIsPerUserProviderKeysEnabled.mockReturnValueOnce(false);
+    // Persistent (not Once): the flag is install-level and read more than once
+    // per turn (creator-fallback warn guard + the env seam itself).
+    mockIsPerUserProviderKeysEnabled.mockReturnValue(false);
     mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([
       { provider: 'openrouter', cred: { kind: 'api_key', apiKey: 'or-key' } },
     ]);
@@ -2543,6 +2545,25 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
     await handleMessage(platform, 'conv-1', 'hello', { userId: 'sender-2' });
     expect(mockListDecryptedUserProviderCredentials).toHaveBeenCalledWith('sender-2');
     expect(mockListDecryptedUserProviderCredentials).not.toHaveBeenCalledWith('u-test');
+  });
+
+  test('falls back to the conversation creator for credentials when no sender (S1)', async () => {
+    // Pins the env seam's fallback ARGUMENT — the prefs seam already asserts
+    // its fallback attribution; without this, a regression of the env seam to
+    // `undefined` would slip through the mock unnoticed.
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello');
+    expect(mockListDecryptedUserProviderCredentials).toHaveBeenCalledWith('u-test');
+  });
+
+  test('prefs and credentials resolve to the SAME identity in a single turn (S1)', async () => {
+    // Guards seam divergence: each seam's revert is caught individually, but
+    // one seam silently using a different identity than the other is not.
+    mockGetUserAiPrefsDb.mockClear();
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello', { userId: 'sender-2' });
+    expect(mockGetUserAiPrefsDb).toHaveBeenCalledWith('sender-2');
+    expect(mockListDecryptedUserProviderCredentials).toHaveBeenCalledWith('sender-2');
   });
 });
 
@@ -2890,6 +2911,27 @@ describe('per-user AI prefs in chat + tier-fallback nudge', () => {
 
     // Degraded to the config profile — the chat turn still reached the AI.
     expect(mockSendQuery).toHaveBeenCalled();
+  });
+
+  test('profile-invalid log attributes the EXECUTION identity, not the creator (S1)', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ user_id: 'creator-1' } as Partial<Conversation>))
+    );
+    // Sender's stored prefs are corrupt → buildAiProfile throws → degrade path
+    // logs the identity whose prefs were at fault: the sender.
+    mockGetUserAiPrefsDb.mockImplementation(async () => ({
+      aliases: { fast: { provider: 'claude', model: 'haiku' } },
+    }));
+    mockLogger.error.mockClear();
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'Hello', { userId: 'sender-2' });
+
+    const invalidLog = mockLogger.error.mock.calls.find(
+      c => c[1] === 'orchestrator.user_ai_prefs_profile_invalid'
+    ) as [Record<string, unknown>, string] | undefined;
+    expect(invalidLog).toBeDefined();
+    expect(invalidLog?.[0].userId).toBe('sender-2');
   });
 
   test('a prefs DB failure falls back to config-only (chat still answers)', async () => {
