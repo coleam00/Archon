@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with a clear error: `"Node '<id>' timed out with no output … Consider increasing idle_timeout or
   reducing prompt size."` Nodes that do produce output before the subprocess hangs still complete
   with a warning, unchanged (#1807).
+- **Duplicate assistant replies in the web chat are fixed.** Tool-less replies (e.g. "hi")
+  could render twice: a stale-`messagesRef` race in `onLockChange` triggered a spurious REST
+  refetch whose freshly-persisted DB row coexisted with the SSE-streamed copy (SSE synthetic
+  ids never match DB UUIDs, so id-based dedupe missed it). The recovery refetch is now gated on
+  `isSendInFlight()` so it only fires when streamed text genuinely never arrived, and both
+  history merges drop client-only assistant messages whose content the DB already returned (#1972).
 
 ## [0.4.1] - 2026-05-28
 

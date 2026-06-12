@@ -104,3 +104,95 @@ export function applyOnText(
   // Rule 6: no active streaming assistant message → create a new one.
   return [...prev, makeStreamingMessage(makeId(), content, now, true)];
 }
+/**
+ * Drops client-only assistant messages whose content already exists in the
+ * hydrated DB set. SSE message IDs are synthetic and never match DB UUIDs,
+ * so id-based deduplication alone cannot catch an already-persisted streamed
+ * reply.
+ */
+function dropHydratedContentDuplicates(
+  clientOnly: ChatMessage[],
+  hydrated: ChatMessage[]
+): ChatMessage[] {
+  const hydratedAssistantContents = new Set(
+    hydrated.filter(m => m.role === 'assistant' && m.content).map(m => m.content)
+  );
+  return clientOnly.filter(
+    m =>
+      !(
+        m.role === 'assistant' &&
+        m.content !== '' &&
+        m.error === undefined &&
+        hydratedAssistantContents.has(m.content)
+      )
+  );
+}
+
+/**
+ * Merge REST-hydrated history into the current list on mount.
+ * DB is canonical; keeps client-only messages that are still live
+ * (system, streaming-with-content, tool calls). Drops client copies whose
+ * content the DB already returned (SSE ids never match DB UUIDs, so id-based
+ * dedupe alone cannot catch an already-persisted streamed reply).
+ */
+export function mergeHydratedHistory(
+  prev: ChatMessage[],
+  hydrated: ChatMessage[],
+  sendActive: boolean
+): ChatMessage[] {
+  if (prev.length === 0) {
+    return hydrated;
+  }
+  // Preserve SSE-only messages: streaming text OR messages with tool calls not yet in DB.
+  // Tool-call messages keep isStreaming:true while the stream is active so the
+  // loading indicator persists; the toolCalls clause below ensures they also
+  // survive hydration regardless of isStreaming state.
+  const activeSSE = prev.filter(
+    m =>
+      m.role === 'system' ||
+      (m.isStreaming && (m.content || sendActive)) ||
+      (m.toolCalls && m.toolCalls.length > 0)
+  );
+  if (activeSSE.length === 0) return hydrated;
+  // Merge: DB is canonical, append SSE-only messages that aren't yet in DB.
+  // Identify which SSE messages are already covered by hydrated DB data to avoid dupes.
+  const hydratedIds = new Set(hydrated.map(m => m.id));
+  let sseOnly = activeSSE.filter(m => !hydratedIds.has(m.id));
+  sseOnly = dropHydratedContentDuplicates(sseOnly, hydrated);
+  if (sseOnly.length === 0) return hydrated;
+  const merged = [...hydrated, ...sseOnly];
+  merged.sort((a, b) => a.timestamp - b.timestamp);
+  return merged;
+}
+
+/**
+ * Merge REST-hydrated history after the stuck-placeholder recovery refetch.
+ * Same dedupe rules; preserves the timestamp-interleave insertion order.
+ */
+export function mergeRecoveredHistory(prev: ChatMessage[], hydrated: ChatMessage[]): ChatMessage[] {
+  const hydratedIds = new Set(hydrated.map(m => m.id));
+  // Keep only meaningful client-only messages not present in hydrated set.
+  // Exclude optimistic user rows and empty thinking placeholders.
+  let clientOnly = prev.filter(m => {
+    if (hydratedIds.has(m.id)) return false;
+    if (m.role === 'system') return true;
+    if (m.role !== 'assistant') return false;
+    return (
+      Boolean(m.content) ||
+      Boolean(m.error) ||
+      Boolean(m.workflowDispatch) ||
+      Boolean(m.workflowResult) ||
+      Boolean(m.toolCalls?.length)
+    );
+  });
+  clientOnly = dropHydratedContentDuplicates(clientOnly, hydrated);
+  if (clientOnly.length === 0) return hydrated;
+  // Interleave client-only messages at their original positions by timestamp
+  const merged = [...hydrated];
+  for (const msg of clientOnly) {
+    const insertIdx = merged.findIndex(m => m.timestamp > msg.timestamp);
+    if (insertIdx === -1) merged.push(msg);
+    else merged.splice(insertIdx, 0, msg);
+  }
+  return merged;
+}

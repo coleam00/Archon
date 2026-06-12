@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { applyOnText } from './chat-message-reducer';
+import { applyOnText, mergeHydratedHistory, mergeRecoveredHistory } from './chat-message-reducer';
 import type { ChatMessage, ToolCallDisplay } from './types';
 
 // Helpers
@@ -190,5 +190,158 @@ describe('applyOnText — workflow-result (Rule 1)', () => {
     // Same runId already in state — no new message added
     expect(result).toHaveLength(1);
     expect(result).toBe(prev); // reference equality: same array returned
+  });
+});
+// ---------------------------------------------------------------------------
+// mergeRecoveredHistory — regression for #1972 (duplicate assistant replies)
+// ---------------------------------------------------------------------------
+
+function makeUser(overrides: Partial<ChatMessage> = {}): ChatMessage {
+  return {
+    id: `user-${String(++idCounter)}`,
+    role: 'user',
+    content: 'hi',
+    timestamp: NOW,
+    ...overrides,
+  };
+}
+
+function makeHydrated(overrides: Partial<ChatMessage> = {}): ChatMessage {
+  return {
+    id: crypto.randomUUID(),
+    role: 'assistant',
+    content: '',
+    timestamp: NOW,
+    isStreaming: false,
+    toolCalls: [],
+    ...overrides,
+  };
+}
+
+describe('mergeRecoveredHistory', () => {
+  test('drops the persisted streamed copy (#1972 scenario)', () => {
+    const content = "Hi! I'm Archon, your AI assistant.";
+    const prev: ChatMessage[] = [
+      makeUser({ id: 'user-synth', timestamp: 999 }),
+      makeAssistant({ id: 'assistant-synth', content, isStreaming: false, timestamp: 1000 }),
+    ];
+    const hydrated: ChatMessage[] = [
+      makeUser({ id: 'user-db', timestamp: 999 }),
+      makeHydrated({ content, timestamp: 9000 }),
+    ];
+
+    const result = mergeRecoveredHistory(prev, hydrated);
+
+    expect(result).toHaveLength(2);
+    expect(result.filter(m => m.role === 'assistant')).toHaveLength(1);
+    expect(result.find(m => m.role === 'assistant')?.content).toBe(content);
+    expect(result.find(m => m.role === 'assistant')?.id).not.toBe('assistant-synth');
+  });
+
+  test('keeps distinct client-only content interleaved by timestamp', () => {
+    const prev: ChatMessage[] = [
+      makeUser({ id: 'u1', timestamp: 100 }),
+      makeAssistant({ id: 'a-synth', content: 'client-only', isStreaming: false, timestamp: 200 }),
+    ];
+    const hydrated: ChatMessage[] = [
+      makeUser({ id: 'u-db', timestamp: 100 }),
+      makeHydrated({ content: 'db-reply', timestamp: 300 }),
+    ];
+
+    const result = mergeRecoveredHistory(prev, hydrated);
+
+    expect(result).toHaveLength(3);
+    expect(result[0].role).toBe('user');
+    expect(result[1].content).toBe('client-only');
+    expect(result[2].content).toBe('db-reply');
+  });
+
+  test('keeps system messages even when content matches a hydrated row', () => {
+    const content = 'System announcement';
+    const prev: ChatMessage[] = [{ id: 'sys-1', role: 'system', content, timestamp: NOW }];
+    const hydrated: ChatMessage[] = [makeHydrated({ content, timestamp: NOW + 1 })];
+
+    const result = mergeRecoveredHistory(prev, hydrated);
+
+    expect(result).toHaveLength(2);
+    expect(result.some(m => m.role === 'system')).toBe(true);
+  });
+
+  test('keeps error-bearing messages even when content matches a hydrated row', () => {
+    const content = 'Error happened';
+    const prev: ChatMessage[] = [
+      makeAssistant({
+        id: 'a-err',
+        content,
+        isStreaming: false,
+        timestamp: NOW,
+        error: { message: 'Oops', classification: 'transient', suggestedActions: [] },
+      }),
+    ];
+    const hydrated: ChatMessage[] = [makeHydrated({ content, timestamp: NOW + 1 })];
+
+    const result = mergeRecoveredHistory(prev, hydrated);
+
+    expect(result).toHaveLength(2);
+    expect(result.some(m => m.error !== undefined)).toBe(true);
+  });
+});
+
+describe('mergeHydratedHistory', () => {
+  test('returns hydrated when prev is empty', () => {
+    const hydrated: ChatMessage[] = [makeHydrated({ content: 'hello', timestamp: NOW })];
+
+    const result = mergeHydratedHistory([], hydrated, false);
+
+    expect(result).toEqual(hydrated);
+  });
+
+  test('preserves an empty streaming placeholder when sendActive is true', () => {
+    const prev: ChatMessage[] = [
+      makeUser({ id: 'u1', timestamp: 100 }),
+      makeAssistant({ id: 'thinking-1', content: '', timestamp: 200 }),
+    ];
+    const hydrated: ChatMessage[] = [makeUser({ id: 'u-db', timestamp: 100 })];
+
+    const result = mergeHydratedHistory(prev, hydrated, true);
+
+    expect(result).toHaveLength(2);
+    expect(result.some(m => m.id === 'thinking-1')).toBe(true);
+  });
+
+  test('drops a streaming message whose content already matches a hydrated assistant row', () => {
+    const content = 'already flushed';
+    const prev: ChatMessage[] = [
+      makeUser({ id: 'u1', timestamp: 100 }),
+      makeAssistant({ id: 'a-synth', content, isStreaming: true, timestamp: 200 }),
+    ];
+    const hydrated: ChatMessage[] = [
+      makeUser({ id: 'u-db', timestamp: 100 }),
+      makeHydrated({ content, timestamp: 200 }),
+    ];
+
+    const result = mergeHydratedHistory(prev, hydrated, false);
+
+    expect(result).toHaveLength(2);
+    expect(result.filter(m => m.role === 'assistant')).toHaveLength(1);
+    expect(result.find(m => m.role === 'assistant')?.id).not.toBe('a-synth');
+  });
+
+  test('keeps tool-call messages with empty content (not falsely deduped)', () => {
+    const prev: ChatMessage[] = [
+      makeAssistant({
+        id: 'a-tool',
+        content: '',
+        isStreaming: true,
+        timestamp: 200,
+        toolCalls: [makeToolCall()],
+      }),
+    ];
+    const hydrated: ChatMessage[] = [makeHydrated({ content: 'db-reply', timestamp: 100 })];
+
+    const result = mergeHydratedHistory(prev, hydrated, false);
+
+    expect(result).toHaveLength(2);
+    expect(result.some(m => m.id === 'a-tool')).toBe(true);
   });
 });

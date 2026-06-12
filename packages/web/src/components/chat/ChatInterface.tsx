@@ -28,7 +28,11 @@ import type {
   ErrorDisplay,
   WorkflowDispatchEvent,
 } from '@/lib/types';
-import { applyOnText } from '@/lib/chat-message-reducer';
+import {
+  applyOnText,
+  mergeHydratedHistory,
+  mergeRecoveredHistory,
+} from '@/lib/chat-message-reducer';
 import { applySystemStatus } from '@/lib/system-status-reducer';
 import {
   getCachedMessages,
@@ -162,33 +166,7 @@ export function ChatInterface({ conversationId }: ChatInterfaceProps): React.Rea
         // Uses a module-level flag (isSendInFlight) rather than a component ref
         // because navigate() after new-chat creation causes a full remount, and
         // refs don't survive across mount boundaries.
-        setMessages(prev => {
-          if (prev.length === 0) {
-            return hydrated;
-          }
-          const sendActive = isSendInFlight();
-          // Preserve SSE-only messages: streaming text OR messages with tool calls not yet in DB.
-          // Tool-call messages keep isStreaming:true while the stream is active so the
-          // loading indicator persists; the toolCalls clause below ensures they also
-          // survive hydration regardless of isStreaming state.
-          // Note: dedup below relies on SSE messages using 'msg-{timestamp}' IDs that
-          // never match DB-assigned IDs. Keep SSE IDs synthetic to preserve this invariant.
-          const activeSSE = prev.filter(
-            m =>
-              m.role === 'system' ||
-              (m.isStreaming && (m.content || sendActive)) ||
-              (m.toolCalls && m.toolCalls.length > 0)
-          );
-          if (activeSSE.length === 0) return hydrated;
-          // Merge: DB is canonical, append SSE-only messages that aren't yet in DB.
-          // Identify which SSE messages are already covered by hydrated DB data to avoid dupes.
-          const hydratedIds = new Set(hydrated.map(m => m.id));
-          const sseOnly = activeSSE.filter(m => !hydratedIds.has(m.id));
-          if (sseOnly.length === 0) return hydrated;
-          const merged = [...hydrated, ...sseOnly];
-          merged.sort((a, b) => a.timestamp - b.timestamp);
-          return merged;
-        });
+        setMessages(prev => mergeHydratedHistory(prev, hydrated, isSendInFlight()));
         setHasSentMessage(true);
       })
       .catch((e: unknown) => {
@@ -407,6 +385,14 @@ export function ChatInterface({ conversationId }: ChatInterfaceProps): React.Rea
     setQueuePosition(position);
     if (!isLocked) {
       const now = Date.now();
+      // Capture BEFORE clearing: isSendInFlight() is true only when no SSE text
+      // has arrived for the in-flight send (onText clears it synchronously on the
+      // first text event, even before React re-renders). This is what makes the
+      // stuck-placeholder check below immune to the stale-messagesRef race: when
+      // the final text event and conversation_lock:false arrive in the same SSE
+      // burst, messagesRef still shows an empty placeholder, but sendStillInFlight
+      // is already false — so we don't spuriously refetch and duplicate the reply.
+      const sendStillInFlight = isSendInFlight();
       // AI processing is done (lock released) — always clear the sendInFlight guard.
       // This must be unconditional: if it's only cleared inside hasStuckPlaceholder,
       // the flag stays true after workflow dispatches (where the placeholder is replaced
@@ -420,7 +406,8 @@ export function ChatInterface({ conversationId }: ChatInterfaceProps): React.Rea
       // the lock-release event is received. We detect this race and re-fetch via REST.
       // Read current messages from ref (stable closure-safe snapshot) to avoid
       // side effects inside the state updater (which React may call twice in StrictMode).
-      const hasStuckPlaceholder = messagesRef.current.some(m => m.isStreaming && !m.content);
+      const hasStuckPlaceholder =
+        sendStillInFlight && messagesRef.current.some(m => m.isStreaming && !m.content);
       setMessages(prev =>
         prev.map(msg => {
           const needsToolFix = msg.toolCalls?.some(tc => !tc.output && tc.duration === undefined);
@@ -449,32 +436,7 @@ export function ChatInterface({ conversationId }: ChatInterfaceProps): React.Rea
             const hydrated = rows.map(mapMessageRow);
             // Merge hydrated DB messages with client-only state (system, live SSE) to
             // avoid losing messages that exist only on the client.
-            setMessages(prev => {
-              const hydratedIds = new Set(hydrated.map(m => m.id));
-              // Keep only meaningful client-only messages not present in hydrated set.
-              // Exclude optimistic user rows and empty thinking placeholders.
-              const clientOnly = prev.filter(m => {
-                if (hydratedIds.has(m.id)) return false;
-                if (m.role === 'system') return true;
-                if (m.role !== 'assistant') return false;
-                return (
-                  Boolean(m.content) ||
-                  Boolean(m.error) ||
-                  Boolean(m.workflowDispatch) ||
-                  Boolean(m.workflowResult) ||
-                  Boolean(m.toolCalls?.length)
-                );
-              });
-              if (clientOnly.length === 0) return hydrated;
-              // Interleave client-only messages at their original positions by timestamp
-              const merged = [...hydrated];
-              for (const msg of clientOnly) {
-                const insertIdx = merged.findIndex(m => m.timestamp > msg.timestamp);
-                if (insertIdx === -1) merged.push(msg);
-                else merged.splice(insertIdx, 0, msg);
-              }
-              return merged;
-            });
+            setMessages(prev => mergeRecoveredHistory(prev, hydrated));
           })
           .catch((err: unknown) => {
             console.error(
