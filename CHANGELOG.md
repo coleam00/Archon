@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Added
 
-- **Experimental GSD workflow suite** under `.archon/workflows/experimental/` — 11 workflows porting the GSD core loop (map-codebase, new-project, discuss/plan/execute/verify phases, ship, milestones) plus `gsd-quick` and `gsd-debug`, with shared role prompts in `.archon/commands/gsd/` and in-repo `.planning/` state (#1696)
+- **Experimental GSD workflow suite** under `.archon/workflows/experimental/` — 11 workflows porting the GSD core loop (map-codebase, new-project, discuss/plan/execute/verify phases, ship, milestones) plus `gsd-quick` and `gsd-debug`, with shared role prompts in `.archon/commands/gsd/` and in-repo `.planning/` state. Every work-producing workflow now ensures a `gsd/*` branch, pushes it, and opens or updates a pull request (draft while phase work is in progress, ready-for-review for project setup and milestone docs); all except `gsd-debug` (diagnose-only, must stay usable without GitHub) declare `requires: [github]` (#1696)
 
 
 ### Fixed

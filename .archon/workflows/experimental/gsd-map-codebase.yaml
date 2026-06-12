@@ -6,7 +6,7 @@
 # Install: copy .archon/workflows/experimental/gsd-*.yaml into <repo>/.archon/workflows/
 #   and .archon/commands/gsd/ into <repo>/.archon/commands/gsd/
 # State: .planning/ in-repo, committed to git (scratch excluded by .planning/.gitignore).
-# Runs in the live checkout (worktree disabled): GSD state accumulates on current branch.
+# Runs in the live checkout (worktree disabled): work lands on a gsd/* branch (or your current feature branch) and is pushed as a PR.
 # Promotion to bundled defaults is gated on real-world full cycles — tracked in #1696.
 #
 # Drops from GSD source: --fast, --query, --paths flags.
@@ -25,11 +25,13 @@ description: |
            phase-level planning or execution (use gsd-discuss/plan/execute-phase).
   Input: Optional focus-area hint in $ARGUMENTS (e.g. "auth system", "database layer").
          Empty $ARGUMENTS maps the entire codebase.
-  Output: 7 committed .planning/codebase/*.md documents + a summary table.
+  Output: 7 committed .planning/codebase/*.md documents + a summary table, pushed
+          to a gsd/map-codebase-<date> branch with a PR opened.
 
 provider: claude
 worktree:
   enabled: false
+requires: [github]
 
 nodes:
   # ═══════════════════════════════════════════════════════════════
@@ -38,6 +40,23 @@ nodes:
 
   - id: setup
     bash: |
+      # ── GSD branch discipline: never commit to the base branch ──
+      CURRENT="$(git branch --show-current)"
+      if [ -z "$CURRENT" ] || [ "$CURRENT" = "$BASE_BRANCH" ] || [ "$CURRENT" = "main" ] || [ "$CURRENT" = "master" ]; then
+        GSD_BRANCH="gsd/map-codebase-$(date +%Y%m%d)"
+        if git show-ref --verify --quiet "refs/heads/$GSD_BRANCH"; then
+          git checkout "$GSD_BRANCH"
+          git pull --ff-only origin "$GSD_BRANCH" 2>/dev/null || true
+        elif git ls-remote --exit-code --heads origin "$GSD_BRANCH" >/dev/null 2>&1; then
+          git fetch origin "$GSD_BRANCH"
+          git checkout -b "$GSD_BRANCH" "origin/$GSD_BRANCH"
+        else
+          git checkout -b "$GSD_BRANCH"
+        fi
+        echo "branch=$GSD_BRANCH (managed by workflow)"
+      else
+        echo "branch=$CURRENT (user branch, left untouched)"
+      fi
       mkdir -p .planning/codebase
       if [ ! -f .planning/.gitignore ]; then
         printf '# GSD scratch files — never committed (see issue #1696)\nFALLOW.json\n*-DISCUSS-CHECKPOINT.json\n.continue-here.md\n' > .planning/.gitignore
@@ -174,3 +193,28 @@ nodes:
       echo ""
       echo "=== Next Steps ==="
       echo "Next: archon workflow run gsd-new-project"
+
+  # ═══════════════════════════════════════════════════════════════
+  # PUBLISH — push to origin and create/update PR
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: publish
+    depends_on: [verify-commit]
+    bash: |
+      set -e
+      command -v gh >/dev/null 2>&1 || { echo "ERROR: gh CLI not found. Install: https://cli.github.com/ — then: archon workflow resume $WORKFLOW_ID" >&2; exit 1; }
+      gh auth status >/dev/null 2>&1 || { echo "ERROR: gh not authenticated. Run: gh auth login — then: archon workflow resume $WORKFLOW_ID" >&2; exit 1; }
+      git remote get-url origin >/dev/null 2>&1 || { echo "ERROR: no 'origin' remote — cannot push or create a PR." >&2; exit 1; }
+      BRANCH="$(git branch --show-current)"
+      if [ -z "$BRANCH" ] || [ "$BRANCH" = "$BASE_BRANCH" ] || [ "$BRANCH" = "main" ] || [ "$BRANCH" = "master" ]; then
+        echo "ERROR: refusing to push '$BRANCH' — expected a gsd/* or feature branch." >&2
+        exit 1
+      fi
+      git push -u origin "$BRANCH"
+      PR_URL="$(gh pr list --head "$BRANCH" --state open --json url --jq '.[0].url' 2>/dev/null || true)"
+      if [ -n "$PR_URL" ]; then
+        echo "pr=$PR_URL (existing — updated by push)"
+      else
+        PR_URL="$(gh pr create --base "$BASE_BRANCH" --title "docs: map codebase" --body "Codebase mapping documents for .planning/codebase/")"
+        echo "pr=$PR_URL (created)"
+      fi

@@ -4,7 +4,7 @@
 # Install in your own repo: copy .archon/workflows/experimental/gsd-*.yaml into <repo>/.archon/workflows/
 #   and .archon/commands/gsd/ into <repo>/.archon/commands/gsd/  (or use ~/.archon/{workflows,commands}/).
 # State: .planning/ in-repo, committed to git (scratch excluded by .planning/.gitignore).
-# Runs in the live checkout (worktree disabled): GSD state accumulates on your current branch across runs.
+# Runs in the live checkout (worktree disabled): work lands on a gsd/* branch (or your current feature branch) and is pushed as a PR.
 # Promotion to bundled defaults is gated on real-world full cycles — tracked in #1696.
 # NOT for: individual phase completion (use gsd-execute-phase + gsd-verify-work), starting new milestones
 #   (use gsd-new-milestone). Drops: audit-milestone pre-flight file (subsumed by the audit node here),
@@ -25,13 +25,14 @@ description: |
     5. Archives milestone: creates .planning/milestones/v{X}-ROADMAP.md and v{X}-REQUIREMENTS.md
     6. Collapses ROADMAP.md to a one-line link, deletes .planning/REQUIREMENTS.md
     7. Updates PROJECT.md, MILESTONES.md, and STATE.md
-    8. Tags the release (git tag -a), does NOT push the tag
+    8. Tags the release (git tag -a). The publish node will push the branch and create a PR. Push the tag after the PR merges.
   Input: Version number (e.g. "1.0", "2.0" — "v" prefix stripped if present)
 
 provider: claude
 interactive: true
 worktree:
   enabled: false
+requires: [github]
 
 nodes:
   # ═══════════════════════════════════════════════════════════════
@@ -202,6 +203,31 @@ nodes:
         Review the milestone report above. Approve to archive v{VERSION} and tag the release; reject to abort.
     capture_response: true
     depends_on: [audit]
+
+  # ═══════════════════════════════════════════════════════════════
+  # BRANCH — ensure we're on a gsd/ branch, never commit to base
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: branch
+    depends_on: [confirm]
+    bash: |
+      # ── GSD branch discipline: never commit to the base branch ──
+      CURRENT="$(git branch --show-current)"
+      if [ -z "$CURRENT" ] || [ "$CURRENT" = "$BASE_BRANCH" ] || [ "$CURRENT" = "main" ] || [ "$CURRENT" = "master" ]; then
+        GSD_BRANCH="gsd/complete-milestone-$(date +%Y%m%d)"
+        if git show-ref --verify --quiet "refs/heads/$GSD_BRANCH"; then
+          git checkout "$GSD_BRANCH"
+          git pull --ff-only origin "$GSD_BRANCH" 2>/dev/null || true
+        elif git ls-remote --exit-code --heads origin "$GSD_BRANCH" >/dev/null 2>&1; then
+          git fetch origin "$GSD_BRANCH"
+          git checkout -b "$GSD_BRANCH" "origin/$GSD_BRANCH"
+        else
+          git checkout -b "$GSD_BRANCH"
+        fi
+        echo "branch=$GSD_BRANCH (managed by workflow)"
+      else
+        echo "branch=$CURRENT (user branch, left untouched)"
+      fi
 
   # ═══════════════════════════════════════════════════════════════
   # PHASE 2: ARCHIVE — Write archive files, collapse roadmap, tag release
@@ -412,14 +438,14 @@ nodes:
       git tag -a v{VERSION} -m "{ONE_LINE_MILESTONE_SUMMARY}"
       ```
 
-      **DO NOT push the tag.** Print:
+      **The publish node will push the branch and create a PR. Push the tag after the PR merges.**
       ```
       ## Milestone v{VERSION} Archived ✅
 
       **Commit:** chore: archive v{VERSION} milestone
       **Tag:** v{VERSION}
 
-      ### To push the tag to remote:
+      ### After the PR merges, push the tag:
       ```
       git push origin v{VERSION}
       ```
@@ -435,10 +461,35 @@ nodes:
 
       - Delete `.planning/REQUIREMENTS.md` with `git rm` — it is replaced by the archive
       - NEVER use `git add -A`, `git add .`, or `git add -u` — stage explicit file paths only
-      - NEVER push the tag — print the push command for the user to run manually
+      - Push the tag only after the PR merges — the prompt above prints the push command as a reminder
       - Archive files go in `.planning/milestones/` — always create the directory first
       - ROADMAP.md is edited in place (collapse milestone), not replaced entirely
       - Phase numbering in the archive must match the actual directory names
       - Use actual SUMMARY.md content for plan descriptions, not ROADMAP.md's original titles
-    depends_on: [confirm]
+    depends_on: [branch]
     context: fresh
+
+  # ═══════════════════════════════════════════════════════════════
+  # PUBLISH — push branch and create/update a non-draft PR
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: publish
+    depends_on: [archive]
+    bash: |
+      set -e
+      command -v gh >/dev/null 2>&1 || { echo "ERROR: gh CLI not found. Install: https://cli.github.com/ — then: archon workflow resume $WORKFLOW_ID" >&2; exit 1; }
+      gh auth status >/dev/null 2>&1 || { echo "ERROR: gh not authenticated. Run: gh auth login — then: archon workflow resume $WORKFLOW_ID" >&2; exit 1; }
+      git remote get-url origin >/dev/null 2>&1 || { echo "ERROR: no 'origin' remote — cannot push or create a PR." >&2; exit 1; }
+      BRANCH="$(git branch --show-current)"
+      if [ -z "$BRANCH" ] || [ "$BRANCH" = "$BASE_BRANCH" ] || [ "$BRANCH" = "main" ] || [ "$BRANCH" = "master" ]; then
+        echo "ERROR: refusing to push '$BRANCH' — expected a gsd/* or feature branch." >&2
+        exit 1
+      fi
+      git push -u origin "$BRANCH"
+      PR_URL="$(gh pr list --head "$BRANCH" --state open --json url --jq '.[0].url' 2>/dev/null || true)"
+      if [ -n "$PR_URL" ]; then
+        echo "pr=$PR_URL (existing — updated by push)"
+      else
+        PR_URL="$(gh pr create --base "$BASE_BRANCH" --title "docs: complete milestone" --body "Milestone archive with ROADMAP, REQUIREMENTS, and release tag")"
+        echo "pr=$PR_URL (created)"
+      fi

@@ -5,7 +5,7 @@
 # Install: copy .archon/workflows/experimental/gsd-*.yaml into <repo>/.archon/workflows/
 #   and .archon/commands/gsd/ into <repo>/.archon/commands/gsd/
 # State: .planning/ in-repo, committed to git (scratch excluded by .planning/.gitignore).
-# Runs in the live checkout (worktree disabled): GSD state accumulates on current branch.
+# Runs in the live checkout (worktree disabled). Pushes branch and creates/updates a PR.
 # Promotion to bundled defaults is gated on real-world full cycles — tracked in #1696.
 #
 # NOT for: draft PRs (`--draft` flag dropped — set as default in gh config if needed),
@@ -27,7 +27,7 @@ description: |
            shipping without completed verification.
   Input: Optional phase number (e.g. "1"). If empty, resolves from the
          highest-numbered phase dir containing a VERIFICATION.md.
-  Output: PR URL and summary of what was shipped.
+  Output: PR URL (created or updated), branch pushed, summary of what was shipped.
 
 provider: claude
 worktree:
@@ -43,9 +43,10 @@ nodes:
     bash: |
       set -e
 
-      # ── Block shipping from main/master ──
+      # ── Block shipping from main/master/base ──
       CURRENT_BRANCH="$(git branch --show-current)"
-      if [ -z "$CURRENT_BRANCH" ] || [ "$CURRENT_BRANCH" = "main" ] || [ "$CURRENT_BRANCH" = "master" ]; then
+      BASE_BRANCH="$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|^refs/remotes/origin/||' || echo "main")"
+      if [ -z "$CURRENT_BRANCH" ] || [ "$CURRENT_BRANCH" = "main" ] || [ "$CURRENT_BRANCH" = "master" ] || [ "$CURRENT_BRANCH" = "$BASE_BRANCH" ]; then
         echo "ERROR: Create a feature branch before shipping (current: '${CURRENT_BRANCH:-detached HEAD}')" >&2
         exit 1
       fi
@@ -195,31 +196,37 @@ nodes:
       If push fails because the remote already has the branch, that's fine —
       the PR step will surface the existing PR.
 
-      ## Step 4: Create PR
+      ## Step 4: Create or update PR
 
       Detect the base branch:
       ```bash
       BASE=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|^refs/remotes/origin/||' || echo "main")
       ```
 
-      Check if a PR already exists for this branch:
+      Capture the current branch:
       ```bash
-      gh pr list --head "$CURRENT_BRANCH" --json url,number --jq '.[0].url' 2>/dev/null
+      CURRENT_BRANCH=$(git branch --show-current)
       ```
 
-      If an existing PR is found, output its URL and skip creation:
+      Check for an existing PR:
+      ```bash
+      PR_INFO=$(gh pr list --head "$CURRENT_BRANCH" --json number,url,isDraft --jq '.[0]' 2>/dev/null || true)
+      ```
 
-      > PR already exists: {url}
+      If `PR_INFO` has a `number`:
+      1. Extract `PR_NUM`, `PR_URL`, `IS_DRAFT`
+      2. Run `gh pr edit "$PR_NUM" --title "feat(phase-{N}): {goal from ROADMAP}" --body-file "$ARTIFACTS_DIR/pr-body.md"`
+      3. If `isDraft` is true, run `gh pr ready "$PR_NUM"`
+      4. Output: `PR updated: $PR_URL`
 
-      Otherwise, create the PR:
+      If no existing PR:
       ```bash
       gh pr create \
         --title "feat(phase-{N}): {goal from ROADMAP}" \
         --body-file "$ARTIFACTS_DIR/pr-body.md" \
         --base "$BASE"
       ```
-
-      Output the PR URL.
+      Output the new PR URL.
 
       ## Step 5: Record in STATE.md
 
@@ -252,6 +259,6 @@ nodes:
       **Verification:** {PASS/FAIL/WARN}
       **Plans completed:** {N}
 
-      Merge the PR to close this phase.
+      The PR is ready for review. Merge it to close this phase.
       Next milestone prep: archon workflow run gsd-new-milestone
       ```

@@ -6,7 +6,7 @@
 # Install: copy .archon/workflows/experimental/gsd-*.yaml into <repo>/.archon/workflows/
 #   and .archon/commands/gsd/ into <repo>/.archon/commands/gsd/
 # State: .planning/ in-repo, committed to git (scratch excluded by .planning/.gitignore).
-# Runs in the live checkout (worktree disabled): GSD state accumulates on current branch.
+# Runs in the live checkout (worktree disabled): work lands on a gsd/phase-NN branch (or your current feature branch) and is pushed as a draft PR.
 # Promotion to bundled defaults is gated on real-world full cycles — tracked in #1696.
 #
 # Drops from the GSD source (workflows/plan-phase.md):
@@ -30,12 +30,14 @@ description: |
   Input: Phase number (e.g. "1") — defaults to next phase whose dir lacks
          *-PLAN.md files. Requires .planning/ROADMAP.md from gsd-new-project.
   Output: .planning/phases/{NN}-{slug}/{NN}-RESEARCH.md, {NN}-{MM}-PLAN.md
-          files committed under "docs: create phase plans".
+          files committed under "docs: create phase plans", pushed to a
+          gsd/phase-NN branch with a draft PR opened.
 
 provider: claude
 interactive: true
 worktree:
   enabled: false
+requires: [github]
 
 nodes:
   # ═══════════════════════════════════════════════════════════════
@@ -44,6 +46,34 @@ nodes:
 
   - id: guard
     bash: |
+      PHASE_NUM="$ARGUMENTS"
+      if [ -n "$PHASE_NUM" ]; then
+        PHASE_NUM=$(echo "$PHASE_NUM" | tr -cd '0-9')
+        PHASE_NUM=$((10#$PHASE_NUM))
+      fi
+
+      # ── GSD branch discipline: never commit to the base branch ──
+      CURRENT="$(git branch --show-current)"
+      if [ -z "$CURRENT" ] || [ "$CURRENT" = "$BASE_BRANCH" ] || [ "$CURRENT" = "main" ] || [ "$CURRENT" = "master" ]; then
+        if [ -z "$PHASE_NUM" ]; then
+          echo "ERROR: No phase number provided and current branch is '$CURRENT'. Provide a phase number (e.g. '1') or switch to a feature branch." >&2
+          exit 1
+        fi
+        GSD_BRANCH="gsd/phase-$(printf '%02d' "$PHASE_NUM")"
+        if git show-ref --verify --quiet "refs/heads/$GSD_BRANCH"; then
+          git checkout "$GSD_BRANCH"
+          git pull --ff-only origin "$GSD_BRANCH" 2>/dev/null || true
+        elif git ls-remote --exit-code --heads origin "$GSD_BRANCH" >/dev/null 2>&1; then
+          git fetch origin "$GSD_BRANCH"
+          git checkout -b "$GSD_BRANCH" "origin/$GSD_BRANCH"
+        else
+          git checkout -b "$GSD_BRANCH"
+        fi
+        echo "branch=$GSD_BRANCH (managed by workflow)"
+      else
+        echo "branch=$CURRENT (user branch, left untouched)"
+      fi
+
       if [ ! -f .planning/ROADMAP.md ]; then
         echo "ERROR: .planning/ROADMAP.md not found — run gsd-new-project first" >&2
         exit 1
@@ -250,3 +280,34 @@ nodes:
       echo "Next: archon workflow run gsd-execute-phase $PHASE_NUM"
       echo "  (copy the phase number from above, e.g. 'archon workflow run gsd-execute-phase 01')"
     depends_on: [plan-gate]
+
+  - id: publish
+    depends_on: [commit]
+    bash: |
+      set -e
+      command -v gh >/dev/null 2>&1 || { echo "ERROR: gh CLI not found. Install: https://cli.github.com/ — then: archon workflow resume $WORKFLOW_ID" >&2; exit 1; }
+      gh auth status >/dev/null 2>&1 || { echo "ERROR: gh not authenticated. Run: gh auth login — then: archon workflow resume $WORKFLOW_ID" >&2; exit 1; }
+      git remote get-url origin >/dev/null 2>&1 || { echo "ERROR: no 'origin' remote — cannot push or create a PR." >&2; exit 1; }
+      BRANCH="$(git branch --show-current)"
+      if [ -z "$BRANCH" ] || [ "$BRANCH" = "$BASE_BRANCH" ] || [ "$BRANCH" = "main" ] || [ "$BRANCH" = "master" ]; then
+        echo "ERROR: refusing to push '$BRANCH' — expected a gsd/* or feature branch." >&2
+        exit 1
+      fi
+      PHASE_NUM="${BRANCH#gsd/phase-}"
+      if [ "$PHASE_NUM" = "$BRANCH" ]; then
+        PHASE_NUM=$(echo "$ARGUMENTS" | tr -cd '0-9')
+        if [ -z "$PHASE_NUM" ]; then
+          PHASE_NUM="??"
+        else
+          PHASE_NUM=$(printf '%02d' "$((10#$PHASE_NUM))")
+        fi
+      fi
+      git push -u origin "$BRANCH"
+      PR_URL="$(gh pr list --head "$BRANCH" --state open --json url --jq '.[0].url' 2>/dev/null || true)"
+      if [ -n "$PR_URL" ]; then
+        echo "pr=$PR_URL (existing — updated by push)"
+      else
+        PR_URL="$(gh pr create --draft --base "$BASE_BRANCH" --title "gsd: phase ${PHASE_NUM} — in progress" --body "Draft PR for phase ${PHASE_NUM} work. Will be marked ready for review after verification passes." 2>/dev/null \
+               || gh pr create --base "$BASE_BRANCH" --title "gsd: phase ${PHASE_NUM} — in progress" --body "Draft PR for phase ${PHASE_NUM} work. Will be marked ready for review after verification passes.")"
+        echo "pr=$PR_URL (created)"
+      fi

@@ -6,7 +6,7 @@
 # Install: copy .archon/workflows/experimental/gsd-*.yaml into <repo>/.archon/workflows/
 #   and .archon/commands/gsd/ into <repo>/.archon/commands/gsd/
 # State: .planning/ in-repo, committed to git (scratch excluded by .planning/.gitignore).
-# Runs in the live checkout (worktree disabled): GSD state accumulates on current branch.
+# Runs in the live checkout (worktree disabled): GSD state accumulates on current branch; fixes ship as a PR when started from the base branch.
 # Promotion to bundled defaults is gated on real-world full cycles — tracked in #1696.
 #
 # NOT for (GSD features intentionally dropped):
@@ -29,11 +29,11 @@ description: |
   1. Creates a persistent debug session file in .planning/debug/{slug}.md
   2. Runs scientific-method investigation cycles (hypothesis → evidence → evaluate)
   3. Pauses at root cause for user decision: fix it, or diagnose only
-  4. On fix: applies the fix, verifies, commits, archives the session
+  4. On fix: applies the fix, verifies, commits, archives the session, and opens a PR when started from the base branch
   5. Survives interruption — re-run with the same description to resume
 
   Input: A description of the bug — symptoms, errors, what's broken.
-  Output: Root cause diagnosis with evidence, optional fix, archived debug session.
+  Output: Root cause diagnosis with evidence, optional fix, archived debug session, and a PR with the fix when the session started from the base branch.
 
 provider: claude
 interactive: true
@@ -257,11 +257,37 @@ nodes:
         2. Update Resolution: `root_cause`, `fix` (description), `files_changed` (list), `status: fixing`
         3. Verify: reproduce original issue → fixed; run related tests; check adjacent functionality
         4. Update `status: verified` and fill Resolution.verification
-        5. Auto-commit the fix: `git add <explicit-files> && git commit -m "fix({slug}): {short description}"`
-        6. Archive: `mkdir -p .planning/debug && git mv .planning/debug/{slug}.md .planning/debug/resolved/`
-        7. Commit the archive: `git add .planning/debug/resolved/{slug}.md && git commit -m "docs: resolve debug session {slug}"`
-        8. Output `## DEBUG COMPLETE` summary (from gsd-debugger.md format)
-        9. **Emit** `<promise>DEBUG_COMPLETE</promise>`
+        5. **Branch discipline.** Record where you are now and detect the base branch:
+           ```bash
+           ORIG="$(git branch --show-current)"   # empty means detached HEAD
+           BASE="$(git symbolic-ref refs/remotes/origin/HEAD --short 2>/dev/null | sed 's|^origin/||')"   # empty when no remote
+           ```
+           If `ORIG` is empty (detached), equals `$BASE`, or equals `main` or `master`:
+           run `git checkout -b gsd/debug-{slug}` and REMEMBER that you created it (and that
+           the starting point was `$ORIG`). Otherwise you are on the user's own feature branch
+           — stay on it and REMEMBER that you did NOT create a branch.
+        6. Auto-commit the fix: `git add <explicit-files> && git commit -m "fix({slug}): {short description}"`
+        7. Archive: `mkdir -p .planning/debug && git mv .planning/debug/{slug}.md .planning/debug/resolved/`
+        8. Commit the archive: `git add .planning/debug/resolved/{slug}.md && git commit -m "docs: resolve debug session {slug}"`
+        9. **Ship the fix** — branch on whether you created `gsd/debug-{slug}` in step 5:
+           - **If you created it:**
+             - Push it: `git push -u origin gsd/debug-{slug}`
+             - Build the PR body from the session's Resolution section (root cause, fix,
+               verification, files_changed) and write it to `$ARTIFACTS_DIR/pr-body.md`.
+             - Create the PR (base = the `$BASE` you detected, or `main` if it was empty):
+               `gh pr create --base "${BASE:-main}" --title "fix: {short description}" --body-file "$ARTIFACTS_DIR/pr-body.md"`
+             - Return the original checkout: if `$ORIG` is non-empty run `git checkout "$ORIG"`;
+               if you started on a detached HEAD, stay on `gsd/debug-{slug}` and say so.
+             - Include the PR URL in the DEBUG COMPLETE summary.
+             - **If push or gh fails** (no gh, not authenticated, no origin): do NOT fail the
+               session. State loudly in the summary that the fix is committed on
+               `gsd/debug-{slug}`, and print the exact `git push -u origin gsd/debug-{slug}`
+               and `gh pr create` commands for the user to run.
+           - **If you did NOT create it** (already on a user feature branch): keep today's
+             behavior — no push, no PR. The summary says "fix committed on {branch}; open a
+             PR for it when ready, or ship the phase with gsd-ship".
+        10. Output `## DEBUG COMPLETE` summary (from gsd-debugger.md format)
+        11. **Emit** `<promise>DEBUG_COMPLETE</promise>`
 
         ### If user says "diagnose only" / "no" / "just the diagnosis":
 

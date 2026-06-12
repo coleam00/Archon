@@ -5,8 +5,8 @@
 #   agent spawning then runs in-context.
 # Install: copy .archon/workflows/experimental/gsd-*.yaml into <repo>/.archon/workflows/
 #   and .archon/commands/gsd/ into <repo>/.archon/commands/gsd/
-# State: .planning/ in-repo, committed to git (scratch excluded by .planning/.gitignore).
-# Runs in the live checkout (worktree disabled): GSD state accumulates on current branch.
+# State: .planning/ committed to git on the run's worktree branch (scratch excluded by .planning/.gitignore).
+# Runs in an isolated worktree (auto-named branch per run): plan + execute, then ship the work as its own PR.
 # Promotion to bundled defaults is gated on real-world full cycles — tracked in #1696.
 #
 # NOT for: --discuss/--research/--validate/--full flags (use the phase loop for full pipeline:
@@ -31,6 +31,7 @@ description: |
      write one quick-mode PLAN.md (2–3 tasks, wave: 1, standard GSD frontmatter).
   2. EXECUTE: Execute each task atomically, commit per task as `quick: <slug> - <task>`,
      write SUMMARY.md, optionally update STATE.md.
+  3. SHIP: push the worktree branch and open a ready-for-review PR.
 
   Input: A description of what to build (free text). Examples:
     "add a modulo function with a test"
@@ -38,14 +39,28 @@ description: |
 
 provider: claude
 worktree:
-  enabled: false
+  enabled: true
+requires: [github]
 
 nodes:
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 0: PREFLIGHT — fail before any AI cost if GitHub isn't ready
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: preflight
+    bash: |
+      set -e
+      command -v gh >/dev/null 2>&1 || { echo "ERROR: gh CLI not found. Install: https://cli.github.com/ — then: archon workflow resume $WORKFLOW_ID" >&2; exit 1; }
+      gh auth status >/dev/null 2>&1 || { echo "ERROR: gh not authenticated. Run: gh auth login — then: archon workflow resume $WORKFLOW_ID" >&2; exit 1; }
+      git remote get-url origin >/dev/null 2>&1 || { echo "ERROR: no 'origin' remote — cannot push or create a PR. Then: archon workflow resume $WORKFLOW_ID" >&2; exit 1; }
+      echo "preflight: gh present, authenticated, origin remote OK"
+
   # ═══════════════════════════════════════════════════════════════
   # PHASE 1: PLAN — Set up quick directory and write the plan
   # ═══════════════════════════════════════════════════════════════
 
   - id: plan
+    depends_on: [preflight]
     prompt: |
       # GSD Quick — Plan
 
@@ -246,8 +261,84 @@ nodes:
       - <file> — <what changed>
 
       ### Next Steps
-      (if complete) "Done. Review .planning/quick/<date>-<slug>/SUMMARY.md."
-      (if blocked) "Blocked. Read SUMMARY.md ## Blocked for unblock instructions."
+      (if complete) "Execution complete. The ship node will push this worktree branch and open a PR."
+      (if blocked) "Blocked. The ship node still opens a PR; read SUMMARY.md ## Blocked for unblock steps."
       ```
 
     depends_on: [plan]
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 3: SHIP — push the worktree branch and open a PR
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: ship
+    depends_on: [execute]
+    prompt: |
+      # GSD Quick — Ship
+
+      You are shipping the completed quick task as a pull request. You are inside an
+      isolated worktree on an auto-named branch that already holds every commit from
+      the execute node (per-task commits, SUMMARY.md, and the .planning/ artifacts).
+
+      **Execute output from the previous node**: $execute.output
+
+      ## Step 1: Locate the quick directory
+
+      Identify the quick plan directory and slug from the execute output above. If you
+      cannot determine it, find the most recently written SUMMARY:
+      ```bash
+      find .planning/quick -name '*-SUMMARY.md' -mmin -15 | head -1
+      ```
+      Its parent is the directory; the slug is the trailing part of the dir name
+      (`.planning/quick/<YYYYMMDD>-<slug>/`). Read `<dir>/01-01-SUMMARY.md` (one-liner,
+      status, tasks table, files changed) and `<dir>/01-01-PLAN.md` (task names).
+
+      ## Step 2: Write the PR body
+
+      Write the PR body to `$ARTIFACTS_DIR/pr-body.md` (NEVER in the repo):
+
+      ```markdown
+      ## Summary
+
+      {SUMMARY one-liner} — **status: {complete | blocked}**
+
+      ## Tasks
+
+      {the Tasks table from SUMMARY.md: # | Task | Status | Commits}
+
+      ## Files Changed
+
+      {bulleted list of files from the SUMMARY "Files Changed" section}
+      ```
+
+      If the SUMMARY frontmatter says `status: blocked`, append a `## Blocked` section
+      copied verbatim from the SUMMARY's `## Blocked` section (its exact unblock steps).
+      A blocked run still ships its PR — the section is the signal to the reviewer.
+
+      ## Step 3: Push and open the PR
+
+      ```bash
+      git push -u origin HEAD
+      ```
+
+      Check whether a PR already exists for this branch:
+      ```bash
+      gh pr list --head "$(git branch --show-current)" --state open --json url --jq '.[0].url'
+      ```
+      - If it prints a URL, the push updated that PR — output the URL and skip creation.
+      - Otherwise create one (ready for review, NOT a draft):
+        ```bash
+        gh pr create --base "$BASE_BRANCH" --title "quick: <slug> — <one-liner>" --body-file "$ARTIFACTS_DIR/pr-body.md"
+        ```
+
+      ## Step 4: Final output
+
+      ```
+      ## Quick task shipped
+
+      **PR:** {url}
+      **Slug:** {slug}
+      **Status:** {complete | blocked}
+
+      Merge the PR to land this quick task.
+      ```

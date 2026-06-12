@@ -6,7 +6,7 @@
 # Install: copy .archon/workflows/experimental/gsd-*.yaml into <repo>/.archon/workflows/
 #   and .archon/commands/gsd/ into <repo>/.archon/commands/gsd/
 # State: .planning/ in-repo, committed to git (scratch excluded by .planning/.gitignore).
-# Runs in the live checkout (worktree disabled): GSD state accumulates on current branch.
+# Runs in the live checkout (worktree disabled): work lands on a gsd/* branch (or your current feature branch) and is pushed as a PR.
 # Promotion to bundled defaults is gated on real-world full cycles — tracked in #1696.
 #
 # NOT for: --reset-phase-numbers (phase numbering always continues from the archived
@@ -32,12 +32,15 @@ description: |
            archived milestone — this port drops that flag).
   Input: Milestone name or version as $ARGUMENTS (e.g. "v2.0" or "performance
          milestone"), or empty to be asked.
+  Output: ROADMAP.md, REQUIREMENTS.md, STATE.md committed, pushed to a
+          gsd/new-milestone-<date> branch with a PR opened.
 
 provider: claude
 interactive: true
 
 worktree:
   enabled: false
+requires: [github]
 
 nodes:
   # ═══════════════════════════════════════════════════════════════
@@ -46,6 +49,24 @@ nodes:
 
   - id: guard
     bash: |
+      # ── GSD branch discipline: never commit to the base branch ──
+      CURRENT="$(git branch --show-current)"
+      if [ -z "$CURRENT" ] || [ "$CURRENT" = "$BASE_BRANCH" ] || [ "$CURRENT" = "main" ] || [ "$CURRENT" = "master" ]; then
+        GSD_BRANCH="gsd/new-milestone-$(date +%Y%m%d)"
+        if git show-ref --verify --quiet "refs/heads/$GSD_BRANCH"; then
+          git checkout "$GSD_BRANCH"
+          git pull --ff-only origin "$GSD_BRANCH" 2>/dev/null || true
+        elif git ls-remote --exit-code --heads origin "$GSD_BRANCH" >/dev/null 2>&1; then
+          git fetch origin "$GSD_BRANCH"
+          git checkout -b "$GSD_BRANCH" "origin/$GSD_BRANCH"
+        else
+          git checkout -b "$GSD_BRANCH"
+        fi
+        echo "branch=$GSD_BRANCH (managed by workflow)"
+      else
+        echo "branch=$CURRENT (user branch, left untouched)"
+      fi
+
       set -e
 
       # Ensure project has been initialized
@@ -372,5 +393,31 @@ nodes:
       else
         echo "Roadmap committed. Could not parse the first phase number from .planning/ROADMAP.md."
         echo "Inspect .planning/ROADMAP.md, then run: archon workflow run gsd-discuss-phase <N>"
+      fi
+    timeout: 30000
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 6 — Publish: push and create PR
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: publish
+    depends_on: [finalize]
+    bash: |
+      set -e
+      command -v gh >/dev/null 2>&1 || { echo "ERROR: gh CLI not found. Install: https://cli.github.com/ — then: archon workflow resume $WORKFLOW_ID" >&2; exit 1; }
+      gh auth status >/dev/null 2>&1 || { echo "ERROR: gh not authenticated. Run: gh auth login — then: archon workflow resume $WORKFLOW_ID" >&2; exit 1; }
+      git remote get-url origin >/dev/null 2>&1 || { echo "ERROR: no 'origin' remote — cannot push or create a PR." >&2; exit 1; }
+      BRANCH="$(git branch --show-current)"
+      if [ -z "$BRANCH" ] || [ "$BRANCH" = "$BASE_BRANCH" ] || [ "$BRANCH" = "main" ] || [ "$BRANCH" = "master" ]; then
+        echo "ERROR: refusing to push '$BRANCH' — expected a gsd/* or feature branch." >&2
+        exit 1
+      fi
+      git push -u origin "$BRANCH"
+      PR_URL="$(gh pr list --head "$BRANCH" --state open --json url --jq '.[0].url' 2>/dev/null || true)"
+      if [ -n "$PR_URL" ]; then
+        echo "pr=$PR_URL (existing — updated by push)"
+      else
+        PR_URL="$(gh pr create --base "$BASE_BRANCH" --title "docs: define next milestone" --body "Milestone definition with roadmap, requirements, and project update")"
+        echo "pr=$PR_URL (created)"
       fi
     timeout: 30000
