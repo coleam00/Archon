@@ -17,10 +17,8 @@ import {
 } from '../lib/agent-status';
 import { useCancelledRef } from '../lib/use-cancelled-ref';
 import { SubscriptionLoginFlow } from './SubscriptionLoginFlow';
+import { INPUT_CLASS } from './SettingsFormPrimitives';
 
-// Mirrors AssistantConfigPanel's INPUT_CLASS so inputs match the console form style.
-const INPUT_CLASS =
-  'w-full rounded-[9px] border border-border bg-surface px-3.5 py-[11px] font-mono text-[13px] text-text-primary placeholder:text-text-tertiary transition-all focus:border-accent-bright/50 focus:outline-none focus:shadow-[0_0_0_3px_color-mix(in_oklch,var(--brand-magenta),transparent_92%)]';
 const GHOST_BUTTON =
   'shrink-0 rounded border border-border px-2.5 py-1 text-[11px] text-text-secondary transition-colors hover:border-border-bright hover:text-text-primary disabled:opacity-40';
 const BRAND_BUTTON =
@@ -452,13 +450,6 @@ function BackendPicker({
 type OpencodePhase = 'idle' | 'loading' | 'loaded' | 'error';
 
 /**
- * Booting the embedded OpenCode runtime is the slow path; give it a generous
- * minute before declaring the load hung so the user always gets the Retry
- * escape (I4) instead of a permanent "Loading…".
- */
-const OPENCODE_LOAD_TIMEOUT_MS = 60_000;
-
-/**
  * OpenCode's dynamic backend list. The introspection endpoint is heavyweight
  * (it boots the embedded runtime), so nothing loads until the user explicitly
  * asks; any load failure (503 runtime-unavailable, network error, timeout)
@@ -481,7 +472,7 @@ function OpencodeBackends(): ReactElement {
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => {
             reject(new Error('Timed out waiting for the OpenCode runtime — retry.'));
-          }, OPENCODE_LOAD_TIMEOUT_MS);
+          }, skill.OPENCODE_LOAD_TIMEOUT_MS);
         }),
       ]);
       if (cancelledRef.current) return;

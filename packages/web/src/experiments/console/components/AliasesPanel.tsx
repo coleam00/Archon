@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactElement } from 'react';
 import * as skill from '../skills';
 import type {
   AliasRowForm,
+  PiModelInfo,
   ProviderInfo,
   ProviderKeyList,
   SafeConfigAliases,
@@ -11,47 +12,12 @@ import type {
 import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
 import { providerOptionHint } from '../lib/agent-status';
+import { effortOptionsForAgent, normalizeEffortForAgent } from '../lib/model-options';
 import { useCancelledRef } from '../lib/use-cancelled-ref';
 import { SettingsSection } from './SettingsSection';
 import { ScopeToggle } from './ScopeToggle';
-
-// Field styling mirrors ModelTiersPanel (design v5 .set-input / .set-select).
-const INPUT_CLASS =
-  'w-full rounded-[9px] border border-border bg-surface px-3.5 py-[11px] font-mono text-[13px] text-text-primary placeholder:text-text-tertiary transition-all focus:border-accent-bright/50 focus:outline-none focus:shadow-[0_0_0_3px_color-mix(in_oklch,var(--brand-magenta),transparent_92%)]';
-const SELECT_CLASS =
-  'w-full cursor-pointer appearance-none rounded-[9px] border border-border bg-surface-elevated py-[11px] pl-3.5 pr-8 font-mono text-[13px] font-semibold text-text-primary transition-all focus:border-accent-bright/50 focus:outline-none focus:shadow-[0_0_0_3px_color-mix(in_oklch,var(--brand-magenta),transparent_92%)]';
-
-/** Relative wrapper that overlays the design chevron on an appearance-none select. */
-function SelectShell({
-  children,
-  className = '',
-}: {
-  children: ReactNode;
-  className?: string;
-}): ReactElement {
-  return (
-    <span className={`relative inline-flex items-center ${className}`}>
-      {children}
-      <span
-        aria-hidden
-        className="pointer-events-none absolute right-[11px] flex text-text-tertiary"
-      >
-        <svg
-          width="13"
-          height="13"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.8"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <path d="M6 9l6 6 6-6" />
-        </svg>
-      </span>
-    </span>
-  );
-}
+import { INPUT_CLASS, SELECT_CLASS, SelectShell } from './SettingsFormPrimitives';
+import { ModelPickerField } from './ModelPickerField';
 
 /**
  * Editor for `@custom` model aliases in two scopes: "This install" writes
@@ -77,6 +43,9 @@ export function AliasesPanel(): ReactElement {
     K.providerConnections,
     skill.listProviderKeys
   );
+  // Pi catalog for the model picker's suggestions + cost hints. Best-effort:
+  // the server returns [] when the catalog can't load; an error means no hints.
+  const { data: piModels } = useEntity<PiModelInfo[]>(K.piModels, skill.listPiModels);
 
   const userScopeAvailable = userPrefsError === undefined;
   const [scope, setScope] = useState<SettingsScope>('install');
@@ -173,69 +142,94 @@ export function AliasesPanel(): ReactElement {
         </p>
       ) : (
         <div className="flex flex-col gap-[11px]">
-          {rows.map((row, i) => (
-            <div
-              // Index key is intentional: rows are positional edit buffers and
-              // names are editable (a name key would remount mid-keystroke).
-              key={i}
-              className="flex flex-wrap items-center gap-[14px] rounded-xl border border-border bg-surface-elevated p-4"
-            >
-              <input
-                value={row.name}
-                onChange={e => {
-                  setRow(i, { name: e.target.value });
-                }}
-                placeholder="@fast"
-                aria-label="Alias name"
-                className={`${INPUT_CLASS} w-[120px] shrink-0`}
-              />
-              <SelectShell className="w-[150px] shrink-0">
-                <select
-                  value={row.provider}
-                  onChange={e => {
-                    setRow(i, { provider: e.target.value });
-                  }}
-                  aria-label="Provider"
-                  className={SELECT_CLASS}
-                >
-                  {providers.map(p => (
-                    <option key={p.id} value={p.id}>
-                      {p.displayName}
-                      {providerOptionHint(keyData?.agents, p.id)}
-                    </option>
-                  ))}
-                </select>
-              </SelectShell>
-              <input
-                value={row.model}
-                onChange={e => {
-                  setRow(i, { model: e.target.value });
-                }}
-                placeholder="model (e.g. opus, gpt-5.5)"
-                aria-label="Model"
-                className={`${INPUT_CLASS} min-w-[140px] flex-1`}
-              />
-              <input
-                value={row.effort}
-                onChange={e => {
-                  setRow(i, { effort: e.target.value });
-                }}
-                placeholder="effort"
-                aria-label="Effort"
-                className={`${INPUT_CLASS} w-[90px] shrink-0`}
-              />
-              <button
-                type="button"
-                onClick={() => {
-                  removeRow(i);
-                }}
-                aria-label={`Remove alias ${row.name}`}
-                className="shrink-0 rounded border border-border px-2.5 py-1.5 text-[11px] text-text-secondary transition-colors hover:border-border-bright hover:text-text-primary"
+          {rows.map((row, i) => {
+            const effortOptions = effortOptionsForAgent(row.provider);
+            return (
+              <div
+                // Index key is intentional: rows are positional edit buffers and
+                // names are editable (a name key would remount mid-keystroke).
+                key={i}
+                className="flex flex-wrap items-center gap-[14px] rounded-xl border border-border bg-surface-elevated p-4"
               >
-                Remove
-              </button>
-            </div>
-          ))}
+                <input
+                  value={row.name}
+                  onChange={e => {
+                    setRow(i, { name: e.target.value });
+                  }}
+                  placeholder="@fast"
+                  aria-label="Alias name"
+                  className={`${INPUT_CLASS} w-[120px] shrink-0`}
+                />
+                <SelectShell className="w-[150px] shrink-0">
+                  <select
+                    value={row.provider}
+                    onChange={e => {
+                      // Carry effort across the switch only when the new agent's
+                      // vocabulary accepts it (see ModelTiersPanel).
+                      const provider = e.target.value;
+                      setRow(i, {
+                        provider,
+                        effort: normalizeEffortForAgent(provider, row.effort),
+                      });
+                    }}
+                    aria-label="Provider"
+                    className={SELECT_CLASS}
+                  >
+                    {providers.map(p => (
+                      <option key={p.id} value={p.id}>
+                        {p.displayName}
+                        {providerOptionHint(keyData?.agents, p.id)}
+                      </option>
+                    ))}
+                  </select>
+                </SelectShell>
+                <ModelPickerField
+                  // Re-key per agent so picker-internal state never bleeds
+                  // across a provider switch.
+                  key={row.provider}
+                  agentId={row.provider}
+                  value={row.model}
+                  onChange={v => {
+                    setRow(i, { model: v });
+                  }}
+                  placeholder="model (e.g. opus, gpt-5.5)"
+                  ariaLabel="Model"
+                  className="min-w-[140px] flex-1"
+                  agents={keyData?.agents}
+                  piModels={piModels}
+                />
+                {effortOptions !== null ? (
+                  <SelectShell className="w-[110px] shrink-0">
+                    <select
+                      value={row.effort}
+                      onChange={e => {
+                        setRow(i, { effort: e.target.value });
+                      }}
+                      aria-label="Effort"
+                      className={SELECT_CLASS}
+                    >
+                      <option value="">effort</option>
+                      {effortOptions.map(o => (
+                        <option key={o} value={o}>
+                          {o}
+                        </option>
+                      ))}
+                    </select>
+                  </SelectShell>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => {
+                    removeRow(i);
+                  }}
+                  aria-label={`Remove alias ${row.name}`}
+                  className="shrink-0 rounded border border-border px-2.5 py-1.5 text-[11px] text-text-secondary transition-colors hover:border-border-bright hover:text-text-primary"
+                >
+                  Remove
+                </button>
+              </div>
+            );
+          })}
         </div>
       )}
 

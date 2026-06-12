@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactElement } from 'react';
 import * as skill from '../skills';
 import type {
   PiModelInfo,
@@ -15,48 +15,12 @@ import { TIER_ORDER } from '../skills';
 import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
 import { providerOptionHint } from '../lib/agent-status';
+import { effortOptionsForAgent, normalizeEffortForAgent } from '../lib/model-options';
 import { useCancelledRef } from '../lib/use-cancelled-ref';
 import { SettingsSection } from './SettingsSection';
 import { ScopeToggle } from './ScopeToggle';
-
-// Field styling mirrors AssistantConfigPanel (design v5 .set-input / .set-select):
-// mono fields on the page surface with a magenta focus ring.
-const INPUT_CLASS =
-  'w-full rounded-[9px] border border-border bg-surface px-3.5 py-[11px] font-mono text-[13px] text-text-primary placeholder:text-text-tertiary transition-all focus:border-accent-bright/50 focus:outline-none focus:shadow-[0_0_0_3px_color-mix(in_oklch,var(--brand-magenta),transparent_92%)]';
-const SELECT_CLASS =
-  'w-full cursor-pointer appearance-none rounded-[9px] border border-border bg-surface-elevated py-[11px] pl-3.5 pr-8 font-mono text-[13px] font-semibold text-text-primary transition-all focus:border-accent-bright/50 focus:outline-none focus:shadow-[0_0_0_3px_color-mix(in_oklch,var(--brand-magenta),transparent_92%)]';
-
-/** Relative wrapper that overlays the design chevron on an appearance-none select. */
-function SelectShell({
-  children,
-  className = '',
-}: {
-  children: ReactNode;
-  className?: string;
-}): ReactElement {
-  return (
-    <span className={`relative inline-flex items-center ${className}`}>
-      {children}
-      <span
-        aria-hidden
-        className="pointer-events-none absolute right-[11px] flex text-text-tertiary"
-      >
-        <svg
-          width="13"
-          height="13"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.8"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <path d="M6 9l6 6 6-6" />
-        </svg>
-      </span>
-    </span>
-  );
-}
+import { SELECT_CLASS, SelectShell } from './SettingsFormPrimitives';
+import { ModelPickerField } from './ModelPickerField';
 
 /** Seed the editable tier form from a tier map (configured tiers only). */
 function seedTiers(tiers: SafeConfigTiers['tiers']): TiersForm {
@@ -100,8 +64,9 @@ export function ModelTiersPanel(): ReactElement {
     K.userAiPrefs,
     skill.getUserAiPrefs
   );
-  // Pi catalog for the cost/reasoning hint. Best-effort: the server returns []
-  // when the catalog can't load, and a fetch error simply means no hint.
+  // Pi catalog for the model picker's suggestions + cost/reasoning hints.
+  // Best-effort: the server returns [] when the catalog can't load, and a
+  // fetch error simply means no suggestions.
   const { data: piModels } = useEntity<PiModelInfo[]>(K.piModels, skill.listPiModels);
   // Agent credential matrix for readiness hints in the provider dropdowns.
   // Shares the AgentsPanel cache key (one fetch); a 401/error means no hints.
@@ -157,15 +122,6 @@ export function ModelTiersPanel(): ReactElement {
     setForm(f => (f === null ? f : { ...f, [t]: { ...f[t], ...partial } }));
   };
 
-  /** Cost/reasoning hint for a Pi tier model, or null when not applicable. */
-  const piHint = (row: TierRowForm): string | null => {
-    if (row.provider !== 'pi' || piModels === undefined) return null;
-    const m = piModels.find(x => x.ref === row.model.trim());
-    if (!m) return null;
-    const ctx = `${String(Math.round(m.contextWindow / 1000))}k ctx`;
-    return `$${String(m.cost.input)}/M in · $${String(m.cost.output)}/M out${m.reasoning ? ' · reasoning' : ''} · ${ctx}`;
-  };
-
   const onSave = async (): Promise<void> => {
     setSaving(true);
     setSaveError(null);
@@ -203,7 +159,7 @@ export function ModelTiersPanel(): ReactElement {
         {TIER_ORDER.map(tier => {
           const row = form[tier];
           const unset = row.provider === '';
-          const hint = piHint(row);
+          const effortOptions = effortOptionsForAgent(row.provider);
           return (
             <div
               key={tier}
@@ -216,7 +172,14 @@ export function ModelTiersPanel(): ReactElement {
                 <select
                   value={row.provider}
                   onChange={e => {
-                    setRow(tier, { provider: e.target.value });
+                    // Carry effort across the switch only when the new agent's
+                    // vocabulary accepts it; clear it otherwise (the field
+                    // hides for agents where tier effort doesn't route).
+                    const provider = e.target.value;
+                    setRow(tier, {
+                      provider,
+                      effort: normalizeEffortForAgent(provider, row.effort),
+                    });
                   }}
                   className={SELECT_CLASS}
                 >
@@ -229,28 +192,47 @@ export function ModelTiersPanel(): ReactElement {
                   ))}
                 </select>
               </SelectShell>
-              <input
+              <ModelPickerField
+                // Re-key per agent so picker-internal state (Pi "show all",
+                // OpenCode loaded backends) never bleeds across a switch.
+                key={row.provider}
+                agentId={row.provider}
                 value={row.model}
-                onChange={e => {
-                  setRow(tier, { model: e.target.value });
+                onChange={v => {
+                  setRow(tier, { model: v });
                 }}
                 disabled={unset}
                 placeholder={
                   unset ? `default: ${defaultHint(cfg, tier, scope)}` : 'model (e.g. opus, gpt-5.5)'
                 }
-                className={`${INPUT_CLASS} min-w-[160px] flex-1 ${unset ? 'opacity-50' : ''}`}
+                ariaLabel={`${tier} model`}
+                className="min-w-[160px] flex-1"
+                agents={keyData?.agents}
+                piModels={piModels}
               />
-              <input
-                value={row.effort}
-                onChange={e => {
-                  setRow(tier, { effort: e.target.value });
-                }}
-                disabled={unset}
-                placeholder="effort"
-                className={`${INPUT_CLASS} w-[110px] shrink-0 ${unset ? 'opacity-50' : ''}`}
-              />
-              {hint !== null ? (
-                <p className="w-full font-mono text-[10.5px] text-text-tertiary">{hint}</p>
+              {effortOptions !== null ? (
+                <SelectShell className="w-[110px] shrink-0">
+                  <select
+                    value={row.effort}
+                    onChange={e => {
+                      setRow(tier, { effort: e.target.value });
+                    }}
+                    // Currently unreachable while disabled (unset rows have no
+                    // effort vocabulary), but every row control rides the
+                    // shared disabled state so a future widening of `unset`
+                    // can't silently skip this one.
+                    disabled={unset}
+                    aria-label={`${tier} effort`}
+                    className={`${SELECT_CLASS} ${unset ? 'opacity-50' : ''}`}
+                  >
+                    <option value="">effort</option>
+                    {effortOptions.map(o => (
+                      <option key={o} value={o}>
+                        {o}
+                      </option>
+                    ))}
+                  </select>
+                </SelectShell>
               ) : null}
             </div>
           );
