@@ -68,6 +68,27 @@ const SECTIONS = [
       },
     ],
   },
+  {
+    heading: 'Open questions',
+    items: [
+      {
+        slug: 'platform-scope',
+        title: 'Scope of the platform',
+        description:
+          'Working understanding only; Blake confirmation outstanding on the full capability inventory.',
+        badge: 'pending Blake',
+        badgeTone: 'amber' as const,
+      },
+      {
+        slug: 'commercial-structure',
+        title: 'Commercial structure with Blake',
+        description:
+          'White-label reseller terms outstanding. Parallel to Jason\u2019s direct-hire conversation with Fountain (its own track).',
+        badge: 'decide',
+        badgeTone: 'amber' as const,
+      },
+    ],
+  },
 ];
 
 const KPIS = [
