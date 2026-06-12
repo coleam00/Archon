@@ -217,8 +217,13 @@ export function ModelTiersPanel(): ReactElement {
                     onChange={e => {
                       setRow(tier, { effort: e.target.value });
                     }}
+                    // Currently unreachable while disabled (unset rows have no
+                    // effort vocabulary), but every row control rides the
+                    // shared disabled state so a future widening of `unset`
+                    // can't silently skip this one.
+                    disabled={unset}
                     aria-label={`${tier} effort`}
-                    className={SELECT_CLASS}
+                    className={`${SELECT_CLASS} ${unset ? 'opacity-50' : ''}`}
                   >
                     <option value="">effort</option>
                     {effortOptions.map(o => (

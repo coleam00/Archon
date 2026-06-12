@@ -10,11 +10,12 @@ import type {
 } from '../skills';
 import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
+import { CODEX_EFFORT_OPTIONS } from '../lib/model-options';
+import { useCancelledRef } from '../lib/use-cancelled-ref';
 import { SettingsSection } from './SettingsSection';
 import { SELECT_CLASS_COMPACT, SelectShell } from './SettingsFormPrimitives';
 import { ModelPickerField } from './ModelPickerField';
 
-const REASONING_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh'] as const;
 const WEB_SEARCH_MODES = ['disabled', 'cached', 'live'] as const;
 
 /** Read a string field off the open `ProviderDefaults` record, '' when absent/non-string. */
@@ -67,14 +68,8 @@ export function AssistantConfigPanel(): ReactElement {
   const [savingUserDefault, setSavingUserDefault] = useState(false);
   const [userDefaultError, setUserDefaultError] = useState<string | null>(null);
 
-  // Guard async setState after unmount (mirrors ModelTiersPanel/AliasesPanel).
-  const cancelledRef = useRef(false);
-  useEffect(() => {
-    cancelledRef.current = false;
-    return (): void => {
-      cancelledRef.current = true;
-    };
-  }, []);
+  // Guard async setState after unmount (same hook as the sibling panels).
+  const cancelledRef = useCancelledRef();
 
   const onUserDefaultChange = async (value: string): Promise<void> => {
     setSavingUserDefault(true);
@@ -253,7 +248,7 @@ export function AssistantConfigPanel(): ReactElement {
                           className={SELECT_CLASS_COMPACT}
                         >
                           <option value="">inherit</option>
-                          {REASONING_EFFORTS.map(o => (
+                          {CODEX_EFFORT_OPTIONS.map(o => (
                             <option key={o} value={o}>
                               {o}
                             </option>

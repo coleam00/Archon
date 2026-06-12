@@ -169,10 +169,34 @@ describe('piModelOptions', () => {
     expect(r.options.map(o => o.value)).toEqual(['openrouter/qwen/qwen3-coder']);
   });
 
+  test('matches the display name alone when it differs from the ref', () => {
+    const named = [
+      model({ ref: 'anthropic/claude-haiku-4-5', provider: 'anthropic', name: 'Claude Haiku 4.5' }),
+      model({ ref: 'groq/llama-4', provider: 'groq', name: 'Llama 4' }),
+    ];
+    // '4.5' appears only in the display name — the ref spells it '4-5'.
+    const r = piModelOptions(named, '4.5', null, false, 30);
+    expect(r.options.map(o => o.value)).toEqual(['anthropic/claude-haiku-4-5']);
+  });
+
   test('caps options at limit but reports the full match total', () => {
     const r = piModelOptions(catalog, '', connected, true, 2);
     expect(r.options).toHaveLength(2);
     expect(r.matchTotal).toBe(4);
+  });
+
+  test('backend filter and limit cap combine without double-counting', () => {
+    const wide = [
+      model({ ref: 'anthropic/a', provider: 'anthropic' }),
+      model({ ref: 'anthropic/b', provider: 'anthropic' }),
+      model({ ref: 'anthropic/c', provider: 'anthropic' }),
+      model({ ref: 'groq/d', provider: 'groq' }),
+      model({ ref: 'xai/e', provider: 'xai' }),
+    ];
+    const r = piModelOptions(wide, '', new Set(['anthropic']), false, 2);
+    expect(r.options.map(o => o.value)).toEqual(['anthropic/a', 'anthropic/b']);
+    expect(r.matchTotal).toBe(3); // every filtered match, not just the rendered cap
+    expect(r.hiddenByFilter).toBe(2); // groq + xai, unaffected by the cap
   });
 
   test('undefined catalog → empty result', () => {
@@ -199,6 +223,12 @@ describe('piModelHint', () => {
     });
     expect(piModelHint(m)).toBe('$3/M in · $15/M out · reasoning · 1049k ctx');
     expect(piModelHint(model({ ref: 'x/z', provider: 'x' }))).toBe('$1/M in · $2/M out · 200k ctx');
+  });
+
+  test('zero-cost (free-tier) models render $0 rather than dropping the hint', () => {
+    expect(
+      piModelHint(model({ ref: 'x/free', provider: 'x', cost: { input: 0, output: 0 } }))
+    ).toBe('$0/M in · $0/M out · 200k ctx');
   });
 });
 

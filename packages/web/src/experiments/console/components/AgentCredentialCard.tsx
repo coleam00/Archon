@@ -450,13 +450,6 @@ function BackendPicker({
 type OpencodePhase = 'idle' | 'loading' | 'loaded' | 'error';
 
 /**
- * Booting the embedded OpenCode runtime is the slow path; give it a generous
- * minute before declaring the load hung so the user always gets the Retry
- * escape (I4) instead of a permanent "Loading…".
- */
-const OPENCODE_LOAD_TIMEOUT_MS = 60_000;
-
-/**
  * OpenCode's dynamic backend list. The introspection endpoint is heavyweight
  * (it boots the embedded runtime), so nothing loads until the user explicitly
  * asks; any load failure (503 runtime-unavailable, network error, timeout)
@@ -479,7 +472,7 @@ function OpencodeBackends(): ReactElement {
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => {
             reject(new Error('Timed out waiting for the OpenCode runtime — retry.'));
-          }, OPENCODE_LOAD_TIMEOUT_MS);
+          }, skill.OPENCODE_LOAD_TIMEOUT_MS);
         }),
       ]);
       if (cancelledRef.current) return;

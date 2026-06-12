@@ -20,13 +20,6 @@ import { INPUT_CLASS, SELECT_CLASS, SelectShell } from './SettingsFormPrimitives
 /** Cap on rendered Pi suggestions — the catalog is ~920 models. */
 const PI_SUGGESTION_LIMIT = 30;
 
-/**
- * Mirrors OPENCODE_LOAD_TIMEOUT_MS in AgentCredentialCard: booting the
- * embedded OpenCode runtime is the slow path; always leave the user a Retry
- * escape instead of a permanent "Loading…".
- */
-const OPENCODE_LOAD_TIMEOUT_MS = 60_000;
-
 const DROPDOWN_CLASS =
   // Same elevation recipe as ProjectRow's context menu (the console's other
   // floating dropdown).
@@ -140,7 +133,7 @@ function ModelCombobox({
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => {
             reject(new Error('Timed out waiting for the OpenCode runtime — retry.'));
-          }, OPENCODE_LOAD_TIMEOUT_MS);
+          }, skill.OPENCODE_LOAD_TIMEOUT_MS);
         }),
       ]);
       if (cancelledRef.current) return;
@@ -159,13 +152,15 @@ function ModelCombobox({
   const backends = shape === 'pi' ? usablePiBackends(agents) : null;
   const pi =
     shape === 'pi' ? piModelOptions(piModels, value, backends, showAll, PI_SUGGESTION_LIMIT) : null;
-  const options: ModelOption[] = pi
-    ? pi.options
-    : shape === 'opencode'
-      ? ocPhase === 'loaded'
-        ? filterModelOptions(opencodeBackendOptions(ocProviders), value)
-        : []
-      : filterModelOptions(curatedOptionsForAgent(agentId), value);
+  let options: ModelOption[];
+  if (pi !== null) {
+    options = pi.options;
+  } else if (shape === 'opencode') {
+    options =
+      ocPhase === 'loaded' ? filterModelOptions(opencodeBackendOptions(ocProviders), value) : [];
+  } else {
+    options = filterModelOptions(curatedOptionsForAgent(agentId), value);
+  }
 
   const pick = (o: ModelOption): void => {
     onChange(o.value);
@@ -224,7 +219,15 @@ function ModelCombobox({
                   …{pi.matchTotal - options.length} more — keep typing to narrow.
                 </p>
               ) : null}
-              {pi.matchTotal === 0 && pi.hiddenByFilter === 0 ? (
+              {/* Two distinct empty states: an undefined catalog (still
+                  loading, or the fetch failed — all panels read K.piModels
+                  best-effort and drop the error) is NOT "no match". */}
+              {piModels === undefined ? (
+                <p className="px-3 py-2 font-mono text-[11px] text-text-tertiary">
+                  Catalog unavailable — free text is fine.
+                </p>
+              ) : null}
+              {piModels !== undefined && pi.matchTotal === 0 && pi.hiddenByFilter === 0 ? (
                 <p className="px-3 py-2 font-mono text-[11px] text-text-tertiary">
                   No catalog match — custom models.json refs are fine as free text.
                 </p>

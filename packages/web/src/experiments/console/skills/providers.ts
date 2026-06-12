@@ -59,3 +59,11 @@ export function listOpencodeCredentials(): Promise<OpencodeCredentialProvider[]>
     '/api/providers/opencode/credentials'
   ).then(r => r.providers);
 }
+
+/**
+ * Client-side deadline for `listOpencodeCredentials` callers: booting the
+ * embedded OpenCode runtime is the slow path, so give it a generous minute
+ * before declaring the load hung — the user always gets a Retry escape
+ * instead of a permanent "Loading…".
+ */
+export const OPENCODE_LOAD_TIMEOUT_MS = 60_000;

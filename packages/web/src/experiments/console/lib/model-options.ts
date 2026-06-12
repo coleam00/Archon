@@ -108,22 +108,21 @@ export function curatedOptionsForAgent(agentId: string): readonly ModelOption[] 
 // ---------------------------------------------------------------------------
 
 /** Mirrors CLAUDE_EFFORTS in packages/workflows/src/model-validation.ts. */
-export const CLAUDE_EFFORT_OPTIONS: readonly string[] = ['low', 'medium', 'high', 'max'];
+export const CLAUDE_EFFORT_OPTIONS = ['low', 'medium', 'high', 'max'] as const;
 /** Mirrors CODEX_REASONING_EFFORTS in packages/workflows/src/model-validation.ts. */
-export const CODEX_EFFORT_OPTIONS: readonly string[] = [
-  'minimal',
-  'low',
-  'medium',
-  'high',
-  'xhigh',
-];
+export const CODEX_EFFORT_OPTIONS = ['minimal', 'low', 'medium', 'high', 'xhigh'] as const;
+
+export type ClaudeEffort = (typeof CLAUDE_EFFORT_OPTIONS)[number];
+export type CodexEffort = (typeof CODEX_EFFORT_OPTIONS)[number];
+/** Any effort value an agent's vocabulary can produce. */
+export type EffortOption = ClaudeEffort | CodexEffort;
 
 /**
  * The effort vocabulary an agent's tier/alias `effort` accepts, or null when
  * effort doesn't route there (Pi/OpenCode/Copilot presets drop it) — null
  * hides the field entirely instead of offering a no-op input.
  */
-export function effortOptionsForAgent(agentId: string): readonly string[] | null {
+export function effortOptionsForAgent(agentId: string): readonly EffortOption[] | null {
   if (agentId === 'claude') return CLAUDE_EFFORT_OPTIONS;
   if (agentId === 'codex') return CODEX_EFFORT_OPTIONS;
   return null;
@@ -135,9 +134,9 @@ export function effortOptionsForAgent(agentId: string): readonly string[] | null
  * (including agents with no effort concept, where the field is hidden and a
  * stale value would be invisible state).
  */
-export function normalizeEffortForAgent(agentId: string, effort: string): string {
+export function normalizeEffortForAgent(agentId: string, effort: string): EffortOption | '' {
   const valid = effortOptionsForAgent(agentId);
-  return valid?.includes(effort) === true ? effort : '';
+  return valid?.find(v => v === effort) ?? '';
 }
 
 // ---------------------------------------------------------------------------
@@ -149,8 +148,10 @@ export function normalizeEffortForAgent(agentId: string, effort: string): string
  * The set of Pi backend ids (vendor-canonical, same ids the Pi catalog uses as
  * `PiModelInfo.provider`) with a usable credential — connected, install env,
  * or ambient. Returns null when the matrix is unavailable (401/solo install)
- * or carries no Pi credential rows: null means "can't filter, show everything"
- * rather than "nothing is connected".
+ * or carries no Pi credential rows: null means "can't filter, show everything".
+ * An EMPTY set is different — the matrix is present but nothing is usable, so
+ * the filter is active and the default suggestion list is empty (the "show
+ * all backends" toggle is the way out).
  */
 export function usablePiBackends(
   agents: AgentCredentials[] | undefined
@@ -162,8 +163,7 @@ export function usablePiBackends(
 
 /** Cost/context/reasoning hint for one Pi catalog model. */
 export function piModelHint(m: PiModelInfo): string {
-  const ctx = `${String(Math.round(m.contextWindow / 1000))}k ctx`;
-  return `$${String(m.cost.input)}/M in · $${String(m.cost.output)}/M out${m.reasoning ? ' · reasoning' : ''} · ${ctx}`;
+  return `$${m.cost.input}/M in · $${m.cost.output}/M out${m.reasoning ? ' · reasoning' : ''} · ${Math.round(m.contextWindow / 1000)}k ctx`;
 }
 
 export interface PiPickerResult {
@@ -268,6 +268,6 @@ export function opencodeBackendOptions(providers: OpencodeCredentialProvider[]):
     .map(p => ({
       value: `${p.id}/`,
       prefix: true,
-      hint: `${p.name} · ${String(p.modelCount)} model${p.modelCount === 1 ? '' : 's'}${p.connected ? ' · connected' : ''}`,
+      hint: `${p.name} · ${p.modelCount} model${p.modelCount === 1 ? '' : 's'}${p.connected ? ' · connected' : ''}`,
     }));
 }
