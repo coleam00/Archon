@@ -14,7 +14,13 @@ const validOmpConfigInput = {
   env: { PLANNOTATOR_REMOTE: '1' },
   settings: {
     retry: { enabled: true, maxRetries: 3 },
-    compaction: { enabled: false },
+    compaction: {
+      enabled: false,
+      strategy: 'snapcompact',
+      supersedeReads: false,
+      dropUseless: false,
+    },
+    snapcompact: { systemPrompt: 'agents-md', toolResults: true, shape: 'auto' },
     contextPromotion: { enabled: true },
     modelRoles: {
       default: 'anthropic/claude-sonnet-4-5',
@@ -49,7 +55,13 @@ describe('parseOmpConfig', () => {
         env: { KEEP: 'yes', DROP: 1 },
         settings: {
           retry: { enabled: 'yes', maxRetries: -1 },
-          compaction: { enabled: 'no' },
+          compaction: {
+            enabled: 'no',
+            strategy: 'invalid',
+            supersedeReads: 'yes',
+            dropUseless: 'no',
+          },
+          snapcompact: { systemPrompt: 'everything', toolResults: 'yes', shape: '' },
           contextPromotion: null,
           modelRoles: { default: 'anthropic/claude-sonnet-4-5', bad: false },
           enabledModels: ['anthropic/*', 7],
@@ -79,13 +91,25 @@ describe('parseOmpConfig', () => {
       parseOmpConfig({
         settings: {
           retry: { enabled: false, maxRetries: 0 },
-          compaction: { enabled: true },
+          compaction: {
+            enabled: true,
+            strategy: 'context-full',
+            supersedeReads: true,
+            dropUseless: true,
+          },
+          snapcompact: { systemPrompt: 'all', toolResults: false, shape: '8x8r-bw' },
         },
       })
     ).toEqual({
       settings: {
         retry: { enabled: false, maxRetries: 0 },
-        compaction: { enabled: true },
+        compaction: {
+          enabled: true,
+          strategy: 'context-full',
+          supersedeReads: true,
+          dropUseless: true,
+        },
+        snapcompact: { systemPrompt: 'all', toolResults: false, shape: '8x8r-bw' },
       },
     });
   });

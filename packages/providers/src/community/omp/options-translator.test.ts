@@ -83,7 +83,13 @@ describe('buildOmpSettingsOverrides', () => {
       buildOmpSettingsOverrides({
         settings: {
           retry: { enabled: true, maxRetries: 3 },
-          compaction: { enabled: false },
+          compaction: {
+            enabled: false,
+            strategy: 'snapcompact',
+            supersedeReads: false,
+            dropUseless: false,
+          },
+          snapcompact: { systemPrompt: 'agents-md', toolResults: true, shape: 'auto' },
           contextPromotion: { enabled: true },
           modelRoles: { default: 'anthropic/claude-sonnet-4-5' },
           enabledModels: ['anthropic/*'],
@@ -96,6 +102,12 @@ describe('buildOmpSettingsOverrides', () => {
       'retry.enabled': true,
       'retry.maxRetries': 3,
       'compaction.enabled': false,
+      'compaction.strategy': 'snapcompact',
+      'compaction.supersedeReads': false,
+      'compaction.dropUseless': false,
+      'snapcompact.systemPrompt': 'agents-md',
+      'snapcompact.toolResults': true,
+      'snapcompact.shape': 'auto',
       'contextPromotion.enabled': true,
       modelRoles: { default: 'anthropic/claude-sonnet-4-5' },
       enabledModels: ['anthropic/*'],

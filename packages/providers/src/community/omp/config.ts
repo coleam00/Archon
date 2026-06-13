@@ -7,15 +7,25 @@ export interface OmpRetrySettingsDefaults {
 
 export interface OmpCompactionSettingsDefaults {
   enabled?: boolean;
+  strategy?: 'context-full' | 'handoff' | 'shake' | 'snapcompact' | 'off';
+  supersedeReads?: boolean;
+  dropUseless?: boolean;
 }
 
 export interface OmpContextPromotionSettingsDefaults {
   enabled?: boolean;
 }
 
+export interface OmpSnapcompactSettingsDefaults {
+  systemPrompt?: 'none' | 'agents-md' | 'all';
+  toolResults?: boolean;
+  shape?: string;
+}
+
 export interface OmpSettingsDefaults {
   retry?: OmpRetrySettingsDefaults;
   compaction?: OmpCompactionSettingsDefaults;
+  snapcompact?: OmpSnapcompactSettingsDefaults;
   contextPromotion?: OmpContextPromotionSettingsDefaults;
   modelRoles?: Record<string, string>;
   enabledModels?: string[];
@@ -123,6 +133,45 @@ function enabledSetting(value: unknown): { enabled?: boolean } | undefined {
   return { enabled: value.enabled };
 }
 
+function compactionSettings(value: unknown): OmpSettingsDefaults['compaction'] | undefined {
+  if (!isRecord(value)) return undefined;
+
+  const compaction: NonNullable<OmpSettingsDefaults['compaction']> = {};
+  if (typeof value.enabled === 'boolean') compaction.enabled = value.enabled;
+  if (
+    value.strategy === 'context-full' ||
+    value.strategy === 'handoff' ||
+    value.strategy === 'shake' ||
+    value.strategy === 'snapcompact' ||
+    value.strategy === 'off'
+  ) {
+    compaction.strategy = value.strategy;
+  }
+  if (typeof value.supersedeReads === 'boolean') compaction.supersedeReads = value.supersedeReads;
+  if (typeof value.dropUseless === 'boolean') compaction.dropUseless = value.dropUseless;
+
+  return Object.keys(compaction).length > 0 ? compaction : undefined;
+}
+
+function snapcompactSettings(value: unknown): OmpSettingsDefaults['snapcompact'] | undefined {
+  if (!isRecord(value)) return undefined;
+
+  const snapcompact: NonNullable<OmpSettingsDefaults['snapcompact']> = {};
+  if (
+    value.systemPrompt === 'none' ||
+    value.systemPrompt === 'agents-md' ||
+    value.systemPrompt === 'all'
+  ) {
+    snapcompact.systemPrompt = value.systemPrompt;
+  }
+  if (typeof value.toolResults === 'boolean') snapcompact.toolResults = value.toolResults;
+  if (typeof value.shape === 'string' && value.shape.trim().length > 0) {
+    snapcompact.shape = value.shape;
+  }
+
+  return Object.keys(snapcompact).length > 0 ? snapcompact : undefined;
+}
+
 function assignDefined<T extends object, K extends keyof T>(
   target: T,
   key: K,
@@ -136,7 +185,8 @@ function settingsObject(value: unknown): OmpSettingsDefaults | undefined {
 
   const settings: OmpSettingsDefaults = {};
   assignDefined(settings, 'retry', retrySettings(value.retry));
-  assignDefined(settings, 'compaction', enabledSetting(value.compaction));
+  assignDefined(settings, 'compaction', compactionSettings(value.compaction));
+  assignDefined(settings, 'snapcompact', snapcompactSettings(value.snapcompact));
   assignDefined(settings, 'contextPromotion', enabledSetting(value.contextPromotion));
   assignDefined(settings, 'modelRoles', stringRecord(value.modelRoles));
 
