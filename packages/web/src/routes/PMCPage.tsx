@@ -40,6 +40,7 @@ import {
 } from '@/lib/pmc-derived';
 import prospectsData from '@/lib/business-prospects.generated.json';
 import playgroundData from '@/lib/playground.generated.json';
+import agentTraceData from '@/lib/agent-trace.generated.json';
 import type { BusinessProspect } from '@/components/business/BusinessPage';
 
 const REMARK_PLUGINS = [remarkGfm, remarkBreaks];
@@ -725,6 +726,57 @@ export function PMCPage(): React.ReactElement {
           </div>
         </section>
 
+        {/* Wave 5 — agent-trace static panel (D1=b decision: vault-driven, no backend) */}
+        <section className="rounded-xl border border-border bg-card p-5">
+          <div className="mb-3 flex items-baseline justify-between">
+            <h3 className="text-sm font-semibold text-text-primary">
+              Recent Carlos activity — agent trace
+            </h3>
+            <span className="text-[10px] text-text-tertiary">
+              {(agentTraceData as { total_sessions?: number }).total_sessions ?? 0} sessions on disk
+              · last {((agentTraceData as { recent?: unknown[] }).recent ?? []).length} shown
+            </span>
+          </div>
+          <p className="mb-3 text-[11px] text-text-tertiary">
+            Static JSON built from ~/.hermes/sessions/. Refreshes when{' '}
+            <code className="font-mono">build-agent-trace-json.py</code> runs.
+          </p>
+          <ul className="divide-y divide-border">
+            {(
+              (
+                agentTraceData as {
+                  recent?: {
+                    session_id: string;
+                    started_at?: string;
+                    source?: string;
+                    model?: string;
+                    last_user_message_preview?: string;
+                    tool_call_count?: number;
+                  }[];
+                }
+              ).recent ?? []
+            ).map(s => (
+              <li key={s.session_id} className="py-2">
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="truncate text-xs font-medium text-text-primary">
+                    {s.last_user_message_preview || s.session_id}
+                  </span>
+                  <span className="shrink-0 text-[10px] text-text-tertiary">
+                    {s.started_at ? new Date(s.started_at).toLocaleString() : '—'}
+                  </span>
+                </div>
+                <div className="mt-0.5 flex items-center gap-2 text-[10px] text-text-tertiary">
+                  <span>{s.source ?? 'user'}</span>
+                  <span>·</span>
+                  <span>{s.model ?? 'unknown'}</span>
+                  <span>·</span>
+                  <span>{s.tool_call_count ?? 0} tool calls</span>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+
         {/* P3.1 — portfolio cross-sell strip */}
         <section className="rounded-xl border border-border bg-card p-5">
           <div className="mb-3 flex items-baseline justify-between">
@@ -764,7 +816,6 @@ export function PMCPage(): React.ReactElement {
             ))}
           </div>
         </section>
-
         {/* Footer */}
         <footer className="border-t border-border pt-4 text-[10px] text-text-tertiary">
           Last data refresh {generatedAtValid ? generatedAt.toLocaleString() : '—'}
@@ -773,6 +824,7 @@ export function PMCPage(): React.ReactElement {
               ⚠ {Math.round(hoursStale)}h stale — playground refresh due
             </span>
           )}
+          {/* Tailscale Funnel deploy chain status is rendered globally via Layout.tsx -> DeployStatusFooter (D3). */}
         </footer>
       </div>
     </div>

@@ -1,0 +1,96 @@
+{
+  "generated_at": "2026-06-13T01:56:44.233434+00:00",
+  "total_sessions": 695,
+  "recent": [
+    {
+      "session_id": "session_20260612_155947_8b00203e",
+      "started_at": "2026-06-12T15:59:47",
+      "source": "user",
+      "model": "claude-opus-4-7",
+      "last_user_message_preview": "lets research the best practices for the following: build a design skill and healthcare marketing business operator skill or equivalent and ",
+      "tool_call_count": 0,
+      "status": "completed"
+    },
+    {
+      "session_id": "session_20260612_184843_33fbad",
+      "started_at": "2026-06-12T18:48:43",
+      "source": "user",
+      "model": "claude-opus-4-7",
+      "last_user_message_preview": "lets research the best practices for the following: build a design skill and healthcare marketing business operator skill or equivalent and ",
+      "tool_call_count": 0,
+      "status": "completed"
+    },
+    {
+      "session_id": "session_20260612_163823_941ed6",
+      "started_at": "2026-06-12T16:38:23",
+      "source": "user",
+      "model": "claude-opus-4-7",
+      "last_user_message_preview": "lets research the best practices for the following: build a design skill and healthcare marketing business operator skill or equivalent and ",
+      "tool_call_count": 0,
+      "status": "completed"
+    },
+    {
+      "session_id": "session_20260612_161634_c1777d",
+      "started_at": "2026-06-12T16:16:34",
+      "source": "user",
+      "model": "claude-opus-4-7",
+      "last_user_message_preview": "lets research the best practices for the following: build a design skill and healthcare marketing business operator skill or equivalent and ",
+      "tool_call_count": 0,
+      "status": "completed"
+    },
+    {
+      "session_id": "session_cron_1486de91ae08_20260612_160043",
+      "started_at": "2026-06-12T16:00:43",
+      "source": "cron",
+      "model": "claude-opus-4-7",
+      "last_user_message_preview": "[IMPORTANT: The user has invoked the \"apollo-daily-performance\" skill, indicating they want you to follow its instructions. The full skill c",
+      "tool_call_count": 0,
+      "status": "completed"
+    },
+    {
+      "session_id": "session_20260612_155510_06f93a",
+      "started_at": "2026-06-12T15:55:10",
+      "source": "user",
+      "model": "claude-opus-4-7",
+      "last_user_message_preview": "[The user sent a voice message~ Here's what they said: \"Can you just come up with some clever Asian teams using our other Hermes profiles ju",
+      "tool_call_count": 0,
+      "status": "completed"
+    },
+    {
+      "session_id": "session_20260612_123424_dea7ae29",
+      "started_at": "2026-06-12T12:34:24",
+      "source": "user",
+      "model": "claude-opus-4-7",
+      "last_user_message_preview": "[The user sent a document: 'Greg_Jason sync Archon_Dashboard Refinements Meeting.docx'. The file is saved at: /Users/jason-agent/.hermes/cac",
+      "tool_call_count": 0,
+      "status": "completed"
+    },
+    {
+      "session_id": "session_bg_155926_1a5faa",
+      "started_at": null,
+      "source": "user",
+      "model": "claude-opus-4-7",
+      "last_user_message_preview": "everything we do should be pushed and deployed to the vault",
+      "tool_call_count": 0,
+      "status": "completed"
+    },
+    {
+      "session_id": "session_20260612_073626_32efc5b0",
+      "started_at": "2026-06-12T07:36:26",
+      "source": "user",
+      "model": "claude-opus-4-7",
+      "last_user_message_preview": "[The user sent a voice message~ Here's what they said: \"Can you just come up with some clever Asian teams using our other Hermes profiles ju",
+      "tool_call_count": 0,
+      "status": "completed"
+    },
+    {
+      "session_id": "session_20260612_121859_a98d009d",
+      "started_at": "2026-06-12T12:18:59",
+      "source": "user",
+      "model": "claude-opus-4-7",
+      "last_user_message_preview": "[Replying to: \"Carlos PRD Kanban nudge \u2014 11/12 done.\\n\\nPending:\\n- t_0b65ec17 triage \u2014 PRD 7 dashboard implementation triage\\n\\nNext: keep ",
+      "tool_call_count": 0,
+      "status": "completed"
+    }
+  ]
+}
