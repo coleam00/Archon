@@ -54,7 +54,7 @@ const KPIS = [
   { label: 'Phase', value: 'Build' },
   { label: 'Partner', value: 'IHHT-CellIT' },
   { label: 'Composite rank', value: 'Mid-tier sub-brand' },
-  { label: 'Top blocker', value: 'Clinical one-pager + demo script' },
+  { label: 'Top blocker', value: 'Demo script + IHHT-led Apollo sequence' },
 ];
 
 export function IHHTPage(): React.ReactElement {
