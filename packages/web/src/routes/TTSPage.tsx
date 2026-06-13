@@ -64,9 +64,41 @@ const SECTIONS = [
         badgeTone: 'amber' as const,
       },
       {
+        slug: 'phase-3-fallback-execution-paths',
+        title: 'Phase 3 fallback execution paths',
+        description:
+          'phase-3-fallback-execution-paths.md — pre-built pivots if 4-decision stack stalls past 6/12',
+        badge: 'fallback',
+        badgeTone: 'amber' as const,
+      },
+      {
+        slug: 'phase-3-week-9-content-pack',
+        title: 'Phase 3 Week 9 content pack (Jun 15-21)',
+        description:
+          'phase-3-week-9-content-pack.md — 7 hard-CTA pieces across IG/LI/FB, ships on Decision 1 ratification',
+        badge: 'pending',
+        badgeTone: 'amber' as const,
+      },
+      {
         slug: 'qualification-call-script',
         title: '15-min qualification call script',
         description: 'qualification-call-script.md — NEPQ-style soft-discovery + rubric',
+      },
+      {
+        slug: 'calendly-event-spec',
+        title: 'Calendly event spec',
+        description:
+          'calendly-event-spec.md — full TTTS qualification event-type provisioning blueprint',
+        badge: 'spec',
+        badgeTone: 'sky' as const,
+      },
+      {
+        slug: 'collaborator-co-post-ask-templates',
+        title: 'Collaborator co-post DM templates',
+        description:
+          'collaborator-co-post-ask-templates.md — 3 personalized DMs for the 4-5 collaborator gap-fill',
+        badge: 'draft',
+        badgeTone: 'sky' as const,
       },
       {
         slug: 'content-roadmap',
