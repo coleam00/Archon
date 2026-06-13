@@ -57,7 +57,7 @@ const ITEMS: FirehoseItem[] = Object.entries(briefModules)
     const filename = path.split('/').pop() ?? path;
     const dateMatch = /^(\d{4}-\d{2}-\d{2})/.exec(filename);
     const date = dateMatch ? dateMatch[1] : null;
-    const { fm, body } = parseFrontmatter(raw);
+    const { fm, body } = parseFrontmatter(raw as string);
     const titleFromBody = /^#\s+(.+)$/m.exec(body)?.[1]?.trim();
     const title =
       (typeof fm.title === 'string' ? fm.title : undefined) ??

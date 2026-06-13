@@ -52,6 +52,7 @@ const coreTabs: readonly NavTab[] = [
   // QEP merged into Fountain WPB (2026-06-11). Nav entry removed; /qep redirects to /fountain.
   { to: '/accufit', end: false, icon: Zap, label: 'AccuFit' },
   { to: '/social-content', end: false, icon: Share2, label: 'Social Content' },
+  { to: '/agents', end: false, icon: Activity, label: 'Sessions' },
 ] as const;
 
 const externalRepTabs: readonly NavTab[] = [

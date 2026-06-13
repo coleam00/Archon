@@ -1,0 +1,29 @@
+{
+  "generated_at": "2026-06-13T01:53:16.613735+00:00",
+  "chain": [
+    {
+      "hop": "gregs-mac-mini.tail4e0ac6.ts.net:443",
+      "role": "Tailscale Funnel public ingress"
+    },
+    {
+      "hop": ":8401",
+      "role": "Caddy (jid5274-hermes-expose)"
+    },
+    {
+      "hop": ":9999",
+      "role": "Python auth-proxy"
+    },
+    {
+      "hop": ":5173",
+      "role": "Vite static dashboard"
+    }
+  ],
+  "canonical_url": "https://gregs-mac-mini.tail4e0ac6.ts.net/",
+  "doc": "second-brain/intelligence/decisions/2026-06-12-caddy-tailscale-funnel-chain.md",
+  "funnel_status": {
+    "available": "true",
+    "exit_code": "0",
+    "first_line": "# Funnel on:",
+    "line_count": "21"
+  }
+}

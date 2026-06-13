@@ -25,6 +25,7 @@ import { SolutionsPage } from '@/routes/SolutionsPage';
 import { ContactsPage } from '@/routes/ContactsPage';
 import { ResearchFirehosePage } from '@/routes/ResearchFirehosePage';
 import { StartHerePage } from '@/routes/StartHerePage';
+import { SessionTracesPage } from '@/routes/SessionTracesPage';
 
 interface ErrorBoundaryState {
   hasError: boolean;
@@ -104,6 +105,7 @@ export function App(): React.ReactElement {
                 <Route path="/social-content" element={<SocialContentPage />} />
                 <Route path="/external-reps/arc" element={<ARCPage />} />
                 <Route path="/external-reps/sadn" element={<SADNPage />} />
+                <Route path="/agents" element={<SessionTracesPage />} />
                 {/* Backend-dependent routes intentionally omitted for static build:
                     /chat, /dashboard, /workflows*, /settings, /tts */}
                 <Route path="*" element={<Navigate to="/welcome" replace />} />
