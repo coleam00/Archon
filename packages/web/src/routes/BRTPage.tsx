@@ -28,17 +28,19 @@ const doc = parseFrontmatter(overviewRaw);
 
 // Real Apollo sequence data filtered to BRT
 const BRT_SEQUENCES = (
-  playgroundData.sequences as {
-    name: string;
-    brand: string;
-    sent: number;
-    opened: number;
-    replied: number;
-    reply_rate: number;
-    open_rate: number;
-    bounce_rate?: number;
-    health_flag?: string;
-  }[]
+  (playgroundData.sequences as
+    | {
+        name: string;
+        brand: string;
+        sent: number;
+        opened: number;
+        replied: number;
+        reply_rate: number;
+        open_rate: number;
+        bounce_rate?: number;
+        health_flag?: string;
+      }[]
+    | undefined) ?? []
 ).filter(s => s.brand === 'BRT');
 
 const SEQUENCE_REPLY_DATA = BRT_SEQUENCES.map(s => ({
@@ -72,7 +74,7 @@ const VALUE_PROPS = [
     icon: Activity,
   },
   {
-    title: 'Nontherml at 10 µT',
+    title: 'Nonthermal at 10 µT',
     body: 'Very low-amplitude PEMF (~20% of Earth\u2019s magnetic field). Direct cellular signaling effect without heating — durable, multi-modality safety profile.',
     icon: Zap,
   },
