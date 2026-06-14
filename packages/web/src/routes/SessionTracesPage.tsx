@@ -106,11 +106,13 @@ function SessionRow({
 }): React.ReactElement {
   // eslint-disable-next-line @typescript-eslint/naming-convention
   const Chevron = expanded ? ChevronDown : ChevronRight;
+  const headTurns = session.head_turns ?? [];
+  const tailTurns = session.tail_turns ?? [];
   const dedupedTail = useMemo<TurnEntry[]>(() => {
-    if (session.tail_turns.length === 0) return [];
-    const headIds = new Set(session.head_turns.map(t => `${t.role}|${t.ts}`));
-    return session.tail_turns.filter(t => !headIds.has(`${t.role}|${t.ts}`));
-  }, [session.head_turns, session.tail_turns]);
+    if (tailTurns.length === 0) return [];
+    const headIds = new Set(headTurns.map(t => `${t.role}|${t.ts}`));
+    return tailTurns.filter(t => !headIds.has(`${t.role}|${t.ts}`));
+  }, [headTurns, tailTurns]);
 
   return (
     <div className="rounded-lg border border-border bg-surface-elevated">
@@ -153,9 +155,9 @@ function SessionRow({
         <div className="flex flex-col gap-3 border-t border-border p-4">
           <div className="flex flex-col gap-2">
             <h4 className="text-[10px] font-semibold uppercase tracking-wider text-text-tertiary">
-              First {session.head_turns.length} turns
+              First {headTurns.length} turns
             </h4>
-            {session.head_turns.map((t, i) => (
+            {headTurns.map((t, i) => (
               <TurnRow key={`head-${i}`} turn={t} />
             ))}
           </div>
@@ -181,27 +183,28 @@ function SessionRow({
 }
 
 export function SessionTracesPage(): React.ReactElement {
-  const data = tracesData as TracesPayload;
+  const data = tracesData as Partial<TracesPayload>;
+  const sessions = data.sessions ?? [];
   const [query, setQuery] = useState<string>('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const filtered = useMemo<SessionEntry[]>(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return data.sessions;
-    return data.sessions.filter(s => {
+    if (!q) return sessions;
+    return sessions.filter(s => {
       const blob = [
         s.session_id,
         s.workspace,
         s.first_prompt_preview,
         s.last_activity_preview,
-        ...s.head_turns.map(t => t.preview),
-        ...s.tail_turns.map(t => t.preview),
+        ...(s.head_turns ?? []).map(t => t.preview),
+        ...(s.tail_turns ?? []).map(t => t.preview),
       ]
         .join(' ')
         .toLowerCase();
       return blob.includes(q);
     });
-  }, [data.sessions, query]);
+  }, [sessions, query]);
 
   return (
     <div className="flex h-full flex-1 flex-col gap-6 overflow-y-auto p-6">
@@ -228,14 +231,15 @@ export function SessionTracesPage(): React.ReactElement {
         </p>
         <div className="flex flex-wrap items-center gap-3 text-xs text-text-tertiary">
           <span>
-            <strong className="text-text-secondary">{data.session_count}</strong> sessions
+            <strong className="text-text-secondary">{data.session_count ?? sessions.length}</strong>{' '}
+            sessions
           </span>
           <span>·</span>
           <span>
-            <strong className="text-text-secondary">{data.turn_count}</strong> turns
+            <strong className="text-text-secondary">{data.turn_count ?? 0}</strong> turns
           </span>
           <span>·</span>
-          <span>Generated {formatTs(data.generated_at)}</span>
+          <span>Generated {formatTs(data.generated_at ?? '')}</span>
         </div>
       </div>
 
@@ -253,7 +257,7 @@ export function SessionTracesPage(): React.ReactElement {
         />
         {query && (
           <span className="text-xs text-text-tertiary">
-            {filtered.length} / {data.sessions.length}
+            {filtered.length} / {sessions.length}
           </span>
         )}
       </div>
@@ -261,7 +265,7 @@ export function SessionTracesPage(): React.ReactElement {
       {/* Session list */}
       {filtered.length === 0 ? (
         <div className="rounded-lg border border-dashed border-border bg-surface p-8 text-center text-sm text-text-tertiary">
-          {data.sessions.length === 0
+          {sessions.length === 0
             ? 'No session exports found. Has the build script run yet?'
             : 'No sessions match this filter.'}
         </div>
