@@ -76,6 +76,17 @@ interface PlaygroundData {
 
 const data = playgroundData as unknown as PlaygroundData;
 
+// Defensive array views — generator scripts can ship partial JSON (missing keys
+// from an Apollo pull failure, stale cache, partial regen). Module-eval `.map`
+// / `new Set(.map())` on `undefined` would white-screen `/playground` before
+// any component renders. Same hardening pattern applied to BRTPage / PMCPage /
+// EWCPage / QEPPage / SADNPage `prospectsData.by_business` consumers
+// (2026-06-09..06-11). Use optional-chain (`?.`) per `prefer-optional-chain`.
+const safeSequences = (data as Partial<PlaygroundData>).sequences ?? [];
+const safeDialsByDay = (data as Partial<PlaygroundData>).dials_by_day ?? [];
+const safeOutcomeFunnel = (data as Partial<PlaygroundData>).outcome_funnel ?? [];
+const safeMeetingsByWeek = (data as Partial<PlaygroundData>).meetings_by_week ?? [];
+
 // --- Brand palette (matches the Tailwind tokens in BusinessPage) ---
 const BRAND_COLOR: Record<string, string> = {
   BRT: '#34d399', // emerald-400
@@ -158,7 +169,7 @@ export function PlaygroundPage(): React.ReactElement {
   // Sequence reply-rate horizontal bar
   const seqChartData = useMemo(
     () =>
-      data.sequences.map(s => ({
+      safeSequences.map(s => ({
         name: s.name.length > 32 ? s.name.slice(0, 30) + '…' : s.name,
         replyRate: s.reply_rate,
         openRate: s.open_rate,
@@ -183,11 +194,11 @@ export function PlaygroundPage(): React.ReactElement {
   // Dial outcomes stacked area — pivot dial_by_day into wide format
   const dialsAreaData = useMemo(() => {
     const byDate: Record<string, Record<string, number>> = {};
-    for (const d of data.dials_by_day) {
+    for (const d of safeDialsByDay) {
       byDate[d.date] ??= {};
       byDate[d.date][d.outcome] = d.count;
     }
-    const outcomeKeys = Array.from(new Set(data.dials_by_day.map(d => d.outcome))).filter(
+    const outcomeKeys = Array.from(new Set(safeDialsByDay.map(d => d.outcome))).filter(
       o => o !== 'closed-test'
     );
     const rows = Object.entries(byDate)
@@ -203,7 +214,7 @@ export function PlaygroundPage(): React.ReactElement {
   // Funnel rendered as horizontal bars (descending stages)
   const funnelData = useMemo(
     () =>
-      data.outcome_funnel.map(f => ({
+      safeOutcomeFunnel.map(f => ({
         stage: FUNNEL_LABEL[f.stage] ?? f.stage,
         count: f.count,
       })),
@@ -213,14 +224,14 @@ export function PlaygroundPage(): React.ReactElement {
   // Meetings per week — line with reference lines for D30/D90 targets
   const meetingsLineData = useMemo(
     () =>
-      data.meetings_by_week.map(m => ({
+      safeMeetingsByWeek.map(m => ({
         week: m.week.slice(5), // MM-DD only for x-axis
         meetings: m.total,
       })),
     []
   );
 
-  const brands = Array.from(new Set(data.sequences.map(s => s.brand)));
+  const brands = Array.from(new Set(safeSequences.map(s => s.brand)));
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
