@@ -18,6 +18,7 @@ import type {
 import { PI_CAPABILITIES } from './capabilities';
 import { parsePiConfig } from './config';
 import { parsePiModelRef } from './model-ref';
+import { customProviderApiKeyEnvVar } from './custom-provider-key';
 
 // IMPORTANT: Do NOT add static `import { ... } from '@earendil-works/*'` here,
 // and do NOT statically import sibling modules that themselves import runtime
@@ -266,7 +267,8 @@ export class PiProvider implements IAgentProvider {
 
     // 4. Resolve credentials. Per-request env vars override auth.json entries via
     //    setRuntimeApiKey — codebase-scoped env vars win over the user's global Pi login.
-    const envVarName = PI_PROVIDER_ENV_VARS[parsed.provider];
+    const envVarName =
+      PI_PROVIDER_ENV_VARS[parsed.provider] ?? customProviderApiKeyEnvVar(parsed.provider);
     const envOverride = envVarName
       ? (requestOptions?.env?.[envVarName] ?? process.env[envVarName])
       : undefined;
