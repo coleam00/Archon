@@ -105,11 +105,11 @@ describe('credentials/catalog', () => {
       expect(pi.ready).toBe(true);
     });
 
-    test('subscriptionAvailable reflects the gate (openai wired but disabled, #1924)', () => {
+    test('subscriptionAvailable: all three subscription vendors connectable (#1924 gate lifted)', () => {
       const matrix = buildAgentCredentialMatrix([]);
       const codex = matrix.find(a => a.id === 'codex')!;
       expect(codex.credentials[0]!.vendor).toBe('openai');
-      expect(codex.credentials[0]!.subscriptionAvailable).toBe(false);
+      expect(codex.credentials[0]!.subscriptionAvailable).toBe(true);
       const claude = matrix.find(a => a.id === 'claude')!;
       expect(claude.credentials[0]!.subscriptionAvailable).toBe(true);
       const copilot = matrix.find(a => a.id === 'copilot')!;

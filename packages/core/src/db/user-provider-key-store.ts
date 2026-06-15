@@ -4,10 +4,12 @@
  * GitHub-token store. One row per `(user_id, provider)`.
  *
  * Two credential kinds: `api_key` (a single bearer string) and `oauth` (an
- * opaque blob from `@earendil-works/pi-ai/oauth` provider `login()`). For
- * `api_key`, `getDecryptedProviderCredential` returns the decrypted bearer
- * directly. For `oauth`, it decrypts the blob, mints/refreshes a usable bearer
- * via Pi's `getOAuthApiKey`, re-saves rotated creds, and returns it (PR-3).
+ * opaque blob minted at login). For `api_key`,
+ * `getDecryptedProviderCredential` returns the decrypted bearer directly. For
+ * `oauth`, it decrypts the blob, mints/refreshes a usable bearer — via Pi's
+ * `getOAuthApiKey` for Pi-driven vendors, or the Archon-owned OpenAI flow
+ * (`mintOpenAiOAuthApiKey`, which preserves the `id_token` Pi drops, #1924) —
+ * re-saves rotated creds, and returns it (PR-3).
  *
  * (Filename carries a `-store` suffix to satisfy a local secret-guard hook
  * that blocks basenames ending in `key(s).ts` / `token(s).ts`; the table is
@@ -21,8 +23,13 @@ import {
 } from '@archon/providers/oauth';
 import { encryptToken, decryptToken, getEncryptionKey } from '../utils/token-crypto';
 import type { UserProviderKeyRow } from '../schemas/user-provider-key-row';
-import type { OAuthCredentials, ResolvedCredential } from '../credentials/delivery';
-import { piOAuthProviderFor } from '../credentials/oauth-providers';
+import {
+  normalizeCredentialVendor,
+  type OAuthCredentials,
+  type ResolvedCredential,
+} from '../credentials/delivery';
+import { piOAuthProviderFor, OPENAI_SUBSCRIPTION_VENDOR } from '../credentials/oauth-providers';
+import { mintOpenAiOAuthApiKey, type OpenAiOAuthCredentials } from '../credentials/openai-oauth';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -176,9 +183,12 @@ export async function getDecryptedProviderCredential(
 }
 
 /**
- * Decrypt + refresh one OAuth credential via Pi's `getOAuthApiKey`. On rotation,
- * re-save the new blob (best-effort; a failed re-save is non-fatal — the run
- * still gets a usable key and the next read re-refreshes). Never throws.
+ * Decrypt + refresh one OAuth credential. Vendor `openai` refreshes through
+ * the Archon-owned flow (`mintOpenAiOAuthApiKey`) — Pi's `getOAuthApiKey`
+ * would rebuild the blob from its own shape and DROP the `id_token` the Codex
+ * CLI requires on every rotation (#1924). Everything else goes through Pi's
+ * `getOAuthApiKey`. On rotation, re-save the new blob (with retry; a dead
+ * resave means a dead refresh token — see below). Never throws.
  */
 async function resolveOAuthCredential(
   userId: string,
@@ -186,9 +196,10 @@ async function resolveOAuthCredential(
   ciphertext: string,
   key: Buffer
 ): Promise<ResolvedCredential | null> {
-  const piProvider = piOAuthProviderFor(provider);
-  if (!piProvider) {
-    // An oauth row for a provider with no Pi OAuth flow (shouldn't happen — connect guards it).
+  const vendor = normalizeCredentialVendor(provider);
+  const piProvider = vendor === OPENAI_SUBSCRIPTION_VENDOR ? undefined : piOAuthProviderFor(vendor);
+  if (vendor !== OPENAI_SUBSCRIPTION_VENDOR && !piProvider) {
+    // An oauth row for a provider with no OAuth flow (shouldn't happen — connect guards it).
     getLog().warn({ userId, provider }, 'user_provider_key.oauth_no_pi_provider');
     return null;
   }
@@ -202,11 +213,16 @@ async function resolveOAuthCredential(
     );
     return null;
   }
-  let result: { newCredentials: PiOAuthCredentials; apiKey: string } | null;
+  let result: { newCredentials: PiOAuthCredentials | OAuthCredentials; apiKey: string } | null;
   try {
-    result = await getOAuthApiKey(piProvider.id, {
-      [piProvider.id]: creds as unknown as PiOAuthCredentials,
-    });
+    result = piProvider
+      ? await getOAuthApiKey(piProvider.id, {
+          [piProvider.id]: creds as unknown as PiOAuthCredentials,
+        })
+      : // Assertion to the narrow openai shape: rows under vendor 'openai' are
+        // minted exclusively by openai-oauth.ts, which validates every field at
+        // write time; mint's runtime guards still tolerate legacy/corrupt rows.
+        await mintOpenAiOAuthApiKey(creds as OpenAiOAuthCredentials);
   } catch (err) {
     getLog().error(
       { err: err as Error, userId, provider },

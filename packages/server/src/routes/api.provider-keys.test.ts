@@ -78,6 +78,15 @@ class InvalidProviderKeyError extends Error {
   }
 }
 
+// Mirror core's retryable port-wedge error so the oauth/start route's
+// `instanceof` check (actionable 503 vs opaque 500) is exercised (#1963).
+class OAuthCallbackPortBusyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'OAuthCallbackPortBusyError';
+  }
+}
+
 let keysEnabled = true;
 let savedKeys: { userId: string; provider: string; apiKey: string; label: string | null }[] = [];
 
@@ -105,8 +114,8 @@ const mockDelete = mock(async (userId: string, provider: string) => {
   savedKeys = savedKeys.filter(k => !(k.userId === userId && k.provider === provider));
 });
 
-// Vendor-keyed like production (#1955); openai is gate-excluded there too.
-const SUBSCRIPTION = new Set<string>(['anthropic', 'github-copilot']);
+// Vendor-keyed like production (#1955); all three subscription vendors (#1924 lifted).
+const SUBSCRIPTION = new Set<string>(['anthropic', 'openai', 'github-copilot']);
 const mockStartOAuth = mock(async (_userId: string, provider: string) => ({
   sessionId: 'sess-1',
   mode: 'manual' as const,
@@ -148,6 +157,7 @@ mock.module('@archon/core', () => ({
   SUBSCRIPTION_PROVIDERS: SUBSCRIPTION,
   startOAuth: mockStartOAuth,
   pollOAuth: mockPollOAuth,
+  OAuthCallbackPortBusyError,
 }));
 
 mock.module('@archon/paths', () => ({
@@ -507,6 +517,23 @@ describe('POST /api/auth/providers/:provider/oauth/start', () => {
     });
     expect(res.status).toBe(500);
     expect(await res.text()).not.toContain('53999');
+  });
+
+  test('held callback port → 503 with the actionable message (#1963)', async () => {
+    mockStartOAuth.mockRejectedValueOnce(
+      new OAuthCallbackPortBusyError(
+        "A previous 'anthropic' login attempt is still holding the OAuth callback port. " +
+          'Wait a few seconds and retry; if it persists, restart the Archon server.'
+      )
+    );
+    const res = await makeApp().request('/api/auth/providers/claude/oauth/start', {
+      method: 'POST',
+      headers: ALICE,
+    });
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toContain('callback port');
+    expect(body.error).toContain('retry');
   });
 
   test('no identity → 401', async () => {

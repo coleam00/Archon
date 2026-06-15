@@ -121,6 +121,20 @@ export function ensurePiPackageDirShim(): void {
 // scripts/generate-pi-vendor-map.ts; `bun run check:pi-vendor-map` guards drift.
 import { PI_PROVIDER_ENV_VARS } from './pi-vendor-map.generated';
 
+// Pi provider id → OAuth-subscription env var. pi-ai's getApiKeyEnvVars lists
+// the OAuth var ahead of the API-key var (e.g. anthropic →
+// ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]). Archon delivers subscriptions
+// to env-only chat under this var (delivery.ts), but the per-user injection never
+// writes to process.env — Pi only ingests requestOptions.env via the explicit
+// bridge below, so the bridge must read the OAuth var too (#1984). github-copilot
+// delivers its single COPILOT_GITHUB_TOKEN (already the API-key var); openai is
+// shipped by delivery.ts as a CODEX_HOME/auth.json file (dropped in env-only chat),
+// never an env var — so on this env channel anthropic is the only backend that
+// needs a distinct OAuth var.
+const PI_OAUTH_ENV_VARS: Readonly<Record<string, string>> = {
+  anthropic: 'ANTHROPIC_OAUTH_TOKEN',
+};
+
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('provider.pi');
@@ -265,11 +279,17 @@ export class PiProvider implements IAgentProvider {
     }
 
     // 4. Resolve credentials. Per-request env vars override auth.json entries via
-    //    setRuntimeApiKey — codebase-scoped env vars win over the user's global Pi login.
+    //    setRuntimeApiKey — codebase-scoped env vars win over the user's global Pi
+    //    login. Subscriptions delivered to env-only chat arrive under the OAuth var
+    //    (e.g. ANTHROPIC_OAUTH_TOKEN); read it first, then the API-key var. pi-ai's
+    //    createClient discriminates OAuth vs api-key by token content (sk-ant-oat*),
+    //    so one runtime channel serves both — and setRuntimeApiKey stays runtime-only
+    //    (no auth.json disk write, unlike AuthStorage.set) (#1984).
     const envVarName = PI_PROVIDER_ENV_VARS[parsed.provider];
-    const envOverride = envVarName
-      ? (requestOptions?.env?.[envVarName] ?? process.env[envVarName])
-      : undefined;
+    const oauthVarName = PI_OAUTH_ENV_VARS[parsed.provider];
+    const readEnvOverride = (name: string | undefined): string | undefined =>
+      name ? (requestOptions?.env?.[name] ?? process.env[name]) : undefined;
+    const envOverride = readEnvOverride(oauthVarName) ?? readEnvOverride(envVarName);
     if (envOverride) {
       authStorage.setRuntimeApiKey(parsed.provider, envOverride);
     }
@@ -281,7 +301,13 @@ export class PiProvider implements IAgentProvider {
       const resolvedKey = await authStorage.getApiKey(parsed.provider);
       if (!resolvedKey) {
         if (envVarName) {
-          const envHint = `Set ${envVarName} in the environment or codebase env vars (.archon/config.yaml env: section).`;
+          // Name the OAuth var first when the backend has one — a subscription
+          // user who hits this miss must be told the var the resolver actually
+          // prefers (ANTHROPIC_OAUTH_TOKEN), not just the API-key var (#1984).
+          const varHint = oauthVarName
+            ? `${oauthVarName} (subscription) or ${envVarName}`
+            : envVarName;
+          const envHint = `Set ${varHint} in the environment or codebase env vars (.archon/config.yaml env: section).`;
           const loginHint = `Or run \`pi\` and type \`/login\` locally to authenticate '${parsed.provider}' via OAuth; credentials land in ~/.pi/agent/auth.json and are picked up automatically.`;
           throw new Error(
             `Pi auth: no credentials for provider '${parsed.provider}'. ${envHint} ${loginHint}`

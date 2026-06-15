@@ -50,6 +50,7 @@ import {
   SUBSCRIPTION_PROVIDERS,
   startOAuth,
   pollOAuth,
+  OAuthCallbackPortBusyError,
   getUserAiPrefs,
   setUserTiers,
   setUserAliases,
@@ -1144,6 +1145,7 @@ const providerOAuthStartRoute = createRoute({
     400: jsonError('Provider does not support subscription login'),
     401: jsonError('Web auth required (X-Archon-User header missing)'),
     404: jsonError('Per-user provider keys not enabled on this install'),
+    503: jsonError('OAuth callback port still held by a previous login attempt — retry shortly'),
   },
 });
 
@@ -1683,6 +1685,15 @@ export function registerApiRoutes(
       const start = await startOAuth(web.userId, provider);
       return c.json(start);
     } catch (err) {
+      // A leaked callback port from a previous attempt is an expected,
+      // retryable condition — log it at warn under its own event (an
+      // error-level `…_failed` would pollute error dashboards on multi-user
+      // installs) and surface the actionable message as a 503 instead of an
+      // opaque 500 (#1963).
+      if (err instanceof OAuthCallbackPortBusyError) {
+        getLog().warn({ userId: web.userId, provider }, 'auth.provider_oauth_start_port_busy');
+        return apiError(c, 503, err.message);
+      }
       getLog().error(
         { err: err as Error, userId: web.userId, provider },
         'auth.provider_oauth_start_failed'
@@ -2105,7 +2116,12 @@ export function registerApiRoutes(
    */
   async function tryAutoResumeAfterGate(
     run: WorkflowRun,
-    action: 'approve' | 'reject'
+    action: 'approve' | 'reject',
+    // Identity of the user who approved/rejected the gate. The resumed chat
+    // turn executes as THIS user (sender-first, #1976/#1982) — without it the
+    // dispatch would fall back to the conversation creator's prefs/credentials.
+    // Undefined on solo installs (no web identity) → creator fallback applies.
+    gateActorUserId?: string
   ): Promise<boolean> {
     if (!run.parent_conversation_id) return false;
     // Literal event names per action — greppable for ops tooling. Keeping the
@@ -2160,7 +2176,7 @@ export function registerApiRoutes(
         return false;
       }
       const resumeMessage = `/workflow run ${run.workflow_name} ${run.user_message ?? ''}`.trim();
-      await dispatchToOrchestrator(platformConvId, resumeMessage);
+      await dispatchToOrchestrator(platformConvId, resumeMessage, { userId: gateActorUserId });
       getLog().info(
         { runId: run.id, workflowName: run.workflow_name, platformConvId },
         events.dispatched
@@ -2268,6 +2284,14 @@ export function registerApiRoutes(
       // Default visibility stays open (everyone sees everyone's conversations).
       const mine = c.req.query('mine') === 'true';
       const userId = mine ? (await resolveAuthContext(c))?.userId : undefined;
+      if (mine && !userId && getAuth()) {
+        // Narrowing was requested but no identity resolved on an install with
+        // web auth configured — the list silently degrades to ALL conversations
+        // (documented non-enforcing posture). Without web auth (solo installs,
+        // where the console always sends mine=true) this is the normal path
+        // and stays silent.
+        getLog().warn({ route: 'GET /api/conversations' }, 'api.mine_filter_identity_unresolved');
+      }
       const conversations = await conversationDb.listConversations(
         50,
         platformType,
@@ -3109,7 +3133,11 @@ export function registerApiRoutes(
         );
       }
       const resumeMessage = `/workflow run ${run.workflow_name} ${run.user_message ?? ''}`.trim();
-      await dispatchToOrchestrator(parentConv.platform_conversation_id, resumeMessage);
+      // Resume executes as the user who clicked resume (sender-first, #1982),
+      // not the conversation creator. Undefined on solo installs → fallback.
+      await dispatchToOrchestrator(parentConv.platform_conversation_id, resumeMessage, {
+        userId: await resolveWebUserId(c),
+      });
       getLog().info(
         {
           runId,
@@ -3202,7 +3230,7 @@ export function registerApiRoutes(
       // `parent_conversation_id` on the run (set by orchestrator-agent for any
       // web-dispatched workflow — foreground, interactive, and background via
       // the pre-created run) and a web-platform parent (guarded in the helper).
-      const autoResumed = await tryAutoResumeAfterGate(run, 'approve');
+      const autoResumed = await tryAutoResumeAfterGate(run, 'approve', await resolveWebUserId(c));
 
       return c.json({
         success: true,
@@ -3259,7 +3287,7 @@ export function registerApiRoutes(
         // without requiring the user to re-run the workflow command. Mirrors
         // what `workflowRejectCommand` does in the CLI. Same cross-adapter
         // guard as approve — only web parents auto-resume.
-        const autoResumed = await tryAutoResumeAfterGate(run, 'reject');
+        const autoResumed = await tryAutoResumeAfterGate(run, 'reject', await resolveWebUserId(c));
 
         return c.json({
           success: true,

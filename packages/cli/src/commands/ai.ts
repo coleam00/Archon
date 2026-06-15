@@ -4,7 +4,7 @@
  *   archon ai key set <provider>   Connect an API key (read from masked prompt or piped stdin)
  *   archon ai list                 List connected providers (metadata only, no secrets)
  *   archon ai logout <provider>    Disconnect a provider
- *   archon ai login <provider>     Connect a subscription (claude/copilot) via OAuth
+ *   archon ai login <provider>     Connect a subscription (claude/codex/copilot) via OAuth
  *   archon ai tier set|list|unset  Edit small/medium/large tier presets (config, not a credential)
  *   archon ai alias set|list|unset Edit @custom model aliases (config, not a credential)
  *   archon ai default <provider>   Set the default assistant (config, not a credential)
@@ -229,9 +229,10 @@ function sleep(ms: number): Promise<void> {
 
 /**
  * `archon ai login <provider>` — connect a subscription (Claude Pro/Max,
- * ChatGPT/Codex, GitHub Copilot) via Pi's OAuth, driven in-process through the
- * bridge. Manual-code providers (claude/codex) print a URL and prompt for the
- * pasted code; device-code (copilot) prints a user-code and polls.
+ * ChatGPT/Codex, GitHub Copilot), driven in-process through the bridge
+ * (Pi's OAuth for claude/copilot; Archon's own PKCE flow for codex, #1924).
+ * Manual-code providers (claude/codex) print a URL and prompt for the pasted
+ * code or redirect URL; device-code (copilot) prints a user-code and polls.
  */
 export async function aiLoginCommand(providerArg: string | undefined): Promise<number> {
   if (!ensureEnabled()) return 1;
@@ -262,9 +263,11 @@ export async function aiLoginCommand(providerArg: string | undefined): Promise<n
     }
     // manual-code (Anthropic / Codex)
     if (start.url) console.log(`\n→ Visit: ${start.url}`);
-    console.log('→ Authorize in your browser, then paste the code shown back here.');
+    console.log(
+      '→ Authorize in your browser, then paste the code (or the full redirect URL) back here.'
+    );
     const code = await text({
-      message: 'Paste the authorization code:',
+      message: 'Paste the authorization code (or redirect URL):',
       validate: v => (v?.trim() ? undefined : 'Authorization code is required.'),
     });
     if (isCancel(code)) {

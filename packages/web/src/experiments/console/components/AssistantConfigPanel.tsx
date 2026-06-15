@@ -1,54 +1,22 @@
-import { useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactElement } from 'react';
 import * as skill from '../skills';
-import type { SafeConfig, ProviderInfo, AssistantConfigForm, UserAiPrefs } from '../skills';
+import type {
+  SafeConfig,
+  PiModelInfo,
+  ProviderInfo,
+  ProviderKeyList,
+  AssistantConfigForm,
+  UserAiPrefs,
+} from '../skills';
 import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
+import { CODEX_EFFORT_OPTIONS } from '../lib/model-options';
+import { useCancelledRef } from '../lib/use-cancelled-ref';
 import { SettingsSection } from './SettingsSection';
+import { SELECT_CLASS_COMPACT, SelectShell } from './SettingsFormPrimitives';
+import { ModelPickerField } from './ModelPickerField';
 
-const REASONING_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh'] as const;
 const WEB_SEARCH_MODES = ['disabled', 'cached', 'live'] as const;
-
-// Design v5 (.set-input / .set-select): mono fields on the page surface with
-// a magenta focus ring. Border colors ride inline styles where needed because
-// the console scope's wildcard border-color rule repaints Tailwind utilities.
-const INPUT_CLASS =
-  'w-full rounded-[9px] border border-border bg-surface px-3.5 py-[11px] font-mono text-[13px] text-text-primary placeholder:text-text-tertiary transition-all focus:border-accent-bright/50 focus:outline-none focus:shadow-[0_0_0_3px_color-mix(in_oklch,var(--brand-magenta),transparent_92%)]';
-// appearance-none kills the browser's edge-pinned arrow; SelectShell paints
-// the design's chevron at right:11px instead (.set-select / .set-select-chev).
-const SELECT_CLASS =
-  'w-full cursor-pointer appearance-none rounded-[9px] border border-border bg-surface-elevated py-[7px] pl-3 pr-8 font-mono text-[12.5px] font-semibold text-text-primary transition-all focus:border-accent-bright/50 focus:outline-none focus:shadow-[0_0_0_3px_color-mix(in_oklch,var(--brand-magenta),transparent_92%)]';
-
-/** Relative wrapper that overlays the design chevron on an appearance-none select. */
-function SelectShell({
-  children,
-  className = '',
-}: {
-  children: ReactNode;
-  className?: string;
-}): ReactElement {
-  return (
-    <span className={`relative inline-flex items-center ${className}`}>
-      {children}
-      <span
-        aria-hidden
-        className="pointer-events-none absolute right-[11px] flex text-text-tertiary"
-      >
-        <svg
-          width="13"
-          height="13"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.8"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <path d="M6 9l6 6 6-6" />
-        </svg>
-      </span>
-    </span>
-  );
-}
 
 /** Read a string field off the open `ProviderDefaults` record, '' when absent/non-string. */
 function readStr(rec: SafeConfig['assistants'][string] | undefined, key: string): string {
@@ -71,9 +39,10 @@ function seedForm(config: SafeConfig, providers: ProviderInfo[]): AssistantConfi
 
 /**
  * Editor for the global default assistant + per-provider model (and Codex
- * reasoning/web-search). Model is a FREE-TEXT input for every provider — Archon
- * does not validate model strings (the SDK is the source of truth and ships
- * models faster than we can enumerate them). Saves via PATCH /api/config/assistants
+ * reasoning/web-search). The model field is agent-aware (ModelPickerField,
+ * #1957) but never blocks free text — Archon does not validate model strings
+ * (the SDK is the source of truth and ships models faster than we can
+ * enumerate them). Saves via PATCH /api/config/assistants
  * → ~/.archon/config.yaml, then invalidates K.config so the form re-seeds from the
  * persisted values (which also clears the dirty state).
  */
@@ -87,18 +56,20 @@ export function AssistantConfigPanel(): ReactElement {
     K.userAiPrefs,
     skill.getUserAiPrefs
   );
+  // Agents matrix + Pi catalog for the agent-aware model pickers (#1957).
+  // Both share cache keys with other Settings panels (one fetch per page);
+  // undefined (401/error) just means pickers render without readiness data.
+  const { data: keyData } = useEntity<ProviderKeyList>(
+    K.providerConnections,
+    skill.listProviderKeys
+  );
+  const { data: piModels } = useEntity<PiModelInfo[]>(K.piModels, skill.listPiModels);
   const userScopeAvailable = userPrefsError === undefined;
   const [savingUserDefault, setSavingUserDefault] = useState(false);
   const [userDefaultError, setUserDefaultError] = useState<string | null>(null);
 
-  // Guard async setState after unmount (mirrors ModelTiersPanel/AliasesPanel).
-  const cancelledRef = useRef(false);
-  useEffect(() => {
-    cancelledRef.current = false;
-    return (): void => {
-      cancelledRef.current = true;
-    };
-  }, []);
+  // Guard async setState after unmount (same hook as the sibling panels).
+  const cancelledRef = useCancelledRef();
 
   const onUserDefaultChange = async (value: string): Promise<void> => {
     setSavingUserDefault(true);
@@ -177,7 +148,7 @@ export function AssistantConfigPanel(): ReactElement {
             onChange={e => {
               patch({ assistant: e.target.value });
             }}
-            className={`${SELECT_CLASS} py-[11px] pl-3.5 text-[13.5px]`}
+            className={`${SELECT_CLASS_COMPACT} py-[11px] pl-3.5 text-[13.5px]`}
           >
             {providers.map(p => (
               <option key={p.id} value={p.id}>
@@ -201,7 +172,7 @@ export function AssistantConfigPanel(): ReactElement {
               value={userPrefs.defaultProvider ?? ''}
               onChange={e => void onUserDefaultChange(e.target.value)}
               disabled={savingUserDefault}
-              className={`${SELECT_CLASS} py-[11px] pl-3.5 text-[13.5px]`}
+              className={`${SELECT_CLASS_COMPACT} py-[11px] pl-3.5 text-[13.5px]`}
             >
               <option value="">Inherit (this install)</option>
               {providers.map(p => (
@@ -251,13 +222,18 @@ export function AssistantConfigPanel(): ReactElement {
                 ) : null}
               </div>
               <div className="min-w-0 flex-1">
-                <input
+                <ModelPickerField
+                  agentId={p.id}
                   value={form.models[p.id] ?? ''}
-                  onChange={e => {
-                    setModel(p.id, e.target.value);
+                  onChange={v => {
+                    setModel(p.id, v);
                   }}
                   placeholder="model (e.g. sonnet, gpt-5.3-codex) — blank = inherit"
-                  className={INPUT_CLASS}
+                  selectEmptyLabel="inherit"
+                  ariaLabel={`${p.displayName} default model`}
+                  className="w-full"
+                  agents={keyData?.agents}
+                  piModels={piModels}
                 />
                 {p.id === 'codex' ? (
                   <div className="mt-[11px] flex flex-wrap items-center justify-end gap-5">
@@ -269,10 +245,10 @@ export function AssistantConfigPanel(): ReactElement {
                           onChange={e => {
                             patch({ modelReasoningEffort: e.target.value });
                           }}
-                          className={SELECT_CLASS}
+                          className={SELECT_CLASS_COMPACT}
                         >
                           <option value="">inherit</option>
-                          {REASONING_EFFORTS.map(o => (
+                          {CODEX_EFFORT_OPTIONS.map(o => (
                             <option key={o} value={o}>
                               {o}
                             </option>
@@ -288,7 +264,7 @@ export function AssistantConfigPanel(): ReactElement {
                           onChange={e => {
                             patch({ webSearchMode: e.target.value });
                           }}
-                          className={SELECT_CLASS}
+                          className={SELECT_CLASS_COMPACT}
                         >
                           <option value="">inherit</option>
                           {WEB_SEARCH_MODES.map(o => (

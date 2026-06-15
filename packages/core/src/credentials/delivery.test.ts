@@ -65,11 +65,16 @@ describe('credentials/delivery', () => {
       expect(r.files).toBeUndefined();
     });
 
-    test('oauth (Claude Pro/Max subscription) → CLAUDE_CODE_OAUTH_TOKEN', () => {
+    test('oauth (Claude Pro/Max subscription) → CLAUDE_CODE_OAUTH_TOKEN + ANTHROPIC_OAUTH_TOKEN', () => {
+      // Native Claude reads CLAUDE_CODE_OAUTH_TOKEN; Pi's anthropic backend reads
+      // ANTHROPIC_OAUTH_TOKEN in env-only chat (#1984). Both carry the same bearer.
       const r = deliverCredential('anthropic', oauth('claude-oauth-tok'), {
         artifactsDir: ART_DIR,
       });
-      expect(r.env).toEqual({ CLAUDE_CODE_OAUTH_TOKEN: 'claude-oauth-tok' });
+      expect(r.env).toEqual({
+        CLAUDE_CODE_OAUTH_TOKEN: 'claude-oauth-tok',
+        ANTHROPIC_OAUTH_TOKEN: 'claude-oauth-tok',
+      });
       expect(r.files).toBeUndefined();
     });
 
@@ -106,11 +111,17 @@ describe('credentials/delivery', () => {
       expect(typeof parsed.last_refresh).toBe('string');
     });
 
-    test('oauth → full tokens shape; account_id from Pi `accountId`, id_token best-effort', () => {
+    test('oauth → full tokens shape; real id_token from the Archon-owned flow (#1924)', () => {
       const cred: ResolvedCredential = {
         kind: 'oauth',
         oauthApiKey: 'x',
-        rawCreds: { access: 'acc-tok', refresh: 'ref-tok', expires: 123, accountId: 'acct-9' },
+        rawCreds: {
+          access: 'acc-tok',
+          refresh: 'ref-tok',
+          expires: 123,
+          accountId: 'acct-9',
+          id_token: 'idt-real',
+        },
       };
       const r = deliverCredential('codex', cred, { artifactsDir: ART_DIR });
       const parsed = JSON.parse(r.files![0]!.contents) as {
@@ -120,11 +131,22 @@ describe('credentials/delivery', () => {
       };
       expect(parsed.OPENAI_API_KEY).toBeNull();
       expect(parsed.tokens).toEqual({
-        id_token: '', // Pi does not surface one
+        id_token: 'idt-real', // captured by openai-oauth.ts (Pi drops it)
         access_token: 'acc-tok',
         refresh_token: 'ref-tok',
-        account_id: 'acct-9', // mapped from Pi's camelCase `accountId`
+        account_id: 'acct-9', // mapped from the camelCase `accountId`
       });
+    });
+
+    test('legacy Pi-minted blob without id_token → empty string (run fails with the known Codex error; reconnect mints a full blob)', () => {
+      const cred: ResolvedCredential = {
+        kind: 'oauth',
+        oauthApiKey: 'x',
+        rawCreds: { access: 'acc-tok', refresh: 'ref-tok', expires: 123, accountId: 'acct-9' },
+      };
+      const r = deliverCredential('codex', cred, { artifactsDir: ART_DIR });
+      const parsed = JSON.parse(r.files![0]!.contents) as { tokens: Record<string, string> };
+      expect(parsed.tokens.id_token).toBe('');
     });
   });
 
