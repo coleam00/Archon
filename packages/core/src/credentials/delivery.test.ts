@@ -65,11 +65,16 @@ describe('credentials/delivery', () => {
       expect(r.files).toBeUndefined();
     });
 
-    test('oauth (Claude Pro/Max subscription) → CLAUDE_CODE_OAUTH_TOKEN', () => {
+    test('oauth (Claude Pro/Max subscription) → CLAUDE_CODE_OAUTH_TOKEN + ANTHROPIC_OAUTH_TOKEN', () => {
+      // Native Claude reads CLAUDE_CODE_OAUTH_TOKEN; Pi's anthropic backend reads
+      // ANTHROPIC_OAUTH_TOKEN in env-only chat (#1984). Both carry the same bearer.
       const r = deliverCredential('anthropic', oauth('claude-oauth-tok'), {
         artifactsDir: ART_DIR,
       });
-      expect(r.env).toEqual({ CLAUDE_CODE_OAUTH_TOKEN: 'claude-oauth-tok' });
+      expect(r.env).toEqual({
+        CLAUDE_CODE_OAUTH_TOKEN: 'claude-oauth-tok',
+        ANTHROPIC_OAUTH_TOKEN: 'claude-oauth-tok',
+      });
       expect(r.files).toBeUndefined();
     });
 

@@ -180,8 +180,9 @@ mock.module('../config/config-loader', () => ({
   loadConfig: mockLoadConfig,
 }));
 
+const mockGenerateAndSetTitle = mock(() => Promise.resolve());
 mock.module('../services/title-generator', () => ({
-  generateAndSetTitle: mock(() => Promise.resolve()),
+  generateAndSetTitle: mockGenerateAndSetTitle,
 }));
 
 const mockDispatchBackgroundWorkflow = mock(() => Promise.resolve());
@@ -2475,6 +2476,8 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
     mockListDecryptedUserProviderCredentials.mockImplementation(async () => []);
     mockIsPerUserProviderKeysEnabled.mockReset();
     mockIsPerUserProviderKeysEnabled.mockImplementation(() => true);
+    mockGenerateAndSetTitle.mockReset();
+    mockGenerateAndSetTitle.mockImplementation(() => Promise.resolve());
   });
 
   test('injects api_key env vars from a connected provider', async () => {
@@ -2486,6 +2489,46 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
     // The env passed to sendQuery should contain the provider's env var.
     const requestOptions = mockSendQuery.mock.calls[0]?.[3] as { env?: Record<string, string> };
     expect(requestOptions?.env).toMatchObject({ OPENROUTER_API_KEY: 'or-key' });
+  });
+
+  test('anthropic OAuth subscription delivers ANTHROPIC_OAUTH_TOKEN into chat env (#1984)', async () => {
+    // env-only chat: the bearer must reach the env under the Pi-readable OAuth var,
+    // not only the native-Claude var — otherwise a Pi-default install can't see it.
+    mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([
+      {
+        provider: 'anthropic',
+        cred: { kind: 'oauth', oauthApiKey: 'sk-ant-oat01-x', rawCreds: {} },
+      },
+    ]);
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello');
+    const requestOptions = mockSendQuery.mock.calls[0]?.[3] as { env?: Record<string, string> };
+    expect(requestOptions?.env).toMatchObject({
+      ANTHROPIC_OAUTH_TOKEN: 'sk-ant-oat01-x',
+      CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-x',
+    });
+  });
+
+  test('title generation receives the per-user env bag (#1984)', async () => {
+    // The title-gen branch (if (!conversation.title)) previously built titleOptions
+    // with no env, so title generation ran with no per-user subscription and failed
+    // on per-user-only installs. title: null enters the branch; assert the bag flows.
+    mockGetOrCreateConversation.mockImplementation(() =>
+      Promise.resolve(makeConversation({ user_id: 'u-test', title: null }))
+    );
+    mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([
+      {
+        provider: 'anthropic',
+        cred: { kind: 'oauth', oauthApiKey: 'sk-ant-oat01-x', rawCreds: {} },
+      },
+    ]);
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello there');
+    // generateAndSetTitle(convId, msg, provider, cwd, sessionId?, assistantConfig?, titleOptions)
+    const titleOptions = mockGenerateAndSetTitle.mock.calls[0]?.[6] as
+      | { env?: Record<string, string> }
+      | undefined;
+    expect(titleOptions?.env).toMatchObject({ ANTHROPIC_OAUTH_TOKEN: 'sk-ant-oat01-x' });
   });
 
   test('drops file-based deliveries (Codex OAuth) — no CODEX_HOME in chat env', async () => {
