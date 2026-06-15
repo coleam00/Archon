@@ -2488,6 +2488,24 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
     expect(requestOptions?.env).toMatchObject({ OPENROUTER_API_KEY: 'or-key' });
   });
 
+  test('anthropic OAuth subscription delivers ANTHROPIC_OAUTH_TOKEN into chat env (#1984)', async () => {
+    // env-only chat: the bearer must reach the env under the Pi-readable OAuth var,
+    // not only the native-Claude var — otherwise a Pi-default install can't see it.
+    mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([
+      {
+        provider: 'anthropic',
+        cred: { kind: 'oauth', oauthApiKey: 'sk-ant-oat01-x', rawCreds: {} },
+      },
+    ]);
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello');
+    const requestOptions = mockSendQuery.mock.calls[0]?.[3] as { env?: Record<string, string> };
+    expect(requestOptions?.env).toMatchObject({
+      ANTHROPIC_OAUTH_TOKEN: 'sk-ant-oat01-x',
+      CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-x',
+    });
+  });
+
   test('drops file-based deliveries (Codex OAuth) — no CODEX_HOME in chat env', async () => {
     mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([
       {

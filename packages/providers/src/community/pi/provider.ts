@@ -121,6 +121,19 @@ export function ensurePiPackageDirShim(): void {
 // scripts/generate-pi-vendor-map.ts; `bun run check:pi-vendor-map` guards drift.
 import { PI_PROVIDER_ENV_VARS } from './pi-vendor-map.generated';
 
+// Pi provider id → OAuth-subscription env var. pi-ai's getApiKeyEnvVars lists
+// the OAuth var ahead of the API-key var (e.g. anthropic →
+// ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]). Archon delivers subscriptions
+// to env-only chat under this var (delivery.ts), but the per-user injection never
+// writes to process.env — Pi only ingests requestOptions.env via the explicit
+// bridge below, so the bridge must read the OAuth var too (#1984). github-copilot
+// delivers its single COPILOT_GITHUB_TOKEN (already the API-key var) and
+// openai/codex subscriptions use the auth.json file path, so anthropic is the
+// only backend that needs a distinct OAuth env var here.
+const PI_OAUTH_ENV_VARS: Readonly<Record<string, string>> = {
+  anthropic: 'ANTHROPIC_OAUTH_TOKEN',
+};
+
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('provider.pi');
@@ -265,11 +278,17 @@ export class PiProvider implements IAgentProvider {
     }
 
     // 4. Resolve credentials. Per-request env vars override auth.json entries via
-    //    setRuntimeApiKey — codebase-scoped env vars win over the user's global Pi login.
+    //    setRuntimeApiKey — codebase-scoped env vars win over the user's global Pi
+    //    login. Subscriptions delivered to env-only chat arrive under the OAuth var
+    //    (e.g. ANTHROPIC_OAUTH_TOKEN); read it first, then the API-key var. pi-ai's
+    //    createClient discriminates OAuth vs api-key by token content (sk-ant-oat*),
+    //    so one runtime channel serves both — and setRuntimeApiKey stays runtime-only
+    //    (no auth.json disk write, unlike AuthStorage.set) (#1984).
     const envVarName = PI_PROVIDER_ENV_VARS[parsed.provider];
-    const envOverride = envVarName
-      ? (requestOptions?.env?.[envVarName] ?? process.env[envVarName])
-      : undefined;
+    const oauthVarName = PI_OAUTH_ENV_VARS[parsed.provider];
+    const readEnvOverride = (name: string | undefined): string | undefined =>
+      name ? (requestOptions?.env?.[name] ?? process.env[name]) : undefined;
+    const envOverride = readEnvOverride(oauthVarName) ?? readEnvOverride(envVarName);
     if (envOverride) {
       authStorage.setRuntimeApiKey(parsed.provider, envOverride);
     }

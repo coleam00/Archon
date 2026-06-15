@@ -1352,6 +1352,11 @@ export async function handleMessage(
       const titleOptions: SendQueryOptions = {
         model: titleRequest.model,
         assistantConfig: { ...(config.assistants[titleRequest.provider] ?? {}) },
+        // Thread the per-user credential bag so title generation authenticates as
+        // the sender too. Without this, title-gen runs with no per-user
+        // subscription/key and fails on per-user-only installs (#1984; same family
+        // as #1794/#1855). Same env-only bag as the main chat request above.
+        env: Object.keys(effectiveEnv).length > 0 ? effectiveEnv : undefined,
       };
       if (titleRequest.preset) {
         applyPresetToRequestOptions(titleRequest.provider, titleRequest.preset, titleOptions);

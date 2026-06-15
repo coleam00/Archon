@@ -243,6 +243,7 @@ describe('PiProvider', () => {
     runtimeOverrides = {};
     delete process.env.GEMINI_API_KEY;
     delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_OAUTH_TOKEN;
     delete process.env.ARCHON_PI_AUTH_PATH;
     // The extension-loader cache is module-level and persists across tests;
     // clear it so each test starts with an empty cache and sees its own
@@ -589,6 +590,75 @@ describe('PiProvider', () => {
       })
     );
     expect(mockSetRuntimeApiKey).toHaveBeenCalledWith('anthropic', 'from-env');
+  });
+
+  test('ANTHROPIC_OAUTH_TOKEN (subscription) routes into setRuntimeApiKey for anthropic (#1984)', async () => {
+    // Env-only chat delivers a Claude Pro/Max subscription under the OAuth var.
+    // The bridge must read it (Pi never sees requestOptions.env via process.env),
+    // and the sk-ant-oat* bearer flows through the same runtime channel — pi-ai's
+    // createClient detects OAuth by token content downstream.
+    resetScript([
+      {
+        type: 'agent_end',
+        messages: [
+          {
+            role: 'assistant',
+            usage: {
+              input: 1,
+              output: 1,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 2,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: 'stop',
+            content: [],
+          },
+        ],
+      },
+    ]);
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'anthropic/claude-haiku-4-5',
+        env: { ANTHROPIC_OAUTH_TOKEN: 'sk-ant-oat01-bearer' },
+      })
+    );
+    expect(mockSetRuntimeApiKey).toHaveBeenCalledWith('anthropic', 'sk-ant-oat01-bearer');
+  });
+
+  test('OAuth var wins over the API-key var when both are delivered (#1984)', async () => {
+    resetScript([
+      {
+        type: 'agent_end',
+        messages: [
+          {
+            role: 'assistant',
+            usage: {
+              input: 1,
+              output: 1,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 2,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: 'stop',
+            content: [],
+          },
+        ],
+      },
+    ]);
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'anthropic/claude-haiku-4-5',
+        env: {
+          ANTHROPIC_OAUTH_TOKEN: 'sk-ant-oat01-bearer',
+          ANTHROPIC_API_KEY: 'sk-ant-apikey',
+        },
+      })
+    );
+    expect(mockSetRuntimeApiKey).toHaveBeenCalledWith('anthropic', 'sk-ant-oat01-bearer');
   });
 
   test('yields assistant chunks from text_delta events', async () => {
