@@ -1057,7 +1057,7 @@ export async function handleMessage(
 
         if (command === 'setproject') {
           getLog().debug({ command, conversationId }, 'deterministic_command');
-          const result = await handleSetProject(message, conversationId);
+          const result = await handleSetProject(message, conversation);
           await platform.sendMessage(conversationId, result);
           return;
         }
@@ -2165,11 +2165,11 @@ async function handleRemoveProject(message: string): Promise<string> {
 
 /**
  * Handle /setproject command.
- * Binds the current conversation to a registered codebase by writing
- * `codebase_id` and `cwd` to the conversations table. Uses 4-tier fuzzy
- * name resolution (exact → case-insensitive → prefix → substring).
+ * Binds the current conversation to a registered codebase. The project root
+ * remains codebase.default_cwd; conversation.cwd is only an explicit runtime
+ * override, so switching projects clears it.
  */
-async function handleSetProject(message: string, conversationId: string): Promise<string> {
+async function handleSetProject(message: string, conversation: Conversation): Promise<string> {
   const { args } = commandHandler.parseCommand(message);
   if (args.length < 1) {
     return 'Usage: /setproject <project-name>';
@@ -2192,13 +2192,25 @@ async function handleSetProject(message: string, conversationId: string): Promis
       : `Project "${projectName}" not found. No projects registered — use /register-project.`;
   }
 
-  await db.updateConversation(conversationId, {
+  await db.updateConversation(conversation.id, {
     codebase_id: codebase.id,
-    cwd: codebase.default_cwd,
+    cwd: null,
+    isolation_env_id: null,
   });
 
+  const session = await sessionDb.getActiveSession(conversation.id);
+  if (session) {
+    try {
+      await sessionDb.deactivateSession(session.id, 'project-changed');
+    } catch (error) {
+      const err = toError(error);
+      if (err.name !== 'SessionNotFoundError') throw error;
+      getLog().debug({ sessionId: session.id }, 'project.set_session_already_deactivated');
+    }
+  }
+
   getLog().info(
-    { conversationId, projectName: codebase.name, codebaseId: codebase.id },
+    { conversationId: conversation.id, projectName: codebase.name, codebaseId: codebase.id },
     'project.set_completed'
   );
   return `Project set to **${codebase.name}**\nWorking directory: ${codebase.default_cwd}`;
