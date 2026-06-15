@@ -127,9 +127,10 @@ import { PI_PROVIDER_ENV_VARS } from './pi-vendor-map.generated';
 // to env-only chat under this var (delivery.ts), but the per-user injection never
 // writes to process.env — Pi only ingests requestOptions.env via the explicit
 // bridge below, so the bridge must read the OAuth var too (#1984). github-copilot
-// delivers its single COPILOT_GITHUB_TOKEN (already the API-key var) and
-// openai/codex subscriptions use the auth.json file path, so anthropic is the
-// only backend that needs a distinct OAuth env var here.
+// delivers its single COPILOT_GITHUB_TOKEN (already the API-key var); openai is
+// shipped by delivery.ts as a CODEX_HOME/auth.json file (dropped in env-only chat),
+// never an env var — so on this env channel anthropic is the only backend that
+// needs a distinct OAuth var.
 const PI_OAUTH_ENV_VARS: Readonly<Record<string, string>> = {
   anthropic: 'ANTHROPIC_OAUTH_TOKEN',
 };
@@ -300,7 +301,13 @@ export class PiProvider implements IAgentProvider {
       const resolvedKey = await authStorage.getApiKey(parsed.provider);
       if (!resolvedKey) {
         if (envVarName) {
-          const envHint = `Set ${envVarName} in the environment or codebase env vars (.archon/config.yaml env: section).`;
+          // Name the OAuth var first when the backend has one — a subscription
+          // user who hits this miss must be told the var the resolver actually
+          // prefers (ANTHROPIC_OAUTH_TOKEN), not just the API-key var (#1984).
+          const varHint = oauthVarName
+            ? `${oauthVarName} (subscription) or ${envVarName}`
+            : envVarName;
+          const envHint = `Set ${varHint} in the environment or codebase env vars (.archon/config.yaml env: section).`;
           const loginHint = `Or run \`pi\` and type \`/login\` locally to authenticate '${parsed.provider}' via OAuth; credentials land in ~/.pi/agent/auth.json and are picked up automatically.`;
           throw new Error(
             `Pi auth: no credentials for provider '${parsed.provider}'. ${envHint} ${loginHint}`
