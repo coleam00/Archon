@@ -59,6 +59,62 @@ describe('remove-selection', () => {
   });
 });
 
+describe('apply-selection (canvas select deltas)', () => {
+  test('merges node and edge select deltas into the selection sets', () => {
+    let state = mixedState();
+    state = editorReducer(state, {
+      type: 'apply-selection',
+      nodes: [{ id: 'classify', selected: true }],
+      edges: [{ id: edgeId('classify', 'fix'), selected: true }],
+    });
+    expect([...state.selectedNodes]).toEqual(['classify']);
+    expect([...state.selectedEdges]).toEqual([edgeId('classify', 'fix')]);
+  });
+
+  test('an edge select delta makes the edge deletable via remove-selection', () => {
+    let state = mixedState();
+    // Click the connector — the only way to select an edge.
+    state = editorReducer(state, {
+      type: 'apply-selection',
+      nodes: [],
+      edges: [{ id: edgeId('classify', 'fix'), selected: true }],
+    });
+    expect(state.selectedEdges.size).toBe(1);
+    const removed = editorReducer(state, { type: 'remove-selection', at: 1000 });
+    expect(removed.workflow.nodes.find(n => n.id === 'fix')?.base.depends_on).toBeUndefined();
+    // The other dependency edge is untouched.
+    expect(removed.workflow.nodes.find(n => n.id === 'report')?.base.depends_on).toEqual([
+      'classify',
+      'fix',
+    ]);
+  });
+
+  test('select:false deltas remove ids; a no-op delta returns the same state', () => {
+    let state = mixedState();
+    state = editorReducer(state, {
+      type: 'apply-selection',
+      nodes: [
+        { id: 'classify', selected: true },
+        { id: 'fix', selected: true },
+      ],
+      edges: [],
+    });
+    state = editorReducer(state, {
+      type: 'apply-selection',
+      nodes: [{ id: 'classify', selected: false }],
+      edges: [],
+    });
+    expect([...state.selectedNodes]).toEqual(['fix']);
+
+    const same = editorReducer(state, {
+      type: 'apply-selection',
+      nodes: [{ id: 'classify', selected: false }],
+      edges: [],
+    });
+    expect(same).toBe(state);
+  });
+});
+
 describe('rename-node id validation', () => {
   test('rejects ids outside the engine grammar', () => {
     const initial = mixedState();

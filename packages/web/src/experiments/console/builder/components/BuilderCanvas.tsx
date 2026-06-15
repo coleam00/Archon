@@ -21,7 +21,6 @@ import {
   type Connection,
   type EdgeChange,
   type NodeChange,
-  type OnSelectionChangeParams,
   type ReactFlowInstance,
 } from '@xyflow/react';
 import type { VariantId } from '../types';
@@ -41,7 +40,11 @@ interface BuilderCanvasProps {
   nodes: BuilderFlowNode[];
   edges: BuilderFlowEdge[];
   onMoveNodes: (moves: readonly { id: string; position: XYPosition }[]) => void;
-  onSelectionChange: (nodeIds: ReadonlySet<string>, edgeIds: ReadonlySet<string>) => void;
+  /** Per-element selection deltas (xyflow's only selection channel in controlled mode). */
+  onSelectDelta: (
+    nodes: readonly { id: string; selected: boolean }[],
+    edges: readonly { id: string; selected: boolean }[]
+  ) => void;
   onConnect: (source: string, target: string) => void;
   onAddNode: (variant: VariantId, position: XYPosition) => void;
   onInit: (instance: ReactFlowInstance<BuilderFlowNode, BuilderFlowEdge>) => void;
@@ -61,7 +64,7 @@ function CanvasInner({
   nodes,
   edges,
   onMoveNodes,
-  onSelectionChange,
+  onSelectDelta,
   onConnect,
   onAddNode,
   onInit,
@@ -74,6 +77,15 @@ function CanvasInner({
 
   const handleNodesChange = useCallback(
     (changes: NodeChange<BuilderFlowNode>[]): void => {
+      // Selection: xyflow emits `select` changes here (controlled mode never
+      // updates its store directly), so this is the only place node clicks and
+      // marquee selection are observable. Forward them before the early return.
+      const selects: { id: string; selected: boolean }[] = [];
+      for (const c of changes) {
+        if (c.type === 'select') selects.push({ id: c.id, selected: c.selected });
+      }
+      if (selects.length > 0) onSelectDelta(selects, []);
+
       const positionChanges = changes.filter(
         c => c.type === 'position' && c.position !== undefined
       );
@@ -106,21 +118,22 @@ function CanvasInner({
       if (!dragging) setGuides({ vertical: [], horizontal: [] });
       onMoveNodes(moves);
     },
-    [nodes, guides, onMoveNodes]
+    [nodes, guides, onMoveNodes, onSelectDelta]
   );
 
-  // Selection flows through onSelectionChange below; edge data changes flow
-  // through the reducer. Nothing to apply here, but xyflow requires the
-  // handler for edges to be selectable at all.
-  const handleEdgesChange = useCallback((_changes: EdgeChange<BuilderFlowEdge>[]): void => {
-    // no-op: selection is handled by handleSelectionChange, removal by the keymap
-  }, []);
-
-  const handleSelectionChange = useCallback(
-    (params: OnSelectionChangeParams<BuilderFlowNode, BuilderFlowEdge>): void => {
-      onSelectionChange(new Set(params.nodes.map(n => n.id)), new Set(params.edges.map(e => e.id)));
+  // Edges are selectable only because we forward their `select` changes: in
+  // controlled mode xyflow drops them unless onEdgesChange applies them, so a
+  // no-op handler (the previous behavior) made edges impossible to select or
+  // delete. Edge removal still runs through the keymap (deleteKeyCode={null}).
+  const handleEdgesChange = useCallback(
+    (changes: EdgeChange<BuilderFlowEdge>[]): void => {
+      const selects: { id: string; selected: boolean }[] = [];
+      for (const c of changes) {
+        if (c.type === 'select') selects.push({ id: c.id, selected: c.selected });
+      }
+      if (selects.length > 0) onSelectDelta([], selects);
     },
-    [onSelectionChange]
+    [onSelectDelta]
   );
 
   const handleConnect = useCallback(
@@ -166,10 +179,10 @@ function CanvasInner({
       selectionOnDrag
       selectionMode={SelectionMode.Partial}
       panOnDrag={[1, 2]}
+      panActivationKeyCode="Space"
       deleteKeyCode={null}
       onNodesChange={handleNodesChange}
       onEdgesChange={handleEdgesChange}
-      onSelectionChange={handleSelectionChange}
       onConnect={handleConnect}
       onDragOver={handleDragOver}
       onDrop={handleDrop}

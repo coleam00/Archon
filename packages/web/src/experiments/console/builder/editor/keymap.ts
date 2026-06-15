@@ -195,9 +195,21 @@ export function buildBuilderBindings(actions: BuilderKeymapActions): Binding[] {
   }));
 }
 
+/**
+ * Canvas pointer gestures — documented in the `?` overlay so they're
+ * discoverable, but NOT bound here: xyflow owns Space-to-pan
+ * (`panActivationKeyCode`), Shift-marquee, and middle/right-drag panning.
+ */
+const CANVAS_GESTURES: readonly { keys: readonly [string, ...string[]]; label: string }[] = [
+  { keys: ['Space', 'drag'], label: 'Pan the canvas' },
+  { keys: ['drag'], label: 'Marquee-select nodes' },
+  { keys: ['Shift', 'click'], label: 'Add to selection' },
+  { keys: ['click', 'edge'], label: 'Select a connector (then Delete)' },
+];
+
 /** Docs-side groups for the `KeymapHelp` overlay (same source table). */
 export function builderKeymapGroups(): KeymapGroup[] {
-  const groups: KeymapGroup[] = [];
+  const groups: KeymapGroup[] = [{ title: 'Builder · canvas', entries: CANVAS_GESTURES }];
   for (const title of ['Edit', 'Arrange'] as const) {
     groups.push({
       title: `Builder · ${title.toLowerCase()}`,

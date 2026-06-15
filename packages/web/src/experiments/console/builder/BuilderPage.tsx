@@ -58,12 +58,6 @@ type UnstampedAction = EditorAction extends infer A
     : never
   : never;
 
-function setsEqual(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
-  if (a.size !== b.size) return false;
-  for (const v of a) if (!b.has(v)) return false;
-  return true;
-}
-
 export function BuilderPage({ initialWorkflow, onChange }: BuilderPageProps): ReactElement {
   const [state, dispatch] = useReducer(editorReducer, initialWorkflow, createEditorState);
   const [issues, setIssues] = useState<Issue[]>(() => runValidation(initialWorkflow));
@@ -115,16 +109,18 @@ export function BuilderPage({ initialWorkflow, onChange }: BuilderPageProps): Re
       ? (state.workflow.nodes.find(n => state.selectedNodes.has(n.id)) ?? null)
       : null;
 
-  const handleSelectionChange = useCallback(
-    (nodeIds: ReadonlySet<string>, edgeIds: ReadonlySet<string>): void => {
-      // The canvas echoes selection on every derived-prop change; only
-      // dispatch when it actually moved to avoid render loops.
-      if (setsEqual(nodeIds, state.selectedNodes) && setsEqual(edgeIds, state.selectedEdges)) {
-        return;
-      }
-      dispatch({ type: 'set-selection', nodeIds, edgeIds });
+  // Selection is driven by per-element deltas from the canvas (xyflow's only
+  // selection channel in controlled mode); the reducer merges them and the
+  // `apply-selection` no-op guard prevents render churn. No stale-state deps,
+  // so this callback is stable.
+  const handleSelectDelta = useCallback(
+    (
+      selectedNodes: readonly { id: string; selected: boolean }[],
+      selectedEdges: readonly { id: string; selected: boolean }[]
+    ): void => {
+      dispatch({ type: 'apply-selection', nodes: selectedNodes, edges: selectedEdges });
     },
-    [state.selectedNodes, state.selectedEdges]
+    []
   );
 
   const handleMoveNodes = useCallback(
@@ -272,7 +268,7 @@ export function BuilderPage({ initialWorkflow, onChange }: BuilderPageProps): Re
             nodes={nodes}
             edges={edges}
             onMoveNodes={handleMoveNodes}
-            onSelectionChange={handleSelectionChange}
+            onSelectDelta={handleSelectDelta}
             onConnect={handleConnect}
             onAddNode={handleAddNode}
             onInit={(instance): void => {

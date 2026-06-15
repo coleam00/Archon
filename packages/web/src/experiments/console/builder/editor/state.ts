@@ -58,6 +58,14 @@ export type EditorAction =
   | { type: 'remove-selection'; at: number }
   | { type: 'move-nodes'; moves: readonly { id: string; position: XYPosition }[]; at: number }
   | { type: 'set-selection'; nodeIds: ReadonlySet<string>; edgeIds: ReadonlySet<string> }
+  | {
+      // Per-element selection deltas from the canvas. xyflow only reports
+      // selection through node/edge `select` changes in controlled mode, so
+      // this merges those deltas into the canonical selection sets.
+      type: 'apply-selection';
+      nodes: readonly { id: string; selected: boolean }[];
+      edges: readonly { id: string; selected: boolean }[];
+    }
   | { type: 'select-all' }
   | { type: 'copy' }
   | { type: 'cut'; at: number }
@@ -102,6 +110,12 @@ function uniqueNodeId(variant: VariantId, taken: ReadonlySet<string>): string {
 
 function nodeIds(workflow: BuilderWorkflow): Set<string> {
   return new Set(workflow.nodes.map(n => n.id));
+}
+
+function setsEqual(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+  if (a.size !== b.size) return false;
+  for (const v of a) if (!b.has(v)) return false;
+  return true;
 }
 
 /**
@@ -307,6 +321,26 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
 
     case 'set-selection':
       return { ...state, selectedNodes: action.nodeIds, selectedEdges: action.edgeIds };
+
+    case 'apply-selection': {
+      const selectedNodes = new Set(state.selectedNodes);
+      for (const c of action.nodes) {
+        if (c.selected) selectedNodes.add(c.id);
+        else selectedNodes.delete(c.id);
+      }
+      const selectedEdges = new Set(state.selectedEdges);
+      for (const c of action.edges) {
+        if (c.selected) selectedEdges.add(c.id);
+        else selectedEdges.delete(c.id);
+      }
+      if (
+        setsEqual(selectedNodes, state.selectedNodes) &&
+        setsEqual(selectedEdges, state.selectedEdges)
+      ) {
+        return state;
+      }
+      return { ...state, selectedNodes, selectedEdges };
+    }
 
     case 'select-all':
       return {
