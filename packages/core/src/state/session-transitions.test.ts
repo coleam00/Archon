@@ -20,6 +20,7 @@ describe('session-transitions', () => {
     test('returns false for deactivate-only triggers', () => {
       const deactivateOnly: TransitionTrigger[] = [
         'isolation-changed',
+        'project-changed',
         'reset-requested',
         'worktree-removed',
         'conversation-closed',
@@ -38,6 +39,7 @@ describe('session-transitions', () => {
     test('returns true for all deactivate-only triggers', () => {
       const deactivateOnly: TransitionTrigger[] = [
         'isolation-changed',
+        'project-changed',
         'reset-requested',
         'worktree-removed',
         'conversation-closed',
@@ -94,6 +96,10 @@ describe('session-transitions', () => {
 
     test('maps worktree-remove to worktree-removed', () => {
       expect(getTriggerForCommand('worktree-remove')).toBe('worktree-removed');
+    });
+
+    test('maps setproject to project-changed', () => {
+      expect(getTriggerForCommand('setproject')).toBe('project-changed');
     });
 
     test('returns null for commands without triggers', () => {

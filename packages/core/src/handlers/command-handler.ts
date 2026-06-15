@@ -37,6 +37,7 @@ import {
 import { getTriggerForCommand, type DeactivatingCommand } from '../state/session-transitions';
 import { SessionNotFoundError } from '../db/sessions';
 import { createLogger } from '@archon/paths';
+import { resolveConversationCwd } from '../utils/conversation-cwd';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -1101,9 +1102,10 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
 
       if (codebase?.name) {
         const repoContext = await formatRepoContext(codebase, conversation.isolation_env_id);
+        const cwdResolution = await resolveConversationCwd(conversation, { codebase });
         msg += `\n\n## Conversation Context\n- Project: ${repoContext}`;
-        if (conversation.cwd) {
-          msg += `\n- Working Directory: ${conversation.cwd}`;
+        if (cwdResolution) {
+          msg += `\n- Working Directory: ${cwdResolution.cwd}`;
         }
         // For a folder project, surface the git repos contained under its root.
         if (isFolderProject) {
@@ -1218,14 +1220,16 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
 
     case 'init': {
       // Create .archon structure in current repo
-      if (!conversation.cwd) {
+      const cwdResolution = await resolveConversationCwd(conversation);
+      if (!cwdResolution) {
         return {
           success: false,
-          message: 'No working directory set. Register a project first with /register-project.',
+          message:
+            'No working directory set. Register or select a project first with /register-project or /setproject.',
         };
       }
 
-      const archonDir = join(conversation.cwd, '.archon');
+      const archonDir = join(cwdResolution.cwd, '.archon');
       const commandsDir = join(archonDir, 'commands');
       const configPath = join(archonDir, 'config.yaml');
 

@@ -56,8 +56,10 @@ let spyMkdirAsync: ReturnType<typeof spyOn>;
 
 // Spies for fs/promises (avoid global mock.module pollution)
 let spyFsAccess: ReturnType<typeof spyOn>;
+let spyFsMkdir: ReturnType<typeof spyOn>;
 let spyFsReaddir: ReturnType<typeof spyOn>;
 let spyFsRm: ReturnType<typeof spyOn>;
+let spyFsWriteFile: ReturnType<typeof spyOn>;
 
 // Spies for workflows module
 let spyDiscoverWorkflows: ReturnType<typeof spyOn>;
@@ -282,8 +284,12 @@ function setupSpies(): void {
   spyFsAccess = spyOn(fsPromises, 'access').mockImplementation(() =>
     Promise.reject(new Error('ENOENT'))
   );
+  spyFsMkdir = spyOn(fsPromises, 'mkdir').mockImplementation(() => Promise.resolve(undefined));
   spyFsReaddir = spyOn(fsPromises, 'readdir').mockImplementation(() => Promise.resolve([]));
   spyFsRm = spyOn(fsPromises, 'rm').mockImplementation(() => Promise.resolve());
+  spyFsWriteFile = spyOn(fsPromises, 'writeFile').mockImplementation(() =>
+    Promise.resolve(undefined)
+  );
 
   // Workflow spies
   spyDiscoverWorkflows = spyOn(workflowDiscovery, 'discoverWorkflowsWithConfig').mockResolvedValue({
@@ -305,8 +311,10 @@ function restoreSpies(): void {
   spyFindWorktreeByBranch?.mockRestore();
   spyMkdirAsync?.mockRestore();
   spyFsAccess?.mockRestore();
+  spyFsMkdir?.mockRestore();
   spyFsReaddir?.mockRestore();
   spyFsRm?.mockRestore();
+  spyFsWriteFile?.mockRestore();
   spyDiscoverWorkflows?.mockRestore();
 }
 
@@ -711,6 +719,45 @@ describe('CommandHandler', () => {
         const result = await handleCommand(baseConversation, '/reset');
         expect(result.success).toBe(true);
         expect(result.message).toContain('No active session');
+      });
+    });
+
+    describe('/init', () => {
+      test('uses codebase default cwd when conversation cwd is unset', async () => {
+        const conversation = {
+          ...baseConversation,
+          codebase_id: 'cb-123',
+          cwd: null,
+        };
+        mockGetCodebase.mockResolvedValue({
+          id: 'cb-123',
+          name: 'my-repo',
+          repository_url: 'https://github.com/user/my-repo',
+          default_cwd: '/workspace/my-repo',
+          default_branch: 'main',
+          ai_assistant_type: 'claude',
+          commands: {},
+          created_at: new Date(),
+          updated_at: new Date(),
+        });
+
+        const result = await handleCommand(conversation, '/init');
+
+        expect(result.success).toBe(true);
+        expect(spyFsMkdir).toHaveBeenCalledWith('/workspace/my-repo/.archon/commands', {
+          recursive: true,
+        });
+        expect(spyFsWriteFile).toHaveBeenCalledWith(
+          '/workspace/my-repo/.archon/config.yaml',
+          expect.any(String)
+        );
+      });
+
+      test('returns clear error when no cwd or codebase context exists', async () => {
+        const result = await handleCommand(baseConversation, '/init');
+
+        expect(result.success).toBe(false);
+        expect(result.message).toContain('No working directory set');
       });
     });
 

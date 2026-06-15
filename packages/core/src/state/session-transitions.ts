@@ -11,6 +11,7 @@ export type TransitionTrigger =
   | 'first-message' // No existing session
   | 'plan-to-execute' // Plan phase completed, starting execution
   | 'isolation-changed' // Working directory/worktree changed
+  | 'project-changed' // Conversation was rebound to a different project
   | 'reset-requested' // User requested /reset
   | 'worktree-removed' // Worktree manually removed
   | 'conversation-closed'; // Platform conversation closed (issue/PR closed)
@@ -28,6 +29,7 @@ const TRIGGER_BEHAVIOR: Record<TransitionTrigger, 'creates' | 'deactivates' | 'n
   'first-message': 'none', // No existing session to deactivate
   'plan-to-execute': 'creates', // Only case where we deactivate AND immediately create
   'isolation-changed': 'deactivates',
+  'project-changed': 'deactivates',
   'reset-requested': 'deactivates',
   'worktree-removed': 'deactivates',
   'conversation-closed': 'deactivates',
@@ -68,10 +70,11 @@ export function detectPlanToExecuteTransition(
  * Commands that have known trigger mappings.
  * Used for function overloads to return non-null for known commands.
  */
-export type DeactivatingCommand = 'reset' | 'worktree-remove';
+export type DeactivatingCommand = 'reset' | 'setproject' | 'worktree-remove';
 
 const COMMAND_TRIGGER_MAP: Record<DeactivatingCommand, TransitionTrigger> = {
   reset: 'reset-requested',
+  setproject: 'project-changed',
   'worktree-remove': 'worktree-removed',
 };
 
