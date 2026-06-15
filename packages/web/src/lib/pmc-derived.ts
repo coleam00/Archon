@@ -45,7 +45,22 @@ interface PlaygroundKpis {
 
 // --- Type-cast escape hatches (one place, not scattered through the page) ---
 
-const KPIS: PlaygroundKpis = playgroundData.kpis as PlaygroundKpis;
+const DEFAULT_KPIS: PlaygroundKpis = {
+  meetings_this_week: 0,
+  dials_last_7d: 0,
+  active_sequences: 0,
+  reply_rate_14d: 0,
+  open_rate_14d: 0,
+  total_delivered: 0,
+  total_replied: 0,
+  target_30d_meetings: 0,
+  target_90d_meetings: 0,
+};
+
+const KPIS: PlaygroundKpis = {
+  ...DEFAULT_KPIS,
+  ...((playgroundData as { kpis?: Partial<PlaygroundKpis> }).kpis ?? {}),
+};
 const SEQUENCES: SequenceRow[] = (playgroundData.sequences ?? []) as SequenceRow[];
 const OUTCOME_FUNNEL: OutcomeFunnelRow[] =
   (playgroundData as { outcome_funnel?: OutcomeFunnelRow[] }).outcome_funnel ?? [];

@@ -112,7 +112,7 @@ function buildKpiTiles(meetingsDelta: ReturnType<typeof meetingsWeekDelta>): Kpi
   return [
     {
       label: 'First mtgs / wk (target)',
-      value: `${playgroundData.kpis.meetings_this_week} / ${playgroundData.kpis.target_30d_meetings}`,
+      value: `${KPIS.meetings_this_week} / ${KPIS.target_30d_meetings}`,
       sub: 'Day-30 target — North Star KPI',
       delta: meetingsDeltaLabel,
       deltaDirection: meetingsDelta.direction,
@@ -120,14 +120,14 @@ function buildKpiTiles(meetingsDelta: ReturnType<typeof meetingsWeekDelta>): Kpi
     },
     {
       label: 'Active sequences',
-      value: String(playgroundData.kpis.active_sequences),
-      sub: `${playgroundData.kpis.total_delivered} delivered · ${playgroundData.kpis.total_replied} replied`,
+      value: String(KPIS.active_sequences),
+      sub: `${KPIS.total_delivered} delivered · ${KPIS.total_replied} replied`,
       icon: TrendingUp,
     },
     {
       label: 'Reply rate (14d)',
-      value: `${playgroundData.kpis.reply_rate_14d}%`,
-      sub: `Open rate: ${playgroundData.kpis.open_rate_14d}%`,
+      value: `${KPIS.reply_rate_14d}%`,
+      sub: `Open rate: ${KPIS.open_rate_14d}%`,
       icon: ArrowUpRight,
     },
     {
@@ -167,6 +167,7 @@ export function PMCPage(): React.ReactElement {
   const pmcProspects: BusinessProspect[] = (
     (prospectsData.by_business as Record<string, BusinessProspect[]> | undefined)?.PMC ?? []
   ).slice(0, 9);
+  const pmcProspectTotal = (prospectsData.totals as Record<string, number> | undefined)?.PMC ?? 0;
 
   // Live pipeline funnel built from playground data + dial-tracker.
   const pipelineFunnel = buildPipelineFunnel();
@@ -196,11 +197,11 @@ export function PMCPage(): React.ReactElement {
   const meetingsGaugeData = [
     {
       name: 'First mtgs',
-      value: playgroundData.kpis.meetings_this_week,
+      value: KPIS.meetings_this_week,
       fill: 'var(--primary)',
     },
   ];
-  const meetingsTarget = playgroundData.kpis.target_30d_meetings;
+  const meetingsTarget = KPIS.target_30d_meetings;
 
   return (
     <div className="flex flex-1 flex-col overflow-auto">
@@ -515,7 +516,7 @@ export function PMCPage(): React.ReactElement {
                   className="text-4xl font-bold text-text-primary"
                   style={{ fontFamily: "'Playfair Display', serif" }}
                 >
-                  {playgroundData.kpis.meetings_this_week}
+                  {KPIS.meetings_this_week}
                 </div>
                 <div className="text-[11px] text-text-tertiary">of {meetingsTarget}</div>
               </div>
@@ -634,8 +635,7 @@ export function PMCPage(): React.ReactElement {
                 Top PMC ICP prospects — worklist
               </h3>
               <span className="text-[10px] text-text-tertiary">
-                {pmcProspects.length} of {(prospectsData.totals as Record<string, number>).PMC ?? 0}{' '}
-                · sorted by engagement signal
+                {pmcProspects.length} of {pmcProspectTotal} · sorted by engagement signal
               </span>
             </div>
             <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-12T22:53:42+00:00",
+  "generated_at": "2026-06-15T16:00:31+00:00",
   "vault_path": "second-brain/resources/drive-index",
   "count": 22,
   "folders": [
@@ -10,11 +10,18 @@
       "folderId": "1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
       "parentId": "",
       "audience": "jason-only",
-      "lastSynced": "2026-06-03T19:00:49+00:00",
-      "fileCount": 11,
+      "lastSynced": "2026-06-13T18:03:28+00:00",
+      "fileCount": 12,
       "vaultPath": "second-brain/resources/drive-index/_root.md",
       "driveUrl": "https://drive.google.com/drive/folders/1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
       "files": [
+        {
+          "name": "Jason Call Sheet -- Prospect Master v1 (2026-06-13)",
+          "type": "g-spreadsheet",
+          "modified": "2026-06-13",
+          "size": "",
+          "link": "https://docs.google.com/spreadsheets/d/1hjfgjMnLyuWipY3fvTTq54snxTd09U8IEEWee06M5IE/edit?usp=drivesdk"
+        },
         {
           "name": "Dial Board -- Wed June 3 2026 (Top 30 enriched, PMC + BRT)",
           "type": "g-document",
@@ -1018,11 +1025,18 @@
       "folderId": "1rc58IY7vFgaiAob48MbDtKeSh4U3k658",
       "parentId": "1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
       "audience": "internal",
-      "lastSynced": "2026-06-02T02:35:53+00:00",
-      "fileCount": 17,
+      "lastSynced": "2026-06-13T17:00:16+00:00",
+      "fileCount": 18,
       "vaultPath": "second-brain/resources/drive-index/lead-lists-apollo-imports.md",
       "driveUrl": "https://drive.google.com/drive/folders/1rc58IY7vFgaiAob48MbDtKeSh4U3k658",
       "files": [
+        {
+          "name": "VA-NameFind-29-Rows-2026-06-13",
+          "type": "g-spreadsheet",
+          "modified": "2026-06-13",
+          "size": "",
+          "link": "https://docs.google.com/spreadsheets/d/15SJD53vfVflfzKSVJ5tWVN9Zxr7uG926GlEdue9cu8U/edit?usp=drivesdk"
+        },
         {
           "name": "Dial List ALL \u2014 Apollo Sequences \u2014 2026-05-13",
           "type": "g-spreadsheet",
@@ -1564,15 +1578,15 @@
       "folderId": "1aO-IEBzPewrOx_sbvZWJtzSbo9k5Jgmv",
       "parentId": "1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
       "audience": "all",
-      "lastSynced": "2026-06-10T17:00:47+00:00",
+      "lastSynced": "2026-06-15T16:00:30+00:00",
       "fileCount": 6,
       "vaultPath": "second-brain/resources/drive-index/social-media.md",
       "driveUrl": "https://drive.google.com/drive/folders/1aO-IEBzPewrOx_sbvZWJtzSbo9k5Jgmv",
       "files": [
         {
-          "name": "Weave & PMC_ Campaign Messaging Draft_2026.06.09",
+          "name": "PMC_ Campaign Messaging Draft_2026.06.15_v2",
           "type": "g-document",
-          "modified": "2026-06-10",
+          "modified": "2026-06-15",
           "size": "",
           "link": "https://docs.google.com/document/d/1froWbACykyg1-77Ny3JxI6wed1DbALtry7mExOh8MfQ/edit?usp=drivesdk"
         },
