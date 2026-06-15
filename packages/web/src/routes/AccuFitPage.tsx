@@ -49,9 +49,13 @@ const ASSETS = [
 ];
 
 const KPI_TILES = [
-  { label: 'Status', value: 'Active', sub: 'Side-income line per multi-line PRD' },
-  { label: 'Hourly base', value: '$4,000', sub: '10 days × 10 hrs × $40' },
-  { label: 'BD partner', value: 'Paul Fulford', sub: 'AccuFit device showcase day' },
+  { label: 'Status', value: 'Exploring', sub: 'Parked behind PMC/BRT priorities' },
+  { label: 'Terms', value: 'Unconfirmed', sub: 'Scenario math only until written terms' },
+  {
+    label: 'Next confirm',
+    value: 'Rep + margin',
+    sub: 'Need Lutronic contact + commission structure',
+  },
   { label: 'Manufacturer', value: 'Lutronic', sub: 'Aesthetic device line' },
 ];
 
@@ -224,7 +228,7 @@ export function AccuFitPage(): React.ReactElement {
           </div>
         </section>
 
-        {/* BD partner + Manufacturer cards */}
+        {/* Contact + Manufacturer cards */}
         <section className="grid gap-4 md:grid-cols-2">
           <div className="rounded-xl border border-border bg-card p-5">
             <div className="flex items-center gap-2">
@@ -233,21 +237,21 @@ export function AccuFitPage(): React.ReactElement {
                 className="text-sm font-semibold text-text-primary"
                 style={{ fontFamily: "'Playfair Display', serif" }}
               >
-                BD Partner
+                Contact status
               </h3>
             </div>
             <p
               className="mt-2 text-lg text-text-primary"
               style={{ fontFamily: "'Playfair Display', serif" }}
             >
-              Paul Fulford
+              Fulford thread captured; Lutronic rep TBD
             </p>
             <p className="mt-1 text-xs text-text-secondary">
-              Coordinates showcase day scheduling + provider intros. Engaged via LinkedIn (most
-              recent thread 2026-05-03).
+              Vault marks the Lutronic territory rep, commission structure, and first qualified
+              co-pitch prospect as the confirmation set before AccuFit should be treated as active.
             </p>
             <p className="mt-2 text-[11px] text-text-tertiary">
-              Status: not the priority focus right now per Jason (2026-06-03)
+              Status: exploring, not the priority focus right now per Jason (2026-06-03)
             </p>
           </div>
           <div className="rounded-xl border border-border bg-card p-5">
@@ -329,17 +333,17 @@ export function AccuFitPage(): React.ReactElement {
             className="text-sm font-semibold text-text-primary"
             style={{ fontFamily: "'Playfair Display', serif" }}
           >
-            🟡 Confirm with Fulford
+            🟡 Confirm before activating
           </h3>
           <p className="mt-2 text-sm text-text-secondary">
-            ASP placeholder is $25K — actual AccuFit device pricing should be pulled from Lutronic /
-            Showpad to finalize the commission scenarios. Schedule + first showcase-day date also
-            TBD.
+            ASP placeholder is $25K and all compensation scenarios are planning math only. Pull
+            actual AccuFit device pricing, written commission/margin terms, territory-rep contact,
+            and first BRT-overlap prospect before treating this route as an active sales lane.
           </p>
         </section>
 
         <footer className="border-t border-border pt-4 text-[10px] text-text-tertiary">
-          Source: Jason 3/31 BRT capture + Showpad share · Last sync 2026-06-03
+          Source: partners/accufit/_accufit.md + Jason 3/31 BRT capture · Last sync 2026-06-15
         </footer>
       </div>
     </div>
