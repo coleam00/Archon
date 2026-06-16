@@ -103,6 +103,20 @@ interface KpiTile {
   icon: typeof TrendingUp;
 }
 
+interface AgentTraceSession {
+  session_id: string;
+  started_at?: string;
+  source?: string;
+  model?: string;
+  last_user_message_preview?: string;
+  tool_call_count?: number;
+}
+
+interface AgentTracePayload {
+  total_sessions?: number;
+  recent?: AgentTraceSession[];
+}
+
 function buildKpiTiles(meetingsDelta: ReturnType<typeof meetingsWeekDelta>): KpiTile[] {
   const meetingsDeltaLabel =
     meetingsDelta.delta !== 0
@@ -168,6 +182,8 @@ export function PMCPage(): React.ReactElement {
     (prospectsData.by_business as Record<string, BusinessProspect[]> | undefined)?.PMC ?? []
   ).slice(0, 9);
   const pmcProspectTotal = (prospectsData.totals as Record<string, number> | undefined)?.PMC ?? 0;
+  const agentTrace = agentTraceData as AgentTracePayload;
+  const recentAgentSessions = agentTrace.recent ?? [];
 
   // Live pipeline funnel built from playground data + dial-tracker.
   const pipelineFunnel = buildPipelineFunnel();
@@ -733,8 +749,8 @@ export function PMCPage(): React.ReactElement {
               Recent Carlos activity — agent trace
             </h3>
             <span className="text-[10px] text-text-tertiary">
-              {(agentTraceData as { total_sessions?: number }).total_sessions ?? 0} sessions on disk
-              · last {((agentTraceData as { recent?: unknown[] }).recent ?? []).length} shown
+              {agentTrace.total_sessions ?? 0} sessions on disk · last {recentAgentSessions.length}{' '}
+              shown
             </span>
           </div>
           <p className="mb-3 text-[11px] text-text-tertiary">
@@ -742,38 +758,33 @@ export function PMCPage(): React.ReactElement {
             <code className="font-mono">build-agent-trace-json.py</code> runs.
           </p>
           <ul className="divide-y divide-border">
-            {(
-              (
-                agentTraceData as {
-                  recent?: {
-                    session_id: string;
-                    started_at?: string;
-                    source?: string;
-                    model?: string;
-                    last_user_message_preview?: string;
-                    tool_call_count?: number;
-                  }[];
-                }
-              ).recent ?? []
-            ).map(s => (
-              <li key={s.session_id} className="py-2">
-                <div className="flex items-baseline justify-between gap-2">
-                  <span className="truncate text-xs font-medium text-text-primary">
-                    {s.last_user_message_preview || s.session_id}
-                  </span>
-                  <span className="shrink-0 text-[10px] text-text-tertiary">
-                    {s.started_at ? new Date(s.started_at).toLocaleString() : '—'}
-                  </span>
-                </div>
-                <div className="mt-0.5 flex items-center gap-2 text-[10px] text-text-tertiary">
-                  <span>{s.source ?? 'user'}</span>
-                  <span>·</span>
-                  <span>{s.model ?? 'unknown'}</span>
-                  <span>·</span>
-                  <span>{s.tool_call_count ?? 0} tool calls</span>
-                </div>
+            {recentAgentSessions.length > 0 ? (
+              recentAgentSessions.map(s => (
+                <li key={s.session_id} className="py-2">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="truncate text-xs font-medium text-text-primary">
+                      {s.last_user_message_preview || s.session_id}
+                    </span>
+                    <span className="shrink-0 text-[10px] text-text-tertiary">
+                      {s.started_at ? new Date(s.started_at).toLocaleString() : '—'}
+                    </span>
+                  </div>
+                  <div className="mt-0.5 flex items-center gap-2 text-[10px] text-text-tertiary">
+                    <span>{s.source ?? 'user'}</span>
+                    <span>·</span>
+                    <span>{s.model ?? 'unknown'}</span>
+                    <span>·</span>
+                    <span>{s.tool_call_count ?? 0} tool calls</span>
+                  </div>
+                </li>
+              ))
+            ) : (
+              <li className="rounded-lg border border-dashed border-border bg-background px-3 py-3 text-[11px] text-text-secondary">
+                No recent trace rows in the generated snapshot. Run{' '}
+                <code className="font-mono text-text-primary">build-agent-trace-json.py</code> to
+                refresh this panel.
               </li>
-            ))}
+            )}
           </ul>
         </section>
 
