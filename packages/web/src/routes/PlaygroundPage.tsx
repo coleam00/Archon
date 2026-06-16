@@ -76,6 +76,18 @@ interface PlaygroundData {
 
 const data = playgroundData as unknown as PlaygroundData;
 
+const DEFAULT_KPIS: Kpis = {
+  meetings_this_week: 0,
+  dials_last_7d: 0,
+  active_sequences: 0,
+  reply_rate_14d: 0,
+  open_rate_14d: 0,
+  total_delivered: 0,
+  total_replied: 0,
+  target_30d_meetings: 8,
+  target_90d_meetings: 15,
+};
+
 // Defensive array views — generator scripts can ship partial JSON (missing keys
 // from an Apollo pull failure, stale cache, partial regen). Module-eval `.map`
 // / `new Set(.map())` on `undefined` would white-screen `/playground` before
@@ -86,6 +98,7 @@ const safeSequences = (data as Partial<PlaygroundData>).sequences ?? [];
 const safeDialsByDay = (data as Partial<PlaygroundData>).dials_by_day ?? [];
 const safeOutcomeFunnel = (data as Partial<PlaygroundData>).outcome_funnel ?? [];
 const safeMeetingsByWeek = (data as Partial<PlaygroundData>).meetings_by_week ?? [];
+const safeKpis = { ...DEFAULT_KPIS, ...((data as Partial<PlaygroundData>).kpis ?? {}) };
 
 // --- Brand palette (matches the Tailwind tokens in BusinessPage) ---
 const BRAND_COLOR: Record<string, string> = {
@@ -260,19 +273,19 @@ export function PlaygroundPage(): React.ReactElement {
         <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <KpiTile
             label="Meetings this week"
-            value={String(data.kpis.meetings_this_week)}
-            hint={`Day-30 target: ${data.kpis.target_30d_meetings}/wk`}
+            value={String(safeKpis.meetings_this_week)}
+            hint={`Day-30 target: ${safeKpis.target_30d_meetings}/wk`}
           />
-          <KpiTile label="Dials (last 7d)" value={String(data.kpis.dials_last_7d)} />
+          <KpiTile label="Dials (last 7d)" value={String(safeKpis.dials_last_7d)} />
           <KpiTile
             label="Active sequences"
-            value={String(data.kpis.active_sequences)}
-            hint={`${data.kpis.total_delivered} delivered / ${data.kpis.total_replied} replied`}
+            value={String(safeKpis.active_sequences)}
+            hint={`${safeKpis.total_delivered} delivered / ${safeKpis.total_replied} replied`}
           />
           <KpiTile
             label="Reply rate (14d)"
-            value={`${data.kpis.reply_rate_14d}%`}
-            hint={`Open rate: ${data.kpis.open_rate_14d}%`}
+            value={`${safeKpis.reply_rate_14d}%`}
+            hint={`Open rate: ${safeKpis.open_rate_14d}%`}
           />
         </section>
 
@@ -397,7 +410,7 @@ export function PlaygroundPage(): React.ReactElement {
 
           <ChartCard
             title="Outcome funnel (all-time)"
-            subtitle={`${data.kpis.dials_last_7d > 0 ? '' : 'historical'} — dial → meeting`}
+            subtitle={`${safeKpis.dials_last_7d > 0 ? '' : 'historical'} — dial → meeting`}
           >
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={funnelData} layout="vertical" margin={{ left: 30 }}>
@@ -477,7 +490,7 @@ export function PlaygroundPage(): React.ReactElement {
                 }}
               />
               <ReferenceLine
-                y={data.kpis.target_30d_meetings}
+                y={safeKpis.target_30d_meetings}
                 stroke="#fbbf24"
                 strokeDasharray="4 4"
                 label={{
@@ -488,7 +501,7 @@ export function PlaygroundPage(): React.ReactElement {
                 }}
               />
               <ReferenceLine
-                y={data.kpis.target_90d_meetings}
+                y={safeKpis.target_90d_meetings}
                 stroke="#34d399"
                 strokeDasharray="4 4"
                 label={{
