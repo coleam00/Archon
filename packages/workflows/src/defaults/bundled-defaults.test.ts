@@ -186,6 +186,11 @@ describe('bundled-defaults', () => {
             `${workflowName}: verify-pr-base checks current branch before .pr-number`
           );
         }
+        if (!/if \[ -z "(?:\$PR_NUMBER|\$\{PR_NUMBER\})" \][\s\S]*?exit 1/.test(block)) {
+          blockFailures.push(
+            `${workflowName}: verify-pr-base does not have a fail-fast guard (if [ -z "$PR_NUMBER" ]; then … exit 1)`
+          );
+        }
         if (
           !/gh pr view\s+"(?:\$PR_NUMBER|\$\{PR_NUMBER\})"\s+--json\s+[^\n]*baseRefName/.test(block)
         ) {
