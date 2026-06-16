@@ -25,19 +25,19 @@ interface DeployStatusPayload {
   funnel_status: FunnelStatus;
 }
 
-function formatTs(iso: string): string {
-  if (!iso) return '—';
-  try {
-    return new Date(iso).toLocaleString();
-  } catch {
-    return iso;
-  }
+function formatTs(iso: unknown): string {
+  if (typeof iso !== 'string' || !iso) return '—';
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) return iso;
+  return parsed.toLocaleString();
 }
 
 export function DeployStatusFooter(): React.ReactElement {
-  const data = deployStatus as DeployStatusPayload;
+  const data = deployStatus as Partial<DeployStatusPayload>;
   const funnelOk = data.funnel_status?.available === 'true';
-  const chainStr = data.chain.map(c => c.hop).join(' → ');
+  const chain = data.chain ?? [];
+  const chainStr = chain.length > 0 ? chain.map(c => c.hop).join(' → ') : 'deploy chain pending';
+  const docPath = data.doc ?? 'deploy-chain doc pending';
   return (
     <footer className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border bg-surface-elevated px-4 py-1.5 text-[10px] text-text-tertiary">
       <span className="flex items-center gap-1.5">
@@ -55,7 +55,7 @@ export function DeployStatusFooter(): React.ReactElement {
       <span className="font-mono">{chainStr}</span>
       <span aria-hidden="true">·</span>
       <span>
-        Chain doc: <code className="rounded bg-surface px-1 font-mono">{data.doc}</code>
+        Chain doc: <code className="rounded bg-surface px-1 font-mono">{docPath}</code>
       </span>
       <span aria-hidden="true">·</span>
       <span>Captured {formatTs(data.generated_at)}</span>
