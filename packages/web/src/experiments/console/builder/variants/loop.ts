@@ -20,7 +20,9 @@ export function loopFromDag(variantSpecific: Partial<WireDagNode>): LoopNodeData
     );
   }
   return {
-    prompt: loop.prompt,
+    // `prompt` is optional on the wire (a loop may use `command` instead); the
+    // builder only models prompt-based loops, so fall back to the empty default.
+    prompt: loop.prompt ?? '',
     until: loop.until,
     max_iterations: loop.max_iterations,
     // Engine default is false but the generated type makes it required, so it is
