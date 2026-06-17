@@ -8,7 +8,7 @@
  */
 import { VARIANT_REGISTRY } from '../variants';
 import type { BuilderWorkflow } from '../types';
-import { layoutWithDagre } from './layout';
+import { layoutWithDagre, NODE_HEIGHT, NODE_WIDTH } from './layout';
 import type { BuilderFlowEdge, BuilderFlowNode, XYPosition } from './types';
 
 /** The xyflow `nodeTypes` key every builder node renders under. */
@@ -67,6 +67,15 @@ export function builderToFlow(
     type: BUILDER_NODE_TYPE,
     position: positions?.get(node.id) ?? computed?.get(node.id) ?? { x: 0, y: 0 },
     selected: selectedNodeIds.has(node.id),
+    // Seed dimensions so consumers that read node size (the MiniMap, fitView
+    // bounds) have values even though this is a *controlled* graph: our
+    // onNodesChange forwards only select/position changes and drops xyflow's
+    // `dimensions` changes, so `measured` never lands on these nodes and the
+    // MiniMap would otherwise skip every node (nodeHasDimensions === false).
+    // initialWidth/Height only seed — the live DOM measurement still drives the
+    // node's real rendered height on the canvas.
+    initialWidth: NODE_WIDTH,
+    initialHeight: NODE_HEIGHT,
     data: { node, label: VARIANT_REGISTRY[node.variant].label },
   }));
 

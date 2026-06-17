@@ -66,15 +66,17 @@ function consoleTheme(): Extension {
 function consoleHighlight(): Extension {
   return syntaxHighlighting(
     HighlightStyle.define([
-      // YAML keys carry the brand accent; values stay neutral.
+      // YAML keys carry the brand accent; string/scalar values render at the
+      // primary text tier so they read clearly against the inset background
+      // (secondary/tertiary were too dim — they washed out the values).
       { tag: tags.definition(tags.propertyName), color: 'var(--brand-teal)' },
       { tag: tags.propertyName, color: 'var(--brand-teal)' },
-      { tag: tags.string, color: 'var(--text-secondary)' },
+      { tag: tags.string, color: 'var(--text-primary)' },
       { tag: tags.number, color: 'var(--brand-magenta-2)' },
       { tag: tags.bool, color: 'var(--brand-magenta-2)' },
       { tag: tags.null, color: 'var(--brand-magenta-2)' },
       { tag: tags.comment, color: 'var(--text-tertiary)', fontStyle: 'italic' },
-      { tag: tags.punctuation, color: 'var(--text-tertiary)' },
+      { tag: tags.punctuation, color: 'var(--text-secondary)' },
     ])
   );
 }
@@ -135,6 +137,10 @@ export function YamlPreview({ yamlText }: YamlPreviewProps): ReactElement {
       <div className="min-h-0 flex-1 overflow-hidden">
         <CodeMirror
           value={yamlText}
+          // theme="none" disables @uiw/react-codemirror's default *light* theme,
+          // whose `.cm-editor` white background was overriding our consoleTheme()
+          // and turning the pane white (text rendered near-white → invisible).
+          theme="none"
           extensions={extensions}
           editable={false}
           basicSetup={{
