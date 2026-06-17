@@ -12,4 +12,4 @@ Rules:
 Current experiments:
 
 - `console/` — greenfield rebuild of the web UI around the 4-primitive mental model (Project, Run, Workflow, Worktree). Mounted at `/console`.
-- `console/builder/` — Archon Studio workflow-builder data layer (types, variant registry, round-trip model, validation). PR-1 of the builder chain; no route mount yet — canvas (PR-2) and persistence (PR-3) follow.
+- `console/builder/` — Archon Studio visual workflow builder: the PR-1 data layer (types, variant registry, round-trip model, validation) plus the PR-2 canvas — a controlled React Flow surface with node palette, inspector, validation panel, YAML preview, and context menu. Mounted (beta) at `/console/builder` with a sidebar entry; still fixture-backed (takes a workflow prop, reports edits via `onChange`). Persistence — load/save and the live `:name` route — follows in PR-3.

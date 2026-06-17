@@ -62,22 +62,34 @@ export function builderToFlow(
       )
     : undefined;
 
-  const nodes: BuilderFlowNode[] = bw.nodes.map(node => ({
-    id: node.id,
-    type: BUILDER_NODE_TYPE,
-    position: positions?.get(node.id) ?? computed?.get(node.id) ?? { x: 0, y: 0 },
-    selected: selectedNodeIds.has(node.id),
-    // Seed dimensions so consumers that read node size (the MiniMap, fitView
-    // bounds) have values even though this is a *controlled* graph: our
-    // onNodesChange forwards only select/position changes and drops xyflow's
-    // `dimensions` changes, so `measured` never lands on these nodes and the
-    // MiniMap would otherwise skip every node (nodeHasDimensions === false).
-    // initialWidth/Height only seed — the live DOM measurement still drives the
-    // node's real rendered height on the canvas.
-    initialWidth: NODE_WIDTH,
-    initialHeight: NODE_HEIGHT,
-    data: { node, label: VARIANT_REGISTRY[node.variant].label },
-  }));
+  const nodes: BuilderFlowNode[] = bw.nodes.map(node => {
+    // dagre lays out every node when any position is missing, so the origin
+    // fallback is a defensive last resort. If it ever fires, a node would stack
+    // at (0,0) — make that visible rather than silently overlapping nodes.
+    const position = positions?.get(node.id) ?? computed?.get(node.id);
+    if (position === undefined) {
+      // Dev-visibility for an unreachable layout gap (dagre lays out all nodes).
+      console.warn(
+        `[builder] node '${node.id}' has no saved or computed position; placing at origin`
+      );
+    }
+    return {
+      id: node.id,
+      type: BUILDER_NODE_TYPE,
+      position: position ?? { x: 0, y: 0 },
+      selected: selectedNodeIds.has(node.id),
+      // Seed dimensions so consumers that read node size (the MiniMap, fitView
+      // bounds) have values even though this is a *controlled* graph: our
+      // onNodesChange forwards only select/position changes and drops xyflow's
+      // `dimensions` changes, so `measured` never lands on these nodes and the
+      // MiniMap would otherwise skip every node (nodeHasDimensions === false).
+      // initialWidth/Height only seed — the live DOM measurement still drives
+      // the node's real rendered height on the canvas.
+      initialWidth: NODE_WIDTH,
+      initialHeight: NODE_HEIGHT,
+      data: { node, label: VARIANT_REGISTRY[node.variant].label },
+    };
+  });
 
   return { nodes, edges };
 }

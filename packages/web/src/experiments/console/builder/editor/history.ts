@@ -26,12 +26,12 @@ interface HistoryEntry {
 
 /** Immutable history value. Create with `createHistory()`. */
 export interface History {
-  past: readonly HistoryEntry[];
-  future: readonly HistoryEntry[];
+  readonly past: readonly HistoryEntry[];
+  readonly future: readonly HistoryEntry[];
   /** Kind of the most recent push attempt (for coalescing). */
-  lastKind: string | null;
+  readonly lastKind: string | null;
   /** Timestamp of the most recent push attempt (for coalescing). */
-  lastTime: number;
+  readonly lastTime: number;
 }
 
 export const COALESCE_MS = 400;

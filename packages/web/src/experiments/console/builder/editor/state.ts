@@ -372,7 +372,14 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       if (nodes.length === 0) return state;
       const merged = new Map(state.positions);
       for (const node of nodes) {
-        merged.set(node.id, positions.get(node.id) ?? { x: 40, y: 40 });
+        const pos = positions.get(node.id);
+        if (pos === undefined) {
+          // A copied node whose source had no canvas position (clipboard omits
+          // position-less nodes) lands on this fallback and would stack at a
+          // fixed point. Rare, but make it visible rather than silently overlap.
+          console.warn(`[builder] pasted node '${node.id}' has no position; placing at {40,40}`);
+        }
+        merged.set(node.id, pos ?? { x: 40, y: 40 });
       }
       return {
         ...state,

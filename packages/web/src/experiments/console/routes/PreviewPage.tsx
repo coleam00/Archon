@@ -4,7 +4,7 @@ import { ProjectTile } from '../components/ProjectTile';
 import { OriginBadge } from '../components/OriginBadge';
 import { BuilderPage } from '../builder/BuilderPage';
 import { FIXTURES } from '../builder/fixtures';
-import { fromWorkflowDefinition } from '../builder/model';
+import { importWorkflowDefinition } from '../builder/model';
 import type { Run } from '../primitives/run';
 
 /**
@@ -162,7 +162,7 @@ function BuilderPreview(): ReactElement {
         {definition !== undefined ? (
           <BuilderPage
             key={fixtureKey}
-            initialWorkflow={fromWorkflowDefinition(definition).workflow}
+            initialWorkflow={importWorkflowDefinition(definition, fixtureKey)}
           />
         ) : null}
       </div>

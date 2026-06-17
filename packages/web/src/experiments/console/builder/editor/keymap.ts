@@ -150,6 +150,11 @@ const ENTRIES: readonly BuilderKeyEntry[] = [
       a.align('bottom');
     },
   },
+  // The label/mode pairing below looks inverted but is correct: align.ts names
+  // each mode after the CENTERLINE AXIS, while the label names the COORDINATE
+  // being equalized. "Align horizontal centers" equalizes each node's horizontal
+  // center (same center x) → a vertical centerline → `centerV`; "Align vertical
+  // centers" equalizes the vertical center (same center y) → `centerH`.
   {
     keys: ['g', 'c'],
     label: 'Align horizontal centers',

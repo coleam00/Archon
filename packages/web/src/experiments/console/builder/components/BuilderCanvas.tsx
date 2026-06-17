@@ -29,7 +29,7 @@ import {
   type NodeChange,
   type ReactFlowInstance,
 } from '@xyflow/react';
-import { VARIANTS, VARIANT_REGISTRY } from '../variants';
+import { VARIANTS, VARIANT_REGISTRY, isVariantId } from '../variants';
 import type { VariantId } from '../types';
 import type { BuilderFlowEdge, BuilderFlowNode, XYPosition } from '../flow/types';
 import { BUILDER_NODE_TYPE } from '../flow/to-flow';
@@ -199,8 +199,13 @@ function CanvasInner({
       const variant = event.dataTransfer.getData(PALETTE_DATA_KEY);
       if (variant.length === 0) return;
       event.preventDefault();
+      // The MIME key is namespaced to the builder, but a foreign drag could
+      // still carry an unrecognized payload under it. Validate against the
+      // registry before casting — otherwise VARIANT_REGISTRY[unknown] is
+      // undefined and `.defaultData()` throws on a stray drop.
+      if (!isVariantId(variant)) return;
       const point = screenToFlowPosition({ x: event.clientX, y: event.clientY });
-      onAddNode(variant as VariantId, {
+      onAddNode(variant, {
         x: point.x - NODE_WIDTH / 2,
         y: point.y - NODE_HEIGHT / 2,
       });

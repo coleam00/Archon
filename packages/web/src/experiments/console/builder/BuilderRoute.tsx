@@ -7,7 +7,7 @@
  */
 import { useState, type ChangeEvent, type ReactElement } from 'react';
 import { FIXTURES } from './fixtures';
-import { fromWorkflowDefinition } from './model';
+import { importWorkflowDefinition } from './model';
 import { BuilderPage } from './BuilderPage';
 
 const FIXTURE_KEYS = Object.keys(FIXTURES);
@@ -51,7 +51,7 @@ export function BuilderRoute(): ReactElement {
           // Key by fixture so switching remounts the editor with fresh state.
           <BuilderPage
             key={fixtureKey}
-            initialWorkflow={fromWorkflowDefinition(definition).workflow}
+            initialWorkflow={importWorkflowDefinition(definition, fixtureKey)}
           />
         ) : null}
       </div>

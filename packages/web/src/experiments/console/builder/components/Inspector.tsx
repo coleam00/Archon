@@ -151,6 +151,14 @@ export function Inspector({
       setRenameError('Ids use letters, digits, _ and - (no leading digit).');
       return;
     }
+    // Collision check mirrors the reducer's silent guard (rename-node rejects a
+    // taken id). Surfacing it here is the only feedback the user gets — without
+    // it the rename is a confusing no-op (the input keeps the typed value while
+    // the graph keeps the old id).
+    if (otherIds.includes(next)) {
+      setRenameError(`Another node already uses the id '${next}'.`);
+      return;
+    }
     setRenameError(null);
     onRename(node.id, next);
   };

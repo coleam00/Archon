@@ -5,7 +5,7 @@
  * from the `--node-<variant>` CSS variables so all seven variants render a
  * distinct identity without hard-coded hex.
  */
-import { memo, type CSSProperties, type ReactElement } from 'react';
+import { memo, type CSSProperties, type ReactElement, type ReactNode } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { VARIANT_REGISTRY } from '../variants';
 import type { BuilderNode } from '../types';
@@ -85,7 +85,7 @@ function BuilderNodeRender({ data, selected }: NodeProps<BuilderFlowNode>): Reac
   );
 }
 
-function Pill({ children }: { children: React.ReactNode }): ReactElement {
+function Pill({ children }: { children: ReactNode }): ReactElement {
   return (
     <span className="inline-flex items-center rounded bg-surface-inset px-1.5 py-0.5 text-[9px] font-medium text-text-secondary">
       {children}
