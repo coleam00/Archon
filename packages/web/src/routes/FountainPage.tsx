@@ -63,7 +63,7 @@ const THERAPEUTICS = [
 const AESTHETICS = [{ name: 'Dermal Fillers' }, { name: 'Botox Treatments' }];
 
 // Cross-sell map: Fountain's diagnostic-first model is the natural feeder
-// for BRT + AccuFit + EWC body-comp / wellness journeys.
+// for BRT + AccuFit + Jason-owned EWC/Lumnen + Quicksilver wellness journeys.
 const PMC_PORTFOLIO_FIT = [
   {
     name: 'BRT (PEMF + EEG)',
@@ -78,7 +78,7 @@ const PMC_PORTFOLIO_FIT = [
     note: 'Composition tracking complements Bio-Age + weight-loss line',
   },
   {
-    name: 'EWC (Lumnen)',
+    name: 'EWC + Lumnen (Jason LLC)',
     value: 18,
     color: '#10b981',
     note: 'Clinical wellness journey, recovery-room overlap',
@@ -109,8 +109,8 @@ const KPI_TILES = [
   { label: 'Key contact', value: 'Blake Baynham', sub: 'Warm relationship via QEP partnership' },
 ];
 
-// QEP — Quantum Executive Protocol. Packaged executive program delivered at The Fountain.
-// Merged into FountainPage 2026-06-11 per QEP/Fountain consolidation decision.
+// QEP: Quantum Executive Protocol. Health-data governance platform anchored by The Fountain.
+// Kept distinct from Fountain as an entity, while Fountain remains the first deployment site.
 const QEP_VALUE_PROPS = [
   {
     title: 'Proprietary health-data governance',

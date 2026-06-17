@@ -69,7 +69,7 @@ export const CATEGORIES: CategoryDef[] = [
     oneLiner: 'Healthcare/medtech landscape monitoring + competitive intel + research briefs.',
     description:
       'Staying current on healthcare, medtech, and insurance trends. Tracks comparable players ' +
-      '(SignatureMD, Griffin Concierge, MDVIP), modality science (BRT/Cellcom, Naba, Cell-IT, ' +
+      '(SignatureMD, Griffin Concierge, MDVIP), modality science (BRT/Cellcom, Quicksilver, Cell-IT, ' +
       'VivaFuel), and produces research briefs that feed Writing & Comms. Future home for the ' +
       'content-architect + investigative-journalist subagents (spec pending).',
     vaultSections: [
