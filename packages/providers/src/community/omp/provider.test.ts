@@ -637,6 +637,63 @@ describe('OmpProvider', () => {
     }
   });
 
+  test('ANTHROPIC_OAUTH_TOKEN routes into setRuntimeApiKey for anthropic (#1984)', async () => {
+    let runtimeOverride: [string, string] | undefined;
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        onSetRuntimeApiKey(providerName, apiKey) {
+          runtimeOverride = [providerName, apiKey];
+        },
+      })
+    );
+
+    await collectChunks(provider, {
+      model: 'anthropic/claude-sonnet-4-5',
+      env: { ANTHROPIC_OAUTH_TOKEN: 'sk-ant-oat01-bearer' },
+    });
+
+    expect(runtimeOverride).toEqual(['anthropic', 'sk-ant-oat01-bearer']);
+  });
+
+  test('CLAUDE_CODE_OAUTH_TOKEN routes into setRuntimeApiKey for anthropic', async () => {
+    let runtimeOverride: [string, string] | undefined;
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        onSetRuntimeApiKey(providerName, apiKey) {
+          runtimeOverride = [providerName, apiKey];
+        },
+      })
+    );
+
+    await collectChunks(provider, {
+      model: 'anthropic/claude-sonnet-4-5',
+      env: { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-claude-code' },
+    });
+
+    expect(runtimeOverride).toEqual(['anthropic', 'sk-ant-oat01-claude-code']);
+  });
+
+  test('OAuth var wins over API-key var for anthropic (#1984)', async () => {
+    let runtimeOverride: [string, string] | undefined;
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        onSetRuntimeApiKey(providerName, apiKey) {
+          runtimeOverride = [providerName, apiKey];
+        },
+      })
+    );
+
+    await collectChunks(provider, {
+      model: 'anthropic/claude-sonnet-4-5',
+      env: {
+        ANTHROPIC_OAUTH_TOKEN: 'sk-ant-oat01-bearer',
+        ANTHROPIC_API_KEY: 'sk-ant-apikey',
+      },
+    });
+
+    expect(runtimeOverride).toEqual(['anthropic', 'sk-ant-oat01-bearer']);
+  });
+
   test('injects request env into OMP bash tool calls', async () => {
     let bashArgs: Record<string, unknown> | undefined;
     const provider = new OmpProvider(async () =>

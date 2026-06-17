@@ -113,9 +113,13 @@ class FakeCopilotClient {
 
 // Capture the onPermissionRequest passed into createSession.
 const approveAllStub = mock(() => ({ kind: 'approved' }));
+const runtimeConnectionForStdio = mock((opts?: { path?: string }) => ({ kind: 'stdio', ...opts }));
 
 mock.module('@github/copilot-sdk', () => ({
   CopilotClient: FakeCopilotClient,
+  RuntimeConnection: {
+    forStdio: runtimeConnectionForStdio,
+  },
   approveAll: approveAllStub,
 }));
 
@@ -489,6 +493,7 @@ describe('CopilotProvider.sendQuery', () => {
     await collect(gen);
 
     expect(lastClientOpts?.baseDirectory).toBe('/custom/copilot-home');
+
   });
 
   test('COPILOT_GITHUB_TOKEN is always used (intent signal)', async () => {

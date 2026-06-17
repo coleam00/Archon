@@ -226,8 +226,40 @@ describe('getRuntimeAuthOverride', () => {
     expect(getRuntimeAuthOverride('zhipu-coding-plan', { ZHIPU_API_KEY: 'zhipu-key' })).toBe(
       'zhipu-key'
     );
+    expect(getRuntimeAuthOverride('aimlapi', { AIMLAPI_API_KEY: 'aiml-key' })).toBe('aiml-key');
+    expect(getRuntimeAuthOverride('azure', { AZURE_OPENAI_API_KEY: 'azure-key' })).toBe(
+      'azure-key'
+    );
+    expect(
+      getRuntimeAuthOverride('xiaomi-token-plan-ams', {
+        XIAOMI_TOKEN_PLAN_AMS_API_KEY: 'xiaomi-ams-key',
+      })
+    ).toBe('xiaomi-ams-key');
   });
 
+  test('reads Umans request-scoped API key', () => {
+    expect(getRuntimeAuthOverride('umans', { UMANS_AI_CODING_PLAN_API_KEY: 'umans-key' })).toBe(
+      'umans-key'
+    );
+  });
+
+  test('prefers Anthropic OAuth token over API key', () => {
+    expect(
+      getRuntimeAuthOverride('anthropic', {
+        ANTHROPIC_OAUTH_TOKEN: 'oauth-token',
+        ANTHROPIC_API_KEY: 'api-key',
+      })
+    ).toBe('oauth-token');
+  });
+
+  test('falls back to Claude Code OAuth token for Anthropic', () => {
+    expect(
+      getRuntimeAuthOverride('anthropic', {
+        CLAUDE_CODE_OAUTH_TOKEN: 'claude-code-oauth-token',
+        ANTHROPIC_API_KEY: 'api-key',
+      })
+    ).toBe('claude-code-oauth-token');
+  });
   test('reads Hugging Face hub token before generic HF token', () => {
     expect(
       getRuntimeAuthOverride('huggingface', {

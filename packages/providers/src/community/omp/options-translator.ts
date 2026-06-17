@@ -68,11 +68,15 @@ const LEGACY_OMP_TOOL_ALIASES: Record<string, string> = {
   fetch: 'read',
 };
 
-// Mirrors @oh-my-pi/pi-ai@15.7.2 stream.ts serviceProviderMap for providers
-// whose credentials can be represented as environment variables.
+// Mirrors @oh-my-pi/pi-ai@16.0.0 stream.ts serviceProviderMap for providers
+// whose credentials can be represented as environment variables. Keep request-scoped
+// env lookup local because OMP's own getEnvApiKey() reads process/dotenv state, not
+// Archon's per-turn requestOptions.env bag.
 const OMP_PROVIDER_ENV_VARS: Record<string, readonly string[]> = {
   'alibaba-coding-plan': ['ALIBABA_CODING_PLAN_API_KEY'],
-  anthropic: ['ANTHROPIC_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'],
+  aimlapi: ['AIMLAPI_API_KEY'],
+  anthropic: ['ANTHROPIC_OAUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'],
+  azure: ['AZURE_OPENAI_API_KEY'],
   'azure-openai-responses': ['AZURE_OPENAI_API_KEY'],
   brave: ['BRAVE_API_KEY'],
   cerebras: ['CEREBRAS_API_KEY'],
@@ -115,6 +119,7 @@ const OMP_PROVIDER_ENV_VARS: Record<string, readonly string[]> = {
   synthetic: ['SYNTHETIC_API_KEY'],
   tavily: ['TAVILY_API_KEY'],
   together: ['TOGETHER_API_KEY'],
+  umans: ['UMANS_AI_CODING_PLAN_API_KEY'],
   'vercel-ai-gateway': ['AI_GATEWAY_API_KEY'],
   venice: ['VENICE_API_KEY'],
   vllm: ['VLLM_API_KEY'],
@@ -123,6 +128,9 @@ const OMP_PROVIDER_ENV_VARS: Record<string, readonly string[]> = {
   xai: ['XAI_API_KEY'],
   'xai-oauth': ['XAI_OAUTH_TOKEN', 'XAI_API_KEY'],
   xiaomi: ['XIAOMI_API_KEY'],
+  'xiaomi-token-plan-ams': ['XIAOMI_TOKEN_PLAN_AMS_API_KEY'],
+  'xiaomi-token-plan-cn': ['XIAOMI_TOKEN_PLAN_CN_API_KEY'],
+  'xiaomi-token-plan-sgp': ['XIAOMI_TOKEN_PLAN_SGP_API_KEY'],
   zai: ['ZAI_API_KEY'],
   zenmux: ['ZENMUX_API_KEY'],
   'zhipu-coding-plan': ['ZHIPU_API_KEY'],

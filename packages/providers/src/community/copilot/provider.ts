@@ -468,7 +468,11 @@ export class CopilotProvider implements IAgentProvider {
     const cliPath = await resolveCopilotBinaryPath(copilotConfig.copilotCliPath);
 
     const sdk = await import('@github/copilot-sdk');
-    const { CopilotClient: copilotClientCtor, approveAll } = sdk;
+    const {
+      CopilotClient: copilotClientCtor,
+      RuntimeConnection: runtimeConnection,
+      approveAll,
+    } = sdk;
 
     const warnings: ProviderWarning[] = [];
     const sessionConfig = await buildSessionConfig(
