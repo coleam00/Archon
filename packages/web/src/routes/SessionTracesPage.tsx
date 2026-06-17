@@ -131,7 +131,7 @@ function DailyOpsPanel({ traces }: { traces: Partial<TracesPayload> }): React.Re
     {
       label: 'Next distribution',
       value: 'Research Firehose',
-      note: 'Daily summary now routes to Andrew; VA routing awaits target wiring',
+      note: 'Daily summary routes to Andrew and the VA team',
       icon: Send,
     },
   ];
