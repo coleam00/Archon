@@ -25,9 +25,7 @@ import {
   SelectionMode,
   useReactFlow,
   type Connection,
-  type Edge,
   type EdgeChange,
-  type Node,
   type NodeChange,
   type ReactFlowInstance,
 } from '@xyflow/react';
@@ -228,34 +226,43 @@ function CanvasInner({
     [screenToFlowPosition]
   );
 
-  // Right-clicking an element that isn't already selected replaces the
-  // selection with just it (so the menu acts on what was clicked); a click on
-  // something already in a multi-selection keeps the selection intact.
-  const handleNodeContextMenu = useCallback(
-    (event: ReactMouseEvent, node: Node): void => {
-      if (nodes.find(n => n.id === node.id)?.selected !== true) {
-        onSetSelection([node.id], []);
+  // ONE contextmenu handler on the canvas wrapper — NOT React Flow's
+  // onPaneContextMenu/onNodeContextMenu. Those route through React Flow's
+  // `wrapHandler`, which fires onPaneContextMenu ONLY when `event.target` is
+  // *exactly* the `.react-flow__pane` element; a real cursor right-click whose
+  // target is a pane child (the background dots, the viewport, a node's inner
+  // text) is silently dropped, so the menu never opens for real clicks even
+  // though a synthetic dispatch on the pane works. Handling the *bubbled*
+  // contextmenu here catches every right-click in the canvas and classifies it
+  // by walking the DOM. Right-clicking an unselected element replaces the
+  // selection with it; right-clicking inside a multi-selection keeps it. The
+  // mini-map / controls keep their native menu.
+  const handleCanvasContextMenu = useCallback(
+    (event: ReactMouseEvent<HTMLDivElement>): void => {
+      const targetEl = event.target instanceof HTMLElement ? event.target : null;
+      if (targetEl === null) return;
+      // The open menu itself and React Flow chrome are not the canvas surface.
+      if (targetEl.closest('[role="menu"]') !== null) return;
+      if (
+        targetEl.closest(
+          '.react-flow__minimap, .react-flow__controls, .react-flow__attribution'
+        ) !== null
+      ) {
+        return;
       }
-      openMenu(event, 'node');
-    },
-    [nodes, onSetSelection, openMenu]
-  );
-
-  const handleEdgeContextMenu = useCallback(
-    (event: ReactMouseEvent, edge: Edge): void => {
-      if (edges.find(e => e.id === edge.id)?.selected !== true) {
-        onSetSelection([], [edge.id]);
+      const nodeId = targetEl.closest<HTMLElement>('.react-flow__node')?.dataset.id;
+      const edgeId = targetEl.closest<HTMLElement>('.react-flow__edge')?.dataset.id;
+      if (nodeId !== undefined && nodeId.length > 0) {
+        if (nodes.find(n => n.id === nodeId)?.selected !== true) onSetSelection([nodeId], []);
+        openMenu(event, 'node');
+      } else if (edgeId !== undefined && edgeId.length > 0) {
+        if (edges.find(e => e.id === edgeId)?.selected !== true) onSetSelection([], [edgeId]);
+        openMenu(event, 'edge');
+      } else {
+        openMenu(event, 'pane');
       }
-      openMenu(event, 'edge');
     },
-    [edges, onSetSelection, openMenu]
-  );
-
-  const handlePaneContextMenu = useCallback(
-    (event: ReactMouseEvent | MouseEvent): void => {
-      openMenu(event, 'pane');
-    },
-    [openMenu]
+    [nodes, edges, onSetSelection, openMenu]
   );
 
   const menuEntries = useCallback(
@@ -328,7 +335,7 @@ function CanvasInner({
   );
 
   return (
-    <div className="relative h-full w-full">
+    <div className="relative h-full w-full" onContextMenu={handleCanvasContextMenu}>
       <ReactFlow<BuilderFlowNode, BuilderFlowEdge>
         nodes={nodes}
         edges={edges}
@@ -351,9 +358,6 @@ function CanvasInner({
         onDragOver={handleDragOver}
         onDrop={handleDrop}
         onInit={onInit}
-        onNodeContextMenu={handleNodeContextMenu}
-        onEdgeContextMenu={handleEdgeContextMenu}
-        onPaneContextMenu={handlePaneContextMenu}
         defaultEdgeOptions={{ type: 'smoothstep' }}
         style={{ background: 'var(--surface-inset)' }}
       >
