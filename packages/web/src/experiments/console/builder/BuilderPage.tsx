@@ -95,7 +95,19 @@ export function BuilderPage({ initialWorkflow, onChange }: BuilderPageProps): Re
     const derived = builderToFlow(state.workflow, state.positions, state.selectedNodes);
     return {
       nodes: derived.nodes,
-      edges: derived.edges.map(e => (state.selectedEdges.has(e.id) ? { ...e, selected: true } : e)),
+      // Override the edge's inline stroke when selected: xyflow's `.selected`
+      // CSS can't win against an inline `style.stroke`, so a selected edge would
+      // otherwise look identical to an unselected one. Spreading `e.style` keeps
+      // a conditional edge's dashes while swapping in the accent stroke.
+      edges: derived.edges.map(e =>
+        state.selectedEdges.has(e.id)
+          ? {
+              ...e,
+              selected: true,
+              style: { ...e.style, stroke: 'var(--accent)', strokeWidth: 2 },
+            }
+          : e
+      ),
     };
   }, [state.workflow, state.positions, state.selectedNodes, state.selectedEdges]);
 
@@ -164,6 +176,37 @@ export function BuilderPage({ initialWorkflow, onChange }: BuilderPageProps): Re
   const fitView = useCallback((): void => {
     void flowRef.current?.fitView({ padding: 0.2, duration: 200 });
   }, []);
+
+  // Context-menu callbacks (stable refs; the reducer reads selection/clipboard
+  // itself). `set-selection` replaces the whole selection so a right-click can
+  // target the clicked element; duplicate is copy-then-paste in one tick (the
+  // reducer applies the two dispatches sequentially, so paste sees the clipboard
+  // the copy just wrote).
+  const handleSetSelection = useCallback(
+    (nodeIds: readonly string[], edgeIds: readonly string[]): void => {
+      dispatch({ type: 'set-selection', nodeIds: new Set(nodeIds), edgeIds: new Set(edgeIds) });
+    },
+    []
+  );
+  const handleCopy = useCallback((): void => {
+    dispatch({ type: 'copy' });
+  }, []);
+  const handleCut = useCallback((): void => {
+    stamped({ type: 'cut' });
+  }, [stamped]);
+  const handlePaste = useCallback((): void => {
+    stamped({ type: 'paste' });
+  }, [stamped]);
+  const handleDuplicate = useCallback((): void => {
+    dispatch({ type: 'copy' });
+    stamped({ type: 'paste' });
+  }, [stamped]);
+  const handleSelectAll = useCallback((): void => {
+    dispatch({ type: 'select-all' });
+  }, []);
+  const handleAutoArrange = useCallback((): void => {
+    stamped({ type: 'auto-arrange' });
+  }, [stamped]);
 
   /** Measured node sizes from the live canvas, so align/distribute use the
    *  same geometry as smart-guide snapping (constants are the fallback). */
@@ -274,6 +317,18 @@ export function BuilderPage({ initialWorkflow, onChange }: BuilderPageProps): Re
             onInit={(instance): void => {
               flowRef.current = instance;
             }}
+            onSetSelection={handleSetSelection}
+            onCopy={handleCopy}
+            onCut={handleCut}
+            onPaste={handlePaste}
+            onDuplicate={handleDuplicate}
+            onDelete={removeSelection}
+            onSelectAll={handleSelectAll}
+            onAutoArrange={handleAutoArrange}
+            onFitView={fitView}
+            hasClipboard={state.clipboard !== null}
+            selectedNodeCount={state.selectedNodes.size}
+            selectedEdgeCount={state.selectedEdges.size}
           />
         </div>
 

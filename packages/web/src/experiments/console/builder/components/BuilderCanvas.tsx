@@ -8,7 +8,13 @@
  * overlay. Deletion is keymap-owned (`deleteKeyCode={null}`) so Delete /
  * Backspace behave identically inside and outside the canvas.
  */
-import { useCallback, useState, type DragEvent, type ReactElement } from 'react';
+import {
+  useCallback,
+  useState,
+  type DragEvent,
+  type MouseEvent as ReactMouseEvent,
+  type ReactElement,
+} from 'react';
 import {
   Background,
   BackgroundVariant,
@@ -19,10 +25,13 @@ import {
   SelectionMode,
   useReactFlow,
   type Connection,
+  type Edge,
   type EdgeChange,
+  type Node,
   type NodeChange,
   type ReactFlowInstance,
 } from '@xyflow/react';
+import { VARIANTS, VARIANT_REGISTRY } from '../variants';
 import type { VariantId } from '../types';
 import type { BuilderFlowEdge, BuilderFlowNode, XYPosition } from '../flow/types';
 import { BUILDER_NODE_TYPE } from '../flow/to-flow';
@@ -30,6 +39,7 @@ import { NODE_HEIGHT, NODE_WIDTH } from '../flow/layout';
 import { computeGuides, GUIDE_THRESHOLD, type Rect } from '../editor/smart-guides';
 import { builderNodeView } from './BuilderNodeView';
 import { SmartGuides } from './SmartGuides';
+import { BuilderContextMenu, type MenuEntry } from './BuilderContextMenu';
 
 /** dataTransfer MIME key the palette writes and the canvas reads. */
 export const PALETTE_DATA_KEY = 'application/archon-builder-variant';
@@ -48,6 +58,27 @@ interface BuilderCanvasProps {
   onConnect: (source: string, target: string) => void;
   onAddNode: (variant: VariantId, position: XYPosition) => void;
   onInit: (instance: ReactFlowInstance<BuilderFlowNode, BuilderFlowEdge>) => void;
+  /** Replace the whole selection (used when right-clicking an unselected element). */
+  onSetSelection: (nodeIds: readonly string[], edgeIds: readonly string[]) => void;
+  onCopy: () => void;
+  onCut: () => void;
+  onPaste: () => void;
+  onDuplicate: () => void;
+  onDelete: () => void;
+  onSelectAll: () => void;
+  onAutoArrange: () => void;
+  onFitView: () => void;
+  hasClipboard: boolean;
+  selectedNodeCount: number;
+  selectedEdgeCount: number;
+}
+
+/** Open context menu: viewport anchor + the flow point under the cursor. */
+interface MenuState {
+  x: number;
+  y: number;
+  flow: XYPosition;
+  target: 'pane' | 'node' | 'edge';
 }
 
 function rectOf(node: BuilderFlowNode, position: XYPosition): Rect {
@@ -68,12 +99,25 @@ function CanvasInner({
   onConnect,
   onAddNode,
   onInit,
+  onSetSelection,
+  onCopy,
+  onCut,
+  onPaste,
+  onDuplicate,
+  onDelete,
+  onSelectAll,
+  onAutoArrange,
+  onFitView,
+  hasClipboard,
+  selectedNodeCount,
+  selectedEdgeCount,
 }: BuilderCanvasProps): ReactElement {
   const { screenToFlowPosition } = useReactFlow();
   const [guides, setGuides] = useState<{ vertical: number[]; horizontal: number[] }>({
     vertical: [],
     horizontal: [],
   });
+  const [menu, setMenu] = useState<MenuState | null>(null);
 
   const handleNodesChange = useCallback(
     (changes: NodeChange<BuilderFlowNode>[]): void => {
@@ -166,41 +210,168 @@ function CanvasInner({
     [screenToFlowPosition, onAddNode]
   );
 
+  const closeMenu = useCallback((): void => {
+    setMenu(null);
+  }, []);
+
+  /** Build the menu anchor (and flow point) from a right-click event. */
+  const openMenu = useCallback(
+    (event: ReactMouseEvent | MouseEvent, target: MenuState['target']): void => {
+      event.preventDefault();
+      setMenu({
+        x: event.clientX,
+        y: event.clientY,
+        flow: screenToFlowPosition({ x: event.clientX, y: event.clientY }),
+        target,
+      });
+    },
+    [screenToFlowPosition]
+  );
+
+  // Right-clicking an element that isn't already selected replaces the
+  // selection with just it (so the menu acts on what was clicked); a click on
+  // something already in a multi-selection keeps the selection intact.
+  const handleNodeContextMenu = useCallback(
+    (event: ReactMouseEvent, node: Node): void => {
+      if (nodes.find(n => n.id === node.id)?.selected !== true) {
+        onSetSelection([node.id], []);
+      }
+      openMenu(event, 'node');
+    },
+    [nodes, onSetSelection, openMenu]
+  );
+
+  const handleEdgeContextMenu = useCallback(
+    (event: ReactMouseEvent, edge: Edge): void => {
+      if (edges.find(e => e.id === edge.id)?.selected !== true) {
+        onSetSelection([], [edge.id]);
+      }
+      openMenu(event, 'edge');
+    },
+    [edges, onSetSelection, openMenu]
+  );
+
+  const handlePaneContextMenu = useCallback(
+    (event: ReactMouseEvent | MouseEvent): void => {
+      openMenu(event, 'pane');
+    },
+    [openMenu]
+  );
+
+  const menuEntries = useCallback(
+    (m: MenuState): MenuEntry[] => {
+      if (m.target === 'edge') {
+        return [
+          {
+            kind: 'item',
+            label: selectedEdgeCount > 1 ? 'Delete connectors' : 'Delete connector',
+            danger: true,
+            hint: 'Del',
+            onSelect: onDelete,
+          },
+        ];
+      }
+      if (m.target === 'node') {
+        const many = selectedNodeCount > 1;
+        return [
+          { kind: 'item', label: 'Cut', hint: 'x', onSelect: onCut },
+          { kind: 'item', label: 'Copy', hint: 'y', onSelect: onCopy },
+          { kind: 'item', label: 'Duplicate', onSelect: onDuplicate },
+          { kind: 'separator' },
+          {
+            kind: 'item',
+            label: many ? 'Delete nodes' : 'Delete node',
+            danger: true,
+            hint: 'Del',
+            onSelect: onDelete,
+          },
+        ];
+      }
+      // Pane menu.
+      return [
+        {
+          kind: 'submenu',
+          label: 'Add node here',
+          items: VARIANTS.map(variant => ({
+            kind: 'item' as const,
+            label: VARIANT_REGISTRY[variant].label,
+            onSelect: (): void => {
+              onAddNode(variant, {
+                x: m.flow.x - NODE_WIDTH / 2,
+                y: m.flow.y - NODE_HEIGHT / 2,
+              });
+            },
+          })),
+        },
+        { kind: 'separator' },
+        { kind: 'item', label: 'Paste', hint: 'P', disabled: !hasClipboard, onSelect: onPaste },
+        { kind: 'item', label: 'Select all', hint: 'a', onSelect: onSelectAll },
+        { kind: 'separator' },
+        { kind: 'item', label: 'Auto-arrange', hint: 'A', onSelect: onAutoArrange },
+        { kind: 'item', label: 'Fit view', hint: 'f', onSelect: onFitView },
+      ];
+    },
+    [
+      selectedEdgeCount,
+      selectedNodeCount,
+      hasClipboard,
+      onCut,
+      onCopy,
+      onDuplicate,
+      onDelete,
+      onAddNode,
+      onPaste,
+      onSelectAll,
+      onAutoArrange,
+      onFitView,
+    ]
+  );
+
   return (
-    <ReactFlow<BuilderFlowNode, BuilderFlowEdge>
-      nodes={nodes}
-      edges={edges}
-      nodeTypes={NODE_TYPES}
-      colorMode="dark"
-      fitView
-      minZoom={0.2}
-      snapToGrid
-      snapGrid={[8, 8]}
-      selectionOnDrag
-      selectionMode={SelectionMode.Partial}
-      panOnDrag={[1, 2]}
-      panActivationKeyCode="Space"
-      deleteKeyCode={null}
-      onNodesChange={handleNodesChange}
-      onEdgesChange={handleEdgesChange}
-      onConnect={handleConnect}
-      onDragOver={handleDragOver}
-      onDrop={handleDrop}
-      onInit={onInit}
-      defaultEdgeOptions={{ type: 'smoothstep' }}
-      style={{ background: 'var(--surface-inset)' }}
-    >
-      <Background variant={BackgroundVariant.Dots} gap={16} size={1} color="var(--border)" />
-      <MiniMap
-        pannable
-        zoomable
+    <div className="relative h-full w-full">
+      <ReactFlow<BuilderFlowNode, BuilderFlowEdge>
+        nodes={nodes}
+        edges={edges}
+        nodeTypes={NODE_TYPES}
+        colorMode="dark"
+        fitView
+        minZoom={0.2}
+        snapToGrid
+        snapGrid={[8, 8]}
+        selectionOnDrag
+        selectionMode={SelectionMode.Partial}
+        // Middle-button drag pans (plus Space+drag); the right button is left
+        // free so the canvas can own a custom context menu.
+        panOnDrag={[1]}
+        panActivationKeyCode="Space"
+        deleteKeyCode={null}
+        onNodesChange={handleNodesChange}
+        onEdgesChange={handleEdgesChange}
+        onConnect={handleConnect}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+        onInit={onInit}
+        onNodeContextMenu={handleNodeContextMenu}
+        onEdgeContextMenu={handleEdgeContextMenu}
+        onPaneContextMenu={handlePaneContextMenu}
+        defaultEdgeOptions={{ type: 'smoothstep' }}
         style={{ background: 'var(--surface-inset)' }}
-        maskColor="color-mix(in oklch, var(--surface-inset), transparent 40%)"
-        nodeColor={(n): string => `var(--node-${(n as BuilderFlowNode).data.node.variant})`}
-      />
-      <Controls showInteractive={false} />
-      <SmartGuides vertical={guides.vertical} horizontal={guides.horizontal} />
-    </ReactFlow>
+      >
+        <Background variant={BackgroundVariant.Dots} gap={16} size={1} color="var(--border)" />
+        <MiniMap
+          pannable
+          zoomable
+          style={{ background: 'var(--surface-inset)' }}
+          maskColor="color-mix(in oklch, var(--surface-inset), transparent 40%)"
+          nodeColor={(n): string => `var(--node-${(n as BuilderFlowNode).data.node.variant})`}
+        />
+        <Controls showInteractive={false} />
+        <SmartGuides vertical={guides.vertical} horizontal={guides.horizontal} />
+      </ReactFlow>
+      {menu !== null ? (
+        <BuilderContextMenu x={menu.x} y={menu.y} entries={menuEntries(menu)} onClose={closeMenu} />
+      ) : null}
+    </div>
   );
 }
 

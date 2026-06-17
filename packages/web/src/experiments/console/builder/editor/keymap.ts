@@ -205,6 +205,7 @@ const CANVAS_GESTURES: readonly { keys: readonly [string, ...string[]]; label: s
   { keys: ['drag'], label: 'Marquee-select nodes' },
   { keys: ['Shift', 'click'], label: 'Add to selection' },
   { keys: ['click', 'edge'], label: 'Select a connector (then Delete)' },
+  { keys: ['right-click'], label: 'Open context menu' },
 ];
 
 /** Docs-side groups for the `KeymapHelp` overlay (same source table). */
