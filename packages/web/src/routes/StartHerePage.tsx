@@ -27,6 +27,19 @@ interface CardProps {
   badge?: string;
 }
 
+interface DriveFolderSnapshot {
+  fileCount?: number;
+}
+
+interface SolutionSnapshot {
+  name?: string;
+}
+
+interface ContactSnapshot {
+  email?: string;
+  role?: string;
+}
+
 function Card({ to, title, description, icon: Icon, badge }: CardProps): React.ReactElement {
   return (
     <Link
@@ -51,22 +64,31 @@ function Card({ to, title, description, icon: Icon, badge }: CardProps): React.R
 
 export function StartHerePage(): React.ReactElement {
   // Live counts from generated JSON (refreshed by build script + cron syncs)
-  const driveFolderCount = driveIndex.count ?? 0;
-  const driveFileCount = (driveIndex.folders ?? []).reduce(
-    (acc: number, f: { fileCount?: number }) => acc + (f.fileCount ?? 0),
-    0
+  const driveFolders = ((driveIndex as { folders?: DriveFolderSnapshot[] }).folders ?? []).filter(
+    (folder): folder is DriveFolderSnapshot => typeof folder === 'object' && folder !== null
   );
-  const solutionsCount = solutionsData.count ?? 0;
-  const solutionsNames = (solutionsData.solutions ?? [])
-    .map((s: { name: string }) => s.name.replace(/\s*\(.*?\)\s*/g, '').trim())
+  const solutions = ((solutionsData as { solutions?: SolutionSnapshot[] }).solutions ?? []).filter(
+    (solution): solution is SolutionSnapshot => typeof solution === 'object' && solution !== null
+  );
+  const contacts = ((contactsData as { contacts?: ContactSnapshot[] }).contacts ?? []).filter(
+    (contact): contact is ContactSnapshot => typeof contact === 'object' && contact !== null
+  );
+
+  const driveFolderCount = driveIndex.count ?? driveFolders.length;
+  const driveFileCount = driveFolders.reduce((acc, f) => acc + (f.fileCount ?? 0), 0);
+  const solutionsCount = solutionsData.count ?? solutions.length;
+  const solutionsNames = solutions
+    .map(s => (s.name ?? '').replace(/\s*\(.*?\)\s*/g, '').trim())
+    .filter(Boolean)
     .join(', ');
   // Filter out TBD-stub contacts the same way ContactsPage does so the count matches
-  const realContactsCount = (contactsData.contacts ?? []).filter(
-    (c: { email?: string; role?: string }) => {
-      const isStub = c.email === 'TBD' || (c.role ?? '').trim().toUpperCase().startsWith('TBD');
-      return !isStub;
-    }
-  ).length;
+  const realContactsCount = contacts.filter(c => {
+    const isStub = c.email === 'TBD' || (c.role ?? '').trim().toUpperCase().startsWith('TBD');
+    return !isStub;
+  }).length;
+  const solutionsDescription = solutionsNames
+    ? `${solutionsCount} third-party solutions Jason represents or integrates: ${solutionsNames}.`
+    : `${solutionsCount} third-party solutions Jason represents or integrates. Awaiting solutions snapshot names.`;
 
   return (
     <div className="flex h-full flex-1 flex-col gap-6 overflow-y-auto p-6">
@@ -161,7 +183,7 @@ export function StartHerePage(): React.ReactElement {
             to="/solutions"
             icon={Briefcase}
             title="Solutions & Partners"
-            description={`${solutionsCount} third-party solutions Jason represents or integrates: ${solutionsNames}.`}
+            description={solutionsDescription}
             badge="live"
           />
           <Card
