@@ -18,6 +18,7 @@ import rehypeHighlight from 'rehype-highlight';
 import { Zap, Activity, Stethoscope, BarChart3, Microscope } from 'lucide-react';
 import { parseFrontmatter } from '@/lib/pmc-frontmatter';
 import prospectsData from '@/lib/business-prospects.generated.json';
+import prospectContactsData from '@/lib/pmc-prospect-contacts.generated.json';
 import playgroundData from '@/lib/playground.generated.json';
 import type { BusinessProspect } from '@/components/business/BusinessPage';
 
@@ -25,6 +26,16 @@ const REMARK_PLUGINS = [remarkGfm, remarkBreaks];
 const REHYPE_PLUGINS = [rehypeHighlight];
 
 const doc = parseFrontmatter(overviewRaw);
+
+interface PmcProspectContact {
+  brand_fit?: string[];
+  apollo_sequence_name?: string;
+}
+
+interface PmcProspectContactsPayload {
+  brand_counts?: Record<string, number>;
+  prospects?: PmcProspectContact[];
+}
 
 // Real Apollo sequence data filtered to BRT
 const BRT_SEQUENCES = (
@@ -52,12 +63,48 @@ const SEQUENCE_REPLY_DATA = BRT_SEQUENCES.map(s => ({
   replied: s.replied,
 })).sort((a, b) => b.replyRate - a.replyRate);
 
-const ICP_SEGMENTS = [
+const FALLBACK_ICP_SEGMENTS = [
   { name: 'BH-Therapy', value: 368, color: '#1e40af' },
   { name: 'Chiropractic', value: 122, color: '#2563eb' },
   { name: 'Medspa', value: 52, color: '#3b82f6' },
   { name: 'BH-Psych', value: 30, color: '#60a5fa' },
 ];
+
+const ICP_COLORS: Record<string, string> = {
+  'BH-Therapy': '#1e40af',
+  Chiropractic: '#2563eb',
+  Medspa: '#3b82f6',
+  'BH-Psych': '#60a5fa',
+  Other: '#93c5fd',
+};
+
+function classifyBrtIcp(contact: PmcProspectContact): string {
+  const sequence = (contact.apollo_sequence_name ?? '').toLowerCase();
+  if (sequence.includes('psychiatric') || sequence.includes('psych')) return 'BH-Psych';
+  if (sequence.includes('behavioral') || sequence.includes('therapy')) return 'BH-Therapy';
+  if (sequence.includes('chiro')) return 'Chiropractic';
+  if (sequence.includes('medspa') || sequence.includes('aesthetic')) return 'Medspa';
+  return 'Other';
+}
+
+const prospectContacts = prospectContactsData as PmcProspectContactsPayload;
+const BRT_PROSPECT_CONTACTS = (prospectContacts.prospects ?? []).filter(contact =>
+  contact.brand_fit?.includes('BRT')
+);
+const BRT_ACTIVE_CONTACT_COUNT =
+  prospectContacts.brand_counts?.BRT ?? BRT_PROSPECT_CONTACTS.length ?? 0;
+
+const computedIcpSegments = Object.entries(
+  BRT_PROSPECT_CONTACTS.reduce<Record<string, number>>((acc, contact) => {
+    const segment = classifyBrtIcp(contact);
+    acc[segment] = (acc[segment] ?? 0) + 1;
+    return acc;
+  }, {})
+)
+  .map(([name, value]) => ({ name, value, color: ICP_COLORS[name] ?? ICP_COLORS.Other }))
+  .sort((a, b) => b.value - a.value);
+
+const ICP_SEGMENTS = computedIcpSegments.length > 0 ? computedIcpSegments : FALLBACK_ICP_SEGMENTS;
 const ICP_TOTAL = ICP_SEGMENTS.reduce((s, x) => s + x.value, 0);
 
 const CLINICAL_EVIDENCE = [
@@ -88,8 +135,8 @@ const VALUE_PROPS = [
 const KPI_TILES = [
   {
     label: 'Active contacts',
-    value: '572',
-    sub: 'Across BH-Psych, BH-Therapy, Chiro, Medspa',
+    value: String(BRT_ACTIVE_CONTACT_COUNT || ICP_TOTAL),
+    sub: 'From consolidated prospect snapshot',
   },
   {
     label: 'Live sequences',
