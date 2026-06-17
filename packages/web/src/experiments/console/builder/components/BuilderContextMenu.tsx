@@ -81,12 +81,22 @@ export function BuilderContextMenu({
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') onClose();
     };
-    window.addEventListener('mousedown', onPointer);
-    window.addEventListener('contextmenu', onPointer);
+    // Attach the pointer/contextmenu/scroll/resize dismissers on the NEXT tick.
+    // React 18 flushes discrete events synchronously, so a listener added while
+    // the opening right-click is still being handled would fire as that very
+    // `contextmenu` event continues bubbling to `window` — instantly closing the
+    // menu we just opened (the open→close-by-own-event race). Deferring by a
+    // macrotask lets the opening event fully settle first. `keydown` is safe to
+    // attach immediately (the opener is never a key event), so Escape works at once.
     window.addEventListener('keydown', onKey);
-    window.addEventListener('scroll', onClose, true);
-    window.addEventListener('resize', onClose);
+    const timer = window.setTimeout(() => {
+      window.addEventListener('mousedown', onPointer);
+      window.addEventListener('contextmenu', onPointer);
+      window.addEventListener('scroll', onClose, true);
+      window.addEventListener('resize', onClose);
+    }, 0);
     return (): void => {
+      window.clearTimeout(timer);
       window.removeEventListener('mousedown', onPointer);
       window.removeEventListener('contextmenu', onPointer);
       window.removeEventListener('keydown', onKey);

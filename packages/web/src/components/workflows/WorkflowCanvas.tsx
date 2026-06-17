@@ -336,9 +336,16 @@ export function WorkflowCanvas({
 
     window.addEventListener('keydown', onKey);
     // Use capture so we beat ReactFlow's own handlers and any stopPropagation.
-    window.addEventListener('mousedown', onClickOutside, true);
-    window.addEventListener('contextmenu', onClickOutside, true);
+    // Attach the pointer/contextmenu dismissers on the NEXT tick: React 18 flushes
+    // the opening right-click synchronously, so a listener added mid-event could
+    // fire as that same `contextmenu` event finishes propagating — instantly
+    // closing the menu we just opened. Deferring by a macrotask lets it settle.
+    const timer = window.setTimeout(() => {
+      window.addEventListener('mousedown', onClickOutside, true);
+      window.addEventListener('contextmenu', onClickOutside, true);
+    }, 0);
     return (): void => {
+      window.clearTimeout(timer);
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('mousedown', onClickOutside, true);
       window.removeEventListener('contextmenu', onClickOutside, true);
