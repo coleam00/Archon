@@ -1,0 +1,78 @@
+name: archon-triage-issue
+description: |
+  Use when: A GitHub issue needs to be classified and labeled before entering the fix queue.
+  Triggers: "triage #123", "triage issue 123", "classify #123".
+  NOT for: Fixing issues (use archon-fix-github-issue), PR reviews, general exploration.
+
+  Lightweight workflow:
+  1. Fetch the issue from GitHub
+  2. Classify as bug, enhancement, or skip (haiku — fast and cheap)
+  3. Apply the label and remove archon:triage-in-progress
+
+provider: claude
+model: haiku
+
+nodes:
+  - id: extract-issue-number
+    model: haiku
+    prompt: |
+      Extract the GitHub issue number from this message.
+
+      Message: $ARGUMENTS
+
+      CRITICAL: Reply with ONLY the bare integer. Example: 42
+
+  - id: fetch-issue
+    bash: |
+      ISSUE_NUM=$(echo "$extract-issue-number.output" | tr -d "'\"\`\n " | grep -oE '[0-9]+' | head -1)
+      if [ -z "$ISSUE_NUM" ]; then
+        echo "Failed to extract issue number" >&2
+        exit 1
+      fi
+      gh issue view "$ISSUE_NUM" --json number,title,body,labels
+    depends_on: [extract-issue-number]
+
+  - id: classify
+    model: haiku
+    prompt: |
+      Classify this GitHub issue as exactly one of: bug, enhancement, skip
+
+      Rules:
+      - bug: something is broken, not working as expected, a security vulnerability, a crash, or a regression
+      - enhancement: a new feature, improvement, refactor, performance improvement, or any actionable change request
+      - skip: ONLY for issues that are completely nonsensical — spam, empty body, unintelligible text, or obvious test submissions with no real content
+
+      Important: complexity, security sensitivity, or needing careful review are NOT reasons to skip.
+      When in doubt, classify as bug or enhancement. Skip is a last resort.
+
+      Issue:
+      $fetch-issue.output
+
+      Reply with exactly one word: bug, enhancement, or skip
+    depends_on: [fetch-issue]
+
+  - id: apply-label
+    bash: |
+      ISSUE_NUM=$(echo "$extract-issue-number.output" | tr -d "'\"\`\n " | grep -oE '[0-9]+' | head -1)
+      if [ -z "$ISSUE_NUM" ]; then
+        echo "Failed to extract issue number" >&2
+        exit 1
+      fi
+      REPO=$(gh repo view --json nameWithOwner -q '.nameWithOwner')
+      RESULT=$(echo "$classify.output" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]' \
+        | grep -E '^(bug|enhancement|skip)$' || echo "bug")
+
+      gh issue edit "$ISSUE_NUM" --repo "$REPO" \
+        --remove-label "archon:triage-in-progress" 2>/dev/null || true
+
+      case "$RESULT" in
+        bug|enhancement)
+          gh issue edit "$ISSUE_NUM" --repo "$REPO" --add-label "$RESULT"
+          echo "Triaged #$ISSUE_NUM as $RESULT"
+          ;;
+        skip)
+          gh issue edit "$ISSUE_NUM" --repo "$REPO" --add-label "archon:skipped"
+          echo "Triaged #$ISSUE_NUM as non-actionable (archon:skipped)"
+          ;;
+      esac
+    depends_on: [extract-issue-number, classify]
