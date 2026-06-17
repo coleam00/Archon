@@ -14,7 +14,6 @@ model: haiku
 
 nodes:
   - id: extract-issue-number
-    model: haiku
     prompt: |
       Extract the GitHub issue number from this message.
 
@@ -33,7 +32,6 @@ nodes:
     depends_on: [extract-issue-number]
 
   - id: classify
-    model: haiku
     prompt: |
       Classify this GitHub issue as exactly one of: bug, enhancement, skip
 

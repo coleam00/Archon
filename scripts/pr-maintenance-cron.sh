@@ -42,10 +42,8 @@ for PROJECT in "${PROJECTS[@]}"; do
   cd "$REPO_DIR"
 
   # --- Phase 0: Promote CLEAN draft PRs to ready-for-review ---
-  # Archon workflows create PRs as drafts by default. When CI is green the
-  # draft has nothing left to gate on, but the Phase 1 merge filter skips
-  # drafts — so left alone a green draft sits forever. Flip it to ready so
-  # Phase 1 can merge it on this same tick.
+  # Some older PRs may still be in draft state. Flip CLEAN drafts to ready so
+  # Phase 1 can merge them on this same tick.
   GREEN_DRAFTS=$(gh pr list --state open --json number,mergeStateStatus,isDraft \
     --jq '[.[] | select(.isDraft == true and .mergeStateStatus == "CLEAN")] | .[].number' 2>/dev/null || true)
 
