@@ -333,7 +333,6 @@ nodes:
       # This way, if the watch-and-merge loop exits (max iterations),
       # the PR still merges automatically when CI eventually goes green.
       gh pr merge "$PR_NUMBER" --squash --auto --delete-branch 2>&1 || echo "Auto-merge not available, will retry in watch loop"
-      echo "$PR_NUMBER"
     depends_on: [report]
 
   # ═══════════════════════════════════════════════════════════════

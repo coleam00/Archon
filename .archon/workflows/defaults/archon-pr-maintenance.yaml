@@ -63,12 +63,12 @@ nodes:
 
       # Gather diagnostic info
       echo "=== PR INFO ==="
-      gh pr view "$PR_NUMBER" --json number,title,headRefName,baseRefName,mergeable,mergeStateStatus,statusCheckRollup \
-        --jq '{number, title, head: .headRefName, base: .baseRefName, mergeable, mergeState: .mergeStateStatus, checks: [.statusCheckRollup[]? | {name, status, conclusion}]}'
+      PR_INFO=$(gh pr view "$PR_NUMBER" --json number,title,headRefName,baseRefName,mergeable,mergeStateStatus,statusCheckRollup)
+      echo "$PR_INFO" | jq '{number, title, head: .headRefName, base: .baseRefName, mergeable, mergeState: .mergeStateStatus, checks: [.statusCheckRollup[]? | {name, status, conclusion}]}'
 
       echo ""
       echo "=== BEHIND COUNT ==="
-      BASE=$(gh pr view "$PR_NUMBER" --json baseRefName -q '.baseRefName')
+      BASE=$(echo "$PR_INFO" | jq -r '.baseRefName')
       git fetch origin "$BASE" --quiet
       BEHIND=$(git rev-list --count HEAD.."origin/$BASE")
       echo "$BEHIND commits behind $BASE"
