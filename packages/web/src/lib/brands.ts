@@ -89,12 +89,12 @@ export const BRANDS: BrandDef[] = [
     slug: 'qep',
     label: 'QEP',
     apolloPrefix: 'QEP',
-    icp: 'Physician practices evaluating a white-labeled health-data-governance platform (built by Blake Baynham with Plaud.ai as capture layer). Solves encounter-capture, cross-modality protocol tracking, and HIPAA/audit governance for cash-pay and concierge clinics. NOT outbound-named yet per Jason 2026-06-05.',
+    icp: 'Fountain-associated health-data-governance protocol built by Blake Baynham with Claude and Plaud.ai as capture layer. Functions as a HIPAA-compliant listening / safety-net workflow for doctors so care details are not missed. White-label resale is future-only and requires Blake approval. Do NOT name QEP in outbound or messaging until Jason says otherwise.',
     adjacentIcps: [
-      'Concierge / DPC practices running multi-modality stacks (BRT + IHHT + IV + peptides)',
-      'Cash-pay clinics looking to package their own branded patient-data system',
-      'Multi-location physician groups needing governed protocol data across sites',
-      'Functional medicine practices with audit / compliance exposure',
+      'The Fountain WPB only for current QEP outreach',
+      'Future concierge / DPC white-label prospects only after Blake approval',
+      'Future multi-location physician groups only after Blake approval',
+      'Future functional medicine practices only after Blake approval',
     ],
   },
 ];
