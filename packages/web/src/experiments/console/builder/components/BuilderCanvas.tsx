@@ -136,15 +136,23 @@ function CanvasInner({
       const dragging = positionChanges.some(c => c.type === 'position' && c.dragging === true);
       const moves: { id: string; position: XYPosition }[] = [];
 
-      if (positionChanges.length === 1 && dragging) {
-        // Single-node drag: compute helper lines and snap to the closest one.
+      if (positionChanges.length === 1) {
+        // Single-node move: compute helper lines and snap to the closest one.
+        // Snapping must run for the FINAL change too (xyflow emits a last
+        // `position` change with `dragging: false` on drop, and in controlled
+        // mode that raw position would otherwise overwrite the snapped one).
+        // Guides are a drag-time affordance, so only show them while dragging.
         const change = positionChanges[0];
         if (change.type !== 'position' || change.position === undefined) return;
         const node = nodes.find(n => n.id === change.id);
         if (node === undefined) return;
         const others = nodes.filter(n => n.id !== change.id).map(n => rectOf(n, n.position));
         const result = computeGuides(rectOf(node, change.position), others, GUIDE_THRESHOLD);
-        setGuides({ vertical: result.vertical, horizontal: result.horizontal });
+        setGuides(
+          dragging
+            ? { vertical: result.vertical, horizontal: result.horizontal }
+            : { vertical: [], horizontal: [] }
+        );
         moves.push({ id: change.id, position: result.snap });
       } else {
         if (guides.vertical.length > 0 || guides.horizontal.length > 0) {

@@ -102,22 +102,26 @@ export function YamlPreview({ yamlText }: YamlPreviewProps): ReactElement {
   const [copied, setCopied] = useState<'idle' | 'copied' | 'failed'>('idle');
 
   const copy = (): void => {
-    navigator.clipboard.writeText(yamlText).then(
-      () => {
-        setCopied('copied');
-        setTimeout(() => {
-          setCopied('idle');
-        }, 1500);
-      },
-      () => {
-        // Clipboard API can be unavailable (permissions, insecure context);
-        // surface the failure inline instead of swallowing it.
-        setCopied('failed');
-        setTimeout(() => {
-          setCopied('idle');
-        }, 1500);
-      }
-    );
+    const settle = (next: 'copied' | 'failed'): void => {
+      setCopied(next);
+      setTimeout(() => {
+        setCopied('idle');
+      }, 1500);
+    };
+    // Calling writeText inside the .then callback funnels BOTH failure modes
+    // into the rejection handler: an async rejection (permissions) AND the
+    // synchronous TypeError thrown when `navigator.clipboard` is undefined
+    // (insecure context / unsupported browser). Surfaced inline, never swallowed.
+    void Promise.resolve()
+      .then(() => navigator.clipboard.writeText(yamlText))
+      .then(
+        () => {
+          settle('copied');
+        },
+        () => {
+          settle('failed');
+        }
+      );
   };
 
   return (

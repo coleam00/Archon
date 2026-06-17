@@ -195,10 +195,15 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     }
 
     case 'rename-node': {
+      const ids = nodeIds(state.workflow);
+      // Renaming a node that no longer exists must be a no-op: otherwise it
+      // records a history entry and could rewrite dangling `depends_on` refs
+      // that happen to match the (absent) source id.
+      if (!ids.has(action.id)) return state;
       const nextId = action.nextId.trim();
       if (nextId.length === 0 || nextId === action.id) return state;
       if (!NODE_ID_PATTERN.test(nextId)) return state;
-      if (nodeIds(state.workflow).has(nextId)) return state;
+      if (ids.has(nextId)) return state;
       const nodes = state.workflow.nodes.map(node => {
         if (node.id === action.id) return { ...node, id: nextId } as BuilderNode;
         const deps = node.base.depends_on;
@@ -222,6 +227,12 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         workflow: { ...state.workflow, nodes },
         positions,
         selectedNodes,
+        // Edge ids derive from node ids (`source->target`), so a rename leaves
+        // any selected edge id touching this node stale. Clear the edge
+        // selection rather than parsing/remapping ids (edge ids are never parsed
+        // elsewhere — see remove-selection); a stale id would otherwise make a
+        // subsequent delete silently miss.
+        selectedEdges: new Set(),
       };
     }
 
@@ -435,6 +446,11 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         history: result.history,
         workflow: result.snapshot.workflow,
         positions: result.snapshot.positions,
+        // The restored snapshot is a different graph; the live selection can
+        // reference nodes/edges it no longer contains. Clear it so the toolbar
+        // and keybindings never act on entities absent from the workflow.
+        selectedNodes: new Set(),
+        selectedEdges: new Set(),
       };
     }
 
@@ -446,6 +462,9 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         history: result.history,
         workflow: result.snapshot.workflow,
         positions: result.snapshot.positions,
+        // See `undo`: selection may dangle against the restored snapshot.
+        selectedNodes: new Set(),
+        selectedEdges: new Set(),
       };
     }
   }

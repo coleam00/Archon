@@ -410,9 +410,19 @@ describe('undo / redo integration', () => {
     const undone = editorReducer(added, { type: 'undo' });
     expect(undone.workflow.nodes.length).toBe(3);
     expect(undone.workflow.nodes.map(n => n.id)).toEqual(['classify', 'fix', 'report']);
+    // Selection is cleared on undo so it can never dangle against the restored
+    // snapshot (the added node's selection would otherwise reference a node the
+    // undo just removed).
+    expect(undone.selectedNodes.size).toBe(0);
+    expect(undone.selectedEdges.size).toBe(0);
 
     const redone = editorReducer(undone, { type: 'redo' });
     expect(redone.workflow.nodes.length).toBe(4);
+    // Redo also clears selection; whatever remains must reference live nodes.
+    expect(redone.selectedNodes.size).toBe(0);
+    for (const id of redone.selectedNodes) {
+      expect(redone.workflow.nodes.some(n => n.id === id)).toBe(true);
+    }
   });
 
   test('undo and redo are no-ops at the ends of the history stack', () => {
@@ -432,6 +442,32 @@ describe('rename-node duplicate id', () => {
       at: 1000,
     });
     expect(result).toBe(initial);
+  });
+
+  test('renaming a non-existent source id is a no-op (no history, no dep rewrite)', () => {
+    const initial = mixedState();
+    const result = editorReducer(initial, {
+      type: 'rename-node',
+      id: 'ghost',
+      nextId: 'phantom',
+      at: 1000,
+    });
+    expect(result).toBe(initial);
+  });
+
+  test('clears a stale edge selection so a later delete cannot miss', () => {
+    // Select the classify->fix edge, then rename 'classify' — the edge id
+    // `classify->fix` no longer exists, so the selection must be cleared.
+    let state = select(mixedState(), [], [edgeId('classify', 'fix')]);
+    state = editorReducer(state, {
+      type: 'rename-node',
+      id: 'classify',
+      nextId: 'triage',
+      at: 1000,
+    });
+    expect(state.selectedEdges.size).toBe(0);
+    // The dependency itself was rewired to the new id.
+    expect(state.workflow.nodes.find(n => n.id === 'fix')?.base.depends_on).toEqual(['triage']);
   });
 });
 

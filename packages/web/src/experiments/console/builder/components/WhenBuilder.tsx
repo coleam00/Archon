@@ -67,8 +67,10 @@ function AtomRow({
         spellCheck={false}
         onChange={(e: ChangeEvent<HTMLInputElement>): void => {
           const field = e.target.value.trim();
-          // Editing the field through the builder normalizes to the canonical
-          // `$node.output.field` spelling (shorthand flag dropped).
+          // Editing the field canonicalizes the PATH: the `shorthand`
+          // (`$node.field`) flag is intentionally not carried over, so the atom
+          // re-serializes as the canonical `$node.output.field`. The `bare` RHS
+          // spelling (unquoted number/boolean) is preserved as the author wrote it.
           const next: AtomNode = { nodeId: atom.nodeId, op: atom.op, value: atom.value };
           if (field.length > 0) next.field = field;
           if (atom.bare === true) next.bare = true;
