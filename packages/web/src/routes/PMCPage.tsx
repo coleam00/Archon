@@ -117,6 +117,29 @@ interface AgentTracePayload {
   recent?: AgentTraceSession[];
 }
 
+const MARKET_BENCHMARKS = [
+  {
+    stat: '70%',
+    label: 'Staff time lost to manual work',
+    implication: 'Workflow redesign is not a nice-to-have; it is a margin leak.',
+  },
+  {
+    stat: '45%',
+    label: 'Average revenue lost to denials and delays',
+    implication: 'RCM cleanup can be framed as immediate revenue protection.',
+  },
+  {
+    stat: '30%',
+    label: 'Inbound practice calls go unanswered',
+    implication: 'Access leakage becomes a patient-growth and retention hook.',
+  },
+  {
+    stat: '15%',
+    label: 'Healthcare staffing turnover rate',
+    implication: 'Training, role clarity, and automation protect operating capacity.',
+  },
+];
+
 function buildKpiTiles(meetingsDelta: ReturnType<typeof meetingsWeekDelta>): KpiTile[] {
   const meetingsDeltaLabel =
     meetingsDelta.delta !== 0
@@ -291,6 +314,45 @@ export function PMCPage(): React.ReactElement {
               </div>
             );
           })}
+        </section>
+
+        {/* Market benchmarks */}
+        <section className="rounded-2xl border border-border bg-[oklch(0.985_0.012_88)] p-5 shadow-sm">
+          <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[var(--primary)]">
+                Market benchmarks
+              </p>
+              <h2
+                className="mt-1 text-2xl font-semibold text-text-primary"
+                style={{ fontFamily: "'Playfair Display', serif" }}
+              >
+                Credibility signals behind the PMC story
+              </h2>
+              <p className="mt-1 max-w-3xl text-sm text-text-secondary">
+                Use these as historical source stats and case-by-case proof points. Live copy should
+                lead with the practice-management problem first, then show the statistic and the
+                operational implication.
+              </p>
+            </div>
+            <div className="rounded-lg border border-amber-700/30 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              Source: PMC overview, brochure stats section
+            </div>
+          </div>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+            {MARKET_BENCHMARKS.map(b => (
+              <div key={b.label} className="rounded-xl border border-border bg-card p-4">
+                <div
+                  className="text-3xl font-semibold text-[var(--primary)]"
+                  style={{ fontFamily: "'Playfair Display', serif" }}
+                >
+                  {b.stat}
+                </div>
+                <h3 className="mt-2 text-sm font-semibold text-text-primary">{b.label}</h3>
+                <p className="mt-2 text-xs leading-relaxed text-text-secondary">{b.implication}</p>
+              </div>
+            ))}
+          </div>
         </section>
 
         {/* Value prop tiles */}

@@ -1,6 +1,18 @@
 import { useMemo, useState } from 'react';
-import { Activity, Search, ChevronDown, ChevronRight, User, Bot, Clock } from 'lucide-react';
+import {
+  Activity,
+  Search,
+  ChevronDown,
+  ChevronRight,
+  User,
+  Bot,
+  Clock,
+  CheckCircle2,
+  ShieldCheck,
+  Send,
+} from 'lucide-react';
 import tracesData from '@/lib/cc-session-traces.generated.json';
+import agentRollupData from '@/lib/agent-trace.generated.json';
 
 // PRD 7 stated outcome: per-session agent trace tab driven by static JSON.
 // Source: scripts/build-cc-session-traces-json.py (cron-emitted, no live DB read).
@@ -42,6 +54,22 @@ interface TracesPayload {
   sessions: SessionEntry[];
 }
 
+interface AgentRollupSession {
+  session_id: string;
+  started_at?: string | null;
+  source?: string;
+  model?: string;
+  last_user_message_preview?: string;
+  tool_call_count?: number;
+  status?: string;
+}
+
+interface AgentRollupPayload {
+  generated_at?: string;
+  total_sessions?: number;
+  recent?: AgentRollupSession[];
+}
+
 function formatTs(iso: string): string {
   if (!iso) return '—';
   try {
@@ -72,6 +100,93 @@ function shortWorkspace(path: string): string {
   const idx = path.lastIndexOf('jid5274');
   if (idx === -1) return path;
   return path.slice(idx);
+}
+
+function DailyOpsPanel({ traces }: { traces: Partial<TracesPayload> }): React.ReactElement {
+  const rollup = agentRollupData as AgentRollupPayload;
+  const recent = rollup.recent ?? [];
+  const cronCount = recent.filter(s => s.source === 'cron').length;
+  const userCount = recent.filter(s => s.source !== 'cron').length;
+  const latest = recent[0];
+
+  const tiles = [
+    {
+      label: 'Automation pulse',
+      value: `${cronCount} cron / ${userCount} user`,
+      note: 'Recent Hermes sessions split by source',
+      icon: CheckCircle2,
+    },
+    {
+      label: 'Trace coverage',
+      value: `${traces.session_count ?? 0} sessions`,
+      note: `${traces.turn_count ?? 0} sanitized turns in the static export`,
+      icon: Activity,
+    },
+    {
+      label: 'Privacy guard',
+      value: 'Head 5 + tail 5',
+      note: 'Full transcripts and tool bodies stay hidden here',
+      icon: ShieldCheck,
+    },
+    {
+      label: 'Next distribution',
+      value: 'Research Firehose',
+      note: 'Daily summary now routes to Andrew; VA routing awaits target wiring',
+      icon: Send,
+    },
+  ];
+
+  return (
+    <section className="rounded-2xl border border-border bg-[oklch(0.985_0.012_88)] p-5 shadow-sm">
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[var(--primary)]">
+            Daily Ops Panel
+          </p>
+          <h2 className="mt-1 text-xl font-semibold text-text-primary">What the bots are doing</h2>
+          <p className="mt-1 max-w-3xl text-sm text-text-secondary">
+            Digestible operator view of automation health, trace freshness, and distribution work.
+            This panel is intentionally summary-first so Jason does not need to read raw sessions.
+          </p>
+        </div>
+        <div className="rounded-lg border border-border bg-card px-3 py-2 text-xs text-text-tertiary">
+          Rollup generated {formatTs(rollup.generated_at ?? '')}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+        {tiles.map(tile => {
+          // eslint-disable-next-line @typescript-eslint/naming-convention
+          const Icon = tile.icon;
+          return (
+            <div key={tile.label} className="rounded-xl border border-border bg-card p-4">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-text-tertiary">
+                  {tile.label}
+                </span>
+                <Icon className="h-4 w-4 text-[var(--primary)]" />
+              </div>
+              <div className="mt-2 text-lg font-semibold text-text-primary">{tile.value}</div>
+              <p className="mt-1 text-xs leading-relaxed text-text-secondary">{tile.note}</p>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="mt-4 rounded-xl border border-border bg-card p-4">
+        <div className="text-[10px] font-semibold uppercase tracking-wider text-text-tertiary">
+          Latest visible activity
+        </div>
+        <p className="mt-2 text-sm text-text-primary">
+          {latest?.last_user_message_preview ?? 'No recent session preview available.'}
+        </p>
+        <p className="mt-2 text-xs text-text-tertiary">
+          Source: {latest?.source ?? 'unknown'} · Model: {latest?.model ?? 'unknown'} · Started:{' '}
+          {formatTs(latest?.started_at ?? '')}
+        </p>
+      </div>
+    </section>
+  );
 }
 
 function TurnRow({ turn }: { turn: TurnEntry }): React.ReactElement {
@@ -242,6 +357,8 @@ export function SessionTracesPage(): React.ReactElement {
           <span>Generated {formatTs(data.generated_at ?? '')}</span>
         </div>
       </div>
+
+      <DailyOpsPanel traces={data} />
 
       {/* Filter */}
       <div className="flex items-center gap-2 rounded-lg border border-border bg-surface-elevated px-3 py-2">
