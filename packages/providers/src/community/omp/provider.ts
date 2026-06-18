@@ -384,6 +384,14 @@ function filterDeniedMcpTools(
   return { customTools, toolNames };
 }
 
+function deadlineFromIdleTimeout(nodeConfig: SendQueryOptions['nodeConfig']): number | undefined {
+  const idleTimeout = nodeConfig?.idle_timeout;
+  if (typeof idleTimeout !== 'number' || !Number.isFinite(idleTimeout) || idleTimeout <= 0) {
+    return undefined;
+  }
+  return Date.now() + idleTimeout;
+}
+
 /**
  * Oh My Pi community provider. Uses Archon YAML/config as the canonical
  * behavior surface while wiring OMP's auth/model/session primitives directly.
@@ -562,9 +570,11 @@ export class OmpProvider implements IAgentProvider {
           ? mergeToolNames(toolNames, [...(effectiveMcpTools?.toolNames ?? []), ...nativeToolNames])
           : toolNames;
       const envInjectionExtension = createBashEnvInjectionExtension(requestOptions?.env);
+      const sdkDeadline = deadlineFromIdleTimeout(nodeConfig);
       const sessionOptions: OmpCreateAgentSessionOptions = {
         cwd,
         ...(ompConfig.agentDir ? { agentDir: ompConfig.agentDir } : {}),
+        ...(ompConfig.spawns !== undefined ? { spawns: ompConfig.spawns } : {}),
         model,
         authStorage,
         modelRegistry,
@@ -584,6 +594,7 @@ export class OmpProvider implements IAgentProvider {
         ...(systemPromptBlocks !== undefined ? { systemPrompt: systemPromptBlocks } : {}),
         ...(resolvedMcp ? { mcpManager: resolvedMcp.manager } : {}),
         ...(customTools ? { customTools } : {}),
+        ...(sdkDeadline !== undefined ? { deadline: sdkDeadline } : {}),
         toolNames: effectiveToolNames,
         hasUI: interactive,
       };

@@ -113,10 +113,12 @@ export interface OmpCreateAgentSessionOptions {
   disableExtensionDiscovery?: boolean;
   additionalExtensionPaths?: string[];
   extensions?: OmpExtensionFactory[];
+  spawns?: string;
   thinkingLevel?: string;
   systemPrompt?: string[] | ((defaultPrompt: string[]) => string[]);
   mcpManager?: OmpMcpManager;
   customTools?: unknown[];
+  deadline?: number;
   toolNames: string[];
   hasUI: boolean;
 }
