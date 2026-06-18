@@ -31,6 +31,16 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
+/**
+ * Escape regex metacharacters so a configured bot mention (sourced from
+ * `JIRA_BOT_MENTION` / `BOT_DISPLAY_NAME` / `config.botName`) can be safely
+ * interpolated into a RegExp. Without this a mention like `c++` would throw at
+ * match time and the mention would silently never be detected.
+ */
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 /** Jira comment bodies are capped at ~32k chars; leave a safety buffer. */
 const MAX_LENGTH = 30000;
 
@@ -143,12 +153,13 @@ export class JiraAdapter implements IPlatformAdapter {
   // ── Mention helpers (mirror the GitHub adapter) ───────────────────────────
 
   private hasMention(text: string): boolean {
-    const pattern = new RegExp(`@${this.botMention}[\\s,:;]`, 'i');
+    const escaped = escapeRegExp(this.botMention);
+    const pattern = new RegExp(`@${escaped}[\\s,:;]`, 'i');
     return pattern.test(text) || text.trim().toLowerCase() === `@${this.botMention.toLowerCase()}`;
   }
 
   private stripMention(text: string): string {
-    const pattern = new RegExp(`@${this.botMention}[\\s,:;]+`, 'gi');
+    const pattern = new RegExp(`@${escapeRegExp(this.botMention)}[\\s,:;]+`, 'gi');
     return text.replace(pattern, '').trim();
   }
 
@@ -290,8 +301,14 @@ export class JiraAdapter implements IPlatformAdapter {
   /**
    * Fetch recent comments for thread context, formatted `author: body` in
    * chronological order (oldest first). Returns [] on failure.
+   *
+   * @param excludeCommentId - id of the comment that triggered the webhook; it
+   *   is dropped so the stripped mention text isn't duplicated into the context.
    */
-  private async fetchCommentHistory(issueKey: string): Promise<string[]> {
+  private async fetchCommentHistory(
+    issueKey: string,
+    excludeCommentId?: string
+  ): Promise<string[]> {
     try {
       const res = await fetch(
         `${this.baseUrl}/rest/api/3/issue/${issueKey}/comment?orderBy=-created&maxResults=20`,
@@ -303,11 +320,14 @@ export class JiraAdapter implements IPlatformAdapter {
       }
       const data = (await res.json()) as JiraCommentList;
       // orderBy=-created returns newest first; reverse for chronological order.
-      return [...(data.comments ?? [])].reverse().map(comment => {
-        const author = comment.author?.displayName ?? comment.author?.accountId ?? 'unknown';
-        const body = adfToPlainText(comment.body);
-        return `${author}: ${body}`;
-      });
+      return [...(data.comments ?? [])]
+        .reverse()
+        .filter(comment => excludeCommentId === undefined || comment.id !== excludeCommentId)
+        .map(comment => {
+          const author = comment.author?.displayName ?? comment.author?.accountId ?? 'unknown';
+          const body = adfToPlainText(comment.body);
+          return `${author}: ${body}`;
+        });
     } catch (error) {
       getLog().warn({ err: toError(error), issueKey }, 'jira.comment_history_fetch_failed');
       return [];
@@ -334,9 +354,11 @@ ${description}`;
    * Fire-and-forget contract: all failures are logged, never thrown to caller.
    */
   async handleWebhook(payload: string, secret: string | undefined): Promise<void> {
-    // 1. Verify shared secret (constant-time)
+    // 1. Verify shared secret (constant-time). Logged at warn, not error: an
+    // internet-exposed endpoint gets scanned, so a wrong/missing secret is
+    // expected background noise rather than an operational fault.
     if (!timingSafeCompareSecret(secret, this.webhookSecret)) {
-      getLog().error({ payloadSize: payload.length }, 'jira.webhook_rejected');
+      getLog().warn({ payloadSize: payload.length }, 'jira.webhook_rejected');
       return;
     }
 
@@ -402,10 +424,12 @@ ${description}`;
     // 7. Fetch ticket + thread context
     const issue = await this.fetchIssue(issueKey);
     const issueContext = issue ? this.buildIssueContext(issue) : undefined;
-    const commentHistory = await this.fetchCommentHistory(issueKey);
+    const commentHistory = await this.fetchCommentHistory(issueKey, comment.id);
     const threadContext = commentHistory.length > 0 ? commentHistory.join('\n') : undefined;
 
-    // 8. Create conversation WITHOUT a codebase, then dispatch via the orchestrator.
+    // 8. Ensure the conversation exists (WITHOUT a codebase) before taking the
+    // lock. handleMessage also get-or-creates it, but doing it here keeps the
+    // lock keyed to a row that is guaranteed to exist; the call is idempotent.
     const conversationId = this.buildConversationId(issueKey);
     await db.getOrCreateConversation('jira', conversationId);
 

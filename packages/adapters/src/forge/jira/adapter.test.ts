@@ -89,7 +89,10 @@ function installFetch(opts?: { myselfFails?: boolean }): {
     }
     if (url.includes('/comment') && method === 'GET') {
       return json({
-        comments: [{ author: { displayName: 'Alice' }, body: 'first comment' }],
+        comments: [
+          { id: 'trigger-1', author: { displayName: 'Bot' }, body: '@Archon do the thing' },
+          { id: 'c-2', author: { displayName: 'Alice' }, body: 'first comment' },
+        ],
       });
     }
     if (url.includes('/comment') && method === 'POST') {
@@ -237,5 +240,43 @@ describe('handleWebhook', () => {
     const marked = makeCommentEvent('@Archon hi ​​archon-bot-response​​');
     await adapter.handleWebhook(marked, SECRET);
     expect(mockHandleMessage).not.toHaveBeenCalled();
+  });
+
+  test('excludes the triggering comment from thread context', async () => {
+    const adapter = await makeStartedAdapter();
+    // The webhook payload carries the id of the comment that fired it; the
+    // history fetch returns that same comment, which must be filtered out so
+    // the stripped mention text isn't duplicated into threadContext.
+    const event = JSON.stringify({
+      webhookEvent: 'comment_created',
+      issue: { key: 'PROJ-123', fields: { summary: 'Login button broken' } },
+      comment: {
+        id: 'trigger-1',
+        author: { accountId: 'human-1', emailAddress: 'human@acme.com' },
+        body: '@Archon do the thing',
+      },
+    });
+    await adapter.handleWebhook(event, SECRET);
+
+    const [, , , context] = mockHandleMessage.mock.calls[0] as unknown as [
+      unknown,
+      string,
+      string,
+      { threadContext?: string },
+    ];
+    expect(context.threadContext).toContain('Alice: first comment');
+    expect(context.threadContext).not.toContain('do the thing');
+  });
+});
+
+describe('regex-unsafe bot mention', () => {
+  test('detects and strips a mention containing regex metacharacters', () => {
+    const adapter = new JiraAdapter(BASE, 'u', 't', SECRET, lockManager, 'c++') as unknown as {
+      hasMention: (t: string) => boolean;
+      stripMention: (t: string) => string;
+    };
+    expect(adapter.hasMention('hey @c++ help')).toBe(true);
+    expect(adapter.hasMention('no mention')).toBe(false);
+    expect(adapter.stripMention('@c++ run the tests')).toBe('run the tests');
   });
 });
