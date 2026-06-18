@@ -60,8 +60,8 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.121",
-    "@oh-my-pi/pi-ai": "^15.7.3",
-    "@oh-my-pi/pi-coding-agent": "^15.7.3",
+    "@oh-my-pi/pi-ai": "^16.0.5",
+    "@oh-my-pi/pi-coding-agent": "^16.0.5",
     "@opencode-ai/sdk": "^1.14.20"
   }
 }
