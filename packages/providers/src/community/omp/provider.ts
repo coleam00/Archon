@@ -35,6 +35,7 @@ import {
   resolveOmpSkills,
   resolveOmpThinkingLevel,
   resolveOmpToolNames,
+  selectAppliedConfigEnv,
   restoreConfigEnv,
 } from './options-translator';
 import { buildOmpNativeToolDefinitions } from './native-tools';
@@ -490,14 +491,15 @@ export class OmpProvider implements IAgentProvider {
     let sdkManagedMcp: OmpMcpManager | undefined;
     let sessionForCleanup: OmpSession | undefined;
     try {
+      const appliedConfigEnv = selectAppliedConfigEnv(ompConfig.env, configEnvKeysApplied);
       const runtimeOverride =
         getRuntimeAuthOverride(parsed.provider, requestOptions?.env) ??
-        getRuntimeAuthOverride(parsed.provider, ompConfig.env);
+        getRuntimeAuthOverride(parsed.provider, appliedConfigEnv);
       if (runtimeOverride) authStorage.setRuntimeApiKey(parsed.provider, runtimeOverride);
       if (fallbackModel) {
         const fallbackRuntimeOverride =
           getRuntimeAuthOverride(fallbackModel.provider, requestOptions?.env) ??
-          getRuntimeAuthOverride(fallbackModel.provider, ompConfig.env);
+          getRuntimeAuthOverride(fallbackModel.provider, appliedConfigEnv);
         if (fallbackRuntimeOverride) {
           authStorage.setRuntimeApiKey(fallbackModel.provider, fallbackRuntimeOverride);
         }

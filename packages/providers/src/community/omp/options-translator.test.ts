@@ -7,6 +7,7 @@ import {
   getRuntimeAuthOverride,
   resolveOmpThinkingLevel,
   resolveOmpToolNames,
+  selectAppliedConfigEnv,
   restoreConfigEnv,
 } from './options-translator';
 
@@ -216,6 +217,13 @@ describe('applyConfigEnv', () => {
     restoreConfigEnv(applied, targetEnv);
 
     expect(targetEnv).toEqual({});
+  });
+
+  test('selects only config env keys that were applied to process env', () => {
+    expect(
+      selectAppliedConfigEnv({ ANTHROPIC_API_KEY: 'config', OTHER: 'value' }, ['OTHER'])
+    ).toEqual({ OTHER: 'value' });
+    expect(selectAppliedConfigEnv({ ANTHROPIC_API_KEY: 'config' }, [])).toBeUndefined();
   });
 });
 

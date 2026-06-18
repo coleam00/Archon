@@ -367,6 +367,21 @@ export function applyConfigEnv(
   return applied;
 }
 
+export function selectAppliedConfigEnv(
+  env: Record<string, string> | undefined,
+  appliedKeys: readonly string[]
+): Record<string, string> | undefined {
+  if (!env || appliedKeys.length === 0) return undefined;
+
+  const appliedEnv: Record<string, string> = {};
+  for (const key of appliedKeys) {
+    const value = env[key];
+    if (value !== undefined) appliedEnv[key] = value;
+  }
+
+  return Object.keys(appliedEnv).length > 0 ? appliedEnv : undefined;
+}
+
 export function restoreConfigEnv(
   appliedKeys: readonly string[],
   targetEnv: Record<string, string | undefined> = process.env
