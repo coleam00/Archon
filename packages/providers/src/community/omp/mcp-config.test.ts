@@ -40,6 +40,20 @@ describe('loadMcpConfig', () => {
     expect(result.serverNames).toEqual(['github', 'postgres']);
   });
 
+  test('loads servers from an mcpServers wrapper', async () => {
+    const config = {
+      mcpServers: {
+        github: { command: 'npx', args: ['-y', '@mcp/server-github'] },
+      },
+    };
+    await writeFile(join(testDir, 'wrapped.json'), JSON.stringify(config));
+
+    const result = await loadMcpConfig('wrapped.json', testDir);
+
+    expect(result.serverNames).toEqual(['github']);
+    expect(result.servers).toEqual(config.mcpServers);
+  });
+
   test('filters disabled servers before connecting', async () => {
     const config = {
       enabled: { command: 'npx', args: ['enabled-server'] },
@@ -66,6 +80,19 @@ describe('loadMcpConfig', () => {
     } finally {
       delete process.env.TEST_OMP_MCP_TOKEN;
     }
+  });
+
+  test('expands env values from supplied env source', async () => {
+    const config = { github: { command: 'npx', env: { TOKEN: '$TEST_OMP_MCP_TOKEN' } } };
+    await writeFile(join(testDir, 'mcp-env-source.json'), JSON.stringify(config));
+
+    const result = await loadMcpConfig('mcp-env-source.json', testDir, {
+      TEST_OMP_MCP_TOKEN: 'request-secret',
+    });
+    const server = result.servers.github as Record<string, unknown>;
+
+    expect(server.env).toEqual({ TOKEN: 'request-secret' });
+    expect(result.missingVars).toEqual([]);
   });
 
   test('expands ${VAR_NAME} in env and header values', async () => {
@@ -173,7 +200,7 @@ describe('loadMcpConfig', () => {
     await writeFile(join(testDir, 'bad-server.json'), JSON.stringify({ github: 'bad' }));
 
     await expect(loadMcpConfig('bad-server.json', testDir)).rejects.toThrow(
-      'MCP server config must be a JSON object: github in bad-server.json'
+      'MCP server "github" must be a JSON object (got string)'
     );
   });
 
@@ -188,10 +215,30 @@ describe('loadMcpConfig', () => {
     );
 
     await expect(loadMcpConfig('bad-env.json', testDir)).rejects.toThrow(
-      'MCP server env must be a JSON object: github in bad-env.json'
+      'MCP config github.env must be a JSON object of string values (got array)'
     );
     await expect(loadMcpConfig('bad-headers.json', testDir)).rejects.toThrow(
-      'MCP server headers must be a JSON object: api in bad-headers.json'
+      'MCP config api.headers must be a JSON object of string values (got array)'
+    );
+  });
+
+  test('throws on non-string env or headers values', async () => {
+    await writeFile(
+      join(testDir, 'non-string-env.json'),
+      JSON.stringify({ github: { command: 'npx', env: { TOKEN: 123 } } })
+    );
+    await writeFile(
+      join(testDir, 'non-string-headers.json'),
+      JSON.stringify({
+        api: { type: 'http', url: 'https://example.com', headers: { XApiKey: true } },
+      })
+    );
+
+    await expect(loadMcpConfig('non-string-env.json', testDir)).rejects.toThrow(
+      'MCP config github.env.TOKEN must be a string (got number)'
+    );
+    await expect(loadMcpConfig('non-string-headers.json', testDir)).rejects.toThrow(
+      'MCP config api.headers.XApiKey must be a string (got boolean)'
     );
   });
 });

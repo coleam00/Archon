@@ -9,7 +9,7 @@ sidebar:
   order: 4
 ---
 
-You must configure **at least one** AI assistant. All four can be configured and mixed within workflows.
+You must configure **at least one** AI assistant. Multiple assistants can be configured and mixed within workflows.
 
 ## Structured output guarantees
 
@@ -18,7 +18,7 @@ When a workflow node sets `output_format`, the guarantee level depends on the pr
 | Provider | Tier | How it works | On a validation miss |
 |----------|------|--------------|----------------------|
 | Claude, Codex, OpenCode | **enforced** | The SDK/backend grammar-constrains decoding (`output_config.format` / `outputSchema` / `format:{json_schema}`). | The node **fails** — a refusal or `max_tokens` truncation can still bypass grammar enforcement, so the parsed output is validated post-parse for these too. No reask (a failure here is a genuine edge). |
-| Pi, Copilot | **best-effort** | The schema is appended to the prompt; JSON is extracted from the response and structurally repaired (trailing commas, single quotes, truncated tails). | The executor re-asks (prompt + the schema errors) up to **3×**; if still invalid, the node **fails loudly**. |
+| Pi, Copilot, Oh My Pi | **best-effort** | The schema is appended to the prompt; JSON is extracted from the response and structurally repaired (trailing commas, single quotes, truncated tails). | The executor re-asks (prompt + the schema errors) up to **3×**; if still invalid, the node **fails loudly**. |
 
 In all cases the parsed output is **validated against your `output_format` schema** before downstream nodes see it, and a node that declares `output_format` but produces no schema-valid output **fails** rather than silently degrading. See [Authoring Workflows → `output_format`](/guides/authoring-workflows/#output_format-for-structured-json) for field-access (`$node.output.field`) semantics.
 
@@ -644,6 +644,108 @@ Node-level Archon `mcp:` and `assistants.omp.enableMCP` are intentionally separa
 - [Pi documentation](https://pi.dev) — official Pi docs (extensions, model registry, settings).
 - [Pi on GitHub](https://github.com/earendil-works/pi) — upstream Pi project.
 - [Oh My Pi on GitHub](https://github.com/can1357/oh-my-pi) — upstream Oh My Pi project.
+
+## Oh My Pi (Community Provider)
+
+**SDK-backed OMP provider.** Archon's Oh My Pi adapter uses `@oh-my-pi/pi-coding-agent` as provider id `omp`. It is registered as `builtIn: false`.
+
+### Install
+
+Oh My Pi is included as a dependency of `@archon/providers` — `bun install` pulls in the SDK automatically. It's available immediately.
+
+### Authenticate
+
+Oh My Pi resolves credentials from its own auth storage and from environment variables for key-backed backends. Request-scoped/codebase env vars win for a single run or chat turn, so per-codebase or per-user credentials can select the key used by the OMP model provider.
+
+Common env vars include:
+
+| OMP provider id | Env var |
+|---|---|
+| `anthropic` | `ANTHROPIC_OAUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, or `ANTHROPIC_API_KEY` |
+| `openai` | `OPENAI_API_KEY` |
+| `google` | `GEMINI_API_KEY` |
+| `openrouter` | `OPENROUTER_API_KEY` |
+| `github-copilot` | `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, or `GITHUB_TOKEN` |
+
+`agentDir` can point OMP at a custom auth/session/settings root when you do not want the SDK default.
+
+### Configuration Options
+
+```yaml
+assistants:
+  omp:
+    model: anthropic/claude-sonnet-4-5   # Required: '<omp-provider-id>/<model-id>'
+    # agentDir: /absolute/path/to/omp-agent
+    # enableMCP: false                   # OMP's own MCP discovery; workflow `mcp:` still works
+    # enableLsp: true
+    # disableExtensionDiscovery: true
+    # additionalExtensionPaths:
+    #   - /absolute/path/to/extension
+    # toolNames: [read, search, bash]
+    # interactive: true
+    # extensionFlags:
+    #   plan: true
+    # env:
+    #   EXTENSION_FLAG: "1"              # in-process OMP extensions/settings only
+    # settings:
+    #   # OMP Settings.isolated overrides owned by this provider
+```
+
+### Model reference format
+
+Oh My Pi models use a `<omp-provider-id>/<model-id>` format and split only on the first slash, so routed model ids can contain nested slashes:
+
+```yaml
+assistants:
+  omp:
+    model: anthropic/claude-sonnet-4-5
+    # model: openrouter/qwen/qwen3-coder
+    # model: llama.cpp/qwen2.5-coder
+```
+
+### Usage in workflows
+
+```yaml
+name: omp-workflow
+provider: omp
+model: anthropic/claude-sonnet-4-5
+
+nodes:
+  - id: analyze
+    prompt: "Analyze this repository"
+    mcp: .archon/mcp/github.json
+    allowed_tools: []
+    effort: high
+```
+
+### Supported Archon Features
+
+| Feature | Support | Notes |
+|---|---|---|
+| Session resume | ✅ | Returns `sessionId`; reused on resume |
+| MCP servers | ✅ | `mcp: path/to/servers.json` connects through OMP's MCP manager; `env`/`headers` expansion includes process env, codebase env, and request-scoped credentials |
+| Structured output | ✅ | best-effort via prompt augmentation + repair; the executor validates and re-asks up to 3× |
+| Skills | ✅ | `skills: [name]` resolved from project/user skill directories |
+| Tool restrictions | ✅ | `allowed_tools` / `denied_tools`; legacy names `grep`, `python`, `fetch`, `poll` map to OMP tool names |
+| Thinking / effort | ✅ | `effort:` or string `thinking:` — `auto`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `off` |
+| Fallback model | ✅ | `fallbackModel: <omp-provider-id>/<model-id>` |
+| System prompt override | ✅ | String prompt blocks only; Claude preset/object forms are ignored with a warning |
+| Codebase env vars (`envInjection`) | ✅ | Used for runtime auth, bash tool calls, and workflow MCP env expansion |
+| Inline agents (`agents:`) | ❌ | Claude-only; ignored with a warning |
+| Hooks | ❌ | Claude-specific format |
+| In-process native tools | ❌ | OMP does not receive Archon's native `manage_run` tool |
+| Cost limits (`maxBudgetUsd`) | ❌ | no runtime budget enforcement |
+| Sandbox | ❌ | not native in the SDK; Archon uses worktree isolation |
+
+### Set as Default (Optional)
+
+```ini
+DEFAULT_AI_ASSISTANT=omp
+```
+
+### See also
+
+- [Adding a Community Provider](../contributing/adding-a-community-provider/) — the contributor-facing guide for extending Archon with your own provider.
 
 ## GitHub Copilot (Community Provider)
 

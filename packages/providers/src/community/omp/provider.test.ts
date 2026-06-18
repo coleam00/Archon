@@ -1472,6 +1472,47 @@ describe('OmpProvider', () => {
     }
   });
 
+  test('expands MCP env vars from request env', async () => {
+    const temp = await writeTempMcpConfig({
+      github: { command: 'npx', env: { GITHUB_TOKEN: '$OMP_REQUEST_MCP_TOKEN' } },
+    });
+    let connectArgs: Parameters<NonNullable<FakeSdkOptions['onConnectMcp']>>[0] | undefined;
+    const originalToken = process.env.OMP_REQUEST_MCP_TOKEN;
+    delete process.env.OMP_REQUEST_MCP_TOKEN;
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        onConnectMcp(args) {
+          connectArgs = args;
+        },
+      })
+    );
+
+    try {
+      const chunks = await collectChunks(
+        provider,
+        {
+          model: 'anthropic/claude-sonnet-4-5',
+          nodeConfig: { mcp: 'mcp.json' },
+          env: { OMP_REQUEST_MCP_TOKEN: 'request-token' },
+        },
+        temp.dir
+      );
+
+      expect(connectArgs?.configs).toEqual({
+        github: { command: 'npx', env: { GITHUB_TOKEN: 'request-token' } },
+      });
+      expect(chunks).not.toContainEqual({
+        type: 'system',
+        content:
+          '⚠️ MCP config references undefined env vars: OMP_REQUEST_MCP_TOKEN. These will be empty strings — MCP servers may fail to authenticate.',
+      });
+    } finally {
+      await temp.cleanup();
+      if (originalToken === undefined) delete process.env.OMP_REQUEST_MCP_TOKEN;
+      else process.env.OMP_REQUEST_MCP_TOKEN = originalToken;
+    }
+  });
+
   test('disconnects workflow MCP manager when MCP bootstrap fails', async () => {
     const temp = await writeTempMcpConfig({ github: { command: 'npx' } });
     let disconnectCount = 0;

@@ -8,6 +8,8 @@ import type {
   OmpMcpSourceMeta,
 } from './sdk-loader';
 
+type EnvSource = Record<string, string | undefined>;
+
 export interface ResolvedOmpMcp {
   manager: OmpMcpManager;
   customTools: unknown[];
@@ -76,9 +78,10 @@ export async function resolveOmpMcp(
   sdk: Pick<OmpCodingAgentSdk, 'MCPManager'>,
   cwd: string,
   mcpPath: string,
-  authStorage: OmpAuthStorage
+  authStorage: OmpAuthStorage,
+  envSource?: EnvSource
 ): Promise<ResolvedOmpMcp> {
-  const { servers, serverNames, missingVars } = await loadMcpConfig(mcpPath, cwd);
+  const { servers, serverNames, missingVars } = await loadMcpConfig(mcpPath, cwd, envSource);
   const manager = new sdk.MCPManager(cwd, null);
   manager.setAuthStorage(authStorage);
   const resolvedPath = isAbsolute(mcpPath) ? mcpPath : resolve(cwd, mcpPath);

@@ -514,7 +514,10 @@ export class OmpProvider implements IAgentProvider {
       const settings = sdk.Settings.isolated(settingsOverrides);
 
       if (nodeConfig?.mcp) {
-        resolvedMcp = await resolveOmpMcp(sdk, cwd, nodeConfig.mcp, authStorage);
+        const mcpEnvSource = requestOptions?.env
+          ? { ...process.env, ...requestOptions.env }
+          : process.env;
+        resolvedMcp = await resolveOmpMcp(sdk, cwd, nodeConfig.mcp, authStorage, mcpEnvSource);
         getLog().info(
           { serverNames: resolvedMcp.serverNames, mcpPath: nodeConfig.mcp },
           'omp.mcp_config_loaded'

@@ -123,8 +123,8 @@ Connects to an SSE endpoint.
 ## Environment Variable Expansion
 
 Values in `env` and `headers` fields support `$VAR_NAME` and `${VAR_NAME}` references. They are
-expanded from Archon's process environment at execution time. Codex workflow
-nodes also include codebase-scoped env vars in that expansion.
+expanded from Archon's process environment at execution time. Codex and Oh My Pi workflow
+nodes also include codebase-scoped/request-scoped env vars in that expansion.
 
 ```json
 {
