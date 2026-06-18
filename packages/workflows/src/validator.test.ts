@@ -379,6 +379,29 @@ describe('validateCommand', () => {
 // =============================================================================
 
 describe('discoverAvailableCommands', () => {
+  // Isolate ARCHON_HOME so home-scoped command discovery (~/.archon/commands/)
+  // doesn't leak the developer's real home-scoped commands into these
+  // assertions. Home-scoped commands are discovered unconditionally, regardless
+  // of loadDefaultCommands. CI passes without this only because ~/.archon is
+  // empty there; locally it fails for anyone with home-scoped commands installed.
+  let emptyHome: string;
+  const savedArchonHome = process.env.ARCHON_HOME;
+  const savedArchonDocker = process.env.ARCHON_DOCKER;
+
+  beforeEach(async () => {
+    emptyHome = await mkdtemp(join(tmpdir(), 'validator-emptyhome-'));
+    process.env.ARCHON_HOME = emptyHome;
+    delete process.env.ARCHON_DOCKER;
+  });
+
+  afterEach(async () => {
+    await rm(emptyHome, { recursive: true, force: true });
+    if (savedArchonHome === undefined) delete process.env.ARCHON_HOME;
+    else process.env.ARCHON_HOME = savedArchonHome;
+    if (savedArchonDocker === undefined) delete process.env.ARCHON_DOCKER;
+    else process.env.ARCHON_DOCKER = savedArchonDocker;
+  });
+
   test('finds commands in .archon/commands/', async () => {
     await createCommandFile('my-command');
     await createCommandFile('other-command');
