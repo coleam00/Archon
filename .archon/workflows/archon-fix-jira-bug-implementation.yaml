@@ -1,23 +1,18 @@
-name: archon-fix-jira-bug
+name: archon-fix-jira-bug-implementation
 description: |
-  Use when: User explicitly wants a ONE-SHOT fix for a JIRA bug (no plan approval step).
-  Triggers: "one-shot fix jira bug", "auto-fix PROJ-123 without approval", "skip plan approval for PROJ-123".
-  NOT for: Normal bug fixing — use archon-fix-jira-bug-analysis (plan-approval flow) instead.
-           Non-bug JIRA tickets (Stories, Tasks, Epics), GitHub issues (use archon-fix-github-issue),
-           questions about tickets, PR reviews, general exploration.
+  Use when: BugKiller plan-approval flow continues after human APPROVED the plan.
+  Triggers (internal): BugKiller archon_backend.run_implementation()
 
   Requires environment variables: JIRA_BASE_URL, JIRA_USER, JIRA_API_TOKEN.
+  Requires state at .bugkiller-state/<KEY>/plan.md (produced by analysis or revision).
 
   DAG workflow that:
-  1. Fetches the JIRA bug ticket and validates it is type Bug
-  2. Transitions ticket to "In Progress"
-  3. Researches context (web research + codebase exploration)
-  4. Investigates root cause and writes investigation plan
-  5. Implements the fix with validation
-  6. Creates a draft PR with JIRA ticket link for bidirectional traceability
+  4. Implements the approved fix
+  5. Validates
+  6. Creates a draft PR with JIRA ticket link
   7. Transitions ticket to "In Review" and links PR in JIRA
   8. Runs smart review (always code review + CLAUDE.md check, conditional additional agents)
-  9. Aggressively self-fixes all findings (tests, docs, error handling)
+  9. Aggressively self-fixes all findings
   10. Simplifies changed code
   11. Posts completion report as JIRA comment
 
@@ -25,10 +20,6 @@ provider: claude
 model: sonnet
 
 nodes:
-  # ═══════════════════════════════════════════════════════════════
-  # PHASE 1: FETCH & VALIDATE
-  # ═══════════════════════════════════════════════════════════════
-
   - id: extract-issue-key
     prompt: |
       Extract the JIRA issue key from this request: $ARGUMENTS
@@ -41,243 +32,54 @@ nodes:
       CRITICAL: Your final output must be ONLY the bare key with no quotes, no markdown, no explanation.
       Example correct output: PROJ-123
 
-  - id: fetch-jira-issue
+  # Load persisted state into $ARTIFACTS_DIR. Re-fetch JIRA to avoid stale data
+  # (the ticket may have been edited between analysis and approval).
+  - id: load-state
     bash: |
+      set -euo pipefail
       KEY=$(echo "$extract-issue-key.output" | tr -d ' \n\t' | grep -oE '[A-Z]+-[0-9]+' | head -1)
       if [ -z "$KEY" ]; then
-        echo "Failed to parse JIRA key from: $extract-issue-key.output" >&2
+        echo "FATAL: could not parse JIRA key from input" >&2
         exit 1
       fi
 
-      RESPONSE=$(curl -s -w "\n%{http_code}" \
-        -u "$JIRA_USER:$JIRA_API_TOKEN" \
-        "$JIRA_BASE_URL/rest/api/3/issue/$KEY" \
-        -H "Accept: application/json")
-
-      HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-      BODY=$(echo "$RESPONSE" | sed '$d')
-
-      if [ "$HTTP_CODE" != "200" ]; then
-        echo "JIRA API returned HTTP $HTTP_CODE for $KEY. Check JIRA_BASE_URL, JIRA_USER, JIRA_API_TOKEN." >&2
-        echo "$BODY" >&2
+      STATE_DIR=".bugkiller-state/$KEY"
+      if [ ! -f "$STATE_DIR/plan.md" ]; then
+        echo "FATAL: no plan.md at $STATE_DIR — analysis phase did not run for $KEY." >&2
         exit 1
       fi
 
       mkdir -p "$ARTIFACTS_DIR"
-      echo "$BODY" > "$ARTIFACTS_DIR/jira-issue.json"
-      echo "$BODY"
+      cp "$STATE_DIR/.jira-key"           "$ARTIFACTS_DIR/.jira-key"
+      cp "$STATE_DIR/investigation.md"    "$ARTIFACTS_DIR/investigation.md"
+      cp "$STATE_DIR/plan.md"             "$ARTIFACTS_DIR/plan.md"
+
+      # Re-fetch JIRA to pick up any edits since analysis (cheap; prevents drift)
+      RESPONSE=$(curl -s -w "\n%{http_code}" \
+        -u "$JIRA_USER:$JIRA_API_TOKEN" \
+        "$JIRA_BASE_URL/rest/api/3/issue/$KEY" \
+        -H "Accept: application/json")
+      HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+      BODY=$(echo "$RESPONSE" | sed '$d')
+      if [ "$HTTP_CODE" = "200" ]; then
+        echo "$BODY" > "$ARTIFACTS_DIR/jira-issue.json"
+        cp "$ARTIFACTS_DIR/jira-issue.json" "$STATE_DIR/jira-issue.json"
+        echo "Refreshed JIRA issue for $KEY"
+      else
+        echo "WARN: re-fetch returned HTTP $HTTP_CODE — falling back to cached jira-issue.json" >&2
+        cp "$STATE_DIR/jira-issue.json" "$ARTIFACTS_DIR/jira-issue.json"
+      fi
+
+      echo "Loaded state for $KEY"
     depends_on: [extract-issue-key]
 
-  # Validates issue type is Bug, saves key, transitions to In Progress.
-  # Fails fast (exit 1) if the ticket is not a Bug type.
-  # Status transition is best-effort — continues if "In Progress" transition is unavailable.
-  - id: validate-and-start
-    bash: |
-      KEY=$(echo "$extract-issue-key.output" | tr -d ' \n\t' | grep -oE '[A-Z]+-[0-9]+' | head -1)
-      echo "$KEY" > "$ARTIFACTS_DIR/.jira-key"
-
-      ISSUE_TYPE=$(jq -r '.fields.issuetype.name' "$ARTIFACTS_DIR/jira-issue.json")
-      NORMALIZED=$(echo "$ISSUE_TYPE" | tr '[:upper:]' '[:lower:]')
-
-      if ! echo "$NORMALIZED" | grep -qE '^(bug|defect)$'; then
-        echo "Ticket $KEY is type '$ISSUE_TYPE' — this workflow only handles Bug tickets." >&2
-        echo "For features/enhancements use archon-fix-github-issue or a feature workflow." >&2
-        exit 1
-      fi
-
-      SUMMARY=$(jq -r '.fields.summary' "$ARTIFACTS_DIR/jira-issue.json")
-      echo "Confirmed Bug: [$KEY] $SUMMARY"
-
-      # Transition to In Progress (best-effort)
-      TRANSITIONS=$(curl -s \
-        -u "$JIRA_USER:$JIRA_API_TOKEN" \
-        "$JIRA_BASE_URL/rest/api/3/issue/$KEY/transitions" \
-        -H "Accept: application/json")
-
-      TRANSITION_ID=$(echo "$TRANSITIONS" | jq -r \
-        '.transitions[] | select(.name | test("In Progress|Start Progress|Start Work"; "i")) | .id' | head -1)
-
-      if [ -n "$TRANSITION_ID" ]; then
-        curl -s -X POST \
-          -u "$JIRA_USER:$JIRA_API_TOKEN" \
-          "$JIRA_BASE_URL/rest/api/3/issue/$KEY/transitions" \
-          -H "Content-Type: application/json" \
-          -d "{\"transition\": {\"id\": \"$TRANSITION_ID\"}}" > /dev/null
-        echo "Transitioned $KEY to In Progress"
-      else
-        echo "No 'In Progress' transition available — skipping status change"
-      fi
-    depends_on: [fetch-jira-issue]
-
-  # Posts a JIRA comment immediately after validation so the team knows BugKiller is on it.
-  # Runs in parallel with web-research — no need to wait.
-  - id: notify-taking-over
-    bash: |
-      KEY=$(cat "$ARTIFACTS_DIR/.jira-key")
-      ADF_BODY=$(jq -n '{
-        body: {
-          version: 1,
-          type: "doc",
-          content: [
-            {
-              type: "paragraph",
-              content: [
-                {
-                  type: "text",
-                  text: "🤖 BugKiller has picked up this ticket and is now investigating the root cause. An investigation report will follow shortly."
-                }
-              ]
-            }
-          ]
-        }
-      }')
-      curl -s -X POST \
-        -u "$JIRA_USER:$JIRA_API_TOKEN" \
-        "$JIRA_BASE_URL/rest/api/3/issue/$KEY/comment" \
-        -H "Content-Type: application/json" \
-        -d "$ADF_BODY" > /dev/null
-      echo "Posted taking-over notice to $KEY"
-    depends_on: [validate-and-start]
-
   # ═══════════════════════════════════════════════════════════════
-  # PHASE 2: RESEARCH
-  # ═══════════════════════════════════════════════════════════════
-
-  - id: web-research
-    command: archon-web-research
-    depends_on: [validate-and-start]
-    context: fresh
-
-  # ═══════════════════════════════════════════════════════════════
-  # PHASE 3: INVESTIGATE
-  # ═══════════════════════════════════════════════════════════════
-
-  - id: investigate
-    command: jira-investigate-issue
-    depends_on: [validate-and-start, web-research]
-    context: fresh
-
-  # Reads the Confidence row from the investigation artifact.
-  # Outputs exactly: HIGH, MEDIUM, or LOW (uppercase, no whitespace).
-  - id: check-confidence
-    bash: |
-      CONFIDENCE=$(grep -iE '^\| *Confidence *\|' "$ARTIFACTS_DIR/investigation.md" | head -1 \
-        | awk -F'|' '{print $3}' | tr -d ' \t\r\n' | tr '[:lower:]' '[:upper:]')
-      if [ -z "$CONFIDENCE" ]; then
-        echo "MEDIUM"
-      else
-        echo "$CONFIDENCE"
-      fi
-    depends_on: [investigate]
-
-  # When confidence is below HIGH, post a proposed fix plan to JIRA and stop.
-  # The investigation report was already posted by the investigate step.
-  - id: plan-for-investigation
-    prompt: |
-      The investigation confidence is below HIGH — we will NOT auto-implement this fix.
-      Your job is to produce a detailed, actionable proposed fix plan and post it to JIRA.
-
-      ## Step 1 — Read investigation artifact
-
-      ```bash
-      cat "$ARTIFACTS_DIR/investigation.md"
-      JIRA_KEY=$(cat "$ARTIFACTS_DIR/.jira-key")
-      ```
-
-      ## Step 2 — Write proposed fix plan to artifact
-
-      Write `$ARTIFACTS_DIR/proposed-fix-plan.md` using this structure:
-
-      ```markdown
-      # Proposed Fix Plan: {JIRA_KEY}
-
-      **Confidence**: {MEDIUM|LOW}
-      **Reason confidence is below HIGH**: {brief explanation}
-
-      ---
-
-      ## Proposed Approach
-
-      {2–3 sentences on the recommended strategy}
-
-      ---
-
-      ## Step-by-step Fix
-
-      ### Step 1: {action}
-      - **File**: `path/to/file.ts`
-      - **Lines**: {range}
-      - **Change**: {what to do and why}
-
-      ### Step N: Update / Add Tests
-      - **File**: `path/to/test.ts`
-      - **Test cases**: {describe what to cover}
-
-      ---
-
-      ## Assumptions & Unknowns
-
-      | Item | Assumption | Risk if wrong |
-      |------|-----------|---------------|
-      | {item} | {assumption} | {risk} |
-
-      ---
-
-      ## Suggested Next Steps for the Team
-
-      1. {action to clarify or verify before implementing}
-      2. {…}
-      ```
-
-      ## Step 3 — Post plan to JIRA
-
-      ```bash
-      JIRA_KEY=$(cat "$ARTIFACTS_DIR/.jira-key")
-      PLAN_TEXT=$(cat "$ARTIFACTS_DIR/proposed-fix-plan.md")
-
-      ADF_BODY=$(jq -n --arg plan "$PLAN_TEXT" '{
-        body: {
-          version: 1,
-          type: "doc",
-          content: [
-            {
-              type: "heading",
-              attrs: {level: 2},
-              content: [{type: "text", text: "📋 Proposed Fix Plan (Manual Implementation Required)"}]
-            },
-            {
-              type: "paragraph",
-              content: [{type: "text", text: "Investigation confidence is below HIGH — BugKiller will not auto-implement this fix. A proposed plan is outlined below for the team to review and execute."}]
-            },
-            {type: "rule"},
-            {
-              type: "paragraph",
-              content: [{type: "text", text: $plan}]
-            }
-          ]
-        }
-      }')
-
-      HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-        -u "$JIRA_USER:$JIRA_API_TOKEN" \
-        "$JIRA_BASE_URL/rest/api/3/issue/$JIRA_KEY/comment" \
-        -H "Content-Type: application/json" \
-        -d "$ADF_BODY")
-
-      echo "Posted proposed fix plan to $JIRA_KEY (HTTP $HTTP_CODE)"
-      ```
-    depends_on: [check-confidence]
-    when: "$check-confidence.output != 'HIGH'"
-    context: fresh
-
-  # ═══════════════════════════════════════════════════════════════
-  # PHASE 4: IMPLEMENT
+  # PHASE 4: IMPLEMENT (no confidence gate — human approved the plan)
   # ═══════════════════════════════════════════════════════════════
 
   - id: implement
     command: archon-fix-issue
-    depends_on: [check-confidence]
-    when: "$check-confidence.output == 'HIGH'"
+    depends_on: [load-state]
     context: fresh
     model: opus[1m]
 
@@ -318,12 +120,14 @@ nodes:
            - `.pr-body.md`, `pr-body.md`, `*.scratch.md`, `*.tmp.md` at any path
            - `review/`, `*-report.md` at the repo root
            - Anything under `$ARTIFACTS_DIR`
+           - Anything under `.bugkiller-state/`
          - Verify with `git status --porcelain` that nothing scratch is staged before committing
 
       3. Push the branch: `git push -u origin HEAD`
 
       4. Read implementation artifacts from `$ARTIFACTS_DIR/` for context:
          - `$ARTIFACTS_DIR/investigation.md`
+         - `$ARTIFACTS_DIR/plan.md`
          - `$ARTIFACTS_DIR/implementation.md`
          - `$ARTIFACTS_DIR/validation.md`
 
@@ -350,11 +154,18 @@ nodes:
          PR_URL=$(gh pr view --json url -q '.url')
          echo "$PR_URL" > "$ARTIFACTS_DIR/.pr-url"
          ```
+
+      9. Write `.bugkiller-pr.json` at the repo root so BugKiller can extract the PR number:
+         ```bash
+         PR_NUMBER=$(cat "$ARTIFACTS_DIR/.pr-number")
+         PR_URL=$(cat "$ARTIFACTS_DIR/.pr-url")
+         jq -n --argjson pr "$PR_NUMBER" --arg url "$PR_URL" \
+           '{pr_number: $pr, url: $url}' > .bugkiller-pr.json
+         ```
     depends_on: [validate]
     context: fresh
 
   # Transitions JIRA ticket to "In Review" and adds the PR as a remote link.
-  # Both operations are best-effort — continues if transitions/links are unavailable.
   - id: link-and-transition
     bash: |
       KEY=$(cat "$ARTIFACTS_DIR/.jira-key")

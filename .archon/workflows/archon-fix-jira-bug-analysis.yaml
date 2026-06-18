@@ -1,0 +1,209 @@
+name: archon-fix-jira-bug-analysis
+description: |
+  Use when: User wants to FIX or RESOLVE a JIRA bug ticket using the plan-approval flow.
+  Triggers: "fix jira bug", "fix PROJ-123", "resolve jira ticket", "fix this jira bug",
+            "bugkiller PROJ-123", "investigate and plan fix for PROJ-123".
+  NOT for: Non-bug JIRA tickets (Stories, Tasks, Epics), GitHub issues,
+           questions about tickets, PR reviews, general exploration.
+           For one-shot fixes without approval, use archon-fix-jira-bug.
+
+  Requires environment variables: JIRA_BASE_URL, JIRA_USER, JIRA_API_TOKEN.
+
+  DAG workflow that:
+  1. Fetches the JIRA bug ticket and validates it is type Bug
+  2. Transitions ticket to "In Progress"
+  3. Researches context (web research + codebase exploration)
+  4. Investigates root cause
+  5. ALWAYS writes a fix plan to .bugkiller-state/<KEY>/plan.md
+  6. Posts the plan to JIRA with approval instructions
+  7. Exits — run archon-fix-jira-bug-implementation after human approves the plan
+
+provider: claude
+model: sonnet
+
+nodes:
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 1: FETCH & VALIDATE
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: extract-issue-key
+    prompt: |
+      Extract the JIRA issue key from this request: $ARGUMENTS
+
+      Rules:
+      - If the message contains an explicit JIRA key (e.g., "PROJ-123", "MYTEAM-456"), extract it exactly.
+      - JIRA keys follow the pattern: one or more uppercase letters, a dash, one or more digits (e.g., ABC-123).
+      - If no explicit key is found, respond with: ERROR: no JIRA key found in input.
+
+      CRITICAL: Your final output must be ONLY the bare key with no quotes, no markdown, no explanation.
+      Example correct output: PROJ-123
+
+  - id: fetch-jira-issue
+    bash: |
+      KEY=$(echo "$extract-issue-key.output" | tr -d ' \n\t' | grep -oE '[A-Z]+-[0-9]+' | head -1)
+      if [ -z "$KEY" ]; then
+        echo "Failed to parse JIRA key from: $extract-issue-key.output" >&2
+        exit 1
+      fi
+
+      RESPONSE=$(curl -s -w "\n%{http_code}" \
+        -u "$JIRA_USER:$JIRA_API_TOKEN" \
+        "$JIRA_BASE_URL/rest/api/3/issue/$KEY" \
+        -H "Accept: application/json")
+
+      HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+      BODY=$(echo "$RESPONSE" | sed '$d')
+
+      if [ "$HTTP_CODE" != "200" ]; then
+        echo "JIRA API returned HTTP $HTTP_CODE for $KEY. Check JIRA_BASE_URL, JIRA_USER, JIRA_API_TOKEN." >&2
+        echo "$BODY" >&2
+        exit 1
+      fi
+
+      mkdir -p "$ARTIFACTS_DIR"
+      echo "$BODY" > "$ARTIFACTS_DIR/jira-issue.json"
+      echo "$BODY"
+    depends_on: [extract-issue-key]
+
+  # Validates issue type is Bug, saves key, transitions to In Progress.
+  - id: validate-and-start
+    bash: |
+      KEY=$(echo "$extract-issue-key.output" | tr -d ' \n\t' | grep -oE '[A-Z]+-[0-9]+' | head -1)
+      echo "$KEY" > "$ARTIFACTS_DIR/.jira-key"
+
+      ISSUE_TYPE=$(jq -r '.fields.issuetype.name' "$ARTIFACTS_DIR/jira-issue.json")
+      NORMALIZED=$(echo "$ISSUE_TYPE" | tr '[:upper:]' '[:lower:]')
+
+      if ! echo "$NORMALIZED" | grep -qE '^(bug|defect)$'; then
+        echo "Ticket $KEY is type '$ISSUE_TYPE' — this workflow only handles Bug tickets." >&2
+        exit 1
+      fi
+
+      SUMMARY=$(jq -r '.fields.summary' "$ARTIFACTS_DIR/jira-issue.json")
+      echo "Confirmed Bug: [$KEY] $SUMMARY"
+
+      # Transition to In Progress (best-effort)
+      TRANSITIONS=$(curl -s \
+        -u "$JIRA_USER:$JIRA_API_TOKEN" \
+        "$JIRA_BASE_URL/rest/api/3/issue/$KEY/transitions" \
+        -H "Accept: application/json")
+
+      TRANSITION_ID=$(echo "$TRANSITIONS" | jq -r \
+        '.transitions[] | select(.name | test("In Progress|Start Progress|Start Work"; "i")) | .id' | head -1)
+
+      if [ -n "$TRANSITION_ID" ]; then
+        curl -s -X POST \
+          -u "$JIRA_USER:$JIRA_API_TOKEN" \
+          "$JIRA_BASE_URL/rest/api/3/issue/$KEY/transitions" \
+          -H "Content-Type: application/json" \
+          -d "{\"transition\": {\"id\": \"$TRANSITION_ID\"}}" > /dev/null
+        echo "Transitioned $KEY to In Progress"
+      else
+        echo "No 'In Progress' transition available — skipping status change"
+      fi
+    depends_on: [fetch-jira-issue]
+
+  # Persist initial state to .bugkiller-state/<KEY>/ so revision and implementation
+  # workflows can load it later without re-fetching JIRA.
+  - id: persist-state-init
+    bash: |
+      KEY=$(cat "$ARTIFACTS_DIR/.jira-key")
+      STATE_DIR=".bugkiller-state/$KEY"
+      mkdir -p "$STATE_DIR/plan-history"
+      cp "$ARTIFACTS_DIR/jira-issue.json" "$STATE_DIR/jira-issue.json"
+      echo "$KEY" > "$STATE_DIR/.jira-key"
+      echo "Initialized $STATE_DIR"
+    depends_on: [validate-and-start]
+
+  - id: notify-taking-over
+    bash: |
+      KEY=$(cat "$ARTIFACTS_DIR/.jira-key")
+      ADF_BODY=$(jq -n '{
+        body: {
+          version: 1,
+          type: "doc",
+          content: [
+            {
+              type: "paragraph",
+              content: [
+                {
+                  type: "text",
+                  text: "🤖 BugKiller has picked up this ticket and is now investigating the root cause. A fix plan will be posted for your approval shortly."
+                }
+              ]
+            }
+          ]
+        }
+      }')
+      curl -s -X POST \
+        -u "$JIRA_USER:$JIRA_API_TOKEN" \
+        "$JIRA_BASE_URL/rest/api/3/issue/$KEY/comment" \
+        -H "Content-Type: application/json" \
+        -d "$ADF_BODY" > /dev/null
+      echo "Posted taking-over notice to $KEY"
+    depends_on: [persist-state-init]
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 2: RESEARCH
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: web-research
+    command: archon-web-research
+    depends_on: [validate-and-start]
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 3: INVESTIGATE
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: investigate
+    command: jira-investigate-issue
+    depends_on: [validate-and-start, web-research]
+    context: fresh
+
+  # Persist investigation.md to state for downstream workflows.
+  - id: persist-investigation
+    bash: |
+      KEY=$(cat "$ARTIFACTS_DIR/.jira-key")
+      cp "$ARTIFACTS_DIR/investigation.md" ".bugkiller-state/$KEY/investigation.md"
+      echo "Persisted investigation.md for $KEY"
+    depends_on: [investigate]
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 3.5: ALWAYS PRODUCE A PLAN (no confidence gate)
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: produce-plan
+    command: archon-bug-plan
+    depends_on: [persist-investigation]
+    context: fresh
+
+  # Persist plan.md to state. Archive any prior plan first (matters for revision flow).
+  - id: persist-plan
+    bash: |
+      set -euo pipefail
+      KEY=$(cat "$ARTIFACTS_DIR/.jira-key")
+      STATE_DIR=".bugkiller-state/$KEY"
+
+      if [ -f "$STATE_DIR/plan.md" ]; then
+        N=$(ls "$STATE_DIR/plan-history/" 2>/dev/null | wc -l | tr -d ' ')
+        cp "$STATE_DIR/plan.md" "$STATE_DIR/plan-history/plan-v$((N + 1)).md"
+      fi
+      cp "$ARTIFACTS_DIR/plan.md" "$STATE_DIR/plan.md"
+
+      # Retention: keep at most 10 archived versions
+      ls -1t "$STATE_DIR/plan-history/" 2>/dev/null | tail -n +11 | while read -r f; do
+        rm -f "$STATE_DIR/plan-history/$f"
+      done
+
+      echo "Persisted plan.md for $KEY"
+    depends_on: [produce-plan]
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 4: POST PLAN TO JIRA (awaits human approval)
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: post-plan
+    command: archon-bug-post-plan
+    depends_on: [persist-plan]
+    context: fresh

@@ -284,6 +284,8 @@ nodes:
       - Report each finding ID and what you changed
     depends_on: [classify-agents]
     context: fresh
+    provider: codex
+    model: gpt-5.5
 
   - id: agent-2
     prompt: |
@@ -312,6 +314,8 @@ nodes:
       - Report each finding ID and what you changed
     depends_on: [classify-agents]
     context: fresh
+    provider: codex
+    model: gpt-5.5
 
   - id: agent-3
     prompt: |
@@ -341,6 +345,8 @@ nodes:
     depends_on: [classify-agents]
     when: "$classify-agents.output.run_agent_3 == 'true'"
     context: fresh
+    provider: codex
+    model: gpt-5.5
 
   - id: agent-4
     prompt: |
@@ -370,6 +376,8 @@ nodes:
     depends_on: [classify-agents]
     when: "$classify-agents.output.run_agent_4 == 'true'"
     context: fresh
+    provider: codex
+    model: gpt-5.5
 
   # ═══════════════════════════════════════════════════════════════
   # PHASE 6: VALIDATE & REPAIR LOOP
@@ -484,3 +492,29 @@ nodes:
       - Explicitly request a re-review
     depends_on: [validate-and-repair]
     context: fresh
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 8: WRITE OUTCOME
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: write-outcome
+    bash: |
+      BASE=$(jq -r '.baseRefName' "$ARTIFACTS_DIR/pr-meta.json")
+      HEAD_REF=$(jq -r '.headRefName' "$ARTIFACTS_DIR/pr-meta.json")
+
+      # Check whether we actually pushed new commits during this run.
+      # "fixes_pushed" → Claude will re-review on the synchronize event.
+      # "approved"     → nothing changed; no new review will fire, so mark done.
+      NEW_COMMITS=$(git log --oneline "origin/$BASE..HEAD" -- 2>/dev/null | wc -l | tr -d ' ')
+      REMOTE_HEAD=$(git rev-parse "origin/$HEAD_REF" 2>/dev/null || echo "")
+      LOCAL_HEAD=$(git rev-parse HEAD)
+
+      if [ "$LOCAL_HEAD" != "$REMOTE_HEAD" ] && [ "$NEW_COMMITS" -gt 0 ]; then
+        STATUS="fixes_pushed"
+      else
+        STATUS="approved"
+      fi
+
+      echo "{\"status\": \"$STATUS\"}" > .bugkiller-outcome.json
+      echo "outcome: $STATUS"
+    depends_on: [push-and-comment]

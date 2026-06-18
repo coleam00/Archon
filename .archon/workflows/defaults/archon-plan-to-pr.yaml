@@ -95,32 +95,44 @@ nodes:
     command: archon-code-review-agent
     depends_on: [sync]
     context: fresh
+    provider: codex
+    model: gpt-5.5
 
   - id: error-handling
     command: archon-error-handling-agent
     depends_on: [sync]
     context: fresh
+    provider: codex
+    model: gpt-5.5
 
   - id: test-coverage
     command: archon-test-coverage-agent
     depends_on: [sync]
     context: fresh
+    provider: codex
+    model: gpt-5.5
 
   - id: comment-quality
     command: archon-comment-quality-agent
     depends_on: [sync]
     context: fresh
+    provider: codex
+    model: gpt-5.5
 
   - id: docs-impact
     command: archon-docs-impact-agent
     depends_on: [sync]
     context: fresh
+    provider: codex
+    model: gpt-5.5
 
   - id: synthesize
     command: archon-synthesize-review
     depends_on: [code-review, error-handling, test-coverage, comment-quality, docs-impact]
     trigger_rule: one_success
     context: fresh
+    provider: codex
+    model: gpt-5.5
 
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 7: FIX REVIEW ISSUES

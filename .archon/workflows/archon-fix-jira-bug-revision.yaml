@@ -1,0 +1,101 @@
+name: archon-fix-jira-bug-revision
+description: |
+  Use when: BugKiller plan-approval flow needs to re-plan with human feedback.
+  Triggers (internal): BugKiller archon_backend.run_plan_revision()
+
+  Requires environment variables:
+    JIRA_BASE_URL, JIRA_USER, JIRA_API_TOKEN
+    BUGKILLER_PLAN_FEEDBACK — the human's revision feedback text
+
+  Requires prior state at .bugkiller-state/<KEY>/ (written by analysis workflow).
+
+  DAG workflow that:
+  1. Loads existing state (jira-issue, investigation, prior plan)
+  2. Re-runs the plan step factoring in $BUGKILLER_PLAN_FEEDBACK
+  3. Archives the prior plan, persists the new one
+  4. Posts the updated plan to JIRA
+  5. Exits — caller (BugKiller) sets WAITING_PLAN_APPROVAL again
+
+provider: claude
+model: sonnet
+
+nodes:
+  - id: extract-issue-key
+    prompt: |
+      Extract the JIRA issue key from this request: $ARGUMENTS
+
+      Rules:
+      - If the message contains an explicit JIRA key (e.g., "PROJ-123", "MYTEAM-456"), extract it exactly.
+      - JIRA keys follow the pattern: one or more uppercase letters, a dash, one or more digits (e.g., ABC-123).
+      - If no explicit key is found, respond with: ERROR: no JIRA key found in input.
+
+      CRITICAL: Your final output must be ONLY the bare key with no quotes, no markdown, no explanation.
+      Example correct output: PROJ-123
+
+  # Load persisted state into $ARTIFACTS_DIR so downstream commands work unchanged.
+  - id: load-state
+    bash: |
+      set -euo pipefail
+      KEY=$(echo "$extract-issue-key.output" | tr -d ' \n\t' | grep -oE '[A-Z]+-[0-9]+' | head -1)
+      if [ -z "$KEY" ]; then
+        echo "FATAL: could not parse JIRA key from input" >&2
+        exit 1
+      fi
+
+      STATE_DIR=".bugkiller-state/$KEY"
+      if [ ! -d "$STATE_DIR" ]; then
+        echo "FATAL: no state dir at $STATE_DIR — analysis phase never ran for $KEY." >&2
+        exit 1
+      fi
+
+      if [ -z "${BUGKILLER_PLAN_FEEDBACK:-}" ]; then
+        echo "FATAL: BUGKILLER_PLAN_FEEDBACK env var is empty — nothing to revise." >&2
+        exit 1
+      fi
+
+      mkdir -p "$ARTIFACTS_DIR"
+      cp "$STATE_DIR/.jira-key"           "$ARTIFACTS_DIR/.jira-key"
+      cp "$STATE_DIR/jira-issue.json"     "$ARTIFACTS_DIR/jira-issue.json"
+      cp "$STATE_DIR/investigation.md"    "$ARTIFACTS_DIR/investigation.md"
+      cp "$STATE_DIR/plan.md"             "$ARTIFACTS_DIR/prior-plan.md"
+
+      # Append feedback to history (audit trail)
+      printf "\n---\n## Revision @ %s\n%s\n" \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$BUGKILLER_PLAN_FEEDBACK" \
+        >> "$STATE_DIR/feedback-history.md"
+
+      echo "Loaded state for $KEY (feedback length: ${#BUGKILLER_PLAN_FEEDBACK} chars)"
+    depends_on: [extract-issue-key]
+
+  # Re-run the plan step. The command sees prior-plan.md + $BUGKILLER_PLAN_FEEDBACK
+  # and produces an updated plan.md.
+  - id: revise-plan
+    command: archon-bug-plan
+    depends_on: [load-state]
+    context: fresh
+
+  # Archive prior, persist new (same logic as analysis.persist-plan)
+  - id: persist-plan
+    bash: |
+      set -euo pipefail
+      KEY=$(cat "$ARTIFACTS_DIR/.jira-key")
+      STATE_DIR=".bugkiller-state/$KEY"
+
+      if [ -f "$STATE_DIR/plan.md" ]; then
+        N=$(ls "$STATE_DIR/plan-history/" 2>/dev/null | wc -l | tr -d ' ')
+        cp "$STATE_DIR/plan.md" "$STATE_DIR/plan-history/plan-v$((N + 1)).md"
+      fi
+      cp "$ARTIFACTS_DIR/plan.md" "$STATE_DIR/plan.md"
+
+      # Retention: keep at most 10 archived versions
+      ls -1t "$STATE_DIR/plan-history/" 2>/dev/null | tail -n +11 | while read -r f; do
+        rm -f "$STATE_DIR/plan-history/$f"
+      done
+
+      echo "Persisted revised plan.md for $KEY"
+    depends_on: [revise-plan]
+
+  - id: post-plan
+    command: archon-bug-post-plan
+    depends_on: [persist-plan]
+    context: fresh
