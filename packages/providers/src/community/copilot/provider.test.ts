@@ -113,13 +113,9 @@ class FakeCopilotClient {
 
 // Capture the onPermissionRequest passed into createSession.
 const approveAllStub = mock(() => ({ kind: 'approved' }));
-const runtimeConnectionForStdio = mock((opts?: { path?: string }) => ({ kind: 'stdio', ...opts }));
 
 mock.module('@github/copilot-sdk', () => ({
   CopilotClient: FakeCopilotClient,
-  RuntimeConnection: {
-    forStdio: runtimeConnectionForStdio,
-  },
   approveAll: approveAllStub,
 }));
 

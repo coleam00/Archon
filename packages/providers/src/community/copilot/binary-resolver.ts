@@ -5,7 +5,7 @@
  * dep, and by default the SDK resolves the binary from its own bundled copy
  * via `import.meta.url`. In compiled archon binaries that path is frozen to
  * the build host's filesystem, so we resolve explicitly and pass the result
- * via `new CopilotClient({ connection: RuntimeConnection.forStdio({ path }) })`.
+ * via `new CopilotClient({ cliPath })`.
  *
  * Resolution order:
  *  1. `COPILOT_BIN_PATH` environment variable
