@@ -94,10 +94,33 @@ function safeTextList(values?: string[]): string[] {
   return Array.isArray(values) ? values.filter(Boolean) : [];
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isProspectContact(value: unknown): value is PmcProspectContact {
+  return isRecord(value);
+}
+
+function safeMetricRecord(value: unknown): Record<string, number> {
+  if (!isRecord(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value).filter((entry): entry is [string, number] => {
+      const [, metric] = entry;
+      return typeof metric === 'number' && Number.isFinite(metric);
+    })
+  );
+}
+
 export function PMCProspectsPage(): React.ReactElement {
-  const prospectContactsPayload = prospectContactsData as Partial<PmcProspectContactsPayload>;
-  const prospectContacts = prospectContactsPayload.prospects ?? [];
-  const prospectContactTotals = prospectContactsPayload.totals ?? {};
+  const prospectContactsPayload = prospectContactsData as Partial<PmcProspectContactsPayload> & {
+    prospects?: unknown;
+    totals?: unknown;
+  };
+  const prospectContacts = Array.isArray(prospectContactsPayload.prospects)
+    ? prospectContactsPayload.prospects.filter(isProspectContact)
+    : [];
+  const prospectContactTotals = safeMetricRecord(prospectContactsPayload.totals);
   const [prospectSearch, setProspectSearch] = useState('');
   const [prospectBrandFilter, setProspectBrandFilter] = useState('all');
   const [prospectStateFilter, setProspectStateFilter] = useState('all');
