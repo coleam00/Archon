@@ -27,6 +27,56 @@ interface DriveFolder {
   files: DriveFile[];
 }
 
+interface DriveIndexPayload {
+  generated_at?: string;
+  folders?: unknown;
+}
+
+function isAudience(value: unknown): value is Audience {
+  return (
+    value === 'all' || value === 'internal' || value === 'partner-only' || value === 'jason-only'
+  );
+}
+
+function stringField(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
+function normalizeDriveFile(value: unknown): DriveFile | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const file = value as Partial<Record<keyof DriveFile, unknown>>;
+  return {
+    name: stringField(file.name),
+    type: stringField(file.type),
+    modified: stringField(file.modified),
+    size: stringField(file.size),
+    link: stringField(file.link),
+  };
+}
+
+function normalizeDriveFolder(value: unknown, index: number): DriveFolder | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const folder = value as Partial<Record<keyof DriveFolder, unknown>>;
+  const files = Array.isArray(folder.files)
+    ? folder.files.map(normalizeDriveFile).filter((file): file is DriveFile => file !== null)
+    : [];
+  const slug = stringField(folder.slug) || stringField(folder.id) || `folder-${index + 1}`;
+  const fileCount = typeof folder.fileCount === 'number' ? folder.fileCount : files.length;
+  return {
+    id: stringField(folder.id) || slug,
+    slug,
+    name: stringField(folder.name) || slug,
+    folderId: stringField(folder.folderId),
+    parentId: stringField(folder.parentId),
+    audience: isAudience(folder.audience) ? folder.audience : 'all',
+    lastSynced: stringField(folder.lastSynced),
+    fileCount,
+    vaultPath: stringField(folder.vaultPath),
+    driveUrl: stringField(folder.driveUrl),
+    files,
+  };
+}
+
 // Map ?view= query param -> set of audiences a viewer is allowed to see.
 // jason-only is internal-superset; partner-only is for sharing scoped folders.
 const VIEW_TO_ALLOWED: Record<string, Set<Audience>> = {
@@ -66,8 +116,13 @@ export function DrivePage(): React.ReactElement {
   const [folderSearch, setFolderSearch] = useState<string>('');
   const [fileSearch, setFileSearch] = useState<string>('');
 
-  const allFolders = (driveData.folders as DriveFolder[]) ?? [];
-  const generatedAt = (driveData as { generated_at?: string }).generated_at ?? '';
+  const drivePayload = driveData as DriveIndexPayload;
+  const allFolders = Array.isArray(drivePayload.folders)
+    ? drivePayload.folders
+        .map(normalizeDriveFolder)
+        .filter((folder): folder is DriveFolder => folder !== null)
+    : [];
+  const generatedAt = drivePayload.generated_at ?? '';
 
   // Audience-filter at the folder level
   const visibleFolders = useMemo<DriveFolder[]>(
