@@ -11,7 +11,7 @@
     "./community/forge/gitlab": "./src/community/forge/gitlab/index.ts"
   },
   "scripts": {
-    "test": "bun test src/chat/slack/adapter.test.ts src/chat/slack/auth.test.ts src/chat/slack/blocks.test.ts src/chat/telegram/ src/community/chat/ src/community/forge/gitlab/auth.test.ts src/forge/github/auth.test.ts src/utils/ && bun test src/chat/slack/workflow-bridge.test.ts && bun test src/forge/github/adapter.test.ts && bun test src/forge/github/context.test.ts && bun test src/community/forge/gitea/adapter.test.ts && bun test src/community/forge/gitlab/adapter.test.ts",
+    "test": "bun test src/chat/slack/adapter.test.ts src/chat/slack/auth.test.ts src/chat/slack/blocks.test.ts src/chat/telegram/ src/community/chat/ src/community/forge/gitlab/auth.test.ts src/forge/github/auth.test.ts src/forge/jira/auth.test.ts src/forge/jira/adf.test.ts src/utils/ && bun test src/chat/slack/workflow-bridge.test.ts && bun test src/forge/github/adapter.test.ts && bun test src/forge/github/context.test.ts && bun test src/community/forge/gitea/adapter.test.ts && bun test src/community/forge/gitlab/adapter.test.ts && bun test src/forge/jira/adapter.test.ts",
     "type-check": "bun x tsc --noEmit"
   },
   "dependencies": {
