@@ -542,6 +542,8 @@ assistants:
     disableExtensionDiscovery: true
     additionalExtensionPaths:
       - /opt/omp/extensions/acme
+    # OMP SDK spawn allowlist expression; syntax is passed through unchanged.
+    spawns: "*"
     extensionFlags:
       plan: true
       mode: strict
@@ -573,8 +575,40 @@ assistants:
         fallbackRevertPolicy: cooldown-expiry
       compaction:
         enabled: true
+        thresholdPercent: 80
+        thresholdTokens: 100000
       contextPromotion:
         enabled: true
+      model:
+        loopGuard:
+          enabled: true
+          checkAssistantContent: true
+      tools:
+        approvalMode: write       # 'always-ask' | 'write' | 'yolo'
+        maxTimeout: 60            # seconds; 0 disables the cap
+      providers:
+        webSearch: gemini         # 'auto' or a supported web-search provider
+        webSearchExclude:
+          - brave
+        image: openrouter         # 'auto' | 'openai' | 'antigravity' | 'xai' | 'gemini' | 'openrouter'
+      task:
+        maxConcurrency: 8         # 0 means unlimited
+        maxRuntimeMs: 600000      # 0 disables the cap
+      memory:
+        backend: mnemopi          # 'off' | 'local' | 'hindsight' | 'mnemopi'
+      mnemopi:
+        autoRecall: true
+        autoRetain: true
+        polyphonicRecall: false
+        enhancedRecall: false
+        noEmbeddings: false
+        debug: false
+      hindsight:
+        autoRecall: true
+        autoRetain: true
+        mentalModelsEnabled: true
+        mentalModelAutoSeed: false
+        debug: false
       modelRoles:
         default: anthropic/claude-sonnet-4-5
         task: anthropic/claude-haiku-4-5
@@ -588,7 +622,7 @@ assistants:
         - risky-extension
 ```
 
-Only `model` is exposed to web clients by default; filesystem paths, environment variables, extension settings, and OMP settings remain server-side configuration.
+Only `model` is exposed to web clients by default; filesystem paths, environment variables, extension settings, OMP settings, and OMP spawn controls remain server-side configuration.
 
 ### Model reference format
 
@@ -626,11 +660,14 @@ Tools that can modify files, run code, access the network, or change session sta
 | Auth env override | ✅ | provider API-key env vars such as `ANTHROPIC_API_KEY` are passed to OMP auth storage as runtime overrides; Hugging Face uses `HUGGINGFACE_HUB_TOKEN` then `HF_TOKEN` |
 | OMP config env | ✅ | `assistants.omp.env` applies session-scoped process env for in-process OMP extensions, does not override shell env, and removes keys Archon created after the prompt |
 | OMP interactivity | ✅ | `assistants.omp.interactive: false` passes `hasUI: false` and skips Archon's OMP UI bridge |
+| OMP SDK deadline | ✅ | Workflow node `idle_timeout` is also passed to OMP as an absolute SDK deadline; Archon's idle watchdog still owns workflow timeout behavior |
+| OMP spawn controls | ✅ | `assistants.omp.spawns` is passed through to the OMP SDK as its spawn allowlist expression; omit it to keep the SDK default |
 | OMP extension flags | ✅ when an extension runner loads | `assistants.omp.extensionFlags` calls OMP `extensionRunner.setFlagValue()` before the first prompt; Archon emits a warning if no runner is present |
-| OMP settings overrides | ✅ | `assistants.omp.settings.retry`, `compaction`, `contextPromotion`, `modelRoles`, `enabledModels`, `modelProviderOrder`, `disabledProviders`, and `disabledExtensions` are passed to `Settings.isolated(...)`; retry settings include `enabled`, `maxRetries`, `fallbackChains`, and `fallbackRevertPolicy` |
+| OMP settings overrides | ✅ | `assistants.omp.settings.retry`, `compaction`, `snapcompact`, `contextPromotion`, `model.loopGuard`, `tools`, `providers`, `task`, `memory`, `mnemopi`, `hindsight`, `modelRoles`, `enabledModels`, `modelProviderOrder`, `disabledProviders`, and `disabledExtensions` are passed to `Settings.isolated(...)`; secret-bearing Mnemopi/Hindsight fields and raw arbitrary settings are not exposed |
 | OMP MCP discovery | ✅ (OMP-native) | `assistants.omp.enableMCP` toggles OMP's own MCP discovery from `.omp/mcp.json`, `~/.omp/agent/mcp.json`, root `mcp.json`, and supported third-party config files |
 | Archon `mcp:` field | ✅ (node-scoped) | Workflow node `mcp: .archon/mcp/server.json` loads that Archon MCP JSON only for the node. It does not require `assistants.omp.enableMCP: true` and does not write OMP-native config files |
 | Bash subprocess env injection | ✅ | Workflow/codebase `envVars` are injected into OMP `bash` tool calls. If a model supplies an explicit bash `env` argument for the same key, the tool-call value wins. |
+| In-process native tools | ✅ | Archon's native `manage_run` tool is injected into OMP through SDK `customTools` for project-scoped chat/workflow control. |
 | Fallback model | ✅ (retry/rate-limit fallback) | `fallbackModel:` maps to OMP `retry.fallbackChains` for the node/workflow primary model. OMP applies it during retryable errors such as rate limits or transient provider failures, not as an arbitrary-error fallback. |
 | Custom tools / commands / hooks paths | OMP-native only | Use OMP discovery directories such as `.omp/tools`, `.omp/commands`, `.omp/hooks`, or extensions; Archon does not write hidden config files or expose path-array shims |
 | Claude hooks / inline agents / sandbox / cost limits | ❌ | no Archon-compatible OMP session-level equivalent wired in v1 |
@@ -683,6 +720,7 @@ assistants:
     #   - /absolute/path/to/extension
     # toolNames: [read, search, bash]
     # interactive: true
+    # spawns: "*"                        # OMP SDK pass-through spawn allowlist expression
     # extensionFlags:
     #   plan: true
     # env:
@@ -727,13 +765,15 @@ nodes:
 | Structured output | ✅ | best-effort via prompt augmentation + repair; the executor validates and re-asks up to 3× |
 | Skills | ✅ | `skills: [name]` resolved from project/user skill directories |
 | Tool restrictions | ✅ | `allowed_tools` / `denied_tools`; legacy names `grep`, `python`, `fetch`, `poll` map to OMP tool names |
+| OMP SDK deadline | ✅ | Node `idle_timeout` is also passed to OMP as an absolute SDK deadline; Archon's watchdog semantics are unchanged |
+| OMP spawn controls | ✅ | `assistants.omp.spawns` passes OMP's spawn allowlist expression through unchanged; omit it for the SDK default |
 | Thinking / effort | ✅ | `effort:` or string `thinking:` — `auto`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `off` |
 | Fallback model | ✅ | `fallbackModel: <omp-provider-id>/<model-id>` |
 | System prompt override | ✅ | String prompt blocks only; Claude preset/object forms are ignored with a warning |
 | Codebase env vars (`envInjection`) | ✅ | Used for runtime auth, bash tool calls, and workflow MCP env expansion |
 | Inline agents (`agents:`) | ❌ | Claude-only; ignored with a warning |
 | Hooks | ❌ | Claude-specific format |
-| In-process native tools | ❌ | OMP does not receive Archon's native `manage_run` tool |
+| In-process native tools | ✅ | Archon's native `manage_run` tool is injected through OMP SDK `customTools` |
 | Cost limits (`maxBudgetUsd`) | ❌ | no runtime budget enforcement |
 | Sandbox | ❌ | not native in the SDK; Archon uses worktree isolation |
 
