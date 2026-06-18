@@ -33,7 +33,7 @@ export const DEFAULT_OMP_TOOL_NAMES = [
   'browser',
   'task',
   'job',
-  'todo_write',
+  'todo',
   'web_search',
   'write',
   'render_mermaid',
@@ -66,6 +66,7 @@ const LEGACY_OMP_TOOL_ALIASES: Record<string, string> = {
   grep: 'search',
   poll: 'job',
   fetch: 'read',
+  todo_write: 'todo',
 };
 
 // Mirrors @oh-my-pi/pi-ai@16.0.0 stream.ts serviceProviderMap for providers
@@ -172,7 +173,10 @@ export function resolveOmpThinkingLevel(nodeConfig?: NodeConfig): ResolvedThinki
 
 export interface ResolvedOmpTools {
   toolNames: string[];
+  /** Unknown names from allowed_tools or assistants.omp.toolNames. These are dropped and warned. */
   unknownTools: string[];
+  /** Unknown names from denied_tools. These must fail fast so a typo never leaves a dangerous tool enabled. */
+  unknownDeniedTools: string[];
 }
 
 function normalizeToolName(name: string, unknownTools: string[]): string | undefined {
@@ -191,20 +195,32 @@ export function resolveOmpToolNames(
 ): ResolvedOmpTools {
   const base = defaults?.toolNames !== undefined ? defaults.toolNames : [...DEFAULT_OMP_TOOL_NAMES];
   const unknownTools: string[] = [];
+  const unknownDeniedTools: string[] = [];
 
-  const normalize = (name: string): string | undefined => normalizeToolName(name, unknownTools);
+  const normalizeSelected = (name: string): string | undefined =>
+    normalizeToolName(name, unknownTools);
+  const normalizeDenied = (name: string): string | undefined =>
+    normalizeToolName(name, unknownDeniedTools);
   let selected = nodeConfig?.allowed_tools
-    ? nodeConfig.allowed_tools.map(normalize).filter((name): name is string => name !== undefined)
-    : base.map(normalize).filter((name): name is string => name !== undefined);
+    ? nodeConfig.allowed_tools
+        .map(normalizeSelected)
+        .filter((name): name is string => name !== undefined)
+    : base.map(normalizeSelected).filter((name): name is string => name !== undefined);
 
   if (nodeConfig?.denied_tools) {
     const denied = new Set(
-      nodeConfig.denied_tools.map(normalize).filter((name): name is string => name !== undefined)
+      nodeConfig.denied_tools
+        .map(normalizeDenied)
+        .filter((name): name is string => name !== undefined)
     );
     selected = selected.filter(name => !denied.has(name));
   }
 
-  return { toolNames: [...new Set(selected)], unknownTools: [...new Set(unknownTools)] };
+  return {
+    toolNames: [...new Set(selected)],
+    unknownTools: [...new Set(unknownTools)],
+    unknownDeniedTools: [...new Set(unknownDeniedTools)],
+  };
 }
 
 export interface ResolvedOmpSkills {

@@ -417,7 +417,15 @@ export class OmpProvider implements IAgentProvider {
     const { level: thinkingLevel, warning: thinkingWarning } = resolveOmpThinkingLevel(nodeConfig);
     if (thinkingWarning) yield { type: 'system', content: `⚠️ ${thinkingWarning}` };
 
-    const { toolNames, unknownTools } = resolveOmpToolNames(nodeConfig, ompConfig);
+    const { toolNames, unknownTools, unknownDeniedTools } = resolveOmpToolNames(
+      nodeConfig,
+      ompConfig
+    );
+    if (unknownDeniedTools.length > 0) {
+      throw new Error(
+        `Oh My Pi denied_tools contains unknown tool names: ${unknownDeniedTools.join(', ')}. Fix the tool name or remove it so Archon does not leave the tool enabled by mistake.`
+      );
+    }
     if (unknownTools.length > 0) {
       yield {
         type: 'system',

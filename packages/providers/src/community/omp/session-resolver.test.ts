@@ -160,6 +160,29 @@ describe('resolveOmpSession', () => {
     });
   });
 
+  test('throws when session loading error only mentions ENOENT', async () => {
+    const sdk: Pick<OmpCodingAgentSdk, 'SessionManager'> = {
+      SessionManager: {
+        getDefaultSessionDir() {
+          return '/tmp/omp-sessions';
+        },
+        create(cwd: string, sessionDir?: string) {
+          return { kind: 'create', cwd, sessionDir };
+        },
+        async list() {
+          throw new Error('corrupt session index mentions ENOENT but has no fs code');
+        },
+        async open() {
+          throw new Error('should not open');
+        },
+      },
+    };
+
+    await expect(resolveOmpSession(sdk, '/repo', 'abc')).rejects.toThrow(
+      "Oh My Pi session resume failed for 'abc': corrupt session index mentions ENOENT but has no fs code"
+    );
+  });
+
   test('throws when opening a matching session fails unexpectedly', async () => {
     const sdk: Pick<OmpCodingAgentSdk, 'SessionManager'> = {
       SessionManager: {

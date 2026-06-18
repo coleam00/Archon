@@ -67,7 +67,7 @@ describe('parseOmpConfig', () => {
     expect(parseOmpConfig(validOmpConfigInput)).toEqual(validOmpConfigOutput);
   });
 
-  test('drops invalid values silently', () => {
+  test('drops invalid values and makes invalid approval mode safe', () => {
     expect(
       parseOmpConfig({
         model: 42,
@@ -132,6 +132,7 @@ describe('parseOmpConfig', () => {
       env: { KEEP: 'yes' },
       settings: {
         providers: { webSearchExclude: ['brave'] },
+        tools: { approvalMode: 'always-ask' },
         mnemopi: { autoRetain: true, enhancedRecall: false, debug: true },
         hindsight: { autoRetain: false, mentalModelsEnabled: true },
         modelRoles: { default: 'anthropic/claude-sonnet-4-5' },

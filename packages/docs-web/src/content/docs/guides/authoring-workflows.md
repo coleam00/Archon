@@ -426,7 +426,7 @@ nodes:
 
 ### `allowed_tools` and `denied_tools` for Tool Restrictions
 
-Restrict which built-in tools a node can use without relying on prompt instructions. Restrictions are enforced for Claude, Pi, and Oh My Pi. Tool names are provider-specific: Claude uses Claude SDK names, Pi uses `grep`, and Oh My Pi uses `search`.
+Restrict which built-in tools a node can use without relying on prompt instructions. Restrictions are enforced for Claude, OpenCode, Pi, Copilot, and Oh My Pi. Tool names are provider-specific: Claude uses Claude SDK names, Pi uses `grep`, and Oh My Pi uses `search`.
 
 ```yaml
 nodes:
@@ -1379,7 +1379,7 @@ Before deploying a workflow:
 5. **Parallel by default** — nodes in the same topological layer run concurrently
 6. **Conditional branching** — `when:` conditions and `trigger_rule` control which nodes run
 7. **`output_format`** — enforce structured JSON output from AI nodes for reliable branching
-8. **`allowed_tools` / `denied_tools`** — restrict tools per node (Claude, Pi, and Oh My Pi; use provider-specific tool names)
+8. **`allowed_tools` / `denied_tools`** — restrict tools per node (Claude, OpenCode, Pi, Copilot, and Oh My Pi; use provider-specific tool names)
 9. **`retry:`** — auto-retries transient errors (default: 2 retries / 3 total attempts, 3 s backoff); customize per node
 10. **`hooks`** — attach SDK hook callbacks to Claude nodes for tool control and context injection
 11. **`mcp:`** — attach per-node MCP servers via JSON config (Claude, Codex, and Oh My Pi)

@@ -29,14 +29,21 @@ describe('resolveOmpThinkingLevel', () => {
 });
 
 describe('resolveOmpToolNames', () => {
-  test('uses curated defaults', () => {
-    expect(resolveOmpToolNames().toolNames).toEqual([...DEFAULT_OMP_TOOL_NAMES]);
+  test('uses curated defaults with current OMP tool names', () => {
+    expect(resolveOmpToolNames()).toEqual({
+      toolNames: [...DEFAULT_OMP_TOOL_NAMES],
+      unknownTools: [],
+      unknownDeniedTools: [],
+    });
+    expect(DEFAULT_OMP_TOOL_NAMES).toContain('todo');
+    expect(DEFAULT_OMP_TOOL_NAMES).not.toContain('todo_write');
   });
 
   test('uses current OMP tool names', () => {
     expect(resolveOmpToolNames({ allowed_tools: ['eval', 'search', 'read', 'job'] })).toEqual({
       toolNames: ['eval', 'search', 'read', 'job'],
       unknownTools: [],
+      unknownDeniedTools: [],
     });
   });
 
@@ -44,20 +51,32 @@ describe('resolveOmpToolNames', () => {
     expect(resolveOmpToolNames({ allowed_tools: ['read', 'calc', 'recipe'] })).toEqual({
       toolNames: ['read'],
       unknownTools: ['calc', 'recipe'],
+      unknownDeniedTools: [],
     });
   });
 
   test('maps legacy OMP tool aliases to current names', () => {
-    expect(resolveOmpToolNames({ allowed_tools: ['python', 'grep', 'fetch', 'poll'] })).toEqual({
-      toolNames: ['eval', 'search', 'read', 'job'],
+    expect(
+      resolveOmpToolNames({ allowed_tools: ['python', 'grep', 'fetch', 'poll', 'todo_write'] })
+    ).toEqual({
+      toolNames: ['eval', 'search', 'read', 'job', 'todo'],
       unknownTools: [],
+      unknownDeniedTools: [],
     });
   });
 
   test('honors allowed and denied tools in OMP namespace', () => {
     expect(
       resolveOmpToolNames({ allowed_tools: ['read', 'ssh', 'grep'], denied_tools: ['search'] })
-    ).toEqual({ toolNames: ['read', 'ssh'], unknownTools: [] });
+    ).toEqual({ toolNames: ['read', 'ssh'], unknownTools: [], unknownDeniedTools: [] });
+  });
+
+  test('reports unknown denied tools separately', () => {
+    expect(resolveOmpToolNames({ denied_tools: ['bash', 'typo_tool'] })).toEqual({
+      toolNames: DEFAULT_OMP_TOOL_NAMES.filter(name => name !== 'bash'),
+      unknownTools: [],
+      unknownDeniedTools: ['typo_tool'],
+    });
   });
 
   test('uses assistant toolNames as base', () => {
@@ -66,6 +85,7 @@ describe('resolveOmpToolNames', () => {
     ).toEqual({
       toolNames: ['read'],
       unknownTools: [],
+      unknownDeniedTools: [],
     });
   });
 
@@ -73,6 +93,7 @@ describe('resolveOmpToolNames', () => {
     expect(resolveOmpToolNames(undefined, { toolNames: [] })).toEqual({
       toolNames: [],
       unknownTools: [],
+      unknownDeniedTools: [],
     });
   });
 });

@@ -361,6 +361,27 @@ describe('OmpProvider', () => {
     expect(sessionOptions?.spawns).toBe('reviewer,planner');
   });
 
+  test('throws on unknown denied tools before creating a session', async () => {
+    let createSessionCalled = false;
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        onCreateAgentSession() {
+          createSessionCalled = true;
+        },
+      })
+    );
+
+    await expect(
+      collectChunks(provider, {
+        model: 'anthropic/claude-sonnet-4-5',
+        nodeConfig: { denied_tools: ['typo_tool'] },
+      })
+    ).rejects.toThrow(
+      'Oh My Pi denied_tools contains unknown tool names: typo_tool. Fix the tool name or remove it so Archon does not leave the tool enabled by mistake.'
+    );
+    expect(createSessionCalled).toBe(false);
+  });
+
   test('forks resumed sessions when executor requests forkSession', async () => {
     const forkCalls: Array<{ filePath: string; cwd: string; sessionDir?: string }> = [];
     const openCalls: Array<{ filePath: string; sessionDir?: string }> = [];

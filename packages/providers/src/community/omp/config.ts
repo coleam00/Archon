@@ -334,8 +334,9 @@ function toolsSettings(value: unknown): OmpSettingsDefaults['tools'] | undefined
   if (!isRecord(value)) return undefined;
 
   const tools: NonNullable<OmpSettingsDefaults['tools']> = {};
-  const approvalMode = enumSetting(value.approvalMode, OMP_APPROVAL_MODES);
-  if (approvalMode !== undefined) tools.approvalMode = approvalMode;
+  if (Object.prototype.hasOwnProperty.call(value, 'approvalMode')) {
+    tools.approvalMode = enumSetting(value.approvalMode, OMP_APPROVAL_MODES) ?? 'always-ask';
+  }
   const maxTimeout = nonNegativeInteger(value.maxTimeout);
   if (maxTimeout !== undefined) tools.maxTimeout = maxTimeout;
 

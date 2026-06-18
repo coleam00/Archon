@@ -14,10 +14,9 @@ function sessionsDir(
 }
 
 function isMissingSessionError(error: unknown): boolean {
-  const err = error as { code?: string; message?: string };
-  return (
-    err.code === 'ENOENT' || err.code === 'ENOTDIR' || err.message?.includes('ENOENT') === true
-  );
+  if (typeof error !== 'object' || error === null) return false;
+  const code = (error as { code?: unknown }).code;
+  return code === 'ENOENT' || code === 'ENOTDIR';
 }
 
 /**

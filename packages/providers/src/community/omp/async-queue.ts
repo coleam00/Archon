@@ -37,7 +37,7 @@ export class AsyncQueue<T> implements AsyncIterable<T> {
     this.closed = true;
     while (this.waiters.length > 0) {
       const waiter = this.waiters.shift();
-      if (waiter) waiter({ value: undefined, done: true });
+      if (waiter) waiter({ value: undefined as T, done: true });
     }
   }
 
@@ -48,21 +48,33 @@ export class AsyncQueue<T> implements AsyncIterable<T> {
       );
     }
     this.consumed = true;
-    return this.iterate();
-  }
 
-  private async *iterate(): AsyncGenerator<T> {
-    while (true) {
-      if (this.buffer.length > 0) {
-        yield this.buffer.shift() as T;
-        continue;
-      }
-      if (this.closed) return;
-      const result = await new Promise<IteratorResult<T>>(resolve => {
-        this.waiters.push(resolve);
-      });
-      if (result.done) return;
-      yield result.value;
-    }
+    let finished = false;
+    const done = (): IteratorResult<T> => ({ value: undefined as T, done: true });
+
+    return {
+      next: (): Promise<IteratorResult<T>> => {
+        if (finished) return Promise.resolve(done());
+        if (this.buffer.length > 0) {
+          return Promise.resolve({ value: this.buffer.shift() as T, done: false });
+        }
+        if (this.closed) {
+          finished = true;
+          return Promise.resolve(done());
+        }
+
+        return new Promise<IteratorResult<T>>(resolve => {
+          this.waiters.push(result => {
+            if (result.done) finished = true;
+            resolve(result);
+          });
+        });
+      },
+      return: (): Promise<IteratorResult<T>> => {
+        finished = true;
+        this.close();
+        return Promise.resolve(done());
+      },
+    };
   }
 }

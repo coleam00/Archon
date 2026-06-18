@@ -644,9 +644,9 @@ Archon still chooses the initial model from the node/workflow model first, then 
 
 ### OMP tool names
 
-`allowed_tools`, `denied_tools`, and `assistants.omp.toolNames` use OMP tool names. Common safe read/analysis tools are `read`, `search`, `find`, `lsp`, `web_search`, `ast_grep`, `ast_edit`, `calc`, `task`, `todo_write`, and `ask`.
+`allowed_tools`, `denied_tools`, and `assistants.omp.toolNames` use OMP tool names. Common safe read/analysis tools are `read`, `search`, `find`, `lsp`, `web_search`, `ast_grep`, `ast_edit`, `task`, `todo`, and `ask`.
 
-Tools that can modify files, run code, access the network, or change session state should be enabled intentionally: `bash`, `python`, `write`, `edit`, `browser`, `ssh`, `GitHub`, `checkpoint`, `rewind`, `job`, `irc`, `render_mermaid`, and `search_tool_bm25`. Hidden SDK tools such as `yield`, `resolve`, and `exit_plan_mode` are only useful for OMP-internal workflows.
+Tools that can modify files, run code, access the network, or change session state should be enabled intentionally: `bash`, `eval`, `write`, `edit`, `browser`, `ssh`, `github`, `checkpoint`, `rewind`, `job`, `irc`, `render_mermaid`, and `search_tool_bm25`. Legacy aliases are accepted for existing workflows: `grep` → `search`, `python` → `eval`, `fetch` → `read`, `poll` → `job`, and `todo_write` → `todo`. Hidden SDK tools such as `yield`, `resolve`, and `exit_plan_mode` are only useful for OMP-internal workflows.
 
 ### Oh My Pi capabilities
 
@@ -681,111 +681,6 @@ Node-level Archon `mcp:` and `assistants.omp.enableMCP` are intentionally separa
 - [Pi documentation](https://pi.dev) — official Pi docs (extensions, model registry, settings).
 - [Pi on GitHub](https://github.com/earendil-works/pi) — upstream Pi project.
 - [Oh My Pi on GitHub](https://github.com/can1357/oh-my-pi) — upstream Oh My Pi project.
-
-## Oh My Pi (Community Provider)
-
-**SDK-backed OMP provider.** Archon's Oh My Pi adapter uses `@oh-my-pi/pi-coding-agent` as provider id `omp`. It is registered as `builtIn: false`.
-
-### Install
-
-Oh My Pi is included as a dependency of `@archon/providers` — `bun install` pulls in the SDK automatically. It's available immediately.
-
-### Authenticate
-
-Oh My Pi resolves credentials from its own auth storage and from environment variables for key-backed backends. Request-scoped/codebase env vars win for a single run or chat turn, so per-codebase or per-user credentials can select the key used by the OMP model provider.
-
-Common env vars include:
-
-| OMP provider id | Env var |
-|---|---|
-| `anthropic` | `ANTHROPIC_OAUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, or `ANTHROPIC_API_KEY` |
-| `openai` | `OPENAI_API_KEY` |
-| `google` | `GEMINI_API_KEY` |
-| `openrouter` | `OPENROUTER_API_KEY` |
-| `github-copilot` | `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, or `GITHUB_TOKEN` |
-
-`agentDir` can point OMP at a custom auth/session/settings root when you do not want the SDK default.
-
-### Configuration Options
-
-```yaml
-assistants:
-  omp:
-    model: anthropic/claude-sonnet-4-5   # Required: '<omp-provider-id>/<model-id>'
-    # agentDir: /absolute/path/to/omp-agent
-    # enableMCP: false                   # OMP's own MCP discovery; workflow `mcp:` still works
-    # enableLsp: true
-    # disableExtensionDiscovery: true
-    # additionalExtensionPaths:
-    #   - /absolute/path/to/extension
-    # toolNames: [read, search, bash]
-    # interactive: true
-    # spawns: "*"                        # OMP SDK pass-through spawn allowlist expression
-    # extensionFlags:
-    #   plan: true
-    # env:
-    #   EXTENSION_FLAG: "1"              # in-process OMP extensions/settings only
-    # settings:
-    #   # OMP Settings.isolated overrides owned by this provider
-```
-
-### Model reference format
-
-Oh My Pi models use a `<omp-provider-id>/<model-id>` format and split only on the first slash, so routed model ids can contain nested slashes:
-
-```yaml
-assistants:
-  omp:
-    model: anthropic/claude-sonnet-4-5
-    # model: openrouter/qwen/qwen3-coder
-    # model: llama.cpp/qwen2.5-coder
-```
-
-### Usage in workflows
-
-```yaml
-name: omp-workflow
-provider: omp
-model: anthropic/claude-sonnet-4-5
-
-nodes:
-  - id: analyze
-    prompt: "Analyze this repository"
-    mcp: .archon/mcp/github.json
-    allowed_tools: []
-    effort: high
-```
-
-### Supported Archon Features
-
-| Feature | Support | Notes |
-|---|---|---|
-| Session resume | ✅ | Returns `sessionId`; reused on resume |
-| MCP servers | ✅ | `mcp: path/to/servers.json` connects through OMP's MCP manager; `env`/`headers` expansion includes process env, codebase env, and request-scoped credentials |
-| Structured output | ✅ | best-effort via prompt augmentation + repair; the executor validates and re-asks up to 3× |
-| Skills | ✅ | `skills: [name]` resolved from project/user skill directories |
-| Tool restrictions | ✅ | `allowed_tools` / `denied_tools`; legacy names `grep`, `python`, `fetch`, `poll` map to OMP tool names |
-| OMP SDK deadline | ✅ | Node `idle_timeout` is also passed to OMP as an absolute SDK deadline; Archon's watchdog semantics are unchanged |
-| OMP spawn controls | ✅ | `assistants.omp.spawns` passes OMP's spawn allowlist expression through unchanged; omit it for the SDK default |
-| Thinking / effort | ✅ | `effort:` or string `thinking:` — `auto`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `off` |
-| Fallback model | ✅ | `fallbackModel: <omp-provider-id>/<model-id>` |
-| System prompt override | ✅ | String prompt blocks only; Claude preset/object forms are ignored with a warning |
-| Codebase env vars (`envInjection`) | ✅ | Used for runtime auth, bash tool calls, and workflow MCP env expansion |
-| Inline agents (`agents:`) | ❌ | Claude-only; ignored with a warning |
-| Hooks | ❌ | Claude-specific format |
-| In-process native tools | ✅ | Archon's native `manage_run` tool is injected through OMP SDK `customTools` |
-| Cost limits (`maxBudgetUsd`) | ❌ | no runtime budget enforcement |
-| Sandbox | ❌ | not native in the SDK; Archon uses worktree isolation |
-
-### Set as Default (Optional)
-
-```ini
-DEFAULT_AI_ASSISTANT=omp
-```
-
-### See also
-
-- [Adding a Community Provider](../contributing/adding-a-community-provider/) — the contributor-facing guide for extending Archon with your own provider.
 
 ## GitHub Copilot (Community Provider)
 

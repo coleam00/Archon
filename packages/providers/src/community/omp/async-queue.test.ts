@@ -69,4 +69,15 @@ describe('AsyncQueue', () => {
 
     expect(items).toEqual(['first', 'second']);
   });
+
+  test('return settles a pending next without waiting for push or close', async () => {
+    const queue = new AsyncQueue<string>();
+    const iterator = queue[Symbol.asyncIterator]();
+    const pendingNext = iterator.next();
+    if (!iterator.return) throw new Error('AsyncQueue iterator is missing return()');
+
+    await expect(iterator.return()).resolves.toEqual({ value: undefined, done: true });
+    await expect(pendingNext).resolves.toEqual({ value: undefined, done: true });
+    await expect(iterator.next()).resolves.toEqual({ value: undefined, done: true });
+  });
 });

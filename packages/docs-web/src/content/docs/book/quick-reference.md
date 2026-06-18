@@ -135,8 +135,8 @@ All nodes share these base fields:
 | `model` | No | string | Per-node model override |
 | `context` | No | `fresh` \| `shared` | Session context — `fresh` starts a new conversation, `shared` inherits from prior node |
 | `output_format` | No | JSON Schema | Enforce structured JSON output from this node |
-| `allowed_tools` | No | string[] | Restrict available tools to this list (Claude, Pi, and Oh My Pi; use provider-specific tool names) |
-| `denied_tools` | No | string[] | Remove specific tools from this node's context (Claude, Pi, and Oh My Pi; use provider-specific tool names) |
+| `allowed_tools` | No | string[] | Restrict available tools to this list (Claude, OpenCode, Pi, Copilot, and Oh My Pi; use provider-specific tool names) |
+| `denied_tools` | No | string[] | Remove specific tools from this node's context (Claude, OpenCode, Pi, Copilot, and Oh My Pi; use provider-specific tool names) |
 | `idle_timeout` | No | number | Per-node idle timeout in milliseconds (default: 5 minutes) |
 | `retry` | No | object | Retry configuration for transient failures (see Retry Options). **Hard error on loop nodes** |
 | `hooks` | No | object | SDK hook callbacks (Claude only; see Hook Schema) |
@@ -330,7 +330,7 @@ defaults:
 | `Routing unclear — falling back to archon-assist` | No workflow matched the input | Use an explicit workflow name: `archon workflow run my-workflow "..."` |
 | `Worktree already exists for branch X` | Prior run left a worktree | Run `archon complete X` or `archon isolation cleanup` |
 | `Not a git repository` | Running outside a repo | `cd` into a git repo first — workflow and isolation commands require one |
-| `Unknown provider 'X'. Registered: claude, codex, pi, omp` | Typo in `provider:` (workflow root or node-level) | Set `provider:` to one of the registered ids. Model strings themselves are not validated at load time — the SDK rejects unknown models at request time. |
+| `Unknown provider 'X'. Registered: claude, codex, opencode, pi, copilot, omp` | Typo in `provider:` (workflow root or node-level) | Set `provider:` to one of the registered ids. Model strings themselves are not validated at load time — the SDK rejects unknown models at request time. |
 | `$BASE_BRANCH referenced but could not be detected` | No base branch set and auto-detection failed | Set `worktree.baseBranch` in `.archon/config.yaml` or ensure `main`/`master` exists |
 | Node fails with "timed out with no output" | `idle_timeout` fired before the provider emitted anything (time-to-first-token exceeded the window) | Increase `idle_timeout` on the node or reduce prompt size |
 
