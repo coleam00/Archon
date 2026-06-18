@@ -53,8 +53,6 @@ interface PmcProspectContactsPayload {
 
 const PROSPECT_STATE_OPTIONS = ['all', 'hot', 'engaged', 'warmup-active', 'cold', 'dead'];
 
-const PROSPECT_BRAND_OPTIONS = ['all', 'PMC', 'BRT', 'Weave', 'Neural Cloud', 'Research needed'];
-
 const STRATEGIC_STATE_TONE: Record<string, string> = {
   hot: 'border-emerald-700/40 bg-emerald-100 text-emerald-800',
   engaged: 'border-sky-700/40 bg-sky-100 text-sky-800',
@@ -121,6 +119,16 @@ export function PMCProspectsPage(): React.ReactElement {
     ? prospectContactsPayload.prospects.filter(isProspectContact)
     : [];
   const prospectContactTotals = safeMetricRecord(prospectContactsPayload.totals);
+  const prospectBrandOptions = useMemo(() => {
+    const brandCounts = isRecord(prospectContactsPayload.brand_counts)
+      ? Object.keys(prospectContactsPayload.brand_counts).filter(Boolean)
+      : [];
+    const brandFits = prospectContacts.flatMap(p => safeTextList(p.brand_fit));
+    return [
+      'all',
+      ...Array.from(new Set([...brandCounts, ...brandFits])).sort((a, b) => a.localeCompare(b)),
+    ];
+  }, [prospectContacts, prospectContactsPayload.brand_counts]);
   const [prospectSearch, setProspectSearch] = useState('');
   const [prospectBrandFilter, setProspectBrandFilter] = useState('all');
   const [prospectStateFilter, setProspectStateFilter] = useState('all');
@@ -229,7 +237,7 @@ export function PMCProspectsPage(): React.ReactElement {
             }}
             className="rounded-lg border border-border bg-background px-3 py-2 text-sm text-text-primary outline-none focus:border-primary"
           >
-            {PROSPECT_BRAND_OPTIONS.map(option => (
+            {prospectBrandOptions.map(option => (
               <option key={option} value={option}>
                 {option === 'all' ? 'All brand fits' : option}
               </option>

@@ -185,7 +185,12 @@ export function BRTPage(): React.ReactElement {
             </div>
             {doc.frontmatter.website && (
               <a
-                href={`https://${doc.frontmatter.website}`}
+                href={
+                  doc.frontmatter.website.startsWith('http://') ||
+                  doc.frontmatter.website.startsWith('https://')
+                    ? doc.frontmatter.website
+                    : `https://${doc.frontmatter.website}`
+                }
                 target="_blank"
                 rel="noopener noreferrer"
                 className="rounded-md border border-border bg-card px-3 py-1.5 text-xs text-text-secondary transition-colors hover:border-primary hover:text-primary"

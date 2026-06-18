@@ -10,6 +10,7 @@ import {
   UserPlus,
 } from 'lucide-react';
 import contactsData from '@/lib/contacts.generated.json';
+import { isContactStub } from '@/lib/contact-utils';
 
 interface Contact {
   id: string;
@@ -64,10 +65,7 @@ export function ContactsPage(): React.ReactElement {
     const raw = (contactsData.contacts as Contact[]) ?? [];
     // Filter vault stubs — contacts with TBD role/email are placeholders pending
     // Jason confirmation, not real records. Surface them only via /contacts?include=stubs.
-    return raw.filter(c => {
-      const isStub = c.email === 'TBD' || (c.role ?? '').trim().toUpperCase().startsWith('TBD');
-      return !isStub;
-    });
+    return raw.filter(c => !isContactStub(c));
   }, []);
 
   const filtered = useMemo<Contact[]>(() => {

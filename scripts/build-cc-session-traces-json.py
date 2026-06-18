@@ -158,7 +158,7 @@ def parse_session_file(path: Path) -> dict[str, Any] | None:
     head = turns[:HEAD_TAIL_N]
     tail = turns[-HEAD_TAIL_N:]
     # Dedup overlap when session is short.
-    if len(turns) <= HEAD_TAIL_N * 2:
+    if len(turns) < HEAD_TAIL_N * 2:
         tail = []
 
     return {
@@ -178,7 +178,7 @@ def parse_session_file(path: Path) -> dict[str, Any] | None:
 
 def main() -> int:
     if not EXPORTS_DIR.exists():
-        print(f"[build-agent-trace] no session-exports dir at {EXPORTS_DIR}", file=sys.stderr)
+        print(f"[build-cc-session-traces] no session-exports dir at {EXPORTS_DIR}", file=sys.stderr)
         out = {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "source": "jid5274/session-exports/**/*.jsonl",
@@ -211,7 +211,7 @@ def main() -> int:
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     OUT_PATH.write_text(json.dumps(out, indent=2) + "\n")
     print(
-        f"[build-agent-trace] wrote {OUT_PATH.relative_to(ARCHON_ROOT)} "
+        f"[build-cc-session-traces] wrote {OUT_PATH.relative_to(ARCHON_ROOT)} "
         f"({len(sessions)} sessions, {total_turns} turns)",
         file=sys.stderr,
     )

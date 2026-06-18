@@ -72,6 +72,18 @@ def parse_frontmatter(text: str) -> tuple[dict, str]:
     return fm, body
 
 
+def normalize_action_field(value: object) -> str:
+    """Normalize contact action fields so placeholders don't create broken actions."""
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if text.upper() in {"TBD", "?", "N/A", "NA", "NONE", "UNKNOWN"}:
+        return ""
+    if "pending Jason confirmation" in text or "verification notes" in text:
+        return ""
+    return text
+
+
 def extract_first_paragraph(body: str) -> str:
     """Pull the first non-empty line/paragraph after the H1 header, if any."""
     lines = body.split("\n")
@@ -146,9 +158,9 @@ def main() -> int:
             "name": name,
             "role": fm.get("role") or fm.get("specialty") or "",
             "company": fm.get("company") or fm.get("team") or "",
-            "email": fm.get("email") or "",
-            "linkedin": fm.get("linkedin") or "",
-            "phone": fm.get("phone") or "",
+            "email": normalize_action_field(fm.get("email")),
+            "linkedin": normalize_action_field(fm.get("linkedin")),
+            "phone": normalize_action_field(fm.get("phone")),
             "status": fm.get("status") or "",
             "preview": preview,
             "tags": fm.get("tags") or [],

@@ -30,7 +30,7 @@ const SECTIONS = [
         slug: 'blake',
         title: 'Blake Baynham (The Fountain WPB)',
         description: 'Platform builder + product owner. PMC is the GTM partner.',
-        to: '/clients/fountain-wpb',
+        to: '/fountain',
         badge: 'core client',
         badgeTone: 'emerald' as const,
       },
@@ -38,7 +38,7 @@ const SECTIONS = [
         slug: 'plaud',
         title: 'Plaud.ai (capture layer)',
         description: 'AI voice / capture / transcription. Distributorship in formation.',
-        to: '/solutions/plaud-ai',
+        to: '/solutions',
       },
       {
         slug: 'website',

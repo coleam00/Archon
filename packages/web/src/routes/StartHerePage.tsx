@@ -18,6 +18,7 @@ import {
 import driveIndex from '@/lib/drive-index.generated.json';
 import solutionsData from '@/lib/solutions.generated.json';
 import contactsData from '@/lib/contacts.generated.json';
+import { isContactStub } from '@/lib/contact-utils';
 
 interface CardProps {
   to: string;
@@ -82,10 +83,7 @@ export function StartHerePage(): React.ReactElement {
     .filter(Boolean)
     .join(', ');
   // Filter out TBD-stub contacts the same way ContactsPage does so the count matches
-  const realContactsCount = contacts.filter(c => {
-    const isStub = c.email === 'TBD' || (c.role ?? '').trim().toUpperCase().startsWith('TBD');
-    return !isStub;
-  }).length;
+  const realContactsCount = contacts.filter(c => !isContactStub(c)).length;
   const solutionsDescription = solutionsNames
     ? `${solutionsCount} third-party solutions Jason represents or integrates: ${solutionsNames}.`
     : `${solutionsCount} third-party solutions Jason represents or integrates. Awaiting solutions snapshot names.`;

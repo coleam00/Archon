@@ -96,7 +96,7 @@
   --color-node-prompt: var(--node-prompt);
   --color-node-bash: var(--node-bash);
   --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
-  --font-serif: 'Playfair Display', Georgia, serif;
+  --font-serif: 'Playfair Display', georgia, serif;
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;
 
   /* shadcn theme mappings */

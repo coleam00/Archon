@@ -181,7 +181,8 @@ def main() -> int:
             continue  # skip the catalog MOC
         try:
             text = flat.read_text(encoding="utf-8")
-        except Exception:
+        except OSError as e:
+            print(f"WARN read {flat}: {e}", file=sys.stderr)
             continue
         fm, body = parse_frontmatter(text)
         solutions.append(build_solution(flat, fm, body))

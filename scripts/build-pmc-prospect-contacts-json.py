@@ -176,7 +176,14 @@ def load_dials() -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
     if not DIAL_HISTORY.exists():
         return out
-    raw = json.loads(DIAL_HISTORY.read_text())
+    try:
+        raw = json.loads(DIAL_HISTORY.read_text())
+    except json.JSONDecodeError as e:
+        print(f"[pmc-prospect-contacts] WARN invalid JSON in {DIAL_HISTORY}: {e}", file=sys.stderr)
+        return out
+    except OSError as e:
+        print(f"[pmc-prospect-contacts] WARN failed to read {DIAL_HISTORY}: {e}", file=sys.stderr)
+        return out
     attempts: list[dict[str, Any]] = []
     for value in raw.values():
         values = value if isinstance(value, list) else [value]

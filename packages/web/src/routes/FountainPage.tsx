@@ -135,7 +135,7 @@ const QEP_FACTS = [
 
 export function FountainPage(): React.ReactElement {
   const serviceMix = [
-    { name: 'Functional Diagnostics', value: 4 },
+    { name: 'Functional Diagnostics', value: FUNCTIONAL_DIAGNOSTICS.length },
     { name: 'Therapeutics', value: THERAPEUTICS.length },
     { name: 'Aesthetics', value: AESTHETICS.length },
   ];
