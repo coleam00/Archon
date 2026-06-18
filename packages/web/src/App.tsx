@@ -12,6 +12,7 @@ import { IHHTPage } from '@/routes/IHHTPage';
 // import { QEPPage } from '@/routes/QEPPage';
 import { SocialContentPage } from '@/routes/SocialContentPage';
 import { PMCPage } from '@/routes/PMCPage';
+import { PMCProspectsPage } from '@/routes/PMCProspectsPage';
 import { EWCPage } from '@/routes/EWCPage';
 import { FountainPage } from '@/routes/FountainPage';
 import { TTSPage } from '@/routes/TTSPage';
@@ -91,6 +92,7 @@ export function App(): React.ReactElement {
                 <Route path="/contacts" element={<ContactsPage />} />
                 <Route path="/research" element={<ResearchFirehosePage />} />
                 <Route path="/pmc" element={<PMCPage />} />
+                <Route path="/pmc-prospects" element={<PMCProspectsPage />} />
                 <Route path="/brt" element={<BRTPage />} />
                 <Route path="/ewc" element={<EWCPage />} />
                 <Route path="/fountain" element={<FountainPage />} />
