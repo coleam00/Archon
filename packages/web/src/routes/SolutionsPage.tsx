@@ -45,11 +45,9 @@ const STATUS_STYLE: Record<string, string> = {
 
 function formatTimestamp(iso: string): string {
   if (!iso) return 'never';
-  try {
-    return new Date(iso).toLocaleString();
-  } catch {
-    return iso;
-  }
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) return iso;
+  return parsed.toLocaleString();
 }
 
 export function SolutionsPage(): React.ReactElement {
@@ -59,8 +57,12 @@ export function SolutionsPage(): React.ReactElement {
   const [search, setSearch] = useState<string>('');
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
 
-  const allSolutions = (solutionsData.solutions as Solution[]) ?? [];
-  const generatedAt = (solutionsData as { generated_at?: string }).generated_at ?? '';
+  const solutionsPayload = solutionsData as Partial<{
+    generated_at: string;
+    solutions: Solution[];
+  }>;
+  const allSolutions = Array.isArray(solutionsPayload.solutions) ? solutionsPayload.solutions : [];
+  const generatedAt = solutionsPayload.generated_at ?? '';
 
   const visibleSolutions = useMemo<Solution[]>(
     () => allSolutions.filter(s => visibleForView(view, s.audience)),

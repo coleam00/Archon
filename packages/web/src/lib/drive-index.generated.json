@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-15T20:25:53+00:00",
+  "generated_at": "2026-06-18T04:01:23+00:00",
   "vault_path": "second-brain/resources/drive-index",
   "count": 22,
   "folders": [
@@ -10,11 +10,18 @@
       "folderId": "1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
       "parentId": "",
       "audience": "jason-only",
-      "lastSynced": "2026-06-13T18:03:28+00:00",
-      "fileCount": 12,
+      "lastSynced": "2026-06-18T04:01:22+00:00",
+      "fileCount": 13,
       "vaultPath": "second-brain/resources/drive-index/_root.md",
       "driveUrl": "https://drive.google.com/drive/folders/1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
       "files": [
+        {
+          "name": "PMC Prospect Master v2 organized 2026-06-18",
+          "type": "g-spreadsheet",
+          "modified": "2026-06-18",
+          "size": "",
+          "link": "https://docs.google.com/spreadsheets/d/1bY2om1TOgPFmH9C8a5nlNY2T5OFzBssU-0xrtyF3ftg/edit?usp=drivesdk"
+        },
         {
           "name": "Jason Call Sheet -- Prospect Master v1 (2026-06-13)",
           "type": "g-spreadsheet",
