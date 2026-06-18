@@ -37,6 +37,7 @@ import {
   resolveOmpToolNames,
   restoreConfigEnv,
 } from './options-translator';
+import { buildOmpNativeToolDefinitions } from './native-tools';
 import { resolveOmpSession } from './session-resolver';
 import { createArchonOmpUIBridge, createArchonOmpUIContext } from './ui-context-stub';
 
@@ -547,9 +548,19 @@ export class OmpProvider implements IAgentProvider {
       const effectiveMcpTools = resolvedMcp
         ? filterDeniedMcpTools(resolvedMcp, nodeConfig?.denied_tools)
         : undefined;
-      const effectiveToolNames = effectiveMcpTools
-        ? mergeToolNames(toolNames, effectiveMcpTools.toolNames)
-        : toolNames;
+      const nativeTools =
+        requestOptions?.nativeTools && requestOptions.nativeTools.length > 0
+          ? buildOmpNativeToolDefinitions(requestOptions.nativeTools)
+          : [];
+      const nativeToolNames = nativeTools.map(tool => tool.name);
+      const customTools =
+        effectiveMcpTools || nativeTools.length > 0
+          ? [...(effectiveMcpTools?.customTools ?? []), ...nativeTools]
+          : undefined;
+      const effectiveToolNames =
+        effectiveMcpTools || nativeToolNames.length > 0
+          ? mergeToolNames(toolNames, [...(effectiveMcpTools?.toolNames ?? []), ...nativeToolNames])
+          : toolNames;
       const envInjectionExtension = createBashEnvInjectionExtension(requestOptions?.env);
       const sessionOptions: OmpCreateAgentSessionOptions = {
         cwd,
@@ -572,7 +583,7 @@ export class OmpProvider implements IAgentProvider {
         ...(thinkingLevel ? { thinkingLevel } : {}),
         ...(systemPromptBlocks !== undefined ? { systemPrompt: systemPromptBlocks } : {}),
         ...(resolvedMcp ? { mcpManager: resolvedMcp.manager } : {}),
-        ...(effectiveMcpTools ? { customTools: effectiveMcpTools.customTools } : {}),
+        ...(customTools ? { customTools } : {}),
         toolNames: effectiveToolNames,
         hasUI: interactive,
       };

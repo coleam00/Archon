@@ -18,5 +18,5 @@ export const OMP_CAPABILITIES: ProviderCapabilities = {
   thinkingControl: true,
   fallbackModel: true,
   sandbox: false,
-  nativeTools: false,
+  nativeTools: true,
 };
