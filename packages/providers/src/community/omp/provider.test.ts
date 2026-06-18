@@ -14,6 +14,7 @@ import type {
   OmpAuthStorage,
   OmpCodingAgentSdk,
   OmpCreateAgentSessionOptions,
+  OmpCustomTool,
   OmpCreateAgentSessionResult,
   OmpExtensionRunner,
   OmpExtensionApi,
@@ -303,6 +304,63 @@ describe('OmpProvider', () => {
     });
   });
 
+  test('passes SDK deadline from node idle_timeout', async () => {
+    const originalNow = Date.now;
+    let sessionOptions: OmpCreateAgentSessionOptions | undefined;
+    Date.now = () => 1_700_000_000_000;
+    try {
+      const provider = new OmpProvider(async () =>
+        makeSdk({
+          onCreateAgentSession(options) {
+            sessionOptions = options;
+          },
+        })
+      );
+
+      await collectChunks(provider, {
+        model: 'anthropic/claude-sonnet-4-5',
+        nodeConfig: { idle_timeout: 2500 },
+      });
+    } finally {
+      Date.now = originalNow;
+    }
+
+    expect(sessionOptions?.deadline).toBe(1_700_000_002_500);
+  });
+
+  test('omits SDK deadline when node idle_timeout is absent', async () => {
+    let sessionOptions: OmpCreateAgentSessionOptions | undefined;
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        onCreateAgentSession(options) {
+          sessionOptions = options;
+        },
+      })
+    );
+
+    await collectChunks(provider, { model: 'anthropic/claude-sonnet-4-5' });
+
+    expect(sessionOptions?.deadline).toBeUndefined();
+  });
+
+  test('passes configured spawns through to OMP SDK', async () => {
+    let sessionOptions: OmpCreateAgentSessionOptions | undefined;
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        onCreateAgentSession(options) {
+          sessionOptions = options;
+        },
+      })
+    );
+
+    await collectChunks(provider, {
+      model: 'anthropic/claude-sonnet-4-5',
+      assistantConfig: { spawns: 'reviewer,planner' },
+    });
+
+    expect(sessionOptions?.spawns).toBe('reviewer,planner');
+  });
+
   test('forks resumed sessions when executor requests forkSession', async () => {
     const forkCalls: Array<{ filePath: string; cwd: string; sessionDir?: string }> = [];
     const openCalls: Array<{ filePath: string; sessionDir?: string }> = [];
@@ -357,8 +415,15 @@ describe('OmpProvider', () => {
             fallbackChains: { default: ['openrouter/qwen/qwen3-coder'] },
             fallbackRevertPolicy: 'never',
           },
-          compaction: { enabled: true },
+          compaction: { enabled: true, thresholdPercent: 75, thresholdTokens: 50000 },
           contextPromotion: { enabled: false },
+          model: { loopGuard: { enabled: false, checkAssistantContent: true } },
+          tools: { approvalMode: 'write', maxTimeout: 45 },
+          providers: { webSearch: 'exa', webSearchExclude: ['brave'], image: 'openai' },
+          task: { maxConcurrency: 2, maxRuntimeMs: 30000 },
+          memory: { backend: 'local' },
+          mnemopi: { autoRecall: false, autoRetain: true, debug: true },
+          hindsight: { autoRecall: true, autoRetain: false, mentalModelsEnabled: false },
           modelRoles: { default: 'anthropic/claude-sonnet-4-5' },
           enabledModels: ['anthropic/*'],
           modelProviderOrder: ['anthropic'],
@@ -374,7 +439,25 @@ describe('OmpProvider', () => {
       'retry.fallbackChains': { default: ['openrouter/qwen/qwen3-coder'] },
       'retry.fallbackRevertPolicy': 'never',
       'compaction.enabled': true,
+      'compaction.thresholdPercent': 75,
+      'compaction.thresholdTokens': 50000,
       'contextPromotion.enabled': false,
+      'model.loopGuard.enabled': false,
+      'model.loopGuard.checkAssistantContent': true,
+      'tools.approvalMode': 'write',
+      'tools.maxTimeout': 45,
+      'providers.webSearch': 'exa',
+      'providers.webSearchExclude': ['brave'],
+      'providers.image': 'openai',
+      'task.maxConcurrency': 2,
+      'task.maxRuntimeMs': 30000,
+      'memory.backend': 'local',
+      'mnemopi.autoRecall': false,
+      'mnemopi.autoRetain': true,
+      'mnemopi.debug': true,
+      'hindsight.autoRecall': true,
+      'hindsight.autoRetain': false,
+      'hindsight.mentalModelsEnabled': false,
       modelRoles: { default: 'anthropic/claude-sonnet-4-5' },
       enabledModels: ['anthropic/*'],
       modelProviderOrder: ['anthropic'],
@@ -1408,6 +1491,135 @@ describe('OmpProvider', () => {
       await temp.cleanup();
     }
   });
+
+  test('passes native tools as OMP custom tools and preserves execution', async () => {
+    let sessionOptions: OmpCreateAgentSessionOptions | undefined;
+    const calls: Record<string, unknown>[] = [];
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        onCreateAgentSession(options) {
+          sessionOptions = options;
+        },
+      })
+    );
+
+    await collectChunks(provider, {
+      model: 'anthropic/claude-sonnet-4-5',
+      nativeTools: [
+        {
+          name: 'manage_run',
+          description: 'Inspect and control Archon workflow runs.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              action: { type: 'string', enum: ['status'], description: 'Action to perform.' },
+              verbose: { type: 'boolean' },
+            },
+            required: ['action'],
+          },
+          async handler(input) {
+            calls.push(input);
+            return `managed:${String(input.action)}`;
+          },
+        },
+      ],
+    });
+
+    expect(sessionOptions?.toolNames).toContain('manage_run');
+    const [tool] = (sessionOptions?.customTools ?? []) as OmpCustomTool[];
+    expect(tool).toBeDefined();
+    if (!tool) throw new Error('Native tool was not passed to OMP customTools');
+    expect(tool.name).toBe('manage_run');
+    expect(tool.label).toBe('manage_run');
+    expect(tool.description).toBe('Inspect and control Archon workflow runs.');
+    expect(tool.parameters).toMatchObject({
+      type: 'object',
+      properties: {
+        action: { const: 'status', type: 'string' },
+        verbose: { type: 'boolean' },
+      },
+      required: ['action'],
+    });
+    await expect(
+      tool.execute('call-1', { action: 'status', verbose: true }, undefined, undefined)
+    ).resolves.toEqual({
+      content: [{ type: 'text', text: 'managed:status' }],
+      details: undefined,
+    });
+    expect(calls).toEqual([{ action: 'status', verbose: true }]);
+  });
+
+  test('combines native tools with filtered MCP custom tools', async () => {
+    const temp = await writeTempMcpConfig({ github: { command: 'npx' } });
+    let sessionOptions: OmpCreateAgentSessionOptions | undefined;
+    const deniedTool = { name: 'mcp__github_create_issue' };
+    const allowedTool = { name: 'mcp__github_list_issues' };
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        mcpTools: [deniedTool, allowedTool],
+        onCreateAgentSession(options) {
+          sessionOptions = options;
+        },
+      })
+    );
+
+    try {
+      await collectChunks(
+        provider,
+        {
+          model: 'anthropic/claude-sonnet-4-5',
+          nodeConfig: {
+            mcp: 'mcp.json',
+            allowed_tools: ['read'],
+            denied_tools: ['mcp__github_create_issue'],
+          },
+          nativeTools: [
+            {
+              name: 'manage_run',
+              description: 'Inspect and control Archon workflow runs.',
+              inputSchema: { type: 'object', properties: { action: { type: 'string' } } },
+              async handler() {
+                return 'ok';
+              },
+            },
+          ],
+        },
+        temp.dir
+      );
+
+      expect(sessionOptions?.toolNames).toEqual(['read', 'mcp__github_list_issues', 'manage_run']);
+      const customToolNames = (sessionOptions?.customTools ?? []).map(
+        tool => (tool as { name: string }).name
+      );
+      expect(customToolNames).toEqual(['mcp__github_list_issues', 'manage_run']);
+      expect(sessionOptions?.customTools?.[0]).toBe(allowedTool);
+    } finally {
+      await temp.cleanup();
+    }
+  });
+
+  test('fails fast for unsupported native tool schemas', async () => {
+    const provider = new OmpProvider(async () => makeSdk());
+
+    await expect(
+      collectChunks(provider, {
+        model: 'anthropic/claude-sonnet-4-5',
+        nativeTools: [
+          {
+            name: 'manage_run',
+            description: 'Inspect and control Archon workflow runs.',
+            inputSchema: { type: 'object', properties: { count: { type: 'number' } } },
+            async handler() {
+              return 'ok';
+            },
+          },
+        ],
+      })
+    ).rejects.toThrow(
+      "native tool schema: unsupported type for 'count' (only string / string-enum / boolean)"
+    );
+  });
+
   test('surfaces missing MCP env vars', async () => {
     delete process.env.MISSING_OMP_MCP_TOKEN;
     const temp = await writeTempMcpConfig({

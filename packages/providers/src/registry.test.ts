@@ -415,7 +415,7 @@ describe('registry', () => {
       expect(caps.costControl).toBe(false);
       expect(caps.fallbackModel).toBe(true);
       expect(caps.sandbox).toBe(false);
-      expect(caps.nativeTools).toBe(false);
+      expect(caps.nativeTools).toBe(true);
     });
 
     test('appears in getProviderInfoList with builtIn: false', () => {
