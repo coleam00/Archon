@@ -47,6 +47,13 @@ import { Toolbar } from './components/Toolbar';
 interface BuilderPageProps {
   initialWorkflow: BuilderWorkflow;
   onChange?: (bw: BuilderWorkflow) => void;
+  /**
+   * Issues produced outside the client validation tiers — import issues from the
+   * round-trip and server-tier validation/save errors (PR-3). Merged into the
+   * panel alongside the debounced `runValidation` output and deduped by id, so a
+   * re-validation never clobbers a server/import issue.
+   */
+  extraIssues?: Issue[];
 }
 
 const VALIDATION_DEBOUNCE_MS = 300;
@@ -58,7 +65,11 @@ type UnstampedAction = EditorAction extends infer A
     : never
   : never;
 
-export function BuilderPage({ initialWorkflow, onChange }: BuilderPageProps): ReactElement {
+export function BuilderPage({
+  initialWorkflow,
+  onChange,
+  extraIssues,
+}: BuilderPageProps): ReactElement {
   const [state, dispatch] = useReducer(editorReducer, initialWorkflow, createEditorState);
   const [issues, setIssues] = useState<Issue[]>(() => runValidation(initialWorkflow));
   const [helpOpen, setHelpOpen] = useState(false);
@@ -115,6 +126,16 @@ export function BuilderPage({ initialWorkflow, onChange }: BuilderPageProps): Re
     () => serializeToYaml(toWorkflowDefinition(state.workflow)),
     [state.workflow]
   );
+
+  // Merge client-tier issues with import/server issues (`extraIssues`), deduped
+  // by stable id. Kept separate in state so the debounced client re-validation
+  // (which calls setIssues) can never clobber a persisted server/import issue.
+  const mergedIssues = useMemo(() => {
+    const byId = new Map<string, Issue>();
+    for (const issue of issues) byId.set(issue.id, issue);
+    for (const issue of extraIssues ?? []) byId.set(issue.id, issue);
+    return [...byId.values()];
+  }, [issues, extraIssues]);
 
   const selectedNode =
     state.selectedNodes.size === 1
@@ -380,7 +401,7 @@ export function BuilderPage({ initialWorkflow, onChange }: BuilderPageProps): Re
 
           <div className="max-h-56 shrink-0 border-t border-border">
             <IssueList
-              issues={issues}
+              issues={mergedIssues}
               onSelectNode={(nodeId): void => {
                 dispatch({
                   type: 'set-selection',

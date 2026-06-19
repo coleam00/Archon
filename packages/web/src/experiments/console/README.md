@@ -10,6 +10,8 @@ Mounted at `/console/*`. Not part of the shipped product. Validates the mental m
 
 - `/console` → Runs view (scope = `all`)
 - `/console/settings` → Settings (assistant config, system health, GitHub identity) — global
+- `/console/builder` → Workflow builder (project picker + open a workflow) — global
+- `/console/builder/:name` → Workflow builder editing `:name` (deep-link with `?project=<id>`)
 - `/console/p/:projectId` → Runs view scoped to a project
 - `/console/p/:projectId/chat` → Project-scoped agent chat
 - `/console/p/:projectId/r/:runId` → Run detail
@@ -52,6 +54,7 @@ Client-only view preferences. All reads are try/catch-guarded and fall back to t
 | `archon.console.runNodeFilter` | `all` | Run detail | Node filter (`all` or a nodeId); auto-resets when the node is absent from the open run |
 | `archon.console.railWidth` | — | Project rail | Persisted sidebar width |
 | `archon.console.lastWorkflow` | — | Chat / dispatch | Last-used workflow |
+| `archon.console.builderProject` | — | Workflow builder | Selected project (`cwd`); also mirrored as `?project=` |
 
 ## Status
 
@@ -62,5 +65,6 @@ ideas land via the PR template's UX Journey section.
 
 In progress: the `builder/` subtree (Archon Studio workflow builder). PR-1
 ships the data layer — types, variant registry, round-trip model, validation —
-with no route mount; PR-2 adds the canvas UI and PR-3 wires saving through the
-workflow API. See `builder/README.md`.
+with no route mount; PR-2 adds the canvas UI; PR-3 wires connected mode
+(`/console/builder[/:name]`, project picker, load/save/rename/delete through the
+workflow API, dirty + nav guard, bundled Save-as). See `builder/README.md`.

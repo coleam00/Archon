@@ -11,6 +11,7 @@ export const K = {
   projects: 'projects' as const,
   project: (id: string): string => `project:${id}`,
   workflows: (cwd: string): string => `workflows:${cwd}`,
+  workflow: (cwd: string, name: string): string => `workflow:${cwd}:${name}`,
   worktrees: (projectId: string): string => `worktrees:${projectId}`,
   runs: (scope: Scope): string => `runs:${scopeKey(scope)}`,
   run: (id: string): string => `run:${id}`,
