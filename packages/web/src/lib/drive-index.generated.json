@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-19T09:09:31+00:00",
+  "generated_at": "2026-06-19T20:01:07+00:00",
   "vault_path": "second-brain/resources/drive-index",
   "count": 22,
   "folders": [
@@ -10,17 +10,24 @@
       "folderId": "1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
       "parentId": "",
       "audience": "jason-only",
-      "lastSynced": "2026-06-19T09:09:31+00:00",
-      "fileCount": 13,
+      "lastSynced": "2026-06-19T20:01:06+00:00",
+      "fileCount": 14,
       "vaultPath": "second-brain/resources/drive-index/_root.md",
       "driveUrl": "https://drive.google.com/drive/folders/1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
       "files": [
         {
-          "name": "PMC Prospect Master v2 organized 2026-06-18",
+          "name": "PMC TTTS Canonical Master Prospect List -- 2026-06-19 live HeyReach + VA split",
           "type": "g-spreadsheet",
           "modified": "2026-06-19",
           "size": "",
           "link": "https://docs.google.com/spreadsheets/d/1bY2om1TOgPFmH9C8a5nlNY2T5OFzBssU-0xrtyF3ftg/edit?usp=drivesdk"
+        },
+        {
+          "name": "TTTS VA Outreach -- Not Live in HeyReach -- 2026-06-19",
+          "type": "g-spreadsheet",
+          "modified": "2026-06-19",
+          "size": "",
+          "link": "https://docs.google.com/spreadsheets/d/1YeTqr5q_3CpIHJb6DaatR43v5Y4RLT26mr2Gdz3yH1k/edit?usp=drivesdk"
         },
         {
           "name": "Jason Call Sheet -- Prospect Master v1 (2026-06-13)",

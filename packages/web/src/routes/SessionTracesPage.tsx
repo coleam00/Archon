@@ -101,8 +101,8 @@ function shortWorkspace(path: string): string {
 }
 
 function DailyOpsPanel({ traces }: { traces: Partial<TracesPayload> }): React.ReactElement {
-  const rollup = agentRollupData as AgentRollupPayload;
-  const recent = rollup.recent ?? [];
+  const rollup = agentRollupData as Partial<AgentRollupPayload>;
+  const recent = Array.isArray(rollup.recent) ? rollup.recent : [];
   const cronCount = recent.filter(s => s.source === 'cron').length;
   const userCount = recent.filter(s => s.source !== 'cron').length;
   const latest = recent[0];
