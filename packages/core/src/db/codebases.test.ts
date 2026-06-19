@@ -1,4 +1,4 @@
-import { mock, describe, test, expect, beforeEach } from 'bun:test';
+import { mock, describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { createQueryResult, mockPostgresDialect } from '../test/mocks/database';
 import { Codebase } from '../types';
 
@@ -26,8 +26,20 @@ import {
 } from './codebases';
 
 describe('codebases', () => {
+  let originalDefaultAiAssistant: string | undefined;
+
   beforeEach(() => {
+    originalDefaultAiAssistant = process.env.DEFAULT_AI_ASSISTANT;
+    delete process.env.DEFAULT_AI_ASSISTANT;
     mockQuery.mockClear();
+  });
+
+  afterEach(() => {
+    if (originalDefaultAiAssistant === undefined) {
+      delete process.env.DEFAULT_AI_ASSISTANT;
+    } else {
+      process.env.DEFAULT_AI_ASSISTANT = originalDefaultAiAssistant;
+    }
   });
 
   const mockCodebase: Codebase = {

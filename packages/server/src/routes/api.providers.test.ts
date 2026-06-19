@@ -257,6 +257,14 @@ describe('PATCH /api/config/tiers', () => {
     expect(arg.tiers.large).toEqual({ provider: 'claude', model: 'opus', effort: 'high' });
   });
 
+  test('accepts Codex minimal tier effort', async () => {
+    const res = await patch({ small: { provider: 'codex', model: 'gpt-5.5', effort: 'minimal' } });
+    expect(res.status).toBe(200);
+    expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(1);
+    const arg = mockUpdateGlobalConfig.mock.calls[0]?.[0] as { tiers: Record<string, unknown> };
+    expect(arg.tiers.small).toEqual({ provider: 'codex', model: 'gpt-5.5', effort: 'minimal' });
+  });
+
   test('unknown provider → 400, no write', async () => {
     const res = await patch({ large: { provider: 'definitely-not-a-provider', model: 'x' } });
     expect(res.status).toBe(400);

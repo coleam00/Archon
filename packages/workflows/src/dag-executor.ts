@@ -40,6 +40,8 @@ import type {
   TriggerRule,
   WorkflowRun,
   EffortLevel,
+  ModelReasoningEffort,
+  WebSearchMode,
   ThinkingConfig,
   SandboxSettings,
   WorkflowSource,
@@ -190,7 +192,8 @@ function applyPresetOptions(
   if (
     preset.effort === undefined ||
     node.effort !== undefined ||
-    workflowLevelOptions.effort !== undefined
+    workflowLevelOptions.effort !== undefined ||
+    (provider === 'codex' && workflowLevelOptions.modelReasoningEffort !== undefined)
   ) {
     return;
   }
@@ -210,6 +213,24 @@ function applyPresetOptions(
     nodeConfig.effort = routed.value;
   } else {
     assistantConfig.modelReasoningEffort = routed.value;
+  }
+}
+
+function applyCodexWorkflowAssistantOptions(
+  provider: string,
+  workflowLevelOptions: WorkflowLevelOptions,
+  assistantConfig: Record<string, unknown>
+): void {
+  if (provider !== 'codex') return;
+
+  if (workflowLevelOptions.modelReasoningEffort !== undefined) {
+    assistantConfig.modelReasoningEffort = workflowLevelOptions.modelReasoningEffort;
+  }
+  if (workflowLevelOptions.webSearchMode !== undefined) {
+    assistantConfig.webSearchMode = workflowLevelOptions.webSearchMode;
+  }
+  if (workflowLevelOptions.additionalDirectories !== undefined) {
+    assistantConfig.additionalDirectories = workflowLevelOptions.additionalDirectories;
   }
 }
 
@@ -266,9 +287,12 @@ export async function loadConfiguredMcpServerNames(
   }
 }
 
-/** Workflow-level Claude SDK options — per-node overrides take precedence via ?? */
+/** Workflow-level provider options — per-node overrides take precedence via ?? where supported. */
 interface WorkflowLevelOptions {
   effort?: EffortLevel;
+  modelReasoningEffort?: ModelReasoningEffort;
+  webSearchMode?: WebSearchMode;
+  additionalDirectories?: string[];
   thinking?: ThinkingConfig;
   fallbackModel?: string;
   betas?: string[];
@@ -638,6 +662,7 @@ async function resolveNodeProviderAndModel(
     nodeConfig,
     assistantConfig
   );
+  applyCodexWorkflowAssistantOptions(provider, workflowLevelOptions, assistantConfig);
 
   const options: SendQueryOptions = {
     ...baseOptions,
@@ -2892,6 +2917,9 @@ export async function executeDagWorkflow(
   const dagStartTime = Date.now();
   const workflowLevelOptions = {
     effort: workflow.effort,
+    modelReasoningEffort: workflow.modelReasoningEffort,
+    webSearchMode: workflow.webSearchMode,
+    additionalDirectories: workflow.additionalDirectories,
     thinking: workflow.thinking,
     fallbackModel: workflow.fallbackModel,
     betas: workflow.betas,

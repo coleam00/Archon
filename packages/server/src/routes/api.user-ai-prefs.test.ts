@@ -267,6 +267,23 @@ describe('PATCH /api/auth/me/ai-prefs/tiers', () => {
     expect(await res.json()).toEqual({ tiers: { large: { provider: 'claude', model: 'opus' } } });
   });
 
+  test('accepts Codex minimal tier effort', async () => {
+    const res = await makeApp().request('/api/auth/me/ai-prefs/tiers', {
+      method: 'PATCH',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        tiers: { small: { provider: 'codex', model: 'gpt-5.5', effort: 'minimal' } },
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect(mockSetTiers).toHaveBeenCalledWith('user-from-alice', {
+      small: { provider: 'codex', model: 'gpt-5.5', effort: 'minimal' },
+    });
+    expect(await res.json()).toEqual({
+      tiers: { small: { provider: 'codex', model: 'gpt-5.5', effort: 'minimal' } },
+    });
+  });
+
   test('null unsets a tier', async () => {
     prefsByUser['user-from-alice'] = {
       tiers: {

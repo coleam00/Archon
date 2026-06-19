@@ -1,4 +1,4 @@
-import { describe, test, expect, mock, spyOn } from 'bun:test';
+import { afterEach, beforeEach, describe, test, expect, mock, spyOn } from 'bun:test';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
@@ -12,6 +12,23 @@ import { makeTestWorkflow, makeTestWorkflowWithSource } from '@archon/workflows/
 function createTestApp(): OpenAPIHono {
   return new OpenAPIHono({ defaultHook: validationErrorHook });
 }
+
+const originalArchonHome = process.env.ARCHON_HOME;
+const isolatedArchonHome = join(tmpdir(), 'archon-api-workflows-test-home');
+
+beforeEach(async () => {
+  await rm(isolatedArchonHome, { recursive: true, force: true });
+  process.env.ARCHON_HOME = isolatedArchonHome;
+});
+
+afterEach(async () => {
+  await rm(isolatedArchonHome, { recursive: true, force: true });
+  if (originalArchonHome === undefined) {
+    delete process.env.ARCHON_HOME;
+  } else {
+    process.env.ARCHON_HOME = originalArchonHome;
+  }
+});
 
 const mockDiscoverWorkflows = mock(async (_cwd: string | null) => ({
   workflows: [makeTestWorkflowWithSource({ name: 'deploy', description: 'Deploy app' }, 'bundled')],

@@ -312,6 +312,13 @@ describe('aiTierSetCommand', () => {
     expect(arg.tiers.large).toEqual({ provider: 'claude', model: 'opus', effort: 'high' });
   });
 
+  it('accepts Codex minimal tier effort', async () => {
+    expect(await aiTierSetCommand('small', 'codex', 'gpt-5.5', 'minimal')).toBe(0);
+    expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(1);
+    const arg = mockUpdateGlobalConfig.mock.calls[0]?.[0] as { tiers: Record<string, unknown> };
+    expect(arg.tiers.small).toEqual({ provider: 'codex', model: 'gpt-5.5', effort: 'minimal' });
+  });
+
   it('invalid tier name → 1, no write', async () => {
     expect(await aiTierSetCommand('huge', 'claude', 'opus', undefined)).toBe(1);
     expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();

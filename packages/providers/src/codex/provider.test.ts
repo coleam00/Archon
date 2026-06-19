@@ -742,7 +742,7 @@ describe('CodexProvider', () => {
       for await (const _ of client.sendQuery('test prompt', '/workspace', undefined, {
         model: 'gpt-5.2-codex',
         assistantConfig: {
-          modelReasoningEffort: 'medium',
+          modelReasoningEffort: 'minimal',
           webSearchMode: 'live',
           additionalDirectories: ['/other/repo'],
         },
@@ -753,7 +753,7 @@ describe('CodexProvider', () => {
       expect(mockStartThread).toHaveBeenCalledWith(
         expect.objectContaining({
           model: 'gpt-5.2-codex',
-          modelReasoningEffort: 'medium',
+          modelReasoningEffort: 'minimal',
           webSearchMode: 'live',
           additionalDirectories: ['/other/repo'],
         })

@@ -1170,6 +1170,147 @@ describe('executeDagWorkflow -- tool restrictions', () => {
     expect(nodeConfig.effort).toBeUndefined();
   });
 
+  it('passes workflow-level Codex options to assistantConfig', async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'codex',
+      getCapabilities: mockCodexCapabilities,
+    }));
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'codex-workflow-options-test',
+        modelReasoningEffort: 'minimal',
+        webSearchMode: 'live',
+        additionalDirectories: ['/workspace/shared'],
+        nodes: [{ id: 'step1', command: 'my-cmd' }],
+      },
+      workflowRun,
+      'codex',
+      'gpt-5.5',
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      {
+        ...minimalConfig,
+        assistants: {
+          claude: {},
+          codex: {
+            modelReasoningEffort: 'high',
+            webSearchMode: 'disabled',
+            additionalDirectories: ['/workspace/default'],
+          },
+        },
+      }
+    );
+
+    expect(mockGetAgentProviderDag.mock.calls[0][0]).toBe('codex');
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    const assistantConfig = optionsArg.assistantConfig as Record<string, unknown>;
+    expect(assistantConfig.modelReasoningEffort).toBe('minimal');
+    expect(assistantConfig.webSearchMode).toBe('live');
+    expect(assistantConfig.additionalDirectories).toEqual(['/workspace/shared']);
+  });
+
+  it('routes built-in Codex small tier effort to assistantConfig.modelReasoningEffort', async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'codex',
+      getCapabilities: mockCodexCapabilities,
+    }));
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+    const aiProfile = buildAiProfile('codex');
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'codex-small-tier-effort-test',
+        nodes: [{ id: 'step1', command: 'my-cmd', model: 'small' }],
+      },
+      workflowRun,
+      'codex',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      aiProfile
+    );
+
+    expect(mockGetAgentProviderDag.mock.calls[0][0]).toBe('codex');
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    expect(optionsArg.model).toBe('gpt-5.5');
+    const assistantConfig = optionsArg.assistantConfig as Record<string, unknown>;
+    const nodeConfig = optionsArg.nodeConfig as Record<string, unknown>;
+    expect(assistantConfig.modelReasoningEffort).toBe('minimal');
+    expect(nodeConfig.effort).toBeUndefined();
+  });
+
+  it('prefers workflow-level Codex reasoning over tier preset effort', async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'codex',
+      getCapabilities: mockCodexCapabilities,
+    }));
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+    const aiProfile = buildAiProfile('codex', {
+      repoTiers: {
+        small: { provider: 'codex', model: 'gpt-5.5', effort: 'minimal' },
+      },
+    });
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'codex-workflow-reasoning-precedence-test',
+        modelReasoningEffort: 'low',
+        nodes: [{ id: 'step1', command: 'my-cmd', model: 'small' }],
+      },
+      workflowRun,
+      'codex',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      aiProfile
+    );
+
+    expect(mockGetAgentProviderDag.mock.calls[0][0]).toBe('codex');
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    expect(optionsArg.model).toBe('gpt-5.5');
+    const assistantConfig = optionsArg.assistantConfig as Record<string, unknown>;
+    expect(assistantConfig.modelReasoningEffort).toBe('low');
+  });
+
   it('applies inherited workflow tier effort to nodes without model overrides', async () => {
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
@@ -1562,6 +1703,10 @@ describe('executeDagWorkflow -- bash nodes', () => {
   });
 
   it('bash node stdout is available for downstream $nodeId.output substitution', async () => {
+    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({
+      stdout: '42 files\n',
+      stderr: '',
+    });
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();
     const workflowRun = makeWorkflowRun('bash-test-run-id', {
@@ -1580,27 +1725,31 @@ describe('executeDagWorkflow -- bash nodes', () => {
       { id: 'process', command: 'my-cmd', depends_on: ['stats'] },
     ];
 
-    await executeDagWorkflow(
-      mockDeps,
-      platform,
-      'conv-bash',
-      testDir,
-      { name: 'bash-subst-test', nodes },
-      workflowRun,
-      'claude',
-      undefined,
-      join(testDir, 'artifacts'),
-      join(testDir, 'logs'),
-      'main',
-      'docs/',
-      minimalConfig
-    );
+    try {
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-bash',
+        testDir,
+        { name: 'bash-subst-test', nodes },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
 
-    // AI client should have been called for the downstream node
-    expect(mockSendQueryDag.mock.calls.length).toBe(1);
-    // The prompt should contain the substituted bash output
-    const prompt = mockSendQueryDag.mock.calls[0][0] as string;
-    expect(prompt).toContain('42 files');
+      // AI client should have been called for the downstream node
+      expect(mockSendQueryDag.mock.calls.length).toBe(1);
+      // The prompt should contain the substituted bash output
+      const prompt = mockSendQueryDag.mock.calls[0][0] as string;
+      expect(prompt).toContain('42 files');
+    } finally {
+      execSpy.mockRestore();
+    }
   });
 
   it('non-zero exit code results in failed state', async () => {
@@ -1642,6 +1791,18 @@ describe('executeDagWorkflow -- bash nodes', () => {
   });
 
   it('failure message surfaces stderr and does not leak the "Command failed: bash -c <body>" prefix', async () => {
+    const execSpy = spyOn(git, 'execFileAsync').mockRejectedValue(
+      Object.assign(
+        new Error(
+          'Command failed: bash -c echo UNIQUE_CMDLINE_MARKER_1389; echo "diagnostic from stderr" >&2; exit 1\n' +
+            'diagnostic from stderr'
+        ),
+        {
+          code: 1,
+          stderr: 'diagnostic from stderr\n',
+        }
+      )
+    );
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();
     const workflowRun = makeWorkflowRun('bash-1389-run-id', {
@@ -1658,35 +1819,39 @@ describe('executeDagWorkflow -- bash nodes', () => {
       bash: 'echo UNIQUE_CMDLINE_MARKER_1389; echo "diagnostic from stderr" >&2; exit 1',
     };
 
-    await executeDagWorkflow(
-      mockDeps,
-      platform,
-      'conv-1389b',
-      testDir,
-      { name: 'bash-1389', nodes: [bashNode] },
-      workflowRun,
-      'claude',
-      undefined,
-      join(testDir, 'artifacts'),
-      join(testDir, 'logs'),
-      'main',
-      'docs/',
-      minimalConfig
-    );
+    try {
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-1389b',
+        testDir,
+        { name: 'bash-1389', nodes: [bashNode] },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
 
-    const eventCalls = (mockDeps.store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
-    const failedEvent = eventCalls.find(
-      (call: unknown[]) =>
-        (call[0] as { event_type: string }).event_type === 'node_failed' &&
-        (call[0] as { step_name: string }).step_name === 'fail-bash-1389'
-    );
-    expect(failedEvent).toBeDefined();
-    const errorMsg = (failedEvent![0] as { data: { error: string } }).data.error;
-    expect(errorMsg).toContain("Bash node 'fail-bash-1389' failed");
-    expect(errorMsg).toContain('[exit 1]');
-    expect(errorMsg).not.toContain('Command failed:');
-    expect(errorMsg).not.toContain('UNIQUE_CMDLINE_MARKER_1389');
-    expect(errorMsg).toContain('diagnostic from stderr');
+      const eventCalls = (mockDeps.store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+      const failedEvent = eventCalls.find(
+        (call: unknown[]) =>
+          (call[0] as { event_type: string }).event_type === 'node_failed' &&
+          (call[0] as { step_name: string }).step_name === 'fail-bash-1389'
+      );
+      expect(failedEvent).toBeDefined();
+      const errorMsg = (failedEvent![0] as { data: { error: string } }).data.error;
+      expect(errorMsg).toContain("Bash node 'fail-bash-1389' failed");
+      expect(errorMsg).toContain('[exit 1]');
+      expect(errorMsg).not.toContain('Command failed:');
+      expect(errorMsg).not.toContain('UNIQUE_CMDLINE_MARKER_1389');
+      expect(errorMsg).toContain('diagnostic from stderr');
+    } finally {
+      execSpy.mockRestore();
+    }
   });
 
   it('variable substitution works in bash scripts', async () => {
@@ -3740,6 +3905,10 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
   });
 
   it('stores node_output in node_completed event data for bash nodes', async () => {
+    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({
+      stdout: 'bash output\n',
+      stderr: '',
+    });
     const store = createMockStore();
     const mockDeps = createMockDeps(store);
     const platform = createMockPlatform();
@@ -3747,32 +3916,36 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
 
     const bashNode: BashNode = { id: 'stats', bash: 'echo "bash output"' };
 
-    await executeDagWorkflow(
-      mockDeps,
-      platform,
-      'conv-bash-output',
-      testDir,
-      { name: 'bash-output-test', nodes: [bashNode] },
-      workflowRun,
-      'claude',
-      undefined,
-      join(testDir, 'artifacts'),
-      join(testDir, 'logs'),
-      'main',
-      'docs/',
-      minimalConfig
-    );
+    try {
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-bash-output',
+        testDir,
+        { name: 'bash-output-test', nodes: [bashNode] },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
 
-    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
-    const completedEvent = eventCalls.find(
-      (call: unknown[]) =>
-        (call[0] as { event_type: string }).event_type === 'node_completed' &&
-        (call[0] as { step_name: string }).step_name === 'stats'
-    );
-    expect(completedEvent).toBeDefined();
-    expect((completedEvent![0] as { data: { node_output: string } }).data.node_output).toContain(
-      'bash output'
-    );
+      const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+      const completedEvent = eventCalls.find(
+        (call: unknown[]) =>
+          (call[0] as { event_type: string }).event_type === 'node_completed' &&
+          (call[0] as { step_name: string }).step_name === 'stats'
+      );
+      expect(completedEvent).toBeDefined();
+      expect((completedEvent![0] as { data: { node_output: string } }).data.node_output).toContain(
+        'bash output'
+      );
+    } finally {
+      execSpy.mockRestore();
+    }
   });
 
   it('stores node_output in node_completed event data for AI nodes', async () => {
@@ -6431,6 +6604,10 @@ describe('executeDagWorkflow -- cancel node', () => {
   });
 
   it('cancel node transitions run to cancelled and sends message', async () => {
+    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({
+      stdout: 'blocked\n',
+      stderr: '',
+    });
     const store = createMockStore();
     (store.cancelWorkflowRun as Mock<() => Promise<void>>).mockResolvedValue(undefined);
     // Track whether cancelWorkflowRun has been called to simulate status transition
@@ -6445,37 +6622,41 @@ describe('executeDagWorkflow -- cancel node', () => {
     const platform = createMockPlatform();
     const workflowRun = makeWorkflowRun();
 
-    await executeDagWorkflow(
-      mockDeps,
-      platform,
-      'conv-dag',
-      testDir,
-      {
-        name: 'cancel-test',
-        nodes: [
-          { id: 'check', bash: 'echo blocked' },
-          { id: 'stop', depends_on: ['check'], cancel: 'Precondition failed' },
-        ],
-      },
-      workflowRun,
-      'claude',
-      undefined,
-      join(testDir, 'artifacts'),
-      join(testDir, 'logs'),
-      'main',
-      'docs/',
-      minimalConfig
-    );
+    try {
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        {
+          name: 'cancel-test',
+          nodes: [
+            { id: 'check', bash: 'echo blocked' },
+            { id: 'stop', depends_on: ['check'], cancel: 'Precondition failed' },
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
 
-    // cancelWorkflowRun should have been called
-    expect((store.cancelWorkflowRun as Mock<() => Promise<void>>).mock.calls.length).toBe(1);
+      // cancelWorkflowRun should have been called
+      expect((store.cancelWorkflowRun as Mock<() => Promise<void>>).mock.calls.length).toBe(1);
 
-    // A message with the cancel reason should have been sent
-    const sendCalls = (platform.sendMessage as Mock<() => Promise<void>>).mock.calls;
-    const cancelMsg = sendCalls.find(
-      (call: unknown[]) => typeof call[1] === 'string' && call[1].includes('Workflow cancelled')
-    );
-    expect(cancelMsg).toBeDefined();
+      // A message with the cancel reason should have been sent
+      const sendCalls = (platform.sendMessage as Mock<() => Promise<void>>).mock.calls;
+      const cancelMsg = sendCalls.find(
+        (call: unknown[]) => typeof call[1] === 'string' && call[1].includes('Workflow cancelled')
+      );
+      expect(cancelMsg).toBeDefined();
+    } finally {
+      execSpy.mockRestore();
+    }
   });
 
   it('cancel node with when: false is skipped', async () => {
@@ -8509,7 +8690,21 @@ describe('executeDagWorkflow -- final status derivation', () => {
     }
   });
 
+  function mockStatusBashExecutions(): { mockRestore: () => void } {
+    return spyOn(git, 'execFileAsync').mockImplementation(async (_cmd: string, args: string[]) => {
+      const script = String(args[1] ?? '');
+      if (script.includes('exit 1')) {
+        throw Object.assign(new Error(`Command failed: bash -c ${script}\nfailure`), {
+          code: 1,
+          stderr: 'failure\n',
+        });
+      }
+      return { stdout: 'ok\n', stderr: '' };
+    });
+  }
+
   it('one success + one independent failure -> failWorkflowRun, not completeWorkflowRun', async () => {
+    const execSpy = mockStatusBashExecutions();
     const mockStore = createMockStore();
     const mockDeps = createMockDeps(mockStore);
     const platform = createMockPlatform();
@@ -8520,37 +8715,42 @@ describe('executeDagWorkflow -- final status derivation', () => {
       { id: 'fail', bash: 'exit 1' } as BashNode,
     ];
 
-    await executeDagWorkflow(
-      mockDeps,
-      platform,
-      'conv-status',
-      testDir,
-      { name: 'status-test', nodes },
-      workflowRun,
-      'claude',
-      undefined,
-      join(testDir, 'artifacts'),
-      join(testDir, 'logs'),
-      'main',
-      'docs/',
-      minimalConfig
-    );
+    try {
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-status',
+        testDir,
+        { name: 'status-test', nodes },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
 
-    expect((mockStore.failWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(1);
-    expect((mockStore.completeWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(0);
-    expect(mockStore.failWorkflowRun).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.stringContaining('fail')
-    );
+      expect((mockStore.failWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(1);
+      expect((mockStore.completeWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(0);
+      expect(mockStore.failWorkflowRun).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.stringContaining('fail')
+      );
 
-    // Confirm the failure message names the failing node
-    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
-    const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
-    const failMsg = messages.find((m: string) => m.includes('completed with failures'));
-    expect(failMsg).toBeDefined();
+      // Confirm the failure message names the failing node
+      const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
+      const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
+      const failMsg = messages.find((m: string) => m.includes('completed with failures'));
+      expect(failMsg).toBeDefined();
+    } finally {
+      execSpy.mockRestore();
+    }
   });
 
   it('multiple successes + one failure -> failWorkflowRun, not completeWorkflowRun', async () => {
+    const execSpy = mockStatusBashExecutions();
     const mockStore = createMockStore();
     const mockDeps = createMockDeps(mockStore);
     const platform = createMockPlatform();
@@ -8563,33 +8763,37 @@ describe('executeDagWorkflow -- final status derivation', () => {
       { id: 'fail', bash: 'exit 1' } as BashNode,
     ];
 
-    await executeDagWorkflow(
-      mockDeps,
-      platform,
-      'conv-status',
-      testDir,
-      { name: 'status-test-multi', nodes },
-      workflowRun,
-      'claude',
-      undefined,
-      join(testDir, 'artifacts'),
-      join(testDir, 'logs'),
-      'main',
-      'docs/',
-      minimalConfig
-    );
+    try {
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-status',
+        testDir,
+        { name: 'status-test-multi', nodes },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
 
-    expect((mockStore.failWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(1);
-    expect((mockStore.completeWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(0);
-    expect(mockStore.failWorkflowRun).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.stringContaining('fail')
-    );
+      expect((mockStore.failWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(1);
+      expect((mockStore.completeWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(0);
+      expect(mockStore.failWorkflowRun).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.stringContaining('fail')
+      );
 
-    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
-    const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
-    const failMsg = messages.find((m: string) => m.includes('completed with failures'));
-    expect(failMsg).toBeDefined();
+      const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
+      const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
+      const failMsg = messages.find((m: string) => m.includes('completed with failures'));
+      expect(failMsg).toBeDefined();
+    } finally {
+      execSpy.mockRestore();
+    }
   });
 
   it('trigger_rule: none_failed skips dependent node + anyFailed still marks run failed', async () => {
@@ -8847,35 +9051,44 @@ describe('executeDagWorkflow -- typed artifacts (output_type)', () => {
   });
 
   it('bash node with output_type writes a sidecar with no sessionId', async () => {
-    await executeDagWorkflow(
-      createMockDeps(),
-      createMockPlatform(),
-      'conv-dag',
-      testDir,
-      {
-        name: 'bash-typed',
-        nodes: [{ id: 'metrics', bash: 'echo "result-data"', output_type: 'metrics' }],
-      },
-      makeWorkflowRun(),
-      'claude',
-      undefined,
-      join(testDir, 'artifacts'),
-      join(testDir, 'logs'),
-      'main',
-      'docs/',
-      minimalConfig
-    );
+    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({
+      stdout: 'result-data\n',
+      stderr: '',
+    });
 
-    const body = await readFile(join(testDir, 'artifacts', 'nodes', 'metrics.md'), 'utf8');
-    expect(body).toContain('result-data');
-    const meta = JSON.parse(
-      await readFile(join(testDir, 'artifacts', 'nodes', 'metrics.meta.json'), 'utf8')
-    ) as Record<string, unknown>;
-    expect(meta).toMatchObject({ nodeId: 'metrics', outputType: 'metrics' });
-    // Bash nodes have no provider session — the field is omitted, not null.
-    expect('sessionId' in meta).toBe(false);
-    // Bash node does not invoke the AI client.
-    expect(mockSendQueryDag.mock.calls.length).toBe(0);
+    try {
+      await executeDagWorkflow(
+        createMockDeps(),
+        createMockPlatform(),
+        'conv-dag',
+        testDir,
+        {
+          name: 'bash-typed',
+          nodes: [{ id: 'metrics', bash: 'echo "result-data"', output_type: 'metrics' }],
+        },
+        makeWorkflowRun(),
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      const body = await readFile(join(testDir, 'artifacts', 'nodes', 'metrics.md'), 'utf8');
+      expect(body).toContain('result-data');
+      const meta = JSON.parse(
+        await readFile(join(testDir, 'artifacts', 'nodes', 'metrics.meta.json'), 'utf8')
+      ) as Record<string, unknown>;
+      expect(meta).toMatchObject({ nodeId: 'metrics', outputType: 'metrics' });
+      // Bash nodes have no provider session — the field is omitted, not null.
+      expect('sessionId' in meta).toBe(false);
+      // Bash node does not invoke the AI client.
+      expect(mockSendQueryDag.mock.calls.length).toBe(0);
+    } finally {
+      execSpy.mockRestore();
+    }
   });
 
   it('artifact write failure is non-fatal — the node still completes', async () => {
