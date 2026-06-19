@@ -7,16 +7,40 @@ import type { Codebase, Conversation } from '../types';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
 
 /**
- * Format a single project for the orchestrator prompt.
+ * Extra context prefetched at routing time to help the orchestrator pick a
+ * project for an unscoped conversation without asking the user.
  */
-export function formatProjectSection(codebase: Codebase): string {
+export interface OrchestratorRoutingContext {
+  /** Formatted JIRA ticket block (from {@link fetchJiraTicketContext}). */
+  jiraContext?: string;
+  /** README snippet per codebase id (from {@link readProjectReadmes}). */
+  readmeByCodebaseId?: ReadonlyMap<string, string>;
+}
+
+/**
+ * Format a single project for the orchestrator prompt. When a README snippet is
+ * provided it is appended as a Summary block so the AI can match a referenced
+ * ticket/task to the right project by what the project actually does.
+ */
+export function formatProjectSection(codebase: Codebase, readmeSnippet?: string): string {
   let section = `### ${codebase.name}\n`;
   if (codebase.repository_url) {
     section += `- Repository: ${codebase.repository_url}\n`;
   }
   section += `- Directory: ${codebase.default_cwd}\n`;
   section += `- AI Provider: ${codebase.ai_assistant_type}\n`;
+  if (readmeSnippet) {
+    section += `- Summary (from README):\n${indentBlock(readmeSnippet)}\n`;
+  }
   return section;
+}
+
+/** Indent a multi-line block by two spaces so it nests under a list item. */
+function indentBlock(text: string): string {
+  return text
+    .split('\n')
+    .map(line => `  ${line}`)
+    .join('\n');
 }
 
 /**
@@ -68,18 +92,33 @@ export function formatWorkflowContextSection(results: readonly WorkflowResultCon
 /**
  * Build the routing rules section of the prompt.
  */
-export function buildRoutingRules(): string {
-  return buildRoutingRulesWithProject();
+export function buildRoutingRules(options?: { hasJiraContext?: boolean }): string {
+  return buildRoutingRulesWithProject(undefined, options);
 }
 
 /**
  * Build the routing rules section, optionally scoped to a specific project.
  * When projectName is provided, rule #4 defaults to that project instead of asking.
+ * When no project is scoped but a referenced ticket was prefetched
+ * (`hasJiraContext`), rule #4 tells the AI to infer the project from the ticket
+ * and project summaries rather than immediately asking.
  */
-export function buildRoutingRulesWithProject(projectName?: string): string {
-  const rule4 = projectName
-    ? `4. If ambiguous which project → use **${projectName}** (the active project)`
-    : '4. If ambiguous which project → ask the user';
+export function buildRoutingRulesWithProject(
+  projectName?: string,
+  options?: { hasJiraContext?: boolean }
+): string {
+  let rule4: string;
+  if (projectName) {
+    rule4 = `4. If ambiguous which project → use **${projectName}** (the active project)`;
+  } else if (options?.hasJiraContext) {
+    rule4 =
+      '4. If ambiguous which project → infer it from the **Referenced JIRA Ticket** below ' +
+      "(its summary, description, and components) matched against each project's repository " +
+      'URL and README summary. Pick the single best match and proceed. Only ask the user if ' +
+      'two or more projects are genuinely plausible or none fit.';
+  } else {
+    rule4 = '4. If ambiguous which project → ask the user';
+  }
 
   return `## Routing Rules
 
@@ -141,7 +180,8 @@ IMPORTANT: Always clone into ~/.archon/workspaces/{owner}/{repo}/source unless t
  */
 export function buildOrchestratorPrompt(
   codebases: readonly Codebase[],
-  workflows: readonly WorkflowDefinition[]
+  workflows: readonly WorkflowDefinition[],
+  routingContext?: OrchestratorRoutingContext
 ): string {
   let prompt = `# Archon Orchestrator
 
@@ -158,7 +198,10 @@ You can answer questions directly or invoke workflows for structured development
       'No projects registered yet. Ask the user to add a project or clone a repository.\n\n';
   } else {
     for (const codebase of codebases) {
-      prompt += formatProjectSection(codebase);
+      prompt += formatProjectSection(
+        codebase,
+        routingContext?.readmeByCodebaseId?.get(codebase.id)
+      );
       prompt += '\n';
     }
   }
@@ -166,7 +209,11 @@ You can answer questions directly or invoke workflows for structured development
   prompt += '## Available Workflows\n\n';
   prompt += formatWorkflowSection(workflows);
 
-  prompt += buildRoutingRules();
+  prompt += buildRoutingRules({ hasJiraContext: !!routingContext?.jiraContext });
+
+  if (routingContext?.jiraContext) {
+    prompt += `\n\n## Referenced JIRA Ticket\n\n${routingContext.jiraContext}\n`;
+  }
 
   return prompt;
 }
@@ -253,13 +300,17 @@ When the user asks what's running, whether a run passed/failed, or to approve / 
 export function buildOrchestratorSystemAppend(
   conversation: Conversation,
   codebases: readonly Codebase[],
-  workflows: readonly WorkflowDefinition[]
+  workflows: readonly WorkflowDefinition[],
+  routingContext?: OrchestratorRoutingContext
 ): string {
   const scopedCodebase = conversation.codebase_id
     ? codebases.find(c => c.id === conversation.codebase_id)
     : undefined;
 
+  // routingContext (prefetched JIRA ticket + READMEs) only helps the unscoped
+  // path, where the agent must otherwise ask which project to use. A scoped
+  // conversation already defaults to its active project (rule #4).
   return scopedCodebase
     ? buildProjectScopedPrompt(scopedCodebase, codebases, workflows)
-    : buildOrchestratorPrompt(codebases, workflows);
+    : buildOrchestratorPrompt(codebases, workflows, routingContext);
 }

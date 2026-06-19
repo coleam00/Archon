@@ -677,7 +677,9 @@ describe('orchestrator-agent handleMessage', () => {
       expect(mockBuildOrchestratorSystemAppend).toHaveBeenCalledWith(
         expect.objectContaining({ id: expect.any(String) }),
         [mockCodebase],
-        expect.any(Array)
+        expect.any(Array),
+        // No JIRA key in "help me" → no prefetched routing context.
+        undefined
       );
     });
 
@@ -695,7 +697,9 @@ describe('orchestrator-agent handleMessage', () => {
       expect(mockBuildOrchestratorSystemAppend).toHaveBeenCalledWith(
         expect.objectContaining({ codebase_id: 'codebase-789' }),
         [mockCodebase],
-        expect.any(Array)
+        expect.any(Array),
+        // Scoped conversation → routing-context prefetch is skipped.
+        undefined
       );
     });
 

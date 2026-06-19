@@ -147,6 +147,102 @@ describe('buildOrchestratorSystemAppend', () => {
   });
 });
 
+describe('routing rule #4 with JIRA context', () => {
+  test('unscoped + no JIRA context → ask the user', () => {
+    const rules = buildRoutingRulesWithProject();
+    expect(rules).toContain('ask the user');
+    expect(rules).not.toContain('Referenced JIRA Ticket');
+  });
+
+  test('unscoped + JIRA context → infer the project from the ticket', () => {
+    const rules = buildRoutingRulesWithProject(undefined, { hasJiraContext: true });
+    expect(rules).toContain('infer it from the **Referenced JIRA Ticket**');
+    expect(rules).toContain('repository');
+    expect(rules).toContain('README summary');
+  });
+
+  test('scoped project takes precedence over JIRA context', () => {
+    const rules = buildRoutingRulesWithProject('my-project', { hasJiraContext: true });
+    expect(rules).toContain('use **my-project**');
+    expect(rules).not.toContain('Referenced JIRA Ticket');
+  });
+});
+
+describe('buildOrchestratorSystemAppend with routing context', () => {
+  const makeConversation = (codebaseId: string | null) =>
+    ({
+      id: 'conv-1',
+      platform_type: 'web',
+      platform_conversation_id: 'web-1',
+      codebase_id: codebaseId,
+      cwd: null,
+      isolation_env_id: null,
+      ai_assistant_type: 'claude',
+      title: null,
+      hidden: false,
+      deleted_at: null,
+      last_activity_at: null,
+      created_at: new Date(),
+      updated_at: new Date(),
+    }) as const;
+
+  const codebases = [
+    {
+      id: 'cb-1',
+      name: 'coral',
+      default_cwd: '/path/to/coral',
+      ai_assistant_type: 'claude',
+      repository_url: 'https://github.com/QuartzAI/coral',
+      commands: null,
+    },
+  ];
+
+  const workflows = [
+    {
+      name: 'assist',
+      description: 'General assistance',
+      nodes: [{ id: 'step1', command: 'archon-assist', depends_on: [] }],
+    },
+  ] as unknown as import('@archon/workflows/schemas/workflow').WorkflowDefinition[];
+
+  const routingContext = {
+    jiraContext: '[Referenced JIRA Ticket]\nKey: DEV-2602\nSummary: Payment crash',
+    readmeByCodebaseId: new Map([['cb-1', 'Coral is the payments service.']]),
+  };
+
+  test('unscoped: injects the JIRA ticket block, README summary, and inferring rule', () => {
+    const result = buildOrchestratorSystemAppend(
+      makeConversation(null),
+      codebases,
+      workflows,
+      routingContext
+    );
+    expect(result).toContain('## Referenced JIRA Ticket');
+    expect(result).toContain('Key: DEV-2602');
+    expect(result).toContain('Summary (from README):');
+    expect(result).toContain('Coral is the payments service.');
+    expect(result).toContain('infer it from the **Referenced JIRA Ticket**');
+  });
+
+  test('scoped: routing context is ignored (defaults to active project)', () => {
+    const result = buildOrchestratorSystemAppend(
+      makeConversation('cb-1'),
+      codebases,
+      workflows,
+      routingContext
+    );
+    expect(result).toContain('## Active Project');
+    expect(result).not.toContain('## Referenced JIRA Ticket');
+    expect(result).toContain('use **coral**');
+  });
+
+  test('unscoped without routing context preserves prior ask-the-user behavior', () => {
+    const result = buildOrchestratorSystemAppend(makeConversation(null), codebases, workflows);
+    expect(result).not.toContain('## Referenced JIRA Ticket');
+    expect(result).toContain('ask the user');
+  });
+});
+
 describe('buildRunManagementSection', () => {
   test('lists the run-management verbs and the --json hint', () => {
     const section = buildRunManagementSection();

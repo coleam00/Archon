@@ -60,7 +60,9 @@ import {
   buildRunManagementSection,
   formatWorkflowContextSection,
 } from './prompt-builder';
-import type { WorkflowResultContext } from './prompt-builder';
+import type { WorkflowResultContext, OrchestratorRoutingContext } from './prompt-builder';
+import { fetchJiraTicketContext } from './jira-context';
+import { readProjectReadmes } from './project-readme';
 import * as messageDb from '../db/messages';
 import * as workflowDb from '../db/workflows';
 import * as workflowEventDb from '../db/workflow-events';
@@ -1314,9 +1316,31 @@ export async function handleMessage(
       }
     }
 
+    // On an UNSCOPED conversation that references a JIRA ticket, prefetch the
+    // ticket + project READMEs so the agent can map the ticket to a project on
+    // its own instead of asking "which project?" (rule #4). Best-effort and
+    // gated tightly: only when nothing is scoped, projects exist, the adapter
+    // didn't already supply ticket context, and a JIRA key is actually present
+    // (the fetch is the only network cost and only fires on a key match).
+    let routingContext: OrchestratorRoutingContext | undefined;
+    if (scopedCodebase === undefined && codebases.length > 0 && !issueContext) {
+      const jiraContext = await fetchJiraTicketContext(message, {
+        ...process.env,
+        ...effectiveEnv,
+      });
+      if (jiraContext) {
+        routingContext = { jiraContext, readmeByCodebaseId: await readProjectReadmes(codebases) };
+      }
+    }
+
     // Claude supports the preset object for prompt caching; other providers
     // need a plain string (Pi coerces non-string to undefined, Codex ignores it).
-    let systemAppend = buildOrchestratorSystemAppend(conversation, codebases, workflows);
+    let systemAppend = buildOrchestratorSystemAppend(
+      conversation,
+      codebases,
+      workflows,
+      routingContext
+    );
     // Capabilities are only consulted for project-scoped chats (both the native tool
     // and the CLI pointer are scoped features), so look them up lazily — this also
     // avoids a registry lookup (and a throw for an unregistered provider) on the
