@@ -280,18 +280,35 @@ describe('GET /api/workflows/:name', () => {
   });
 
   test('returns bundled workflow with source:bundled', async () => {
-    const app = createTestApp();
-    registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+    const tmpHome = join(tmpdir(), `wf-bundled-test-${Date.now()}`);
+    const prevArchonHome = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = tmpHome;
 
-    // No cwd → no readFile attempt → checks BUNDLED_WORKFLOWS → archon-assist found
-    mockListCodebases.mockImplementationOnce(async () => []);
+    try {
+      const app = createTestApp();
+      registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
 
-    const response = await app.request('/api/workflows/archon-assist');
-    expect(response.status).toBe(200);
-    const body = (await response.json()) as { source: string; filename: string; workflow: unknown };
-    expect(body.source).toBe('bundled');
-    expect(body.filename).toBe('archon-assist.yaml');
-    expect(body.workflow).toBeDefined();
+      // No cwd and no home-scoped copy, so the request falls through to bundled defaults.
+      mockListCodebases.mockImplementationOnce(async () => []);
+
+      const response = await app.request('/api/workflows/archon-assist');
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        source: string;
+        filename: string;
+        workflow: unknown;
+      };
+      expect(body.source).toBe('bundled');
+      expect(body.filename).toBe('archon-assist.yaml');
+      expect(body.workflow).toBeDefined();
+    } finally {
+      if (prevArchonHome === undefined) {
+        delete process.env.ARCHON_HOME;
+      } else {
+        process.env.ARCHON_HOME = prevArchonHome;
+      }
+      await rm(tmpHome, { recursive: true, force: true });
+    }
   });
 
   test('returns project workflow with source:project when file exists on disk', async () => {

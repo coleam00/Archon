@@ -8,6 +8,62 @@ import { join } from 'path';
 import { BUNDLED_MANAGE_RUN_SKILL_FILES, BUNDLED_SKILL_FILES } from '../bundled-skill';
 import { copyArchonSkill, skillInstallCommand } from './skill';
 
+const SKILL_DESCRIPTION_MAX_CHARS = 1024;
+
+function extractFrontmatter(markdown: string): string {
+  const lines = markdown.split(/\r?\n/);
+  if (lines[0] !== '---') {
+    throw new Error('missing frontmatter');
+  }
+
+  const endIndex = lines.findIndex((line, index) => index > 0 && line === '---');
+  if (endIndex === -1) {
+    throw new Error('unterminated frontmatter');
+  }
+
+  return lines.slice(1, endIndex).join('\n');
+}
+
+function trimBlockIndent(lines: string[]): string {
+  const indentedLines = lines.filter(line => line.trim().length > 0);
+  const indent =
+    indentedLines.length === 0
+      ? 0
+      : Math.min(...indentedLines.map(line => /^\s*/.exec(line)?.[0].length ?? 0));
+
+  return lines
+    .map(line => line.slice(Math.min(indent, line.length)))
+    .join('\n')
+    .trimEnd();
+}
+
+function extractSkillDescription(markdown: string): string {
+  const lines = extractFrontmatter(markdown).split('\n');
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const match = /^description:\s*(.*)$/.exec(lines[i]);
+    if (match === null) {
+      continue;
+    }
+
+    const value = match[1].trim();
+    if (value !== '|') {
+      return value;
+    }
+
+    const blockLines: string[] = [];
+    for (let j = i + 1; j < lines.length; j += 1) {
+      if (lines[j].length > 0 && !/^\s/.test(lines[j])) {
+        break;
+      }
+      blockLines.push(lines[j]);
+    }
+    return trimBlockIndent(blockLines);
+  }
+
+  throw new Error('missing description');
+}
+
 describe('copyArchonSkill', () => {
   let tempDir: string;
 
@@ -63,6 +119,22 @@ describe('copyArchonSkill', () => {
 
     await copyArchonSkill(tempDir);
     expect(readFileSync(skillMdPath, 'utf-8')).toBe(BUNDLED_SKILL_FILES['SKILL.md']);
+  });
+});
+
+describe('bundled skill metadata', () => {
+  it('keeps the archon skill description within the Agent Skills limit', () => {
+    const description = extractSkillDescription(BUNDLED_SKILL_FILES['SKILL.md']);
+
+    expect(description.length).toBeGreaterThan(0);
+    expect(description.length).toBeLessThanOrEqual(SKILL_DESCRIPTION_MAX_CHARS);
+  });
+
+  it('keeps the manage-run skill description within the Agent Skills limit', () => {
+    const description = extractSkillDescription(BUNDLED_MANAGE_RUN_SKILL_FILES['SKILL.md']);
+
+    expect(description.length).toBeGreaterThan(0);
+    expect(description.length).toBeLessThanOrEqual(SKILL_DESCRIPTION_MAX_CHARS);
   });
 });
 

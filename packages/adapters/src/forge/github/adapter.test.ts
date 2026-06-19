@@ -1199,13 +1199,24 @@ describe('GitHubAdapter', () => {
       provider: ReturnType<typeof makeMockProvider>;
     } {
       const provider = makeMockProvider(opts);
-      const adapter = new GitHubAdapter(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mock provider isn't structurally identical to the real interface (suffices for these tests)
-        { kind: 'app', provider: provider.provider as any },
-        'fake-webhook-secret',
-        mockLockManager,
-        'archon'
-      );
+      const originalAllowedUsers = process.env.GITHUB_ALLOWED_USERS;
+      delete process.env.GITHUB_ALLOWED_USERS;
+      let adapter: GitHubAdapter;
+      try {
+        adapter = new GitHubAdapter(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mock provider isn't structurally identical to the real interface (suffices for these tests)
+          { kind: 'app', provider: provider.provider as any },
+          'fake-webhook-secret',
+          mockLockManager,
+          'archon'
+        );
+      } finally {
+        if (originalAllowedUsers === undefined) {
+          delete process.env.GITHUB_ALLOWED_USERS;
+        } else {
+          process.env.GITHUB_ALLOWED_USERS = originalAllowedUsers;
+        }
+      }
       // @ts-expect-error - mock signature verification
       adapter.verifySignature = mock(() => true);
       return { adapter, provider };

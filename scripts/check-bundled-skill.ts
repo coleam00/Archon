@@ -27,6 +27,7 @@ const SKILLS_DIR = join(REPO_ROOT, '.claude', 'skills');
 /** Skills bundled into the binary and installed by `archon skill install`. */
 const BUNDLED_SKILLS = ['archon', 'manage-run'];
 const BUNDLED_SKILL_PATH = join(REPO_ROOT, 'packages', 'cli', 'src', 'bundled-skill.ts');
+const SKILL_DESCRIPTION_MAX_CHARS = 1024;
 
 const CHECK_ONLY = process.argv.includes('--check');
 
@@ -35,6 +36,87 @@ function listSkillFiles(dir: string, base: string): string[] {
     const full = join(dir, entry);
     return statSync(full).isDirectory() ? listSkillFiles(full, base) : [relative(base, full)];
   });
+}
+
+function extractFrontmatter(markdown: string): string | null {
+  const lines = markdown.split(/\r?\n/);
+  if (lines[0] !== '---') {
+    return null;
+  }
+
+  const endIndex = lines.findIndex((line, index) => index > 0 && line === '---');
+  return endIndex === -1 ? null : lines.slice(1, endIndex).join('\n');
+}
+
+function trimBlockIndent(lines: string[]): string {
+  const indentedLines = lines.filter(line => line.trim().length > 0);
+  const indent =
+    indentedLines.length === 0
+      ? 0
+      : Math.min(...indentedLines.map(line => /^\s*/.exec(line)?.[0].length ?? 0));
+
+  return lines
+    .map(line => line.slice(Math.min(indent, line.length)))
+    .join('\n')
+    .trimEnd();
+}
+
+function extractSkillDescription(markdown: string): string | null {
+  const frontmatter = extractFrontmatter(markdown);
+  if (frontmatter === null) {
+    return null;
+  }
+
+  const lines = frontmatter.split('\n');
+  for (let i = 0; i < lines.length; i += 1) {
+    const match = /^description:\s*(.*)$/.exec(lines[i]);
+    if (match === null) {
+      continue;
+    }
+
+    const value = match[1].trim();
+    if (value !== '|') {
+      return value;
+    }
+
+    const blockLines: string[] = [];
+    for (let j = i + 1; j < lines.length; j += 1) {
+      if (lines[j].length > 0 && !/^\s/.test(lines[j])) {
+        break;
+      }
+      blockLines.push(lines[j]);
+    }
+    return trimBlockIndent(blockLines);
+  }
+
+  return null;
+}
+
+function validateSkillDescription(skill: string): string[] {
+  const skillMdPath = join(SKILLS_DIR, skill, 'SKILL.md');
+  const relativePath = relative(REPO_ROOT, skillMdPath);
+  let markdown: string;
+
+  try {
+    markdown = readFileSync(skillMdPath, 'utf-8');
+  } catch {
+    return [`${relativePath}: missing SKILL.md`];
+  }
+
+  const description = extractSkillDescription(markdown);
+  if (description === null) {
+    return [`${relativePath}: missing description in frontmatter`];
+  }
+  if (description.length === 0) {
+    return [`${relativePath}: description must not be empty`];
+  }
+  if (description.length > SKILL_DESCRIPTION_MAX_CHARS) {
+    return [
+      `${relativePath}: description is ${description.length} characters; maximum is ${SKILL_DESCRIPTION_MAX_CHARS}`,
+    ];
+  }
+
+  return [];
 }
 
 // Paths are relative to .claude/skills/ so they keep the skill dir name
@@ -53,15 +135,27 @@ const bundledSrc = readFileSync(BUNDLED_SKILL_PATH, 'utf-8');
 // stale string literal will also pass. It's a safety net against missing imports,
 // not a structural verification of the export map.
 const missing = skillFiles.filter(f => !bundledSrc.includes(f));
+const descriptionErrors = BUNDLED_SKILLS.flatMap(validateSkillDescription);
+const validationErrors: string[] = [];
 
 if (missing.length > 0) {
-  console.error(
+  validationErrors.push(
     `bundled-skill.ts is missing these files:\n${missing.map(f => `  - ${f}`).join('\n')}\n\n` +
       `Add a corresponding import + bundled map entry to\n  ${relative(REPO_ROOT, BUNDLED_SKILL_PATH)}`
   );
+}
+
+if (descriptionErrors.length > 0) {
+  validationErrors.push(
+    `Bundled skill description validation failed:\n${descriptionErrors.map(e => `  - ${e}`).join('\n')}`
+  );
+}
+
+if (validationErrors.length > 0) {
+  console.error(validationErrors.join('\n\n'));
   process.exit(CHECK_ONLY ? 2 : 1);
 }
 
 console.log(
-  `bundled-skill.ts is up to date (${skillFiles.length} files across ${BUNDLED_SKILLS.length} skills).`
+  `bundled-skill.ts is up to date (${skillFiles.length} files across ${BUNDLED_SKILLS.length} skills; descriptions <= ${SKILL_DESCRIPTION_MAX_CHARS} chars).`
 );
