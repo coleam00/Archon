@@ -28,6 +28,17 @@ interface Contact {
   vaultPath: string;
 }
 
+const contactsPayload = contactsData as Partial<{
+  generated_at: string;
+  contacts: Contact[];
+}>;
+
+function formatGeneratedAt(value: unknown): string {
+  if (typeof value !== 'string' || value.length === 0) return '—';
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? '—' : parsed.toLocaleString();
+}
+
 const CATEGORIES: {
   slug: string;
   label: string;
@@ -62,7 +73,7 @@ export function ContactsPage(): React.ReactElement {
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const allContacts = useMemo<Contact[]>(() => {
-    const raw = (contactsData.contacts as Contact[]) ?? [];
+    const raw = Array.isArray(contactsPayload.contacts) ? contactsPayload.contacts : [];
     // Filter vault stubs — contacts with TBD role/email are placeholders pending
     // Jason confirmation, not real records. Surface them only via /contacts?include=stubs.
     return raw.filter(c => !isContactStub(c));
@@ -101,9 +112,7 @@ export function ContactsPage(): React.ReactElement {
         </p>
         <p className="text-xs text-text-tertiary">
           {allContacts.length} contacts · last refreshed{' '}
-          {typeof contactsData.generated_at === 'string' && contactsData.generated_at.length > 0
-            ? new Date(contactsData.generated_at).toLocaleString()
-            : '—'}
+          {formatGeneratedAt(contactsPayload.generated_at)}
         </p>
       </div>
 

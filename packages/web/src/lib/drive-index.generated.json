@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-18T04:01:23+00:00",
+  "generated_at": "2026-06-19T09:09:31+00:00",
   "vault_path": "second-brain/resources/drive-index",
   "count": 22,
   "folders": [
@@ -10,7 +10,7 @@
       "folderId": "1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
       "parentId": "",
       "audience": "jason-only",
-      "lastSynced": "2026-06-18T04:01:22+00:00",
+      "lastSynced": "2026-06-19T09:09:31+00:00",
       "fileCount": 13,
       "vaultPath": "second-brain/resources/drive-index/_root.md",
       "driveUrl": "https://drive.google.com/drive/folders/1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
@@ -18,7 +18,7 @@
         {
           "name": "PMC Prospect Master v2 organized 2026-06-18",
           "type": "g-spreadsheet",
-          "modified": "2026-06-18",
+          "modified": "2026-06-19",
           "size": "",
           "link": "https://docs.google.com/spreadsheets/d/1bY2om1TOgPFmH9C8a5nlNY2T5OFzBssU-0xrtyF3ftg/edit?usp=drivesdk"
         },
@@ -1641,11 +1641,25 @@
       "folderId": "1bhcNbhJ4oHVZODBa6ky9pPtL1HotWU8T",
       "parentId": "1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
       "audience": "all",
-      "lastSynced": "2026-06-02T02:35:56+00:00",
-      "fileCount": 1,
+      "lastSynced": "2026-06-19T04:00:19+00:00",
+      "fileCount": 3,
       "vaultPath": "second-brain/resources/drive-index/ttts-assets.md",
       "driveUrl": "https://drive.google.com/drive/folders/1bhcNbhJ4oHVZODBa6ky9pPtL1HotWU8T",
       "files": [
+        {
+          "name": "TTTS_Human_Performance_HypeFrame_Reel_2026.06.25.mp4",
+          "type": "video/mp4",
+          "modified": "2026-06-19",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1L8k1p36f3X84AIekb142jf99DwUsSfZS/view?usp=drivesdk"
+        },
+        {
+          "name": "TTTS_Invitation_BioReg_2026.06.25.pdf",
+          "type": "pdf",
+          "modified": "2026-06-19",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1j7Ykynv0rBIOTHDbeA4IkQaXk8h-oqfB/view?usp=drivesdk"
+        },
         {
           "name": "Assets",
           "type": "g-folder",
