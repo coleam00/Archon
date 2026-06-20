@@ -10,6 +10,8 @@ sidebar:
 
 Everything you need to go from zero to a working Archon setup — whether you prefer the Web UI or the CLI.
 
+> **Looking for RAG, embeddings, or knowledge bases?** You may be thinking of Archon v1–v6, which was a different product. Current Archon (v7+) is a workflow engine for AI coding agents—no embeddings, no vector stores, no direct LLM API calls. See [What Archon Is (and Is Not)](/getting-started/what-archon-is-not/) for details.
+
 ---
 
 ## Prerequisites
