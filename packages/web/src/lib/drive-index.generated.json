@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-19T20:01:07+00:00",
+  "generated_at": "2026-06-20T11:00:28+00:00",
   "vault_path": "second-brain/resources/drive-index",
   "count": 22,
   "folders": [
@@ -1648,11 +1648,18 @@
       "folderId": "1bhcNbhJ4oHVZODBa6ky9pPtL1HotWU8T",
       "parentId": "1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
       "audience": "all",
-      "lastSynced": "2026-06-19T04:00:19+00:00",
-      "fileCount": 3,
+      "lastSynced": "2026-06-20T11:00:27+00:00",
+      "fileCount": 4,
       "vaultPath": "second-brain/resources/drive-index/ttts-assets.md",
       "driveUrl": "https://drive.google.com/drive/folders/1bhcNbhJ4oHVZODBa6ky9pPtL1HotWU8T",
       "files": [
+        {
+          "name": "Outreach",
+          "type": "g-folder",
+          "modified": "2026-06-20",
+          "size": "",
+          "link": "https://drive.google.com/drive/folders/1fP5ol7rBPqVoQtnxI1HcE12fGHlJTzZd"
+        },
         {
           "name": "TTTS_Human_Performance_HypeFrame_Reel_2026.06.25.mp4",
           "type": "video/mp4",

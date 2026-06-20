@@ -41,6 +41,10 @@ interface ContactSnapshot {
   role?: string;
 }
 
+function safeCount(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
 function Card({ to, title, description, icon: Icon, badge }: CardProps): React.ReactElement {
   return (
     <Link
@@ -75,9 +79,12 @@ export function StartHerePage(): React.ReactElement {
     (contact): contact is ContactSnapshot => typeof contact === 'object' && contact !== null
   );
 
-  const driveFolderCount = driveIndex.count ?? driveFolders.length;
-  const driveFileCount = driveFolders.reduce((acc, f) => acc + (f.fileCount ?? 0), 0);
-  const solutionsCount = solutionsData.count ?? solutions.length;
+  const driveFolderCount = safeCount(
+    (driveIndex as { count?: unknown }).count,
+    driveFolders.length
+  );
+  const driveFileCount = driveFolders.reduce((acc, f) => acc + safeCount(f.fileCount, 0), 0);
+  const solutionsCount = safeCount((solutionsData as { count?: unknown }).count, solutions.length);
   const solutionsNames = solutions
     .map(s => (s.name ?? '').replace(/\s*\(.*?\)\s*/g, '').trim())
     .filter(Boolean)
