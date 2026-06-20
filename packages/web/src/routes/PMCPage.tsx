@@ -198,6 +198,15 @@ function safeTextList(values?: string[]): string[] {
   return Array.isArray(values) ? values.filter(Boolean) : [];
 }
 
+function isNumberRecord(value: unknown): value is Record<string, number> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.values(value).every(item => typeof item === 'number' && Number.isFinite(item))
+  );
+}
+
 const MARKET_BENCHMARKS = [
   {
     stat: '70%',
@@ -289,8 +298,12 @@ export function PMCPage(): React.ReactElement {
   const agentTrace = agentTraceData as AgentTracePayload;
   const recentAgentSessions = agentTrace.recent ?? [];
   const prospectContactsPayload = prospectContactsData as Partial<PmcProspectContactsPayload>;
-  const prospectContacts = prospectContactsPayload.prospects ?? [];
-  const prospectContactTotals = prospectContactsPayload.totals ?? {};
+  const prospectContacts = Array.isArray(prospectContactsPayload.prospects)
+    ? prospectContactsPayload.prospects
+    : [];
+  const prospectContactTotals = isNumberRecord(prospectContactsPayload.totals)
+    ? prospectContactsPayload.totals
+    : {};
   const [prospectSearch, setProspectSearch] = useState('');
   const [prospectBrandFilter, setProspectBrandFilter] = useState('all');
   const [prospectStateFilter, setProspectStateFilter] = useState('all');
