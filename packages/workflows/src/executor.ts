@@ -318,6 +318,17 @@ export type ExecuteWorkflowOptions = ResumePayload & {
    * is preserved on resume.
    */
   userId?: string;
+  /**
+   * Manual failed-node retry context. The shared retry operation prepares the
+   * run row, invalidation set, and prior outputs before dispatch; later DAG
+   * execution code consumes this to avoid foreground resume lookup and to
+   * scope retry-only behavior.
+   */
+  retryContext?: {
+    targetNodeId: string;
+    retryEpoch: number;
+    invalidatedNodeIds: readonly string[];
+  };
 };
 
 /**
@@ -383,8 +394,10 @@ export async function executeWorkflow(
     priorCompletedNodes,
     userId,
     source,
+    retryContext,
     baseBranch: callerBaseBranch,
   } = opts;
+  void retryContext;
   // Load config once for the entire workflow execution
   const fileConfig = await deps.loadConfig(cwd);
   const dbEnvVars = codebaseId ? await deps.store.getCodebaseEnvVars(codebaseId) : {};

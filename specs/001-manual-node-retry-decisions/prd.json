@@ -85,7 +85,7 @@
     },
     {
       "title": "Phase 2: Foundational (Blocking Prerequisites)",
-      "completed": false,
+      "completed": true,
       "tasks": [
         {
           "id": "T009",
@@ -93,7 +93,7 @@
           "description": "Create checkpoint row Zod schema in `packages/core/src/schemas/workflow-checkpoint.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 9,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -102,7 +102,7 @@
           "description": "Re-export checkpoint schema and derived type from `packages/core/src/schemas/index.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 10,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -111,7 +111,7 @@
           "description": "Add `remote_agent_workflow_node_checkpoints` to SQLite initialization in `packages/core/src/db/adapters/sqlite.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 11,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -120,7 +120,7 @@
           "description": "Add idempotent checkpoint table and indexes to PostgreSQL migration in `migrations/000_combined.sql`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 12,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -129,7 +129,7 @@
           "description": "Regenerate bundled DB schema content in `packages/core/src/db/bundled-schema.generated.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 13,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -138,7 +138,7 @@
           "description": "Implement checkpoint DB queries in `packages/core/src/db/workflow-checkpoints.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 14,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -147,7 +147,7 @@
           "description": "Export checkpoint DB module from `packages/core/src/db/index.ts` and extend `IWorkflowStore`/workflow deps with narrow checkpoint persistence methods that the core store adapter implements for pre-node DAG checkpoint writes",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 15,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -156,7 +156,7 @@
           "description": "Extend workflow event type unions with `node_retry_requested`, `node_retry_reset`, and `node_retry_failed` in `packages/workflows/src/store.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 16,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -165,7 +165,7 @@
           "description": "Extend persisted workflow event row schema validation for retry events in `packages/core/src/schemas/workflow-event.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 17,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -174,7 +174,7 @@
           "description": "Add retry event bridge support to the core workflow store adapter in `packages/core/src/workflows/store-adapter.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 18,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -183,7 +183,7 @@
           "description": "Implement pure retry DAG helpers for descendants, invalidation, and latest effective node state in `packages/workflows/src/retry-state.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 19,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -192,7 +192,7 @@
           "description": "Export retry DAG helper types/functions from `packages/workflows/src/index.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 20,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -201,7 +201,7 @@
           "description": "Add epoch-aware completed DAG output hydration entry point in `packages/core/src/db/workflow-events.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 21,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -210,7 +210,7 @@
           "description": "Add tracked-only git ref, commit, validation, and reset helpers in `packages/git/src/retry-refs.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 22,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -219,7 +219,7 @@
           "description": "Export retry git helpers from `packages/git/src/index.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 23,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -228,7 +228,7 @@
           "description": "Add retry operation request/result/error types and a strict retry audit event writer in `packages/core/src/operations/workflow-retry.ts`; T035/T055/T056 MUST call this writer instead of `IWorkflowStore.createWorkflowEvent()` for retry audit events",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 24,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -237,7 +237,7 @@
           "description": "Export retry operation from `packages/core/src/operations/index.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 25,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -246,7 +246,7 @@
           "description": "Extend `ExecuteWorkflowOptions` with retry context fields in `packages/workflows/src/executor.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 26,
-          "passes": false,
+          "passes": true,
           "notes": ""
         }
       ],

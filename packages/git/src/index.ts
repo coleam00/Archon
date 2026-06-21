@@ -51,3 +51,18 @@ export {
   syncRepository,
   addSafeDirectory,
 } from './repo';
+
+// Manual failed-node retry ref helpers
+export {
+  buildCheckpointRef,
+  buildRetrySafetyRef,
+  assertGitRepository,
+  validateGitRef,
+  verifyCommitRef,
+  hasTrackedChanges,
+  createTrackedChangesCommit,
+  upsertCheckpointRef,
+  createRetrySafetyRef,
+  resetTrackedFilesToCommit,
+} from './retry-refs';
+export type { RetryRefIdentity, CheckpointRefIdentity, RetryRefResult } from './retry-refs';

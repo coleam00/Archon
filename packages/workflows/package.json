@@ -3,6 +3,8 @@
   "version": "0.4.1",
   "type": "module",
   "exports": {
+    ".": "./src/index.ts",
+    "./retry-state": "./src/retry-state.ts",
     "./schemas/*": "./src/schemas/*.ts",
     "./executor": "./src/executor.ts",
     "./loader": "./src/loader.ts",

@@ -30,6 +30,7 @@ import {
   listWorkflowEvents,
   listRecentEvents,
   getCompletedDagNodeOutputs,
+  getEpochAwareCompletedDagNodeOutputs,
 } from './workflow-events';
 
 describe('workflow-events', () => {
@@ -318,6 +319,59 @@ describe('workflow-events', () => {
       mockQuery.mockRejectedValueOnce(new Error('connection refused'));
 
       await expect(getCompletedDagNodeOutputs('run-error')).rejects.toThrow('connection refused');
+    });
+  });
+
+  describe('getEpochAwareCompletedDagNodeOutputs', () => {
+    test('drops stale outputs for retry-invalidated nodes until they complete in the active epoch', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          {
+            ...mockEvent,
+            id: 'evt-a',
+            event_type: 'node_completed',
+            step_name: 'a',
+            data: { node_output: 'A0' },
+          },
+          {
+            ...mockEvent,
+            id: 'evt-b-old',
+            event_type: 'node_completed',
+            step_name: 'b',
+            data: { node_output: 'B0' },
+          },
+          {
+            ...mockEvent,
+            id: 'evt-retry',
+            event_type: 'node_retry_requested',
+            step_name: 'b',
+            data: { node_id: 'b', retry_epoch: 1, invalidated_node_ids: ['b', 'c'] },
+          },
+          {
+            ...mockEvent,
+            id: 'evt-b-new',
+            event_type: 'node_completed',
+            step_name: 'b',
+            data: { node_id: 'b', retry_epoch: 1, node_output: 'B1' },
+          },
+        ])
+      );
+
+      const result = await getEpochAwareCompletedDagNodeOutputs('run-retry');
+
+      expect(result).toEqual(
+        new Map([
+          ['a', 'A0'],
+          ['b', 'B1'],
+        ])
+      );
+      expect(result.has('c')).toBe(false);
+      expect(mockQuery).toHaveBeenCalledWith(
+        `SELECT * FROM remote_agent_workflow_events
+       WHERE workflow_run_id = $1
+       ORDER BY created_at ASC`,
+        ['run-retry']
+      );
     });
   });
 });

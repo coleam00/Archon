@@ -1,6 +1,7 @@
 ## Codebase Patterns
 - Package test scripts enumerate isolated `bun test` invocations; when adding a new test file, wire it into that package's `package.json` test script instead of relying on root test discovery.
 - Bundled workflow/default command content must be regenerated with `bun run generate:bundled` whenever `.archon/commands/defaults/` or `.archon/workflows/defaults/` files change.
+- Keep persisted workflow event row validation legacy-compatible; add narrow payload schemas and strict writers for new event families instead of tightening `workflowEventRowSchema.event_type` globally.
 
 ## 2026-06-21 23:19:46 +07 - Phase 1: Setup (Shared Test Scaffolding) (iter 1)
 **Tasks completed this iter:** T001 (checkpoint schema/export coverage), T002 (SQLite/PostgreSQL checkpoint convergence coverage), T003 (tracked-only checkpoint/safety git helper coverage), T004 (epoch-aware DAG retry projection coverage), T005 (retry preparation operation coverage), T006 (retry API route coverage), T007 (CLI `workflow retry-node` coverage), T008 (Web retry helper coverage)
@@ -20,4 +21,34 @@
 - `test.todo` needs an empty callback for Web package type-check compatibility.
 - Full `bun run test` can fail on bundled-default drift when default workflow files have changed; regenerate `packages/workflows/src/defaults/bundled-defaults.generated.ts` before validation.
 - Phase 1 intentionally records future behavior as TODO contracts so the repository remains green until the foundational implementation phases replace them with executable assertions.
+---
+
+## 2026-06-21 23:40:28 +07 - Phase 2: Foundational (Blocking Prerequisites) (iter 2)
+**Tasks completed this iter:** T009 (checkpoint row Zod schema), T010 (checkpoint schema export), T011 (SQLite checkpoint table), T012 (PostgreSQL checkpoint migration), T013 (bundled DB schema regeneration), T014 (checkpoint DB queries), T015 (checkpoint store/deps bridge), T016 (retry workflow event types), T017 (retry event row payload validation), T018 (core store retry-event bridge support), T019 (retry DAG helpers), T020 (retry helper exports), T021 (epoch-aware DAG output hydration), T022 (tracked-only retry git helpers), T023 (retry git helper exports), T024 (retry operation/audit primitives), T025 (retry operation export), T026 (executor retry context option)
+**Status:** completed:true (18/18 tasks)
+
+- Per-task summary lines:
+  - T009 — Added `workflowCheckpointRowSchema` and `WorkflowCheckpointRow` for persisted retry checkpoint rows in `packages/core/src/schemas/workflow-checkpoint.ts`.
+  - T010 — Re-exported the checkpoint schema/type from `packages/core/src/schemas/index.ts` and replaced the Phase 1 schema TODOs with executable assertions.
+  - T011 — Added the SQLite `remote_agent_workflow_node_checkpoints` table, primary key, retry epoch check, and lookup indexes in `packages/core/src/db/adapters/sqlite.ts`.
+  - T012 — Added the idempotent PostgreSQL checkpoint table/index DDL to `migrations/000_combined.sql`.
+  - T013 — Regenerated `packages/core/src/db/bundled-schema.generated.ts` from the combined migration.
+  - T014 — Implemented checkpoint upsert, exact/latest lookup, retry fallback lookup, list, and delete helpers in `packages/core/src/db/workflow-checkpoints.ts`.
+  - T015 — Exported the checkpoint DB module and added narrow optional checkpoint persistence methods to `IWorkflowStore`; the core store adapter implements them now.
+  - T016 — Added `node_retry_requested`, `node_retry_reset`, and `node_retry_failed` to the workflow event type union in `packages/workflows/src/store.ts`.
+  - T017 — Added strict retry audit payload schemas/types in `packages/core/src/schemas/workflow-event.ts` while leaving legacy event row validation broad.
+  - T018 — Added retry checkpoint delegation coverage through `packages/core/src/workflows/store-adapter.test.ts`; generic event creation remains intentionally non-throwing for ordinary workflow events.
+  - T019 — Implemented pure retry DAG descendant, invalidation, epoch, and latest-effective-state projection helpers in `packages/workflows/src/retry-state.ts`.
+  - T020 — Exported retry helper types/functions from `packages/workflows/src/index.ts` and the `@archon/workflows/retry-state` subpath.
+  - T021 — Added `getEpochAwareCompletedDagNodeOutputs()` in `packages/core/src/db/workflow-events.ts` with direct coverage for stale invalidated output filtering.
+  - T022 — Added tracked-only checkpoint/safety ref helpers in `packages/git/src/retry-refs.ts`, including ref validation, commit verification, tracked reset, and no `git clean` behavior.
+  - T023 — Exported retry git helper functions and types from `packages/git/src/index.ts`.
+  - T024 — Added retry request/result/error types and the strict `writeRetryAuditEvent()` DB writer in `packages/core/src/operations/workflow-retry.ts`.
+  - T025 — Exported the retry operation primitives from `packages/core/src/operations/index.ts`.
+  - T026 — Extended `ExecuteWorkflowOptions` with retry context fields in `packages/workflows/src/executor.ts` for later dispatch handoff.
+
+**Learnings for future iterations:**
+- Use package test scripts or isolated `bun test` invocations; combining mock-heavy workflow/core tests in one process can create false failures.
+- Retry audit events should use `writeRetryAuditEvent()` because the generic workflow event path intentionally logs and swallows write failures.
+- Checkpoint store methods are optional on the engine contract until DAG checkpoint writes land, but the real core adapter already implements them for pre-node checkpoint persistence.
 ---
