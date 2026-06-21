@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-06-18T02:19:12.355516Z",
+  "generated_at": "2026-06-21T14:04:25.189850Z",
   "vault_path": "second-brain/contacts",
-  "count": 42,
+  "count": 43,
   "contacts": [
     {
       "id": "team/andrea-redassich",
@@ -581,6 +581,28 @@
         "relationship/hornback"
       ],
       "vaultPath": "contacts/prospects/miranda-torres-hornback.md"
+    },
+    {
+      "id": "prospects/nathan-bryan",
+      "slug": "nathan-bryan",
+      "category": "prospects",
+      "name": "Dr. Nathan S. Bryan",
+      "role": "",
+      "company": "",
+      "email": "",
+      "linkedin": "",
+      "phone": "",
+      "status": "active",
+      "preview": "Nitric oxide researcher and product/IP entrepreneur; strategic-partner and practitioner-channel commercialization fit for PMC/BioReg.",
+      "tags": [
+        "prospect",
+        "pmc",
+        "bioreg",
+        "strategic-partner",
+        "nitric-oxide",
+        "practitioner-channel"
+      ],
+      "vaultPath": "contacts/prospects/nathan-bryan.md"
     },
     {
       "id": "prospects/jessi-trifiletti",

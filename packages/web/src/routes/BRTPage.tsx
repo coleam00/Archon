@@ -87,6 +87,10 @@ function classifyBrtIcp(contact: PmcProspectContact): string {
   return 'Other';
 }
 
+function safeNumber(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
 const prospectContacts = prospectContactsData as Partial<PmcProspectContactsPayload>;
 const safeProspectContacts = Array.isArray(prospectContacts.prospects)
   ? prospectContacts.prospects
@@ -94,7 +98,10 @@ const safeProspectContacts = Array.isArray(prospectContacts.prospects)
 const BRT_PROSPECT_CONTACTS = safeProspectContacts.filter(contact =>
   contact.brand_fit?.includes('BRT')
 );
-const BRT_ACTIVE_CONTACT_COUNT = prospectContacts.brand_counts?.BRT ?? BRT_PROSPECT_CONTACTS.length;
+const BRT_ACTIVE_CONTACT_COUNT = safeNumber(
+  prospectContacts.brand_counts?.BRT,
+  BRT_PROSPECT_CONTACTS.length
+);
 
 const computedIcpSegments = Object.entries(
   BRT_PROSPECT_CONTACTS.reduce<Record<string, number>>((acc, contact) => {
