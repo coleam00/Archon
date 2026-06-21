@@ -10,6 +10,7 @@ description: |
   NOT for: When a spec already exists (use archon-speckit-plan-to-tasks instead).
   NOT for: Spec generation only without planning (use archon-speckit-spec instead).
 provider: codex
+modelReasoningEffort: xhigh
 
 nodes:
   - id: setup
@@ -385,7 +386,9 @@ nodes:
     context: fresh
   - id: analyze
     prompt: |
-      Read .specify/feature.json to resolve <feature_directory>, then run:
+      Read .specify/feature.json to resolve <feature_directory>.
+      If there is a grill-me reference, read it and follow all decisions.
+      Then run:
       /speckit-analyzebatch <feature_directory>
     depends_on:
       - tasks

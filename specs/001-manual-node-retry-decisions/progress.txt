@@ -1,0 +1,23 @@
+## Codebase Patterns
+- Package test scripts enumerate isolated `bun test` invocations; when adding a new test file, wire it into that package's `package.json` test script instead of relying on root test discovery.
+- Bundled workflow/default command content must be regenerated with `bun run generate:bundled` whenever `.archon/commands/defaults/` or `.archon/workflows/defaults/` files change.
+
+## 2026-06-21 23:19:46 +07 - Phase 1: Setup (Shared Test Scaffolding) (iter 1)
+**Tasks completed this iter:** T001 (checkpoint schema/export coverage), T002 (SQLite/PostgreSQL checkpoint convergence coverage), T003 (tracked-only checkpoint/safety git helper coverage), T004 (epoch-aware DAG retry projection coverage), T005 (retry preparation operation coverage), T006 (retry API route coverage), T007 (CLI `workflow retry-node` coverage), T008 (Web retry helper coverage)
+**Status:** completed:true (8/8 tasks)
+
+- Per-task summary lines:
+  - T001 — Added pending workflow checkpoint schema/export contracts in `packages/core/src/schemas/index.test.ts`; wired schema tests into the core package test script.
+  - T002 — Added pending SQLite and PostgreSQL checkpoint table convergence contracts in `packages/core/src/db/adapters/sqlite.test.ts` and `packages/core/src/db/adapters/postgres.test.ts`.
+  - T003 — Added pending tracked-only checkpoint, safety ref, ref validation, and no-untracked-cleanup contracts in `packages/git/src/git.test.ts`.
+  - T004 — Added `packages/workflows/src/retry-state.test.ts` with pending epoch-aware retry projection contracts and wired it into the workflows package test script.
+  - T005 — Added `packages/core/src/operations/workflow-retry.test.ts` with pending retry preparation operation contracts and wired it into the core package test script.
+  - T006 — Added pending retry API route contracts in `packages/server/src/routes/api.workflow-runs.test.ts`.
+  - T007 — Added pending CLI `workflow retry-node` contracts in `packages/cli/src/commands/workflow.test.ts`.
+  - T008 — Added `packages/web/src/lib/workflow-retry.test.ts` with pending Web eligibility/API helper contracts.
+
+**Learnings for future iterations:**
+- `test.todo` needs an empty callback for Web package type-check compatibility.
+- Full `bun run test` can fail on bundled-default drift when default workflow files have changed; regenerate `packages/workflows/src/defaults/bundled-defaults.generated.ts` before validation.
+- Phase 1 intentionally records future behavior as TODO contracts so the repository remains green until the foundational implementation phases replace them with executable assertions.
+---

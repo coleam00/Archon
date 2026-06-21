@@ -341,6 +341,18 @@ describe('SqliteAdapter', () => {
       expect(again).toEqual([{ n: 3 }]);
     });
   });
+
+  describe('workflow node checkpoint schema convergence', () => {
+    test.todo(
+      'creates remote_agent_workflow_node_checkpoints with retry checkpoint columns',
+      () => {}
+    );
+    test.todo('creates indexes for run/node checkpoint lookup and cleanup by run', () => {});
+    test.todo(
+      'migrates existing SQLite databases idempotently when checkpoint storage is added',
+      () => {}
+    );
+  });
 });
 
 function raw_pragma(dbPath: string, table: string): string[] {

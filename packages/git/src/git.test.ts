@@ -2302,4 +2302,16 @@ branch refs/heads/feature/auth
       }
     });
   });
+
+  describe('retry checkpoint and safety ref helpers', () => {
+    test.todo('rejects retry checkpoint operations outside a git repository', () => {});
+    test.todo(
+      'detects tracked dirty changes without including untracked or ignored files',
+      () => {}
+    );
+    test.todo('creates checkpoint refs from clean and tracked-dirty worktrees', () => {});
+    test.todo('creates retry safety refs before tracked-only resets', () => {});
+    test.todo('validates retry refs with git check-ref-format before mutation', () => {});
+    test.todo('never removes untracked files while preparing retry checkout state', () => {});
+  });
 });

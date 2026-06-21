@@ -314,4 +314,14 @@ describe('core schemas', () => {
     });
     expect(result.success).toBe(true);
   });
+
+  // -----------------------------------------------------------------------
+  // workflowCheckpointRowSchema
+  // -----------------------------------------------------------------------
+  test.todo('workflowCheckpointRowSchema is exported from @archon/core/schemas', () => {});
+  test.todo('workflowCheckpointRowSchema accepts persisted retry checkpoint rows', () => {});
+  test.todo(
+    'workflowCheckpointRowSchema rejects rows missing run, node, or checkpoint refs',
+    () => {}
+  );
 });

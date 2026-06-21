@@ -543,3 +543,15 @@ describe('postgresDialect', () => {
     });
   });
 });
+
+describe('PostgreSQL workflow node checkpoint schema convergence', () => {
+  test.todo(
+    'applies remote_agent_workflow_node_checkpoints idempotently from bundled SQL',
+    () => {}
+  );
+  test.todo('matches SQLite checkpoint columns, retry epoch fields, and lookup indexes', () => {});
+  test.todo(
+    'keeps checkpoint migration safe to rerun inside the advisory-lock transaction',
+    () => {}
+  );
+});

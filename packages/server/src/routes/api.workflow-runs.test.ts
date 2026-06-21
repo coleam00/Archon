@@ -1794,3 +1794,15 @@ describe('GET /api/runs/:runId/artifacts', () => {
     expect(response.status).toBe(400);
   });
 });
+
+describe('POST /api/workflows/runs/:runId/nodes/:nodeId/retry', () => {
+  test.todo(
+    'returns success and dispatches a prepared retry run for eligible web-owned runs',
+    () => {}
+  );
+  test.todo('returns 400 for malformed retry requests and invalid node ids', () => {});
+  test.todo('returns 401 when no authenticated web requester is available', () => {});
+  test.todo('returns 403 when the requester cannot mutate the workflow run', () => {});
+  test.todo('returns 404 when the target run or failed node does not exist', () => {});
+  test.todo('returns 409 when retry preparation detects an ineligible run state', () => {});
+});
