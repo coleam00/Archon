@@ -97,6 +97,14 @@ export class SlackAdapter implements IPlatformAdapter {
       ? channelId.split(':')
       : [channelId, undefined];
 
+    // Transition the lifecycle reaction on the triggering message from 👀 → ✅.
+    // The triggering ref is keyed by conversationId (channel:ts).
+    const triggerRef = this.getTriggeringMessage(channelId);
+    if (triggerRef) {
+      void this.removeReactionSafe(triggerRef, 'eyes');
+      void this.addReactionSafe(triggerRef, 'white_check_mark');
+    }
+
     if (message.length <= MAX_MARKDOWN_BLOCK_LENGTH) {
       await this.sendWithMarkdownBlock(channel, message, threadTs);
       return;
@@ -234,6 +242,50 @@ export class SlackAdapter implements IPlatformAdapter {
       }
     }
     this.triggeringMessages.set(conversationId, ref);
+  }
+
+  /**
+   * Add a reaction to a Slack message. Failures are best-effort —
+   * a missing reaction must never break the message-processing pipeline.
+   */
+  private async addReactionSafe(ref: SlackMessageRef, emoji: string): Promise<void> {
+    try {
+      await this.app.client.reactions.add({
+        channel: ref.channel,
+        name: emoji,
+        timestamp: ref.ts,
+      });
+    } catch (err) {
+      const e = err as Error & { data?: { error?: string } };
+      const code = e.data?.error ?? 'unknown';
+      // Already reacted, or message gone — fine to ignore.
+      getLog().warn(
+        { channel: ref.channel, ts: ref.ts, emoji, error: code },
+        'slack.reaction_failed'
+      );
+    }
+  }
+
+  /**
+   * Remove a reaction from a Slack message. Best-effort: swallows errors so
+   * that reaction cleanup never fails the underlying message pipeline.
+   */
+  private async removeReactionSafe(ref: SlackMessageRef, emoji: string): Promise<void> {
+    try {
+      await this.app.client.reactions.remove({
+        channel: ref.channel,
+        name: emoji,
+        timestamp: ref.ts,
+      });
+    } catch (err) {
+      const e = err as Error & { data?: { error?: string } };
+      const code = e.data?.error ?? 'unknown';
+      // Reaction not present, message gone — fine to ignore.
+      getLog().debug(
+        { channel: ref.channel, ts: ref.ts, emoji, error: code },
+        'slack.reaction_remove_failed'
+      );
+    }
   }
 
   /**
@@ -408,10 +460,14 @@ export class SlackAdapter implements IPlatformAdapter {
           thread_ts: event.thread_ts,
           displayName,
         };
-        this.trackTrigger(this.getConversationId(messageEvent), {
+        const triggerRef: SlackMessageRef = {
           channel: event.channel,
           ts: event.ts,
-        });
+        };
+        this.trackTrigger(this.getConversationId(messageEvent), triggerRef);
+        // Add an 👀 reaction so the user knows the message was received and
+        // is being processed. Removed automatically when the reply arrives.
+        void this.addReactionSafe(triggerRef, 'eyes');
         // Fire-and-forget - errors handled by caller
         void this.messageHandler(messageEvent);
       }
@@ -450,10 +506,12 @@ export class SlackAdapter implements IPlatformAdapter {
           thread_ts: 'thread_ts' in event ? event.thread_ts : undefined,
           displayName,
         };
-        this.trackTrigger(this.getConversationId(messageEvent), {
+        const triggerRef: SlackMessageRef = {
           channel: event.channel,
           ts: event.ts,
-        });
+        };
+        this.trackTrigger(this.getConversationId(messageEvent), triggerRef);
+        void this.addReactionSafe(triggerRef, 'eyes');
         void this.messageHandler(messageEvent);
       }
     });
