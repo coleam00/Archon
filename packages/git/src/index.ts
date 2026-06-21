@@ -64,5 +64,11 @@ export {
   upsertCheckpointRef,
   createRetrySafetyRef,
   resetTrackedFilesToCommit,
+  deleteRetryRefsByRunId,
 } from './retry-refs';
-export type { RetryRefIdentity, CheckpointRefIdentity, RetryRefResult } from './retry-refs';
+export type {
+  RetryRefIdentity,
+  CheckpointRefIdentity,
+  RetryRefResult,
+  DeleteRetryRefsResult,
+} from './retry-refs';

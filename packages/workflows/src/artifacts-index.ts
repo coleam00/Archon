@@ -54,7 +54,9 @@ export async function writeNodeArtifact(
   params: Omit<NodeArtifact, 'path' | 'size'>,
   outputText: string
 ): Promise<NodeArtifact> {
-  const nodesDir = join(artifactsDir, NODES_SUBDIR);
+  const retryEpoch = params.retryEpoch ?? 0;
+  const relDir = retryEpoch > 0 ? join(NODES_SUBDIR, `epoch-${String(retryEpoch)}`) : NODES_SUBDIR;
+  const nodesDir = join(artifactsDir, relDir);
   await mkdir(nodesDir, { recursive: true });
   const safeId = safeSegment(params.nodeId);
   const metaPath = join(nodesDir, `${safeId}.meta.json`);
@@ -71,7 +73,7 @@ export async function writeNodeArtifact(
     );
   }
 
-  const relPath = join(NODES_SUBDIR, `${safeId}.md`);
+  const relPath = join(relDir, `${safeId}.md`);
   await writeFile(join(artifactsDir, relPath), outputText, 'utf8');
   const meta: NodeArtifact = {
     nodeId: params.nodeId,
@@ -80,6 +82,7 @@ export async function writeNodeArtifact(
     runId: params.runId,
     producedAt: params.producedAt,
     size: Buffer.byteLength(outputText, 'utf8'),
+    ...(retryEpoch > 0 ? { retryEpoch } : {}),
     ...(params.sessionId !== undefined ? { sessionId: params.sessionId } : {}),
   };
   await writeFile(metaPath, JSON.stringify(meta, null, 2), 'utf8');
@@ -107,20 +110,40 @@ export async function readNodeArtifacts(artifactsDir: string): Promise<NodeArtif
   }
   const out: NodeArtifact[] = [];
   for (const file of files) {
-    if (!file.endsWith('.meta.json')) continue;
     const full = join(nodesDir, file);
-    try {
-      const parsed = nodeArtifactSchema.safeParse(JSON.parse(await readFile(full, 'utf8')));
-      if (parsed.success) {
-        out.push(parsed.data);
-      } else {
-        getLog().warn({ file: full, issues: parsed.error.issues }, 'artifacts.index_entry_invalid');
+    if (file.startsWith('epoch-')) {
+      let epochFiles: string[];
+      try {
+        epochFiles = await readdir(full);
+      } catch (err) {
+        getLog().warn({ file: full, err: err as Error }, 'artifacts.epoch_dir_read_failed');
+        continue;
       }
-    } catch (err) {
-      getLog().warn({ file: full, err: err as Error }, 'artifacts.index_entry_read_failed');
+      for (const epochFile of epochFiles) {
+        if (epochFile.endsWith('.meta.json')) {
+          await readNodeArtifactMeta(join(full, epochFile), out);
+        }
+      }
+      continue;
+    }
+    if (file.endsWith('.meta.json')) {
+      await readNodeArtifactMeta(full, out);
     }
   }
   return out;
+}
+
+async function readNodeArtifactMeta(file: string, out: NodeArtifact[]): Promise<void> {
+  try {
+    const parsed = nodeArtifactSchema.safeParse(JSON.parse(await readFile(file, 'utf8')));
+    if (parsed.success) {
+      out.push(parsed.data);
+    } else {
+      getLog().warn({ file, issues: parsed.error.issues }, 'artifacts.index_entry_invalid');
+    }
+  } catch (err) {
+    getLog().warn({ file, err: err as Error }, 'artifacts.index_entry_read_failed');
+  }
 }
 
 /**

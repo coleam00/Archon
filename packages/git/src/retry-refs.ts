@@ -15,6 +15,11 @@ export interface RetryRefResult {
   createdCommit: boolean;
 }
 
+export interface DeleteRetryRefsResult {
+  deletedRefs: string[];
+  warnings: string[];
+}
+
 async function git(cwd: string, args: string[]): Promise<string> {
   const result = await execFileAsync('git', args, { cwd });
   return result.stdout.trim();
@@ -125,4 +130,32 @@ export async function resetTrackedFilesToCommit(
   const commitSha = await verifyCommitRef(repoPath, refOrSha);
   await git(repoPath, ['reset', '--hard', commitSha]);
   return commitSha;
+}
+
+export async function deleteRetryRefsByRunId(
+  repoPath: string,
+  runId: string
+): Promise<DeleteRetryRefsResult> {
+  await assertGitRepository(repoPath);
+  const prefixes = [
+    `refs/archon/checkpoints/${runId}`,
+    `refs/archon/retry-safety/${runId}`,
+  ] as const;
+  const refsOutput = await git(repoPath, ['for-each-ref', '--format=%(refname)', ...prefixes]);
+  const refs = refsOutput
+    .split('\n')
+    .map(ref => ref.trim())
+    .filter(ref => ref.length > 0);
+
+  const deletedRefs: string[] = [];
+  const warnings: string[] = [];
+  for (const ref of refs) {
+    try {
+      await git(repoPath, ['update-ref', '-d', ref]);
+      deletedRefs.push(ref);
+    } catch (err) {
+      warnings.push(`Failed to delete retry ref '${ref}': ${(err as Error).message}`);
+    }
+  }
+  return { deletedRefs, warnings };
 }

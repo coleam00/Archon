@@ -8,6 +8,9 @@
 - Pre-node DAG checkpoint tests should opt into checkpoint persistence by adding `upsertWorkflowNodeCheckpoint` to the mock store; ordinary executor tests intentionally omit it so they do not need git repositories.
 - The Web package test script recursively runs `src/components/`, so new component test files under that tree do not need package script wiring.
 - Web run mutations should invalidate `['workflowRun', runId]`, `['dashboardRuns']`, `['workflowRuns']`, and `['workflow-runs-status']` so run detail, dashboard, list, and status widgets converge.
+- Run detail UI should prefer server-derived `nodeStates` from `/api/workflows/runs/:runId`; raw event projection remains only a compatibility fallback.
+- Retry epoch artifacts keep epoch 0 at `nodes/<nodeId>.md` and write epoch 1+ artifacts under `nodes/epoch-<N>/<nodeId>.md`.
+- Retry checkpoint/safety ref cleanup during run deletion is best-effort: log warnings, preserve DB deletion/cleanup progress, and never call `git clean`.
 
 ## 2026-06-21 23:19:46 +07 - Phase 1: Setup (Shared Test Scaffolding) (iter 1)
 **Tasks completed this iter:** T001 (checkpoint schema/export coverage), T002 (SQLite/PostgreSQL checkpoint convergence coverage), T003 (tracked-only checkpoint/safety git helper coverage), T004 (epoch-aware DAG retry projection coverage), T005 (retry preparation operation coverage), T006 (retry API route coverage), T007 (CLI `workflow retry-node` coverage), T008 (Web retry helper coverage)
@@ -197,4 +200,31 @@
 - US4 has a clear split between existing helper behavior and future implementation seams: DB hydration can be asserted executable now, while server `nodeStates`, retry-epoch artifact paths, retry-event dashboard mapping, console retry setup projection, and retry-ref cleanup remain Phase 6.2 TODO contracts.
 - The contiguous `[P]` batch was safe to swarm because each task owned a disjoint test file; shared PRD/progress/commit edits stayed in the main lane.
 - Browser verification was not needed in this tests-only batch; rendered Web retry projection still needs verification when Phase 6.2 changes production UI behavior.
+---
+
+## 2026-06-22 01:47 +0700 - Phase 6.2: Implementation for User Story 4 (iter 10)
+**Tasks completed this iter:** T083 (`retry_epoch` lifecycle data), T084 (epoch-qualified node artifacts), T085 (run detail `nodeStates`), T086 (Web server-derived graph state), T087 (console retry setup projection), T088 (workflow status retry refetch mapping), T089 (dashboard retry poller mapping), T090 (delete-run retry-ref cleanup), T091 (old-run retry-ref cleanup), T092 (raw historical events preserved), T093 (retry-node prompt reference), T094 (manual retry docs), T095 (quickstart notes), T096 (focused quickstart tests), T097 (`bun run validate`)
+**Status:** completed:true (15/15 tasks)
+
+- Per-task summary lines:
+  - T083 — Added `retry_epoch` to retry execution node lifecycle event data in `packages/workflows/src/dag-executor.ts`.
+  - T084 — Wrote retry epoch 1+ node artifacts under `nodes/epoch-<N>/` while preserving epoch-0 paths in `packages/workflows/src/artifacts-index.ts` and `packages/workflows/src/dag-executor.ts`.
+  - T085 — Added server-derived `nodeStates` to run detail schema and response projection in `packages/server/src/routes/schemas/workflow.schemas.ts` and `packages/server/src/routes/api.ts`.
+  - T086 — Updated `WorkflowExecution` to prefer API-provided `nodeStates` with local raw-event projection as a fallback.
+  - T087 — Classified `node_retry_requested`, `node_retry_reset`, and `node_retry_failed` as setup/system events in the experimental console event projection.
+  - T088 — Mapped retry setup events to workflow status refetch triggers in the Web workflow bridge.
+  - T089 — Replaced dashboard retry-event TODOs with executable mapping assertions for retry status refetch behavior.
+  - T090 — Added best-effort checkpoint/safety ref cleanup when deleting an individual workflow run.
+  - T091 — Added scheduled old workflow-run cleanup with best-effort retry-ref deletion and warning-only failure handling.
+  - T092 — Kept raw workflow events unchanged while current node status derives from latest effective retry epoch state.
+  - T093 — Updated run-management prompt guidance to mention `archon workflow retry-node <run-id> <node-id>` and its non-JSON streaming behavior.
+  - T094 — Documented manual failed-node retry behavior, audit events, checkpoint reset behavior, safety refs, and untracked-file preservation in workflow docs.
+  - T095 — Added quickstart scenario notes for Web and CLI manual retry verification.
+  - T096 — Ran the focused quickstart test list across workflows, core, server, CLI, and Web packages.
+  - T097 — Ran `bun run validate`; fixed Prettier drift and a stale integration-test `@archon/paths` mock exposed by retry-ref cleanup imports.
+
+**Learnings for future iterations:**
+- Importing `@archon/git` through its barrel can trigger worktree path helper imports; isolated tests that mock `@archon/paths` must include the helper names required by the barrel.
+- Server-side run detail `nodeStates` avoids duplicating retry-epoch folding in the Web UI; keep API projection authoritative and use client event folding only for older/stale payloads.
+- Web behavior was verified through focused tests and full validation in this iteration; no browser session was run.
 ---

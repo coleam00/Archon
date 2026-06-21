@@ -15,6 +15,7 @@ import type {
   DashboardRunsResult,
 } from '../schemas/workflow-run';
 import { createLogger } from '@archon/paths';
+import { deleteRetryRefsByRunId } from '@archon/git';
 
 /** Best-effort ROLLBACK — log but swallow errors since we're already in an error path. */
 function rollback(): Promise<void> {
@@ -50,6 +51,27 @@ let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('db.workflows');
   return cachedLog;
+}
+
+async function cleanupRetryRefsForRun(run: {
+  id: string;
+  working_path: string | null;
+}): Promise<void> {
+  if (!run.working_path) return;
+  try {
+    const result = await deleteRetryRefsByRunId(run.working_path, run.id);
+    if (result.warnings.length > 0) {
+      getLog().warn(
+        { workflowRunId: run.id, workingPath: run.working_path, warnings: result.warnings },
+        'db.workflow_retry_ref_cleanup_partial'
+      );
+    }
+  } catch (err) {
+    getLog().warn(
+      { err: err as Error, workflowRunId: run.id, workingPath: run.working_path },
+      'db.workflow_retry_ref_cleanup_failed'
+    );
+  }
 }
 
 /**
@@ -1126,6 +1148,16 @@ export async function deleteOldWorkflowRuns(olderThanDays: number): Promise<{ co
       ? `NOW() - INTERVAL '${String(olderThanDays)} days'`
       : `datetime('now', '-${String(olderThanDays)} days')`;
   try {
+    const eligibleRuns = await pool.query<{ id: string; working_path: string | null }>(
+      `SELECT id, working_path FROM remote_agent_workflow_runs
+       WHERE status IN ('completed', 'failed', 'cancelled')
+         AND started_at < ${cutoff}`,
+      []
+    );
+    for (const run of eligibleRuns.rows) {
+      await cleanupRetryRefsForRun(run);
+    }
+
     await pool.query('BEGIN', []);
     // Delete events first (FK reference)
     await pool.query(
@@ -1160,8 +1192,8 @@ export async function deleteWorkflowRun(id: string): Promise<void> {
   try {
     await pool.query('BEGIN', []);
     // Guard: verify run exists and is terminal before deleting
-    const check = await pool.query<{ status: string }>(
-      'SELECT status FROM remote_agent_workflow_runs WHERE id = $1',
+    const check = await pool.query<{ status: string; working_path: string | null }>(
+      'SELECT status, working_path FROM remote_agent_workflow_runs WHERE id = $1',
       [id]
     );
     if (check.rows.length === 0) {
@@ -1172,6 +1204,7 @@ export async function deleteWorkflowRun(id: string): Promise<void> {
         `Cannot delete workflow run in '${check.rows[0].status}' status — cancel it first`
       );
     }
+    await cleanupRetryRefsForRun({ id, working_path: check.rows[0].working_path });
     await pool.query('DELETE FROM remote_agent_workflow_events WHERE workflow_run_id = $1', [id]);
     await pool.query('DELETE FROM remote_agent_workflow_runs WHERE id = $1', [id]);
     await pool.query('COMMIT', []);

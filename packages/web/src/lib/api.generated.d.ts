@@ -3814,6 +3814,17 @@ export interface components {
         conversation_platform_id: string | null;
       };
       events: components['schemas']['WorkflowEvent'][];
+      nodeStates: components['schemas']['WorkflowNodeState'][];
+    };
+    WorkflowNodeState: {
+      nodeId: string;
+      name: string;
+      /** @enum {string} */
+      status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+      retryEpoch: number;
+      duration?: number;
+      error?: string;
+      reason?: string;
     };
     WorkflowEvent: {
       id: string;

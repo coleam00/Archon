@@ -79,6 +79,7 @@ import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discover
 import { parseWorkflow } from '@archon/workflows/loader';
 import { resolveWorkflowName } from '@archon/workflows/router';
 import { isValidCommandName } from '@archon/workflows/command-validation';
+import { projectLatestEffectiveNodeStates } from '@archon/workflows/retry-state';
 import { BUNDLED_WORKFLOWS, BUNDLED_COMMANDS, isBinaryBuild } from '@archon/workflows/defaults';
 import {
   RESUMABLE_WORKFLOW_STATUSES,
@@ -88,6 +89,7 @@ import type { ApprovalContext, WorkflowRun } from '@archon/workflows/schemas/wor
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
 import type { MessageRow } from '@archon/core/schemas/message';
 import type { DashboardWorkflowRun } from '@archon/core/schemas/workflow-run';
+import type { WorkflowEventRow } from '@archon/core/schemas/workflow-event';
 import { findMarkdownFilesRecursive } from '@archon/core/utils/commands';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -95,6 +97,53 @@ let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('api');
   return cachedLog;
+}
+
+interface ApiWorkflowNodeState {
+  nodeId: string;
+  name: string;
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+  retryEpoch: number;
+  duration?: number;
+  error?: string;
+  reason?: string;
+}
+
+function projectApiWorkflowNodeStates(events: readonly WorkflowEventRow[]): ApiWorkflowNodeState[] {
+  const projected = projectLatestEffectiveNodeStates(events);
+  const latestLifecycleData = new Map<string, Record<string, unknown>>();
+  for (const event of events) {
+    const nodeId =
+      typeof event.data.node_id === 'string'
+        ? event.data.node_id
+        : typeof event.step_name === 'string'
+          ? event.step_name
+          : undefined;
+    if (!nodeId) continue;
+    if (
+      event.event_type === 'node_started' ||
+      event.event_type === 'node_completed' ||
+      event.event_type === 'node_failed' ||
+      event.event_type === 'node_skipped' ||
+      event.event_type === 'node_skipped_prior_success'
+    ) {
+      latestLifecycleData.set(nodeId, event.data);
+    }
+  }
+
+  return [...projected.values()].map(state => {
+    const data = latestLifecycleData.get(state.node_id) ?? {};
+    const duration = data.duration_ms;
+    return {
+      nodeId: state.node_id,
+      name: state.node_id,
+      status: state.state,
+      retryEpoch: state.retry_epoch,
+      ...(typeof duration === 'number' ? { duration } : {}),
+      ...(state.error ? { error: state.error } : {}),
+      ...(state.reason ? { reason: state.reason } : {}),
+    };
+  });
 }
 import * as conversationDb from '@archon/core/db/conversations';
 import * as codebaseDb from '@archon/core/db/codebases';
@@ -3792,6 +3841,7 @@ export function registerApiRoutes(
           conversation_platform_id: conversationPlatformId ?? null,
         },
         events,
+        nodeStates: projectApiWorkflowNodeStates(events),
       });
     } catch (error) {
       getLog().error({ err: error }, 'get_workflow_run_failed');

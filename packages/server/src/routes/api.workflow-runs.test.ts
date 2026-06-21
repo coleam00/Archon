@@ -781,6 +781,7 @@ describe('GET /api/workflows/runs/:runId', () => {
     const body = (await response.json()) as {
       run: { id: string; workflow_name: string };
       events: Array<{ event_type: string }>;
+      nodeStates: Array<{ nodeId: string; status: string }>;
     };
     expect(body.run.id).toBe('run-uuid-1');
     expect(body.run.workflow_name).toBe('deploy');
@@ -788,22 +789,163 @@ describe('GET /api/workflows/runs/:runId', () => {
     expect(body.events.length).toBe(3);
     expect(body.events[0]?.event_type).toBe('step_started');
     expect(body.events[2]?.event_type).toBe('tool_called');
+    expect(body.nodeStates).toEqual([]);
   });
 
-  test.todo(
-    'projects later retry epoch completion as authoritative in nodeStates while preserving raw events',
-    () => {}
-  );
+  test('projects later retry epoch completion as authoritative in nodeStates while preserving raw events', async () => {
+    const events: MockWorkflowEvent[] = [
+      {
+        id: 'evt-b-old',
+        workflow_run_id: 'run-uuid-1',
+        event_type: 'node_failed',
+        step_index: null,
+        step_name: 'build',
+        data: { error: 'old failure' },
+        created_at: NOW,
+      },
+      {
+        id: 'evt-retry',
+        workflow_run_id: 'run-uuid-1',
+        event_type: 'node_retry_requested',
+        step_index: null,
+        step_name: 'build',
+        data: { node_id: 'build', retry_epoch: 1, invalidated_node_ids: ['build'] },
+        created_at: NOW,
+      },
+      {
+        id: 'evt-b-new',
+        workflow_run_id: 'run-uuid-1',
+        event_type: 'node_completed',
+        step_index: null,
+        step_name: 'build',
+        data: { node_id: 'build', retry_epoch: 1, duration_ms: 25, node_output: 'ok' },
+        created_at: NOW,
+      },
+    ];
+    mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_RUNNING_RUN);
+    mockListWorkflowEvents.mockImplementationOnce(async () => events);
+    mockGetConversationById.mockImplementationOnce(async () => ({
+      id: 'conv-uuid-1',
+      platform_conversation_id: 'web-conv-abc',
+    }));
 
-  test.todo(
-    'projects invalidated retry epoch nodes as pending before new lifecycle events arrive',
-    () => {}
-  );
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-1');
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      events: MockWorkflowEvent[];
+      nodeStates: Array<{ nodeId: string; status: string; retryEpoch: number; duration?: number }>;
+    };
 
-  test.todo(
-    'keeps older failed and skipped retry history visible when nodeStates uses the active retry epoch',
-    () => {}
-  );
+    expect(body.events).toHaveLength(3);
+    expect(body.events[0]?.event_type).toBe('node_failed');
+    expect(body.nodeStates).toEqual([
+      { nodeId: 'build', name: 'build', status: 'completed', retryEpoch: 1, duration: 25 },
+    ]);
+  });
+
+  test('projects invalidated retry epoch nodes as pending before new lifecycle events arrive', async () => {
+    mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_RUNNING_RUN);
+    mockListWorkflowEvents.mockImplementationOnce(async () => [
+      {
+        id: 'evt-old',
+        workflow_run_id: 'run-uuid-1',
+        event_type: 'node_completed',
+        step_index: null,
+        step_name: 'test',
+        data: { node_output: 'old' },
+        created_at: NOW,
+      },
+      {
+        id: 'evt-retry',
+        workflow_run_id: 'run-uuid-1',
+        event_type: 'node_retry_requested',
+        step_index: null,
+        step_name: 'build',
+        data: { node_id: 'build', retry_epoch: 2, invalidated_node_ids: ['build', 'test'] },
+        created_at: NOW,
+      },
+    ]);
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-1');
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      nodeStates: Array<{ nodeId: string; status: string; retryEpoch: number }>;
+    };
+
+    expect(body.nodeStates).toEqual([
+      { nodeId: 'test', name: 'test', status: 'pending', retryEpoch: 2 },
+      { nodeId: 'build', name: 'build', status: 'pending', retryEpoch: 2 },
+    ]);
+  });
+
+  test('keeps older failed and skipped retry history visible when nodeStates uses the active retry epoch', async () => {
+    mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_RUNNING_RUN);
+    mockListWorkflowEvents.mockImplementationOnce(async () => [
+      {
+        id: 'evt-old-fail',
+        workflow_run_id: 'run-uuid-1',
+        event_type: 'node_failed',
+        step_index: null,
+        step_name: 'build',
+        data: { error: 'old failure' },
+        created_at: NOW,
+      },
+      {
+        id: 'evt-old-skip',
+        workflow_run_id: 'run-uuid-1',
+        event_type: 'node_skipped',
+        step_index: null,
+        step_name: 'deploy',
+        data: { reason: 'trigger_rule' },
+        created_at: NOW,
+      },
+      {
+        id: 'evt-retry',
+        workflow_run_id: 'run-uuid-1',
+        event_type: 'node_retry_requested',
+        step_index: null,
+        step_name: 'build',
+        data: { node_id: 'build', retry_epoch: 1, invalidated_node_ids: ['build'] },
+        created_at: NOW,
+      },
+      {
+        id: 'evt-new-start',
+        workflow_run_id: 'run-uuid-1',
+        event_type: 'node_started',
+        step_index: null,
+        step_name: 'build',
+        data: { retry_epoch: 1 },
+        created_at: NOW,
+      },
+    ]);
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-1');
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      events: MockWorkflowEvent[];
+      nodeStates: Array<{ nodeId: string; status: string; retryEpoch: number }>;
+    };
+
+    expect(body.events.map(event => event.event_type)).toEqual([
+      'node_failed',
+      'node_skipped',
+      'node_retry_requested',
+      'node_started',
+    ]);
+    expect(body.nodeStates).toEqual([
+      { nodeId: 'build', name: 'build', status: 'running', retryEpoch: 1 },
+      {
+        nodeId: 'deploy',
+        name: 'deploy',
+        status: 'skipped',
+        retryEpoch: 0,
+        reason: 'trigger_rule',
+      },
+    ]);
+  });
 
   test('returns 404 when run not found', async () => {
     mockGetWorkflowRun.mockImplementationOnce(async () => null);

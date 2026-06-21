@@ -15,6 +15,8 @@ export const nodeArtifactSchema = z.object({
   /** Path to the output file, relative to the artifacts dir (e.g. `nodes/plan.md`). */
   path: z.string(),
   runId: z.string(),
+  /** Retry epoch that produced this artifact. Omitted for legacy epoch-0 artifacts. */
+  retryEpoch: z.number().int().nonnegative().optional(),
   // ISO-8601 timestamp of when the artifact was written. Enforced as a valid
   // datetime so the lexicographic ordering in `latestNodeArtifactOfType` stays
   // correct — a corrupt/non-ISO value is rejected on read (skipped + warned)

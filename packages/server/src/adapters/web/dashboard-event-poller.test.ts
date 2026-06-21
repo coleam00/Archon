@@ -124,11 +124,24 @@ describe('mapWorkflowEventRow', () => {
     expect(e).toMatchObject({ type: 'workflow_status', status: 'running' });
   });
 
-  test.todo('node_retry_requested → workflow_status running', () => {});
+  test('node_retry_requested → workflow_status running', () => {
+    const e = JSON.parse(
+      mapWorkflowEventRow(row({ event_type: 'node_retry_requested' })) as string
+    );
+    expect(e).toMatchObject({ type: 'workflow_status', status: 'running', runId: 'r1' });
+  });
 
-  test.todo('node_retry_reset → workflow_status running', () => {});
+  test('node_retry_reset → workflow_status running', () => {
+    const e = JSON.parse(mapWorkflowEventRow(row({ event_type: 'node_retry_reset' })) as string);
+    expect(e).toMatchObject({ type: 'workflow_status', status: 'running', runId: 'r1' });
+  });
 
-  test.todo('node_retry_failed → workflow_status failed', () => {});
+  test('node_retry_failed → workflow_status failed', () => {
+    const e = JSON.parse(
+      mapWorkflowEventRow(row({ event_type: 'node_retry_failed', data: { error: 'reset failed' } }))
+    ) as string;
+    expect(e).toMatchObject({ type: 'workflow_status', status: 'failed', runId: 'r1' });
+  });
 
   test('high-frequency / internal events are skipped (null)', () => {
     expect(mapWorkflowEventRow(row({ event_type: 'tool_called' }))).toBeNull();

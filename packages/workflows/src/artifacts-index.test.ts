@@ -45,12 +45,48 @@ describe('artifacts-index', () => {
     expect(onDisk.outputType).toBe('plan');
   });
 
-  test.todo('writeNodeArtifact keeps retry epoch 0 node artifact paths unchanged', () => {});
+  test('writeNodeArtifact keeps retry epoch 0 node artifact paths unchanged', async () => {
+    const meta = await writeNodeArtifact(
+      dir,
+      {
+        nodeId: 'planner',
+        outputType: 'plan',
+        runId: 'run-1',
+        producedAt: '2026-06-03T00:00:00.000Z',
+        retryEpoch: 0,
+      },
+      'epoch zero'
+    );
 
-  test.todo(
-    'writeNodeArtifact writes retry epoch 1+ artifacts under epoch-qualified node paths',
-    () => {}
-  );
+    expect(meta.path).toBe(join('nodes', 'planner.md'));
+    expect('retryEpoch' in meta).toBe(false);
+    expect(await readFile(join(dir, 'nodes', 'planner.md'), 'utf8')).toBe('epoch zero');
+  });
+
+  test('writeNodeArtifact writes retry epoch 1+ artifacts under epoch-qualified node paths', async () => {
+    const meta = await writeNodeArtifact(
+      dir,
+      {
+        nodeId: 'planner',
+        outputType: 'plan',
+        runId: 'run-1',
+        producedAt: '2026-06-03T00:00:00.000Z',
+        retryEpoch: 1,
+      },
+      'retry output'
+    );
+
+    expect(meta).toMatchObject({
+      path: join('nodes', 'epoch-1', 'planner.md'),
+      retryEpoch: 1,
+    });
+    expect(await readFile(join(dir, 'nodes', 'epoch-1', 'planner.md'), 'utf8')).toBe(
+      'retry output'
+    );
+    expect((await readNodeArtifacts(dir)).map(entry => entry.path)).toEqual([
+      join('nodes', 'epoch-1', 'planner.md'),
+    ]);
+  });
 
   test('writeNodeArtifact omits sessionId when not provided', async () => {
     const meta = await writeNodeArtifact(

@@ -124,6 +124,18 @@ export const workflowEventSchema = workflowEventRowSchema
   })
   .openapi('WorkflowEvent');
 
+export const workflowNodeStateSchema = z
+  .object({
+    nodeId: z.string(),
+    name: z.string(),
+    status: z.enum(['pending', 'running', 'completed', 'failed', 'skipped']),
+    retryEpoch: z.number().int().nonnegative(),
+    duration: z.number().optional(),
+    error: z.string().optional(),
+    reason: z.string().optional(),
+  })
+  .openapi('WorkflowNodeState');
+
 /** GET /api/workflows/runs/:runId response. */
 export const workflowRunDetailSchema = z
   .object({
@@ -133,6 +145,7 @@ export const workflowRunDetailSchema = z
       conversation_platform_id: z.string().nullable(),
     }),
     events: z.array(workflowEventSchema),
+    nodeStates: z.array(workflowNodeStateSchema),
   })
   .openapi('WorkflowRunDetail');
 

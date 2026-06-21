@@ -44,6 +44,16 @@ bun test packages/web/src/lib/ packages/web/src/components/
 
 ## 4. Required Scenarios
 
+Use these notes as the expected behavior across every scenario below:
+
+- Manual retry targets one latest-effective `failed` DAG node on a `failed` run. It reuses the same run id, invalidates the target plus current-DAG descendants, preserves valid upstream and independent sibling outputs, and clears persisted node sessions for invalidated nodes.
+- Web path: retry only web-created, web-dispatchable runs. The failed-node action requires confirmation that tracked files may reset to a checkpoint, dirty tracked changes are saved to a retry safety ref first, untracked/ignored files are preserved, and the selected node plus downstream dependents rerun. Success must refetch run/dashboard state; errors leave the run `failed`.
+- CLI path: `archon workflow retry-node <run-id> <node-id>` streams execution like resume, rejects `--json` in v1, and verifies the recorded working path still identifies the expected repo or Archon-managed worktree before any git mutation.
+- Retry epochs: each accepted retry increments `workflow_runs.metadata.retry_epoch` exactly once. Epoch `0` artifacts keep existing paths; epoch `1+` node artifacts/logs use epoch-qualified paths such as `nodes/epoch-<N>/<nodeId>.*`.
+- Audit history: never delete old events, logs, or artifacts during retry. Write `node_retry_requested` after validation/CAS, `node_retry_reset` after reset setup succeeds or an allowed reset skip, and `node_retry_failed` when setup fails after acceptance. Latest epoch state drives current projection and output hydration.
+- Git reset safety: checkpoint and safety refs are local-only under `refs/archon/checkpoints/<runId>/<retryEpoch>/<nodeId>` and `refs/archon/retry-safety/<runId>/<retryEpoch>`. Validate refs/commits before reset, commit tracked dirty changes only when required, and restore the run to `failed` without dispatch on setup/reset failure.
+- Untracked preservation: manual retry must never run `git clean` or equivalent cleanup. Untracked and ignored files remain untouched during checkpointing, safety commits, and retry reset.
+
 ### Linear Retry
 
 Fixture DAG: `A -> B -> C`

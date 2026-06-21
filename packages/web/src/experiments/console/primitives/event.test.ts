@@ -230,11 +230,58 @@ describe('toRunEvent — error & workflow lifecycle', () => {
 });
 
 describe('toRunEvent — retry setup projection', () => {
-  test.todo('node_retry_requested projects as a system event for retry setup history', () => {});
+  test('node_retry_requested projects as a system event for retry setup history', () => {
+    const e = toRunEvent(
+      raw({
+        event_type: 'node_retry_requested',
+        step_name: 'build',
+        data: { node_id: 'build', retry_epoch: 1, invalidated_node_ids: ['build'] },
+      })
+    );
 
-  test.todo('node_retry_reset projects as a system event with reset checkpoint detail', () => {});
+    expect(e).toMatchObject({
+      kind: 'system',
+      label: 'Node retry requested',
+      detail: 'node=build epoch=1',
+    });
+  });
 
-  test.todo('node_retry_failed projects as a system event with setup failure detail', () => {});
+  test('node_retry_reset projects as a system event with reset checkpoint detail', () => {
+    const e = toRunEvent(
+      raw({
+        event_type: 'node_retry_reset',
+        step_name: 'build',
+        data: {
+          node_id: 'build',
+          retry_epoch: 1,
+          checkpoint_ref: 'refs/archon/checkpoints/run-uuid/0/build',
+          reset_skipped: false,
+        },
+      })
+    );
+
+    expect(e).toMatchObject({
+      kind: 'system',
+      label: 'Node retry reset prepared',
+      detail: 'refs/archon/checkpoints/run-uuid/0/build',
+    });
+  });
+
+  test('node_retry_failed projects as a system event with setup failure detail', () => {
+    const e = toRunEvent(
+      raw({
+        event_type: 'node_retry_failed',
+        step_name: 'build',
+        data: { node_id: 'build', retry_epoch: 1, setup_phase: 'reset', error: 'reset failed' },
+      })
+    );
+
+    expect(e).toMatchObject({
+      kind: 'system',
+      label: 'Node retry failed',
+      detail: 'reset failed',
+    });
+  });
 });
 
 describe('toRunEvent — fallback', () => {

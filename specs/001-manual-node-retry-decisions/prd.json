@@ -854,7 +854,7 @@
     },
     {
       "title": "Phase 6.2: Implementation for User Story 4",
-      "completed": false,
+      "completed": true,
       "tasks": [
         {
           "id": "T083",
@@ -862,7 +862,7 @@
           "description": "[US4] Include `retry_epoch` in node lifecycle event data during retry execution in `packages/workflows/src/dag-executor.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 83,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -871,7 +871,7 @@
           "description": "[US4] Write epoch `1+` node artifacts under `nodes/epoch-<N>/<nodeId>.*` in `packages/workflows/src/dag-executor.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 84,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -880,7 +880,7 @@
           "description": "[US4] Add server-derived `nodeStates` to run detail responses in `packages/server/src/routes/api.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 85,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -889,7 +889,7 @@
           "description": "[US4] Update Web run graph/detail rendering to prefer server-derived `nodeStates` in `packages/web/src/components/workflows/WorkflowExecution.tsx`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 86,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -898,7 +898,7 @@
           "description": "[US4] Update experimental console event projection for `node_retry_*` setup events in `packages/web/src/experiments/console/primitives/event.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 87,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -907,7 +907,7 @@
           "description": "[US4] Map retry events to existing `workflow_status` refetch triggers in `packages/server/src/adapters/web/workflow-bridge.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 88,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -916,7 +916,7 @@
           "description": "[US4] Include retry events in dashboard poller whitelist/refetch mapping in `packages/server/src/adapters/web/dashboard-event-poller.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 89,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -925,7 +925,7 @@
           "description": "[US4] Add checkpoint/safety ref cleanup by run prefix during run deletion in `packages/core/src/db/workflows.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 90,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -934,7 +934,7 @@
           "description": "[US4] Add checkpoint/safety ref cleanup by run prefix during old-run cleanup in `packages/core/src/services/cleanup-service.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 91,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -943,7 +943,7 @@
           "description": "[US4] Keep raw historical events unchanged while using latest epoch for current status in `packages/core/src/db/workflow-events.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 92,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -952,7 +952,7 @@
           "description": "[P] Update CLI help/reference text for retry-node in `packages/core/src/orchestrator/prompt-builder.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 93,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -961,7 +961,7 @@
           "description": "[P] Update workflow docs for manual retry behavior in `packages/docs-web/src/content/docs/book/dag-workflows.md`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 94,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -970,7 +970,7 @@
           "description": "[P] Add quickstart scenario notes to `specs/001-manual-node-retry-decisions/quickstart.md`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 95,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -979,7 +979,7 @@
           "description": "Run focused package tests listed in `specs/001-manual-node-retry-decisions/quickstart.md`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 96,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -988,7 +988,7 @@
           "description": "Run `bun run validate` using root `package.json` and fix failures in touched package files",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 97,
-          "passes": false,
+          "passes": true,
           "notes": ""
         }
       ],
