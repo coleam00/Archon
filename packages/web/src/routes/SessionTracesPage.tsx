@@ -297,7 +297,7 @@ function SessionRow({
 
 export function SessionTracesPage(): React.ReactElement {
   const data = tracesData as Partial<TracesPayload>;
-  const sessions = data.sessions ?? [];
+  const sessions = Array.isArray(data.sessions) ? data.sessions : [];
   const [query, setQuery] = useState<string>('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
