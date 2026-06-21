@@ -645,7 +645,7 @@
     },
     {
       "title": "Phase 5.2: Implementation for User Story 3",
-      "completed": false,
+      "completed": true,
       "tasks": [
         {
           "id": "T063",
@@ -653,7 +653,7 @@
           "description": "[US3] Add retry request/response OpenAPI schemas in `packages/server/src/routes/schemas/workflow.schemas.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 63,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -662,7 +662,7 @@
           "description": "[US3] Register `POST /api/workflows/runs/{runId}/nodes/{nodeId}/retry` with `registerOpenApiRoute(createRoute(...), handler)` in `packages/server/src/routes/api.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 64,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -671,7 +671,7 @@
           "description": "[US3] Resolve Web auth requester and run owner/admin authorization before mutation in `packages/server/src/routes/api.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 65,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -680,7 +680,7 @@
           "description": "[US3] Reject Web retry for CLI-created or non-web parent conversations with actionable CLI text in `packages/server/src/routes/api.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 66,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -689,7 +689,7 @@
           "description": "[US3] Dispatch retry-specific Web execution using the prepared run instead of `/workflow run` resume lookup in `packages/server/src/routes/api.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 67,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -698,7 +698,7 @@
           "description": "[US3] Add `workflow retry-node <run-id> <node-id>` parser/help branch in `packages/cli/src/cli.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 68,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -707,7 +707,7 @@
           "description": "[US3] Implement CLI retry-node command, streamed execution, and human output in `packages/cli/src/commands/workflow.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 69,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -716,7 +716,7 @@
           "description": "[US3] Verify CLI working path identity against codebase/worktree contracts before mutation in `packages/cli/src/commands/workflow.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 70,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -725,7 +725,7 @@
           "description": "[US3] Add `retryWorkflowNode(runId, nodeId)` API wrapper in `packages/web/src/lib/api.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 71,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -734,7 +734,7 @@
           "description": "[US3] Regenerate frontend OpenAPI declarations in `packages/web/src/lib/api.generated.d.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 72,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -743,7 +743,7 @@
           "description": "[US3] Add pure Web retry eligibility helpers in `packages/web/src/lib/workflow-retry.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 73,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -752,7 +752,7 @@
           "description": "[US3] Render retry action for eligible failed nodes in `packages/web/src/components/workflows/WorkflowExecution.tsx`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 74,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -761,7 +761,7 @@
           "description": "[US3] Add confirmation dialog copy covering tracked reset, safety ref/commit, untracked preservation, and rerun scope in `packages/web/src/components/workflows/WorkflowNodeRetryAction.tsx`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 75,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -770,7 +770,7 @@
           "description": "[US3] Invalidate/refetch run and dashboard queries after successful retry in `packages/web/src/components/workflows/WorkflowNodeRetryAction.tsx`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 76,
-          "passes": false,
+          "passes": true,
           "notes": ""
         }
       ],

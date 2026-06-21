@@ -7,6 +7,7 @@
 - Retry-ref helper tests should use real temporary git repositories with local `user.name`/`user.email`; assert tracked-only behavior with untracked and ignored files left in the worktree.
 - Pre-node DAG checkpoint tests should opt into checkpoint persistence by adding `upsertWorkflowNodeCheckpoint` to the mock store; ordinary executor tests intentionally omit it so they do not need git repositories.
 - The Web package test script recursively runs `src/components/`, so new component test files under that tree do not need package script wiring.
+- Web run mutations should invalidate `['workflowRun', runId]`, `['dashboardRuns']`, `['workflowRuns']`, and `['workflow-runs-status']` so run detail, dashboard, list, and status widgets converge.
 
 ## 2026-06-21 23:19:46 +07 - Phase 1: Setup (Shared Test Scaffolding) (iter 1)
 **Tasks completed this iter:** T001 (checkpoint schema/export coverage), T002 (SQLite/PostgreSQL checkpoint convergence coverage), T003 (tracked-only checkpoint/safety git helper coverage), T004 (epoch-aware DAG retry projection coverage), T005 (retry preparation operation coverage), T006 (retry API route coverage), T007 (CLI `workflow retry-node` coverage), T008 (Web retry helper coverage)
@@ -152,4 +153,30 @@
 - T058 and T059 both edit `packages/server/src/routes/api.workflow-runs.test.ts`, so the `[P]` run-group was intentionally handled serially.
 - Phase 5.1 remains a tests-first contract batch; the route, CLI command, Web helper, and component implementation seams land in Phase 5.2.
 - No browser verification was needed because this iteration added test contracts only and did not change rendered UI behavior.
+---
+
+## 2026-06-22 01:10 +0700 - Phase 5.2: Implementation for User Story 3 (iter 8)
+**Tasks completed this iter:** T063 (retry OpenAPI schemas), T064 (retry API route), T065 (Web retry authorization), T066 (CLI/non-web retry rejection), T067 (prepared Web retry dispatch), T068 (CLI parser/help), T069 (CLI retry-node execution), T070 (CLI path verification), T071 (Web API wrapper), T072 (generated OpenAPI types), T073 (Web retry helpers), T074 (retry action rendering), T075 (confirmation copy), T076 (query invalidation)
+**Status:** completed:true (14/14 tasks)
+
+- Per-task summary lines:
+  - T063 - Added retry-node route params and response schemas in `packages/server/src/routes/schemas/workflow.schemas.ts`.
+  - T064 - Registered `POST /api/workflows/runs/{runId}/nodes/{nodeId}/retry` through `registerOpenApiRoute()` in `packages/server/src/routes/api.ts`.
+  - T065 - Added Web retry authorization for run owners, admins, and solo/local unowned runs before retry mutation.
+  - T066 - Rejected CLI-created and non-web parent runs from the Web route with `archon workflow retry-node <run-id> <node-id>` guidance.
+  - T067 - Dispatched Web retries with `prepareWorkflowNodeRetry()` output, pre-created run state, filtered preserved outputs, and retry context passed to `executeWorkflow()`.
+  - T068 - Added CLI help/parser handling for `workflow retry-node <run-id> <node-id>` in `packages/cli/src/cli.ts`.
+  - T069 - Implemented streamed CLI retry-node execution and human retry scope/safety output in `packages/cli/src/commands/workflow.ts`.
+  - T070 - Verified CLI retry cwd by realpath against the registered codebase root or active isolation worktree before mutating the failed run.
+  - T071 - Added `retryWorkflowNode(runId, nodeId)` and response typing in `packages/web/src/lib/api.ts`.
+  - T072 - Regenerated `packages/web/src/lib/api.generated.d.ts` from the updated OpenAPI spec.
+  - T073 - Added pure retry eligibility, CLI command, path, and error-normalization helpers in `packages/web/src/lib/workflow-retry.ts`.
+  - T074 - Rendered retry action state for the selected failed execution node in `packages/web/src/components/workflows/WorkflowExecution.tsx`.
+  - T075 - Added `WorkflowNodeRetryAction` confirmation copy covering tracked reset, safety ref/commit, untracked preservation, and rerun scope.
+  - T076 - Invalidated/refetched run detail, dashboard, run list, and status query keys after successful Web retry dispatch.
+
+**Learnings for future iterations:**
+- Web and CLI retry dispatch both need to call `prepareWorkflowNodeRetry()` before `executeWorkflow()`; the retry-specific run state is not the same as ordinary resume.
+- Browser verification is still needed for the Web confirmation/action flow because this iteration validated via type-check, lint, generated API types, and tests but did not run a browser session.
+- Full `bun run validate` passes after formatting ignored `.omx/state` JSON files; those files remain ignored and should not be committed.
 ---

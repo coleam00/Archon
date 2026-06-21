@@ -151,6 +151,27 @@ export const workflowRunActionResponseSchema = z
   .object({ success: z.boolean(), message: z.string() })
   .openapi('WorkflowRunActionResponse');
 
+/** POST /api/workflows/runs/:runId/nodes/:nodeId/retry path params. */
+export const retryWorkflowNodeParamsSchema = z
+  .object({
+    runId: z.string().min(1),
+    nodeId: z.string().min(1),
+  })
+  .openapi('RetryWorkflowNodeParams');
+
+/** POST /api/workflows/runs/:runId/nodes/:nodeId/retry response. */
+export const retryWorkflowNodeResponseSchema = z
+  .object({
+    success: z.boolean(),
+    message: z.string(),
+    runId: z.string(),
+    nodeId: z.string(),
+    retryEpoch: z.number().int().nonnegative(),
+    invalidatedNodes: z.array(z.string()),
+    safetyCommitSha: z.string().optional(),
+  })
+  .openapi('RetryWorkflowNodeResponse');
+
 /** POST /api/workflows/runs/:runId/approve request body. */
 export const approveWorkflowRunBodySchema = z
   .object({ comment: z.string().optional() })

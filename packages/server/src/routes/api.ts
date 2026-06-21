@@ -77,6 +77,7 @@ import {
 } from '@archon/paths';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { parseWorkflow } from '@archon/workflows/loader';
+import { resolveWorkflowName } from '@archon/workflows/router';
 import { isValidCommandName } from '@archon/workflows/command-validation';
 import { BUNDLED_WORKFLOWS, BUNDLED_COMMANDS, isBinaryBuild } from '@archon/workflows/defaults';
 import {
@@ -84,6 +85,7 @@ import {
   TERMINAL_WORKFLOW_STATUSES,
 } from '@archon/workflows/schemas/workflow-run';
 import type { ApprovalContext, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
 import type { MessageRow } from '@archon/core/schemas/message';
 import type { DashboardWorkflowRun } from '@archon/core/schemas/workflow-run';
 import { findMarkdownFilesRecursive } from '@archon/core/utils/commands';
@@ -119,6 +121,8 @@ import {
   workflowRunByWorkerResponseSchema,
   cancelWorkflowRunResponseSchema,
   workflowRunActionResponseSchema,
+  retryWorkflowNodeParamsSchema,
+  retryWorkflowNodeResponseSchema,
   dashboardRunsResponseSchema,
   dashboardRunsQuerySchema,
   workflowRunsQuerySchema,
@@ -757,6 +761,26 @@ const resumeWorkflowRunRoute = createRoute({
   },
 });
 
+const retryWorkflowNodeRoute = createRoute({
+  method: 'post',
+  path: '/api/workflows/runs/{runId}/nodes/{nodeId}/retry',
+  tags: ['Workflows'],
+  summary: 'Retry one failed DAG node and its descendants',
+  request: { params: retryWorkflowNodeParamsSchema },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: retryWorkflowNodeResponseSchema } },
+      description: 'Retry accepted and dispatched',
+    },
+    400: jsonError('Bad request'),
+    401: jsonError('Authentication required'),
+    403: jsonError('Forbidden'),
+    404: jsonError('Not found'),
+    409: jsonError('Conflict'),
+    500: jsonError('Server error'),
+  },
+});
+
 const abandonWorkflowRunRoute = createRoute({
   method: 'post',
   path: '/api/workflows/runs/{runId}/abandon',
@@ -1320,7 +1344,7 @@ export function registerApiRoutes(
 ): void {
   function apiError(
     c: Context,
-    status: 400 | 401 | 404 | 422 | 500 | 503,
+    status: 400 | 401 | 403 | 404 | 409 | 422 | 500 | 503,
     message: string,
     detail?: string
   ): Response {
@@ -2181,6 +2205,231 @@ export function registerApiRoutes(
       getLog().warn({ err: err as Error, runId: run.id }, events.failed);
       return false;
     }
+  }
+
+  type RetryAuthDecision =
+    | { requesterUserId: string; authorizationBasis: string }
+    | { error: Response };
+
+  async function authorizeWorkflowNodeRetry(
+    c: Context,
+    run: WorkflowRun
+  ): Promise<RetryAuthDecision> {
+    const requester = await resolveAuthContext(c);
+
+    if (run.user_id) {
+      if (!requester) {
+        return { error: apiError(c, 401, 'Authentication required to retry this workflow run') };
+      }
+      if (requester.userId === run.user_id) {
+        return { requesterUserId: requester.userId, authorizationBasis: 'owner' };
+      }
+      if (requester.role === 'admin') {
+        return { requesterUserId: requester.userId, authorizationBasis: 'admin' };
+      }
+      return { error: apiError(c, 403, 'Only the run owner or an admin can retry this node') };
+    }
+
+    if (isWebAuthEnabled() || isApiGateEnabled()) {
+      if (!requester) {
+        return { error: apiError(c, 401, 'Authentication required to retry this workflow run') };
+      }
+      if (requester.role !== 'admin') {
+        return { error: apiError(c, 403, 'Only admins can retry unowned workflow runs') };
+      }
+      return { requesterUserId: requester.userId, authorizationBasis: 'admin' };
+    }
+
+    return {
+      requesterUserId: requester?.userId ?? 'unavailable',
+      authorizationBasis: requester?.role === 'admin' ? 'admin' : 'solo',
+    };
+  }
+
+  interface RetryWorkflowLookup {
+    workflow: WorkflowDefinition;
+    source: WorkflowSource;
+    discoveryCwd: string;
+    baseBranch?: string;
+  }
+
+  async function loadWorkflowForRetryRun(run: WorkflowRun): Promise<RetryWorkflowLookup> {
+    let discoveryCwd = run.working_path ?? undefined;
+    let baseBranch: string | undefined;
+
+    if (run.codebase_id) {
+      const codebase = await codebaseDb.getCodebase(run.codebase_id);
+      if (codebase) {
+        discoveryCwd = codebase.default_cwd;
+        baseBranch = codebase.default_branch?.trim() || undefined;
+      }
+    }
+
+    if (!discoveryCwd) {
+      throw new Error(
+        `Cannot retry workflow '${run.workflow_name}': missing workflow discovery path`
+      );
+    }
+
+    const result = await discoverWorkflowsWithConfig(discoveryCwd, loadConfig);
+    const workflowEntries = result.workflows;
+    const workflow = resolveWorkflowName(
+      run.workflow_name,
+      workflowEntries.map(entry => entry.workflow)
+    );
+    if (!workflow) {
+      const loadError = result.errors.find(
+        error =>
+          error.filename.replace(/\.ya?ml$/, '') === run.workflow_name ||
+          error.filename === `${run.workflow_name}.yaml` ||
+          error.filename === `${run.workflow_name}.yml`
+      );
+      const suffix = loadError ? `: ${loadError.error}` : '';
+      throw new Error(`Workflow '${run.workflow_name}' could not be loaded${suffix}`);
+    }
+
+    return {
+      workflow,
+      source: workflowEntries.find(entry => entry.workflow === workflow)?.source ?? 'project',
+      discoveryCwd,
+      baseBranch,
+    };
+  }
+
+  function getRetryErrorStatus(error: unknown): 400 | 404 | 409 | 500 {
+    const code = (error as { code?: unknown }).code;
+    switch (code) {
+      case 'run_not_found':
+        return 404;
+      case 'cas_miss':
+        return 409;
+      case 'run_not_failed':
+      case 'node_not_found':
+      case 'node_not_failed':
+      case 'checkpoint_unavailable':
+      case 'git_reset_failed':
+        return 400;
+      default:
+        return 500;
+    }
+  }
+
+  async function restoreRunAfterRetryDispatchFailure(runId: string, error: Error): Promise<void> {
+    await workflowDb
+      .updateWorkflowRun(runId, {
+        status: 'failed',
+        metadata: { retry_dispatch_error: error.message },
+      })
+      .catch((updateError: Error) => {
+        getLog().error(
+          { err: updateError, runId, originalError: error.message },
+          'api.workflow_retry_dispatch_restore_failed'
+        );
+      });
+  }
+
+  async function dispatchPreparedWebRetry(input: {
+    run: WorkflowRun;
+    workflow: WorkflowDefinition;
+    source: WorkflowSource;
+    workerPlatformId: string;
+    parentPlatformId: string;
+    workingPath: string;
+    targetNodeId: string;
+    prepared: {
+      preCreatedRun: WorkflowRun;
+      preservedCompletedOutputs: Map<string, string>;
+      retryEpoch: number;
+      invalidatedNodeIds: string[];
+    };
+    baseBranch?: string;
+  }): Promise<{ accepted: boolean; status: string }> {
+    const [{ executeWorkflow }, { createWorkflowDeps }] = await Promise.all([
+      import('@archon/workflows/executor'),
+      import('@archon/core/workflows/store-adapter'),
+    ]);
+    const deps = createWorkflowDeps();
+    const result = await lockManager.acquireLock(input.workerPlatformId, async () => {
+      webAdapter.emitLockEvent(input.workerPlatformId, true);
+      try {
+        const executionResult = await executeWorkflow(
+          deps,
+          webAdapter,
+          input.workerPlatformId,
+          input.workingPath,
+          input.workflow,
+          input.run.user_message ?? '',
+          input.run.conversation_id,
+          {
+            codebaseId: input.run.codebase_id ?? undefined,
+            source: input.source,
+            baseBranch: input.baseBranch,
+            preCreatedRun: input.prepared.preCreatedRun,
+            priorCompletedNodes: input.prepared.preservedCompletedOutputs,
+            retryContext: {
+              targetNodeId: input.targetNodeId,
+              retryEpoch: input.prepared.retryEpoch,
+              invalidatedNodeIds: input.prepared.invalidatedNodeIds,
+            },
+          }
+        );
+
+        if ('paused' in executionResult) {
+          return;
+        }
+
+        if (executionResult.success && executionResult.summary) {
+          await webAdapter.sendMessage(input.parentPlatformId, executionResult.summary, {
+            category: 'workflow_result',
+            segment: 'new',
+            workflowResult: {
+              workflowName: input.workflow.name,
+              runId: executionResult.workflowRunId,
+            },
+          });
+        } else if (!executionResult.success && executionResult.workflowRunId) {
+          await webAdapter.sendMessage(
+            input.parentPlatformId,
+            `Workflow **${input.workflow.name}** retry failed: ${executionResult.error}`,
+            {
+              category: 'workflow_result',
+              segment: 'new',
+              workflowResult: {
+                workflowName: input.workflow.name,
+                runId: executionResult.workflowRunId,
+              },
+            }
+          );
+        }
+      } catch (error) {
+        const err = error as Error;
+        getLog().error({ err, runId: input.run.id }, 'api.workflow_retry_execute_failed');
+        await restoreRunAfterRetryDispatchFailure(input.run.id, err);
+        await webAdapter
+          .sendMessage(input.parentPlatformId, `Workflow retry failed: ${err.message}`, {
+            category: 'workflow_result',
+            segment: 'new',
+            workflowResult: {
+              workflowName: input.workflow.name,
+              runId: input.run.id,
+            },
+          })
+          .catch((notifyError: unknown) => {
+            getLog().warn(
+              { err: notifyError as Error, runId: input.run.id },
+              'api.workflow_retry_failure_notify_failed'
+            );
+          });
+      } finally {
+        await webAdapter.emitLockEvent(input.workerPlatformId, false);
+      }
+    });
+
+    if (result.status === 'queued-conversation' || result.status === 'queued-capacity') {
+      void webAdapter.emitLockEvent(input.workerPlatformId, true);
+    }
+
+    return { accepted: true, status: result.status };
   }
 
   // ---------------------------------------------------------------------------
@@ -3136,6 +3385,110 @@ export function registerApiRoutes(
     } catch (error) {
       getLog().error({ err: error, runId }, 'api.workflow_run_resume_failed');
       return apiError(c, 500, 'Failed to resume workflow run');
+    }
+  });
+
+  // POST /api/workflows/runs/:runId/nodes/:nodeId/retry - Retry a failed DAG node
+  registerOpenApiRoute(retryWorkflowNodeRoute, async c => {
+    const runId = c.req.param('runId') ?? '';
+    const nodeId = c.req.param('nodeId') ?? '';
+    if (!runId || !nodeId) {
+      return apiError(c, 400, 'runId and nodeId are required');
+    }
+
+    try {
+      const run = await workflowDb.getWorkflowRun(runId);
+      if (!run) {
+        return apiError(c, 404, 'Workflow run not found');
+      }
+      if (run.status !== 'failed') {
+        return apiError(c, 400, `Cannot retry workflow in '${run.status}' status`);
+      }
+
+      const auth = await authorizeWorkflowNodeRetry(c, run);
+      if ('error' in auth) return auth.error;
+
+      if (!run.parent_conversation_id) {
+        return apiError(
+          c,
+          400,
+          `This run was created outside the web UI. Use \`archon workflow retry-node ${runId} ${nodeId}\` from the CLI to retry it.`
+        );
+      }
+
+      const parentConv = await conversationDb.getConversationById(run.parent_conversation_id);
+      if (!parentConv?.platform_conversation_id || parentConv.platform_type !== 'web') {
+        return apiError(
+          c,
+          400,
+          `Cannot retry from web UI: the run's parent conversation is not a web conversation. Use \`archon workflow retry-node ${runId} ${nodeId}\` from the CLI.`
+        );
+      }
+
+      const workerConv = await conversationDb.getConversationById(run.conversation_id);
+      if (!workerConv?.platform_conversation_id) {
+        return apiError(c, 400, 'Cannot retry: worker conversation is missing');
+      }
+      if (!run.working_path) {
+        return apiError(c, 400, 'Cannot retry: workflow run has no working path');
+      }
+
+      let lookup: RetryWorkflowLookup;
+      try {
+        lookup = await loadWorkflowForRetryRun(run);
+      } catch (error) {
+        const err = error as Error;
+        return apiError(c, 400, err.message);
+      }
+
+      const { prepareWorkflowNodeRetry } = await import('@archon/core/operations/workflow-retry');
+      let prepared: Awaited<ReturnType<typeof prepareWorkflowNodeRetry>>;
+      try {
+        prepared = await prepareWorkflowNodeRetry({
+          runId,
+          nodeId,
+          workflow: lookup.workflow,
+          requesterSurface: 'web',
+          requesterUserId: auth.requesterUserId,
+          authorizationBasis: auth.authorizationBasis,
+        });
+      } catch (error) {
+        const err = error as Error;
+        return apiError(c, getRetryErrorStatus(error), err.message);
+      }
+
+      try {
+        await dispatchPreparedWebRetry({
+          run,
+          workflow: lookup.workflow,
+          source: lookup.source,
+          workerPlatformId: workerConv.platform_conversation_id,
+          parentPlatformId: parentConv.platform_conversation_id,
+          workingPath: run.working_path,
+          targetNodeId: nodeId,
+          prepared,
+          baseBranch: lookup.baseBranch,
+        });
+      } catch (error) {
+        const err = error as Error;
+        await restoreRunAfterRetryDispatchFailure(runId, err);
+        getLog().error({ err, runId, nodeId }, 'api.workflow_retry_dispatch_failed');
+        return apiError(c, 500, `Failed to dispatch retry: ${err.message}`);
+      }
+
+      const downstreamCount = Math.max(0, prepared.invalidatedNodeIds.length - 1);
+      return c.json({
+        success: true,
+        message: `Retrying node ${nodeId} and ${String(downstreamCount)} downstream node(s).`,
+        runId,
+        nodeId,
+        retryEpoch: prepared.retryEpoch,
+        invalidatedNodes: prepared.invalidatedNodeIds,
+        ...(prepared.safetyCommitSha ? { safetyCommitSha: prepared.safetyCommitSha } : {}),
+      });
+    } catch (error) {
+      getLog().error({ err: error as Error, runId, nodeId }, 'api.workflow_retry_failed');
+      return apiError(c, 500, 'Failed to retry workflow node');
     }
   });
 

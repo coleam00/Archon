@@ -8,6 +8,7 @@ import { StepLogs } from './StepLogs';
 import { WorkflowLogs } from './WorkflowLogs';
 import { WorkflowDagViewer } from './WorkflowDagViewer';
 import { ArtifactSummary } from './ArtifactSummary';
+import { WorkflowNodeRetryAction } from './WorkflowNodeRetryAction';
 import { ChatInterface } from '@/components/chat/ChatInterface';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
@@ -488,6 +489,13 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
     setNodeScrollTrigger(prev => prev + 1);
   }, []);
 
+  const handleRetryDispatched = useCallback((): void => {
+    void queryClient.invalidateQueries({ queryKey: ['workflowRun', runId] });
+    void queryClient.invalidateQueries({ queryKey: ['dashboardRuns'] });
+    void queryClient.invalidateQueries({ queryKey: ['workflowRuns'] });
+    void queryClient.invalidateQueries({ queryKey: ['workflow-runs-status'] });
+  }, [queryClient, runId]);
+
   if (error) {
     return (
       <div className="flex items-center justify-center h-full text-error">
@@ -519,10 +527,25 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
 
   // Pick the platform ID for logs: worker takes precedence over conversation.
   const logsPlatformId = workerPlatformId ?? conversationPlatformId;
+  const selectedNodeState =
+    selectedDagNode !== null
+      ? (workflow.dagNodes.find(node => node.nodeId === selectedDagNode) ?? null)
+      : null;
+  const retryActionPanel = (
+    <WorkflowNodeRetryAction
+      runId={runId}
+      runStatus={workflow.status}
+      node={selectedNodeState}
+      parentPlatformId={parentPlatformId}
+      conversationPlatformId={conversationPlatformId}
+      onRetried={handleRetryDispatched}
+    />
+  );
 
   // Logs panel — detect whether the selected node has any DB events so we can show an empty-state
   const logsPanel = (
     <div className="flex-1 flex flex-col overflow-hidden min-h-0 h-full">
+      {retryActionPanel}
       <div className="flex-1 flex flex-col overflow-hidden min-h-0">
         {logsPlatformId && !selectedStepHasEvents && !isRunning ? (
           <div className="flex-1 flex items-center justify-center text-text-secondary text-sm">
