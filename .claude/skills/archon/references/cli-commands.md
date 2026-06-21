@@ -26,6 +26,7 @@ archon workflow run my-workflow --branch feat/dark-mode --from develop "Add dark
 archon workflow run quick-fix --no-worktree "Fix the typo in README"
 archon workflow run archon-fix-github-issue --resume
 archon workflow run archon-assist "Investigate the flaky test" --detach
+archon workflow retry-node <run-id> <node-id>
 ```
 
 | Flag | Description |
@@ -44,7 +45,7 @@ archon workflow run archon-assist "Investigate the flaky test" --detach
 
 **Default behavior** (no flags): Auto-creates a worktree with branch name `{workflow-name}-{timestamp}`.
 
-**Auto-resume without `--resume`**: If a prior invocation of the same workflow at the same cwd failed, the next invocation automatically skips completed nodes. `--resume` is only needed when you want to force resume a specific failed run or to reuse the worktree from that run.
+**Resume is explicit**: Plain `archon workflow run <name>` starts a fresh run. Use `--resume` to reuse the most recent failed run at this cwd, or `archon workflow resume <run-id>` for a specific run.
 
 ### `archon workflow status`
 
@@ -123,12 +124,23 @@ archon workflow abandon abc123 --json   # { "ok": true, "runId": "abc123", "acti
 
 ### `archon workflow resume <run-id> [message] [--json]`
 
-Explicitly re-run a failed run. Most workflows auto-resume without this — use it when you want to force a specific run ID. (`--json` validates that the run is resumable and returns `executed: false` WITHOUT running — see the note under `approve`; to actually execute, use the blocking form as a background task.)
+Explicitly re-run a failed run, skipping completed nodes. (`--json` validates that the run is resumable and returns `executed: false` WITHOUT running — see the note under `approve`; to actually execute, use the blocking form as a background task.)
 
 ```bash
 archon workflow resume abc123
 archon workflow resume abc123 "continue with the plan"
 ```
+
+### `archon workflow retry-node <run-id> <node-id>`
+
+Retry one failed DAG node and its descendants in the same run. Use this when upstream work succeeded but one failed branch needs another attempt.
+
+```bash
+archon workflow get abc123 --verbose --json   # find failed node ids
+archon workflow retry-node abc123 build
+```
+
+`retry-node` streams execution output like `resume` and does **not** support `--json` in v1. The CLI verifies the recorded working path still identifies the intended repository or Archon-managed worktree before any git mutation. Mutating workflows create local checkpoint/safety refs under `refs/archon/` and reset tracked files; `mutates_checkout: false` skips checkout reset.
 
 ### `archon workflow cleanup [days]`
 

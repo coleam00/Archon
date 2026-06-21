@@ -223,6 +223,9 @@ bun run cli workflow get <run-id> --json
 # Resume a failed workflow (re-runs, skipping completed nodes)
 bun run cli workflow resume <run-id>
 
+# Retry one failed DAG node and its descendants (streams output; no --json)
+bun run cli workflow retry-node <run-id> <node-id>
+
 # Discard a non-terminal run
 bun run cli workflow abandon <run-id>
 
@@ -452,22 +455,23 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 
 ### Database Schema
 
-**18 Tables (all prefixed with `remote_agent_`):**
+**19 Tables (all prefixed with `remote_agent_`):**
 1. **`codebases`** - Repository metadata and commands (JSONB)
 2. **`conversations`** - Track platform conversations with titles and soft-delete support; nullable `user_id` records first creator
 3. **`sessions`** - Track AI SDK sessions with resume capability
 4. **`isolation_environments`** - Git worktree isolation tracking; nullable `created_by_user_id` preserves first creator
 5. **`workflow_runs`** - Workflow execution tracking and state; nullable `user_id` for per-run attribution
 6. **`workflow_events`** - Step-level workflow event log (step transitions, artifacts, errors)
-7. **`messages`** - Conversation message history with tool call metadata (JSONB); nullable `user_id` (NULL for assistant rows)
-8. **`codebase_env_vars`** - Per-project env vars injected into project-scoped execution surfaces (Claude, Codex, bash/script nodes, and direct chat when codebase-scoped), managed via Web UI or `env:` in config
-9. **`users`** - Archon-internal identity (one row per human/bot); created lazily on first sight by any adapter; `role` (`'admin'`(default)`/'member'`) is the identity seam for future per-resource scoping (visibility stays open today)
-10. **`user_identities`** - Per-platform mapping (Slack U-id, Telegram chat id, Discord snowflake, GitHub login, Better Auth web user id) → `users.id`; `UNIQUE(platform, platform_user_id)`
-11. **`workflow_node_sessions`** - Per-node provider session IDs persisted across workflow re-runs (opt-in via `persist_session`); keyed by `(workflow_name, node_id, scope_key, provider)`; `scope_key` is typically the conversation UUID
-12. **`user_github_tokens`** - Per-user GitHub device-flow tokens encrypted at rest (AES-256-GCM); one row per Archon user (`UNIQUE(user_id)`), cascades on user deletion; numeric `github_user_id` anchors the commit no-reply email
-13. **`user_provider_keys`** - Per-user AI-provider credentials encrypted at rest (AES-256-GCM, same `TOKEN_ENCRYPTION_KEY`); one row per `(user_id, provider)` (`UNIQUE(user_id, provider)`), cascades on user deletion; `kind` is `api_key` or `oauth`; resolved + injected into the user's runs/chat env at execution time. Gated on `TOKEN_ENCRYPTION_KEY`. Since #1955 the `provider` column holds **vendor-canonical credential ids** (`anthropic`, `openai`, `github-copilot`, plus the Pi backend vendors) — NOT agent ids; legacy `claude`/`codex`/`copilot` rows are renamed by an idempotent startup data fix (vendor row wins on conflict), and the connectable catalog is derived from provider registrations (`acceptedCredentials` via `credentials:` on `ProviderRegistration`), never hand-listed
-14. **`user_ai_prefs`** - Per-user AI preferences (Phase 3): personal model `tiers`/`aliases` (JSON-as-TEXT) + `default_provider`. NON-encrypted (model names aren't secrets — mirrors `codebase_env_vars`, not the provider-key store); one row per user (`UNIQUE(user_id)`), cascades on user deletion. Folded into `buildAiProfile` as the highest-precedence layer at the userId-aware seams (workflow executor + chat orchestrator); needs a web/CLI identity but NO `TOKEN_ENCRYPTION_KEY`
-15–18. **`remote_agent_auth_user` / `remote_agent_auth_session` / `remote_agent_auth_account` / `remote_agent_auth_verification`** - Better Auth tables for opt-in web login (**PostgreSQL only**; always created on Postgres via the idempotent schema apply, but populated only when web auth is enabled — `DATABASE_URL` + `BETTER_AUTH_SECRET`). Owned and shaped by Better Auth (text ids, camelCase columns); Archon never queries them directly — a session maps to the canonical `users` row via `user_identities('web', <betterAuthUserId>)`
+7. **`workflow_node_checkpoints`** - Per-node git checkpoints for manual failed-node retry; keyed by `(workflow_run_id, node_id, retry_epoch)` and used to reset tracked checkout state before `workflow retry-node`
+8. **`messages`** - Conversation message history with tool call metadata (JSONB); nullable `user_id` (NULL for assistant rows)
+9. **`codebase_env_vars`** - Per-project env vars injected into project-scoped execution surfaces (Claude, Codex, bash/script nodes, and direct chat when codebase-scoped), managed via Web UI or `env:` in config
+10. **`users`** - Archon-internal identity (one row per human/bot); created lazily on first sight by any adapter; `role` (`'admin'`(default)`/'member'`) is the identity seam for future per-resource scoping (visibility stays open today)
+11. **`user_identities`** - Per-platform mapping (Slack U-id, Telegram chat id, Discord snowflake, GitHub login, Better Auth web user id) → `users.id`; `UNIQUE(platform, platform_user_id)`
+12. **`workflow_node_sessions`** - Per-node provider session IDs persisted across workflow re-runs (opt-in via `persist_session`); keyed by `(workflow_name, node_id, scope_key, provider)`; `scope_key` is typically the conversation UUID
+13. **`user_github_tokens`** - Per-user GitHub device-flow tokens encrypted at rest (AES-256-GCM); one row per Archon user (`UNIQUE(user_id)`), cascades on user deletion; numeric `github_user_id` anchors the commit no-reply email
+14. **`user_provider_keys`** - Per-user AI-provider credentials encrypted at rest (AES-256-GCM, same `TOKEN_ENCRYPTION_KEY`); one row per `(user_id, provider)` (`UNIQUE(user_id, provider)`), cascades on user deletion; `kind` is `api_key` or `oauth`; resolved + injected into the user's runs/chat env at execution time. Gated on `TOKEN_ENCRYPTION_KEY`. Since #1955 the `provider` column holds **vendor-canonical credential ids** (`anthropic`, `openai`, `github-copilot`, plus the Pi backend vendors) — NOT agent ids; legacy `claude`/`codex`/`copilot` rows are renamed by an idempotent startup data fix (vendor row wins on conflict), and the connectable catalog is derived from provider registrations (`acceptedCredentials` via `credentials:` on `ProviderRegistration`), never hand-listed
+15. **`user_ai_prefs`** - Per-user AI preferences (Phase 3): personal model `tiers`/`aliases` (JSON-as-TEXT) + `default_provider`. NON-encrypted (model names aren't secrets — mirrors `codebase_env_vars`, not the provider-key store); one row per user (`UNIQUE(user_id)`), cascades on user deletion. Folded into `buildAiProfile` as the highest-precedence layer at the userId-aware seams (workflow executor + chat orchestrator); needs a web/CLI identity but NO `TOKEN_ENCRYPTION_KEY`
+16–19. **`remote_agent_auth_user` / `remote_agent_auth_session` / `remote_agent_auth_account` / `remote_agent_auth_verification`** - Better Auth tables for opt-in web login (**PostgreSQL only**; always created on Postgres via the idempotent schema apply, but populated only when web auth is enabled — `DATABASE_URL` + `BETTER_AUTH_SECRET`). Owned and shaped by Better Auth (text ids, camelCase columns); Archon never queries them directly — a session maps to the canonical `users` row via `user_identities('web', <betterAuthUserId>)`
 
 **Key Patterns:**
 - Conversation ID format: Platform-specific (`thread_ts`, `chat_id`, `user/repo#123`)
@@ -808,7 +812,7 @@ async function createSession(conversationId: string, codebaseId: string) {
    - Model and options can be set per workflow or inherited from config defaults
    - `interactive: true` at the workflow level forces foreground execution on web (required for approval-gate workflows in the web UI)
    - Model validation ensures provider/model compatibility at load time
-   - Commands: `/workflow list`, `/workflow reload`, `/workflow status`, `/workflow cancel`, `/workflow resume <id>` (re-runs failed workflow, skipping completed nodes), `/workflow abandon <id>`, `/workflow cleanup [days]` (CLI only — deletes old run records), `/workflow reset-sessions <name> [<node-id>]` (clears persisted `persist_session` memory; chat auto-scopes to the current conversation, CLI adds `--scope`/`--yes` for cross-scope control)
+   - Commands: `/workflow list`, `/workflow reload`, `/workflow status`, `/workflow cancel`, `/workflow resume <id>` (re-runs failed workflow, skipping completed nodes), `/workflow abandon <id>`, `/workflow cleanup [days]` (CLI only — deletes old run records), `/workflow reset-sessions <name> [<node-id>]` (clears persisted `persist_session` memory; chat auto-scopes to the current conversation, CLI adds `--scope`/`--yes` for cross-scope control); CLI additionally supports `workflow retry-node <run-id> <node-id>` for manual failed DAG node retry
    - Resilient loading: One broken YAML doesn't abort discovery; errors shown in `/workflow list`
    - `resolveWorkflowName()` (in `router.ts`) resolves workflow names via a 4-tier fallback — exact, case-insensitive, suffix (`-name`), substring — with ambiguity detection; used by both the CLI and all chat platforms
    - Router fallback: if no `/invoke-workflow` is produced, falls back to `archon-assist` (with "Routing unclear" notice); raw AI response returned only when `archon-assist` is unavailable
@@ -884,6 +888,7 @@ Pattern: Use `classifyIsolationError()` (from `@archon/isolation`) to map git er
 
 **Workflow Run Lifecycle:**
 - `POST /api/workflows/runs/{runId}/resume` - Resume a failed run from where it left off (skips already-completed DAG nodes; AI session context is not restored).
+- `POST /api/workflows/runs/{runId}/nodes/{nodeId}/retry` - Retry one failed DAG node and its descendants in the same run
 - `POST /api/workflows/runs/{runId}/abandon` - Abandon a non-terminal run (marks as cancelled)
 - `DELETE /api/workflows/runs/{runId}` - Delete a terminal workflow run and its events
 

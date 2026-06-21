@@ -541,12 +541,12 @@ SDK subprocess retry (claude.ts)  — 3 total attempts, 2 s base backoff
     ↓ only if all SDK retries exhausted
 Node retry (dag-executor)  — default 2 retries, 3 s base backoff
     ↓ only if all node retries exhausted
-Workflow fails → user opts in to resume on next invocation
+Workflow fails → user opts in to resume or manual failed-node retry
 ```
 
 This means a single transient crash may trigger up to **3 SDK retries** before a single node retry attempt is consumed.
 
-> **DAG resume**: For `nodes:` (DAG) workflows, resume is opt-in — pass `--resume` to `archon workflow run`, run `archon workflow resume <id>`, or use the web UI resume button. Plain `archon workflow run <name>` always starts a fresh run. See [DAG Resume on Failure](#dag-resume-on-failure) below.
+> **DAG resume and manual retry**: For `nodes:` (DAG) workflows, resume is opt-in — pass `--resume` to `archon workflow run`, run `archon workflow resume <id>`, or use the web UI resume button. To rerun one failed node plus its current descendants, use `archon workflow retry-node <run-id> <node-id>` or the Web UI retry action. Plain `archon workflow run <name>` always starts a fresh run. See [DAG Resume on Failure](#dag-resume-on-failure) below.
 
 ---
 
@@ -576,6 +576,14 @@ When a `nodes:` (DAG) workflow fails, the prior run stays in the database as a c
 Once the row reaches a terminal status, you can resume it explicitly via the paths above. Plain `archon workflow run` never resumes implicitly.
 
 > Not to be confused with `archon workflow cleanup [days]`, which **deletes** old terminal runs (`completed`/`failed`/`cancelled`) from the database for disk hygiene. It does not transition `running` rows.
+
+**Retry one failed node**: If only one DAG node failed and its upstream work is still valid, retry that node instead of resuming the whole failed remainder:
+
+```bash
+archon workflow retry-node <run-id> <node-id>
+```
+
+Manual node retry preserves completed upstream and sibling outputs, invalidates the target node plus descendants, and runs that branch again with a fresh retry epoch. For workflows that can mutate the checkout, Archon stores local checkpoint/safety refs and resets tracked files before retry execution; `mutates_checkout: false` workflows skip the checkout reset.
 
 **Known limitation**: AI session context from prior nodes is not restored. If a downstream node relies on in-context knowledge from a prior run's session (rather than artifacts), it may need to re-read those artifacts explicitly.
 
@@ -1161,7 +1169,7 @@ nodes:
     context: fresh
 ```
 
-If the workflow fails at `batch-2`, run `archon workflow run large-migration --resume` to skip `plan` and `batch-1`. Plain `archon workflow run large-migration` (without `--resume`) starts fresh.
+If the workflow fails at `batch-2`, run `archon workflow run large-migration --resume` to skip `plan` and `batch-1`, or `archon workflow retry-node <run-id> batch-2` to rerun only `batch-2` and its descendants from the retry checkpoint. Plain `archon workflow run large-migration` (without `--resume`) starts fresh.
 
 ### Pattern: Human-in-the-Loop
 

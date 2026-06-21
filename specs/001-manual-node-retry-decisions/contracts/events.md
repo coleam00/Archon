@@ -58,7 +58,7 @@ Rules:
 Rules:
 
 - Written after safety ref/commit and checkpoint reset succeed.
-- `safety_commit_sha` is omitted when no safety commit was created.
+- `safety_ref` and `safety_commit_sha` are `null` when reset is skipped; otherwise they record the created safety ref and the commit it points at.
 - `reset_skipped` is true for allowed no-reset paths, such as `mutates_checkout: false` with no checkpoint reset.
 
 ## `node_retry_failed`

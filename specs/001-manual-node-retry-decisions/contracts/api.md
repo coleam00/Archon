@@ -47,7 +47,7 @@ Fields:
 - `nodeId`: target node.
 - `retryEpoch`: accepted epoch after increment.
 - `invalidatedNodes`: target plus current-DAG descendants.
-- `safetyCommitSha`: present only when dirty tracked changes were committed before reset.
+- `safetyCommitSha`: present when a retry safety ref was created before checkout reset.
 
 ## Error Responses
 
@@ -94,7 +94,7 @@ bun --filter @archon/web generate:types
 
 `GET /api/workflows/runs/{runId}` should continue returning raw `events` for logs/audit, and should also return server-derived node state for graph rendering and retry eligibility. This keeps retry epoch folding in one place.
 
-Suggested additive response field:
+Response field:
 
 ```json
 {
@@ -103,12 +103,11 @@ Suggested additive response field:
   "nodeStates": [
     {
       "nodeId": "build",
-      "status": "pending",
+      "name": "build",
+      "status": "failed",
       "retryEpoch": 1,
-      "retryEligible": false,
-      "invalidated": true,
-      "error": null,
-      "reason": null
+      "duration": 4212,
+      "error": "Node failed"
     }
   ]
 }
@@ -117,6 +116,7 @@ Suggested additive response field:
 Rules:
 
 - Raw `events` remain unchanged and complete.
-- `nodeStates` is derived from workflow definition plus epoch-aware event projection.
+- `nodeStates` is derived from epoch-aware event projection.
+- Each node state includes `nodeId`, `name`, `status`, and `retryEpoch`; `duration`, `error`, and `reason` are included only when available.
 - Web retry display uses `nodeStates` when present.
 - A client fallback may exist during rollout, but server projection is authoritative.
