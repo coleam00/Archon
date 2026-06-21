@@ -8,7 +8,7 @@
 import { writeFileSync } from 'fs';
 import { readFile } from 'fs/promises';
 import { isAbsolute, join as joinPath, resolve as resolvePath } from 'path';
-import { execFileAsync } from '@archon/git';
+import { execFileAsync, upsertCheckpointRef } from '@archon/git';
 import { discoverScriptsForCwd } from './script-discovery';
 import type {
   IWorkflowPlatform,
@@ -107,6 +107,53 @@ function dagNodeTelemetryType(node: DagNode): WorkflowNodeType {
   if (isCancelNode(node)) return 'cancel';
   if ('command' in node) return 'command';
   return 'prompt';
+}
+
+function isCheckpointableExecutableNode(node: DagNode): boolean {
+  return !isApprovalNode(node) && !isCancelNode(node);
+}
+
+function getRunRetryEpoch(
+  workflowRun: WorkflowRun,
+  retryContext: WorkflowRetryContext | undefined
+): number {
+  if (retryContext) return retryContext.retryEpoch;
+  const retryEpoch = workflowRun.metadata.retry_epoch;
+  return typeof retryEpoch === 'number' && Number.isInteger(retryEpoch) && retryEpoch >= 0
+    ? retryEpoch
+    : 0;
+}
+
+async function createPreNodeCheckpoint(params: {
+  deps: WorkflowDeps;
+  cwd: string;
+  workflowRun: WorkflowRun;
+  node: DagNode;
+  retryContext: WorkflowRetryContext | undefined;
+}): Promise<void> {
+  if (!params.deps.store.upsertWorkflowNodeCheckpoint) {
+    getLog().warn(
+      { workflowRunId: params.workflowRun.id, nodeId: params.node.id },
+      'dag.checkpoint_store_unavailable'
+    );
+    return;
+  }
+
+  const retryEpoch = getRunRetryEpoch(params.workflowRun, params.retryContext);
+  const checkpoint = await upsertCheckpointRef(params.cwd, {
+    runId: params.workflowRun.id,
+    retryEpoch,
+    nodeId: params.node.id,
+  });
+  await params.deps.store.upsertWorkflowNodeCheckpoint({
+    workflow_run_id: params.workflowRun.id,
+    node_id: params.node.id,
+    retry_epoch: retryEpoch,
+    checkpoint_ref: checkpoint.ref,
+    commit_sha: checkpoint.commitSha,
+    created_commit: checkpoint.createdCommit,
+    fallback_from_node_id: null,
+  });
 }
 
 /**
@@ -2873,6 +2920,8 @@ export async function executeDagWorkflow(
     nodes: readonly DagNode[];
     /** Workflow-level default for per-node `persist_session` (read directly here). */
     persist_sessions?: boolean;
+    /** Whether executable nodes may mutate checkout state; omitted means mutating. */
+    mutates_checkout?: boolean;
   } & WorkflowLevelOptions,
   workflowRun: WorkflowRun,
   workflowProvider: string,
@@ -2959,9 +3008,21 @@ export async function executeDagWorkflow(
   for (let layerIdx = 0; layerIdx < layers.length; layerIdx++) {
     const layer = layers[layerIdx];
     const isParallelLayer = layer.length > 1;
+    const layerExecutableNodes = layer.filter(isCheckpointableExecutableNode);
 
     if (isParallelLayer) {
       lastSequentialSessionId = undefined; // reset — parallel nodes can't share sessions
+    }
+
+    if (workflow.mutates_checkout !== false && layerExecutableNodes.length > 1) {
+      getLog().warn(
+        {
+          workflowRunId: workflowRun.id,
+          layerIdx,
+          nodeIds: layerExecutableNodes.map(node => node.id),
+        },
+        'dag.parallel_mutating_executable_nodes'
+      );
     }
 
     // Execute all nodes in the layer concurrently
@@ -3150,6 +3211,16 @@ export async function executeDagWorkflow(
                 output: { state: 'skipped' as const, output: '' },
               };
             }
+          }
+
+          if (workflow.mutates_checkout !== false && isCheckpointableExecutableNode(node)) {
+            await createPreNodeCheckpoint({
+              deps,
+              cwd,
+              workflowRun,
+              node,
+              retryContext,
+            });
           }
 
           // 3. Bash node dispatch — no AI, no session

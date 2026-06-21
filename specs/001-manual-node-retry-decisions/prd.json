@@ -465,7 +465,7 @@
     },
     {
       "title": "Phase 4.2: Implementation for User Story 2",
-      "completed": false,
+      "completed": true,
       "tasks": [
         {
           "id": "T046",
@@ -473,7 +473,7 @@
           "description": "[US2] Implement tracked-only dirty detection and commit creation in `packages/git/src/retry-refs.ts`, including immediate non-git repository rejection, missing `user.name`/`user.email` guidance, no stash fallback, and focused T003 coverage for those failures",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 46,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -482,7 +482,7 @@
           "description": "[US2] Implement `git check-ref-format` validation before checkpoint/safety ref mutation in `packages/git/src/retry-refs.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 47,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -491,7 +491,7 @@
           "description": "[US2] Implement checkpoint ref upsert for clean and dirty checkouts in `packages/git/src/retry-refs.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 48,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -500,7 +500,7 @@
           "description": "[US2] Create checkpoints after trigger/`when:` checks and before executable node start only when `workflow.mutates_checkout !== false`; add explicit `mutates_checkout: false` no-checkpoint coverage and require retry setup to proceed without checkout reset and emit `node_retry_reset.reset_skipped = true` when no checkpoint exists in `packages/workflows/src/dag-executor.ts` and `packages/core/src/operations/workflow-retry.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 49,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -509,7 +509,7 @@
           "description": "[US2] Persist node checkpoint rows for command, prompt, bash, script, and loop nodes in `packages/core/src/workflows/store-adapter.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 50,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -518,7 +518,7 @@
           "description": "[US2] Skip checkpointing for approval/cancel/skipped nodes in `packages/workflows/src/dag-executor.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 51,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -527,7 +527,7 @@
           "description": "[US2] Implement latest prior checkpoint and first-dependency fallback lookup in `packages/core/src/db/workflow-checkpoints.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 52,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -536,7 +536,7 @@
           "description": "[US2] Create retry safety ref/commit before reset in `packages/core/src/operations/workflow-retry.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 53,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -545,7 +545,7 @@
           "description": "[US2] Reset tracked files to selected checkpoint and never call `git clean` in `packages/core/src/operations/workflow-retry.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 54,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -554,7 +554,7 @@
           "description": "[US2] Write `node_retry_reset` after successful safety/ref/reset setup in `packages/core/src/operations/workflow-retry.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 55,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -563,7 +563,7 @@
           "description": "[US2] Write `node_retry_failed` with setup phase and error when checkpoint validation or reset fails in `packages/core/src/operations/workflow-retry.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 56,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -572,7 +572,7 @@
           "description": "[US2] Emit warning for parallel mutating executable nodes in one DAG layer in `packages/workflows/src/dag-executor.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 57,
-          "passes": false,
+          "passes": true,
           "notes": ""
         }
       ],

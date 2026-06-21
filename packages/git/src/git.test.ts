@@ -2383,6 +2383,68 @@ branch refs/heads/feature/auth
       expect(ignoredStatus).toContain('!! ignored.tmp');
     });
 
+    test('fails dirty checkpoint commits with git identity guidance and no stash fallback', async () => {
+      const originalEnv = {
+        HOME: process.env.HOME,
+        XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+        GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
+        GIT_CONFIG_NOSYSTEM: process.env.GIT_CONFIG_NOSYSTEM,
+      };
+      const isolatedHome = join(testDir, 'identity-home');
+      const repoPath = join(testDir, 'missing-identity');
+      await realMkdir(isolatedHome, { recursive: true });
+      await realMkdir(repoPath, { recursive: true });
+
+      process.env.HOME = isolatedHome;
+      process.env.XDG_CONFIG_HOME = join(isolatedHome, '.config');
+      process.env.GIT_CONFIG_GLOBAL = join(isolatedHome, '.gitconfig');
+      process.env.GIT_CONFIG_NOSYSTEM = '1';
+
+      try {
+        await runGit(repoPath, ['init']);
+        await writeFile(join(repoPath, 'tracked.txt'), 'initial\n');
+        await runGit(repoPath, ['add', 'tracked.txt']);
+        await runGit(repoPath, [
+          '-c',
+          'user.name=Bootstrap User',
+          '-c',
+          'user.email=bootstrap@example.com',
+          'commit',
+          '-m',
+          'initial',
+        ]);
+        await writeFile(join(repoPath, 'tracked.txt'), 'dirty\n');
+
+        await expect(
+          git.upsertCheckpointRef(repoPath, {
+            runId: 'run-missing-identity',
+            retryEpoch: 0,
+            nodeId: 'node-a',
+          })
+        ).rejects.toThrow('git user.name and user.email configured');
+
+        const status = await runGit(repoPath, ['status', '--porcelain', '--untracked-files=no']);
+        expect(status).toContain('M tracked.txt');
+      } finally {
+        process.env.HOME = originalEnv.HOME;
+        if (originalEnv.XDG_CONFIG_HOME === undefined) {
+          delete process.env.XDG_CONFIG_HOME;
+        } else {
+          process.env.XDG_CONFIG_HOME = originalEnv.XDG_CONFIG_HOME;
+        }
+        if (originalEnv.GIT_CONFIG_GLOBAL === undefined) {
+          delete process.env.GIT_CONFIG_GLOBAL;
+        } else {
+          process.env.GIT_CONFIG_GLOBAL = originalEnv.GIT_CONFIG_GLOBAL;
+        }
+        if (originalEnv.GIT_CONFIG_NOSYSTEM === undefined) {
+          delete process.env.GIT_CONFIG_NOSYSTEM;
+        } else {
+          process.env.GIT_CONFIG_NOSYSTEM = originalEnv.GIT_CONFIG_NOSYSTEM;
+        }
+      }
+    });
+
     test('creates retry safety refs before tracked-only resets and preserves untracked files', async () => {
       const { repoPath, initialSha } = await initRetryRepo('retry-safety');
       const checkpoint = await git.upsertCheckpointRef(repoPath, {

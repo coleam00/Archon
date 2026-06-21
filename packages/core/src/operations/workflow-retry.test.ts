@@ -42,6 +42,26 @@ mock.module('../db/workflow-node-sessions', () => ({
   deleteWorkflowNodeSessions: mockDeleteWorkflowNodeSessions,
 }));
 
+const mockFindLatestCheckpointForRetry = mock(async () => null);
+
+mock.module('../db/workflow-checkpoints', () => ({
+  findLatestCheckpointForRetry: mockFindLatestCheckpointForRetry,
+}));
+
+const mockVerifyCommitRef = mock(async () => 'checkpoint-sha');
+const mockCreateRetrySafetyRef = mock(async () => ({
+  ref: 'refs/archon/retry-safety/run-1/1',
+  commitSha: 'safety-sha',
+  createdCommit: false,
+}));
+const mockResetTrackedFilesToCommit = mock(async () => 'checkpoint-sha');
+
+mock.module('@archon/git', () => ({
+  verifyCommitRef: mockVerifyCommitRef,
+  createRetrySafetyRef: mockCreateRetrySafetyRef,
+  resetTrackedFilesToCommit: mockResetTrackedFilesToCommit,
+}));
+
 const mockQuery = mock(async () => createQueryResult([]));
 
 mock.module('../db/connection', () => ({
@@ -120,6 +140,18 @@ describe('workflow retry preparation operation', () => {
     mockGetRetryPreservedDagNodeOutputs.mockImplementation(async () => new Map([['a', 'A0']]));
     mockDeleteWorkflowNodeSessions.mockReset();
     mockDeleteWorkflowNodeSessions.mockImplementation(async () => ({ deleted: 0 }));
+    mockFindLatestCheckpointForRetry.mockReset();
+    mockFindLatestCheckpointForRetry.mockImplementation(async () => null);
+    mockVerifyCommitRef.mockReset();
+    mockVerifyCommitRef.mockImplementation(async () => 'checkpoint-sha');
+    mockCreateRetrySafetyRef.mockReset();
+    mockCreateRetrySafetyRef.mockImplementation(async () => ({
+      ref: 'refs/archon/retry-safety/run-1/1',
+      commitSha: 'safety-sha',
+      createdCommit: false,
+    }));
+    mockResetTrackedFilesToCommit.mockReset();
+    mockResetTrackedFilesToCommit.mockImplementation(async () => 'checkpoint-sha');
     mockQuery.mockReset();
     mockQuery.mockImplementation(async () => createQueryResult([]));
   });
@@ -194,6 +226,13 @@ describe('workflow retry preparation operation', () => {
       requester_user_id: 'user-1',
       authorization_basis: 'cli/solo',
     });
+    expect(auditPayloads()[1]).toMatchObject({
+      node_id: 'b',
+      retry_epoch: 1,
+      checkpoint_ref: null,
+      safety_ref: null,
+      reset_skipped: true,
+    });
   });
 
   test('restores failed status and avoids dispatch when retry preparation fails', async () => {
@@ -208,7 +247,9 @@ describe('workflow retry preparation operation', () => {
       metadata: { retry_setup_error: 'hydration failed' },
     });
     const payloads = auditPayloads();
-    expect(payloads[1]).toMatchObject({
+    expect(
+      payloads.find(payload => (payload as { setup_phase?: unknown }).setup_phase)
+    ).toMatchObject({
       node_id: 'b',
       retry_epoch: 1,
       setup_phase: 'retry_preparation',
@@ -216,9 +257,131 @@ describe('workflow retry preparation operation', () => {
     });
   });
 
-  test.todo(
-    'writes node_retry_failed and avoids dispatch when checkpoint ref validation fails',
-    () => {}
-  );
-  test.todo('writes node_retry_failed and avoids dispatch when git reset --hard fails', () => {});
+  test('writes reset_skipped when a mutating retry has no checkpoint fallback', async () => {
+    const result = await prepareWorkflowNodeRetry(
+      makeRequest({ workflow: makeWorkflow({ mutates_checkout: true }) })
+    );
+
+    expect(result.resetSkipped).toBe(true);
+    expect(mockFindLatestCheckpointForRetry).toHaveBeenCalledWith('run-1', 'b', ['a'], 1);
+    expect(mockVerifyCommitRef).not.toHaveBeenCalled();
+    expect(mockCreateRetrySafetyRef).not.toHaveBeenCalled();
+    expect(mockResetTrackedFilesToCommit).not.toHaveBeenCalled();
+    expect(auditPayloads()[1]).toMatchObject({
+      node_id: 'b',
+      retry_epoch: 1,
+      checkpoint_ref: null,
+      checkpoint_commit_sha: null,
+      safety_ref: null,
+      safety_commit_sha: null,
+      reset_skipped: true,
+    });
+  });
+
+  test('creates safety ref, resets to selected checkpoint, and writes node_retry_reset', async () => {
+    mockFindLatestCheckpointForRetry.mockResolvedValueOnce({
+      workflow_run_id: 'run-1',
+      node_id: 'b',
+      retry_epoch: 0,
+      checkpoint_ref: 'refs/archon/checkpoints/run-1/0/b',
+      commit_sha: 'checkpoint-sha',
+      created_commit: false,
+      fallback_from_node_id: null,
+      created_at: new Date(),
+    });
+
+    const result = await prepareWorkflowNodeRetry(
+      makeRequest({ workflow: makeWorkflow({ mutates_checkout: true }) })
+    );
+
+    expect(result.resetSkipped).toBe(false);
+    expect(result.checkpointRef).toBe('refs/archon/checkpoints/run-1/0/b');
+    expect(result.checkpointCommitSha).toBe('checkpoint-sha');
+    expect(result.safetyRef).toBe('refs/archon/retry-safety/run-1/1');
+    expect(result.safetyCommitSha).toBe('safety-sha');
+    expect(mockVerifyCommitRef).toHaveBeenCalledWith(
+      '/workspace/repo',
+      'refs/archon/checkpoints/run-1/0/b'
+    );
+    expect(mockCreateRetrySafetyRef).toHaveBeenCalledWith('/workspace/repo', {
+      runId: 'run-1',
+      retryEpoch: 1,
+    });
+    expect(mockResetTrackedFilesToCommit).toHaveBeenCalledWith(
+      '/workspace/repo',
+      'refs/archon/checkpoints/run-1/0/b'
+    );
+    expect(auditPayloads()[1]).toMatchObject({
+      node_id: 'b',
+      retry_epoch: 1,
+      checkpoint_ref: 'refs/archon/checkpoints/run-1/0/b',
+      checkpoint_commit_sha: 'checkpoint-sha',
+      safety_ref: 'refs/archon/retry-safety/run-1/1',
+      safety_commit_sha: 'safety-sha',
+      reset_skipped: false,
+    });
+  });
+
+  test('writes node_retry_failed and avoids dispatch when checkpoint ref validation fails', async () => {
+    mockFindLatestCheckpointForRetry.mockResolvedValueOnce({
+      workflow_run_id: 'run-1',
+      node_id: 'b',
+      retry_epoch: 0,
+      checkpoint_ref: 'refs/archon/checkpoints/run-1/0/b',
+      commit_sha: 'checkpoint-sha',
+      created_commit: false,
+      fallback_from_node_id: null,
+      created_at: new Date(),
+    });
+    mockVerifyCommitRef.mockRejectedValueOnce(new Error('missing checkpoint ref'));
+
+    await expect(
+      prepareWorkflowNodeRetry(makeRequest({ workflow: makeWorkflow({ mutates_checkout: true }) }))
+    ).rejects.toMatchObject({ code: 'checkpoint_unavailable' });
+
+    expect(mockCreateRetrySafetyRef).not.toHaveBeenCalled();
+    expect(mockResetTrackedFilesToCommit).not.toHaveBeenCalled();
+    expect(mockGetRetryPreservedDagNodeOutputs).not.toHaveBeenCalled();
+    expect(mockUpdateWorkflowRun).toHaveBeenCalledWith('run-1', {
+      status: 'failed',
+      metadata: { retry_setup_error: 'missing checkpoint ref' },
+    });
+    expect(auditPayloads().at(-1)).toMatchObject({
+      node_id: 'b',
+      retry_epoch: 1,
+      setup_phase: 'checkpoint_validation',
+      error: 'missing checkpoint ref',
+    });
+  });
+
+  test('writes node_retry_failed and avoids dispatch when git reset --hard fails', async () => {
+    mockFindLatestCheckpointForRetry.mockResolvedValueOnce({
+      workflow_run_id: 'run-1',
+      node_id: 'b',
+      retry_epoch: 0,
+      checkpoint_ref: 'refs/archon/checkpoints/run-1/0/b',
+      commit_sha: 'checkpoint-sha',
+      created_commit: false,
+      fallback_from_node_id: null,
+      created_at: new Date(),
+    });
+    mockResetTrackedFilesToCommit.mockRejectedValueOnce(new Error('reset failed'));
+
+    await expect(
+      prepareWorkflowNodeRetry(makeRequest({ workflow: makeWorkflow({ mutates_checkout: true }) }))
+    ).rejects.toMatchObject({ code: 'git_reset_failed' });
+
+    expect(mockCreateRetrySafetyRef).toHaveBeenCalledTimes(1);
+    expect(mockGetRetryPreservedDagNodeOutputs).not.toHaveBeenCalled();
+    expect(mockUpdateWorkflowRun).toHaveBeenCalledWith('run-1', {
+      status: 'failed',
+      metadata: { retry_setup_error: 'reset failed' },
+    });
+    expect(auditPayloads().at(-1)).toMatchObject({
+      node_id: 'b',
+      retry_epoch: 1,
+      setup_phase: 'git_reset',
+      error: 'reset failed',
+    });
+  });
 });

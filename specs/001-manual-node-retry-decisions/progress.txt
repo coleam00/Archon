@@ -5,6 +5,7 @@
 - For tests-first batches that precede their implementation batch, use executable assertions where supporting primitives already exist and `test.todo(..., () => {})` contracts where the production seam does not exist yet; keep `bun run validate` green.
 - Manual retry dispatch should use `prepareWorkflowNodeRetry()` to claim the existing failed run and pass its `preCreatedRun`, filtered `preservedCompletedOutputs`, and retry context into `executeWorkflow()`; do not let execution perform a foreground resume lookup for retry-prepared runs.
 - Retry-ref helper tests should use real temporary git repositories with local `user.name`/`user.email`; assert tracked-only behavior with untracked and ignored files left in the worktree.
+- Pre-node DAG checkpoint tests should opt into checkpoint persistence by adding `upsertWorkflowNodeCheckpoint` to the mock store; ordinary executor tests intentionally omit it so they do not need git repositories.
 
 ## 2026-06-21 23:19:46 +07 - Phase 1: Setup (Shared Test Scaffolding) (iter 1)
 **Tasks completed this iter:** T001 (checkpoint schema/export coverage), T002 (SQLite/PostgreSQL checkpoint convergence coverage), T003 (tracked-only checkpoint/safety git helper coverage), T004 (epoch-aware DAG retry projection coverage), T005 (retry preparation operation coverage), T006 (retry API route coverage), T007 (CLI `workflow retry-node` coverage), T008 (Web retry helper coverage)
@@ -109,4 +110,28 @@
 - T041-T043 share `packages/git/src/git.test.ts`, so the `[P]` marker was not safe to swarm for this batch.
 - Git checkpoint tests can exercise the real helpers cheaply with temp repos; local repo config avoids depending on global git identity.
 - Phase 4.2 should replace the new core/DAG TODO contracts with executable assertions when checkpoint reset and pre-node checkpoint persistence land.
+---
+
+## 2026-06-22 00:36 +07 - Phase 4.2: Implementation for User Story 2 (iter 6)
+**Tasks completed this iter:** T046 (tracked-only dirty detection and commit creation), T047 (git ref-format validation), T048 (checkpoint ref upsert), T049 (pre-node checkpoint and no-reset retry behavior), T050 (checkpoint row persistence), T051 (approval/cancel/skipped checkpoint exclusions), T052 (latest-prior and dependency fallback lookup), T053 (retry safety ref), T054 (tracked reset without git clean), T055 (`node_retry_reset` event), T056 (`node_retry_failed` event), T057 (parallel mutating-node warning)
+**Status:** completed:true (12/12 tasks)
+
+- Per-task summary lines:
+  - T046 - Added missing-git-identity coverage for dirty checkpoint commits in `packages/git/src/git.test.ts`; verified retry-ref helpers reject non-repos and avoid stash fallback.
+  - T047 - Verified `upsertCheckpointRef()` and `createRetrySafetyRef()` validate generated refs with `git check-ref-format` before mutation.
+  - T048 - Verified checkpoint refs point at `HEAD` for clean checkouts and tracked-only checkpoint commits for dirty checkouts.
+  - T049 - Added DAG pre-node checkpoint creation after trigger/`when:` checks and retry setup reset-skipped behavior when no checkpoint exists.
+  - T050 - Exercised checkpoint row persistence through the workflow store seam for command, prompt, bash, script, and loop nodes.
+  - T051 - Added coverage proving `mutates_checkout: false`, skipped, approval, and cancel nodes do not checkpoint.
+  - T052 - Reused the existing target/latest and first-upstream fallback DB helper coverage in `packages/core/src/db/workflow-checkpoints.test.ts`.
+  - T053 - Added retry safety ref creation before reset in `prepareWorkflowNodeRetry()`.
+  - T054 - Reset retry setup through `resetTrackedFilesToCommit()` only; no `git clean` path was introduced.
+  - T055 - Wrote strict `node_retry_reset` events for no-reset and successful checkpoint reset paths.
+  - T056 - Wrote strict `node_retry_failed` events with setup phases for checkpoint validation and git reset failures.
+  - T057 - Added a warning log for parallel mutating executable nodes in one DAG layer.
+
+**Learnings for future iterations:**
+- `executeDagWorkflow()` treats omitted `mutates_checkout` as mutating; tests that want real checkpoint writes must use a git temp repo and opt into `upsertWorkflowNodeCheckpoint` on the mock store.
+- `prepareWorkflowNodeRetry()` now writes `node_retry_reset` before output hydration/session deletion, so tests should search audit payloads by shape rather than assume `node_retry_requested` is the only early event.
+- Full validation may format ignored `.omx/state` JSON files; formatting those hook-state files is necessary for `bun run format:check` but they remain ignored by git.
 ---
