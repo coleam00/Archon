@@ -5451,6 +5451,13 @@ describe('executeDagWorkflow -- always_run resume opt-out', () => {
   });
 });
 
+describe('executeDagWorkflow -- retry checkpoints', () => {
+  it.todo(
+    'persists pre-node checkpoints for command, prompt, bash, script, and loop executable node kinds',
+    () => {}
+  );
+});
+
 describe('executeDagWorkflow -- break after result (no hang on subprocess exit)', () => {
   let testDir: string;
 

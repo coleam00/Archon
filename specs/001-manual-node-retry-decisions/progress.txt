@@ -4,6 +4,7 @@
 - Keep persisted workflow event row validation legacy-compatible; add narrow payload schemas and strict writers for new event families instead of tightening `workflowEventRowSchema.event_type` globally.
 - For tests-first batches that precede their implementation batch, use executable assertions where supporting primitives already exist and `test.todo(..., () => {})` contracts where the production seam does not exist yet; keep `bun run validate` green.
 - Manual retry dispatch should use `prepareWorkflowNodeRetry()` to claim the existing failed run and pass its `preCreatedRun`, filtered `preservedCompletedOutputs`, and retry context into `executeWorkflow()`; do not let execution perform a foreground resume lookup for retry-prepared runs.
+- Retry-ref helper tests should use real temporary git repositories with local `user.name`/`user.email`; assert tracked-only behavior with untracked and ignored files left in the worktree.
 
 ## 2026-06-21 23:19:46 +07 - Phase 1: Setup (Shared Test Scaffolding) (iter 1)
 **Tasks completed this iter:** T001 (checkpoint schema/export coverage), T002 (SQLite/PostgreSQL checkpoint convergence coverage), T003 (tracked-only checkpoint/safety git helper coverage), T004 (epoch-aware DAG retry projection coverage), T005 (retry preparation operation coverage), T006 (retry API route coverage), T007 (CLI `workflow retry-node` coverage), T008 (Web retry helper coverage)
@@ -91,4 +92,21 @@
 - Normal resume still forces `always_run` nodes to rerun, but retry-prepared execution receives already-filtered preserved outputs and should skip preserved `always_run` nodes unless they were invalidated.
 - The retry operation currently fails fast for mutating workflows unless `mutates_checkout: false`; checkpoint reset support belongs to the next US2 batch.
 - Full validation can surface formatting drift in ignored `.omx/state` hook files; formatting those ignored state files does not affect the feature commit.
+---
+
+## 2026-06-22 00:16:14 +07 - Phase 4.1: Tests for User Story 2 (iter 5)
+**Tasks completed this iter:** T041 (clean-checkout checkpoint ref test), T042 (tracked-dirty checkpoint commit test), T043 (safety/ref/reset failure contracts), T044 (checkpoint fallback lookup test), T045 (DAG pre-node checkpoint contract)
+**Status:** completed:true (5/5 tasks)
+
+- Per-task summary lines:
+  - T041 — Replaced retry-ref TODOs with an executable clean-checkout checkpoint-ref test in `packages/git/src/git.test.ts`, asserting the checkpoint points at `HEAD` without creating a commit.
+  - T042 — Added a tracked-dirty checkpoint test proving `upsertCheckpointRef()` commits tracked modifications while leaving untracked and ignored files out of the commit.
+  - T043 — Added executable retry safety/ref validation/reset tests in `packages/git/src/git.test.ts` and TODO contracts for future core retry setup failures in `packages/core/src/operations/workflow-retry.test.ts`.
+  - T044 — Added `packages/core/src/db/workflow-checkpoints.test.ts` for target checkpoint lookup and first-upstream fallback behavior, and wired it into `packages/core/package.json`.
+  - T045 — Added the DAG executor TODO contract for pre-node checkpoints across command, prompt, bash, script, and loop executable nodes in `packages/workflows/src/dag-executor.test.ts`.
+
+**Learnings for future iterations:**
+- T041-T043 share `packages/git/src/git.test.ts`, so the `[P]` marker was not safe to swarm for this batch.
+- Git checkpoint tests can exercise the real helpers cheaply with temp repos; local repo config avoids depending on global git identity.
+- Phase 4.2 should replace the new core/DAG TODO contracts with executable assertions when checkpoint reset and pre-node checkpoint persistence land.
 ---

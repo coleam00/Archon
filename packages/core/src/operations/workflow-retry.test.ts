@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
-import type { WorkflowDefinition, WorkflowRun } from '@archon/workflows/schemas';
+import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
+import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { createQueryResult, mockPostgresDialect } from '../test/mocks/database';
 
 const mockGetWorkflowRun = mock(async () => makeRun());
@@ -214,4 +215,10 @@ describe('workflow retry preparation operation', () => {
       error: 'hydration failed',
     });
   });
+
+  test.todo(
+    'writes node_retry_failed and avoids dispatch when checkpoint ref validation fails',
+    () => {}
+  );
+  test.todo('writes node_retry_failed and avoids dispatch when git reset --hard fails', () => {});
 });

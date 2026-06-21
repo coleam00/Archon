@@ -413,7 +413,7 @@
     },
     {
       "title": "Phase 4.1: Tests for User Story 2",
-      "completed": false,
+      "completed": true,
       "tasks": [
         {
           "id": "T041",
@@ -421,7 +421,7 @@
           "description": "[P] [US2] Add clean-checkout checkpoint ref test in `packages/git/src/git.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 41,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -430,7 +430,7 @@
           "description": "[P] [US2] Add tracked-dirty checkpoint commit test excluding untracked files in `packages/git/src/git.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 42,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -439,7 +439,7 @@
           "description": "[P] [US2] Add retry safety ref/commit, checkpoint ref/SHA `git rev-parse --verify <ref-or-sha>^{commit}` validation, invalid/missing ref producing `node_retry_failed` with no dispatch, and `git reset --hard` failure tests in `packages/git/src/git.test.ts` and `packages/core/src/operations/workflow-retry.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 43,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -448,7 +448,7 @@
           "description": "[P] [US2] Add checkpoint lookup fallback test for target and first upstream dependency in `packages/core/src/db/workflow-checkpoints.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 44,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -457,7 +457,7 @@
           "description": "[P] [US2] Add DAG pre-node checkpoint test for executable node kinds in `packages/workflows/src/dag-executor.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 45,
-          "passes": false,
+          "passes": true,
           "notes": ""
         }
       ],
