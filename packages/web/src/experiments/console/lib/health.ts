@@ -21,9 +21,16 @@ export function useIsDocker(): boolean {
   return data?.is_docker ?? true;
 }
 
-/** Open a host path in the user's editor via the vscode:// scheme. */
-export function openInIde(workingPath: string): void {
+const VSCODE_NEW_WINDOW_QUERY = 'windowId=_blank';
+
+/** Build a VS Code protocol URI that opens a path without replacing the active window. */
+export function buildIdeUri(workingPath: string): string {
   // Normalise backslashes for Windows paths the same way the old UI does.
   const normalised = workingPath.replace(/\\/g, '/');
-  window.open(`vscode://file/${normalised}`, '_blank');
+  return `vscode://file/${normalised}?${VSCODE_NEW_WINDOW_QUERY}`;
+}
+
+/** Open a host path in the user's editor via the vscode:// scheme. */
+export function openInIde(workingPath: string): void {
+  window.open(buildIdeUri(workingPath), '_blank');
 }

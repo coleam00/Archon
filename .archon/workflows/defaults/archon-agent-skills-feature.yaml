@@ -1,0 +1,227 @@
+name: archon-agent-skills-feature
+description: |
+  Use when: User wants to build a feature end-to-end with the agent-skills
+  (Addy Osmani) command pipeline, running fully unattended in a worktree.
+  Triggers: "agent-skills feature", "plan build test review", "addy pipeline",
+            "agent skills workflow", "opus plan codex build".
+  Does: Claude Opus plans (/plan) -> Codex reviews + fixes the plan -> Codex
+        implements the plan via the ultragoal skill (oh-my-codex) -> Codex makes
+        the suite green (/test) -> Codex reviews the diff (/review) and writes
+        tasks/review-report.md.
+  NOT for: quick one-file fixes, bug fixes, PR reviews.
+  Prereq: the agent-skills commands/skills must be installed for BOTH Claude
+        (project/user .claude) AND Codex (~/.codex/prompts or .agents/skills);
+        the repo ships no Codex install out of the box.
+
+# Most nodes are Codex; only planning runs on Claude Opus (overridden per node).
+# Codex reasoning effort is taken from assistants.codex.modelReasoningEffort in
+# .archon/config.yaml (there is no per-node modelReasoningEffort field) — set it to
+# `xhigh` there for maximum Codex reasoning across these nodes.
+provider: codex
+
+nodes:
+  # ───────────────────────────────────────────────────────────────────
+  # STEP 1 / 5 — Setup
+  # ───────────────────────────────────────────────────────────────────
+  - id: setup
+    bash: |
+      set -euo pipefail
+      echo "=== AGENT-SKILLS FEATURE PIPELINE ==="
+      echo "Feature: $ARGUMENTS"
+      echo "PROJECT_ROOT=$(pwd)"
+      echo "HEAD=$(git rev-parse --short HEAD 2>/dev/null || echo 'no-git')"
+      echo "ARTIFACTS_DIR=$ARTIFACTS_DIR"
+      git fetch --all --prune 2>/dev/null || true
+      mkdir -p tasks
+      echo ""
+      echo "Pipeline: /plan (Claude Opus) -> codex review+fix -> ultragoal -> /test -> /review"
+      echo "Starting Step 1 of 5: planning..."
+
+  # ───────────────────────────────────────────────────────────────────
+  # STEP 2 / 5 — Plan with Claude Opus (/plan), fully autonomous
+  # ───────────────────────────────────────────────────────────────────
+  - id: plan
+    prompt: |
+      ## Autonomous headless mode — NO human is available
+
+      You are running inside an automated Archon workflow. There is NO human to
+      answer questions and no interactive chat. The `AskUserQuestion` tool is
+      unavailable (denied) — never attempt to use it and never stop to wait.
+
+      `/plan` would normally "present the plan for human review". DO NOT do that
+      and DO NOT block. Make the simplest durable decisions yourself (KISS /
+      YAGNI), grounded in the ACTUAL repository — never invent requirements or
+      expand scope. Put ONLY genuinely human/business-judgment questions you
+      cannot resolve from the codebase into `tasks/open-questions.md`, one
+      `## Q<n>` block each (question + options weighed + your provisional
+      default); a later step resolves them.
+
+      ## Task
+
+      Produce the implementation plan for this feature. Save the plan to
+      `tasks/plan.md` and the task list to `tasks/todo.md` (the paths the
+      planning skill uses). Slice work into small vertically-complete tasks with
+      acceptance criteria and dependency ordering.
+
+      /plan $ARGUMENTS
+
+      When finished, print the exact paths you wrote.
+    depends_on: [setup]
+    provider: claude
+    model: opus
+    context: fresh
+    denied_tools:
+      - AskUserQuestion
+
+  # ───────────────────────────────────────────────────────────────────
+  # STEP 3 / 5 — Codex reviews the plan, answers open questions, fixes in place
+  # ───────────────────────────────────────────────────────────────────
+  - id: review-plan
+    prompt: |
+      ## Persona
+
+      You are a SHARP SOLUTION ARCHITECT who lives by KISS and YAGNI. You do not
+      overthink, you do not invent problems that don't exist, and you reject
+      over-engineering as hard as you reject band-aids. When a problem is real you
+      pick the simplest durable fix that matches the feature intent and the
+      actual repo. No speculative abstractions, no feature flags, no
+      "TODO: revisit".
+
+      ## Headless mode — NO human is available
+
+      There is no human to answer questions and no chat to ask in. Resolve every
+      decision yourself from the plan plus the actual codebase, and APPLY your
+      fixes directly to the plan files. Do not stop to ask.
+
+      ## Task
+
+      Claude Opus just wrote an implementation plan to `tasks/plan.md` and a task
+      list to `tasks/todo.md`. Independently VERIFY and FIX them IN PLACE, then
+      write a review report. Treat every plan claim as a hypothesis to test
+      against the real repository — not a verdict to accept.
+
+      1. Read `tasks/plan.md` and `tasks/todo.md`.
+      2. If `tasks/open-questions.md` exists, answer EACH `## Q<n>` using bounded
+         evidence from the actual codebase (cite file:line). Fold each answer into
+         the plan/tasks so they stay self-contained, then mark it answered. Leave
+         a question unanswered ONLY if it truly needs a business/product decision
+         unavailable from the code — and say so explicitly.
+      3. Verify against the real codebase and fix problems in place:
+         - feasibility — every referenced file, symbol, API, table, and command
+           actually exists (inspect the repo to confirm); fix wrong references.
+         - correctness & internal consistency — tasks don't contradict each other;
+           dependency order is right; each task's acceptance criteria and
+           verification steps are concrete and runnable.
+         - scope — no gold-plating beyond the feature's intent; cut YAGNI
+           violations; do NOT expand scope.
+         - the contract or edge case the plan missed that sits one step from what
+           it already covers.
+         Edit `tasks/plan.md` / `tasks/todo.md` directly. Change only what is
+         wrong, risky, or missing — do not rewrite sound sections for style.
+      4. Do NOT implement the feature — only verify and repair the plan.
+      5. Write a review report to `tasks/plan-review.md` (ALWAYS create it, even
+         when nothing needed fixing). Use this structure:
+
+           # Plan Review Report
+           - Reviewer: codex
+           - Verdict: <clean | fixed-with-changes | needs-human-decision>
+           - Summary: <2-4 sentences>
+
+           ## Open Questions Answered
+           (one block per question; or "None")
+           - Q<n>: <question> — Answer / Evidence (file:line) / Folded into
+
+           ## Issues Found & Fixed
+           (one `### ` block per issue; or "None — plan verified sound")
+           ### <short title>
+           - Location: <tasks/plan.md or tasks/todo.md + section/task>
+           - Severity: <blocker | major | minor>
+           - Problem: <what is wrong, in detail>
+           - Why it's wrong: <evidence — codebase file:line, contradiction, etc.>
+           - Fix applied: <what changed; short before -> after>
+           - Rationale: <why this is the simplest durable fix>
+
+      Cite real file:line evidence — no generic platitudes. When finished, print
+      the report path and a one-line verdict, then end with `REVIEW_PLAN_DONE`.
+    depends_on: [plan]
+    context: fresh
+
+  # ───────────────────────────────────────────────────────────────────
+  # STEP 4 / 5 — Codex implements the whole plan via ultragoal
+  # ───────────────────────────────────────────────────────────────────
+  - id: build
+    prompt: |
+      ## Autonomous headless mode — NO human is available
+
+      No human, no chat, no approvals. Drive the work to completion; if a
+      high-risk step arises, make the safest reasonable choice and document it.
+      Never fake, skip, or weaken tests.
+
+      ## Task
+
+      Implement the verified plan (`tasks/plan.md` + `tasks/todo.md`) using the
+      Codex `ultragoal` skill (oh-my-codex): turn the plan into goals and execute
+      them to completion.
+
+      $ultragoal tasks/plan.md
+
+      Drive the full ultragoal loop: create goals from the plan, then complete
+      EVERY goal (implement + test + commit per goal) until `omx ultragoal status`
+      reports all goals complete and the final cleanup/review gate is clean. Do
+      not stop until the whole plan is implemented and the test suite passes.
+
+      When finished, print a summary of the goals completed and the final test
+      results.
+    depends_on: [review-plan]
+    context: fresh
+
+  # ───────────────────────────────────────────────────────────────────
+  # STEP 5a — Codex makes the full suite green (/test)
+  # ───────────────────────────────────────────────────────────────────
+  - id: test
+    prompt: |
+      ## Autonomous headless mode — NO human is available
+
+      No human, no chat, no approvals. Never fake, skip, or weaken tests, and
+      never edit a test just to make it pass — fix the code.
+
+      ## Task
+
+      Using the agent-skills `/test` discipline, make the full test suite green
+      for the implemented feature: add tests for any new behavior that lacks
+      coverage, add a failing reproducing test for any bug then fix the code, and
+      run the FULL suite until it passes. If the `/test` command is available,
+      use it.
+
+      /test
+
+      When finished, print the final test results (pass/fail counts).
+    depends_on: [build]
+    context: fresh
+
+  # ───────────────────────────────────────────────────────────────────
+  # STEP 5b — Codex reviews the diff (/review), writes a report file
+  # ───────────────────────────────────────────────────────────────────
+  - id: review
+    prompt: |
+      ## Autonomous headless mode — NO human is available
+
+      No human, no chat. This is a review (analysis) step — do not change feature
+      code here; record findings instead.
+
+      ## Task
+
+      Using the agent-skills `/review` discipline, review the changes implemented
+      in this run (staged changes + recent commits). Assess correctness,
+      readability, architecture, security, and performance; categorize each
+      finding Critical / Important / Suggestion with `file:line` references and a
+      concrete recommended fix. If the `/review` command is available, use it.
+
+      /review
+
+      `/review` normally prints to chat only. Instead, WRITE the full review to
+      `tasks/review-report.md` (Critical / Important / Suggestion sections, each
+      finding with file:line + fix), then print a one-line verdict and end with
+      `REVIEW_DONE`.
+    depends_on: [test]
+    context: fresh

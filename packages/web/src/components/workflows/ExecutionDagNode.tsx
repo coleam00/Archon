@@ -30,6 +30,7 @@ const TYPE_COLORS: Record<string, string> = {
   prompt: 'text-accent-bright',
   bash: 'text-amber-400',
   loop: 'text-orange-400',
+  approval: 'text-node-approval',
 };
 
 const TYPE_LABELS: Record<string, string> = {
@@ -37,6 +38,7 @@ const TYPE_LABELS: Record<string, string> = {
   bash: 'BASH',
   prompt: 'PROMPT',
   loop: 'LOOP',
+  approval: 'APPROVAL',
 };
 
 function ExecutionDagNodeRender({ data }: NodeProps<ExecutionFlowNode>): React.ReactElement {

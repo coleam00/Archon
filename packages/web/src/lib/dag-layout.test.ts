@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { resolveNodeDisplay, dagNodesToReactFlow } from './dag-layout';
+import { resolveExecutionNodeDisplay, resolveNodeDisplay, dagNodesToReactFlow } from './dag-layout';
 import type { DagNode } from '@/lib/api';
 
 describe('resolveNodeDisplay', () => {
@@ -28,6 +28,48 @@ describe('resolveNodeDisplay', () => {
     expect(resolveNodeDisplay(dn)).toEqual({
       label: 'Approval',
       nodeType: 'approval',
+    });
+  });
+});
+
+describe('resolveExecutionNodeDisplay', () => {
+  test('uses the node id as the execution graph label for prompt nodes', () => {
+    const dn: DagNode = {
+      id: 'cook',
+      prompt: 'implement the verified plan',
+    };
+
+    expect(resolveExecutionNodeDisplay(dn)).toEqual({
+      label: 'cook',
+      nodeType: 'prompt',
+      promptText: 'implement the verified plan',
+    });
+  });
+
+  test('uses the node id as the execution graph label for bash nodes', () => {
+    const dn: DagNode = {
+      id: 'resolve-plan',
+      bash: 'printf %s "$PLAN_DIR"',
+      timeout: 5000,
+    };
+
+    expect(resolveExecutionNodeDisplay(dn)).toEqual({
+      label: 'resolve-plan',
+      nodeType: 'bash',
+      bashScript: 'printf %s "$PLAN_DIR"',
+      bashTimeout: 5000,
+    });
+  });
+
+  test('uses the node id as the execution graph label for command nodes', () => {
+    const dn: DagNode = {
+      id: 'lint',
+      command: 'check-code',
+    };
+
+    expect(resolveExecutionNodeDisplay(dn)).toEqual({
+      label: 'lint',
+      nodeType: 'command',
     });
   });
 });

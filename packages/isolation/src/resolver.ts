@@ -445,6 +445,7 @@ export class IsolationResolver {
       codebaseId: codebase.id,
       codebaseName: codebase.name,
       canonicalRepoPath: canonicalPath,
+      baseBranch: codebase.defaultBranch ?? undefined,
       identifier: workflowId,
       gitIdentity,
     };

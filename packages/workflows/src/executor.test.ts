@@ -33,8 +33,9 @@ mock.module('@archon/paths', () => ({
 }));
 
 // --- Mock git ---
+const mockGetDefaultBranch = mock(async () => 'main');
 mock.module('@archon/git', () => ({
-  getDefaultBranch: mock(async () => 'main'),
+  getDefaultBranch: mockGetDefaultBranch,
   toRepoPath: mock((p: string) => p),
 }));
 
@@ -147,6 +148,8 @@ describe('executeWorkflow', () => {
     mockEmitter.registerRun.mockClear();
     mockEmitter.unregisterRun.mockClear();
     mockEmitter.emit.mockClear();
+    mockGetDefaultBranch.mockClear();
+    mockGetDefaultBranch.mockImplementation(async () => 'main');
     mockExecuteDagWorkflow.mockImplementation(async (): Promise<string | undefined> => undefined);
   });
 
@@ -507,6 +510,79 @@ describe('executeWorkflow', () => {
       expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
       const docsDir = mockExecuteDagWorkflow.mock.calls[0]?.[11];
       expect(docsDir).toBe('packages/docs-web/src/content/docs');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Base branch resolution
+  // -------------------------------------------------------------------------
+
+  describe('base branch resolution', () => {
+    it('uses caller-provided baseBranch when repo config is unset', async () => {
+      mockGetDefaultBranch.mockImplementation(async () => {
+        throw new Error('origin/HEAD missing');
+      });
+      const deps = makeDeps();
+
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp/worktree',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1',
+        { baseBranch: 'develop' }
+      );
+
+      expect(mockGetDefaultBranch).not.toHaveBeenCalled();
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[10]).toBe('develop');
+    });
+
+    it('prefers repo config baseBranch over caller-provided baseBranch', async () => {
+      const deps = makeDeps();
+      deps.loadConfig = mock(
+        async (): Promise<WorkflowConfig> => ({
+          assistant: 'claude' as const,
+          assistants: {
+            claude: {},
+            codex: {},
+          },
+          baseBranch: 'main',
+          commands: { folder: '' },
+        })
+      );
+
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp/worktree',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1',
+        { baseBranch: 'develop' }
+      );
+
+      expect(mockGetDefaultBranch).not.toHaveBeenCalled();
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[10]).toBe('main');
+    });
+
+    it('falls back to git auto-detection when config and caller branch are unset', async () => {
+      const deps = makeDeps();
+
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp/worktree',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1'
+      );
+
+      expect(mockGetDefaultBranch).toHaveBeenCalledWith('/tmp/worktree');
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[10]).toBe('main');
     });
   });
 

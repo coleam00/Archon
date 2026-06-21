@@ -113,6 +113,10 @@ mock.module('@archon/isolation', () => ({
   getIsolationProvider: mock(() => ({})),
 }));
 
+mock.module('@archon/git', () => ({
+  toBranchName: mock((branch: string) => branch),
+}));
+
 mock.module('./prompt-builder', () => ({
   buildOrchestratorPrompt: mock(() => 'prompt'),
   buildProjectScopedPrompt: mock(() => 'prompt'),
@@ -242,5 +246,25 @@ describe('validateAndResolveIsolation', () => {
       'Cleaned up 3 merged worktree(s) to make room.'
     );
     expect(result.status).toBe('new');
+  });
+
+  test('passes codebase default_branch into isolation resolver', async () => {
+    const conversation = makeConversation();
+    const codebase = makeCodebase({ default_branch: 'develop' });
+
+    mockResolve.mockResolvedValueOnce({
+      status: 'none',
+      cwd: '/workspace/test-repo',
+    });
+
+    await validateAndResolveIsolation(conversation, codebase, platform, 'conv-1');
+
+    expect(mockResolve).toHaveBeenCalledWith(
+      expect.objectContaining({
+        codebase: expect.objectContaining({
+          defaultBranch: 'develop',
+        }),
+      })
+    );
   });
 });

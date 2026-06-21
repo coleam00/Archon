@@ -74,6 +74,13 @@ export function resolveNodeDisplay(dn: DagNode): {
   };
 }
 
+export function resolveExecutionNodeDisplay(dn: DagNode): ReturnType<typeof resolveNodeDisplay> {
+  return {
+    ...resolveNodeDisplay(dn),
+    label: dn.id,
+  };
+}
+
 export function dagNodesToReactFlow(dagNodes: readonly DagNode[]): {
   nodes: DagFlowNode[];
   edges: Edge[];

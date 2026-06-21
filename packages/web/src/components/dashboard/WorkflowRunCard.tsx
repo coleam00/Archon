@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import type { DashboardRunResponse } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { buildIdeUri } from '@/lib/ide';
 import { formatDuration } from '@/lib/format';
 import { useWorkflowStore } from '@/stores/workflow-store';
 import type { WorkflowState } from '@/lib/types';
@@ -297,7 +298,7 @@ export function WorkflowRunCard({
         )}
         {run.working_path && !isDocker && (
           <a
-            href={`vscode://file/${run.working_path.replace(/\\/g, '/')}`}
+            href={buildIdeUri(run.working_path)}
             target="_blank"
             rel="noopener noreferrer"
             className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-text-secondary hover:bg-surface-elevated hover:text-text-primary transition-colors"

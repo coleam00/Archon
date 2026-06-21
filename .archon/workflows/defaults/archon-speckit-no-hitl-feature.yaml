@@ -1,0 +1,554 @@
+name: archon-speckit-no-hitl-feature
+description: |
+  Use when: User wants to develop a feature using the speckit SDD (Spec-Driven Development) pipeline end-to-end.
+  Triggers: "speckit feature", "spec-driven", "sdd pipeline", "full speckit", "speckit full",
+            "specify plan implement", "speckit end-to-end", "feature with speckit",
+            "speckit pipeline", "sdd feature".
+  Does: Specify → red-team adversarial review → clarify ambiguities → plan → tasks →
+        analyze cross-artifact consistency → tasks-to-ralph → run ralph.sh → sync-back →
+        no-mistakes validation.
+  Prereq: run `no-mistakes init` once in the target repository before validation.
+  NOT for: Quick one-file fixes, bug fixes, PR reviews.
+  NOT for: When a spec already exists (use archon-speckit-plan-to-tasks instead).
+  NOT for: Spec generation only without planning (use archon-speckit-spec instead).
+provider: codex
+
+nodes:
+  - id: setup
+    bash: |
+      echo "=== SPECKIT SDD PIPELINE ==="
+      echo "Feature: $ARGUMENTS"
+      FEATURE_SLUG=$(echo "$ARGUMENTS" | tr '[:upper:]' '[:lower:]' | tr -s ' ' '-' | sed 's/[^a-z0-9-]//g' | sed 's/--*/-/g' | cut -c1-60)
+      echo "FEATURE_SLUG=$FEATURE_SLUG"
+      echo "PROJECT_ROOT=$(pwd)"
+      echo "HEAD=$(git rev-parse --short HEAD 2>/dev/null || echo 'no-git')"
+      git fetch --all --prune 2>/dev/null || true
+      echo "ARTIFACTS_DIR=$ARTIFACTS_DIR"
+      echo ""
+      echo "Artifacts will be saved to: $ARTIFACTS_DIR"
+      echo "Starting Step 1 of 8: Generating feature specification..."
+  - id: specify
+    prompt: |
+      /speckit-specify read requirement in $ARGUMENTS , scout source code to know the context , create detail spec, spawn sub-agents for help
+    depends_on:
+      - setup
+    provider: codex
+    model: gpt-5.5
+    context: fresh
+  - id: clarify
+    prompt: |
+      $speckit-clarifybatch --turn 10
+    depends_on:
+      - specify
+    provider: codex
+    model: gpt-5.5
+    context: fresh
+  - id: clarify-respond
+    prompt: |
+      ## Persona
+
+      You are a SHARP SOLUTION ARCHITECT who lives by KISS and YAGNI. You
+      DO NOT overthink. You DO NOT invent problems that don't exist. Your
+      first instinct on any question is "is this a real problem?" — most
+      aren't, and you skip those without ceremony. When the problem IS real,
+      you pick the SIMPLEST durable answer that matches the feature intent and
+      local project constraints — never the most elaborate architecture you can imagine. You think in
+      invariants and contracts because they keep things simple long-term,
+      not because complexity impresses anyone. You push back on weak
+      questions, reject band-aids, and reject over-engineering with equal
+      force. You name trade-offs explicitly. No speculative abstractions.
+      No feature flags or "TODO: revisit" comments. No future-proofing for
+      requirements nobody has asked for.
+
+      ## Task
+
+      Draft answers to clarification questions in the file produced by the
+      previous `clarify` node. The file is the single source of truth —
+      no chat-only Q&A drafts.
+      Run all commands from the current working directory; use only relative paths.
+
+      ## Instructions
+      1. Read .specify/feature.json to resolve <feature_directory>.
+      2. Read <feature_directory>/clarification-questions.md. Confirm it
+         exists and has `Status: PENDING`. If missing or already ARCHIVED,
+         STOP and report BLOCKED — do NOT fabricate questions.
+      3. For EACH `## Q<N>.` block in the file, use the existing spec and
+         narrowly relevant local project context to determine the best answer.
+         Inspect code only when the question depends on an existing API, data
+         model, integration point, or documented behavior. Do NOT inspect
+         sibling/external repositories unless the user's feature request
+         explicitly names them.
+      4. Edit the file IN-PLACE using the Edit tool. For EACH block, fill
+         TWO lines:
+         a. `Your Answer:` line — one of:
+              - an option letter (A/B/C/D/E) for multiple-choice questions
+              - the word `recommended` to accept the suggested option
+              - a short phrase (<=5 words) for short-answer questions
+              - leave blank if you cannot determine a confident answer
+         b. `Reason:` line — append immediately AFTER `Your Answer:`
+              (insert the line if it does not yet exist). Write 1-2
+              sentences explaining WHY this option was picked, anchored
+              in concrete evidence:
+                - quote a phrase from the spec, OR
+                - cite a narrowly relevant local code/doc file:line, OR
+                - name the domain rule / constraint that forces the choice.
+              No generic platitudes ("it's cleaner", "best practice").
+              Leave blank if `Your Answer:` is blank.
+      5. Do NOT modify question text, categories, recommended options, the
+         options table, or any other metadata. Do NOT change `Status: PENDING`.
+         The APPLY phase parser keys off the `Your Answer:` line — keep
+         that line a single token. `Reason:` is reviewer-facing only and
+         is ignored by the parser, so it is safe to add.
+      6. After editing, print "ANSWERS_DRAFTED" and the file path, then STOP.
+    depends_on:
+      - clarify
+    provider: codex
+    model: gpt-5.5
+    context: fresh
+    allowed_tools:
+      - Read
+      - Edit
+      - Glob
+      - Grep
+      - Bash
+  - id: clarify-apply
+    prompt: |
+      $speckit-clarifybatch --apply
+    depends_on:
+      - clarify-respond
+    model: gpt-5.5
+    context: fresh
+  - id: red-team
+    prompt: |
+      Read .specify/feature.json to resolve <feature_directory>, then run:
+      $speckit.red-team.run <feature_directory> --yes
+    depends_on:
+      - clarify-apply
+    model: gpt-5.5
+    context: fresh
+    denied_tools:
+      - Bash
+  - id: red-team-respond
+    prompt: |
+      ## Persona
+
+      You are a SHARP SOLUTION ARCHITECT who lives by KISS and YAGNI. You
+      DO NOT overthink. You DO NOT invent problems that don't exist. Your
+      first instinct on any finding is "is this a real problem?" — most
+      aren't, and you skip those without ceremony. When the problem IS real,
+      you pick the SIMPLEST durable fix that matches the feature intent and
+      local project constraints — never the most elaborate architecture you can imagine. You think in
+      invariants and contracts because they keep things simple long-term,
+      not because complexity impresses anyone. You push back on weak
+      findings, reject band-aids, and reject over-engineering with equal
+      force. You name trade-offs explicitly. No speculative abstractions.
+      No feature flags or "TODO: revisit" comments. No future-proofing for
+      requirements nobody has asked for.
+
+      ## Task
+
+      Draft per-finding resolutions for a red-team findings file produced by
+      the previous `red-team` node. The file is the single source of truth —
+      no chat-only RECAP drafts. Mirror of the `clarify-respond` flow above
+      (file-centric, in-place edits).
+      Run all commands from the current working directory; use only relative paths.
+
+      ## Stance: critical-thinking, bounded-verification, long-term-only
+
+      A red-team finding is an ACCUSATION, not a verdict. Treat each finding as
+      a hypothesis to be tested against the feature artifacts before picking a
+      resolution category. Do not auto-accept the reviewer's framing; do not
+      auto-apply their proposed fix. Your job is to:
+        (a) verify the finding's premise against the actual spec,
+        (b) inspect narrowly relevant local code/docs only when needed to
+            resolve an existing contract, API, data shape, or integration point,
+        (c) propose the LONG-TERM resolution — never a work-around / band-aid.
+
+      ## Instructions
+
+      1. Read .specify/feature.json to resolve <feature_directory>.
+      2. Glob `<feature_directory>/red-team-findings-*.md` and pick the MOST
+         RECENT file whose filename does NOT contain `-applied-` (highest
+         YYYY-MM-DD, then highest -NN). Confirm the file's §2 Findings table
+         has `Status` blank (not yet resolved). If file missing, or already
+         archived (filename contains `-applied-`), STOP and report BLOCKED —
+         do NOT fabricate findings.
+      3. Read `<feature_directory>/spec.md` for context.
+
+      4. **Focused verification, not broad archaeology.**
+         For EACH finding row in §2:
+           a. Read the spec section the finding cites (use the row's
+              `Location` column). Quote the exact text. If the finding
+              mischaracterizes what the spec says, flag it as a signal that
+              the finding may be invalid.
+           b. Inspect only the minimum additional context required to resolve
+              the finding:
+                - feature artifacts first (`spec.md`, clarification answers,
+                  red-team findings context);
+                - local code/docs only when the finding depends on an existing
+                  API, data model, storage contract, permission boundary,
+                  workflow, or integration point;
+                - no sibling repos, external repos, vendored examples, or
+                  broad comparison hunts unless the user's
+                  original feature request explicitly names them.
+           c. If the finding touches existing code, inspect the smallest
+              relevant symbol/file set needed to understand the contract and
+              likely blast radius. Do not read whole subsystems just to prove
+              absence.
+           d. If the answer cannot be determined from feature artifacts plus
+              narrowly relevant local code/docs, record that uncertainty in
+              the resolution (`new-OQ`, `accepted-risk`, or `skipped`) instead
+              of expanding inspection scope.
+
+         You MAY use a sub-agent for a complex finding or a tight cluster of
+         related findings, but the sub-agent prompt MUST include the same scope
+         limits above and must return a concise verification note, not file edits.
+
+      5. **Choose ONE resolution category** from speckit-red-team-run skill §7.
+
+         **Scope-preservation invariant (read first):** if the finding asks
+         for a broader redesign outside this feature's stated scope, do not
+         route it to `spec-fix`. Use `skipped`, `out-of-scope`, or
+         `accepted-risk` as appropriate and cite the local evidence you used.
+
+         Decision rules:
+           - spec-fix       finding is valid, the current artifact genuinely
+                            conflicts with verified requirements, local project
+                            constraints, or a required existing contract, AND
+                            the fix is durable. REQUIRED: cite the evidence
+                            supporting the chosen shape.
+           - new-OQ         RESERVED for findings where BOTH conditions hold:
+                              (i) feature artifacts and narrowly relevant
+                                  local code/docs do not answer the behavior
+                                  in question,
+                              AND
+                              (ii) the spec is silent / ambiguous AND the
+                                   decision requires human or product
+                                   judgment (business policy, regulatory
+                                   call, scope call, novel UX).
+                            If feature artifacts or a required local contract
+                            answer the question, new-OQ is FORBIDDEN — use
+                            that evidence.
+           - accepted-risk  finding is real, the structural fix exists, but
+                            cost of fixing > cost of risk in this milestone.
+                            Rationale must name the milestone and the
+                            trigger that would re-open it.
+           - out-of-scope   handled in another spec/phase — give the
+                            cross-reference.
+           - skipped        Use when ANY of:
+                              (a) finding's premise is wrong (spec doesn't
+                                  actually say what the finding claims);
+                              (b) recommended fix CONFLICTS with verified
+                                  requirements or a required local contract;
+                              (c) the finding asks the spec to expand beyond
+                                  the feature scope without evidence that the
+                                  broader redesign is required.
+                            Reason MUST cite the verification source
+                            (file:line + quoted snippet) that proves the case.
+         **Long-term-only rule:** if a band-aid fix and a structural fix both
+         resolve the finding, pick the structural one. Do NOT add a feature
+         flag, defensive guard, or "TODO: revisit" comment as the resolution.
+         If the long-term fix is too large for this milestone, use
+         `accepted-risk` with the trigger condition — never silently pick the
+         band-aid.
+
+      6. Edit the findings file IN-PLACE using the Edit tool. For EACH finding ID:
+         a. §2 Findings table — fill the `Status` column with the chosen category.
+         b. §3 Resolutions Log block — fill the payload per category. EVERY
+            payload MUST start with a mandatory `Reasoning:` block (3–8
+            sentences) covering:
+              1. **Verification:** what the spec actually says (quote) and
+                 whether the finding's premise holds.
+              2. **Evidence:** the spec, local code, or local docs file:line
+                 used to resolve the finding. Quote the key phrase when useful.
+                 If the answer is not knowable from bounded local context,
+                 state that explicitly.
+              3. **Why this category over alternatives:** name at least one
+                 rejected category and why (e.g. "not new-OQ because the spec
+                 already establishes the answer at <path:line>").
+              4. **Long-term vs band-aid:** describe the band-aid that was
+                 considered and explicitly rejected, and why this resolution
+                 is the durable fix.
+            The `Reasoning:` block is reviewer-facing; the apply phase
+            ignores unknown fields, so it is safe to add. Place it BEFORE
+            the apply-critical fields below. Then continue with:
+              - spec-fix: `Target: <path>` (default `<feature_directory>/spec.md`),
+                then a `Before:`/`After:` snippet pair.
+
+                LITERAL-SUBSTRING CONTRACT (CRITICAL — apply will reject
+                anything else with `Before-snippet not found in <target>`):
+                  * `Before:` MUST be a VERBATIM SUBSTRING of `Target:` —
+                    literal text COPIED from the file using the Read tool.
+                    NOT a paraphrase. NOT a description of the gap.
+                    NOT a directive like "FR-X is missing …".
+                  * `After:` MUST be the intended replacement of that exact
+                    `Before:` text (so apply can do `target.replace(before, after)`
+                    mechanically).
+                  * `Before:` MUST appear EXACTLY ONCE in `Target:`. After
+                    drafting, run `grep -c -F "<Before>" <Target>` and confirm
+                    the result is `1`. If `0`, you paraphrased — re-read
+                    `Target:` and copy literal text. If `>1`, expand `Before:`
+                    with surrounding context until unique.
+
+                WRONG (will fail apply):
+                  Before: FR-021 is missing a result-subtype mapping for max_tokens.
+                  After:  Add a row stating max_tokens maps to error_during_execution.
+
+                RIGHT (passes apply):
+                  Before: | error_during_execution | runtime errors | errors[0] populated |
+                  After:  | error_during_execution | runtime errors, max_tokens, model_context_window_exceeded | errors[0] populated |
+
+                If the fix is a wholesale rewrite of an entire section/FR,
+                set `Before:` to the FULL block being replaced (verbatim) and
+                `After:` to the full new block. Apply does literal find/replace,
+                so size is fine — what matters is that `Before:` exists in
+                `Target:` exactly once.
+                For `spec-fix`, the `After:` text SHOULD reflect the shape
+                established by verified requirements and required local
+                contracts. Do NOT introduce a novel structure when the feature
+                artifacts already establish the expected shape.
+              - new-OQ: `OQ Text:` (one paragraph) + `Owner:` + `Blocks:` lines.
+                The OQ Text should name the specific decision the human owner
+                must make and include only the bounded local evidence checked
+                in step 4b.
+              - accepted-risk: `Rationale:` (one paragraph) + optional `Tags:`
+                line. Rationale MUST include: (i) the milestone that defers
+                the structural fix, (ii) the trigger condition that re-opens
+                it, (iii) cite the local evidence that will guide the eventual
+                fix. Include `[regulatory-review]` tag
+                when the finding touches money path / regulatory path /
+                compliance / disclosure / KYC / AML / SEC / SFC / FCA / GDPR
+                signals (apply phase will also auto-tag, but be explicit when
+                obvious).
+              - out-of-scope: `Cross-reference: <spec path or ID>` + `Reason:`.
+              - skipped: `Reason: <why>` — MUST cite the spec quote or local
+                code/docs file:line that disproves the finding's premise.
+                "Disagree" without evidence is not acceptable.
+      7. Do NOT modify finding description, severity, lens, location, or any
+         other §2 metadata. Do NOT touch §1 Session Summary, §4 Validation
+         Decision, or §5 Session Metadata YAML — `/speckit.red-team.apply`
+         manages those at apply time.
+      8. After editing, print "RESOLUTIONS_DRAFTED" and the absolute path of
+         the findings file, then STOP.
+    depends_on:
+      - red-team
+    provider: codex
+    model: gpt-5.5
+    context: fresh
+    allowed_tools:
+      - Read
+      - Edit
+      - Glob
+      - Grep
+      - Bash
+      - Task
+  - id: red-team-apply
+    prompt: |
+      /speckit.red-team.apply --allow-historical-edits
+    depends_on:
+      - red-team-respond
+    model: gpt-5.5
+    context: fresh
+  - id: plan
+    prompt: |
+      Read .specify/feature.json to resolve <feature_directory>, then run:
+      /speckit-plan create detail plan <feature_directory>, spawn sub-agents for help
+    depends_on:
+      - red-team-apply
+    model: gpt-5.5
+    context: fresh
+  - id: tasks
+    prompt: |
+      Read .specify/feature.json to resolve <feature_directory>, then run:
+      /speckit-tasks <feature_directory>
+    depends_on:
+      - plan
+    model: gpt-5.5
+    context: fresh
+  - id: analyze
+    prompt: |
+      Read .specify/feature.json to resolve <feature_directory>.
+      Before analysis, check `<feature_directory>/spec.md`, `plan.md`, and
+      `tasks.md` for any grill-me decisions reference/path. If one exists,
+      read the referenced file(s) and treat every recorded decision as binding
+      context: do not create findings that contradict, reopen, or punt on
+      those decisions. Use them to resolve ambiguity.
+      Then run:
+      /speckit-analyzebatch <feature_directory>
+    depends_on:
+      - tasks
+    model: gpt-5.5
+    context: fresh
+  - id: analyze-respond
+    prompt: |
+      ## Persona
+
+      You are a SHARP SOLUTION ARCHITECT who lives by KISS and YAGNI. You
+      DO NOT overthink. You DO NOT invent problems that don't exist. Your
+      first instinct on any finding is "is this a real problem?" — most
+      aren't, and you skip those without ceremony. When the problem IS real,
+      you pick the SIMPLEST durable fix that matches the feature intent and
+      local project constraints — never the most elaborate architecture you can imagine. You think in
+      invariants and contracts because they keep things simple long-term,
+      not because complexity impresses anyone. You push back on weak
+      findings, reject band-aids, and reject over-engineering with equal
+      force. You name trade-offs explicitly. No speculative abstractions.
+      No feature flags or "TODO: revisit" comments. No future-proofing for
+      requirements nobody has asked for.
+
+      ## Task
+
+      Draft per-finding resolutions for the analyze findings file produced
+      by the previous `analyze` node. The file is the single source of
+      truth — no chat-only RECAP drafts. Mirror of the `red-team-respond`
+      flow earlier in this workflow (file-centric, in-place edits).
+      Run all commands from the current working directory; use only relative paths.
+
+      ## Instructions
+
+      1. Read .specify/feature.json to resolve <feature_directory>.
+      2. Glob `<feature_directory>/analyze-findings-*.md` and pick the MOST
+         RECENT file whose filename does NOT contain `-applied-` (highest
+         YYYY-MM-DD, then highest -NN). Confirm the file's header has
+         `Status: PENDING` and §2 Findings table has the `Status` column blank.
+         If the file is missing, or already archived (filename contains
+         `-applied-`), STOP and report BLOCKED — do NOT fabricate findings.
+      3. Read `<feature_directory>/spec.md`, `plan.md`, and `tasks.md` for context.
+      4. Check `<feature_directory>/spec.md`, `plan.md`, and `tasks.md` for
+         any grill-me decisions reference/path. If one exists, read the
+         referenced file(s) and treat every recorded decision as binding
+         context: do not contradict, reopen, or punt on those decisions. Use
+         them as local evidence when choosing categories and cite the decisions
+         file/line in `Rationale:` or `Reason:` when a decision determines the
+         resolution.
+      5. For EACH finding row in §2 Findings, INVESTIGATE FIRST — do not punt
+         ambiguity to a human when the answer is available in bounded local
+         context. Start with spec.md / plan.md / tasks.md. Inspect code only
+         when the finding depends on an existing API, data model, integration
+         point, workflow, or documented behavior. Do NOT inspect sibling or
+         external repositories unless the user's feature request explicitly
+         names them.
+
+         **Scope-preservation invariant (read first):** if the finding asks
+         for a broader redesign outside this feature's stated scope, do not
+         route it to `spec-fix`. Use `skipped`, `out-of-scope`, or
+         `accepted-risk` as appropriate and cite the local evidence you used.
+
+         Only then choose ONE resolution category:
+           - spec-fix       finding is valid AND you derived the correct answer
+                            from requirements, feature artifacts, or narrowly
+                            relevant local code/docs. Propose a concrete diff
+                            to spec.md / plan.md / tasks.md (the artifact named
+                            in the §2 Location column) and explain WHY that
+                            answer is correct in the `Rationale:` line.
+           - accepted-risk  acknowledge but do not edit; record under
+                            `## Accepted Risks` of the relevant artifact.
+           - out-of-scope   cross-reference only; no artifact edit.
+           - skipped        Use when ANY of:
+                              (a) finding's premise is wrong (the artifact
+                                  doesn't actually say what the finding claims,
+                                  or the inconsistency dissolves on read);
+                              (b) recommended fix CONFLICTS with verified
+                                  requirements or a required local contract;
+                              (c) the finding asks the spec to expand beyond
+                                  the feature scope without evidence that the
+                                  broader redesign is required.
+                            Reason MUST cite the verification source
+                            (file:line + quoted snippet, or the artifact
+                            path:line that disproves the premise).
+      6. Edit the findings file IN-PLACE using the Edit tool. For EACH finding ID:
+         a. §2 Findings table — fill the `Status` column with the chosen category.
+         b. §3 Resolutions Log block — fill the payload per category:
+              - spec-fix: `Target: <path>` (typically `<feature_directory>/spec.md`,
+                `plan.md`, or `tasks.md`), then a `Before:` / `After:` snippet pair.
+
+                LITERAL-SUBSTRING CONTRACT (CRITICAL — apply will reject anything
+                else with `Before-snippet not found in <target>`):
+                  * `Before:` MUST be a VERBATIM SUBSTRING of `Target:` —
+                    literal text COPIED from the file using the Read tool.
+                    NOT a paraphrase. NOT a description of the gap.
+                    NOT a directive like "FR-X is missing …".
+                  * `After:` MUST be the intended replacement of that exact
+                    `Before:` text (so apply can do `target.replace(before, after)`
+                    mechanically).
+                  * `Before:` MUST appear EXACTLY ONCE in `Target:`. After
+                    drafting, run `grep -c -F "<Before>" <Target>` and confirm
+                    the result is `1`. If `0`, you paraphrased — re-read
+                    `Target:` and copy literal text. If `>1`, expand `Before:`
+                    with surrounding context until unique.
+
+                WRONG (will fail apply):
+                  Before: FR-021 is missing a result-subtype mapping for max_tokens.
+                  After:  Add a row stating max_tokens maps to error_during_execution.
+
+                RIGHT (passes apply):
+                  Before: | error_during_execution | runtime errors | errors[0] populated |
+                  After:  | error_during_execution | runtime errors, max_tokens, model_context_window_exceeded | errors[0] populated |
+
+                After the Before/After pair, ALSO emit a `Rationale:` line
+                (one paragraph) explaining HOW you derived the After text:
+                cite the file paths, symbols, table rows, or local docs
+                that prove this is the correct answer. The maintainer reads
+                this to verify your reasoning, not just your diff.
+
+              - accepted-risk: `Rationale:` (one paragraph) + optional `Tags:`
+                line. Include `[regulatory-review]` tag when the finding touches
+                money path / regulatory path / compliance / disclosure / KYC /
+                AML / SEC / SFC / FCA / GDPR signals (apply phase will also
+                auto-tag, but be explicit when obvious).
+              - out-of-scope: `Cross-reference: <spec path or ID>` + `Reason:`.
+              - skipped: `Reason: <why>`.
+      7. Do NOT modify finding ID, category, severity, location, summary, or
+         recommendation in §2. Do NOT touch §1 Session Summary or §5 Session
+         Metadata YAML — `/speckit-analyzebatch --apply` manages those at apply time.
+      8. After editing, print "RESOLUTIONS_DRAFTED" and the absolute path of
+         the findings file, then STOP.
+    depends_on:
+      - analyze
+    provider: codex
+    model: gpt-5.5
+    context: fresh
+    allowed_tools:
+      - Read
+      - Edit
+      - Glob
+      - Grep
+      - Bash
+  - id: analyze-apply
+    prompt: |
+      $speckit-analyzebatch --apply --allow-historical-edits
+    depends_on:
+      - analyze-respond
+    model: gpt-5.5
+    context: fresh
+  - id: ralph-tasks-to-ralph
+    prompt: |
+      Read .specify/feature.json to resolve <feature_directory>, then run:
+      /speckit.ralph-loop.tasks-to-ralph <feature_directory>
+    depends_on:
+      - analyze-apply
+    model: gpt-5.5
+    context: fresh
+  - id: ralph-loop-run
+    bash: |
+      bash .specify/extensions/ralph-loop/ralph.sh
+    depends_on:
+      - ralph-tasks-to-ralph
+    timeout: 86400000
+  - id: ralph-sync-back
+    prompt: |
+      Read .specify/feature.json to resolve <feature_directory>, then run:
+      /speckit.ralph-loop.sync-back <feature_directory>
+    depends_on:
+      - ralph-loop-run
+    model: gpt-5.5
+    context: fresh
+  - id: test
+    bash: |
+      no-mistakes axi run \
+        --intent "Validate the completed speckit no-HITL feature implementation for: $ARGUMENTS" \
+        --no-worktree \
+        --yolo
+    depends_on:
+      - ralph-sync-back
+    timeout: 86400000

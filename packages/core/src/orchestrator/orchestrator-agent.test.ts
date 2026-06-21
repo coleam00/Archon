@@ -1352,16 +1352,18 @@ describe('workflow dispatch routing — interactive flag', () => {
     return makeConversation({ codebase_id: 'codebase-1' });
   }
 
-  function makeDispatchCodebase() {
+  function makeDispatchCodebase(overrides: Partial<Codebase> = {}) {
     return {
       id: 'codebase-1',
       name: 'test-repo',
       repository_url: null,
       default_cwd: '/repos/test-repo',
+      default_branch: null,
       ai_assistant_type: 'claude' as const,
       commands: {},
       created_at: new Date(),
       updated_at: new Date(),
+      ...overrides,
     };
   }
 
@@ -1393,7 +1395,9 @@ describe('workflow dispatch routing — interactive flag', () => {
 
   test('calls executeWorkflow (not dispatchBackground) for interactive workflow on web', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
-    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockGetCodebase.mockReturnValueOnce(
+      Promise.resolve(makeDispatchCodebase({ default_branch: 'develop' }))
+    );
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
 
     const platform = makePlatform(); // getPlatformType returns 'web'
@@ -1405,8 +1409,12 @@ describe('workflow dispatch routing — interactive flag', () => {
     // as opts.parentConversationId so the approve/reject API handlers can
     // dispatch resume back through the orchestrator.
     const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
-    const opts = callArgs[callArgs.length - 1] as { parentConversationId?: string };
+    const opts = callArgs[callArgs.length - 1] as {
+      parentConversationId?: string;
+      baseBranch?: string;
+    };
     expect(opts.parentConversationId).toBe('conv-1');
+    expect(opts.baseBranch).toBe('develop');
   });
 
   test('foreground_resume_detected: passes parentConversationId to executeWorkflow when a resumable run exists', async () => {
@@ -1417,7 +1425,9 @@ describe('workflow dispatch routing — interactive flag', () => {
     // executeWorkflow via opts. parentConversationId still flows so the API
     // helpers keep dispatching resume on subsequent approvals.
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
-    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockGetCodebase.mockReturnValueOnce(
+      Promise.resolve(makeDispatchCodebase({ default_branch: 'develop' }))
+    );
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
     mockFindResumableRunByParentConversation.mockReturnValueOnce(
       Promise.resolve({
@@ -1440,10 +1450,12 @@ describe('workflow dispatch routing — interactive flag', () => {
     // Resume payload lives on the opts bag (the trailing arg).
     const opts = callArgs[callArgs.length - 1] as {
       parentConversationId?: string;
+      baseBranch?: string;
       preCreatedRun?: { id: string };
       priorCompletedNodes?: Map<string, string>;
     };
     expect(opts.parentConversationId).toBe('conv-1');
+    expect(opts.baseBranch).toBe('develop');
     expect(opts.preCreatedRun?.id).toBe('resumable-run-1');
     expect(opts.priorCompletedNodes?.size).toBeGreaterThan(0);
   });

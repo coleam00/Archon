@@ -42,6 +42,14 @@ interface IsolationRequestBase {
    */
   canonicalRepoPath: RepoPath;
 
+  /**
+   * Preferred base branch for new worktrees when repo config does not override it.
+   *
+   * Populated from the registered codebase default branch so locally-registered
+   * repos with non-main defaults do not depend on origin/HEAD being set.
+   */
+  baseBranch?: BranchName;
+
   description?: string;
 
   /**
@@ -315,6 +323,7 @@ export interface ResolveRequest {
     id: string;
     defaultCwd: string;
     name: string;
+    defaultBranch?: BranchName | null;
   } | null;
   hints?: IsolationHints;
   platformType: string;

@@ -10,7 +10,7 @@ import {
 import type { Edge, NodeTypes } from '@xyflow/react';
 import type { DagNodeState, WorkflowStepStatus } from '@/lib/types';
 import type { DagNode } from '@/lib/api';
-import { dagNodesToReactFlow, resolveNodeDisplay } from '@/lib/dag-layout';
+import { dagNodesToReactFlow, resolveExecutionNodeDisplay } from '@/lib/dag-layout';
 import { formatDurationMs } from '@/lib/format';
 import {
   executionDagNode,
@@ -78,7 +78,7 @@ export function WorkflowDagViewer({
       const live = statusMap.get(node.id);
       // baseNodes is derived from dagNodes, so this find should always succeed
       const dagNode = dagNodes.find(dn => dn.id === node.id);
-      const display = dagNode ? resolveNodeDisplay(dagNode) : node.data;
+      const display = dagNode ? resolveExecutionNodeDisplay(dagNode) : node.data;
       return {
         ...node,
         type: 'executionNode',

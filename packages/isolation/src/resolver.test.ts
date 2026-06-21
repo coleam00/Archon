@@ -17,7 +17,7 @@ mock.module('@archon/paths', () => ({
 import { IsolationResolver } from './resolver';
 import type { IsolationResolverDeps } from './resolver';
 import type { IIsolationStore } from './store';
-import type { IsolationEnvironmentRow, IsolatedEnvironment } from './types';
+import type { IsolationEnvironmentRow, IsolationRequest, IsolatedEnvironment } from './types';
 
 function makeEnvRow(overrides?: Partial<IsolationEnvironmentRow>): IsolationEnvironmentRow {
   return {
@@ -669,6 +669,44 @@ describe('IsolationResolver', () => {
 
     expect(capturedRequests).toHaveLength(1);
     expect(capturedRequests[0]).toMatchObject({ codebaseName: 'owner/repo' });
+  });
+
+  test('passes defaultBranch from codebase to isolation request', async () => {
+    const capturedRequests: IsolationRequest[] = [];
+    const resolver = createResolver({
+      provider: {
+        ...makeMockProvider(),
+        create: async (request: IsolationRequest): Promise<IsolatedEnvironment> => {
+          capturedRequests.push(request);
+          return {
+            id: '/worktrees/new-branch',
+            provider: 'worktree' as const,
+            workingPath: '/worktrees/new-branch',
+            branchName: 'new-branch',
+            status: 'active' as const,
+            createdAt: new Date(),
+            metadata: { adopted: false },
+          };
+        },
+      },
+    });
+
+    worktreeExistsSpy.mockResolvedValue(false);
+
+    await resolver.resolve({
+      existingEnvId: null,
+      codebase: {
+        id: 'cb-1',
+        name: 'owner/repo',
+        defaultCwd: '/local/repo',
+        defaultBranch: git.toBranchName('develop'),
+      },
+      hints: { workflowType: 'task', workflowId: 'wf-1' },
+      platformType: 'web',
+    });
+
+    expect(capturedRequests).toHaveLength(1);
+    expect(capturedRequests[0]?.baseBranch).toBe('develop');
   });
 
   // --- Constructor validation tests ---

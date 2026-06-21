@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { ExternalLink, Copy, Check } from 'lucide-react';
+import { openInIde } from '@/lib/ide';
 import { cn } from '@/lib/utils';
 
 interface HeaderProps {
@@ -27,9 +28,7 @@ export function Header({
 
   const openInVSCode = (): void => {
     if (subtitle) {
-      // Normalize backslashes to forward slashes for the vscode:// URI
-      const normalizedPath = subtitle.replace(/\\/g, '/');
-      window.open(`vscode://file/${normalizedPath}`, '_blank');
+      openInIde(subtitle);
     }
   };
 

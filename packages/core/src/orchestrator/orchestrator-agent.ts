@@ -628,6 +628,7 @@ async function dispatchOrchestratorWorkflow(
           parentConversationId: conversation.id,
           userId,
           source,
+          baseBranch: codebase.default_branch ? toBranchName(codebase.default_branch) : undefined,
           ...prepared,
         }
       );
@@ -649,6 +650,7 @@ async function dispatchOrchestratorWorkflow(
           parentConversationId: conversation.id,
           userId,
           source,
+          baseBranch: codebase.default_branch ? toBranchName(codebase.default_branch) : undefined,
         }
       );
     }
@@ -684,6 +686,7 @@ async function dispatchOrchestratorWorkflow(
         parentConversationId: conversation.id,
         userId,
         source,
+        baseBranch: codebase.default_branch ? toBranchName(codebase.default_branch) : undefined,
       }
     );
   }

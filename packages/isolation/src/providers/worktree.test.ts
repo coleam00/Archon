@@ -2273,6 +2273,42 @@ describe('WorktreeProvider', () => {
       });
     });
 
+    test('uses request baseBranch when no config baseBranch is set', async () => {
+      worktreeExistsSpy.mockResolvedValue(false);
+      syncWorkspaceSpy.mockResolvedValue({
+        branch: 'develop',
+        synced: true,
+        mode: 'fast-forward',
+        state: 'in_sync',
+        previousHead: '',
+        newHead: '',
+        updated: false,
+      });
+      const configLoader: RepoConfigLoader = async () => ({});
+      provider = new WorktreeProvider(configLoader);
+
+      await provider.create({
+        ...baseRequest,
+        baseBranch: git.toBranchName('develop'),
+      });
+
+      expect(syncWorkspaceSpy).toHaveBeenCalledWith('/workspace/owner/repo', 'develop', {
+        mode: 'fast-forward',
+      });
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        expect.arrayContaining([
+          'worktree',
+          'add',
+          expect.any(String),
+          '-b',
+          'archon/issue-42',
+          'origin/develop',
+        ]),
+        expect.any(Object)
+      );
+    });
+
     test('uses explicit reset mode for managed clone worktree creation', async () => {
       worktreeExistsSpy.mockResolvedValue(false);
       const configLoader: RepoConfigLoader = async () => ({});
@@ -2323,6 +2359,21 @@ describe('WorktreeProvider', () => {
       };
 
       await provider.create(request);
+
+      expect(syncWorkspaceSpy).toHaveBeenCalledWith('/workspace/owner/repo', 'main', {
+        mode: 'fast-forward',
+      });
+    });
+
+    test('uses configuredBaseBranch over request baseBranch when both are set', async () => {
+      worktreeExistsSpy.mockResolvedValue(false);
+      const configLoader: RepoConfigLoader = async () => ({ baseBranch: 'main' });
+      provider = new WorktreeProvider(configLoader);
+
+      await provider.create({
+        ...baseRequest,
+        baseBranch: git.toBranchName('develop'),
+      });
 
       expect(syncWorkspaceSpy).toHaveBeenCalledWith('/workspace/owner/repo', 'main', {
         mode: 'fast-forward',

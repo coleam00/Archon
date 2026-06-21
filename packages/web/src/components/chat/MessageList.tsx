@@ -122,22 +122,25 @@ function WorkflowResultCard({
 
   // One-time API fetch: staleTime: Infinity because a terminal run record is immutable —
   // status, timestamps, and events do not change once completed/failed/cancelled.
+  // Distinct key: WorkflowExecution caches a *transformed* shape under ['workflowRun', runId];
+  // sharing that key would hand this component the wrong shape (no `.run`) from the cache.
   const { data: runData, isError } = useQuery({
-    queryKey: ['workflowRun', runId],
+    queryKey: ['workflowRunDetail', runId],
     queryFn: () => getWorkflowRun(runId),
     staleTime: Infinity,
   });
 
-  // Merge: prefer live state when available
-  const status = liveState?.status ?? runData?.run.status ?? 'completed';
+  // Merge: prefer live state when available. Guard `.run` (not just `runData`): a
+  // peripheral result card must degrade gracefully, never crash the whole message list.
+  const status = liveState?.status ?? runData?.run?.status ?? 'completed';
   const dagNodes = liveState?.dagNodes ?? [];
   const storeArtifacts = liveState?.artifacts ?? [];
   const startedAt =
     liveState?.startedAt ??
-    (runData?.run.started_at ? new Date(ensureUtc(runData.run.started_at)).getTime() : null);
+    (runData?.run?.started_at ? new Date(ensureUtc(runData.run.started_at)).getTime() : null);
   const completedAt =
     liveState?.completedAt ??
-    (runData?.run.completed_at ? new Date(ensureUtc(runData.run.completed_at)).getTime() : null);
+    (runData?.run?.completed_at ? new Date(ensureUtc(runData.run.completed_at)).getTime() : null);
   const duration = startedAt != null && completedAt != null ? completedAt - startedAt : null;
 
   // Node counts: prefer live dagNodes (exact), fall back to events (approximation —
