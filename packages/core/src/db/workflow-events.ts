@@ -243,3 +243,14 @@ export async function getEpochAwareCompletedDagNodeOutputs(
   }
   return outputs;
 }
+
+export async function getRetryPreservedDagNodeOutputs(
+  workflowRunId: string,
+  invalidatedNodeIds: readonly string[]
+): Promise<Map<string, string>> {
+  const outputs = await getEpochAwareCompletedDagNodeOutputs(workflowRunId);
+  for (const nodeId of invalidatedNodeIds) {
+    outputs.delete(nodeId);
+  }
+  return outputs;
+}

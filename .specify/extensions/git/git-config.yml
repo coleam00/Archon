@@ -50,7 +50,7 @@ auto_commit:
     message: "[Spec Kit] Add tasks"
   after_implement:
     enabled: true
-    message: "feat: Phase 3.1: Tests for User Story 1 - implemented 5 tasks"
+    message: "feat: Phase 3.2: Implementation for User Story 1 - implemented 9 tasks"
   after_checklist:
     enabled: false
     message: "[Spec Kit] Add checklist"

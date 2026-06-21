@@ -41,6 +41,12 @@ export interface LatestWorkflowNodeCheckpointQuery {
   retry_epoch?: number;
 }
 
+export interface WorkflowRetryContext {
+  targetNodeId: string;
+  retryEpoch: number;
+  invalidatedNodeIds: readonly string[];
+}
+
 export const WORKFLOW_EVENT_TYPES = [
   'workflow_started',
   'workflow_completed',

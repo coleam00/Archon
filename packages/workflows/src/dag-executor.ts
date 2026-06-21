@@ -16,6 +16,7 @@ import type {
   WorkflowConfig,
   WorkflowDeps,
 } from './deps';
+import type { WorkflowRetryContext } from './store';
 import type {
   SendQueryOptions,
   NodeConfig,
@@ -2887,7 +2888,8 @@ export async function executeDagWorkflow(
   /** Discovery source — telemetry only (custom-vs-default + name redaction). */
   source?: WorkflowSource,
   aiProfile?: ResolvedAiProfile,
-  workflowPreset?: ModelAliasPreset
+  workflowPreset?: ModelAliasPreset,
+  retryContext?: WorkflowRetryContext
 ): Promise<string | undefined> {
   const dagStartTime = Date.now();
   const workflowLevelOptions = {
@@ -2902,13 +2904,15 @@ export async function executeDagWorkflow(
 
   // Pre-populate nodeOutputs from prior run so already-completed nodes are
   // treated as done for trigger-rule and $nodeId.output substitution purposes.
-  // Nodes flagged `always_run: true` are excluded — they re-execute on resume
-  // and downstream consumers must see the fresh output, not the cached one.
+  // Nodes flagged `always_run: true` are excluded for normal resume — they
+  // re-execute and downstream consumers must see the fresh output. Retry
+  // contexts receive already-filtered priorCompletedNodes, so preserved
+  // always_run nodes should stay preserved unless the retry invalidated them.
   if (priorCompletedNodes && priorCompletedNodes.size > 0) {
     const alwaysRunIds = new Set(workflow.nodes.filter(n => n.always_run).map(n => n.id));
     let prepopulatedCount = 0;
     for (const [nodeId, output] of priorCompletedNodes) {
-      if (alwaysRunIds.has(nodeId)) continue;
+      if (!retryContext && alwaysRunIds.has(nodeId)) continue;
       nodeOutputs.set(nodeId, { state: 'completed', output });
       prepopulatedCount++;
     }
@@ -2969,7 +2973,13 @@ export async function executeDagWorkflow(
           // when the prior run completed it.
           if (priorCompletedNodes?.has(node.id)) {
             if (node.always_run) {
-              getLog().info({ nodeId: node.id }, 'dag.node_always_run_resume_forced');
+              if (retryContext) {
+                getLog().info({ nodeId: node.id }, 'dag.node_skipped_prior_success_retry');
+              } else {
+                getLog().info({ nodeId: node.id }, 'dag.node_always_run_resume_forced');
+              }
+            }
+            if (node.always_run && !retryContext) {
               deps.store
                 .createWorkflowEvent({
                   workflow_run_id: workflowRun.id,

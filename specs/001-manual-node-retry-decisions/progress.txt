@@ -3,6 +3,7 @@
 - Bundled workflow/default command content must be regenerated with `bun run generate:bundled` whenever `.archon/commands/defaults/` or `.archon/workflows/defaults/` files change.
 - Keep persisted workflow event row validation legacy-compatible; add narrow payload schemas and strict writers for new event families instead of tightening `workflowEventRowSchema.event_type` globally.
 - For tests-first batches that precede their implementation batch, use executable assertions where supporting primitives already exist and `test.todo(..., () => {})` contracts where the production seam does not exist yet; keep `bun run validate` green.
+- Manual retry dispatch should use `prepareWorkflowNodeRetry()` to claim the existing failed run and pass its `preCreatedRun`, filtered `preservedCompletedOutputs`, and retry context into `executeWorkflow()`; do not let execution perform a foreground resume lookup for retry-prepared runs.
 
 ## 2026-06-21 23:19:46 +07 - Phase 1: Setup (Shared Test Scaffolding) (iter 1)
 **Tasks completed this iter:** T001 (checkpoint schema/export coverage), T002 (SQLite/PostgreSQL checkpoint convergence coverage), T003 (tracked-only checkpoint/safety git helper coverage), T004 (epoch-aware DAG retry projection coverage), T005 (retry preparation operation coverage), T006 (retry API route coverage), T007 (CLI `workflow retry-node` coverage), T008 (Web retry helper coverage)
@@ -69,4 +70,25 @@
 - `executeWorkflow()` already supports the retry handoff shape through `preCreatedRun` plus filtered `priorCompletedNodes`; later US1 implementation should wire retry-specific dispatch into that existing seam.
 - Retry-state projection can cover sibling preservation and skipped downstream ineligibility today without waiting for the shared operation implementation.
 - Session cleanup for invalidated nodes should call `deleteWorkflowNodeSessions({ workflow_name, scope_key, node_id })` without `provider` so every provider's persisted session for that node is cleared.
+---
+
+## 2026-06-22 00:06:18 +07 - Phase 3.2: Implementation for User Story 1 (iter 4)
+**Tasks completed this iter:** T032 (failed-run/node target validation), T033 (target-plus-descendant invalidation), T034 (failed-to-running retry CAS), T035 (`node_retry_requested` audit event), T036 (filtered preserved outputs), T037 (invalidated session deletion), T038 (retry-prepared execution handoff), T039 (DAG preserved-node skip/rerun behavior), T040 (restore failed status on retry-preparation failure)
+**Status:** completed:true (9/9 tasks)
+
+- Per-task summary lines:
+  - T032 — Implemented `prepareWorkflowNodeRetry()` validation for failed run status, current workflow node presence, and latest effective failed target state in `packages/core/src/operations/workflow-retry.ts`.
+  - T033 — Wired current-DAG invalidation through `getRetryInvalidatedNodeIds()` so the failed target and current descendants rerun while upstream/sibling nodes stay preserved.
+  - T034 — Added `claimWorkflowRunForNodeRetry()` in `packages/core/src/db/workflows.ts` with a failed-to-running CAS and single `metadata.retry_epoch` increment.
+  - T035 — Wrote the mandatory strict `node_retry_requested` audit event immediately after a successful retry claim.
+  - T036 — Added `getRetryPreservedDagNodeOutputs()` in `packages/core/src/db/workflow-events.ts` to hydrate epoch-aware outputs and remove currently invalidated nodes.
+  - T037 — Cleared persisted sessions for each invalidated node via `deleteWorkflowNodeSessions({ workflow_name, scope_key, node_id })`.
+  - T038 — Passed retry context into `executeDagWorkflow()` so retry-prepared executions reuse `preCreatedRun` and filtered prior outputs without foreground resume lookup.
+  - T039 — Updated DAG resume behavior so retry-prepared runs skip preserved completed nodes, including preserved `always_run` nodes outside the invalidation set, while invalidated nodes rerun.
+  - T040 — Restored the run to `failed` and wrote `node_retry_failed` if retry preparation fails after the claim, before any execution dispatch.
+
+**Learnings for future iterations:**
+- Normal resume still forces `always_run` nodes to rerun, but retry-prepared execution receives already-filtered preserved outputs and should skip preserved `always_run` nodes unless they were invalidated.
+- The retry operation currently fails fast for mutating workflows unless `mutates_checkout: false`; checkpoint reset support belongs to the next US2 batch.
+- Full validation can surface formatting drift in ignored `.omx/state` hook files; formatting those ignored state files does not affect the feature commit.
 ---

@@ -325,7 +325,7 @@
     },
     {
       "title": "Phase 3.2: Implementation for User Story 1",
-      "completed": false,
+      "completed": true,
       "tasks": [
         {
           "id": "T032",
@@ -333,7 +333,7 @@
           "description": "[US1] Implement target validation for failed run and latest effective failed node in `packages/core/src/operations/workflow-retry.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 32,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -342,7 +342,7 @@
           "description": "[US1] Implement invalidated target-plus-descendants calculation using current workflow DAG in `packages/core/src/operations/workflow-retry.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 33,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -351,7 +351,7 @@
           "description": "[US1] Implement retry CAS from `failed` to `running` with exactly one metadata epoch increment in `packages/core/src/db/workflows.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 34,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -360,7 +360,7 @@
           "description": "[US1] Write mandatory `node_retry_requested` audit event after CAS in `packages/core/src/operations/workflow-retry.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 35,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -369,7 +369,7 @@
           "description": "[US1] Filter prior completed outputs to exclude invalidated nodes while preserving upstream/sibling outputs in `packages/core/src/db/workflow-events.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 36,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -378,7 +378,7 @@
           "description": "[US1] Delete persisted node sessions for every invalidated node and all providers in `packages/core/src/operations/workflow-retry.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 37,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -387,7 +387,7 @@
           "description": "[US1] Use retry-prepared `preCreatedRun` and filtered `priorCompletedNodes` without foreground resume lookup in `packages/workflows/src/executor.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 38,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -396,7 +396,7 @@
           "description": "[US1] Ensure DAG execution skips preserved completed nodes and reruns invalidated nodes in `packages/workflows/src/dag-executor.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 39,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -405,7 +405,7 @@
           "description": "[US1] Restore run status to `failed` and avoid dispatch on retry preparation failure in `packages/core/src/operations/workflow-retry.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 40,
-          "passes": false,
+          "passes": true,
           "notes": ""
         }
       ],

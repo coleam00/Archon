@@ -31,6 +31,7 @@ import {
   listRecentEvents,
   getCompletedDagNodeOutputs,
   getEpochAwareCompletedDagNodeOutputs,
+  getRetryPreservedDagNodeOutputs,
 } from './workflow-events';
 
 describe('workflow-events', () => {
@@ -372,6 +373,40 @@ describe('workflow-events', () => {
        ORDER BY created_at ASC`,
         ['run-retry']
       );
+    });
+  });
+
+  describe('getRetryPreservedDagNodeOutputs', () => {
+    test('returns only completed outputs outside the current retry invalidation set', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          {
+            ...mockEvent,
+            id: 'evt-a',
+            event_type: 'node_completed',
+            step_name: 'a',
+            data: { node_output: 'A0' },
+          },
+          {
+            ...mockEvent,
+            id: 'evt-b',
+            event_type: 'node_completed',
+            step_name: 'b',
+            data: { node_output: 'B0' },
+          },
+          {
+            ...mockEvent,
+            id: 'evt-c',
+            event_type: 'node_completed',
+            step_name: 'c',
+            data: { node_output: 'C0' },
+          },
+        ])
+      );
+
+      const result = await getRetryPreservedDagNodeOutputs('run-retry', ['b', 'c']);
+
+      expect(result).toEqual(new Map([['a', 'A0']]));
     });
   });
 });

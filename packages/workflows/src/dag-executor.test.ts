@@ -5393,6 +5393,62 @@ describe('executeDagWorkflow -- always_run resume opt-out', () => {
     expect(consumerPrompt).toContain('fresh producer output');
     expect(consumerPrompt).not.toContain('STALE_CACHED_VALUE');
   });
+
+  it('preserves always_run nodes during retry when they are outside the invalidated set', async () => {
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    let capturedPrompt = '';
+    mockSendQueryDag.mockImplementation(function* (prompt: string) {
+      capturedPrompt = prompt;
+      yield { type: 'assistant', content: 'consumer result' };
+      yield { type: 'result', sessionId: 'session-id' };
+    });
+
+    const priorCompletedNodes = new Map([['producer', 'preserved retry output']]);
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-retry-always-run',
+      testDir,
+      {
+        name: 'retry-always-run-preserve',
+        nodes: [
+          { id: 'producer', command: 'producer', always_run: true },
+          { id: 'consumer', prompt: 'See: $producer.output', depends_on: ['producer'] },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      priorCompletedNodes,
+      undefined,
+      undefined,
+      undefined,
+      { targetNodeId: 'consumer', retryEpoch: 1, invalidatedNodeIds: ['consumer'] }
+    );
+
+    expect(mockSendQueryDag.mock.calls.length).toBe(1);
+    expect(capturedPrompt).toContain('preserved retry output');
+
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const resetEvent = eventCalls.find(
+      (call: unknown[]) =>
+        (call[0] as { event_type: string }).event_type === 'node_always_run_reset' &&
+        (call[0] as { step_name: string }).step_name === 'producer'
+    );
+    expect(resetEvent).toBeUndefined();
+  });
 });
 
 describe('executeDagWorkflow -- break after result (no hang on subprocess exit)', () => {

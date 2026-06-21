@@ -20,6 +20,7 @@ import {
   getActiveWorkflowRun,
   getActiveWorkflowRunByPath,
   updateWorkflowRun,
+  claimWorkflowRunForNodeRetry,
   completeWorkflowRun,
   failWorkflowRun,
   updateWorkflowActivity,
@@ -255,6 +256,45 @@ describe('workflows database', () => {
       await updateWorkflowRun('workflow-run-123', {});
 
       expect(mockQuery).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('claimWorkflowRunForNodeRetry', () => {
+    test('claims a failed run, clears completion, and increments metadata retry_epoch in one CAS update', async () => {
+      const claimedRun = {
+        ...mockWorkflowRun,
+        status: 'running' as const,
+        metadata: { retry_epoch: 3 },
+        completed_at: null,
+      };
+      mockQuery
+        .mockResolvedValueOnce(createQueryResult([], 1))
+        .mockResolvedValueOnce(createQueryResult([claimedRun]));
+
+      const result = await claimWorkflowRunForNodeRetry('workflow-run-123');
+
+      expect(result).toEqual(claimedRun);
+      const [updateSql, updateParams] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(updateSql).toContain("SET status = 'running'");
+      expect(updateSql).toContain('completed_at = NULL');
+      expect(updateSql).toContain("jsonb_set(\n         COALESCE(metadata, '{}'::jsonb)");
+      expect(updateSql).toContain("WHERE id = $1 AND status = 'failed'");
+      expect(updateParams).toEqual(['workflow-run-123']);
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        2,
+        'SELECT * FROM remote_agent_workflow_runs WHERE id = $1',
+        ['workflow-run-123']
+      );
+    });
+
+    test('throws retry claim conflict when the failed -> running CAS misses', async () => {
+      mockQuery
+        .mockResolvedValueOnce(createQueryResult([], 0))
+        .mockResolvedValueOnce(createQueryResult([{ status: 'running' }]));
+
+      await expect(claimWorkflowRunForNodeRetry('workflow-run-123')).rejects.toThrow(
+        'not retry-claimable'
+      );
     });
   });
 

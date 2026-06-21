@@ -91,6 +91,38 @@ export class WorkflowNotResumableError extends Error {
   }
 }
 
+/**
+ * Thrown by claimWorkflowRunForNodeRetry when a manual retry CAS loses.
+ * Callers translate this into a retry-specific user-facing conflict.
+ */
+export class WorkflowRetryNotClaimableError extends Error {
+  constructor(
+    public readonly runId: string,
+    public readonly currentStatus: string
+  ) {
+    super(
+      `Workflow run is not retry-claimable (id: ${runId}, status: ${currentStatus}). ` +
+        'It may have already been retried, resumed, completed, or cancelled.'
+    );
+    this.name = 'WorkflowRetryNotClaimableError';
+  }
+}
+
+function retryEpochMetadataSetExpression(): string {
+  return getDatabaseType() === 'postgresql'
+    ? `jsonb_set(
+         COALESCE(metadata, '{}'::jsonb),
+         '{retry_epoch}',
+         to_jsonb(COALESCE((metadata->>'retry_epoch')::integer, 0) + 1),
+         true
+       )`
+    : `json_set(
+         COALESCE(metadata, '{}'),
+         '$.retry_epoch',
+         COALESCE(CAST(json_extract(metadata, '$.retry_epoch') AS INTEGER), 0) + 1
+       )`;
+}
+
 export async function createWorkflowRun(data: {
   workflow_name: string;
   conversation_id: string;
@@ -520,6 +552,71 @@ export async function resumeWorkflowRun(id: string): Promise<WorkflowRun> {
   if (!row) {
     getLog().error({ workflowRunId: id }, 'db.workflow_run_resume_vanished');
     throw new Error(`Workflow run vanished after update (id: ${id})`);
+  }
+  return normalizeWorkflowRun(row);
+}
+
+export async function claimWorkflowRunForNodeRetry(id: string): Promise<WorkflowRun> {
+  const dialect = getDialect();
+
+  let updateResult: Awaited<ReturnType<typeof pool.query>>;
+  try {
+    updateResult = await pool.query(
+      `UPDATE remote_agent_workflow_runs
+       SET status = 'running',
+           completed_at = NULL,
+           started_at = ${dialect.now()},
+           last_activity_at = ${dialect.now()},
+           metadata = ${retryEpochMetadataSetExpression()}
+       WHERE id = $1 AND status = 'failed'`,
+      [id]
+    );
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, workflowRunId: id }, 'db.workflow_run_retry_claim_failed');
+    throw new Error(`Failed to claim workflow run for retry: ${err.message}`);
+  }
+
+  if (updateResult.rowCount === 0) {
+    let probeRows: readonly { status: string }[];
+    try {
+      const probe = await pool.query<{ status: string }>(
+        'SELECT status FROM remote_agent_workflow_runs WHERE id = $1',
+        [id]
+      );
+      probeRows = probe.rows;
+    } catch (error) {
+      const err = error as Error;
+      getLog().error({ err, workflowRunId: id }, 'db.workflow_run_retry_claim_probe_failed');
+      throw new Error(`Failed to claim workflow run for retry: ${err.message}`, { cause: err });
+    }
+
+    const currentStatus = probeRows[0]?.status;
+    if (currentStatus === undefined) {
+      getLog().warn({ workflowRunId: id }, 'db.workflow_run_retry_claim_not_found');
+      throw new Error(`Workflow run not found (id: ${id})`);
+    }
+
+    getLog().info({ workflowRunId: id, currentStatus }, 'db.workflow_run_retry_claim_cas_miss');
+    throw new WorkflowRetryNotClaimableError(id, currentStatus);
+  }
+
+  let selectResult: Awaited<ReturnType<typeof pool.query<WorkflowRun>>>;
+  try {
+    selectResult = await pool.query<WorkflowRun>(
+      'SELECT * FROM remote_agent_workflow_runs WHERE id = $1',
+      [id]
+    );
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, workflowRunId: id }, 'db.workflow_run_retry_claim_select_failed');
+    throw new Error(`Failed to read workflow run after retry claim: ${err.message}`);
+  }
+
+  const row = selectResult.rows[0];
+  if (!row) {
+    getLog().error({ workflowRunId: id }, 'db.workflow_run_retry_claim_vanished');
+    throw new Error(`Workflow run vanished after retry claim (id: ${id})`);
   }
   return normalizeWorkflowRun(row);
 }
