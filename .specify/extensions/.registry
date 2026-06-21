@@ -1,0 +1,106 @@
+{
+  "schema_version": "1.0",
+  "extensions": {
+    "git": {
+      "version": "1.0.0",
+      "source": "local",
+      "manifest_hash": "sha256:9731aa8143a72fbebfdb440f155038ab42642517c2b2bdbbf67c8fdbe076ed79",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "agy": [
+          "speckit.git.feature",
+          "speckit.git.validate",
+          "speckit.git.remote",
+          "speckit.git.initialize",
+          "speckit.git.commit"
+        ],
+        "claude": [
+          "speckit.git.feature",
+          "speckit.git.validate",
+          "speckit.git.remote",
+          "speckit.git.initialize",
+          "speckit.git.commit"
+        ],
+        "codex": [
+          "speckit.git.feature",
+          "speckit.git.validate",
+          "speckit.git.remote",
+          "speckit.git.initialize",
+          "speckit.git.commit"
+        ],
+        "copilot": [
+          "speckit.git.feature",
+          "speckit.git.validate",
+          "speckit.git.remote",
+          "speckit.git.initialize",
+          "speckit.git.commit"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-06-21T09:24:20.464271+00:00"
+    },
+    "red-team": {
+      "version": "1.1.1",
+      "source": "local",
+      "manifest_hash": "sha256:307ff7d3e7bb4f4c04de112933ff9e5d18db065ad0c1b8b77311efdb1e830387",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "agy": [
+          "speckit.red-team.run",
+          "speckit.red-team.gate",
+          "speckit.red-team.draft",
+          "speckit.red-team.apply"
+        ],
+        "claude": [
+          "speckit.red-team.run",
+          "speckit.red-team.gate",
+          "speckit.red-team.draft",
+          "speckit.red-team.apply"
+        ],
+        "codex": [
+          "speckit.red-team.run",
+          "speckit.red-team.gate",
+          "speckit.red-team.draft",
+          "speckit.red-team.apply"
+        ],
+        "copilot": [
+          "speckit.red-team.run",
+          "speckit.red-team.gate",
+          "speckit.red-team.draft",
+          "speckit.red-team.apply"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-06-21T09:25:16.045850+00:00"
+    },
+    "ralph-loop": {
+      "version": "3.0.0",
+      "source": "local",
+      "manifest_hash": "sha256:037ad1a0221975f38f901e900b08cc6acd4d38ae735fdd9d6fd576a5c2afbda4",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "agy": [
+          "speckit.ralph-loop.tasks-to-ralph",
+          "speckit.ralph-loop.sync-back"
+        ],
+        "claude": [
+          "speckit.ralph-loop.tasks-to-ralph",
+          "speckit.ralph-loop.sync-back"
+        ],
+        "codex": [
+          "speckit.ralph-loop.tasks-to-ralph",
+          "speckit.ralph-loop.sync-back"
+        ],
+        "copilot": [
+          "speckit.ralph-loop.tasks-to-ralph",
+          "speckit.ralph-loop.sync-back"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-06-21T09:31:49.665517+00:00"
+    }
+  }
+}

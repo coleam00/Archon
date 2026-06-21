@@ -1,0 +1,64 @@
+schema_version: "1.0"
+
+extension:
+  id: "red-team"
+  name: "Red Team"
+  version: "1.1.1"
+  description: "Adversarial review of functional specs before /speckit.plan. Parallel adversarial lens agents catch hostile actors, silent failures, and regulatory blind spots that clarify/analyze cannot."
+  author: "Ash Brener"
+  repository: "https://github.com/ashbrener/spec-kit-red-team"
+  license: "MIT"
+  homepage: "https://github.com/ashbrener/spec-kit-red-team"
+
+requires:
+  speckit_version: ">=0.1.0"
+  # No external MCP tools required. The command dispatches sub-agents via the
+  # host AI agent's built-in primitives (e.g., Claude Code's Agent tool).
+
+provides:
+  commands:
+    - name: "speckit.red-team.run"
+      file: "commands/red-team.md"
+      description: "Attack the current feature spec with project-configured adversarial lenses and produce a structured findings report."
+    - name: "speckit.red-team.gate"
+      file: "commands/red-team-gate.md"
+      description: "Principle VIII gate — scan the current spec for red team trigger categories and block /speckit.plan if a qualifying spec has no findings report on record. Invoked automatically as a before_plan hook."
+    - name: "speckit.red-team.draft"
+      file: "commands/red-team-draft.md"
+      description: "Batch-mode draft of /speckit.red-team.run — runs §1-§6 (lens dispatch + findings aggregation) and STOPS after writing the findings report. Skips §7 interactive resolution walk so automation pipelines can have the maintainer fill the Resolutions Log offline before /speckit.red-team.apply integrates."
+    - name: "speckit.red-team.apply"
+      file: "commands/red-team-apply.md"
+      description: "Batch-mode integration of a filled findings report — parses §3 Resolutions Log per finding ID, validates payloads, applies edits atomically per category (spec-fix / new-OQ / accepted-risk / out-of-scope), and archives the findings file. Mirror of /speckit-clarifybatch --apply for red-team. Pair with /speckit.red-team.draft."
+
+  hooks:
+    before_plan:
+      - command: "speckit.red-team.gate"
+        description: "Red Team Gate (Principle VIII) — blocks /speckit.plan if the spec triggers a red team category and no findings report exists."
+        prompt: "Running red team gate check on the current feature spec..."
+        optional: false
+        enabled: true
+        # No condition — gate logic runs inside the command itself. The gate
+        # is idempotent and cheap (<10ms) so it runs on every /speckit.plan
+        # invocation; non-qualifying specs return PROCEED silently.
+
+  config:
+    - name: "red-team-lenses.yml"
+      template: "config-template.yml"
+      description: "Project-specific adversarial lens catalog. Declares which lenses exist, which trigger categories activate them, and per-lens severity weighting and finding bounds."
+      required: true
+
+tags:
+  - "adversarial-review"
+  - "quality-gate"
+  - "spec-hardening"
+  - "pre-plan"
+  - "audit"
+
+defaults:
+  # Project-wide defaults applied to every lens unless overridden per-lens in
+  # the catalog. See config-template.yml for the full lens schema.
+  finding_bound: 5
+  severity_weight: 5
+  # Overwhelming-findings abort threshold: if combined HIGH+CRITICAL findings
+  # reach this count after aggregation, the command warns and offers abort.
+  overwhelming_threshold: 25

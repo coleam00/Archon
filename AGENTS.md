@@ -962,3 +962,10 @@ Pattern: Use `classifyIsolationError()` (from `@archon/isolation`) to map git er
 - Parse `@archon` in issue/PR **comments only** (not descriptions)
 - Events: `issue_comment` only
 - Note: Descriptions often contain example commands or documentation - these are NOT command invocations (see #96)
+
+<!-- SPECKIT START -->
+
+For additional context about technologies to be used, project structure,
+shell commands, and other important information, read the current plan
+
+<!-- SPECKIT END -->

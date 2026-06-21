@@ -1,0 +1,17 @@
+# Packaged release artifacts
+*.zip
+dist/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Local scratch
+.scratch/
+.gitnexus

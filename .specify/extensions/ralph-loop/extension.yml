@@ -1,0 +1,48 @@
+schema_version: "1.0"
+
+extension:
+  id: "ralph-loop"
+  name: "Spec-Kit Ralph Loop"
+  version: "3.0.0"
+  description: "External-bash-loop driver around `claude --print` per snarktank/ralph; v3 schema groups tasks into per-phase batches (one batch processed per iteration). Bridges via /speckit.ralph-loop.tasks-to-ralph and /speckit.ralph-loop.sync-back."
+  author: "another-cowork"
+  license: "MIT"
+
+requires:
+  speckit_version: ">=0.1.0"
+  tools:
+    - name: "git"
+      required: true
+    - name: "jq"
+      required: true
+    - name: "claude"
+      required: true
+      reason: "Loop spawns `claude --print --dangerously-skip-permissions` per iteration."
+
+provides:
+  commands:
+    - name: "speckit.ralph-loop.tasks-to-ralph"
+      file: "commands/speckit-tasks-to-ralph.md"
+      description: "Convert tasks.md → prd.json + progress.txt for the external bash loop"
+    - name: "speckit.ralph-loop.sync-back"
+      file: "commands/speckit-ralph-sync-back.md"
+      description: "Flip [X] in tasks.md from prd.json passes:true; archive run artifacts"
+
+  config:
+    - name: "ralph-config.yml"
+      template: "ralph-config.template.yml"
+      description: "Defaults for the external bash loop (max_iterations, sleep_seconds)"
+      required: false
+
+tags:
+  - "implementation"
+  - "automation"
+  - "loop"
+  - "external"
+  - "bash"
+
+defaults:
+  max_iterations: 50
+  sleep_seconds: 2
+
+consent_required: true

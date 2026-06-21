@@ -1,0 +1,70 @@
+# Red Team Lens Catalog
+#
+# Copy this file to `.specify/extensions/red-team/red-team-lenses.yml` and
+# customise it for your project. The `speckit.red-team.run` command reads this
+# file to decide which adversarial lenses apply to each spec.
+#
+# Schema (per-field detail below):
+#
+#   version: "v1"
+#   defaults:
+#     finding_bound: 5        # top-N findings per lens
+#     severity_weight: 5      # default weight in tie-breaks
+#   lenses:
+#     - name: <string>                    # required
+#       description: <string>             # required
+#       core_questions: [<string>, ...]   # required, ≥1 entry, ≥3 recommended
+#       trigger_match:                    # required, ≥1 of:
+#         - money_path
+#         - regulatory_path
+#         - ai_llm
+#         - immutability_audit
+#         - multi_party
+#         - contracts
+#       severity_weight: <integer>        # optional, overrides defaults
+#       finding_bound: <integer>          # optional, overrides defaults
+#
+# Trigger categories (for `trigger_match`):
+#   - money_path           — spec computes, transfers, or represents monetary values
+#   - regulatory_path      — spec is subject to regulatory requirements
+#   - ai_llm               — spec relies on LLM inference for a correctness-sensitive output
+#   - immutability_audit   — spec declares immutability or audit-trail guarantees
+#   - multi_party          — spec coordinates ≥2 human roles with different authority
+#   - contracts            — spec defines an upstream/downstream interface contract
+#
+# Examples below are placeholders — replace the `lenses` list with lenses
+# calibrated for YOUR project's domain. Delete examples you don't need;
+# define at least 1 lens covering each trigger category your project cares about.
+
+version: "v1"
+
+defaults:
+  finding_bound: 5
+  severity_weight: 5
+
+lenses:
+
+  # Example lens 1 — Regulatory Adversary
+  # Use if your project has a regulatory path. Customise the `core_questions`
+  # for your specific regulatory environment (SEC, FCA, GDPR, HIPAA, etc.).
+  - name: "Regulatory Adversary"
+    description: "Attacks the spec from a regulatory examiner's perspective — assumes every ambiguity will be read against the firm."
+    core_questions:
+      - "If a regulator audited this spec, what would they flag as non-compliant?"
+      - "Which decision in this spec would be hard to defend in an enforcement action?"
+      - "What evidence chain is missing that an auditor would expect?"
+      - "Where does the spec rely on 'best efforts' where regulators expect deterministic controls?"
+    trigger_match: [regulatory_path, money_path]
+    severity_weight: 8
+
+  # Example lens 2 — Trust-Boundary Adversary
+  # Use if your project has authorisation gates, approval flows, or
+  # privilege-escalation surfaces.
+  - name: "Trust-Boundary Adversary"
+    description: "Attacks the spec's trust assumptions — looks for implicitly-trusted inputs, authorisation gaps, privilege escalation."
+    core_questions:
+      - "Which inputs does the spec trust without validation?"
+      - "Where could a low-privilege actor bypass a gate intended for a higher-privilege actor?"
+      - "Which data source is trusted as authoritative but could be compromised or lagged?"
+    trigger_match: [multi_party, contracts]
+    severity_weight: 6
