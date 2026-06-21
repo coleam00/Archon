@@ -1,0 +1,8 @@
+agent: codex
+
+commands:
+  test: "bun run test:e2e:no-mistakes"
+  lint: "bun run typecheck:imports && bun run scripts/check-session-boundary.ts"
+test:
+  evidence:
+    store_in_repo: false
