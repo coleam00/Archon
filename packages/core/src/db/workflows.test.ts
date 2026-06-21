@@ -336,22 +336,37 @@ describe('workflows database', () => {
     test('merges metadata when provided', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
       const metadata = { node_counts: { completed: 3, failed: 1, skipped: 0, total: 4 } };
+      const expectedMetadataSql =
+        "metadata = (COALESCE(metadata, '{}'::jsonb) || $2::jsonb) - 'error'";
 
       await completeWorkflowRun('workflow-run-123', metadata);
 
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain("status = 'completed'");
-      expect(query).toContain('metadata = metadata ||');
+      expect(query).toContain(expectedMetadataSql);
       expect(params).toEqual(['workflow-run-123', JSON.stringify(metadata)]);
     });
 
-    test('uses simple query without metadata merge when no metadata provided', async () => {
+    test('clears stale failure error when metadata is provided', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+      const metadata = { node_counts: { completed: 4, failed: 0, skipped: 0, total: 4 } };
+      const expectedMetadataSql =
+        "metadata = (COALESCE(metadata, '{}'::jsonb) || $2::jsonb) - 'error'";
+
+      await completeWorkflowRun('workflow-run-123', metadata);
+
+      const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(query).toContain(expectedMetadataSql);
+      expect(params).toEqual(['workflow-run-123', JSON.stringify(metadata)]);
+    });
+
+    test('clears stale failure error when no metadata is provided', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
 
       await completeWorkflowRun('workflow-run-123');
 
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
-      expect(query).not.toContain('metadata =');
+      expect(query).toContain("metadata = (COALESCE(metadata, '{}'::jsonb)) - 'error'");
       expect(params).toEqual(['workflow-run-123']);
     });
   });

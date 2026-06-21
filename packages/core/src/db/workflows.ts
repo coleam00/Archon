@@ -145,6 +145,22 @@ function retryEpochMetadataSetExpression(): string {
        )`;
 }
 
+function completedWorkflowMetadataExpression(
+  dialect: SqlDialect,
+  metadataParamIndex?: number
+): string {
+  const isPostgres = getDatabaseType() === 'postgresql';
+  const existingMetadata = isPostgres
+    ? "COALESCE(metadata, '{}'::jsonb)"
+    : "COALESCE(metadata, '{}')";
+  const mergedMetadata =
+    metadataParamIndex === undefined
+      ? existingMetadata
+      : dialect.jsonMerge(existingMetadata, metadataParamIndex);
+
+  return isPostgres ? `(${mergedMetadata}) - 'error'` : `json_remove(${mergedMetadata}, '$.error')`;
+}
+
 export async function createWorkflowRun(data: {
   workflow_name: string;
   conversation_id: string;
@@ -737,16 +753,18 @@ export async function completeWorkflowRun(
   let result: Awaited<ReturnType<IDatabase['query']>>;
   try {
     if (metadata) {
+      const metadataExpression = completedWorkflowMetadataExpression(dialect, 2);
       result = await pool.query(
         `UPDATE remote_agent_workflow_runs
-         SET status = 'completed', completed_at = ${dialect.now()}, metadata = ${dialect.jsonMerge('metadata', 2)}
+         SET status = 'completed', completed_at = ${dialect.now()}, metadata = ${metadataExpression}
          WHERE id = $1 AND status = 'running'`,
         [id, JSON.stringify(metadata)]
       );
     } else {
+      const metadataExpression = completedWorkflowMetadataExpression(dialect);
       result = await pool.query(
         `UPDATE remote_agent_workflow_runs
-         SET status = 'completed', completed_at = ${dialect.now()}
+         SET status = 'completed', completed_at = ${dialect.now()}, metadata = ${metadataExpression}
          WHERE id = $1 AND status = 'running'`,
         [id]
       );
