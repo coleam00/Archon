@@ -1805,4 +1805,7 @@ describe('POST /api/workflows/runs/:runId/nodes/:nodeId/retry', () => {
   test.todo('returns 403 when the requester cannot mutate the workflow run', () => {});
   test.todo('returns 404 when the target run or failed node does not exist', () => {});
   test.todo('returns 409 when retry preparation detects an ineligible run state', () => {});
+  test.todo('allows retry only for failed runs created from Web conversations', () => {});
+  test.todo('rejects CLI-created runs with actionable workflow retry-node guidance', () => {});
+  test.todo('rejects non-web parent conversations with CLI retry guidance', () => {});
 });

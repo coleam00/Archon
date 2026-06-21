@@ -593,7 +593,7 @@
     },
     {
       "title": "Phase 5.1: Tests for User Story 3",
-      "completed": false,
+      "completed": true,
       "tasks": [
         {
           "id": "T058",
@@ -601,7 +601,7 @@
           "description": "[P] [US3] Add API success, 400, 401, 403, 404, and 409 route tests in `packages/server/src/routes/api.workflow-runs.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 58,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -610,7 +610,7 @@
           "description": "[P] [US3] Add Web-created versus CLI-created retry eligibility route tests in `packages/server/src/routes/api.workflow-runs.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 59,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -619,7 +619,7 @@
           "description": "[P] [US3] Add CLI path verification and `--json` rejection tests in `packages/cli/src/commands/workflow.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 60,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -628,7 +628,7 @@
           "description": "[P] [US3] Add Web retry eligibility and API wrapper tests in `packages/web/src/lib/workflow-retry.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 61,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -637,7 +637,7 @@
           "description": "[P] [US3] Add retry confirmation/loading/error UI tests in `packages/web/src/components/workflows/WorkflowNodeRetryAction.test.tsx`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 62,
-          "passes": false,
+          "passes": true,
           "notes": ""
         }
       ],

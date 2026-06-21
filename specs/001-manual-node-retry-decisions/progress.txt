@@ -6,6 +6,7 @@
 - Manual retry dispatch should use `prepareWorkflowNodeRetry()` to claim the existing failed run and pass its `preCreatedRun`, filtered `preservedCompletedOutputs`, and retry context into `executeWorkflow()`; do not let execution perform a foreground resume lookup for retry-prepared runs.
 - Retry-ref helper tests should use real temporary git repositories with local `user.name`/`user.email`; assert tracked-only behavior with untracked and ignored files left in the worktree.
 - Pre-node DAG checkpoint tests should opt into checkpoint persistence by adding `upsertWorkflowNodeCheckpoint` to the mock store; ordinary executor tests intentionally omit it so they do not need git repositories.
+- The Web package test script recursively runs `src/components/`, so new component test files under that tree do not need package script wiring.
 
 ## 2026-06-21 23:19:46 +07 - Phase 1: Setup (Shared Test Scaffolding) (iter 1)
 **Tasks completed this iter:** T001 (checkpoint schema/export coverage), T002 (SQLite/PostgreSQL checkpoint convergence coverage), T003 (tracked-only checkpoint/safety git helper coverage), T004 (epoch-aware DAG retry projection coverage), T005 (retry preparation operation coverage), T006 (retry API route coverage), T007 (CLI `workflow retry-node` coverage), T008 (Web retry helper coverage)
@@ -134,4 +135,21 @@
 - `executeDagWorkflow()` treats omitted `mutates_checkout` as mutating; tests that want real checkpoint writes must use a git temp repo and opt into `upsertWorkflowNodeCheckpoint` on the mock store.
 - `prepareWorkflowNodeRetry()` now writes `node_retry_reset` before output hydration/session deletion, so tests should search audit payloads by shape rather than assume `node_retry_requested` is the only early event.
 - Full validation may format ignored `.omx/state` JSON files; formatting those hook-state files is necessary for `bun run format:check` but they remain ignored by git.
+---
+
+## 2026-06-22 00:46 +07 - Phase 5.1: Tests for User Story 3 (iter 7)
+**Tasks completed this iter:** T058 (API retry route status contracts), T059 (Web-created versus CLI-created route eligibility contracts), T060 (CLI retry-node path and JSON rejection contracts), T061 (Web retry eligibility and API wrapper contracts), T062 (Web retry action UI contracts)
+**Status:** completed:true (5/5 tasks)
+
+- Per-task summary lines:
+  - T058 - Added focused retry route TODO contracts for success and 400/401/403/404/409 responses in `packages/server/src/routes/api.workflow-runs.test.ts`.
+  - T059 - Added Web-only eligibility route TODOs for web-created runs, CLI-created runs, and non-web parent conversations in `packages/server/src/routes/api.workflow-runs.test.ts`.
+  - T060 - Added CLI `workflow retry-node` TODOs for JSON rejection output and cwd/codebase/worktree path identity in `packages/cli/src/commands/workflow.test.ts`.
+  - T061 - Expanded Web retry helper TODOs for Web-created eligibility, CLI-only rejection, successful API response details, and API error normalization in `packages/web/src/lib/workflow-retry.test.ts`.
+  - T062 - Added `packages/web/src/components/workflows/WorkflowNodeRetryAction.test.tsx` with TODO contracts for confirmation, loading, duplicate-submit prevention, error recovery, and reset/safety-ref/untracked-preservation copy.
+
+**Learnings for future iterations:**
+- T058 and T059 both edit `packages/server/src/routes/api.workflow-runs.test.ts`, so the `[P]` run-group was intentionally handled serially.
+- Phase 5.1 remains a tests-first contract batch; the route, CLI command, Web helper, and component implementation seams land in Phase 5.2.
+- No browser verification was needed because this iteration added test contracts only and did not change rendered UI behavior.
 ---
