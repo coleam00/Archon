@@ -57,15 +57,63 @@ const DEFAULT_KPIS: PlaygroundKpis = {
   target_90d_meetings: 0,
 };
 
+const PLAYGROUND_PAYLOAD = playgroundData as Partial<{
+  kpis: Partial<PlaygroundKpis>;
+  sequences: unknown;
+  outcome_funnel: unknown;
+  meetings_by_week: unknown;
+}>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function safeNumber(value: unknown, fallback = 0): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function safeKpis(value: unknown): PlaygroundKpis {
+  const raw = isRecord(value) ? value : {};
+  const discoveryBooked = safeNumber(raw.discovery_booked, Number.NaN);
+  return {
+    meetings_this_week: safeNumber(raw.meetings_this_week),
+    dials_last_7d: safeNumber(raw.dials_last_7d),
+    active_sequences: safeNumber(raw.active_sequences),
+    reply_rate_14d: safeNumber(raw.reply_rate_14d),
+    open_rate_14d: safeNumber(raw.open_rate_14d),
+    total_delivered: safeNumber(raw.total_delivered),
+    total_replied: safeNumber(raw.total_replied),
+    target_30d_meetings: safeNumber(raw.target_30d_meetings),
+    target_90d_meetings: safeNumber(raw.target_90d_meetings),
+    discovery_booked: Number.isNaN(discoveryBooked) ? undefined : discoveryBooked,
+  };
+}
+
+function isSequenceRow(value: unknown): value is SequenceRow {
+  return isRecord(value);
+}
+
+function isOutcomeFunnelRow(value: unknown): value is OutcomeFunnelRow {
+  return isRecord(value) && typeof value.stage === 'string' && Number.isFinite(value.count);
+}
+
+function isMeetingsWeekRow(value: unknown): value is MeetingsWeekRow {
+  return isRecord(value) && typeof value.week === 'string' && Number.isFinite(value.total);
+}
+
 const KPIS: PlaygroundKpis = {
   ...DEFAULT_KPIS,
-  ...((playgroundData as { kpis?: Partial<PlaygroundKpis> }).kpis ?? {}),
+  ...safeKpis(PLAYGROUND_PAYLOAD.kpis),
 };
-const SEQUENCES: SequenceRow[] = (playgroundData.sequences ?? []) as SequenceRow[];
-const OUTCOME_FUNNEL: OutcomeFunnelRow[] =
-  (playgroundData as { outcome_funnel?: OutcomeFunnelRow[] }).outcome_funnel ?? [];
-const MEETINGS_BY_WEEK: MeetingsWeekRow[] =
-  (playgroundData as { meetings_by_week?: MeetingsWeekRow[] }).meetings_by_week ?? [];
+const SEQUENCES: SequenceRow[] = Array.isArray(PLAYGROUND_PAYLOAD.sequences)
+  ? PLAYGROUND_PAYLOAD.sequences.filter(isSequenceRow)
+  : [];
+const OUTCOME_FUNNEL: OutcomeFunnelRow[] = Array.isArray(PLAYGROUND_PAYLOAD.outcome_funnel)
+  ? PLAYGROUND_PAYLOAD.outcome_funnel.filter(isOutcomeFunnelRow)
+  : [];
+const MEETINGS_BY_WEEK: MeetingsWeekRow[] = Array.isArray(PLAYGROUND_PAYLOAD.meetings_by_week)
+  ? PLAYGROUND_PAYLOAD.meetings_by_week.filter(isMeetingsWeekRow)
+  : [];
 
 export { KPIS, SEQUENCES, OUTCOME_FUNNEL, MEETINGS_BY_WEEK };
 
@@ -216,9 +264,9 @@ export function meetingsWeekDelta(): WeeklyDelta {
 // consume the same canonical shape) ---
 
 export function buildPipelineFunnelData(): { stage: string; count: number }[] {
-  const sent = SEQUENCES.reduce((a, s) => a + (s.sent ?? 0), 0);
-  const opened = SEQUENCES.reduce((a, s) => a + (s.opened ?? 0), 0);
-  const replied = SEQUENCES.reduce((a, s) => a + (s.replied ?? 0), 0);
+  const sent = SEQUENCES.reduce((a, s) => a + safeNumber(s.sent), 0);
+  const opened = SEQUENCES.reduce((a, s) => a + safeNumber(s.opened), 0);
+  const replied = SEQUENCES.reduce((a, s) => a + safeNumber(s.replied), 0);
   const discoveryBooked = KPIS.discovery_booked ?? KPIS.meetings_this_week ?? 0;
   const auditsClosed = getAuditsClosedProxy();
   return [
