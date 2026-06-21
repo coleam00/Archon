@@ -793,7 +793,7 @@
     },
     {
       "title": "Phase 6.1: Tests for User Story 4",
-      "completed": false,
+      "completed": true,
       "tasks": [
         {
           "id": "T077",
@@ -801,7 +801,7 @@
           "description": "[P] [US4] Add epoch-aware output hydration tests in `packages/core/src/db/workflow-events.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 77,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -810,7 +810,7 @@
           "description": "[P] [US4] Add run detail `nodeStates` projection tests in `packages/server/src/routes/api.workflow-runs.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 78,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -819,7 +819,7 @@
           "description": "[P] [US4] Add retry epoch artifact path tests in `packages/workflows/src/artifacts-index.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 79,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -828,7 +828,7 @@
           "description": "[P] [US4] Add dashboard retry-event refetch tests in `packages/server/src/adapters/web/dashboard-event-poller.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 80,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -837,7 +837,7 @@
           "description": "[P] [US4] Add experimental console retry projection tests in `packages/web/src/experiments/console/primitives/event.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 81,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -846,7 +846,7 @@
           "description": "[P] [US4] Add cleanup warning/non-blocking tests for retry refs in `packages/core/src/services/cleanup-service.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 82,
-          "passes": false,
+          "passes": true,
           "notes": ""
         }
       ],

@@ -788,6 +788,16 @@ describe('runScheduledCleanup', () => {
       error: 'database locked',
     });
   });
+
+  test.todo(
+    'attempts checkpoint and retry-safety ref cleanup by workflow run prefix during old-run cleanup',
+    () => {}
+  );
+
+  test.todo(
+    'warns and continues DB cleanup when retry ref cleanup fails during old-run cleanup',
+    () => {}
+  );
 });
 
 describe('SESSION_RETENTION_DAYS', () => {

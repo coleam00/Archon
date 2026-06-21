@@ -324,6 +324,36 @@ describe('workflow-events', () => {
   });
 
   describe('getEpochAwareCompletedDagNodeOutputs', () => {
+    test('treats missing retry_epoch on historical completed events as epoch 0 outputs', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          {
+            ...mockEvent,
+            id: 'evt-a',
+            event_type: 'node_completed',
+            step_name: 'a',
+            data: { node_output: 'A0' },
+          },
+          {
+            ...mockEvent,
+            id: 'evt-b',
+            event_type: 'node_skipped_prior_success',
+            step_name: 'b',
+            data: { reason: 'prior_success', node_output: 'B0' },
+          },
+        ])
+      );
+
+      const result = await getEpochAwareCompletedDagNodeOutputs('run-historical');
+
+      expect(result).toEqual(
+        new Map([
+          ['a', 'A0'],
+          ['b', 'B0'],
+        ])
+      );
+    });
+
     test('drops stale outputs for retry-invalidated nodes until they complete in the active epoch', async () => {
       mockQuery.mockResolvedValueOnce(
         createQueryResult([
@@ -374,6 +404,52 @@ describe('workflow-events', () => {
         ['run-retry']
       );
     });
+
+    test('returns the latest retry epoch output when historical retry events are preserved', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          {
+            ...mockEvent,
+            id: 'evt-b-old',
+            event_type: 'node_completed',
+            step_name: 'b',
+            data: { node_output: 'B0' },
+          },
+          {
+            ...mockEvent,
+            id: 'evt-retry-1',
+            event_type: 'node_retry_requested',
+            step_name: 'b',
+            data: { node_id: 'b', retry_epoch: 1, invalidated_node_ids: ['b'] },
+          },
+          {
+            ...mockEvent,
+            id: 'evt-b-retry-1',
+            event_type: 'node_completed',
+            step_name: 'b',
+            data: { node_id: 'b', retry_epoch: 1, node_output: 'B1' },
+          },
+          {
+            ...mockEvent,
+            id: 'evt-retry-2',
+            event_type: 'node_retry_requested',
+            step_name: 'b',
+            data: { node_id: 'b', retry_epoch: 2, invalidated_node_ids: ['b'] },
+          },
+          {
+            ...mockEvent,
+            id: 'evt-b-retry-2',
+            event_type: 'node_completed',
+            step_name: 'b',
+            data: { node_id: 'b', retry_epoch: 2, node_output: 'B2' },
+          },
+        ])
+      );
+
+      const result = await getEpochAwareCompletedDagNodeOutputs('run-multi-retry');
+
+      expect(result).toEqual(new Map([['b', 'B2']]));
+    });
   });
 
   describe('getRetryPreservedDagNodeOutputs', () => {
@@ -405,6 +481,38 @@ describe('workflow-events', () => {
       );
 
       const result = await getRetryPreservedDagNodeOutputs('run-retry', ['b', 'c']);
+
+      expect(result).toEqual(new Map([['a', 'A0']]));
+    });
+
+    test('preserves non-invalidated upstream outputs and ignores invalidated stale outputs', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          {
+            ...mockEvent,
+            id: 'evt-a',
+            event_type: 'node_completed',
+            step_name: 'a',
+            data: { node_output: 'A0' },
+          },
+          {
+            ...mockEvent,
+            id: 'evt-b',
+            event_type: 'node_completed',
+            step_name: 'b',
+            data: { node_output: 'B0' },
+          },
+          {
+            ...mockEvent,
+            id: 'evt-retry',
+            event_type: 'node_retry_requested',
+            step_name: 'b',
+            data: { node_id: 'b', retry_epoch: 1, invalidated_node_ids: ['b', 'c'] },
+          },
+        ])
+      );
+
+      const result = await getRetryPreservedDagNodeOutputs('run-retry-preserve', ['b', 'c']);
 
       expect(result).toEqual(new Map([['a', 'A0']]));
     });

@@ -180,3 +180,21 @@
 - Browser verification is still needed for the Web confirmation/action flow because this iteration validated via type-check, lint, generated API types, and tests but did not run a browser session.
 - Full `bun run validate` passes after formatting ignored `.omx/state` JSON files; those files remain ignored and should not be committed.
 ---
+
+## 2026-06-22 01:20 +0700 - Phase 6.1: Tests for User Story 4 (iter 9)
+**Tasks completed this iter:** T077 (epoch-aware output hydration tests), T078 (run detail `nodeStates` projection tests), T079 (retry epoch artifact path tests), T080 (dashboard retry-event refetch tests), T081 (experimental console retry projection tests), T082 (cleanup warning/non-blocking retry-ref tests)
+**Status:** completed:true (6/6 tasks)
+
+- Per-task summary lines:
+  - T077 - Added executable epoch-aware output hydration coverage in `packages/core/src/db/workflow-events.test.ts` for historical epoch-0 outputs, latest retry epoch authority, and preserved upstream outputs while invalidated stale outputs are ignored.
+  - T078 - Added run-detail `nodeStates` TODO contracts in `packages/server/src/routes/api.workflow-runs.test.ts` for latest-epoch authority, pending invalidated nodes, and raw historical event preservation.
+  - T079 - Added retry-epoch artifact path TODO contracts in `packages/workflows/src/artifacts-index.test.ts` covering unchanged epoch-0 paths and epoch-qualified retry paths.
+  - T080 - Added dashboard poller TODO contracts in `packages/server/src/adapters/web/dashboard-event-poller.test.ts` for retry events mapping to workflow status refetch triggers.
+  - T081 - Added experimental console retry projection TODOs plus executable guards in `packages/web/src/experiments/console/primitives/event.test.ts` proving retry setup events do not affect terminal counts or folded node lifecycle state.
+  - T082 - Added cleanup-service TODO contracts in `packages/core/src/services/cleanup-service.test.ts` for checkpoint/retry-safety ref cleanup warnings and non-blocking old-run cleanup behavior.
+
+**Learnings for future iterations:**
+- US4 has a clear split between existing helper behavior and future implementation seams: DB hydration can be asserted executable now, while server `nodeStates`, retry-epoch artifact paths, retry-event dashboard mapping, console retry setup projection, and retry-ref cleanup remain Phase 6.2 TODO contracts.
+- The contiguous `[P]` batch was safe to swarm because each task owned a disjoint test file; shared PRD/progress/commit edits stayed in the main lane.
+- Browser verification was not needed in this tests-only batch; rendered Web retry projection still needs verification when Phase 6.2 changes production UI behavior.
+---

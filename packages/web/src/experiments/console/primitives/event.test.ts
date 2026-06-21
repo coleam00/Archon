@@ -229,6 +229,14 @@ describe('toRunEvent — error & workflow lifecycle', () => {
   });
 });
 
+describe('toRunEvent — retry setup projection', () => {
+  test.todo('node_retry_requested projects as a system event for retry setup history', () => {});
+
+  test.todo('node_retry_reset projects as a system event with reset checkpoint detail', () => {});
+
+  test.todo('node_retry_failed projects as a system event with setup failure detail', () => {});
+});
+
 describe('toRunEvent — fallback', () => {
   test('unknown event types fall through to a text event with a payload summary', () => {
     const e = toRunEvent(raw({ event_type: 'mystery_event', data: { foo: 'bar' } }));
@@ -281,6 +289,20 @@ describe('countTerminalNodes', () => {
 
   test('a terminal event with a null nodeId is skipped (can not be deduped)', () => {
     expect(countTerminalNodes([node(null, 'node_completed')])).toEqual({ completed: 0, total: 0 });
+  });
+
+  test('node_retry_requested does not count as a terminal node transition', () => {
+    const events = [
+      node('build', 'node_completed'),
+      toRunEvent(
+        raw({
+          event_type: 'node_retry_requested',
+          step_name: 'build',
+          data: { node_id: 'build', retry_epoch: 1, invalidated_node_ids: ['build'] },
+        })
+      ),
+    ];
+    expect(countTerminalNodes(events)).toEqual({ completed: 1, total: 1 });
   });
 });
 
@@ -414,5 +436,27 @@ describe('foldNodeRuns', () => {
     ]);
     expect(runs).toHaveLength(1);
     expect(runs[0]?.nodeId).toBe('plan');
+  });
+
+  test('node_retry_reset does not replace the current lifecycle projection', () => {
+    const runs = foldNodeRuns([
+      node('build', 'node_failed', { created_at: at('1'), data: { duration_ms: 42 } }),
+      toRunEvent(
+        raw({
+          event_type: 'node_retry_reset',
+          step_name: 'build',
+          created_at: at('2'),
+          data: {
+            node_id: 'build',
+            retry_epoch: 1,
+            checkpoint_ref: 'refs/archon/checkpoints/run-uuid/0/build',
+            safety_ref: 'refs/archon/retry-safety/run-uuid/1',
+            reset_skipped: false,
+          },
+        })
+      ),
+    ]);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ nodeId: 'build', status: 'failed', durationMs: 42 });
   });
 });

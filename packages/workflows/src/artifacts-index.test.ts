@@ -45,6 +45,13 @@ describe('artifacts-index', () => {
     expect(onDisk.outputType).toBe('plan');
   });
 
+  test.todo('writeNodeArtifact keeps retry epoch 0 node artifact paths unchanged', () => {});
+
+  test.todo(
+    'writeNodeArtifact writes retry epoch 1+ artifacts under epoch-qualified node paths',
+    () => {}
+  );
+
   test('writeNodeArtifact omits sessionId when not provided', async () => {
     const meta = await writeNodeArtifact(
       dir,

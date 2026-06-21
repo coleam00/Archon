@@ -124,6 +124,12 @@ describe('mapWorkflowEventRow', () => {
     expect(e).toMatchObject({ type: 'workflow_status', status: 'running' });
   });
 
+  test.todo('node_retry_requested → workflow_status running', () => {});
+
+  test.todo('node_retry_reset → workflow_status running', () => {});
+
+  test.todo('node_retry_failed → workflow_status failed', () => {});
+
   test('high-frequency / internal events are skipped (null)', () => {
     expect(mapWorkflowEventRow(row({ event_type: 'tool_called' }))).toBeNull();
     expect(mapWorkflowEventRow(row({ event_type: 'tool_completed' }))).toBeNull();

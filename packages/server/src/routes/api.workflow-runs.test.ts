@@ -790,6 +790,21 @@ describe('GET /api/workflows/runs/:runId', () => {
     expect(body.events[2]?.event_type).toBe('tool_called');
   });
 
+  test.todo(
+    'projects later retry epoch completion as authoritative in nodeStates while preserving raw events',
+    () => {}
+  );
+
+  test.todo(
+    'projects invalidated retry epoch nodes as pending before new lifecycle events arrive',
+    () => {}
+  );
+
+  test.todo(
+    'keeps older failed and skipped retry history visible when nodeStates uses the active retry epoch',
+    () => {}
+  );
+
   test('returns 404 when run not found', async () => {
     mockGetWorkflowRun.mockImplementationOnce(async () => null);
 
