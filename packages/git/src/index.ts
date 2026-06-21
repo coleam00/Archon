@@ -69,6 +69,7 @@ export {
 export type {
   RetryRefIdentity,
   CheckpointRefIdentity,
+  RetrySafetyRefIdentity,
   RetryRefResult,
   DeleteRetryRefsResult,
 } from './retry-refs';

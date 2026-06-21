@@ -72,6 +72,92 @@ function toDagNodeState(nodeState: WorkflowRunNodeState): DagNodeState {
   };
 }
 
+function buildDagNodeStatesFromEvents(events: WorkflowEventResponse[]): DagNodeState[] {
+  const nodeMap = new Map<string, DagNodeState>();
+  for (const e of events.filter(ev => ev.event_type.startsWith('node_'))) {
+    const nodeId = e.step_name ?? (e.data.nodeId as string) ?? '';
+    if (!nodeId) continue;
+    const status =
+      e.event_type === 'node_started'
+        ? 'running'
+        : e.event_type === 'node_completed'
+          ? 'completed'
+          : e.event_type === 'node_failed'
+            ? 'failed'
+            : 'skipped';
+    const existing = nodeMap.get(nodeId);
+    if (!existing || status !== 'running') {
+      nodeMap.set(nodeId, {
+        nodeId,
+        name: nodeId,
+        status: status as WorkflowStepStatus,
+        duration: e.data.duration_ms as number | undefined,
+        error: e.data.error as string | undefined,
+        reason: e.data.reason as 'when_condition' | 'trigger_rule' | undefined,
+      });
+    }
+  }
+  return Array.from(nodeMap.values());
+}
+
+function enrichDagNodesWithLoopIterations(
+  nodes: DagNodeState[],
+  events: WorkflowEventResponse[]
+): DagNodeState[] {
+  const nodeMap = new Map(nodes.map(node => [node.nodeId, node]));
+  for (const e of events.filter(ev => ev.event_type.startsWith('loop_iteration_'))) {
+    const nodeId = e.step_name ?? '';
+    if (!nodeId) continue;
+    const existing = nodeMap.get(nodeId);
+    if (!existing) continue;
+
+    const iteration = e.data.iteration as number | undefined;
+    const maxIter = e.data.maxIterations as number | undefined;
+    if (iteration === undefined) continue;
+
+    let iterStatus: LoopIterationInfo['status'];
+    if (e.event_type === 'loop_iteration_started') {
+      iterStatus = 'running';
+    } else if (e.event_type === 'loop_iteration_completed') {
+      iterStatus = 'completed';
+    } else {
+      iterStatus = 'failed';
+    }
+
+    const existingIters: LoopIterationInfo[] = existing.iterations ?? [];
+    const iterIdx = existingIters.findIndex(it => it.iteration === iteration);
+    const iterState: LoopIterationInfo = {
+      iteration,
+      status: iterStatus,
+      duration: e.data.duration_ms as number | undefined,
+    };
+    const newIters = [...existingIters];
+    if (iterIdx >= 0) {
+      newIters[iterIdx] = iterState;
+    } else {
+      newIters.push(iterState);
+    }
+
+    nodeMap.set(nodeId, {
+      ...existing,
+      currentIteration: iteration,
+      maxIterations: maxIter ?? existing.maxIterations,
+      iterations: newIters,
+    });
+  }
+  return Array.from(nodeMap.values());
+}
+
+export function buildWorkflowDagNodeStates(
+  nodeStates: WorkflowRunNodeState[] | undefined,
+  events: WorkflowEventResponse[]
+): DagNodeState[] {
+  const baseNodes = nodeStates
+    ? nodeStates.map(toDagNodeState)
+    : buildDagNodeStatesFromEvents(events);
+  return enrichDagNodesWithLoopIterations(baseNodes, events);
+}
+
 interface WorkflowExecutionProps {
   runId: string;
 }
@@ -128,81 +214,7 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
           runId: data.run.id,
           workflowName: data.run.workflow_name,
           status: data.run.status,
-          dagNodes: data.nodeStates
-            ? data.nodeStates.map(toDagNodeState)
-            : ((): DagNodeState[] => {
-                const nodeMap = new Map<string, DagNodeState>();
-                for (const e of data.events.filter(ev => ev.event_type.startsWith('node_'))) {
-                  const nodeId = e.step_name ?? (e.data.nodeId as string) ?? '';
-                  if (!nodeId) continue;
-                  const status =
-                    e.event_type === 'node_started'
-                      ? 'running'
-                      : e.event_type === 'node_completed'
-                        ? 'completed'
-                        : e.event_type === 'node_failed'
-                          ? 'failed'
-                          : 'skipped';
-                  const existing = nodeMap.get(nodeId);
-                  // Keep the latest non-running status (completed/failed/skipped override running)
-                  if (!existing || status !== 'running') {
-                    nodeMap.set(nodeId, {
-                      nodeId,
-                      name: nodeId,
-                      status: status as WorkflowStepStatus,
-                      duration: e.data.duration_ms as number | undefined,
-                      error: e.data.error as string | undefined,
-                      reason: e.data.reason as 'when_condition' | 'trigger_rule' | undefined,
-                    });
-                  }
-                }
-
-                // Second pass: enrich loop nodes with iteration data
-                for (const e of data.events.filter(ev =>
-                  ev.event_type.startsWith('loop_iteration_')
-                )) {
-                  const nodeId = e.step_name ?? '';
-                  if (!nodeId) continue;
-                  const existing = nodeMap.get(nodeId);
-                  if (!existing) continue; // No node_started event yet — skip (events ordered in DB)
-
-                  const iteration = e.data.iteration as number | undefined;
-                  const maxIter = e.data.maxIterations as number | undefined;
-                  if (iteration === undefined) continue;
-
-                  let iterStatus: LoopIterationInfo['status'];
-                  if (e.event_type === 'loop_iteration_started') {
-                    iterStatus = 'running';
-                  } else if (e.event_type === 'loop_iteration_completed') {
-                    iterStatus = 'completed';
-                  } else {
-                    iterStatus = 'failed';
-                  }
-
-                  const existingIters: LoopIterationInfo[] = existing.iterations ?? [];
-                  const iterIdx = existingIters.findIndex(it => it.iteration === iteration);
-                  const iterState: LoopIterationInfo = {
-                    iteration,
-                    status: iterStatus,
-                    duration: e.data.duration_ms as number | undefined,
-                  };
-                  const newIters = [...existingIters];
-                  if (iterIdx >= 0) {
-                    newIters[iterIdx] = iterState;
-                  } else {
-                    newIters.push(iterState);
-                  }
-
-                  nodeMap.set(nodeId, {
-                    ...existing,
-                    currentIteration: iteration,
-                    maxIterations: maxIter ?? existing.maxIterations,
-                    iterations: newIters,
-                  });
-                }
-
-                return Array.from(nodeMap.values());
-              })(),
+          dagNodes: buildWorkflowDagNodeStates(data.nodeStates, data.events),
           artifacts: data.events
             .filter(e => e.event_type === 'workflow_artifact')
             .map(e => {

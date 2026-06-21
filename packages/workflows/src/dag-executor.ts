@@ -152,6 +152,7 @@ async function createPreNodeCheckpoint(params: {
   const checkpoint = await upsertCheckpointRef(params.cwd, {
     runId: params.workflowRun.id,
     retryEpoch,
+    workflowName: params.workflowRun.workflow_name,
     nodeId: params.node.id,
   });
   await params.deps.store.upsertWorkflowNodeCheckpoint({

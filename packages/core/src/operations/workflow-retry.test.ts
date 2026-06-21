@@ -7,11 +7,13 @@ const mockGetWorkflowRun = mock(async () => makeRun());
 const mockClaimWorkflowRunForNodeRetry = mock(async () =>
   makeRun({ status: 'running', metadata: { retry_epoch: 1 } })
 );
+const mockGetActiveWorkflowRunByPath = mock(async () => null as WorkflowRun | null);
 const mockUpdateWorkflowRun = mock(async () => {});
 
 mock.module('../db/workflows', () => ({
   getWorkflowRun: mockGetWorkflowRun,
   claimWorkflowRunForNodeRetry: mockClaimWorkflowRunForNodeRetry,
+  getActiveWorkflowRunByPath: mockGetActiveWorkflowRunByPath,
   updateWorkflowRun: mockUpdateWorkflowRun,
   WorkflowRetryNotClaimableError: class WorkflowRetryNotClaimableError extends Error {
     constructor(
@@ -128,6 +130,8 @@ describe('workflow retry preparation operation', () => {
     mockClaimWorkflowRunForNodeRetry.mockImplementation(async () =>
       makeRun({ status: 'running', metadata: { retry_epoch: 1 } })
     );
+    mockGetActiveWorkflowRunByPath.mockReset();
+    mockGetActiveWorkflowRunByPath.mockImplementation(async () => null);
     mockUpdateWorkflowRun.mockReset();
     mockUpdateWorkflowRun.mockImplementation(async () => {});
     mockListWorkflowEvents.mockReset();
@@ -257,24 +261,64 @@ describe('workflow retry preparation operation', () => {
     });
   });
 
-  test('writes reset_skipped when a mutating retry has no checkpoint fallback', async () => {
+  test('creates safety ref and resets to HEAD when a mutating retry has no checkpoint fallback', async () => {
     const result = await prepareWorkflowNodeRetry(
       makeRequest({ workflow: makeWorkflow({ mutates_checkout: true }) })
     );
 
-    expect(result.resetSkipped).toBe(true);
+    expect(result.resetSkipped).toBe(false);
     expect(mockFindLatestCheckpointForRetry).toHaveBeenCalledWith('run-1', 'b', ['a'], 1);
-    expect(mockVerifyCommitRef).not.toHaveBeenCalled();
-    expect(mockCreateRetrySafetyRef).not.toHaveBeenCalled();
-    expect(mockResetTrackedFilesToCommit).not.toHaveBeenCalled();
+    expect(mockVerifyCommitRef).toHaveBeenCalledWith('/workspace/repo', 'HEAD');
+    expect(mockCreateRetrySafetyRef).toHaveBeenCalledWith('/workspace/repo', {
+      runId: 'run-1',
+      retryEpoch: 1,
+      workflowName: 'retry-workflow',
+      nodeId: 'b',
+    });
+    expect(mockResetTrackedFilesToCommit).toHaveBeenCalledWith('/workspace/repo', 'checkpoint-sha');
     expect(auditPayloads()[1]).toMatchObject({
       node_id: 'b',
       retry_epoch: 1,
       checkpoint_ref: null,
-      checkpoint_commit_sha: null,
-      safety_ref: null,
-      safety_commit_sha: null,
-      reset_skipped: true,
+      checkpoint_commit_sha: 'checkpoint-sha',
+      safety_ref: 'refs/archon/retry-safety/run-1/1',
+      safety_commit_sha: 'safety-sha',
+      reset_skipped: false,
+    });
+  });
+
+  test('restores failed status and avoids git mutation when another run owns the working path', async () => {
+    mockGetActiveWorkflowRunByPath.mockResolvedValueOnce(
+      makeRun({
+        id: 'active-run-123',
+        workflow_name: 'active-workflow',
+        status: 'running',
+      })
+    );
+
+    await expect(
+      prepareWorkflowNodeRetry(makeRequest({ workflow: makeWorkflow({ mutates_checkout: true }) }))
+    ).rejects.toMatchObject({ code: 'path_in_use' });
+
+    expect(mockGetActiveWorkflowRunByPath).toHaveBeenCalledWith('/workspace/repo', {
+      id: 'run-1',
+      startedAt: new Date('2026-06-21T00:00:00.000Z'),
+    });
+    expect(mockFindLatestCheckpointForRetry).not.toHaveBeenCalled();
+    expect(mockVerifyCommitRef).not.toHaveBeenCalled();
+    expect(mockCreateRetrySafetyRef).not.toHaveBeenCalled();
+    expect(mockResetTrackedFilesToCommit).not.toHaveBeenCalled();
+    expect(mockUpdateWorkflowRun).toHaveBeenCalledWith('run-1', {
+      status: 'failed',
+      metadata: {
+        retry_setup_error:
+          "Cannot retry workflow run run-1: working path is in use by workflow 'active-workflow' (running, run active-r)",
+      },
+    });
+    expect(auditPayloads().at(-1)).toMatchObject({
+      node_id: 'b',
+      retry_epoch: 1,
+      setup_phase: 'path_lock',
     });
   });
 
@@ -306,6 +350,8 @@ describe('workflow retry preparation operation', () => {
     expect(mockCreateRetrySafetyRef).toHaveBeenCalledWith('/workspace/repo', {
       runId: 'run-1',
       retryEpoch: 1,
+      workflowName: 'retry-workflow',
+      nodeId: 'b',
     });
     expect(mockResetTrackedFilesToCommit).toHaveBeenCalledWith(
       '/workspace/repo',

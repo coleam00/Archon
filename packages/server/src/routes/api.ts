@@ -2351,6 +2351,7 @@ export function registerApiRoutes(
       case 'run_not_found':
         return 404;
       case 'cas_miss':
+      case 'path_in_use':
         return 409;
       case 'run_not_failed':
       case 'node_not_found':

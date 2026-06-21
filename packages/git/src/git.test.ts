@@ -2328,6 +2328,7 @@ branch refs/heads/feature/auth
         git.upsertCheckpointRef(testDir, {
           runId: 'run-not-repo',
           retryEpoch: 0,
+          workflowName: 'retry-workflow',
           nodeId: 'node-a',
         })
       ).rejects.toThrow('Retry checkpoint operations require a git repository');
@@ -2339,6 +2340,7 @@ branch refs/heads/feature/auth
       const result = await git.upsertCheckpointRef(repoPath, {
         runId: 'run-clean',
         retryEpoch: 0,
+        workflowName: 'retry-workflow',
         nodeId: 'node-a',
       });
 
@@ -2361,6 +2363,7 @@ branch refs/heads/feature/auth
       const result = await git.upsertCheckpointRef(repoPath, {
         runId: 'run-dirty',
         retryEpoch: 0,
+        workflowName: 'retry-workflow',
         nodeId: 'node-b',
       });
 
@@ -2377,6 +2380,10 @@ branch refs/heads/feature/auth
 
       const trackedContent = await runGit(repoPath, ['show', `${result.commitSha}:tracked.txt`]);
       expect(trackedContent).toBe('tracked dirty');
+      const message = await runGit(repoPath, ['log', '-1', '--format=%B']);
+      expect(message).toBe(
+        'archon checkpoint: retry-workflow/node-b\n\nRun: run-dirty\nEpoch: 0\nNode: node-b'
+      );
       const status = await runGit(repoPath, ['status', '--porcelain', '--untracked-files=all']);
       expect(status).toContain('?? untracked.txt');
       const ignoredStatus = await runGit(repoPath, ['status', '--porcelain', '--ignored']);
@@ -2419,6 +2426,7 @@ branch refs/heads/feature/auth
           git.upsertCheckpointRef(repoPath, {
             runId: 'run-missing-identity',
             retryEpoch: 0,
+            workflowName: 'retry-workflow',
             nodeId: 'node-a',
           })
         ).rejects.toThrow('git user.name and user.email configured');
@@ -2450,6 +2458,7 @@ branch refs/heads/feature/auth
       const checkpoint = await git.upsertCheckpointRef(repoPath, {
         runId: 'run-reset',
         retryEpoch: 0,
+        workflowName: 'retry-workflow',
         nodeId: 'node-a',
       });
       expect(checkpoint.commitSha).toBe(initialSha);
@@ -2460,6 +2469,8 @@ branch refs/heads/feature/auth
       const safety = await git.createRetrySafetyRef(repoPath, {
         runId: 'run-reset',
         retryEpoch: 1,
+        workflowName: 'retry-workflow',
+        nodeId: 'node-a',
       });
       expect(safety).toMatchObject({
         ref: 'refs/archon/retry-safety/run-reset/1',
@@ -2468,6 +2479,9 @@ branch refs/heads/feature/auth
       await expect(git.verifyCommitRef(repoPath, safety.ref)).resolves.toBe(safety.commitSha);
       expect(await runGit(repoPath, ['show', `${safety.commitSha}:tracked.txt`])).toBe(
         'failed attempt work'
+      );
+      expect(await runGit(repoPath, ['log', '-1', '--format=%B'])).toBe(
+        'archon retry safety: retry-workflow\n\nRun: run-reset\nEpoch: 1\nRetry node: node-a'
       );
 
       await writeFile(join(repoPath, 'tracked.txt'), 'post-safety mutation\n');
@@ -2485,6 +2499,7 @@ branch refs/heads/feature/auth
         git.upsertCheckpointRef(repoPath, {
           runId: 'bad run',
           retryEpoch: 0,
+          workflowName: 'retry-workflow',
           nodeId: 'node-a',
         })
       ).rejects.toThrow("Invalid git ref 'refs/archon/checkpoints/bad run/0/node-a'");
@@ -2493,6 +2508,8 @@ branch refs/heads/feature/auth
         git.createRetrySafetyRef(repoPath, {
           runId: 'bad run',
           retryEpoch: 1,
+          workflowName: 'retry-workflow',
+          nodeId: 'node-a',
         })
       ).rejects.toThrow("Invalid git ref 'refs/archon/retry-safety/bad run/1'");
 

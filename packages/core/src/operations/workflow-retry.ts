@@ -30,6 +30,7 @@ export type WorkflowRetryErrorCode =
   | 'node_not_found'
   | 'node_not_failed'
   | 'cas_miss'
+  | 'path_in_use'
   | 'checkpoint_unavailable'
   | 'git_reset_failed'
   | 'dispatch_failed';
@@ -127,6 +128,18 @@ function requireWorkflowRunPath(run: WorkflowRun): string {
   return run.working_path;
 }
 
+function getRunStartedAtDate(run: WorkflowRun): Date {
+  return run.started_at instanceof Date ? run.started_at : new Date(run.started_at);
+}
+
+function buildPathInUseError(claimedRun: WorkflowRun, activeRun: WorkflowRun): WorkflowRetryError {
+  const shortActiveRunId = activeRun.id.slice(0, 8);
+  return new WorkflowRetryError(
+    'path_in_use',
+    `Cannot retry workflow run ${claimedRun.id}: working path is in use by workflow '${activeRun.workflow_name}' (${activeRun.status}, run ${shortActiveRunId})`
+  );
+}
+
 export async function prepareWorkflowNodeRetry(
   input: PrepareWorkflowNodeRetryInput
 ): Promise<WorkflowNodeRetryPreparedResult> {
@@ -200,6 +213,16 @@ export async function prepareWorkflowNodeRetry(
         },
       });
     } else {
+      const repoPath = requireWorkflowRunPath(claimedRun);
+      setupPhase = 'path_lock';
+      const activeWorkflow = await workflowDb.getActiveWorkflowRunByPath(repoPath, {
+        id: claimedRun.id,
+        startedAt: getRunStartedAtDate(claimedRun),
+      });
+      if (activeWorkflow) {
+        throw buildPathInUseError(claimedRun, activeWorkflow);
+      }
+
       setupPhase = 'checkpoint_lookup';
       const checkpoint = await workflowCheckpointDb.findLatestCheckpointForRetry(
         input.runId,
@@ -209,20 +232,50 @@ export async function prepareWorkflowNodeRetry(
       );
 
       if (!checkpoint) {
+        setupPhase = 'checkpoint_validation';
+        try {
+          checkpointCommitSha = await verifyCommitRef(repoPath, 'HEAD');
+        } catch (error) {
+          throw toRetryError(error, 'checkpoint_unavailable');
+        }
+
+        setupPhase = 'safety_ref';
+        let safety;
+        try {
+          safety = await createRetrySafetyRef(repoPath, {
+            runId: input.runId,
+            retryEpoch,
+            workflowName: run.workflow_name,
+            nodeId: input.nodeId,
+          });
+        } catch (error) {
+          throw toRetryError(error, 'git_reset_failed');
+        }
+        safetyRef = safety.ref;
+        safetyCommitSha = safety.commitSha;
+
+        setupPhase = 'git_reset';
+        try {
+          checkpointCommitSha = await resetTrackedFilesToCommit(repoPath, checkpointCommitSha);
+        } catch (error) {
+          throw toRetryError(error, 'git_reset_failed');
+        }
+
+        resetSkipped = false;
+        setupPhase = 'retry_preparation';
         await writeRetryAuditEvent(input.runId, {
           eventType: 'node_retry_reset',
           data: {
             node_id: input.nodeId,
             retry_epoch: retryEpoch,
             checkpoint_ref: null,
-            checkpoint_commit_sha: null,
-            safety_ref: null,
-            safety_commit_sha: null,
-            reset_skipped: true,
+            checkpoint_commit_sha: checkpointCommitSha,
+            safety_ref: safetyRef,
+            safety_commit_sha: safetyCommitSha,
+            reset_skipped: false,
           },
         });
       } else {
-        const repoPath = requireWorkflowRunPath(claimedRun);
         checkpointRef = checkpoint.checkpoint_ref;
 
         setupPhase = 'checkpoint_validation';
@@ -238,6 +291,8 @@ export async function prepareWorkflowNodeRetry(
           safety = await createRetrySafetyRef(repoPath, {
             runId: input.runId,
             retryEpoch,
+            workflowName: run.workflow_name,
+            nodeId: input.nodeId,
           });
         } catch (error) {
           throw toRetryError(error, 'git_reset_failed');

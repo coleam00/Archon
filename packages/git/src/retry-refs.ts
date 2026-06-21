@@ -6,6 +6,12 @@ export interface RetryRefIdentity {
 }
 
 export interface CheckpointRefIdentity extends RetryRefIdentity {
+  workflowName: string;
+  nodeId: string;
+}
+
+export interface RetrySafetyRefIdentity extends RetryRefIdentity {
+  workflowName: string;
   nodeId: string;
 }
 
@@ -80,6 +86,25 @@ async function requireCommitIdentity(repoPath: string): Promise<void> {
   }
 }
 
+function normalizeAuditText(value: string): string {
+  return Array.from(value, char => {
+    const code = char.charCodeAt(0);
+    return code <= 31 || code === 127 ? ' ' : char;
+  }).join('');
+}
+
+function buildCheckpointCommitMessage(identity: CheckpointRefIdentity): string {
+  const workflowName = normalizeAuditText(identity.workflowName);
+  const nodeId = normalizeAuditText(identity.nodeId);
+  return `archon checkpoint: ${workflowName}/${nodeId}\n\nRun: ${identity.runId}\nEpoch: ${String(identity.retryEpoch)}\nNode: ${nodeId}`;
+}
+
+function buildRetrySafetyCommitMessage(identity: RetrySafetyRefIdentity): string {
+  const workflowName = normalizeAuditText(identity.workflowName);
+  const nodeId = normalizeAuditText(identity.nodeId);
+  return `archon retry safety: ${workflowName}\n\nRun: ${identity.runId}\nEpoch: ${String(identity.retryEpoch)}\nRetry node: ${nodeId}`;
+}
+
 export async function createTrackedChangesCommit(
   repoPath: string,
   message: string
@@ -101,23 +126,20 @@ export async function upsertCheckpointRef(
 ): Promise<RetryRefResult> {
   const ref = buildCheckpointRef(identity);
   await validateGitRef(repoPath, ref);
-  const result = await createTrackedChangesCommit(
-    repoPath,
-    `archon checkpoint ${identity.runId}/${String(identity.retryEpoch)}/${identity.nodeId}`
-  );
+  const result = await createTrackedChangesCommit(repoPath, buildCheckpointCommitMessage(identity));
   await git(repoPath, ['update-ref', ref, result.commitSha]);
   return { ref, commitSha: result.commitSha, createdCommit: result.createdCommit };
 }
 
 export async function createRetrySafetyRef(
   repoPath: string,
-  identity: RetryRefIdentity
+  identity: RetrySafetyRefIdentity
 ): Promise<RetryRefResult> {
   const ref = buildRetrySafetyRef(identity);
   await validateGitRef(repoPath, ref);
   const result = await createTrackedChangesCommit(
     repoPath,
-    `archon retry safety ${identity.runId}/${String(identity.retryEpoch)}`
+    buildRetrySafetyCommitMessage(identity)
   );
   await git(repoPath, ['update-ref', ref, result.commitSha]);
   return { ref, commitSha: result.commitSha, createdCommit: result.createdCommit };
