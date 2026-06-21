@@ -1,6 +1,10 @@
 import { describe, test } from 'bun:test';
 
 describe('workflow retry preparation operation', () => {
+  test.todo(
+    'prepares a linear A -> B -> C retry by preserving A, invalidating B/C, and reusing the same run',
+    () => {}
+  );
   test.todo('rejects retry when the run is not failed or the target node is not failed', () => {});
   test.todo(
     'increments retry metadata exactly once while moving the same run back to running',

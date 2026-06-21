@@ -352,6 +352,50 @@ describe('executeWorkflow preamble', () => {
       expect(result.workflowRunId).toBe('prior-run');
     });
 
+    it('hands retry-prepared runs to DAG execution with filtered prior outputs', async () => {
+      const retryPreparedRun = makeRun({
+        id: 'retry-run',
+        status: 'running',
+        metadata: { retry_epoch: 1 },
+      });
+      const priorCompletedNodes = new Map([
+        ['a', 'preserved upstream output'],
+        ['sibling', 'preserved sibling output'],
+      ]);
+      const findSpy = mock(async () => null);
+      const store = makeStore({ findResumableRun: findSpy });
+      const deps = makeDeps(store);
+
+      const result = await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-123',
+        '/tmp',
+        makeWorkflow({
+          nodes: [
+            { id: 'a', command: 'a' },
+            { id: 'b', command: 'b', depends_on: ['a'] },
+            { id: 'c', command: 'c', depends_on: ['b'] },
+            { id: 'sibling', command: 'sibling', depends_on: ['a'] },
+          ],
+        }),
+        'User message',
+        'db-conv-id',
+        {
+          preCreatedRun: retryPreparedRun,
+          priorCompletedNodes,
+          retryContext: { targetNodeId: 'b', retryEpoch: 1, invalidatedNodeIds: ['b', 'c'] },
+        }
+      );
+
+      expect(findSpy).not.toHaveBeenCalled();
+      expect((store.createWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(0);
+      expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
+      expect(mockExecuteDagWorkflow.mock.calls[0][5]).toBe(retryPreparedRun);
+      expect(mockExecuteDagWorkflow.mock.calls[0][15]).toBe(priorCompletedNodes);
+      expect(result.workflowRunId).toBe('retry-run');
+    });
+
     it('sends interactive-loop notification when priorCompletedNodes is empty (paused approval gate)', async () => {
       const resumedRun = makeRun({ id: 'paused-loop-run', status: 'running' });
       const priorCompletedNodes = new Map<string, string>();

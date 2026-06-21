@@ -148,6 +148,22 @@ describe('workflow-node-sessions', () => {
       expect(params).toEqual(['feature-dev', 'conv-1', 'planner']);
     });
 
+    test('deletes all provider sessions for one retry-invalidated node when provider is omitted', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 2));
+      const result = await deleteWorkflowNodeSessions({
+        workflow_name: 'retryable-workflow',
+        scope_key: 'conv-retry',
+        node_id: 'failed-node',
+      });
+
+      expect(result).toEqual({ deleted: 2 });
+      const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(sql).toBe(
+        'DELETE FROM remote_agent_workflow_node_sessions WHERE workflow_name = $1 AND scope_key = $2 AND node_id = $3'
+      );
+      expect(params).toEqual(['retryable-workflow', 'conv-retry', 'failed-node']);
+    });
+
     test('narrows by node_id without scope_key', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 2));
       const result = await deleteWorkflowNodeSessions({

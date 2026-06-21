@@ -34,6 +34,33 @@ describe('retry DAG state projection', () => {
     expect(states.get('b')?.state).toBe('pending');
   });
 
+  test('preserves parallel sibling branch while invalidating target branch descendants', () => {
+    const nodes = [
+      { id: 'root', prompt: 'root' },
+      { id: 'left', prompt: 'left', depends_on: ['root'] },
+      { id: 'left-child', prompt: 'left child', depends_on: ['left'] },
+      { id: 'right', prompt: 'right', depends_on: ['root'] },
+      { id: 'join', prompt: 'join', depends_on: ['left-child', 'right'] },
+    ] satisfies DagNode[];
+
+    const invalidatedNodeIds = getRetryInvalidatedNodeIds(nodes, 'left');
+    const states = projectLatestEffectiveNodeStates([
+      { event_type: 'node_completed', step_name: 'root', data: { node_output: 'root-output' } },
+      { event_type: 'node_completed', step_name: 'right', data: { node_output: 'right-output' } },
+      {
+        event_type: 'node_retry_requested',
+        data: { retry_epoch: 1, invalidated_node_ids: invalidatedNodeIds },
+      },
+    ]);
+
+    expect(invalidatedNodeIds).toEqual(['left', 'left-child', 'join']);
+    expect(states.get('root')).toMatchObject({ state: 'completed', output: 'root-output' });
+    expect(states.get('right')).toMatchObject({ state: 'completed', output: 'right-output' });
+    expect(states.get('left')).toMatchObject({ state: 'pending', retry_epoch: 1 });
+    expect(states.get('left-child')).toMatchObject({ state: 'pending', retry_epoch: 1 });
+    expect(states.get('join')).toMatchObject({ state: 'pending', retry_epoch: 1 });
+  });
+
   test('treats skipped downstream nodes as latest effective skipped state', () => {
     const state = getLatestEffectiveNodeState(
       [
@@ -47,6 +74,24 @@ describe('retry DAG state projection', () => {
     );
 
     expect(state).toMatchObject({ state: 'skipped', retry_epoch: 1, reason: 'dependency_failed' });
+  });
+
+  test('keeps skipped downstream nodes ineligible while failed ancestor remains the retry target', () => {
+    const states = projectLatestEffectiveNodeStates([
+      {
+        event_type: 'node_failed',
+        step_name: 'build',
+        data: { error: 'compiler failed' },
+      },
+      {
+        event_type: 'node_skipped',
+        step_name: 'test',
+        data: { reason: 'dependency_failed' },
+      },
+    ]);
+
+    expect(states.get('build')).toMatchObject({ state: 'failed', error: 'compiler failed' });
+    expect(states.get('test')).toMatchObject({ state: 'skipped', reason: 'dependency_failed' });
   });
 
   test('uses latest effective node state when older epochs contain stale failures', () => {

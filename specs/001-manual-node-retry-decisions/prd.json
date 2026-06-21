@@ -273,7 +273,7 @@
     },
     {
       "title": "Phase 3.1: Tests for User Story 1",
-      "completed": false,
+      "completed": true,
       "tasks": [
         {
           "id": "T027",
@@ -281,7 +281,7 @@
           "description": "[P] [US1] Add linear `A -> B -> C` retry scope test in `packages/core/src/operations/workflow-retry.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 27,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -290,7 +290,7 @@
           "description": "[P] [US1] Add parallel sibling preservation retry test in `packages/workflows/src/retry-state.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 28,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -299,7 +299,7 @@
           "description": "[P] [US1] Add skipped downstream ineligible retry test in `packages/workflows/src/retry-state.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 29,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -308,7 +308,7 @@
           "description": "[P] [US1] Add retry execution handoff test for prepared runs in `packages/workflows/src/executor-preamble.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 30,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -317,7 +317,7 @@
           "description": "[P] [US1] Add invalidated persisted-session deletion test in `packages/core/src/db/workflow-node-sessions.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 31,
-          "passes": false,
+          "passes": true,
           "notes": ""
         }
       ],

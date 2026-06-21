@@ -2,6 +2,7 @@
 - Package test scripts enumerate isolated `bun test` invocations; when adding a new test file, wire it into that package's `package.json` test script instead of relying on root test discovery.
 - Bundled workflow/default command content must be regenerated with `bun run generate:bundled` whenever `.archon/commands/defaults/` or `.archon/workflows/defaults/` files change.
 - Keep persisted workflow event row validation legacy-compatible; add narrow payload schemas and strict writers for new event families instead of tightening `workflowEventRowSchema.event_type` globally.
+- For tests-first batches that precede their implementation batch, use executable assertions where supporting primitives already exist and `test.todo(..., () => {})` contracts where the production seam does not exist yet; keep `bun run validate` green.
 
 ## 2026-06-21 23:19:46 +07 - Phase 1: Setup (Shared Test Scaffolding) (iter 1)
 **Tasks completed this iter:** T001 (checkpoint schema/export coverage), T002 (SQLite/PostgreSQL checkpoint convergence coverage), T003 (tracked-only checkpoint/safety git helper coverage), T004 (epoch-aware DAG retry projection coverage), T005 (retry preparation operation coverage), T006 (retry API route coverage), T007 (CLI `workflow retry-node` coverage), T008 (Web retry helper coverage)
@@ -51,4 +52,21 @@
 - Use package test scripts or isolated `bun test` invocations; combining mock-heavy workflow/core tests in one process can create false failures.
 - Retry audit events should use `writeRetryAuditEvent()` because the generic workflow event path intentionally logs and swallows write failures.
 - Checkpoint store methods are optional on the engine contract until DAG checkpoint writes land, but the real core adapter already implements them for pre-node checkpoint persistence.
+---
+
+## 2026-06-21 23:47:40 +07 - Phase 3.1: Tests for User Story 1 (iter 3)
+**Tasks completed this iter:** T027 (linear A -> B -> C retry scope test), T028 (parallel sibling preservation retry test), T029 (skipped downstream ineligible retry test), T030 (retry execution handoff test), T031 (invalidated persisted-session deletion test)
+**Status:** completed:true (5/5 tasks)
+
+- Per-task summary lines:
+  - T027 — Added a pending linear `A -> B -> C` retry-preparation contract in `packages/core/src/operations/workflow-retry.test.ts` covering preserved upstream output, invalidated target/descendant scope, and same-run reuse.
+  - T028 — Added executable retry projection coverage in `packages/workflows/src/retry-state.test.ts` proving a parallel sibling branch stays completed while the target branch and join descendant are invalidated.
+  - T029 — Added executable retry projection coverage in `packages/workflows/src/retry-state.test.ts` proving skipped downstream nodes remain skipped while the failed ancestor remains the retry target.
+  - T030 — Added executor preamble coverage in `packages/workflows/src/executor-preamble.test.ts` proving retry-prepared runs bypass foreground resume lookup/new-run creation and pass filtered prior outputs to DAG execution.
+  - T031 — Added node-session deletion coverage in `packages/core/src/db/workflow-node-sessions.test.ts` proving workflow/scope/node deletion omits provider to delete all persisted provider sessions for an invalidated node.
+
+**Learnings for future iterations:**
+- `executeWorkflow()` already supports the retry handoff shape through `preCreatedRun` plus filtered `priorCompletedNodes`; later US1 implementation should wire retry-specific dispatch into that existing seam.
+- Retry-state projection can cover sibling preservation and skipped downstream ineligibility today without waiting for the shared operation implementation.
+- Session cleanup for invalidated nodes should call `deleteWorkflowNodeSessions({ workflow_name, scope_key, node_id })` without `provider` so every provider's persisted session for that node is cleared.
 ---
