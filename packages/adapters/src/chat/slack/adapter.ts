@@ -250,8 +250,9 @@ export class SlackAdapter implements IPlatformAdapter {
   }
 
   /**
-   * Add a reaction to a Slack message. Failures are best-effort —
-   * a missing reaction must never break the message-processing pipeline.
+   * Add a reaction to a Slack message. Failures are caught so that a
+   * missing reaction never breaks the message-processing pipeline, but
+   * they are logged at `warn` so operators notice scope / duplicate issues.
    */
   private async addReactionSafe(ref: SlackMessageRef, emoji: string): Promise<void> {
     try {
@@ -442,7 +443,8 @@ export class SlackAdapter implements IPlatformAdapter {
   }
 
   /**
-   * Start the bot (connects via Socket Mode)
+   * Start the bot. Registers `app_mention`, DM `message`, and slash-command
+   * handlers, then opens the Socket Mode connection.
    */
   async start(): Promise<void> {
     // Register app_mention event handler (when bot is @mentioned)

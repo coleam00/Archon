@@ -629,6 +629,8 @@ describe('SlackAdapter', () => {
       mockAddReaction.mockClear();
       mockRemoveReaction.mockClear();
       mockEvent.mockClear();
+      mockCommand.mockClear();
+      mockAction.mockClear();
     });
 
     async function fireMention(adapter: SlackAdapter): Promise<void> {
@@ -688,6 +690,48 @@ describe('SlackAdapter', () => {
       expect(calls.length).toBeGreaterThanOrEqual(2);
       expect(calls[0]![0].name).toBe('eyes');
       expect(calls[calls.length - 1]![0].name).toBe('white_check_mark');
+    });
+
+    test('removes 👀 and adds ✅ when sendMessage replies (multi-chunk)', async () => {
+      const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+      adapter.onMessage(async () => {});
+      await fireMention(adapter);
+
+      mockRemoveReaction.mockClear();
+      mockAddReaction.mockClear();
+
+      const paragraph1 = 'a'.repeat(10000);
+      const paragraph2 = 'b'.repeat(10000);
+      await adapter.sendMessage('C456:111.222', `${paragraph1}\n\n${paragraph2}`);
+
+      // Should split into two markdown blocks
+      expect(mockPostMessage).toHaveBeenCalledTimes(2);
+
+      // Reaction transition happens after the last chunk is sent
+      const removeCalls = mockRemoveReaction.mock.calls as unknown as {
+        channel: string;
+        name: string;
+        timestamp: string;
+      }[][];
+      expect(
+        removeCalls.some(
+          c => c[0].channel === 'C456' && c[0].timestamp === '111.222' && c[0].name === 'eyes'
+        )
+      ).toBe(true);
+
+      const addCalls = mockAddReaction.mock.calls as unknown as {
+        channel: string;
+        name: string;
+        timestamp: string;
+      }[][];
+      expect(
+        addCalls.some(
+          c =>
+            c[0].channel === 'C456' &&
+            c[0].timestamp === '111.222' &&
+            c[0].name === 'white_check_mark'
+        )
+      ).toBe(true);
     });
 
     test('reaction failures are swallowed (do NOT break message processing)', async () => {
