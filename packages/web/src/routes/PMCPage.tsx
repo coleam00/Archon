@@ -207,6 +207,10 @@ function isNumberRecord(value: unknown): value is Record<string, number> {
   );
 }
 
+function finiteNumber(value: unknown, fallback = 0): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
 const MARKET_BENCHMARKS = [
   {
     stat: '70%',
@@ -295,8 +299,9 @@ export function PMCPage(): React.ReactElement {
     (prospectsData.by_business as Record<string, BusinessProspect[]> | undefined)?.PMC ?? []
   ).slice(0, 9);
   const pmcProspectTotal = (prospectsData.totals as Record<string, number> | undefined)?.PMC ?? 0;
-  const agentTrace = agentTraceData as AgentTracePayload;
-  const recentAgentSessions = agentTrace.recent ?? [];
+  const agentTrace = agentTraceData as Partial<AgentTracePayload>;
+  const recentAgentSessions = Array.isArray(agentTrace.recent) ? agentTrace.recent : [];
+  const agentTraceSessionCount = finiteNumber(agentTrace.total_sessions);
   const prospectContactsPayload = prospectContactsData as Partial<PmcProspectContactsPayload>;
   const prospectContacts = Array.isArray(prospectContactsPayload.prospects)
     ? prospectContactsPayload.prospects
@@ -1276,8 +1281,7 @@ export function PMCPage(): React.ReactElement {
               Recent Carlos activity — agent trace
             </h3>
             <span className="text-[10px] text-text-tertiary">
-              {agentTrace.total_sessions ?? 0} sessions on disk · last {recentAgentSessions.length}{' '}
-              shown
+              {agentTraceSessionCount} sessions on disk · last {recentAgentSessions.length} shown
             </span>
           </div>
           <p className="mb-3 text-[11px] text-text-tertiary">

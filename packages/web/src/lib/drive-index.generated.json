@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-22T17:00:18+00:00",
+  "generated_at": "2026-06-22T19:00:30+00:00",
   "vault_path": "second-brain/resources/drive-index",
   "count": 22,
   "folders": [
@@ -1648,11 +1648,18 @@
       "folderId": "1bhcNbhJ4oHVZODBa6ky9pPtL1HotWU8T",
       "parentId": "1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
       "audience": "all",
-      "lastSynced": "2026-06-20T11:00:27+00:00",
-      "fileCount": 4,
+      "lastSynced": "2026-06-22T19:00:30+00:00",
+      "fileCount": 5,
       "vaultPath": "second-brain/resources/drive-index/ttts-assets.md",
       "driveUrl": "https://drive.google.com/drive/folders/1bhcNbhJ4oHVZODBa6ky9pPtL1HotWU8T",
       "files": [
+        {
+          "name": "Social Media",
+          "type": "g-folder",
+          "modified": "2026-06-22",
+          "size": "",
+          "link": "https://drive.google.com/drive/folders/1lBVxa94WJVSXmdJY3vqUcPeIuSjUDN0-"
+        },
         {
           "name": "Outreach",
           "type": "g-folder",
