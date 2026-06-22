@@ -93,6 +93,10 @@ function formatDuration(start: string, end: string): string {
   }
 }
 
+function safeCount(value: unknown, fallback = 0): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
 function shortWorkspace(path: string): string {
   // Strip everything up to the last `jid5274` segment (most paths route through it).
   const idx = path.lastIndexOf('jid5274');
@@ -116,8 +120,8 @@ function DailyOpsPanel({ traces }: { traces: Partial<TracesPayload> }): React.Re
     },
     {
       label: 'Trace coverage',
-      value: `${traces.session_count ?? 0} sessions`,
-      note: `${traces.turn_count ?? 0} sanitized turns in the static export`,
+      value: `${safeCount(traces.session_count)} sessions`,
+      note: `${safeCount(traces.turn_count)} sanitized turns in the static export`,
       icon: Activity,
     },
     {
@@ -298,6 +302,8 @@ function SessionRow({
 export function SessionTracesPage(): React.ReactElement {
   const data = tracesData as Partial<TracesPayload>;
   const sessions = Array.isArray(data.sessions) ? data.sessions : [];
+  const sessionCount = safeCount(data.session_count, sessions.length);
+  const turnCount = safeCount(data.turn_count);
   const [query, setQuery] = useState<string>('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
@@ -345,12 +351,11 @@ export function SessionTracesPage(): React.ReactElement {
         </p>
         <div className="flex flex-wrap items-center gap-3 text-xs text-text-tertiary">
           <span>
-            <strong className="text-text-secondary">{data.session_count ?? sessions.length}</strong>{' '}
-            sessions
+            <strong className="text-text-secondary">{sessionCount}</strong> sessions
           </span>
           <span>·</span>
           <span>
-            <strong className="text-text-secondary">{data.turn_count ?? 0}</strong> turns
+            <strong className="text-text-secondary">{turnCount}</strong> turns
           </span>
           <span>·</span>
           <span>Generated {formatTs(data.generated_at ?? '')}</span>
