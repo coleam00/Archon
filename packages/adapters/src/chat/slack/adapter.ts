@@ -97,16 +97,17 @@ export class SlackAdapter implements IPlatformAdapter {
       ? channelId.split(':')
       : [channelId, undefined];
 
-    // Transition the lifecycle reaction on the triggering message from 👀 → ✅.
-    // The triggering ref is keyed by conversationId (channel:ts).
+    // Transition the lifecycle reaction on the triggering message from 👀 → ✅,
+    // but only after the reply has been successfully sent. If sending fails,
+    // the 👀 remains as a visual indicator that something is still pending.
     const triggerRef = this.getTriggeringMessage(channelId);
-    if (triggerRef) {
-      void this.removeReactionSafe(triggerRef, 'eyes');
-      void this.addReactionSafe(triggerRef, 'white_check_mark');
-    }
 
     if (message.length <= MAX_MARKDOWN_BLOCK_LENGTH) {
       await this.sendWithMarkdownBlock(channel, message, threadTs);
+      if (triggerRef) {
+        void this.removeReactionSafe(triggerRef, 'eyes');
+        void this.addReactionSafe(triggerRef, 'white_check_mark');
+      }
       return;
     }
 
@@ -120,6 +121,10 @@ export class SlackAdapter implements IPlatformAdapter {
       const body = chunks[i] ?? '';
       const annotated = total > 1 ? `${body}\n\n_part ${i + 1}/${total}_` : body;
       await this.sendWithMarkdownBlock(channel, annotated, threadTs);
+    }
+    if (triggerRef) {
+      void this.removeReactionSafe(triggerRef, 'eyes');
+      void this.addReactionSafe(triggerRef, 'white_check_mark');
     }
   }
 

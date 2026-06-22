@@ -666,6 +666,17 @@ describe('SlackAdapter', () => {
 
       await adapter.sendMessage('C456:111.222', 'Status: all clear');
 
+      const removeCalls = mockRemoveReaction.mock.calls as unknown as {
+        channel: string;
+        name: string;
+        timestamp: string;
+      }[][];
+      expect(
+        removeCalls.some(
+          c => c[0].channel === 'C456' && c[0].timestamp === '111.222' && c[0].name === 'eyes'
+        )
+      ).toBe(true);
+
       // removeReactionSafe is fire-and-forget so called counts may not
       // always be stable. We assert addReactionSafe order directly.
       const calls = mockAddReaction.mock.calls as unknown as {
@@ -695,6 +706,25 @@ describe('SlackAdapter', () => {
       }[][];
       expect(checkCalls.some(c => c[0].name === 'eyes')).toBe(true);
       expect(checkCalls.some(c => c[0].name === 'white_check_mark')).toBe(true);
+    });
+
+    test('removeReaction failures are also swallowed (best-effort lifecycle)', async () => {
+      mockRemoveReaction.mockRejectedValueOnce(new Error('no_reaction'));
+      const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+      adapter.onMessage(async () => {});
+      await fireMention(adapter);
+
+      // sendMessage must still succeed even if removeReaction fails
+      await adapter.sendMessage('C456:111.222', 'Still works');
+
+      // Both remove and add still attempted; remove may have failed but the
+      // add reaction for the transition still fires
+      expect(
+        mockAddReaction.mock.calls.some((c: unknown) => {
+          const args = (c as unknown[])[0] as { name: string };
+          return args.name === 'white_check_mark';
+        })
+      ).toBe(true);
     });
 
     test('DM handler also adds eyes reaction', async () => {
