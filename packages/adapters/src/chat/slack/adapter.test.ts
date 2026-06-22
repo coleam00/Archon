@@ -27,6 +27,8 @@ mock.module('@archon/paths', () => ({
 // Create mock functions
 const mockPostMessage = mock(() => Promise.resolve(undefined));
 const mockReplies = mock(() => Promise.resolve({ messages: [] }));
+const mockAddReaction = mock(() => Promise.resolve(undefined));
+const mockRemoveReaction = mock(() => Promise.resolve(undefined));
 const mockUsersInfo = mock(() =>
   Promise.resolve({
     user: {
@@ -52,6 +54,10 @@ const mockApp = {
     },
     users: {
       info: mockUsersInfo,
+    },
+    reactions: {
+      add: mockAddReaction,
+      remove: mockRemoveReaction,
     },
   },
   event: mockEvent,
@@ -615,6 +621,103 @@ describe('SlackAdapter', () => {
       const second = await adapter.fetchDisplayName('U_RETRY');
       expect(second).toBe('Eventually');
       expect(mockUsersInfo).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('lifecycle reactions', () => {
+    beforeEach(() => {
+      mockAddReaction.mockClear();
+      mockRemoveReaction.mockClear();
+    });
+
+    async function fireMention(adapter: SlackAdapter): Promise<void> {
+      await adapter.start();
+      const calls = (mockEvent as unknown as Mock<(t: string, h: unknown) => void>).mock.calls;
+      const reg = calls.find(c => c[0] === 'app_mention');
+      if (!reg) throw new Error('app_mention handler not registered');
+      await (reg[1] as (args: { event: SlackMessageEvent }) => Promise<void>)({
+        event: { text: '<@U0> /status', user: 'U123', channel: 'C456', ts: '111.222' },
+      });
+    }
+
+    test('adds 👀 eyes on app_mention receipt', async () => {
+      const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+      adapter.onMessage(async () => {});
+      await fireMention(adapter);
+
+      expect(mockAddReaction).toHaveBeenCalledTimes(1);
+      const call = (
+        mockAddReaction.mock.calls[0] as unknown as {
+          channel: string;
+          name: string;
+          timestamp: string;
+        }[]
+      )[0];
+      expect(call.channel).toBe('C456');
+      expect(call.timestamp).toBe('111.222');
+      expect(call.name).toBe('eyes');
+    });
+
+    test('removes 👀 and adds ✅ when sendMessage replies', async () => {
+      const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+      adapter.onMessage(async () => {});
+      await fireMention(adapter);
+
+      await adapter.sendMessage('C456:111.222', 'Status: all clear');
+
+      // removeReactionSafe is fire-and-forget so called counts may not
+      // always be stable. We assert addReactionSafe order directly.
+      const calls = mockAddReaction.mock.calls as unknown as {
+        channel: string;
+        name: string;
+        timestamp: string;
+      }[][];
+      // First was eyes on receipt, second is white_check_mark on sendMessage.
+      expect(calls.length).toBeGreaterThanOrEqual(2);
+      expect(calls[0]![0].name).toBe('eyes');
+      expect(calls[calls.length - 1]![0].name).toBe('white_check_mark');
+    });
+
+    test('reaction failures are swallowed (do NOT break message processing)', async () => {
+      mockAddReaction.mockRejectedValueOnce(new Error('already_reacted'));
+      const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+      adapter.onMessage(async () => {});
+      await fireMention(adapter);
+
+      // sendMessage must still succeed even if addReaction fails
+      await adapter.sendMessage('C456:111.222', 'Still works');
+
+      // The second addReaction call (white_check_mark) still happens
+      const checkCalls = mockAddReaction.mock.calls as unknown as {
+        channel: string;
+        name: string;
+      }[][];
+      expect(checkCalls.some(c => c[0].name === 'eyes')).toBe(true);
+      expect(checkCalls.some(c => c[0].name === 'white_check_mark')).toBe(true);
+    });
+
+    test('DM handler also adds eyes reaction', async () => {
+      const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+      adapter.onMessage(async () => {});
+      await adapter.start();
+
+      const calls = (mockEvent as unknown as Mock<(t: string, h: unknown) => void>).mock.calls;
+      const reg = calls.find(c => c[0] === 'message');
+      if (!reg) throw new Error('message handler not registered');
+      await (reg[1] as (args: { event: SlackMessageEvent }) => Promise<void>)({
+        event: { text: 'hello', user: 'U789', channel: 'D123', ts: '333.444' },
+      });
+
+      const call = (
+        mockAddReaction.mock.calls[0] as unknown as {
+          channel: string;
+          name: string;
+          timestamp: string;
+        }[]
+      )[0];
+      expect(call.channel).toBe('D123');
+      expect(call.timestamp).toBe('333.444');
+      expect(call.name).toBe('eyes');
     });
   });
 });
