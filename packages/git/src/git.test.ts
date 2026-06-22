@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach, mock, spyOn, type Mock } from 'bun:test';
-import { writeFile, mkdir as realMkdir, rm } from 'fs/promises';
+import { readFile, writeFile, mkdir as realMkdir, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir, homedir } from 'os';
 
@@ -2300,6 +2300,225 @@ branch refs/heads/feature/auth
         expect((err as Error).cause).toBeDefined();
         expect(((err as Error).cause as NodeJS.ErrnoException).code).toBe('ENOENT');
       }
+    });
+  });
+
+  describe('retry checkpoint and safety ref helpers', () => {
+    async function runGit(repoPath: string, args: string[]): Promise<string> {
+      const result = await git.execFileAsync('git', args, { cwd: repoPath });
+      return result.stdout.trim();
+    }
+
+    async function initRetryRepo(name: string): Promise<{ repoPath: string; initialSha: string }> {
+      const repoPath = join(testDir, name);
+      await realMkdir(repoPath, { recursive: true });
+      await runGit(repoPath, ['init']);
+      await runGit(repoPath, ['config', 'user.name', 'Archon Test']);
+      await runGit(repoPath, ['config', 'user.email', 'archon-test@example.com']);
+      await writeFile(join(repoPath, 'tracked.txt'), 'initial\n');
+      await writeFile(join(repoPath, '.gitignore'), 'ignored.tmp\n');
+      await runGit(repoPath, ['add', 'tracked.txt', '.gitignore']);
+      await runGit(repoPath, ['commit', '-m', 'initial']);
+      const initialSha = await runGit(repoPath, ['rev-parse', '--verify', 'HEAD']);
+      return { repoPath, initialSha };
+    }
+
+    test('rejects retry checkpoint operations outside a git repository', async () => {
+      await expect(
+        git.upsertCheckpointRef(testDir, {
+          runId: 'run-not-repo',
+          retryEpoch: 0,
+          workflowName: 'retry-workflow',
+          nodeId: 'node-a',
+        })
+      ).rejects.toThrow('Retry checkpoint operations require a git repository');
+    });
+
+    test('creates a checkpoint ref from a clean checkout without creating a commit', async () => {
+      const { repoPath, initialSha } = await initRetryRepo('checkpoint-clean');
+
+      const result = await git.upsertCheckpointRef(repoPath, {
+        runId: 'run-clean',
+        retryEpoch: 0,
+        workflowName: 'retry-workflow',
+        nodeId: 'node-a',
+      });
+
+      expect(result).toEqual({
+        ref: 'refs/archon/checkpoints/run-clean/0/node-a',
+        commitSha: initialSha,
+        createdCommit: false,
+      });
+      await expect(git.verifyCommitRef(repoPath, result.ref)).resolves.toBe(initialSha);
+    });
+
+    test('creates a checkpoint commit from tracked dirty changes without including untracked or ignored files', async () => {
+      const { repoPath, initialSha } = await initRetryRepo('checkpoint-dirty');
+      await writeFile(join(repoPath, 'tracked.txt'), 'tracked dirty\n');
+      await writeFile(join(repoPath, 'untracked.txt'), 'do not commit\n');
+      await writeFile(join(repoPath, 'ignored.tmp'), 'do not commit\n');
+
+      await expect(git.hasTrackedChanges(repoPath)).resolves.toBe(true);
+
+      const result = await git.upsertCheckpointRef(repoPath, {
+        runId: 'run-dirty',
+        retryEpoch: 0,
+        workflowName: 'retry-workflow',
+        nodeId: 'node-b',
+      });
+
+      expect(result.ref).toBe('refs/archon/checkpoints/run-dirty/0/node-b');
+      expect(result.createdCommit).toBe(true);
+      expect(result.commitSha).not.toBe(initialSha);
+      await expect(git.verifyCommitRef(repoPath, result.ref)).resolves.toBe(result.commitSha);
+      expect(await runGit(repoPath, ['rev-parse', '--verify', 'HEAD'])).toBe(result.commitSha);
+
+      const committedFiles = await runGit(repoPath, ['ls-tree', '-r', '--name-only', 'HEAD']);
+      expect(committedFiles.split('\n')).toContain('tracked.txt');
+      expect(committedFiles).not.toContain('untracked.txt');
+      expect(committedFiles).not.toContain('ignored.tmp');
+
+      const trackedContent = await runGit(repoPath, ['show', `${result.commitSha}:tracked.txt`]);
+      expect(trackedContent).toBe('tracked dirty');
+      const message = await runGit(repoPath, ['log', '-1', '--format=%B']);
+      expect(message).toBe(
+        'archon checkpoint: retry-workflow/node-b\n\nRun: run-dirty\nEpoch: 0\nNode: node-b'
+      );
+      const status = await runGit(repoPath, ['status', '--porcelain', '--untracked-files=all']);
+      expect(status).toContain('?? untracked.txt');
+      const ignoredStatus = await runGit(repoPath, ['status', '--porcelain', '--ignored']);
+      expect(ignoredStatus).toContain('!! ignored.tmp');
+    });
+
+    test('fails dirty checkpoint commits with git identity guidance and no stash fallback', async () => {
+      const originalEnv = {
+        HOME: process.env.HOME,
+        XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+        GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
+        GIT_CONFIG_NOSYSTEM: process.env.GIT_CONFIG_NOSYSTEM,
+      };
+      const isolatedHome = join(testDir, 'identity-home');
+      const repoPath = join(testDir, 'missing-identity');
+      await realMkdir(isolatedHome, { recursive: true });
+      await realMkdir(repoPath, { recursive: true });
+
+      process.env.HOME = isolatedHome;
+      process.env.XDG_CONFIG_HOME = join(isolatedHome, '.config');
+      process.env.GIT_CONFIG_GLOBAL = join(isolatedHome, '.gitconfig');
+      process.env.GIT_CONFIG_NOSYSTEM = '1';
+
+      try {
+        await runGit(repoPath, ['init']);
+        await writeFile(join(repoPath, 'tracked.txt'), 'initial\n');
+        await runGit(repoPath, ['add', 'tracked.txt']);
+        await runGit(repoPath, [
+          '-c',
+          'user.name=Bootstrap User',
+          '-c',
+          'user.email=bootstrap@example.com',
+          'commit',
+          '-m',
+          'initial',
+        ]);
+        await writeFile(join(repoPath, 'tracked.txt'), 'dirty\n');
+
+        await expect(
+          git.upsertCheckpointRef(repoPath, {
+            runId: 'run-missing-identity',
+            retryEpoch: 0,
+            workflowName: 'retry-workflow',
+            nodeId: 'node-a',
+          })
+        ).rejects.toThrow('git user.name and user.email configured');
+
+        const status = await runGit(repoPath, ['status', '--porcelain', '--untracked-files=no']);
+        expect(status).toContain('M tracked.txt');
+      } finally {
+        process.env.HOME = originalEnv.HOME;
+        if (originalEnv.XDG_CONFIG_HOME === undefined) {
+          delete process.env.XDG_CONFIG_HOME;
+        } else {
+          process.env.XDG_CONFIG_HOME = originalEnv.XDG_CONFIG_HOME;
+        }
+        if (originalEnv.GIT_CONFIG_GLOBAL === undefined) {
+          delete process.env.GIT_CONFIG_GLOBAL;
+        } else {
+          process.env.GIT_CONFIG_GLOBAL = originalEnv.GIT_CONFIG_GLOBAL;
+        }
+        if (originalEnv.GIT_CONFIG_NOSYSTEM === undefined) {
+          delete process.env.GIT_CONFIG_NOSYSTEM;
+        } else {
+          process.env.GIT_CONFIG_NOSYSTEM = originalEnv.GIT_CONFIG_NOSYSTEM;
+        }
+      }
+    });
+
+    test('creates retry safety refs before tracked-only resets and preserves untracked files', async () => {
+      const { repoPath, initialSha } = await initRetryRepo('retry-safety');
+      const checkpoint = await git.upsertCheckpointRef(repoPath, {
+        runId: 'run-reset',
+        retryEpoch: 0,
+        workflowName: 'retry-workflow',
+        nodeId: 'node-a',
+      });
+      expect(checkpoint.commitSha).toBe(initialSha);
+
+      await writeFile(join(repoPath, 'tracked.txt'), 'failed attempt work\n');
+      await writeFile(join(repoPath, 'untracked.txt'), 'keep me\n');
+
+      const safety = await git.createRetrySafetyRef(repoPath, {
+        runId: 'run-reset',
+        retryEpoch: 1,
+        workflowName: 'retry-workflow',
+        nodeId: 'node-a',
+      });
+      expect(safety).toMatchObject({
+        ref: 'refs/archon/retry-safety/run-reset/1',
+        createdCommit: true,
+      });
+      await expect(git.verifyCommitRef(repoPath, safety.ref)).resolves.toBe(safety.commitSha);
+      expect(await runGit(repoPath, ['show', `${safety.commitSha}:tracked.txt`])).toBe(
+        'failed attempt work'
+      );
+      expect(await runGit(repoPath, ['log', '-1', '--format=%B'])).toBe(
+        'archon retry safety: retry-workflow\n\nRun: run-reset\nEpoch: 1\nRetry node: node-a'
+      );
+
+      await writeFile(join(repoPath, 'tracked.txt'), 'post-safety mutation\n');
+      await expect(git.resetTrackedFilesToCommit(repoPath, checkpoint.ref)).resolves.toBe(
+        initialSha
+      );
+      expect(await readFile(join(repoPath, 'tracked.txt'), 'utf8')).toBe('initial\n');
+      expect(await readFile(join(repoPath, 'untracked.txt'), 'utf8')).toBe('keep me\n');
+    });
+
+    test('validates checkpoint and safety refs before mutation and rejects missing commit refs', async () => {
+      const { repoPath } = await initRetryRepo('retry-ref-validation');
+
+      await expect(
+        git.upsertCheckpointRef(repoPath, {
+          runId: 'bad run',
+          retryEpoch: 0,
+          workflowName: 'retry-workflow',
+          nodeId: 'node-a',
+        })
+      ).rejects.toThrow("Invalid git ref 'refs/archon/checkpoints/bad run/0/node-a'");
+
+      await expect(
+        git.createRetrySafetyRef(repoPath, {
+          runId: 'bad run',
+          retryEpoch: 1,
+          workflowName: 'retry-workflow',
+          nodeId: 'node-a',
+        })
+      ).rejects.toThrow("Invalid git ref 'refs/archon/retry-safety/bad run/1'");
+
+      await expect(git.verifyCommitRef(repoPath, 'refs/archon/missing')).rejects.toThrow(
+        "Invalid git commit ref 'refs/archon/missing'"
+      );
+      await expect(git.resetTrackedFilesToCommit(repoPath, 'refs/archon/missing')).rejects.toThrow(
+        "Invalid git commit ref 'refs/archon/missing'"
+      );
     });
   });
 });

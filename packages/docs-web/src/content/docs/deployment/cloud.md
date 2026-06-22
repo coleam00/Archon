@@ -478,7 +478,8 @@ psql $DATABASE_URL -c "\dt"
 # Should show: remote_agent_codebases, remote_agent_conversations,
 #              remote_agent_sessions, remote_agent_isolation_environments,
 #              remote_agent_workflow_runs, remote_agent_workflow_events,
-#              remote_agent_messages, remote_agent_codebase_env_vars,
+#              remote_agent_workflow_node_checkpoints, remote_agent_messages,
+#              remote_agent_codebase_env_vars,
 #              remote_agent_users, remote_agent_user_identities
 ```
 

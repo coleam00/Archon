@@ -30,8 +30,22 @@ export { sessionRowSchema, sessionMetadataSchema } from './session';
 export type { Session, SessionMetadata } from './session';
 
 // WorkflowEvent
-export { workflowEventRowSchema } from './workflow-event';
-export type { WorkflowEventRow } from './workflow-event';
+export {
+  workflowEventRowSchema,
+  nodeRetryRequestedEventDataSchema,
+  nodeRetryResetEventDataSchema,
+  nodeRetryFailedEventDataSchema,
+} from './workflow-event';
+export type {
+  WorkflowEventRow,
+  NodeRetryRequestedEventData,
+  NodeRetryResetEventData,
+  NodeRetryFailedEventData,
+} from './workflow-event';
+
+// WorkflowCheckpoint
+export { workflowCheckpointRowSchema } from './workflow-checkpoint';
+export type { WorkflowCheckpointRow } from './workflow-checkpoint';
 
 // EnvVar
 export { codebaseEnvVarSchema } from './env-var';

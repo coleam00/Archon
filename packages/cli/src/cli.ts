@@ -47,6 +47,7 @@ import {
   workflowGetCommand,
   workflowRunsCommand,
   workflowResumeCommand,
+  workflowRetryNodeCommand,
   workflowAbandonCommand,
   workflowApproveCommand,
   workflowRejectCommand,
@@ -124,6 +125,7 @@ Commands:
   workflow status            Show status of running/paused workflows
   workflow runs              List recent runs (all statuses) for this project
   workflow get <run-id>      Show detail for a single run (any status)
+  workflow retry-node <run-id> <node-id> Retry one failed DAG node
   workflow search [query]    Search the workflow marketplace
   workflow install <slug>    Install a workflow from the marketplace
   isolation list             List all active worktrees/environments
@@ -185,6 +187,7 @@ Examples:
   archon workflow run archon-assist --detach "Investigate the flaky test"
   archon workflow runs --json
   archon workflow get <run-id> --json
+  archon workflow retry-node <run-id> <node-id>
   archon continue fix/issue-42 --workflow archon-smart-pr-review "Review the changes"
   archon skill install
   archon skill install /path/to/project
@@ -553,6 +556,23 @@ async function main(): Promise<number> {
               return 1;
             }
             await workflowResumeCommand(resumeRunId, jsonFlag);
+            break;
+          }
+
+          case 'retry-node': {
+            const retryRunId = positionals[2];
+            const retryNodeId = positionals[3];
+            if (!retryRunId || !retryNodeId) {
+              console.error('Usage: archon workflow retry-node <run-id> <node-id>');
+              return 1;
+            }
+            if (jsonFlag) {
+              console.error(
+                'Error: workflow retry-node does not support --json in v1 because retry execution streams output.'
+              );
+              return 1;
+            }
+            await workflowRetryNodeCommand(retryRunId, retryNodeId, jsonFlag);
             break;
           }
 

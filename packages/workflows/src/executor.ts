@@ -29,6 +29,7 @@ import {
 import { resolveGithubTokenOverrides } from './utils/github-token-policy';
 import { buildAiProfile, isLiteralSpec, resolveModelSpec } from './model-validation';
 import type { ModelAliasPreset, ResolvedAiProfile } from './model-validation';
+import type { WorkflowRetryContext } from './store';
 
 /** The per-user prefs layer as returned by `WorkflowDeps.getUserAiPrefs`. */
 type UserAiPrefsLayer = Awaited<ReturnType<NonNullable<WorkflowDeps['getUserAiPrefs']>>>;
@@ -318,6 +319,13 @@ export type ExecuteWorkflowOptions = ResumePayload & {
    * is preserved on resume.
    */
   userId?: string;
+  /**
+   * Manual failed-node retry context. The shared retry operation prepares the
+   * run row, invalidation set, and prior outputs before dispatch; later DAG
+   * execution code consumes this to avoid foreground resume lookup and to
+   * scope retry-only behavior.
+   */
+  retryContext?: WorkflowRetryContext;
 };
 
 /**
@@ -383,6 +391,7 @@ export async function executeWorkflow(
     priorCompletedNodes,
     userId,
     source,
+    retryContext,
     baseBranch: callerBaseBranch,
   } = opts;
   // Load config once for the entire workflow execution
@@ -549,8 +558,9 @@ export async function executeWorkflow(
   let workflowRun: WorkflowRun | undefined = preCreatedRun;
 
   if (preCreatedRun && priorCompletedNodes !== undefined) {
-    const resumeMsg =
-      priorCompletedNodes.size > 0
+    const resumeMsg = retryContext
+      ? `🔁 **Retrying** node \`${retryContext.targetNodeId}\` in workflow \`${workflow.name}\` — rerunning ${String(retryContext.invalidatedNodeIds.length)} invalidated node(s), preserving ${String(priorCompletedNodes.size)} completed node(s).`
+      : priorCompletedNodes.size > 0
         ? `▶️ **Resuming** workflow \`${workflow.name}\` — skipping ${String(priorCompletedNodes.size)} already-completed node(s).\n\nNote: AI session context from prior nodes is not restored. Nodes that depend on prior context may need to re-read artifacts.`
         : `▶️ **Resuming** workflow \`${workflow.name}\` — continuing interactive loop.`;
     await safeSendMessage(platform, conversationId, resumeMsg);
@@ -893,7 +903,8 @@ export async function executeWorkflow(
       dagPriorCompletedNodes,
       source,
       aiProfile,
-      workflowPreset
+      workflowPreset,
+      retryContext
     );
 
     // executeDagWorkflow throws on fatal errors; check DB status for result

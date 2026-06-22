@@ -319,6 +319,32 @@ nodes:
 
 ---
 
+## Retry a Failed Node
+
+When a DAG run fails, you can retry the failed node instead of resuming the whole failed run. Node retry reuses the same workflow run, reruns the selected failed node and its current DAG descendants, and preserves successful upstream and sibling outputs.
+
+Use node retry when one node failed after earlier work succeeded:
+
+```bash
+archon workflow retry-node <run-id> <node-id>
+```
+
+The Web UI shows a retry action for eligible failed nodes on web-created failed runs. If the run was created from the CLI or another non-web surface, use the CLI command above from the run's repository or Archon-managed worktree.
+
+| Behavior | What happens |
+|----------|--------------|
+| Retry target | The target node must have a latest effective status of `failed`. Skipped downstream nodes are not retry targets. |
+| Rerun scope | Archon invalidates the target node and all descendants in the current workflow DAG. Completed upstream nodes and independent siblings stay valid. |
+| Retry epochs | Each manual retry increments the run's retry epoch. Historical events, logs, and artifacts remain in the audit history; current node state is projected from the latest epoch. |
+| Checkout reset | For workflows that can mutate the checkout, Archon records tracked-file checkpoints before executable nodes and resets tracked files to the selected checkpoint before retry execution. |
+| Safety refs | Before the reset, dirty tracked changes from the failed attempt are saved to a local safety ref/commit under `refs/archon/retry-safety/`. |
+| Untracked files | Untracked and ignored files are preserved. Retry reset does not delete them. |
+| No-reset workflows | If `mutates_checkout: false` is set, Archon skips checkout checkpoint/reset setup and retries the node without resetting files. |
+
+`retry-node` is different from `resume`. `archon workflow resume <run-id>` resumes a failed run and skips completed nodes, while `retry-node` deliberately invalidates one failed node plus descendants so that branch can run again with a fresh retry epoch.
+
+---
+
 ## Best Practices
 
 **Keep nodes focused.** A node that investigates a bug should investigate — not also implement the fix. Single responsibility makes debugging easier and conditional routing more reliable.
@@ -329,7 +355,7 @@ nodes:
 
 **Test with simple inputs first.** Before running your full workflow on real data, verify that each branch of a conditional routes correctly. Create a simple test input that's clearly a bug, confirm the BUG path runs. Then test with a clear feature request.
 
-**Let DAG resume handle failures.** If a long workflow fails partway through, run `archon workflow run <name> --resume` (or `archon workflow resume <id>`) to skip nodes that already completed and continue from where it left off. Plain `archon workflow run` always starts fresh.
+**Choose resume or retry deliberately.** If a long workflow fails partway through and you just need to continue past completed nodes, run `archon workflow run <name> --resume` or `archon workflow resume <id>`. If one failed DAG node needs a fresh attempt, use `archon workflow retry-node <run-id> <node-id>`.
 
 ---
 

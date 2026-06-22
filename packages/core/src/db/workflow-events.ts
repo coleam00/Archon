@@ -11,6 +11,7 @@
 import { pool, getDialect, getDatabaseType } from './connection';
 import type { WorkflowEventRow } from '../schemas/workflow-event';
 import { createLogger } from '@archon/paths';
+import { projectLatestEffectiveNodeStates } from '@archon/workflows/retry-state';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -217,6 +218,39 @@ export async function getCompletedDagNodeOutputs(
     if (typeof data.node_output === 'string') {
       outputs.set(row.step_name, data.node_output);
     }
+  }
+  return outputs;
+}
+
+/**
+ * Return node outputs from the latest effective retry epoch projection.
+ *
+ * Unlike getCompletedDagNodeOutputs(), this entry point reads the complete run
+ * event history and applies node_retry_requested invalidation before returning
+ * outputs. Older outputs for invalidated nodes are ignored until those nodes
+ * complete again in the active retry epoch.
+ */
+export async function getEpochAwareCompletedDagNodeOutputs(
+  workflowRunId: string
+): Promise<Map<string, string>> {
+  const events = await listWorkflowEvents(workflowRunId);
+  const projected = projectLatestEffectiveNodeStates(events);
+  const outputs = new Map<string, string>();
+  for (const [nodeId, state] of projected) {
+    if (state.state === 'completed') {
+      outputs.set(nodeId, state.output);
+    }
+  }
+  return outputs;
+}
+
+export async function getRetryPreservedDagNodeOutputs(
+  workflowRunId: string,
+  invalidatedNodeIds: readonly string[]
+): Promise<Map<string, string>> {
+  const outputs = await getEpochAwareCompletedDagNodeOutputs(workflowRunId);
+  for (const nodeId of invalidatedNodeIds) {
+    outputs.delete(nodeId);
   }
   return outputs;
 }

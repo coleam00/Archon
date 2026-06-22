@@ -5393,6 +5393,295 @@ describe('executeDagWorkflow -- always_run resume opt-out', () => {
     expect(consumerPrompt).toContain('fresh producer output');
     expect(consumerPrompt).not.toContain('STALE_CACHED_VALUE');
   });
+
+  it('preserves always_run nodes during retry when they are outside the invalidated set', async () => {
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    let capturedPrompt = '';
+    mockSendQueryDag.mockImplementation(function* (prompt: string) {
+      capturedPrompt = prompt;
+      yield { type: 'assistant', content: 'consumer result' };
+      yield { type: 'result', sessionId: 'session-id' };
+    });
+
+    const priorCompletedNodes = new Map([['producer', 'preserved retry output']]);
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-retry-always-run',
+      testDir,
+      {
+        name: 'retry-always-run-preserve',
+        nodes: [
+          { id: 'producer', command: 'producer', always_run: true },
+          { id: 'consumer', prompt: 'See: $producer.output', depends_on: ['producer'] },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      priorCompletedNodes,
+      undefined,
+      undefined,
+      undefined,
+      { targetNodeId: 'consumer', retryEpoch: 1, invalidatedNodeIds: ['consumer'] }
+    );
+
+    expect(mockSendQueryDag.mock.calls.length).toBe(1);
+    expect(capturedPrompt).toContain('preserved retry output');
+
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const resetEvent = eventCalls.find(
+      (call: unknown[]) =>
+        (call[0] as { event_type: string }).event_type === 'node_always_run_reset' &&
+        (call[0] as { step_name: string }).step_name === 'producer'
+    );
+    expect(resetEvent).toBeUndefined();
+  });
+});
+
+describe('executeDagWorkflow -- retry checkpoints', () => {
+  async function runGit(repoPath: string, args: string[]): Promise<string> {
+    const result = await git.execFileAsync('git', args, { cwd: repoPath });
+    return result.stdout.trim();
+  }
+
+  it('persists pre-node checkpoints for command, prompt, bash, script, and loop executable node kinds', async () => {
+    const testDir = join(
+      tmpdir(),
+      `dag-checkpoint-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    const commandsDir = join(testDir, '.archon', 'commands');
+    await mkdir(commandsDir, { recursive: true });
+    await writeFile(join(commandsDir, 'my-cmd.md'), 'Command prompt');
+    await runGit(testDir, ['init']);
+    await runGit(testDir, ['config', 'user.name', 'Archon Test']);
+    await runGit(testDir, ['config', 'user.email', 'archon-test@example.com']);
+    await runGit(testDir, ['add', '.']);
+    await runGit(testDir, ['commit', '-m', 'initial']);
+
+    const upsertCheckpoint = mock(
+      async (data: Parameters<NonNullable<IWorkflowStore['upsertWorkflowNodeCheckpoint']>>[0]) => ({
+        ...data,
+        created_at: new Date(),
+      })
+    );
+    const store = createMockStore();
+    store.upsertWorkflowNodeCheckpoint = upsertCheckpoint;
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('checkpoint-run', {
+      working_path: testDir,
+      metadata: { retry_epoch: 0 },
+    });
+
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'DAG AI response COMPLETE' };
+      yield { type: 'result', sessionId: 'dag-session-id' };
+    });
+
+    try {
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        {
+          name: 'dag-checkpoint-test',
+          nodes: [
+            { id: 'command-node', command: 'my-cmd' },
+            { id: 'prompt-node', prompt: 'Say done.', depends_on: ['command-node'] },
+            { id: 'bash-node', bash: 'echo bash-output', depends_on: ['prompt-node'] },
+            {
+              id: 'script-node',
+              script: "console.log('script-output')",
+              runtime: 'bun',
+              depends_on: ['bash-node'],
+            },
+            {
+              id: 'loop-node',
+              loop: {
+                prompt: 'Say COMPLETE.',
+                until: 'COMPLETE',
+                max_iterations: 1,
+              },
+              depends_on: ['script-node'],
+            },
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      expect(upsertCheckpoint.mock.calls.map(call => call[0].node_id)).toEqual([
+        'command-node',
+        'prompt-node',
+        'bash-node',
+        'script-node',
+        'loop-node',
+      ]);
+      expect(
+        upsertCheckpoint.mock.calls.every(call => call[0].workflow_run_id === 'checkpoint-run')
+      ).toBe(true);
+      expect(upsertCheckpoint.mock.calls.every(call => call[0].retry_epoch === 0)).toBe(true);
+      expect(
+        upsertCheckpoint.mock.calls.every(call =>
+          call[0].checkpoint_ref.startsWith('refs/archon/checkpoints/checkpoint-run/0/')
+        )
+      ).toBe(true);
+    } finally {
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: 'DAG AI response' };
+        yield { type: 'result', sessionId: 'dag-session-id' };
+      });
+      await rm(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it('skips checkpointing when mutates_checkout is false', async () => {
+    const testDir = join(
+      tmpdir(),
+      `dag-no-checkpoint-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    await mkdir(testDir, { recursive: true });
+    const upsertCheckpoint = mock(
+      async (data: Parameters<NonNullable<IWorkflowStore['upsertWorkflowNodeCheckpoint']>>[0]) => ({
+        ...data,
+        created_at: new Date(),
+      })
+    );
+    const store = createMockStore();
+    store.upsertWorkflowNodeCheckpoint = upsertCheckpoint;
+
+    try {
+      await executeDagWorkflow(
+        createMockDeps(store),
+        createMockPlatform(),
+        'conv-dag',
+        testDir,
+        {
+          name: 'dag-no-checkpoint-test',
+          mutates_checkout: false,
+          nodes: [{ id: 'prompt-node', prompt: 'Say done.' }],
+        },
+        makeWorkflowRun('no-checkpoint-run'),
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      expect(upsertCheckpoint).not.toHaveBeenCalled();
+    } finally {
+      await rm(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it('skips checkpointing for skipped, approval, and cancel nodes', async () => {
+    const testDir = join(
+      tmpdir(),
+      `dag-checkpoint-skip-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    await mkdir(testDir, { recursive: true });
+    const upsertCheckpoint = mock(
+      async (data: Parameters<NonNullable<IWorkflowStore['upsertWorkflowNodeCheckpoint']>>[0]) => ({
+        ...data,
+        created_at: new Date(),
+      })
+    );
+    const store = createMockStore();
+    store.upsertWorkflowNodeCheckpoint = upsertCheckpoint;
+
+    try {
+      await executeDagWorkflow(
+        createMockDeps(store),
+        createMockPlatform(),
+        'conv-dag',
+        testDir,
+        {
+          name: 'dag-checkpoint-skip-test',
+          nodes: [
+            { id: 'skipped-node', prompt: 'skip me', when: 'not valid condition' },
+            { id: 'approval-node', approval: { message: 'approve?' } },
+            { id: 'cancel-node', cancel: 'stop' },
+          ],
+        },
+        makeWorkflowRun('checkpoint-skip-run'),
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      expect(upsertCheckpoint).not.toHaveBeenCalled();
+    } finally {
+      await rm(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it('logs a warning for parallel mutating executable nodes in one layer', async () => {
+    mockLogFn.mockClear();
+    const testDir = join(
+      tmpdir(),
+      `dag-parallel-warning-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    await mkdir(testDir, { recursive: true });
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+
+    try {
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        {
+          name: 'dag-parallel-warning-test',
+          nodes: [
+            { id: 'left', prompt: 'Left.' },
+            { id: 'right', prompt: 'Right.' },
+          ],
+        },
+        makeWorkflowRun('parallel-warning-run'),
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      expect(
+        mockLogFn.mock.calls.some(call => call[1] === 'dag.parallel_mutating_executable_nodes')
+      ).toBe(true);
+    } finally {
+      await rm(testDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('executeDagWorkflow -- break after result (no hang on subprocess exit)', () => {

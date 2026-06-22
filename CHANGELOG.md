@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Manual failed-node retry for DAG workflows**: failed DAG runs can now retry one failed node and its current descendants from the Web UI or `archon workflow retry-node <run-id> <node-id>`, preserving successful upstream outputs while checkpointing/resetting tracked checkout state for mutating workflows.
+
 ### Fixed
 
 - **DAG nodes no longer silently complete when `idle_timeout` fires before any output is produced.**

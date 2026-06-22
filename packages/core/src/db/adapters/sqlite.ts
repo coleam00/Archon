@@ -518,6 +518,19 @@ export class SqliteAdapter implements IDatabase {
         created_at TEXT DEFAULT (datetime('now'))
       );
 
+      -- Per-node git checkpoints for manual failed-node retry setup
+      CREATE TABLE IF NOT EXISTS remote_agent_workflow_node_checkpoints (
+        workflow_run_id TEXT NOT NULL REFERENCES remote_agent_workflow_runs(id) ON DELETE CASCADE,
+        node_id TEXT NOT NULL,
+        retry_epoch INTEGER NOT NULL CHECK (retry_epoch >= 0),
+        checkpoint_ref TEXT NOT NULL,
+        commit_sha TEXT NOT NULL,
+        created_commit INTEGER NOT NULL DEFAULT 0,
+        fallback_from_node_id TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        PRIMARY KEY (workflow_run_id, node_id, retry_epoch)
+      );
+
       -- Messages table (conversation history for Web UI)
       CREATE TABLE IF NOT EXISTS remote_agent_messages (
         id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
@@ -554,6 +567,9 @@ export class SqliteAdapter implements IDatabase {
       CREATE INDEX IF NOT EXISTS idx_workflow_events_run_id ON remote_agent_workflow_events(workflow_run_id);
       CREATE INDEX IF NOT EXISTS idx_workflow_events_type ON remote_agent_workflow_events(event_type);
       CREATE INDEX IF NOT EXISTS idx_workflow_events_created_at ON remote_agent_workflow_events(created_at);
+      CREATE INDEX IF NOT EXISTS idx_workflow_node_checkpoints_run ON remote_agent_workflow_node_checkpoints(workflow_run_id);
+      CREATE INDEX IF NOT EXISTS idx_workflow_node_checkpoints_run_node_epoch
+        ON remote_agent_workflow_node_checkpoints(workflow_run_id, node_id, retry_epoch DESC);
       CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON remote_agent_messages(conversation_id, created_at ASC);
       CREATE INDEX IF NOT EXISTS idx_workflow_node_sessions_scope ON remote_agent_workflow_node_sessions(scope_key);
       CREATE INDEX IF NOT EXISTS idx_workflow_node_sessions_workflow ON remote_agent_workflow_node_sessions(workflow_name);

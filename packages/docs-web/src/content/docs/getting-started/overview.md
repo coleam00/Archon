@@ -311,6 +311,7 @@ archon workflow run <name> --cwd /path/to/repo "<message>"
 | `archon workflow runs` | List recent runs of every status for this project |
 | `archon workflow get <id>` | Show detail for a single run (any status) |
 | `archon workflow resume <id>` | Resume a failed workflow |
+| `archon workflow retry-node <id> <node-id>` | Retry one failed DAG node |
 | `archon workflow abandon <id>` | Abandon a non-terminal run |
 | `archon workflow approve <id> [comment]` | Approve an interactive loop gate |
 | `archon workflow reject <id> [--reason "..."]` | Reject an approval gate |
@@ -474,7 +475,7 @@ cp -r Archon/.claude/skills/archon /path/to/your/repo/.claude/skills/
 cp -r Archon/.claude/skills/manage-run /path/to/your/repo/.claude/skills/
 ```
 
-Then in Claude Code, say things like "use archon to fix issue #42" and it will invoke the appropriate workflow. The `manage-run` skill lets it inspect and control runs (`archon workflow runs`/`get`/`approve`...).
+Then in Claude Code, say things like "use archon to fix issue #42" and it will invoke the appropriate workflow. The `manage-run` skill lets it inspect and control runs (`archon workflow runs`/`get`/`approve`/`retry-node`...).
 
 ---
 

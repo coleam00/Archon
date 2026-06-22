@@ -20,6 +20,7 @@ export * as sessionDb from './sessions';
 export * as isolationEnvDb from './isolation-environments';
 export * as workflowDb from './workflows';
 export * as workflowNodeSessionDb from './workflow-node-sessions';
+export * as workflowCheckpointDb from './workflow-checkpoints';
 export * as userDb from './users';
 
 // Also export individual functions for direct imports
@@ -30,4 +31,5 @@ export * from './sessions';
 export * from './isolation-environments';
 export * from './workflows';
 export * from './workflow-node-sessions';
+export * from './workflow-checkpoints';
 export * from './users';

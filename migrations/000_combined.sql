@@ -283,6 +283,30 @@ COMMENT ON TABLE remote_agent_workflow_events IS
   'Lean UI-relevant workflow events for observability (step transitions, artifacts, errors)';
 
 -- ============================================================================
+-- Workflow node checkpoints (manual failed-node retry setup)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS remote_agent_workflow_node_checkpoints (
+  workflow_run_id UUID NOT NULL REFERENCES remote_agent_workflow_runs(id) ON DELETE CASCADE,
+  node_id VARCHAR(255) NOT NULL,
+  retry_epoch INTEGER NOT NULL CHECK (retry_epoch >= 0),
+  checkpoint_ref TEXT NOT NULL,
+  commit_sha TEXT NOT NULL,
+  created_commit BOOLEAN NOT NULL DEFAULT FALSE,
+  fallback_from_node_id VARCHAR(255),
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  PRIMARY KEY (workflow_run_id, node_id, retry_epoch)
+);
+
+CREATE INDEX IF NOT EXISTS idx_workflow_node_checkpoints_run
+  ON remote_agent_workflow_node_checkpoints(workflow_run_id);
+CREATE INDEX IF NOT EXISTS idx_workflow_node_checkpoints_run_node_epoch
+  ON remote_agent_workflow_node_checkpoints(workflow_run_id, node_id, retry_epoch DESC);
+
+COMMENT ON TABLE remote_agent_workflow_node_checkpoints IS
+  'Per-node git checkpoints used to restore tracked checkout state before manual DAG node retry.';
+
+-- ============================================================================
 -- Workflow node sessions (persist_session opt-in across re-runs)
 -- ============================================================================
 

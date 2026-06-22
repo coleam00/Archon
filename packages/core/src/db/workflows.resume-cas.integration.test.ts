@@ -21,6 +21,9 @@ mock.module('@archon/paths', () => ({
     trace() {},
     fatal() {},
   }),
+  getArchonWorkspacesPath: () => '/tmp/archon/workspaces',
+  getProjectWorktreesPath: (owner: string, repo: string) =>
+    `/tmp/archon/workspaces/${owner}/${repo}/worktrees`,
 }));
 
 const { SqliteAdapter, sqliteDialect } = await import('./adapters/sqlite');

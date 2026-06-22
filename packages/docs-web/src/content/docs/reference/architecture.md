@@ -53,13 +53,13 @@ Archon is a **platform-agnostic AI coding assistant orchestrator** that connects
       └───────────────┼───────────────────┘
                       ▼
 ┌─────────────────────────────────────────────┐
-│    SQLite (default) / PostgreSQL (16 Tables) │
+│    SQLite (default) / PostgreSQL (19 Tables) │
 │  • Codebases  • Conversations  • Sessions   │
 │  • Isolation Envs • Workflow Runs            │
-│  • Workflow Events • Messages                │
+│  • Workflow Events • Checkpoints • Messages  │
 │  • Codebase Env Vars                         │
 │  • Users • User Identities • Node Sessions   │
-│  • GitHub Tokens • Web Auth Tables           │
+│  • GitHub Tokens • AI Keys/Prefs • Web Auth  │
 └─────────────────────────────────────────────┘
 ```
 
@@ -1102,6 +1102,16 @@ remote_agent_workflow_events
 ├── step_index (INTEGER)
 ├── step_name (VARCHAR)
 ├── data (JSONB) -- Event-specific data
+└── created_at (TIMESTAMP)
+
+remote_agent_workflow_node_checkpoints
+├── workflow_run_id (UUID -> remote_agent_workflow_runs.id)
+├── node_id (VARCHAR)
+├── retry_epoch (INTEGER)
+├── checkpoint_ref (TEXT)
+├── commit_sha (TEXT)
+├── created_commit (BOOLEAN)
+├── fallback_from_node_id (VARCHAR, nullable)
 └── created_at (TIMESTAMP)
 
 remote_agent_messages

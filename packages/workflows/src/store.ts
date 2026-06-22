@@ -22,6 +22,31 @@ export interface WorkflowNodeSessionKey {
   provider: string;
 }
 
+export interface WorkflowNodeCheckpoint {
+  workflow_run_id: string;
+  node_id: string;
+  retry_epoch: number;
+  checkpoint_ref: string;
+  commit_sha: string;
+  created_commit: boolean;
+  fallback_from_node_id: string | null;
+  created_at: Date | string;
+}
+
+export type WorkflowNodeCheckpointInput = Omit<WorkflowNodeCheckpoint, 'created_at'>;
+
+export interface LatestWorkflowNodeCheckpointQuery {
+  workflow_run_id: string;
+  node_id: string;
+  retry_epoch?: number;
+}
+
+export interface WorkflowRetryContext {
+  targetNodeId: string;
+  retryEpoch: number;
+  invalidatedNodeIds: readonly string[];
+}
+
 export const WORKFLOW_EVENT_TYPES = [
   'workflow_started',
   'workflow_completed',
@@ -44,6 +69,9 @@ export const WORKFLOW_EVENT_TYPES = [
   'workflow_cancelled',
   'workflow_artifact',
   'node_session_resumed',
+  'node_retry_requested',
+  'node_retry_reset',
+  'node_retry_failed',
 ] as const;
 
 export type WorkflowEventType = (typeof WORKFLOW_EVENT_TYPES)[number];
@@ -118,6 +146,15 @@ export interface IWorkflowStore {
    * Throws on DB error — caller (executor.ts) owns the degradation policy.
    */
   getCompletedDagNodeOutputs(workflowRunId: string): Promise<Map<string, string>>;
+
+  /**
+   * Persist a pre-node git checkpoint. Optional until checkpoint writing is
+   * enabled by DAG execution; core's real store adapter implements it now.
+   */
+  upsertWorkflowNodeCheckpoint?(data: WorkflowNodeCheckpointInput): Promise<WorkflowNodeCheckpoint>;
+  getLatestWorkflowNodeCheckpoint?(
+    query: LatestWorkflowNodeCheckpointQuery
+  ): Promise<WorkflowNodeCheckpoint | null>;
 
   // Per-codebase env vars for workflow node injection
   getCodebaseEnvVars(codebaseId: string): Promise<Record<string, string>>;

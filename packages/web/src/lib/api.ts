@@ -224,6 +224,7 @@ export async function deleteCodebase(id: string): Promise<{ success: boolean }> 
 
 export type WorkflowRunResponse = components['schemas']['WorkflowRun'];
 export type WorkflowEventResponse = components['schemas']['WorkflowEvent'];
+export type RetryWorkflowNodeResponse = components['schemas']['RetryWorkflowNodeResponse'];
 
 export type WorkflowListEntry = components['schemas']['WorkflowListEntry'];
 
@@ -293,6 +294,16 @@ export async function resumeWorkflowRun(
   return fetchJSON(`/api/workflows/runs/${encodeURIComponent(runId)}/resume`, {
     method: 'POST',
   });
+}
+
+export async function retryWorkflowNode(
+  runId: string,
+  nodeId: string
+): Promise<RetryWorkflowNodeResponse> {
+  return fetchJSON(
+    `/api/workflows/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/retry`,
+    { method: 'POST' }
+  );
 }
 
 export async function abandonWorkflowRun(

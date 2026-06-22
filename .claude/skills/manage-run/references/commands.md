@@ -1,9 +1,10 @@
 # Manage-Run Command Reference
 
 Every command runs through the `archon` CLI and is scoped to the current project by
-the working directory. Add `--json` for a single clean JSON object on stdout (logs
-are suppressed in `--json` mode); omit it for human-readable text. Diagnostics go to
-stderr either way.
+the working directory. Add `--json` to list/inspect/decision commands for a single
+clean JSON object on stdout (logs are suppressed in `--json` mode); omit it for
+human-readable text. Diagnostics go to stderr either way. `retry-node` streams
+execution output and does not support `--json` in v1.
 
 ---
 
@@ -111,6 +112,19 @@ Re-run a failed/paused run, skipping completed nodes.
 ```json
 { "ok": true, "runId": "…", "action": "resume", "executed": false,
   "status": "failed", "workflowName": "…", "workingPath": "…" }
+```
+
+### `archon workflow retry-node <run-id> <node-id>`
+Retry one failed DAG node and its current descendants in the same run.
+
+- Streams execution output like the non-JSON `resume` command; no `--json` support in v1.
+- The target node's latest effective status must be `failed`.
+- Before git mutation, the CLI verifies the recorded working path still points at the expected registered repo or Archon-managed worktree.
+- Mutating workflows use local checkpoint/safety refs under `refs/archon/` and reset tracked files before retry execution; `mutates_checkout: false` skips checkout reset.
+
+```bash
+archon workflow get <run-id> --verbose --json
+archon workflow retry-node <run-id> <node-id>
 ```
 
 ---

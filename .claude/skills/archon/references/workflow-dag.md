@@ -587,8 +587,23 @@ Standard DAG fields (`id`, `depends_on`, `when`, `trigger_rule`, `idle_timeout`)
 
 ### When to use `cancel` vs failing a `bash:` check
 
-- **Use `cancel:`** when the precondition failure is **expected** (e.g., wrong branch, required file missing, feature flag disabled). The run shows as `cancelled`, which doesn't trigger the DAG auto-resume path.
-- **Use a `bash:` node that exits non-zero** when the check itself fails (e.g., network error, tool missing). The run shows as `failed`, which auto-resumes on the next invocation.
+- **Use `cancel:`** when the precondition failure is **expected** (e.g., wrong branch, required file missing, feature flag disabled). The run shows as `cancelled`, which is not resumable/retryable.
+- **Use a `bash:` node that exits non-zero** when the check itself fails (e.g., network error, tool missing). The run shows as `failed`, so the user can explicitly resume the run or retry the failed DAG node.
+
+## Manual Failed-Node Retry
+
+When a DAG run fails after upstream nodes succeeded, retry only the failed branch:
+
+```bash
+archon workflow retry-node <run-id> <node-id>
+```
+
+Manual retry invalidates the target failed node plus its current DAG descendants,
+preserves successful upstream/sibling outputs, and reuses the same run row with a new
+retry epoch. For workflows that can mutate the checkout, Archon writes local
+checkpoint/safety refs under `refs/archon/`, resets tracked files to the selected
+checkpoint, and preserves untracked files. Set workflow-level `mutates_checkout: false`
+to skip checkout checkpoint/reset setup.
 
 ### Typical Patterns
 

@@ -11,8 +11,9 @@ import {
 import { WORKFLOW_EVENT_TYPES, type WorkflowEventType } from '@archon/workflows/store';
 import { configureIsolation, getIsolationProvider } from '@archon/isolation';
 import { createLogger, getArchonHome, BUNDLED_IS_BINARY } from '@archon/paths';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { mkdirSync, openSync, closeSync } from 'node:fs';
+import { realpath } from 'node:fs/promises';
 import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { resolveWorkflowName } from '@archon/workflows/router';
@@ -21,7 +22,11 @@ import {
   getWorkflowEventEmitter,
   type WorkflowEmitterEvent,
 } from '@archon/workflows/event-emitter';
-import type { WorkflowDefinition, WorkflowLoadResult } from '@archon/workflows/schemas/workflow';
+import type {
+  WorkflowDefinition,
+  WorkflowLoadResult,
+  WorkflowSource,
+} from '@archon/workflows/schemas/workflow';
 import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import {
@@ -1391,6 +1396,242 @@ function printJsonWriteError(runId: string, action: string, error: unknown): voi
   console.log(
     JSON.stringify({ ok: false, runId, action, error: (error as Error).message }, null, 2)
   );
+}
+
+function normalizeRemoteUrl(url: string): string {
+  const trimmed = url
+    .trim()
+    .replace(/\/+$/, '')
+    .replace(/\.git$/, '');
+  const ssh = /^git@([^:]+):(.+)$/.exec(trimmed);
+  if (ssh) return `${ssh[1].toLowerCase()}/${ssh[2].toLowerCase()}`;
+  return trimmed.replace(/^https?:\/\//, '').toLowerCase();
+}
+
+async function realpathOrNull(path: string): Promise<string | null> {
+  try {
+    return await realpath(path);
+  } catch {
+    return null;
+  }
+}
+
+interface RetryPathVerificationResult {
+  workingPath: string;
+  discoveryCwd: string;
+  codebaseId?: string;
+  baseBranch?: string;
+}
+
+async function verifyRetryWorkingPath(run: WorkflowRun): Promise<RetryPathVerificationResult> {
+  if (!run.working_path) {
+    throw new Error(
+      `Workflow run '${run.id}' has no working path recorded.\n` +
+        'Cannot determine where to retry.'
+    );
+  }
+
+  const workingPath = await realpathOrNull(run.working_path);
+  if (!workingPath) {
+    throw new Error(`Cannot retry: recorded working path no longer exists: ${run.working_path}`);
+  }
+
+  const repoRoot = await git.findRepoRoot(workingPath);
+  if (!repoRoot) {
+    throw new Error(
+      `Cannot retry: recorded working path is not inside a git repository: ${workingPath}`
+    );
+  }
+  const canonicalRepoRoot = (await realpathOrNull(repoRoot)) ?? repoRoot;
+
+  if (!run.codebase_id) {
+    return {
+      workingPath: canonicalRepoRoot,
+      discoveryCwd: canonicalRepoRoot,
+    };
+  }
+
+  const codebase = await codebaseDb.getCodebase(run.codebase_id);
+  if (!codebase) {
+    throw new Error(`Cannot retry: codebase '${run.codebase_id}' no longer exists`);
+  }
+
+  const codebaseRoot = await realpathOrNull(codebase.default_cwd);
+  if (!codebaseRoot) {
+    throw new Error(
+      `Cannot retry: registered codebase path no longer exists: ${codebase.default_cwd}`
+    );
+  }
+
+  const envs = await isolationDb.listByCodebase(codebase.id);
+  const matchingEnv = await (async (): Promise<boolean> => {
+    for (const env of envs) {
+      const envPath = await realpathOrNull(env.working_path);
+      if (envPath === canonicalRepoRoot || envPath === workingPath) return true;
+    }
+    return false;
+  })();
+
+  const isRegisteredSource =
+    canonicalRepoRoot === codebaseRoot || canonicalRepoRoot.startsWith(codebaseRoot + sep);
+  if (!isRegisteredSource && !matchingEnv) {
+    throw new Error(
+      'Cannot retry: recorded working path does not match the registered codebase or an active Archon worktree.\n' +
+        `  Working path: ${workingPath}\n` +
+        `  Repo root: ${canonicalRepoRoot}\n` +
+        `  Codebase: ${codebaseRoot}`
+    );
+  }
+
+  if (codebase.repository_url) {
+    const remoteUrl = await git.getRemoteUrl(git.toRepoPath(canonicalRepoRoot));
+    if (
+      remoteUrl &&
+      normalizeRemoteUrl(remoteUrl) !== normalizeRemoteUrl(codebase.repository_url)
+    ) {
+      throw new Error(
+        'Cannot retry: repository remote does not match the registered codebase for this run.\n' +
+          `  Expected: ${codebase.repository_url}\n` +
+          `  Actual:   ${remoteUrl}`
+      );
+    }
+  }
+
+  return {
+    workingPath: canonicalRepoRoot,
+    discoveryCwd: codebase.default_cwd,
+    codebaseId: codebase.id,
+    baseBranch: codebase.default_branch?.trim() || undefined,
+  };
+}
+
+async function loadWorkflowForRetryCommand(
+  run: WorkflowRun,
+  discoveryCwd: string
+): Promise<{
+  workflow: WorkflowDefinition;
+  source: WorkflowSource;
+}> {
+  const { workflows: workflowEntries, errors } = await loadWorkflows(discoveryCwd);
+  const workflow = resolveWorkflowName(
+    run.workflow_name,
+    workflowEntries.map(entry => entry.workflow)
+  );
+  if (!workflow) {
+    const loadError = errors.find(
+      error =>
+        error.filename.replace(/\.ya?ml$/, '') === run.workflow_name ||
+        error.filename === `${run.workflow_name}.yaml` ||
+        error.filename === `${run.workflow_name}.yml`
+    );
+    const suffix = loadError ? `: ${loadError.error}` : '';
+    throw new Error(`Workflow '${run.workflow_name}' could not be loaded${suffix}`);
+  }
+  return {
+    workflow,
+    source: workflowEntries.find(entry => entry.workflow === workflow)?.source ?? 'project',
+  };
+}
+
+async function resolveRetryCliUserId(): Promise<string> {
+  const cliId = resolveCliUserId();
+  if (!cliId) return 'unavailable';
+  try {
+    const cliUser = await userDb.findOrCreateUserByPlatformIdentity('cli', cliId, cliId);
+    return cliUser.id;
+  } catch (error) {
+    getLog().warn({ err: error as Error, cliId }, 'cli.retry_node_user_identity_resolve_failed');
+    return 'unavailable';
+  }
+}
+
+export async function workflowRetryNodeCommand(
+  runId: string,
+  nodeId: string,
+  json?: boolean
+): Promise<void> {
+  if (json) {
+    throw new Error(
+      '`workflow retry-node` does not support --json in v1 because retry execution streams output. Run without --json.'
+    );
+  }
+
+  const run = await workflowDb.getWorkflowRun(runId);
+  if (!run) {
+    throw new Error(`Workflow run not found: ${runId}`);
+  }
+  if (run.status !== 'failed') {
+    throw new Error(`Cannot retry workflow run '${runId}' with status '${run.status}'.`);
+  }
+
+  const pathContext = await verifyRetryWorkingPath(run);
+  const { workflow, source } = await loadWorkflowForRetryCommand(run, pathContext.discoveryCwd);
+  const requesterUserId = await resolveRetryCliUserId();
+  const { prepareWorkflowNodeRetry } = await import('@archon/core/operations/workflow-retry');
+  const prepared = await prepareWorkflowNodeRetry({
+    runId,
+    nodeId,
+    workflow,
+    requesterSurface: 'cli',
+    requesterUserId,
+    authorizationBasis: requesterUserId === 'unavailable' ? 'cli/solo' : 'cli/user',
+  });
+
+  console.log(`Retrying workflow: ${run.workflow_name}`);
+  console.log(`Run: ${run.id}`);
+  console.log(`Path: ${pathContext.workingPath}`);
+  console.log(`Node: ${nodeId}`);
+  console.log(`Retry epoch: ${String(prepared.retryEpoch)}`);
+  console.log(`Invalidated nodes: ${prepared.invalidatedNodeIds.join(', ')}`);
+  if (prepared.safetyRef) console.log(`Safety ref: ${prepared.safetyRef}`);
+  if (prepared.safetyCommitSha) console.log(`Safety commit: ${prepared.safetyCommitSha}`);
+  console.log('');
+
+  const adapter = new CLIAdapter();
+  let platformConversationId = run.conversation_id;
+  try {
+    const conversation = await conversationDb.getConversationById(run.conversation_id);
+    platformConversationId = conversation?.platform_conversation_id ?? run.conversation_id;
+  } catch (error) {
+    getLog().warn(
+      { err: error as Error, runId, conversationId: run.conversation_id },
+      'cli.retry_node_conversation_lookup_failed'
+    );
+  }
+  adapter.setConversationDbId(platformConversationId, run.conversation_id);
+
+  const deps = createWorkflowDeps();
+  const result = await executeWorkflow(
+    deps,
+    adapter,
+    platformConversationId,
+    pathContext.workingPath,
+    workflow,
+    run.user_message ?? '',
+    run.conversation_id,
+    {
+      codebaseId: pathContext.codebaseId ?? run.codebase_id ?? undefined,
+      source,
+      baseBranch: pathContext.baseBranch,
+      preCreatedRun: prepared.preCreatedRun,
+      priorCompletedNodes: prepared.preservedCompletedOutputs,
+      retryContext: {
+        targetNodeId: nodeId,
+        retryEpoch: prepared.retryEpoch,
+        invalidatedNodeIds: prepared.invalidatedNodeIds,
+      },
+    }
+  );
+
+  if (result.success && 'paused' in result && result.paused) {
+    console.log('\nWorkflow paused — waiting for approval.');
+    return;
+  }
+  if (result.success) {
+    console.log('\nWorkflow retry completed successfully.');
+    return;
+  }
+  throw new Error(`Workflow retry failed: ${result.error}`);
 }
 
 /**

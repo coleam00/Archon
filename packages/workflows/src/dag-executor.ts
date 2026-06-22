@@ -8,7 +8,7 @@
 import { writeFileSync } from 'fs';
 import { readFile } from 'fs/promises';
 import { isAbsolute, join as joinPath, resolve as resolvePath } from 'path';
-import { execFileAsync } from '@archon/git';
+import { execFileAsync, upsertCheckpointRef } from '@archon/git';
 import { discoverScriptsForCwd } from './script-discovery';
 import type {
   IWorkflowPlatform,
@@ -16,6 +16,7 @@ import type {
   WorkflowConfig,
   WorkflowDeps,
 } from './deps';
+import type { WorkflowRetryContext } from './store';
 import type {
   SendQueryOptions,
   NodeConfig,
@@ -106,6 +107,63 @@ function dagNodeTelemetryType(node: DagNode): WorkflowNodeType {
   if (isCancelNode(node)) return 'cancel';
   if ('command' in node) return 'command';
   return 'prompt';
+}
+
+function isCheckpointableExecutableNode(node: DagNode): boolean {
+  return !isApprovalNode(node) && !isCancelNode(node);
+}
+
+function getRunRetryEpoch(
+  workflowRun: WorkflowRun,
+  retryContext: WorkflowRetryContext | undefined
+): number {
+  if (retryContext) return retryContext.retryEpoch;
+  const retryEpoch = workflowRun.metadata.retry_epoch;
+  return typeof retryEpoch === 'number' && Number.isInteger(retryEpoch) && retryEpoch >= 0
+    ? retryEpoch
+    : 0;
+}
+
+function withRetryEpochData(
+  workflowRun: WorkflowRun,
+  retryContext: WorkflowRetryContext | undefined,
+  data: Record<string, unknown>
+): Record<string, unknown> {
+  const retryEpoch = getRunRetryEpoch(workflowRun, retryContext);
+  return retryEpoch > 0 ? { ...data, retry_epoch: retryEpoch } : data;
+}
+
+async function createPreNodeCheckpoint(params: {
+  deps: WorkflowDeps;
+  cwd: string;
+  workflowRun: WorkflowRun;
+  node: DagNode;
+  retryContext: WorkflowRetryContext | undefined;
+}): Promise<void> {
+  if (!params.deps.store.upsertWorkflowNodeCheckpoint) {
+    getLog().warn(
+      { workflowRunId: params.workflowRun.id, nodeId: params.node.id },
+      'dag.checkpoint_store_unavailable'
+    );
+    return;
+  }
+
+  const retryEpoch = getRunRetryEpoch(params.workflowRun, params.retryContext);
+  const checkpoint = await upsertCheckpointRef(params.cwd, {
+    runId: params.workflowRun.id,
+    retryEpoch,
+    workflowName: params.workflowRun.workflow_name,
+    nodeId: params.node.id,
+  });
+  await params.deps.store.upsertWorkflowNodeCheckpoint({
+    workflow_run_id: params.workflowRun.id,
+    node_id: params.node.id,
+    retry_epoch: retryEpoch,
+    checkpoint_ref: checkpoint.ref,
+    commit_sha: checkpoint.commitSha,
+    created_commit: checkpoint.createdCommit,
+    fallback_from_node_id: null,
+  });
 }
 
 /**
@@ -768,7 +826,7 @@ async function executeNodeInternal(
       workflow_run_id: workflowRun.id,
       event_type: 'node_started',
       step_name: node.id,
-      data: { command: node.command ?? null, provider },
+      data: withRetryEpochData(workflowRun, undefined, { command: node.command ?? null, provider }),
     })
     .catch((err: Error) => {
       getLog().error(
@@ -798,7 +856,7 @@ async function executeNodeInternal(
           workflow_run_id: workflowRun.id,
           event_type: 'node_failed',
           step_name: node.id,
-          data: { error: errMsg },
+          data: withRetryEpochData(workflowRun, undefined, { error: errMsg }),
         })
         .catch((err: Error) => {
           getLog().error(
@@ -1349,7 +1407,10 @@ async function executeNodeInternal(
           workflow_run_id: workflowRun.id,
           event_type: 'node_failed',
           step_name: node.id,
-          data: { error: 'Cancelled by user', duration_ms: duration },
+          data: withRetryEpochData(workflowRun, undefined, {
+            error: 'Cancelled by user',
+            duration_ms: duration,
+          }),
         })
         .catch((err: Error) => {
           getLog().error(
@@ -1394,7 +1455,7 @@ async function executeNodeInternal(
           workflow_run_id: workflowRun.id,
           event_type: 'node_failed',
           step_name: node.id,
-          data: { error: creditError },
+          data: withRetryEpochData(workflowRun, undefined, { error: creditError }),
         })
         .catch((err: Error) => {
           getLog().error(
@@ -1431,7 +1492,10 @@ async function executeNodeInternal(
           workflow_run_id: workflowRun.id,
           event_type: 'node_failed',
           step_name: node.id,
-          data: { error: emptyError, duration_ms: duration },
+          data: withRetryEpochData(workflowRun, undefined, {
+            error: emptyError,
+            duration_ms: duration,
+          }),
         })
         .catch((err: Error) => {
           getLog().error(
@@ -1466,14 +1530,14 @@ async function executeNodeInternal(
         workflow_run_id: workflowRun.id,
         event_type: 'node_completed',
         step_name: node.id,
-        data: {
+        data: withRetryEpochData(workflowRun, undefined, {
           duration_ms: duration,
           node_output: nodeOutputText,
           ...(nodeCostUsd !== undefined ? { cost_usd: nodeCostUsd } : {}),
           ...(nodeStopReason ? { stop_reason: nodeStopReason } : {}),
           ...(nodeNumTurns !== undefined ? { num_turns: nodeNumTurns } : {}),
           ...(nodeModelUsage ? { model_usage: nodeModelUsage } : {}),
-        },
+        }),
       })
       .catch((err: Error) => {
         getLog().error(
@@ -1538,7 +1602,7 @@ async function executeNodeInternal(
         workflow_run_id: workflowRun.id,
         event_type: 'node_failed',
         step_name: node.id,
-        data: { error: err.message },
+        data: withRetryEpochData(workflowRun, undefined, { error: err.message }),
       })
       .catch((err: Error) => {
         getLog().error(
@@ -1603,7 +1667,7 @@ async function executeBashNode(
       workflow_run_id: workflowRun.id,
       event_type: 'node_started',
       step_name: node.id,
-      data: { type: 'bash' },
+      data: withRetryEpochData(workflowRun, undefined, { type: 'bash' }),
     })
     .catch((err: Error) => {
       getLog().error(
@@ -1682,7 +1746,11 @@ async function executeBashNode(
         workflow_run_id: workflowRun.id,
         event_type: 'node_completed',
         step_name: node.id,
-        data: { duration_ms: duration, type: 'bash', node_output: output },
+        data: withRetryEpochData(workflowRun, undefined, {
+          duration_ms: duration,
+          type: 'bash',
+          node_output: output,
+        }),
       })
       .catch((err: Error) => {
         getLog().error(
@@ -1730,7 +1798,7 @@ async function executeBashNode(
         workflow_run_id: workflowRun.id,
         event_type: 'node_failed',
         step_name: node.id,
-        data: { error: errorMsg, type: 'bash' },
+        data: withRetryEpochData(workflowRun, undefined, { error: errorMsg, type: 'bash' }),
       })
       .catch((dbErr: Error) => {
         getLog().error(
@@ -1782,7 +1850,7 @@ async function executeScriptNode(
       workflow_run_id: workflowRun.id,
       event_type: 'node_started',
       step_name: node.id,
-      data: { type: 'script', runtime: node.runtime },
+      data: withRetryEpochData(workflowRun, undefined, { type: 'script', runtime: node.runtime }),
     })
     .catch((err: Error) => {
       getLog().error(
@@ -1869,7 +1937,10 @@ async function executeScriptNode(
             workflow_run_id: workflowRun.id,
             event_type: 'node_failed',
             step_name: node.id,
-            data: { error: errorMsg, type: 'script' },
+            data: withRetryEpochData(workflowRun, undefined, {
+              error: errorMsg,
+              type: 'script',
+            }),
           })
           .catch((dbErr: Error) => {
             getLog().error(
@@ -1900,7 +1971,10 @@ async function executeScriptNode(
             workflow_run_id: workflowRun.id,
             event_type: 'node_failed',
             step_name: node.id,
-            data: { error: errorMsg, type: 'script' },
+            data: withRetryEpochData(workflowRun, undefined, {
+              error: errorMsg,
+              type: 'script',
+            }),
           })
           .catch((dbErr: Error) => {
             getLog().error(
@@ -1951,7 +2025,11 @@ async function executeScriptNode(
         workflow_run_id: workflowRun.id,
         event_type: 'node_completed',
         step_name: node.id,
-        data: { duration_ms: duration, type: 'script', node_output: output },
+        data: withRetryEpochData(workflowRun, undefined, {
+          duration_ms: duration,
+          type: 'script',
+          node_output: output,
+        }),
       })
       .catch((err: Error) => {
         getLog().error(
@@ -1999,7 +2077,7 @@ async function executeScriptNode(
         workflow_run_id: workflowRun.id,
         event_type: 'node_failed',
         step_name: node.id,
-        data: { error: errorMsg, type: 'script' },
+        data: withRetryEpochData(workflowRun, undefined, { error: errorMsg, type: 'script' }),
       })
       .catch((dbErr: Error) => {
         getLog().error(
@@ -2553,13 +2631,13 @@ async function executeLoopNode(
           workflow_run_id: workflowRun.id,
           event_type: 'node_completed',
           step_name: node.id,
-          data: {
+          data: withRetryEpochData(workflowRun, undefined, {
             duration_ms: Date.now() - iterationStart,
             node_output: lastIterationOutput,
             ...(loopTotalCostUsd !== undefined ? { cost_usd: loopTotalCostUsd } : {}),
             ...(loopFinalStopReason ? { stop_reason: loopFinalStopReason } : {}),
             ...(loopTotalNumTurns !== undefined ? { num_turns: loopTotalNumTurns } : {}),
-          },
+          }),
         })
         .catch((err: Error) => {
           getLog().error(
@@ -2872,6 +2950,8 @@ export async function executeDagWorkflow(
     nodes: readonly DagNode[];
     /** Workflow-level default for per-node `persist_session` (read directly here). */
     persist_sessions?: boolean;
+    /** Whether executable nodes may mutate checkout state; omitted means mutating. */
+    mutates_checkout?: boolean;
   } & WorkflowLevelOptions,
   workflowRun: WorkflowRun,
   workflowProvider: string,
@@ -2887,9 +2967,11 @@ export async function executeDagWorkflow(
   /** Discovery source — telemetry only (custom-vs-default + name redaction). */
   source?: WorkflowSource,
   aiProfile?: ResolvedAiProfile,
-  workflowPreset?: ModelAliasPreset
+  workflowPreset?: ModelAliasPreset,
+  retryContext?: WorkflowRetryContext
 ): Promise<string | undefined> {
   const dagStartTime = Date.now();
+  const retryEpoch = getRunRetryEpoch(workflowRun, retryContext);
   const workflowLevelOptions = {
     effort: workflow.effort,
     thinking: workflow.thinking,
@@ -2902,13 +2984,15 @@ export async function executeDagWorkflow(
 
   // Pre-populate nodeOutputs from prior run so already-completed nodes are
   // treated as done for trigger-rule and $nodeId.output substitution purposes.
-  // Nodes flagged `always_run: true` are excluded — they re-execute on resume
-  // and downstream consumers must see the fresh output, not the cached one.
+  // Nodes flagged `always_run: true` are excluded for normal resume — they
+  // re-execute and downstream consumers must see the fresh output. Retry
+  // contexts receive already-filtered priorCompletedNodes, so preserved
+  // always_run nodes should stay preserved unless the retry invalidated them.
   if (priorCompletedNodes && priorCompletedNodes.size > 0) {
     const alwaysRunIds = new Set(workflow.nodes.filter(n => n.always_run).map(n => n.id));
     let prepopulatedCount = 0;
     for (const [nodeId, output] of priorCompletedNodes) {
-      if (alwaysRunIds.has(nodeId)) continue;
+      if (!retryContext && alwaysRunIds.has(nodeId)) continue;
       nodeOutputs.set(nodeId, { state: 'completed', output });
       prepopulatedCount++;
     }
@@ -2955,9 +3039,21 @@ export async function executeDagWorkflow(
   for (let layerIdx = 0; layerIdx < layers.length; layerIdx++) {
     const layer = layers[layerIdx];
     const isParallelLayer = layer.length > 1;
+    const layerExecutableNodes = layer.filter(isCheckpointableExecutableNode);
 
     if (isParallelLayer) {
       lastSequentialSessionId = undefined; // reset — parallel nodes can't share sessions
+    }
+
+    if (workflow.mutates_checkout !== false && layerExecutableNodes.length > 1) {
+      getLog().warn(
+        {
+          workflowRunId: workflowRun.id,
+          layerIdx,
+          nodeIds: layerExecutableNodes.map(node => node.id),
+        },
+        'dag.parallel_mutating_executable_nodes'
+      );
     }
 
     // Execute all nodes in the layer concurrently
@@ -2969,7 +3065,13 @@ export async function executeDagWorkflow(
           // when the prior run completed it.
           if (priorCompletedNodes?.has(node.id)) {
             if (node.always_run) {
-              getLog().info({ nodeId: node.id }, 'dag.node_always_run_resume_forced');
+              if (retryContext) {
+                getLog().info({ nodeId: node.id }, 'dag.node_skipped_prior_success_retry');
+              } else {
+                getLog().info({ nodeId: node.id }, 'dag.node_always_run_resume_forced');
+              }
+            }
+            if (node.always_run && !retryContext) {
               deps.store
                 .createWorkflowEvent({
                   workflow_run_id: workflowRun.id,
@@ -2996,10 +3098,10 @@ export async function executeDagWorkflow(
                   workflow_run_id: workflowRun.id,
                   event_type: 'node_skipped_prior_success',
                   step_name: node.id,
-                  data: {
+                  data: withRetryEpochData(workflowRun, retryContext, {
                     reason: 'prior_success',
                     node_output: priorCompletedNodes.get(node.id) ?? '',
-                  },
+                  }),
                 })
                 .catch((err: Error) => {
                   getLog().error(
@@ -3041,7 +3143,7 @@ export async function executeDagWorkflow(
                 workflow_run_id: workflowRun.id,
                 event_type: 'node_skipped',
                 step_name: node.id,
-                data: { reason: 'trigger_rule' },
+                data: withRetryEpochData(workflowRun, retryContext, { reason: 'trigger_rule' }),
               })
               .catch((err: Error) => {
                 getLog().error(
@@ -3089,7 +3191,10 @@ export async function executeDagWorkflow(
                   workflow_run_id: workflowRun.id,
                   event_type: 'node_skipped',
                   step_name: node.id,
-                  data: { reason: 'when_condition_parse_error', expr: node.when },
+                  data: withRetryEpochData(workflowRun, retryContext, {
+                    reason: 'when_condition_parse_error',
+                    expr: node.when,
+                  }),
                 })
                 .catch((err: Error) => {
                   getLog().error(
@@ -3119,7 +3224,10 @@ export async function executeDagWorkflow(
                   workflow_run_id: workflowRun.id,
                   event_type: 'node_skipped',
                   step_name: node.id,
-                  data: { reason: 'when_condition', expr: node.when },
+                  data: withRetryEpochData(workflowRun, retryContext, {
+                    reason: 'when_condition',
+                    expr: node.when,
+                  }),
                 })
                 .catch((err: Error) => {
                   getLog().error(
@@ -3140,6 +3248,16 @@ export async function executeDagWorkflow(
                 output: { state: 'skipped' as const, output: '' },
               };
             }
+          }
+
+          if (workflow.mutates_checkout !== false && isCheckpointableExecutableNode(node)) {
+            await createPreNodeCheckpoint({
+              deps,
+              cwd,
+              workflowRun,
+              node,
+              retryContext,
+            });
           }
 
           // 3. Bash node dispatch — no AI, no session
@@ -3508,7 +3626,7 @@ export async function executeDagWorkflow(
               workflow_run_id: workflowRun.id,
               event_type: 'node_failed',
               step_name: node.id,
-              data: { error: err.message },
+              data: withRetryEpochData(workflowRun, retryContext, { error: err.message }),
             })
             .catch((dbErr: Error) => {
               getLog().error({ err: dbErr, nodeId: node.id }, 'workflow_event_persist_failed');
@@ -3572,6 +3690,7 @@ export async function executeDagWorkflow(
                 outputType: completedNode.output_type,
                 runId: workflowRun.id,
                 producedAt: new Date().toISOString(),
+                ...(retryEpoch > 0 ? { retryEpoch } : {}),
                 // `sessionId` may be undefined (e.g. bash/script nodes have no
                 // session); writeNodeArtifact omits it from the metadata when so.
                 sessionId: output.sessionId,

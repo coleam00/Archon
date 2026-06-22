@@ -8,6 +8,7 @@ import {
   sessionRowSchema,
   sessionMetadataSchema,
   workflowEventRowSchema,
+  workflowCheckpointRowSchema,
   codebaseEnvVarSchema,
   dashboardWorkflowRunSchema,
   listDashboardRunsOptionsSchema,
@@ -313,5 +314,33 @@ describe('core schemas', () => {
       counts: { all: 0, running: 0, completed: 0, failed: 0, cancelled: 0, pending: 0, paused: 0 },
     });
     expect(result.success).toBe(true);
+  });
+
+  // -----------------------------------------------------------------------
+  // workflowCheckpointRowSchema
+  // -----------------------------------------------------------------------
+  test('workflowCheckpointRowSchema accepts persisted retry checkpoint rows', () => {
+    const result = workflowCheckpointRowSchema.safeParse({
+      workflow_run_id: 'run-1',
+      node_id: 'build',
+      retry_epoch: 1,
+      checkpoint_ref: 'refs/archon/checkpoints/run-1/1/build',
+      commit_sha: '0123456789abcdef0123456789abcdef01234567',
+      created_commit: true,
+      fallback_from_node_id: null,
+      created_at: new Date(),
+    });
+    expect(result.success).toBe(true);
+  });
+
+  test('workflowCheckpointRowSchema rejects rows missing run, node, or checkpoint refs', () => {
+    const result = workflowCheckpointRowSchema.safeParse({
+      retry_epoch: 0,
+      commit_sha: '0123456789abcdef0123456789abcdef01234567',
+      created_commit: false,
+      fallback_from_node_id: null,
+      created_at: new Date(),
+    });
+    expect(result.success).toBe(false);
   });
 });

@@ -124,6 +124,18 @@ export const workflowEventSchema = workflowEventRowSchema
   })
   .openapi('WorkflowEvent');
 
+export const workflowNodeStateSchema = z
+  .object({
+    nodeId: z.string(),
+    name: z.string(),
+    status: z.enum(['pending', 'running', 'completed', 'failed', 'skipped']),
+    retryEpoch: z.number().int().nonnegative(),
+    duration: z.number().optional(),
+    error: z.string().optional(),
+    reason: z.string().optional(),
+  })
+  .openapi('WorkflowNodeState');
+
 /** GET /api/workflows/runs/:runId response. */
 export const workflowRunDetailSchema = z
   .object({
@@ -133,6 +145,7 @@ export const workflowRunDetailSchema = z
       conversation_platform_id: z.string().nullable(),
     }),
     events: z.array(workflowEventSchema),
+    nodeStates: z.array(workflowNodeStateSchema),
   })
   .openapi('WorkflowRunDetail');
 
@@ -150,6 +163,27 @@ export const cancelWorkflowRunResponseSchema = z
 export const workflowRunActionResponseSchema = z
   .object({ success: z.boolean(), message: z.string() })
   .openapi('WorkflowRunActionResponse');
+
+/** POST /api/workflows/runs/:runId/nodes/:nodeId/retry path params. */
+export const retryWorkflowNodeParamsSchema = z
+  .object({
+    runId: z.string().min(1),
+    nodeId: z.string().min(1),
+  })
+  .openapi('RetryWorkflowNodeParams');
+
+/** POST /api/workflows/runs/:runId/nodes/:nodeId/retry response. */
+export const retryWorkflowNodeResponseSchema = z
+  .object({
+    success: z.boolean(),
+    message: z.string(),
+    runId: z.string(),
+    nodeId: z.string(),
+    retryEpoch: z.number().int().nonnegative(),
+    invalidatedNodes: z.array(z.string()),
+    safetyCommitSha: z.string().optional(),
+  })
+  .openapi('RetryWorkflowNodeResponse');
 
 /** POST /api/workflows/runs/:runId/approve request body. */
 export const approveWorkflowRunBodySchema = z

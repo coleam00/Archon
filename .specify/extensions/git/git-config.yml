@@ -49,8 +49,8 @@ auto_commit:
     enabled: false
     message: "[Spec Kit] Add tasks"
   after_implement:
-    enabled: false
-    message: "[Spec Kit] Implementation progress"
+    enabled: true
+    message: "feat: Phase 6.2: Implementation for User Story 4 - implemented 15 tasks"
   after_checklist:
     enabled: false
     message: "[Spec Kit] Add checklist"
