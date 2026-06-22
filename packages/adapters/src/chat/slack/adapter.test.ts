@@ -628,6 +628,7 @@ describe('SlackAdapter', () => {
     beforeEach(() => {
       mockAddReaction.mockClear();
       mockRemoveReaction.mockClear();
+      mockEvent.mockClear();
     });
 
     async function fireMention(adapter: SlackAdapter): Promise<void> {
@@ -705,7 +706,7 @@ describe('SlackAdapter', () => {
       const reg = calls.find(c => c[0] === 'message');
       if (!reg) throw new Error('message handler not registered');
       await (reg[1] as (args: { event: SlackMessageEvent }) => Promise<void>)({
-        event: { text: 'hello', user: 'U789', channel: 'D123', ts: '333.444' },
+        event: { text: 'hello', user: 'U789', channel: 'D123', ts: '333.444', channel_type: 'im' },
       });
 
       const call = (

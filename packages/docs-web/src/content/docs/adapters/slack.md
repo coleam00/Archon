@@ -184,10 +184,25 @@ You can also DM the bot directly -- no @mention needed:
 /help
 ```
 
+## Message Receipt & Lifecycle Reactions
+
+When the bot receives any message — whether an `@mention` in a channel or a direct message — it immediately adds an 👀 reaction to the triggering message. This gives the user immediate visual confirmation that the message was received and is being processed.
+
+When the reply is sent back to Slack, the 👀 is removed and replaced with a ✅ reaction. Failures in the reaction pipeline (missing scope, already-reacted, later-deleted message) are swallowed silently — a reaction glitch never blocks message processing.
+
+| Event                    | Reaction pattern |
+|--------------------------|------------------|
+| Message received         | 👀 added         |
+| Reply sent               | 👀 removed → ✅ added |
+| Missing `reactions:write` scope | Message still processes; reaction skipped |
+
+**Required OAuth Scope:** `reactions:write` (listed in Step 3 above).
+
 ## In-Thread UX
 
 When a workflow runs in a Slack thread, Archon now:
 
+- Adds an 👀 reaction to any received message (even non-workflow replies) at the moment it is received, swapped for ✅ when the reply is sent back (see "Message Receipt & Lifecycle Reactions" above for details)
 - Adds 🔄 to your triggering message when the run starts, and swaps it for ✅
   on completion or ❌ on failure / cancellation
 - Posts a single status message in the thread that's edited in place as DAG
