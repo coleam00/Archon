@@ -68,23 +68,26 @@ function Card({ to, title, description, icon: Icon, badge }: CardProps): React.R
 }
 
 export function StartHerePage(): React.ReactElement {
-  // Live counts from generated JSON (refreshed by build script + cron syncs)
-  const driveFolders = ((driveIndex as { folders?: DriveFolderSnapshot[] }).folders ?? []).filter(
+  // Live counts from generated JSON (refreshed by build script + cron syncs).
+  // Defensive: tolerate partial snapshots where a generator emits a non-array value.
+  const drivePayload = driveIndex as { count?: unknown; folders?: unknown };
+  const solutionsPayload = solutionsData as { count?: unknown; solutions?: unknown };
+  const contactsPayload = contactsData as { contacts?: unknown };
+  const driveFolders = (Array.isArray(drivePayload.folders) ? drivePayload.folders : []).filter(
     (folder): folder is DriveFolderSnapshot => typeof folder === 'object' && folder !== null
   );
-  const solutions = ((solutionsData as { solutions?: SolutionSnapshot[] }).solutions ?? []).filter(
+  const solutions = (
+    Array.isArray(solutionsPayload.solutions) ? solutionsPayload.solutions : []
+  ).filter(
     (solution): solution is SolutionSnapshot => typeof solution === 'object' && solution !== null
   );
-  const contacts = ((contactsData as { contacts?: ContactSnapshot[] }).contacts ?? []).filter(
+  const contacts = (Array.isArray(contactsPayload.contacts) ? contactsPayload.contacts : []).filter(
     (contact): contact is ContactSnapshot => typeof contact === 'object' && contact !== null
   );
 
-  const driveFolderCount = safeCount(
-    (driveIndex as { count?: unknown }).count,
-    driveFolders.length
-  );
+  const driveFolderCount = safeCount(drivePayload.count, driveFolders.length);
   const driveFileCount = driveFolders.reduce((acc, f) => acc + safeCount(f.fileCount, 0), 0);
-  const solutionsCount = safeCount((solutionsData as { count?: unknown }).count, solutions.length);
+  const solutionsCount = safeCount(solutionsPayload.count, solutions.length);
   const solutionsNames = solutions
     .map(s => (s.name ?? '').replace(/\s*\(.*?\)\s*/g, '').trim())
     .filter(Boolean)
