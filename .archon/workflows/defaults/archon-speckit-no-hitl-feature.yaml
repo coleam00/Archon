@@ -12,6 +12,7 @@ description: |
   NOT for: When a spec already exists (use archon-speckit-plan-to-tasks instead).
   NOT for: Spec generation only without planning (use archon-speckit-spec instead).
 provider: codex
+modelReasoningEffort: xhigh
 
 nodes:
   - id: setup
@@ -69,16 +70,17 @@ nodes:
 
       ## Instructions
       1. Read .specify/feature.json to resolve <feature_directory>.
-      2. Read <feature_directory>/clarification-questions.md. Confirm it
+      2. If there is a grill-me reference, read it and follow all decisions.
+      3. Read <feature_directory>/clarification-questions.md. Confirm it
          exists and has `Status: PENDING`. If missing or already ARCHIVED,
          STOP and report BLOCKED — do NOT fabricate questions.
-      3. For EACH `## Q<N>.` block in the file, use the existing spec and
+      4. For EACH `## Q<N>.` block in the file, use the existing spec and
          narrowly relevant local project context to determine the best answer.
          Inspect code only when the question depends on an existing API, data
          model, integration point, or documented behavior. Do NOT inspect
          sibling/external repositories unless the user's feature request
          explicitly names them.
-      4. Edit the file IN-PLACE using the Edit tool. For EACH block, fill
+      5. Edit the file IN-PLACE using the Edit tool. For EACH block, fill
          TWO lines:
          a. `Your Answer:` line — one of:
               - an option letter (A/B/C/D/E) for multiple-choice questions
@@ -94,12 +96,12 @@ nodes:
                 - name the domain rule / constraint that forces the choice.
               No generic platitudes ("it's cleaner", "best practice").
               Leave blank if `Your Answer:` is blank.
-      5. Do NOT modify question text, categories, recommended options, the
+      6. Do NOT modify question text, categories, recommended options, the
          options table, or any other metadata. Do NOT change `Status: PENDING`.
          The APPLY phase parser keys off the `Your Answer:` line — keep
          that line a single token. `Reason:` is reviewer-facing only and
          is ignored by the parser, so it is safe to add.
-      6. After editing, print "ANSWERS_DRAFTED" and the file path, then STOP.
+      7. After editing, print "ANSWERS_DRAFTED" and the file path, then STOP.
     depends_on:
       - clarify
     provider: codex
@@ -174,8 +176,9 @@ nodes:
          archived (filename contains `-applied-`), STOP and report BLOCKED —
          do NOT fabricate findings.
       3. Read `<feature_directory>/spec.md` for context.
+      4. If there is a grill-me reference, read it and follow all decisions.
 
-      4. **Focused verification, not broad archaeology.**
+      5. **Focused verification, not broad archaeology.**
          For EACH finding row in §2:
            a. Read the spec section the finding cites (use the row's
               `Location` column). Quote the exact text. If the finding
@@ -204,7 +207,7 @@ nodes:
          related findings, but the sub-agent prompt MUST include the same scope
          limits above and must return a concise verification note, not file edits.
 
-      5. **Choose ONE resolution category** from speckit-red-team-run skill §7.
+      6. **Choose ONE resolution category** from speckit-red-team-run skill §7.
 
          **Scope-preservation invariant (read first):** if the finding asks
          for a broader redesign outside this feature's stated scope, do not
@@ -252,7 +255,7 @@ nodes:
          `accepted-risk` with the trigger condition — never silently pick the
          band-aid.
 
-      6. Edit the findings file IN-PLACE using the Edit tool. For EACH finding ID:
+      7. Edit the findings file IN-PLACE using the Edit tool. For EACH finding ID:
          a. §2 Findings table — fill the `Status` column with the chosen category.
          b. §3 Resolutions Log block — fill the payload per category. EVERY
             payload MUST start with a mandatory `Reasoning:` block (3–8
@@ -324,11 +327,11 @@ nodes:
               - skipped: `Reason: <why>` — MUST cite the spec quote or local
                 code/docs file:line that disproves the finding's premise.
                 "Disagree" without evidence is not acceptable.
-      7. Do NOT modify finding description, severity, lens, location, or any
+      8. Do NOT modify finding description, severity, lens, location, or any
          other §2 metadata. Do NOT touch §1 Session Summary, §4 Validation
          Decision, or §5 Session Metadata YAML — `/speckit.red-team.apply`
          manages those at apply time.
-      8. After editing, print "RESOLUTIONS_DRAFTED" and the absolute path of
+      9. After editing, print "RESOLUTIONS_DRAFTED" and the absolute path of
          the findings file, then STOP.
     depends_on:
       - red-team
@@ -410,7 +413,8 @@ nodes:
          If the file is missing, or already archived (filename contains
          `-applied-`), STOP and report BLOCKED — do NOT fabricate findings.
       3. Read `<feature_directory>/spec.md`, `plan.md`, and `tasks.md` for context.
-      4. For EACH finding row in §2 Findings, INVESTIGATE FIRST — do not punt
+      4. If there is a grill-me reference, read it and follow all decisions.
+      5. For EACH finding row in §2 Findings, INVESTIGATE FIRST — do not punt
          ambiguity to a human when the answer is available in bounded local
          context. Start with spec.md / plan.md / tasks.md. Inspect code only
          when the finding depends on an existing API, data model, integration
@@ -445,7 +449,7 @@ nodes:
                             Reason MUST cite the verification source
                             (file:line + quoted snippet, or the artifact
                             path:line that disproves the premise).
-      5. Edit the findings file IN-PLACE using the Edit tool. For EACH finding ID:
+      6. Edit the findings file IN-PLACE using the Edit tool. For EACH finding ID:
          a. §2 Findings table — fill the `Status` column with the chosen category.
          b. §3 Resolutions Log block — fill the payload per category:
               - spec-fix: `Target: <path>` (typically `<feature_directory>/spec.md`,
@@ -487,10 +491,10 @@ nodes:
                 auto-tag, but be explicit when obvious).
               - out-of-scope: `Cross-reference: <spec path or ID>` + `Reason:`.
               - skipped: `Reason: <why>`.
-      6. Do NOT modify finding ID, category, severity, location, summary, or
+      7. Do NOT modify finding ID, category, severity, location, summary, or
          recommendation in §2. Do NOT touch §1 Session Summary or §5 Session
          Metadata YAML — `/speckit-analyzebatch --apply` manages those at apply time.
-      7. After editing, print "RESOLUTIONS_DRAFTED" and the absolute path of
+      8. After editing, print "RESOLUTIONS_DRAFTED" and the absolute path of
          the findings file, then STOP.
     depends_on:
       - analyze

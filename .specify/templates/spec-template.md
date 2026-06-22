@@ -95,6 +95,25 @@ _Example of marking unclear requirements:_
 - **FR-006**: System MUST authenticate users via [NEEDS CLARIFICATION: auth method not specified - email/password, SSO, OAuth?]
 - **FR-007**: System MUST retain user data for [NEEDS CLARIFICATION: retention period not specified]
 
+### Constitutional Requirements
+
+- **CR-001 Scope Boundary**: [Confirm the feature preserves Archon's
+  single-developer default, or identify the accepted use case for expanding
+  tenancy, roles, or visibility]
+- **CR-002 Package Boundary**: [List impacted packages and the interface seam
+  used: IPlatformAdapter, IAgentProvider, WorkflowDeps, generated API types,
+  or N/A]
+- **CR-003 Type/Schema Contract**: [List schemas, OpenAPI routes, generated
+  types, runtime enums, and database rows that must change, or N/A]
+- **CR-004 Workflow Determinism**: [Identify deterministic workflow steps,
+  AI-judgment steps, output validation, and generated artifact impacts, or N/A]
+- **CR-005 Git/Lifecycle Safety**: [Describe git operations, worktree behavior,
+  and non-terminal state ownership. Confirm no autonomous destructive lifecycle
+  mutation, or N/A]
+- **CR-006 Observability/Security**: [Name required structured log events,
+  classified errors, auth/webhook/internal exposure checks, and secret/PII
+  redaction, or N/A]
+
 ### Key Entities _(include if feature involves data)_
 
 - **[Entity 1]**: [What it represents, key attributes without implementation]

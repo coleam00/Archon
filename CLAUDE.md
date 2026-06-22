@@ -4,6 +4,12 @@
 
 ## Core Principles
 
+**Spec-Kit Constitution**
+- `.specify/memory/constitution.md` is the governing source for spec-kit specs,
+  plans, tasks, and constitution checks
+- Update the constitution, dependent spec-kit templates, and this guidance
+  together when project principles or quality gates change
+
 **Single-Developer Tool**
 - No multi-tenant complexity
 

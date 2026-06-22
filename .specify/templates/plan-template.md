@@ -31,7 +31,34 @@
 
 _GATE: Must pass before Phase 0 research. Re-check after Phase 1 design._
 
-[Gates determined based on constitution file]
+Document each gate as PASS, FAIL, or WAIVED with concrete evidence. Any waiver
+requires a Complexity Tracking row with the accepted use case, simpler
+alternative rejected, and rollback path.
+
+- **Single-developer scope**: Confirm the feature avoids speculative
+  multi-tenant policy, new visibility matrices, or role expansion beyond the
+  existing open-by-default admin/member seam unless explicitly accepted.
+- **Boundary discipline**: Identify touched packages and interfaces. Platform
+  work must stay behind `IPlatformAdapter`; provider work must stay behind
+  `IAgentProvider`/provider registry; workflow engine changes must use
+  `WorkflowDeps`; web types must come from the generated API layer.
+- **Type/schema contracts**: List every Zod schema, OpenAPI route, generated
+  web type, runtime enum, and database row affected. Confirm `z.infer`,
+  explicit `z.record(z.string(), valueSchema)`, route wrapper usage, and
+  generated artifact updates.
+- **Determinism and validation**: Separate deterministic workflow behavior
+  (`bash`/`script`/`approval`) from AI judgment. Name required test files,
+  generated checks, and the exact validation command. Never use root `bun test`
+  as the validation signal.
+- **Git/lifecycle safety**: Confirm git operations use `@archon/git` or
+  `execFileAsync`, never `git clean -fd`, preserve worktree isolation by
+  default, and avoid autonomous terminal-state mutation for ambiguous
+  cross-process workflow/environment ownership.
+- **Observability and security**: Name structured log events, classified error
+  paths, webhook/signature or auth implications, `/internal/*` exposure checks,
+  and secret/PII redaction requirements.
+- **UI/brand**: For visual surfaces, confirm reuse of Archon brand tokens and
+  document any token or brand-guide update.
 
 ## Project Structure
 
