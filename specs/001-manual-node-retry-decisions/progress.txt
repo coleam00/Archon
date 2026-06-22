@@ -1,0 +1,230 @@
+## Codebase Patterns
+- Package test scripts enumerate isolated `bun test` invocations; when adding a new test file, wire it into that package's `package.json` test script instead of relying on root test discovery.
+- Bundled workflow/default command content must be regenerated with `bun run generate:bundled` whenever `.archon/commands/defaults/` or `.archon/workflows/defaults/` files change.
+- Keep persisted workflow event row validation legacy-compatible; add narrow payload schemas and strict writers for new event families instead of tightening `workflowEventRowSchema.event_type` globally.
+- For tests-first batches that precede their implementation batch, use executable assertions where supporting primitives already exist and `test.todo(..., () => {})` contracts where the production seam does not exist yet; keep `bun run validate` green.
+- Manual retry dispatch should use `prepareWorkflowNodeRetry()` to claim the existing failed run and pass its `preCreatedRun`, filtered `preservedCompletedOutputs`, and retry context into `executeWorkflow()`; do not let execution perform a foreground resume lookup for retry-prepared runs.
+- Retry-ref helper tests should use real temporary git repositories with local `user.name`/`user.email`; assert tracked-only behavior with untracked and ignored files left in the worktree.
+- Pre-node DAG checkpoint tests should opt into checkpoint persistence by adding `upsertWorkflowNodeCheckpoint` to the mock store; ordinary executor tests intentionally omit it so they do not need git repositories.
+- The Web package test script recursively runs `src/components/`, so new component test files under that tree do not need package script wiring.
+- Web run mutations should invalidate `['workflowRun', runId]`, `['dashboardRuns']`, `['workflowRuns']`, and `['workflow-runs-status']` so run detail, dashboard, list, and status widgets converge.
+- Run detail UI should prefer server-derived `nodeStates` from `/api/workflows/runs/:runId`; raw event projection remains only a compatibility fallback.
+- Retry epoch artifacts keep epoch 0 at `nodes/<nodeId>.md` and write epoch 1+ artifacts under `nodes/epoch-<N>/<nodeId>.md`.
+- Retry checkpoint/safety ref cleanup during run deletion is best-effort: log warnings, preserve DB deletion/cleanup progress, and never call `git clean`.
+
+## 2026-06-21 23:19:46 +07 - Phase 1: Setup (Shared Test Scaffolding) (iter 1)
+**Tasks completed this iter:** T001 (checkpoint schema/export coverage), T002 (SQLite/PostgreSQL checkpoint convergence coverage), T003 (tracked-only checkpoint/safety git helper coverage), T004 (epoch-aware DAG retry projection coverage), T005 (retry preparation operation coverage), T006 (retry API route coverage), T007 (CLI `workflow retry-node` coverage), T008 (Web retry helper coverage)
+**Status:** completed:true (8/8 tasks)
+
+- Per-task summary lines:
+  - T001 — Added pending workflow checkpoint schema/export contracts in `packages/core/src/schemas/index.test.ts`; wired schema tests into the core package test script.
+  - T002 — Added pending SQLite and PostgreSQL checkpoint table convergence contracts in `packages/core/src/db/adapters/sqlite.test.ts` and `packages/core/src/db/adapters/postgres.test.ts`.
+  - T003 — Added pending tracked-only checkpoint, safety ref, ref validation, and no-untracked-cleanup contracts in `packages/git/src/git.test.ts`.
+  - T004 — Added `packages/workflows/src/retry-state.test.ts` with pending epoch-aware retry projection contracts and wired it into the workflows package test script.
+  - T005 — Added `packages/core/src/operations/workflow-retry.test.ts` with pending retry preparation operation contracts and wired it into the core package test script.
+  - T006 — Added pending retry API route contracts in `packages/server/src/routes/api.workflow-runs.test.ts`.
+  - T007 — Added pending CLI `workflow retry-node` contracts in `packages/cli/src/commands/workflow.test.ts`.
+  - T008 — Added `packages/web/src/lib/workflow-retry.test.ts` with pending Web eligibility/API helper contracts.
+
+**Learnings for future iterations:**
+- `test.todo` needs an empty callback for Web package type-check compatibility.
+- Full `bun run test` can fail on bundled-default drift when default workflow files have changed; regenerate `packages/workflows/src/defaults/bundled-defaults.generated.ts` before validation.
+- Phase 1 intentionally records future behavior as TODO contracts so the repository remains green until the foundational implementation phases replace them with executable assertions.
+---
+
+## 2026-06-21 23:40:28 +07 - Phase 2: Foundational (Blocking Prerequisites) (iter 2)
+**Tasks completed this iter:** T009 (checkpoint row Zod schema), T010 (checkpoint schema export), T011 (SQLite checkpoint table), T012 (PostgreSQL checkpoint migration), T013 (bundled DB schema regeneration), T014 (checkpoint DB queries), T015 (checkpoint store/deps bridge), T016 (retry workflow event types), T017 (retry event row payload validation), T018 (core store retry-event bridge support), T019 (retry DAG helpers), T020 (retry helper exports), T021 (epoch-aware DAG output hydration), T022 (tracked-only retry git helpers), T023 (retry git helper exports), T024 (retry operation/audit primitives), T025 (retry operation export), T026 (executor retry context option)
+**Status:** completed:true (18/18 tasks)
+
+- Per-task summary lines:
+  - T009 — Added `workflowCheckpointRowSchema` and `WorkflowCheckpointRow` for persisted retry checkpoint rows in `packages/core/src/schemas/workflow-checkpoint.ts`.
+  - T010 — Re-exported the checkpoint schema/type from `packages/core/src/schemas/index.ts` and replaced the Phase 1 schema TODOs with executable assertions.
+  - T011 — Added the SQLite `remote_agent_workflow_node_checkpoints` table, primary key, retry epoch check, and lookup indexes in `packages/core/src/db/adapters/sqlite.ts`.
+  - T012 — Added the idempotent PostgreSQL checkpoint table/index DDL to `migrations/000_combined.sql`.
+  - T013 — Regenerated `packages/core/src/db/bundled-schema.generated.ts` from the combined migration.
+  - T014 — Implemented checkpoint upsert, exact/latest lookup, retry fallback lookup, list, and delete helpers in `packages/core/src/db/workflow-checkpoints.ts`.
+  - T015 — Exported the checkpoint DB module and added narrow optional checkpoint persistence methods to `IWorkflowStore`; the core store adapter implements them now.
+  - T016 — Added `node_retry_requested`, `node_retry_reset`, and `node_retry_failed` to the workflow event type union in `packages/workflows/src/store.ts`.
+  - T017 — Added strict retry audit payload schemas/types in `packages/core/src/schemas/workflow-event.ts` while leaving legacy event row validation broad.
+  - T018 — Added retry checkpoint delegation coverage through `packages/core/src/workflows/store-adapter.test.ts`; generic event creation remains intentionally non-throwing for ordinary workflow events.
+  - T019 — Implemented pure retry DAG descendant, invalidation, epoch, and latest-effective-state projection helpers in `packages/workflows/src/retry-state.ts`.
+  - T020 — Exported retry helper types/functions from `packages/workflows/src/index.ts` and the `@archon/workflows/retry-state` subpath.
+  - T021 — Added `getEpochAwareCompletedDagNodeOutputs()` in `packages/core/src/db/workflow-events.ts` with direct coverage for stale invalidated output filtering.
+  - T022 — Added tracked-only checkpoint/safety ref helpers in `packages/git/src/retry-refs.ts`, including ref validation, commit verification, tracked reset, and no `git clean` behavior.
+  - T023 — Exported retry git helper functions and types from `packages/git/src/index.ts`.
+  - T024 — Added retry request/result/error types and the strict `writeRetryAuditEvent()` DB writer in `packages/core/src/operations/workflow-retry.ts`.
+  - T025 — Exported the retry operation primitives from `packages/core/src/operations/index.ts`.
+  - T026 — Extended `ExecuteWorkflowOptions` with retry context fields in `packages/workflows/src/executor.ts` for later dispatch handoff.
+
+**Learnings for future iterations:**
+- Use package test scripts or isolated `bun test` invocations; combining mock-heavy workflow/core tests in one process can create false failures.
+- Retry audit events should use `writeRetryAuditEvent()` because the generic workflow event path intentionally logs and swallows write failures.
+- Checkpoint store methods are optional on the engine contract until DAG checkpoint writes land, but the real core adapter already implements them for pre-node checkpoint persistence.
+---
+
+## 2026-06-21 23:47:40 +07 - Phase 3.1: Tests for User Story 1 (iter 3)
+**Tasks completed this iter:** T027 (linear A -> B -> C retry scope test), T028 (parallel sibling preservation retry test), T029 (skipped downstream ineligible retry test), T030 (retry execution handoff test), T031 (invalidated persisted-session deletion test)
+**Status:** completed:true (5/5 tasks)
+
+- Per-task summary lines:
+  - T027 — Added a pending linear `A -> B -> C` retry-preparation contract in `packages/core/src/operations/workflow-retry.test.ts` covering preserved upstream output, invalidated target/descendant scope, and same-run reuse.
+  - T028 — Added executable retry projection coverage in `packages/workflows/src/retry-state.test.ts` proving a parallel sibling branch stays completed while the target branch and join descendant are invalidated.
+  - T029 — Added executable retry projection coverage in `packages/workflows/src/retry-state.test.ts` proving skipped downstream nodes remain skipped while the failed ancestor remains the retry target.
+  - T030 — Added executor preamble coverage in `packages/workflows/src/executor-preamble.test.ts` proving retry-prepared runs bypass foreground resume lookup/new-run creation and pass filtered prior outputs to DAG execution.
+  - T031 — Added node-session deletion coverage in `packages/core/src/db/workflow-node-sessions.test.ts` proving workflow/scope/node deletion omits provider to delete all persisted provider sessions for an invalidated node.
+
+**Learnings for future iterations:**
+- `executeWorkflow()` already supports the retry handoff shape through `preCreatedRun` plus filtered `priorCompletedNodes`; later US1 implementation should wire retry-specific dispatch into that existing seam.
+- Retry-state projection can cover sibling preservation and skipped downstream ineligibility today without waiting for the shared operation implementation.
+- Session cleanup for invalidated nodes should call `deleteWorkflowNodeSessions({ workflow_name, scope_key, node_id })` without `provider` so every provider's persisted session for that node is cleared.
+---
+
+## 2026-06-22 00:06:18 +07 - Phase 3.2: Implementation for User Story 1 (iter 4)
+**Tasks completed this iter:** T032 (failed-run/node target validation), T033 (target-plus-descendant invalidation), T034 (failed-to-running retry CAS), T035 (`node_retry_requested` audit event), T036 (filtered preserved outputs), T037 (invalidated session deletion), T038 (retry-prepared execution handoff), T039 (DAG preserved-node skip/rerun behavior), T040 (restore failed status on retry-preparation failure)
+**Status:** completed:true (9/9 tasks)
+
+- Per-task summary lines:
+  - T032 — Implemented `prepareWorkflowNodeRetry()` validation for failed run status, current workflow node presence, and latest effective failed target state in `packages/core/src/operations/workflow-retry.ts`.
+  - T033 — Wired current-DAG invalidation through `getRetryInvalidatedNodeIds()` so the failed target and current descendants rerun while upstream/sibling nodes stay preserved.
+  - T034 — Added `claimWorkflowRunForNodeRetry()` in `packages/core/src/db/workflows.ts` with a failed-to-running CAS and single `metadata.retry_epoch` increment.
+  - T035 — Wrote the mandatory strict `node_retry_requested` audit event immediately after a successful retry claim.
+  - T036 — Added `getRetryPreservedDagNodeOutputs()` in `packages/core/src/db/workflow-events.ts` to hydrate epoch-aware outputs and remove currently invalidated nodes.
+  - T037 — Cleared persisted sessions for each invalidated node via `deleteWorkflowNodeSessions({ workflow_name, scope_key, node_id })`.
+  - T038 — Passed retry context into `executeDagWorkflow()` so retry-prepared executions reuse `preCreatedRun` and filtered prior outputs without foreground resume lookup.
+  - T039 — Updated DAG resume behavior so retry-prepared runs skip preserved completed nodes, including preserved `always_run` nodes outside the invalidation set, while invalidated nodes rerun.
+  - T040 — Restored the run to `failed` and wrote `node_retry_failed` if retry preparation fails after the claim, before any execution dispatch.
+
+**Learnings for future iterations:**
+- Normal resume still forces `always_run` nodes to rerun, but retry-prepared execution receives already-filtered preserved outputs and should skip preserved `always_run` nodes unless they were invalidated.
+- The retry operation currently fails fast for mutating workflows unless `mutates_checkout: false`; checkpoint reset support belongs to the next US2 batch.
+- Full validation can surface formatting drift in ignored `.omx/state` hook files; formatting those ignored state files does not affect the feature commit.
+---
+
+## 2026-06-22 00:16:14 +07 - Phase 4.1: Tests for User Story 2 (iter 5)
+**Tasks completed this iter:** T041 (clean-checkout checkpoint ref test), T042 (tracked-dirty checkpoint commit test), T043 (safety/ref/reset failure contracts), T044 (checkpoint fallback lookup test), T045 (DAG pre-node checkpoint contract)
+**Status:** completed:true (5/5 tasks)
+
+- Per-task summary lines:
+  - T041 — Replaced retry-ref TODOs with an executable clean-checkout checkpoint-ref test in `packages/git/src/git.test.ts`, asserting the checkpoint points at `HEAD` without creating a commit.
+  - T042 — Added a tracked-dirty checkpoint test proving `upsertCheckpointRef()` commits tracked modifications while leaving untracked and ignored files out of the commit.
+  - T043 — Added executable retry safety/ref validation/reset tests in `packages/git/src/git.test.ts` and TODO contracts for future core retry setup failures in `packages/core/src/operations/workflow-retry.test.ts`.
+  - T044 — Added `packages/core/src/db/workflow-checkpoints.test.ts` for target checkpoint lookup and first-upstream fallback behavior, and wired it into `packages/core/package.json`.
+  - T045 — Added the DAG executor TODO contract for pre-node checkpoints across command, prompt, bash, script, and loop executable nodes in `packages/workflows/src/dag-executor.test.ts`.
+
+**Learnings for future iterations:**
+- T041-T043 share `packages/git/src/git.test.ts`, so the `[P]` marker was not safe to swarm for this batch.
+- Git checkpoint tests can exercise the real helpers cheaply with temp repos; local repo config avoids depending on global git identity.
+- Phase 4.2 should replace the new core/DAG TODO contracts with executable assertions when checkpoint reset and pre-node checkpoint persistence land.
+---
+
+## 2026-06-22 00:36 +07 - Phase 4.2: Implementation for User Story 2 (iter 6)
+**Tasks completed this iter:** T046 (tracked-only dirty detection and commit creation), T047 (git ref-format validation), T048 (checkpoint ref upsert), T049 (pre-node checkpoint and no-reset retry behavior), T050 (checkpoint row persistence), T051 (approval/cancel/skipped checkpoint exclusions), T052 (latest-prior and dependency fallback lookup), T053 (retry safety ref), T054 (tracked reset without git clean), T055 (`node_retry_reset` event), T056 (`node_retry_failed` event), T057 (parallel mutating-node warning)
+**Status:** completed:true (12/12 tasks)
+
+- Per-task summary lines:
+  - T046 - Added missing-git-identity coverage for dirty checkpoint commits in `packages/git/src/git.test.ts`; verified retry-ref helpers reject non-repos and avoid stash fallback.
+  - T047 - Verified `upsertCheckpointRef()` and `createRetrySafetyRef()` validate generated refs with `git check-ref-format` before mutation.
+  - T048 - Verified checkpoint refs point at `HEAD` for clean checkouts and tracked-only checkpoint commits for dirty checkouts.
+  - T049 - Added DAG pre-node checkpoint creation after trigger/`when:` checks and retry setup reset-skipped behavior when no checkpoint exists.
+  - T050 - Exercised checkpoint row persistence through the workflow store seam for command, prompt, bash, script, and loop nodes.
+  - T051 - Added coverage proving `mutates_checkout: false`, skipped, approval, and cancel nodes do not checkpoint.
+  - T052 - Reused the existing target/latest and first-upstream fallback DB helper coverage in `packages/core/src/db/workflow-checkpoints.test.ts`.
+  - T053 - Added retry safety ref creation before reset in `prepareWorkflowNodeRetry()`.
+  - T054 - Reset retry setup through `resetTrackedFilesToCommit()` only; no `git clean` path was introduced.
+  - T055 - Wrote strict `node_retry_reset` events for no-reset and successful checkpoint reset paths.
+  - T056 - Wrote strict `node_retry_failed` events with setup phases for checkpoint validation and git reset failures.
+  - T057 - Added a warning log for parallel mutating executable nodes in one DAG layer.
+
+**Learnings for future iterations:**
+- `executeDagWorkflow()` treats omitted `mutates_checkout` as mutating; tests that want real checkpoint writes must use a git temp repo and opt into `upsertWorkflowNodeCheckpoint` on the mock store.
+- `prepareWorkflowNodeRetry()` now writes `node_retry_reset` before output hydration/session deletion, so tests should search audit payloads by shape rather than assume `node_retry_requested` is the only early event.
+- Full validation may format ignored `.omx/state` JSON files; formatting those hook-state files is necessary for `bun run format:check` but they remain ignored by git.
+---
+
+## 2026-06-22 00:46 +07 - Phase 5.1: Tests for User Story 3 (iter 7)
+**Tasks completed this iter:** T058 (API retry route status contracts), T059 (Web-created versus CLI-created route eligibility contracts), T060 (CLI retry-node path and JSON rejection contracts), T061 (Web retry eligibility and API wrapper contracts), T062 (Web retry action UI contracts)
+**Status:** completed:true (5/5 tasks)
+
+- Per-task summary lines:
+  - T058 - Added focused retry route TODO contracts for success and 400/401/403/404/409 responses in `packages/server/src/routes/api.workflow-runs.test.ts`.
+  - T059 - Added Web-only eligibility route TODOs for web-created runs, CLI-created runs, and non-web parent conversations in `packages/server/src/routes/api.workflow-runs.test.ts`.
+  - T060 - Added CLI `workflow retry-node` TODOs for JSON rejection output and cwd/codebase/worktree path identity in `packages/cli/src/commands/workflow.test.ts`.
+  - T061 - Expanded Web retry helper TODOs for Web-created eligibility, CLI-only rejection, successful API response details, and API error normalization in `packages/web/src/lib/workflow-retry.test.ts`.
+  - T062 - Added `packages/web/src/components/workflows/WorkflowNodeRetryAction.test.tsx` with TODO contracts for confirmation, loading, duplicate-submit prevention, error recovery, and reset/safety-ref/untracked-preservation copy.
+
+**Learnings for future iterations:**
+- T058 and T059 both edit `packages/server/src/routes/api.workflow-runs.test.ts`, so the `[P]` run-group was intentionally handled serially.
+- Phase 5.1 remains a tests-first contract batch; the route, CLI command, Web helper, and component implementation seams land in Phase 5.2.
+- No browser verification was needed because this iteration added test contracts only and did not change rendered UI behavior.
+---
+
+## 2026-06-22 01:10 +0700 - Phase 5.2: Implementation for User Story 3 (iter 8)
+**Tasks completed this iter:** T063 (retry OpenAPI schemas), T064 (retry API route), T065 (Web retry authorization), T066 (CLI/non-web retry rejection), T067 (prepared Web retry dispatch), T068 (CLI parser/help), T069 (CLI retry-node execution), T070 (CLI path verification), T071 (Web API wrapper), T072 (generated OpenAPI types), T073 (Web retry helpers), T074 (retry action rendering), T075 (confirmation copy), T076 (query invalidation)
+**Status:** completed:true (14/14 tasks)
+
+- Per-task summary lines:
+  - T063 - Added retry-node route params and response schemas in `packages/server/src/routes/schemas/workflow.schemas.ts`.
+  - T064 - Registered `POST /api/workflows/runs/{runId}/nodes/{nodeId}/retry` through `registerOpenApiRoute()` in `packages/server/src/routes/api.ts`.
+  - T065 - Added Web retry authorization for run owners, admins, and solo/local unowned runs before retry mutation.
+  - T066 - Rejected CLI-created and non-web parent runs from the Web route with `archon workflow retry-node <run-id> <node-id>` guidance.
+  - T067 - Dispatched Web retries with `prepareWorkflowNodeRetry()` output, pre-created run state, filtered preserved outputs, and retry context passed to `executeWorkflow()`.
+  - T068 - Added CLI help/parser handling for `workflow retry-node <run-id> <node-id>` in `packages/cli/src/cli.ts`.
+  - T069 - Implemented streamed CLI retry-node execution and human retry scope/safety output in `packages/cli/src/commands/workflow.ts`.
+  - T070 - Verified CLI retry cwd by realpath against the registered codebase root or active isolation worktree before mutating the failed run.
+  - T071 - Added `retryWorkflowNode(runId, nodeId)` and response typing in `packages/web/src/lib/api.ts`.
+  - T072 - Regenerated `packages/web/src/lib/api.generated.d.ts` from the updated OpenAPI spec.
+  - T073 - Added pure retry eligibility, CLI command, path, and error-normalization helpers in `packages/web/src/lib/workflow-retry.ts`.
+  - T074 - Rendered retry action state for the selected failed execution node in `packages/web/src/components/workflows/WorkflowExecution.tsx`.
+  - T075 - Added `WorkflowNodeRetryAction` confirmation copy covering tracked reset, safety ref/commit, untracked preservation, and rerun scope.
+  - T076 - Invalidated/refetched run detail, dashboard, run list, and status query keys after successful Web retry dispatch.
+
+**Learnings for future iterations:**
+- Web and CLI retry dispatch both need to call `prepareWorkflowNodeRetry()` before `executeWorkflow()`; the retry-specific run state is not the same as ordinary resume.
+- Browser verification is still needed for the Web confirmation/action flow because this iteration validated via type-check, lint, generated API types, and tests but did not run a browser session.
+- Full `bun run validate` passes after formatting ignored `.omx/state` JSON files; those files remain ignored and should not be committed.
+---
+
+## 2026-06-22 01:20 +0700 - Phase 6.1: Tests for User Story 4 (iter 9)
+**Tasks completed this iter:** T077 (epoch-aware output hydration tests), T078 (run detail `nodeStates` projection tests), T079 (retry epoch artifact path tests), T080 (dashboard retry-event refetch tests), T081 (experimental console retry projection tests), T082 (cleanup warning/non-blocking retry-ref tests)
+**Status:** completed:true (6/6 tasks)
+
+- Per-task summary lines:
+  - T077 - Added executable epoch-aware output hydration coverage in `packages/core/src/db/workflow-events.test.ts` for historical epoch-0 outputs, latest retry epoch authority, and preserved upstream outputs while invalidated stale outputs are ignored.
+  - T078 - Added run-detail `nodeStates` TODO contracts in `packages/server/src/routes/api.workflow-runs.test.ts` for latest-epoch authority, pending invalidated nodes, and raw historical event preservation.
+  - T079 - Added retry-epoch artifact path TODO contracts in `packages/workflows/src/artifacts-index.test.ts` covering unchanged epoch-0 paths and epoch-qualified retry paths.
+  - T080 - Added dashboard poller TODO contracts in `packages/server/src/adapters/web/dashboard-event-poller.test.ts` for retry events mapping to workflow status refetch triggers.
+  - T081 - Added experimental console retry projection TODOs plus executable guards in `packages/web/src/experiments/console/primitives/event.test.ts` proving retry setup events do not affect terminal counts or folded node lifecycle state.
+  - T082 - Added cleanup-service TODO contracts in `packages/core/src/services/cleanup-service.test.ts` for checkpoint/retry-safety ref cleanup warnings and non-blocking old-run cleanup behavior.
+
+**Learnings for future iterations:**
+- US4 has a clear split between existing helper behavior and future implementation seams: DB hydration can be asserted executable now, while server `nodeStates`, retry-epoch artifact paths, retry-event dashboard mapping, console retry setup projection, and retry-ref cleanup remain Phase 6.2 TODO contracts.
+- The contiguous `[P]` batch was safe to swarm because each task owned a disjoint test file; shared PRD/progress/commit edits stayed in the main lane.
+- Browser verification was not needed in this tests-only batch; rendered Web retry projection still needs verification when Phase 6.2 changes production UI behavior.
+---
+
+## 2026-06-22 01:47 +0700 - Phase 6.2: Implementation for User Story 4 (iter 10)
+**Tasks completed this iter:** T083 (`retry_epoch` lifecycle data), T084 (epoch-qualified node artifacts), T085 (run detail `nodeStates`), T086 (Web server-derived graph state), T087 (console retry setup projection), T088 (workflow status retry refetch mapping), T089 (dashboard retry poller mapping), T090 (delete-run retry-ref cleanup), T091 (old-run retry-ref cleanup), T092 (raw historical events preserved), T093 (retry-node prompt reference), T094 (manual retry docs), T095 (quickstart notes), T096 (focused quickstart tests), T097 (`bun run validate`)
+**Status:** completed:true (15/15 tasks)
+
+- Per-task summary lines:
+  - T083 — Added `retry_epoch` to retry execution node lifecycle event data in `packages/workflows/src/dag-executor.ts`.
+  - T084 — Wrote retry epoch 1+ node artifacts under `nodes/epoch-<N>/` while preserving epoch-0 paths in `packages/workflows/src/artifacts-index.ts` and `packages/workflows/src/dag-executor.ts`.
+  - T085 — Added server-derived `nodeStates` to run detail schema and response projection in `packages/server/src/routes/schemas/workflow.schemas.ts` and `packages/server/src/routes/api.ts`.
+  - T086 — Updated `WorkflowExecution` to prefer API-provided `nodeStates` with local raw-event projection as a fallback.
+  - T087 — Classified `node_retry_requested`, `node_retry_reset`, and `node_retry_failed` as setup/system events in the experimental console event projection.
+  - T088 — Mapped retry setup events to workflow status refetch triggers in the Web workflow bridge.
+  - T089 — Replaced dashboard retry-event TODOs with executable mapping assertions for retry status refetch behavior.
+  - T090 — Added best-effort checkpoint/safety ref cleanup when deleting an individual workflow run.
+  - T091 — Added scheduled old workflow-run cleanup with best-effort retry-ref deletion and warning-only failure handling.
+  - T092 — Kept raw workflow events unchanged while current node status derives from latest effective retry epoch state.
+  - T093 — Updated run-management prompt guidance to mention `archon workflow retry-node <run-id> <node-id>` and its non-JSON streaming behavior.
+  - T094 — Documented manual failed-node retry behavior, audit events, checkpoint reset behavior, safety refs, and untracked-file preservation in workflow docs.
+  - T095 — Added quickstart scenario notes for Web and CLI manual retry verification.
+  - T096 — Ran the focused quickstart test list across workflows, core, server, CLI, and Web packages.
+  - T097 — Ran `bun run validate`; fixed Prettier drift and a stale integration-test `@archon/paths` mock exposed by retry-ref cleanup imports.
+
+**Learnings for future iterations:**
+- Importing `@archon/git` through its barrel can trigger worktree path helper imports; isolated tests that mock `@archon/paths` must include the helper names required by the barrel.
+- Server-side run detail `nodeStates` avoids duplicating retry-epoch folding in the Web UI; keep API projection authoritative and use client event folding only for older/stale payloads.
+- Web behavior was verified through focused tests and full validation in this iteration; no browser session was run.
+---

@@ -87,6 +87,11 @@ mock.module('../db/sessions', () => ({
   deleteOldSessions: mockDeleteOldSessions,
 }));
 
+const mockDeleteOldWorkflowRuns = mock(() => Promise.resolve({ count: 0 }));
+mock.module('../db/workflows', () => ({
+  deleteOldWorkflowRuns: mockDeleteOldWorkflowRuns,
+}));
+
 // Mock codebases DB
 const mockGetCodebase = mock(() => Promise.resolve(null));
 mock.module('../db/codebases', () => ({
@@ -112,6 +117,7 @@ import {
   removeEnvironment,
   onConversationClosed,
   SESSION_RETENTION_DAYS,
+  WORKFLOW_RUN_RETENTION_DAYS,
 } from './cleanup-service';
 
 describe('cleanup-service', () => {
@@ -467,6 +473,7 @@ describe('runScheduledCleanup', () => {
     mockGetById.mockClear();
     mockGetCodebase.mockClear();
     mockDeleteOldSessions.mockClear();
+    mockDeleteOldWorkflowRuns.mockClear();
     mockLoadRepoConfig.mockClear();
     // Reset defaults
     mockHasUncommittedChanges.mockResolvedValue(false);
@@ -475,6 +482,7 @@ describe('runScheduledCleanup', () => {
     mockIsBranchMerged.mockResolvedValue(false);
     mockGetLastCommitDate.mockResolvedValue(null);
     mockLoadRepoConfig.mockResolvedValue({});
+    mockDeleteOldWorkflowRuns.mockResolvedValue({ count: 0 });
   });
 
   test('returns empty report when no environments exist', async () => {
@@ -786,6 +794,29 @@ describe('runScheduledCleanup', () => {
     expect(report.errors).toContainEqual({
       id: 'session-cleanup',
       error: 'database locked',
+    });
+  });
+
+  test('attempts checkpoint and retry-safety ref cleanup by workflow run prefix during old-run cleanup', async () => {
+    mockListAllActiveWithCodebase.mockResolvedValueOnce([]);
+    mockDeleteOldWorkflowRuns.mockResolvedValueOnce({ count: 2 });
+
+    const report = await runScheduledCleanup();
+
+    expect(mockDeleteOldWorkflowRuns).toHaveBeenCalledWith(WORKFLOW_RUN_RETENTION_DAYS);
+    expect(report.workflowRunsDeleted).toBe(2);
+  });
+
+  test('warns and continues DB cleanup when retry ref cleanup fails during old-run cleanup', async () => {
+    mockListAllActiveWithCodebase.mockResolvedValueOnce([]);
+    mockDeleteOldWorkflowRuns.mockRejectedValueOnce(new Error('retry ref cleanup failed'));
+
+    const report = await runScheduledCleanup();
+
+    expect(report.workflowRunsDeleted).toBe(0);
+    expect(report.errors).toContainEqual({
+      id: 'workflow-run-cleanup',
+      error: 'retry ref cleanup failed',
     });
   });
 });

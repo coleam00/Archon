@@ -3444,3 +3444,15 @@ describe('workflowResetSessionsCommand', () => {
     );
   });
 });
+
+describe('workflowRetryNodeCommand', () => {
+  it.todo('parses workflow retry-node <run-id> <node-id> and streams retry execution', () => {});
+  it.todo('prints human-readable retry scope, safety ref, and reset feedback', () => {});
+  it.todo('emits machine-readable JSON without inline auto-resume when --json is set', () => {});
+  it.todo('emits {ok:false} JSON when retry-node is rejected in --json mode', () => {});
+  it.todo('accepts retry-node only when cwd matches the run codebase or worktree path', () => {});
+  it.todo(
+    'rejects retry-node when cwd does not match the run codebase or worktree contracts',
+    () => {}
+  );
+});

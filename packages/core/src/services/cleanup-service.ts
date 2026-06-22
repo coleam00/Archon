@@ -7,6 +7,7 @@ import * as conversationDb from '../db/conversations';
 import * as sessionDb from '../db/sessions';
 import { SessionNotFoundError } from '../db/sessions';
 import * as codebaseDb from '../db/codebases';
+import * as workflowDb from '../db/workflows';
 import { getIsolationProvider, getPrState } from '@archon/isolation';
 import type { WorktreeStatusBreakdown, PrState } from '@archon/isolation';
 import {
@@ -50,9 +51,10 @@ async function resolveBaseBranch(repoPath: RepoPath, cwd: string): Promise<Branc
 const STALE_THRESHOLD_DAYS = parseInt(process.env.STALE_THRESHOLD_DAYS ?? '14', 10);
 const CLEANUP_INTERVAL_HOURS = parseInt(process.env.CLEANUP_INTERVAL_HOURS ?? '6', 10);
 const SESSION_RETENTION_DAYS = parseInt(process.env.SESSION_RETENTION_DAYS ?? '30', 10);
+const WORKFLOW_RUN_RETENTION_DAYS = parseInt(process.env.WORKFLOW_RUN_RETENTION_DAYS ?? '7', 10);
 
 // Export configuration for use by other modules
-export { STALE_THRESHOLD_DAYS, SESSION_RETENTION_DAYS };
+export { STALE_THRESHOLD_DAYS, SESSION_RETENTION_DAYS, WORKFLOW_RUN_RETENTION_DAYS };
 
 // Module-level variable for scheduler
 let cleanupIntervalId: NodeJS.Timeout | null = null;
@@ -62,6 +64,7 @@ export interface CleanupReport {
   skipped: { id: string; reason: string }[];
   errors: { id: string; error: string }[];
   sessionsDeleted: number;
+  workflowRunsDeleted: number;
 }
 
 /**
@@ -295,7 +298,13 @@ async function getRemovalBlocker(env: {
  */
 export async function runScheduledCleanup(): Promise<CleanupReport> {
   getLog().info('cleanup_started');
-  const report: CleanupReport = { removed: [], skipped: [], errors: [], sessionsDeleted: 0 };
+  const report: CleanupReport = {
+    removed: [],
+    skipped: [],
+    errors: [],
+    sessionsDeleted: 0,
+    workflowRunsDeleted: 0,
+  };
 
   try {
     // Get all active environments with their codebase info
@@ -408,12 +417,22 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
     report.errors.push({ id: 'session-cleanup', error: err.message });
   }
 
+  try {
+    const result = await workflowDb.deleteOldWorkflowRuns(WORKFLOW_RUN_RETENTION_DAYS);
+    report.workflowRunsDeleted = result.count;
+  } catch (error) {
+    const err = error as Error;
+    getLog().warn({ err: error }, 'workflow_run_cleanup_failed');
+    report.errors.push({ id: 'workflow-run-cleanup', error: err.message });
+  }
+
   getLog().info(
     {
       removed: report.removed.length,
       skipped: report.skipped.length,
       errors: report.errors.length,
       sessionsDeleted: report.sessionsDeleted,
+      workflowRunsDeleted: report.workflowRunsDeleted,
     },
     'cleanup_completed'
   );

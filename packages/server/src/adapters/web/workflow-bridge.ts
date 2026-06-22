@@ -179,6 +179,9 @@ const ROW_WORKFLOW_STATUS: Record<string, 'running' | 'completed' | 'failed' | '
   workflow_completed: 'completed',
   workflow_failed: 'failed',
   workflow_cancelled: 'cancelled',
+  node_retry_requested: 'running',
+  node_retry_reset: 'running',
+  node_retry_failed: 'failed',
 };
 
 /** DB event_type → node-level status, emitted as a `dag_node` SSE event. */

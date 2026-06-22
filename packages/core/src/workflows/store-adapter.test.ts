@@ -39,6 +39,13 @@ mock.module('../db/workflow-events', () => ({
   getCompletedDagNodeOutputs: mockGetCompletedDagNodeOutputs,
 }));
 
+const mockUpsertWorkflowNodeCheckpoint = mock(() => Promise.resolve({ workflow_run_id: 'run-1' }));
+const mockGetLatestWorkflowNodeCheckpoint = mock(() => Promise.resolve(null));
+mock.module('../db/workflow-checkpoints', () => ({
+  upsertWorkflowNodeCheckpoint: mockUpsertWorkflowNodeCheckpoint,
+  getLatestWorkflowNodeCheckpoint: mockGetLatestWorkflowNodeCheckpoint,
+}));
+
 const mockGetCodebase = mock(() => Promise.resolve(null));
 mock.module('../db/codebases', () => ({
   getCodebase: mockGetCodebase,
@@ -119,6 +126,8 @@ describe('createWorkflowStore', () => {
       'cancelWorkflowRun',
       'createWorkflowEvent',
       'getCompletedDagNodeOutputs',
+      'upsertWorkflowNodeCheckpoint',
+      'getLatestWorkflowNodeCheckpoint',
       'getCodebase',
       'getCodebaseEnvVars',
     ];
@@ -163,6 +172,31 @@ describe('createWorkflowStore', () => {
     const result = await store.getCompletedDagNodeOutputs('run-123');
     expect(result).toBe(expected);
     expect(mockGetCompletedDagNodeOutputs).toHaveBeenCalledWith('run-123');
+  });
+
+  test('delegates workflow node checkpoint upsert to DB', async () => {
+    const expected = {
+      workflow_run_id: 'run-1',
+      node_id: 'build',
+      retry_epoch: 0,
+      checkpoint_ref: 'refs/archon/checkpoints/run-1/0/build',
+      commit_sha: 'abc',
+      created_commit: false,
+      fallback_from_node_id: null,
+      created_at: new Date(),
+    };
+    mockUpsertWorkflowNodeCheckpoint.mockResolvedValueOnce(expected);
+    const store = createWorkflowStore();
+    const result = await store.upsertWorkflowNodeCheckpoint?.({
+      workflow_run_id: 'run-1',
+      node_id: 'build',
+      retry_epoch: 0,
+      checkpoint_ref: 'refs/archon/checkpoints/run-1/0/build',
+      commit_sha: 'abc',
+      created_commit: false,
+      fallback_from_node_id: null,
+    });
+    expect(result).toBe(expected);
   });
 
   test('delegates cancelWorkflowRun to DB', async () => {

@@ -341,6 +341,38 @@ describe('SqliteAdapter', () => {
       expect(again).toEqual([{ n: 3 }]);
     });
   });
+
+  describe('workflow node checkpoint schema convergence', () => {
+    test('creates remote_agent_workflow_node_checkpoints with retry checkpoint columns', () => {
+      db = createTestDb();
+      const cols = raw_pragma(currentDbPath, 'remote_agent_workflow_node_checkpoints');
+      expect(cols).toEqual([
+        'workflow_run_id',
+        'node_id',
+        'retry_epoch',
+        'checkpoint_ref',
+        'commit_sha',
+        'created_commit',
+        'fallback_from_node_id',
+        'created_at',
+      ]);
+    });
+
+    test('creates indexes for run/node checkpoint lookup and cleanup by run', () => {
+      db = createTestDb();
+      const indexes = raw_indexes(currentDbPath);
+      expect(indexes).toContain('idx_workflow_node_checkpoints_run');
+      expect(indexes).toContain('idx_workflow_node_checkpoints_run_node_epoch');
+    });
+
+    test('migrates existing SQLite databases idempotently when checkpoint storage is added', async () => {
+      db = createTestDb();
+      await db.close();
+      db = new SqliteAdapter(currentDbPath);
+      const cols = raw_pragma(currentDbPath, 'remote_agent_workflow_node_checkpoints');
+      expect(cols).toContain('checkpoint_ref');
+    });
+  });
 });
 
 function raw_pragma(dbPath: string, table: string): string[] {

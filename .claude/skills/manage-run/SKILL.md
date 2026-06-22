@@ -6,10 +6,10 @@ description: |
   Triggers (inspect): "what's running", "list runs", "show recent runs", "run status",
             "did the review pass", "check run <id>", "show me run <id>", "what happened in that run".
   Triggers (control): "approve the plan", "approve run <id>", "reject that run", "cancel that run",
-            "abandon run <id>", "resume run <id>", "continue that run".
+            "abandon run <id>", "resume run <id>", "continue that run", "retry failed node".
   Triggers (start): "start <workflow> in the background", "kick off <workflow> detached".
-  Capability: Drives `archon workflow runs/get/status/run --detach/approve/reject/abandon/resume`
-            with machine-readable `--json` output, scoped to the current project by cwd.
+  Capability: Drives `archon workflow runs/get/status/run --detach/approve/reject/abandon/resume/retry-node`
+            with machine-readable `--json` output where supported, scoped to the current project by cwd.
   NOT for: Authoring workflows/commands, or Archon setup/config — use the broader `archon` skill.
 argument-hint: "[run-id or workflow] [comment]"
 ---
@@ -27,8 +27,9 @@ workflows, setup, or config, use the broader **`archon`** skill instead.
 
 ## How output works
 
-- Add `--json` to any command for a **single clean JSON object on stdout** (logs are
+- Add `--json` to list/inspect/decision commands for a **single clean JSON object on stdout** (logs are
   suppressed automatically in `--json` mode). Prefer `--json` when you will parse the result.
+- `retry-node` streams retry execution output and does **not** support `--json` in v1.
 - Without `--json` you get human-readable text. Diagnostics/warnings always go to stderr.
 - The current directory (cwd) determines which project's runs you see. Run from the repo.
 
@@ -45,6 +46,7 @@ workflows, setup, or config, use the broader **`archon`** skill instead.
 | **Start** a run, non-blocking | `archon workflow run <workflow> "<message>" --detach` |
 | **Approve** a paused gate | `archon workflow approve <run-id> "looks good" --json` |
 | **Reject** a paused gate | `archon workflow reject <run-id> "fix X first" --json` |
+| **Retry** one failed DAG node | `archon workflow retry-node <run-id> <node-id>` |
 | **Cancel** a non-terminal run | `archon workflow abandon <run-id> --json` |
 
 > There is no separate `cancel` verb — `abandon` cancels a non-terminal run by id.
@@ -88,6 +90,17 @@ If you only need to record the decision (e.g. cancel via reject) and don't need 
 drive the run forward, the `--json` step alone is enough. To approve **and** continue
 in one blocking call, drop `--json`: `archon workflow approve <run-id> "ship it"`
 auto-resumes (run it as a background task).
+
+### Retry one failed DAG node
+```bash
+archon workflow get <run-id> --verbose --json      # find the failed node id
+archon workflow retry-node <run-id> <node-id>      # streams retry execution
+archon workflow get <run-id> --json                # poll until completed/failed
+```
+Retry invalidates the selected failed node plus descendants, preserves successful
+upstream/sibling outputs, and reuses the same run row. For mutating workflows Archon
+creates local checkpoint/safety refs before resetting tracked files; untracked files
+are preserved.
 
 ## Reference
 

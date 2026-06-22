@@ -278,6 +278,16 @@ archon workflow resume <run-id> --json   # validate + ack only; does NOT re-exec
 
 In `--json` mode the command is a non-blocking control-plane ack: it validates the run is resumable and reports its state but does **not** re-execute inline (execution streams output to stdout, which would corrupt the JSON). To actually drive a resumable run to completion, use the blocking form or `workflow run <name> --resume --detach`.
 
+### `workflow retry-node`
+
+Retry one failed DAG node and its current DAG descendants in the same workflow run. Use this when a specific node failed after earlier work succeeded and you want that branch to run again with a fresh retry epoch.
+
+```bash
+archon workflow retry-node <run-id> <node-id>
+```
+
+`retry-node` streams execution output like `workflow resume` and does **not** support `--json` in v1. The command verifies the recorded working path still points at the expected repository or Archon-managed worktree before any git mutation. For workflows that can mutate the checkout, Archon creates local safety/checkpoint refs under `refs/archon/`, resets tracked files to the selected checkpoint, preserves untracked files, and keeps successful upstream/sibling outputs.
+
 ### `workflow abandon`
 
 Discard a workflow run (marks it as `cancelled`). Use this to unblock a worktree when you don't want to resume — the path lock is released immediately so a new workflow can start.

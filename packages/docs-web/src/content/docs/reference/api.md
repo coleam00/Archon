@@ -261,11 +261,12 @@ Only user-defined workflows can be deleted. Bundled defaults cannot be removed.
 |--------|------|-------------|
 | POST | `/api/workflows/{name}/run` | Run a workflow (JSON or multipart) |
 | GET | `/api/workflows/runs` | List workflow runs |
-| GET | `/api/workflows/runs/{runId}` | Get run details with events |
+| GET | `/api/workflows/runs/{runId}` | Get run details with events and server-derived DAG node states |
 | GET | `/api/runs/{runId}/artifacts` | List artifact files produced by a run |
 | GET | `/api/workflows/runs/by-worker/{platformId}` | Look up a run by worker conversation ID |
 | POST | `/api/workflows/runs/{runId}/cancel` | Cancel a running workflow |
 | POST | `/api/workflows/runs/{runId}/resume` | Resume a failed workflow |
+| POST | `/api/workflows/runs/{runId}/nodes/{nodeId}/retry` | Retry one failed DAG node and its descendants |
 | POST | `/api/workflows/runs/{runId}/abandon` | Abandon a non-terminal run |
 | POST | `/api/workflows/runs/{runId}/approve` | Approve a paused workflow |
 | POST | `/api/workflows/runs/{runId}/reject` | Reject a paused workflow |
@@ -302,6 +303,16 @@ curl -X POST http://localhost:3090/api/workflows/runs/{runId}/resume
 ```
 
 Resumes the workflow from where it left off, skipping already-completed nodes. Equivalent to `archon workflow resume <run-id>` from the CLI. Plain `archon workflow run <name>` invocations never resume implicitly.
+
+#### Retry a Failed DAG Node
+
+```bash
+curl -X POST http://localhost:3090/api/workflows/runs/{runId}/nodes/{nodeId}/retry
+```
+
+Retries the selected failed node and its current DAG descendants in the same run. The run must be failed, the node's latest effective status must be `failed`, and Web retry only applies to web-created runs with a web parent conversation. CLI-created or non-web runs should use `archon workflow retry-node <run-id> <node-id>`.
+
+Success returns `{ success, message, runId, nodeId, retryEpoch, invalidatedNodes, safetyCommitSha? }`. The `safetyCommitSha` field is present when Archon created a safety ref before resetting the checkout.
 
 #### Approve / Reject a Paused Run
 

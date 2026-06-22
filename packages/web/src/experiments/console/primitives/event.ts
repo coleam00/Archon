@@ -282,6 +282,29 @@ export function toRunEvent(raw: RawWorkflowEvent): RunEvent {
     };
   }
 
+  if (et === 'node_retry_requested' || et === 'node_retry_reset' || et === 'node_retry_failed') {
+    const nodeId = readString(data, 'node_id') || (raw.step_name ?? '');
+    const retryEpoch = readNumberOrNull(data, 'retry_epoch');
+    const label =
+      et === 'node_retry_requested'
+        ? 'Node retry requested'
+        : et === 'node_retry_reset'
+          ? 'Node retry reset prepared'
+          : 'Node retry failed';
+    const detail =
+      et === 'node_retry_requested'
+        ? `node=${nodeId} epoch=${String(retryEpoch ?? 0)}`
+        : et === 'node_retry_reset'
+          ? readString(data, 'checkpoint_ref') || 'Reset skipped'
+          : readString(data, 'error');
+    return {
+      ...base,
+      kind: 'system',
+      label,
+      detail,
+    };
+  }
+
   // Fallback: render anything else as a text event with the payload summary.
   return {
     ...base,

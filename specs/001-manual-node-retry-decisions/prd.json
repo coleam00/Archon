@@ -1,0 +1,1014 @@
+{
+  "project": "001-manual-node-retry-decisions",
+  "branchName": "001-manual-node-retry-decisions",
+  "description": "Manual Failed-Node Retry Decisions",
+  "specDirectory": "specs/001-manual-node-retry-decisions",
+  "userStories": [
+    {
+      "title": "Phase 1: Setup (Shared Test Scaffolding)",
+      "completed": true,
+      "tasks": [
+        {
+          "id": "T001",
+          "title": "[P] Add failing checkpoint schema/export coverage in `packages/core/src/schemas/",
+          "description": "[P] Add failing checkpoint schema/export coverage in `packages/core/src/schemas/index.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 1,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T002",
+          "title": "[P] Add failing checkpoint SQLite/PostgreSQL convergence coverage in `packages/c",
+          "description": "[P] Add failing checkpoint SQLite/PostgreSQL convergence coverage in `packages/core/src/db/adapters/sqlite.test.ts` and `packages/core/src/db/adapters/postgres.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 2,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T003",
+          "title": "[P] Add failing tracked-only checkpoint/safety git helper coverage in `packages/",
+          "description": "[P] Add failing tracked-only checkpoint/safety git helper coverage in `packages/git/src/git.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 3,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T004",
+          "title": "[P] Add failing epoch-aware DAG retry projection coverage in `packages/workflows",
+          "description": "[P] Add failing epoch-aware DAG retry projection coverage in `packages/workflows/src/retry-state.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 4,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T005",
+          "title": "[P] Add failing retry preparation operation coverage in `packages/core/src/opera",
+          "description": "[P] Add failing retry preparation operation coverage in `packages/core/src/operations/workflow-retry.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 5,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T006",
+          "title": "[P] Add failing retry API route coverage in `packages/server/src/routes/api.work",
+          "description": "[P] Add failing retry API route coverage in `packages/server/src/routes/api.workflow-runs.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 6,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T007",
+          "title": "[P] Add failing CLI `workflow retry-node` coverage in `packages/cli/src/commands",
+          "description": "[P] Add failing CLI `workflow retry-node` coverage in `packages/cli/src/commands/workflow.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 7,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T008",
+          "title": "[P] Add failing Web retry helper coverage in `packages/web/src/lib/workflow-retr",
+          "description": "[P] Add failing Web retry helper coverage in `packages/web/src/lib/workflow-retry.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 8,
+          "passes": true,
+          "notes": ""
+        }
+      ],
+      "tasksIds": ["T001", "T002", "T003", "T004", "T005", "T006", "T007", "T008"]
+    },
+    {
+      "title": "Phase 2: Foundational (Blocking Prerequisites)",
+      "completed": true,
+      "tasks": [
+        {
+          "id": "T009",
+          "title": "Create checkpoint row Zod schema in `packages/core/src/schemas/workflow-checkpoi",
+          "description": "Create checkpoint row Zod schema in `packages/core/src/schemas/workflow-checkpoint.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 9,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T010",
+          "title": "Re-export checkpoint schema and derived type from `packages/core/src/schemas/ind",
+          "description": "Re-export checkpoint schema and derived type from `packages/core/src/schemas/index.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 10,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T011",
+          "title": "Add `remote_agent_workflow_node_checkpoints` to SQLite initialization in `packag",
+          "description": "Add `remote_agent_workflow_node_checkpoints` to SQLite initialization in `packages/core/src/db/adapters/sqlite.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 11,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T012",
+          "title": "Add idempotent checkpoint table and indexes to PostgreSQL migration in `migratio",
+          "description": "Add idempotent checkpoint table and indexes to PostgreSQL migration in `migrations/000_combined.sql`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 12,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T013",
+          "title": "Regenerate bundled DB schema content in `packages/core/src/db/bundled-schema.gen",
+          "description": "Regenerate bundled DB schema content in `packages/core/src/db/bundled-schema.generated.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 13,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T014",
+          "title": "Implement checkpoint DB queries in `packages/core/src/db/workflow-checkpoints.ts",
+          "description": "Implement checkpoint DB queries in `packages/core/src/db/workflow-checkpoints.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 14,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T015",
+          "title": "Export checkpoint DB module from `packages/core/src/db/index.ts` and extend `IWo",
+          "description": "Export checkpoint DB module from `packages/core/src/db/index.ts` and extend `IWorkflowStore`/workflow deps with narrow checkpoint persistence methods that the core store adapter implements for pre-node DAG checkpoint writes",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 15,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T016",
+          "title": "Extend workflow event type unions with `node_retry_requested`, `node_retry_reset",
+          "description": "Extend workflow event type unions with `node_retry_requested`, `node_retry_reset`, and `node_retry_failed` in `packages/workflows/src/store.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 16,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T017",
+          "title": "Extend persisted workflow event row schema validation for retry events in `packa",
+          "description": "Extend persisted workflow event row schema validation for retry events in `packages/core/src/schemas/workflow-event.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 17,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T018",
+          "title": "Add retry event bridge support to the core workflow store adapter in `packages/c",
+          "description": "Add retry event bridge support to the core workflow store adapter in `packages/core/src/workflows/store-adapter.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 18,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T019",
+          "title": "Implement pure retry DAG helpers for descendants, invalidation, and latest effec",
+          "description": "Implement pure retry DAG helpers for descendants, invalidation, and latest effective node state in `packages/workflows/src/retry-state.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 19,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T020",
+          "title": "Export retry DAG helper types/functions from `packages/workflows/src/index.ts`",
+          "description": "Export retry DAG helper types/functions from `packages/workflows/src/index.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 20,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T021",
+          "title": "Add epoch-aware completed DAG output hydration entry point in `packages/core/src",
+          "description": "Add epoch-aware completed DAG output hydration entry point in `packages/core/src/db/workflow-events.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 21,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T022",
+          "title": "Add tracked-only git ref, commit, validation, and reset helpers in `packages/git",
+          "description": "Add tracked-only git ref, commit, validation, and reset helpers in `packages/git/src/retry-refs.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 22,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T023",
+          "title": "Export retry git helpers from `packages/git/src/index.ts`",
+          "description": "Export retry git helpers from `packages/git/src/index.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 23,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T024",
+          "title": "Add retry operation request/result/error types and a strict retry audit event wr",
+          "description": "Add retry operation request/result/error types and a strict retry audit event writer in `packages/core/src/operations/workflow-retry.ts`; T035/T055/T056 MUST call this writer instead of `IWorkflowStore.createWorkflowEvent()` for retry audit events",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 24,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T025",
+          "title": "Export retry operation from `packages/core/src/operations/index.ts`",
+          "description": "Export retry operation from `packages/core/src/operations/index.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 25,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T026",
+          "title": "Extend `ExecuteWorkflowOptions` with retry context fields in `packages/workflows",
+          "description": "Extend `ExecuteWorkflowOptions` with retry context fields in `packages/workflows/src/executor.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 26,
+          "passes": true,
+          "notes": ""
+        }
+      ],
+      "tasksIds": [
+        "T009",
+        "T010",
+        "T011",
+        "T012",
+        "T013",
+        "T014",
+        "T015",
+        "T016",
+        "T017",
+        "T018",
+        "T019",
+        "T020",
+        "T021",
+        "T022",
+        "T023",
+        "T024",
+        "T025",
+        "T026"
+      ]
+    },
+    {
+      "title": "Phase 3.1: Tests for User Story 1",
+      "completed": true,
+      "tasks": [
+        {
+          "id": "T027",
+          "title": "[P] [US1] Add linear `A -> B -> C` retry scope test in `packages/core/src/operat",
+          "description": "[P] [US1] Add linear `A -> B -> C` retry scope test in `packages/core/src/operations/workflow-retry.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 27,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T028",
+          "title": "[P] [US1] Add parallel sibling preservation retry test in `packages/workflows/sr",
+          "description": "[P] [US1] Add parallel sibling preservation retry test in `packages/workflows/src/retry-state.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 28,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T029",
+          "title": "[P] [US1] Add skipped downstream ineligible retry test in `packages/workflows/sr",
+          "description": "[P] [US1] Add skipped downstream ineligible retry test in `packages/workflows/src/retry-state.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 29,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T030",
+          "title": "[P] [US1] Add retry execution handoff test for prepared runs in `packages/workfl",
+          "description": "[P] [US1] Add retry execution handoff test for prepared runs in `packages/workflows/src/executor-preamble.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 30,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T031",
+          "title": "[P] [US1] Add invalidated persisted-session deletion test in `packages/core/src/",
+          "description": "[P] [US1] Add invalidated persisted-session deletion test in `packages/core/src/db/workflow-node-sessions.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 31,
+          "passes": true,
+          "notes": ""
+        }
+      ],
+      "tasksIds": ["T027", "T028", "T029", "T030", "T031"]
+    },
+    {
+      "title": "Phase 3.2: Implementation for User Story 1",
+      "completed": true,
+      "tasks": [
+        {
+          "id": "T032",
+          "title": "[US1] Implement target validation for failed run and latest effective failed nod",
+          "description": "[US1] Implement target validation for failed run and latest effective failed node in `packages/core/src/operations/workflow-retry.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 32,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T033",
+          "title": "[US1] Implement invalidated target-plus-descendants calculation using current wo",
+          "description": "[US1] Implement invalidated target-plus-descendants calculation using current workflow DAG in `packages/core/src/operations/workflow-retry.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 33,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T034",
+          "title": "[US1] Implement retry CAS from `failed` to `running` with exactly one metadata e",
+          "description": "[US1] Implement retry CAS from `failed` to `running` with exactly one metadata epoch increment in `packages/core/src/db/workflows.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 34,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T035",
+          "title": "[US1] Write mandatory `node_retry_requested` audit event after CAS in `packages/",
+          "description": "[US1] Write mandatory `node_retry_requested` audit event after CAS in `packages/core/src/operations/workflow-retry.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 35,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T036",
+          "title": "[US1] Filter prior completed outputs to exclude invalidated nodes while preservi",
+          "description": "[US1] Filter prior completed outputs to exclude invalidated nodes while preserving upstream/sibling outputs in `packages/core/src/db/workflow-events.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 36,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T037",
+          "title": "[US1] Delete persisted node sessions for every invalidated node and all provider",
+          "description": "[US1] Delete persisted node sessions for every invalidated node and all providers in `packages/core/src/operations/workflow-retry.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 37,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T038",
+          "title": "[US1] Use retry-prepared `preCreatedRun` and filtered `priorCompletedNodes` with",
+          "description": "[US1] Use retry-prepared `preCreatedRun` and filtered `priorCompletedNodes` without foreground resume lookup in `packages/workflows/src/executor.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 38,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T039",
+          "title": "[US1] Ensure DAG execution skips preserved completed nodes and reruns invalidate",
+          "description": "[US1] Ensure DAG execution skips preserved completed nodes and reruns invalidated nodes in `packages/workflows/src/dag-executor.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 39,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T040",
+          "title": "[US1] Restore run status to `failed` and avoid dispatch on retry preparation fai",
+          "description": "[US1] Restore run status to `failed` and avoid dispatch on retry preparation failure in `packages/core/src/operations/workflow-retry.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 40,
+          "passes": true,
+          "notes": ""
+        }
+      ],
+      "tasksIds": ["T032", "T033", "T034", "T035", "T036", "T037", "T038", "T039", "T040"]
+    },
+    {
+      "title": "Phase 4.1: Tests for User Story 2",
+      "completed": true,
+      "tasks": [
+        {
+          "id": "T041",
+          "title": "[P] [US2] Add clean-checkout checkpoint ref test in `packages/git/src/git.test.t",
+          "description": "[P] [US2] Add clean-checkout checkpoint ref test in `packages/git/src/git.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 41,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T042",
+          "title": "[P] [US2] Add tracked-dirty checkpoint commit test excluding untracked files in ",
+          "description": "[P] [US2] Add tracked-dirty checkpoint commit test excluding untracked files in `packages/git/src/git.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 42,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T043",
+          "title": "[P] [US2] Add retry safety ref/commit, checkpoint ref/SHA `git rev-parse --verif",
+          "description": "[P] [US2] Add retry safety ref/commit, checkpoint ref/SHA `git rev-parse --verify <ref-or-sha>^{commit}` validation, invalid/missing ref producing `node_retry_failed` with no dispatch, and `git reset --hard` failure tests in `packages/git/src/git.test.ts` and `packages/core/src/operations/workflow-retry.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 43,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T044",
+          "title": "[P] [US2] Add checkpoint lookup fallback test for target and first upstream depe",
+          "description": "[P] [US2] Add checkpoint lookup fallback test for target and first upstream dependency in `packages/core/src/db/workflow-checkpoints.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 44,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T045",
+          "title": "[P] [US2] Add DAG pre-node checkpoint test for executable node kinds in `package",
+          "description": "[P] [US2] Add DAG pre-node checkpoint test for executable node kinds in `packages/workflows/src/dag-executor.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 45,
+          "passes": true,
+          "notes": ""
+        }
+      ],
+      "tasksIds": ["T041", "T042", "T043", "T044", "T045"]
+    },
+    {
+      "title": "Phase 4.2: Implementation for User Story 2",
+      "completed": true,
+      "tasks": [
+        {
+          "id": "T046",
+          "title": "[US2] Implement tracked-only dirty detection and commit creation in `packages/gi",
+          "description": "[US2] Implement tracked-only dirty detection and commit creation in `packages/git/src/retry-refs.ts`, including immediate non-git repository rejection, missing `user.name`/`user.email` guidance, no stash fallback, and focused T003 coverage for those failures",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 46,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T047",
+          "title": "[US2] Implement `git check-ref-format` validation before checkpoint/safety ref m",
+          "description": "[US2] Implement `git check-ref-format` validation before checkpoint/safety ref mutation in `packages/git/src/retry-refs.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 47,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T048",
+          "title": "[US2] Implement checkpoint ref upsert for clean and dirty checkouts in `packages",
+          "description": "[US2] Implement checkpoint ref upsert for clean and dirty checkouts in `packages/git/src/retry-refs.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 48,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T049",
+          "title": "[US2] Create checkpoints after trigger/`when:` checks and before executable node",
+          "description": "[US2] Create checkpoints after trigger/`when:` checks and before executable node start only when `workflow.mutates_checkout !== false`; add explicit `mutates_checkout: false` no-checkpoint coverage and require retry setup to proceed without checkout reset and emit `node_retry_reset.reset_skipped = true` when no checkpoint exists in `packages/workflows/src/dag-executor.ts` and `packages/core/src/operations/workflow-retry.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 49,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T050",
+          "title": "[US2] Persist node checkpoint rows for command, prompt, bash, script, and loop n",
+          "description": "[US2] Persist node checkpoint rows for command, prompt, bash, script, and loop nodes in `packages/core/src/workflows/store-adapter.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 50,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T051",
+          "title": "[US2] Skip checkpointing for approval/cancel/skipped nodes in `packages/workflow",
+          "description": "[US2] Skip checkpointing for approval/cancel/skipped nodes in `packages/workflows/src/dag-executor.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 51,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T052",
+          "title": "[US2] Implement latest prior checkpoint and first-dependency fallback lookup in ",
+          "description": "[US2] Implement latest prior checkpoint and first-dependency fallback lookup in `packages/core/src/db/workflow-checkpoints.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 52,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T053",
+          "title": "[US2] Create retry safety ref/commit before reset in `packages/core/src/operatio",
+          "description": "[US2] Create retry safety ref/commit before reset in `packages/core/src/operations/workflow-retry.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 53,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T054",
+          "title": "[US2] Reset tracked files to selected checkpoint and never call `git clean` in `",
+          "description": "[US2] Reset tracked files to selected checkpoint and never call `git clean` in `packages/core/src/operations/workflow-retry.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 54,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T055",
+          "title": "[US2] Write `node_retry_reset` after successful safety/ref/reset setup in `packa",
+          "description": "[US2] Write `node_retry_reset` after successful safety/ref/reset setup in `packages/core/src/operations/workflow-retry.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 55,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T056",
+          "title": "[US2] Write `node_retry_failed` with setup phase and error when checkpoint valid",
+          "description": "[US2] Write `node_retry_failed` with setup phase and error when checkpoint validation or reset fails in `packages/core/src/operations/workflow-retry.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 56,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T057",
+          "title": "[US2] Emit warning for parallel mutating executable nodes in one DAG layer in `p",
+          "description": "[US2] Emit warning for parallel mutating executable nodes in one DAG layer in `packages/workflows/src/dag-executor.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 57,
+          "passes": true,
+          "notes": ""
+        }
+      ],
+      "tasksIds": [
+        "T046",
+        "T047",
+        "T048",
+        "T049",
+        "T050",
+        "T051",
+        "T052",
+        "T053",
+        "T054",
+        "T055",
+        "T056",
+        "T057"
+      ]
+    },
+    {
+      "title": "Phase 5.1: Tests for User Story 3",
+      "completed": true,
+      "tasks": [
+        {
+          "id": "T058",
+          "title": "[P] [US3] Add API success, 400, 401, 403, 404, and 409 route tests in `packages/",
+          "description": "[P] [US3] Add API success, 400, 401, 403, 404, and 409 route tests in `packages/server/src/routes/api.workflow-runs.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 58,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T059",
+          "title": "[P] [US3] Add Web-created versus CLI-created retry eligibility route tests in `p",
+          "description": "[P] [US3] Add Web-created versus CLI-created retry eligibility route tests in `packages/server/src/routes/api.workflow-runs.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 59,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T060",
+          "title": "[P] [US3] Add CLI path verification and `--json` rejection tests in `packages/cl",
+          "description": "[P] [US3] Add CLI path verification and `--json` rejection tests in `packages/cli/src/commands/workflow.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 60,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T061",
+          "title": "[P] [US3] Add Web retry eligibility and API wrapper tests in `packages/web/src/l",
+          "description": "[P] [US3] Add Web retry eligibility and API wrapper tests in `packages/web/src/lib/workflow-retry.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 61,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T062",
+          "title": "[P] [US3] Add retry confirmation/loading/error UI tests in `packages/web/src/com",
+          "description": "[P] [US3] Add retry confirmation/loading/error UI tests in `packages/web/src/components/workflows/WorkflowNodeRetryAction.test.tsx`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 62,
+          "passes": true,
+          "notes": ""
+        }
+      ],
+      "tasksIds": ["T058", "T059", "T060", "T061", "T062"]
+    },
+    {
+      "title": "Phase 5.2: Implementation for User Story 3",
+      "completed": true,
+      "tasks": [
+        {
+          "id": "T063",
+          "title": "[US3] Add retry request/response OpenAPI schemas in `packages/server/src/routes/",
+          "description": "[US3] Add retry request/response OpenAPI schemas in `packages/server/src/routes/schemas/workflow.schemas.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 63,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T064",
+          "title": "[US3] Register `POST /api/workflows/runs/{runId}/nodes/{nodeId}/retry` with `reg",
+          "description": "[US3] Register `POST /api/workflows/runs/{runId}/nodes/{nodeId}/retry` with `registerOpenApiRoute(createRoute(...), handler)` in `packages/server/src/routes/api.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 64,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T065",
+          "title": "[US3] Resolve Web auth requester and run owner/admin authorization before mutati",
+          "description": "[US3] Resolve Web auth requester and run owner/admin authorization before mutation in `packages/server/src/routes/api.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 65,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T066",
+          "title": "[US3] Reject Web retry for CLI-created or non-web parent conversations with acti",
+          "description": "[US3] Reject Web retry for CLI-created or non-web parent conversations with actionable CLI text in `packages/server/src/routes/api.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 66,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T067",
+          "title": "[US3] Dispatch retry-specific Web execution using the prepared run instead of `/",
+          "description": "[US3] Dispatch retry-specific Web execution using the prepared run instead of `/workflow run` resume lookup in `packages/server/src/routes/api.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 67,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T068",
+          "title": "[US3] Add `workflow retry-node <run-id> <node-id>` parser/help branch in `packag",
+          "description": "[US3] Add `workflow retry-node <run-id> <node-id>` parser/help branch in `packages/cli/src/cli.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 68,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T069",
+          "title": "[US3] Implement CLI retry-node command, streamed execution, and human output in ",
+          "description": "[US3] Implement CLI retry-node command, streamed execution, and human output in `packages/cli/src/commands/workflow.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 69,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T070",
+          "title": "[US3] Verify CLI working path identity against codebase/worktree contracts befor",
+          "description": "[US3] Verify CLI working path identity against codebase/worktree contracts before mutation in `packages/cli/src/commands/workflow.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 70,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T071",
+          "title": "[US3] Add `retryWorkflowNode(runId, nodeId)` API wrapper in `packages/web/src/li",
+          "description": "[US3] Add `retryWorkflowNode(runId, nodeId)` API wrapper in `packages/web/src/lib/api.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 71,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T072",
+          "title": "[US3] Regenerate frontend OpenAPI declarations in `packages/web/src/lib/api.gene",
+          "description": "[US3] Regenerate frontend OpenAPI declarations in `packages/web/src/lib/api.generated.d.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 72,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T073",
+          "title": "[US3] Add pure Web retry eligibility helpers in `packages/web/src/lib/workflow-r",
+          "description": "[US3] Add pure Web retry eligibility helpers in `packages/web/src/lib/workflow-retry.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 73,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T074",
+          "title": "[US3] Render retry action for eligible failed nodes in `packages/web/src/compone",
+          "description": "[US3] Render retry action for eligible failed nodes in `packages/web/src/components/workflows/WorkflowExecution.tsx`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 74,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T075",
+          "title": "[US3] Add confirmation dialog copy covering tracked reset, safety ref/commit, un",
+          "description": "[US3] Add confirmation dialog copy covering tracked reset, safety ref/commit, untracked preservation, and rerun scope in `packages/web/src/components/workflows/WorkflowNodeRetryAction.tsx`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 75,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T076",
+          "title": "[US3] Invalidate/refetch run and dashboard queries after successful retry in `pa",
+          "description": "[US3] Invalidate/refetch run and dashboard queries after successful retry in `packages/web/src/components/workflows/WorkflowNodeRetryAction.tsx`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 76,
+          "passes": true,
+          "notes": ""
+        }
+      ],
+      "tasksIds": [
+        "T063",
+        "T064",
+        "T065",
+        "T066",
+        "T067",
+        "T068",
+        "T069",
+        "T070",
+        "T071",
+        "T072",
+        "T073",
+        "T074",
+        "T075",
+        "T076"
+      ]
+    },
+    {
+      "title": "Phase 6.1: Tests for User Story 4",
+      "completed": true,
+      "tasks": [
+        {
+          "id": "T077",
+          "title": "[P] [US4] Add epoch-aware output hydration tests in `packages/core/src/db/workfl",
+          "description": "[P] [US4] Add epoch-aware output hydration tests in `packages/core/src/db/workflow-events.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 77,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T078",
+          "title": "[P] [US4] Add run detail `nodeStates` projection tests in `packages/server/src/r",
+          "description": "[P] [US4] Add run detail `nodeStates` projection tests in `packages/server/src/routes/api.workflow-runs.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 78,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T079",
+          "title": "[P] [US4] Add retry epoch artifact path tests in `packages/workflows/src/artifac",
+          "description": "[P] [US4] Add retry epoch artifact path tests in `packages/workflows/src/artifacts-index.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 79,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T080",
+          "title": "[P] [US4] Add dashboard retry-event refetch tests in `packages/server/src/adapte",
+          "description": "[P] [US4] Add dashboard retry-event refetch tests in `packages/server/src/adapters/web/dashboard-event-poller.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 80,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T081",
+          "title": "[P] [US4] Add experimental console retry projection tests in `packages/web/src/e",
+          "description": "[P] [US4] Add experimental console retry projection tests in `packages/web/src/experiments/console/primitives/event.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 81,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T082",
+          "title": "[P] [US4] Add cleanup warning/non-blocking tests for retry refs in `packages/cor",
+          "description": "[P] [US4] Add cleanup warning/non-blocking tests for retry refs in `packages/core/src/services/cleanup-service.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 82,
+          "passes": true,
+          "notes": ""
+        }
+      ],
+      "tasksIds": ["T077", "T078", "T079", "T080", "T081", "T082"]
+    },
+    {
+      "title": "Phase 6.2: Implementation for User Story 4",
+      "completed": true,
+      "tasks": [
+        {
+          "id": "T083",
+          "title": "[US4] Include `retry_epoch` in node lifecycle event data during retry execution ",
+          "description": "[US4] Include `retry_epoch` in node lifecycle event data during retry execution in `packages/workflows/src/dag-executor.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 83,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T084",
+          "title": "[US4] Write epoch `1+` node artifacts under `nodes/epoch-<N>/<nodeId>.*` in `pac",
+          "description": "[US4] Write epoch `1+` node artifacts under `nodes/epoch-<N>/<nodeId>.*` in `packages/workflows/src/dag-executor.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 84,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T085",
+          "title": "[US4] Add server-derived `nodeStates` to run detail responses in `packages/serve",
+          "description": "[US4] Add server-derived `nodeStates` to run detail responses in `packages/server/src/routes/api.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 85,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T086",
+          "title": "[US4] Update Web run graph/detail rendering to prefer server-derived `nodeStates",
+          "description": "[US4] Update Web run graph/detail rendering to prefer server-derived `nodeStates` in `packages/web/src/components/workflows/WorkflowExecution.tsx`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 86,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T087",
+          "title": "[US4] Update experimental console event projection for `node_retry_*` setup even",
+          "description": "[US4] Update experimental console event projection for `node_retry_*` setup events in `packages/web/src/experiments/console/primitives/event.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 87,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T088",
+          "title": "[US4] Map retry events to existing `workflow_status` refetch triggers in `packag",
+          "description": "[US4] Map retry events to existing `workflow_status` refetch triggers in `packages/server/src/adapters/web/workflow-bridge.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 88,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T089",
+          "title": "[US4] Include retry events in dashboard poller whitelist/refetch mapping in `pac",
+          "description": "[US4] Include retry events in dashboard poller whitelist/refetch mapping in `packages/server/src/adapters/web/dashboard-event-poller.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 89,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T090",
+          "title": "[US4] Add checkpoint/safety ref cleanup by run prefix during run deletion in `pa",
+          "description": "[US4] Add checkpoint/safety ref cleanup by run prefix during run deletion in `packages/core/src/db/workflows.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 90,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T091",
+          "title": "[US4] Add checkpoint/safety ref cleanup by run prefix during old-run cleanup in ",
+          "description": "[US4] Add checkpoint/safety ref cleanup by run prefix during old-run cleanup in `packages/core/src/services/cleanup-service.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 91,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T092",
+          "title": "[US4] Keep raw historical events unchanged while using latest epoch for current ",
+          "description": "[US4] Keep raw historical events unchanged while using latest epoch for current status in `packages/core/src/db/workflow-events.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 92,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T093",
+          "title": "[P] Update CLI help/reference text for retry-node in `packages/core/src/orchestr",
+          "description": "[P] Update CLI help/reference text for retry-node in `packages/core/src/orchestrator/prompt-builder.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 93,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T094",
+          "title": "[P] Update workflow docs for manual retry behavior in `packages/docs-web/src/con",
+          "description": "[P] Update workflow docs for manual retry behavior in `packages/docs-web/src/content/docs/book/dag-workflows.md`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 94,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T095",
+          "title": "[P] Add quickstart scenario notes to `specs/001-manual-node-retry-decisions/quic",
+          "description": "[P] Add quickstart scenario notes to `specs/001-manual-node-retry-decisions/quickstart.md`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 95,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T096",
+          "title": "Run focused package tests listed in `specs/001-manual-node-retry-decisions/quick",
+          "description": "Run focused package tests listed in `specs/001-manual-node-retry-decisions/quickstart.md`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 96,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T097",
+          "title": "Run `bun run validate` using root `package.json` and fix failures in touched pac",
+          "description": "Run `bun run validate` using root `package.json` and fix failures in touched package files",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 97,
+          "passes": true,
+          "notes": ""
+        }
+      ],
+      "tasksIds": [
+        "T083",
+        "T084",
+        "T085",
+        "T086",
+        "T087",
+        "T088",
+        "T089",
+        "T090",
+        "T091",
+        "T092",
+        "T093",
+        "T094",
+        "T095",
+        "T096",
+        "T097"
+      ]
+    }
+  ]
+}
