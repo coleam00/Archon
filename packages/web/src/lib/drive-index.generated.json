@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-22T19:00:30+00:00",
+  "generated_at": "2026-06-22T23:00:08+00:00",
   "vault_path": "second-brain/resources/drive-index",
   "count": 22,
   "folders": [
@@ -759,11 +759,18 @@
       "folderId": "1bK_Gsd_hSB3pjwG9r8Po7WM2iInO4Ss7",
       "parentId": "1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
       "audience": "all",
-      "lastSynced": "2026-06-11T20:00:36+00:00",
-      "fileCount": 1,
+      "lastSynced": "2026-06-22T23:00:07+00:00",
+      "fileCount": 2,
       "vaultPath": "second-brain/resources/drive-index/carlos.md",
       "driveUrl": "https://drive.google.com/drive/folders/1bK_Gsd_hSB3pjwG9r8Po7WM2iInO4Ss7",
       "files": [
+        {
+          "name": "jid5274-review-bundle.zip",
+          "type": "zip",
+          "modified": "2026-06-22",
+          "size": "",
+          "link": "https://drive.google.com/file/d/1nSwWPBFcLFir3LxWZMp89kr7XRIGDFSW/view?usp=drivesdk"
+        },
         {
           "name": "Inbox",
           "type": "g-folder",

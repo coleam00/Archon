@@ -28,7 +28,7 @@ interface DriveFolder {
 }
 
 interface DriveIndexPayload {
-  generated_at?: string;
+  generated_at?: unknown;
   folders?: unknown;
 }
 
@@ -61,7 +61,10 @@ function normalizeDriveFolder(value: unknown, index: number): DriveFolder | null
     ? folder.files.map(normalizeDriveFile).filter((file): file is DriveFile => file !== null)
     : [];
   const slug = stringField(folder.slug) || stringField(folder.id) || `folder-${index + 1}`;
-  const fileCount = typeof folder.fileCount === 'number' ? folder.fileCount : files.length;
+  const fileCount =
+    typeof folder.fileCount === 'number' && Number.isFinite(folder.fileCount)
+      ? folder.fileCount
+      : files.length;
   return {
     id: stringField(folder.id) || slug,
     slug,
@@ -90,13 +93,11 @@ function visibleForView(view: string, audience: Audience): boolean {
   return allowed.has(audience);
 }
 
-function formatTimestamp(iso: string): string {
-  if (!iso) return 'never';
-  try {
-    return new Date(iso).toLocaleString();
-  } catch {
-    return iso;
-  }
+function formatTimestamp(value: unknown): string {
+  if (typeof value !== 'string' || !value) return 'never';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
 }
 
 function typeLabel(t: string): string {
@@ -122,7 +123,7 @@ export function DrivePage(): React.ReactElement {
         .map(normalizeDriveFolder)
         .filter((folder): folder is DriveFolder => folder !== null)
     : [];
-  const generatedAt = drivePayload.generated_at ?? '';
+  const generatedAt = drivePayload.generated_at;
 
   // Audience-filter at the folder level
   const visibleFolders = useMemo<DriveFolder[]>(
