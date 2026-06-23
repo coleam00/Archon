@@ -37,22 +37,41 @@ interface PmcProspectContactsPayload {
   prospects?: PmcProspectContact[];
 }
 
+interface BrtSequence {
+  name: string;
+  brand: string;
+  sent: number;
+  replied: number;
+  reply_rate: number;
+  open_rate: number;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function safeNumber(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function isBrtSequence(value: unknown): value is BrtSequence {
+  return isRecord(value) && typeof value.name === 'string' && value.brand === 'BRT';
+}
+
+const playgroundPayload = playgroundData as { sequences?: unknown };
+const safePlaygroundSequences = Array.isArray(playgroundPayload.sequences)
+  ? playgroundPayload.sequences
+  : [];
+
 // Real Apollo sequence data filtered to BRT
-const BRT_SEQUENCES = (
-  (playgroundData.sequences as
-    | {
-        name: string;
-        brand: string;
-        sent: number;
-        opened: number;
-        replied: number;
-        reply_rate: number;
-        open_rate: number;
-        bounce_rate?: number;
-        health_flag?: string;
-      }[]
-    | undefined) ?? []
-).filter(s => s.brand === 'BRT');
+const BRT_SEQUENCES = safePlaygroundSequences.filter(isBrtSequence).map(s => ({
+  name: s.name,
+  brand: s.brand,
+  sent: safeNumber(s.sent, 0),
+  replied: safeNumber(s.replied, 0),
+  reply_rate: safeNumber(s.reply_rate, 0),
+  open_rate: safeNumber(s.open_rate, 0),
+}));
 
 const SEQUENCE_REPLY_DATA = BRT_SEQUENCES.map(s => ({
   name: s.name.length > 22 ? s.name.slice(0, 20) + '…' : s.name,
@@ -85,10 +104,6 @@ function classifyBrtIcp(contact: PmcProspectContact): string {
   if (sequence.includes('chiro')) return 'Chiropractic';
   if (sequence.includes('medspa') || sequence.includes('aesthetic')) return 'Medspa';
   return 'Other';
-}
-
-function safeNumber(value: unknown, fallback: number): number {
-  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
 const prospectContacts = prospectContactsData as Partial<PmcProspectContactsPayload>;
