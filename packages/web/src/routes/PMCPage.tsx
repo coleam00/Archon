@@ -73,11 +73,21 @@ const DIAL_FUNNEL_STAGE_LABELS: Record<string, string> = {
   'meeting-booked': 'Meeting booked',
 };
 
+function isDialFunnelRow(value: unknown): value is { stage: string; count: number } {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value) &&
+    typeof (value as { stage?: unknown }).stage === 'string' &&
+    typeof (value as { count?: unknown }).count === 'number' &&
+    Number.isFinite((value as { count: number }).count)
+  );
+}
+
 function buildDialFunnel(): { stage: string; count: number }[] {
-  const raw = (playgroundData as { outcome_funnel?: { stage: string; count: number }[] })
-    .outcome_funnel;
-  if (!raw || raw.length === 0) return [];
-  return raw.map(r => ({
+  const raw = (playgroundData as { outcome_funnel?: unknown }).outcome_funnel;
+  if (!Array.isArray(raw) || raw.length === 0) return [];
+  return raw.filter(isDialFunnelRow).map(r => ({
     stage: DIAL_FUNNEL_STAGE_LABELS[r.stage] ?? r.stage,
     count: r.count,
   }));
