@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-22T23:00:08+00:00",
+  "generated_at": "2026-06-24T17:01:08+00:00",
   "vault_path": "second-brain/resources/drive-index",
   "count": 22,
   "folders": [
@@ -178,11 +178,18 @@
       "folderId": "1hxiUwSZEGBQA00gVkhHWV1y5IztPVsyl",
       "parentId": "1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
       "audience": "internal",
-      "lastSynced": "2026-06-02T02:35:56+00:00",
-      "fileCount": 67,
+      "lastSynced": "2026-06-24T17:01:08+00:00",
+      "fileCount": 68,
       "vaultPath": "second-brain/resources/drive-index/bioreg-assets.md",
       "driveUrl": "https://drive.google.com/drive/folders/1hxiUwSZEGBQA00gVkhHWV1y5IztPVsyl",
       "files": [
+        {
+          "name": "Michael Cohen NRBS Webinar Prep -- EMDR + Neurofeedback (2026-06-24)",
+          "type": "g-document",
+          "modified": "2026-06-24",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1vF-QPIAs1-6tdHmMWLc3bRXfBmLuDTeeQyuhQm9jyOE/edit?usp=drivesdk"
+        },
         {
           "name": "Scientific Foundations of BRT V1 2026.pdf",
           "type": "pdf",

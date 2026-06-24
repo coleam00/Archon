@@ -5,6 +5,7 @@ import solutionsData from '@/lib/solutions.generated.json';
 
 type Status = 'active' | 'exploring' | 'prospect' | 'dormant' | '';
 type Audience = 'all' | 'internal' | 'partner-only' | 'jason-only';
+type UnknownRecord = Record<string, unknown>;
 
 interface Solution {
   id: string;
@@ -43,6 +44,59 @@ const STATUS_STYLE: Record<string, string> = {
   '': 'bg-surface-inset text-text-secondary border-border',
 };
 
+function isRecord(value: unknown): value is UnknownRecord {
+  return typeof value === 'object' && value !== null;
+}
+
+function stringField(row: UnknownRecord, key: keyof Solution): string {
+  const value = row[key];
+  return typeof value === 'string' ? value : '';
+}
+
+function normalizeStatus(value: unknown): Status {
+  return value === 'active' || value === 'exploring' || value === 'prospect' || value === 'dormant'
+    ? value
+    : '';
+}
+
+function normalizeAudience(value: unknown): Audience {
+  return value === 'all' ||
+    value === 'internal' ||
+    value === 'partner-only' ||
+    value === 'jason-only'
+    ? value
+    : 'jason-only';
+}
+
+function normalizeTags(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((tag): tag is string => typeof tag === 'string' && tag.length > 0);
+}
+
+function normalizeSolution(row: unknown, index: number): Solution | null {
+  if (!isRecord(row)) return null;
+  const slug = stringField(row, 'slug') || stringField(row, 'id');
+  const name = stringField(row, 'name') || slug;
+  if (!slug || !name) return null;
+  return {
+    id: stringField(row, 'id') || slug,
+    slug,
+    name,
+    type: stringField(row, 'type'),
+    category: stringField(row, 'category'),
+    model: stringField(row, 'model'),
+    status: normalizeStatus(row.status),
+    audience: normalizeAudience(row.audience),
+    website: stringField(row, 'website'),
+    tagline: stringField(row, 'tagline'),
+    description: stringField(row, 'description'),
+    keyContact: stringField(row, 'keyContact'),
+    lastTouch: stringField(row, 'lastTouch'),
+    vaultPath: stringField(row, 'vaultPath') || `solutions.generated.json#row-${index + 1}`,
+    tags: normalizeTags(row.tags),
+  };
+}
+
 function formatTimestamp(iso: string): string {
   if (!iso) return 'never';
   const parsed = new Date(iso);
@@ -59,9 +113,13 @@ export function SolutionsPage(): React.ReactElement {
 
   const solutionsPayload = solutionsData as Partial<{
     generated_at: string;
-    solutions: Solution[];
+    solutions: unknown[];
   }>;
-  const allSolutions = Array.isArray(solutionsPayload.solutions) ? solutionsPayload.solutions : [];
+  const allSolutions = Array.isArray(solutionsPayload.solutions)
+    ? solutionsPayload.solutions
+        .map((solution, index) => normalizeSolution(solution, index))
+        .filter((solution): solution is Solution => solution !== null)
+    : [];
   const generatedAt = solutionsPayload.generated_at ?? '';
 
   const visibleSolutions = useMemo<Solution[]>(
