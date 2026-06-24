@@ -239,6 +239,25 @@ export const listArtifactsResponseSchema = z
   })
   .openapi('ListArtifactsResponse');
 
+/** POST /api/workflows/import/n8n request body. */
+export const importN8nBodySchema = z
+  .object({
+    /** The raw n8n workflow JSON export (parsed — not a string). */
+    n8nJson: z.record(z.string(), z.unknown()),
+    /** Optional project root override (defaults to server cwd). Not used by server-side endpoint — returned in response only. */
+    cwd: z.string().optional(),
+  })
+  .openapi('ImportN8nBody');
+
+/** POST /api/workflows/import/n8n response. */
+export const importN8nResponseSchema = z
+  .object({
+    yaml: z.string(),
+    workflowName: z.string(),
+    warnings: z.array(z.string()),
+  })
+  .openapi('ImportN8nResponse');
+
 /** GET /api/dashboard/runs query params. */
 export const dashboardRunsQuerySchema = z.object({
   // z.string() — handler validates the enum value and ignores invalid values

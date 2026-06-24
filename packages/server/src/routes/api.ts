@@ -128,6 +128,8 @@ import {
   resetWorkflowNodeSessionsQuerySchema,
   resetWorkflowNodeSessionsResponseSchema,
   listArtifactsResponseSchema,
+  importN8nBodySchema,
+  importN8nResponseSchema,
 } from './schemas/workflow.schemas';
 import {
   conversationListResponseSchema,
@@ -276,6 +278,27 @@ const validateWorkflowRoute = createRoute({
     200: {
       content: { 'application/json': { schema: validateWorkflowResponseSchema } },
       description: 'Validation result',
+    },
+    400: jsonError('Bad request'),
+    500: jsonError('Server error'),
+  },
+});
+
+const importN8nRoute = createRoute({
+  method: 'post',
+  path: '/api/workflows/import/n8n',
+  tags: ['Workflows'],
+  summary: 'Convert an n8n workflow JSON export to Archon YAML',
+  request: {
+    body: {
+      content: { 'application/json': { schema: importN8nBodySchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: importN8nResponseSchema } },
+      description: 'Conversion result — YAML string + warnings',
     },
     400: jsonError('Bad request'),
     500: jsonError('Server error'),
@@ -3489,6 +3512,33 @@ export function registerApiRoutes(
       getLog().error({ err }, 'workflow.validate_failed');
       return apiError(c, 500, 'Failed to validate workflow');
     }
+  });
+
+  // POST /api/workflows/import/n8n - Convert n8n workflow JSON to Archon YAML
+  // Must be registered before GET /api/workflows/:name so the static path isn't treated as :name
+  registerOpenApiRoute(importN8nRoute, async c => {
+    const { convertN8nToArchon } = await import('@archon/workflows/n8n-converter');
+    const { n8nJson } = getValidatedBody(c, importN8nBodySchema);
+
+    let result: Awaited<ReturnType<typeof convertN8nToArchon>>;
+    try {
+      result = convertN8nToArchon(n8nJson);
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      getLog().error({ err }, 'api.n8n_convert_failed');
+      return apiError(c, 400, 'Failed to convert n8n workflow');
+    }
+
+    let yaml: string;
+    try {
+      yaml = Bun.YAML.stringify(JSON.parse(JSON.stringify(result.workflow)));
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      getLog().error({ err }, 'api.n8n_yaml_serialize_failed');
+      return apiError(c, 500, 'Failed to serialize converted workflow to YAML');
+    }
+
+    return c.json({ yaml, workflowName: result.workflow.name, warnings: result.warnings });
   });
 
   // GET /api/workflows/:name - Fetch a single workflow definition

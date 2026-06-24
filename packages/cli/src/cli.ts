@@ -55,6 +55,7 @@ import {
   workflowEventEmitCommand,
   workflowSearchCommand,
   workflowInstallCommand,
+  workflowImportN8nCommand,
   isValidEventType,
 } from './commands/workflow';
 import { WORKFLOW_EVENT_TYPES } from '@archon/workflows/store';
@@ -296,6 +297,7 @@ async function main(): Promise<number> {
         node: { type: 'string' },
         yes: { type: 'boolean' },
         force: { type: 'boolean' },
+        out: { type: 'string' },
         'conversation-id': { type: 'string' },
         detach: { type: 'boolean' },
         all: { type: 'boolean' },
@@ -693,6 +695,28 @@ async function main(): Promise<number> {
             break;
           }
 
+          case 'import': {
+            const importFormat = positionals[2];
+            if (importFormat !== 'n8n') {
+              console.error(
+                importFormat
+                  ? `Unknown import format: ${importFormat}. Available: n8n`
+                  : 'Usage: archon workflow import n8n <file.json> [--out <name>] [--cwd <path>]'
+              );
+              return 1;
+            }
+            const importFile = positionals[3];
+            if (!importFile) {
+              console.error(
+                'Usage: archon workflow import n8n <file.json> [--out <name>] [--cwd <path>]'
+              );
+              return 1;
+            }
+            const outName = values.out as string | undefined;
+            await workflowImportN8nCommand(importFile, { out: outName, cwd: effectiveCwd });
+            break;
+          }
+
           default:
             if (subcommand === undefined) {
               console.error('Missing workflow subcommand');
@@ -700,7 +724,7 @@ async function main(): Promise<number> {
               console.error(`Unknown workflow subcommand: ${subcommand}`);
             }
             console.error(
-              'Available: list, run, status, get, runs, resume, abandon, approve, reject, cleanup, event, search, install'
+              'Available: list, run, status, get, runs, resume, abandon, approve, reject, cleanup, event, search, install, import'
             );
             return 1;
         }

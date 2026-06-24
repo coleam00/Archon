@@ -2175,3 +2175,65 @@ async function installDirectory(
 
   console.log(`Installed '${entry.name}' (${String(installedCount)} files)`);
 }
+
+// ---------------------------------------------------------------------------
+// workflowImportN8nCommand
+// ---------------------------------------------------------------------------
+
+/**
+ * Convert an n8n workflow JSON file to Archon YAML and write it to the project's
+ * .archon/workflows/ directory.
+ */
+export async function workflowImportN8nCommand(
+  filePath: string,
+  options: { out?: string; cwd?: string } = {}
+): Promise<void> {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const { convertN8nToArchon } = await import('@archon/workflows/n8n-converter');
+  const { findRepoRoot } = await import('@archon/git');
+
+  const effectiveCwd = options.cwd ? path.resolve(options.cwd) : process.cwd();
+  const absoluteFilePath = path.resolve(effectiveCwd, filePath);
+
+  if (!fs.existsSync(absoluteFilePath)) {
+    console.error(`Error: File not found: ${absoluteFilePath}`);
+    process.exit(1);
+  }
+
+  let n8nJson: unknown;
+  try {
+    const raw = fs.readFileSync(absoluteFilePath, 'utf-8');
+    n8nJson = JSON.parse(raw);
+  } catch {
+    console.error(`Error: Could not parse ${path.basename(absoluteFilePath)} as JSON`);
+    process.exit(1);
+  }
+
+  const { workflow, warnings } = convertN8nToArchon(n8nJson);
+
+  for (const w of warnings) {
+    console.warn(`Warning: ${w}`);
+  }
+
+  // Resolve output directory: prefer repo root .archon/workflows/, fall back to cwd
+  let repoRoot: string;
+  try {
+    const root = await findRepoRoot(effectiveCwd);
+    repoRoot = root ?? effectiveCwd;
+  } catch {
+    repoRoot = effectiveCwd;
+  }
+
+  const outDir = path.join(repoRoot, '.archon', 'workflows');
+  fs.mkdirSync(outDir, { recursive: true });
+
+  const outName = options.out ?? workflow.name;
+  const outFile = path.join(outDir, `${outName}.yaml`);
+
+  // Serialize to YAML — strip undefined fields so the output is clean
+  const yaml = Bun.YAML.stringify(JSON.parse(JSON.stringify(workflow)));
+
+  fs.writeFileSync(outFile, yaml, 'utf-8');
+  console.log(`Written: ${outFile}`);
+}
