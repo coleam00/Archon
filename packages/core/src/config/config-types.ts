@@ -63,6 +63,22 @@ export type AssistantDefaults = ProviderDefaultsMap & {
   codex: CodexProviderDefaults;
 };
 
+/**
+ * A specialist "god" registered for workflow dispatch.
+ * When configured, the chat assistant learns who each god is
+ * and which Archon workflows to invoke for their domain.
+ */
+export interface GodDefinition {
+  /** Unique identifier (e.g. 'thoth', 'hephaestus') */
+  id: string;
+  /** Human-readable name shown in the system prompt */
+  displayName: string;
+  /** One-line role description (e.g. 'Research specialist') */
+  description: string;
+  /** Archon workflow names the assistant should dispatch to for this god */
+  workflows?: string[];
+}
+
 export interface GlobalConfig {
   /**
    * Bot display name (shown in messages)
@@ -93,6 +109,13 @@ export interface GlobalConfig {
    * workflow/node `model:` fields.
    */
   tiers?: RawTiersConfig;
+
+  /**
+   * Specialist god definitions for the Conductor persona.
+   * Each god is injected into the chat system prompt so the assistant
+   * knows who to dispatch to for specialist work.
+   */
+  gods?: GodDefinition[];
 
   /**
    * Platform streaming preferences (can be overridden per conversation)
@@ -153,6 +176,12 @@ export interface RepoConfig {
 
   /** Repo-level model tier presets — override global tiers with same name. */
   tiers?: RawTiersConfig;
+
+  /**
+   * Repo-level specialist god definitions — override global gods with same id,
+   * remainder are appended.
+   */
+  gods?: GodDefinition[];
 
   /**
    * Commands configuration
@@ -339,6 +368,12 @@ export interface MergedConfig {
    * Undefined when no env vars are configured.
    */
   envVars?: Record<string, string>;
+
+  /**
+   * Merged god definitions (repo overrides global by id).
+   * Always present (empty array when no gods configured).
+   */
+  gods: GodDefinition[];
 }
 
 /**

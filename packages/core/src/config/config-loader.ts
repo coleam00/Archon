@@ -37,6 +37,7 @@ import type {
   AssistantDefaultsConfig,
   RawAliasesConfig,
   RawTiersConfig,
+  GodDefinition,
 } from './config-types';
 import { createLogger } from '@archon/paths';
 import {
@@ -95,6 +96,16 @@ function mergeTiers(
 ): RawTiersConfig | undefined {
   if (!base && !overrides) return undefined;
   return { ...base, ...overrides };
+}
+
+/**
+ * Merge god arrays: overrides replace base entries with the same id;
+ * remaining base entries are preserved; new overrides are appended.
+ */
+function mergeGods(base: GodDefinition[], overrides: GodDefinition[]): GodDefinition[] {
+  if (overrides.length === 0) return base;
+  const overrideIds = new Set(overrides.map(g => g.id));
+  return [...base.filter(g => !overrideIds.has(g.id)), ...overrides];
 }
 
 function mergeAssistantDefaults(
@@ -386,6 +397,7 @@ function getDefaults(): MergedConfig {
       loadDefaultCommands: true,
       loadDefaultWorkflows: true,
     },
+    gods: [],
   };
 }
 
@@ -492,6 +504,10 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
   result.aliases = mergeAliases(result.aliases, global.aliases);
   result.tiers = mergeTiers(result.tiers, global.tiers);
 
+  if (global.gods?.length) {
+    result.gods = mergeGods(result.gods, global.gods);
+  }
+
   // Streaming preferences
   if (global.streaming) {
     if (global.streaming.telegram) result.streaming.telegram = global.streaming.telegram;
@@ -538,6 +554,10 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
 
   result.aliases = mergeAliases(result.aliases, repo.aliases);
   result.tiers = mergeTiers(result.tiers, repo.tiers);
+
+  if (repo.gods?.length) {
+    result.gods = mergeGods(result.gods, repo.gods);
+  }
 
   // Commands config
   if (repo.commands) {
