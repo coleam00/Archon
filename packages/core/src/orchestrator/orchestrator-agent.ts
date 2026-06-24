@@ -1316,7 +1316,12 @@ export async function handleMessage(
 
     // Claude supports the preset object for prompt caching; other providers
     // need a plain string (Pi coerces non-string to undefined, Codex ignores it).
-    let systemAppend = buildOrchestratorSystemAppend(conversation, codebases, workflows, config.gods);
+    let systemAppend = buildOrchestratorSystemAppend(
+      conversation,
+      codebases,
+      workflows,
+      config.gods ?? []
+    );
     // Capabilities are only consulted for project-scoped chats (both the native tool
     // and the CLI pointer are scoped features), so look them up lazily — this also
     // avoids a registry lookup (and a throw for an unregistered provider) on the

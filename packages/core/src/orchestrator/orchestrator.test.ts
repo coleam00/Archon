@@ -677,6 +677,7 @@ describe('orchestrator-agent handleMessage', () => {
       expect(mockBuildOrchestratorSystemAppend).toHaveBeenCalledWith(
         expect.objectContaining({ id: expect.any(String) }),
         [mockCodebase],
+        expect.any(Array),
         expect.any(Array)
       );
     });
@@ -695,6 +696,7 @@ describe('orchestrator-agent handleMessage', () => {
       expect(mockBuildOrchestratorSystemAppend).toHaveBeenCalledWith(
         expect.objectContaining({ codebase_id: 'codebase-789' }),
         [mockCodebase],
+        expect.any(Array),
         expect.any(Array)
       );
     });
