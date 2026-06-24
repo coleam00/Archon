@@ -88,16 +88,86 @@ function channelTone(channel: string): string {
   return 'border-border bg-card text-text-tertiary';
 }
 
-function safeTextList(values?: string[]): string[] {
-  return Array.isArray(values) ? values.filter(Boolean) : [];
+function safeTextList(values: unknown): string[] {
+  return Array.isArray(values)
+    ? values.filter((value): value is string => typeof value === 'string')
+    : [];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function isProspectContact(value: unknown): value is PmcProspectContact {
-  return isRecord(value);
+function stringField(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function numberField(record: Record<string, unknown>, key: string): number | undefined {
+  const value = record[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function booleanField(record: Record<string, unknown>, key: string): boolean | undefined {
+  const value = record[key];
+  return typeof value === 'boolean' ? value : undefined;
+}
+
+function normalizeProspectContact(value: unknown, index: number): PmcProspectContact | null {
+  if (!isRecord(value)) return null;
+  const brandFit = safeTextList(value.brand_fit);
+  const channelsCovered = safeTextList(value.channels_covered);
+  const id = stringField(value, 'id') ?? `pmc-prospect-${index + 1}`;
+  const name =
+    stringField(value, 'name') ??
+    stringField(value, 'company') ??
+    stringField(value, 'email') ??
+    `Unnamed prospect ${index + 1}`;
+
+  return {
+    id,
+    name,
+    company: stringField(value, 'company'),
+    title: stringField(value, 'title'),
+    specialty: stringField(value, 'specialty'),
+    email: stringField(value, 'email'),
+    phone: stringField(value, 'phone'),
+    linkedin_url: stringField(value, 'linkedin_url'),
+    website: stringField(value, 'website'),
+    city: stringField(value, 'city'),
+    state: stringField(value, 'state'),
+    source: stringField(value, 'source'),
+    priority: stringField(value, 'priority'),
+    apollo_sequence_name: stringField(value, 'apollo_sequence_name'),
+    apollo_last_open: stringField(value, 'apollo_last_open'),
+    apollo_last_reply: stringField(value, 'apollo_last_reply'),
+    apollo_replies: numberField(value, 'apollo_replies'),
+    apollo_opens: numberField(value, 'apollo_opens'),
+    salesnav_present: booleanField(value, 'salesnav_present'),
+    salesnav_thread_summary: stringField(value, 'salesnav_thread_summary'),
+    heyreach_present: booleanField(value, 'heyreach_present'),
+    dial_last_attempt: stringField(value, 'dial_last_attempt'),
+    dial_last_outcome: stringField(value, 'dial_last_outcome'),
+    dial_attempt_count: numberField(value, 'dial_attempt_count'),
+    notes: stringField(value, 'notes'),
+    dial_notes: stringField(value, 'dial_notes'),
+    brand_fit: brandFit,
+    approach_angle: stringField(value, 'approach_angle'),
+    engagement_subjects: safeTextList(value.engagement_subjects),
+    channels_covered: channelsCovered,
+    channels_open: safeTextList(value.channels_open),
+    channels_covered_count: numberField(value, 'channels_covered_count') ?? channelsCovered.length,
+    missing_fields: safeTextList(value.missing_fields),
+    latest_engagement: stringField(value, 'latest_engagement'),
+    latest_outcome: stringField(value, 'latest_outcome'),
+    strategic_state: stringField(value, 'strategic_state'),
+    next_action: stringField(value, 'next_action'),
+    stop_by_this_week: booleanField(value, 'stop_by_this_week'),
+  };
+}
+
+function isProspectContact(value: PmcProspectContact | null): value is PmcProspectContact {
+  return value !== null;
 }
 
 function safeMetricRecord(value: unknown): Record<string, number> {
@@ -116,7 +186,7 @@ export function PMCProspectsPage(): React.ReactElement {
     totals?: unknown;
   };
   const prospectContacts = Array.isArray(prospectContactsPayload.prospects)
-    ? prospectContactsPayload.prospects.filter(isProspectContact)
+    ? prospectContactsPayload.prospects.map(normalizeProspectContact).filter(isProspectContact)
     : [];
   const prospectContactTotals = safeMetricRecord(prospectContactsPayload.totals);
   const prospectBrandOptions = useMemo(() => {
