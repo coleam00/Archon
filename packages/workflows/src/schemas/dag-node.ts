@@ -343,9 +343,42 @@ export type CancelNode = z.infer<typeof cancelNodeSchema> & {
   loop?: never;
   approval?: never;
   script?: never;
+  webhook?: never;
 };
 
-/** A single node in a DAG workflow. command, prompt, bash, loop, approval, cancel, and script are mutually exclusive. */
+/**
+ * Webhook node config — pauses the workflow and waits for an external HTTP POST.
+ * The POST payload is captured as the node's output string (JSON-serialized).
+ */
+export const webhookNodeConfigSchema = z.object({
+  /** Optional instructions shown/logged when the workflow is waiting for the trigger */
+  message: z.string().optional(),
+  /** How long to wait before timing out (ms). Default: 3_600_000 (1 hour). */
+  timeout: z.number().positive().optional(),
+});
+
+export type WebhookNodeConfig = z.infer<typeof webhookNodeConfigSchema>;
+
+/**
+ * Webhook node schema — pauses execution until an external system POSTs to the trigger URL.
+ * Extends full base for type compatibility; AI-specific fields are ignored at runtime.
+ */
+export const webhookNodeSchema = dagNodeBaseSchema.extend({
+  webhook: webhookNodeConfigSchema,
+});
+
+/** DAG node that pauses the workflow and waits for an inbound HTTP trigger */
+export type WebhookNode = z.infer<typeof webhookNodeSchema> & {
+  command?: never;
+  prompt?: never;
+  bash?: never;
+  loop?: never;
+  approval?: never;
+  cancel?: never;
+  script?: never;
+};
+
+/** A single node in a DAG workflow. command, prompt, bash, loop, approval, cancel, script, and webhook are mutually exclusive. */
 export type DagNode =
   | CommandNode
   | PromptNode
@@ -353,7 +386,8 @@ export type DagNode =
   | LoopNode
   | ApprovalNode
   | CancelNode
-  | ScriptNode;
+  | ScriptNode
+  | WebhookNode;
 
 // ---------------------------------------------------------------------------
 // AI-specific fields that are meaningless on non-AI nodes
@@ -433,6 +467,8 @@ export const dagNodeSchema = dagNodeBaseSchema
     deps: z.array(z.string().min(1, 'each dep must be a non-empty string')).optional(),
     // Bash/Script shared
     timeout: z.number().optional(),
+    // Webhook node config
+    webhook: webhookNodeConfigSchema.optional(),
   })
   .superRefine((data, ctx) => {
     const id = data.id.trim();
@@ -454,6 +490,7 @@ export const dagNodeSchema = dagNodeBaseSchema
     const hasApproval = data.approval !== undefined;
     const hasCancel = typeof data.cancel === 'string' && data.cancel.trim().length > 0;
     const hasScript = typeof data.script === 'string' && data.script.trim().length > 0;
+    const hasWebhook = data.webhook !== undefined;
 
     const modeCount = [
       hasCommand,
@@ -463,13 +500,14 @@ export const dagNodeSchema = dagNodeBaseSchema
       hasApproval,
       hasCancel,
       hasScript,
+      hasWebhook,
     ].filter(Boolean).length;
 
     if (modeCount > 1) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
-          "'command', 'prompt', 'bash', 'loop', 'approval', 'cancel', and 'script' are mutually exclusive",
+          "'command', 'prompt', 'bash', 'loop', 'approval', 'cancel', 'script', and 'webhook' are mutually exclusive",
       });
       return z.NEVER;
     }
@@ -501,7 +539,7 @@ export const dagNodeSchema = dagNodeBaseSchema
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
-          "must have either 'command', 'prompt', 'bash', 'loop', 'approval', 'cancel', or 'script'",
+          "must have either 'command', 'prompt', 'bash', 'loop', 'approval', 'cancel', 'script', or 'webhook'",
       });
       return z.NEVER;
     }
@@ -640,6 +678,9 @@ export const dagNodeSchema = dagNodeBaseSchema
     if (data.cancel !== undefined && data.cancel.trim().length > 0) {
       return { ...base, ...shared, cancel: data.cancel.trim() } as CancelNode;
     }
+    if (data.webhook !== undefined) {
+      return { ...base, ...shared, webhook: data.webhook } as WebhookNode;
+    }
     // loop — guaranteed by superRefine to be defined at this point
     if (!data.loop) throw new Error('unreachable: loop must be defined after superRefine');
     return { ...base, loop: data.loop } as LoopNode;
@@ -675,6 +716,11 @@ export function isScriptNode(node: DagNode): node is ScriptNode {
   return 'script' in node && typeof node.script === 'string';
 }
 
+/** Type guard: check if a DAG node is a webhook (external trigger) node */
+export function isWebhookNode(node: DagNode): node is WebhookNode {
+  return 'webhook' in node && typeof node.webhook === 'object' && node.webhook !== null;
+}
+
 /** Type guard: validates a value is a known TriggerRule */
 export function isTriggerRule(value: unknown): value is TriggerRule {
   return typeof value === 'string' && (TRIGGER_RULES as readonly string[]).includes(value);
@@ -694,6 +740,7 @@ export function isPersistableNode(node: DagNode): boolean {
     !isApprovalNode(node) &&
     !isCancelNode(node) &&
     !isScriptNode(node) &&
-    !isBashNode(node)
+    !isBashNode(node) &&
+    !isWebhookNode(node)
   );
 }
