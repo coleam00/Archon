@@ -1,0 +1,144 @@
+{
+  "project": "Archon",
+  "branchName": "ralph/conductor-archon-extensions",
+  "prdFile": "prd.md",
+  "description": "Add god-registry system prompts, webhook DAG node type, and n8n workflow importer to Archon for the Conductor application",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "God registry config types",
+      "description": "As an operator, I want to declare a list of specialist 'gods' in my Archon config so that the chat assistant knows who they are and which workflows to dispatch to them.",
+      "acceptanceCriteria": [
+        "Add `GodDefinition` interface (id, displayName, description, workflows?: string[]) to `packages/core/src/config/config-types.ts`",
+        "`GlobalConfig` and `RepoConfig` gain an optional `gods?: GodDefinition[]` field",
+        "`MergedConfig` gains a required `gods: GodDefinition[]` field (defaults to `[]` when absent)",
+        "`loadConfig()` in `config-loader.ts` merges god entries: repo gods override global gods by `id`, remainder are appended",
+        "Type-check passes with zero errors",
+        "Tests pass"
+      ],
+      "technicalNotes": "Extend `packages/core/src/config/config-types.ts` at the `GlobalConfig` interface (line 66) and `RepoConfig` (line 139) and `MergedConfig` (line 285). Update `packages/core/src/config/config-loader.ts` to merge the god arrays. No Zod schema needed here — config-types.ts uses plain TypeScript interfaces parsed by YAML loader.",
+      "dependsOn": [],
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-002",
+      "title": "formatGodsSection() and prompt-builder integration",
+      "description": "As an operator, I want the chat's system prompt to include the registered gods and their dispatch workflows so the assistant knows who to call for specialist work.",
+      "acceptanceCriteria": [
+        "Add `formatGodsSection(gods: GodDefinition[]): string` to `packages/core/src/orchestrator/prompt-builder.ts`",
+        "Returns `''` when `gods` is empty — no section injected",
+        "Returns a `## Known Specialists` section with each god's displayName, description, and workflow list when non-empty",
+        "`buildOrchestratorPrompt()` includes the gods section between the workflows section and routing rules (only when non-empty)",
+        "`buildProjectScopedPrompt()` includes the gods section in the same position",
+        "`buildOrchestratorSystemAppend()` passes `config.gods` through to both prompt builders",
+        "Unit tests cover: empty gods array returns no section, one god with no workflows, two gods with overlapping workflows",
+        "Type-check passes, lint passes, tests pass"
+      ],
+      "technicalNotes": "Mirror `formatWorkflowSection()` at `prompt-builder.ts:25-38`. The section appears after workflows and before routing rules. `buildOrchestratorSystemAppend()` at line 253 must receive the gods array — update its signature and all callers in `orchestrator-agent.ts`. Pass `mergedConfig.gods` (default `[]`) from the orchestrator.",
+      "dependsOn": ["US-001"],
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "title": "Conductor persona bundled default command",
+      "description": "As an operator, I want a Conductor persona system prompt available as a bundled Archon command so I can load it into the chat without writing it myself.",
+      "acceptanceCriteria": [
+        "New file `.archon/commands/defaults/conductor-persona.md` exists with a ≥100-word system prompt covering: Conductor voice, routing doctrine (answer directly vs. dispatch to god workflow), refusal to drift outside the ledger, and the ledger-shape metaphor",
+        "`bun run generate:bundled` runs without error and the new file appears in `bundled-defaults.generated.ts`",
+        "`bun run validate` passes (checks `check:bundled`)",
+        "Type-check passes, lint passes, tests pass"
+      ],
+      "technicalNotes": "Follow the exact format of existing defaults like `.archon/commands/defaults/archon-assist.md`. After adding the file, run `bun run generate:bundled` to regenerate `packages/workflows/src/defaults/bundled-defaults.generated.ts`. The conductor-persona command is invokable as a `command:` node in any workflow or directly from chat.",
+      "dependsOn": [],
+      "priority": 3,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "WebhookNode Zod schema",
+      "description": "As a workflow author, I want a `webhook:` node type in the DAG schema so I can pause a workflow and wait for an external HTTP POST before continuing.",
+      "acceptanceCriteria": [
+        "Add `webhookNodeConfigSchema` (message?: string, timeout?: number) to `packages/workflows/src/schemas/dag-node.ts`",
+        "Add `webhookNodeSchema` extending `dagNodeBaseSchema` with `webhook: webhookNodeConfigSchema`",
+        "Add `WebhookNode` type derived via `z.infer`",
+        "`DagNode` union includes `WebhookNode`",
+        "The `superRefine` mutual-exclusivity check includes `webhook` in the mode-field list",
+        "Add `isWebhookNode(node: DagNode): node is WebhookNode` type guard, exported from `packages/workflows/src/schemas/index.ts`",
+        "CLAUDE.md node type list (both the schema file docstring and any relevant docs) updated to mention `webhook:`",
+        "Unit test: valid webhook node parses without error; node with both `webhook` and `prompt` fails validation",
+        "Type-check passes, lint passes, tests pass"
+      ],
+      "technicalNotes": "Follow the `approvalNodeSchema` pattern at `dag-node.ts:312-328`. The discriminant is presence of the `webhook` key (same flat-schema + superRefine approach — no explicit `type:` discriminant). `timeout` defaults to `3_600_000` (1 hour) at executor time, not schema time. Export `isWebhookNode` alongside `isApprovalNode` etc. in `packages/workflows/src/schemas/index.ts`.",
+      "dependsOn": [],
+      "priority": 4,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-005",
+      "title": "Webhook HTTP receiver endpoint + DAG executor support",
+      "description": "As an external system (Zapier, n8n, GitHub Actions), I want to POST to a URL and have a paused Archon workflow resume with my payload as the node's output.",
+      "acceptanceCriteria": [
+        "New endpoint `POST /webhooks/workflow/:runId/:nodeId` in `packages/server/src/routes/api.ts` (or a dedicated webhooks router) accepts any JSON body, stores a `webhook_triggered` event in `workflow_events` with the payload, returns `{ received: true }`",
+        "Endpoint returns 404 when `runId` does not exist, 409 when the run is not in `paused` status",
+        "DAG executor in `packages/workflows/src/dag-executor.ts` handles `WebhookNode`: on reach, emits `webhook_registered` platform event with trigger URL, sets node to pending/paused state",
+        "Executor polls `workflow_events` for a `webhook_triggered` event matching `(runId, nodeId)`; on receipt, captures event payload as node output string (JSON-serialized)",
+        "If no event arrives within `webhook.timeout` ms (default 1 hour), node fails with a `WebhookTimeoutError` and the workflow run transitions to `failed`",
+        "Webhook URL format in the platform event: `/webhooks/workflow/{runId}/{nodeId}`",
+        "Unit test: `isWebhookNode()` guard routes correctly in executor switch; timeout path emits error",
+        "Type-check passes, lint passes, tests pass"
+      ],
+      "technicalNotes": "Mirror the ApprovalNode pause/resume pattern in `dag-executor.ts`. The receiver endpoint must NOT use `registerOpenApiRoute` if it accepts arbitrary JSON bodies without a fixed schema — use `app.post(...)` with an explanatory comment per the CLAUDE.md wildcard/raw-body exception. Poll `deps.store.getWorkflowEvents(runId, 'webhook_triggered')` (or equivalent store method). The `IWorkflowStore` interface may need a `getLatestWebhookTrigger(runId: string, nodeId: string)` method; add it and implement for both SQLite and PostgreSQL adapters.",
+      "dependsOn": ["US-004"],
+      "priority": 5,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-006",
+      "title": "n8n-to-Archon converter utility",
+      "description": "As an operator with existing n8n workflows, I want a converter that reads n8n JSON and produces valid Archon YAML so I can migrate without manual translation.",
+      "acceptanceCriteria": [
+        "New file `packages/cli/src/commands/n8n-converter.ts` (or `packages/workflows/src/n8n-converter.ts`) exports `convertN8nToArchon(n8nJson: unknown): ConversionResult`",
+        "`ConversionResult` is `{ workflow: WorkflowDefinition; warnings: string[] }`",
+        "Converter maps these n8n node types to Archon equivalents: `n8n-nodes-base.OpenAiChat` → `prompt:`, `n8n-nodes-base.Code` → `bash:` or `script:`, `n8n-nodes-base.HttpRequest` → `bash:` (curl), `n8n-nodes-base.Wait` → `approval:`, any unmapped type → `bash:` stub with `# TODO: map from n8n type <X>` comment and a warning",
+        "n8n node connections (`connections` field) are translated to `depends_on` arrays",
+        "Workflow name is derived from n8n JSON `name` field (kebab-cased)",
+        "Converter returns `{ workflow, warnings }` — never throws on unknown node types (degrades gracefully to stub)",
+        "Unit test with a 3-node n8n fixture (one mapped type, one unmapped): verifies node count, depends_on edges, warning for unmapped node",
+        "Type-check passes, lint passes, tests pass"
+      ],
+      "technicalNotes": "Import `WorkflowDefinition` from `@archon/workflows/schemas/workflow`. The n8n JSON format has `nodes: [{id, name, type, parameters, position}]` and `connections: {[sourceNodeName]: {main: [[{node, type, index}]]}}`. Each n8n node becomes a DAG node; connections become `depends_on`. No I/O in the converter — pure function. Use a `Map<string, string>` node-type table for clean extension later.",
+      "dependsOn": [],
+      "priority": 6,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-007",
+      "title": "`archon workflow import n8n` CLI command + REST endpoint",
+      "description": "As an operator, I want to run `archon workflow import n8n <file.json>` (or call a REST endpoint) to convert and save an n8n workflow to my project's `.archon/workflows/` directory.",
+      "acceptanceCriteria": [
+        "CLI: `archon workflow import n8n <file>` reads the file, calls `convertN8nToArchon()`, writes the YAML to `.archon/workflows/<workflow-name>.yaml` in the current project, prints any warnings",
+        "CLI option `--out <name>` overrides the output filename (without `.yaml` extension)",
+        "CLI option `--cwd <path>` sets the project root (defaults to `process.cwd()`)",
+        "CLI fails with a clear error if the input file does not exist or is not valid JSON",
+        "CLI prints the written file path on success",
+        "REST: `POST /api/workflows/import/n8n` accepts `{ n8nJson: object, cwd?: string }` JSON body, calls converter, returns `{ yaml: string, warnings: string[], workflowName: string }`",
+        "REST endpoint is registered via `registerOpenApiRoute(createRoute({...}), handler)` with a Zod body schema",
+        "REST returns 400 with `{ error: string }` when input is not valid n8n JSON",
+        "Type-check passes, lint passes, tests pass"
+      ],
+      "technicalNotes": "Add `workflowImportN8nCommand(cwd, filePath, options)` to `packages/cli/src/commands/workflow.ts` following the style of `workflowListCommand` (line 348). Register the `import n8n` subcommand in the CLI entry point at `packages/cli/src/cli.ts`. For the REST endpoint, add it near the other workflow routes in `packages/server/src/routes/api.ts`; the Zod body schema wraps the n8n JSON as `z.record(z.string(), z.unknown())`. The REST endpoint does NOT write to disk — it returns YAML for the client to preview.",
+      "dependsOn": ["US-006"],
+      "priority": 7,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}
