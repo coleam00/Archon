@@ -190,10 +190,15 @@ const STRATEGIC_STATE_TONE: Record<string, string> = {
   dead: 'border-red-700/40 bg-red-100 text-red-800',
 };
 
-function formatProspectDate(value?: string): string {
-  if (!value) return 'n/a';
+function formatProspectDate(value: unknown): string {
+  if (typeof value !== 'string' && typeof value !== 'number' && !(value instanceof Date)) {
+    return 'n/a';
+  }
+  if (typeof value === 'string' && value.trim().length === 0) return 'n/a';
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value.slice(0, 10);
+  if (Number.isNaN(date.getTime())) {
+    return typeof value === 'string' ? value.slice(0, 10) : 'n/a';
+  }
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
