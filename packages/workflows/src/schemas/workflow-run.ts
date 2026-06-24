@@ -125,8 +125,8 @@ export type WorkflowRun = z.infer<typeof workflowRunSchema>;
 export interface ApprovalContext {
   nodeId: string;
   message: string;
-  /** Distinguishes approval-gate pauses from interactive-loop pauses. */
-  type?: 'approval' | 'interactive_loop';
+  /** Distinguishes approval-gate pauses, interactive-loop pauses, and webhook-trigger pauses. */
+  type?: 'approval' | 'interactive_loop' | 'webhook';
   /** Current loop iteration when paused (interactive loops only). */
   iteration?: number;
   /** Session ID to restore on resume (interactive loops only). */

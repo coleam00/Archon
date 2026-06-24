@@ -41,6 +41,8 @@ export const WORKFLOW_EVENT_TYPES = [
   'ralph_story_completed',
   'approval_requested',
   'approval_received',
+  'webhook_registered',
+  'webhook_triggered',
   'workflow_cancelled',
   'workflow_artifact',
   'node_session_resumed',

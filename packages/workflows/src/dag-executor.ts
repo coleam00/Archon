@@ -36,6 +36,7 @@ import type {
   PromptNode,
   LoopNode,
   ScriptNode,
+  WebhookNode,
   NodeOutput,
   TriggerRule,
   WorkflowRun,
@@ -50,6 +51,7 @@ import {
   isApprovalNode,
   isCancelNode,
   isScriptNode,
+  isWebhookNode,
   isApprovalContext,
 } from './schemas';
 import { formatToolCall } from './utils/tool-formatter';
@@ -104,6 +106,7 @@ function dagNodeTelemetryType(node: DagNode): WorkflowNodeType {
   if (isLoopNode(node)) return 'loop';
   if (isApprovalNode(node)) return 'approval';
   if (isCancelNode(node)) return 'cancel';
+  if (isWebhookNode(node)) return 'webhook';
   if ('command' in node) return 'command';
   return 'prompt';
 }
@@ -2669,6 +2672,67 @@ async function executeLoopNode(
   };
 }
 
+const DEFAULT_WEBHOOK_TIMEOUT_MS = 3_600_000; // 1 hour
+
+/**
+ * Execute a webhook node — pauses workflow and waits for an external HTTP POST.
+ * The caller (webhook receiver endpoint) writes a node_completed event with the
+ * POST body as output and resumes the run. Timeout is enforced at trigger time:
+ * if the webhook arrives after timeout ms, the receiver refuses it.
+ */
+async function executeWebhookNode(
+  node: WebhookNode,
+  workflowRun: WorkflowRun,
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string
+): Promise<NodeOutput> {
+  const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
+  const timeoutMs = node.webhook.timeout ?? DEFAULT_WEBHOOK_TIMEOUT_MS;
+  const message =
+    node.webhook.message ?? `Waiting for external webhook trigger on node \`${node.id}\``;
+  const triggerUrl = `/webhooks/workflow/${workflowRun.id}/${node.id}`;
+
+  const webhookMsg =
+    `⏸ **Webhook trigger required**: ${message}\n\n` +
+    `Run ID: \`${workflowRun.id}\` | Node: \`${node.id}\`\n` +
+    `Trigger URL: \`POST ${triggerUrl}\`\n` +
+    `Timeout: ${String(Math.round(timeoutMs / 60_000))} minutes`;
+  await safeSendMessage(platform, conversationId, webhookMsg, msgContext);
+
+  deps.store
+    .createWorkflowEvent({
+      workflow_run_id: workflowRun.id,
+      event_type: 'webhook_registered',
+      step_name: node.id,
+      data: { triggerUrl, timeoutMs, message },
+    })
+    .catch((err: Error) => {
+      getLog().error(
+        { err, workflowRunId: workflowRun.id, eventType: 'webhook_registered' },
+        'workflow.event_persist_failed'
+      );
+    });
+
+  await deps.store.pauseWorkflowRun(workflowRun.id, {
+    message,
+    nodeId: node.id,
+    type: 'webhook',
+    captureResponse: true, // payload is always captured
+  });
+
+  getWorkflowEventEmitter().emit({
+    type: 'approval_pending', // reuse approval_pending so UI shows paused state
+    runId: workflowRun.id,
+    nodeId: node.id,
+    message: webhookMsg,
+  });
+
+  // Return completed — the between-layer status check will see 'paused' and break.
+  // On trigger, the webhook receiver writes a node_completed event and resumes the run.
+  return { state: 'completed' as const, output: '' };
+}
+
 /**
  * Execute an approval node — pauses workflow for human review.
  * On rejection resume (when on_reject is configured): runs the on_reject prompt via AI,
@@ -3273,6 +3337,18 @@ export async function executeDagWorkflow(
               nodeOutputs,
               issueContext,
               config.envVars
+            );
+            return { nodeId: node.id, output };
+          }
+
+          // 3f. Webhook node dispatch — pauses workflow until external HTTP trigger
+          if (isWebhookNode(node)) {
+            const output = await executeWebhookNode(
+              node,
+              workflowRun,
+              deps,
+              platform,
+              conversationId
             );
             return { nodeId: node.id, output };
           }

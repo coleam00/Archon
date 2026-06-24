@@ -4206,4 +4206,68 @@ export function registerApiRoutes(
     const result = await checkForUpdate(appVersion);
     return c.json(result ?? noUpdate);
   });
+
+  // POST /webhooks/workflow/:runId/:nodeId — external webhook trigger for webhook: DAG nodes.
+  // Not registered via registerOpenApiRoute: the body is arbitrary JSON from any external
+  // caller (Zapier, n8n, GitHub Actions) with no fixed schema — adding a Zod body schema
+  // would reject valid payloads. The /webhooks/* prefix puts it outside the /api/* auth gate.
+  app.post('/webhooks/workflow/:runId/:nodeId', async c => {
+    const runId = c.req.param('runId') ?? '';
+    const nodeId = c.req.param('nodeId') ?? '';
+    try {
+      const run = await workflowDb.getWorkflowRun(runId);
+      if (!run) {
+        return c.json({ error: 'Workflow run not found' }, 404);
+      }
+      if (run.status !== 'paused') {
+        return c.json(
+          { error: `Cannot trigger webhook on workflow in '${run.status}' status` },
+          409
+        );
+      }
+      const approval = run.metadata.approval as
+        | { nodeId?: string; type?: string; timeout?: number }
+        | undefined;
+      if (!approval?.nodeId || approval.nodeId !== nodeId) {
+        return c.json({ error: 'Run is not waiting for a webhook on this node' }, 400);
+      }
+      if (approval.type !== 'webhook') {
+        return c.json({ error: 'Run is paused for a different gate type (not webhook)' }, 400);
+      }
+
+      // Parse caller payload — accept any JSON object; raw text if non-JSON
+      let payload: unknown = null;
+      try {
+        payload = await c.req.json();
+      } catch {
+        payload = await c.req.text();
+      }
+      const outputStr = typeof payload === 'string' ? payload : JSON.stringify(payload);
+
+      // Write node_completed so the executor skips the node on resume
+      await workflowEventDb.createWorkflowEvent({
+        workflow_run_id: runId,
+        event_type: 'node_completed',
+        step_name: nodeId,
+        data: { node_output: outputStr, trigger_source: 'webhook' },
+      });
+      await workflowEventDb.createWorkflowEvent({
+        workflow_run_id: runId,
+        event_type: 'webhook_triggered',
+        step_name: nodeId,
+        data: { payload },
+      });
+
+      // Mark run as failed so the CLI resume / auto-resume can re-execute it
+      await workflowDb.updateWorkflowRun(runId, { status: 'failed' });
+
+      const autoResumed = await tryAutoResumeAfterGate(run, 'approve', await resolveWebUserId(c));
+
+      getLog().info({ runId, nodeId }, 'webhook.trigger_received');
+      return c.json({ received: true, autoResumed });
+    } catch (error) {
+      getLog().error({ err: error, runId, nodeId }, 'webhook.trigger_failed');
+      return c.json({ error: 'Internal server error' }, 500);
+    }
+  });
 }
