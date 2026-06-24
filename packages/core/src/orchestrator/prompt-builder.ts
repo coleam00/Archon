@@ -4,6 +4,7 @@
  * registered projects and available workflows.
  */
 import type { Codebase, Conversation } from '../types';
+import type { GodDefinition } from '../config/config-types';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
 
 /**
@@ -35,6 +36,29 @@ export function formatWorkflowSection(workflows: readonly WorkflowDefinition[]):
     section += '\n';
   }
   return section;
+}
+
+/**
+ * Format the registered specialist gods section.
+ * Returns empty string when gods is empty — callers only include it when non-empty.
+ */
+export function formatGodsSection(gods: readonly GodDefinition[]): string {
+  if (gods.length === 0) return '';
+
+  let section = '## Known Specialists\n\n';
+  section +=
+    'The following specialists are available for dispatch via workflow invocation. ' +
+    'Route specialist work to them; answer general questions directly.\n\n';
+
+  for (const god of gods) {
+    section += `**${god.displayName}** — ${god.description}\n`;
+    if (god.workflows && god.workflows.length > 0) {
+      section += `  Workflows: ${god.workflows.join(', ')}\n`;
+    }
+    section += '\n';
+  }
+
+  return section.trimEnd();
 }
 
 /** WorkflowResult type for prompt context injection */
@@ -137,11 +161,12 @@ IMPORTANT: Always clone into ~/.archon/workspaces/{owner}/{repo}/source unless t
 
 /**
  * Build the full orchestrator system prompt.
- * Includes all registered projects, available workflows, and routing instructions.
+ * Includes all registered projects, available workflows, god specialists, and routing instructions.
  */
 export function buildOrchestratorPrompt(
   codebases: readonly Codebase[],
-  workflows: readonly WorkflowDefinition[]
+  workflows: readonly WorkflowDefinition[],
+  gods: readonly GodDefinition[] = []
 ): string {
   let prompt = `# Archon Orchestrator
 
@@ -166,6 +191,11 @@ You can answer questions directly or invoke workflows for structured development
   prompt += '## Available Workflows\n\n';
   prompt += formatWorkflowSection(workflows);
 
+  const godsSection = formatGodsSection(gods);
+  if (godsSection) {
+    prompt += '\n\n' + godsSection;
+  }
+
   prompt += buildRoutingRules();
 
   return prompt;
@@ -179,7 +209,8 @@ You can answer questions directly or invoke workflows for structured development
 export function buildProjectScopedPrompt(
   scopedCodebase: Codebase,
   allCodebases: readonly Codebase[],
-  workflows: readonly WorkflowDefinition[]
+  workflows: readonly WorkflowDefinition[],
+  gods: readonly GodDefinition[] = []
 ): string {
   const otherCodebases = allCodebases.filter(c => c.id !== scopedCodebase.id);
 
@@ -206,6 +237,11 @@ ${formatProjectSection(scopedCodebase)}
 
   prompt += '## Available Workflows\n\n';
   prompt += formatWorkflowSection(workflows);
+
+  const godsSection = formatGodsSection(gods);
+  if (godsSection) {
+    prompt += '\n\n' + godsSection;
+  }
 
   prompt += buildRoutingRulesWithProject(scopedCodebase.name);
 
@@ -253,13 +289,14 @@ When the user asks what's running, whether a run passed/failed, or to approve / 
 export function buildOrchestratorSystemAppend(
   conversation: Conversation,
   codebases: readonly Codebase[],
-  workflows: readonly WorkflowDefinition[]
+  workflows: readonly WorkflowDefinition[],
+  gods: readonly GodDefinition[] = []
 ): string {
   const scopedCodebase = conversation.codebase_id
     ? codebases.find(c => c.id === conversation.codebase_id)
     : undefined;
 
   return scopedCodebase
-    ? buildProjectScopedPrompt(scopedCodebase, codebases, workflows)
-    : buildOrchestratorPrompt(codebases, workflows);
+    ? buildProjectScopedPrompt(scopedCodebase, codebases, workflows, gods)
+    : buildOrchestratorPrompt(codebases, workflows, gods);
 }

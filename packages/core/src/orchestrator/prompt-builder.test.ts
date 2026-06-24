@@ -4,6 +4,7 @@ import {
   formatWorkflowContextSection,
   buildOrchestratorSystemAppend,
   buildRunManagementSection,
+  formatGodsSection,
 } from './prompt-builder';
 
 describe('buildRoutingRulesWithProject', () => {
@@ -144,6 +145,103 @@ describe('buildOrchestratorSystemAppend', () => {
     const unscoped = buildOrchestratorSystemAppend(makeConversation(null), codebases, workflows);
     expect(scoped).not.toContain('## Managing Workflow Runs');
     expect(unscoped).not.toContain('## Managing Workflow Runs');
+  });
+});
+
+describe('formatGodsSection', () => {
+  test('returns empty string for empty gods array', () => {
+    expect(formatGodsSection([])).toBe('');
+  });
+
+  test('includes section header and god name when non-empty', () => {
+    const result = formatGodsSection([
+      { id: 'thoth', displayName: 'Thoth', description: 'Research specialist', workflows: ['archon-assist'] },
+    ]);
+    expect(result).toContain('## Known Specialists');
+    expect(result).toContain('**Thoth**');
+    expect(result).toContain('Research specialist');
+  });
+
+  test('lists workflows for a god that has them', () => {
+    const result = formatGodsSection([
+      { id: 'thoth', displayName: 'Thoth', description: 'Research', workflows: ['archon-assist', 'archon-architect'] },
+    ]);
+    expect(result).toContain('archon-assist, archon-architect');
+  });
+
+  test('omits workflows line for a god with no workflows', () => {
+    const result = formatGodsSection([
+      { id: 'hermes', displayName: 'Hermes', description: 'Messenger', workflows: [] },
+    ]);
+    expect(result).toContain('**Hermes**');
+    expect(result).not.toContain('Workflows:');
+  });
+
+  test('includes all gods when multiple are provided', () => {
+    const result = formatGodsSection([
+      { id: 'thoth', displayName: 'Thoth', description: 'Research' },
+      { id: 'hephaestus', displayName: 'Hephaestus', description: 'Implementation' },
+    ]);
+    expect(result).toContain('**Thoth**');
+    expect(result).toContain('**Hephaestus**');
+  });
+
+  test('output does not end with trailing whitespace', () => {
+    const result = formatGodsSection([
+      { id: 'thoth', displayName: 'Thoth', description: 'Research' },
+    ]);
+    expect(result).toBe(result.trimEnd());
+  });
+});
+
+describe('buildOrchestratorSystemAppend gods integration', () => {
+  const makeConversation = (codebaseId: string | null) =>
+    ({
+      id: 'conv-1',
+      platform_type: 'web',
+      platform_conversation_id: 'web-1',
+      codebase_id: codebaseId,
+      cwd: null,
+      isolation_env_id: null,
+      ai_assistant_type: 'claude',
+      title: null,
+      hidden: false,
+      deleted_at: null,
+      last_activity_at: null,
+      created_at: new Date(),
+      updated_at: new Date(),
+    }) as const;
+
+  const codebases = [
+    { id: 'cb-1', name: 'proj', default_cwd: '/p', ai_assistant_type: 'claude', repository_url: null, commands: null },
+  ];
+
+  const workflows = [] as unknown as import('@archon/workflows/schemas/workflow').WorkflowDefinition[];
+
+  const gods = [
+    { id: 'thoth', displayName: 'Thoth', description: 'Research specialist', workflows: ['archon-assist'] },
+  ];
+
+  test('gods section appears in unscoped prompt when gods provided', () => {
+    const result = buildOrchestratorSystemAppend(makeConversation(null), codebases, workflows, gods);
+    expect(result).toContain('## Known Specialists');
+    expect(result).toContain('Thoth');
+  });
+
+  test('gods section appears in scoped prompt when gods provided', () => {
+    const result = buildOrchestratorSystemAppend(makeConversation('cb-1'), codebases, workflows, gods);
+    expect(result).toContain('## Known Specialists');
+    expect(result).toContain('Thoth');
+  });
+
+  test('gods section absent when gods array is empty', () => {
+    const result = buildOrchestratorSystemAppend(makeConversation(null), codebases, workflows, []);
+    expect(result).not.toContain('## Known Specialists');
+  });
+
+  test('gods section absent when gods parameter omitted', () => {
+    const result = buildOrchestratorSystemAppend(makeConversation(null), codebases, workflows);
+    expect(result).not.toContain('## Known Specialists');
   });
 });
 
