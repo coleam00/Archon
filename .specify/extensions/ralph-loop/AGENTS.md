@@ -44,25 +44,26 @@ The PRD groups tasks into **batches** (`userStories[]`).
 4. Read the rest of `$RALPH_PROGRESS_FILE` for prior-iteration context.
 5. Verify you're on the branch named in PRD `branchName`. If not, check it out (or create from `main`).
 6. **Pick the first batch where `completed: false`** (lowest array index). This is your active batch this iteration.
-7. **Within that batch**, walk `tasks[]` in array order. **First check for a parallel run-group** (see "Parallel Task Execution" below); if found, dispatch it as one swarm, then resume sequential walking from the next `passes:false` task. For each task with `passes: false`:
+7. **Read relevant `LESSONS.md` files before editing active-batch tasks.** For each task or parallel run-group you are about to implement, identify likely touched directories from the task description, acceptance criteria, and existing codebase patterns. Read any nearby `LESSONS.md` files in those directories or parent directories up to the repo root, then apply those lessons as local implementation constraints, gotchas, testing notes, and dependency reminders.
+8. **Within that batch**, walk `tasks[]` in array order. **First check for a parallel run-group** (see "Parallel Task Execution" below); if found, dispatch it as one swarm, then resume sequential walking from the next `passes:false` task. For each task with `passes: false`:
    1. Implement it.
    2. Run quality checks (typecheck, lint, test — whatever the project requires).
    3. If a check fails: fix it, re-run. Do NOT leave broken code in working tree.
    4. Set the task's `passes: true` in `$RALPH_PRD_FILE`.
    5. **Do NOT commit per task and do NOT append progress per task.** Keep changes staged/unstaged in the working tree and accumulate task notes mentally (or in a scratch buffer) until the end of the iteration.
-8. **After flipping each task**, check whether _every_ `tasks[].passes` in the active batch is now `true`. If yes, set the batch's `completed: true` in `$RALPH_PRD_FILE`.
-9. **Stay inside the active batch** — do NOT cross batch boundaries within a single iteration. (Exception: if step 8 just flipped `completed:true` AND budget remains, you MAY proceed to the next `completed:false` batch — but commit the just-finished batch FIRST per step 11 before starting the next.)
-10. If budget is tight (response getting long, context filling), STOP after the current task — leaving `completed:false` is fine. The next iteration will resume from your first `passes:false` task automatically.
-11. **At the end of the iteration — append ONE progress entry covering the whole batch of work done this iter** to `$RALPH_PROGRESS_FILE` (see format below). The entry lists every task you flipped `passes:true` this iter, plus aggregated learnings.
-12. **Commit per batch — exactly one commit per iteration via `speckit-git-commit`.** Right after step 11:
+9. **After flipping each task**, check whether _every_ `tasks[].passes` in the active batch is now `true`. If yes, set the batch's `completed: true` in `$RALPH_PRD_FILE`.
+10. **Stay inside the active batch** — do NOT cross batch boundaries within a single iteration. (Exception: if step 9 just flipped `completed:true` AND budget remains, you MAY proceed to the next `completed:false` batch — but commit the just-finished batch FIRST per step 14 before starting the next.)
+11. If budget is tight (response getting long, context filling), STOP after the current task — leaving `completed:false` is fine. The next iteration will resume from your first `passes:false` task automatically.
+12. **At the end of the iteration — append ONE progress entry covering the whole batch of work done this iter** to `$RALPH_PROGRESS_FILE` (see format below). The entry lists every task you flipped `passes:true` this iter, plus aggregated learnings.
+13. Update LESSONS.md files if you discovered reusable patterns (see below).
+14. **Commit per batch — exactly one commit per iteration via `speckit-git-commit`.** Right after step 13:
     - Determine the commit message:
       - If the active batch's `completed:true` flipped this iter → `feat: [Batch Title] - implemented [N] tasks` (e.g. `feat: Phase 1: Setup - implemented 9 tasks`).
       - If the active batch is still `completed:false` (partial work) → `feat: [Batch Title] (partial) - [TFIRST..TLAST]` (e.g. `feat: Phase 7: Settings (partial) - T210..T215`).
     - Set the message in `.specify/extensions/git/git-config.yml` under `auto_commit.after_implement.message` (and ensure `auto_commit.after_implement.enabled: true`).
-    - Invoke the `speckit-git-commit` skill with event `after_implement` (runs `.specify/extensions/git/scripts/bash/auto-commit.sh after_implement`). The skill stages all changes (`git add .`) and commits with the configured message — covering all task changes + the PRD edits + the progress.txt append in one commit.
-    - The commit MUST include the staged PRD update (`passes:true` flips, optional `completed:true` flip) and the progress.txt append.
+    - Invoke the `speckit-git-commit` skill with event `after_implement` (runs `.specify/extensions/git/scripts/bash/auto-commit.sh after_implement`). The skill stages all changes (`git add .`) and commits with the configured message — covering all task changes + the PRD edits + the progress.txt append + any LESSONS.md updates in one commit.
+    - The commit MUST include the staged PRD update (`passes:true` flips, optional `completed:true` flip), the progress.txt append, and any LESSONS.md updates.
     - Do NOT run raw `git commit -m ...` — always go through `speckit-git-commit`.
-13. Update CLAUDE.md files if you discovered reusable patterns (see below).
 
 ## Parallel Task Execution
 
@@ -135,7 +136,7 @@ When falling back, just walk the run-group sequentially. The `[P]` marker is a h
 
 ### Backward Compatibility
 
-If no task in the batch carries `[P]` (older PRDs or batches with hard sequencing), the swarm path is skipped entirely — pure sequential walk per step 7.
+If no task in the batch carries `[P]` (older PRDs or batches with hard sequencing), the swarm path is skipped entirely — pure sequential walk per step 8.
 
 ## Progress Report Format
 
@@ -179,12 +180,12 @@ If you discover a **reusable pattern** that future iterations should know, add i
 
 Only add patterns that are **general and reusable**, not story-specific details.
 
-## Update CLAUDE.md Files
+## Update LESSONS.md Files
 
-Before committing, check if any edited files have learnings worth preserving in nearby CLAUDE.md files:
+Before committing, check if any edited files have learnings worth preserving in nearby LESSONS.md files:
 
 1. **Identify directories with edited files** - Look at which directories you modified
-2. **Check for existing CLAUDE.md** - Look for CLAUDE.md in those directories or parent directories
+2. **Check for existing LESSONS.md** - Look for LESSONS.md in those directories or parent directories
 3. **Add valuable learnings** - If you discovered something future developers/agents should know:
    - API patterns or conventions specific to that module
    - Gotchas or non-obvious requirements
@@ -192,7 +193,7 @@ Before committing, check if any edited files have learnings worth preserving in 
    - Testing approaches for that area
    - Configuration or environment requirements
 
-**Examples of good CLAUDE.md additions:**
+**Examples of good LESSONS.md additions:**
 
 - "When modifying X, also update Y to keep them in sync"
 - "This module uses pattern Z for all API calls"
@@ -205,7 +206,7 @@ Before committing, check if any edited files have learnings worth preserving in 
 - Temporary debugging notes
 - Information already in `$RALPH_PROGRESS_FILE`
 
-Only update CLAUDE.md if you have **genuinely reusable knowledge** that would help future work in that directory.
+Only update LESSONS.md if you have **genuinely reusable knowledge** that would help future work in that directory.
 
 ## Quality Requirements
 

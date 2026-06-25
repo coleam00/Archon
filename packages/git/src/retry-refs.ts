@@ -68,11 +68,13 @@ export async function verifyCommitRef(repoPath: string, refOrSha: string): Promi
   }
 }
 
-export async function hasTrackedChanges(repoPath: string): Promise<boolean> {
+export async function hasGitVisibleChanges(repoPath: string): Promise<boolean> {
   await assertGitRepository(repoPath);
-  const status = await git(repoPath, ['status', '--porcelain', '--untracked-files=no']);
+  const status = await git(repoPath, ['status', '--porcelain', '--untracked-files=all']);
   return status.length > 0;
 }
+
+export const hasTrackedChanges = hasGitVisibleChanges;
 
 async function requireCommitIdentity(repoPath: string): Promise<void> {
   const [name, email] = await Promise.all([
@@ -105,20 +107,22 @@ function buildRetrySafetyCommitMessage(identity: RetrySafetyRefIdentity): string
   return `archon retry safety: ${workflowName}\n\nRun: ${identity.runId}\nEpoch: ${String(identity.retryEpoch)}\nRetry node: ${nodeId}`;
 }
 
-export async function createTrackedChangesCommit(
+export async function createGitVisibleChangesCommit(
   repoPath: string,
   message: string
 ): Promise<{ commitSha: string; createdCommit: boolean }> {
   await assertGitRepository(repoPath);
-  if (!(await hasTrackedChanges(repoPath))) {
+  if (!(await hasGitVisibleChanges(repoPath))) {
     return { commitSha: await verifyCommitRef(repoPath, 'HEAD'), createdCommit: false };
   }
 
   await requireCommitIdentity(repoPath);
-  await git(repoPath, ['add', '-u']);
+  await git(repoPath, ['add', '-A']);
   await git(repoPath, ['commit', '-m', message]);
   return { commitSha: await verifyCommitRef(repoPath, 'HEAD'), createdCommit: true };
 }
+
+export const createTrackedChangesCommit = createGitVisibleChangesCommit;
 
 export async function upsertCheckpointRef(
   repoPath: string,
@@ -126,7 +130,10 @@ export async function upsertCheckpointRef(
 ): Promise<RetryRefResult> {
   const ref = buildCheckpointRef(identity);
   await validateGitRef(repoPath, ref);
-  const result = await createTrackedChangesCommit(repoPath, buildCheckpointCommitMessage(identity));
+  const result = await createGitVisibleChangesCommit(
+    repoPath,
+    buildCheckpointCommitMessage(identity)
+  );
   await git(repoPath, ['update-ref', ref, result.commitSha]);
   return { ref, commitSha: result.commitSha, createdCommit: result.createdCommit };
 }
@@ -137,7 +144,7 @@ export async function createRetrySafetyRef(
 ): Promise<RetryRefResult> {
   const ref = buildRetrySafetyRef(identity);
   await validateGitRef(repoPath, ref);
-  const result = await createTrackedChangesCommit(
+  const result = await createGitVisibleChangesCommit(
     repoPath,
     buildRetrySafetyCommitMessage(identity)
   );

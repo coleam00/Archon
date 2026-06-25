@@ -4,7 +4,7 @@ extension:
   id: "ralph-loop"
   name: "Spec-Kit Ralph Loop"
   version: "3.0.0"
-  description: "External-bash-loop driver around `claude --print` per snarktank/ralph; v3 schema groups tasks into per-phase batches (one batch processed per iteration). Bridges via /speckit.ralph-loop.tasks-to-ralph and /speckit.ralph-loop.sync-back."
+  description: "External bash loop driver around a selected coding-agent CLI; v3 schema groups tasks into per-phase batches (one batch processed per iteration). Bridges via /speckit.ralph-loop.tasks-to-ralph and /speckit.ralph-loop.sync-back."
   author: "another-cowork"
   license: "MIT"
 
@@ -16,8 +16,20 @@ requires:
     - name: "jq"
       required: true
     - name: "claude"
-      required: true
-      reason: "Loop spawns `claude --print --dangerously-skip-permissions` per iteration."
+      required: false
+      reason: "Optional loop tool when ralph-config.yml uses `tool: claude`."
+    - name: "codex"
+      required: false
+      reason: "Optional loop tool when ralph-config.yml uses `tool: codex`."
+    - name: "pi"
+      required: false
+      reason: "Optional loop tool when ralph-config.yml uses `tool: pi`."
+    - name: "amp"
+      required: false
+      reason: "Optional loop tool when ralph-config.yml uses `tool: amp`."
+    - name: "ccs"
+      required: false
+      reason: "Optional loop wrapper when ralph-config.yml uses `tool: test-gpt5.5-codex` or `tool: ccs-bp`."
 
 provides:
   commands:

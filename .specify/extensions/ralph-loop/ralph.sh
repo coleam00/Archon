@@ -1,6 +1,6 @@
 #!/bin/bash
 # Ralph Wiggum - Long-running AI agent loop
-# Usage: ./ralph.sh [--tool amp|claude|codex|test-gpt5.5-codex|ccs-bp] [max_iterations]
+# Usage: ./ralph.sh [--tool amp|claude|codex|pi|test-gpt5.5-codex|ccs-bp] [max_iterations]
 #
 # Configuration precedence (highest first):
 #   1. CLI args / env vars
@@ -88,7 +88,7 @@ if [ "${RALPH_I_UNDERSTAND_DANGEROUS:-0}" != "1" ] \
    && [ ! -f "$_consent_file" ] \
    && [ "$_consent_cfg" != "1" ]; then
   {
-    echo "[ralph] consent required — this script runs the selected tool with permission bypass enabled."
+    echo "[ralph] consent required — this script runs the selected tool with broad local access."
     echo "Pick ONE to proceed:"
     echo "  export RALPH_I_UNDERSTAND_DANGEROUS=1"
     echo "  touch .specify/extensions/ralph-loop/.consent"
@@ -120,7 +120,7 @@ _resolve_from_feature_json() {
 PRD_FILE="${RALPH_PRD_FILE:-$(_resolve_from_feature_json ralph_prd_file || echo "$SCRIPT_DIR/prd.json")}"
 PROGRESS_FILE="${RALPH_PROGRESS_FILE:-$(_resolve_from_feature_json ralph_progress_file || echo "$SCRIPT_DIR/progress.txt")}"
 
-# Export so the spawned tool (Claude / amp) and AGENT.md instructions see them.
+# Export so the spawned tool and AGENTS.md instructions see them.
 export RALPH_PRD_FILE="$PRD_FILE"
 export RALPH_PROGRESS_FILE="$PROGRESS_FILE"
 
@@ -243,7 +243,7 @@ for i in $(seq 1 $MAX_ITERATIONS); do
     "$@" --dangerously-skip-permissions --print --verbose \
         --model "$MODEL" \
         --output-format stream-json --input-format text \
-        < "$SCRIPT_DIR/AGENT.md" \
+        < "$SCRIPT_DIR/AGENTS.md" \
       | tee "$iter_json" \
       | jq -r --unbuffered "$_claude_stream_formatter" || true
     jq -sr '[.[]? | select(.type=="assistant") | .message.content[]? | select(.type=="text") | .text] | join("\n")' \
@@ -313,7 +313,7 @@ for i in $(seq 1 $MAX_ITERATIONS); do
         --dangerously-bypass-approvals-and-sandbox \
         --skip-git-repo-check \
         - \
-        < "$SCRIPT_DIR/AGENT.md" \
+        < "$SCRIPT_DIR/AGENTS.md" \
       | tee "$iter_json" \
       | jq -r --unbuffered "$_codex_stream_formatter" || true
     jq -sr '[.[]? | select(.type=="item.completed") | .item // {} | select(.type=="agent_message") | .text // ""] | join("\n")' \
@@ -321,12 +321,78 @@ for i in $(seq 1 $MAX_ITERATIONS); do
     rm -f "$iter_json"
   }
 
+  # Live event formatter for `pi --mode json` JSONL output.
+  # Pi emits session/agent/message/tool lifecycle events; this projects those
+  # into the same compact labels used by the other Ralph tool runners.
+  _pi_stream_formatter='
+    def oneline: (. // "") | tostring | gsub("\n"; " ") | gsub("\\s+"; " ");
+    def trunc(n): if (. | length) > n then .[0:n] + "..." else . end;
+    def fmt(tag; content): "  " + tag + ": \"" + (content | oneline | trunc(60)) + "\"";
+    def content_text:
+      if type == "string" then .
+      elif type == "array" then
+        [.[]? | if (.type // "") == "text" then .text // "" else empty end] | join(" ")
+      elif type == "object" then tojson
+      else tostring end;
+
+    . as $e |
+    if $e.type == "session" then
+      fmt("session"; (($e.id // "?") | tostring | .[0:8]) + " (" + ($e.cwd // "?") + ")")
+    elif $e.type == "message_end" then
+      ($e.message // {}) as $m |
+      if $m.role == "assistant" then
+        ([$m.content[]? | select((.type // "") == "text") | .text // ""] | join("\n")) as $text |
+        if $text == "" then empty else fmt("message"; $text) end
+      else empty end
+    elif $e.type == "tool_execution_start" then
+      ($e.toolName // "?") as $tool | ($e.args // {}) as $in |
+      if $tool == "bash" then fmt("terminal"; $in.command // "")
+      elif $tool == "read" then fmt("read_file"; $in.path // $in.file_path // "")
+      elif $tool == "edit" then fmt("patch"; ($in.path // $in.file_path // "") + " (x" + (($in.edits // [] | length) | tostring) + ")")
+      elif $tool == "write" then fmt("write_file"; $in.path // $in.file_path // "")
+      elif $tool == "grep" then fmt("search_files"; ($in.pattern // "") + (if $in.path then " in " + $in.path else "" end))
+      elif $tool == "find" then fmt("search_files"; ($in.pattern // "") + (if $in.path then " in " + $in.path else "" end))
+      elif $tool == "ls" then fmt("read_dir"; $in.path // ".")
+      else fmt($tool; ($in | tojson)) end
+    elif $e.type == "tool_execution_end" and ($e.isError // false) then
+      fmt("error"; (($e.result // {}).content // [] | content_text))
+    elif $e.type == "turn_end" then
+      ($e.message.usage // {}) as $u |
+      fmt("done"; "in=" + (($u.input // 0) | tostring)
+        + " out=" + (($u.output // 0) | tostring)
+        + (if ($u.cacheRead // 0) > 0 then " cached=" + (($u.cacheRead) | tostring) else "" end))
+    elif $e.type == "auto_retry_start" or $e.type == "auto_retry_end" then
+      fmt("retry"; $e.message // $e.errorMessage // ($e | tojson))
+    elif $e.type == "compaction_start" or $e.type == "compaction_end" then
+      fmt("compaction"; $e.reason // "")
+    else empty end
+  '
+
+  # Runs Pi in JSON event-stream mode, prints compact live progress, captures raw
+  # JSONL, and writes concatenated final assistant text into $ITER_LOG so the
+  # existing <promise>COMPLETE</promise> grep works.
+  _run_pi_stream() {
+    local iter_json="${ITER_LOG}.json"
+    pi --mode json \
+        --approve \
+        --model "$MODEL" \
+        --thinking "$REASONING_EFFORT" \
+        < "$SCRIPT_DIR/AGENTS.md" \
+      | tee "$iter_json" \
+      | jq -r --unbuffered "$_pi_stream_formatter" || true
+    jq -sr '[.[]? | select(.type=="message_end") | .message // {} | select(.role=="assistant") | .content[]? | select((.type // "")=="text") | .text // ""] | join("\n")' \
+        "$iter_json" > "$ITER_LOG" 2>/dev/null || cp "$iter_json" "$ITER_LOG"
+    rm -f "$iter_json"
+  }
+
   if [[ "$TOOL" == "amp" ]]; then
-    amp --dangerously-allow-all < "$SCRIPT_DIR/AGENT.md" 2>&1 | tee "$ITER_LOG" || true
+    amp --dangerously-allow-all < "$SCRIPT_DIR/AGENTS.md" 2>&1 | tee "$ITER_LOG" || true
   elif [[ "$TOOL" == "claude" ]]; then
     _run_claude_stream claude
   elif [[ "$TOOL" == "codex" ]]; then
     _run_codex_stream
+  elif [[ "$TOOL" == "pi" ]]; then
+    _run_pi_stream
   elif [[ "$TOOL" == "test-gpt5.5-codex" ]]; then
     _run_claude_stream ccs test-gpt5.5-codex
   elif [[ "$TOOL" == "ccs-bp" ]]; then

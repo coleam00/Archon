@@ -105,7 +105,7 @@ The database has 19 tables, all prefixed with `remote_agent_`:
 7. **`remote_agent_workflow_node_checkpoints`** - Per-node git checkpoints for manual DAG node retry
    - Keyed by `(workflow_run_id, node_id, retry_epoch)`
    - Stores checkpoint refs/commit SHAs and whether Archon created a checkpoint commit
-   - Used to reset tracked checkout state before `workflow retry-node`; untracked files are not deleted
+   - Used to reset checkout state before `workflow retry-node`; non-ignored untracked files can be saved in checkpoint commits, while ignored files are not added or cleaned
 
 8. **`remote_agent_messages`** - Conversation message history
    - Persists user and assistant messages with timestamps
@@ -145,7 +145,7 @@ The database has 19 tables, all prefixed with `remote_agent_`:
 
 15. **`remote_agent_user_ai_prefs`** - Per-user AI preferences (personal model tiers, `@custom` aliases, default assistant)
     - NON-encrypted (model names aren't secrets); one row per user (`UNIQUE(user_id)`), cascades on user deletion
-    - `tiers` / `aliases` are JSON-as-TEXT; folded into model resolution as the highest-precedence layer for runs/chats that user starts
+    - `tiers` / `aliases` are JSON-as-TEXT; folded into model resolution as the highest-precedence layer. Resolution follows the **acting user**: workflow runs use the run starter; chat turns use the message **sender** (the conversation creator's row is only a fallback when no sender identity resolves)
     - Editable via the console "Just me" scope, `archon ai … --scope user`, or `/api/auth/me/ai-prefs*`
 
 16–19. **`remote_agent_auth_user` / `remote_agent_auth_session` / `remote_agent_auth_account` / `remote_agent_auth_verification`** - Better Auth tables for opt-in web login

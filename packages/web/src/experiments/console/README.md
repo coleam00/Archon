@@ -23,6 +23,16 @@ conversation (`createConversation` is JSON-only) — the UI shows a notice to
 re-attach once the chat exists. Drag-drop / paste / optimistic chips are tracked
 in #1913.
 
+## Chat user scoping
+
+On multi-user installs (web auth enabled) each signed-in user gets their own
+per-project conversation: the list request passes the non-enforcing `mine=true`
+filter, and the first send lazily creates a conversation attributed to the
+sender. Chat turns execute with the **sender's** per-user credentials and AI
+prefs (the conversation creator is only a fallback when no sender identity
+resolves). Solo installs see no change — without an identity, `mine=true`
+narrows nothing.
+
 ## Constraints
 
 - **Isolated.** Forbidden imports from `packages/web/src/{components,stores,contexts,routes,hooks}` and `@tanstack/react-query`, `@/lib/api` (function exports). Enforced by ESLint. Type-only imports from `@/lib/api.generated` are allowed.

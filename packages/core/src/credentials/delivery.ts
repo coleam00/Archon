@@ -145,8 +145,18 @@ export function deliverCredential(
         // pre-#1955 'claude' delivery (harmless superset).
         return { env: { ANTHROPIC_API_KEY: cred.apiKey, CLAUDE_API_KEY: cred.apiKey } };
       }
-      // Claude Pro/Max subscription → the token var the Claude SDK reads.
-      return { env: { CLAUDE_CODE_OAUTH_TOKEN: cred.oauthApiKey } };
+      // Claude Pro/Max subscription. CLAUDE_CODE_OAUTH_TOKEN is the var the
+      // native Claude SDK reads; ANTHROPIC_OAUTH_TOKEN is what Pi's anthropic
+      // backend reads in env-only chat (Pi never reads the CLAUDE_CODE_* var).
+      // Both carry the same sk-ant-oat* bearer — a harmless superset, mirroring
+      // the api_key branch above shipping ANTHROPIC_API_KEY + CLAUDE_API_KEY
+      // (#1984). The Pi env bridge maps ANTHROPIC_OAUTH_TOKEN into AuthStorage.
+      return {
+        env: {
+          CLAUDE_CODE_OAUTH_TOKEN: cred.oauthApiKey,
+          ANTHROPIC_OAUTH_TOKEN: cred.oauthApiKey,
+        },
+      };
 
     case 'openai':
       if (cred.kind === 'api_key') {

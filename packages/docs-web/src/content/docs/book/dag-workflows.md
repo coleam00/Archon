@@ -336,9 +336,9 @@ The Web UI shows a retry action for eligible failed nodes on web-created failed 
 | Retry target | The target node must have a latest effective status of `failed`. Skipped downstream nodes are not retry targets. |
 | Rerun scope | Archon invalidates the target node and all descendants in the current workflow DAG. Completed upstream nodes and independent siblings stay valid. |
 | Retry epochs | Each manual retry increments the run's retry epoch. Historical events, logs, and artifacts remain in the audit history; current node state is projected from the latest epoch. |
-| Checkout reset | For workflows that can mutate the checkout, Archon records tracked-file checkpoints before executable nodes and resets tracked files to the selected checkpoint before retry execution. |
-| Safety refs | Before the reset, dirty tracked changes from the failed attempt are saved to a local safety ref/commit under `refs/archon/retry-safety/`. |
-| Untracked files | Untracked and ignored files are preserved. Retry reset does not delete them. |
+| Checkout reset | For workflows that can mutate the checkout, Archon records Git-visible checkpoints before executable nodes and resets the checkout to the selected checkpoint before retry execution. |
+| Safety refs | Before the reset, dirty Git-visible changes from the failed attempt are saved to a local safety ref/commit under `refs/archon/retry-safety/`. |
+| Untracked files | Non-ignored untracked files are saved in checkpoint and safety commits. Ignored files are not added or cleaned. |
 | No-reset workflows | If `mutates_checkout: false` is set, Archon skips checkout checkpoint/reset setup and retries the node without resetting files. |
 
 `retry-node` is different from `resume`. `archon workflow resume <run-id>` resumes a failed run and skips completed nodes, while `retry-node` deliberately invalidates one failed node plus descendants so that branch can run again with a fresh retry epoch.

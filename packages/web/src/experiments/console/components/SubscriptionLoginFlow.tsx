@@ -4,6 +4,7 @@ import type { ProviderOAuthStart } from '../skills';
 import { invalidate } from '../store/cache';
 import { K } from '../store/keys';
 import { normalizeOAuthCode } from '../lib/oauth-code';
+import { mergeOAuthSignals } from '../lib/oauth-flow';
 import { useCancelledRef } from '../lib/use-cancelled-ref';
 
 type Phase = 'starting' | 'manual' | 'device' | 'error';
@@ -66,6 +67,14 @@ export function SubscriptionLoginFlow({
           pendingCodeRef.current = undefined;
           const res = await skill.pollProviderOAuth(provider, sessionId, submit);
           if (stale()) return;
+          // The authorize URL / device code can arrive via POLL rather than
+          // start (supersede latency) — merge late signals or the manual
+          // panel stays linkless forever while polling "pending".
+          setStart(prev => (prev ? mergeOAuthSignals(prev, res) : prev));
+          const polledMode = res.mode;
+          if (polledMode) {
+            setPhase(p => (p === 'error' ? p : polledMode));
+          }
           if (res.status === 'connected') {
             invalidate(K.providerConnections);
             onDoneRef.current();
@@ -146,6 +155,13 @@ export function SubscriptionLoginFlow({
             {start.userCode}
           </span>
           <span className="ml-2 text-text-tertiary">(polling…)</span>
+        </span>
+      ) : null}
+
+      {phase === 'manual' && !start?.url ? (
+        <span className="text-text-tertiary">
+          Waiting for the authorization link… (the provider flow is starting; this can take a few
+          seconds when a previous attempt was just cancelled)
         </span>
       ) : null}
 

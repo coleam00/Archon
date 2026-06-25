@@ -34,20 +34,11 @@ spec-kit-ralph/
   `main` or `master`.
 - A feature directory under `specs/` with a `tasks.md` file.
 - `git` and `jq` on `PATH`.
-- `claude` on `PATH`, because `extension.yml` declares it as required.
 - The selected loop tool installed and authenticated. `ralph.sh` supports
-  `claude`, `codex`, `amp`, `test-gpt5.5-codex`, and `ccs-bp`.
+  `claude`, `codex`, `pi`, `amp`, `test-gpt5.5-codex`, and `ccs-bp`.
 
-Runtime prompt files are also required by the shell script:
-
-- `ralph.sh` reads `CLAUDE.md` from the installed extension directory for
-  `claude`, `codex`, `test-gpt5.5-codex`, and `ccs-bp`.
-- `ralph.sh` reads `prompt.md` from the installed extension directory for
-  `amp`.
-
-This checkout currently does not include `CLAUDE.md` or `prompt.md`. If those
-files are absent in the installed extension directory, the loop fails before it
-can start the selected agent CLI.
+`ralph.sh` reads `AGENT.md` from the installed extension directory and passes it
+to the selected agent CLI each iteration.
 
 ## Install Into a Spec Kit Project
 
@@ -128,10 +119,11 @@ Override the configured tool with `--tool`:
 ```bash
 RALPH_I_UNDERSTAND_DANGEROUS=1 bash .specify/extensions/ralph-loop/ralph.sh --tool claude 50
 RALPH_I_UNDERSTAND_DANGEROUS=1 bash .specify/extensions/ralph-loop/ralph.sh --tool codex 50
+RALPH_I_UNDERSTAND_DANGEROUS=1 bash .specify/extensions/ralph-loop/ralph.sh --tool pi 50
 ```
 
 The script requires an explicit danger consent because it runs the selected
-agent with permission bypass flags. Any one of these consent paths works:
+agent with broad local access. Any one of these consent paths works:
 
 ```bash
 export RALPH_I_UNDERSTAND_DANGEROUS=1
@@ -201,6 +193,9 @@ runs. In the current script, the CLI can override only:
 
 - `tool`, with `--tool <name>` or `--tool=<name>`.
 - `max_iterations`, with a positional number such as `50`.
+
+For Pi, `model` maps to `pi --model` and `reasoning_effort` maps to
+`pi --thinking`.
 
 ## Task Format Expected by the Converter
 

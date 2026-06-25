@@ -26,6 +26,7 @@ import type {
   WorkflowDefinition,
   WorkflowLoadResult,
   WorkflowSource,
+  WorkflowWithSource,
 } from '@archon/workflows/schemas/workflow';
 import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
@@ -321,6 +322,18 @@ async function loadWorkflows(cwd: string): Promise<WorkflowLoadResult> {
   }
 }
 
+function countWorkflowSources(
+  workflows: readonly WorkflowWithSource[]
+): Record<WorkflowSource, number> {
+  return workflows.reduce<Record<WorkflowSource, number>>(
+    (counts, entry) => {
+      counts[entry.source] += 1;
+      return counts;
+    },
+    { bundled: 0, global: 0, project: 0 }
+  );
+}
+
 interface WorkflowJsonEntry {
   name: string;
   description: string;
@@ -399,7 +412,17 @@ export async function workflowRunCommand(
   userMessage: string,
   options: WorkflowRunOptions = {}
 ): Promise<void> {
-  const { workflows: workflowEntries, errors } = await loadWorkflows(options.discoveryCwd ?? cwd);
+  const effectiveDiscoveryCwd = options.discoveryCwd ?? cwd;
+  const { workflows: workflowEntries, errors } = await loadWorkflows(effectiveDiscoveryCwd);
+  const sourceCounts = countWorkflowSources(workflowEntries);
+
+  if (!options.json && !options.quiet) {
+    console.log(
+      `Discovery: root=${effectiveDiscoveryCwd} workflows=${String(workflowEntries.length)} ` +
+        `bundled=${String(sourceCounts.bundled)} global=${String(sourceCounts.global)} ` +
+        `project=${String(sourceCounts.project)}`
+    );
+  }
 
   if (workflowEntries.length === 0 && errors.length === 0) {
     throw new Error('No workflows found in .archon/workflows/');
@@ -1634,6 +1657,38 @@ export async function workflowRetryNodeCommand(
   throw new Error(`Workflow retry failed: ${result.error}`);
 }
 
+async function resolveDiscoveryCwdForCodebase(
+  runId: string,
+  codebaseId: string,
+  action: 'resume' | 'approve' | 'reject'
+): Promise<string> {
+  try {
+    const codebase = await codebaseDb.getCodebase(codebaseId);
+    if (!codebase) {
+      throw new Error(
+        `Workflow run '${runId}' references codebase '${codebaseId}', but that codebase no longer exists.\n` +
+          'Cannot safely discover workflows from the run worktree because project workflow files may be missing.\n' +
+          'Re-register the project or restore the codebase row, then retry.'
+      );
+    }
+    return codebase.default_cwd;
+  } catch (error) {
+    const err = error as Error;
+    if (err.message.includes('references codebase')) {
+      throw err;
+    }
+    getLog().error(
+      { err, errorType: err.constructor.name, runId, codebaseId },
+      `cli.workflow_${action}_codebase_lookup_failed`
+    );
+    throw new Error(
+      `Failed to load codebase '${codebaseId}' for workflow run '${runId}': ${err.message}\n` +
+        'Cannot safely discover workflows from the run worktree because project workflow files may be missing.\n' +
+        'Fix the codebase lookup problem, then retry.'
+    );
+  }
+}
+
 /**
  * Resume a failed workflow run by ID.
  *
@@ -1685,27 +1740,9 @@ export async function workflowResumeCommand(runId: string, json?: boolean): Prom
   // Use the codebase's source path for workflow YAML discovery so the file is
   // found even when working_path is a worktree or workspace clone that does
   // not contain the user's local (often untracked) workflow YAML.
-  let discoveryCwd: string | undefined;
-  if (run.codebase_id) {
-    try {
-      const codebase = await codebaseDb.getCodebase(run.codebase_id);
-      if (codebase) {
-        discoveryCwd = codebase.default_cwd;
-      } else {
-        getLog().warn(
-          { runId, codebaseId: run.codebase_id },
-          'cli.workflow_resume_codebase_not_found'
-        );
-      }
-    } catch (error) {
-      const err = error as Error;
-      getLog().warn(
-        { err, errorType: err.constructor.name, runId, codebaseId: run.codebase_id },
-        'cli.workflow_resume_codebase_lookup_failed'
-      );
-    }
-  }
-  if (discoveryCwd) console.log(`Discovery path: ${discoveryCwd}`);
+  const discoveryCwd = run.codebase_id
+    ? await resolveDiscoveryCwdForCodebase(runId, run.codebase_id, 'resume')
+    : undefined;
 
   // Re-execute via workflowRunCommand with --resume: it locates the prior failed
   // run via findResumableRun and skips already-completed nodes (the executor
@@ -1834,32 +1871,14 @@ export async function workflowApproveCommand(
     );
   }
 
-  // Use the codebase's source path for workflow YAML discovery so the file is
-  // found even when working_path is a worktree or workspace clone that does
-  // not contain the user's local (often untracked) workflow YAML.
-  let discoveryCwd: string | undefined;
-  if (result.codebaseId) {
-    try {
-      const codebase = await codebaseDb.getCodebase(result.codebaseId);
-      if (codebase) {
-        discoveryCwd = codebase.default_cwd;
-      } else {
-        getLog().warn(
-          { runId, codebaseId: result.codebaseId },
-          'cli.workflow_approve_codebase_not_found'
-        );
-      }
-    } catch (error) {
-      const err = error as Error;
-      getLog().warn(
-        { err, errorType: err.constructor.name, runId, codebaseId: result.codebaseId },
-        'cli.workflow_approve_codebase_lookup_failed'
-      );
-    }
-  }
-  if (discoveryCwd) console.log(`Discovery path: ${discoveryCwd}`);
-
   try {
+    // Use the codebase's source path for workflow YAML discovery so the file is
+    // found even when working_path is a worktree or workspace clone that does
+    // not contain the user's local (often untracked) workflow YAML.
+    const discoveryCwd = result.codebaseId
+      ? await resolveDiscoveryCwdForCodebase(runId, result.codebaseId, 'approve')
+      : undefined;
+
     await workflowRunCommand(result.workingPath, result.workflowName, result.userMessage ?? '', {
       resume: true,
       codebaseId: result.codebaseId ?? undefined,
@@ -1954,32 +1973,14 @@ export async function workflowRejectCommand(
     );
   }
 
-  // Use the codebase's source path for workflow YAML discovery so the file is
-  // found even when working_path is a worktree or workspace clone that does
-  // not contain the user's local (often untracked) workflow YAML.
-  let discoveryCwd: string | undefined;
-  if (result.codebaseId) {
-    try {
-      const codebase = await codebaseDb.getCodebase(result.codebaseId);
-      if (codebase) {
-        discoveryCwd = codebase.default_cwd;
-      } else {
-        getLog().warn(
-          { runId, codebaseId: result.codebaseId },
-          'cli.workflow_reject_codebase_not_found'
-        );
-      }
-    } catch (error) {
-      const err = error as Error;
-      getLog().warn(
-        { err, errorType: err.constructor.name, runId, codebaseId: result.codebaseId },
-        'cli.workflow_reject_codebase_lookup_failed'
-      );
-    }
-  }
-  if (discoveryCwd) console.log(`Discovery path: ${discoveryCwd}`);
-
   try {
+    // Use the codebase's source path for workflow YAML discovery so the file is
+    // found even when working_path is a worktree or workspace clone that does
+    // not contain the user's local (often untracked) workflow YAML.
+    const discoveryCwd = result.codebaseId
+      ? await resolveDiscoveryCwdForCodebase(runId, result.codebaseId, 'reject')
+      : undefined;
+
     await workflowRunCommand(result.workingPath, result.workflowName, result.userMessage ?? '', {
       resume: true,
       codebaseId: result.codebaseId ?? undefined,

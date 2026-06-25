@@ -1,7 +1,8 @@
 # Default cap for ralph.sh's outer for-loop.
 max_iterations: 100
 
-# Which agent CLI to invoke per iteration. One of: amp | claude | codex.
+# Which agent CLI to invoke per iteration. One of:
+# amp | claude | codex | pi | test-gpt5.5-codex | ccs-bp
 # Overridden by `--tool <name>` on the command line.
 
 tool: codex

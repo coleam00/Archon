@@ -5555,6 +5555,93 @@ describe('executeDagWorkflow -- retry checkpoints', () => {
     }
   });
 
+  it('persists untracked files from a completed dependency before the next node starts', async () => {
+    const testDir = join(
+      tmpdir(),
+      `dag-checkpoint-untracked-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    const questionsFile = 'specs/008-runtime-settings-background/clarification-questions.md';
+    await mkdir(testDir, { recursive: true });
+    await runGit(testDir, ['init']);
+    await runGit(testDir, ['config', 'user.name', 'Archon Test']);
+    await runGit(testDir, ['config', 'user.email', 'archon-test@example.com']);
+    await writeFile(join(testDir, 'README.md'), 'initial\n');
+    await runGit(testDir, ['add', 'README.md']);
+    await runGit(testDir, ['commit', '-m', 'initial']);
+
+    const upsertCheckpoint = mock(
+      async (data: Parameters<NonNullable<IWorkflowStore['upsertWorkflowNodeCheckpoint']>>[0]) => ({
+        ...data,
+        created_at: new Date(),
+      })
+    );
+    const store = createMockStore();
+    store.upsertWorkflowNodeCheckpoint = upsertCheckpoint;
+    const workflowRun = makeWorkflowRun('checkpoint-untracked-run', {
+      workflow_name: 'checkpoint-untracked-workflow',
+      working_path: testDir,
+      metadata: { retry_epoch: 0 },
+    });
+
+    try {
+      await executeDagWorkflow(
+        createMockDeps(store),
+        createMockPlatform(),
+        'conv-dag',
+        testDir,
+        {
+          name: 'checkpoint-untracked-workflow',
+          nodes: [
+            {
+              id: 'clarify',
+              bash:
+                'mkdir -p .specify specs/008-runtime-settings-background\n' +
+                'printf \'{"feature":"008-runtime-settings-background"}\\n\' > .specify/feature.json\n' +
+                `printf 'question before response\\n' > ${questionsFile}`,
+            },
+            {
+              id: 'clarify-respond',
+              bash: `printf 'response mutation\\n' >> ${questionsFile}`,
+              depends_on: ['clarify'],
+            },
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      const checkpointRows = upsertCheckpoint.mock.calls.map(call => call[0]);
+      const clarifyRespondCheckpoint = checkpointRows.find(
+        row => row.node_id === 'clarify-respond'
+      );
+      expect(clarifyRespondCheckpoint).toBeDefined();
+      expect(clarifyRespondCheckpoint?.created_commit).toBe(true);
+
+      const committedFiles = await runGit(testDir, [
+        'ls-tree',
+        '-r',
+        '--name-only',
+        clarifyRespondCheckpoint!.commit_sha,
+      ]);
+      expect(committedFiles.split('\n')).toContain('.specify/feature.json');
+      expect(committedFiles.split('\n')).toContain(questionsFile);
+      expect(
+        await runGit(testDir, ['show', `${clarifyRespondCheckpoint!.commit_sha}:${questionsFile}`])
+      ).toBe('question before response');
+      expect(await readFile(join(testDir, questionsFile), 'utf8')).toBe(
+        'question before response\nresponse mutation\n'
+      );
+    } finally {
+      await rm(testDir, { recursive: true, force: true });
+    }
+  });
+
   it('skips checkpointing when mutates_checkout is false', async () => {
     const testDir = join(
       tmpdir(),
