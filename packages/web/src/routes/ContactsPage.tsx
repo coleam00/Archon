@@ -12,10 +12,12 @@ import {
 import contactsData from '@/lib/contacts.generated.json';
 import { isContactStub } from '@/lib/contact-utils';
 
+type ContactCategory = 'team' | 'clinical-partners' | 'prospects';
+
 interface Contact {
   id: string;
   slug: string;
-  category: 'team' | 'clinical-partners' | 'prospects';
+  category: ContactCategory;
   name: string;
   role: string;
   company: string;
@@ -30,8 +32,53 @@ interface Contact {
 
 const contactsPayload = contactsData as Partial<{
   generated_at: string;
-  contacts: Contact[];
+  contacts: unknown[];
 }>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function stringField(record: Record<string, unknown>, key: string): string {
+  const value = record[key];
+  return typeof value === 'string' ? value : '';
+}
+
+function stringListField(record: Record<string, unknown>, key: string): string[] {
+  const value = record[key];
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
+}
+
+function categoryField(record: Record<string, unknown>): ContactCategory {
+  const category = stringField(record, 'category');
+  return category === 'team' || category === 'clinical-partners' || category === 'prospects'
+    ? category
+    : 'prospects';
+}
+
+function normalizeContact(row: unknown, index: number): Contact | null {
+  if (!isRecord(row)) return null;
+  const name = stringField(row, 'name').trim();
+  if (!name) return null;
+  const slug = stringField(row, 'slug').trim() || `contact-row-${index + 1}`;
+  return {
+    id: stringField(row, 'id').trim() || slug,
+    slug,
+    category: categoryField(row),
+    name,
+    role: stringField(row, 'role'),
+    company: stringField(row, 'company'),
+    email: stringField(row, 'email'),
+    linkedin: stringField(row, 'linkedin'),
+    phone: stringField(row, 'phone'),
+    status: stringField(row, 'status'),
+    preview: stringField(row, 'preview'),
+    tags: stringListField(row, 'tags'),
+    vaultPath: stringField(row, 'vaultPath') || `contacts.generated.json#row-${index + 1}`,
+  };
+}
 
 function formatGeneratedAt(value: unknown): string {
   if (typeof value !== 'string' || value.length === 0) return '—';
@@ -76,7 +123,9 @@ export function ContactsPage(): React.ReactElement {
     const raw = Array.isArray(contactsPayload.contacts) ? contactsPayload.contacts : [];
     // Filter vault stubs — contacts with TBD role/email are placeholders pending
     // Jason confirmation, not real records. Surface them only via /contacts?include=stubs.
-    return raw.filter(c => !isContactStub(c));
+    return raw
+      .map((row, index) => normalizeContact(row, index))
+      .filter((contact): contact is Contact => contact !== null && !isContactStub(contact));
   }, []);
 
   const filtered = useMemo<Contact[]>(() => {
