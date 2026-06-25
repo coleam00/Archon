@@ -236,12 +236,13 @@ export function FountainPage(): React.ReactElement {
               </h2>
             </div>
             <span className="text-[10px] uppercase tracking-wider text-text-secondary">
-              Packaged executive program · delivered at The Fountain
+              Health-data governance · Fountain pilot venue
             </span>
           </div>
           <p className="mb-4 text-sm text-text-secondary">
-            QEP is the packaged executive program the Fountain stack ladders into. White-label scope
-            in build; PMC owns the physician-practice resale channel.
+            QEP is the health-data governance layer Blake is building with Plaud.ai, with Fountain
+            as the first deployment site. White-label scope is in build; PMC owns the
+            physician-practice resale channel.
           </p>
 
           <div className="grid gap-3 md:grid-cols-3">
