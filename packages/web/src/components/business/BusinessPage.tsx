@@ -177,7 +177,10 @@ export function BusinessPage({
         {kpis && kpis.length > 0 && (
           <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
             {kpis.map(k => (
-              <div key={k.label} className="rounded-lg border border-border bg-surface p-3">
+              <div
+                key={k.label}
+                className="rounded-lg border border-border bg-surface-elevated p-3"
+              >
                 <div className="text-[10px] uppercase tracking-wider text-text-tertiary">
                   {k.label}
                 </div>
@@ -220,7 +223,7 @@ export function BusinessPage({
               <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
                 {sec.items.map((item, idx) => {
                   const inner = (
-                    <article className="rounded-lg border border-border bg-surface p-4 transition-colors hover:border-primary/40">
+                    <article className="rounded-lg border border-border bg-surface-elevated p-4 transition-colors hover:border-primary/40">
                       <div className="flex items-start justify-between gap-2">
                         <h3 className="text-sm font-medium text-text-primary">{item.title}</h3>
                         {item.badge && (
@@ -278,7 +281,7 @@ export function BusinessPage({
               {prospects.map((p, idx) => (
                 <article
                   key={`${p.name}-${idx}`}
-                  className="rounded-lg border border-border bg-surface p-4 transition-colors hover:border-primary/40"
+                  className="rounded-lg border border-border bg-surface-elevated p-4 transition-colors hover:border-primary/40"
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
