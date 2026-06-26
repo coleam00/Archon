@@ -2360,15 +2360,17 @@ async function executeLoopGroupNode(
         logEventStoreError(err, i);
       });
 
-    // Pre-substitute $LOOP_PREV.* refs into the body node prompt fields. The body is a
-    // sealed sub-DAG whose executors build prompts from node definitions; resolving
-    // $LOOP_PREV here (before runLayers) keeps the body executors unaware of the loop.
-    // On iteration 1 loopPrevOutputs is undefined → refs resolve to ''.
+    // Pre-substitute $LOOP_PREV.* refs and $LOOP_USER_INPUT into the body node prompt
+    // fields. The body is a sealed sub-DAG whose executors build prompts from node
+    // definitions; resolving these here (before runLayers) keeps the body executors
+    // unaware of the enclosing loop iteration. On iteration 1 loopPrevOutputs is undefined
+    // → $LOOP_PREV refs resolve to ''; $LOOP_USER_INPUT is '' except on the first resumed
+    // iteration of an interactive loop.
     const prevSnapshot = loopPrevOutputs;
-    const iterBodyNodes =
-      prevSnapshot && prevSnapshot.size > 0
-        ? group.nodes.map(n => applyLoopPrevToBodyNode(n, prevSnapshot))
-        : group.nodes;
+    const userInputForIter = isLoopResume && i === startIteration ? loopUserInput : '';
+    const iterBodyNodes = group.nodes.map(n =>
+      applyLoopPrevToBodyNode(n, prevSnapshot, userInputForIter)
+    );
     // Re-layer from the (possibly substituted) body nodes — runLayers walks ctx.layers,
     // not ctx.nodes, so the layers must reference the substituted nodes to take effect.
     const iterBodyLayers = buildTopologicalLayers(iterBodyNodes);
@@ -2633,16 +2635,24 @@ async function executeLoopGroupNode(
 }
 
 /**
- * Clone a body node with `$LOOP_PREV.<id>.output[.field]` refs pre-substituted into every
- * text field a body executor reads prompts from. Used by {@link executeLoopGroupNode} so
- * the sealed body sub-DAG's executors stay unaware of the enclosing loop iteration.
+ * Clone a body node with `$LOOP_PREV.<id>.output[.field]` refs and `$LOOP_USER_INPUT`
+ * pre-substituted into every text field a body executor reads prompts from. Used by
+ * {@link executeLoopGroupNode} so the sealed body sub-DAG's executors stay unaware of the
+ * enclosing loop iteration (the body's own executors call substituteWorkflowVariables, but
+ * that uses the run's user_message — not the loop's per-iteration user input — so
+ * $LOOP_USER_INPUT must be resolved here, at the loop-group level).
  *
  * Only prompt-bearing fields are substituted in v1; `when:` conditions are NOT (they use
  * evaluateCondition, which does not call substituteLoopPrevRefs). Body authors who need
  * cross-iteration gating should branch on prompt content, not `when:`.
  */
-function applyLoopPrevToBodyNode(node: DagNode, loopPrevOutputs: Map<string, NodeOutput>): DagNode {
-  const sub = (s: string): string => substituteLoopPrevRefs(s, loopPrevOutputs, false);
+function applyLoopPrevToBodyNode(
+  node: DagNode,
+  loopPrevOutputs: Map<string, NodeOutput> | undefined,
+  loopUserInput: string
+): DagNode {
+  const sub = (s: string): string =>
+    substituteLoopPrevRefs(s.replace(/\$LOOP_USER_INPUT/g, loopUserInput), loopPrevOutputs, false);
   if (isLoopNode(node)) return { ...node, loop: { ...node.loop, prompt: sub(node.loop.prompt) } };
   if (isLoopGroupNode(node)) {
     // Nested loop_group: recurse into the body (each body node gets $LOOP_PREV resolved
@@ -2652,7 +2662,9 @@ function applyLoopPrevToBodyNode(node: DagNode, loopPrevOutputs: Map<string, Nod
       ...node,
       loop_group: {
         ...node.loop_group,
-        nodes: node.loop_group.nodes.map(n => applyLoopPrevToBodyNode(n, loopPrevOutputs)),
+        nodes: node.loop_group.nodes.map(n =>
+          applyLoopPrevToBodyNode(n, loopPrevOutputs, loopUserInput)
+        ),
       },
     };
   }

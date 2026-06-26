@@ -10386,4 +10386,281 @@ describe('executeDagWorkflow -- loop_group node', () => {
     expect(calls).toBe(2);
     expect(result).toContain('outer review');
   });
+
+  // --- Dimension 4: interactive gate + resume ---
+
+  it('INTERACTIVE: interactive loop_group pauses at the gate after iteration 1', async () => {
+    // Fresh interactive loop_group: iteration 1 emits no signal → pauses at the gate.
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'iteration 1 draft, awaiting review' };
+      yield { type: 'result', sessionId: 'lg-gate-sess-1' };
+    });
+
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('lg-interactive');
+
+    const nodes: DagNode[] = [
+      {
+        id: 'refine',
+        loop_group: {
+          until: 'APPROVED',
+          max_iterations: 5,
+          fresh_context: false,
+          interactive: true,
+          gate_message: 'Review the result.',
+          nodes: [{ id: 'work', prompt: 'produce a draft', depends_on: [] }],
+        },
+        depends_on: [],
+      },
+    ];
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-lg',
+      testDir,
+      { name: 'lg-interactive', nodes },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    // One AI call (iteration 1), then paused.
+    expect(mockSendQueryDag.mock.calls.length).toBe(1);
+    const pauseCalls = (
+      mockDeps.store.pauseWorkflowRun as Mock<
+        (id: string, ctx: Record<string, unknown>) => Promise<void>
+      >
+    ).mock.calls;
+    expect(pauseCalls.length).toBe(1);
+    expect(pauseCalls[0][1]).toMatchObject({
+      type: 'interactive_loop',
+      nodeId: 'refine',
+      iteration: 1,
+      message: 'Review the result.',
+    });
+  });
+
+  it('INTERACTIVE: resumed loop_group continues from the next iteration and completes', async () => {
+    // Two-call pattern (mirrors the loop: resume test): call 1 pauses at the gate after
+    // iteration 1 (no signal). Call 2 resumes with metadata.approval populated; iteration 2
+    // emits APPROVED → completes.
+    mockSendQueryDag.mockImplementationOnce(function* () {
+      yield { type: 'assistant', content: 'iter1 draft, not approved' };
+      yield { type: 'result', sessionId: 'lg-resume-sess-1' };
+    });
+
+    const mockDeps1 = createMockDeps();
+    const platform1 = createMockPlatform();
+    const freshRun = makeWorkflowRun('lg-resume-fresh');
+
+    const workflow = {
+      name: 'lg-resume',
+      nodes: [
+        {
+          id: 'refine',
+          loop_group: {
+            until: 'APPROVED',
+            max_iterations: 5,
+            fresh_context: false,
+            interactive: true,
+            gate_message: 'Review.',
+            nodes: [
+              { id: 'work', prompt: 'User: $LOOP_USER_INPUT. Draft or APPROVED.', depends_on: [] },
+            ],
+          },
+          depends_on: [],
+        },
+      ] as DagNode[],
+    };
+
+    await executeDagWorkflow(
+      mockDeps1,
+      platform1,
+      'conv-lg',
+      testDir,
+      workflow,
+      freshRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+    // Call 1 paused at iteration 1.
+    expect(mockSendQueryDag.mock.calls.length).toBe(1);
+
+    // ---- Call 2: resume with metadata.approval carrying iter 1 + user input.
+    mockSendQueryDag.mockImplementationOnce(function* () {
+      yield { type: 'assistant', content: 'all good, shipping\nAPPROVED' };
+      yield { type: 'result', sessionId: 'lg-resume-sess-2' };
+    });
+    const mockDeps2 = createMockDeps();
+    const platform2 = createMockPlatform();
+    const resumedRun = makeWorkflowRun('lg-resume-resume', {
+      metadata: {
+        approval: {
+          type: 'interactive_loop',
+          nodeId: 'refine',
+          iteration: 1,
+          sessionId: 'lg-resume-sess-1',
+          message: 'Review.',
+        },
+        loop_user_input: 'looks great',
+      },
+    });
+
+    await executeDagWorkflow(
+      mockDeps2,
+      platform2,
+      'conv-lg',
+      testDir,
+      workflow,
+      resumedRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    // Resumed iteration (iteration 2) ran once more and completed via APPROVED.
+    expect(mockSendQueryDag.mock.calls.length).toBe(2);
+    // The resumed iteration's prompt carried the user input via $LOOP_USER_INPUT.
+    const resumePrompt = mockSendQueryDag.mock.calls[1][0] as string;
+    expect(resumePrompt).toContain('looks great');
+    // Resume completed (no second pause at the gate).
+    const pauseCalls2 = (
+      mockDeps2.store.pauseWorkflowRun as Mock<
+        (id: string, ctx: Record<string, unknown>) => Promise<void>
+      >
+    ).mock.calls;
+    expect(pauseCalls2.length).toBe(0);
+  });
+
+  // --- Dimension 3: cost/token accumulation across iterations ---
+
+  it('COST: accumulates total_cost_usd across loop_group iterations', async () => {
+    // 2 iterations: iter 1 no signal (cost 0.01), iter 2 DONE (cost 0.02).
+    // The group sums per-iteration cost into its NodeExecutionResult; the outer runLayers
+    // then aggregates it into the run's total_cost_usd.
+    let calls = 0;
+    mockSendQueryDag.mockImplementation(function* () {
+      calls++;
+      const cost = calls === 1 ? 0.01 : 0.02;
+      const content = calls === 1 ? 'work in progress' : 'done\nDONE';
+      yield { type: 'assistant', content };
+      yield { type: 'result', sessionId: `s-${calls}`, cost };
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('lg-cost');
+
+    const nodes: DagNode[] = [
+      {
+        id: 'paid',
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 3,
+          fresh_context: false,
+          nodes: [{ id: 'work', prompt: 'do work', depends_on: [] }],
+        },
+        depends_on: [],
+      },
+    ];
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-lg',
+      testDir,
+      { name: 'lg-cost', nodes },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(calls).toBe(2);
+    const completeCalls = (
+      store.completeWorkflowRun as Mock<
+        (id: string, metadata?: Record<string, unknown>) => Promise<void>
+      >
+    ).mock.calls;
+    expect(completeCalls.length).toBe(1);
+    // 0.01 + 0.02 = 0.03 accumulated across the group's 2 iterations.
+    expect(completeCalls[0][1]).toMatchObject({ total_cost_usd: 0.03 });
+  });
+
+  // --- Dimension 2: output_type typed artifact from final iteration ---
+
+  it('OUTPUT_TYPE: loop_group with output_type writes a sidecar from the final terminal output', async () => {
+    // The group declares output_type: 'result'. On completion, the outer runLayers writes
+    // nodes/{groupId}.md from the group's NodeExecutionResult.output (= final iteration's
+    // terminal output).
+    let calls = 0;
+    mockSendQueryDag.mockImplementation(function* () {
+      calls++;
+      const content = calls === 1 ? 'draft v1' : 'final result v2\nDONE';
+      yield { type: 'assistant', content };
+      yield { type: 'result', sessionId: `s-${calls}` };
+    });
+
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('lg-artifact');
+    const artifactsDir = join(testDir, 'artifacts');
+
+    const nodes: DagNode[] = [
+      {
+        id: 'producer',
+        output_type: 'result',
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 3,
+          fresh_context: false,
+          nodes: [{ id: 'work', prompt: 'produce output', depends_on: [] }],
+        },
+        depends_on: [],
+      },
+    ];
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-lg',
+      testDir,
+      { name: 'lg-artifact', nodes },
+      workflowRun,
+      'claude',
+      undefined,
+      artifactsDir,
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(calls).toBe(2);
+    // The sidecar artifact carries the final iteration's terminal output.
+    const written = await readFile(join(artifactsDir, 'nodes', 'producer.md'), 'utf8');
+    expect(written).toContain('final result v2');
+    expect(written).not.toContain('draft v1');
+  });
 });
