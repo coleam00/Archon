@@ -234,7 +234,7 @@ export function StartHerePage(): React.ReactElement {
             to="/fountain"
             icon={ClipboardList}
             title="Fountain WPB / QEP"
-            description="Boutique anti-aging venue + Quantum Executive Protocol packaged program. WPB."
+            description="Boutique anti-aging venue + QEP health-data-governance pilot. WPB."
           />
           <Card
             to="/ihht"
