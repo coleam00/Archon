@@ -307,9 +307,6 @@ export function PMCPage(): React.ReactElement {
   });
 
   const pmcRuns = (runsData?.runs ?? []).filter(r => isPmcScoped(r.workflow_name)).slice(0, 5);
-  const businessName = pmcOverview.frontmatter.name ?? 'Practice Management Consultants';
-  const tagline = pmcOverview.frontmatter.description ?? 'Break Through Your Revenue Ceiling.';
-
   const pmcProspects: BusinessProspect[] = (
     (prospectsData.by_business as Record<string, BusinessProspect[]> | undefined)?.PMC ?? []
   ).slice(0, 9);
@@ -404,36 +401,6 @@ export function PMCPage(): React.ReactElement {
 
   return (
     <div className="flex flex-1 flex-col overflow-auto">
-      {/* HERO — large editorial header on ivory canvas */}
-      <header className="border-b border-border bg-gradient-to-b from-[oklch(0.985_0.012_88)] to-[var(--background)] px-8 pt-10 pb-12">
-        <div className="mx-auto flex max-w-7xl flex-col gap-4">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[var(--primary)]">
-            The Advisory Standard · Medical Practice Advisory
-          </p>
-          <div className="flex flex-wrap items-end justify-between gap-4">
-            <div>
-              <h1
-                className="text-4xl font-bold tracking-tight text-text-primary"
-                style={{ fontFamily: "'Playfair Display', serif" }}
-              >
-                {businessName}
-              </h1>
-              <p className="mt-2 max-w-2xl text-base text-text-secondary">{tagline}</p>
-            </div>
-            {pmcOverview.frontmatter.website && (
-              <a
-                href={`https://${pmcOverview.frontmatter.website}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="rounded-md border border-border bg-card px-3 py-1.5 text-xs text-text-secondary transition-colors hover:border-primary hover:text-primary"
-              >
-                {pmcOverview.frontmatter.website} ↗
-              </a>
-            )}
-          </div>
-        </div>
-      </header>
-
       <div className="mx-auto w-full max-w-7xl space-y-8 px-8 py-8">
         {/* KPI strip */}
         <section className="grid grid-cols-2 gap-3 md:grid-cols-4">

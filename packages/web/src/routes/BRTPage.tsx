@@ -203,48 +203,8 @@ const BRT_PROSPECTS: BusinessProspect[] = (
 ).slice(0, 12);
 
 export function BRTPage(): React.ReactElement {
-  const name = doc.frontmatter.name ?? 'BioReg Technologies';
-
   return (
     <div className="flex flex-1 flex-col overflow-auto">
-      {/* HERO */}
-      <header className="border-b border-border bg-gradient-to-b from-[oklch(0.985_0.012_88)] to-[var(--background)] px-8 pt-10 pb-12">
-        <div className="mx-auto flex max-w-7xl flex-col gap-4">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[var(--primary)]">
-            Clinical PEMF · Biofeedback · LENYO Bioregulation Therapy
-          </p>
-          <div className="flex flex-wrap items-end justify-between gap-4">
-            <div>
-              <h1
-                className="text-4xl font-bold tracking-tight text-text-primary"
-                style={{ fontFamily: "'Playfair Display', serif" }}
-              >
-                {name}
-              </h1>
-              <p className="mt-2 max-w-2xl text-base text-text-secondary">
-                Parasympathetic nervous-system activation via 20+ years of LENYO bioregulation
-                science. US distribution + clinical-partner program.
-              </p>
-            </div>
-            {doc.frontmatter.website && (
-              <a
-                href={
-                  doc.frontmatter.website.startsWith('http://') ||
-                  doc.frontmatter.website.startsWith('https://')
-                    ? doc.frontmatter.website
-                    : `https://${doc.frontmatter.website}`
-                }
-                target="_blank"
-                rel="noopener noreferrer"
-                className="rounded-md border border-border bg-card px-3 py-1.5 text-xs text-text-secondary transition-colors hover:border-primary hover:text-primary"
-              >
-                {doc.frontmatter.website} ↗
-              </a>
-            )}
-          </div>
-        </div>
-      </header>
-
       <div className="mx-auto w-full max-w-7xl space-y-8 px-8 py-8">
         {/* KPI strip */}
         <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
