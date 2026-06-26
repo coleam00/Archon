@@ -192,7 +192,6 @@ export async function checkConnectedProviders(
   loadDeps: () => Promise<ProviderDeps> = defaultLoadProviderDeps
 ): Promise<CheckResult> {
   const label = 'AI credentials';
-  // Guard first: if there's no CLI identity, don't bother loading the module.
   const cliId = env.ARCHON_USER_ID || env.USER || env.USERNAME;
   if (!cliId) {
     return { label, status: 'skip', message: 'no CLI identity (set ARCHON_USER_ID or USER)' };

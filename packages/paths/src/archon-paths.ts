@@ -106,12 +106,7 @@ export function getArchonConfigPath(): string {
   return join(getArchonHome(), 'config.yaml');
 }
 
-/**
- * Get the path to the local auto-provisioned encryption key file.
- * Created on first use (0600) when TOKEN_ENCRYPTION_KEY is not set, so the
- * per-user credential vault works on solo installs with zero env-var setup.
- * Returns: ~/.archon/credential-key
- */
+/** Path where the auto-provisioned encryption key is stored (~/.archon/credential-key). */
 export function getCredentialKeyPath(): string {
   return join(getArchonHome(), 'credential-key');
 }

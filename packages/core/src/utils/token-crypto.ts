@@ -91,10 +91,8 @@ export function readOrCreateLocalKey(keyPath: string): Buffer {
     localKeyCache.set(keyPath, key);
     return key;
   } catch (err) {
-    const e = err as NodeJS.ErrnoException;
     // Only ENOENT falls through — malformed-content errors have no .code and rethrow here too.
-    if (e.code !== 'ENOENT') throw err;
-    // ENOENT → fall through and generate a new key below.
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
   }
 
   const newKey = randomBytes(KEY_BYTES);
