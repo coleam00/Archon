@@ -91,6 +91,7 @@ import {
   routePresetEffort,
   type ModelAliasPreset,
   type ResolvedAiProfile,
+  type TierName,
 } from './model-validation';
 
 /**
@@ -472,7 +473,7 @@ async function resolveNodeProviderAndModel(
   provider: string;
   model: string | undefined;
   options: SendQueryOptions | undefined;
-  tier?: 'small' | 'medium' | 'large';
+  tier?: TierName;
 }> {
   const configuredProvider: string = node.provider ?? workflowProvider;
   let provider: string = configuredProvider;
@@ -762,7 +763,7 @@ async function executeNodeInternal(
   configuredCommandFolder?: string,
   issueContext?: string,
   resolvedModel?: string,
-  resolvedTier?: 'small' | 'medium' | 'large'
+  resolvedTier?: TierName
 ): Promise<NodeExecutionResult> {
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };

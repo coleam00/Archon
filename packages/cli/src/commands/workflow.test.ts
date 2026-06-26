@@ -3,7 +3,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
 import type { WorkflowEmitterEvent } from '@archon/workflows/event-emitter';
-import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
+import { makeTestWorkflow, makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 import {
   workflowListCommand,
   workflowRunCommand,
@@ -17,6 +17,7 @@ import {
   workflowCleanupCommand,
   workflowResetSessionsCommand,
   buildDetachedRunCmd,
+  maybePrintTierNotice,
 } from './workflow';
 
 const mockLogger = {
@@ -3785,5 +3786,109 @@ describe('workflowResetSessionsCommand', () => {
     expect(consoleSpy).toHaveBeenCalledWith(
       JSON.stringify({ workflow: 'feature-dev', deleted: 2, scope: 'conv-1', node: null })
     );
+  });
+});
+
+describe('maybePrintTierNotice', () => {
+  const { loadConfig, getUserAiPrefs } = require('@archon/core') as {
+    loadConfig: ReturnType<typeof mock>;
+    getUserAiPrefs: ReturnType<typeof mock>;
+  };
+  const { readTierNoticeState, markTierNoticeShown } = require('@archon/paths') as {
+    readTierNoticeState: ReturnType<typeof mock>;
+    markTierNoticeShown: ReturnType<typeof mock>;
+  };
+
+  let stderrSpy: ReturnType<typeof spyOn>;
+
+  function makeTierWorkflow(nodeModel?: string, workflowModel?: string) {
+    return makeTestWorkflow({
+      name: 'tier-test',
+      ...(workflowModel !== undefined ? { model: workflowModel } : {}),
+      nodes: [
+        { id: 'n1', command: 'test-cmd', ...(nodeModel !== undefined ? { model: nodeModel } : {}) },
+      ],
+    });
+  }
+
+  beforeEach(() => {
+    stderrSpy = spyOn(process.stderr, 'write').mockImplementation(() => true);
+    (readTierNoticeState as ReturnType<typeof mock>).mockReturnValue(null);
+    (markTierNoticeShown as ReturnType<typeof mock>).mockClear();
+    (loadConfig as ReturnType<typeof mock>).mockResolvedValue({ defaults: {}, tiers: {} });
+    (getUserAiPrefs as ReturnType<typeof mock>).mockResolvedValue({});
+  });
+
+  afterEach(() => {
+    stderrSpy.mockRestore();
+  });
+
+  it('prints nothing and returns when quiet=true', async () => {
+    const workflow = makeTierWorkflow('large');
+    await maybePrintTierNotice(workflow, '/cwd', undefined, true);
+    expect(stderrSpy).not.toHaveBeenCalled();
+    expect(markTierNoticeShown).not.toHaveBeenCalled();
+  });
+
+  it('prints nothing when no nodes use tier keywords', async () => {
+    const workflow = makeTierWorkflow(undefined);
+    await maybePrintTierNotice(workflow, '/cwd', undefined, false);
+    expect(stderrSpy).not.toHaveBeenCalled();
+    expect(markTierNoticeShown).not.toHaveBeenCalled();
+  });
+
+  it('detects workflow-level tier keyword even when no per-node model is set', async () => {
+    const workflow = makeTierWorkflow(undefined, 'large');
+    await maybePrintTierNotice(workflow, '/cwd', undefined, false);
+    expect(stderrSpy).toHaveBeenCalled();
+    expect(markTierNoticeShown).toHaveBeenCalledWith('0.0.0-test');
+  });
+
+  it('prints nothing when the used tier is explicitly configured in install config', async () => {
+    (loadConfig as ReturnType<typeof mock>).mockResolvedValue({
+      defaults: {},
+      tiers: { large: { provider: 'claude', model: 'opus' } },
+    });
+    const workflow = makeTierWorkflow('large');
+    await maybePrintTierNotice(workflow, '/cwd', undefined, false);
+    expect(stderrSpy).not.toHaveBeenCalled();
+    expect(markTierNoticeShown).not.toHaveBeenCalled();
+  });
+
+  it('prints nothing when the notice was already shown for this version', async () => {
+    (readTierNoticeState as ReturnType<typeof mock>).mockReturnValue({
+      shownForVersion: '0.0.0-test',
+    });
+    const workflow = makeTierWorkflow('large');
+    await maybePrintTierNotice(workflow, '/cwd', undefined, false);
+    expect(stderrSpy).not.toHaveBeenCalled();
+    expect(markTierNoticeShown).not.toHaveBeenCalled();
+  });
+
+  it('prints the notice and marks shown when tier is unconfigured and not yet shown', async () => {
+    const workflow = makeTierWorkflow('large');
+    await maybePrintTierNotice(workflow, '/cwd', undefined, false);
+    expect(stderrSpy).toHaveBeenCalled();
+    const written = stderrSpy.mock.calls[0][0] as string;
+    expect(written).toContain('model tiers');
+    expect(markTierNoticeShown).toHaveBeenCalledWith('0.0.0-test');
+  });
+
+  it('returns silently when loadConfig throws', async () => {
+    (loadConfig as ReturnType<typeof mock>).mockRejectedValue(new Error('parse error'));
+    const workflow = makeTierWorkflow('large');
+    await expect(maybePrintTierNotice(workflow, '/cwd', undefined, false)).resolves.toBeUndefined();
+    expect(stderrSpy).not.toHaveBeenCalled();
+    expect(markTierNoticeShown).not.toHaveBeenCalled();
+  });
+
+  it('prints nothing when user prefs already configure the tier', async () => {
+    (getUserAiPrefs as ReturnType<typeof mock>).mockResolvedValue({
+      tiers: { large: { provider: 'claude', model: 'claude-opus-4-8' } },
+    });
+    const workflow = makeTierWorkflow('large');
+    await maybePrintTierNotice(workflow, '/cwd', 'user-1', false);
+    expect(stderrSpy).not.toHaveBeenCalled();
+    expect(markTierNoticeShown).not.toHaveBeenCalled();
   });
 });

@@ -286,9 +286,10 @@ function resolveTitleAssistantType(
 /**
  * Print a one-time per-version tier notice to stderr when the workflow uses
  * unconfigured tier-keyword nodes (small/medium/large resolving via built-in
- * defaults). Suppressed under --quiet. Mirrors `archon ai tier list` formatting.
+ * defaults). Suppressed under --quiet. Uses the same 7-char tier column as
+ * `archon ai tier list`.
  */
-async function maybePrintTierNotice(
+export async function maybePrintTierNotice(
   workflow: WorkflowDefinition,
   cwd: string,
   cliUserId: string | undefined,
@@ -296,8 +297,13 @@ async function maybePrintTierNotice(
 ): Promise<void> {
   if (quiet) return;
 
-  // Collect tier keywords used by the workflow's nodes.
+  // Collect tier keywords used by the workflow — check the workflow-level default
+  // first (model: large at the top level applies to all nodes without overrides),
+  // then per-node overrides.
   const usedTiers = new Set<TierName>();
+  if (typeof workflow.model === 'string' && isTierName(workflow.model)) {
+    usedTiers.add(workflow.model);
+  }
   for (const node of workflow.nodes) {
     if ('model' in node && typeof node.model === 'string' && isTierName(node.model)) {
       usedTiers.add(node.model);
@@ -309,7 +315,8 @@ async function maybePrintTierNotice(
   let config: Awaited<ReturnType<typeof loadConfig>>;
   try {
     config = await loadConfig(cwd);
-  } catch {
+  } catch (err) {
+    getLog().debug({ err }, 'tier_notice.config_load_failed');
     return;
   }
   const configuredTiers: RawTiersConfig = config.tiers ?? {};
@@ -332,7 +339,7 @@ async function maybePrintTierNotice(
   if (!hasUnconfigured) return;
 
   // One-time per Archon version (a version bump may ship new tier defaults).
-  const version = BUNDLED_VERSION ?? 'dev';
+  const version = BUNDLED_VERSION;
   if (readTierNoticeState()?.shownForVersion === version) return;
 
   // Build the resolved profile for the effective default assistant.

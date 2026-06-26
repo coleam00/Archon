@@ -25,14 +25,15 @@ function getStatePath(): string {
   return join(getArchonHome(), STATE_FILE);
 }
 
-/** Read the persisted notice state. Returns null when absent or unreadable. */
+/** Read the persisted notice state. Returns null when absent or unreadable (errors silently discarded). */
 export function readTierNoticeState(): TierNoticeState | null {
   try {
     const raw = readFileSync(getStatePath(), 'utf-8');
     const data = JSON.parse(raw) as TierNoticeState;
     if (typeof data.shownForVersion !== 'string') return null;
     return data;
-  } catch {
+  } catch (err) {
+    log.debug({ err }, 'tier_notice.read_failed');
     return null;
   }
 }

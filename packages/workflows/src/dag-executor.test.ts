@@ -1258,6 +1258,14 @@ describe('executeDagWorkflow -- tool restrictions', () => {
     expect(optionsArg.model).toBe('opus');
     const nodeConfig = optionsArg.nodeConfig as Record<string, unknown>;
     expect(nodeConfig.effort).toBe('max');
+
+    // Verify that the node_started event carries the resolved tier and model.
+    const createEventCalls = (mockDeps.store.createWorkflowEvent as ReturnType<typeof mock>).mock
+      .calls as Array<[{ event_type: string; data?: Record<string, unknown> }]>;
+    const nodeStartedCall = createEventCalls.find(([arg]) => arg.event_type === 'node_started');
+    expect(nodeStartedCall).toBeDefined();
+    expect(nodeStartedCall?.[0].data?.tier).toBe('large');
+    expect(nodeStartedCall?.[0].data?.model).toBe('opus');
   });
 
   it('passes literal node model through unchanged', async () => {
