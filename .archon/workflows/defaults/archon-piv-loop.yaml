@@ -772,10 +772,15 @@ nodes:
   - id: verify-pr-base
     bash: |
       set -euo pipefail
+      HEAD_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+      PR_NUMBER=$(gh pr list --head "$HEAD_BRANCH" --state open --json number -q '.[0].number')
+      if [ -z "$PR_NUMBER" ]; then
+        echo "No open PR found for branch $HEAD_BRANCH" >&2
+        exit 1
+      fi
       EXPECTED="$BASE_BRANCH"
-      ACTUAL=$(gh pr view --json baseRefName -q '.baseRefName')
+      ACTUAL=$(gh pr view "$PR_NUMBER" --json baseRefName -q '.baseRefName')
       if [ "$ACTUAL" != "$EXPECTED" ]; then
-        PR_NUMBER=$(gh pr view --json number -q '.number')
         echo "Base mismatch on PR #$PR_NUMBER: expected=$EXPECTED actual=$ACTUAL — re-targeting" >&2
         gh pr edit "$PR_NUMBER" --base "$EXPECTED"
       else
