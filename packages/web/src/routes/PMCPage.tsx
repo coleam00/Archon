@@ -324,6 +324,10 @@ export function PMCPage(): React.ReactElement {
   const prospectContactTotals = isNumberRecord(prospectContactsPayload.totals)
     ? prospectContactsPayload.totals
     : {};
+  const playgroundPayload = playgroundData as { sequences?: unknown };
+  const playgroundSequenceCount = Array.isArray(playgroundPayload.sequences)
+    ? playgroundPayload.sequences.length
+    : 0;
   const [prospectSearch, setProspectSearch] = useState('');
   const [prospectBrandFilter, setProspectBrandFilter] = useState('all');
   const [prospectStateFilter, setProspectStateFilter] = useState('all');
@@ -587,7 +591,7 @@ export function PMCPage(): React.ReactElement {
                 Pipeline funnel — Apollo to audit close
               </h3>
               <span className="text-[10px] text-text-tertiary">
-                Live · {playgroundData.sequences?.length ?? 0} sequences aggregated
+                Live · {playgroundSequenceCount} sequences aggregated
               </span>
             </div>
             <p className="mb-3 text-[11px] text-text-tertiary">
