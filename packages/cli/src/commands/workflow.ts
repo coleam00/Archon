@@ -350,7 +350,10 @@ export async function maybePrintTierNotice(
       globalTiers: configuredTiers,
       userTiers,
     }).aliases;
-  } catch {
+  } catch (err) {
+    // Non-fatal: a corrupt tier/alias config can make buildAiProfile throw —
+    // skip the notice rather than blocking the run.
+    getLog().debug({ err }, 'tier_notice.build_profile_failed');
     return;
   }
 

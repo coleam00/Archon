@@ -275,6 +275,9 @@ interface WorkflowLevelOptions {
   fallbackModel?: string;
   betas?: string[];
   sandbox?: SandboxSettings;
+  /** Workflow-level tier keyword (when `workflow.model` is small/medium/large), so
+   *  nodes that inherit the workflow model can still surface the `← tier` annotation. */
+  workflowTier?: 'small' | 'medium' | 'large';
 }
 
 /** Internal node execution result — extends NodeOutput with cost data for aggregation. */
@@ -649,9 +652,15 @@ async function resolveNodeProviderAndModel(
   };
 
   // `node.model` is the original ref (e.g. "large"); `model` is the resolved
-  // string (e.g. "opus"). Only surface `tier` when the ref was a tier keyword.
+  // string (e.g. "opus"). Surface `tier` when the ref was a tier keyword — from
+  // the node's own `model`, or (when the node inherits the workflow-level model)
+  // from the workflow tier, mirroring the effectivePreset inheritance condition.
   const tier: 'small' | 'medium' | 'large' | undefined =
-    node.model && isTierName(node.model) ? node.model : undefined;
+    node.model && isTierName(node.model)
+      ? node.model
+      : !node.model && provider === workflowProvider
+        ? workflowLevelOptions.workflowTier
+        : undefined;
 
   return { provider, model, options, tier };
 }
@@ -3049,6 +3058,9 @@ export async function executeDagWorkflow(
     nodes: readonly DagNode[];
     /** Workflow-level default for per-node `persist_session` (read directly here). */
     persist_sessions?: boolean;
+    /** Raw workflow-level `model` ref — used only to derive the workflow tier
+     *  keyword for node_started attribution (resolution uses `workflowModel`). */
+    model?: string;
   } & WorkflowLevelOptions,
   workflowRun: WorkflowRun,
   workflowProvider: string,
@@ -3067,12 +3079,14 @@ export async function executeDagWorkflow(
   workflowPreset?: ModelAliasPreset
 ): Promise<string | undefined> {
   const dagStartTime = Date.now();
+  const workflowTier = workflow.model && isTierName(workflow.model) ? workflow.model : undefined;
   const workflowLevelOptions = {
     effort: workflow.effort,
     thinking: workflow.thinking,
     fallbackModel: workflow.fallbackModel,
     betas: workflow.betas,
     sandbox: workflow.sandbox,
+    workflowTier,
   };
   const layers = buildTopologicalLayers(workflow.nodes);
   const nodeOutputs = new Map<string, NodeOutput>();
