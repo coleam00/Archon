@@ -28,13 +28,13 @@ const REHYPE_PLUGINS = [rehypeHighlight];
 const doc = parseFrontmatter(overviewRaw);
 
 interface PmcProspectContact {
-  brand_fit?: string[];
+  brand_fit: string[];
   apollo_sequence_name?: string;
 }
 
 interface PmcProspectContactsPayload {
   brand_counts?: Record<string, number>;
-  prospects?: PmcProspectContact[];
+  prospects?: unknown[];
 }
 
 interface BrtSequence {
@@ -52,6 +52,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function safeNumber(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function normalizeProspectContact(value: unknown): PmcProspectContact | null {
+  if (!isRecord(value)) return null;
+
+  const brandFit = Array.isArray(value.brand_fit)
+    ? value.brand_fit.filter((brand): brand is string => typeof brand === 'string')
+    : [];
+  const sequence =
+    typeof value.apollo_sequence_name === 'string' ? value.apollo_sequence_name : undefined;
+
+  if (brandFit.length === 0) return null;
+
+  return {
+    brand_fit: brandFit,
+    ...(sequence ? { apollo_sequence_name: sequence } : {}),
+  };
 }
 
 function isBrtSequence(value: unknown): value is BrtSequence {
@@ -109,9 +126,11 @@ function classifyBrtIcp(contact: PmcProspectContact): string {
 const prospectContacts = prospectContactsData as Partial<PmcProspectContactsPayload>;
 const safeProspectContacts = Array.isArray(prospectContacts.prospects)
   ? prospectContacts.prospects
+      .map(normalizeProspectContact)
+      .filter((contact): contact is PmcProspectContact => contact !== null)
   : [];
 const BRT_PROSPECT_CONTACTS = safeProspectContacts.filter(contact =>
-  contact.brand_fit?.includes('BRT')
+  contact.brand_fit.includes('BRT')
 );
 const BRT_ACTIVE_CONTACT_COUNT = safeNumber(
   prospectContacts.brand_counts?.BRT,
