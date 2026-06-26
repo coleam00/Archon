@@ -8,9 +8,15 @@
  * - Content blocks are typed via inline assertions for clarity
  *
  * Authentication:
- * - CLAUDE_USE_GLOBAL_AUTH=true: Use global auth from `claude /login`, filter env tokens
- * - CLAUDE_USE_GLOBAL_AUTH=false: Use explicit tokens from env vars
- * - Not set: Auto-detect - use tokens if present in env, otherwise global auth
+ * - Credentials reach the subprocess via process.env (already cleaned by
+ *   stripCwdEnv) PLUS any per-request `requestOptions.env` (per-user delivered
+ *   keys/subscriptions), merged LAST so it wins. `buildSubprocessEnv` does NOT
+ *   filter tokens — it only logs which posture process.env shows (explicit
+ *   token present vs not); the historical env-token allowlist was removed in
+ *   #1067, so the log can read "global" while a per-request token authenticates.
+ * - CLAUDE_USE_GLOBAL_AUTH is an Archon-only boot sentinel (set for solo
+ *   installs with no creds — see server/src/boot/claude-auth-posture.ts). The
+ *   Claude CLI itself ignores it; it neither gates nor filters env here.
  *
  * Binary resolution:
  * - In compiled binaries, `pathToClaudeCodeExecutable` is resolved from

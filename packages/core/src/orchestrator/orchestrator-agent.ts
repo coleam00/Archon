@@ -1595,7 +1595,11 @@ async function handleStreamMode(
           },
           'ai_result_error'
         );
-        const syntheticError = new Error(msg.errorSubtype ?? 'AI result error');
+        // Carry the SDK error detail (not just the subtype code) into the
+        // formatter so it can classify actionable cases like "Not logged in"
+        // rather than emitting a generic message (#1983).
+        const errorDetail = [msg.errorSubtype, ...(msg.errors ?? [])].filter(Boolean).join(': ');
+        const syntheticError = new Error(errorDetail || 'AI result error');
         await platform.sendMessage(conversationId, classifyAndFormatError(syntheticError));
         if (newSessionId) {
           await tryPersistSessionId(session.id, newSessionId);
@@ -1809,7 +1813,11 @@ async function handleBatchMode(
           },
           'ai_result_error'
         );
-        const syntheticError = new Error(msg.errorSubtype ?? 'AI result error');
+        // Carry the SDK error detail (not just the subtype code) into the
+        // formatter so it can classify actionable cases like "Not logged in"
+        // rather than emitting a generic message (#1983).
+        const errorDetail = [msg.errorSubtype, ...(msg.errors ?? [])].filter(Boolean).join(': ');
+        const syntheticError = new Error(errorDetail || 'AI result error');
         await platform.sendMessage(conversationId, classifyAndFormatError(syntheticError));
         if (newSessionId) {
           await tryPersistSessionId(session.id, newSessionId);
