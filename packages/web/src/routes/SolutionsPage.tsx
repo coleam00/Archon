@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router';
-import { Search, ExternalLink, Mail, HardDrive } from 'lucide-react';
+import { Search, ExternalLink, Briefcase, CheckCircle2, Eye, Mail, HardDrive } from 'lucide-react';
 import solutionsData from '@/lib/solutions.generated.json';
 
 type Status = 'active' | 'exploring' | 'prospect' | 'dormant' | '';
@@ -97,6 +97,13 @@ function normalizeSolution(row: unknown, index: number): Solution | null {
   };
 }
 
+function formatTimestamp(iso: string): string {
+  if (!iso) return 'never';
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) return iso;
+  return parsed.toLocaleString();
+}
+
 export function SolutionsPage(): React.ReactElement {
   const [searchParams] = useSearchParams();
   const view = (searchParams.get('view') ?? 'jason').toLowerCase();
@@ -113,10 +120,13 @@ export function SolutionsPage(): React.ReactElement {
         .map((solution, index) => normalizeSolution(solution, index))
         .filter((solution): solution is Solution => solution !== null)
     : [];
+  const generatedAt = solutionsPayload.generated_at ?? '';
+
   const visibleSolutions = useMemo<Solution[]>(
     () => allSolutions.filter(s => visibleForView(view, s.audience)),
     [allSolutions, view]
   );
+  const hiddenCount = allSolutions.length - visibleSolutions.length;
 
   const filtered = useMemo<Solution[]>(() => {
     const q = search.trim().toLowerCase();
@@ -137,11 +147,54 @@ export function SolutionsPage(): React.ReactElement {
     });
   }, [visibleSolutions, search]);
 
+  const counts = useMemo<Record<string, number>>(() => {
+    const out: Record<string, number> = {};
+    for (const s of visibleSolutions) {
+      out[s.status] = (out[s.status] ?? 0) + 1;
+    }
+    return out;
+  }, [visibleSolutions]);
+
   const selected: Solution | null =
     (selectedSlug && visibleSolutions.find(s => s.slug === selectedSlug)) || null;
 
   return (
     <div className="flex h-full flex-1 flex-col gap-4 p-6">
+      {/* Header */}
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center gap-3">
+          <Briefcase className="h-6 w-6 text-text-secondary" />
+          <h1 className="text-2xl font-semibold text-text-primary">Solutions & Partners</h1>
+          <span className="rounded-full bg-surface-inset px-2 py-0.5 text-xs text-text-secondary">
+            view: {view}
+          </span>
+        </div>
+        <p className="text-sm text-text-secondary">
+          Third-party solutions, distributorships, and strategic partners. Distinct from PMC
+          sub-brands (which Jason owns) and clients (orgs Jason serves).
+        </p>
+        <div className="flex flex-wrap items-center gap-4 text-xs text-text-tertiary">
+          <span>last build: {formatTimestamp(generatedAt)}</span>
+          <span>
+            {visibleSolutions.length} solution
+            {visibleSolutions.length === 1 ? '' : 's'}
+          </span>
+          {Object.entries(counts).map(([status, n]) => (
+            <span
+              key={status}
+              className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 ${STATUS_STYLE[status] ?? STATUS_STYLE['']}`}
+            >
+              <CheckCircle2 className="h-3 w-3" /> {status || 'other'}: {n}
+            </span>
+          ))}
+          {hiddenCount > 0 && (
+            <span className="inline-flex items-center gap-1 text-text-tertiary">
+              <Eye className="h-3 w-3" /> {hiddenCount} hidden by view
+            </span>
+          )}
+        </div>
+      </div>
+
       {/* Search */}
       <div className="relative">
         <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary" />

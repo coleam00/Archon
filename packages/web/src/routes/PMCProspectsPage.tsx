@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Search } from 'lucide-react';
+import { Database, Search, Target, Users } from 'lucide-react';
 import prospectContactsData from '@/lib/pmc-prospect-contacts.generated.json';
 
 interface PmcProspectContact {
@@ -60,6 +60,19 @@ const STRATEGIC_STATE_TONE: Record<string, string> = {
   cold: 'border-border bg-card text-text-tertiary',
   dead: 'border-red-700/40 bg-red-100 text-red-800',
 };
+
+const METRIC_CARDS: {
+  label: string;
+  key: string;
+  icon: typeof Database;
+}[] = [
+  { label: 'Hot', key: 'hot', icon: Target },
+  { label: 'Engaged', key: 'engaged', icon: Users },
+  { label: 'Warmup active', key: 'warmup_active', icon: Database },
+  { label: 'Apollo covered', key: 'apollo_covered', icon: Database },
+  { label: 'LinkedIn covered', key: 'linkedin_covered', icon: Users },
+  { label: 'Dial covered', key: 'dial_covered', icon: Target },
+];
 
 function formatProspectDate(value?: string): string {
   if (!value) return 'n/a';
@@ -157,6 +170,16 @@ function isProspectContact(value: PmcProspectContact | null): value is PmcProspe
   return value !== null;
 }
 
+function safeMetricRecord(value: unknown): Record<string, number> {
+  if (!isRecord(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value).filter((entry): entry is [string, number] => {
+      const [, metric] = entry;
+      return typeof metric === 'number' && Number.isFinite(metric);
+    })
+  );
+}
+
 export function PMCProspectsPage(): React.ReactElement {
   const prospectContactsPayload = prospectContactsData as Partial<PmcProspectContactsPayload> & {
     prospects?: unknown;
@@ -165,6 +188,7 @@ export function PMCProspectsPage(): React.ReactElement {
   const prospectContacts = Array.isArray(prospectContactsPayload.prospects)
     ? prospectContactsPayload.prospects.map(normalizeProspectContact).filter(isProspectContact)
     : [];
+  const prospectContactTotals = safeMetricRecord(prospectContactsPayload.totals);
   const prospectBrandOptions = useMemo(() => {
     const brandCounts = isRecord(prospectContactsPayload.brand_counts)
       ? Object.keys(prospectContactsPayload.brand_counts).filter(Boolean)
@@ -222,6 +246,48 @@ export function PMCProspectsPage(): React.ReactElement {
   return (
     <div className="flex flex-1 flex-col gap-6 p-6">
       <section className="rounded-2xl border border-border bg-card p-5 shadow-sm">
+        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[var(--primary)]">
+              PMC Prospects
+            </p>
+            <h1
+              className="mt-1 text-3xl font-semibold text-text-primary"
+              style={{ fontFamily: "'Playfair Display', serif" }}
+            >
+              Outreach command center
+            </h1>
+            <p className="mt-1 max-w-3xl text-sm text-text-secondary">
+              Deduped prospect rows with identifiers, channel coverage, engagement subjects,
+              approach angles, notes, and next steps across PMC, BRT, Weave, and Neural Cloud.
+            </p>
+          </div>
+          <div className="rounded-lg border border-border bg-background px-3 py-2 text-[11px] text-text-tertiary">
+            <div>
+              {(prospectContactTotals.prospects ?? prospectContacts.length).toLocaleString()}{' '}
+              deduped contacts · {filteredProspectContacts.length.toLocaleString()} shown by filter
+            </div>
+            <div>Refresh: {formatProspectDate(prospectContactsPayload.generated_at)}</div>
+          </div>
+        </div>
+
+        <div className="mb-4 grid grid-cols-2 gap-2 md:grid-cols-6">
+          {METRIC_CARDS.map(metric => {
+            // eslint-disable-next-line @typescript-eslint/naming-convention
+            const MetricIcon = metric.icon;
+            const value = prospectContactTotals[metric.key] ?? 0;
+            return (
+              <div key={metric.key} className="rounded-xl border border-border bg-background p-3">
+                <div className="flex items-center gap-1 text-[10px] uppercase tracking-wider text-text-tertiary">
+                  <MetricIcon className="h-3 w-3" />
+                  {metric.label}
+                </div>
+                <div className="mt-1 text-xl font-semibold text-text-primary">{value}</div>
+              </div>
+            );
+          })}
+        </div>
+
         <div className="mb-4 grid gap-2 md:grid-cols-[1fr_180px_180px]">
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary" />

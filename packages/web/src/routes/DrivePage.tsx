@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router';
-import { Search, ExternalLink, Folder, Eye } from 'lucide-react';
+import { Search, ExternalLink, HardDrive, RefreshCw, Folder, Eye, EyeOff } from 'lucide-react';
 import driveData from '@/lib/drive-index.generated.json';
 
 type Audience = 'all' | 'internal' | 'partner-only' | 'jason-only';
@@ -123,11 +123,14 @@ export function DrivePage(): React.ReactElement {
         .map(normalizeDriveFolder)
         .filter((folder): folder is DriveFolder => folder !== null)
     : [];
+  const generatedAt = drivePayload.generated_at;
+
   // Audience-filter at the folder level
   const visibleFolders = useMemo<DriveFolder[]>(
     () => allFolders.filter(f => visibleForView(view, f.audience)),
     [allFolders, view]
   );
+  const hiddenCount = allFolders.length - visibleFolders.length;
 
   const folderFiltered = useMemo<DriveFolder[]>(() => {
     const q = folderSearch.trim().toLowerCase();
@@ -147,8 +150,48 @@ export function DrivePage(): React.ReactElement {
     );
   }, [selected, fileSearch]);
 
+  const totalFiles = visibleFolders.reduce((sum, f) => sum + f.fileCount, 0);
+
   return (
     <div className="flex h-full flex-1 flex-col gap-4 p-6">
+      {/* Header */}
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center gap-3">
+          <HardDrive className="h-6 w-6 text-text-secondary" />
+          <h1 className="text-2xl font-semibold text-text-primary">Drive Index</h1>
+          <span className="rounded-full bg-surface-inset px-2 py-0.5 text-xs text-text-secondary">
+            view: {view}
+          </span>
+        </div>
+        <p className="text-sm text-text-secondary">
+          PMC Assets folder, indexed from the second-brain vault. Hourly snapshot decouples the
+          dashboard from live Drive OAuth.
+        </p>
+        <div className="flex flex-wrap items-center gap-4 text-xs text-text-tertiary">
+          <span className="inline-flex items-center gap-1">
+            <RefreshCw className="h-3 w-3" />
+            last build: {formatTimestamp(generatedAt)}
+          </span>
+          <span>
+            {visibleFolders.length} folders &middot; {totalFiles} files
+          </span>
+          {hiddenCount > 0 && (
+            <span className="inline-flex items-center gap-1">
+              <EyeOff className="h-3 w-3" />
+              {hiddenCount} folder{hiddenCount === 1 ? '' : 's'} hidden by view
+            </span>
+          )}
+          <a
+            href="https://drive.google.com/drive/folders/1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN"
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 text-blue-700 hover:underline"
+          >
+            open PMC Assets in Drive <ExternalLink className="h-3 w-3" />
+          </a>
+        </div>
+      </div>
+
       <div className="flex min-h-0 flex-1 gap-4">
         {/* Folder rail */}
         <div className="flex w-72 flex-col gap-2 overflow-hidden rounded-lg border border-border bg-surface-elevated p-3">
