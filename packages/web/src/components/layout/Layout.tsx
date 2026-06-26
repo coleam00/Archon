@@ -9,13 +9,13 @@ export function Layout(): React.ReactElement {
   const summary = getTabSummary(location.pathname);
 
   return (
-    <div className="flex h-screen flex-col bg-background">
+    <div className="flex h-screen min-h-0 flex-col bg-background">
       <TopNav />
       {/* Seamless blend strip between navy nav and ivory canvas */}
-      <div className="pmc-nav-blend" aria-hidden="true" />
-      <main className="flex flex-1 flex-col overflow-hidden">
+      <div className="pmc-nav-blend shrink-0" aria-hidden="true" />
+      <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
         {summary && (
-          <div className="border-b border-border bg-[oklch(0.985_0.012_88)] px-6 py-4">
+          <div className="shrink-0 border-b border-border bg-[oklch(0.985_0.012_88)] px-6 py-4">
             <div className="mx-auto max-w-7xl">
               <TabSummary
                 title={summary.title}
@@ -29,9 +29,13 @@ export function Layout(): React.ReactElement {
             </div>
           </div>
         )}
-        <Outlet />
+        <div id="dashboard-tab-content" className="min-h-0 flex-1 overflow-auto scroll-mt-4">
+          <Outlet />
+        </div>
       </main>
-      <DeployStatusFooter />
+      <div className="shrink-0">
+        <DeployStatusFooter />
+      </div>
     </div>
   );
 }
