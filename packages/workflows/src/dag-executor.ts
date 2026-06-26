@@ -86,6 +86,7 @@ import {
 } from './executor-shared';
 import {
   isLiteralSpec,
+  isTierName,
   resolveModelSpec,
   routePresetEffort,
   type ModelAliasPreset,
@@ -471,6 +472,7 @@ async function resolveNodeProviderAndModel(
   provider: string;
   model: string | undefined;
   options: SendQueryOptions | undefined;
+  tier?: 'small' | 'medium' | 'large';
 }> {
   const configuredProvider: string = node.provider ?? workflowProvider;
   let provider: string = configuredProvider;
@@ -645,7 +647,12 @@ async function resolveNodeProviderAndModel(
     assistantConfig,
   };
 
-  return { provider, model, options };
+  // `node.model` is the original ref (e.g. "large"); `model` is the resolved
+  // string (e.g. "opus"). Only surface `tier` when the ref was a tier keyword.
+  const tier: 'small' | 'medium' | 'large' | undefined =
+    node.model && isTierName(node.model) ? node.model : undefined;
+
+  return { provider, model, options, tier };
 }
 
 /** Evaluate trigger rule for a node given its upstream states */
@@ -753,7 +760,9 @@ async function executeNodeInternal(
   nodeOutputs: Map<string, NodeOutput>,
   resumeSessionId: string | undefined,
   configuredCommandFolder?: string,
-  issueContext?: string
+  issueContext?: string,
+  resolvedModel?: string,
+  resolvedTier?: 'small' | 'medium' | 'large'
 ): Promise<NodeExecutionResult> {
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -768,7 +777,7 @@ async function executeNodeInternal(
       workflow_run_id: workflowRun.id,
       event_type: 'node_started',
       step_name: node.id,
-      data: { command: node.command ?? null, provider },
+      data: { command: node.command ?? null, provider, model: resolvedModel, tier: resolvedTier },
     })
     .catch((err: Error) => {
       getLog().error(
@@ -783,6 +792,9 @@ async function executeNodeInternal(
     runId: workflowRun.id,
     nodeId: node.id,
     nodeName: node.command ?? node.id,
+    provider,
+    model: resolvedModel,
+    tier: resolvedTier,
   });
 
   // Load prompt
@@ -2931,7 +2943,12 @@ async function executeApprovalNode(
       ...(node.idle_timeout ? { idle_timeout: node.idle_timeout } : {}),
     };
 
-    const { provider, options: nodeOptions } = await resolveNodeProviderAndModel(
+    const {
+      provider,
+      model: resolvedNodeModel,
+      options: nodeOptions,
+      tier: resolvedTier,
+    } = await resolveNodeProviderAndModel(
       syntheticNode,
       workflowProvider,
       workflowModel,
@@ -2961,7 +2978,9 @@ async function executeApprovalNode(
       nodeOutputs,
       undefined, // fresh session
       configuredCommandFolder,
-      issueContext
+      issueContext,
+      resolvedNodeModel,
+      resolvedTier
     );
 
     if (output.state === 'failed') {
@@ -3435,7 +3454,12 @@ export async function executeDagWorkflow(
           }
 
           // 4. Resolve per-node provider/model/options
-          const { provider, options: nodeOptions } = await resolveNodeProviderAndModel(
+          const {
+            provider,
+            model: resolvedNodeModel,
+            options: nodeOptions,
+            tier: resolvedTier,
+          } = await resolveNodeProviderAndModel(
             node,
             workflowProvider,
             workflowModel,
@@ -3562,7 +3586,9 @@ export async function executeDagWorkflow(
               // ensures the source is never mutated, so retries can safely resume from it.
               resumeSessionId,
               configuredCommandFolder,
-              issueContext
+              issueContext,
+              resolvedNodeModel,
+              resolvedTier
             );
 
             if (output.state !== 'failed') break;

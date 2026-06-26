@@ -84,6 +84,9 @@ interface NodeStartedEvent {
   runId: string;
   nodeId: string;
   nodeName: string; // command name or node.id for inline prompts
+  provider?: string; // resolved AI provider (absent for bash/script nodes)
+  model?: string; // resolved model string (absent for bash/script nodes)
+  tier?: 'small' | 'medium' | 'large'; // only set when node.model was a tier keyword
 }
 
 interface NodeCompletedEvent {

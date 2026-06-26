@@ -35,6 +35,9 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
   getArchonHome: mock(() => '/home/test/.archon'),
   BUNDLED_IS_BINARY: false,
+  BUNDLED_VERSION: '0.0.0-test',
+  readTierNoticeState: mock(() => null),
+  markTierNoticeShown: mock(() => undefined),
 }));
 
 // Mock @archon/isolation (getIsolationProvider moved here from @archon/core)
@@ -71,6 +74,7 @@ mock.module('@archon/core', () => ({
   loadConfig: mock(() => Promise.resolve({ defaults: {} })),
   generateAndSetTitle: mock(() => Promise.resolve()),
   loadRepoConfig: mock(() => Promise.resolve(null)),
+  getUserAiPrefs: mock(() => Promise.resolve({})),
   createWorkflowStore: mock(() => ({
     createWorkflowEvent: mock(() => Promise.resolve()),
   })),
@@ -3412,6 +3416,74 @@ describe('workflowRunCommand — progress rendering', () => {
     await workflowRunCommand('/test/path', 'plan', 'hello', {});
 
     expect(stderrSpy).toHaveBeenCalledWith('[classify] Started\n');
+  });
+
+  it('should write node_started with provider/model/tier suffix for tier-resolved nodes', async () => {
+    setupWorkflowMocks();
+
+    const { executeWorkflow } = require('@archon/workflows/executor');
+    (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
+      if (capturedSubscribeHandler) {
+        capturedSubscribeHandler({
+          type: 'node_started',
+          runId: 'run-1',
+          nodeId: 'implement',
+          nodeName: 'implement',
+          provider: 'claude',
+          model: 'opus',
+          tier: 'large',
+        });
+      }
+      return { success: true, workflowRunId: 'run-1' };
+    });
+
+    await workflowRunCommand('/test/path', 'plan', 'hello', {});
+
+    expect(stderrSpy).toHaveBeenCalledWith('[implement] Started  (claude/opus ← large)\n');
+  });
+
+  it('should write node_started with provider/model suffix (no tier) for literal-model nodes', async () => {
+    setupWorkflowMocks();
+
+    const { executeWorkflow } = require('@archon/workflows/executor');
+    (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
+      if (capturedSubscribeHandler) {
+        capturedSubscribeHandler({
+          type: 'node_started',
+          runId: 'run-1',
+          nodeId: 'classify',
+          nodeName: 'classify',
+          provider: 'claude',
+          model: 'claude-haiku-4-5',
+        });
+      }
+      return { success: true, workflowRunId: 'run-1' };
+    });
+
+    await workflowRunCommand('/test/path', 'plan', 'hello', {});
+
+    expect(stderrSpy).toHaveBeenCalledWith('[classify] Started  (claude/claude-haiku-4-5)\n');
+  });
+
+  it('should write a bare node_started line when no provider/model (bash/script node)', async () => {
+    setupWorkflowMocks();
+
+    const { executeWorkflow } = require('@archon/workflows/executor');
+    (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
+      if (capturedSubscribeHandler) {
+        capturedSubscribeHandler({
+          type: 'node_started',
+          runId: 'run-1',
+          nodeId: 'build',
+          nodeName: 'build',
+        });
+      }
+      return { success: true, workflowRunId: 'run-1' };
+    });
+
+    await workflowRunCommand('/test/path', 'plan', 'hello', {});
+
+    expect(stderrSpy).toHaveBeenCalledWith('[build] Started\n');
   });
 
   it('should write node_completed event with duration to stderr', async () => {
