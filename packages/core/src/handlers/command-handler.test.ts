@@ -474,6 +474,20 @@ describe('CommandHandler', () => {
       expect(result.args).toEqual(['plan', '']);
     });
 
+    test('should unescape quoted workflow suggestions', () => {
+      const result = parseCommand(
+        '/workflow run test --force "fix \\\\ path \\"quoted\\" \\`tick\\`"'
+      );
+      expect(result.command).toBe('workflow');
+      expect(result.args).toEqual(['run', 'test', '--force', 'fix \\ path "quoted" `tick`']);
+    });
+
+    test('should unescape single quoted strings', () => {
+      const result = parseCommand("/command-invoke plan 'it\\'s \\\\ ready'");
+      expect(result.command).toBe('command-invoke');
+      expect(result.args).toEqual(['plan', "it's \\ ready"]);
+    });
+
     test('should return empty command for non-slash-prefixed input (Windows Git Bash path expansion)', () => {
       const result = parseCommand('C:/Program Files/Git/status');
       expect(result.command).toBe('');
@@ -1401,7 +1415,7 @@ describe('CommandHandler', () => {
     });
 
     describe('/workflow resume', () => {
-      test('should indicate failed run is ready to resume', async () => {
+      test('should return workflow dispatch data for failed run resume', async () => {
         const run = {
           id: 'run-123',
           workflow_name: 'implement',
@@ -1417,12 +1431,20 @@ describe('CommandHandler', () => {
           working_path: '/workspace/wt',
         };
         mockGetWorkflowRun.mockResolvedValueOnce(run);
+        spyDiscoverWorkflows.mockResolvedValueOnce({
+          workflows: [
+            makeTestWorkflowWithSource({ name: 'implement', description: 'Implement changes' }),
+          ],
+          errors: [],
+        });
 
         const result = await handleCommand(baseConversation, '/workflow resume run-123');
 
         expect(result.success).toBe(true);
-        expect(result.message).toContain('ready to resume');
-        expect(result.message).toContain('implement');
+        expect(result.message).toContain('Resuming workflow: `implement`');
+        expect(result.workflow?.definition.name).toBe('implement');
+        expect(result.workflow?.args).toBe('test');
+        expect(result.workflow?.resumeRunId).toBe('run-123');
       });
 
       test('should accept already-failed run without status change', async () => {
@@ -1441,12 +1463,80 @@ describe('CommandHandler', () => {
           working_path: null,
         };
         mockGetWorkflowRun.mockResolvedValueOnce(run);
+        spyDiscoverWorkflows.mockResolvedValueOnce({
+          workflows: [makeTestWorkflowWithSource({ name: 'plan', description: 'Plan changes' })],
+          errors: [],
+        });
 
         const result = await handleCommand(baseConversation, '/workflow resume run-456');
 
         expect(result.success).toBe(true);
+        expect(result.workflow?.resumeRunId).toBe('run-456');
         // Already failed — no status change needed
         expect(mockFailWorkflowRun).not.toHaveBeenCalled();
+      });
+
+      test('should return error when workflow definition is unavailable', async () => {
+        mockGetWorkflowRun.mockResolvedValueOnce({
+          id: 'run-missing-workflow',
+          workflow_name: 'missing-workflow',
+          conversation_id: 'conv-1',
+          parent_conversation_id: null,
+          codebase_id: null,
+          status: 'failed' as const,
+          user_message: 'test',
+          metadata: {},
+          started_at: new Date(),
+          completed_at: null,
+          last_activity_at: null,
+          working_path: null,
+        });
+        spyDiscoverWorkflows.mockResolvedValueOnce({ workflows: [], errors: [] });
+
+        const result = await handleCommand(
+          baseConversation,
+          '/workflow resume run-missing-workflow'
+        );
+
+        expect(result.success).toBe(false);
+        expect(result.message).toContain('was not found');
+        expect(result.workflow).toBeUndefined();
+      });
+
+      test('should surface workflow load errors before not found during resume', async () => {
+        mockGetWorkflowRun.mockResolvedValueOnce({
+          id: 'run-bad-workflow',
+          workflow_name: 'bad-workflow',
+          conversation_id: 'conv-1',
+          parent_conversation_id: null,
+          codebase_id: null,
+          status: 'failed' as const,
+          user_message: 'test',
+          metadata: {},
+          started_at: new Date(),
+          completed_at: null,
+          last_activity_at: null,
+          working_path: '/workspace/wt',
+        });
+        spyDiscoverWorkflows.mockResolvedValueOnce({
+          workflows: [],
+          errors: [
+            {
+              filename: 'bad-workflow.yaml',
+              error: 'Invalid workflow YAML',
+              errorType: 'parse_error',
+            },
+          ],
+        });
+
+        const result = await handleCommand(baseConversation, '/workflow resume run-bad-workflow');
+
+        expect(result.success).toBe(false);
+        expect(result.message).toContain(
+          'Workflow `bad-workflow` failed to load: Invalid workflow YAML'
+        );
+        expect(result.message).toContain('Fix the YAML file and try again');
+        expect(result.workflow).toBeUndefined();
       });
 
       test('should reject resume of non-resumable run', async () => {
@@ -1664,6 +1754,60 @@ describe('CommandHandler', () => {
         expect(result.workflow).toBeDefined();
         expect(result.workflow?.definition.name).toBe('fix-issue');
         expect(result.workflow?.args).toBe('#42 add dark mode');
+      });
+
+      test('should parse --force after workflow name and strip it from args', async () => {
+        spyDiscoverWorkflows.mockResolvedValueOnce({
+          workflows: [
+            makeTestWorkflowWithSource({ name: 'test-workflow', description: 'A test workflow' }),
+          ],
+          errors: [],
+        });
+
+        const result = await handleCommand(
+          conversationWithCodebase,
+          '/workflow run test-workflow --force do it'
+        );
+
+        expect(result.success).toBe(true);
+        expect(result.workflow?.force).toBe(true);
+        expect(result.workflow?.args).toBe('do it');
+      });
+
+      test('should parse --force anywhere in workflow args and strip it', async () => {
+        spyDiscoverWorkflows.mockResolvedValueOnce({
+          workflows: [
+            makeTestWorkflowWithSource({ name: 'test-workflow', description: 'A test workflow' }),
+          ],
+          errors: [],
+        });
+
+        const result = await handleCommand(
+          conversationWithCodebase,
+          '/workflow run test-workflow do --force it'
+        );
+
+        expect(result.success).toBe(true);
+        expect(result.workflow?.force).toBe(true);
+        expect(result.workflow?.args).toBe('do it');
+      });
+
+      test('should leave force unset when --force is absent', async () => {
+        spyDiscoverWorkflows.mockResolvedValueOnce({
+          workflows: [
+            makeTestWorkflowWithSource({ name: 'test-workflow', description: 'A test workflow' }),
+          ],
+          errors: [],
+        });
+
+        const result = await handleCommand(
+          conversationWithCodebase,
+          '/workflow run test-workflow do it'
+        );
+
+        expect(result.success).toBe(true);
+        expect(result.workflow?.force).toBeUndefined();
+        expect(result.workflow?.args).toBe('do it');
       });
 
       test('should return not-found when no codebase is configured', async () => {

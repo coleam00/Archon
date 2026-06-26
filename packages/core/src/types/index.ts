@@ -2,6 +2,7 @@
  * Core type definitions for the Remote Coding Agent platform
  */
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
+import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 
 // MessageChunk + TokenUsage are used by IPlatformAdapter below.
 import type { MessageChunk, TokenUsage } from '@archon/providers/types';
@@ -63,6 +64,9 @@ export interface CommandResult {
     // If set, orchestrator should execute this workflow
     definition: WorkflowDefinition;
     args: string;
+    force?: boolean;
+    resumeRunId?: string;
+    resumeRun?: WorkflowRun;
   };
 }
 
