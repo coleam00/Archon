@@ -385,12 +385,11 @@ export async function maybePrintTierNotice(
 function renderWorkflowEvent(event: WorkflowEmitterEvent, verbose: boolean): void {
   switch (event.type) {
     case 'node_started': {
-      const suffix =
-        event.provider !== undefined && event.model !== undefined
-          ? event.tier !== undefined
-            ? `  (${event.provider}/${event.model} ← ${event.tier})`
-            : `  (${event.provider}/${event.model})`
-          : '';
+      let suffix = '';
+      if (event.provider !== undefined && event.model !== undefined) {
+        const tierPart = event.tier !== undefined ? ` ← ${event.tier}` : '';
+        suffix = `  (${event.provider}/${event.model}${tierPart})`;
+      }
       process.stderr.write(`[${event.nodeName}] Started${suffix}\n`);
       break;
     }
