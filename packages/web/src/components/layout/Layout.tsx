@@ -4,9 +4,19 @@ import { getTabSummary } from '@/lib/tab-summaries';
 import { TopNav } from './TopNav';
 import { DeployStatusFooter } from './DeployStatusFooter';
 
+const ROUTES_WITHOUT_TAB_SUMMARY = new Set([
+  '/solutions',
+  '/pmc',
+  '/pmc-prospects',
+  '/drive',
+  '/brt',
+]);
+
 export function Layout(): React.ReactElement {
   const location = useLocation();
-  const summary = getTabSummary(location.pathname);
+  const summary = ROUTES_WITHOUT_TAB_SUMMARY.has(location.pathname)
+    ? undefined
+    : getTabSummary(location.pathname);
 
   return (
     <div className="flex h-screen min-h-0 flex-col bg-background">
