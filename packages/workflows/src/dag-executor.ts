@@ -35,6 +35,7 @@ import type {
   CommandNode,
   PromptNode,
   LoopNode,
+  LoopGroupNode,
   ScriptNode,
   NodeOutput,
   TriggerRule,
@@ -47,6 +48,7 @@ import type {
 import {
   isBashNode,
   isLoopNode,
+  isLoopGroupNode,
   isApprovalNode,
   isCancelNode,
   isScriptNode,
@@ -104,6 +106,7 @@ function dagNodeTelemetryType(node: DagNode): WorkflowNodeType {
   if (isBashNode(node)) return 'bash';
   if (isScriptNode(node)) return 'script';
   if (isLoopNode(node)) return 'loop';
+  if (isLoopGroupNode(node)) return 'loop_group';
   if (isApprovalNode(node)) return 'approval';
   if (isCancelNode(node)) return 'cancel';
   if ('command' in node) return 'command';
@@ -2200,6 +2203,46 @@ async function executeScriptNode(
 }
 
 /**
+ * Execute a loop-group node — runs a multi-node sub-DAG body repeatedly until a
+ * completion condition (`until` signal / `until_bash` exit code) or `max_iterations`.
+ *
+ * TODO(loop_group): This is a stub. The full implementation (mirroring `executeLoopNode`
+ * at subgraph granularity: scoped `nodeOutputs` per iteration, `runLayers` over the body,
+ * completion gate, `fresh_context` session reset, interactive gate pause/resume, and
+ * `$LOOP_PREV.<id>.output` prior-iteration snapshot) lands in a follow-up task. Until
+ * then, a workflow that authors a `loop_group` node fails fast with a clear message.
+ *
+ * Key behaviors (target):
+ * - Returns NodeExecutionResult (not void) — DAG executor owns workflow lifecycle
+ * - The body is a sealed sub-DAG; body node events are namespaced `{groupId}.{nodeId}`
+ * - `$groupId.output` (outer DAG) = the final iteration's terminal-node output
+ */
+async function executeLoopGroupNode(
+  _deps: WorkflowDeps,
+  _platform: IWorkflowPlatform,
+  _conversationId: string,
+  _cwd: string,
+  workflowRun: WorkflowRun,
+  node: LoopGroupNode,
+  _workflowProvider: string,
+  _resolvedOptions: SendQueryOptions | undefined,
+  _artifactsDir: string,
+  _logDir: string,
+  _baseBranch: string,
+  _docsDir: string,
+  _nodeOutputs: Map<string, NodeOutput>,
+  _config: WorkflowConfig,
+  _issueContext?: string
+): Promise<NodeExecutionResult> {
+  const errorMsg = `loop_group node '${node.id}': subgraph loop execution is not yet implemented (schema + dispatch are in place; the per-iteration body runner is pending). See .claude/archon/plans/subgraph-loop-group-node.plan.md task T5.`;
+  getLog().error(
+    { nodeId: node.id, workflowRunId: workflowRun.id },
+    'loop_group_node.not_implemented'
+  );
+  return { state: 'failed', output: '', error: errorMsg };
+}
+
+/**
  * Execute a loop node — runs prompt repeatedly until completion signal or max iterations.
  *
  * Key behaviors:
@@ -3373,6 +3416,45 @@ export async function executeDagWorkflow(
               node,
               loopProvider,
               loopOptions,
+              artifactsDir,
+              logDir,
+              baseBranch,
+              docsDir,
+              nodeOutputs,
+              config,
+              issueContext
+            );
+            return { nodeId: node.id, output };
+          }
+
+          // 3b'. Loop-group node dispatch — manages its own subgraph iteration
+          // (body is a sealed sub-DAG re-executed per iteration; the loop is
+          // encapsulated inside this one node, keeping the outer DAG acyclic).
+          if (isLoopGroupNode(node)) {
+            const { provider: loopGroupProvider, options: loopGroupOptions } =
+              await resolveNodeProviderAndModel(
+                node,
+                workflowProvider,
+                workflowModel,
+                config,
+                platform,
+                conversationId,
+                workflowRun.id,
+                cwd,
+                workflowLevelOptions,
+                aiProfile,
+                workflowPreset
+              );
+
+            const output = await executeLoopGroupNode(
+              deps,
+              platform,
+              conversationId,
+              cwd,
+              workflowRun,
+              node,
+              loopGroupProvider,
+              loopGroupOptions,
               artifactsDir,
               logDir,
               baseBranch,
