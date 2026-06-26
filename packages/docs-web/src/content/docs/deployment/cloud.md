@@ -470,23 +470,17 @@ WEBHOOK_SECRET=your_generated_secret_here
 
 ## 5. Database Migration
 
-**IMPORTANT: Run this BEFORE starting the application.**
-
-Initialize the database schema with required tables:
+**No manual migration step is required.** On startup, the app converges the schema by running the idempotent `migrations/000_combined.sql` inside an advisory-lock transaction — fresh installs and upgrades both go through the same path. If you want to confirm the tables landed, after starting the app you can run:
 
 ```bash
-# For remote database (Supabase, Neon, etc.)
-psql $DATABASE_URL < migrations/000_combined.sql
-
 # Verify tables were created
 psql $DATABASE_URL -c "\dt"
-# Should show: codebases, conversations, sessions, isolation_environments,
-#              workflow_runs, workflow_events, messages
+# Should show: remote_agent_codebases, remote_agent_conversations,
+#              remote_agent_sessions, remote_agent_isolation_environments,
+#              remote_agent_workflow_runs, remote_agent_workflow_events,
+#              remote_agent_messages, remote_agent_codebase_env_vars,
+#              remote_agent_users, remote_agent_user_identities
 ```
-
-**If using local PostgreSQL with `with-db` profile:**
-
-You'll run migrations after starting the database in Section 7.
 
 ---
 
@@ -772,10 +766,13 @@ psql $DATABASE_URL -c "SELECT 1"
 cat .env | grep DATABASE_URL
 ```
 
-**Run migrations if tables missing:**
+**Restart the app to re-run schema convergence:**
 
 ```bash
-psql $DATABASE_URL < migrations/000_combined.sql
+docker compose restart app
+# The app re-applies migrations/000_combined.sql on every startup;
+# missing tables/columns will be added automatically (the SQL is idempotent).
+# Look for `db.pg_schema_init_completed` in the logs to confirm success.
 ```
 
 ### GitHub Webhook Not Working

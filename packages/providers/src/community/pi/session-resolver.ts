@@ -1,4 +1,4 @@
-import { SessionManager } from '@mariozechner/pi-coding-agent';
+import { SessionManager } from '@earendil-works/pi-coding-agent';
 
 /**
  * Result of resolving an Archon `resumeSessionId` against Pi's session store.

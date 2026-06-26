@@ -49,7 +49,7 @@ import { createIsolationStore } from '../db/isolation-environments';
 import { toError } from '../utils/error';
 import { getCodebase } from '../db/codebases';
 import { executeWorkflow } from '@archon/workflows/executor';
-import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
+import type { WorkflowDefinition, WorkflowSource } from '@archon/workflows/schemas/workflow';
 import { createWorkflowDeps } from '../workflows/store-adapter';
 import {
   cleanupToMakeRoom,
@@ -57,6 +57,8 @@ import {
   STALE_THRESHOLD_DAYS,
 } from '../services/cleanup-service';
 import { loadRepoConfig } from '../config/config-loader';
+import { isPerUserGitHubEnabled } from '../github-auth/config';
+import { getUserGithubNoreplyEmail } from '../db/user-github-token-store';
 
 type IsolationResolution =
   | { status: 'existing'; cwd: string; env: IsolationEnvironmentRow }
@@ -114,6 +116,16 @@ export async function validateAndResolveIsolation(
   _isRetry = false,
   userId?: string
 ): Promise<IsolationResolution> {
+  // Resolve the originating user's git identity (no-reply email) so a freshly
+  // created worktree stamps commits with the human. Only when per-user GitHub is
+  // enabled and the user is connected; otherwise the worktree uses the ambient
+  // git identity (unchanged behavior).
+  let gitIdentity: { email: string; name?: string } | undefined;
+  if (userId && isPerUserGitHubEnabled()) {
+    const email = await getUserGithubNoreplyEmail(userId);
+    if (email) gitIdentity = { email };
+  }
+
   const result = await getResolver().resolve({
     existingEnvId: conversation.isolation_env_id,
     codebase: codebase
@@ -122,6 +134,7 @@ export async function validateAndResolveIsolation(
     hints,
     platformType: platform.getPlatformType(),
     userId,
+    gitIdentity,
   });
 
   switch (result.status) {
@@ -255,6 +268,12 @@ export interface WorkflowRoutingContext {
    * worker isolation environment, and downstream workflow_run row.
    */
   readonly userId?: string;
+  /**
+   * Discovery source of the workflow — telemetry only (bundled workflows
+   * report their real name, custom ones report "custom"). Optional; defaults
+   * to the privacy-safe "custom" treatment when not provided.
+   */
+  readonly source?: WorkflowSource;
 }
 
 /**
@@ -396,6 +415,7 @@ export async function dispatchBackgroundWorkflow(
             parentConversationId: ctx.conversationDbId,
             preCreatedRun,
             userId: ctx.userId,
+            source: ctx.source,
           }
         );
         // Surface workflow output to parent conversation as a result card

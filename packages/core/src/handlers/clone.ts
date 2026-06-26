@@ -127,8 +127,23 @@ export interface RegisterResult {
   name: string;
   repositoryUrl: string | null;
   defaultCwd: string;
+  defaultBranch: string | null;
   commandCount: number;
   alreadyExisted: boolean;
+}
+
+async function detectCurrentGitBranch(targetPath: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      ['-C', targetPath, 'rev-parse', '--abbrev-ref', 'HEAD'],
+      { timeout: 5000 }
+    );
+    const branch = stdout.trim();
+    return branch && branch !== 'HEAD' ? branch : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -140,6 +155,7 @@ async function registerRepoAtPath(
   repositoryUrl: string | null
 ): Promise<RegisterResult> {
   const suggestedAssistant = await resolveDefaultAssistant(targetPath);
+  const detectedBranch = await detectCurrentGitBranch(targetPath);
 
   // Check if a codebase with this name already exists (dedup by project identity)
   const existing = await codebaseDb.findCodebaseByName(name);
@@ -149,9 +165,16 @@ async function registerRepoAtPath(
     const isExistingPathManaged = existing.default_cwd.includes('/.archon/workspaces/');
     const shouldUpdateCwd = isNewPathLocal && isExistingPathManaged;
 
-    const updates: { default_cwd?: string; repository_url?: string | null } = {};
+    const updates: {
+      default_cwd?: string;
+      repository_url?: string | null;
+      default_branch?: string | null;
+    } = {};
     if (shouldUpdateCwd) {
       updates.default_cwd = targetPath;
+      updates.default_branch = detectedBranch;
+    } else if (!existing.default_branch && detectedBranch) {
+      updates.default_branch = detectedBranch;
     }
     // Fill in repository_url if the existing record doesn't have one
     if (!existing.repository_url && repositoryUrl) {
@@ -163,6 +186,10 @@ async function registerRepoAtPath(
 
     // Still reload commands for the existing codebase
     const effectiveCwd = shouldUpdateCwd ? targetPath : existing.default_cwd;
+    const effectiveDefaultBranch =
+      updates.default_branch !== undefined
+        ? updates.default_branch
+        : (existing.default_branch ?? null);
     let commandsLoaded = 0;
     for (const folder of getCommandFolderSearchPaths()) {
       const commandPath = join(effectiveCwd, folder);
@@ -191,6 +218,7 @@ async function registerRepoAtPath(
       name: existing.name,
       repositoryUrl: existing.repository_url,
       defaultCwd: shouldUpdateCwd ? targetPath : existing.default_cwd,
+      defaultBranch: effectiveDefaultBranch,
       commandCount: commandsLoaded,
       alreadyExisted: true,
     };
@@ -201,6 +229,7 @@ async function registerRepoAtPath(
     name,
     repository_url: repositoryUrl ?? undefined,
     default_cwd: targetPath,
+    default_branch: detectedBranch,
     ai_assistant_type: suggestedAssistant,
   });
 
@@ -234,6 +263,7 @@ async function registerRepoAtPath(
     name: codebase.name,
     repositoryUrl: repositoryUrl,
     defaultCwd: targetPath,
+    defaultBranch: codebase.default_branch ?? null,
     commandCount: commandsLoaded,
     alreadyExisted: false,
   };
@@ -305,6 +335,7 @@ export async function cloneRepository(repoUrl: string): Promise<RegisterResult> 
         name: existingCodebase.name,
         repositoryUrl: existingCodebase.repository_url,
         defaultCwd: existingCodebase.default_cwd,
+        defaultBranch: existingCodebase.default_branch ?? null,
         commandCount: 0,
         alreadyExisted: true,
       };
@@ -381,6 +412,7 @@ export async function registerRepository(localPath: string): Promise<RegisterRes
       name: existing.name,
       repositoryUrl: existing.repository_url,
       defaultCwd: existing.default_cwd,
+      defaultBranch: existing.default_branch ?? null,
       commandCount: 0,
       alreadyExisted: true,
     };

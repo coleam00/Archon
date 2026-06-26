@@ -5,7 +5,22 @@
  * Implementations live in @archon/core (backed by the real DB);
  * the workflow engine depends only on this narrow interface.
  */
-import type { WorkflowRun, WorkflowRunStatus, ApprovalContext } from './schemas';
+import type {
+  WorkflowRun,
+  WorkflowRunStatus,
+  ApprovalContext,
+  WorkflowNodeSession,
+} from './schemas';
+
+export type { WorkflowNodeSession } from './schemas';
+
+/** Composite primary key identifying a single persisted node session row. */
+export interface WorkflowNodeSessionKey {
+  workflow_name: string;
+  node_id: string;
+  scope_key: string;
+  provider: string;
+}
 
 export const WORKFLOW_EVENT_TYPES = [
   'workflow_started',
@@ -28,6 +43,13 @@ export const WORKFLOW_EVENT_TYPES = [
   'approval_received',
   'workflow_cancelled',
   'workflow_artifact',
+  'node_session_resumed',
+  // Phase 2 of #975 — subagent task lifecycle (aggregated from provider
+  // task_started / task_progress / task_notification chunks). Stored
+  // alongside other workflow_events for the timeline view; the SSE bridge
+  // fans out task_activity / hook_activity to live Web UI subscribers.
+  'task_activity',
+  'hook_activity',
 ] as const;
 
 export type WorkflowEventType = (typeof WORKFLOW_EVENT_TYPES)[number];
@@ -78,7 +100,7 @@ export interface IWorkflowStore {
   completeWorkflowRun(id: string, metadata?: Record<string, unknown>): Promise<void>;
   failWorkflowRun(id: string, error: string): Promise<void>;
   pauseWorkflowRun(id: string, approvalContext: ApprovalContext): Promise<void>;
-  cancelWorkflowRun(id: string): Promise<void>;
+  cancelWorkflowRun(id: string): Promise<{ cancelled: boolean }>;
 
   /**
    * Create a workflow event. Implementations MUST NOT throw — catch all errors
@@ -113,4 +135,27 @@ export interface IWorkflowStore {
     repository_url: string | null;
     default_cwd: string;
   } | null>;
+
+  // Per-node provider sessions persisted across workflow re-runs (opt-in via
+  // `persist_session: true` on a node, or `persist_sessions: true` at workflow root).
+  // Distinct from `AgentRequestOptions.persistSession` (Claude SDK on-disk transcript).
+  getWorkflowNodeSession(key: WorkflowNodeSessionKey): Promise<WorkflowNodeSession | null>;
+  upsertWorkflowNodeSession(
+    params: WorkflowNodeSessionKey & {
+      provider_session_id: string;
+      last_run_id: string | null;
+    }
+  ): Promise<void>;
+  deleteWorkflowNodeSessions(filter: {
+    workflow_name: string;
+    scope_key?: string;
+    node_id?: string;
+    /**
+     * Optional provider filter. The executor's stale-row cleanup (run finished with
+     * no sessionId) sets this so switching providers between runs doesn't clobber
+     * the prior provider's saved row. Reset surfaces (CLI/chat/REST) leave it
+     * undefined so a reset wipes every provider for the given scope.
+     */
+    provider?: string;
+  }): Promise<{ deleted: number }>;
 }

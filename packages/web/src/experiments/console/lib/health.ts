@@ -1,24 +1,23 @@
 /**
- * Server-health surface. Currently only used for the Docker check so we
- * know whether to render the `Open in IDE` (vscode://) affordance. The
- * default is `true` (hide the button) until we hear otherwise — matches
- * the old UI's safer default and prevents flashing a broken link on first
- * paint inside Docker.
+ * Server-health surface. Two consumers share the one `K.health` cache entry:
+ * `useIsDocker` (gates the `Open in IDE` vscode:// affordance) and the Settings
+ * SystemPanel (full status grid). The docker default stays `true` (hide the
+ * button) until health resolves — matches the old UI and avoids flashing a broken
+ * link on first paint inside Docker.
  */
 
-import { useEntity } from '../store/cache';
-import { requestJson } from './http';
+import { useEntity, type EntityView } from '../store/cache';
+import { K } from '../store/keys';
+import { getHealth, type HealthResponse } from '../skills/settings';
 
-interface HealthResponse {
-  is_docker?: boolean;
+export type { HealthResponse };
+
+export function useHealth(): EntityView<HealthResponse> {
+  return useEntity<HealthResponse>(K.health, getHealth);
 }
 
-const HEALTH_KEY = 'health';
-
 export function useIsDocker(): boolean {
-  const { data } = useEntity<HealthResponse>(HEALTH_KEY, () =>
-    requestJson<HealthResponse>('/api/health')
-  );
+  const { data } = useHealth();
   return data?.is_docker ?? true;
 }
 

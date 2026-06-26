@@ -1,5 +1,6 @@
 import { describe, test, expect, afterEach } from 'bun:test';
 import { SqliteAdapter } from './sqlite';
+import { getSchemaSQL } from '../bundled-schema';
 import { Database } from 'bun:sqlite';
 import { unlinkSync } from 'fs';
 import { join } from 'path';
@@ -271,6 +272,9 @@ describe('SqliteAdapter', () => {
       db = new SqliteAdapter(dbPath);
 
       // The migration should have added every user_id column.
+      const codebaseCols = raw_pragma(dbPath, 'remote_agent_codebases');
+      expect(codebaseCols).toContain('default_branch');
+
       const conversationCols = raw_pragma(dbPath, 'remote_agent_conversations');
       expect(conversationCols).toContain('user_id');
 
@@ -294,6 +298,101 @@ describe('SqliteAdapter', () => {
         'SELECT COUNT(*) AS n FROM remote_agent_conversations WHERE user_id IS NOT NULL'
       );
       expect(probe).toEqual([{ n: 0 }]);
+    });
+  });
+
+  describe('provider-key vendor-id migration (#1955)', () => {
+    test('renames legacy rows and lets an existing vendor row win on conflict', async () => {
+      db = createTestDb();
+      const dbPath = currentDbPath;
+      // Seed users + legacy/vendor credential rows post-construction…
+      await db.query(`INSERT INTO remote_agent_users (id) VALUES ('u1'), ('u2')`, []);
+      await db.query(
+        `INSERT INTO remote_agent_user_provider_keys (id, user_id, provider, kind, api_key_encrypted, label)
+         VALUES
+           ('k1', 'u1', 'claude',  'api_key', 'enc-legacy-claude', 'legacy'),
+           ('k2', 'u1', 'anthropic', 'api_key', 'enc-vendor-anthropic', 'vendor'),
+           ('k3', 'u2', 'codex',   'api_key', 'enc-legacy-codex', NULL),
+           ('k4', 'u2', 'copilot', 'oauth',   NULL, 'subscription')`,
+        []
+      );
+      await db.close();
+
+      // …then reopen: migrateColumns() runs the idempotent vendor-id data fix.
+      db = new SqliteAdapter(dbPath);
+      const rows = raw_query(
+        dbPath,
+        'SELECT user_id, provider, label FROM remote_agent_user_provider_keys ORDER BY user_id, provider'
+      ) as { user_id: string; provider: string; label: string | null }[];
+      expect(rows).toEqual([
+        // u1: legacy 'claude' row dropped — the explicit 'anthropic' row wins.
+        { user_id: 'u1', provider: 'anthropic', label: 'vendor' },
+        // u2: no conflicts — legacy ids renamed in place.
+        { user_id: 'u2', provider: 'github-copilot', label: 'subscription' },
+        { user_id: 'u2', provider: 'openai', label: null },
+      ]);
+
+      // Idempotent: a third open changes nothing.
+      await db.close();
+      db = new SqliteAdapter(dbPath);
+      const again = raw_query(
+        dbPath,
+        'SELECT COUNT(*) AS n FROM remote_agent_user_provider_keys'
+      ) as { n: number }[];
+      expect(again).toEqual([{ n: 3 }]);
+    });
+  });
+
+  describe('schema parity with the Postgres migration (000_combined.sql)', () => {
+    /**
+     * The SQLite schema (createSchema() in sqlite.ts) and the Postgres schema
+     * (migrations/000_combined.sql) are two independently hand-maintained
+     * sources of truth. Before this test nothing compared them, so a table
+     * added to the migration but forgotten in sqlite.ts shipped silently and
+     * threw `no such table: <name>` on SQLite. That regression actually
+     * happened with remote_agent_user_ai_prefs (Phase 3 / credentials epic):
+     * added to the migration, missed in sqlite.ts, invisible on the Postgres
+     * VPS. The lookup is caught (runs degrade to config-only), but it spammed
+     * two ERROR log lines on every SQLite run.
+     *
+     * Better Auth's remote_agent_auth_* tables are intentionally Postgres-only
+     * (web auth never runs on SQLite — see migrateColumns() and CLAUDE.md), so
+     * they are the one allowlisted exception. A genuinely new Postgres-only
+     * table must be added to this allowlist with a justifying comment.
+     */
+    const POSTGRES_ONLY_PREFIX = 'remote_agent_auth_';
+
+    /** Extract Archon table names declared in the Postgres migration. */
+    function postgresArchonTables(): string[] {
+      const sql = getSchemaSQL();
+      const re = /CREATE TABLE(?:\s+IF NOT EXISTS)?\s+"?([a-z0-9_]+)"?/gi;
+      // All Archon tables share this prefix (CLAUDE.md); the filter also drops
+      // false positives — e.g. "above" captured from "...CREATE TABLE above)"
+      // inside a SQL comment.
+      const names = [...sql.matchAll(re)]
+        .map(m => m[1].toLowerCase())
+        .filter(name => name.startsWith('remote_agent_'));
+      return [...new Set(names)];
+    }
+
+    test('every non-auth Postgres table is created by the SQLite schema', async () => {
+      db = createTestDb();
+      const result = await db.query<{ name: string }>(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+      );
+      const sqliteTables = new Set(result.rows.map(r => r.name));
+
+      const expected = postgresArchonTables().filter(
+        name => !name.startsWith(POSTGRES_ONLY_PREFIX)
+      );
+      // Sanity: the parse found the table set, including the exact table whose
+      // absence triggered this regression — guards against the regex silently
+      // missing a name and the assertion below passing vacuously.
+      expect(expected.length).toBeGreaterThan(10);
+      expect(expected).toContain('remote_agent_user_ai_prefs');
+
+      const missing = expected.filter(name => !sqliteTables.has(name)).sort();
+      expect(missing).toEqual([]);
     });
   });
 });

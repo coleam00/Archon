@@ -8,7 +8,7 @@ export function WorkflowsPage(): React.ReactElement {
       <div className="flex items-center justify-between px-4 pt-4 pb-2">
         <h1 className="text-lg font-semibold text-text-primary">Workflows</h1>
         <Link
-          to="/workflows/builder"
+          to="/legacy/workflows/builder"
           className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-white hover:bg-primary/90 transition-colors"
         >
           <Plus className="size-4" />

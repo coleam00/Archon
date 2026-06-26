@@ -11,7 +11,11 @@ export type {
   ProviderInfo,
   MessageChunk,
   TokenUsage,
+  CredentialKind,
+  CredentialSpec,
+  ProviderCredentialCatalog,
 } from './types';
+export { CREDENTIAL_KINDS } from './types';
 
 // Provider config types (canonical definitions in ./types, re-exported via config modules)
 // Import from ./types directly or from the config modules — both work.
@@ -33,6 +37,14 @@ export {
 // Error
 export { UnknownProviderError } from './errors';
 
+// Shared structured-output helpers (cross-provider; the dag-executor validates
+// every provider's output_format result against the declared schema).
+export {
+  validateStructuredOutput,
+  formatSchemaErrors,
+  type StructuredValidationResult,
+} from './shared/structured-output';
+
 // Provider classes
 export { ClaudeProvider } from './claude/provider';
 export { CodexProvider } from './codex/provider';
@@ -52,14 +64,25 @@ export {
   OpencodeProvider,
   parseOpencodeConfig,
   registerOpencodeProvider,
+  introspectOpencodeCredentials,
   type OpencodeProviderDefaults,
+  type OpencodeCredentialIntrospection,
+  type OpencodeCredentialProvider,
+  type OpencodeAuthMethod,
 } from './community/opencode';
 export {
   PiProvider,
   parsePiConfig,
   registerPiProvider,
+  listPiModels,
   type PiProviderDefaults,
+  type PiModelInfo,
 } from './community/pi';
+// Generated Pi backend → env-var map + ambient vendors (single source for the
+// Pi runtime bridge and @archon/core's credential delivery — see #1955).
+// PI_CREDENTIAL_SPECS is intentionally NOT re-exported: its only consumer is
+// the Pi registration, which imports the generated file directly.
+export { PI_PROVIDER_ENV_VARS, PI_AMBIENT_VENDORS } from './community/pi/pi-vendor-map.generated';
 
 export {
   CopilotProvider,

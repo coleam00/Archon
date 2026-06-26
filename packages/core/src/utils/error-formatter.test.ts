@@ -69,6 +69,20 @@ describe('classifyAndFormatError', () => {
     });
   });
 
+  describe('not logged in (no credential reached the subprocess) (#1983)', () => {
+    test('detects "Not logged in" and names the connect surfaces', () => {
+      const result = classifyAndFormatError(new Error('Not logged in · Please run /login'));
+      expect(result).toContain('Not logged in to the AI provider');
+      expect(result).toContain('Settings → Agents');
+    });
+
+    test('detects a "Please run /login" message without leaking the raw string', () => {
+      const result = classifyAndFormatError(new Error('Invalid API key · Please run /login'));
+      expect(result).toContain('Settings → Agents');
+      expect(result).not.toContain('Invalid API key ·');
+    });
+  });
+
   describe('Codex auth errors', () => {
     test('detects Codex 401 retry exhaustion', () => {
       const result = classifyAndFormatError(

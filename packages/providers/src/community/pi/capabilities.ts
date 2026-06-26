@@ -13,8 +13,8 @@ import type { ProviderCapabilities } from '../../types';
  * provider appends a "JSON only" instruction + the schema to the prompt and
  * the event bridge parses the final assistant transcript on agent_end.
  * Reliable on instruction-following models (GPT-5, Claude, Gemini 2.x,
- * recent Qwen Coder, DeepSeek V3); parse failures degrade via the
- * dag-executor's existing dag.structured_output_missing path.
+ * recent Qwen Coder, DeepSeek V3); the dag-executor validates the parsed output
+ * against the schema, re-asks up to 3× on a miss/invalid, then FAILS the node.
  */
 export const PI_CAPABILITIES: ProviderCapabilities = {
   sessionResume: true,
@@ -23,11 +23,12 @@ export const PI_CAPABILITIES: ProviderCapabilities = {
   skills: true,
   agents: false,
   toolRestrictions: true,
-  structuredOutput: true,
+  structuredOutput: 'best-effort', // prompt-augment + repair + validate + reask×3 (no SDK grammar)
   envInjection: true,
   costControl: false,
   effortControl: true,
   thinkingControl: true,
   fallbackModel: false,
   sandbox: false,
+  nativeTools: true,
 };

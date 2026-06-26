@@ -470,3 +470,44 @@ describe('GET /api/commands', () => {
     expect(Array.isArray(body.commands)).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Tests: GET /api/openapi.json — guards @hono/zod-openapi spec generation
+// (the v0 -> v1 / zod v4 upgrade is a major bump; this confirms every
+// registered route's schema still serializes without throwing).
+// ---------------------------------------------------------------------------
+
+describe('GET /api/openapi.json', () => {
+  test('generates a valid OpenAPI 3 document for all registered routes', async () => {
+    const app = makeApp();
+    const response = await app.request('/api/openapi.json');
+    expect(response.status).toBe(200);
+
+    const doc = (await response.json()) as {
+      openapi: string;
+      info: { title: string; version: string };
+      paths: Record<string, unknown>;
+      components?: { schemas?: Record<string, unknown> };
+    };
+    expect(doc.openapi).toMatch(/^3\./);
+    expect(typeof doc.info.title).toBe('string');
+    // A representative sample of registered routes must be present, including
+    // ones whose schemas use the patterns touched by the zod v4 migration
+    // (z.record key types, z.string().datetime(), the node-sessions route).
+    expect(Object.keys(doc.paths).length).toBeGreaterThan(0);
+    expect(doc.paths['/api/health']).toBeDefined();
+    expect(doc.paths['/api/workflows/{name}/node-sessions']).toBeDefined();
+    // The datetime-heavy, highest-traffic routes are the ones the zod-to-openapi
+    // v7 -> v8 serialization change most threatens (z.string().datetime() fields
+    // on conversation/codebase schemas). A route can register in `paths` while
+    // its schema silently fails to serialize, so also assert the component
+    // schemas those routes reference actually made it into the document.
+    expect(doc.paths['/api/conversations']).toBeDefined();
+    expect(doc.paths['/api/codebases']).toBeDefined();
+    const schemas = doc.components?.schemas ?? {};
+    expect(Object.keys(schemas).length).toBeGreaterThan(10);
+    expect(schemas['Conversation']).toBeDefined();
+    expect(schemas['Codebase']).toBeDefined();
+    expect(schemas['WorkflowEvent']).toBeDefined();
+  });
+});

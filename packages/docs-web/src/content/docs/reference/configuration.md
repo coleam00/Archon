@@ -73,7 +73,7 @@ assistants:
     # Source/dev mode auto-resolves.
     # claudeBinaryPath: /absolute/path/to/claude
   codex:
-    model: gpt-5.3-codex
+    model: gpt-5.5
     modelReasoningEffort: medium
     webSearchMode: disabled
     additionalDirectories:
@@ -96,7 +96,20 @@ paths:
 concurrency:
   maxConversations: 10
 
+# Model tiers — optional cross-provider presets used by bundled workflows,
+# custom workflows, direct chat (`large`), and title generation (`small`).
+tiers:
+  large: { provider: claude, model: opus }
+  medium: { provider: codex, model: gpt-5.5, effort: high }
+  small: { provider: pi, model: minimax-m3 }
+
+# Model aliases — optional custom refs for project workflows.
+aliases:
+  '@reasoning': { provider: claude, model: opus, thinking: { type: enabled, budgetTokens: 8000 } }
+
 ```
+
+The `tiers:` block above is no longer hand-edit-only -- you can also set the `small`/`medium`/`large` presets from the console **AI Settings** -> **Model Tiers** panel, or from the CLI with [`archon ai tier set`](/reference/cli/#ai). Connecting your own provider API key or subscription is covered in [Per-user credentials and AI Settings](/getting-started/ai-assistants/#per-user-credentials-and-ai-settings).
 
 ## Repository Configuration
 
@@ -113,7 +126,7 @@ assistants:
     settingSources:  # Override global settingSources for this repo
       - project
   codex:
-    model: gpt-5.3-codex
+    model: gpt-5.5
     webSearchMode: live
 
 # Commands configuration
@@ -145,13 +158,29 @@ defaults:
   loadDefaultCommands: true   # Load app's bundled default commands at runtime
   loadDefaultWorkflows: true  # Load app's bundled default workflows at runtime
 
+# Recommended workflows for this project (declared order = pin order in the UI)
+# recommendedWorkflows:
+#   - archon-fix-github-issue
+#   - archon-idea-to-pr
+#   - archon-plan
+
 # Per-project environment variables for workflow execution (Claude SDK only)
 # Injected into the Claude subprocess env. Use the Web UI Settings panel for secrets.
 # env:
 #   MY_API_KEY: value
 #   CUSTOM_ENDPOINT: https://...
 
+# Model tiers and aliases override global entries with the same name (repo > global).
+# tiers:
+#   small: { provider: codex, model: gpt-5.5, effort: minimal }
+# aliases:
+#   '@fast': { provider: claude, model: haiku }
+
 ```
+
+Providers with built-in tier defaults (`claude`, `codex`, `pi`, `copilot`, `opencode`) work
+without a `tiers:` block. Other providers must configure any tier they use, or resolving
+`small`, `medium`, or `large` will fail with a clear configuration error.
 
 ### Claude settingSources
 
@@ -215,6 +244,29 @@ worktree:
 
 **Docs path behavior:** The `docs.path` setting controls where the `$DOCS_DIR` variable points. When not configured, `$DOCS_DIR` defaults to `docs/`. Unlike `$BASE_BRANCH`, this variable always has a safe default and never throws an error. Configure it when your documentation lives outside the standard `docs/` directory (e.g., `packages/docs-web/src/content/docs`).
 
+### Recommended workflows (`recommendedWorkflows`)
+
+Repo owners curate an **ordered list of recommended workflows** that lives inside the project's own `.archon/config.yaml`. The list is surfaced **pinned on top** of both UI surfaces under a fixed "Recommended for this project" header:
+
+- The **Workflows page** grid renders the pinned cards above a divider, then the rest of the workflows below.
+- The **sidebar run dropdown** renders two native `<optgroup>` blocks: `Recommended` (declared order) and `Other workflows`.
+
+```yaml
+recommendedWorkflows:
+  - archon-fix-github-issue
+  - archon-idea-to-pr
+  - archon-plan
+```
+
+**Semantics:**
+
+- **List order = pin order.** First entry appears first in both UIs.
+- Each entry is a **workflow name** matched against the discovered set (bundled + global + project).
+- A name that matches **no** discovered workflow is **silently ignored** (debug log). The list is advisory — a stale entry never breaks discovery.
+- Search and category filters apply to **both** partitions. If filtering hides all recommended cards, the header is not rendered.
+- Key **absent or empty** → flat list, no header, no divider. Zero-config safe.
+- The list lives **per-project only** — it is not part of global config (`~/.archon/config.yaml`) and is not per-user.
+
 **Worktree path behavior:** By default, every repo's worktrees live under `~/.archon/workspaces/<owner>/<repo>/worktrees/<branch>` — outside the repo, invisible to the IDE. Set `worktree.path` to opt in to a **repo-local** layout instead: worktrees are created at `<repoRoot>/<worktree.path>/<branch>` so they show up in the file tree and editor workspace. A common choice is `.worktrees`. Because worktrees now live inside the repository tree, you should add the directory to your `.gitignore` (Archon does not modify user-owned files). The configured path must be relative to the repo root; absolute paths and paths containing `..` segments fail loudly at worktree creation rather than silently falling back.
 
 ## Environment Variables
@@ -229,10 +281,9 @@ Environment variables override all other configuration. They are organized by ca
 | `PORT` | HTTP server listen port | `3090` (auto-allocated in worktrees) |
 | `LOG_LEVEL` | Logging verbosity (`fatal`, `error`, `warn`, `info`, `debug`, `trace`) | `info` |
 | `BOT_DISPLAY_NAME` | Bot name shown in batch-mode "starting" messages | `Archon` |
-| `DEFAULT_AI_ASSISTANT` | Default AI assistant. Must match a registered provider id — currently `claude`, `codex`, `pi`, or `copilot`. | `claude` |
+| `DEFAULT_AI_ASSISTANT` | Fallback AI assistant when no config file sets the assistant. Overridden by `defaultAssistant` in global config or `assistant` in repo config. Must match a registered provider id — currently `claude`, `codex`, `pi`, or `copilot`. | `claude` |
 | `MAX_CONCURRENT_CONVERSATIONS` | Maximum concurrent AI conversations | `10` |
 | `SESSION_RETENTION_DAYS` | Delete inactive sessions older than N days | `30` |
-| `ARCHON_SUPPRESS_NESTED_CLAUDE_WARNING` | When set to `1`, suppresses the stderr warning emitted when `archon` is run inside a Claude Code session | -- |
 | `ARCHON_VERBOSE_BOOT` | When set to `1`, prints `[archon] loaded N keys from …` lines to stderr at boot. Also enabled by `LOG_LEVEL=debug` or `LOG_LEVEL=trace`. Silent by default to avoid interleaving with interactive command output. | -- |
 
 ### AI Providers -- Claude
@@ -300,6 +351,36 @@ The Copilot provider also reads `assistants.copilot.{model, modelReasoningEffort
 | `GITHUB_ALLOWED_USERS` | Comma-separated GitHub usernames for whitelist (case-insensitive) | Open access |
 | `GITHUB_BOT_MENTION` | @mention name the bot responds to in issues/PRs | Falls back to `BOT_DISPLAY_NAME` |
 
+### Per-user GitHub identity (App mode, optional)
+
+An opt-in layer on top of [GitHub App mode](/adapters/github-app-setup/) that lets each teammate connect their own GitHub identity so commits, PR comments, and pushes attribute to the human rather than the bot. The feature gate turns on when `GITHUB_APP_ID` **and** `TOKEN_ENCRYPTION_KEY` are both set; `GITHUB_APP_CLIENT_ID` is additionally required for the connect (device) flow — set all three. Solo `GITHUB_TOKEN` installs and App-for-bot-only installs are unaffected.
+
+| Variable | Description | Default |
+| --- | --- | --- |
+| `GITHUB_APP_CLIENT_ID` | The App's **Client ID** (starts with `Iv1.`/`Iv23…`, distinct from the numeric `GITHUB_APP_ID`). Required for the device flow that connects per-user identities. | -- |
+| `TOKEN_ENCRYPTION_KEY` | 64-char hex (32 bytes; `openssl rand -hex 32`) used to encrypt stored per-user tokens at rest (AES-256-GCM). **Per-user GitHub identity** requires this + `GITHUB_APP_ID`. **AI credential vault** auto-provisions its own key at `~/.archon/credential-key` — this env var overrides that file on managed/multi-user deploys. **Rotating it invalidates all stored user credentials** — everyone must reconnect. | -- |
+| `ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK` | When `false` (default), a workflow run by an **unconnected** user has `GH_TOKEN`/`GITHUB_TOKEN` scrubbed (so `gh`/`git` fail) rather than silently using the shared org/bot token. Set `true` to opt back into the shared token. | `false` |
+| `ARCHON_WEB_AUTH_HEADER` | Name of the reverse-proxy-set header Archon trusts to identify the web user (reverse-proxy fallback; still honored alongside Better Auth web login below). Only safe when Archon is reachable **solely** through the proxy on a loopback bind — on a public bind the header is forgeable. Absent header → unattributed (never elevated). | `X-Archon-User` |
+
+To connect once the vars are set: `archon auth github` (CLI), `/archon connect github` (Slack), or the Web UI **Settings → Connect GitHub** card.
+
+### Web UI login (Better Auth, optional)
+
+Real per-user email/password login for the Web UI, mounted at `/api/auth/*` by [Better Auth](https://better-auth.com). **Opt-in and Postgres-only**: enabled only when **both** `DATABASE_URL` (Postgres) and `BETTER_AUTH_SECRET` are set. SQLite/solo installs can never enable it and behave exactly as before (no login UI). It supersedes the single-user `auth-service` sidecar; the `ARCHON_WEB_AUTH_HEADER` trust above remains a fallback for reverse-proxy deploys.
+
+A Better Auth session resolves to the **canonical** `remote_agent_users` row via the `web` platform identity, so chat/CLI/forge identities and the `role` column live on the one Archon user — Better Auth is only the login mechanism. Better Auth owns four tables prefixed `remote_agent_auth_*` (`user`/`session`/`account`/`verification`), applied automatically on startup. Every web request resolves a `{ userId, role }` auth context (session first, then the trusted header); `role` defaults to `admin` and visibility stays open. `GET /api/workflows/runs?mine=true` and `GET /api/conversations?mine=true` are non-enforcing "my" filters that prove the scoping seam — they are not a security boundary.
+
+| Variable | Description | Default |
+| --- | --- | --- |
+| `BETTER_AUTH_SECRET` | Session signing secret, **≥32 chars** (`openssl rand -base64 32`). Its presence (with `DATABASE_URL`) is what enables web login. Boot fails fast if set but too short. | -- |
+| `BETTER_AUTH_URL` | Public base URL. Omit for same-origin deploys (inferred from the request); set only behind a fixed-origin reverse proxy. | inferred |
+| `BETTER_AUTH_TRUSTED_ORIGINS` | Comma-separated extra origins allowed for CSRF/cross-origin (beyond same-origin). | -- |
+| `ARCHON_AUTH_ALLOWED_EMAILS` | Comma-separated invite allowlist for signup (case-insensitive). Set this to invite teammates. | -- |
+| `ARCHON_AUTH_OPEN_SIGNUP` | `true` allows open public signup when no allowlist is set. Default (unset) + no allowlist = signup **disabled** (login only). | `false` |
+| `ARCHON_WEB_AUTH_REQUIRED` | When web auth is enabled, gate every `/api/*` request server-side (401 without a session/identity), except `/api/auth/*` and `/api/health*`. `false` keeps login-UI-only. | on (when enabled) |
+
+Signup uses email + password (no email verification by default). **Signup posture:** allowlist set → invite-gated (403 for non-listed emails); no allowlist + `ARCHON_AUTH_OPEN_SIGNUP=true` → open; otherwise **disabled** (login only, with a boot WARN) so enabling auth never silently opens public registration. Existing sessions remain valid until expiry even if an email is later removed from the allowlist. When `ARCHON_WEB_AUTH_REQUIRED` is on (default), Better Auth is the real access gate, so the Caddy `forward_auth` sidecar can be retired.
+
 ### Platform Adapters -- Gitea
 
 | Variable | Description | Default |
@@ -344,6 +425,18 @@ The Copilot provider also reads `assistants.copilot.{model, modelReasoningEffort
 | `COOKIE_SECRET` | 64-hex-char secret for auth session cookies | -- |
 | `AUTH_SERVICE_PORT` | Port for the auth service container | `9000` |
 | `COOKIE_MAX_AGE` | Auth cookie lifetime in seconds | `86400` |
+
+### Telemetry
+
+Archon sends a few anonymous events — `archon_started` (once per process), `archon_active` (daily server heartbeat), `chat_turn_handled` (direct chat turn — platform, provider, model, duration, and usage totals; never message content), `workflow_invoked` (workflow start), `workflow_completed`/`workflow_failed` (run outcome), `workflow_approval_resolved` (binary approve/reject), and `codebase_registered` (pure count — no name/path/URL). Categorical only: workflow name (real for bundled workflows, `"custom"` for your own), platform, provider id (model id on `workflow_invoked`), node shape and feature flags, outcome/duration, aggregate usage totals (tokens/cost/loop iterations), a fixed-enum failure class (never error text), deployment shape (adapter/db/auth booleans), OS/arch/version, and a random install UUID. No code, prompts, paths, IP, geo, or error text. Any one of the variables below disables it. See `archon telemetry status` to inspect the live state.
+
+| Variable | Description | Default |
+| --- | --- | --- |
+| `ARCHON_TELEMETRY_DISABLED` | Set to `1` to disable anonymous telemetry | -- |
+| `DO_NOT_TRACK` | Set to `1` to disable telemetry (de facto standard honored by Astro, Bun, Prisma, etc.) | -- |
+| `CI` | When set to `true` (case-insensitive), telemetry is auto-disabled so fork CI runs don't send events | -- |
+| `POSTHOG_API_KEY` | Set to `off` / `0` / `false` / `disabled` / empty to disable; set to a `phc_*` key to use a custom PostHog project | Built-in key |
+| `POSTHOG_HOST` | Custom PostHog instance URL (first failure on a custom host logs at `warn`) | `https://us.i.posthog.com` |
 
 ### `.env` File Locations
 

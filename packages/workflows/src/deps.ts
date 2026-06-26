@@ -18,6 +18,7 @@ import type {
   ProviderDefaultsMap,
   ProviderCapabilities,
 } from '@archon/providers/types';
+import type { RawAliasesConfig, RawTiersConfig } from './model-validation';
 
 // Re-export provider types so existing workflow engine consumers don't break
 export type {
@@ -75,6 +76,8 @@ export interface WorkflowConfig {
   baseBranch?: string;
   docsPath?: string;
   envVars?: Record<string, string>;
+  aliases?: RawAliasesConfig;
+  tiers?: RawTiersConfig;
   commands: { folder?: string };
   defaults?: {
     loadDefaultWorkflows?: boolean;
@@ -128,4 +131,57 @@ export interface WorkflowDeps {
    * workflow execution falls back to env inheritance rather than aborting.
    */
   resolveBotGitHubToken?: (owner: string, repo: string) => Promise<string | undefined>;
+  /**
+   * Optional: resolve the originating user's personal GitHub token (decrypted,
+   * refreshed on read). Used by the per-user token policy to route a run's
+   * `gh`/`git push` through the human who triggered it rather than the shared
+   * org/bot token. Returns undefined when the user hasn't connected. Must not
+   * throw — return undefined on any failure.
+   */
+  getUserGithubToken?: (userId: string) => Promise<string | undefined>;
+  /**
+   * Optional: whether per-user GitHub attribution is active for this install
+   * (GitHub App configured + TOKEN_ENCRYPTION_KEY set). When false/absent, the
+   * token policy is a no-op and subprocesses keep inheriting `process.env`.
+   */
+  isPerUserGitHubEnabled?: () => boolean;
+  /**
+   * Optional: whether per-user AI-provider credentials are active for this
+   * install (TOKEN_ENCRYPTION_KEY set; independent of the GitHub App). When
+   * false/absent, no per-user provider env is injected and chats/runs keep
+   * the shared process-global keys.
+   */
+  isPerUserProviderKeysEnabled?: () => boolean;
+  /**
+   * Optional: resolve every connected provider credential for a user into a
+   * delivery bag (env vars + files to write under `artifactsDir`). Called
+   * once per run from `executeWorkflow`. Implementations own the delivery
+   * map — the engine just merges `env` into `config.envVars` and writes the
+   * `files` before any provider invocation.
+   *
+   * Must never throw — return `{ env: {}, files: [] }` on any failure so the
+   * workflow continues with whatever env inheritance was already in place.
+   */
+  getUserProviderEnv?: (
+    userId: string,
+    artifactsDir: string
+  ) => Promise<{
+    env: Record<string, string>;
+    files: { path: string; contents: string }[];
+  }>;
+  /**
+   * Optional: resolve the originating user's personal AI preferences (model
+   * tiers, `@custom` aliases, default assistant) from the DB. Folded into
+   * `buildAiProfile` as the highest-precedence layer at the userId-aware
+   * seams (executor + chat orchestrator) — the deep execution path only ever
+   * sees the resolved profile.
+   *
+   * Must never throw — return `{}` on any failure so model resolution falls
+   * back to install-wide config exactly as before.
+   */
+  getUserAiPrefs?: (userId: string) => Promise<{
+    tiers?: RawTiersConfig;
+    aliases?: RawAliasesConfig;
+    defaultProvider?: string;
+  }>;
 }

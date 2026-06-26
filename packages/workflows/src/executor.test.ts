@@ -19,11 +19,17 @@ const mockLogger = {
   isLevelEnabled: mock(() => true),
   level: 'info',
 };
+// Telemetry is fire-and-forget; mock as no-ops so the executor can call them.
+// Hoisted so tests can assert on the completion call (outcome / exit reason).
+const mockCaptureWorkflowInvoked = mock(() => {});
+const mockCaptureWorkflowCompleted = mock(() => {});
 mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
   parseOwnerRepo: mock(() => null),
   getRunArtifactsPath: mock(() => '/tmp/artifacts'),
   getProjectLogsPath: mock(() => '/tmp/logs'),
+  captureWorkflowInvoked: mockCaptureWorkflowInvoked,
+  captureWorkflowCompleted: mockCaptureWorkflowCompleted,
 }));
 
 // --- Mock git ---
@@ -690,6 +696,98 @@ describe('executeWorkflow', () => {
   });
 
   // -------------------------------------------------------------------------
+  // User provider env injection (per-user AI-provider credentials)
+  // -------------------------------------------------------------------------
+
+  describe('user provider env injection', () => {
+    it('skips injection when isPerUserProviderKeysEnabled returns false', async () => {
+      const getUserProviderEnv = mock(async () => ({ env: { SHOULD_NOT_APPEAR: '1' }, files: [] }));
+      const deps: WorkflowDeps = {
+        ...makeDeps(makeStore()),
+        isPerUserProviderKeysEnabled: () => false,
+        getUserProviderEnv,
+      };
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'msg',
+        'db-c1',
+        { userId: 'u-1' }
+      );
+      expect(getUserProviderEnv).not.toHaveBeenCalled();
+    });
+
+    it('skips injection when userId is absent even if feature is enabled', async () => {
+      const getUserProviderEnv = mock(async () => ({ env: { SHOULD_NOT_APPEAR: '1' }, files: [] }));
+      const deps: WorkflowDeps = {
+        ...makeDeps(makeStore()),
+        isPerUserProviderKeysEnabled: () => true,
+        getUserProviderEnv,
+      };
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'msg',
+        'db-c1'
+        // no userId
+      );
+      expect(getUserProviderEnv).not.toHaveBeenCalled();
+    });
+
+    it('merges user provider env LAST so it overrides DB env', async () => {
+      const store = makeStore({
+        getCodebaseEnvVars: mock(async () => ({ DB_KEY: 'db_val', SHARED_KEY: 'db' })),
+      });
+      const getUserProviderEnv = mock(async () => ({
+        env: { SHARED_KEY: 'user_wins', USER_KEY: 'u_val' },
+        files: [] as { path: string; contents: string }[],
+      }));
+      const deps: WorkflowDeps = {
+        ...makeDeps(store),
+        isPerUserProviderKeysEnabled: () => true,
+        getUserProviderEnv,
+      };
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'msg',
+        'db-c1',
+        { codebaseId: 'codebase-1', userId: 'u-1' }
+      );
+      const configArg = mockExecuteDagWorkflow.mock.calls[0]?.[12] as WorkflowConfig | undefined;
+      expect(configArg?.envVars).toMatchObject({
+        DB_KEY: 'db_val',
+        SHARED_KEY: 'user_wins',
+        USER_KEY: 'u_val',
+      });
+    });
+
+    it('returns {} and does not throw when getUserProviderEnv rejects', async () => {
+      const deps: WorkflowDeps = {
+        ...makeDeps(makeStore()),
+        isPerUserProviderKeysEnabled: () => true,
+        getUserProviderEnv: mock(async () => {
+          throw new Error('network down');
+        }),
+      };
+      await expect(
+        executeWorkflow(deps, makePlatform(), 'conv-1', '/tmp', makeWorkflow(), 'msg', 'db-c1', {
+          userId: 'u-1',
+        })
+      ).resolves.toBeDefined();
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // Lock-token cleanup on pre-DAG failure paths (review #1)
   //
   // Any failure between row creation and DAG start that returns early must
@@ -856,6 +954,329 @@ describe('finally backstop', () => {
       c => typeof c[1] === 'string' && (c[1] as string).includes('exited without finalizing')
     );
     expect(backstopCall).toBeUndefined();
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Telemetry wiring
+//
+// captureWorkflowCompleted is mocked as a no-op; these tests assert it actually
+// fires on the unhandled-throw path (and only there from the executor) and that
+// the WorkflowSource is threaded into executeDagWorkflow. Telemetry regressions
+// are otherwise invisible — a dropped call leaves no failing assertion.
+// ───────────────────────────────────────────────────────────────────────────
+describe('telemetry wiring', () => {
+  beforeEach(() => {
+    mockExecuteDagWorkflow.mockClear();
+    mockCaptureWorkflowCompleted.mockClear();
+    mockExecuteDagWorkflow.mockImplementation(async (): Promise<string | undefined> => undefined);
+  });
+
+  it('captures workflow_failed with unhandled_error when executeDagWorkflow throws', async () => {
+    mockExecuteDagWorkflow.mockRejectedValueOnce(new Error('dag boom'));
+    const store = makeStore();
+    const deps = makeDeps(store);
+
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow(),
+      'msg',
+      'db-conv-1'
+    );
+
+    // Exactly once — the executor catch must not double-emit with the DAG paths.
+    expect(mockCaptureWorkflowCompleted).toHaveBeenCalledTimes(1);
+    expect(mockCaptureWorkflowCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: 'failed', exitReason: 'unhandled_error' })
+    );
+  });
+
+  it('reports feature-adoption booleans on workflow_invoked', async () => {
+    mockCaptureWorkflowInvoked.mockClear();
+    const store = makeStore();
+    const deps = makeDeps(store);
+    const workflow = makeWorkflow({
+      persist_sessions: true,
+      nodes: [
+        { id: 'gen', prompt: 'Generate.', output_format: { type: 'object' }, mcp: 'mcp.json' },
+        {
+          id: 'iterate',
+          depends_on: ['gen'],
+          loop: { prompt: 'Iterate.', until: 'DONE', fresh_context: true },
+        },
+        { id: 'summarize', depends_on: ['iterate'], prompt: 'Summarize.', output_type: 'report' },
+      ],
+    } as Partial<WorkflowDefinition>);
+
+    await executeWorkflow(deps, makePlatform(), 'conv-1', '/tmp', workflow, 'msg', 'db-conv-1');
+
+    expect(mockCaptureWorkflowInvoked).toHaveBeenCalledTimes(1);
+    expect(mockCaptureWorkflowInvoked).toHaveBeenCalledWith(
+      expect.objectContaining({
+        usesOutputFormat: true,
+        usesOutputType: true,
+        usesPersistSession: true,
+        usesMcp: true,
+        usesFreshContext: true,
+        usesSkills: false,
+      })
+    );
+  });
+
+  it('reports adoption booleans as false for a plain single-prompt workflow', async () => {
+    mockCaptureWorkflowInvoked.mockClear();
+    const store = makeStore();
+    const deps = makeDeps(store);
+
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow(),
+      'msg',
+      'db-conv-1'
+    );
+
+    expect(mockCaptureWorkflowInvoked).toHaveBeenCalledWith(
+      expect.objectContaining({
+        usesOutputFormat: false,
+        usesOutputType: false,
+        usesPersistSession: false,
+        usesMcp: false,
+        usesSkills: false,
+        usesFreshContext: false,
+      })
+    );
+  });
+
+  it('does not fire executor-level completion telemetry on the success path', async () => {
+    // The DAG executor owns success/partial-failure telemetry; the executor's
+    // own captureWorkflowCompleted must fire only from the unhandled-throw catch.
+    const store = makeStore();
+    const deps = makeDeps(store);
+
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow(),
+      'msg',
+      'db-conv-1'
+    );
+
+    expect(mockCaptureWorkflowCompleted).not.toHaveBeenCalled();
+  });
+
+  it('threads source through to executeDagWorkflow (arg index 16)', async () => {
+    const store = makeStore();
+    const deps = makeDeps(store);
+
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow(),
+      'msg',
+      'db-conv-1',
+      {
+        source: 'bundled',
+      }
+    );
+
+    expect(mockExecuteDagWorkflow.mock.calls[0]?.[16]).toBe('bundled');
+  });
+
+  it('resolves top-level workflow tier refs before calling the DAG executor', async () => {
+    const store = makeStore();
+    const deps = {
+      ...makeDeps(store),
+      loadConfig: mock(
+        async (): Promise<WorkflowConfig> => ({
+          assistant: 'claude',
+          assistants: { claude: {}, codex: {} },
+          baseBranch: '',
+          commands: { folder: '' },
+          tiers: {
+            large: { provider: 'codex', model: 'gpt-5.5', effort: 'high' },
+          },
+        })
+      ),
+    } as WorkflowDeps;
+
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow({ model: 'large' }),
+      'msg',
+      'db-conv-1'
+    );
+
+    expect(mockExecuteDagWorkflow.mock.calls[0]?.[6]).toBe('codex');
+    expect(mockExecuteDagWorkflow.mock.calls[0]?.[7]).toBe('gpt-5.5');
+    expect(mockExecuteDagWorkflow.mock.calls[0]?.[17]).toEqual(
+      expect.objectContaining({
+        aliases: expect.objectContaining({
+          large: { provider: 'codex', model: 'gpt-5.5', effort: 'high' },
+        }),
+      })
+    );
+    expect(mockExecuteDagWorkflow.mock.calls[0]?.[18]).toEqual({
+      provider: 'codex',
+      model: 'gpt-5.5',
+      effort: 'high',
+    });
+  });
+
+  it('applies per-user AI prefs as the highest-precedence resolver layer', async () => {
+    const store = makeStore();
+    const getUserAiPrefs = mock(async () => ({
+      tiers: { large: { provider: 'codex', model: 'gpt-5.5', effort: 'high' } },
+    }));
+    const deps = {
+      ...makeDeps(store),
+      loadConfig: mock(
+        async (): Promise<WorkflowConfig> => ({
+          assistant: 'claude',
+          assistants: { claude: {}, codex: {} },
+          baseBranch: '',
+          commands: { folder: '' },
+          tiers: {
+            large: { provider: 'claude', model: 'opus' },
+          },
+        })
+      ),
+      getUserAiPrefs,
+    } as WorkflowDeps;
+
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow({ model: 'large' }),
+      'msg',
+      'db-conv-1',
+      { userId: 'user-1' }
+    );
+
+    expect(getUserAiPrefs).toHaveBeenCalledWith('user-1');
+    // User tier wins over the config tier for the same key.
+    expect(mockExecuteDagWorkflow.mock.calls[0]?.[6]).toBe('codex');
+    expect(mockExecuteDagWorkflow.mock.calls[0]?.[7]).toBe('gpt-5.5');
+  });
+
+  it('does not consult per-user AI prefs without a userId (solo unchanged)', async () => {
+    const store = makeStore();
+    const getUserAiPrefs = mock(async () => ({}));
+    const deps = { ...makeDeps(store), getUserAiPrefs } as WorkflowDeps;
+
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow(),
+      'msg',
+      'db-conv-1'
+    );
+
+    expect(getUserAiPrefs).not.toHaveBeenCalled();
+  });
+
+  it('a throwing getUserAiPrefs dep degrades to config-only (run still starts)', async () => {
+    const store = makeStore();
+    const deps = {
+      ...makeDeps(store),
+      getUserAiPrefs: mock(async () => {
+        throw new Error('db down');
+      }),
+    } as WorkflowDeps;
+
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow({ model: 'large' }),
+      'msg',
+      'db-conv-1',
+      { userId: 'user-1' }
+    );
+
+    // Config default is claude → built-in tier defaults resolve 'large'.
+    expect(mockExecuteDagWorkflow.mock.calls[0]?.[6]).toBe('claude');
+  });
+
+  it('structurally invalid stored prefs degrade to config-only (run still starts)', async () => {
+    const store = makeStore();
+    const deps = {
+      ...makeDeps(store),
+      // An alias without the '@' prefix makes buildAiProfile throw.
+      getUserAiPrefs: mock(async () => ({
+        aliases: { fast: { provider: 'claude', model: 'haiku' } },
+      })),
+    } as WorkflowDeps;
+
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow({ model: 'large' }),
+      'msg',
+      'db-conv-1',
+      { userId: 'user-1' }
+    );
+
+    expect(mockExecuteDagWorkflow.mock.calls[0]?.[6]).toBe('claude');
+  });
+
+  it("per-user default provider rebases tier defaults for the run's profile", async () => {
+    const store = makeStore();
+    const deps = {
+      ...makeDeps(store),
+      getUserAiPrefs: mock(async () => ({ defaultProvider: 'codex' })),
+    } as WorkflowDeps;
+
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow({ model: 'large' }),
+      'msg',
+      'db-conv-1',
+      { userId: 'user-1' }
+    );
+
+    // No tiers configured anywhere → built-in tier defaults follow the
+    // user's default provider, not the install config's.
+    expect(mockExecuteDagWorkflow.mock.calls[0]?.[6]).toBe('codex');
+  });
+
+  it('passes undefined source when the caller does not supply one', async () => {
+    const store = makeStore();
+    const deps = makeDeps(store);
+
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow(),
+      'msg',
+      'db-conv-1'
+    );
+
+    expect(mockExecuteDagWorkflow.mock.calls[0]?.[16]).toBeUndefined();
   });
 });
 

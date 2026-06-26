@@ -312,6 +312,61 @@ export async function isAncestorOf(
 }
 
 /**
+ * Get the currently checked-out branch name.
+ *
+ * Returns null for expected errors (detached HEAD, path not found, not a git repo).
+ * Returns null on any error since callers use this for non-destructive read-only
+ * decisions (ff-merge guard, reminder reporting) and the safe default is "unknown branch".
+ */
+export async function getCurrentBranch(
+  workingPath: RepoPath | WorktreePath
+): Promise<BranchName | null> {
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      ['-C', workingPath, 'symbolic-ref', '--short', 'HEAD'],
+      { timeout: 10000 }
+    );
+    const branch = stdout.trim();
+    return branch ? toBranchName(branch) : null;
+  } catch (error) {
+    // Expected: detached HEAD, missing path, not a git repo.
+    // Unexpected (permission denied, timeout): same safe default; log for debugging.
+    getLog().debug({ workingPath, err: error as Error }, 'get_current_branch_failed');
+    return null;
+  }
+}
+
+/**
+ * Count how many local commits on the current branch are ahead of `origin/<branch>`.
+ *
+ * Returns 0 if origin/<branch> doesn't exist, on detached HEAD, or any error.
+ * Used by the post-message reminder to report unpushed work in `source/` —
+ * "I don't know" is reported as zero so the reminder stays silent rather than
+ * spuriously warning.
+ */
+export async function countCommitsAhead(
+  workingPath: RepoPath | WorktreePath,
+  branch: BranchName
+): Promise<number> {
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      ['-C', workingPath, 'rev-list', '--count', `origin/${branch}..HEAD`],
+      { timeout: 10000 }
+    );
+    const n = parseInt(stdout.trim(), 10);
+    return Number.isFinite(n) ? n : 0;
+  } catch (error) {
+    // Expected: origin/<branch> missing, detached HEAD, not a git repo.
+    // Unexpected (permission denied, timeout, git corruption): same safe default
+    // (0 keeps the reminder silent), but log so it's visible during triage.
+    getLog().debug({ workingPath, branch, err: error as Error }, 'count_commits_ahead_failed');
+    return 0;
+  }
+}
+
+/**
  * Get the last commit date for a repository or worktree.
  *
  * Returns null for expected errors (no commits, path not found).

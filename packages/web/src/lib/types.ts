@@ -3,9 +3,13 @@
  * SSE event types match what the Web adapter emits.
  */
 
-import type { components } from '@/lib/api.generated';
-
-export type WorkflowRunStatus = components['schemas']['WorkflowRunStatus'];
+export type WorkflowRunStatus =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'paused';
 export type WorkflowStepStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
 export type ArtifactType = 'pr' | 'commit' | 'file_created' | 'file_modified' | 'branch';
 
@@ -131,6 +135,37 @@ export interface WorkflowToolActivityEvent extends BaseSSEEvent {
   durationMs?: number;
 }
 
+// Subagent task activity (Phase 3 of #975 — aggregated from Claude provider
+// task_started / task_progress / task_notification chunks). Rendered as
+// expandable sub-items under the parent DAG node in the run detail view.
+export interface WorkflowTaskActivityEvent extends BaseSSEEvent {
+  type: 'workflow_task_activity';
+  runId: string;
+  nodeId: string;
+  taskId: string;
+  activity: 'started' | 'progress' | 'completed' | 'failed' | 'stopped';
+  description?: string;
+  summary?: string;
+  usage?: { total_tokens: number; tool_uses: number; duration_ms: number };
+  lastToolName?: string;
+  taskType?: string;
+}
+
+// Hook activity (Phase 3 of #975 — aggregated from Claude provider
+// hook_started / hook_response chunks). Rendered as inline indicators under
+// the parent node (e.g. "PreToolUse(Bash) → approved").
+export interface WorkflowHookActivityEvent extends BaseSSEEvent {
+  type: 'workflow_hook_activity';
+  runId: string;
+  nodeId: string;
+  hookId: string;
+  hookName: string;
+  hookEvent: string;
+  activity: 'started' | 'response';
+  outcome?: 'success' | 'error' | 'cancelled';
+  exitCode?: number;
+}
+
 // Workflow artifact
 export interface WorkflowArtifactEvent extends BaseSSEEvent {
   type: 'workflow_artifact';
@@ -183,6 +218,8 @@ export type SSEEvent =
   | DagNodeEvent
   | LoopIterationEvent
   | WorkflowToolActivityEvent
+  | WorkflowTaskActivityEvent
+  | WorkflowHookActivityEvent
   | WorkflowArtifactEvent
   | WorkflowDispatchEvent
   | WorkflowOutputPreviewEvent
@@ -240,6 +277,39 @@ export interface ErrorDisplay {
 
 // Workflow UI State types
 
+/** Subagent task lifecycle entry (Phase 3 of #975). Keyed by `taskId`
+ *  inside a `DagNodeState.tasks` array; mutated in place as progress /
+ *  completion events arrive. */
+export interface DagTaskInfo {
+  taskId: string;
+  /** 'started' | 'progress' | 'completed' | 'failed' | 'stopped' */
+  activity: 'started' | 'progress' | 'completed' | 'failed' | 'stopped';
+  description?: string;
+  /** Most recent AI-generated summary (only present when
+   *  `agentProgressSummaries: true` and the SDK has emitted one). */
+  summary?: string;
+  lastToolName?: string;
+  taskType?: string;
+  usage?: { total_tokens: number; tool_uses: number; duration_ms: number };
+  startedAt: number;
+  updatedAt: number;
+}
+
+/** Hook lifecycle entry (Phase 3 of #975). Keyed by `hookId` inside a
+ *  `DagNodeState.hooks` array; a started/response pair is collapsed into
+ *  one row (response overwrites `outcome` / `exitCode`). */
+export interface DagHookInfo {
+  hookId: string;
+  hookName: string;
+  hookEvent: string;
+  /** 'started' until the matching response arrives, then 'response'. */
+  activity: 'started' | 'response';
+  outcome?: 'success' | 'error' | 'cancelled';
+  exitCode?: number;
+  startedAt: number;
+  updatedAt: number;
+}
+
 export interface DagNodeState {
   nodeId: string;
   name: string;
@@ -250,6 +320,10 @@ export interface DagNodeState {
   currentIteration?: number;
   maxIterations?: number;
   iterations?: LoopIterationInfo[];
+  /** Subagent tasks spawned by this node (Task tool, inline sub-agents). */
+  tasks?: DagTaskInfo[];
+  /** Hook callbacks fired by this node (PreToolUse, PostToolUse, etc.). */
+  hooks?: DagHookInfo[];
 }
 
 export interface WorkflowArtifact {

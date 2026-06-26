@@ -3,14 +3,14 @@
 ## Install Pi
 
 ```bash
-npm install -g @mariozechner/pi-coding-agent
+npm install -g @earendil-works/pi-coding-agent
 ```
 
 ## Install Kiro provider and dependencies
 
 ```bash
 pi install npm:pi-provider-kiro
-npm install -g @mariozechner/pi-tui @mariozechner/pi-ai
+npm install -g @earendil-works/pi-tui @earendil-works/pi-ai
 ```
 
 ## Install MCP for Pi

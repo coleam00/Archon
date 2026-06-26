@@ -4,6 +4,507 @@
  */
 
 export interface paths {
+  '/api/auth/status': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Web auth availability + signup posture (no auth required) */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Auth status */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['AuthStatusResponse'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/auth/github/device/start': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Start the GitHub device flow for the current web user */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Device + user codes */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['GithubDeviceStartResponse'];
+          };
+        };
+        /** @description Web auth required (X-Archon-User header missing) */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Device flow not configured or failed */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/auth/github/device/poll': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Poll the GitHub device flow once for the current web user */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: {
+        content: {
+          'application/json': components['schemas']['GithubDevicePollBody'];
+        };
+      };
+      responses: {
+        /** @description Poll status */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['GithubDevicePollResponse'];
+          };
+        };
+        /** @description Web auth required (X-Archon-User header missing) */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Device flow not configured or failed */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/auth/github': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** GitHub connection status for the current web user */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Connection status */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['GithubConnectionStatus'];
+          };
+        };
+        /** @description Web auth required (X-Archon-User header missing) */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    /** Disconnect the current web user’s GitHub identity */
+    delete: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Disconnected */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['GithubDisconnectResponse'];
+          };
+        };
+        /** @description Web auth required (X-Archon-User header missing) */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/auth/providers': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List the current web user’s connected AI-provider keys */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Connections (metadata only) + connectable provider catalog */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ProviderKeyListResponse'];
+          };
+        };
+        /** @description Web auth required (X-Archon-User header missing) */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/auth/providers/{provider}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    /** Connect (upsert) an API key for a provider for the current web user */
+    put: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          provider: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: {
+        content: {
+          'application/json': components['schemas']['ProviderKeySetBody'];
+        };
+      };
+      responses: {
+        /** @description Key stored (encrypted); response carries no secret value */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ProviderKeySetResponse'];
+          };
+        };
+        /** @description Unknown provider or empty key */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Web auth required (X-Archon-User header missing) */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Per-user provider keys not enabled on this install */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    post?: never;
+    /** Disconnect the current web user’s key for a provider */
+    delete: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          provider: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Disconnected (idempotent) */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ProviderKeyDeleteResponse'];
+          };
+        };
+        /** @description Web auth required (X-Archon-User header missing) */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Per-user provider keys not enabled on this install */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/auth/providers/{provider}/oauth/start': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Begin a subscription (OAuth) login for the current web user */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          provider: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Login session started (mode + URL/user-code) */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ProviderOAuthStartResponse'];
+          };
+        };
+        /** @description Provider does not support subscription login */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Web auth required (X-Archon-User header missing) */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Per-user provider keys not enabled on this install */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/auth/providers/{provider}/oauth/poll': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Poll a subscription login session (submit pasted code for manual flows) */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          provider: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: {
+        content: {
+          'application/json': components['schemas']['ProviderOAuthPollBody'];
+        };
+      };
+      responses: {
+        /** @description Poll status */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ProviderOAuthPollResponse'];
+          };
+        };
+        /** @description Web auth required (X-Archon-User header missing) */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Per-user provider keys not enabled on this install */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/conversations': {
     parameters: {
       query?: never;
@@ -17,6 +518,7 @@ export interface paths {
         query?: {
           platform?: string;
           codebaseId?: string;
+          mine?: 'true' | 'false';
         };
         header?: never;
         path?: never;
@@ -1288,6 +1790,66 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/workflows/{name}/node-sessions': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    /** Reset persisted per-node provider sessions for a workflow. Optional scope and node filters narrow the deletion. */
+    delete: {
+      parameters: {
+        query?: {
+          scope?: string;
+          node?: string;
+          confirm?: 'all-scopes';
+        };
+        header?: never;
+        path: {
+          name: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Sessions deleted (deleted count may be 0) */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ResetWorkflowNodeSessionsResponse'];
+          };
+        };
+        /** @description Bad request */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/workflows/runs': {
     parameters: {
       query?: never;
@@ -1303,6 +1865,7 @@ export interface paths {
           status?: string;
           codebaseId?: string;
           limit?: string;
+          mine?: 'true' | 'false';
         };
         header?: never;
         path?: never;
@@ -1845,6 +2408,67 @@ export interface paths {
     };
     trace?: never;
   };
+  '/api/config/tiers': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /**
+     * Update model-tier presets (small/medium/large)
+     * @description Writes the `tiers:` config to ~/.archon/config.yaml. Ungated (works on solo installs). Per-tier merge; a `null` tier value unsets it.
+     */
+    patch: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['UpdateTiersBody'];
+        };
+      };
+      responses: {
+        /** @description Updated configuration */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ConfigResponse'];
+          };
+        };
+        /** @description Invalid request body */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    trace?: never;
+  };
   '/api/providers': {
     parameters: {
       query?: never;
@@ -2013,6 +2637,87 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
   schemas: {
+    AuthStatusResponse: {
+      enabled: boolean;
+      /** @enum {string} */
+      signup: 'allowlist' | 'open' | 'disabled';
+    };
+    GithubDeviceStartResponse: {
+      device_code: string;
+      user_code: string;
+      verification_uri: string;
+      interval: number;
+      expires_in: number;
+    };
+    Error: {
+      error: string;
+    };
+    GithubDevicePollResponse: {
+      /** @enum {string} */
+      status: 'pending' | 'connected' | 'expired' | 'denied' | 'error';
+      githubLogin?: string;
+      detail?: string;
+    };
+    GithubDevicePollBody: {
+      device_code: string;
+    };
+    GithubConnectionStatus: {
+      connected: boolean;
+      githubLogin: string | null;
+    };
+    GithubDisconnectResponse: {
+      success: boolean;
+    };
+    ProviderKeyListResponse: {
+      enabled: boolean;
+      connections: components['schemas']['ProviderKeyConnection'][];
+      available: string[];
+      subscriptionAvailable: string[];
+    };
+    ProviderKeyConnection: {
+      provider: string;
+      /** @enum {string} */
+      kind: 'api_key' | 'oauth';
+      label: string | null;
+    };
+    ProviderKeySetResponse: {
+      success: boolean;
+      provider: string;
+      /** @enum {string} */
+      kind: 'api_key';
+      label: string | null;
+    };
+    ProviderKeySetBody: {
+      apiKey: string;
+      label?: string;
+    };
+    ProviderKeyDeleteResponse: {
+      success: boolean;
+    };
+    ProviderOAuthStartResponse: {
+      sessionId: string;
+      /** @enum {string} */
+      mode: 'manual' | 'device';
+      url?: string;
+      userCode?: string;
+      verificationUri?: string;
+      expiresIn: number;
+    };
+    ProviderOAuthPollResponse: {
+      /** @enum {string} */
+      status: 'pending' | 'connected' | 'error';
+      detail?: string;
+      /** @enum {string} */
+      mode?: 'manual' | 'device';
+      url?: string;
+      userCode?: string;
+      verificationUri?: string;
+    };
+    ProviderOAuthPollBody: {
+      sessionId: string;
+      code?: string;
+    };
+    ConversationListResponse: components['schemas']['Conversation'][];
     Conversation: {
       id: string;
       platform_type: string;
@@ -2023,14 +2728,15 @@ export interface components {
       ai_assistant_type: string;
       title: string | null;
       hidden: boolean;
+      /** Format: date-time */
       deleted_at: string | null;
+      /** Format: date-time */
       last_activity_at: string | null;
+      user_id: string | null;
+      /** Format: date-time */
       created_at: string;
+      /** Format: date-time */
       updated_at: string;
-    };
-    ConversationListResponse: components['schemas']['Conversation'][];
-    Error: {
-      error: string;
     };
     CreateConversationResponse: {
       conversationId: string;
@@ -2047,6 +2753,7 @@ export interface components {
     UpdateConversationBody: {
       title?: string;
     };
+    MessageListResponse: components['schemas']['Message'][];
     Message: {
       id: string;
       conversation_id: string;
@@ -2054,30 +2761,33 @@ export interface components {
       role: 'user' | 'assistant';
       content: string;
       metadata: string;
+      user_id: string | null;
+      /** Format: date-time */
       created_at: string;
     };
-    MessageListResponse: components['schemas']['Message'][];
     DispatchResponse: {
       accepted: boolean;
       status: string;
     };
-    CodebaseCommand: {
-      path: string;
-      description: string;
-    };
+    CodebaseListResponse: components['schemas']['Codebase'][];
     Codebase: {
       id: string;
       name: string;
       repository_url: string | null;
       default_cwd: string;
+      default_branch: string | null;
       ai_assistant_type: string;
       commands: {
-        [key: string]: components['schemas']['CodebaseCommand'];
+        [key: string]: {
+          path: string;
+          description: string;
+        };
       };
+      /** Format: date-time */
       created_at: string;
+      /** Format: date-time */
       updated_at: string;
     };
-    CodebaseListResponse: components['schemas']['Codebase'][];
     AddCodebaseBody: {
       url?: string;
       path?: string;
@@ -2094,6 +2804,84 @@ export interface components {
     SetEnvVarBody: {
       key: string;
       value: string;
+    };
+    WorkflowListResponse: {
+      workflows: components['schemas']['WorkflowListEntry'][];
+      recommended: string[];
+      errors?: components['schemas']['WorkflowLoadError'][];
+    };
+    WorkflowListEntry: {
+      workflow: components['schemas']['WorkflowDefinition'];
+      source: components['schemas']['WorkflowSource'];
+    };
+    WorkflowDefinition: {
+      name: string;
+      description: string;
+      provider?: string;
+      model?: string;
+      /** @enum {string} */
+      modelReasoningEffort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+      /** @enum {string} */
+      webSearchMode?: 'disabled' | 'cached' | 'live';
+      additionalDirectories?: string[];
+      interactive?: boolean;
+      /** @enum {string} */
+      effort?: 'low' | 'medium' | 'high' | 'max';
+      thinking?:
+        | {
+            /** @enum {string} */
+            type: 'adaptive';
+          }
+        | {
+            /** @enum {string} */
+            type: 'enabled';
+            budgetTokens?: number;
+          }
+        | {
+            /** @enum {string} */
+            type: 'disabled';
+          };
+      fallbackModel?: string;
+      betas?: string[];
+      sandbox?: {
+        enabled?: boolean;
+        autoAllowBashIfSandboxed?: boolean;
+        allowUnsandboxedCommands?: boolean;
+        network?: {
+          allowedDomains?: string[];
+          allowManagedDomainsOnly?: boolean;
+          allowUnixSockets?: string[];
+          allowAllUnixSockets?: boolean;
+          allowLocalBinding?: boolean;
+          httpProxyPort?: number;
+          socksProxyPort?: number;
+        };
+        filesystem?: {
+          allowWrite?: string[];
+          denyWrite?: string[];
+          denyRead?: string[];
+        };
+        ignoreViolations?: {
+          [key: string]: string[];
+        };
+        enableWeakerNestedSandbox?: boolean;
+        enableWeakerNetworkIsolation?: boolean;
+        excludedCommands?: string[];
+        ripgrep?: {
+          command: string;
+          args?: string[];
+        };
+      } & {
+        [key: string]: unknown;
+      };
+      worktree?: {
+        enabled?: boolean;
+      };
+      mutates_checkout?: boolean;
+      persist_sessions?: boolean;
+      tags?: string[];
+      requires?: 'github'[];
+      nodes: components['schemas']['DagNode'][];
     };
     DagNode: {
       id: string;
@@ -2327,8 +3115,12 @@ export interface components {
           command: string;
           args?: string[];
         };
+      } & {
+        [key: string]: unknown;
       };
       always_run?: boolean;
+      persist_session?: boolean;
+      output_type?: string;
       command?: string;
       prompt?: string;
       bash?: string;
@@ -2357,117 +3149,13 @@ export interface components {
       deps?: string[];
       timeout?: number;
     };
-    WorkflowDefinition: {
-      name: string;
-      description: string;
-      provider?: string;
-      model?: string;
-      /** @enum {string} */
-      modelReasoningEffort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
-      /** @enum {string} */
-      webSearchMode?: 'disabled' | 'cached' | 'live';
-      additionalDirectories?: string[];
-      interactive?: boolean;
-      /** @enum {string} */
-      effort?: 'low' | 'medium' | 'high' | 'max';
-      thinking?:
-        | {
-            /** @enum {string} */
-            type: 'adaptive';
-          }
-        | {
-            /** @enum {string} */
-            type: 'enabled';
-            budgetTokens?: number;
-          }
-        | {
-            /** @enum {string} */
-            type: 'disabled';
-          };
-      fallbackModel?: string;
-      betas?: string[];
-      sandbox?: {
-        enabled?: boolean;
-        autoAllowBashIfSandboxed?: boolean;
-        allowUnsandboxedCommands?: boolean;
-        network?: {
-          allowedDomains?: string[];
-          allowManagedDomainsOnly?: boolean;
-          allowUnixSockets?: string[];
-          allowAllUnixSockets?: boolean;
-          allowLocalBinding?: boolean;
-          httpProxyPort?: number;
-          socksProxyPort?: number;
-        };
-        filesystem?: {
-          allowWrite?: string[];
-          denyWrite?: string[];
-          denyRead?: string[];
-        };
-        ignoreViolations?: {
-          [key: string]: string[];
-        };
-        enableWeakerNestedSandbox?: boolean;
-        enableWeakerNetworkIsolation?: boolean;
-        excludedCommands?: string[];
-        ripgrep?: {
-          command: string;
-          args?: string[];
-        };
-      };
-      worktree?: {
-        enabled?: boolean;
-      };
-      mutates_checkout?: boolean;
-      tags?: string[];
-      nodes: components['schemas']['DagNode'][];
-    };
     /** @enum {string} */
     WorkflowSource: 'project' | 'bundled' | 'global';
-    WorkflowListEntry: {
-      workflow: components['schemas']['WorkflowDefinition'];
-      source: components['schemas']['WorkflowSource'];
-    };
     WorkflowLoadError: {
       filename: string;
       error: string;
       /** @enum {string} */
       errorType: 'read_error' | 'parse_error' | 'validation_error';
-    };
-    WorkflowListResponse: {
-      workflows: components['schemas']['WorkflowListEntry'][];
-      errors?: components['schemas']['WorkflowLoadError'][];
-    };
-    /** @enum {string} */
-    WorkflowRunStatus: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
-    WorkflowRun: {
-      id: string;
-      workflow_name: string;
-      conversation_id: string;
-      parent_conversation_id: string | null;
-      codebase_id: string | null;
-      status: components['schemas']['WorkflowRunStatus'];
-      user_message: string;
-      metadata: {
-        [key: string]: unknown;
-      };
-      started_at: string;
-      completed_at: string | null;
-      last_activity_at: string | null;
-      working_path: string | null;
-    };
-    DashboardWorkflowRun: components['schemas']['WorkflowRun'] & {
-      codebase_name: string | null;
-      platform_type: string | null;
-      worker_platform_id: string | null;
-      parent_platform_id: string | null;
-      current_step_name: string | null;
-      total_steps: number | null;
-      /** @enum {string|null} */
-      current_step_status: 'running' | 'completed' | 'failed' | null;
-      agents_completed: number | null;
-      agents_failed: number | null;
-      agents_total: number | null;
     };
     DashboardRunsResponse: {
       runs: components['schemas']['DashboardWorkflowRun'][];
@@ -2481,6 +3169,35 @@ export interface components {
         pending: number;
         paused: number;
       };
+    };
+    DashboardWorkflowRun: {
+      id: string;
+      workflow_name: string;
+      conversation_id: string;
+      parent_conversation_id: string | null;
+      codebase_id: string | null;
+      /** @enum {string} */
+      status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+      user_message: string;
+      metadata: {
+        [key: string]: unknown;
+      };
+      started_at: string;
+      completed_at: string | null;
+      last_activity_at: string | null;
+      working_path: string | null;
+      user_id: string | null;
+      codebase_name: string | null;
+      platform_type: string | null;
+      worker_platform_id: string | null;
+      parent_platform_id: string | null;
+      current_step_name: string | null;
+      total_steps: number | null;
+      /** @enum {string|null} */
+      current_step_status: 'running' | 'completed' | 'failed' | null;
+      agents_completed: number | null;
+      agents_failed: number | null;
+      agents_total: number | null;
     };
     CancelWorkflowRunResponse: {
       success: boolean;
@@ -2496,11 +3213,41 @@ export interface components {
     RejectWorkflowRunBody: {
       reason?: string;
     };
+    ResetWorkflowNodeSessionsResponse: {
+      success: boolean;
+      deleted: number;
+    };
     WorkflowRunListResponse: {
       runs: components['schemas']['WorkflowRun'][];
     };
+    WorkflowRun: {
+      id: string;
+      workflow_name: string;
+      conversation_id: string;
+      parent_conversation_id: string | null;
+      codebase_id: string | null;
+      /** @enum {string} */
+      status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+      user_message: string;
+      metadata: {
+        [key: string]: unknown;
+      };
+      started_at: string;
+      completed_at: string | null;
+      last_activity_at: string | null;
+      working_path: string | null;
+      user_id: string | null;
+    };
     WorkflowRunByWorkerResponse: {
       run: components['schemas']['WorkflowRun'];
+    };
+    WorkflowRunDetail: {
+      run: components['schemas']['WorkflowRun'] & {
+        worker_platform_id?: string;
+        parent_platform_id?: string;
+        conversation_platform_id: string | null;
+      };
+      events: components['schemas']['WorkflowEvent'][];
     };
     WorkflowEvent: {
       id: string;
@@ -2511,15 +3258,8 @@ export interface components {
       data: {
         [key: string]: unknown;
       };
+      /** Format: date-time */
       created_at: string;
-    };
-    WorkflowRunDetail: {
-      run: components['schemas']['WorkflowRun'] & {
-        worker_platform_id?: string;
-        parent_platform_id?: string;
-        conversation_platform_id: string | null;
-      };
-      events: components['schemas']['WorkflowEvent'][];
     };
     ValidateWorkflowResponse: {
       valid: boolean;
@@ -2544,23 +3284,24 @@ export interface components {
       deleted: boolean;
       name: string;
     };
+    CommandListResponse: {
+      commands: components['schemas']['CommandEntry'][];
+    };
     CommandEntry: {
       name: string;
       source: components['schemas']['WorkflowSource'];
     };
-    CommandListResponse: {
-      commands: components['schemas']['CommandEntry'][];
+    ListArtifactsResponse: {
+      files: components['schemas']['ArtifactFile'][];
     };
     ArtifactFile: {
       path: string;
       size: number;
       modifiedAt: string;
     };
-    ListArtifactsResponse: {
-      files: components['schemas']['ArtifactFile'][];
-    };
-    ProviderDefaults: {
-      [key: string]: unknown;
+    ConfigResponse: {
+      config: components['schemas']['SafeConfig'];
+      database: string;
     };
     SafeConfig: {
       botName: string;
@@ -2584,10 +3325,22 @@ export interface components {
         loadDefaultCommands: boolean;
         loadDefaultWorkflows: boolean;
       };
+      tiers?: components['schemas']['TiersConfig'];
+      tierDefaults?: components['schemas']['TiersConfig'];
     };
-    ConfigResponse: {
-      config: components['schemas']['SafeConfig'];
-      database: string;
+    ProviderDefaults: {
+      [key: string]: unknown;
+    };
+    TiersConfig: {
+      small?: components['schemas']['TierEntry'];
+      medium?: components['schemas']['TierEntry'];
+      large?: components['schemas']['TierEntry'];
+    };
+    TierEntry: {
+      provider: string;
+      model: string;
+      effort?: string;
+      thinking?: unknown;
     };
     UpdateAssistantConfigBody: {
       assistant?: string;
@@ -2595,19 +3348,15 @@ export interface components {
         [key: string]: components['schemas']['ProviderDefaults'];
       };
     };
-    ProviderCapabilities: {
-      sessionResume: boolean;
-      mcp: boolean;
-      hooks: boolean;
-      skills: boolean;
-      toolRestrictions: boolean;
-      structuredOutput: boolean;
-      envInjection: boolean;
-      costControl: boolean;
-      effortControl: boolean;
-      thinkingControl: boolean;
-      fallbackModel: boolean;
-      sandbox: boolean;
+    UpdateTiersBody: {
+      tiers: {
+        small?: components['schemas']['TierEntry'] & unknown;
+        medium?: components['schemas']['TierEntry'] & unknown;
+        large?: components['schemas']['TierEntry'] & unknown;
+      };
+    };
+    ProviderListResponse: {
+      providers: components['schemas']['ProviderInfo'][];
     };
     ProviderInfo: {
       id: string;
@@ -2615,8 +3364,22 @@ export interface components {
       capabilities: components['schemas']['ProviderCapabilities'];
       builtIn: boolean;
     };
-    ProviderListResponse: {
-      providers: components['schemas']['ProviderInfo'][];
+    ProviderCapabilities: {
+      sessionResume: boolean;
+      mcp: boolean;
+      hooks: boolean;
+      skills: boolean;
+      toolRestrictions: boolean;
+      structuredOutput: 'enforced' | 'best-effort' | false;
+      envInjection: boolean;
+      costControl: boolean;
+      effortControl: boolean;
+      thinkingControl: boolean;
+      fallbackModel: boolean;
+      sandbox: boolean;
+    };
+    CodebaseEnvironmentsResponse: {
+      environments: components['schemas']['IsolationEnvironment'][];
     };
     IsolationEnvironment: {
       id: string;
@@ -2627,9 +3390,6 @@ export interface components {
       created_at: string;
       updated_at: string;
       days_since_activity: number;
-    };
-    CodebaseEnvironmentsResponse: {
-      environments: components['schemas']['IsolationEnvironment'][];
     };
     HealthResponse: {
       status: string;

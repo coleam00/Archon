@@ -1,6 +1,6 @@
 import { createLogger } from '@archon/paths';
-import type { AgentSession, AgentSessionEvent } from '@mariozechner/pi-coding-agent';
-import type { AssistantMessage, Usage } from '@mariozechner/pi-ai';
+import type { AgentSession, AgentSessionEvent } from '@earendil-works/pi-coding-agent';
+import type { AssistantMessage, Usage } from '@earendil-works/pi-ai';
 
 import type { MessageChunk, TokenUsage } from '../../types';
 

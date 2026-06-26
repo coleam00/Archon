@@ -67,19 +67,38 @@ export class GitHubAdapter implements IPlatformAdapter {
   private botMention: string;
   private lockManager: ConversationLockManager;
   private readonly retryDelayFn: (attempt: number) => number;
+  /**
+   * Resolve the originating user's personal GitHub token (App mode only).
+   * Injected by the server when per-user GitHub is enabled; undefined otherwise.
+   * When present, outbound comments are authored under the user's identity.
+   */
+  private readonly getUserToken?: (userId: string) => Promise<string | undefined>;
+  /**
+   * conversationId → originating Archon userId (the last human to trigger this
+   * thread). Populated in handleWebhook; read in postComment to route the reply
+   * through that user's token. App mode only; lost on restart (graceful: falls
+   * back to the installation/bot identity).
+   */
+  private readonly actorByConversation = new Map<string, string>();
+  /** userId → short-lived Octokit built from the user's token (amortizes construction). */
+  private readonly userOctokitCache = new Map<string, { octokit: Octokit; expiresAt: number }>();
 
   constructor(
     auth: GitHubAuth,
     webhookSecret: string,
     lockManager: ConversationLockManager,
     botMention?: string,
-    options?: { retryDelayMs?: (attempt: number) => number }
+    options?: {
+      retryDelayMs?: (attempt: number) => number;
+      getUserToken?: (userId: string) => Promise<string | undefined>;
+    }
   ) {
     this.auth = auth;
     this.octokit = auth.kind === 'pat' ? new Octokit({ auth: auth.token }) : null;
     this.webhookSecret = webhookSecret;
     this.lockManager = lockManager;
     this.botMention = botMention ?? 'Archon';
+    this.getUserToken = options?.getUserToken;
 
     // Parse GitHub user whitelist (optional - empty = open access)
     this.allowedUsers = parseGitHubAllowedUsers(process.env.GITHUB_ALLOWED_USERS);
@@ -189,6 +208,29 @@ export class GitHubAdapter implements IPlatformAdapter {
   }
 
   /**
+   * Build a short-lived Octokit authenticated as the given user, or null when
+   * per-user routing is unavailable (PAT mode, no resolver, or the user isn't
+   * connected). The underlying token store refreshes on read, so a brief TTL
+   * bounds staleness without re-fetching the token per comment.
+   */
+  private async getUserOctokit(userId: string): Promise<Octokit | null> {
+    if (this.auth.kind !== 'app' || !this.getUserToken) return null;
+    const cached = this.userOctokitCache.get(userId);
+    if (cached && Date.now() < cached.expiresAt) return cached.octokit;
+    let token: string | undefined;
+    try {
+      token = await this.getUserToken(userId);
+    } catch (err) {
+      getLog().warn({ err: toError(err), userId }, 'github.user_token_resolve_failed');
+      return null;
+    }
+    if (!token) return null;
+    const octokit = new Octokit({ auth: token });
+    this.userOctokitCache.set(userId, { octokit, expiresAt: Date.now() + 5 * 60 * 1000 });
+    return octokit;
+  }
+
+  /**
    * Check if an error is retryable (transient network issues)
    */
   private isRetryableError(error: unknown): boolean {
@@ -288,19 +330,39 @@ export class GitHubAdapter implements IPlatformAdapter {
   ): Promise<void> {
     const markedMessage = `${message}\n\n${BOT_RESPONSE_MARKER}`;
     const maxRetries = 3;
-    const conversationId = `${parsed.owner}/${parsed.repo}#${String(parsed.number)}`;
+    const conversationId = this.buildConversationId(parsed.owner, parsed.repo, parsed.number);
+    const commentParams = {
+      owner: parsed.owner,
+      repo: parsed.repo,
+      issue_number: parsed.number,
+      body: markedMessage,
+    };
+    const actorUserId =
+      this.auth.kind === 'app' ? this.actorByConversation.get(conversationId) : undefined;
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
+        // Prefer the originating user's token so the comment shows under their
+        // avatar. On 401 (revoked/expired) evict and fall back to the bot's
+        // installation token rather than failing the reply.
+        if (actorUserId) {
+          const userOctokit = await this.getUserOctokit(actorUserId);
+          if (userOctokit) {
+            try {
+              await userOctokit.rest.issues.createComment(commentParams);
+              getLog().debug({ conversationId, attribution: 'user' }, 'github.comment_posted');
+              return;
+            } catch (err) {
+              if ((err as { status?: number }).status !== 401) throw err;
+              this.userOctokitCache.delete(actorUserId);
+              getLog().warn({ conversationId }, 'github.user_token_comment_fallback');
+            }
+          }
+        }
         await this.withTokenRefresh(parsed.owner, parsed.repo, octokit =>
-          octokit.rest.issues.createComment({
-            owner: parsed.owner,
-            repo: parsed.repo,
-            issue_number: parsed.number,
-            body: markedMessage,
-          })
+          octokit.rest.issues.createComment(commentParams)
         );
-        getLog().debug({ conversationId }, 'github.comment_posted');
+        getLog().debug({ conversationId, attribution: 'bot' }, 'github.comment_posted');
         return;
       } catch (error) {
         const isRetryable = this.isRetryableError(error);
@@ -952,6 +1014,12 @@ ${userComment}`;
 
     // 4. Build conversationId
     const conversationId = this.buildConversationId(owner, repo, number);
+
+    // Remember the triggering user so the bot's reply on this thread can be
+    // authored under their GitHub identity (App mode + per-user tokens only).
+    if (this.auth.kind === 'app' && this.getUserToken && archonUserId) {
+      this.actorByConversation.set(conversationId, archonUserId);
+    }
 
     // 5. Check if new conversation
     const existingConv = await db.getOrCreateConversation('github', conversationId);

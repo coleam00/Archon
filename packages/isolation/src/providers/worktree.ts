@@ -724,6 +724,14 @@ export class WorktreeProvider implements IIsolationProvider {
       await this.createNewBranch(request, repoPath, worktreePath, branchName, baseBranch);
     }
 
+    // Stamp the originating user's git identity on this worktree so workflow
+    // commits attribute to the human (PR-C). Scoped to the worktree's local
+    // config; absent identity leaves the ambient git config untouched. Failure
+    // is non-fatal — commits would just fall back to the ambient identity.
+    if (request.gitIdentity?.email) {
+      await this.applyGitIdentity(worktreePath, request.gitIdentity);
+    }
+
     // Initialize submodules unless explicitly opted out. The check is free
     // when `.gitmodules` is absent (access-based short-circuit), so repos
     // without submodules pay nothing. Default-on matches git's own intent
@@ -746,6 +754,30 @@ export class WorktreeProvider implements IIsolationProvider {
       );
     }
     return { warnings };
+  }
+
+  /**
+   * Set worktree-local `git config user.email`/`user.name` so commits made in
+   * this worktree attribute to the originating user. Non-fatal on failure: a
+   * worktree without the override simply uses the ambient git identity.
+   */
+  private async applyGitIdentity(
+    worktreePath: string,
+    identity: { email: string; name?: string }
+  ): Promise<void> {
+    try {
+      await execFileAsync('git', ['-C', worktreePath, 'config', 'user.email', identity.email], {
+        timeout: 5000,
+      });
+      if (identity.name) {
+        await execFileAsync('git', ['-C', worktreePath, 'config', 'user.name', identity.name], {
+          timeout: 5000,
+        });
+      }
+      getLog().debug({ worktreePath, email: identity.email }, 'isolation.git_identity_applied');
+    } catch (err) {
+      getLog().warn({ err: err as Error, worktreePath }, 'isolation.git_identity_apply_failed');
+    }
   }
 
   /**
@@ -775,15 +807,15 @@ export class WorktreeProvider implements IIsolationProvider {
         { repoPath, branch: configuredBaseBranch ?? 'auto-detect' },
         'workspace_sync_starting'
       );
-      // Only hard-reset for Archon-managed clones (under ~/.archon/workspaces/).
-      // Locally-registered repos get fetch-only to avoid destroying uncommitted work.
+      // Only hard-reset for Archon-managed clones when creating isolated worktrees.
+      // Locally-registered repos keep the non-destructive fast-forward mode.
       const isManagedClone = repoPath
         .replace(/\\/g, '/')
         .startsWith(getArchonWorkspacesPath().replace(/\\/g, '/'));
       const { branch } = await syncWorkspace(
         repoPath,
         configuredBaseBranch ? toBranchName(configuredBaseBranch) : undefined,
-        { resetAfterFetch: isManagedClone }
+        { mode: isManagedClone ? 'reset' : 'fast-forward' }
       );
       getLog().debug({ repoPath, branch }, 'workspace_synced');
       return branch;
@@ -1057,10 +1089,21 @@ export class WorktreeProvider implements IIsolationProvider {
         : `origin/${baseBranch}`;
 
     try {
-      // Try to create with new branch
+      // `--no-track` keeps `branch.<name>.merge` unset; otherwise `gh pr view`
+      // (no PR number) resolves to the base branch's PR via upstream config.
       await execFileAsync(
         'git',
-        ['-C', repoPath, 'worktree', 'add', worktreePath, '-b', branchName, startPoint],
+        [
+          '-C',
+          repoPath,
+          'worktree',
+          'add',
+          '--no-track',
+          worktreePath,
+          '-b',
+          branchName,
+          startPoint,
+        ],
         {
           timeout: GIT_OPERATION_TIMEOUT_MS,
         }

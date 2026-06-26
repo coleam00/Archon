@@ -2,13 +2,18 @@
  * Database operations for workflow runs
  */
 import { pool, getDialect, getDatabaseType } from './connection';
-import type { IDatabase } from './adapters/types';
+import type { IDatabase, SqlDialect } from './adapters/types';
 import type {
   WorkflowRun,
   WorkflowRunStatus,
   ApprovalContext,
 } from '@archon/workflows/schemas/workflow-run';
 import { TERMINAL_WORKFLOW_STATUSES } from '@archon/workflows/schemas/workflow-run';
+import type {
+  DashboardWorkflowRun,
+  ListDashboardRunsOptions,
+  DashboardRunsResult,
+} from '../schemas/workflow-run';
 import { createLogger } from '@archon/paths';
 
 /** Best-effort ROLLBACK — log but swallow errors since we're already in an error path. */
@@ -45,6 +50,45 @@ let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('db.workflows');
   return cachedLog;
+}
+
+/**
+ * Days of inactivity after which a 'running' run is treated as an orphan (its
+ * executor presumed dead) and becomes eligible for resume. Bound as a query
+ * parameter — never interpolated — so both dialects handle it positionally.
+ */
+const ORPHAN_RESUME_STALE_DAYS = 1;
+
+/**
+ * SQL fragment matching a run that may be resumed: failed/paused, or a stale
+ * 'running' orphan (no activity for ORPHAN_RESUME_STALE_DAYS). `dayParamIndex`
+ * is the 1-based placeholder position at which the caller MUST bind
+ * ORPHAN_RESUME_STALE_DAYS. Shared by findResumableRun and resumeWorkflowRun so
+ * the two predicates cannot drift — a hand-duplicated copy did drift and bound
+ * the wrong placeholder, breaking resume (PR #1830 review C1).
+ */
+function resumableStatusClause(dialect: SqlDialect, dayParamIndex: number): string {
+  const staleOrphan = `last_activity_at IS NULL OR last_activity_at < ${dialect.nowMinusDays(dayParamIndex)}`;
+  return `(status IN ('failed', 'paused') OR (status = 'running' AND (${staleOrphan})))`;
+}
+
+/**
+ * Thrown by resumeWorkflowRun when the target run is no longer in a resumable
+ * state (already running/terminal, or concurrently resumed). Callers translate
+ * this into a user-facing "already being resumed" message instead of leaking
+ * the raw internal error string.
+ */
+export class WorkflowNotResumableError extends Error {
+  constructor(
+    public readonly runId: string,
+    public readonly currentStatus: string
+  ) {
+    super(
+      `Workflow run is not resumable (id: ${runId}, status: ${currentStatus}). ` +
+        'It may have already been resumed, completed, or cancelled.'
+    );
+    this.name = 'WorkflowNotResumableError';
+  }
 }
 
 export async function createWorkflowRun(data: {
@@ -130,6 +174,31 @@ export async function getWorkflowRun(id: string): Promise<WorkflowRun | null> {
     const err = error as Error;
     getLog().error({ err }, 'db.workflow_run_get_failed');
     throw new Error(`Failed to get workflow run: ${err.message}`);
+  }
+}
+
+/**
+ * Find runs in a codebase whose id starts with `idPrefix` (e.g. the 8-char
+ * short id shown in listings). Returns up to two matches so callers can detect
+ * an ambiguous prefix. Scoped to `codebaseId` in the query, so it never crosses
+ * projects. Run ids are UUIDs, so `idPrefix` is rejected unless it's within the
+ * UUID charset — that keeps it out of LIKE-wildcard territory (`%` / `_`).
+ */
+export async function findWorkflowRunsByIdPrefix(
+  idPrefix: string,
+  codebaseId: string
+): Promise<WorkflowRun[]> {
+  if (idPrefix.length === 0 || !/^[0-9a-fA-F-]+$/.test(idPrefix)) return [];
+  try {
+    const result = await pool.query<WorkflowRun>(
+      'SELECT * FROM remote_agent_workflow_runs WHERE codebase_id = $1 AND id LIKE $2 LIMIT 2',
+      [codebaseId, `${idPrefix}%`]
+    );
+    return result.rows.map(normalizeWorkflowRun);
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err }, 'db.workflow_run_find_by_prefix_failed');
+    throw new Error(`Failed to find workflow runs by id prefix: ${err.message}`);
   }
 }
 
@@ -315,13 +384,10 @@ export async function findResumableRun(
       `SELECT * FROM remote_agent_workflow_runs
        WHERE workflow_name = $1
          AND working_path = $2
-         AND (
-           status IN ('failed', 'paused')
-           OR (status = 'running' AND (last_activity_at IS NULL OR last_activity_at < ${dialect.nowMinusDays(3)}))
-         )
+         AND ${resumableStatusClause(dialect, 3)}
        ORDER BY started_at DESC
        LIMIT 1`,
-      [workflowName, workingPath, 1]
+      [workflowName, workingPath, ORPHAN_RESUME_STALE_DAYS]
     );
     const row = result.rows[0];
     return row ? normalizeWorkflowRun(row) : null;
@@ -388,14 +454,23 @@ export async function resumeWorkflowRun(id: string): Promise<WorkflowRun> {
     // an active row semantically means "when did this active phase start."
     // The original creation time can be recovered from workflow_events
     // history if needed for analytics.
+    // Compare-and-swap guard: flip to 'running' only if the row is STILL
+    // resumable (resumableStatusClause — shared with findResumableRun so the two
+    // predicates can't drift). The exclusion mechanism is the atomic row-level
+    // UPDATE: because it also refreshes last_activity_at, a second concurrent
+    // resumer finds the row already 'running' with fresh activity, no longer
+    // matches the clause, and gets rowCount 0. Without it two callers (web
+    // Resume + a chat re-dispatch, or the lock-less CLI path) could both flip
+    // the same run to 'running' and double-claim the worktree. The day param is
+    // bound at $2 (ORPHAN_RESUME_STALE_DAYS), matching findResumableRun's bind.
     updateResult = await pool.query(
       `UPDATE remote_agent_workflow_runs
        SET status = 'running',
            completed_at = NULL,
            started_at = ${dialect.now()},
            last_activity_at = ${dialect.now()}
-       WHERE id = $1`,
-      [id]
+       WHERE id = $1 AND ${resumableStatusClause(dialect, 2)}`,
+      [id, ORPHAN_RESUME_STALE_DAYS]
     );
   } catch (error) {
     const err = error as Error;
@@ -404,9 +479,29 @@ export async function resumeWorkflowRun(id: string): Promise<WorkflowRun> {
   }
 
   if (updateResult.rowCount === 0) {
-    // Logical race: run was deleted or already activated between find and resume
-    getLog().warn({ workflowRunId: id }, 'db.workflow_run_resume_not_found');
-    throw new Error(`Workflow run not found (id: ${id})`);
+    // CAS miss: the row is no longer resumable — deleted, terminal, or already
+    // activated by another caller. Refuse rather than double-claim the worktree.
+    // Probe the current status for an actionable error (informational only; the
+    // probe rethrows on its own failure).
+    let probeRows: readonly { status: string }[];
+    try {
+      const probe = await pool.query<{ status: string }>(
+        'SELECT status FROM remote_agent_workflow_runs WHERE id = $1',
+        [id]
+      );
+      probeRows = probe.rows;
+    } catch (error) {
+      const err = error as Error;
+      getLog().error({ err, workflowRunId: id }, 'db.workflow_run_resume_probe_failed');
+      throw new Error(`Failed to resume workflow run: ${err.message}`, { cause: err });
+    }
+    const currentStatus = probeRows[0]?.status;
+    if (currentStatus === undefined) {
+      getLog().warn({ workflowRunId: id }, 'db.workflow_run_resume_not_found');
+      throw new Error(`Workflow run not found (id: ${id})`);
+    }
+    getLog().info({ workflowRunId: id, currentStatus }, 'db.workflow_run_resume_not_resumable');
+    throw new WorkflowNotResumableError(id, currentStatus);
   }
 
   let selectResult: Awaited<ReturnType<typeof pool.query<WorkflowRun>>>;
@@ -468,14 +563,9 @@ export async function updateWorkflowRun(
   const setClauses: string[] = [];
   const values: unknown[] = [];
 
-  // Helper to add parameterized clause
-  function addParam(clause: string, value: unknown): void {
-    values.push(value);
-    setClauses.push(clause.replace('?', `$${values.length}`));
-  }
-
   if (updates.status !== undefined) {
-    addParam('status = ?', updates.status);
+    values.push(updates.status);
+    setClauses.push(`status = $${values.length}`);
     // Auto-set completed_at for terminal-like statuses, but skip when
     // transitioning to 'failed' for approval resume (not a real completion)
     const isApprovalTransition =
@@ -574,13 +664,20 @@ export async function failWorkflowRun(id: string, error: string): Promise<void> 
   }
 }
 
-export async function cancelWorkflowRun(id: string): Promise<void> {
+export async function cancelWorkflowRun(id: string): Promise<{ cancelled: boolean }> {
   const dialect = getDialect();
+  let result: Awaited<ReturnType<typeof pool.query>>;
   try {
-    await pool.query(
+    // Guard against re-stamping an already-finished run. Cancelling a run that
+    // is 'completed' or 'cancelled' must be a no-op, not a re-write of
+    // completed_at / a resurrection of terminal state. 'failed' is intentionally
+    // still cancellable (it is overloaded as a resumable/approval state), and a
+    // 'running' run stays cancellable — that is cooperative cancellation, which
+    // the executor honors via its between-layer status check (dag-executor).
+    result = await pool.query(
       `UPDATE remote_agent_workflow_runs
        SET status = 'cancelled', completed_at = ${dialect.now()}
-       WHERE id = $1`,
+       WHERE id = $1 AND status NOT IN ('completed', 'cancelled')`,
       [id]
     );
   } catch (error) {
@@ -588,6 +685,14 @@ export async function cancelWorkflowRun(id: string): Promise<void> {
     getLog().error({ err }, 'db.workflow_run_cancel_failed');
     throw new Error(`Failed to cancel workflow run: ${err.message}`);
   }
+  const cancelled = (result.rowCount ?? 0) > 0;
+  if (!cancelled) {
+    // Idempotent no-op: the run was already terminal. Returned so callers can
+    // report "nothing to cancel" instead of a false "Cancelled" (see #1830 I1).
+    // Same info level as the resume CAS-miss signal for consistency (S2).
+    getLog().info({ workflowRunId: id }, 'db.workflow_run_cancel_noop');
+  }
+  return { cancelled };
 }
 
 /**
@@ -619,49 +724,11 @@ export async function pauseWorkflowRun(
   }
 }
 
-/**
- * Enriched workflow run with joined data for the dashboard Command Center.
- */
-export interface DashboardWorkflowRun extends WorkflowRun {
-  codebase_name: string | null;
-  platform_type: string | null;
-  worker_platform_id: string | null;
-  parent_platform_id: string | null;
-  // Step-level progress (from latest step_started/step_completed event)
-  current_step_name: string | null;
-  total_steps: number | null;
-  current_step_status: 'running' | 'completed' | 'failed' | null;
-  // Parallel agent progress (from parallel_agent_* events)
-  agents_completed: number | null;
-  agents_failed: number | null;
-  agents_total: number | null;
-}
-
-/** Options for listing dashboard runs with server-side search, filtering, and pagination. */
-export interface ListDashboardRunsOptions {
-  status?: WorkflowRunStatus;
-  codebaseId?: string;
-  search?: string;
-  after?: string;
-  before?: string;
-  limit?: number;
-  offset?: number;
-}
-
-/** Response envelope for paginated dashboard runs. */
-export interface DashboardRunsResult {
-  runs: DashboardWorkflowRun[];
-  total: number;
-  counts: {
-    all: number;
-    running: number;
-    completed: number;
-    failed: number;
-    cancelled: number;
-    pending: number;
-    paused: number;
-  };
-}
+export type {
+  DashboardWorkflowRun,
+  ListDashboardRunsOptions,
+  DashboardRunsResult,
+} from '../schemas/workflow-run';
 
 /**
  * Build WHERE clauses shared between the list and count queries.
@@ -831,6 +898,11 @@ export async function listWorkflowRuns(options?: {
   status?: WorkflowRunStatus | WorkflowRunStatus[];
   limit?: number;
   codebaseId?: string;
+  /**
+   * Non-enforcing "mine" filter: when set, restrict to runs attributed to this
+   * user (`user_id = $N`). Absent → all runs (default visibility stays open).
+   */
+  userId?: string;
 }): Promise<WorkflowRun[]> {
   const whereClauses: string[] = [];
   const values: unknown[] = [];
@@ -838,6 +910,10 @@ export async function listWorkflowRuns(options?: {
   if (options?.conversationId) {
     values.push(options.conversationId);
     whereClauses.push(`conversation_id = $${String(values.length)}`);
+  }
+  if (options?.userId) {
+    values.push(options.userId);
+    whereClauses.push(`user_id = $${String(values.length)}`);
   }
   if (options?.status !== undefined) {
     const statuses = Array.isArray(options.status) ? options.status : [options.status];

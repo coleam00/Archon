@@ -26,7 +26,7 @@ This chapter collects every CLI command, variable, and YAML option in one place.
 | `archon workflow run <name> --cwd /path "<prompt>"` | Run against a specific directory |
 | `archon workflow status` | Show status of active workflow runs |
 | `archon workflow resume <run-id>` | Resume a failed workflow run |
-| `archon workflow abandon <run-id>` | Abandon a non-terminal workflow run |
+| `archon workflow abandon <run-id>` | Abandon a workflow run (running, paused, or failed) |
 | `archon workflow cleanup [days]` | Delete old workflow run records (default: 7 days) |
 
 ### `archon isolation`
@@ -295,7 +295,7 @@ defaults:
 | `Not a git repository` | Running outside a repo | `cd` into a git repo first — workflow and isolation commands require one |
 | `Unknown provider 'X'. Registered: claude, codex, pi` | Typo in `provider:` (workflow root or node-level) | Set `provider:` to one of the registered ids. Model strings themselves are not validated at load time — the SDK rejects unknown models at request time. |
 | `$BASE_BRANCH referenced but could not be detected` | No base branch set and auto-detection failed | Set `worktree.baseBranch` in `.archon/config.yaml` or ensure `main`/`master` exists |
-| Workflow hangs with no output | Node idle timeout hit | Increase `idle_timeout` on the node (milliseconds) |
+| Node fails with "timed out with no output" | `idle_timeout` fired before the provider emitted anything (time-to-first-token exceeded the window) | Increase `idle_timeout` on the node or reduce prompt size |
 
 ### Debug Techniques
 

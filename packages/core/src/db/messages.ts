@@ -2,6 +2,7 @@
  * Database operations for conversation messages (Web UI history and orchestrator prompt enrichment)
  */
 import { pool, getDialect, getDatabaseType } from './connection';
+import type { MessageRow } from '../schemas/message';
 import { createLogger } from '@archon/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -11,15 +12,7 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-export interface MessageRow {
-  id: string;
-  conversation_id: string;
-  role: 'user' | 'assistant';
-  content: string;
-  metadata: string; // JSON string - parsed by frontend and server-side (orchestrator prompt enrichment)
-  user_id: string | null; // FK to remote_agent_users; NULL for assistant rows and rows that predate the column
-  created_at: string;
-}
+export type { MessageRow } from '../schemas/message';
 
 /**
  * Add a message to conversation history.

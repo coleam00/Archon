@@ -28,6 +28,7 @@ import {
   isInlineScript,
   formatSubprocessFailure,
   classifyError,
+  toTelemetryErrorClass,
   safeSendMessage,
   type UnknownErrorTracker,
 } from './executor-shared';
@@ -411,6 +412,37 @@ describe('detectCreditExhaustion', () => {
   it('is case-insensitive', () => {
     expect(detectCreditExhaustion("YOU'RE OUT OF EXTRA USAGE")).not.toBeNull();
   });
+
+  it('detects "You\'ve hit your session limit" and includes reset time', () => {
+    const result = detectCreditExhaustion(
+      "You've hit your session limit · resets 3am (America/Mexico_City)"
+    );
+    expect(result).not.toBeNull();
+    expect(result).toContain('session limit');
+    expect(result).toContain('3am (America/Mexico_City)');
+  });
+
+  it('returns generic session limit message when no reset time found', () => {
+    const result = detectCreditExhaustion("You've hit your session limit.");
+    expect(result).not.toBeNull();
+    expect(result).toContain('session limit');
+  });
+
+  it('detects "hit your session limit" variant (case-insensitive)', () => {
+    expect(detectCreditExhaustion("YOU'VE HIT YOUR SESSION LIMIT · resets noon")).not.toBeNull();
+  });
+
+  it('detects "session limit reached" variant', () => {
+    const result = detectCreditExhaustion('session limit reached');
+    expect(result).not.toBeNull();
+    expect(result).toContain('session limit');
+  });
+
+  it('detects "session limit has been reached" variant', () => {
+    const result = detectCreditExhaustion('Session limit has been reached.');
+    expect(result).not.toBeNull();
+    expect(result).toContain('session limit');
+  });
 });
 
 describe('isInlineScript', () => {
@@ -629,6 +661,26 @@ describe('classifyError', () => {
 
   it('classifies unknown errors as UNKNOWN', () => {
     expect(classifyError(new Error('something completely unexpected happened'))).toBe('UNKNOWN');
+  });
+});
+
+describe('toTelemetryErrorClass', () => {
+  it('maps FATAL to fatal', () => {
+    expect(toTelemetryErrorClass('FATAL')).toBe('fatal');
+  });
+
+  it('maps TRANSIENT to transient', () => {
+    expect(toTelemetryErrorClass('TRANSIENT')).toBe('transient');
+  });
+
+  it('maps UNKNOWN to unknown', () => {
+    expect(toTelemetryErrorClass('UNKNOWN')).toBe('unknown');
+  });
+
+  it('round-trips classifyError output for every ErrorType', () => {
+    expect(toTelemetryErrorClass(classifyError(new Error('401 unauthorized')))).toBe('fatal');
+    expect(toTelemetryErrorClass(classifyError(new Error('rate limit: 429')))).toBe('transient');
+    expect(toTelemetryErrorClass(classifyError(new Error('mystery')))).toBe('unknown');
   });
 });
 

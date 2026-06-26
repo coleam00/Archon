@@ -27,7 +27,7 @@ const ORDER: readonly {
 
 export function FilterChips({ value, onChange, counts }: FilterChipsProps): ReactElement {
   return (
-    <div className="flex items-center gap-1">
+    <div className="flex items-center gap-1.5">
       {ORDER.map(({ filter, label, countKey }) => {
         const active = value === filter;
         const n = counts[countKey];
@@ -38,19 +38,28 @@ export function FilterChips({ value, onChange, counts }: FilterChipsProps): Reac
             onClick={() => {
               onChange(filter);
             }}
-            className={`relative rounded px-2 py-1 text-[11px] font-medium uppercase tracking-wider transition-colors ${
-              active
-                ? 'bg-surface-elevated text-text-primary'
-                : 'text-text-tertiary hover:text-text-primary'
+            className={`relative mr-5 inline-flex items-center gap-2 px-1 pb-[13px] pt-2 font-mono text-[11px] font-semibold uppercase tracking-[0.1em] transition-colors ${
+              active ? 'text-text-primary' : 'text-text-tertiary hover:text-text-secondary'
             }`}
             aria-pressed={active}
           >
             {label}
-            <span className="ml-1.5 font-mono tabular-nums text-text-tertiary">{n}</span>
+            <span
+              className={`min-w-[20px] rounded-full border px-[7px] py-px text-center font-mono text-[10.5px] font-bold tabular-nums ${
+                active
+                  ? 'border-transparent bg-accent-bright/20 text-text-primary'
+                  : 'bg-surface-elevated text-text-secondary'
+              }`}
+              // Inline because the console scope's wildcard border-color rule
+              // repaints Tailwind border utilities (see theme.css).
+              style={{ borderColor: active ? 'transparent' : 'var(--border)' }}
+            >
+              {n}
+            </span>
             {active ? (
               <span
                 aria-hidden
-                className="brand-bar pointer-events-none absolute inset-x-1 -bottom-0.5 h-0.5 rounded-full"
+                className="brand-bar pointer-events-none absolute inset-x-0 -bottom-px h-0.5 rounded-full"
               />
             ) : null}
           </button>

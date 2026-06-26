@@ -61,10 +61,11 @@ export function BuilderToolbar({
   const { providers } = useProviders();
   const [showDescription, setShowDescription] = useState(false);
 
-  const { data: workflows, isError: workflowsError } = useQuery({
+  const { data: workflowsResult, isError: workflowsError } = useQuery({
     queryKey: ['workflows', cwd],
     queryFn: () => listWorkflows(cwd),
   });
+  const workflows = workflowsResult?.workflows;
 
   return (
     <>
@@ -97,7 +98,7 @@ export function BuilderToolbar({
             <button
               type="button"
               onClick={(): void => {
-                navigate('/workflows');
+                navigate('/legacy/workflows');
               }}
               className="text-xs text-text-tertiary hover:text-text-secondary shrink-0"
             >

@@ -17,6 +17,10 @@ import {
   getCodebaseEnvVars,
   setCodebaseEnvVar,
   deleteCodebaseEnvVar,
+  getGithubConnection,
+  startGithubDeviceFlow,
+  pollGithubDeviceFlow,
+  disconnectGithub,
 } from '@/lib/api';
 import type {
   SafeConfigResponse,
@@ -643,6 +647,131 @@ function PlatformConnectionsSection({
   );
 }
 
+/**
+ * Connect / disconnect the current web user's GitHub identity via the device
+ * flow. The browser polls the server (which proxies a single device-flow poll
+ * per call) at the server-supplied interval until connected, expired, or denied.
+ */
+function GithubIdentitySection(): React.ReactElement {
+  const queryClient = useQueryClient();
+  const { data: status } = useQuery({
+    queryKey: ['github-connection'],
+    queryFn: getGithubConnection,
+    // 401 (web auth not configured) → treat as "unavailable", don't spam retries
+    retry: false,
+  });
+
+  const [userCode, setUserCode] = useState<string | null>(null);
+  const [verificationUri, setVerificationUri] = useState<string | null>(null);
+  const [phase, setPhase] = useState<'idle' | 'pending' | 'error'>('idle');
+  const [message, setMessage] = useState<string | null>(null);
+
+  const connect = useMutation({
+    mutationFn: async (): Promise<void> => {
+      setPhase('pending');
+      setMessage(null);
+      const start = await startGithubDeviceFlow();
+      setUserCode(start.user_code);
+      setVerificationUri(start.verification_uri);
+      const deadline = Date.now() + start.expires_in * 1000;
+      let interval = Math.max(1, start.interval);
+      // Poll until terminal. Each poll is one server-side device-flow check.
+      for (;;) {
+        if (Date.now() > deadline) throw new Error('Device code expired — try again.');
+        await new Promise(r => setTimeout(r, interval * 1000));
+        const res = await pollGithubDeviceFlow(start.device_code);
+        if (res.status === 'connected') return;
+        if (res.status === 'pending') continue;
+        if (res.status === 'expired') throw new Error('Device code expired — try again.');
+        if (res.status === 'denied') throw new Error('Authorization was denied.');
+        // 'error' — back off slightly and surface detail
+        interval += 2;
+        if (res.detail) throw new Error(`GitHub connect failed: ${res.detail}`);
+      }
+    },
+    onSuccess: () => {
+      setPhase('idle');
+      setUserCode(null);
+      setVerificationUri(null);
+      void queryClient.invalidateQueries({ queryKey: ['github-connection'] });
+    },
+    onError: (err: Error) => {
+      setPhase('error');
+      setUserCode(null);
+      setVerificationUri(null);
+      setMessage(err.message);
+    },
+  });
+
+  const disconnect = useMutation({
+    mutationFn: disconnectGithub,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['github-connection'] });
+    },
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>GitHub Identity</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="space-y-3 text-sm">
+          {status?.connected ? (
+            <div className="flex items-center justify-between">
+              <span>
+                Connected as <span className="font-medium">@{status.githubLogin}</span>
+              </span>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={disconnect.isPending}
+                onClick={() => {
+                  disconnect.mutate();
+                }}
+              >
+                Disconnect
+              </Button>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">
+                Connect your GitHub account so PR comments and commits attribute to you.
+              </span>
+              <Button
+                size="sm"
+                disabled={connect.isPending}
+                onClick={() => {
+                  connect.mutate();
+                }}
+              >
+                {connect.isPending ? 'Connecting…' : 'Connect GitHub'}
+              </Button>
+            </div>
+          )}
+
+          {phase === 'pending' && userCode && verificationUri && (
+            <div className="rounded-md border border-border bg-muted/40 p-3">
+              Visit{' '}
+              <a
+                href={verificationUri}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline"
+              >
+                {verificationUri}
+              </a>{' '}
+              and enter code: <span className="font-mono font-semibold">{userCode}</span>
+            </div>
+          )}
+
+          {phase === 'error' && message && <div className="text-destructive">{message}</div>}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function ConcurrencySection({
   health,
 }: {
@@ -721,6 +850,10 @@ export function SettingsPage(): React.ReactElement {
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
             {configData && <AssistantConfigSection config={configData.config} />}
             <PlatformConnectionsSection activePlatforms={health?.activePlatforms} />
+          </div>
+
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+            <GithubIdentitySection />
           </div>
 
           <ProjectsSection />

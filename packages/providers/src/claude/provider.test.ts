@@ -125,13 +125,14 @@ describe('ClaudeProvider', () => {
         skills: true,
         agents: true,
         toolRestrictions: true,
-        structuredOutput: true,
+        structuredOutput: 'enforced',
         envInjection: true,
         costControl: true,
         effortControl: true,
         thinkingControl: true,
         fallbackModel: true,
         sandbox: true,
+        nativeTools: true,
       });
     });
   });
@@ -445,6 +446,326 @@ describe('ClaudeProvider', () => {
           resume: 'session-to-resume',
         }),
       });
+    });
+
+    test('result chunk carries resumed:true when resumeSessionId provided (resume-or-error)', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield { type: 'result', session_id: 'resumed-sid' };
+      });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('prompt', '/workspace', 'session-to-resume')) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks.find(c => c.type === 'result')).toMatchObject({ resumed: true });
+    });
+
+    test('result chunk omits resumed when no resumeSessionId', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield { type: 'result', session_id: 'fresh-sid' };
+      });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('prompt', '/workspace')) {
+        chunks.push(chunk);
+      }
+
+      const result = chunks.find(c => c.type === 'result');
+      expect(result).toBeDefined();
+      // Contract is "omitted when no resume was requested", not "present-but-undefined".
+      expect(result).not.toHaveProperty('resumed');
+    });
+
+    // --- Phase 1 of #975 — SDK task/hook lifecycle event handling -----
+
+    test('yields task_started chunk from SDK system message', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield {
+          type: 'system',
+          subtype: 'task_started',
+          task_id: 't-1',
+          description: 'Investigating the bug',
+          task_type: 'general-purpose',
+        };
+      });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test', '/workspace')) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks).toHaveLength(1);
+      expect(chunks[0]).toEqual({
+        type: 'task_started',
+        taskId: 't-1',
+        description: 'Investigating the bug',
+        taskType: 'general-purpose',
+      });
+    });
+
+    test('drops housekeeping task_started when SDK sets skip_transcript', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield {
+          type: 'system',
+          subtype: 'task_started',
+          task_id: 't-housekeeping',
+          description: 'Ambient task',
+          skip_transcript: true,
+        };
+      });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test', '/workspace')) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks).toHaveLength(0);
+    });
+
+    test('yields task_progress with summary + usage + lastToolName', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield {
+          type: 'system',
+          subtype: 'task_progress',
+          task_id: 't-1',
+          description: 'Working on auth',
+          summary: 'Reading auth module',
+          usage: { total_tokens: 1234, tool_uses: 3, duration_ms: 28000 },
+          last_tool_name: 'Read',
+        };
+      });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test', '/workspace')) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks).toEqual([
+        {
+          type: 'task_progress',
+          taskId: 't-1',
+          description: 'Working on auth',
+          summary: 'Reading auth module',
+          usage: { total_tokens: 1234, tool_uses: 3, duration_ms: 28000 },
+          lastToolName: 'Read',
+        },
+      ]);
+    });
+
+    test('yields task_notification with completed status', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield {
+          type: 'system',
+          subtype: 'task_notification',
+          task_id: 't-1',
+          status: 'completed',
+          output_file: '/tmp/task-output.json',
+          summary: 'Plan ready',
+        };
+      });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test', '/workspace')) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks).toEqual([
+        {
+          type: 'task_notification',
+          taskId: 't-1',
+          status: 'completed',
+          summary: 'Plan ready',
+          outputFile: '/tmp/task-output.json',
+        },
+      ]);
+    });
+
+    test('yields task_notification with failed status', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield {
+          type: 'system',
+          subtype: 'task_notification',
+          task_id: 't-2',
+          status: 'failed',
+          output_file: '/tmp/task-2.json',
+          summary: 'Task failed',
+        };
+      });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test', '/workspace')) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks[0]).toMatchObject({ type: 'task_notification', status: 'failed' });
+    });
+
+    test('yields hook_started chunk from SDK system message', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield {
+          type: 'system',
+          subtype: 'hook_started',
+          hook_id: 'h-1',
+          hook_name: 'Bash',
+          hook_event: 'PreToolUse',
+        };
+      });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test', '/workspace')) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks).toEqual([
+        {
+          type: 'hook_started',
+          hookId: 'h-1',
+          hookName: 'Bash',
+          hookEvent: 'PreToolUse',
+        },
+      ]);
+    });
+
+    test('yields hook_response chunk with outcome and exit code', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield {
+          type: 'system',
+          subtype: 'hook_response',
+          hook_id: 'h-1',
+          hook_name: 'Bash',
+          hook_event: 'PreToolUse',
+          outcome: 'success',
+          exit_code: 0,
+        };
+      });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test', '/workspace')) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks).toEqual([
+        {
+          type: 'hook_response',
+          hookId: 'h-1',
+          hookName: 'Bash',
+          hookEvent: 'PreToolUse',
+          outcome: 'success',
+          exitCode: 0,
+        },
+      ]);
+    });
+
+    test('yields hook_response with error outcome and no exit_code', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield {
+          type: 'system',
+          subtype: 'hook_response',
+          hook_id: 'h-2',
+          hook_name: 'Edit',
+          hook_event: 'PreToolUse',
+          outcome: 'error',
+        };
+      });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test', '/workspace')) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks[0]).toEqual({
+        type: 'hook_response',
+        hookId: 'h-2',
+        hookName: 'Edit',
+        hookEvent: 'PreToolUse',
+        outcome: 'error',
+      });
+      expect(chunks[0]).not.toHaveProperty('exitCode');
+    });
+
+    test('emits complete task lifecycle in correct order', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield {
+          type: 'system',
+          subtype: 'task_started',
+          task_id: 't-1',
+          description: 'Working on the bug',
+        };
+        yield {
+          type: 'system',
+          subtype: 'task_progress',
+          task_id: 't-1',
+          description: 'Working on the bug',
+          summary: 'Reading stack trace',
+        };
+        yield {
+          type: 'system',
+          subtype: 'task_notification',
+          task_id: 't-1',
+          status: 'completed',
+          output_file: '/tmp/t-1.json',
+          summary: 'Done',
+        };
+      });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test', '/workspace')) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks.map(c => c.type)).toEqual([
+        'task_started',
+        'task_progress',
+        'task_notification',
+      ]);
+    });
+
+    // --- Phase 4 of #975 — agentProgressSummaries enabled for workflow nodes -----
+
+    test('enables agentProgressSummaries by default for workflow nodes', async () => {
+      mockQuery.mockImplementation(async function* () {
+        // Empty
+      });
+
+      for await (const _ of client.sendQuery('test', '/workspace', undefined, {
+        nodeConfig: { nodeId: 'plan' },
+      })) {
+        // consume
+      }
+
+      const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
+      expect(callArgs.options).toMatchObject({ agentProgressSummaries: true });
+    });
+
+    test('respects explicit agentProgressSummaries: false override', async () => {
+      mockQuery.mockImplementation(async function* () {
+        // Empty
+      });
+
+      for await (const _ of client.sendQuery('test', '/workspace', undefined, {
+        nodeConfig: { nodeId: 'plan', agentProgressSummaries: false },
+      })) {
+        // consume
+      }
+
+      const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
+      expect(callArgs.options).toMatchObject({ agentProgressSummaries: false });
+    });
+
+    test('does not set agentProgressSummaries for direct chat (no nodeConfig)', async () => {
+      mockQuery.mockImplementation(async function* () {
+        // Empty
+      });
+
+      for await (const _ of client.sendQuery('test', '/workspace')) {
+        // consume
+      }
+
+      const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
+      // Phase 4 opt-in is for workflow nodes only. Direct chat keeps the
+      // SDK default (false) so the chat surface is unchanged.
+      expect(callArgs.options).not.toHaveProperty('agentProgressSummaries');
     });
 
     test('handles tool_use with empty input', async () => {

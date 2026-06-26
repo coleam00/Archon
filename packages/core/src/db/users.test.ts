@@ -18,13 +18,21 @@ mock.module('./connection', () => ({
   getDatabase: () => ({ withTransaction: mockWithTransaction }),
 }));
 
-import { findOrCreateUserByPlatformIdentity, getUserById, updateUserDisplayName } from './users';
+import {
+  findOrCreateUserByPlatformIdentity,
+  getUserById,
+  updateUserDisplayName,
+  linkGithubIdentity,
+  updateUserGithubProfile,
+  GithubIdentityConflictError,
+} from './users';
 import type { User, UserIdentity } from '../types';
 
 const userRow = (overrides: Partial<User> = {}): User => ({
   id: 'user-1',
   display_name: null,
   email: null,
+  role: 'admin',
   created_at: new Date(),
   updated_at: new Date(),
   ...overrides,
@@ -75,6 +83,25 @@ describe('users', () => {
       expect(result).toEqual(u);
       expect(mockQuery).toHaveBeenCalledTimes(2);
       expect(mockWithTransaction).not.toHaveBeenCalled();
+    });
+
+    test('returns the role from the user row (identity seam, defaults admin)', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([identityRow()]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([userRow({ role: 'admin' })]));
+
+      const result = await findOrCreateUserByPlatformIdentity('web', 'web-user-1');
+
+      expect(result.role).toBe('admin');
+    });
+
+    test('propagates a non-default role from the user row (member round-trip)', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([identityRow()]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([userRow({ role: 'member' })]));
+
+      const result = await findOrCreateUserByPlatformIdentity('web', 'web-user-2');
+
+      // Confirms the column value is plumbed through, not hardcoded to 'admin'.
+      expect(result.role).toBe('member');
     });
 
     test('backfills both identity and user display_name when both previously null', async () => {
@@ -240,6 +267,97 @@ describe('users', () => {
         'UPDATE remote_agent_users SET display_name = $1, updated_at = NOW() WHERE id = $2',
         ['NewName', 'user-1']
       );
+    });
+  });
+
+  describe('linkGithubIdentity', () => {
+    const githubIdentity = (overrides: Partial<UserIdentity> = {}): UserIdentity =>
+      identityRow({ id: 'id-gh', platform: 'github', platform_user_id: 'alice', ...overrides });
+
+    test('throws GithubIdentityConflictError when login maps to a different user', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([githubIdentity({ user_id: 'user-other' })])
+      );
+      await expect(linkGithubIdentity('user-1', 'alice')).rejects.toBeInstanceOf(
+        GithubIdentityConflictError
+      );
+      // Only the SELECT ran — a conflict must not touch the identity row.
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+    });
+
+    test('updates platform_display_name (no throw) when login already belongs to the same user', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([githubIdentity({ user_id: 'user-1' })]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+      await expect(linkGithubIdentity('user-1', 'alice')).resolves.toBeUndefined();
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        2,
+        'UPDATE remote_agent_user_identities SET platform_display_name = $1 WHERE id = $2',
+        ['alice', 'id-gh']
+      );
+    });
+
+    test('inserts a new identity row when the login is unseen', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+      await linkGithubIdentity('user-1', 'alice');
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining('INSERT INTO remote_agent_user_identities'),
+        ['user-1', 'github', 'alice', 'alice']
+      );
+    });
+
+    test('recovers from a concurrent-insert race when the winner is the same user', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([])); // SELECT: not found yet
+      mockQuery.mockRejectedValueOnce(
+        Object.assign(new Error('duplicate key value violates unique constraint'), {
+          code: '23505',
+        })
+      );
+      // Re-SELECT after the UNIQUE violation: the winner is us → no conflict.
+      mockQuery.mockResolvedValueOnce(createQueryResult([githubIdentity({ user_id: 'user-1' })]));
+      await expect(linkGithubIdentity('user-1', 'alice')).resolves.toBeUndefined();
+      expect(mockQuery).toHaveBeenCalledTimes(3);
+    });
+
+    test('race recovery surfaces a conflict when the winner is a different user', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([])); // SELECT: not found yet
+      mockQuery.mockRejectedValueOnce(
+        Object.assign(new Error('UNIQUE constraint failed'), { code: '23505' })
+      );
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([githubIdentity({ user_id: 'user-other' })])
+      );
+      await expect(linkGithubIdentity('user-1', 'alice')).rejects.toBeInstanceOf(
+        GithubIdentityConflictError
+      );
+    });
+
+    test('rethrows a non-UNIQUE insert error without a recovery SELECT', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([])); // SELECT
+      mockQuery.mockRejectedValueOnce(new Error('connection reset')); // INSERT
+      await expect(linkGithubIdentity('user-1', 'alice')).rejects.toThrow('connection reset');
+      expect(mockQuery).toHaveBeenCalledTimes(2); // no third (recovery) query
+    });
+  });
+
+  describe('updateUserGithubProfile', () => {
+    test('COALESCEs display_name + email and passes [display_name, email, userId]', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+      await updateUserGithubProfile('user-1', {
+        display_name: 'Alice',
+        email: 'alice@example.com',
+      });
+      const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(sql).toContain('COALESCE($1, display_name)');
+      expect(sql).toContain('COALESCE($2, email)');
+      expect(params).toEqual(['Alice', 'alice@example.com', 'user-1']);
+    });
+
+    test('passes null for omitted fields so COALESCE keeps existing values', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+      await updateUserGithubProfile('user-1', { email: null });
+      expect(mockQuery.mock.calls[0]?.[1]).toEqual([null, null, 'user-1']);
     });
   });
 });

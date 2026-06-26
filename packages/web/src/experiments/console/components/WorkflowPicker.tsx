@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -13,6 +14,12 @@ import type { Workflow } from '../primitives/workflow';
 
 interface WorkflowPickerProps {
   workflows: Workflow[];
+  /**
+   * Repo-curated workflow names (PR #1929). When non-empty, `workflows` is
+   * expected to lead with these (in declared order) and the dropdown renders a
+   * "Recommended" group above an "Other workflows" group, split by a divider.
+   */
+  recommendedNames?: string[];
   value: string;
   onChange: (workflowName: string) => void;
   disabled?: boolean;
@@ -68,6 +75,7 @@ interface AnchorPosition {
  */
 export function WorkflowPicker({
   workflows,
+  recommendedNames = [],
   value,
   onChange,
   disabled = false,
@@ -93,6 +101,14 @@ export function WorkflowPicker({
     () => workflows.filter(w => fuzzyMatch(w.name, query)),
     [workflows, query]
   );
+
+  // Group boundaries for the recommended/other divider. `filtered` preserves the
+  // incoming order (recommended-first), so the first non-recommended row marks the
+  // split. Headers only render when at least one recommended row survives the filter.
+  const recommendedSet = useMemo(() => new Set(recommendedNames), [recommendedNames]);
+  const firstRecommendedIdx = filtered.findIndex(w => recommendedSet.has(w.name));
+  const firstOtherIdx = filtered.findIndex(w => !recommendedSet.has(w.name));
+  const showGroups = firstRecommendedIdx !== -1 && recommendedNames.length > 0;
 
   // Compute anchor position when opening + on viewport resize/scroll.
   const reposition = (): void => {
@@ -278,48 +294,65 @@ export function WorkflowPicker({
                     const active = i === cursor;
                     const selected = w.name === value;
                     const desc = shortDescription(w.description);
+                    const header =
+                      showGroups && i === firstRecommendedIdx
+                        ? 'Recommended for this project'
+                        : showGroups && i === firstOtherIdx
+                          ? 'Other workflows'
+                          : null;
                     return (
-                      <button
-                        key={`${w.source}-${w.name}`}
-                        type="button"
-                        role="option"
-                        data-idx={i.toString()}
-                        aria-selected={selected}
-                        onClick={() => {
-                          onChange(w.name);
-                          closePicker();
-                        }}
-                        onMouseEnter={() => {
-                          setCursor(i);
-                        }}
-                        className={`flex h-11 w-full shrink-0 items-center gap-3 px-3 text-left transition-colors ${
-                          active ? 'bg-surface-hover' : ''
-                        }`}
-                      >
-                        <div className="flex min-w-0 flex-1 items-baseline gap-2">
-                          <span className="shrink-0 font-mono text-[13px] text-text-primary">
-                            {w.name}
+                      <Fragment key={`${w.source}-${w.name}`}>
+                        {header !== null ? (
+                          <div
+                            role="presentation"
+                            className={`px-3 pb-1 text-[9px] font-semibold uppercase tracking-[0.16em] text-text-tertiary ${
+                              i === 0 ? 'pt-1' : 'mt-1 border-t border-border/60 pt-2'
+                            }`}
+                          >
+                            {header}
+                          </div>
+                        ) : null}
+                        <button
+                          type="button"
+                          role="option"
+                          data-idx={i.toString()}
+                          aria-selected={selected}
+                          onClick={() => {
+                            onChange(w.name);
+                            closePicker();
+                          }}
+                          onMouseEnter={() => {
+                            setCursor(i);
+                          }}
+                          className={`flex h-11 w-full shrink-0 items-center gap-3 px-3 text-left transition-colors ${
+                            active ? 'bg-surface-hover' : ''
+                          }`}
+                        >
+                          <div className="flex min-w-0 flex-1 items-baseline gap-2">
+                            <span className="shrink-0 font-mono text-[13px] text-text-primary">
+                              {w.name}
+                            </span>
+                            {desc.length > 0 ? (
+                              <span className="min-w-0 truncate text-[11px] text-text-tertiary">
+                                {desc}
+                              </span>
+                            ) : null}
+                          </div>
+                          <span
+                            className={`shrink-0 text-[9px] uppercase tracking-[0.16em] ${sourceBadgeClass(w.source)}`}
+                          >
+                            {w.source}
                           </span>
-                          {desc.length > 0 ? (
-                            <span className="min-w-0 truncate text-[11px] text-text-tertiary">
-                              {desc}
+                          {selected ? (
+                            <span
+                              aria-hidden
+                              className="shrink-0 font-mono text-[11px] text-accent-bright"
+                            >
+                              ✓
                             </span>
                           ) : null}
-                        </div>
-                        <span
-                          className={`shrink-0 text-[9px] uppercase tracking-[0.16em] ${sourceBadgeClass(w.source)}`}
-                        >
-                          {w.source}
-                        </span>
-                        {selected ? (
-                          <span
-                            aria-hidden
-                            className="shrink-0 font-mono text-[11px] text-accent-bright"
-                          >
-                            ✓
-                          </span>
-                        ) : null}
-                      </button>
+                        </button>
+                      </Fragment>
                     );
                   })
                 )}

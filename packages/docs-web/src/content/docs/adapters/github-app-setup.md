@@ -115,6 +115,36 @@ Archon refuses to start if both modes are configured. Remove `GITHUB_TOKEN` from
 3. Trigger a webhook from a repo where the App is installed (e.g. comment `@archon ping` on an issue).
 4. Confirm the bot's reply appears as `<slug>[bot]` with the App badge in the GitHub UI.
 
+## Step 8 (optional): Enable per-user GitHub identity
+
+By default every comment, commit, and push goes through the **bot** (`<slug>[bot]`). On a multi-user install you can let each teammate connect their own GitHub identity so those actions attribute to the human instead.
+
+Enable the feature by adding two env vars on top of App mode:
+
+```bash
+# The App's Client ID (App settings → "Client ID", starts with Iv1./Iv23…).
+# Distinct from the numeric GITHUB_APP_ID.
+GITHUB_APP_CLIENT_ID=Iv23xxxxxxxxxxxx
+# 32-byte key used to encrypt stored per-user tokens at rest (AES-256-GCM).
+TOKEN_ENCRYPTION_KEY=$(openssl rand -hex 32)
+```
+
+Then, on the GitHub App settings page, enable **Device Flow** (under "Identifying and authorizing users"). The feature gate activates when `GITHUB_APP_ID` and `TOKEN_ENCRYPTION_KEY` are both set; `GITHUB_APP_CLIENT_ID` is required for the connect flow itself.
+
+Teammates connect once via any surface:
+
+- **CLI:** `archon auth github`
+- **Slack:** `/archon connect github`
+- **Web UI:** Settings → **Connect GitHub**
+
+Once enabled:
+
+- Workflows declaring `requires: [github]` **hard-block** unconnected users before any worktree/clone/AI cost.
+- An unconnected user's workflow `gh`/`git` has its GitHub token **scrubbed** by default (rather than silently using the shared org/bot token). Opt back into the shared token with `ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK=true`.
+- Rotating `TOKEN_ENCRYPTION_KEY` invalidates all stored user tokens — everyone must reconnect.
+
+This is fully backward compatible: leave the two vars unset and the App keeps working as the bot only. See the [configuration reference](/reference/configuration/#per-user-github-identity-app-mode-optional) for the full env var table.
+
 ## Operational notes
 
 ### Token rotation is invisible
@@ -141,10 +171,10 @@ The credential-helper backend is exposed at `POST /internal/git-credential` and 
 
 Archon enforces this at startup: with App mode active and the server bound to a non-loopback interface (e.g. `0.0.0.0`), the process **refuses to start** and exits with `github_app.internal_endpoint_public_bind_rejected`. Two correct configurations:
 
-1. **Recommended — bind Archon to `127.0.0.1`** (`HOST=127.0.0.1`) and put a reverse proxy in front. Configure the proxy to drop `/internal/*` paths. Operators who use systemd / docker for upstream routing also fall into this category.
-2. **Opt-in escape hatch — `ARCHON_ALLOW_INTERNAL_ON_PUBLIC_BIND=1`** combined with `HOST=0.0.0.0` (or unset). Use ONLY when your reverse proxy already drops `/internal/*` AND your deployment topology genuinely requires the upstream to bind non-loopback (e.g. a container network where loopback isn't reachable from the proxy). Startup logs `github_app.internal_endpoint_exposed_acknowledged` so the choice is auditable.
+1. **Recommended (bare-metal / systemd) — bind Archon to `127.0.0.1`** (`HOST=127.0.0.1`) and put a reverse proxy in front. Configure the proxy to drop `/internal/*` paths.
+2. **Opt-in escape hatch — `ARCHON_ALLOW_INTERNAL_ON_PUBLIC_BIND=1`** combined with `HOST=0.0.0.0` (or unset). Use ONLY when your reverse proxy already drops `/internal/*` AND your deployment topology genuinely requires the upstream to bind non-loopback (e.g. a container network where loopback isn't reachable from the proxy). **Docker / docker-compose deployments fall here** — the app container *must* bind `0.0.0.0` inside the container for docker-proxy to forward traffic, so option 1 isn't directly usable. See the [Canonical Docker setup](#canonical-docker-setup) below. Startup logs `github_app.internal_endpoint_exposed_acknowledged` so the choice is auditable.
 
-Example Caddy snippet that drops `/internal/*`:
+Example Caddy snippet that drops `/internal/*` (bare-metal):
 
 ```caddyfile
 example.com {
@@ -153,6 +183,68 @@ example.com {
   reverse_proxy 127.0.0.1:3090
 }
 ```
+
+### Canonical Docker setup
+
+The canonical Archon Docker stack (`docker-compose.yml` + `docker-compose.override.yml` + Caddy) publishes the app container's port `3000` and runs Caddy as a reverse proxy. Because the app container can't bind `127.0.0.1` and still have docker-proxy forward traffic to it, option 1 above isn't directly usable. Take option 2 with three layers of defense:
+
+**1. In `docker-compose.override.yml` — bind the published host port to loopback only.**
+
+```yaml
+services:
+  app:
+    ports: !override
+      - "127.0.0.1:${PORT:-3000}:${PORT:-3000}"
+```
+
+The `!override` tag (compose-spec) replaces the base file's `ports` list instead of merging. After this, port `3000` is reachable only via the Docker network (where Caddy lives) or from the host itself — not from the public internet.
+
+**2. In `Caddyfile` — drop `/internal/*` requests.**
+
+Insert this `handle` block before the fallthrough `handle { }` block:
+
+```caddyfile
+handle /internal/* {
+  respond "Not Found" 404
+}
+```
+
+Caddy evaluates `handle` blocks by path specificity, so `/internal/*` (more specific) wins over the generic fallthrough regardless of order.
+
+**3. In `.env` — opt out of the loopback-bind guard.**
+
+```ini
+# Safe because:
+#  1. docker-compose binds port 3000 to 127.0.0.1 only (override above)
+#  2. Caddy drops /internal/* (handle block above)
+ARCHON_ALLOW_INTERNAL_ON_PUBLIC_BIND=1
+```
+
+Without this flag, Archon refuses to start in App mode and exits with `github_app.internal_endpoint_public_bind_rejected`.
+
+**Apply + verify:**
+
+```sh
+# Apply the override + Caddyfile + env changes, then restart app + caddy.
+docker compose up -d --force-recreate app caddy
+
+# From outside the host — must be 404/403 from the proxy.
+# Use POST (the endpoint's actual method) — a GET probe can false-pass when
+# the proxy 404s unmatched GETs while still forwarding the POST upstream.
+curl -i -X POST https://your-archon/internal/git-credential \
+  -H 'Content-Type: application/json' \
+  -d '{"host":"github.com","path":"any/repo"}'
+
+# On the host — port should bind to loopback only
+ss -tlnp | grep :3000
+# Expected: 127.0.0.1:3000   (NOT 0.0.0.0:3000)
+
+# Startup log should contain:
+docker compose logs app --tail 200 | grep "internal_endpoint_exposed_acknowledged"
+# This event confirms the opt-out path was taken (audit trail).
+```
+
+If the external POST probe returns anything other than `404` or `403` from the proxy — i.e. anything that suggests the request reached the Archon process — **stop and fix the proxy config** before going live. The endpoint hands out live installation tokens to whoever can reach it.
 
 ## Migration from PAT mode
 
@@ -194,8 +286,8 @@ A webhook-secret mismatch causes `github.signature_mismatch` / `github.signature
 
 ### Server refused to start: `github_app.internal_endpoint_public_bind_rejected`
 
-- App mode is active but the server is bound to a non-loopback interface. This is a fail-fast guard — the `/internal/git-credential` endpoint hands out live installation access tokens and would leak credentials to the network. Either set `HOST=127.0.0.1` (recommended), or, if your reverse proxy already drops `/internal/*` and you genuinely need a non-loopback bind, set `ARCHON_ALLOW_INTERNAL_ON_PUBLIC_BIND=1`.
+- App mode is active but the server is bound to a non-loopback interface. This is a fail-fast guard — the `/internal/git-credential` endpoint hands out live installation access tokens and would leak credentials to the network. Either set `HOST=127.0.0.1` (bare-metal / systemd), or, if you're on Docker, follow the [Canonical Docker setup](#canonical-docker-setup) above (port→127.0.0.1 binding + Caddy `/internal/*` drop + `ARCHON_ALLOW_INTERNAL_ON_PUBLIC_BIND=1`).
 
 ### Server log shows `github_app.internal_endpoint_exposed_acknowledged`
 
-- You set `ARCHON_ALLOW_INTERNAL_ON_PUBLIC_BIND=1`. Double-check that your reverse proxy actually drops `/internal/*` — a `curl https://your-archon/internal/git-credential -d '{"host":"github.com","path":"any/repo"}'` from outside the host must return 404 or 403 from the proxy (NOT a token from Archon).
+- You set `ARCHON_ALLOW_INTERNAL_ON_PUBLIC_BIND=1`. Double-check that your reverse proxy actually drops `/internal/*` — a `curl https://your-archon/internal/git-credential -d '{"host":"github.com","path":"any/repo"}'` from outside the host must return 404 or 403 from the proxy (NOT a token from Archon). On the canonical Docker stack, also confirm `ss -tlnp | grep :3000` shows `127.0.0.1:3000` (not `0.0.0.0:3000`).

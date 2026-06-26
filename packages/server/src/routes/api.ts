@@ -16,18 +16,47 @@ import type {
   AttachedFile,
   HandleMessageContext,
   GlobalConfig,
+  TiersPatch,
+  UserRole,
 } from '@archon/core';
 import {
   handleMessage,
   getDatabaseType,
   loadConfig,
+  loadRepoConfig,
   toSafeConfig,
   updateGlobalConfig,
   cloneRepository,
   registerRepository,
   ConversationNotFoundError,
   generateAndSetTitle,
+  isPerUserGitHubEnabled,
+  loadDeviceFlowConfig,
+  startDeviceFlow,
+  pollDeviceFlowOnce,
+  persistGithubConnection,
+  DeviceFlowError,
+  GithubIdentityConflictError,
+  getUserGithubTokenRecord,
+  deleteUserGithubToken,
+  isPerUserProviderKeysEnabled,
+  persistProviderApiKey,
+  InvalidProviderKeyError,
+  listUserProviderKeys,
+  deleteUserProviderKey,
+  listConnectableVendors,
+  buildAgentCredentialMatrix,
+  normalizeCredentialVendor,
+  SUBSCRIPTION_PROVIDERS,
+  startOAuth,
+  pollOAuth,
+  OAuthCallbackPortBusyError,
+  getUserAiPrefs,
+  setUserTiers,
+  setUserAliases,
+  setUserDefaultProvider,
 } from '@archon/core';
+import type { UserTiersPatch, UserAliasesPatch, AliasesPatch } from '@archon/core';
 import { removeWorktree, toRepoPath, toWorktreePath } from '@archon/git';
 import {
   createLogger,
@@ -44,6 +73,7 @@ import {
   checkForUpdate,
   BUNDLED_IS_BINARY,
   BUNDLED_VERSION,
+  captureApprovalResolved,
 } from '@archon/paths';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { parseWorkflow } from '@archon/workflows/loader';
@@ -54,6 +84,8 @@ import {
   TERMINAL_WORKFLOW_STATUSES,
 } from '@archon/workflows/schemas/workflow-run';
 import type { ApprovalContext, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import type { MessageRow } from '@archon/core/schemas/message';
+import type { DashboardWorkflowRun } from '@archon/core/schemas/workflow-run';
 import { findMarkdownFilesRecursive } from '@archon/core/utils/commands';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -69,6 +101,9 @@ import * as isolationEnvDb from '@archon/core/db/isolation-environments';
 import * as workflowDb from '@archon/core/db/workflows';
 import * as workflowEventDb from '@archon/core/db/workflow-events';
 import * as messageDb from '@archon/core/db/messages';
+import * as userDb from '@archon/core/db/users';
+import { resetWorkflowNodeSessions } from '@archon/core/operations/workflow-operations';
+import { getAuth, isWebAuthEnabled, getSignupMode, isApiGateEnabled } from '../auth';
 import { errorSchema } from './schemas/common.schemas';
 import { updateCheckResponseSchema } from './schemas/system.schemas';
 import {
@@ -89,6 +124,9 @@ import {
   workflowRunsQuerySchema,
   approveWorkflowRunBodySchema,
   rejectWorkflowRunBodySchema,
+  resetWorkflowNodeSessionsParamsSchema,
+  resetWorkflowNodeSessionsQuerySchema,
+  resetWorkflowNodeSessionsResponseSchema,
   listArtifactsResponseSchema,
 } from './schemas/workflow.schemas';
 import {
@@ -119,10 +157,57 @@ import {
   updateAssistantConfigBodySchema,
   updateAssistantConfigResponseSchema,
   configResponseSchema,
+  updateTiersBodySchema,
+  updateAliasesBodySchema,
   codebaseEnvironmentsResponseSchema,
 } from './schemas/config.schemas';
-import { providerListResponseSchema } from './schemas/provider.schemas';
-import { getProviderInfoList, isRegisteredProvider } from '@archon/providers';
+import {
+  TIER_NAMES,
+  isEffortValidForProvider,
+  validEffortsForProvider,
+} from '@archon/workflows/model-validation';
+import {
+  providerListResponseSchema,
+  piModelListResponseSchema,
+  opencodeCredentialListResponseSchema,
+} from './schemas/provider.schemas';
+import {
+  authStatusResponseSchema,
+  deviceStartResponseSchema,
+  devicePollBodySchema,
+  devicePollResponseSchema,
+  githubConnectionStatusSchema,
+  githubDisconnectResponseSchema,
+} from './schemas/auth.schemas';
+import {
+  providerKeyListResponseSchema,
+  providerKeyParamsSchema,
+  providerKeySetBodySchema,
+  providerKeySetResponseSchema,
+  providerKeyDeleteResponseSchema,
+  providerOAuthStartResponseSchema,
+  providerOAuthPollBodySchema,
+  providerOAuthPollResponseSchema,
+} from './schemas/provider-key.schemas';
+import {
+  userAiPrefsResponseSchema,
+  updateUserTiersBodySchema,
+  updateUserAliasesBodySchema,
+  updateUserDefaultProviderBodySchema,
+} from './schemas/user-ai-prefs.schemas';
+import { mapDeviceFlowErrorToPollStatus } from './auth-poll-status';
+import {
+  getProviderInfoList,
+  isRegisteredProvider,
+  listPiModels,
+  introspectOpencodeCredentials,
+} from '@archon/providers';
+import { messageSchema } from './schemas/conversation.schemas';
+import {
+  workflowRunSchema,
+  dashboardWorkflowRunSchema,
+  workflowRunStatusSchema,
+} from './schemas/workflow.schemas';
 
 // Read app version: use build-time constant in binary, package.json in dev
 let appVersion = 'unknown';
@@ -746,6 +831,26 @@ const deleteWorkflowRunRoute = createRoute({
   },
 });
 
+const resetWorkflowNodeSessionsRoute = createRoute({
+  method: 'delete',
+  path: '/api/workflows/{name}/node-sessions',
+  tags: ['Workflows'],
+  summary:
+    'Reset persisted per-node provider sessions for a workflow. Optional scope and node filters narrow the deletion.',
+  request: {
+    params: resetWorkflowNodeSessionsParamsSchema,
+    query: resetWorkflowNodeSessionsQuerySchema,
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: resetWorkflowNodeSessionsResponseSchema } },
+      description: 'Sessions deleted (deleted count may be 0)',
+    },
+    400: jsonError('Bad request'),
+    500: jsonError('Server error'),
+  },
+});
+
 const getWorkflowRunRoute = createRoute({
   method: 'get',
   path: '/api/workflows/runs/{runId}',
@@ -805,6 +910,70 @@ const patchAssistantConfigRoute = createRoute({
   },
 });
 
+const patchTiersConfigRoute = createRoute({
+  method: 'patch',
+  path: '/api/config/tiers',
+  tags: ['System'],
+  summary: 'Update model-tier presets (small/medium/large)',
+  description:
+    'Writes the `tiers:` config to ~/.archon/config.yaml. Ungated (works on solo ' +
+    'installs). Per-tier merge; a `null` tier value unsets it.',
+  request: {
+    body: {
+      content: { 'application/json': { schema: updateTiersBodySchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: configResponseSchema } },
+      description: 'Updated configuration',
+    },
+    400: jsonError('Invalid request body'),
+    500: jsonError('Server error'),
+  },
+});
+
+const patchAliasesConfigRoute = createRoute({
+  method: 'patch',
+  path: '/api/config/aliases',
+  tags: ['System'],
+  summary: 'Update @custom model aliases',
+  description:
+    'Writes the `aliases:` config to ~/.archon/config.yaml. Ungated (works on solo ' +
+    'installs). Per-alias merge; a `null` alias value unsets it.',
+  request: {
+    body: {
+      content: { 'application/json': { schema: updateAliasesBodySchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: configResponseSchema } },
+      description: 'Updated configuration',
+    },
+    400: jsonError('Invalid alias name, unknown provider, or invalid effort'),
+    500: jsonError('Server error'),
+  },
+});
+
+const getPiModelsRoute = createRoute({
+  method: 'get',
+  path: '/api/providers/pi/models',
+  tags: ['System'],
+  summary: "List Pi's model catalog (cost/reasoning metadata for the tier picker)",
+  description:
+    'Best-effort hint surface: returns `{ models: [] }` when the Pi catalog ' +
+    'cannot be loaded, never an error — tier/alias saves must not depend on it.',
+  responses: {
+    200: {
+      content: { 'application/json': { schema: piModelListResponseSchema } },
+      description: 'Pi model catalog (metadata only)',
+    },
+  },
+});
+
 const getProvidersRoute = createRoute({
   method: 'get',
   path: '/api/providers',
@@ -815,6 +984,268 @@ const getProvidersRoute = createRoute({
       content: { 'application/json': { schema: providerListResponseSchema } },
       description: 'List of registered providers',
     },
+  },
+});
+
+const getOpencodeCredentialsRoute = createRoute({
+  method: 'get',
+  path: '/api/providers/opencode/credentials',
+  tags: ['System'],
+  summary: "Introspect OpenCode's backend providers and auth state",
+  description:
+    "Proxies the embedded OpenCode server's provider introspection (catalog, " +
+    'env var names, install-wide connected state). Heavyweight: starts the ' +
+    'embedded server when not already running — call on demand from the ' +
+    'settings card, never on passive page load (#1955).',
+  responses: {
+    200: {
+      content: { 'application/json': { schema: opencodeCredentialListResponseSchema } },
+      description: 'OpenCode backend providers (metadata only, no secrets)',
+    },
+    503: jsonError('Embedded OpenCode runtime unavailable'),
+  },
+});
+
+const authStatusRoute = createRoute({
+  method: 'get',
+  path: '/api/auth/status',
+  tags: ['Auth'],
+  summary: 'Web auth availability + signup posture (no auth required)',
+  responses: {
+    200: {
+      content: { 'application/json': { schema: authStatusResponseSchema } },
+      description: 'Auth status',
+    },
+  },
+});
+
+const githubDeviceStartRoute = createRoute({
+  method: 'post',
+  path: '/api/auth/github/device/start',
+  tags: ['Auth'],
+  summary: 'Start the GitHub device flow for the current web user',
+  responses: {
+    200: {
+      content: { 'application/json': { schema: deviceStartResponseSchema } },
+      description: 'Device + user codes',
+    },
+    401: jsonError('Web auth required (X-Archon-User header missing)'),
+    500: jsonError('Device flow not configured or failed'),
+  },
+});
+
+const githubDevicePollRoute = createRoute({
+  method: 'post',
+  path: '/api/auth/github/device/poll',
+  tags: ['Auth'],
+  summary: 'Poll the GitHub device flow once for the current web user',
+  request: {
+    body: { content: { 'application/json': { schema: devicePollBodySchema } } },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: devicePollResponseSchema } },
+      description: 'Poll status',
+    },
+    401: jsonError('Web auth required (X-Archon-User header missing)'),
+    500: jsonError('Device flow not configured or failed'),
+  },
+});
+
+const githubConnectionStatusRoute = createRoute({
+  method: 'get',
+  path: '/api/auth/github',
+  tags: ['Auth'],
+  summary: 'GitHub connection status for the current web user',
+  responses: {
+    200: {
+      content: { 'application/json': { schema: githubConnectionStatusSchema } },
+      description: 'Connection status',
+    },
+    401: jsonError('Web auth required (X-Archon-User header missing)'),
+  },
+});
+
+const githubDisconnectRoute = createRoute({
+  method: 'delete',
+  path: '/api/auth/github',
+  tags: ['Auth'],
+  summary: 'Disconnect the current web user’s GitHub identity',
+  responses: {
+    200: {
+      content: { 'application/json': { schema: githubDisconnectResponseSchema } },
+      description: 'Disconnected',
+    },
+    401: jsonError('Web auth required (X-Archon-User header missing)'),
+  },
+});
+
+// ---- Per-user AI-provider credential (API-key) connect endpoints ----
+const providerKeyListRoute = createRoute({
+  method: 'get',
+  path: '/api/auth/providers',
+  tags: ['Auth'],
+  summary: 'List the current web user’s connected AI-provider keys',
+  responses: {
+    200: {
+      content: { 'application/json': { schema: providerKeyListResponseSchema } },
+      description: 'Connections (metadata only) + connectable provider catalog',
+    },
+    401: jsonError('Web auth required (X-Archon-User header missing)'),
+  },
+});
+
+const providerKeySetRoute = createRoute({
+  method: 'put',
+  path: '/api/auth/providers/{provider}',
+  tags: ['Auth'],
+  summary: 'Connect (upsert) an API key for a provider for the current web user',
+  request: {
+    params: providerKeyParamsSchema,
+    body: { content: { 'application/json': { schema: providerKeySetBodySchema } } },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: providerKeySetResponseSchema } },
+      description: 'Key stored (encrypted); response carries no secret value',
+    },
+    400: jsonError('Unknown provider or empty key'),
+    401: jsonError('Web auth required (X-Archon-User header missing)'),
+    404: jsonError('Per-user provider keys not enabled on this install'),
+  },
+});
+
+const providerKeyDeleteRoute = createRoute({
+  method: 'delete',
+  path: '/api/auth/providers/{provider}',
+  tags: ['Auth'],
+  summary: 'Disconnect the current web user’s key for a provider',
+  request: { params: providerKeyParamsSchema },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: providerKeyDeleteResponseSchema } },
+      description: 'Disconnected (idempotent)',
+    },
+    401: jsonError('Web auth required (X-Archon-User header missing)'),
+    404: jsonError('Per-user provider keys not enabled on this install'),
+  },
+});
+
+const providerOAuthStartRoute = createRoute({
+  method: 'post',
+  path: '/api/auth/providers/{provider}/oauth/start',
+  tags: ['Auth'],
+  summary: 'Begin a subscription (OAuth) login for the current web user',
+  request: { params: providerKeyParamsSchema },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: providerOAuthStartResponseSchema } },
+      description: 'Login session started (mode + URL/user-code)',
+    },
+    400: jsonError('Provider does not support subscription login'),
+    401: jsonError('Web auth required (X-Archon-User header missing)'),
+    404: jsonError('Per-user provider keys not enabled on this install'),
+    503: jsonError('OAuth callback port still held by a previous login attempt — retry shortly'),
+  },
+});
+
+const providerOAuthPollRoute = createRoute({
+  method: 'post',
+  path: '/api/auth/providers/{provider}/oauth/poll',
+  tags: ['Auth'],
+  summary: 'Poll a subscription login session (submit pasted code for manual flows)',
+  request: {
+    params: providerKeyParamsSchema,
+    body: { content: { 'application/json': { schema: providerOAuthPollBodySchema } } },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: providerOAuthPollResponseSchema } },
+      description: 'Poll status',
+    },
+    401: jsonError('Web auth required (X-Archon-User header missing)'),
+    404: jsonError('Per-user provider keys not enabled on this install'),
+  },
+});
+
+const userAiPrefsGetRoute = createRoute({
+  method: 'get',
+  path: '/api/auth/me/ai-prefs',
+  tags: ['Auth'],
+  summary: 'Get the current web user’s AI preferences (tiers/aliases/default assistant)',
+  responses: {
+    200: {
+      content: { 'application/json': { schema: userAiPrefsResponseSchema } },
+      description: 'The user’s stored prefs (raw per-user layer, not merged with config)',
+    },
+    401: jsonError('Web auth required'),
+    500: jsonError('Server error'),
+  },
+});
+
+const userAiPrefsTiersRoute = createRoute({
+  method: 'patch',
+  path: '/api/auth/me/ai-prefs/tiers',
+  tags: ['Auth'],
+  summary: 'Update the current web user’s model-tier presets (per-key merge; null unsets)',
+  request: {
+    body: {
+      content: { 'application/json': { schema: updateUserTiersBodySchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: userAiPrefsResponseSchema } },
+      description: 'Updated prefs',
+    },
+    400: jsonError('Unknown provider or invalid effort'),
+    401: jsonError('Web auth required'),
+    500: jsonError('Server error'),
+  },
+});
+
+const userAiPrefsAliasesRoute = createRoute({
+  method: 'patch',
+  path: '/api/auth/me/ai-prefs/aliases',
+  tags: ['Auth'],
+  summary: 'Update the current web user’s @custom aliases (per-key merge; null unsets)',
+  request: {
+    body: {
+      content: { 'application/json': { schema: updateUserAliasesBodySchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: userAiPrefsResponseSchema } },
+      description: 'Updated prefs',
+    },
+    400: jsonError('Invalid alias name, unknown provider, or invalid effort'),
+    401: jsonError('Web auth required'),
+    500: jsonError('Server error'),
+  },
+});
+
+const userAiPrefsDefaultRoute = createRoute({
+  method: 'patch',
+  path: '/api/auth/me/ai-prefs/default',
+  tags: ['Auth'],
+  summary: 'Set (or clear with null) the current web user’s default assistant',
+  request: {
+    body: {
+      content: { 'application/json': { schema: updateUserDefaultProviderBodySchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: userAiPrefsResponseSchema } },
+      description: 'Updated prefs',
+    },
+    400: jsonError('Unknown provider'),
+    401: jsonError('Web auth required'),
+    500: jsonError('Server error'),
   },
 });
 
@@ -847,7 +1278,7 @@ const getHealthRoute = createRoute({
             .object({
               status: z.string(),
               adapter: z.string(),
-              concurrency: z.record(z.unknown()),
+              concurrency: z.record(z.string(), z.unknown()),
               runningWorkflows: z.number(),
               version: z.string().optional(),
               is_docker: z.boolean(),
@@ -889,7 +1320,7 @@ export function registerApiRoutes(
 ): void {
   function apiError(
     c: Context,
-    status: 400 | 404 | 422 | 500,
+    status: 400 | 401 | 404 | 422 | 500 | 503,
     message: string,
     detail?: string
   ): Response {
@@ -912,6 +1343,516 @@ export function registerApiRoutes(
   // CORS for Web UI — allow-all is fine for a single-developer tool.
   // Override with WEB_UI_ORIGIN env var to restrict if exposing publicly.
   app.use('/api/*', cors({ origin: process.env.WEB_UI_ORIGIN || '*' }));
+
+  // Server-side access gate: when web auth is enabled (and not opted out via
+  // ARCHON_WEB_AUTH_REQUIRED=false), every /api/* request must resolve to an
+  // identity or get 401 — this is what makes Better Auth the real access
+  // boundary so a reverse-proxy auth sidecar can retire. Public exceptions:
+  //   - /api/auth/* — the login/status/device-flow surface (can't gate login)
+  //   - /api/health* — the Docker/uptime healthcheck MUST stay reachable
+  // /webhooks/* (HMAC-verified) and /internal/* (loopback-guarded) are outside
+  // /api/* and untouched. No-op when web auth is disabled (solo/local unchanged).
+  // `resolveAuthContext`/`apiError` are function declarations below → hoisted.
+  //
+  // SECURITY: resolveAuthContext also accepts the trusted reverse-proxy header
+  // (ARCHON_WEB_AUTH_HEADER, default `X-Archon-User`) as an identity. That header
+  // is only safe to trust when the app is reachable solely through a proxy that
+  // STRIPS it from inbound requests (or the app binds 127.0.0.1). If you retire
+  // the proxy auth sidecar, the proxy MUST still strip that header — otherwise a
+  // client can forge it and walk straight through this gate.
+  const PUBLIC_API_GATE_PREFIXES = ['/api/auth/', '/api/health'];
+  app.use('/api/*', async (c, next) => {
+    if (!isApiGateEnabled()) return next();
+    const path = c.req.path;
+    if (PUBLIC_API_GATE_PREFIXES.some(p => path === p || path.startsWith(p))) return next();
+    const ctx = await resolveAuthContext(c);
+    if (!ctx) return apiError(c, 401, 'Authentication required');
+    return next();
+  });
+
+  /**
+   * Resolve the per-request auth context: `{ userId, role }`, or undefined when
+   * no identity is present. This is the single chokepoint generalised from the
+   * old header-only seam. Resolution order:
+   *   1. Better Auth session (when web auth is enabled) → canonical
+   *      remote_agent_users row via the 'web' platform identity.
+   *   2. Trusted reverse-proxy header (ARCHON_WEB_AUTH_HEADER, default
+   *      `X-Archon-User`) — kept for proxy deploys and the auth-service sidecar.
+   *   3. undefined → NULL attribution, never elevated.
+   *
+   * `role` rides along on the canonical user row (defaults 'admin'); it is the
+   * durable seam future per-resource scoping hooks into. Visibility stays open.
+   *
+   * SECURITY: header trust is only safe when Archon is reachable solely through
+   * a reverse proxy (bind 127.0.0.1). The server logs a startup warning otherwise.
+   */
+  async function resolveAuthContext(
+    c: Context
+  ): Promise<{ userId: string; role: UserRole } | undefined> {
+    // 1. Better Auth session first (no-op when web auth is disabled).
+    const auth = getAuth();
+    if (auth) {
+      try {
+        const session = await auth.api.getSession({ headers: c.req.raw.headers });
+        if (session?.user) {
+          const user = await userDb.findOrCreateUserByPlatformIdentity(
+            'web',
+            session.user.id,
+            session.user.name ?? session.user.email ?? undefined
+          );
+          return { userId: user.id, role: user.role };
+        }
+      } catch (err) {
+        // Session lookup failed (e.g. DB outage). Fall through to the header so a
+        // proxy-authenticated deploy still resolves; absent that → undefined
+        // (NULL attribution). warn (not error): this is the soft attribution seam
+        // — it returns undefined rather than throwing. The /api/* gate maps that
+        // undefined to a 401 (fail-closed); requireWebUser is the strict variant
+        // that distinguishes a backend 503 from a missing identity.
+        getLog().warn({ err: err as Error, path: c.req.path }, 'web.session_resolve_failed');
+      }
+    }
+
+    // 2. Trusted reverse-proxy header.
+    const headerName = process.env.ARCHON_WEB_AUTH_HEADER || 'X-Archon-User';
+    const headerVal = c.req.header(headerName)?.trim();
+    if (!headerVal) return undefined;
+    try {
+      const user = await userDb.findOrCreateUserByPlatformIdentity('web', headerVal, headerVal);
+      return { userId: user.id, role: user.role };
+    } catch (err) {
+      // Best-effort attribution: the header WAS present, but identity resolution
+      // failed (e.g. DB outage). Fall back to NULL attribution rather than
+      // failing the request. headerPresent distinguishes this from "no header".
+      getLog().warn(
+        { err: err as Error, headerPresent: true, path: c.req.path },
+        'web.user_resolve_failed'
+      );
+      return undefined;
+    }
+  }
+
+  /** Soft attribution: call sites that only need the user id, not the role. */
+  async function resolveWebUserId(c: Context): Promise<string | undefined> {
+    return (await resolveAuthContext(c))?.userId;
+  }
+
+  /**
+   * Strict variant for endpoints that REQUIRE a web identity (connect/disconnect).
+   * Session-first then header, mirroring resolveAuthContext, but distinguishing a
+   * missing identity (401) from a backend failure resolving it (503) — a DB
+   * outage must not masquerade as "authentication required". Returns the resolved
+   * context, or the HTTP error Response the caller should return verbatim.
+   */
+  async function requireWebUser(
+    c: Context,
+    failMessage = 'Web authentication required'
+  ): Promise<{ userId: string; role: UserRole } | { error: Response }> {
+    // 1. Better Auth session.
+    const auth = getAuth();
+    if (auth) {
+      let session: Awaited<ReturnType<typeof auth.api.getSession>> | undefined;
+      try {
+        session = await auth.api.getSession({ headers: c.req.raw.headers });
+      } catch (err) {
+        getLog().error({ err: err as Error }, 'web.session_resolve_failed');
+        return { error: apiError(c, 503, 'Could not verify session — backend unavailable') };
+      }
+      if (session?.user) {
+        try {
+          const user = await userDb.findOrCreateUserByPlatformIdentity(
+            'web',
+            session.user.id,
+            session.user.name ?? session.user.email ?? undefined
+          );
+          return { userId: user.id, role: user.role };
+        } catch (err) {
+          getLog().error({ err: err as Error }, 'web.user_resolve_failed');
+          return { error: apiError(c, 503, 'Could not verify web identity — backend unavailable') };
+        }
+      }
+    }
+
+    // 2. Trusted reverse-proxy header.
+    const headerName = process.env.ARCHON_WEB_AUTH_HEADER || 'X-Archon-User';
+    const headerVal = c.req.header(headerName)?.trim();
+    if (!headerVal) return { error: apiError(c, 401, failMessage) };
+    try {
+      const user = await userDb.findOrCreateUserByPlatformIdentity('web', headerVal, headerVal);
+      return { userId: user.id, role: user.role };
+    } catch (err) {
+      getLog().error({ err: err as Error, headerPresent: true }, 'web.user_resolve_failed');
+      return { error: apiError(c, 503, 'Could not verify web identity — backend unavailable') };
+    }
+  }
+
+  // GET /api/auth/status - web auth availability + signup posture.
+  // Public (no identity required): the web UI calls this before login to decide
+  // whether to render the login gate at all. When web auth is enabled the
+  // /api/auth/* mount explicitly next()s Archon-owned paths (this one included)
+  // before Better Auth's handler runs, so the request reaches here untouched
+  // (see isArchonOwnedAuthPath in index.ts).
+  registerOpenApiRoute(authStatusRoute, c => {
+    return c.json({ enabled: isWebAuthEnabled(), signup: getSignupMode() });
+  });
+
+  // ---- GitHub device-flow connect endpoints ----
+  registerOpenApiRoute(githubDeviceStartRoute, async c => {
+    const web = await requireWebUser(c, 'Web authentication required to connect GitHub');
+    if ('error' in web) return web.error;
+    if (!isPerUserGitHubEnabled()) {
+      return apiError(c, 500, 'Per-user GitHub is not enabled on this install');
+    }
+    try {
+      const { clientId } = loadDeviceFlowConfig();
+      const device = await startDeviceFlow(clientId);
+      return c.json({
+        device_code: device.device_code,
+        user_code: device.user_code,
+        verification_uri: device.verification_uri,
+        interval: device.interval,
+        expires_in: device.expires_in,
+      });
+    } catch (err) {
+      getLog().error({ err: err as Error }, 'auth.github_device_start_failed');
+      return apiError(c, 500, 'Failed to start GitHub device flow');
+    }
+  });
+
+  registerOpenApiRoute(githubDevicePollRoute, async c => {
+    const web = await requireWebUser(c, 'Web authentication required to connect GitHub');
+    if ('error' in web) return web.error;
+    if (!isPerUserGitHubEnabled()) {
+      return apiError(c, 500, 'Per-user GitHub is not enabled on this install');
+    }
+    const { device_code: deviceCode } = getValidatedBody(c, devicePollBodySchema);
+    try {
+      const { clientId } = loadDeviceFlowConfig();
+      const result = await pollDeviceFlowOnce(clientId, deviceCode);
+      if (result.status === 'pending' || result.status === 'slow_down') {
+        return c.json({ status: 'pending' as const });
+      }
+      if (result.status === 'error') {
+        // Terminal device-flow codes → client-visible status (testable helper).
+        return c.json({ status: mapDeviceFlowErrorToPollStatus(result.code), detail: result.code });
+      }
+      // authorized
+      const { githubLogin } = await persistGithubConnection(web.userId, result.token);
+      return c.json({ status: 'connected' as const, githubLogin });
+    } catch (err) {
+      if (err instanceof GithubIdentityConflictError) {
+        return c.json({ status: 'error' as const, detail: err.message });
+      }
+      if (err instanceof DeviceFlowError) {
+        return c.json({ status: 'error' as const, detail: err.code });
+      }
+      getLog().error({ err: err as Error }, 'auth.github_device_poll_failed');
+      return apiError(c, 500, 'Failed to poll GitHub device flow');
+    }
+  });
+
+  registerOpenApiRoute(githubConnectionStatusRoute, async c => {
+    const web = await requireWebUser(c);
+    if ('error' in web) return web.error;
+    try {
+      const record = await getUserGithubTokenRecord(web.userId);
+      return c.json({ connected: record !== null, githubLogin: record?.github_login ?? null });
+    } catch (err) {
+      getLog().error({ err: err as Error, userId: web.userId }, 'auth.github_status_failed');
+      return apiError(c, 500, 'Failed to read GitHub connection status');
+    }
+  });
+
+  registerOpenApiRoute(githubDisconnectRoute, async c => {
+    const web = await requireWebUser(c);
+    if ('error' in web) return web.error;
+    try {
+      await deleteUserGithubToken(web.userId);
+      return c.json({ success: true });
+    } catch (err) {
+      getLog().error({ err: err as Error, userId: web.userId }, 'auth.github_disconnect_failed');
+      return apiError(c, 500, 'Failed to disconnect GitHub');
+    }
+  });
+
+  // ---- Per-user AI-provider credential (API-key) connect endpoints ----
+  // Gated on isPerUserProviderKeysEnabled() (TOKEN_ENCRYPTION_KEY). No response
+  // carries a secret value: list/set return provider/kind/label only, delete
+  // returns { success }.
+  registerOpenApiRoute(providerKeyListRoute, async c => {
+    const web = await requireWebUser(c, 'Web authentication required to manage provider keys');
+    if ('error' in web) return web.error;
+    const available = listConnectableVendors();
+    const subscriptionAvailable = [...SUBSCRIPTION_PROVIDERS].sort();
+    if (!isPerUserProviderKeysEnabled()) {
+      // Gate off: the console hides connect affordances on `enabled:false`;
+      // the agents matrix still reports install-env/ambient readiness.
+      return c.json({
+        enabled: false,
+        connections: [],
+        available,
+        subscriptionAvailable,
+        agents: buildAgentCredentialMatrix([]),
+      });
+    }
+    try {
+      const connections = await listUserProviderKeys(web.userId);
+      return c.json({
+        enabled: true,
+        connections,
+        available,
+        subscriptionAvailable,
+        agents: buildAgentCredentialMatrix(connections),
+      });
+    } catch (err) {
+      getLog().error({ err: err as Error, userId: web.userId }, 'auth.provider_keys_list_failed');
+      return apiError(c, 500, 'Failed to list provider keys');
+    }
+  });
+
+  registerOpenApiRoute(providerKeySetRoute, async c => {
+    const web = await requireWebUser(c, 'Web authentication required to manage provider keys');
+    if ('error' in web) return web.error;
+    if (!isPerUserProviderKeysEnabled()) {
+      return apiError(c, 404, 'Per-user provider keys are not enabled on this install');
+    }
+    const provider = c.req.param('provider') ?? '';
+    const { apiKey, label } = getValidatedBody(c, providerKeySetBodySchema);
+    try {
+      const result = await persistProviderApiKey(web.userId, provider, apiKey, label);
+      return c.json({ success: true, ...result });
+    } catch (err) {
+      if (err instanceof InvalidProviderKeyError) {
+        // Caller error (unknown provider / blank key) — the validation message is
+        // safe to surface and carries no secret.
+        return apiError(c, 400, err.message);
+      }
+      // Encryption / DB failure — opaque 500, never echo the internal message.
+      getLog().error(
+        { err: err as Error, userId: web.userId, provider },
+        'auth.provider_key_set_failed'
+      );
+      return apiError(c, 500, 'Failed to store provider key');
+    }
+  });
+
+  registerOpenApiRoute(providerKeyDeleteRoute, async c => {
+    const web = await requireWebUser(c, 'Web authentication required to manage provider keys');
+    if ('error' in web) return web.error;
+    if (!isPerUserProviderKeysEnabled()) {
+      return apiError(c, 404, 'Per-user provider keys are not enabled on this install');
+    }
+    const provider = normalizeCredentialVendor(c.req.param('provider') ?? '');
+    // No catalog check here (unlike PUT): delete is an idempotent no-op, so an
+    // unknown/misspelled vendor id simply removes nothing and returns ok.
+    // Legacy agent-keyed ids normalize so `DELETE .../claude` removes the
+    // migrated `anthropic` row.
+    try {
+      await deleteUserProviderKey(web.userId, provider);
+      return c.json({ success: true });
+    } catch (err) {
+      getLog().error(
+        { err: err as Error, userId: web.userId, provider },
+        'auth.provider_key_delete_failed'
+      );
+      return apiError(c, 500, 'Failed to disconnect provider key');
+    }
+  });
+
+  // ---- Subscription (OAuth) connect: start + poll ----
+  // The bridge holds Pi's in-flight login() server-side; start returns the URL/
+  // user-code, poll(code?) feeds a pasted code (manual flows) and reports status.
+  // No response carries a secret. Paths are under /api/auth/providers/ so they're
+  // already exempt from the Better Auth catch-all (isArchonOwnedAuthPath).
+  registerOpenApiRoute(providerOAuthStartRoute, async c => {
+    const web = await requireWebUser(c, 'Web authentication required to connect a subscription');
+    if ('error' in web) return web.error;
+    if (!isPerUserProviderKeysEnabled()) {
+      return apiError(c, 404, 'Per-user provider keys are not enabled on this install');
+    }
+    // Normalize legacy agent-keyed ids ('claude' → 'anthropic') like every
+    // other credential entry point — SUBSCRIPTION_PROVIDERS is vendor-keyed.
+    const provider = normalizeCredentialVendor(c.req.param('provider') ?? '');
+    if (!SUBSCRIPTION_PROVIDERS.has(provider)) {
+      return apiError(
+        c,
+        400,
+        `Provider '${provider}' does not support subscription login. ` +
+          `Subscription providers: ${[...SUBSCRIPTION_PROVIDERS].sort().join(', ')}.`
+      );
+    }
+    try {
+      const start = await startOAuth(web.userId, provider);
+      return c.json(start);
+    } catch (err) {
+      // A leaked callback port from a previous attempt is an expected,
+      // retryable condition — log it at warn under its own event (an
+      // error-level `…_failed` would pollute error dashboards on multi-user
+      // installs) and surface the actionable message as a 503 instead of an
+      // opaque 500 (#1963).
+      if (err instanceof OAuthCallbackPortBusyError) {
+        getLog().warn({ userId: web.userId, provider }, 'auth.provider_oauth_start_port_busy');
+        return apiError(c, 503, err.message);
+      }
+      getLog().error(
+        { err: err as Error, userId: web.userId, provider },
+        'auth.provider_oauth_start_failed'
+      );
+      return apiError(c, 500, 'Failed to start subscription login');
+    }
+  });
+
+  registerOpenApiRoute(providerOAuthPollRoute, async c => {
+    const web = await requireWebUser(c, 'Web authentication required to connect a subscription');
+    if ('error' in web) return web.error;
+    if (!isPerUserProviderKeysEnabled()) {
+      return apiError(c, 404, 'Per-user provider keys are not enabled on this install');
+    }
+    // The `:provider` path segment only keeps the OAuth routes under one prefix
+    // (so they're exempt from the Better Auth catch-all); poll itself keys off
+    // sessionId + userId.
+    const { sessionId, code } = getValidatedBody(c, providerOAuthPollBodySchema);
+    // pollOAuth is bound to the session's userId, so a stranger's sessionId resolves
+    // to an error status rather than another user's login.
+    const result = pollOAuth(sessionId, web.userId, code);
+    return c.json(result);
+  });
+
+  // ---- Per-user AI preferences (Phase 3) ----
+  // Identity-gated (requireWebUser) but NOT gated on TOKEN_ENCRYPTION_KEY —
+  // prefs are model names, not secrets. Highest-precedence resolver layer.
+
+  /** Validate a tier/alias entry's provider + effort. Returns an error message or null. */
+  function validatePresetEntry(
+    label: string,
+    entry: { provider: string; model: string; effort?: string }
+  ): string | null {
+    if (!isRegisteredProvider(entry.provider)) {
+      return `Unknown provider '${entry.provider}' for ${label}. Available: ${getProviderInfoList()
+        .map(p => p.id)
+        .join(', ')}`;
+    }
+    if (entry.effort !== undefined && !isEffortValidForProvider(entry.provider, entry.effort)) {
+      return (
+        `Invalid effort '${entry.effort}' for provider '${entry.provider}' (${label}). ` +
+        `Valid: ${validEffortsForProvider(entry.provider)?.join(', ') ?? '(none)'}`
+      );
+    }
+    return null;
+  }
+
+  /** Validate a custom alias name: must start with '@' and not shadow a tier keyword. */
+  function validateAliasName(name: string): string | null {
+    if ((TIER_NAMES as readonly string[]).includes(name)) {
+      return `Alias name '${name}' is reserved (small/medium/large are tier keywords). Use a different name.`;
+    }
+    if (!name.startsWith('@')) {
+      return `Alias name '${name}' must start with '@' (e.g. '@${name}').`;
+    }
+    return null;
+  }
+
+  /** Clean a validated entry — drop `thinking` (no UI/CLI surface), keep effort. */
+  function toCleanEntry(entry: { provider: string; model: string; effort?: string }): {
+    provider: string;
+    model: string;
+    effort?: string;
+  } {
+    return {
+      provider: entry.provider,
+      model: entry.model,
+      ...(entry.effort !== undefined ? { effort: entry.effort } : {}),
+    };
+  }
+
+  registerOpenApiRoute(userAiPrefsGetRoute, async c => {
+    const web = await requireWebUser(c, 'Web authentication required to read AI preferences');
+    if ('error' in web) return web.error;
+    try {
+      return c.json(await getUserAiPrefs(web.userId));
+    } catch (err) {
+      getLog().error({ err: err as Error, userId: web.userId }, 'auth.user_ai_prefs_get_failed');
+      return apiError(c, 500, 'Failed to read AI preferences');
+    }
+  });
+
+  registerOpenApiRoute(userAiPrefsTiersRoute, async c => {
+    const web = await requireWebUser(c, 'Web authentication required to update AI preferences');
+    if ('error' in web) return web.error;
+    const body = getValidatedBody(c, updateUserTiersBodySchema);
+    const patch: UserTiersPatch = {};
+    for (const tier of TIER_NAMES) {
+      const entry = body.tiers[tier];
+      if (entry === undefined) continue;
+      if (entry === null) {
+        patch[tier] = null;
+        continue;
+      }
+      const errMsg = validatePresetEntry(`tier '${tier}'`, entry);
+      if (errMsg) return apiError(c, 400, errMsg);
+      patch[tier] = toCleanEntry(entry);
+    }
+    try {
+      await setUserTiers(web.userId, patch);
+      return c.json(await getUserAiPrefs(web.userId));
+    } catch (err) {
+      getLog().error({ err: err as Error, userId: web.userId }, 'auth.user_ai_prefs_tiers_failed');
+      return apiError(c, 500, 'Failed to update AI tier preferences');
+    }
+  });
+
+  registerOpenApiRoute(userAiPrefsAliasesRoute, async c => {
+    const web = await requireWebUser(c, 'Web authentication required to update AI preferences');
+    if ('error' in web) return web.error;
+    const body = getValidatedBody(c, updateUserAliasesBodySchema);
+    const patch: UserAliasesPatch = {};
+    for (const [name, entry] of Object.entries(body.aliases)) {
+      const nameErr = validateAliasName(name);
+      if (nameErr) return apiError(c, 400, nameErr);
+      if (entry === null) {
+        patch[name] = null;
+        continue;
+      }
+      const errMsg = validatePresetEntry(`alias '${name}'`, entry);
+      if (errMsg) return apiError(c, 400, errMsg);
+      patch[name] = toCleanEntry(entry);
+    }
+    try {
+      await setUserAliases(web.userId, patch);
+      return c.json(await getUserAiPrefs(web.userId));
+    } catch (err) {
+      getLog().error(
+        { err: err as Error, userId: web.userId },
+        'auth.user_ai_prefs_aliases_failed'
+      );
+      return apiError(c, 500, 'Failed to update AI alias preferences');
+    }
+  });
+
+  registerOpenApiRoute(userAiPrefsDefaultRoute, async c => {
+    const web = await requireWebUser(c, 'Web authentication required to update AI preferences');
+    if ('error' in web) return web.error;
+    const { provider } = getValidatedBody(c, updateUserDefaultProviderBodySchema);
+    if (provider !== null && !isRegisteredProvider(provider)) {
+      return apiError(
+        c,
+        400,
+        `Unknown provider '${provider}'. Available: ${getProviderInfoList()
+          .map(p => p.id)
+          .join(', ')}`
+      );
+    }
+    try {
+      await setUserDefaultProvider(web.userId, provider);
+      return c.json(await getUserAiPrefs(web.userId));
+    } catch (err) {
+      getLog().error(
+        { err: err as Error, userId: web.userId },
+        'auth.user_ai_prefs_default_failed'
+      );
+      return apiError(c, 500, 'Failed to update default assistant preference');
+    }
+  });
 
   // Shared lock/dispatch/error handling for message and workflow endpoints
   /** Maximum allowed upload size per file (10 MB) */
@@ -1175,7 +2116,12 @@ export function registerApiRoutes(
    */
   async function tryAutoResumeAfterGate(
     run: WorkflowRun,
-    action: 'approve' | 'reject'
+    action: 'approve' | 'reject',
+    // Identity of the user who approved/rejected the gate. The resumed chat
+    // turn executes as THIS user (sender-first, #1976/#1982) — without it the
+    // dispatch would fall back to the conversation creator's prefs/credentials.
+    // Undefined on solo installs (no web identity) → creator fallback applies.
+    gateActorUserId?: string
   ): Promise<boolean> {
     if (!run.parent_conversation_id) return false;
     // Literal event names per action — greppable for ops tooling. Keeping the
@@ -1230,7 +2176,7 @@ export function registerApiRoutes(
         return false;
       }
       const resumeMessage = `/workflow run ${run.workflow_name} ${run.user_message ?? ''}`.trim();
-      await dispatchToOrchestrator(platformConvId, resumeMessage);
+      await dispatchToOrchestrator(platformConvId, resumeMessage, { userId: gateActorUserId });
       getLog().info(
         { runId: run.id, workflowName: run.workflow_name, platformConvId },
         events.dispatched
@@ -1242,18 +2188,118 @@ export function registerApiRoutes(
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // API transform helpers (Date → ISO string for wire shape)
+  // ---------------------------------------------------------------------------
+
+  type ApiConversation = z.infer<typeof conversationSchema>;
+  type ApiCodebase = z.infer<typeof codebaseSchema>;
+  type ApiMessage = z.infer<typeof messageSchema>;
+  type ApiWorkflowRun = z.infer<typeof workflowRunSchema>;
+  type ApiDashboardWorkflowRun = z.infer<typeof dashboardWorkflowRunSchema>;
+
+  function toISOString(val: Date | string): string;
+  function toISOString(val: Date | string | null | undefined): string | null;
+  function toISOString(val: Date | string | null | undefined): string | null {
+    if (val === null || val === undefined) return null;
+    if (typeof val === 'string') return val;
+    try {
+      return val.toISOString();
+    } catch (e) {
+      getLog().error({ err: e as Error, invalidDate: val }, 'api.invalid_date_transform');
+      return null;
+    }
+  }
+
+  function toApiConversation(row: import('@archon/core').Conversation): ApiConversation {
+    return {
+      ...row,
+      created_at: toISOString(row.created_at),
+      updated_at: toISOString(row.updated_at),
+      deleted_at: toISOString(row.deleted_at),
+      last_activity_at: toISOString(row.last_activity_at),
+    };
+  }
+
+  function toApiCodebase(row: import('@archon/core').Codebase): ApiCodebase {
+    let commands = row.commands;
+    if (typeof commands === 'string') {
+      try {
+        commands = JSON.parse(commands) as Record<string, { path: string; description: string }>;
+      } catch (parseErr) {
+        getLog().error({ err: parseErr as Error, codebaseId: row.id }, 'corrupted_commands_json');
+        // Fallback: empty map keeps the API response valid and prevents the endpoint
+        // from crashing. The corruption is already logged above for operator attention.
+        commands = {};
+      }
+    }
+    return {
+      ...row,
+      commands,
+      created_at: toISOString(row.created_at),
+      updated_at: toISOString(row.updated_at),
+    };
+  }
+
+  function toApiMessage(row: MessageRow): ApiMessage {
+    let metadata = row.metadata;
+    if (typeof metadata !== 'string') {
+      try {
+        metadata = JSON.stringify(metadata);
+      } catch (e) {
+        getLog().error(
+          { err: e as Error, messageId: row.id },
+          'api.message_metadata_serialize_failed'
+        );
+        metadata = '{}';
+      }
+    }
+    return { ...row, metadata };
+  }
+
+  function toApiWorkflowRun(row: WorkflowRun): ApiWorkflowRun {
+    return {
+      ...row,
+      started_at: toISOString(row.started_at),
+      completed_at: toISOString(row.completed_at),
+      last_activity_at: toISOString(row.last_activity_at),
+    };
+  }
+
+  function toApiDashboardWorkflowRun(row: DashboardWorkflowRun): ApiDashboardWorkflowRun {
+    return {
+      ...row,
+      started_at: toISOString(row.started_at),
+      completed_at: toISOString(row.completed_at),
+      last_activity_at: toISOString(row.last_activity_at),
+    };
+  }
+
   // GET /api/conversations - List conversations
   registerOpenApiRoute(getConversationsRoute, async c => {
     try {
       const platformType = c.req.query('platform') ?? undefined;
       const codebaseId = c.req.query('codebaseId') ?? undefined;
+      // Non-enforcing "mine" filter: only narrows when an identity resolves.
+      // Default visibility stays open (everyone sees everyone's conversations).
+      const mine = c.req.query('mine') === 'true';
+      const userId = mine ? (await resolveAuthContext(c))?.userId : undefined;
+      if (mine && !userId && getAuth()) {
+        // Narrowing was requested but no identity resolved on an install with
+        // web auth configured — the list silently degrades to ALL conversations
+        // (documented non-enforcing posture). Without web auth (solo installs,
+        // where the console always sends mine=true) this is the normal path
+        // and stays silent.
+        getLog().warn({ route: 'GET /api/conversations' }, 'api.mine_filter_identity_unresolved');
+      }
       const conversations = await conversationDb.listConversations(
         50,
         platformType,
         codebaseId,
-        true
+        true,
+        userId
       );
-      return c.json(conversations);
+      return c.json(conversations.map(toApiConversation));
     } catch (error) {
       getLog().error({ err: error }, 'list_conversations_failed');
       return apiError(c, 500, 'Failed to list conversations');
@@ -1268,7 +2314,7 @@ export function registerApiRoutes(
       if (!conv) {
         return apiError(c, 404, 'Conversation not found');
       }
-      return c.json(conv);
+      return c.json(toApiConversation(conv));
     } catch (error) {
       getLog().error({ err: error, platformId }, 'get_conversation_failed');
       return apiError(c, 500, 'Failed to get conversation');
@@ -1280,6 +2326,7 @@ export function registerApiRoutes(
   registerOpenApiRoute(createConversationRoute, async c => {
     try {
       const { codebaseId, message } = getValidatedBody(c, createConversationBodySchema);
+      const userId = await resolveWebUserId(c);
 
       // Validate codebase exists if provided
       if (codebaseId) {
@@ -1294,17 +2341,16 @@ export function registerApiRoutes(
       const conversation = await conversationDb.getOrCreateConversation(
         'web',
         conversationId,
-        codebaseId
+        codebaseId,
+        undefined,
+        userId
       );
       webAdapter.setConversationDbId(conversation.platform_conversation_id, conversation.id);
 
       // If message provided, dispatch it atomically (avoids ghost "Untitled" conversations)
       if (message) {
         try {
-          // TODO: thread userId once the web UI authentication PR lands
-          // (X-Archon-User header). For now the user_id column stays NULL on
-          // web-originated rows, matching every other web message-insert below.
-          await messageDb.addMessage(conversation.id, 'user', message);
+          await messageDb.addMessage(conversation.id, 'user', message, undefined, userId);
         } catch (e: unknown) {
           // Log only (no SSE warning) — the SSE stream isn't connected yet for new conversations.
           // The existing /message endpoint emits a warning because the stream is guaranteed to be active.
@@ -1325,7 +2371,11 @@ export function registerApiRoutes(
           );
         }
 
-        const result = await dispatchToOrchestrator(conversation.platform_conversation_id, message);
+        const result = await dispatchToOrchestrator(
+          conversation.platform_conversation_id,
+          message,
+          { userId }
+        );
 
         return c.json({
           conversationId: conversation.platform_conversation_id,
@@ -1393,14 +2443,7 @@ export function registerApiRoutes(
         return apiError(c, 404, 'Conversation not found');
       }
       const messages = await messageDb.listMessages(conv.id, limit);
-      // Normalize metadata: PostgreSQL JSONB auto-deserializes to object,
-      // but frontend expects JSON string. SQLite returns string already.
-      return c.json(
-        messages.map(m => ({
-          ...m,
-          metadata: typeof m.metadata === 'string' ? m.metadata : JSON.stringify(m.metadata),
-        }))
-      );
+      return c.json(messages.map(toApiMessage));
     } catch (error) {
       getLog().error({ err: error }, 'list_messages_failed');
       return apiError(c, 500, 'Failed to list messages');
@@ -1411,6 +2454,7 @@ export function registerApiRoutes(
   // Manual body parsing: multipart uses parseBody(), JSON uses req.json().
   registerOpenApiRoute(sendMessageRoute, async c => {
     const conversationId = c.req.param('id') ?? '';
+    const userId = await resolveWebUserId(c);
 
     // Reject conversation IDs that could be used for path traversal when building
     // the upload directory. Web conversation IDs are alphanumeric with hyphens only.
@@ -1419,7 +2463,7 @@ export function registerApiRoutes(
     }
 
     let message: string;
-    const savedFiles: AttachedFile[] = [];
+    let savedFiles: AttachedFile[] = [];
     let uploadDir = '';
 
     const contentType = c.req.header('content-type') ?? '';
@@ -1449,70 +2493,16 @@ export function registerApiRoutes(
         fileList = [];
       }
 
-      // Enforce server-side file count limit
       const fileEntries = fileList.filter((e): e is File => e instanceof File);
-      if (fileEntries.length > MAX_FILES_PER_MESSAGE) {
-        return c.json({ error: `Maximum ${String(MAX_FILES_PER_MESSAGE)} files per message` }, 400);
-      }
-
-      const archonHome = getArchonHome();
-      uploadDir = join(archonHome, 'artifacts', 'uploads', conversationId);
-
-      // Guard against path traversal in conversationId (belt-and-suspenders after regex above)
-      if (!uploadDir.startsWith(archonHome + sep)) {
-        return c.json({ error: 'Invalid conversation ID' }, 400);
-      }
-
-      // Validate all files before writing any to disk
-      for (const entry of fileEntries) {
-        const displayName = basename(entry.name).replace(/[^a-zA-Z0-9._-]/g, '_');
-        // Server-side MIME type allowlist (client-side accept= is not a security boundary;
-        // entry.type is the Content-Type supplied by the client and is not verified against
-        // actual file contents — suitable for a single-developer self-hosted tool)
-        if (!isAllowedUploadType(entry.type, entry.name)) {
-          return c.json(
-            { error: `File "${displayName}" has an unsupported type: ${entry.type}` },
-            400
-          );
+      if (fileEntries.length > 0) {
+        const result = await persistUploadedFiles(conversationId, fileEntries);
+        if (!result.ok) {
+          return c.json({ error: result.error }, result.status);
         }
-        if (entry.size > MAX_UPLOAD_BYTES) {
-          return c.json({ error: `File "${displayName}" exceeds the 10 MB size limit` }, 400);
-        }
+        savedFiles = result.savedFiles;
+        uploadDir = result.uploadDir;
+        getLog().info({ conversationId, fileCount: savedFiles.length }, 'message.files_uploaded');
       }
-
-      // Write files; on any failure clean up already-written files and surface the error
-      try {
-        await mkdir(uploadDir, { recursive: true });
-        for (const entry of fileEntries) {
-          const fileId = randomUUID();
-          const safeName = basename(entry.name).replace(/[^a-zA-Z0-9._-]/g, '_');
-          const filePath = join(uploadDir, `${fileId}_${safeName}`);
-          await writeFile(filePath, Buffer.from(await entry.arrayBuffer()));
-          // Normalise MIME: strip parameters to prevent prompt injection via crafted Content-Type
-          const normalizedMime =
-            entry.type.split(';')[0].trim().toLowerCase() || 'application/octet-stream';
-          savedFiles.push({
-            path: filePath,
-            // Use safeName for display to avoid prompt injection via crafted filenames
-            name: safeName || fileId,
-            mimeType: normalizedMime,
-            size: entry.size,
-          });
-        }
-      } catch (writeErr: unknown) {
-        // Roll back any files written before the failure
-        for (const f of savedFiles) {
-          await unlink(f.path).catch((err: NodeJS.ErrnoException) => {
-            if (err.code !== 'ENOENT') {
-              getLog().warn({ err, filePath: f.path, conversationId }, 'upload.rollback_failed');
-            }
-          });
-        }
-        getLog().error({ err: writeErr, conversationId }, 'upload.write_failed');
-        return c.json({ error: 'Failed to save uploaded file. Check available disk space.' }, 500);
-      }
-
-      getLog().info({ conversationId, fileCount: savedFiles.length }, 'message.files_uploaded');
     } else {
       let body: { message?: unknown };
       try {
@@ -1545,8 +2535,7 @@ export function registerApiRoutes(
           ? { files: savedFiles.map(f => ({ name: f.name, mimeType: f.mimeType, size: f.size })) }
           : undefined;
       try {
-        // TODO: thread userId once the web UI authentication PR lands.
-        await messageDb.addMessage(conv.id, 'user', message, meta);
+        await messageDb.addMessage(conv.id, 'user', message, meta, userId);
       } catch (e: unknown) {
         getLog().error({ err: e, conversationId: conv.id }, 'message_persistence_failed');
         try {
@@ -1568,10 +2557,10 @@ export function registerApiRoutes(
     // Pass savedFiles to dispatchToOrchestrator so cleanup happens inside the lock handler,
     // AFTER handleMessage completes — not in the HTTP handler's finally block where the
     // fire-and-forget lock callback may still be running and the AI has not yet read the files.
-    let extraContext: Omit<HandleMessageContext, 'isolationHints'> | undefined;
+    const extraContext: Omit<HandleMessageContext, 'isolationHints'> =
+      savedFiles.length > 0 ? { userId, attachedFiles: savedFiles } : { userId };
     let filesToCleanup: { files: AttachedFile[]; uploadDir: string } | undefined;
     if (savedFiles.length > 0) {
-      extraContext = { attachedFiles: savedFiles };
       filesToCleanup = { files: savedFiles, uploadDir };
     }
     const result = await dispatchToOrchestrator(
@@ -1685,20 +2674,7 @@ export function registerApiRoutes(
       deduped.push(...seen.values());
       deduped.sort((a, b) => a.name.localeCompare(b.name));
 
-      return c.json(
-        deduped.map(cb => {
-          let commands = cb.commands;
-          if (typeof commands === 'string') {
-            try {
-              commands = JSON.parse(commands);
-            } catch (parseErr) {
-              getLog().error({ err: parseErr, codebaseId: cb.id }, 'corrupted_commands_json');
-              commands = {};
-            }
-          }
-          return { ...cb, commands };
-        })
-      );
+      return c.json(deduped.map(toApiCodebase));
     } catch (error) {
       getLog().error({ err: error }, 'list_codebases_failed');
       return apiError(c, 500, 'Failed to list codebases');
@@ -1712,16 +2688,7 @@ export function registerApiRoutes(
       if (!codebase) {
         return apiError(c, 404, 'Codebase not found');
       }
-      let commands = codebase.commands;
-      if (typeof commands === 'string') {
-        try {
-          commands = JSON.parse(commands);
-        } catch (parseErr) {
-          getLog().error({ err: parseErr, codebaseId: codebase.id }, 'corrupted_commands_json');
-          commands = {};
-        }
-      }
-      return c.json({ ...codebase, commands });
+      return c.json(toApiCodebase(codebase));
     } catch (error) {
       getLog().error({ err: error }, 'get_codebase_failed');
       return apiError(c, 500, 'Failed to get codebase');
@@ -1744,7 +2711,7 @@ export function registerApiRoutes(
         return apiError(c, 500, 'Codebase created but not found');
       }
 
-      return c.json(codebase, result.alreadyExisted ? 200 : 201);
+      return c.json(toApiCodebase(codebase), result.alreadyExisted ? 200 : 201);
     } catch (error) {
       getLog().error({ err: error }, 'add_codebase_failed');
       return apiError(
@@ -1901,8 +2868,31 @@ export function registerApiRoutes(
       // This avoids a misleading empty state on first run, before any project
       // is registered, when bundled defaults are present
       const result = await discoverWorkflowsWithConfig(workingDir ?? null, loadConfig);
+
+      // Resolve repo-owner-curated recommended list (per-project only).
+      // Filter to names present in the discovered set; preserve declared order.
+      // Stale names are silently ignored (advisory).
+      const recommended: string[] = [];
+      if (workingDir) {
+        const repoConfig = await loadRepoConfig(workingDir);
+        const declared = repoConfig.recommendedWorkflows ?? [];
+        if (declared.length > 0) {
+          const discoveredNames = new Set(result.workflows.map(ws => ws.workflow.name));
+          const seen = new Set<string>();
+          for (const name of declared) {
+            if (discoveredNames.has(name) && !seen.has(name)) {
+              recommended.push(name);
+              seen.add(name);
+            } else if (!discoveredNames.has(name)) {
+              getLog().debug({ workingDir, name }, 'workflows.recommended_workflow_not_found');
+            }
+          }
+        }
+      }
+
       return c.json({
         workflows: result.workflows.map(ws => ({ workflow: ws.workflow, source: ws.source })),
+        recommended,
         errors: result.errors.length > 0 ? result.errors : undefined,
       });
     } catch (error) {
@@ -1924,6 +2914,7 @@ export function registerApiRoutes(
   // way a freeform chat message can.
   registerOpenApiRoute(runWorkflowRoute, async c => {
     const workflowName = c.req.param('name') ?? '';
+    const userId = await resolveWebUserId(c);
     if (!isValidCommandName(workflowName)) {
       return apiError(c, 400, 'Invalid workflow name');
     }
@@ -2005,18 +2996,17 @@ export function registerApiRoutes(
       }
       if (conv) {
         try {
-          // Only pass the metadata arg when files are present; keeps the
-          // signature 3-arg in the (common) JSON path so test fixtures don't
-          // need to know about the multipart-shaped 4th argument.
-          // TODO: thread userId once the web UI authentication PR lands.
-          if (savedFiles.length > 0) {
-            const meta = {
-              files: savedFiles.map(f => ({ name: f.name, mimeType: f.mimeType, size: f.size })),
-            };
-            await messageDb.addMessage(conv.id, 'user', message, meta);
-          } else {
-            await messageDb.addMessage(conv.id, 'user', message);
-          }
+          const meta =
+            savedFiles.length > 0
+              ? {
+                  files: savedFiles.map(f => ({
+                    name: f.name,
+                    mimeType: f.mimeType,
+                    size: f.size,
+                  })),
+                }
+              : undefined;
+          await messageDb.addMessage(conv.id, 'user', message, meta, userId);
         } catch (e: unknown) {
           getLog().error({ err: e, conversationId: conv.id }, 'message_persistence_failed');
         }
@@ -2033,7 +3023,8 @@ export function registerApiRoutes(
       }
 
       const fullMessage = `/workflow run ${workflowName} ${message}`;
-      const extraContext = savedFiles.length > 0 ? { attachedFiles: savedFiles } : undefined;
+      const extraContext: Omit<HandleMessageContext, 'isolationHints'> =
+        savedFiles.length > 0 ? { userId, attachedFiles: savedFiles } : { userId };
       const filesToCleanup = savedFiles.length > 0 ? { files: savedFiles, uploadDir } : undefined;
       const result = await dispatchToOrchestrator(
         conversationId,
@@ -2053,17 +3044,10 @@ export function registerApiRoutes(
   registerOpenApiRoute(getDashboardRunsRoute, async c => {
     try {
       const rawStatus = c.req.query('status');
-      const dashboardValidStatuses = [
-        'pending',
-        'running',
-        'completed',
-        'failed',
-        'cancelled',
-        'paused',
-      ] as const;
-      type DashboardRunStatus = (typeof dashboardValidStatuses)[number];
+      const validStatuses = workflowRunStatusSchema.options;
+      type DashboardRunStatus = (typeof validStatuses)[number];
       const status: DashboardRunStatus | undefined =
-        rawStatus && (dashboardValidStatuses as readonly string[]).includes(rawStatus)
+        rawStatus && (validStatuses as readonly string[]).includes(rawStatus)
           ? (rawStatus as DashboardRunStatus)
           : undefined;
       const codebaseId = c.req.query('codebaseId') ?? undefined;
@@ -2084,7 +3068,10 @@ export function registerApiRoutes(
         limit,
         offset,
       });
-      return c.json(result);
+      return c.json({
+        ...result,
+        runs: result.runs.map(toApiDashboardWorkflowRun),
+      });
     } catch (error) {
       getLog().error({ err: error }, 'list_dashboard_runs_failed');
       return apiError(c, 500, 'Failed to list dashboard runs');
@@ -2102,8 +3089,13 @@ export function registerApiRoutes(
       if (run.status !== 'running' && run.status !== 'pending' && run.status !== 'paused') {
         return apiError(c, 400, `Cannot cancel workflow in '${run.status}' status`);
       }
-      await workflowDb.cancelWorkflowRun(runId);
-      return c.json({ success: true, message: `Cancelled workflow: ${run.workflow_name}` });
+      const { cancelled } = await workflowDb.cancelWorkflowRun(runId);
+      return c.json({
+        success: true,
+        message: cancelled
+          ? `Cancelled workflow: ${run.workflow_name}`
+          : `Workflow ${run.workflow_name} already finished — nothing to cancel.`,
+      });
     } catch (error) {
       getLog().error({ err: error }, 'cancel_workflow_run_api_failed');
       return apiError(c, 500, 'Failed to cancel workflow run');
@@ -2141,7 +3133,11 @@ export function registerApiRoutes(
         );
       }
       const resumeMessage = `/workflow run ${run.workflow_name} ${run.user_message ?? ''}`.trim();
-      await dispatchToOrchestrator(parentConv.platform_conversation_id, resumeMessage);
+      // Resume executes as the user who clicked resume (sender-first, #1982),
+      // not the conversation creator. Undefined on solo installs → fallback.
+      await dispatchToOrchestrator(parentConv.platform_conversation_id, resumeMessage, {
+        userId: await resolveWebUserId(c),
+      });
       getLog().info(
         {
           runId,
@@ -2214,6 +3210,9 @@ export function registerApiRoutes(
         step_name: approval.nodeId,
         data: { decision: 'approved', comment },
       });
+      // Anonymous telemetry: binary resolution only (web API inlines the
+      // approve logic rather than calling approveWorkflow).
+      captureApprovalResolved({ resolution: 'approved' });
       // For interactive loops, store user input; for standard approvals, mark as approved
       // and clear any rejection state.
       const metadataUpdate =
@@ -2231,7 +3230,7 @@ export function registerApiRoutes(
       // `parent_conversation_id` on the run (set by orchestrator-agent for any
       // web-dispatched workflow — foreground, interactive, and background via
       // the pre-created run) and a web-platform parent (guarded in the helper).
-      const autoResumed = await tryAutoResumeAfterGate(run, 'approve');
+      const autoResumed = await tryAutoResumeAfterGate(run, 'approve', await resolveWebUserId(c));
 
       return c.json({
         success: true,
@@ -2265,6 +3264,8 @@ export function registerApiRoutes(
         step_name: approval?.nodeId ?? 'unknown',
         data: { decision: 'rejected', reason },
       });
+      // Anonymous telemetry: binary resolution only — no ids/reasons/names.
+      captureApprovalResolved({ resolution: 'rejected' });
 
       const hasOnReject = approval?.onRejectPrompt !== undefined;
       if (hasOnReject) {
@@ -2286,7 +3287,7 @@ export function registerApiRoutes(
         // without requiring the user to re-run the workflow command. Mirrors
         // what `workflowRejectCommand` does in the CLI. Same cross-adapter
         // guard as approve — only web parents auto-resume.
-        const autoResumed = await tryAutoResumeAfterGate(run, 'reject');
+        const autoResumed = await tryAutoResumeAfterGate(run, 'reject', await resolveWebUserId(c));
 
         return c.json({
           success: true,
@@ -2330,19 +3331,47 @@ export function registerApiRoutes(
     }
   });
 
+  // DELETE /api/workflows/:name/node-sessions - Reset persisted per-node provider sessions
+  registerOpenApiRoute(resetWorkflowNodeSessionsRoute, async c => {
+    const workflowName = c.req.param('name') ?? '';
+    if (!workflowName) {
+      return apiError(c, 400, 'Workflow name is required');
+    }
+    const scope = c.req.query('scope') ?? undefined;
+    const node = c.req.query('node') ?? undefined;
+    const confirm = c.req.query('confirm') ?? undefined;
+    // Cross-scope reset (no scope) is destructive — require explicit confirmation so a
+    // dropped `scope` param can't silently wipe every conversation's sessions. Mirrors
+    // the CLI `--yes` guard.
+    if (scope === undefined && confirm !== 'all-scopes') {
+      return apiError(
+        c,
+        400,
+        'Refusing to reset sessions across all scopes without confirmation. Pass ?scope=<key> to narrow, or ?confirm=all-scopes to confirm.'
+      );
+    }
+    try {
+      const { deleted } = await resetWorkflowNodeSessions({
+        workflow_name: workflowName,
+        scope_key: scope,
+        node_id: node,
+      });
+      return c.json({ success: true, deleted });
+    } catch (error) {
+      getLog().error(
+        { err: error, workflowName, scope, node },
+        'api.workflow_reset_node_sessions_failed'
+      );
+      return apiError(c, 500, 'Failed to reset workflow node sessions');
+    }
+  });
+
   // GET /api/workflows/runs - List workflow runs
   registerOpenApiRoute(listWorkflowRunsRoute, async c => {
     try {
       const conversationId = c.req.query('conversationId') ?? undefined;
       const rawStatus = c.req.query('status');
-      const validStatuses = [
-        'pending',
-        'running',
-        'completed',
-        'failed',
-        'cancelled',
-        'paused',
-      ] as const;
+      const validStatuses = workflowRunStatusSchema.options;
       type WorkflowRunStatus = (typeof validStatuses)[number];
       const status: WorkflowRunStatus | undefined =
         rawStatus && (validStatuses as readonly string[]).includes(rawStatus)
@@ -2351,14 +3380,19 @@ export function registerApiRoutes(
       const codebaseId = c.req.query('codebaseId') ?? undefined;
       const limitRaw = Number(c.req.query('limit'));
       const limit = Number.isNaN(limitRaw) ? 50 : Math.min(Math.max(1, limitRaw), 200);
+      // Non-enforcing "mine" filter: only narrows when an identity resolves.
+      // Default visibility stays open (everyone sees everyone's runs).
+      const mine = c.req.query('mine') === 'true';
+      const userId = mine ? (await resolveAuthContext(c))?.userId : undefined;
 
       const runs = await workflowDb.listWorkflowRuns({
         conversationId,
         status,
         limit,
         codebaseId,
+        userId,
       });
-      return c.json({ runs });
+      return c.json({ runs: runs.map(toApiWorkflowRun) });
     } catch (error) {
       getLog().error({ err: error }, 'list_workflow_runs_failed');
       return apiError(c, 500, 'Failed to list workflow runs');
@@ -2374,7 +3408,7 @@ export function registerApiRoutes(
       if (!run) {
         return apiError(c, 404, 'No workflow run found for this worker');
       }
-      return c.json({ run });
+      return c.json({ run: toApiWorkflowRun(run) });
     } catch (error) {
       getLog().error({ err: error }, 'workflow_run_by_worker_lookup_failed');
       return apiError(c, 500, 'Failed to look up workflow run');
@@ -2416,7 +3450,7 @@ export function registerApiRoutes(
 
       return c.json({
         run: {
-          ...run,
+          ...toApiWorkflowRun(run),
           worker_platform_id: workerPlatformId,
           parent_platform_id: parentPlatformId,
           conversation_platform_id: conversationPlatformId ?? null,
@@ -3024,9 +4058,96 @@ export function registerApiRoutes(
     }
   });
 
+  // PATCH /api/config/tiers - Update model-tier presets (ungated — solo-OK, like /assistants)
+  registerOpenApiRoute(patchTiersConfigRoute, async c => {
+    try {
+      const body = getValidatedBody(c, updateTiersBodySchema);
+
+      // Validate the provider of each tier we're SETTING (null = unset, skip).
+      const tiers: TiersPatch = {};
+      for (const tier of TIER_NAMES) {
+        const entry = body.tiers[tier];
+        if (entry === undefined) continue;
+        if (entry === null) {
+          tiers[tier] = null;
+          continue;
+        }
+        const errMsg = validatePresetEntry(`tier '${tier}'`, entry);
+        if (errMsg) return apiError(c, 400, errMsg);
+        // Clean RawAliasEntry — drops `thinking` (no UI/CLI surface yet).
+        tiers[tier] = toCleanEntry(entry);
+      }
+
+      await updateGlobalConfig({ tiers });
+
+      const config = await loadConfig();
+      return c.json({
+        config: toSafeConfig(config),
+        database: getDatabaseType(),
+      });
+    } catch (error) {
+      getLog().error({ err: error }, 'config.tiers_update_failed');
+      return apiError(c, 500, 'Failed to update tier configuration');
+    }
+  });
+
+  // PATCH /api/config/aliases - Update @custom aliases (ungated — solo-OK, like /tiers)
+  registerOpenApiRoute(patchAliasesConfigRoute, async c => {
+    try {
+      const body = getValidatedBody(c, updateAliasesBodySchema);
+      const aliases: AliasesPatch = {};
+      for (const [name, entry] of Object.entries(body.aliases)) {
+        const nameErr = validateAliasName(name);
+        if (nameErr) return apiError(c, 400, nameErr);
+        if (entry === null) {
+          aliases[name] = null;
+          continue;
+        }
+        const errMsg = validatePresetEntry(`alias '${name}'`, entry);
+        if (errMsg) return apiError(c, 400, errMsg);
+        aliases[name] = toCleanEntry(entry);
+      }
+
+      await updateGlobalConfig({ aliases });
+
+      const config = await loadConfig();
+      return c.json({
+        config: toSafeConfig(config),
+        database: getDatabaseType(),
+      });
+    } catch (error) {
+      getLog().error({ err: error }, 'config.aliases_update_failed');
+      return apiError(c, 500, 'Failed to update alias configuration');
+    }
+  });
+
   // GET /api/providers - List registered AI providers
   registerOpenApiRoute(getProvidersRoute, c => {
     return c.json({ providers: getProviderInfoList() });
+  });
+
+  // GET /api/providers/pi/models - Pi model catalog (best-effort hint; [] on failure)
+  registerOpenApiRoute(getPiModelsRoute, async c => {
+    try {
+      return c.json({ models: await listPiModels() });
+    } catch (error) {
+      // listPiModels already degrades internally; this belt-and-suspenders
+      // keeps the documented "never errors" contract at the route boundary.
+      getLog().warn({ err: error }, 'providers.pi_models_list_failed');
+      return c.json({ models: [] });
+    }
+  });
+
+  // GET /api/providers/opencode/credentials - OpenCode backend introspection
+  // (on-demand; starts the embedded runtime). 503 on failure — never a silent [].
+  registerOpenApiRoute(getOpencodeCredentialsRoute, async c => {
+    try {
+      const result = await introspectOpencodeCredentials();
+      return c.json(result);
+    } catch (error) {
+      getLog().error({ err: error }, 'providers.opencode_credentials_introspect_failed');
+      return apiError(c, 503, 'Embedded OpenCode runtime unavailable');
+    }
   });
 
   // GET /api/codebases/:id/environments - List isolation environments for a codebase

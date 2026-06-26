@@ -92,6 +92,8 @@ describe('WorktreeProvider', () => {
     syncWorkspaceSpy.mockResolvedValue({
       branch: 'main',
       synced: true,
+      mode: 'fast-forward',
+      state: 'in_sync',
       previousHead: '',
       newHead: '',
       updated: false,
@@ -233,7 +235,7 @@ describe('WorktreeProvider', () => {
       expect(env.workingPath).toContain('issue-42');
       expect(env.status).toBe('active');
 
-      // Verify git worktree add was called with -b flag and origin/main as start-point
+      // Verify git worktree add was called with --no-track, -b flag and origin/main as start-point
       expect(execSpy).toHaveBeenCalledWith(
         'git',
         expect.arrayContaining([
@@ -241,6 +243,7 @@ describe('WorktreeProvider', () => {
           '/workspace/repo',
           'worktree',
           'add',
+          '--no-track',
           expect.any(String),
           '-b',
           'archon/issue-42',
@@ -284,6 +287,7 @@ describe('WorktreeProvider', () => {
           '/workspace/repo',
           'worktree',
           'add',
+          '--no-track',
           expect.any(String),
           '-b',
           'archon/task-test-adapters',
@@ -663,6 +667,7 @@ describe('WorktreeProvider', () => {
           '/workspace/repo',
           'worktree',
           'add',
+          '--no-track',
           expect.any(String),
           '-b',
           'archon/issue-42',
@@ -690,6 +695,19 @@ describe('WorktreeProvider', () => {
         ]),
         expect.any(Object)
       );
+
+      // --no-track must NOT be in the fallback call (only applies to new-branch -b creation)
+      const fallbackWorktreeAdd = execSpy.mock.calls.filter((call: unknown[]) => {
+        const args = call[1] as string[];
+        return (
+          args.includes('worktree') &&
+          args.includes('add') &&
+          !args.includes('-b') &&
+          args.includes('archon/issue-42')
+        );
+      });
+      expect(fallbackWorktreeAdd).toHaveLength(1);
+      expect(fallbackWorktreeAdd[0][1]).not.toContain('--no-track');
     });
 
     test('propagates error if branch -f reset fails (protected branch, etc.)', async () => {
@@ -2229,7 +2247,15 @@ describe('WorktreeProvider', () => {
 
     test('uses resolved base branch as worktree start-point', async () => {
       worktreeExistsSpy.mockResolvedValue(false);
-      syncWorkspaceSpy.mockResolvedValue({ branch: 'develop', synced: true });
+      syncWorkspaceSpy.mockResolvedValue({
+        branch: 'develop',
+        synced: true,
+        mode: 'fast-forward',
+        state: 'in_sync',
+        previousHead: '',
+        newHead: '',
+        updated: false,
+      });
 
       const configLoader: RepoConfigLoader = async () => ({ baseBranch: 'develop' });
       provider = new WorktreeProvider(configLoader);
@@ -2241,6 +2267,7 @@ describe('WorktreeProvider', () => {
         expect.arrayContaining([
           'worktree',
           'add',
+          '--no-track',
           expect.any(String),
           '-b',
           'archon/issue-42',
@@ -2258,10 +2285,26 @@ describe('WorktreeProvider', () => {
       await provider.create(baseRequest);
 
       // syncWorkspace called with undefined → triggers auto-detect via getDefaultBranch
-      // resetAfterFetch: false because test path is not a managed clone under ~/.archon/workspaces
       expect(syncWorkspaceSpy).toHaveBeenCalledWith('/workspace/owner/repo', undefined, {
-        resetAfterFetch: false,
+        mode: 'fast-forward',
       });
+    });
+
+    test('uses explicit reset mode for managed clone worktree creation', async () => {
+      worktreeExistsSpy.mockResolvedValue(false);
+      const configLoader: RepoConfigLoader = async () => ({});
+      provider = new WorktreeProvider(configLoader);
+
+      await provider.create({
+        ...baseRequest,
+        canonicalRepoPath: '/test/.archon/workspaces/owner/repo/source',
+      });
+
+      expect(syncWorkspaceSpy).toHaveBeenCalledWith(
+        '/test/.archon/workspaces/owner/repo/source',
+        undefined,
+        { mode: 'reset' }
+      );
     });
 
     test('auto-detects base branch when fromBranch is set but no baseBranch configured', async () => {
@@ -2280,7 +2323,7 @@ describe('WorktreeProvider', () => {
 
       // fromBranch is the start-point for the branch, not for sync — sync auto-detects
       expect(syncWorkspaceSpy).toHaveBeenCalledWith('/workspace/owner/repo', undefined, {
-        resetAfterFetch: false,
+        mode: 'fast-forward',
       });
     });
 
@@ -2299,7 +2342,7 @@ describe('WorktreeProvider', () => {
       await provider.create(request);
 
       expect(syncWorkspaceSpy).toHaveBeenCalledWith('/workspace/owner/repo', 'main', {
-        resetAfterFetch: false,
+        mode: 'fast-forward',
       });
     });
 
@@ -2318,7 +2361,7 @@ describe('WorktreeProvider', () => {
 
       // fromBranch is ignored for non-task types, so syncWorkspace gets undefined → auto-detect
       expect(syncWorkspaceSpy).toHaveBeenCalledWith('/workspace/owner/repo', undefined, {
-        resetAfterFetch: false,
+        mode: 'fast-forward',
       });
     });
 
@@ -2332,7 +2375,7 @@ describe('WorktreeProvider', () => {
       await provider.create(baseRequest);
 
       expect(syncWorkspaceSpy).toHaveBeenCalledWith('/workspace/owner/repo', 'develop', {
-        resetAfterFetch: false,
+        mode: 'fast-forward',
       });
       expect(getDefaultBranchSpy).not.toHaveBeenCalled();
     });

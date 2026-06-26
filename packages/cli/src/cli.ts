@@ -20,9 +20,6 @@ import { parseArgs } from 'util';
 import { resolve } from 'path';
 import { existsSync } from 'fs';
 
-// CLAUDECODE=1 warning is emitted inside stripCwdEnv() (boot import above)
-// BEFORE the marker is deleted from process.env. No duplicate warning here.
-
 // Smart defaults for Claude auth
 // If no explicit tokens, default to global auth from `claude /login`
 if (!process.env.CLAUDE_API_KEY && !process.env.CLAUDE_CODE_OAUTH_TOKEN) {
@@ -44,11 +41,14 @@ import {
   workflowListCommand,
   workflowRunCommand,
   workflowStatusCommand,
+  workflowGetCommand,
+  workflowRunsCommand,
   workflowResumeCommand,
   workflowAbandonCommand,
   workflowApproveCommand,
   workflowRejectCommand,
   workflowCleanupCommand,
+  workflowResetSessionsCommand,
   workflowEventEmitCommand,
   workflowSearchCommand,
   workflowInstallCommand,
@@ -68,6 +68,21 @@ import { skillInstallCommand } from './commands/skill';
 import { validateWorkflowsCommand, validateCommandsCommand } from './commands/validate';
 import { serveCommand } from './commands/serve';
 import { doctorCommand } from './commands/doctor';
+import { authGithubCommand } from './commands/auth';
+import {
+  aiKeySetCommand,
+  aiListCommand,
+  aiLogoutCommand,
+  aiLoginCommand,
+  aiTierSetCommand,
+  aiTierListCommand,
+  aiTierUnsetCommand,
+  aiAliasSetCommand,
+  aiAliasListCommand,
+  aiAliasUnsetCommand,
+  aiDefaultCommand,
+} from './commands/ai';
+import { telemetryStatusCommand, telemetryResetCommand } from './commands/telemetry';
 import { closeDatabase } from '@archon/core';
 import {
   setLogLevel,
@@ -76,6 +91,7 @@ import {
   BUNDLED_IS_BINARY,
   BUNDLED_VERSION,
   shutdownTelemetry,
+  captureArchonStarted,
   isVerboseBoot,
 } from '@archon/paths';
 import * as git from '@archon/git';
@@ -102,7 +118,9 @@ Commands:
   setup                      Interactive setup wizard for credentials and config
   workflow list              List available workflows in current directory
   workflow run <name> [msg]  Run a workflow with optional message
-  workflow status            Show status of running workflows
+  workflow status            Show status of running/paused workflows
+  workflow runs              List recent runs (all statuses) for this project
+  workflow get <run-id>      Show detail for a single run (any status)
   workflow search [query]    Search the workflow marketplace
   workflow install <slug>    Install a workflow from the marketplace
   isolation list             List all active worktrees/environments
@@ -113,6 +131,20 @@ Commands:
   serve                      Start the web UI server (downloads web UI on first run)
   skill install [path]       Install the bundled Archon skill into .claude/skills/archon
   doctor                     Verify your Archon setup (Claude binary, gh auth, DB, adapters)
+  auth github                Connect your GitHub identity via device flow (multi-user installs)
+  ai key set <provider>      Connect an AI provider API key (multi-user installs; key read from prompt/stdin)
+  ai login <provider>        Connect a subscription (claude/copilot) via OAuth — codex is API-key only
+  ai list                    List your connected AI provider keys
+  ai logout <provider>       Disconnect an AI provider key
+  ai tier set <t> <p> <m>    Set a model tier (small/medium/large) → provider/model [--effort <e>] [--scope user|install]
+  ai tier list [--json]      Show configured tiers (install + yours) vs built-in defaults
+  ai tier unset <tier>       Reset a tier to its built-in default [--scope user|install]
+  ai alias set <@n> <p> <m>  Set a @custom model alias [--effort <e>] [--scope user|install]
+  ai alias list [--json]     Show configured @custom aliases (install + yours)
+  ai alias unset <@name>     Remove a @custom alias [--scope user|install]
+  ai default <provider>      Set the default assistant [--scope user|install]
+  telemetry status           Show anonymous telemetry state (enabled, reason, ID, host)
+  telemetry reset            Rotate the anonymous install UUID
   validate workflows [name]  Validate workflow definitions and their references
   validate commands [name]   Validate command files
   version, --version, -V     Show version info (also -v when used alone)
@@ -127,9 +159,15 @@ Options:
   --spawn                    Open setup wizard in a new terminal window (for setup command)
   --quiet, -q                Reduce log verbosity to warnings and errors only
   --verbose, -v              Show debug-level output
-  --json                     Output machine-readable JSON (for workflow list)
+  --json                     Output machine-readable JSON (list/status/get/runs/approve/reject/abandon/resume)
+  --detach                   Run 'workflow run' in a detached background child (returns immediately)
+  --all                      For 'workflow runs': list across all projects (ignore cwd scope)
+  --status <status>          For 'workflow runs': filter to one status (running, completed, failed, ...)
+  --limit <n>                For 'workflow runs': max rows (default 20)
   --workflow <name>          Workflow to run for 'continue' (default: archon-assist)
   --no-context               Skip context injection for 'continue'
+  --conversation-id <id>     Reuse a stable conversation scope across runs (enables
+                             persist_session resume between separate CLI invocations)
   --port <port>              Override server port for 'serve' (default: 3090)
   --download-only            Download web UI without starting the server
   --force                    Overwrite existing file (for workflow install)
@@ -141,6 +179,9 @@ Examples:
   archon workflow run plan --cwd /path/to/repo "Add dark mode"
   archon workflow run implement --branch feature-auth "Implement auth"
   archon workflow run quick-fix --no-worktree "Fix typo"
+  archon workflow run archon-assist --detach "Investigate the flaky test"
+  archon workflow runs --json
+  archon workflow get <run-id> --json
   archon continue fix/issue-42 --workflow archon-smart-pr-review "Review the changes"
   archon skill install
   archon skill install /path/to/project
@@ -195,9 +236,17 @@ function isVersionRequest(args: string[]): boolean {
 async function main(): Promise<number> {
   const args = process.argv.slice(2);
 
+  // Anonymous once-per-invocation startup event (self-gates on opt-out).
+  // Emitted before any early return so EVERY invocation — including bare
+  // `archon`, `--help`, and `--version` — is counted, matching the
+  // "once per CLI invocation" contract. Each early-return path below flushes
+  // via shutdownTelemetry(); the main command path flushes in its finally.
+  captureArchonStarted({ surface: 'cli' });
+
   // Handle no arguments - show help and exit successfully
   if (args.length === 0) {
     printUsage();
+    await shutdownTelemetry();
     return 0;
   }
 
@@ -241,7 +290,15 @@ async function main(): Promise<number> {
         port: { type: 'string' },
         'download-only': { type: 'boolean' },
         scope: { type: 'string' },
+        node: { type: 'string' },
+        yes: { type: 'boolean' },
         force: { type: 'boolean' },
+        'conversation-id': { type: 'string' },
+        detach: { type: 'boolean' },
+        all: { type: 'boolean' },
+        status: { type: 'string' },
+        limit: { type: 'string' },
+        effort: { type: 'string' },
       },
       allowPositionals: true,
       strict: false, // Allow unknown flags to pass through
@@ -250,6 +307,7 @@ async function main(): Promise<number> {
     const err = error as Error;
     console.error(`Error parsing arguments: ${err.message}`);
     printUsage();
+    await shutdownTelemetry();
     return 1;
   }
 
@@ -263,9 +321,11 @@ async function main(): Promise<number> {
   const resumeFlag = values.resume as boolean | undefined;
   const spawnFlag = values.spawn as boolean | undefined;
   const jsonFlag = values.json as boolean | undefined;
+  const detachFlag = values.detach as boolean | undefined;
   // Handle help flag
   if (values.help) {
     printUsage();
+    await shutdownTelemetry();
     return 0;
   }
 
@@ -283,14 +343,26 @@ async function main(): Promise<number> {
     'serve',
     'skill',
     'doctor',
+    'telemetry',
+    'auth',
+    'ai',
   ];
   const requiresGitRepo = !noGitCommands.includes(command ?? '');
 
   try {
-    // setup/doctor default to warn to avoid Pino info JSON interleaving with ○/✓ output; lazy loggers pick up this level at first creation
-    const isInteractiveCommand = command === 'setup' || command === 'doctor';
+    // setup/doctor/telemetry default to warn to avoid Pino info JSON interleaving with their human-readable output; lazy loggers pick up this level at first creation
+    const isInteractiveCommand =
+      command === 'setup' || command === 'doctor' || command === 'telemetry';
     const suppressByDefault = isInteractiveCommand && !values.verbose && !isVerboseBoot();
-    if (values.quiet || suppressByDefault) {
+    // --json must keep stdout to EXACTLY the machine-readable payload. Pino's
+    // default destination is stdout, so even one warn/error line would precede
+    // the JSON and break JSON.parse for a consuming agent. Silence logs entirely
+    // (not just lower to 'warn' — warnings still print at that level): every
+    // --json command surfaces failures inside its own { ok: false } envelope, so
+    // no diagnostic the caller needs is lost.
+    if (jsonFlag) {
+      setLogLevel('silent');
+    } else if (values.quiet || suppressByDefault) {
       setLogLevel('warn');
     } else if (values.verbose) {
       setLogLevel('debug');
@@ -421,6 +493,13 @@ async function main(): Promise<number> {
               resume: resumeFlag,
               quiet: values.quiet as boolean | undefined,
               verbose: values.verbose as boolean | undefined,
+              // Stable scope for persist_session across separate CLI invocations. Without
+              // it each run gets a fresh conversation UUID, so persisted sessions never
+              // resume between runs (they only resume within chat/REST, which reuse a
+              // conversation). Pass the same id on each run to opt into cross-run resume.
+              conversationId: values['conversation-id'] as string | undefined,
+              detach: detachFlag,
+              json: jsonFlag,
             };
             await workflowRunCommand(effectiveCwd, workflowName, userMessage, options);
             break;
@@ -430,13 +509,47 @@ async function main(): Promise<number> {
             await workflowStatusCommand(jsonFlag, values.verbose as boolean | undefined);
             break;
 
+          case 'get': {
+            const getRunId = positionals[2];
+            if (!getRunId) {
+              console.error('Usage: archon workflow get <run-id> [--json] [--verbose]');
+              return 1;
+            }
+            // Propagate the command's exit code so `get <id> && ...` and CI
+            // pipelines see a non-zero status when the run is missing.
+            return await workflowGetCommand(
+              getRunId,
+              jsonFlag,
+              values.verbose as boolean | undefined
+            );
+          }
+
+          case 'runs': {
+            const rawLimit = values.limit as string | undefined;
+            let limit: number | undefined;
+            if (rawLimit !== undefined) {
+              limit = Number(rawLimit);
+              if (!Number.isInteger(limit) || limit < 1) {
+                console.error(`Error: --limit must be a positive integer, got '${rawLimit}'.`);
+                return 1;
+              }
+            }
+            await workflowRunsCommand(effectiveCwd, {
+              json: jsonFlag,
+              all: values.all as boolean | undefined,
+              status: values.status as string | undefined,
+              limit,
+            });
+            break;
+          }
+
           case 'resume': {
             const resumeRunId = positionals[2];
             if (!resumeRunId) {
               console.error('Usage: archon workflow resume <run-id>');
               return 1;
             }
-            await workflowResumeCommand(resumeRunId);
+            await workflowResumeCommand(resumeRunId, jsonFlag);
             break;
           }
 
@@ -446,7 +559,7 @@ async function main(): Promise<number> {
               console.error('Usage: archon workflow abandon <run-id>');
               return 1;
             }
-            await workflowAbandonCommand(abandonRunId);
+            await workflowAbandonCommand(abandonRunId, jsonFlag);
             break;
           }
 
@@ -459,7 +572,7 @@ async function main(): Promise<number> {
             // Accept comment as positional args (everything after run ID) or --comment flag
             const approveComment =
               (values.comment as string | undefined) || positionals.slice(3).join(' ') || undefined;
-            await workflowApproveCommand(approveRunId, approveComment);
+            await workflowApproveCommand(approveRunId, approveComment, jsonFlag);
             break;
           }
 
@@ -471,7 +584,7 @@ async function main(): Promise<number> {
             }
             const rejectReason =
               (values.reason as string | undefined) || positionals.slice(3).join(' ') || undefined;
-            await workflowRejectCommand(rejectRunId, rejectReason);
+            await workflowRejectCommand(rejectRunId, rejectReason, jsonFlag);
             break;
           }
 
@@ -483,6 +596,39 @@ async function main(): Promise<number> {
               return 1;
             }
             await workflowCleanupCommand(days);
+            break;
+          }
+
+          case 'reset-sessions': {
+            const workflowName = positionals[2];
+            const extras = positionals.slice(3);
+            if (!workflowName) {
+              console.error(
+                'Usage: archon workflow reset-sessions <workflow-name> [--scope <key>] [--node <id>] [--yes] [--json]'
+              );
+              console.error(
+                '  Without --scope: deletes persisted sessions across ALL scopes (requires --yes).'
+              );
+              return 1;
+            }
+            // Reject extra positionals — this is a destructive command and silently
+            // dropping `archon workflow reset-sessions wf planner` (likely intent: filter to
+            // node "planner") to a cross-scope wipe would be a foot-gun.
+            if (extras.length > 0) {
+              console.error(
+                'Usage: archon workflow reset-sessions <workflow-name> [--scope <key>] [--node <id>] [--yes] [--json]'
+              );
+              console.error(
+                `Error: unexpected positional argument(s): ${extras.join(' ')}. Use --node <id> to filter by node.`
+              );
+              return 1;
+            }
+            await workflowResetSessionsCommand(workflowName, {
+              scope: values.scope as string | undefined,
+              node: values.node as string | undefined,
+              yes: values.yes as boolean | undefined,
+              json: jsonFlag,
+            });
             break;
           }
 
@@ -551,7 +697,7 @@ async function main(): Promise<number> {
               console.error(`Unknown workflow subcommand: ${subcommand}`);
             }
             console.error(
-              'Available: list, run, status, resume, abandon, approve, reject, cleanup, event, search, install'
+              'Available: list, run, status, get, runs, resume, abandon, approve, reject, cleanup, event, search, install'
             );
             return 1;
         }
@@ -644,6 +790,115 @@ async function main(): Promise<number> {
 
       case 'doctor': {
         return await doctorCommand();
+      }
+
+      case 'auth': {
+        switch (subcommand) {
+          case 'github':
+            return await authGithubCommand();
+          default:
+            if (subcommand === undefined) {
+              console.error('Missing auth subcommand');
+            } else {
+              console.error(`Unknown auth subcommand: ${subcommand}`);
+            }
+            console.error('Available: github');
+            return 1;
+        }
+      }
+
+      case 'ai': {
+        switch (subcommand) {
+          case 'key': {
+            const action = positionals[2];
+            if (action !== 'set') {
+              console.error('Usage: archon ai key set <provider>');
+              return 1;
+            }
+            return await aiKeySetCommand(positionals[3]);
+          }
+          case 'list':
+            return await aiListCommand();
+          case 'logout':
+            return await aiLogoutCommand(positionals[2]);
+          case 'login':
+            return await aiLoginCommand(positionals[2]);
+          case 'tier': {
+            const action = positionals[2];
+            const scopeFlag = values.scope as string | undefined;
+            switch (action) {
+              case 'set':
+                return await aiTierSetCommand(
+                  positionals[3],
+                  positionals[4],
+                  positionals[5],
+                  values.effort as string | undefined,
+                  scopeFlag
+                );
+              case 'list':
+                return await aiTierListCommand(jsonFlag);
+              case 'unset':
+                return await aiTierUnsetCommand(positionals[3], scopeFlag);
+              default:
+                console.error(
+                  'Usage: archon ai tier set <small|medium|large> <provider> <model> [--effort <e>] [--scope user|install] | tier list [--json] | tier unset <tier> [--scope user|install]'
+                );
+                return 1;
+            }
+          }
+          case 'alias': {
+            const action = positionals[2];
+            const scopeFlag = values.scope as string | undefined;
+            switch (action) {
+              case 'set':
+                return await aiAliasSetCommand(
+                  positionals[3],
+                  positionals[4],
+                  positionals[5],
+                  values.effort as string | undefined,
+                  scopeFlag
+                );
+              case 'list':
+                return await aiAliasListCommand(jsonFlag);
+              case 'unset':
+                return await aiAliasUnsetCommand(positionals[3], scopeFlag);
+              default:
+                console.error(
+                  'Usage: archon ai alias set <@name> <provider> <model> [--effort <e>] [--scope user|install] | alias list [--json] | alias unset <@name> [--scope user|install]'
+                );
+                return 1;
+            }
+          }
+          case 'default':
+            return await aiDefaultCommand(positionals[2], values.scope as string | undefined);
+          default:
+            if (subcommand === undefined) {
+              console.error('Missing ai subcommand');
+            } else {
+              console.error(`Unknown ai subcommand: ${subcommand}`);
+            }
+            console.error(
+              'Available: key set <provider>, login <provider>, list, logout <provider>, tier set|list|unset, alias set|list|unset, default <provider>'
+            );
+            return 1;
+        }
+      }
+
+      case 'telemetry': {
+        switch (subcommand) {
+          case 'status':
+            return telemetryStatusCommand();
+          case 'reset':
+            return telemetryResetCommand();
+          default:
+            if (subcommand === undefined) {
+              console.error('Missing telemetry subcommand');
+            } else {
+              console.error(`Unknown telemetry subcommand: ${subcommand}`);
+            }
+            console.error('Available: status, reset');
+            return 1;
+        }
       }
 
       case 'skill': {

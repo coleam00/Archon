@@ -53,12 +53,13 @@ Archon is a **platform-agnostic AI coding assistant orchestrator** that connects
       └───────────────┼───────────────────┘
                       ▼
 ┌─────────────────────────────────────────────┐
-│    SQLite (default) / PostgreSQL (10 Tables) │
+│    SQLite (default) / PostgreSQL (16 Tables) │
 │  • Codebases  • Conversations  • Sessions   │
 │  • Isolation Envs • Workflow Runs            │
 │  • Workflow Events • Messages                │
 │  • Codebase Env Vars                         │
-│  • Users  • User Identities                  │
+│  • Users • User Identities • Node Sessions   │
+│  • GitHub Tokens • Web Auth Tables           │
 └─────────────────────────────────────────────┘
 ```
 
@@ -342,10 +343,15 @@ export type MessageChunk =
       structuredOutput?: unknown;
       isError?: boolean;
       errorSubtype?: string;
+      errors?: string[];
       cost?: number;
       stopReason?: string;
       numTurns?: number;
       modelUsage?: Record<string, unknown>;
+      // Session-resume outcome: true = restored, false = requested but fell back
+      // to a fresh session, omitted = no resume requested. Set only when
+      // resumeSessionId was passed (stamp it via withResumedOutcome).
+      resumed?: boolean;
     }
   | { type: 'rate_limit'; rateLimitInfo: Record<string, unknown> }
   | { type: 'tool'; toolName: string; toolInput?: Record<string, unknown>; toolCallId?: string }
@@ -500,7 +506,14 @@ for await (const msg of query({ prompt, options })) {
 **Codex SDK** (`packages/providers/src/codex/provider.ts`):
 
 ```typescript
+// A new thread's id is assigned during the run via the thread.started event,
+// not synchronously on startThread() — capture it for a resumable sessionId.
+let resolvedThreadId = thread.id;
 for await (const event of result.events) {
+  if (event.type === 'thread.started') {
+    resolvedThreadId = event.thread_id; // resumable id; persist_session depends on it
+    continue;
+  }
   if (event.type === 'item.completed') {
     switch (event.item.type) {
       case 'agent_message':
@@ -514,7 +527,7 @@ for await (const event of result.events) {
         break;
     }
   } else if (event.type === 'turn.completed') {
-    yield { type: 'result', sessionId: thread.id };
+    yield { type: 'result', sessionId: resolvedThreadId };
     break; // CRITICAL: Exit loop on turn completion
   }
 }
@@ -1028,7 +1041,7 @@ export function formatToolCall(toolName: string, toolInput?: Record<string, unkn
 
 ## Database Schema
 
-Archon uses a 10-table schema with `remote_agent_` prefix. SQLite is the default (zero setup); PostgreSQL is optional for cloud/advanced deployments.
+Archon uses a 16-table schema with `remote_agent_` prefix. SQLite is the default (zero setup); PostgreSQL is optional for cloud/advanced deployments.
 
 ### Schema Overview
 
@@ -1038,12 +1051,13 @@ remote_agent_codebases
 ├── name (VARCHAR)
 ├── repository_url (VARCHAR)
 ├── default_cwd (VARCHAR)
+├── default_branch (VARCHAR, nullable) -- detected branch used as sync context when available
 ├── ai_assistant_type (VARCHAR) -- registered provider identifier (e.g. 'claude', 'codex')
 └── commands (JSONB) -- {command_name: {path, description}}
 
 remote_agent_conversations
 ├── id (UUID)
-├── platform_type (VARCHAR) -- 'web' | 'telegram' | 'github' | 'slack' | 'discord' | 'cli'
+├── platform_type (VARCHAR) -- 'web' | 'telegram' | 'github' | 'slack' | 'discord' | 'gitea' | 'gitlab' | 'cli'
 ├── platform_conversation_id (VARCHAR) -- Platform-specific ID
 ├── codebase_id (UUID -> remote_agent_codebases.id)
 ├── cwd (VARCHAR) -- Current working directory
@@ -1120,7 +1134,7 @@ remote_agent_users
 remote_agent_user_identities
 ├── id (UUID)
 ├── user_id (UUID -> remote_agent_users.id, ON DELETE CASCADE)
-├── platform (VARCHAR) -- 'slack' | 'telegram' | 'discord' | 'github' | 'web' | 'cli'
+├── platform (VARCHAR) -- 'slack' | 'telegram' | 'discord' | 'github' | 'gitea' | 'gitlab' | 'web' | 'cli'
 ├── platform_user_id (VARCHAR) -- Slack U-id, Telegram chat id, Discord snowflake, GitHub login, ...
 ├── platform_display_name (VARCHAR) -- Cached per-platform display name
 └── UNIQUE(platform, platform_user_id)

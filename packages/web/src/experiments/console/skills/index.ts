@@ -13,6 +13,11 @@ export * from './worktrees';
 export * from './runs';
 export * from './startRun';
 export * from './messages';
+export * from './conversations';
 export * from './envVars';
+export * from './settings';
+export * from './providers';
+export * from './github';
+export * from './providerKeys';
 
 export { HttpError } from '../lib/http';

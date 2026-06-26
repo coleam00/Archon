@@ -17,6 +17,7 @@ import {
   onConversationClosed,
   ConversationLockManager,
 } from '@archon/core';
+import * as userDb from '@archon/core/db/users';
 import {
   ensureProjectStructure,
   getCommandFolderSearchPaths,
@@ -792,21 +793,44 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
 
     getLog().info({ eventType, owner, repo, number, isPR }, 'webhook_processing');
 
-    // 6. Build conversationId
+    // Comment author may differ from event.sender for PR-review comments; prefer
+    // the comment author when present so individual reviewers get their own row.
+    // Resolution failure must not drop the webhook — warn-log and continue with
+    // archonUserId undefined so the conversation/run rows fall back to NULL.
+    // 6. Resolve webhook sender to Archon user UUID
+    const attributedLogin = commentAuthor ?? senderUsername;
+    let archonUserId: string | undefined;
+    if (attributedLogin) {
+      try {
+        const user = await userDb.findOrCreateUserByPlatformIdentity(
+          'gitea',
+          attributedLogin,
+          attributedLogin
+        );
+        archonUserId = user.id;
+      } catch (err) {
+        getLog().warn(
+          { err: toError(err), giteaLogin: attributedLogin },
+          'gitea.user_resolve_failed'
+        );
+      }
+    }
+
+    // 7. Build conversationId
     const conversationId = this.buildConversationId(owner, repo, number, isPR);
 
-    // 7. Check if new conversation
+    // 8. Check if new conversation
     const existingConv = await db.getOrCreateConversation('gitea', conversationId);
     const isNewConversation = !existingConv.codebase_id;
 
-    // 8. Get/create codebase (checks for existing first!)
+    // 9. Get/create codebase (checks for existing first!)
     const {
       codebase,
       repoPath,
       isNew: isNewCodebase,
     } = await this.getOrCreateCodebaseForRepo(owner, repo);
 
-    // 8b. Link conversation to codebase
+    // 9b. Link conversation to codebase
     if (isNewConversation) {
       try {
         await db.updateConversation(existingConv.id, {
@@ -826,18 +850,18 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
       }
     }
 
-    // 9. Get default branch from repository info
+    // 10. Get default branch from repository info
     const defaultBranch = event.repository.default_branch;
 
-    // 10. Ensure repo ready (clone if needed, sync if new conversation)
+    // 11. Ensure repo ready (clone if needed, sync if new conversation)
     await this.ensureRepoReady(owner, repo, defaultBranch, repoPath, isNewCodebase);
 
-    // 11. Auto-load commands if new codebase
+    // 12. Auto-load commands if new codebase
     if (isNewCodebase) {
       await this.autoDetectAndLoadCommands(repoPath, codebase.id);
     }
 
-    // 12. Gather isolation hints for orchestrator
+    // 13. Gather isolation hints for orchestrator
     const isolationHints: IsolationHints = {
       workflowType: isPR ? 'pr' : 'issue',
       workflowId: String(number),
@@ -864,7 +888,7 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
       );
     }
 
-    // 13. Build message with context
+    // 14. Build message with context
     const strippedComment = this.stripMention(comment);
     let finalMessage = strippedComment;
     let contextToAppend: string | undefined;
@@ -894,7 +918,7 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
       }
     }
 
-    // 14. Fetch comment history for thread context
+    // 15. Fetch comment history for thread context
     const commentHistory = await this.fetchCommentHistory(owner, repo, number);
     const threadContext = commentHistory.length > 0 ? commentHistory.join('\n') : undefined;
     getLog().debug(
@@ -902,13 +926,14 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
       'thread_context_loaded'
     );
 
-    // 15. Route to orchestrator with isolation hints (with lock for concurrency control)
+    // 16. Route to orchestrator with isolation hints (with lock for concurrency control)
     await this.lockManager.acquireLock(conversationId, async () => {
       try {
         await handleMessage(this, conversationId, finalMessage, {
           issueContext: contextToAppend,
           threadContext,
           isolationHints,
+          userId: archonUserId,
         });
       } catch (error) {
         const err = toError(error);

@@ -72,7 +72,7 @@ The center of the screen is the chat interface -- this is where you interact wit
 
 ### Command Center (Dashboard)
 
-Accessible via the `/dashboard` route, the Command Center shows all workflow runs across your projects. It includes:
+Accessible via the `/legacy/dashboard` route, the Command Center shows all workflow runs across your projects. It includes:
 
 - **Status summary bar** -- Counts of running, completed, failed, and paused workflows
 - **Workflow run cards** -- Each run shows its status, workflow name, elapsed time, and node progress
@@ -81,7 +81,7 @@ Accessible via the `/dashboard` route, the Command Center shows all workflow run
 
 ### Settings
 
-The `/settings` page lets you configure assistant defaults (model, provider) without editing YAML files. It also includes a **Projects** section for registering and managing codebases.
+The `/legacy/settings` page lets you configure assistant defaults (model, provider) without editing YAML files. It also includes a **Projects** section for registering and managing codebases.
 
 ## Chat Interface
 
@@ -154,7 +154,7 @@ Click the arrow button in the result card header to open the full execution deta
 
 ### Execution Detail Page
 
-Click on a workflow run (from the dashboard or progress card) to open the execution detail page at `/workflows/runs/:runId`. This shows:
+Click on a workflow run (from the dashboard or progress card) to open the execution detail page at `/legacy/workflows/runs/:runId`. This shows:
 
 - The full DAG graph with per-node status
 - Step-by-step logs for each node
@@ -163,7 +163,7 @@ Click on a workflow run (from the dashboard or progress card) to open the execut
 
 ## Workflow Builder
 
-The Workflow Builder at `/workflows/builder` provides a visual editor for creating and modifying workflow YAML files. Features include:
+The Workflow Builder at `/legacy/workflows/builder` provides a visual editor for creating and modifying workflow YAML files. Features include:
 
 - **DAG canvas** -- Drag-and-drop nodes to build your workflow graph visually
 - **Node palette** -- Drag command, prompt, and bash nodes from a sidebar library. Additional node types (`script`, `loop`, `approval`, `cancel`) are editable via the Code / Split view
@@ -175,7 +175,7 @@ The Workflow Builder at `/workflows/builder` provides a visual editor for creati
 - **Delete node** -- Remove a selected node with `Delete` or `Backspace`, the Delete button in the inspector header, or the right-click context menu on any node
 - **Save** -- Saves the workflow YAML to your project's `.archon/workflows/` directory
 
-You can also browse existing workflows on the `/workflows` page and open any of them in the builder to edit.
+You can also browse existing workflows on the `/legacy/workflows` page and open any of them in the builder to edit.
 
 ## SSE Streaming
 
@@ -199,6 +199,8 @@ Events streamed over SSE include:
 | `heartbeat` | Keep-alive signal |
 
 A separate dashboard SSE stream at `/api/stream/__dashboard__` multiplexes workflow events across all conversations, powering the Command Center's live updates.
+
+This stream also covers runs started **out of process** — the `archon` CLI, especially `archon workflow run --detach`. Those runs write their events to the database but never reach the server's in-process emitter, so a server-side poller tails the `workflow_events` table and replays them to `__dashboard__`. On PostgreSQL a `LISTEN/NOTIFY` trigger pushes them in real time; on SQLite the poller picks them up within its poll interval.
 
 ## Projects and Codebases
 

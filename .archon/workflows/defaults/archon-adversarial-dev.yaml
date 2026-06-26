@@ -13,7 +13,7 @@ description: |
   Based on Anthropic's harness design article for long-running application development.
   Separates planning, building, and evaluation into distinct roles with adversarial tension.
 provider: claude
-model: sonnet
+model: medium
 
 nodes:
   # ─── Phase 1: Planning ───────────────────────────────────────────────
@@ -117,7 +117,7 @@ nodes:
   - id: adversarial-sprint
     depends_on: [init-workspace]
     idle_timeout: 600000
-    model: opus[1m]
+    model: large
     loop:
       prompt: |
         # Adversarial Development — Sprint Loop
@@ -307,7 +307,7 @@ nodes:
     depends_on: [adversarial-sprint]
     trigger_rule: all_done
     context: fresh
-    model: haiku
+    model: small
     prompt: |
       You are a project reporter. Generate a comprehensive summary of the adversarial development run.
 

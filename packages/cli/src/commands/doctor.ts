@@ -9,7 +9,7 @@ import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { execFileAsync } from '@archon/git';
-import { BUNDLED_IS_BINARY, getArchonHome, createLogger } from '@archon/paths';
+import { BUNDLED_IS_BINARY, getArchonHome, createLogger, getTelemetryStatus } from '@archon/paths';
 
 // Env vars that indicate a Pi backend API key is configured. Keep in sync with
 // `PI_BACKENDS` in setup.ts — these are the auth signals checkPi inspects.
@@ -167,6 +167,76 @@ async function defaultLoadDatabaseDeps(): Promise<DatabaseDeps> {
   return { pool, getDatabaseType };
 }
 
+export interface ProviderDeps {
+  listUserProviderKeys: (
+    userId: string
+  ) => Promise<{ provider: string; kind: string; label: string | null }[]>;
+  // `platform` is the literal 'cli' — this check resolves the CLI identity only,
+  // and narrowing it keeps the real (platform-union-typed) db fn assignable here.
+  findOrCreateUserByPlatformIdentity: (
+    platform: 'cli',
+    id: string,
+    name: string
+  ) => Promise<{ id: string }>;
+}
+
+/**
+ * Report how many AI-provider credentials the current CLI user has connected,
+ * plus how to connect when none are. Skip (never fail) on any error — credential
+ * status is informational, and a missing CLI identity or DB hiccup shouldn't make
+ * `archon doctor` exit non-zero.
+ */
+export async function checkConnectedProviders(
+  env: NodeJS.ProcessEnv = process.env,
+  // Injected so tests can drive every branch without the dynamic @archon/core import.
+  loadDeps: () => Promise<ProviderDeps> = defaultLoadProviderDeps
+): Promise<CheckResult> {
+  const label = 'AI credentials';
+  const cliId = env.ARCHON_USER_ID || env.USER || env.USERNAME;
+  if (!cliId) {
+    return { label, status: 'skip', message: 'no CLI identity (set ARCHON_USER_ID or USER)' };
+  }
+  let deps: ProviderDeps;
+  try {
+    deps = await loadDeps();
+  } catch (err) {
+    return {
+      label,
+      status: 'skip',
+      message: `could not load credential module: ${(err as Error).message}`,
+    };
+  }
+  try {
+    const user = await deps.findOrCreateUserByPlatformIdentity('cli', cliId, cliId);
+    const rows = await deps.listUserProviderKeys(user.id);
+    if (rows.length === 0) {
+      return {
+        label,
+        status: 'skip',
+        message: 'none connected — run: archon ai login <vendor>  or  archon ai key set <vendor>',
+      };
+    }
+    const summary = rows.map(r => `${r.provider}(${r.kind})`).join(', ');
+    return { label, status: 'pass', message: `${rows.length} connected: ${summary}` };
+  } catch (err) {
+    return {
+      label,
+      status: 'skip',
+      message: `could not read credentials: ${(err as Error).message}`,
+    };
+  }
+}
+
+async function defaultLoadProviderDeps(): Promise<ProviderDeps> {
+  // Lazy imports for the same reason as defaultLoadDatabaseDeps.
+  const { listUserProviderKeys } = await import('@archon/core');
+  const userDb = await import('@archon/core/db/users');
+  return {
+    listUserProviderKeys,
+    findOrCreateUserByPlatformIdentity: userDb.findOrCreateUserByPlatformIdentity,
+  };
+}
+
 export async function checkWorkspaceWritable(): Promise<CheckResult> {
   const label = 'Workspace';
   const home = getArchonHome();
@@ -202,6 +272,27 @@ export async function checkBundledDefaults(): Promise<CheckResult> {
   } catch (err) {
     return { label, status: 'fail', message: `failed to load: ${(err as Error).message}` };
   }
+}
+
+export async function checkTelemetry(): Promise<CheckResult> {
+  const label = 'Telemetry';
+  const status = getTelemetryStatus();
+  if (status.enabled) {
+    return {
+      label,
+      status: 'pass',
+      message: `anonymous, ${status.keySource} key (opt out: DO_NOT_TRACK=1)`,
+    };
+  }
+  // `status` is narrowed to the disabled arm here, so `disabledReason` is
+  // guaranteed non-null — no fallback branch needed.
+  const reasonText: Record<typeof status.disabledReason, string> = {
+    ARCHON_TELEMETRY_DISABLED: 'ARCHON_TELEMETRY_DISABLED=1',
+    DO_NOT_TRACK: 'DO_NOT_TRACK=1',
+    CI: 'CI=true (auto-disabled)',
+    POSTHOG_API_KEY: 'POSTHOG_API_KEY set to an opt-out value',
+  };
+  return { label, status: 'skip', message: `disabled (${reasonText[status.disabledReason]})` };
 }
 
 export async function checkSlack(env: NodeJS.ProcessEnv): Promise<CheckResult> {
@@ -280,8 +371,10 @@ export async function doctorCommand(
         checkGhAuth(env),
         checkPi(env),
         checkDatabase(),
+        checkConnectedProviders(env),
         checkWorkspaceWritable(),
         checkBundledDefaults(),
+        checkTelemetry(),
         checkSlack(env),
         checkTelegram(env),
       ];

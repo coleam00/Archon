@@ -4,6 +4,13 @@
  */
 import { App, LogLevel, type SlashCommand } from '@slack/bolt';
 import type { IPlatformAdapter, MessageMetadata } from '@archon/core';
+import {
+  isPerUserGitHubEnabled,
+  connectGithubForUser,
+  DeviceFlowError,
+  GithubIdentityConflictError,
+} from '@archon/core';
+import * as userDb from '@archon/core/db/users';
 import type { TokenUsage } from '@archon/providers/types';
 import { createLogger } from '@archon/paths';
 import { isSlackUserAuthorized } from './auth';
@@ -507,6 +514,13 @@ export class SlackAdapter implements IPlatformAdapter {
       return;
     }
 
+    // `/archon connect github` — device-flow GitHub connect, handled inline
+    // (no orchestrator dispatch / seed message).
+    if (kind === 'archon' && /^connect\s+github\b/i.test(raw)) {
+      await this.handleConnectGithub(command, respond);
+      return;
+    }
+
     const messageText = kind === 'archon-workflow' ? `/workflow ${raw}` : raw;
 
     // Post a visible seed message so the bot's responses thread cleanly under
@@ -565,6 +579,67 @@ export class SlackAdapter implements IPlatformAdapter {
     });
 
     void this.messageHandler(messageEvent);
+  }
+
+  /**
+   * Handle `/archon connect github`: resolve the invoking Slack user to an
+   * Archon user, then drive the device flow. The device code and final result
+   * are delivered as ephemeral follow-ups via `respond` (response_url is valid
+   * ~30 min / 5 uses — enough for the code + result within the 15-min device
+   * code lifetime). Polling runs detached so we don't block the slash ack.
+   */
+  private async handleConnectGithub(
+    command: SlashCommand,
+    respond: (msg: { response_type: 'ephemeral' | 'in_channel'; text: string }) => Promise<unknown>
+  ): Promise<void> {
+    if (!isPerUserGitHubEnabled()) {
+      await respond({
+        response_type: 'ephemeral',
+        text: 'GitHub connect is not enabled on this Archon install (requires the GitHub App + token encryption).',
+      });
+      return;
+    }
+
+    const actorId = command.user_id;
+    let archonUserId: string;
+    try {
+      const displayName = await this.fetchDisplayName(actorId);
+      const user = await userDb.findOrCreateUserByPlatformIdentity('slack', actorId, displayName);
+      archonUserId = user.id;
+    } catch (err) {
+      getLog().warn({ err: err as Error }, 'slack.connect_github_identity_failed');
+      await respond({
+        response_type: 'ephemeral',
+        text: 'Could not resolve your Archon identity — try again in a moment.',
+      });
+      return;
+    }
+
+    await respond({ response_type: 'ephemeral', text: 'Starting GitHub device flow…' });
+
+    // Detached: device flow can take minutes; the slash command must return now.
+    void connectGithubForUser(archonUserId, async info => {
+      await respond({
+        response_type: 'ephemeral',
+        text: `Visit ${info.verification_uri} and enter code: *${info.user_code}*`,
+      });
+    })
+      .then(async result => {
+        await respond({
+          response_type: 'ephemeral',
+          text: `✓ Connected as @${result.githubLogin} — PR comments will now appear as you.`,
+        });
+      })
+      .catch(async (err: unknown) => {
+        const text =
+          err instanceof GithubIdentityConflictError
+            ? `✗ ${err.message}`
+            : err instanceof DeviceFlowError
+              ? `✗ Device flow failed (${err.code}).`
+              : '✗ GitHub connect failed — try again.';
+        getLog().warn({ err: err as Error }, 'slack.connect_github_failed');
+        await respond({ response_type: 'ephemeral', text });
+      });
   }
 
   /**

@@ -98,6 +98,9 @@ export class YourProvider implements IAgentProvider {
     // 4. Translate nodeConfig to SDK options (only for capabilities you declared)
     // 5. Invoke SDK, yield normalized MessageChunks
     // 6. Include sessionId in final `result` chunk (for resume)
+    // 7. If you support resume, wrap the stream with `withResumedOutcome`
+    //    (../../shared/resumed) so a cold resume is stamped resumed:false and
+    //    surfaced by the executor instead of silently starting fresh.
   }
 
   getType() { return 'your-id'; }

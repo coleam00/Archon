@@ -1,6 +1,6 @@
 import {
-  codingTools,
   createBashTool,
+  createCodingTools,
   createEditTool,
   createFindTool,
   createGrepTool,
@@ -9,16 +9,17 @@ import {
   createWriteTool,
   type BashSpawnContext,
   type BashSpawnHook,
-} from '@mariozechner/pi-coding-agent';
-import type { ThinkingLevel } from '@mariozechner/pi-ai';
+} from '@earendil-works/pi-coding-agent';
+import type { ThinkingLevel } from '@earendil-works/pi-ai';
 
 /**
  * Pi's exported `Tool` type is structurally `AgentTool<TSchema>` and isn't
- * re-exported at the package root. Deriving it from the `codingTools` aggregate
- * (which IS re-exported and typed as `Tool[]`) gives us a namespace-free alias
- * that satisfies TS's portable-type requirement.
+ * re-exported at the package root. Pi 0.68+ removed the `codingTools`
+ * aggregate in favor of a `createCodingTools(cwd, options)` factory, so we
+ * derive the element type from the factory's return type — still
+ * namespace-free, still satisfies TS's portable-type requirement.
  */
-type PiTool = (typeof codingTools)[number];
+type PiTool = ReturnType<typeof createCodingTools>[number];
 
 import type { NodeConfig } from '../../types';
 
@@ -163,6 +164,17 @@ const PI_DEFAULT_TOOL_NAMES = [
   'edit',
   'write',
 ] as const satisfies readonly PiToolName[];
+
+/**
+ * Pi's default coding tools, rebuilt with managed-env injection. Used when
+ * attaching native tools to a chat that had no tool restrictions: setting
+ * `customTools` forces `noTools: 'builtin'`, so the defaults must be
+ * re-supplied or the agent loses bash/read/edit/write.
+ */
+export function buildDefaultPiTools(cwd: string, env?: Record<string, string>): PiTool[] {
+  const spawnHook = buildBashSpawnHook(env);
+  return PI_DEFAULT_TOOL_NAMES.map(name => buildPiTool(name, cwd, spawnHook));
+}
 
 /**
  * Filter Pi's built-in tool set against Archon's `allowed_tools` /

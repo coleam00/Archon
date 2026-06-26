@@ -19,12 +19,12 @@ interface RunGraphPanelProps {
   onNodeSelect?: (nodeId: string) => void;
 }
 
-// Full-canvas node dimensions. dagre positions by center.
-const NODE_W = 160;
-const NODE_H = 40;
-const RANK_SEP = 56;
-const NODE_SEP = 20;
-const PADDING = 24;
+// Full-canvas node dimensions (design v3: 168×46). dagre positions by center.
+const NODE_W = 168;
+const NODE_H = 46;
+const RANK_SEP = 58;
+const NODE_SEP = 32;
+const PADDING = 30;
 
 interface LaidOutNode extends WorkflowGraphNodeWithStatus {
   x: number;
@@ -34,7 +34,8 @@ interface LaidOutNode extends WorkflowGraphNodeWithStatus {
 interface Edge {
   from: string;
   to: string;
-  points: { x: number; y: number }[];
+  /** Orthogonal elbow path (design v3 connectors). */
+  d: string;
 }
 
 interface Layout {
@@ -76,12 +77,23 @@ function layout(nodes: WorkflowGraphNodeWithStatus[]): Layout {
     };
   });
 
+  // Orthogonal elbow connectors (design v3): drop from the source's bottom
+  // center, elbow at the midpoint between ranks, into the target's top center.
+  const laidById = new Map(laid.map(n => [n.id, n]));
   const edges: Edge[] = [];
   for (const e of g.edges()) {
-    const data = g.edge(e) as { points?: { x: number; y: number }[] };
-    if (data.points !== undefined) {
-      edges.push({ from: e.v, to: e.w, points: data.points });
-    }
+    const a = laidById.get(e.v);
+    const b = laidById.get(e.w);
+    if (a === undefined || b === undefined) continue;
+    const ax = a.x + NODE_W / 2;
+    const ay = a.y + NODE_H;
+    const bx = b.x + NODE_W / 2;
+    const by = b.y;
+    const d =
+      ax === bx
+        ? `M${ax.toString()},${ay.toString()} V${by.toString()}`
+        : `M${ax.toString()},${ay.toString()} V${(ay + (by - ay) / 2).toString()} H${bx.toString()} V${by.toString()}`;
+    edges.push({ from: e.v, to: e.w, d });
   }
 
   const graph = g.graph();
@@ -93,40 +105,50 @@ function layout(nodes: WorkflowGraphNodeWithStatus[]): Layout {
   };
 }
 
-function polyline(points: { x: number; y: number }[]): string {
-  return points
-    .map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toString()},${p.y.toString()}`)
-    .join(' ');
-}
-
-/* Status → color (CSS var reference so the warm theme can retune). */
+/* Status → color (design v3 .gnode tints; CSS var refs so themes can retune). */
 function statusFill(s: WorkflowNodeStatus): string {
   switch (s) {
     case 'running':
-      return 'color-mix(in oklch, var(--running), transparent 82%)';
+      return 'color-mix(in oklch, var(--running), transparent 90%)';
     case 'completed':
-      return 'color-mix(in oklch, var(--success), transparent 84%)';
+      return 'color-mix(in oklch, var(--success), transparent 95%)';
     case 'failed':
-      return 'color-mix(in oklch, var(--error), transparent 82%)';
+      return 'color-mix(in oklch, var(--error), transparent 92%)';
     case 'skipped':
-      return 'color-mix(in oklch, var(--text-tertiary), transparent 90%)';
+      return 'var(--surface-elevated)';
     case 'pending':
-      return 'var(--surface-inset)';
+      return 'var(--surface-elevated)';
   }
 }
 
 function statusBorder(s: WorkflowNodeStatus): string {
   switch (s) {
     case 'running':
-      return 'var(--running)';
+      return 'color-mix(in oklch, var(--running), transparent 40%)';
     case 'completed':
-      return 'var(--success)';
+      return 'color-mix(in oklch, var(--success), transparent 60%)';
     case 'failed':
-      return 'var(--error)';
+      return 'color-mix(in oklch, var(--error), transparent 45%)';
     case 'skipped':
-      return 'var(--border)';
+      return 'var(--border-bright)';
     case 'pending':
-      return 'var(--border)';
+      return 'var(--border-bright)';
+  }
+}
+
+/* Glyph/icon color per status (design: green check-tone icon, rose on failed). */
+function statusGlyphClass(s: WorkflowNodeStatus): string {
+  switch (s) {
+    case 'running':
+      return 'text-[color:var(--running)]';
+    case 'completed':
+      return 'text-success';
+    case 'failed':
+      return 'text-error';
+    case 'skipped':
+      return 'text-text-tertiary';
+    case 'pending':
+      return 'text-text-tertiary';
   }
 }
 
@@ -136,6 +158,8 @@ function kindGlyph(k: WorkflowNodeKind): string {
       return '↻';
     case 'approval':
       return '◈';
+    case 'cancel':
+      return '⊘';
     case 'bash':
       return '$';
     case 'command':
@@ -191,10 +215,17 @@ export function RunGraphPanel({
   };
 
   return (
-    <div className="flex h-full w-full justify-center overflow-auto bg-surface-inset p-6">
-      <div className="relative" style={svgStyle}>
+    <div
+      className="flex h-full w-full justify-center overflow-auto p-6"
+      // Dotted canvas (design v3 .rd-graph).
+      style={{
+        background:
+          'radial-gradient(circle at 1px 1px, color-mix(in oklch, white, transparent 95%) 1px, transparent 0) 0 0 / 26px 26px',
+      }}
+    >
+      <div className="relative mt-7" style={svgStyle}>
         <svg
-          className="absolute inset-0"
+          className="absolute inset-0 overflow-visible"
           width={svgStyle.width}
           height={svgStyle.height}
           aria-hidden
@@ -202,9 +233,9 @@ export function RunGraphPanel({
           {edges.map(e => (
             <path
               key={`${e.from}→${e.to}`}
-              d={polyline(e.points)}
+              d={e.d}
               fill="none"
-              stroke="color-mix(in oklch, var(--border), transparent 30%)"
+              stroke="color-mix(in oklch, white, transparent 84%)"
               strokeWidth={1.5}
             />
           ))}
@@ -230,6 +261,8 @@ interface GraphNodeProps {
 
 function GraphNode({ node, onClick }: GraphNodeProps): ReactElement {
   const running = node.status === 'running';
+  const failed = node.status === 'failed';
+  const dimmed = node.status === 'pending' || node.status === 'skipped';
   const style: CSSProperties = {
     left: node.x,
     top: node.y,
@@ -237,6 +270,7 @@ function GraphNode({ node, onClick }: GraphNodeProps): ReactElement {
     height: NODE_H,
     backgroundColor: statusFill(node.status),
     borderColor: statusBorder(node.status),
+    boxShadow: failed ? '0 0 0 3px color-mix(in oklch, var(--error), transparent 94%)' : undefined,
   };
 
   return (
@@ -244,13 +278,22 @@ function GraphNode({ node, onClick }: GraphNodeProps): ReactElement {
       type="button"
       onClick={onClick}
       title={`${node.id} · ${node.kind} · ${node.status}`}
-      className={`absolute flex items-center gap-2 overflow-hidden rounded border px-2 text-left transition-colors hover:brightness-110 ${running ? 'animate-pulse' : ''}`}
+      className={`absolute flex items-center gap-2.5 overflow-hidden rounded-[9px] border px-3.5 text-left transition-colors hover:brightness-110 ${
+        running ? 'animate-pulse' : ''
+      } ${dimmed ? 'opacity-60' : ''}`}
       style={style}
     >
-      <span aria-hidden className="shrink-0 font-mono text-[13px] text-text-tertiary">
+      <span
+        aria-hidden
+        className={`shrink-0 font-mono text-[15px] font-bold leading-none ${statusGlyphClass(node.status)}`}
+      >
         {kindGlyph(node.kind)}
       </span>
-      <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-text-primary">
+      <span
+        className={`min-w-0 flex-1 truncate font-mono text-[13px] font-semibold ${
+          failed ? 'text-error' : dimmed ? 'text-text-secondary' : 'text-text-primary'
+        }`}
+      >
         {node.id}
       </span>
     </button>

@@ -8,7 +8,7 @@
 
 ## The Interface: `IPlatformAdapter`
 
-Defined at `packages/core/src/types/index.ts:106-151`.
+Defined at `packages/core/src/types/index.ts` — search for `export interface IPlatformAdapter`.
 
 | Method | Signature | Required |
 |--------|-----------|----------|
@@ -21,7 +21,7 @@ Defined at `packages/core/src/types/index.ts:106-151`.
 | `sendStructuredEvent` | `(conversationId: string, event: MessageChunk): Promise<void>` | Optional |
 | `emitRetract` | `(conversationId: string): Promise<void>` | Optional |
 
-`IWebPlatformAdapter` (line 158) extends this with web-only methods: `sendStructuredEvent` (required), `setConversationDbId`, `setupEventBridge`, `emitLockEvent`, `registerOutputCallback`, `removeOutputCallback`. Type guard: `isWebAdapter()` checks `getPlatformType() === 'web'`.
+`IWebPlatformAdapter` extends this with web-only methods — search for `export interface IWebPlatformAdapter`: `sendStructuredEvent` (required), `setConversationDbId`, `setupEventBridge`, `emitLockEvent`, `registerOutputCallback`, `removeOutputCallback`. Type guard: `isWebAdapter()` checks `getPlatformType() === 'web'`.
 
 ---
 

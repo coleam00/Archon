@@ -35,6 +35,7 @@ describe('codebases', () => {
     name: 'test-project',
     repository_url: 'https://github.com/user/repo',
     default_cwd: '/workspace/test-project',
+    default_branch: 'main',
     ai_assistant_type: 'claude',
     commands: { plan: { path: '.claude/commands/plan.md', description: 'Plan feature' } },
     created_at: new Date(),
@@ -49,13 +50,20 @@ describe('codebases', () => {
         name: 'test-project',
         repository_url: 'https://github.com/user/repo',
         default_cwd: '/workspace/test-project',
+        default_branch: 'main',
         ai_assistant_type: 'claude',
       });
 
       expect(result).toEqual(mockCodebase);
       expect(mockQuery).toHaveBeenCalledWith(
-        'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, ai_assistant_type) VALUES ($1, $2, $3, $4) RETURNING *',
-        ['test-project', 'https://github.com/user/repo', '/workspace/test-project', 'claude']
+        'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, default_branch, ai_assistant_type) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+        [
+          'test-project',
+          'https://github.com/user/repo',
+          '/workspace/test-project',
+          'main',
+          'claude',
+        ]
       );
     });
 
@@ -73,8 +81,8 @@ describe('codebases', () => {
 
       expect(result).toEqual(codebaseWithoutOptional);
       expect(mockQuery).toHaveBeenCalledWith(
-        'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, ai_assistant_type) VALUES ($1, $2, $3, $4) RETURNING *',
-        ['test-project', null, '/workspace/test-project', 'claude']
+        'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, default_branch, ai_assistant_type) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+        ['test-project', null, '/workspace/test-project', null, 'claude']
       );
     });
 
@@ -426,6 +434,17 @@ describe('codebases', () => {
       expect(mockQuery).toHaveBeenCalledWith(
         'UPDATE remote_agent_codebases SET default_cwd = $1, repository_url = $2, updated_at = NOW() WHERE id = $3',
         ['/new/path', 'https://github.com/owner/repo', 'codebase-123']
+      );
+    });
+
+    test('updates default_branch', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+
+      await updateCodebase('codebase-123', { default_branch: 'develop' });
+
+      expect(mockQuery).toHaveBeenCalledWith(
+        'UPDATE remote_agent_codebases SET default_branch = $1, updated_at = NOW() WHERE id = $2',
+        ['develop', 'codebase-123']
       );
     });
 

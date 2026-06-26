@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
-import type { AgentSessionEvent } from '@mariozechner/pi-coding-agent';
+import type { AgentSessionEvent } from '@earendil-works/pi-coding-agent';
 
 import { createMockLogger } from '../../test/mocks/logger';
 
@@ -133,7 +133,7 @@ const mockCreateGrepTool = mock((_cwd: string) => ({ __piTool: 'grep' }));
 const mockCreateFindTool = mock((_cwd: string) => ({ __piTool: 'find' }));
 const mockCreateLsTool = mock((_cwd: string) => ({ __piTool: 'ls' }));
 
-mock.module('@mariozechner/pi-coding-agent', () => ({
+mock.module('@earendil-works/pi-coding-agent', () => ({
   createAgentSession: mockCreateAgentSession,
   AuthStorage: { create: mockAuthCreate },
   ModelRegistry: { create: mockModelRegistryCreate },
@@ -147,6 +147,10 @@ mock.module('@mariozechner/pi-coding-agent', () => ({
     inMemory: mockSettingsManagerInMemory,
   },
   DefaultResourceLoader: MockDefaultResourceLoader,
+  // Stub for the value import added when resource-loader.ts started passing
+  // an explicit `agentDir` to DefaultResourceLoader (required since
+  // pi-coding-agent 0.68+). Returns a deterministic path for tests.
+  getAgentDir: () => '/mock/.pi/agent',
   createReadTool: mockCreateReadTool,
   createBashTool: mockCreateBashTool,
   createEditTool: mockCreateEditTool,
@@ -154,11 +158,21 @@ mock.module('@mariozechner/pi-coding-agent', () => ({
   createGrepTool: mockCreateGrepTool,
   createFindTool: mockCreateFindTool,
   createLsTool: mockCreateLsTool,
+  // Value import required by ./native-tools (added when manage_run native tools
+  // were wired into Pi). These tests don't pass nativeTools, so it's never
+  // called — but the static `import { defineTool }` needs the binding to exist.
+  defineTool: mock((def: unknown) => def),
 }));
 
 // Import AFTER mocks are set — module resolution freezes the mocks.
 import { PiProvider } from './provider';
 import { PI_CAPABILITIES } from './capabilities';
+// Same module instance the provider dynamic-imports, so clearing this cache
+// resets the loader the provider reuses across calls (issue #1877).
+import {
+  getOrCreateReloadedExtensionLoader,
+  resetReloadedExtensionLoaderCache,
+} from './resource-loader';
 
 // ─── Helpers ────────────────────────────────────────────────────────────
 
@@ -229,6 +243,12 @@ describe('PiProvider', () => {
     runtimeOverrides = {};
     delete process.env.GEMINI_API_KEY;
     delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_OAUTH_TOKEN;
+    delete process.env.ARCHON_PI_AUTH_PATH;
+    // The extension-loader cache is module-level and persists across tests;
+    // clear it so each test starts with an empty cache and sees its own
+    // construct/reload calls (issue #1877).
+    resetReloadedExtensionLoaderCache();
   });
 
   test('getType returns "pi"', () => {
@@ -319,6 +339,44 @@ describe('PiProvider', () => {
     expect(mockModelRegistryCreate).toHaveBeenCalledTimes(1);
     const authInstance = mockAuthCreate.mock.results[0]?.value;
     expect(mockModelRegistryCreate).toHaveBeenCalledWith(authInstance);
+  });
+
+  test('AuthStorage.create reads ARCHON_PI_AUTH_PATH from requestOptions.env (per-user channel)', async () => {
+    // The executor delivers per-user credentials — including the per-run
+    // auth.json PATH — on the per-call requestOptions.env channel, which it
+    // deliberately keeps OUT of process.env (subprocess-isolation). Pi runs
+    // in-process, so it must read the path from requestOptions.env or per-user
+    // subscription delivery silently no-ops (the auth.json is written but never
+    // loaded). Regression for the VPS smoke finding where a claude→anthropic
+    // subscription failed with "no credentials for provider 'anthropic'".
+    fileCreds.anthropic = { type: 'oauth' };
+    resetScript(scriptedAgentEnd());
+    const perRunAuthPath = '/run/abc123/pi-home/auth.json';
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'anthropic/claude-haiku-4-5',
+        env: { ARCHON_PI_AUTH_PATH: perRunAuthPath },
+      })
+    );
+
+    expect(mockAuthCreate).toHaveBeenCalledWith(perRunAuthPath);
+  });
+
+  test('AuthStorage.create falls back to process.env.ARCHON_PI_AUTH_PATH (shell override)', async () => {
+    // A shell-level ARCHON_PI_AUTH_PATH still applies when no per-call value is
+    // present, preserving the local-dev / manual override path.
+    fileCreds.anthropic = { type: 'oauth' };
+    resetScript(scriptedAgentEnd());
+    process.env.ARCHON_PI_AUTH_PATH = '/shell/override/auth.json';
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'anthropic/claude-haiku-4-5',
+      })
+    );
+
+    expect(mockAuthCreate).toHaveBeenCalledWith('/shell/override/auth.json');
   });
 
   test('AuthStorage.create() throwing surfaces a contextualized error', async () => {
@@ -534,6 +592,107 @@ describe('PiProvider', () => {
     expect(mockSetRuntimeApiKey).toHaveBeenCalledWith('anthropic', 'from-env');
   });
 
+  test('ANTHROPIC_OAUTH_TOKEN (subscription) routes into setRuntimeApiKey for anthropic (#1984)', async () => {
+    // Env-only chat delivers a Claude Pro/Max subscription under the OAuth var.
+    // The bridge must read it (Pi never sees requestOptions.env via process.env),
+    // and the sk-ant-oat* bearer flows through the same runtime channel — pi-ai's
+    // createClient detects OAuth by token content downstream.
+    resetScript([
+      {
+        type: 'agent_end',
+        messages: [
+          {
+            role: 'assistant',
+            usage: {
+              input: 1,
+              output: 1,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 2,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: 'stop',
+            content: [],
+          },
+        ],
+      },
+    ]);
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'anthropic/claude-haiku-4-5',
+        env: { ANTHROPIC_OAUTH_TOKEN: 'sk-ant-oat01-bearer' },
+      })
+    );
+    expect(mockSetRuntimeApiKey).toHaveBeenCalledWith('anthropic', 'sk-ant-oat01-bearer');
+  });
+
+  test('OAuth var wins over the API-key var when both are delivered (#1984)', async () => {
+    resetScript([
+      {
+        type: 'agent_end',
+        messages: [
+          {
+            role: 'assistant',
+            usage: {
+              input: 1,
+              output: 1,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 2,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: 'stop',
+            content: [],
+          },
+        ],
+      },
+    ]);
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'anthropic/claude-haiku-4-5',
+        env: {
+          ANTHROPIC_OAUTH_TOKEN: 'sk-ant-oat01-bearer',
+          ANTHROPIC_API_KEY: 'sk-ant-apikey',
+        },
+      })
+    );
+    expect(mockSetRuntimeApiKey).toHaveBeenCalledWith('anthropic', 'sk-ant-oat01-bearer');
+  });
+
+  test('ANTHROPIC_OAUTH_TOKEN is read from process.env when absent from request env (#1984)', async () => {
+    // Shell/ambient override parity with the API-key var path.
+    process.env.ANTHROPIC_OAUTH_TOKEN = 'sk-ant-oat01-proc';
+    resetScript([
+      {
+        type: 'agent_end',
+        messages: [
+          {
+            role: 'assistant',
+            usage: {
+              input: 1,
+              output: 1,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 2,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: 'stop',
+            content: [],
+          },
+        ],
+      },
+    ]);
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'anthropic/claude-haiku-4-5',
+      })
+    );
+    expect(mockSetRuntimeApiKey).toHaveBeenCalledWith('anthropic', 'sk-ant-oat01-proc');
+  });
+
   test('yields assistant chunks from text_delta events', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript([
@@ -682,6 +841,10 @@ describe('PiProvider', () => {
         typeof c === 'object' && c !== null && (c as { type?: string }).type === 'system'
     );
     expect(systemChunks.some(c => c.content.includes('Could not resume'))).toBe(true);
+    // ...and as resumed:false on the result chunk so the executor can surface it.
+    expect(chunks.find(c => (c as { type?: string }).type === 'result')).toMatchObject({
+      resumed: false,
+    });
   });
 
   test('resumeSessionId matches existing session → open by path, no warning', async () => {
@@ -724,6 +887,10 @@ describe('PiProvider', () => {
         typeof c === 'object' && c !== null && (c as { type?: string }).type === 'system'
     );
     expect(systemChunks.some(c => c.content.includes('Could not resume'))).toBe(false);
+    // A warm resume reports resumed:true on the result chunk.
+    expect(chunks.find(c => (c as { type?: string }).type === 'result')).toMatchObject({
+      resumed: true,
+    });
   });
 
   test('result chunk carries Pi sessionId (for Archon to store and reuse)', async () => {
@@ -878,8 +1045,11 @@ describe('PiProvider', () => {
     );
 
     const [callArgs] = mockCreateAgentSession.mock.calls[0] as [Record<string, unknown>];
-    expect(Array.isArray(callArgs.tools)).toBe(true);
-    const tools = callArgs.tools as Array<{ __piTool: string }>;
+    // Pi 0.68+: customTools holds the actual Tool objects; noTools: "builtin"
+    // suppresses Pi's default built-in set so the customTools list is authoritative.
+    expect(Array.isArray(callArgs.customTools)).toBe(true);
+    expect(callArgs.noTools).toBe('builtin');
+    const tools = callArgs.customTools as Array<{ __piTool: string }>;
     expect(tools.map(t => t.__piTool).sort()).toEqual(['grep', 'read']);
   });
 
@@ -895,7 +1065,9 @@ describe('PiProvider', () => {
     );
 
     const [callArgs] = mockCreateAgentSession.mock.calls[0] as [Record<string, unknown>];
-    expect(callArgs.tools).toEqual([]);
+    // Empty customTools + noTools: "builtin" == "no tools at all".
+    expect(callArgs.customTools).toEqual([]);
+    expect(callArgs.noTools).toBe('builtin');
   });
 
   test('unknown tool names yield system warning', async () => {
@@ -928,7 +1100,8 @@ describe('PiProvider', () => {
     );
 
     const [callArgs] = mockCreateAgentSession.mock.calls[0] as [Record<string, unknown>];
-    const tools = callArgs.tools as Array<{ __piTool: string }>;
+    const tools = callArgs.customTools as Array<{ __piTool: string }>;
+    expect(callArgs.noTools).toBe('builtin');
     // Pi has 7 built-ins, 2 denied → 5 remain
     expect(tools).toHaveLength(5);
     expect(tools.find(t => t.__piTool === 'bash')).toBeUndefined();
@@ -946,8 +1119,10 @@ describe('PiProvider', () => {
     );
 
     const [callArgs] = mockCreateAgentSession.mock.calls[0] as [Record<string, unknown>];
-    // tools key should be absent — Pi uses its default codingTools
-    expect('tools' in callArgs).toBe(false);
+    // No overrides → neither customTools nor noTools should be set; Pi uses
+    // its default built-in tools.
+    expect('customTools' in callArgs).toBe(false);
+    expect('noTools' in callArgs).toBe(false);
   });
 
   test('requestOptions.env with no tool restrictions overrides Pi defaults with env-aware bash', async () => {
@@ -962,9 +1137,10 @@ describe('PiProvider', () => {
     );
 
     const [callArgs] = mockCreateAgentSession.mock.calls[0] as [Record<string, unknown>];
-    // Env present → we override Pi's built-in codingTools so bash sees the env.
-    const tools = callArgs.tools as Array<{ __piTool: string }>;
+    // Env present → we override Pi's built-in defaults so bash sees the env.
+    const tools = callArgs.customTools as Array<{ __piTool: string }>;
     expect(Array.isArray(tools)).toBe(true);
+    expect(callArgs.noTools).toBe('builtin');
     expect(tools.map(t => t.__piTool).sort()).toEqual(['bash', 'edit', 'read', 'write']);
 
     const bashCall = mockCreateBashTool.mock.calls.find(call => call[1] !== undefined);
@@ -1114,7 +1290,7 @@ describe('PiProvider', () => {
     expect(caps.sessionResume).toBe(true);
     expect(caps.envInjection).toBe(true);
     // Best-effort structured output via prompt engineering (not SDK-enforced).
-    expect(caps.structuredOutput).toBe(true);
+    expect(caps.structuredOutput).toBe('best-effort');
     // Still false:
     expect(caps.mcp).toBe(false);
     expect(caps.hooks).toBe(false);
@@ -1738,5 +1914,139 @@ describe('PiProvider', () => {
       expect.objectContaining({ scope: 'global', err: loadError }),
       'pi.settings_load_error'
     );
+  });
+
+  // ─── Extension loader reuse (issue #1877) ─────────────────────────────────
+  //
+  // Pi's reload() re-invokes every installed extension factory; the 2nd reload
+  // in a process deadlocks on the first call's never-torn-down state. The fix
+  // loads the extension-bearing loader ONCE per process per input set and
+  // reuses it — so reload()/construct must run once across identical calls,
+  // while each call still gets its own session.
+  describe('extension loader reuse (issue #1877)', () => {
+    test('reload() and loader construction run once across two sequential calls with identical inputs', async () => {
+      process.env.GEMINI_API_KEY = 'sk-test';
+      resetScript(scriptedAgentEnd());
+
+      await consume(
+        new PiProvider().sendQuery('a', '/tmp', undefined, { model: 'google/gemini-2.5-pro' })
+      );
+      await consume(
+        new PiProvider().sendQuery('b', '/tmp', undefined, { model: 'google/gemini-2.5-pro' })
+      );
+
+      // The bug was reload() (and the extension factory it drives) running per
+      // call; after the fix the cached loader is built + reloaded exactly once.
+      expect(MockDefaultResourceLoader).toHaveBeenCalledTimes(1);
+      expect(mockResourceLoaderReload).toHaveBeenCalledTimes(1);
+      // Each call still gets its own session (correctness preserved).
+      expect(mockCreateAgentSession).toHaveBeenCalledTimes(2);
+      expect(mockDispose).toHaveBeenCalledTimes(2);
+    });
+
+    test('different cwd gets its own reloaded loader', async () => {
+      process.env.GEMINI_API_KEY = 'sk-test';
+      resetScript(scriptedAgentEnd());
+
+      await consume(
+        new PiProvider().sendQuery('a', '/tmp/one', undefined, { model: 'google/gemini-2.5-pro' })
+      );
+      await consume(
+        new PiProvider().sendQuery('b', '/tmp/two', undefined, { model: 'google/gemini-2.5-pro' })
+      );
+
+      expect(MockDefaultResourceLoader).toHaveBeenCalledTimes(2);
+      expect(mockResourceLoaderReload).toHaveBeenCalledTimes(2);
+    });
+
+    test('a distinct per-node systemPrompt gets its own reloaded loader (no silent prompt reuse)', async () => {
+      process.env.GEMINI_API_KEY = 'sk-test';
+      resetScript(scriptedAgentEnd());
+
+      await consume(
+        new PiProvider().sendQuery('a', '/tmp', undefined, {
+          model: 'google/gemini-2.5-pro',
+          systemPrompt: 'prompt A',
+        })
+      );
+      await consume(
+        new PiProvider().sendQuery('b', '/tmp', undefined, {
+          model: 'google/gemini-2.5-pro',
+          systemPrompt: 'prompt B',
+        })
+      );
+
+      expect(MockDefaultResourceLoader).toHaveBeenCalledTimes(2);
+      expect(mockResourceLoaderReload).toHaveBeenCalledTimes(2);
+    });
+
+    test('extensions disabled keeps a fresh loader per call and never reloads', async () => {
+      process.env.GEMINI_API_KEY = 'sk-test';
+      resetScript(scriptedAgentEnd());
+
+      const opts = {
+        model: 'google/gemini-2.5-pro',
+        assistantConfig: { enableExtensions: false },
+      };
+      await consume(new PiProvider().sendQuery('a', '/tmp', undefined, opts));
+      await consume(new PiProvider().sendQuery('b', '/tmp', undefined, opts));
+
+      // No caching on the extensions-off path: fresh loader each call, no reload.
+      expect(MockDefaultResourceLoader).toHaveBeenCalledTimes(2);
+      expect(mockResourceLoaderReload).not.toHaveBeenCalled();
+    });
+
+    test('distinct additionalSkillPaths get their own reloaded loader', async () => {
+      const a = await getOrCreateReloadedExtensionLoader('/tmp', {
+        additionalSkillPaths: ['/skills/x'],
+      });
+      const b = await getOrCreateReloadedExtensionLoader('/tmp', {
+        additionalSkillPaths: ['/skills/y'],
+      });
+      expect(a).not.toBe(b);
+      expect(MockDefaultResourceLoader).toHaveBeenCalledTimes(2);
+      expect(mockResourceLoaderReload).toHaveBeenCalledTimes(2);
+    });
+
+    test('concurrent callers (same key) share a single in-flight reload (the documented invariant)', async () => {
+      // Gate reload() so both callers are in-flight before either resolves — the
+      // exact race two parallel same-layer DAG nodes hit. Caching the resolved
+      // value instead of the Promise would construct/reload twice and fail this.
+      let releaseReload: (() => void) | undefined;
+      mockResourceLoaderReload.mockImplementationOnce(
+        () =>
+          new Promise<undefined>(resolve => {
+            releaseReload = (): void => resolve(undefined);
+          })
+      );
+
+      const p1 = getOrCreateReloadedExtensionLoader('/tmp', {});
+      const p2 = getOrCreateReloadedExtensionLoader('/tmp', {});
+      // Both subscribed before reload resolves.
+      releaseReload?.();
+      const [l1, l2] = await Promise.all([p1, p2]);
+
+      expect(l1).toBe(l2);
+      expect(MockDefaultResourceLoader).toHaveBeenCalledTimes(1);
+      expect(mockResourceLoaderReload).toHaveBeenCalledTimes(1);
+    });
+
+    test('a failed reload is evicted so the next call retries cleanly', async () => {
+      mockResourceLoaderReload.mockImplementationOnce(async () => {
+        throw new Error('broken extension');
+      });
+
+      await expect(getOrCreateReloadedExtensionLoader('/tmp', {})).rejects.toThrow(
+        /Pi extension load failed: broken extension/
+      );
+
+      // Entry was evicted on failure → the retry constructs + reloads again
+      // (rather than returning the poisoned rejected promise forever).
+      mockResourceLoaderReload.mockImplementationOnce(async () => undefined);
+      const loader = await getOrCreateReloadedExtensionLoader('/tmp', {});
+      expect(loader).toBeDefined();
+      expect(MockDefaultResourceLoader).toHaveBeenCalledTimes(2);
+      expect(mockResourceLoaderReload).toHaveBeenCalledTimes(2);
+    });
   });
 });

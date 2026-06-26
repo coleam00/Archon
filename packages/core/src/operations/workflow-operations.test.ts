@@ -22,6 +22,12 @@ mock.module('../db/workflow-events', () => ({
   createWorkflowEvent: mockCreateWorkflowEvent,
 }));
 
+const mockDeleteWorkflowNodeSessions = mock(() => Promise.resolve({ deleted: 0 }));
+
+mock.module('../db/workflow-node-sessions', () => ({
+  deleteWorkflowNodeSessions: mockDeleteWorkflowNodeSessions,
+}));
+
 const mockLogger = {
   fatal: mock(() => undefined),
   error: mock(() => undefined),
@@ -30,13 +36,21 @@ const mockLogger = {
   debug: mock(() => undefined),
   trace: mock(() => undefined),
 };
+const mockCaptureApprovalResolved = mock(() => undefined);
 mock.module('@archon/paths', () => ({
+  captureApprovalResolved: mockCaptureApprovalResolved,
   createLogger: mock(() => mockLogger),
 }));
 
 // Import AFTER mocks
-const { approveWorkflow, rejectWorkflow, getWorkflowStatus, resumeWorkflow, abandonWorkflow } =
-  await import('./workflow-operations');
+const {
+  approveWorkflow,
+  rejectWorkflow,
+  getWorkflowStatus,
+  resumeWorkflow,
+  abandonWorkflow,
+  resetWorkflowNodeSessions,
+} = await import('./workflow-operations');
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -72,6 +86,7 @@ function makePausedRun(overrides: Record<string, unknown> = {}) {
 
 describe('approveWorkflow', () => {
   beforeEach(() => {
+    mockCaptureApprovalResolved.mockClear();
     mockGetWorkflowRun.mockClear();
     mockCreateWorkflowEvent.mockClear();
     mockUpdateWorkflowRun.mockClear();
@@ -98,6 +113,10 @@ describe('approveWorkflow', () => {
       status: 'failed',
       metadata: { approval_response: 'approved', rejection_reason: '', rejection_count: 0 },
     });
+
+    // Anonymous telemetry: binary resolution captured exactly once
+    expect(mockCaptureApprovalResolved).toHaveBeenCalledTimes(1);
+    expect(mockCaptureApprovalResolved).toHaveBeenCalledWith({ resolution: 'approved' });
   });
 
   test('approves interactive_loop — writes only approval_received, stores loop_user_input', async () => {
@@ -171,6 +190,7 @@ describe('approveWorkflow', () => {
 
 describe('rejectWorkflow', () => {
   beforeEach(() => {
+    mockCaptureApprovalResolved.mockClear();
     mockGetWorkflowRun.mockClear();
     mockCreateWorkflowEvent.mockClear();
     mockUpdateWorkflowRun.mockClear();
@@ -200,6 +220,9 @@ describe('rejectWorkflow', () => {
       status: 'failed',
       metadata: { rejection_reason: 'needs more tests', rejection_count: 1 },
     });
+
+    expect(mockCaptureApprovalResolved).toHaveBeenCalledTimes(1);
+    expect(mockCaptureApprovalResolved).toHaveBeenCalledWith({ resolution: 'rejected' });
   });
 
   test('rejects at max attempts — cancels run', async () => {
@@ -309,11 +332,63 @@ describe('abandonWorkflow', () => {
     expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1');
   });
 
-  test('throws on terminal run', async () => {
+  test('cancels a failed run', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'failed' }));
+
+    const run = await abandonWorkflow('run-1');
+    expect(run.id).toBe('run-1');
+    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1');
+  });
+
+  test('throws on completed run', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'completed' }));
 
     await expect(abandonWorkflow('run-1')).rejects.toThrow(
       "Cannot abandon run with status 'completed'"
+    );
+  });
+
+  test('throws on cancelled run', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'cancelled' }));
+
+    await expect(abandonWorkflow('run-1')).rejects.toThrow(
+      "Cannot abandon run with status 'cancelled'"
+    );
+  });
+});
+
+describe('resetWorkflowNodeSessions', () => {
+  beforeEach(() => {
+    mockDeleteWorkflowNodeSessions.mockClear();
+    mockDeleteWorkflowNodeSessions.mockImplementation(() => Promise.resolve({ deleted: 0 }));
+  });
+
+  test('passes workflow_name only when scope and node are absent', async () => {
+    mockDeleteWorkflowNodeSessions.mockResolvedValueOnce({ deleted: 3 });
+    const result = await resetWorkflowNodeSessions({ workflow_name: 'feature-dev' });
+    expect(result).toEqual({ deleted: 3 });
+    expect(mockDeleteWorkflowNodeSessions).toHaveBeenCalledWith({ workflow_name: 'feature-dev' });
+  });
+
+  test('forwards scope and node filters', async () => {
+    mockDeleteWorkflowNodeSessions.mockResolvedValueOnce({ deleted: 1 });
+    const result = await resetWorkflowNodeSessions({
+      workflow_name: 'feature-dev',
+      scope_key: 'conv-1',
+      node_id: 'planner',
+    });
+    expect(result).toEqual({ deleted: 1 });
+    expect(mockDeleteWorkflowNodeSessions).toHaveBeenCalledWith({
+      workflow_name: 'feature-dev',
+      scope_key: 'conv-1',
+      node_id: 'planner',
+    });
+  });
+
+  test('wraps DB errors with a descriptive message', async () => {
+    mockDeleteWorkflowNodeSessions.mockRejectedValueOnce(new Error('connection refused'));
+    await expect(resetWorkflowNodeSessions({ workflow_name: 'feature-dev' })).rejects.toThrow(
+      'Failed to reset workflow node sessions: connection refused'
     );
   });
 });

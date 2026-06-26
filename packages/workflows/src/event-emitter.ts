@@ -84,6 +84,9 @@ interface NodeStartedEvent {
   runId: string;
   nodeId: string;
   nodeName: string; // command name or node.id for inline prompts
+  provider?: string; // resolved AI provider (absent for bash/script nodes)
+  model?: string; // resolved model string (absent for bash/script nodes)
+  tier?: 'small' | 'medium' | 'large'; // only set when node.model was a tier keyword
 }
 
 interface NodeCompletedEvent {
@@ -142,6 +145,44 @@ interface WorkflowCancelledEvent {
   reason: string;
 }
 
+// ─── Subagent Task Lifecycle (aggregated from Claude provider task_* chunks) ──
+// Forwarded by the dag-executor whenever a `task_started` / `task_progress` /
+// `task_notification` MessageChunk arrives from the provider. The bridge maps
+// these to `workflow_task_activity` SSE events for the Web UI. `nodeId` ties
+// the task to the parent workflow node (a single node can spawn many subagents).
+interface TaskActivityEvent {
+  type: 'task_activity';
+  runId: string;
+  nodeId: string;
+  taskId: string;
+  activity: 'started' | 'progress' | 'completed' | 'failed' | 'stopped';
+  description?: string;
+  summary?: string;
+  usage?: { total_tokens: number; tool_uses: number; duration_ms: number };
+  lastToolName?: string;
+  taskType?: string;
+  /** True when SDK signaled skip_transcript (housekeeping) — propagated so the
+   *  UI / persistence layer can decide whether to surface. The provider
+   *  filters these out today, but the field is here for forward-compat. */
+  ambient?: boolean;
+}
+
+// ─── Hook Lifecycle (aggregated from Claude provider hook_* chunks) ─────
+// Same aggregation pattern as TaskActivityEvent. Maps to `workflow_hook_activity`
+// SSE events; the Web UI renders them as inline indicators under the parent
+// node (e.g. `PreToolUse(Bash) → approved`).
+interface HookActivityEvent {
+  type: 'hook_activity';
+  runId: string;
+  nodeId: string;
+  hookId: string;
+  hookName: string;
+  hookEvent: string;
+  activity: 'started' | 'response';
+  outcome?: 'success' | 'error' | 'cancelled';
+  exitCode?: number;
+}
+
 export type WorkflowEmitterEvent =
   | WorkflowStartedEvent
   | WorkflowCompletedEvent
@@ -157,7 +198,9 @@ export type WorkflowEmitterEvent =
   | ToolStartedEvent
   | ToolCompletedEvent
   | ApprovalPendingEvent
-  | WorkflowCancelledEvent;
+  | WorkflowCancelledEvent
+  | TaskActivityEvent
+  | HookActivityEvent;
 
 // ---------------------------------------------------------------------------
 // Emitter class

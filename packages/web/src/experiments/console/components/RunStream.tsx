@@ -5,9 +5,10 @@ import { NodeDivider } from './NodeDivider';
 import { ArtifactItem } from './ArtifactItem';
 import type { InlineToolCall, Message } from '../primitives/message';
 import { isSystemCategory } from '../primitives/message';
+import { foldNodeRuns } from '../primitives/event';
 import type {
   RunEvent,
-  NodeTransitionEvent,
+  NodeRun,
   ArtifactEvent,
   ToolCallEvent,
   SystemEvent,
@@ -20,6 +21,8 @@ interface RunStreamProps {
   events: RunEvent[];
   showToolCalls: boolean;
   showSystem: boolean;
+  /** `'all'` shows every node; otherwise restrict the stream to one node's entries. */
+  selectedNodeId: string;
 }
 
 /**
@@ -42,8 +45,17 @@ interface SystemRow {
 
 type TimelineEntry =
   | { kind: 'message'; key: string; at: number; message: Message }
-  | { kind: 'tool'; key: string; at: number; call: InlineToolCall; timestamp: string }
-  | { kind: 'node'; key: string; at: number; event: NodeTransitionEvent; showDetail: boolean }
+  // `nodeId` carries the owning node (workflow-event tools) or null (message-inline
+  // tools are node-blind) — used only by the node filter, not for display.
+  | {
+      kind: 'tool';
+      key: string;
+      at: number;
+      call: InlineToolCall;
+      timestamp: string;
+      nodeId: string | null;
+    }
+  | { kind: 'node'; key: string; at: number; node: NodeRun; showDetail: boolean }
   | { kind: 'artifact'; key: string; at: number; event: ArtifactEvent }
   | { kind: 'system'; key: string; at: number; event: SystemEvent | ErrorEvent }
   | { kind: 'system_row'; key: string; at: number; row: SystemRow };
@@ -62,10 +74,12 @@ type TimelineEntry =
 interface PairedToolCall {
   id: string;
   timestamp: string;
+  /** Owning node (`step_name`) so the call can be filtered by node; null if unattributed. */
+  nodeId: string | null;
   call: InlineToolCall;
 }
 
-function pairToolEvents(events: RunEvent[]): PairedToolCall[] {
+export function pairToolEvents(events: RunEvent[]): PairedToolCall[] {
   const toolEvents = events.filter((e): e is ToolCallEvent => e.kind === 'tool_call');
   // Track unclaimed completed events per step so each call gets exactly one.
   const completedByStep = new Map<string, ToolCallEvent[]>();
@@ -88,6 +102,7 @@ function pairToolEvents(events: RunEvent[]): PairedToolCall[] {
     paired.push({
       id: e.id,
       timestamp: e.timestamp,
+      nodeId: e.nodeId,
       call: {
         name: e.tool || '(unknown)',
         input,
@@ -121,7 +136,12 @@ export function RunStream({
   events,
   showToolCalls,
   showSystem,
+  selectedNodeId,
 }: RunStreamProps): ReactElement {
+  // Single source for the folded nodes — consumed by both the timeline (one
+  // divider per node) and the node-filter window so they can't drift.
+  const nodeRuns = useMemo(() => foldNodeRuns(events), [events]);
+
   const timeline = useMemo<TimelineEntry[]>(() => {
     const entries: TimelineEntry[] = [];
     let inlineToolCount = 0;
@@ -188,6 +208,8 @@ export function RunStream({
           at: base + idx + 1,
           call,
           timestamp: m.timestamp,
+          // Message-inline tools (Claude) are node-blind — messages carry no step.
+          nodeId: null,
         });
       });
     }
@@ -201,15 +223,27 @@ export function RunStream({
           at: new Date(t.timestamp).getTime(),
           call: t.call,
           timestamp: t.timestamp,
+          nodeId: t.nodeId,
         });
       }
     }
 
+    // One divider per node: fold each node's 2–3 transitions (started + terminal,
+    // plus a resume-time skipped_prior_success) into a single NodeRun, positioned
+    // at its first transition so it heads that node's events in the stream.
+    for (const nr of nodeRuns) {
+      entries.push({
+        kind: 'node',
+        key: `n:${nr.nodeId}`,
+        at: new Date(nr.startedAt).getTime(),
+        node: nr,
+        showDetail: showSystem,
+      });
+    }
+
     for (const e of events) {
       const at = new Date(e.timestamp).getTime();
-      if (e.kind === 'node_transition') {
-        entries.push({ kind: 'node', key: `n:${e.id}`, at, event: e, showDetail: showSystem });
-      } else if (e.kind === 'artifact') {
+      if (e.kind === 'artifact') {
         entries.push({ kind: 'artifact', key: `a:${e.id}`, at, event: e });
       } else if (e.kind === 'system' || e.kind === 'error') {
         entries.push({ kind: 'system', key: `s:${e.id}`, at, event: e });
@@ -217,12 +251,35 @@ export function RunStream({
     }
     entries.sort((a, b) => a.at - b.at);
     return entries;
-  }, [messages, events, showSystem]);
+  }, [messages, events, nodeRuns, showSystem]);
+
+  // The selected node's execution slice `[startedAt, nextNode.startedAt)`. Used as
+  // a positional fallback so node-blind entries (message-inline tools, prose,
+  // artifacts, system rows — anything carrying no nodeId) still resolve to a node
+  // when filtering — without it, selecting a node on a message-inline-tool run
+  // (e.g. Claude) would blank the stream.
+  const nodeWindow = useMemo<{ start: number; end: number } | null>(() => {
+    if (selectedNodeId === 'all') return null;
+    const idx = nodeRuns.findIndex(r => r.nodeId === selectedNodeId);
+    if (idx === -1) return null;
+    const start = new Date(nodeRuns[idx].startedAt).getTime();
+    const next = nodeRuns[idx + 1];
+    return { start, end: next !== undefined ? new Date(next.startedAt).getTime() : Infinity };
+  }, [nodeRuns, selectedNodeId]);
 
   const visible = timeline.filter(e => {
     if (e.kind === 'tool' && !showToolCalls) return false;
     if (e.kind === 'system' && !showSystem) return false;
     if (e.kind === 'system_row' && !showSystem) return false;
+    // Node filter: isolate one node. Node markers and node-attributed (workflow-
+    // event) tools match by identity; every node-blind entry (message-inline
+    // tools, prose, artifacts, system rows) falls back to the node's time window
+    // so a node's whole slice of the timeline stays visible regardless of provider.
+    if (selectedNodeId !== 'all') {
+      if (e.kind === 'node') return e.node.nodeId === selectedNodeId;
+      if (e.kind === 'tool' && e.nodeId !== null) return e.nodeId === selectedNodeId;
+      return nodeWindow !== null && e.at >= nodeWindow.start && e.at < nodeWindow.end;
+    }
     return true;
   });
 
@@ -238,10 +295,14 @@ export function RunStream({
   }
 
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="flex flex-col">
       {visible.map(entry => {
         if (entry.kind === 'message') {
-          return <MessageItem key={entry.key} message={entry.message} />;
+          return (
+            <div key={entry.key} className="py-4">
+              <MessageItem message={entry.message} variant="log" />
+            </div>
+          );
         }
         if (entry.kind === 'tool') {
           return <ToolCallItem key={entry.key} call={entry.call} timestamp={entry.timestamp} />;
@@ -250,12 +311,16 @@ export function RunStream({
           return (
             <NodeDivider
               key={entry.key}
-              nodeName={entry.event.nodeName}
-              transition={entry.event.transition}
-              durationMs={entry.event.durationMs}
-              timestamp={entry.event.timestamp}
-              skipReason={entry.event.skipReason}
-              skipExpr={entry.event.skipExpr}
+              nodeId={entry.node.nodeId}
+              nodeName={entry.node.nodeName}
+              status={entry.node.status}
+              durationMs={entry.node.durationMs}
+              timestamp={entry.node.startedAt}
+              costUsd={entry.node.costUsd}
+              numTurns={entry.node.numTurns}
+              stopReason={entry.node.stopReason}
+              skipReason={entry.node.skipReason}
+              skipExpr={entry.node.skipExpr}
               showDetail={entry.showDetail}
             />
           );
@@ -266,41 +331,47 @@ export function RunStream({
           const label = isError ? 'Error' : ev.label;
           const detail = isError ? ev.message : ev.detail;
           return (
-            <StreamCard
-              key={entry.key}
-              timestamp={ev.timestamp}
-              kind={isError ? 'error' : 'system'}
-              compact
-              label={label}
-              headerRight={
-                detail.length > 0 ? (
-                  <span className="truncate font-mono text-[11px] text-text-secondary">
-                    {detail}
-                  </span>
-                ) : null
-              }
-            />
+            <div key={entry.key} className="py-1">
+              <StreamCard
+                timestamp={ev.timestamp}
+                kind={isError ? 'error' : 'system'}
+                compact
+                label={label}
+                headerRight={
+                  detail.length > 0 ? (
+                    <span className="truncate font-mono text-[11px] text-text-secondary">
+                      {detail}
+                    </span>
+                  ) : null
+                }
+              />
+            </div>
           );
         }
         if (entry.kind === 'system_row') {
           return (
-            <StreamCard
-              key={entry.key}
-              timestamp={entry.row.timestamp}
-              kind="system"
-              compact
-              label={entry.row.label}
-              headerRight={
-                entry.row.detail.length > 0 ? (
-                  <span className="truncate font-mono text-[11px] text-text-secondary">
-                    {entry.row.detail}
-                  </span>
-                ) : null
-              }
-            />
+            <div key={entry.key} className="py-1">
+              <StreamCard
+                timestamp={entry.row.timestamp}
+                kind="system"
+                compact
+                label={entry.row.label}
+                headerRight={
+                  entry.row.detail.length > 0 ? (
+                    <span className="truncate font-mono text-[11px] text-text-secondary">
+                      {entry.row.detail}
+                    </span>
+                  ) : null
+                }
+              />
+            </div>
           );
         }
-        return <ArtifactItem key={entry.key} event={entry.event} />;
+        return (
+          <div key={entry.key} className="py-1">
+            <ArtifactItem event={entry.event} />
+          </div>
+        );
       })}
     </div>
   );

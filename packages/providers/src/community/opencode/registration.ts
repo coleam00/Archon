@@ -16,5 +16,9 @@ export function registerOpencodeProvider(): void {
     factory: () => new OpencodeProvider(),
     capabilities: OPENCODE_CAPABILITIES,
     builtIn: false,
+    // OpenCode's backend universe is the models.dev catalog, resolved at
+    // runtime by the embedded server — there is no static list to declare.
+    // Introspection is exposed via GET /api/providers/opencode/credentials.
+    credentials: { kind: 'dynamic' },
   });
 }

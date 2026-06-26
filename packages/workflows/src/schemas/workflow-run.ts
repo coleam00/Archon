@@ -66,6 +66,11 @@ export type NodeState = z.infer<typeof nodeStateSchema>;
  * when the result chunk includes one). Downstream `$nodeId.output.field` substitution and
  * `when:` conditions prefer this object over re-parsing `output`, so providers that emit
  * fence-wrapped or preamble-prefixed JSON (Pi/Minimax) survive the round-trip.
+ * `declaredFields` is the property-name set of a producer's `output_format` schema
+ * (`Object.keys(output_format.properties)`), captured when the node completes. The
+ * consumer uses it to tell a declared-but-optional-absent field (resolves to `''`) from a
+ * field not in the contract at all (a typo → throws). Undefined for non-schema producers
+ * (bash/script/prose) and schemas without a `properties` map.
  */
 export const nodeOutputSchema = z.discriminatedUnion('state', [
   z.object({
@@ -73,6 +78,11 @@ export const nodeOutputSchema = z.discriminatedUnion('state', [
     output: z.string(),
     sessionId: z.string().optional(),
     structuredOutput: z.unknown().optional(),
+    declaredFields: z.array(z.string()).optional(),
+    /** Session-resume outcome from the provider: false ⇒ a requested resume came
+     *  back cold (fresh session). Drives the executor's cold-resume warning.
+     *  Absent on 'failed' nodes — the retry path, not this signal, handles those. */
+    resumed: z.boolean().optional(),
   }),
   z.object({
     state: z.literal('failed'),
@@ -80,6 +90,7 @@ export const nodeOutputSchema = z.discriminatedUnion('state', [
     sessionId: z.string().optional(),
     error: z.string(),
     structuredOutput: z.unknown().optional(),
+    declaredFields: z.array(z.string()).optional(),
   }),
   z.object({
     state: z.enum(['pending', 'skipped']),
@@ -104,7 +115,7 @@ export const workflowRunSchema = z.object({
   codebase_id: z.string().nullable(),
   status: workflowRunStatusSchema,
   user_message: z.string(),
-  metadata: z.record(z.unknown()),
+  metadata: z.record(z.string(), z.unknown()),
   started_at: z.date(),
   completed_at: z.date().nullable(),
   last_activity_at: z.date().nullable(),

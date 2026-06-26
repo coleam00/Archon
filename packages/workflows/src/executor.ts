@@ -1,20 +1,37 @@
 /**
  * Workflow Executor - runs DAG-based workflows
  */
-import { mkdir } from 'fs/promises';
-import { join } from 'path';
+import { mkdir, writeFile } from 'fs/promises';
+import { dirname, join } from 'path';
 import type { IWorkflowPlatform, WorkflowMessageMetadata } from './deps';
 import type { WorkflowDeps, WorkflowConfig } from './deps';
 import * as archonPaths from '@archon/paths';
-import { createLogger, captureWorkflowInvoked, BUNDLED_VERSION } from '@archon/paths';
+import { createLogger, captureWorkflowInvoked, captureWorkflowCompleted } from '@archon/paths';
 import { getDefaultBranch, toRepoPath } from '@archon/git';
-import type { WorkflowDefinition, WorkflowRun, WorkflowExecutionResult } from './schemas';
+import type {
+  WorkflowDefinition,
+  WorkflowRun,
+  WorkflowExecutionResult,
+  WorkflowSource,
+} from './schemas';
+import { isLoopNode, isApprovalNode, isScriptNode, isBashNode } from './schemas';
 import { executeDagWorkflow } from './dag-executor';
 import { logWorkflowStart, logWorkflowError } from './logger';
 import { formatDuration, parseDbTimestamp } from './utils/duration';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { isRegisteredProvider, getRegisteredProviders } from '@archon/providers';
-import { classifyError, safeSendMessage, type SendMessageContext } from './executor-shared';
+import {
+  classifyError,
+  toTelemetryErrorClass,
+  safeSendMessage,
+  type SendMessageContext,
+} from './executor-shared';
+import { resolveGithubTokenOverrides } from './utils/github-token-policy';
+import { buildAiProfile, isLiteralSpec, resolveModelSpec } from './model-validation';
+import type { ModelAliasPreset, ResolvedAiProfile } from './model-validation';
+
+/** The per-user prefs layer as returned by `WorkflowDeps.getUserAiPrefs`. */
+type UserAiPrefsLayer = Awaited<ReturnType<NonNullable<WorkflowDeps['getUserAiPrefs']>>>;
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -139,6 +156,71 @@ async function resolveBotGitHubEnvForWorkflow(
 }
 
 /**
+ * Resolve per-user GitHub token overrides for a run. When per-user mode is on
+ * and the run has an originating user, this routes `gh`/`git push` through the
+ * user's personal token — or scrubs the org/bot token when they haven't
+ * connected (see {@link resolveGithubTokenOverrides}). Returns {} (no opinion)
+ * for server-initiated runs and solo installs, leaving the bot env untouched.
+ */
+async function resolveUserGithubEnvForWorkflow(
+  deps: WorkflowDeps,
+  userId: string | undefined
+): Promise<Record<string, string>> {
+  const perUserEnabled = deps.isPerUserGitHubEnabled?.() ?? false;
+  if (!perUserEnabled) return {};
+  let userToken: string | undefined;
+  if (userId && deps.getUserGithubToken) {
+    try {
+      userToken = await deps.getUserGithubToken(userId);
+    } catch (err) {
+      getLog().warn({ err: err as Error, userId }, 'workflow.user_github_token_resolve_failed');
+    }
+  }
+  return resolveGithubTokenOverrides(perUserEnabled, userId, userToken);
+}
+
+/**
+ * Resolve per-user AI-provider credential env (Phase 2) for a run, and write
+ * any file-based deliveries (e.g. Codex `CODEX_HOME/auth.json`) under the
+ * run's artifacts directory. Returns the env bag to merge LAST into
+ * `config.envVars` so a connected user's keys win over file/db/bot-github
+ * env. Returns `{}` when per-user provider keys are disabled, no userId is
+ * present, or the deps adapter is absent.
+ *
+ * Contract: NEVER THROWS. Adapter failures are logged and yield `{}` so the
+ * workflow continues with whatever env inheritance was already in place.
+ */
+async function resolveUserProviderEnvForWorkflow(
+  deps: WorkflowDeps,
+  userId: string | undefined,
+  artifactsDir: string
+): Promise<Record<string, string>> {
+  const perUserEnabled = deps.isPerUserProviderKeysEnabled?.() ?? false;
+  if (!perUserEnabled || !userId || !deps.getUserProviderEnv) return {};
+  try {
+    // TODO(#1891 PR-3): when Codex OAuth delivery is enabled, file-write failures
+    // must drop only the affected provider's env keys, not all of them. Move file
+    // writes into getUserProviderEnv per-delivery so env + write are atomic
+    // per-provider, or wrap each write in a per-file try-catch that strips the
+    // matching env keys on failure. Currently safe: no OAuth rows can be created
+    // in PR-1 so `files` is always empty and this loop never executes.
+    const { env, files } = await deps.getUserProviderEnv(userId, artifactsDir);
+    for (const f of files) {
+      await mkdir(dirname(f.path), { recursive: true });
+      await writeFile(f.path, f.contents, { encoding: 'utf8', mode: 0o600 });
+    }
+    const envKeys = Object.keys(env);
+    if (envKeys.length > 0) {
+      getLog().debug({ userId, keys: envKeys }, 'workflow.user_provider_env_injected');
+    }
+    return env;
+  } catch (err) {
+    getLog().warn({ err: err as Error, userId }, 'workflow.user_provider_env_resolve_failed');
+    return {};
+  }
+}
+
+/**
  * Resolve the artifacts and log directories for a workflow run.
  * Looks up the codebase by ID once, parses owner/repo, and returns project-scoped paths.
  * Falls back to cwd-based paths for unregistered repos.
@@ -214,6 +296,13 @@ export type ExecuteWorkflowOptions = ResumePayload & {
     prSha?: string;
     prBranch?: string;
   };
+  /**
+   * Discovery source of the workflow (bundled / global / project). Used only
+   * for anonymous telemetry — bundled workflows report their real name, custom
+   * ones report `"custom"`. Optional: defaults to the `"custom"`/project
+   * treatment when a caller doesn't thread it through.
+   */
+  source?: WorkflowSource;
   /** Parent conversation ID — enables approve/reject auto-resume from chat. */
   parentConversationId?: string;
   /**
@@ -288,6 +377,7 @@ export async function executeWorkflow(
     preCreatedRun,
     priorCompletedNodes,
     userId,
+    source,
   } = opts;
   // Load config once for the entire workflow execution
   const fileConfig = await deps.loadConfig(cwd);
@@ -301,13 +391,15 @@ export async function executeWorkflow(
   // time in the GitHub adapter), but the env injection is enough for the
   // typical <1h workflow.
   const botGitHubEnv = await resolveBotGitHubEnvForWorkflow(deps, codebaseId);
+  const userGitHubEnv = await resolveUserGithubEnvForWorkflow(deps, userId);
   const config: WorkflowConfig = {
     ...fileConfig,
-    // Order: file < db < bot-token. Per-codebase env vars are operator-set; the
-    // injected bot token is system-set and represents the live identity for
-    // workflow-driven `gh`/`git push` operations — it must win to avoid a
-    // stale or wrong token leaking from a `GH_TOKEN=` line in .archon/.env.
-    envVars: { ...fileConfig.envVars, ...dbEnvVars, ...botGitHubEnv },
+    // Order: file < db < bot-token < per-user. Per-codebase env vars are
+    // operator-set; the injected bot token is system-set; the per-user override
+    // wins last so a run routes through the originating human's token (or scrubs
+    // the org/bot token when they haven't connected). Empty-string values from
+    // the per-user policy scrub the corresponding key via the subprocess merge.
+    envVars: { ...fileConfig.envVars, ...dbEnvVars, ...botGitHubEnv, ...userGitHubEnv },
   };
   const configuredCommandFolder = config.commands.folder;
 
@@ -332,11 +424,89 @@ export async function executeWorkflow(
 
   const docsDir = config.docsPath ?? 'docs/';
 
-  // Resolve provider and model once (used by all nodes).
-  // Provider is explicit: node.provider ?? workflow.provider ?? config.assistant.
-  // Model strings pass through to the SDK as-is — the SDK validates at request time.
-  const resolvedProvider: string = workflow.provider ?? config.assistant;
-  const providerSource = workflow.provider ? 'workflow definition' : 'config';
+  // Per-user AI prefs (Phase 3): the originating user's tiers/aliases/default-
+  // assistant override install config (highest precedence). The dep contract is
+  // non-throwing, but a third-party deps impl might throw anyway — guard so a
+  // prefs failure can never abort a run; `{}` keeps config-only behavior.
+  let userAiPrefs: UserAiPrefsLayer = {};
+  if (userId && deps.getUserAiPrefs) {
+    try {
+      userAiPrefs = await deps.getUserAiPrefs(userId);
+    } catch (error) {
+      getLog().warn({ err: error as Error, userId }, 'workflow.user_ai_prefs_resolve_failed');
+    }
+  }
+  if (userAiPrefs.tiers || userAiPrefs.aliases || userAiPrefs.defaultProvider) {
+    getLog().debug(
+      {
+        userId,
+        tierKeys: Object.keys(userAiPrefs.tiers ?? {}),
+        aliasKeys: Object.keys(userAiPrefs.aliases ?? {}),
+        defaultProvider: userAiPrefs.defaultProvider,
+      },
+      'workflow.user_ai_prefs_applied'
+    );
+  }
+  let aiProfile: ResolvedAiProfile;
+  try {
+    aiProfile = buildAiProfile(userAiPrefs.defaultProvider ?? config.assistant, {
+      repoTiers: config.tiers,
+      repoAliases: config.aliases,
+      userTiers: userAiPrefs.tiers,
+      userAliases: userAiPrefs.aliases,
+    });
+  } catch (error) {
+    // Structurally invalid STORED prefs (corrupt DB row) must not kill the run
+    // before its record exists — degrade to config-only. A broken config layer
+    // still fails fast: the rebuild below rethrows the same error.
+    getLog().error({ err: error as Error, userId }, 'workflow.user_ai_prefs_profile_invalid');
+    aiProfile = buildAiProfile(config.assistant, {
+      repoTiers: config.tiers,
+      repoAliases: config.aliases,
+    });
+  }
+
+  // Resolve provider and model once (used by all nodes). Literal model strings
+  // keep the existing workflow/provider/config chain; tier and @alias refs use
+  // the resolved preset provider/model so bundled workflows are portable.
+  let resolvedProvider: string = workflow.provider ?? config.assistant;
+  let resolvedModel: string | undefined;
+  let workflowPreset: ModelAliasPreset | undefined;
+  let providerSource = workflow.provider ? 'workflow definition' : 'config';
+  if (workflow.model) {
+    const workflowModelSpec = resolveModelSpec(aiProfile, workflow.model);
+    if (isLiteralSpec(workflowModelSpec)) {
+      resolvedModel = workflowModelSpec.literal;
+    } else {
+      workflowPreset = workflowModelSpec;
+      if (workflow.provider && workflow.provider !== workflowModelSpec.provider) {
+        getLog().warn(
+          {
+            workflowName: workflow.name,
+            configuredProvider: workflow.provider,
+            resolvedProvider: workflowModelSpec.provider,
+            modelRef: workflow.model,
+          },
+          'workflow.model_provider_conflict'
+        );
+        const delivered = await safeSendMessage(
+          platform,
+          conversationId,
+          `Warning: Workflow '${workflow.name}' sets provider '${workflow.provider}' but model '${workflow.model}' resolves to provider '${workflowModelSpec.provider}' — using '${workflowModelSpec.provider}'.`
+        );
+        if (!delivered) {
+          getLog().error(
+            { workflowName: workflow.name, conversationId },
+            'workflow.model_provider_conflict_warning_delivery_failed'
+          );
+        }
+      }
+      resolvedProvider = workflowModelSpec.provider;
+      resolvedModel = workflowModelSpec.model;
+      providerSource = `model preset '${workflow.model}'`;
+    }
+  }
+
   if (!isRegisteredProvider(resolvedProvider)) {
     throw new Error(
       `Workflow '${workflow.name}': unknown provider '${resolvedProvider}'. ` +
@@ -346,7 +516,7 @@ export async function executeWorkflow(
     );
   }
   const assistantDefaults = config.assistants[resolvedProvider];
-  const resolvedModel = workflow.model ?? (assistantDefaults?.model as string | undefined);
+  resolvedModel ??= assistantDefaults?.model as string | undefined;
 
   getLog().info(
     {
@@ -532,6 +702,15 @@ export async function executeWorkflow(
   }
   getLog().debug({ artifactsDir, logDir }, 'workflow_paths_resolved');
 
+  // Per-user AI-provider credentials (Phase 2). Resolved AFTER artifactsDir is
+  // created because file-based deliveries (Codex `CODEX_HOME/auth.json`) live
+  // under it. Merged LAST into config.envVars so the originating user's keys
+  // win over file/db/bot-github env — preserves the GitHub merge order and
+  // keeps the no-key path byte-for-byte unchanged (resolveUserProviderEnvForWorkflow
+  // returns {} when the feature is disabled or no userId is present).
+  const userProviderEnv = await resolveUserProviderEnvForWorkflow(deps, userId, artifactsDir);
+  config.envVars = { ...config.envVars, ...userProviderEnv };
+
   // Wrap execution in try-catch to ensure workflow is marked as failed on any error
   try {
     getLog().info(
@@ -556,14 +735,31 @@ export async function executeWorkflow(
       conversationId: conversationDbId,
     });
 
-    // Fire-and-forget anonymous usage telemetry. No PII: only workflow name +
-    // description (authored by the user in their YAML) + platform + version.
-    // Opt out via ARCHON_TELEMETRY_DISABLED=1 or DO_NOT_TRACK=1.
+    // Fire-and-forget anonymous usage telemetry. Categorical only: bundled
+    // workflows report their real name, custom ones report "custom". No PII —
+    // descriptions/prompts/paths are never sent. Machine context + version ride
+    // along as super-properties. Opt out: ARCHON_TELEMETRY_DISABLED=1 / DO_NOT_TRACK=1.
     captureWorkflowInvoked({
       workflowName: workflow.name,
-      workflowDescription: workflow.description,
+      workflowSource: source,
       platform: platform.getPlatformType(),
-      archonVersion: BUNDLED_VERSION,
+      provider: resolvedProvider,
+      model: resolvedModel,
+      nodeCount: workflow.nodes.length,
+      usesLoop: workflow.nodes.some(isLoopNode),
+      usesApproval: workflow.nodes.some(isApprovalNode),
+      usesScript: workflow.nodes.some(isScriptNode),
+      usesBash: workflow.nodes.some(isBashNode),
+      usesOutputFormat: workflow.nodes.some(n => n.output_format !== undefined),
+      usesOutputType: workflow.nodes.some(n => n.output_type !== undefined),
+      usesPersistSession:
+        workflow.persist_sessions === true || workflow.nodes.some(n => n.persist_session === true),
+      usesMcp: workflow.nodes.some(n => n.mcp !== undefined),
+      usesSkills: workflow.nodes.some(n => n.skills !== undefined),
+      usesFreshContext: workflow.nodes.some(n => isLoopNode(n) && n.loop.fresh_context),
+      interactive: workflow.interactive ?? false,
+      usedIsolation: isolationContext !== undefined,
+      isResume: dagPriorCompletedNodes !== undefined,
     });
     deps.store
       .createWorkflowEvent({
@@ -684,7 +880,10 @@ export async function executeWorkflow(
       config,
       configuredCommandFolder,
       issueContext,
-      dagPriorCompletedNodes
+      dagPriorCompletedNodes,
+      source,
+      aiProfile,
+      workflowPreset
     );
 
     // executeDagWorkflow throws on fatal errors; check DB status for result
@@ -735,6 +934,19 @@ export async function executeWorkflow(
       runId: workflowRun.id,
       workflowName: workflow.name,
       error: err.message,
+    });
+    // Anonymous telemetry for the unhandled-throw failure path. The DAG-internal
+    // failure paths (no/partial completion) fire their own captureWorkflowCompleted
+    // and return without throwing, so this only covers genuine unhandled errors —
+    // no double-count. Duration/node-counts are not in scope here.
+    captureWorkflowCompleted({
+      outcome: 'failed',
+      workflowName: workflow.name,
+      workflowSource: source,
+      provider: resolvedProvider,
+      exitReason: 'unhandled_error',
+      // Categorical class only (fatal/transient/unknown) — err.message never leaves.
+      errorClass: toTelemetryErrorClass(classifyError(err)),
     });
     deps.store
       .createWorkflowEvent({
