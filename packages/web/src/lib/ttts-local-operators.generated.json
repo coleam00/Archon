@@ -15,9 +15,11 @@
     "hot_follow_up": 127,
     "future_event_nurture": 15,
     "repair_channel": 137,
-    "with_phone": 124,
-    "with_email": 47,
-    "with_linkedin": 301
+    "with_phone": 125,
+    "with_email": 50,
+    "with_linkedin": 301,
+    "with_website": 48,
+    "with_instagram": 5
   },
   "lane_counts": {
     "P0 attended / RSVP follow-up": 5,
@@ -58,7 +60,8 @@
     "Inventory includes health/wellness/local operator rows from source-backed HeyReach, LinkedIn/Sales Nav capture, dial outcomes, and Jason-attached event summary.",
     "Rows with explicit not-interested/DNC/unsubscribe language are held out in Excluded Not Interested.",
     "Instagram row-level scan remains unavailable from this host; IG-only rows are included only when Jason/event tracker provided evidence.",
-    "HeyReach Failed rows are included as attempted outreach in P4 repair-channel lane because the campaign attempted the invite but LinkedIn profile resolution failed."
+    "HeyReach Failed rows are included as attempted outreach in P4 repair-channel lane because the campaign attempted the invite but LinkedIn profile resolution failed.",
+    "Contact repair pass 1 applied 2026-06-26 from source-backed official websites/social profiles."
   ],
   "operators": [
     {
@@ -73,11 +76,11 @@
       "state": "FL",
       "phone": "(941) 727-2667",
       "email": "achievelwr@yahoo.com",
-      "website": "",
+      "website": "https://achievelwr.com/",
       "linkedin_url": "https://www.linkedin.com/in/ana-maria-mccue-a364099",
       "instagram_handle": "",
       "source_channels": "LinkedIn / HeyReach",
-      "source_systems": "Canonical master / platform reconcile",
+      "source_systems": "Canonical master / platform reconcile | public web",
       "evidence_type": "dial/event update",
       "outreach_status": "confirmed RSVP / attending",
       "interest_level": "Warm reply / meeting follow-up",
@@ -95,8 +98,8 @@
       "dial_status": "connected-reception",
       "meeting_status": "event-confirmed",
       "suppression_status": "live-in-heyreach",
-      "source_artifacts": "intelligence/prospects/2026-06-19-ttts-canonical-master-prospect-sheet.xlsx",
-      "notes": "heyreach-ttts-union Phone enrichment 2026-06-24T12:20:28: (941) 727-2667 (medium) via NPI Registry org search: Achieve Physical Therapy FL. NPI lists Sean McCue Inc PT location at Lakewood Ranch/Bradenton; Ana Maria individual NPI lists 941-341-0089. | 2026-06-25 contact enrichment: phone/email/title/company/ICP synchronized from positive-interest tracker and Jason Telegram table."
+      "source_artifacts": "intelligence/prospects/2026-06-19-ttts-canonical-master-prospect-sheet.xlsx | contact-repair-pass-1",
+      "notes": "heyreach-ttts-union Phone enrichment 2026-06-24T12:20:28: (941) 727-2667 (medium) via NPI Registry org search: Achieve Physical Therapy FL. NPI lists Sean McCue Inc PT location at Lakewood Ranch/Bradenton; Ana Maria individual NPI lists 941-341-0089. | 2026-06-25 contact enrichment: phone/email/title/company/ICP synchronized from positive-interest tracker and Jason Telegram table. | Contact repair 2026-06-26: Official Lakewood Ranch site/contact page. Avoid similarly named North Dakota Achieve site. Sources: https://achievelwr.com/, https://achievelwr.com/contactus.html"
     },
     {
       "priority": "P0-002",
@@ -110,11 +113,11 @@
       "state": "Florida",
       "phone": "631.704.3866",
       "email": "samanthahayneslmt@gmail.com",
-      "website": "",
+      "website": "https://www.flowmassagesrq.com/",
       "linkedin_url": "",
-      "instagram_handle": "",
+      "instagram_handle": "flowmassagesrq",
       "source_channels": "Jason event summary",
-      "source_systems": "Attached TTTS event tracker",
+      "source_systems": "Attached TTTS event tracker | public web",
       "evidence_type": "Jason supplied event tracker",
       "outreach_status": "",
       "interest_level": "",
@@ -132,8 +135,8 @@
       "dial_status": "",
       "meeting_status": "",
       "suppression_status": "",
-      "source_artifacts": "/Users/jason-agent/.hermes/cache/documents/doc_cc4db09492b3_TTTS_Positive_Replies_and_Interest_Tracker_2026_06_25_Positive_Interest.csv",
-      "notes": ""
+      "source_artifacts": "/Users/jason-agent/.hermes/cache/documents/doc_cc4db09492b3_TTTS_Positive_Replies_and_Interest_Tracker_2026_06_25_Positive_Interest.csv | contact-repair-pass-1",
+      "notes": "Contact repair 2026-06-26: Official Flow Massage SRQ site/contact page and public Instagram. Sources: https://www.flowmassagesrq.com/, https://www.flowmassagesrq.com/contact, https://www.instagram.com/flowmassagesrq/"
     },
     {
       "priority": "P2",
@@ -147,11 +150,11 @@
       "state": "Florida",
       "phone": "941.524.4592",
       "email": "leanns@peaklaunch.com",
-      "website": "",
+      "website": "https://gapininstitute.com/",
       "linkedin_url": "https://www.linkedin.com/in/leann-spofford",
       "instagram_handle": "",
       "source_channels": "HeyReach inbox/LinkedIn",
-      "source_systems": "Canonical master / platform reconcile",
+      "source_systems": "Canonical master / platform reconcile | public web",
       "evidence_type": "source-backed",
       "outreach_status": "replied",
       "interest_level": "neutral",
@@ -169,8 +172,8 @@
       "dial_status": "",
       "meeting_status": "",
       "suppression_status": "",
-      "source_artifacts": "intelligence/prospects/2026-06-19-ttts-canonical-master-prospect-sheet.xlsx",
-      "notes": "full_list_fit_score_5; phone=not_found; canonical=existing-canonical-url | 2026-06-25 contact enrichment: phone/email/title/company/ICP synchronized from positive-interest tracker and Jason Telegram table."
+      "source_artifacts": "intelligence/prospects/2026-06-19-ttts-canonical-master-prospect-sheet.xlsx | contact-repair-pass-1",
+      "notes": "full_list_fit_score_5; phone=not_found; canonical=existing-canonical-url | 2026-06-25 contact enrichment: phone/email/title/company/ICP synchronized from positive-interest tracker and Jason Telegram table. | Contact repair 2026-06-26: Official Gapin Institute / Peak Launch web properties. No Leann-specific public email added. Sources: https://gapininstitute.com/, https://peaklaunch.com/"
     },
     {
       "priority": "P0-004",
@@ -184,11 +187,11 @@
       "state": "Florida",
       "phone": "941.504.3212",
       "email": "kirsten0615@gmail.com",
-      "website": "",
+      "website": "https://luxconpros.com/",
       "linkedin_url": "",
       "instagram_handle": "",
       "source_channels": "Manual / Jason list",
-      "source_systems": "Jason-supplied TTTS contact table",
+      "source_systems": "Jason-supplied TTTS contact table | public web",
       "evidence_type": "manual include",
       "outreach_status": "No-show / keep for follow-up list",
       "interest_level": "manual include / no-show",
@@ -206,8 +209,8 @@
       "dial_status": "",
       "meeting_status": "",
       "suppression_status": "",
-      "source_artifacts": "Jason Telegram table 2026-06-25 + public source verification where noted",
-      "notes": "Contact enrichment 2026-06-25: User-supplied phone/email. Official LuxCon site lists a different business phone: 941.404.9342."
+      "source_artifacts": "Jason Telegram table 2026-06-25 + public source verification where noted | contact-repair-pass-1",
+      "notes": "Contact enrichment 2026-06-25: User-supplied phone/email. Official LuxCon site lists a different business phone: 941.404.9342. | Contact repair 2026-06-26: Official LuxCon Pros website. Sources: https://luxconpros.com/"
     },
     {
       "priority": "P2",
@@ -221,11 +224,11 @@
       "state": "FL",
       "phone": "941.557.9271",
       "email": "suevipond123@gmail.com",
-      "website": "",
+      "website": "https://www.superpatch.com/",
       "linkedin_url": "https://www.linkedin.com/in/suevipond",
       "instagram_handle": "",
       "source_channels": "HeyReach inbox/LinkedIn",
-      "source_systems": "Canonical master / platform reconcile",
+      "source_systems": "Canonical master / platform reconcile | public web",
       "evidence_type": "source-backed",
       "outreach_status": "replied",
       "interest_level": "neutral",
@@ -243,8 +246,8 @@
       "dial_status": "",
       "meeting_status": "",
       "suppression_status": "",
-      "source_artifacts": "intelligence/prospects/2026-06-19-ttts-canonical-master-prospect-sheet.xlsx",
-      "notes": "heyreach-ttts-union | 2026-06-25 contact enrichment: phone/email/title/company/ICP synchronized from positive-interest tracker and Jason Telegram table."
+      "source_artifacts": "intelligence/prospects/2026-06-19-ttts-canonical-master-prospect-sheet.xlsx | contact-repair-pass-1",
+      "notes": "heyreach-ttts-union | 2026-06-25 contact enrichment: phone/email/title/company/ICP synchronized from positive-interest tracker and Jason Telegram table. | Contact repair 2026-06-26: Corporate Super Patch website only; no Sue-specific contact added. Sources: https://www.superpatch.com/"
     },
     {
       "priority": "P2",
@@ -257,12 +260,12 @@
       "city": "North Port-Sarasota Area",
       "state": "Florida",
       "phone": "",
-      "email": "",
-      "website": "",
+      "email": "info@AANWC.com",
+      "website": "https://aanwc.com/",
       "linkedin_url": "https://www.linkedin.com/in/nicolekimmel11",
       "instagram_handle": "",
       "source_channels": "HeyReach inbox/LinkedIn",
-      "source_systems": "Canonical master / platform reconcile",
+      "source_systems": "Canonical master / platform reconcile | public web",
       "evidence_type": "source-backed",
       "outreach_status": "invite sent / open follow-up",
       "interest_level": "September TTTS invite - practice operator",
@@ -280,8 +283,8 @@
       "dial_status": "",
       "meeting_status": "",
       "suppression_status": "",
-      "source_artifacts": "intelligence/prospects/2026-06-19-ttts-canonical-master-prospect-sheet.xlsx",
-      "notes": "full_list_fit_score_5; phone=not_found; canonical=net-new-canonical-append"
+      "source_artifacts": "intelligence/prospects/2026-06-19-ttts-canonical-master-prospect-sheet.xlsx | contact-repair-pass-1",
+      "notes": "full_list_fit_score_5; phone=not_found; canonical=net-new-canonical-append | Contact repair 2026-06-26: Official AANWC site. ANWCB domain did not resolve during fetch, so AANWC retained. Sources: https://aanwc.com/"
     },
     {
       "priority": "P2",
@@ -295,11 +298,11 @@
       "state": "Florida",
       "phone": "",
       "email": "",
-      "website": "",
+      "website": "https://www.avellanetsurgicalaesthetics.com/",
       "linkedin_url": "https://www.linkedin.com/in/dravellanet",
       "instagram_handle": "",
       "source_channels": "HeyReach inbox/LinkedIn",
-      "source_systems": "Canonical master / platform reconcile",
+      "source_systems": "Canonical master / platform reconcile | public web",
       "evidence_type": "source-backed",
       "outreach_status": "invite sent / open follow-up",
       "interest_level": "September TTTS invite - practice operator",
@@ -317,8 +320,8 @@
       "dial_status": "",
       "meeting_status": "",
       "suppression_status": "",
-      "source_artifacts": "intelligence/prospects/2026-06-19-ttts-canonical-master-prospect-sheet.xlsx",
-      "notes": "full_list_fit_score_5; phone=not_found; canonical=net-new-canonical-append"
+      "source_artifacts": "intelligence/prospects/2026-06-19-ttts-canonical-master-prospect-sheet.xlsx | contact-repair-pass-1",
+      "notes": "full_list_fit_score_5; phone=not_found; canonical=net-new-canonical-append | Contact repair 2026-06-26: Official-looking practice domain from public search; fetch DNS failed locally, so no phone/email added. Sources: https://www.avellanetsurgicalaesthetics.com/"
     },
     {
       "priority": "P1-008",
@@ -406,11 +409,11 @@
       "state": "Florida",
       "phone": "(941) 955-2020",
       "email": "",
-      "website": "",
+      "website": "https://advancedrehabinc.com/",
       "linkedin_url": "https://www.linkedin.com/in/daniel-speciale-27631b153",
       "instagram_handle": "",
       "source_channels": "HeyReach inbox/LinkedIn",
-      "source_systems": "Canonical master / platform reconcile",
+      "source_systems": "Canonical master / platform reconcile | public web",
       "evidence_type": "source-backed",
       "outreach_status": "invite sent / open follow-up",
       "interest_level": "September TTTS invite - practice operator",
@@ -428,8 +431,8 @@
       "dial_status": "",
       "meeting_status": "",
       "suppression_status": "",
-      "source_artifacts": "intelligence/prospects/2026-06-19-ttts-canonical-master-prospect-sheet.xlsx",
-      "notes": "full_list_fit_score_5; phone=NPI individual registry match; canonical=existing-canonical-url"
+      "source_artifacts": "intelligence/prospects/2026-06-19-ttts-canonical-master-prospect-sheet.xlsx | contact-repair-pass-1",
+      "notes": "full_list_fit_score_5; phone=NPI individual registry match; canonical=existing-canonical-url | Contact repair 2026-06-26: Official-looking practice domain from public search; DNS failed locally, so no phone/email added. Sources: https://advancedrehabinc.com/"
     },
     {
       "priority": "P1",
@@ -517,11 +520,11 @@
       "state": "Florida",
       "phone": "(941) 896-3028",
       "email": "",
-      "website": "",
+      "website": "https://alluredentalaesthetics.com/",
       "linkedin_url": "https://www.linkedin.com/in/ashley-keen-ramirez-92674a77",
       "instagram_handle": "",
       "source_channels": "HeyReach inbox/LinkedIn",
-      "source_systems": "Canonical master / platform reconcile",
+      "source_systems": "Canonical master / platform reconcile | public web",
       "evidence_type": "source-backed",
       "outreach_status": "invite sent / open follow-up",
       "interest_level": "September TTTS invite - practice operator",
@@ -539,8 +542,8 @@
       "dial_status": "",
       "meeting_status": "",
       "suppression_status": "",
-      "source_artifacts": "intelligence/prospects/2026-06-19-ttts-canonical-master-prospect-sheet.xlsx",
-      "notes": "full_list_fit_score_5; phone=NPI individual registry match; canonical=net-new-canonical-append"
+      "source_artifacts": "intelligence/prospects/2026-06-19-ttts-canonical-master-prospect-sheet.xlsx | contact-repair-pass-1",
+      "notes": "full_list_fit_score_5; phone=NPI individual registry match; canonical=net-new-canonical-append | Contact repair 2026-06-26: Official dental practice website. Sources: https://alluredentalaesthetics.com/"
     },
     {
       "priority": "P2",
@@ -590,12 +593,12 @@
       "city": "North Port-Sarasota Area",
       "state": "Florida",
       "phone": "(941) 993-7531",
-      "email": "",
-      "website": "",
+      "email": "info@andersonlongevityclinic.com",
+      "website": "https://andersonlongevityclinic.com/",
       "linkedin_url": "https://www.linkedin.com/in/ACoAABH5W7gBylSnPO0Ne0Jf9aRP1rGd4glLXDo",
       "instagram_handle": "",
       "source_channels": "HeyReach inbox/LinkedIn",
-      "source_systems": "Canonical master / platform reconcile",
+      "source_systems": "Canonical master / platform reconcile | public web",
       "evidence_type": "source-backed",
       "outreach_status": "invite sent / open follow-up",
       "interest_level": "September TTTS invite - practice operator",
@@ -613,8 +616,8 @@
       "dial_status": "",
       "meeting_status": "",
       "suppression_status": "",
-      "source_artifacts": "intelligence/prospects/2026-06-19-ttts-canonical-master-prospect-sheet.xlsx",
-      "notes": "full_list_fit_score_5; phone=prior Sherlock/source pass; canonical=existing-canonical-url"
+      "source_artifacts": "intelligence/prospects/2026-06-19-ttts-canonical-master-prospect-sheet.xlsx | contact-repair-pass-1",
+      "notes": "full_list_fit_score_5; phone=prior Sherlock/source pass; canonical=existing-canonical-url | Contact repair 2026-06-26: Official Anderson Longevity Clinic site. Phone is public main number, not Sarasota-specific. Sources: https://andersonlongevityclinic.com/"
     },
     {
       "priority": "P1",
@@ -628,11 +631,11 @@
       "state": "Florida",
       "phone": "(941) 907-0222",
       "email": "",
-      "website": "",
+      "website": "https://arsenaultdermatology.com/",
       "linkedin_url": "https://www.linkedin.com/in/mbeachypac",
       "instagram_handle": "",
       "source_channels": "HeyReach inbox/LinkedIn",
-      "source_systems": "Canonical master / platform reconcile",
+      "source_systems": "Canonical master / platform reconcile | public web",
       "evidence_type": "source-backed",
       "outreach_status": "invite sent / open follow-up",
       "interest_level": "September TTTS invite - practice operator",
@@ -650,8 +653,8 @@
       "dial_status": "",
       "meeting_status": "",
       "suppression_status": "",
-      "source_artifacts": "intelligence/prospects/2026-06-19-ttts-canonical-master-prospect-sheet.xlsx",
-      "notes": "full_list_fit_score_5; phone=NPI individual registry match; canonical=net-new-canonical-append"
+      "source_artifacts": "intelligence/prospects/2026-06-19-ttts-canonical-master-prospect-sheet.xlsx | contact-repair-pass-1",
+      "notes": "full_list_fit_score_5; phone=NPI individual registry match; canonical=net-new-canonical-append | Contact repair 2026-06-26: Official Arsenault Dermatology domain; site returned 403 to automated fetch, so no phone/email added. Sources: https://arsenaultdermatology.com/"
     },
     {
       "priority": "P2",
@@ -776,11 +779,11 @@
       "state": "Florida",
       "phone": "(941) 896-2640",
       "email": "hello@bloomaw.com",
-      "website": "",
+      "website": "https://bloomaw.com/",
       "linkedin_url": "https://www.linkedin.com/in/rhonda-martin-96a35899",
       "instagram_handle": "",
       "source_channels": "LinkedIn / HeyReach",
-      "source_systems": "HeyReach campaign 476670",
+      "source_systems": "HeyReach campaign 476670 | public web",
       "evidence_type": "source-backed API export",
       "outreach_status": "replied-interested",
       "interest_level": "interested",
@@ -798,8 +801,8 @@
       "dial_status": "",
       "meeting_status": "",
       "suppression_status": "",
-      "source_artifacts": "/tmp/ttts_campaign_476670_leads_full.jsonl",
-      "notes": "Contact enrichment 2026-06-25: Official Bloom Aesthetics site publishes call/text phone and hello@bloomaw.com; Bradenton/LWR locations."
+      "source_artifacts": "/tmp/ttts_campaign_476670_leads_full.jsonl | contact-repair-pass-1",
+      "notes": "Contact enrichment 2026-06-25: Official Bloom Aesthetics site publishes call/text phone and hello@bloomaw.com; Bradenton/LWR locations. | Contact repair 2026-06-26: Official Bloom Aesthetics and Wellness Bradenton site. Sources: https://bloomaw.com/"
     },
     {
       "priority": "P2",
@@ -813,11 +816,11 @@
       "state": "Florida",
       "phone": "",
       "email": "",
-      "website": "",
+      "website": "https://bootybuilderofficial.com/",
       "linkedin_url": "https://www.linkedin.com/in/darren-piggins-14a68098",
-      "instagram_handle": "",
+      "instagram_handle": "bootybuilderofficial",
       "source_channels": "HeyReach inbox/LinkedIn",
-      "source_systems": "Canonical master / platform reconcile",
+      "source_systems": "Canonical master / platform reconcile | public web",
       "evidence_type": "source-backed",
       "outreach_status": "invite sent / open follow-up",
       "interest_level": "September TTTS invite - practice operator",
@@ -835,8 +838,8 @@
       "dial_status": "",
       "meeting_status": "",
       "suppression_status": "",
-      "source_artifacts": "intelligence/prospects/2026-06-19-ttts-canonical-master-prospect-sheet.xlsx",
-      "notes": "full_list_fit_score_5; phone=not_found; canonical=existing-canonical-url"
+      "source_artifacts": "intelligence/prospects/2026-06-19-ttts-canonical-master-prospect-sheet.xlsx | contact-repair-pass-1",
+      "notes": "full_list_fit_score_5; phone=not_found; canonical=existing-canonical-url | Contact repair 2026-06-26: Official brand site and public Instagram. Sources: https://bootybuilderofficial.com/, https://www.instagram.com/bootybuilderofficial/"
     },
     {
       "priority": "P2",
@@ -850,11 +853,11 @@
       "state": "Florida",
       "phone": "",
       "email": "",
-      "website": "",
+      "website": "https://cancerbeglammed.com/",
       "linkedin_url": "https://www.linkedin.com/in/cancerbeglammed",
-      "instagram_handle": "",
+      "instagram_handle": "cancerbeglammed",
       "source_channels": "HeyReach inbox/LinkedIn",
-      "source_systems": "Canonical master / platform reconcile",
+      "source_systems": "Canonical master / platform reconcile | public web",
       "evidence_type": "source-backed",
       "outreach_status": "invite sent / open follow-up",
       "interest_level": "September TTTS invite - practice operator",
@@ -872,8 +875,8 @@
       "dial_status": "",
       "meeting_status": "",
       "suppression_status": "",
-      "source_artifacts": "intelligence/prospects/2026-06-19-ttts-canonical-master-prospect-sheet.xlsx",
-      "notes": "full_list_fit_score_5; phone=not_found; canonical=existing-canonical-url"
+      "source_artifacts": "intelligence/prospects/2026-06-19-ttts-canonical-master-prospect-sheet.xlsx | contact-repair-pass-1",
+      "notes": "full_list_fit_score_5; phone=not_found; canonical=existing-canonical-url | Contact repair 2026-06-26: Official Cancer Be Glammed site plus public social profiles. Sources: https://cancerbeglammed.com/, https://www.linkedin.com/in/lisa-lurie-88a99a9/, https://www.instagram.com/cancerbeglammed/"
     },
     {
       "priority": "P2",
@@ -885,13 +888,13 @@
       "fit_score": "5",
       "city": "Sarasota",
       "state": "Florida",
-      "phone": "",
+      "phone": "941-924-1323",
       "email": "",
-      "website": "",
+      "website": "https://www.churchofthepalms.org/",
       "linkedin_url": "https://www.linkedin.com/in/ACoAAAEqMSwBJPd6x5dyRVq93XutUoMUh7P6RYU",
-      "instagram_handle": "",
+      "instagram_handle": "churchofthepalms",
       "source_channels": "HeyReach inbox/LinkedIn",
-      "source_systems": "Canonical master / platform reconcile",
+      "source_systems": "Canonical master / platform reconcile | public web",
       "evidence_type": "source-backed",
       "outreach_status": "invite sent / open follow-up",
       "interest_level": "September TTTS invite - practice operator",
@@ -909,8 +912,8 @@
       "dial_status": "",
       "meeting_status": "",
       "suppression_status": "",
-      "source_artifacts": "intelligence/prospects/2026-06-19-ttts-canonical-master-prospect-sheet.xlsx",
-      "notes": "full_list_fit_score_5; phone=not_found; canonical=net-new-canonical-append"
+      "source_artifacts": "intelligence/prospects/2026-06-19-ttts-canonical-master-prospect-sheet.xlsx | contact-repair-pass-1",
+      "notes": "full_list_fit_score_5; phone=not_found; canonical=net-new-canonical-append | Contact repair 2026-06-26: Official church site and public Instagram. Sources: https://www.churchofthepalms.org/, https://www.instagram.com/churchofthepalms/"
     },
     {
       "priority": "P1",
@@ -924,11 +927,11 @@
       "state": "Florida",
       "phone": "(813) 876-0914",
       "email": "",
-      "website": "",
+      "website": "https://clearwaypain.com/",
       "linkedin_url": "https://www.linkedin.com/in/william-newton-do-ms",
       "instagram_handle": "",
       "source_channels": "HeyReach inbox/LinkedIn",
-      "source_systems": "Canonical master / platform reconcile",
+      "source_systems": "Canonical master / platform reconcile | public web",
       "evidence_type": "source-backed",
       "outreach_status": "invite sent / open follow-up",
       "interest_level": "September TTTS invite - practice operator",
@@ -946,8 +949,8 @@
       "dial_status": "",
       "meeting_status": "",
       "suppression_status": "",
-      "source_artifacts": "intelligence/prospects/2026-06-19-ttts-canonical-master-prospect-sheet.xlsx",
-      "notes": "full_list_fit_score_5; phone=NPI individual registry match; canonical=existing-canonical-url"
+      "source_artifacts": "intelligence/prospects/2026-06-19-ttts-canonical-master-prospect-sheet.xlsx | contact-repair-pass-1",
+      "notes": "full_list_fit_score_5; phone=NPI individual registry match; canonical=existing-canonical-url | Contact repair 2026-06-26: Official Clearway Pain Solutions site. Sources: https://clearwaypain.com/"
     },
     {
       "priority": "P1",
@@ -1035,11 +1038,11 @@
       "state": "Florida",
       "phone": "",
       "email": "",
-      "website": "",
+      "website": "https://elitemedicalspa.com/",
       "linkedin_url": "https://www.linkedin.com/in/joshua-englin-833931157",
       "instagram_handle": "",
       "source_channels": "HeyReach inbox/LinkedIn",
-      "source_systems": "Canonical master / platform reconcile",
+      "source_systems": "Canonical master / platform reconcile | public web",
       "evidence_type": "source-backed",
       "outreach_status": "invite sent / open follow-up",
       "interest_level": "September TTTS invite - practice operator",
@@ -1057,8 +1060,8 @@
       "dial_status": "",
       "meeting_status": "",
       "suppression_status": "",
-      "source_artifacts": "intelligence/prospects/2026-06-19-ttts-canonical-master-prospect-sheet.xlsx",
-      "notes": "full_list_fit_score_5; phone=not_found; canonical=existing-canonical-url"
+      "source_artifacts": "intelligence/prospects/2026-06-19-ttts-canonical-master-prospect-sheet.xlsx | contact-repair-pass-1",
+      "notes": "full_list_fit_score_5; phone=not_found; canonical=existing-canonical-url | Contact repair 2026-06-26: Official-looking Elite Medical Spa domain; automated fetch blocked, so no phone/email added. Sources: https://elitemedicalspa.com/"
     },
     {
       "priority": "P1",
@@ -1072,11 +1075,11 @@
       "state": "Florida",
       "phone": "(941) 216-5221",
       "email": "",
-      "website": "",
+      "website": "https://eternalmedspa.com/",
       "linkedin_url": "https://www.linkedin.com/in/jason-dangel-30448527",
-      "instagram_handle": "",
+      "instagram_handle": "eternalmedspa",
       "source_channels": "LinkedIn / HeyReach",
-      "source_systems": "HeyReach campaign 476670",
+      "source_systems": "HeyReach campaign 476670 | public web",
       "evidence_type": "source-backed API export",
       "outreach_status": "invite sent / open follow-up",
       "interest_level": "September TTTS invite - practice operator",
@@ -1094,8 +1097,8 @@
       "dial_status": "",
       "meeting_status": "",
       "suppression_status": "",
-      "source_artifacts": "/tmp/ttts_campaign_476670_leads_full.jsonl",
-      "notes": ""
+      "source_artifacts": "/tmp/ttts_campaign_476670_leads_full.jsonl | contact-repair-pass-1",
+      "notes": "Contact repair 2026-06-26: Official Eternal MedSpa site and public Instagram. Sources: https://eternalmedspa.com/, https://www.instagram.com/eternalmedspa/"
     },
     {
       "priority": "P1",
@@ -1108,12 +1111,12 @@
       "city": "Venice",
       "state": "Florida",
       "phone": "(941) 237-0050",
-      "email": "",
-      "website": "",
+      "email": "info@familyspineandpain.com",
+      "website": "https://familyspineandpain.com/",
       "linkedin_url": "https://www.linkedin.com/in/ACoAAAhyEkkBPi3fZVbiBgCb2snJD2papzRr31Q",
       "instagram_handle": "",
       "source_channels": "HeyReach inbox/LinkedIn",
-      "source_systems": "Canonical master / platform reconcile",
+      "source_systems": "Canonical master / platform reconcile | public web",
       "evidence_type": "source-backed",
       "outreach_status": "invite sent / open follow-up",
       "interest_level": "September TTTS invite - practice operator",
@@ -1131,8 +1134,8 @@
       "dial_status": "",
       "meeting_status": "",
       "suppression_status": "",
-      "source_artifacts": "intelligence/prospects/2026-06-19-ttts-canonical-master-prospect-sheet.xlsx",
-      "notes": "full_list_fit_score_5; phone=NPI individual registry match; canonical=net-new-canonical-append"
+      "source_artifacts": "intelligence/prospects/2026-06-19-ttts-canonical-master-prospect-sheet.xlsx | contact-repair-pass-1",
+      "notes": "full_list_fit_score_5; phone=NPI individual registry match; canonical=net-new-canonical-append | Contact repair 2026-06-26: Official Family Spine and Pain Institute site; main toll-free/contact email. Sources: https://familyspineandpain.com/"
     },
     {
       "priority": "P2",
@@ -12457,7 +12460,5 @@
       "notes": ""
     }
   ],
-  "google_sheet_url": "https://docs.google.com/spreadsheets/d/1-aaN0NqbfXLX7b3e82WZayp-72MSKRBV5yHunFGm_Yk/edit?usp=drivesdk",
-  "local_workbook": "second-brain/intelligence/prospects/2026-06-26-ttts-local-health-wellness-operator-inventory.xlsx",
-  "source_note": "second-brain/intelligence/prospects/2026-06-26-ttts-local-health-wellness-operator-inventory.md"
+  "google_sheet_url": "https://docs.google.com/spreadsheets/d/1-aaN0NqbfXLX7b3e82WZayp-72MSKRBV5yHunFGm_Yk/edit?usp=drivesdk"
 }
