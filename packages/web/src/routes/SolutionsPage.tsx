@@ -1,7 +1,17 @@
 import { useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router';
-import { Search, ExternalLink, Briefcase, CheckCircle2, Eye, Mail, HardDrive } from 'lucide-react';
+import { Link, useSearchParams } from 'react-router';
+import {
+  Search,
+  ExternalLink,
+  Briefcase,
+  CheckCircle2,
+  Eye,
+  Mail,
+  HardDrive,
+  ArrowRight,
+} from 'lucide-react';
 import solutionsData from '@/lib/solutions.generated.json';
+import { STRATEGIC_PARTNERS } from '@/lib/strategic-partners';
 
 type Status = 'active' | 'exploring' | 'prospect' | 'dormant' | '';
 type Audience = 'all' | 'internal' | 'partner-only' | 'jason-only';
@@ -343,6 +353,50 @@ export function SolutionsPage(): React.ReactElement {
           </div>
         )}
       </div>
+
+      <section className="rounded-xl border border-border bg-surface-elevated p-4">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="text-base font-semibold text-text-primary">
+              New strategic partner deep-dives
+            </h2>
+            <p className="text-xs text-text-secondary">
+              Research-backed tabs for the three collaboration targets Jason flagged: event/fitness,
+              executive precision health, and lymphatic education.
+            </p>
+          </div>
+          <span className="rounded-full border border-border bg-surface-inset px-2 py-0.5 text-[11px] text-text-tertiary">
+            public-source diligence
+          </span>
+        </div>
+        <div className="grid gap-3 md:grid-cols-3">
+          {STRATEGIC_PARTNERS.map(partner => (
+            <Link
+              key={partner.slug}
+              to={`/solutions/${partner.slug}`}
+              className="group flex min-h-40 flex-col justify-between rounded-lg border border-border bg-surface-inset p-4 transition-colors hover:border-border-bright hover:bg-surface-hover"
+            >
+              <div>
+                <div className="mb-2 flex items-start justify-between gap-2">
+                  <h3 className="text-sm font-semibold text-text-primary">{partner.name}</h3>
+                  <span className="shrink-0 rounded-full border border-border bg-surface-elevated px-2 py-0.5 text-[10px] text-text-tertiary">
+                    {partner.status}
+                  </span>
+                </div>
+                <p className="mb-3 text-[11px] uppercase tracking-wide text-text-tertiary">
+                  {partner.category}
+                </p>
+                <p className="line-clamp-4 text-xs leading-5 text-text-secondary">
+                  {partner.positioning}
+                </p>
+              </div>
+              <span className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-blue-700 group-hover:underline">
+                Open partner tab <ArrowRight className="h-3.5 w-3.5" />
+              </span>
+            </Link>
+          ))}
+        </div>
+      </section>
 
       <p className="text-[11px] text-text-tertiary">
         Sourced from <code>second-brain/partners/</code>. PMC sub-brands (BRT, EWC, TTTS, IHHT, QEP,

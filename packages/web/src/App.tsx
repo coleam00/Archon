@@ -23,6 +23,7 @@ import { SADNPage } from '@/routes/SADNPage';
 import { CategoryPage } from '@/routes/CategoryPage';
 import { DrivePage } from '@/routes/DrivePage';
 import { SolutionsPage } from '@/routes/SolutionsPage';
+import { StrategicPartnerPage } from '@/routes/StrategicPartnerPage';
 import { ContactsPage } from '@/routes/ContactsPage';
 import { ResearchFirehosePage } from '@/routes/ResearchFirehosePage';
 import { StartHerePage } from '@/routes/StartHerePage';
@@ -89,6 +90,7 @@ export function App(): React.ReactElement {
                 <Route path="/category/:slug" element={<CategoryPage />} />
                 <Route path="/drive" element={<DrivePage />} />
                 <Route path="/solutions" element={<SolutionsPage />} />
+                <Route path="/solutions/:slug" element={<StrategicPartnerPage />} />
                 <Route path="/contacts" element={<ContactsPage />} />
                 <Route path="/research" element={<ResearchFirehosePage />} />
                 <Route path="/pmc" element={<PMCPage />} />
