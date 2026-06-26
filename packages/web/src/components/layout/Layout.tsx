@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react';
 import { Outlet, useLocation } from 'react-router';
 import { TabSummary } from '@/components/TabSummary';
 import { getTabSummary } from '@/lib/tab-summaries';
@@ -7,6 +8,29 @@ import { DeployStatusFooter } from './DeployStatusFooter';
 export function Layout(): React.ReactElement {
   const location = useLocation();
   const summary = getTabSummary(location.pathname);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [isContextHidden, setIsContextHidden] = useState(false);
+
+  useEffect(() => {
+    const contentEl = contentRef.current;
+    if (!contentEl) {
+      return undefined;
+    }
+
+    setIsContextHidden(false);
+    contentEl.scrollTo({ top: 0 });
+
+    const handleScroll = (): void => {
+      setIsContextHidden(contentEl.scrollTop > 24);
+    };
+
+    contentEl.addEventListener('scroll', handleScroll, { passive: true });
+    handleScroll();
+
+    return (): void => {
+      contentEl.removeEventListener('scroll', handleScroll);
+    };
+  }, [location.pathname]);
 
   return (
     <div className="flex h-screen min-h-0 flex-col bg-background">
@@ -15,7 +39,13 @@ export function Layout(): React.ReactElement {
       <div className="pmc-nav-blend shrink-0" aria-hidden="true" />
       <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
         {summary && (
-          <div className="shrink-0 border-b border-border bg-[oklch(0.985_0.012_88)] px-6 py-4">
+          <div
+            className={`shrink-0 overflow-hidden border-b bg-[oklch(0.985_0.012_88)] px-6 transition-[max-height,opacity,padding,border-color] duration-300 ease-out ${
+              isContextHidden
+                ? 'max-h-0 border-transparent py-0 opacity-0'
+                : 'max-h-96 border-border py-4 opacity-100'
+            }`}
+          >
             <div className="mx-auto max-w-7xl">
               <TabSummary
                 title={summary.title}
@@ -29,7 +59,11 @@ export function Layout(): React.ReactElement {
             </div>
           </div>
         )}
-        <div id="dashboard-tab-content" className="min-h-0 flex-1 overflow-auto scroll-mt-4">
+        <div
+          ref={contentRef}
+          id="dashboard-tab-content"
+          className="min-h-0 flex-1 overflow-auto scroll-mt-4"
+        >
           <Outlet />
         </div>
       </main>
