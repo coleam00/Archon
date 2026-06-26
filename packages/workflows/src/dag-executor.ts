@@ -855,6 +855,7 @@ async function executeNodeInternal(
   let nodeOutputText = ''; // Always accumulate regardless of streaming mode
   let structuredOutput: unknown;
   let newSessionId: string | undefined;
+  let nodeResumed: boolean | undefined;
   let nodeTokens: TokenUsage | undefined;
   let nodeCostUsd: number | undefined;
   let nodeStopReason: string | undefined;
@@ -1079,6 +1080,7 @@ async function executeNodeInternal(
           lastToolStartedAt = null;
         }
         if (msg.sessionId) newSessionId = msg.sessionId;
+        if (msg.resumed !== undefined) nodeResumed = msg.resumed;
         if (msg.tokens) nodeTokens = msg.tokens;
         if (msg.cost !== undefined) nodeCostUsd = msg.cost;
         if (msg.stopReason !== undefined) nodeStopReason = msg.stopReason;
@@ -1510,6 +1512,7 @@ async function executeNodeInternal(
       ...(nodeTokens !== undefined ? { tokens: nodeTokens } : {}),
       ...(structuredOutput !== undefined ? { structuredOutput } : {}),
       ...(declaredFields !== undefined ? { declaredFields } : {}),
+      ...(nodeResumed !== undefined ? { resumed: nodeResumed } : {}),
     };
   } catch (error) {
     const err = error as Error;
@@ -3444,6 +3447,38 @@ export async function executeDagWorkflow(
             );
 
             await new Promise(resolve => setTimeout(resolve, delayMs));
+          }
+
+          // Cold-resume surfacing: this node requested a session resume but the
+          // provider reported it came back cold (resumed === false) — the prior
+          // context is gone. Every provider's cold fallback is already a clean
+          // fresh session, so the run we just completed is a valid fresh-context
+          // result; we keep it and persist its fresh session id below. Surface the
+          // lost continuity to the user (no silent failure) so a degraded run isn't
+          // mistaken for a normal resumed one — but do NOT re-run: a replay would
+          // only repeat the same fresh run at double the cost and side effects.
+          if (
+            resumeSessionId !== undefined &&
+            output.state === 'completed' &&
+            output.resumed === false
+          ) {
+            // Mask the session id: it's a resumable artifact, so log only an
+            // 8-char preview (same policy as the node_session_resumed event above).
+            getLog().warn(
+              {
+                nodeId: node.id,
+                provider,
+                workflowRunId: workflowRun.id,
+                resumeSessionId: `${resumeSessionId.slice(0, 8)}…`,
+              },
+              'dag.session_resume_failed'
+            );
+            await safeSendMessage(
+              platform,
+              conversationId,
+              `⚠️ Node \`${node.id}\`: could not resume the prior session — continued with a fresh session, so the earlier context was not restored.`,
+              { workflowId: workflowRun.id, nodeName: node.id }
+            );
           }
 
           // Persist (or drop) the node's provider session ID for the next run in this scope.

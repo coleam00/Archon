@@ -729,7 +729,52 @@ describe('CodexProvider', () => {
         type: 'result',
         sessionId: 'fallback-thread',
         tokens: { input: 10, output: 5 },
+        // A requested resume that fell back to a fresh thread is reported as cold.
+        resumed: false,
       });
+    });
+
+    test('reports resumed:true on the result when an existing thread resumes', async () => {
+      mockRunStreamed.mockResolvedValue({
+        events: (async function* () {
+          yield { type: 'turn.completed', usage: defaultUsage };
+        })(),
+      });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test', '/workspace', 'existing-thread')) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks.find(c => c.type === 'result')).toMatchObject({ resumed: true });
+    });
+
+    test('reports resumed:false when a resumed thread retries cold after a transient crash', async () => {
+      // Attempt 0 resumes the thread, then the turn crashes. The retry re-runs on
+      // a fresh startThread (cold), so the produced result must report resumed:false
+      // rather than inheriting the initial resume's success (see CodeRabbit #1842).
+      let callCount = 0;
+      mockRunStreamed.mockImplementation(() => {
+        callCount++;
+        if (callCount === 1) {
+          return Promise.reject(new Error('Codex Exec exited with code 1'));
+        }
+        return Promise.resolve({
+          events: (async function* () {
+            yield { type: 'turn.completed', usage: defaultUsage };
+          })(),
+        });
+      });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test', '/workspace', 'existing-thread')) {
+        chunks.push(chunk);
+      }
+
+      expect(mockResumeThread).toHaveBeenCalled();
+      // The retry path created a fresh thread, dropping the resumed session context.
+      expect(mockStartThread).toHaveBeenCalled();
+      expect(chunks.find(c => c.type === 'result')).toMatchObject({ resumed: false });
     });
 
     test('passes model and codex options via assistantConfig to thread options', async () => {

@@ -26,6 +26,7 @@ import {
   hasOpenAdditionalProperties,
   normalizeJsonSchemaForOpenAiStrict,
 } from '../shared/structured-output';
+import { withResumedOutcome, resumedOutcome } from '../shared/resumed';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -855,12 +856,18 @@ export class CodexProvider implements IAgentProvider {
           const result = await thread.runStreamed(prompt, turnOptions);
 
           // 5. Stream normalized events (fresh state per attempt to avoid dedup leaks)
-          yield* streamCodexEvents(
-            result.events as AsyncIterable<Record<string, unknown>>,
-            hasOutputFormat,
-            thread.id,
-            attemptController.signal,
-            Boolean(requestOptions?.nodeConfig?.mcp)
+          yield* withResumedOutcome(
+            streamCodexEvents(
+              result.events as AsyncIterable<Record<string, unknown>>,
+              hasOutputFormat,
+              thread.id,
+              attemptController.signal,
+              Boolean(requestOptions?.nodeConfig?.mcp)
+            ),
+            // Stamp from the attempt that produced the result: any retry
+            // (attempt > 0) re-runs on a fresh startThread (cold), so the prior
+            // session context is lost even when the initial resumeThread succeeded.
+            resumedOutcome(resumeSessionId, !sessionResumeFailed && attempt === 0)
           );
           return;
         } catch (error) {

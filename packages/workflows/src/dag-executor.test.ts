@@ -9050,6 +9050,8 @@ describe('executeDagWorkflow -- persist_session', () => {
     );
 
     expect(mockSendQueryDag.mock.calls[0][2]).toBe('prior-session-id');
+    // A warm resume (resumed not false) runs the node exactly once — never replayed.
+    expect(mockSendQueryDag.mock.calls.length).toBe(1);
     const upsertMock = store.upsertWorkflowNodeSession as Mock<
       typeof store.upsertWorkflowNodeSession
     >;
@@ -9061,6 +9063,62 @@ describe('executeDagWorkflow -- persist_session', () => {
       provider_session_id: 'new-session-id',
       last_run_id: 'dag-test-run-id',
     });
+  });
+
+  it('persist_session resume returns cold (resumed:false) → surfaced to user, no re-run, fresh id persisted', async () => {
+    const store = createMockStore();
+    (store.getWorkflowNodeSession as Mock<typeof store.getWorkflowNodeSession>).mockResolvedValue({
+      workflow_name: 'persist-test',
+      node_id: 'planner',
+      scope_key: 'conv-dag',
+      provider: 'claude',
+      provider_session_id: 'prior-session-id',
+      last_run_id: 'prior-run',
+      created_at: '2026-05-01T00:00:00Z',
+      updated_at: '2026-05-01T00:00:00Z',
+    });
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+
+    mockSendQueryDag.mockClear();
+    // The provider could not resume the prior session and ran cold (already a
+    // clean fresh session). The executor must keep this run, not re-run it.
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'cold run' };
+      yield { type: 'result', sessionId: 'cold-id', resumed: false };
+    });
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'persist-test',
+        nodes: [{ id: 'planner', command: 'my-cmd', persist_session: true }],
+      },
+      makeWorkflowRun(),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    // Ran exactly once — a cold resume is NOT replayed (the cold run is already fresh).
+    expect(mockSendQueryDag.mock.calls.length).toBe(1);
+    expect(mockSendQueryDag.mock.calls[0][2]).toBe('prior-session-id');
+    // The cold resume was surfaced to the user — never silent.
+    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
+    const messages = sendMessage.mock.calls.map(c => String(c[1]));
+    expect(messages.some(m => m.includes('could not resume the prior session'))).toBe(true);
+    // The cold run's own fresh session id is what gets persisted for next time.
+    const upsertMock = store.upsertWorkflowNodeSession as Mock<
+      typeof store.upsertWorkflowNodeSession
+    >;
+    expect(upsertMock.mock.calls[0][0]).toMatchObject({ provider_session_id: 'cold-id' });
   });
 
   it('persist_session: true but provider returns no sessionId → delete stale row', async () => {

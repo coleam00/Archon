@@ -841,6 +841,10 @@ describe('PiProvider', () => {
         typeof c === 'object' && c !== null && (c as { type?: string }).type === 'system'
     );
     expect(systemChunks.some(c => c.content.includes('Could not resume'))).toBe(true);
+    // ...and as resumed:false on the result chunk so the executor can surface it.
+    expect(chunks.find(c => (c as { type?: string }).type === 'result')).toMatchObject({
+      resumed: false,
+    });
   });
 
   test('resumeSessionId matches existing session → open by path, no warning', async () => {
@@ -883,6 +887,10 @@ describe('PiProvider', () => {
         typeof c === 'object' && c !== null && (c as { type?: string }).type === 'system'
     );
     expect(systemChunks.some(c => c.content.includes('Could not resume'))).toBe(false);
+    // A warm resume reports resumed:true on the result chunk.
+    expect(chunks.find(c => (c as { type?: string }).type === 'result')).toMatchObject({
+      resumed: true,
+    });
   });
 
   test('result chunk carries Pi sessionId (for Archon to store and reuse)', async () => {
