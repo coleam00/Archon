@@ -452,6 +452,61 @@ export function substituteNodeOutputRefs(
   );
 }
 
+/**
+ * Resolve `$LOOP_PREV.<nodeId>.output` and `$LOOP_PREV.<nodeId>.output.<field>` references
+ * against a loop_group body's *prior-iteration* node outputs.
+ *
+ * Cross-iteration analog of {@link substituteNodeOutputRefs}: where `$nodeId.output` reads
+ * a node's output from the *current* iteration's scope, `$LOOP_PREV.<nodeId>.output` reads
+ * the same node's output from the *previous* iteration — letting a body node reference what
+ * a sibling (or itself) produced one iteration ago. On iteration 1 (no prior iteration)
+ * `loopPrevOutputs` is empty/undefined and every `$LOOP_PREV.*` ref resolves to '' (matching
+ * the empty-on-first semantics of the single-node `$LOOP_PREV_OUTPUT`).
+ *
+ * Field access reuses {@link resolveNodeOutputField} for the same strict no-silent-drop
+ * semantics (declared-schema typo / schemaless non-JSON / missing key → throws
+ * `OutputRefError`, propagating to the consuming node's failure). The only value that
+ * resolves to empty is an author-declared-optional field — or any ref on iteration 1.
+ */
+export function substituteLoopPrevRefs(
+  prompt: string,
+  loopPrevOutputs: Map<string, NodeOutput> | undefined,
+  escapedForBash = false
+): string {
+  // Fast path: no refs to resolve. When refs ARE present but the map is empty/undefined
+  // (iteration 1 — no prior iteration), we still run the replace so each ref resolves to
+  // '' via the `!nodeOutput` branch below, rather than leaving a literal `$LOOP_PREV.…`.
+  if (!prompt.includes('$LOOP_PREV.')) {
+    return prompt;
+  }
+  return prompt.replace(
+    /\$LOOP_PREV\.([a-zA-Z_][a-zA-Z0-9_-]*)\.output(?:\.([a-zA-Z_][a-zA-Z0-9_]*))?/g,
+    (match, nodeId: string, field: string | undefined) => {
+      const nodeOutput = loopPrevOutputs?.get(nodeId);
+      if (!nodeOutput) {
+        // No prior-iteration output for this body node (iteration 1, or the node was
+        // skipped last iteration). Resolve to empty rather than throwing — the author
+        // opted into a cross-iteration ref, and absence on the first pass is expected.
+        getLog().debug({ nodeId, match }, 'loop_group_prev_ref_no_prior_output');
+        return escapedForBash ? "''" : '';
+      }
+      if (!field) {
+        return escapedForBash
+          ? shellQuoteOrFile(nodeOutput.output, nodeId, undefined, undefined)
+          : nodeOutput.output;
+      }
+      const resolution = resolveNodeOutputField(nodeOutput, nodeId, field);
+      if (resolution.kind === 'empty') return escapedForBash ? "''" : '';
+      const value = resolution.value;
+      if (typeof value === 'string')
+        return escapedForBash ? shellQuoteOrFile(value, nodeId, field, undefined) : value;
+      if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+      const json = JSON.stringify(value);
+      return escapedForBash ? shellQuoteOrFile(json, nodeId, field, undefined) : json;
+    }
+  );
+}
+
 // buildSDKHooksFromYAML moved to @archon/providers/src/claude/provider.ts
 // loadMcpConfig moved to @archon/providers/src/mcp/config.ts
 
