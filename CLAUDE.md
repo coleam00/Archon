@@ -1,11 +1,16 @@
 ## Project Overview
 
-**Remote Agentic Coding Platform**: Control AI coding assistants (Claude Code SDK, Codex SDK) remotely from Slack, Telegram, and GitHub. Built with **Bun + TypeScript + SQLite/PostgreSQL**, single-developer tool for AI-assisted development practitioners. Architecture prioritizes simplicity, flexibility, and user control.
+**Archon — a self-hostable, governed agentic automation engine.** Archon runs multi-step workflows that mix deterministic steps (bash/scripts) with AI agents (Claude Code SDK, Codex SDK, and others), with human approval gates and full audit trails — driven remotely from Slack, Telegram, GitHub, Discord, the web UI, or the CLI. Its most mature surface today is agentic **coding** (controlling Claude Code / Codex against repos); the same engine is being extended to drive general **business-operations** automation. Built with **Bun + TypeScript + SQLite/PostgreSQL** and deployed as a single-tenant install (one isolated instance per operator or client — see *Single-Tenant per Install*). Architecture prioritizes simplicity, flexibility, governance, and user control.
+
+## Product Direction
+
+Archon is being positioned as a governed agentic automation engine for business operations, not only coding.
 
 ## Core Principles
 
-**Single-Developer Tool**
-- No multi-tenant complexity
+**Single-Tenant per Install**
+- One isolated instance per operator or client — the deployment model is one install (e.g. one VPS) per client, **not** one install serving many tenants. Keep the data model and runtime single-tenant: no per-tenant isolation, row-scoping, or tenant multiplexing. Client isolation is achieved at the **deployment** layer, not in code — a deliberate simplification, not a limitation.
+- Multi-**user** within one install (several humans sharing an instance, each with their own identity and credentials) **is** supported, and is distinct from multi-**tenant**. Don't conflate them.
 
 **Platform Agnostic**
 - Unified conversation interface across Slack/Telegram/GitHub/cli/web
