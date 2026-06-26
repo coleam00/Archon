@@ -83,6 +83,8 @@ function DagNodeItem({
   const hasTasks = (node.tasks?.length ?? 0) > 0;
   const hasHooks = (node.hooks?.length ?? 0) > 0;
   const hasSubItems = hasIterations || hasTasks || hasHooks;
+  // Stable id linking the toggle button to its collapsible region for a11y.
+  const subItemsId = `dag-subitems-${node.nodeId}`;
 
   return (
     <div>
@@ -105,6 +107,8 @@ function DagNodeItem({
               }}
               className="text-text-tertiary hover:text-text-secondary shrink-0 text-xs cursor-pointer"
               aria-label={expanded ? 'Collapse details' : 'Expand details'}
+              aria-expanded={expanded}
+              aria-controls={subItemsId}
             >
               {expanded ? '\u25BC' : '\u25B6'}
             </button>
@@ -134,7 +138,7 @@ function DagNodeItem({
         )}
       </div>
       {expanded && hasSubItems && (
-        <div className="ml-6 mt-0.5 space-y-1">
+        <div id={subItemsId} className="ml-6 mt-0.5 space-y-1">
           {hasIterations && (
             <div className="space-y-0.5">
               <div className="text-[10px] uppercase tracking-wide text-text-tertiary px-2">

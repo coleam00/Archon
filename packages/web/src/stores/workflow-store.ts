@@ -346,30 +346,51 @@ export const useWorkflowStore = create<WorkflowStoreState>()(
               const now = event.timestamp;
 
               if (event.activity === 'started') {
-                // Replace any prior started row for the same taskId (e.g. a
-                // re-spawn) — keeps the list flat rather than duplicating.
-                const newTask: DagTaskInfo = {
-                  taskId: event.taskId,
-                  activity: 'started',
-                  startedAt: now,
-                  updatedAt: now,
-                  ...(event.description !== undefined ? { description: event.description } : {}),
-                  ...(event.taskType !== undefined ? { taskType: event.taskType } : {}),
-                };
                 if (taskIdx >= 0) {
-                  tasks[taskIdx] = newTask;
+                  // A `started` can arrive after a progress/terminal event was
+                  // already seeded out-of-order. Merge rather than replace so we
+                  // neither regress the activity nor drop accumulated metadata
+                  // (summary / usage / lastToolName).
+                  const prev = tasks[taskIdx];
+                  tasks[taskIdx] = {
+                    ...prev,
+                    activity: prev.activity === 'started' ? 'started' : prev.activity,
+                    startedAt: now,
+                    updatedAt: now,
+                    ...(prev.description === undefined && event.description !== undefined
+                      ? { description: event.description }
+                      : {}),
+                    ...(prev.taskType === undefined && event.taskType !== undefined
+                      ? { taskType: event.taskType }
+                      : {}),
+                  };
                 } else {
-                  tasks.push(newTask);
+                  tasks.push({
+                    taskId: event.taskId,
+                    activity: 'started',
+                    startedAt: now,
+                    updatedAt: now,
+                    ...(event.description !== undefined ? { description: event.description } : {}),
+                    ...(event.taskType !== undefined ? { taskType: event.taskType } : {}),
+                  });
                 }
               } else {
                 if (taskIdx < 0) {
-                  // Notification / progress arrived before started (out-of-order
-                  // replay). Seed a row so the update isn't dropped.
+                  // Notification / progress / terminal arrived before started
+                  // (out-of-order replay). Seed a row carrying this event's
+                  // metadata so nothing is dropped before `started` lands.
                   tasks.push({
                     taskId: event.taskId,
                     activity: event.activity,
                     startedAt: now,
                     updatedAt: now,
+                    ...(event.description !== undefined ? { description: event.description } : {}),
+                    ...(event.taskType !== undefined ? { taskType: event.taskType } : {}),
+                    ...(event.summary !== undefined ? { summary: event.summary } : {}),
+                    ...(event.lastToolName !== undefined
+                      ? { lastToolName: event.lastToolName }
+                      : {}),
+                    ...(event.usage !== undefined ? { usage: event.usage } : {}),
                   });
                 } else {
                   const prev = tasks[taskIdx];
@@ -421,18 +442,28 @@ export const useWorkflowStore = create<WorkflowStoreState>()(
               const now = event.timestamp;
 
               if (event.activity === 'started') {
-                const newHook: DagHookInfo = {
-                  hookId: event.hookId,
-                  hookName: event.hookName,
-                  hookEvent: event.hookEvent,
-                  activity: 'started',
-                  startedAt: now,
-                  updatedAt: now,
-                };
                 if (hookIdx >= 0) {
-                  hooks[hookIdx] = newHook;
+                  // A `started` can arrive after the response was seeded
+                  // out-of-order. Merge so we neither regress 'response' →
+                  // 'started' nor drop the captured outcome / exitCode.
+                  const prev = hooks[hookIdx];
+                  hooks[hookIdx] = {
+                    ...prev,
+                    hookName: prev.hookName || event.hookName,
+                    hookEvent: prev.hookEvent || event.hookEvent,
+                    activity: prev.activity === 'started' ? 'started' : prev.activity,
+                    startedAt: now,
+                    updatedAt: now,
+                  };
                 } else {
-                  hooks.push(newHook);
+                  hooks.push({
+                    hookId: event.hookId,
+                    hookName: event.hookName,
+                    hookEvent: event.hookEvent,
+                    activity: 'started',
+                    startedAt: now,
+                    updatedAt: now,
+                  });
                 }
               } else {
                 if (hookIdx < 0) {

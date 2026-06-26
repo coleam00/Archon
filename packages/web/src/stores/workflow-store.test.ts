@@ -677,6 +677,47 @@ describe('handleTaskActivity', () => {
       .dagNodes.find(n => n.nodeId === 'plan')!;
     expect(node.tasks).toHaveLength(1);
     expect(node.tasks?.[0].activity).toBe('completed');
+    // The seeded row must carry the event's metadata (not just taskId/activity).
+    expect(node.tasks?.[0].summary).toBe('Done before started arrived');
+  });
+
+  test('late started after a seeded terminal event does not regress activity or drop metadata', () => {
+    useWorkflowStore.getState().handleWorkflowStatus(statusEvent({ runId: 'run-t7' }));
+    useWorkflowStore
+      .getState()
+      .handleDagNode(dagNodeEvent({ runId: 'run-t7', nodeId: 'plan', name: 'Plan' }));
+    // completed arrives first (out-of-order), carrying metadata
+    useWorkflowStore.getState().handleTaskActivity(
+      taskEvent({
+        runId: 'run-t7',
+        nodeId: 'plan',
+        taskId: 't-1',
+        activity: 'completed',
+        summary: 'Done',
+        lastToolName: 'Bash',
+        timestamp: 5000,
+      })
+    );
+    // a late started must not wipe the completed state or its metadata
+    useWorkflowStore.getState().handleTaskActivity(
+      taskEvent({
+        runId: 'run-t7',
+        nodeId: 'plan',
+        taskId: 't-1',
+        activity: 'started',
+        description: 'Plan the work',
+        timestamp: 1000,
+      })
+    );
+    const task = useWorkflowStore
+      .getState()
+      .workflows.get('run-t7')!
+      .dagNodes.find(n => n.nodeId === 'plan')!.tasks?.[0];
+    expect(task?.activity).toBe('completed');
+    expect(task?.summary).toBe('Done');
+    expect(task?.lastToolName).toBe('Bash');
+    // the late started still backfills the description it carried
+    expect(task?.description).toBe('Plan the work');
   });
 
   test('preserves tasks array after a later dag_node event for the same node', () => {
@@ -799,6 +840,40 @@ describe('handleHookActivity', () => {
       .dagNodes.find(n => n.nodeId === 'plan')!;
     expect(node.hooks).toHaveLength(1);
     expect(node.hooks?.[0].outcome).toBe('error');
+  });
+
+  test('late started after a seeded response does not regress activity or drop outcome', () => {
+    useWorkflowStore.getState().handleWorkflowStatus(statusEvent({ runId: 'run-h5' }));
+    useWorkflowStore
+      .getState()
+      .handleDagNode(dagNodeEvent({ runId: 'run-h5', nodeId: 'plan', name: 'Plan' }));
+    // response arrives first (out-of-order)
+    useWorkflowStore.getState().handleHookActivity(
+      hookEvent({
+        runId: 'run-h5',
+        nodeId: 'plan',
+        hookId: 'h-1',
+        activity: 'response',
+        outcome: 'success',
+        timestamp: 5000,
+      })
+    );
+    // a late started must not regress 'response' → 'started' or drop the outcome
+    useWorkflowStore.getState().handleHookActivity(
+      hookEvent({
+        runId: 'run-h5',
+        nodeId: 'plan',
+        hookId: 'h-1',
+        activity: 'started',
+        timestamp: 1000,
+      })
+    );
+    const hook = useWorkflowStore
+      .getState()
+      .workflows.get('run-h5')!
+      .dagNodes.find(n => n.nodeId === 'plan')!.hooks?.[0];
+    expect(hook?.activity).toBe('response');
+    expect(hook?.outcome).toBe('success');
   });
 
   test('preserves hooks array after a later dag_node event for the same node', () => {
