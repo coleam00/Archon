@@ -2259,42 +2259,409 @@ async function executeScriptNode(
 
 /**
  * Execute a loop-group node — runs a multi-node sub-DAG body repeatedly until a
- * completion condition (`until` signal / `until_bash` exit code) or `max_iterations`.
+ * completion condition (`until` signal in the body's terminal-node output, and/or
+ * `until_bash` exit code) or `max_iterations`.
  *
- * TODO(loop_group): This is a stub. The full implementation (mirroring `executeLoopNode`
- * at subgraph granularity: scoped `nodeOutputs` per iteration, `runLayers` over the body,
- * completion gate, `fresh_context` session reset, interactive gate pause/resume, and
- * `$LOOP_PREV.<id>.output` prior-iteration snapshot) lands in a follow-up task. Until
- * then, a workflow that authors a `loop_group` node fails fast with a clear message.
+ * Mirrors {@link executeLoopNode} at subgraph granularity: each iteration runs the body's
+ * topological layers via {@link runLayers} against a fresh scoped `nodeOutputs` map. The
+ * body is a sealed sub-DAG — body node events are namespaced `{groupId}.{nodeId}` via the
+ * `stepNamePrefix`. `$LOOP_PREV.<id>.output` refs in body prompts resolve against a
+ * snapshot of the *previous* iteration's body outputs (empty on iteration 1).
  *
- * Key behaviors (target):
- * - Returns NodeExecutionResult (not void) — DAG executor owns workflow lifecycle
- * - The body is a sealed sub-DAG; body node events are namespaced `{groupId}.{nodeId}`
- * - `$groupId.output` (outer DAG) = the final iteration's terminal-node output
+ * `$groupId.output` (visible to the outer DAG) = the final iteration's terminal-node output
+ * (mirrors the top-level run's terminal-output selection).
+ *
+ * Key behaviors:
+ * - Returns NodeExecutionResult (not void) — the outer DAG executor owns run lifecycle
+ * - Loop is encapsulated inside this one node; the outer DAG stays acyclic
+ * - Usage (cost/tokens) is summed across iterations and returned on the final result,
+ *   so the outer `runLayers` aggregates the group as one node's worth of usage
  */
 async function executeLoopGroupNode(
-  _deps: WorkflowDeps,
-  _platform: IWorkflowPlatform,
-  _conversationId: string,
-  _cwd: string,
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  cwd: string,
   workflowRun: WorkflowRun,
   node: LoopGroupNode,
-  _workflowProvider: string,
+  workflowProvider: string,
   _resolvedOptions: SendQueryOptions | undefined,
-  _artifactsDir: string,
-  _logDir: string,
-  _baseBranch: string,
-  _docsDir: string,
-  _nodeOutputs: Map<string, NodeOutput>,
-  _config: WorkflowConfig,
-  _issueContext?: string
+  artifactsDir: string,
+  logDir: string,
+  baseBranch: string,
+  docsDir: string,
+  outerNodeOutputs: Map<string, NodeOutput>,
+  config: WorkflowConfig,
+  issueContext?: string
 ): Promise<NodeExecutionResult> {
-  const errorMsg = `loop_group node '${node.id}': subgraph loop execution is not yet implemented (schema + dispatch are in place; the per-iteration body runner is pending). See .claude/archon/plans/subgraph-loop-group-node.plan.md task T5.`;
-  getLog().error(
-    { nodeId: node.id, workflowRunId: workflowRun.id },
-    'loop_group_node.not_implemented'
+  const group = node.loop_group;
+  const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
+
+  // Body layering is static — compute once, reuse across iterations.
+  const bodyLayers = buildTopologicalLayers(group.nodes);
+  const stepNamePrefix = `${node.id}.`;
+
+  // Detect interactive loop resume (mirrors executeLoopNode).
+  const rawApproval = workflowRun.metadata?.approval;
+  const loopGateMeta = isApprovalContext(rawApproval) ? rawApproval : undefined;
+  const isLoopResume = loopGateMeta?.type === 'interactive_loop' && loopGateMeta.nodeId === node.id;
+  const startIteration = isLoopResume ? (loopGateMeta.iteration ?? 0) + 1 : 1;
+  const loopUserInput = isLoopResume
+    ? ((workflowRun.metadata?.loop_user_input as string | undefined) ?? '')
+    : '';
+
+  let loopPrevOutputs: Map<string, NodeOutput> | undefined; // undefined on iteration 1
+  let lastIterationOutput = '';
+  let loopTotalCostUsd: number | undefined;
+  let loopTotalTokens: TokenUsage | undefined;
+
+  const logEventStoreError = (err: Error, iteration: number): void => {
+    getLog().error({ err, nodeId: node.id, iteration }, 'loop_group_node.iteration_event_failed');
+  };
+
+  for (let i = startIteration; i <= group.max_iterations; i++) {
+    const iterationStart = Date.now();
+
+    // Between-iteration status check (paused tolerated — mirrors executeLoopNode).
+    const runStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
+    if (!shouldContinueStreamingForStatus(runStatus)) {
+      const effectiveStatus = runStatus ?? 'deleted';
+      getLog().info(
+        { workflowRunId: workflowRun.id, nodeId: node.id, iteration: i, status: effectiveStatus },
+        'loop_group_node.stop_detected'
+      );
+      await safeSendMessage(
+        platform,
+        conversationId,
+        `Loop-group node '${node.id}' stopped at iteration ${String(i)} (${effectiveStatus})`,
+        msgContext
+      );
+      return { state: 'failed', output: '', error: `Workflow ${effectiveStatus}` };
+    }
+
+    // Emit iteration started.
+    getWorkflowEventEmitter().emit({
+      type: 'loop_iteration_started',
+      runId: workflowRun.id,
+      nodeId: node.id,
+      iteration: i,
+      maxIterations: group.max_iterations,
+    });
+    deps.store
+      .createWorkflowEvent({
+        workflow_run_id: workflowRun.id,
+        event_type: 'loop_iteration_started',
+        step_name: node.id,
+        data: { iteration: i, maxIterations: group.max_iterations, nodeId: node.id },
+      })
+      .catch((err: Error) => {
+        logEventStoreError(err, i);
+      });
+
+    // Pre-substitute $LOOP_PREV.* refs into the body node prompt fields. The body is a
+    // sealed sub-DAG whose executors build prompts from node definitions; resolving
+    // $LOOP_PREV here (before runLayers) keeps the body executors unaware of the loop.
+    // On iteration 1 loopPrevOutputs is undefined → refs resolve to ''.
+    const prevSnapshot = loopPrevOutputs;
+    const iterBodyNodes =
+      prevSnapshot && prevSnapshot.size > 0
+        ? group.nodes.map(n => applyLoopPrevToBodyNode(n, prevSnapshot))
+        : group.nodes;
+
+    // Fresh scoped output map per iteration. Seed it read-only with the outer DAG's
+    // upstream outputs so body nodes can reference outer context via $nodeId.output if
+    // needed (the body is sealed against depends_on, but prompt refs remain valid).
+    const scopedNodeOutputs = new Map<string, NodeOutput>(outerNodeOutputs);
+
+    const iterCtx: RunLayersContext = {
+      deps,
+      platform,
+      conversationId,
+      cwd,
+      workflowRun,
+      workflowName: node.id,
+      config,
+      workflowProvider,
+      workflowModel: undefined,
+      workflowLevelOptions: {
+        effort: undefined,
+        thinking: undefined,
+        fallbackModel: undefined,
+        betas: undefined,
+        sandbox: undefined,
+      },
+      aiProfile: undefined,
+      workflowPreset: undefined,
+      artifactsDir,
+      logDir,
+      baseBranch,
+      docsDir,
+      configuredCommandFolder: undefined,
+      issueContext,
+      persistScopeKey: undefined,
+      workflowPersistSessions: false,
+      nodes: iterBodyNodes,
+      layers: bodyLayers,
+      nodeOutputs: scopedNodeOutputs,
+      priorCompletedNodes: undefined, // body re-runs in full each iteration (v1)
+      // fresh_context (or iteration 1) starts the body's session threading fresh.
+      lastSequentialSessionId: undefined,
+      totalCostUsd: 0,
+      totalTokensIn: 0,
+      totalTokensOut: 0,
+      totalLoopIterations: 0,
+      stepNamePrefix,
+    };
+    await runLayers(iterCtx);
+
+    // Carry prior-iteration snapshot forward for $LOOP_PREV.* on the next iteration.
+    loopPrevOutputs = new Map(scopedNodeOutputs);
+
+    // Determine this iteration's terminal output (first completed terminal node in
+    // definition order — mirrors the top-level run's terminal-output selection).
+    const allDeps = new Set(iterBodyNodes.flatMap(n => n.depends_on ?? []));
+    const terminalOutput = iterBodyNodes
+      .filter(n => !allDeps.has(n.id))
+      .map(n => scopedNodeOutputs.get(n.id))
+      .find(o => o?.state === 'completed' && o.output.trim().length > 0)?.output;
+    const iterationOutput = terminalOutput ?? '';
+    lastIterationOutput = iterationOutput;
+
+    // Accumulate usage across iterations.
+    loopTotalCostUsd = (loopTotalCostUsd ?? 0) + iterCtx.totalCostUsd;
+    if (iterCtx.totalTokensIn > 0 || iterCtx.totalTokensOut > 0) {
+      loopTotalTokens = {
+        input: (loopTotalTokens?.input ?? 0) + iterCtx.totalTokensIn,
+        output: (loopTotalTokens?.output ?? 0) + iterCtx.totalTokensOut,
+      };
+    }
+
+    // Completion gate: until-signal in the terminal output, and/or until_bash exit 0.
+    const signalDetected = detectCompletionSignal(iterationOutput, group.until);
+
+    let bashComplete = false;
+    if (group.until_bash) {
+      try {
+        const { prompt: bashPrompt } = substituteWorkflowVariables(
+          group.until_bash,
+          workflowRun.id,
+          workflowRun.user_message,
+          artifactsDir,
+          baseBranch,
+          docsDir,
+          issueContext,
+          i === startIteration ? loopUserInput : undefined,
+          undefined,
+          undefined,
+          { shellSafe: true }
+        );
+        const substitutedBash = substituteNodeOutputRefs(
+          bashPrompt,
+          scopedNodeOutputs,
+          true, // escapedForBash
+          logDir
+        );
+        await execFileAsync('bash', ['-c', substitutedBash], {
+          cwd,
+          timeout: SUBPROCESS_DEFAULT_TIMEOUT,
+          env: {
+            ...process.env,
+            USER_MESSAGE: workflowRun.user_message,
+            ARGUMENTS: workflowRun.user_message,
+            LOOP_USER_INPUT: i === startIteration ? (loopUserInput ?? '') : '',
+            LOOP_PREV_OUTPUT: iterationOutput,
+            REJECTION_REASON: '',
+            CONTEXT: issueContext ?? '',
+            EXTERNAL_CONTEXT: issueContext ?? '',
+            ISSUE_CONTEXT: issueContext ?? '',
+            ...(config.envVars ?? {}),
+          },
+        });
+        bashComplete = true;
+      } catch (e) {
+        const bashErr = e as NodeJS.ErrnoException;
+        if (bashErr.code === 'ENOENT' || bashErr.code !== undefined) {
+          getLog().warn(
+            { err: bashErr, nodeId: node.id, iteration: i },
+            'loop_group_node.until_bash_error'
+          );
+        }
+        bashComplete = false;
+      }
+    }
+
+    const duration = Date.now() - iterationStart;
+    const completionDetected = signalDetected || bashComplete;
+
+    getWorkflowEventEmitter().emit({
+      type: 'loop_iteration_completed',
+      runId: workflowRun.id,
+      nodeId: node.id,
+      iteration: i,
+      duration,
+      completionDetected,
+    });
+    deps.store
+      .createWorkflowEvent({
+        workflow_run_id: workflowRun.id,
+        event_type: 'loop_iteration_completed',
+        step_name: node.id,
+        data: { iteration: i, duration, completionDetected, nodeId: node.id },
+      })
+      .catch((err: Error) => {
+        logEventStoreError(err, i);
+      });
+
+    // Completion: honor the signal only when the AI had input to evaluate (interactive
+    // first run always gates first — mirrors executeLoopNode's interactiveFirstRun).
+    const interactiveFirstRun = group.interactive && !isLoopResume;
+    if (completionDetected && !interactiveFirstRun) {
+      await safeSendMessage(
+        platform,
+        conversationId,
+        `Loop-group node '${node.id}' completed after ${String(i)} iteration${i > 1 ? 's' : ''}`,
+        msgContext
+      );
+      deps.store
+        .createWorkflowEvent({
+          workflow_run_id: workflowRun.id,
+          event_type: 'node_completed',
+          step_name: node.id,
+          data: {
+            duration_ms: duration,
+            node_output: lastIterationOutput,
+            ...(loopTotalCostUsd !== undefined ? { cost_usd: loopTotalCostUsd } : {}),
+          },
+        })
+        .catch((err: Error) => {
+          getLog().error(
+            { err, workflowRunId: workflowRun.id, eventType: 'node_completed' },
+            'workflow_event_persist_failed'
+          );
+        });
+      getWorkflowEventEmitter().emit({
+        type: 'node_completed',
+        runId: workflowRun.id,
+        nodeId: node.id,
+        nodeName: node.id,
+        duration,
+        ...(loopTotalCostUsd !== undefined ? { costUsd: loopTotalCostUsd } : {}),
+      });
+      return {
+        state: 'completed',
+        output: lastIterationOutput,
+        costUsd: loopTotalCostUsd,
+        ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+        loopIterations: i,
+      };
+    }
+
+    // Interactive gate — pause after an iteration that did not complete.
+    if (group.interactive && group.gate_message) {
+      const gateMsg =
+        `⏸ **Input required** (loop_group \`${node.id}\`, iteration ${String(i)}): ${group.gate_message}\n\n` +
+        `Run ID: \`${workflowRun.id}\`\n` +
+        `Respond: \`/workflow approve ${workflowRun.id} <your feedback>\` | Cancel: \`/workflow reject ${workflowRun.id}\``;
+      const gateSent = await safeSendMessage(platform, conversationId, gateMsg, {
+        workflowId: workflowRun.id,
+        nodeName: node.id,
+      });
+      if (!gateSent) {
+        getLog().error(
+          { nodeId: node.id, workflowRunId: workflowRun.id, iteration: i },
+          'loop_group_node.gate_message_send_failed'
+        );
+        return {
+          state: 'failed',
+          output: lastIterationOutput,
+          error: `Loop-group gate message failed to deliver for node '${node.id}' — cannot pause safely`,
+        };
+      }
+      deps.store
+        .createWorkflowEvent({
+          workflow_run_id: workflowRun.id,
+          event_type: 'approval_requested',
+          step_name: node.id,
+          data: { message: group.gate_message, iteration: i },
+        })
+        .catch((err: Error) => {
+          logEventStoreError(err, i);
+        });
+      await deps.store.pauseWorkflowRun(workflowRun.id, {
+        nodeId: node.id,
+        message: group.gate_message,
+        type: 'interactive_loop',
+        iteration: i,
+        sessionId: undefined,
+      });
+      getWorkflowEventEmitter().emit({
+        type: 'approval_pending',
+        runId: workflowRun.id,
+        nodeId: node.id,
+        message: group.gate_message,
+      });
+      return {
+        state: 'completed',
+        output: lastIterationOutput,
+        costUsd: loopTotalCostUsd,
+        ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+        loopIterations: i,
+      };
+    }
+  }
+
+  // Max iterations exceeded.
+  const errorMsg = `Loop-group node '${node.id}' exceeded max iterations (${String(group.max_iterations)}) without completion signal '${group.until}'`;
+  getLog().warn(
+    { nodeId: node.id, maxIterations: group.max_iterations, signal: group.until },
+    'loop_group_node.max_iterations_reached'
   );
-  return { state: 'failed', output: '', error: errorMsg };
+  await safeSendMessage(platform, conversationId, errorMsg, msgContext);
+  return {
+    state: 'failed',
+    output: lastIterationOutput,
+    error: errorMsg,
+    costUsd: loopTotalCostUsd,
+    ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+    loopIterations: group.max_iterations,
+  };
+}
+
+/**
+ * Clone a body node with `$LOOP_PREV.<id>.output[.field]` refs pre-substituted into every
+ * text field a body executor reads prompts from. Used by {@link executeLoopGroupNode} so
+ * the sealed body sub-DAG's executors stay unaware of the enclosing loop iteration.
+ *
+ * Only prompt-bearing fields are substituted in v1; `when:` conditions are NOT (they use
+ * evaluateCondition, which does not call substituteLoopPrevRefs). Body authors who need
+ * cross-iteration gating should branch on prompt content, not `when:`.
+ */
+function applyLoopPrevToBodyNode(node: DagNode, loopPrevOutputs: Map<string, NodeOutput>): DagNode {
+  const sub = (s: string): string => substituteLoopPrevRefs(s, loopPrevOutputs, false);
+  if (isLoopNode(node)) return { ...node, loop: { ...node.loop, prompt: sub(node.loop.prompt) } };
+  if (isLoopGroupNode(node)) {
+    // Nested loop_group: recurse into the body (each body node gets $LOOP_PREV resolved
+    // against the OUTER loop's prior-iteration snapshot; inner-loop refs resolve at the
+    // inner loop's own iteration granularity).
+    return {
+      ...node,
+      loop_group: {
+        ...node.loop_group,
+        nodes: node.loop_group.nodes.map(n => applyLoopPrevToBodyNode(n, loopPrevOutputs)),
+      },
+    };
+  }
+  if (isApprovalNode(node)) {
+    return { ...node, approval: { ...node.approval, message: sub(node.approval.message) } };
+  }
+  if (isBashNode(node)) return { ...node, bash: sub(node.bash) };
+  if (isScriptNode(node)) return { ...node, script: sub(node.script) };
+  if (isCancelNode(node)) return { ...node, cancel: sub(node.cancel) };
+  if ('command' in node && typeof node.command === 'string')
+    return { ...node, command: sub(node.command) };
+  if ('prompt' in node && typeof node.prompt === 'string')
+    return { ...node, prompt: sub(node.prompt) };
+  return node;
 }
 
 /**

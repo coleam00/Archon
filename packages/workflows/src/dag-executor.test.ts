@@ -9580,3 +9580,123 @@ describe('executeDagWorkflow -- completion telemetry', () => {
     );
   });
 });
+
+describe('executeDagWorkflow -- loop_group node', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(tmpdir(), `dag-loopgroup-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await mkdir(join(testDir, '.archon', 'commands'), { recursive: true });
+    mockSendQueryDag.mockClear();
+    mockGetAgentProviderDag.mockClear();
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+  });
+
+  afterEach(async () => {
+    try {
+      await rm(testDir, { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
+  });
+
+  it('completes a loop_group when the until signal appears on iteration N', async () => {
+    let callCount = 0;
+    mockSendQueryDag.mockImplementation(function* () {
+      callCount++;
+      if (callCount === 1) {
+        yield { type: 'assistant', content: 'iteration 1 work, not done yet' };
+      } else {
+        yield { type: 'assistant', content: 'iteration 2 final result\nDONE' };
+      }
+      yield { type: 'result', sessionId: `lg-sess-${callCount}` };
+    });
+
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('dag-loopgroup-done');
+
+    const nodes: DagNode[] = [
+      {
+        id: 'fixer',
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 5,
+          fresh_context: false,
+          nodes: [{ id: 'work', prompt: 'do work, emit DONE when finished', depends_on: [] }],
+        },
+        depends_on: [],
+      },
+    ];
+
+    const result = await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-lg',
+      testDir,
+      { name: 'dag-loopgroup-done', nodes },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    // Two iterations: iter 1 (no signal) → iter 2 (DONE signal) → complete.
+    expect(callCount).toBe(2);
+    expect(result).toContain('iteration 2 final result');
+  });
+
+  it('fails the loop_group when max_iterations is exceeded without the until signal', async () => {
+    let callCount = 0;
+    mockSendQueryDag.mockImplementation(function* () {
+      callCount++;
+      yield { type: 'assistant', content: `iteration ${callCount} work, still going` };
+      yield { type: 'result', sessionId: `lg-sess-${callCount}` };
+    });
+
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('dag-loopgroup-maxiter');
+
+    const nodes: DagNode[] = [
+      {
+        id: 'fixer',
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 3,
+          fresh_context: false,
+          nodes: [{ id: 'work', prompt: 'do work, never emit DONE', depends_on: [] }],
+        },
+        depends_on: [],
+      },
+    ];
+
+    const result = await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-lg',
+      testDir,
+      { name: 'dag-loopgroup-maxiter', nodes },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    // Exhausted max_iterations (3) with no signal → run failed, no terminal output.
+    expect(callCount).toBe(3);
+    expect(result).toBeUndefined();
+  });
+});
