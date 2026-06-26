@@ -34,10 +34,20 @@ describe('hasClaudeBootAuthPosture', () => {
     expect(hasClaudeBootAuthPosture({ TOKEN_ENCRYPTION_KEY: 'k' })).toBe(true);
   });
 
-  test.each([['CLAUDE_API_KEY'], ['CLAUDE_CODE_OAUTH_TOKEN'], ['CLAUDE_USE_GLOBAL_AUTH']])(
+  test.each([['CLAUDE_API_KEY'], ['CLAUDE_CODE_OAUTH_TOKEN']])(
     '%s alone is a valid posture',
     key => {
       expect(hasClaudeBootAuthPosture({ [key]: 'x' })).toBe(true);
     }
   );
+
+  test("CLAUDE_USE_GLOBAL_AUTH='true' alone is a valid posture", () => {
+    expect(hasClaudeBootAuthPosture({ CLAUDE_USE_GLOBAL_AUTH: 'true' })).toBe(true);
+  });
+
+  test("CLAUDE_USE_GLOBAL_AUTH='false' is an explicit opt-out, not a posture", () => {
+    expect(hasClaudeBootAuthPosture({ CLAUDE_USE_GLOBAL_AUTH: 'false' })).toBe(false);
+    // any non-'true' value is treated as disabled
+    expect(hasClaudeBootAuthPosture({ CLAUDE_USE_GLOBAL_AUTH: 'x' })).toBe(false);
+  });
 });
