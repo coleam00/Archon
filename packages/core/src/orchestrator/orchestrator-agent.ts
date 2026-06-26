@@ -509,11 +509,15 @@ function buildFailedRunResumePrompt(
   const escapedMessage = escapeWorkflowCommandArg(userMessage);
   const baseCommand = `/workflow run ${workflowName}`;
   const priorPreview = formatPriorRunPromptPreview(resumableRun.user_message);
+  // This prompt fires for any non-paused resumable run — that includes a stale
+  // 'running' orphan (started but never finished), not only 'failed' runs, so
+  // the wording must track the actual status rather than hardcoding "failed".
+  const stateLabel = resumableRun.status === 'running' ? 'interrupted' : resumableRun.status;
 
   return [
     '---',
     '',
-    `Found a prior failed run of **${workflowName}** (run \`${resumableRun.id}\`).`,
+    `Found a prior ${stateLabel} run of **${workflowName}** (run \`${resumableRun.id}\`).`,
     '',
     '**Run prompt was:**',
     '',
@@ -648,6 +652,14 @@ async function dispatchOrchestratorWorkflow(
         codebase.id
       )));
   if (options?.resumeRun && !options.resumeRun.working_path) {
+    getLog().warn(
+      {
+        runId: options.resumeRun.id,
+        workflowName: workflow.name,
+        platformType: platform.getPlatformType(),
+      },
+      'orchestrator.resume_missing_working_path'
+    );
     await platform.sendMessage(
       conversationId,
       `Cannot resume ${options.resumeRun.id}: missing working path.`

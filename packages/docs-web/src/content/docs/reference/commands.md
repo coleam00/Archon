@@ -35,7 +35,7 @@ These commands are handled deterministically by the orchestrator — they always
 | `/workflow status` | Show active workflows |
 | `/workflow cancel` | Cancel running workflow |
 | `/workflow resume <id>` | Resume a failed run (re-runs, skipping completed nodes) |
-| `/workflow abandon <id>` | Discard a non-terminal run |
+| `/workflow abandon <id>` | Discard a run (running, paused, or failed) |
 | `/workflow approve <id> [comment]` | Approve a paused workflow run at an approval gate |
 | `/workflow reject <id> [reason]` | Reject a paused workflow run at an approval gate |
 | `/workflow run <name> [args]` | Run a workflow directly |

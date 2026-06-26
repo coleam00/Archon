@@ -1468,6 +1468,36 @@ describe('workflow dispatch routing — interactive flag', () => {
     );
   });
 
+  test('failed_resume_user_prompted: stale running orphan gates with status-accurate copy', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    // findResumableRunByParentConversation also surfaces stale 'running' orphans,
+    // not just 'failed' runs — the prompt must not mislabel them as "failed".
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve(makeResumableRun({ status: 'running' }))
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+
+    // Gate still fires (no silent auto-resume) ...
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(platform.sendMessage).toHaveBeenCalledWith(
+      'conv-1',
+      expect.stringContaining('/workflow resume resumable-run-1')
+    );
+    // ... but the copy reflects the real status, not "failed".
+    expect(platform.sendMessage).toHaveBeenCalledWith(
+      'conv-1',
+      expect.stringContaining('Found a prior interrupted run of **test-workflow**')
+    );
+    expect(platform.sendMessage).not.toHaveBeenCalledWith(
+      'conv-1',
+      expect.stringContaining('Found a prior failed run')
+    );
+  });
+
   test('failed_resume_user_prompted: prompt includes normalized truncated prior prompt preview', async () => {
     const priorMessage = `line one\n${'x'.repeat(220)}`;
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));

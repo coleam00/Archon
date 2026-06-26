@@ -101,12 +101,19 @@ export async function resumeWorkflow(runId: string): Promise<WorkflowRun> {
 }
 
 /**
- * Abandon a non-terminal workflow run (marks it as cancelled).
+ * Abandon a workflow run (marks it as cancelled).
+ *
+ * Running, paused, AND failed runs can be abandoned. A `failed` run is terminal
+ * per TERMINAL_WORKFLOW_STATUSES but remains resumable, so the user must be able
+ * to discard it — hence the inline check here intentionally diverges from that
+ * constant and blocks only the two non-resumable terminal states.
  */
 export async function abandonWorkflow(runId: string): Promise<WorkflowRun> {
   const run = await getRunOrThrow(runId, 'operations.workflow_abandon_lookup_failed');
   if (run.status === 'completed' || run.status === 'cancelled') {
-    throw new Error(`Cannot abandon run with status '${run.status}'. Run is already terminal.`);
+    throw new Error(
+      `Cannot abandon run with status '${run.status}'. Only running, paused, or failed runs can be abandoned.`
+    );
   }
   try {
     await workflowDb.cancelWorkflowRun(runId);

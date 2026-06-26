@@ -26,7 +26,7 @@ This chapter collects every CLI command, variable, and YAML option in one place.
 | `archon workflow run <name> --cwd /path "<prompt>"` | Run against a specific directory |
 | `archon workflow status` | Show status of active workflow runs |
 | `archon workflow resume <run-id>` | Resume a failed workflow run |
-| `archon workflow abandon <run-id>` | Abandon a non-terminal workflow run |
+| `archon workflow abandon <run-id>` | Abandon a workflow run (running, paused, or failed) |
 | `archon workflow cleanup [days]` | Delete old workflow run records (default: 7 days) |
 
 ### `archon isolation`
