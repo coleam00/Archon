@@ -653,6 +653,7 @@ curl http://localhost:3637/api/conversations/<conversationId>/messages
 ├── vendor/codex/                  # Codex native binary (binary builds, user-placed)
 ├── web-dist/<version>/            # Cached web UI dist (archon serve, binary only)
 ├── update-check.json              # Update check cache (binary builds, 24h TTL)
+├── tier-notice.json               # One-time tier-default notice state (CLI, per version)
 ├── archon.db                     # SQLite database (when DATABASE_URL not set)
 └── config.yaml                   # Global configuration (non-secrets)
 ```

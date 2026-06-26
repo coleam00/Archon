@@ -1258,6 +1258,56 @@ describe('executeDagWorkflow -- tool restrictions', () => {
     expect(optionsArg.model).toBe('opus');
     const nodeConfig = optionsArg.nodeConfig as Record<string, unknown>;
     expect(nodeConfig.effort).toBe('max');
+
+    // Verify that the node_started event carries the resolved tier and model.
+    const createEventCalls = (mockDeps.store.createWorkflowEvent as ReturnType<typeof mock>).mock
+      .calls as Array<[{ event_type: string; data?: Record<string, unknown> }]>;
+    const nodeStartedCall = createEventCalls.find(([arg]) => arg.event_type === 'node_started');
+    expect(nodeStartedCall).toBeDefined();
+    expect(nodeStartedCall?.[0].data?.tier).toBe('large');
+    expect(nodeStartedCall?.[0].data?.model).toBe('opus');
+  });
+
+  it('surfaces the workflow-level tier on nodes that inherit the workflow model', async () => {
+    // Regression guard for #2036: the bundled default workflows set the tier at
+    // the WORKFLOW level (e.g. `model: medium`), and their nodes have no own
+    // `model`. The node_started event must still carry the inherited tier.
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+    const aiProfile = buildAiProfile('claude');
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'workflow-level-tier-test',
+        model: 'medium',
+        nodes: [{ id: 'step1', command: 'my-cmd' }],
+      },
+      workflowRun,
+      'claude',
+      'sonnet', // executor resolves the workflow-level `medium` -> `sonnet`
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      aiProfile
+    );
+
+    const createEventCalls = (mockDeps.store.createWorkflowEvent as ReturnType<typeof mock>).mock
+      .calls as Array<[{ event_type: string; data?: Record<string, unknown> }]>;
+    const nodeStartedCall = createEventCalls.find(([arg]) => arg.event_type === 'node_started');
+    expect(nodeStartedCall).toBeDefined();
+    expect(nodeStartedCall?.[0].data?.tier).toBe('medium');
+    expect(nodeStartedCall?.[0].data?.model).toBe('sonnet');
   });
 
   it('passes literal node model through unchanged', async () => {

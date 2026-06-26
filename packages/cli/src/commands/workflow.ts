@@ -7,10 +7,25 @@ import {
   loadRepoConfig,
   generateAndSetTitle,
   createWorkflowStore,
+  getUserAiPrefs,
 } from '@archon/core';
 import { WORKFLOW_EVENT_TYPES, type WorkflowEventType } from '@archon/workflows/store';
+import {
+  isTierName,
+  buildAiProfile,
+  TIER_NAMES,
+  type TierName,
+  type RawTiersConfig,
+} from '@archon/workflows/model-validation';
 import { configureIsolation, getIsolationProvider } from '@archon/isolation';
-import { createLogger, getArchonHome, BUNDLED_IS_BINARY } from '@archon/paths';
+import {
+  createLogger,
+  getArchonHome,
+  BUNDLED_IS_BINARY,
+  BUNDLED_VERSION,
+  readTierNoticeState,
+  markTierNoticeShown,
+} from '@archon/paths';
 import { join } from 'node:path';
 import { mkdirSync, openSync, closeSync } from 'node:fs';
 import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
@@ -268,12 +283,119 @@ function resolveTitleAssistantType(
   return fallbackAssistant;
 }
 
+/**
+ * Print a one-time per-version tier notice to stderr when the workflow uses
+ * unconfigured tier-keyword nodes (small/medium/large resolving via built-in
+ * defaults). Suppressed under --quiet. Uses the same 7-char tier column as
+ * `archon ai tier list`.
+ */
+export async function maybePrintTierNotice(
+  workflow: WorkflowDefinition,
+  cwd: string,
+  cliUserId: string | undefined,
+  quiet: boolean | undefined
+): Promise<void> {
+  if (quiet) return;
+
+  // Collect tier keywords used by the workflow — check the workflow-level default
+  // first (model: large at the top level applies to all nodes without overrides),
+  // then per-node overrides.
+  const usedTiers = new Set<TierName>();
+  if (typeof workflow.model === 'string' && isTierName(workflow.model)) {
+    usedTiers.add(workflow.model);
+  }
+  for (const node of workflow.nodes) {
+    if ('model' in node && typeof node.model === 'string' && isTierName(node.model)) {
+      usedTiers.add(node.model);
+    }
+  }
+  if (usedTiers.size === 0) return;
+
+  // Load install config to see which tiers are explicitly configured.
+  let config: Awaited<ReturnType<typeof loadConfig>>;
+  try {
+    config = await loadConfig(cwd);
+  } catch (err) {
+    getLog().debug({ err }, 'tier_notice.config_load_failed');
+    return;
+  }
+  const configuredTiers: RawTiersConfig = config.tiers ?? {};
+
+  // Layer in the CLI user's personal tier prefs (best-effort, non-fatal).
+  let userTiers: RawTiersConfig = {};
+  let userDefaultProvider: string | undefined;
+  if (cliUserId) {
+    try {
+      const prefs = await getUserAiPrefs(cliUserId);
+      userTiers = prefs.tiers ?? {};
+      userDefaultProvider = prefs.defaultProvider;
+    } catch {
+      // Non-fatal — proceed without user tier info.
+    }
+  }
+
+  // Only notify when at least one used tier is unconfigured (built-in default).
+  const hasUnconfigured = [...usedTiers].some(t => !configuredTiers[t] && !userTiers[t]);
+  if (!hasUnconfigured) return;
+
+  // One-time per Archon version (a version bump may ship new tier defaults).
+  const version = BUNDLED_VERSION;
+  if (readTierNoticeState()?.shownForVersion === version) return;
+
+  // Build the resolved profile for the effective default assistant.
+  const effectiveAssistant = userDefaultProvider ?? config.assistant;
+  let aliases: ReturnType<typeof buildAiProfile>['aliases'];
+  try {
+    aliases = buildAiProfile(effectiveAssistant, {
+      globalTiers: configuredTiers,
+      userTiers,
+    }).aliases;
+  } catch (err) {
+    // Non-fatal: a corrupt tier/alias config can make buildAiProfile throw —
+    // skip the notice rather than blocking the run.
+    getLog().debug({ err }, 'tier_notice.build_profile_failed');
+    return;
+  }
+
+  const lines: string[] = [
+    "ℹ️  This workflow uses model tiers (small/medium/large). You haven't configured them —",
+    `   using built-in defaults for '${effectiveAssistant}':`,
+  ];
+  for (const t of TIER_NAMES) {
+    const preset = aliases[t];
+    if (preset) lines.push(`     ${t.padEnd(7)} → ${preset.provider}/${preset.model}`);
+  }
+  // Plan-dependent 1M note for the large→opus row (the CLI can't detect the plan).
+  const largePreset = aliases.large;
+  if (largePreset?.provider === 'claude' && largePreset.model === 'opus') {
+    lines.push(
+      '   (Opus runs a 1M context window on API keys and Max/Team/Enterprise;',
+      "    on Pro it's 200K unless you set the `large` tier to `opus[1m]`.)"
+    );
+  }
+  lines.push(
+    '   Customize: `archon ai tier set <tier> <provider> <model>`',
+    '              or `tiers:` in .archon/config.yaml',
+    '   See anytime: `archon ai tier list`           (shown once per version)',
+    ''
+  );
+  process.stderr.write(lines.join('\n') + '\n');
+
+  markTierNoticeShown(version);
+}
+
 /** Render a workflow event to stderr as a progress line. Called only when --quiet is not set. */
 function renderWorkflowEvent(event: WorkflowEmitterEvent, verbose: boolean): void {
   switch (event.type) {
-    case 'node_started':
-      process.stderr.write(`[${event.nodeName}] Started\n`);
+    case 'node_started': {
+      let suffix = '';
+      if (event.provider !== undefined && event.model !== undefined) {
+        const tierPart = event.tier !== undefined ? ` ← ${event.tier}` : '';
+        suffix = `  (${event.provider}/${event.model}${tierPart})`;
+      }
+      process.stderr.write(`[${event.nodeName}] Started${suffix}\n`);
       break;
+    }
     case 'node_completed':
       process.stderr.write(`[${event.nodeName}] Completed (${formatDuration(event.duration)})\n`);
       break;
@@ -928,6 +1050,9 @@ export async function workflowRunCommand(
   process.once('SIGINT', () => {
     cleanup('SIGINT');
   });
+
+  // One-time-per-version notice when the workflow uses unconfigured tier keywords.
+  await maybePrintTierNotice(workflow, workingCwd, cliUserId, options.quiet);
 
   // Subscribe to workflow events for progress rendering on stderr.
   // subscribeForConversation is pure in-memory registration — cannot throw in practice.
