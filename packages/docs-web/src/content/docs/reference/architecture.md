@@ -343,10 +343,15 @@ export type MessageChunk =
       structuredOutput?: unknown;
       isError?: boolean;
       errorSubtype?: string;
+      errors?: string[];
       cost?: number;
       stopReason?: string;
       numTurns?: number;
       modelUsage?: Record<string, unknown>;
+      // Session-resume outcome: true = restored, false = requested but fell back
+      // to a fresh session, omitted = no resume requested. Set only when
+      // resumeSessionId was passed (stamp it via withResumedOutcome).
+      resumed?: boolean;
     }
   | { type: 'rate_limit'; rateLimitInfo: Record<string, unknown> }
   | { type: 'tool'; toolName: string; toolInput?: Record<string, unknown>; toolCallId?: string }

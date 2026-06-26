@@ -18,6 +18,7 @@ import type {
 import { PI_CAPABILITIES } from './capabilities';
 import { parsePiConfig } from './config';
 import { parsePiModelRef } from './model-ref';
+import { withResumedOutcome, resumedOutcome } from '../../shared/resumed';
 
 // IMPORTANT: Do NOT add static `import { ... } from '@earendil-works/*'` here,
 // and do NOT statically import sibling modules that themselves import runtime
@@ -619,12 +620,15 @@ export class PiProvider implements IAgentProvider {
       getLog().debug('pi.semaphore_acquired');
     }
     try {
-      yield* bridgeSession(
-        session,
-        effectivePrompt,
-        requestOptions?.abortSignal,
-        outputFormat?.schema,
-        uiBridge
+      yield* withResumedOutcome(
+        bridgeSession(
+          session,
+          effectivePrompt,
+          requestOptions?.abortSignal,
+          outputFormat?.schema,
+          uiBridge
+        ),
+        resumedOutcome(resumeSessionId, !resumeFailed)
       );
       getLog().info({ piProvider: parsed.provider }, 'pi.prompt_completed');
     } catch (err) {
