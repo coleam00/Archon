@@ -16,7 +16,7 @@ import type {
   AttachedFile,
 } from '../types';
 import type { SendQueryOptions, TokenUsage } from '@archon/providers/types';
-import { ConversationNotFoundError } from '../types';
+import { ConversationNotFoundError, isWebAdapter } from '../types';
 import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
 import * as sessionDb from '../db/sessions';
@@ -1087,6 +1087,25 @@ export async function handleMessage(
       }
     }
 
+    // Persist the inbound user message for non-web platforms (Slack/Telegram/
+    // GitHub/Discord/CLI) — the web adapter's route persists web turns itself.
+    // Placed AFTER the deterministic-command and approval early-returns so only
+    // AI-bound turns get a user row (no orphaned user message without an
+    // assistant reply), and BEFORE the AI call so the user row's timestamp
+    // precedes the assistant row's. Fire-and-forget: a DB failure must not break
+    // platform delivery (#1182).
+    if (!isWebAdapter(platform)) {
+      messageDb
+        .addMessage(conversation.id, 'user', message, undefined, userId)
+        .catch((e: unknown) => {
+          const err = e instanceof Error ? e : new Error(String(e));
+          getLog().warn(
+            { err, errorType: err.constructor.name, conversationId },
+            'orchestrator.user_message_persist_failed'
+          );
+        });
+    }
+
     // 3. Load codebases, discover workflows, build prompt
     const codebases = await codebaseDb.listCodebases();
     const {
@@ -1692,7 +1711,19 @@ async function handleStreamMode(
     return;
   }
 
-  // Text was already streamed — nothing more to send
+  // Text was already streamed — nothing more to send.
+  // Persist the assistant reply for non-web platforms so it appears in the
+  // Web UI conversation history. The web adapter persists through its
+  // MessagePersistence buffer; skip it here to avoid double-write (#1182).
+  if (!isWebAdapter(platform) && fullResponse) {
+    messageDb.addMessage(conversation.id, 'assistant', fullResponse).catch((e: unknown) => {
+      const err = e instanceof Error ? e : new Error(String(e));
+      getLog().warn(
+        { err, errorType: err.constructor.name, conversationId },
+        'orchestrator.assistant_message_persist_failed'
+      );
+    });
+  }
   await maybeSendResultFooter(platform, conversationId, lastResult);
   // Anonymous telemetry: one completed direct-chat turn. The workflow-invocation
   // and project-registration paths return above without reaching this — those
@@ -1940,6 +1971,18 @@ async function handleBatchMode(
   // No orchestrator commands — send the clean response
   getLog().debug({ messageLength: finalMessage.length }, 'sending_final_message');
   await platform.sendMessage(conversationId, finalMessage);
+  // Persist the assistant reply for non-web platforms so it appears in the
+  // Web UI conversation history. The web adapter persists through its
+  // MessagePersistence buffer; skip it here to avoid double-write (#1182).
+  if (!isWebAdapter(platform) && finalMessage) {
+    messageDb.addMessage(conversation.id, 'assistant', finalMessage).catch((e: unknown) => {
+      const err = e instanceof Error ? e : new Error(String(e));
+      getLog().warn(
+        { err, errorType: err.constructor.name, conversationId },
+        'orchestrator.assistant_message_persist_failed'
+      );
+    });
+  }
   await maybeSendResultFooter(platform, conversationId, lastResult);
   // Anonymous telemetry: one completed direct-chat turn (same exclusion
   // rationale as the stream-mode capture in handleStreamMode above).

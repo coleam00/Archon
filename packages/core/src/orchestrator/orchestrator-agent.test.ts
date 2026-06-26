@@ -201,9 +201,10 @@ mock.module('./prompt-builder', () => ({
   ),
 }));
 
+const mockAddMessage = mock(() => Promise.resolve());
 const mockGetRecentWorkflowResultMessages = mock(() => Promise.resolve([]));
 mock.module('../db/messages', () => ({
-  addMessage: mock(() => Promise.resolve()),
+  addMessage: mockAddMessage,
   listMessages: mock(() => Promise.resolve([])),
   getRecentWorkflowResultMessages: mockGetRecentWorkflowResultMessages,
 }));
@@ -3080,5 +3081,159 @@ describe('per-user AI prefs in chat + tier-fallback nudge', () => {
       string,
     ][];
     expect(sendCalls.some(c => c[1].includes("isn't configured"))).toBe(false);
+  });
+});
+
+// ─── Message persistence for non-web platforms (regression for #1182) ────────
+
+describe('message persistence for non-web platforms', () => {
+  beforeEach(() => {
+    mockAddMessage.mockReset();
+    mockAddMessage.mockImplementation(() => Promise.resolve());
+    mockGetOrCreateConversation.mockReset();
+    mockGetCodebase.mockReset();
+    mockGetCodebaseEnvVars.mockReset();
+    mockLoadConfig.mockReset();
+    mockSendQuery.mockClear();
+
+    mockGetOrCreateConversation.mockImplementation(() =>
+      Promise.resolve(makeConversation({ id: 'conv-db-id', platform_conversation_id: 'conv-1' }))
+    );
+    mockGetCodebase.mockImplementation(() => Promise.resolve(null));
+    mockGetCodebaseEnvVars.mockImplementation(() => Promise.resolve({}));
+    mockLoadConfig.mockImplementation(() =>
+      Promise.resolve({ assistants: { claude: {}, codex: {} }, envVars: {} })
+    );
+    mockSendQuery.mockImplementation(async function* () {
+      yield { type: 'assistant', content: 'hello back' };
+      yield { type: 'result', sessionId: 'sess-1' };
+    });
+  });
+
+  test('persists user + assistant messages for non-web platform (batch mode)', async () => {
+    const platform: IPlatformAdapter = {
+      ...makePlatform(),
+      getPlatformType: mock(() => 'github'),
+      getStreamingMode: mock(() => 'batch' as const),
+    };
+
+    await handleMessage(platform, 'conv-1', 'what is this repo?');
+
+    // Inbound user message must land in the DB so the Web UI history is non-empty.
+    expect(mockAddMessage).toHaveBeenCalledWith(
+      'conv-db-id',
+      'user',
+      'what is this repo?',
+      undefined,
+      undefined
+    );
+    // Outbound assistant reply must also be persisted (matches what was sent).
+    expect(mockAddMessage).toHaveBeenCalledWith(
+      'conv-db-id',
+      'assistant',
+      expect.stringContaining('hello back')
+    );
+    expect(mockAddMessage).toHaveBeenCalledTimes(2);
+  });
+
+  test('persists user + assistant messages for non-web platform (stream mode)', async () => {
+    const platform: IPlatformAdapter = {
+      ...makePlatform(),
+      getPlatformType: mock(() => 'telegram'),
+      getStreamingMode: mock(() => 'stream' as const),
+    };
+
+    await handleMessage(platform, 'conv-1', 'what is this repo?');
+
+    expect(mockAddMessage).toHaveBeenCalledWith(
+      'conv-db-id',
+      'user',
+      'what is this repo?',
+      undefined,
+      undefined
+    );
+    expect(mockAddMessage).toHaveBeenCalledWith(
+      'conv-db-id',
+      'assistant',
+      expect.stringContaining('hello back')
+    );
+    expect(mockAddMessage).toHaveBeenCalledTimes(2);
+  });
+
+  test('does NOT call addMessage for web platform (web adapter owns persistence)', async () => {
+    const platform = makePlatform(); // makePlatform defaults getPlatformType to 'web'
+
+    await handleMessage(platform, 'conv-1', 'what is this repo?');
+
+    expect(mockAddMessage).not.toHaveBeenCalled();
+  });
+
+  test('platform delivery is not blocked when persistence rejects', async () => {
+    const platform: IPlatformAdapter = {
+      ...makePlatform(),
+      getPlatformType: mock(() => 'github'),
+      getStreamingMode: mock(() => 'batch' as const),
+    };
+    mockAddMessage.mockImplementation(() => Promise.reject(new Error('db down')));
+
+    await expect(handleMessage(platform, 'conv-1', 'what is this repo?')).resolves.toBeUndefined();
+    expect(platform.sendMessage).toHaveBeenCalled();
+  });
+
+  test('platform delivery is not blocked when persistence rejects (stream mode)', async () => {
+    const platform: IPlatformAdapter = {
+      ...makePlatform(),
+      getPlatformType: mock(() => 'telegram'),
+      getStreamingMode: mock(() => 'stream' as const),
+    };
+    mockAddMessage.mockImplementation(() => Promise.reject(new Error('db down')));
+
+    await expect(handleMessage(platform, 'conv-1', 'what is this repo?')).resolves.toBeUndefined();
+    // Stream mode delivers chunks during the sendQuery loop — a DB failure must
+    // not stop delivery, so the reply must still have reached the platform.
+    expect(platform.sendMessage).toHaveBeenCalled();
+  });
+
+  test('passes userId to addMessage when context provides it', async () => {
+    const platform: IPlatformAdapter = {
+      ...makePlatform(),
+      getPlatformType: mock(() => 'github'),
+      getStreamingMode: mock(() => 'batch' as const),
+    };
+
+    await handleMessage(platform, 'conv-1', 'what is this repo?', { userId: 'user-abc' });
+
+    expect(mockAddMessage).toHaveBeenCalledWith(
+      'conv-db-id',
+      'user',
+      'what is this repo?',
+      undefined,
+      'user-abc'
+    );
+    // The assistant row is NULL-attributed by design — it must NOT carry userId.
+    expect(mockAddMessage).toHaveBeenCalledWith(
+      'conv-db-id',
+      'assistant',
+      expect.stringContaining('hello back')
+    );
+    expect(mockAddMessage).toHaveBeenCalledTimes(2);
+  });
+
+  test('does NOT persist a user row for a deterministic slash command (no orphan)', async () => {
+    const platform: IPlatformAdapter = {
+      ...makePlatform(),
+      getPlatformType: mock(() => 'github'),
+      getStreamingMode: mock(() => 'batch' as const),
+    };
+    mockParseCommand.mockReturnValueOnce({ command: 'status', args: [] });
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve({ success: true, message: 'status ok', workflow: undefined })
+    );
+
+    await handleMessage(platform, 'conv-1', '/status');
+
+    // Deterministic slash commands return before the AI dispatch, so persisting a
+    // user row here would orphan it (no paired assistant row in the Web UI history).
+    expect(mockAddMessage).not.toHaveBeenCalled();
   });
 });
