@@ -1,5 +1,6 @@
 import { describe, test, expect, afterEach } from 'bun:test';
 import { SqliteAdapter } from './sqlite';
+import { getSchemaSQL } from '../bundled-schema';
 import { Database } from 'bun:sqlite';
 import { unlinkSync } from 'fs';
 import { join } from 'path';
@@ -339,6 +340,59 @@ describe('SqliteAdapter', () => {
         'SELECT COUNT(*) AS n FROM remote_agent_user_provider_keys'
       ) as { n: number }[];
       expect(again).toEqual([{ n: 3 }]);
+    });
+  });
+
+  describe('schema parity with the Postgres migration (000_combined.sql)', () => {
+    /**
+     * The SQLite schema (createSchema() in sqlite.ts) and the Postgres schema
+     * (migrations/000_combined.sql) are two independently hand-maintained
+     * sources of truth. Before this test nothing compared them, so a table
+     * added to the migration but forgotten in sqlite.ts shipped silently and
+     * threw `no such table: <name>` on SQLite. That regression actually
+     * happened with remote_agent_user_ai_prefs (Phase 3 / credentials epic):
+     * added to the migration, missed in sqlite.ts, invisible on the Postgres
+     * VPS. The lookup is caught (runs degrade to config-only), but it spammed
+     * two ERROR log lines on every SQLite run.
+     *
+     * Better Auth's remote_agent_auth_* tables are intentionally Postgres-only
+     * (web auth never runs on SQLite — see migrateColumns() and CLAUDE.md), so
+     * they are the one allowlisted exception. A genuinely new Postgres-only
+     * table must be added to this allowlist with a justifying comment.
+     */
+    const POSTGRES_ONLY_PREFIX = 'remote_agent_auth_';
+
+    /** Extract Archon table names declared in the Postgres migration. */
+    function postgresArchonTables(): string[] {
+      const sql = getSchemaSQL();
+      const re = /CREATE TABLE(?:\s+IF NOT EXISTS)?\s+"?([a-z0-9_]+)"?/gi;
+      // All Archon tables share this prefix (CLAUDE.md); the filter also drops
+      // false positives — e.g. "above" captured from "...CREATE TABLE above)"
+      // inside a SQL comment.
+      const names = [...sql.matchAll(re)]
+        .map(m => m[1].toLowerCase())
+        .filter(name => name.startsWith('remote_agent_'));
+      return [...new Set(names)];
+    }
+
+    test('every non-auth Postgres table is created by the SQLite schema', async () => {
+      db = createTestDb();
+      const result = await db.query<{ name: string }>(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+      );
+      const sqliteTables = new Set(result.rows.map(r => r.name));
+
+      const expected = postgresArchonTables().filter(
+        name => !name.startsWith(POSTGRES_ONLY_PREFIX)
+      );
+      // Sanity: the parse found the table set, including the exact table whose
+      // absence triggered this regression — guards against the regex silently
+      // missing a name and the assertion below passing vacuously.
+      expect(expected.length).toBeGreaterThan(10);
+      expect(expected).toContain('remote_agent_user_ai_prefs');
+
+      const missing = expected.filter(name => !sqliteTables.has(name)).sort();
+      expect(missing).toEqual([]);
     });
   });
 });
