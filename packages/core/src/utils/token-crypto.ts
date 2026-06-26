@@ -23,9 +23,10 @@ function getLog(): ReturnType<typeof createLogger> {
  */
 const localKeyCache = new Map<string, Buffer>();
 
-/** Clear the in-memory key cache — exported for test cleanup only. */
+/** Clear the in-memory key cache and cached logger — exported for test cleanup only. */
 export function clearLocalKeyCache(): void {
   localKeyCache.clear();
+  cachedLog = undefined;
 }
 
 /**
@@ -91,6 +92,7 @@ export function readOrCreateLocalKey(keyPath: string): Buffer {
     return key;
   } catch (err) {
     const e = err as NodeJS.ErrnoException;
+    // Only ENOENT falls through — malformed-content errors have no .code and rethrow here too.
     if (e.code !== 'ENOENT') throw err;
     // ENOENT → fall through and generate a new key below.
   }
@@ -99,7 +101,7 @@ export function readOrCreateLocalKey(keyPath: string): Buffer {
   mkdirSync(dirname(keyPath), { recursive: true });
   writeFileSync(keyPath, newKey.toString('hex') + '\n', { mode: 0o600 });
   try {
-    chmodSync(keyPath, 0o600); // tighten perms even if the file pre-existed with a looser umask
+    chmodSync(keyPath, 0o600); // writeFileSync's mode is diluted by umask; enforce explicitly
   } catch {
     /* non-fatal on Windows / filesystems without POSIX perms */
   }
@@ -116,7 +118,8 @@ export function readOrCreateLocalKey(keyPath: string): Buffer {
  *
  * This makes the per-user credential vault available by default on every install
  * while keeping the explicit env var authoritative where operators set one.
- * Throws only when TOKEN_ENCRYPTION_KEY is set but malformed (misconfiguration).
+ * Throws when TOKEN_ENCRYPTION_KEY is set but malformed, or when the local key
+ * file exists but contains malformed content.
  */
 export function getEncryptionKey(env: NodeJS.ProcessEnv = process.env): Buffer {
   const hex = env.TOKEN_ENCRYPTION_KEY;

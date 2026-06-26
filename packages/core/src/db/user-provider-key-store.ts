@@ -306,9 +306,13 @@ export async function listDecryptedUserProviderCredentials(
     // (some rows still resolve) stays at WARN.
     if (rows.length > 0 && out.length === 0) {
       getLog().error(
-        { userId, total: rows.length },
-        'user_provider_key.mass_decrypt_failure: stored credentials cannot be decrypted — ' +
-          'the encryption key may have changed or been deleted. Re-connect with: archon ai login <vendor>'
+        {
+          userId,
+          total: rows.length,
+          resolved: 0,
+          hint: 'Re-connect with: archon ai login <vendor>',
+        },
+        'user_provider_key.mass_decrypt_failure'
       );
     } else {
       getLog().warn(
