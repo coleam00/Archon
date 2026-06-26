@@ -15,6 +15,7 @@ import * as git from '@archon/git';
 import {
   checkClaudeBinary,
   checkDatabase,
+  checkConnectedProviders,
   checkGhAuth,
   checkPi,
   checkWorkspaceWritable,
@@ -480,5 +481,59 @@ describe('doctorCommand', () => {
       .map(args => String(args[0] ?? ''))
       .filter(s => s.startsWith('✓') || s.startsWith('✗') || s.startsWith('○'));
     expect(renderedLines.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('checkConnectedProviders', () => {
+  const mockUser = { id: 'user-1' };
+
+  it('returns skip when CLI identity is not resolvable', async () => {
+    const result = await checkConnectedProviders({}, async () => ({
+      listUserProviderKeys: async () => [],
+      findOrCreateUserByPlatformIdentity: async () => mockUser,
+    }));
+    expect(result.status).toBe('skip');
+    expect(result.message).toContain('no CLI identity');
+  });
+
+  it('returns skip with a connect hint when no providers are connected', async () => {
+    const result = await checkConnectedProviders({ USER: 'testuser' }, async () => ({
+      listUserProviderKeys: async () => [],
+      findOrCreateUserByPlatformIdentity: async () => mockUser,
+    }));
+    expect(result.status).toBe('skip');
+    expect(result.message).toContain('archon ai login');
+  });
+
+  it('returns pass with a count and vendor list when providers are connected', async () => {
+    const result = await checkConnectedProviders({ USER: 'testuser' }, async () => ({
+      listUserProviderKeys: async () => [
+        { provider: 'anthropic', kind: 'oauth', label: 'subscription' },
+        { provider: 'openrouter', kind: 'api_key', label: null },
+      ],
+      findOrCreateUserByPlatformIdentity: async () => mockUser,
+    }));
+    expect(result.status).toBe('pass');
+    expect(result.message).toContain('2 connected');
+    expect(result.message).toContain('anthropic');
+  });
+
+  it('returns skip (not fail) when loadDeps throws', async () => {
+    const result = await checkConnectedProviders({ USER: 'testuser' }, async () => {
+      throw new Error('module load failed');
+    });
+    expect(result.status).toBe('skip');
+    expect(result.message).toContain('module load failed');
+  });
+
+  it('returns skip (not fail) when reading credentials throws', async () => {
+    const result = await checkConnectedProviders({ USER: 'testuser' }, async () => ({
+      listUserProviderKeys: async () => {
+        throw new Error('db down');
+      },
+      findOrCreateUserByPlatformIdentity: async () => mockUser,
+    }));
+    expect(result.status).toBe('skip');
+    expect(result.message).toContain('db down');
   });
 });

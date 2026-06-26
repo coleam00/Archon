@@ -1,9 +1,32 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'crypto';
+import { readFileSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs';
+import { dirname } from 'node:path';
+import { getCredentialKeyPath, createLogger } from '@archon/paths';
 
 const ALGORITHM = 'aes-256-gcm';
 const IV_BYTES = 12;
 const AUTH_TAG_BYTES = 16;
 const KEY_BYTES = 32; // AES-256
+const HEX_KEY_RE = /^[0-9a-fA-F]{64}$/;
+
+/** Lazy-initialized logger (deferred so test mocks can intercept createLogger). */
+let cachedLog: ReturnType<typeof createLogger> | undefined;
+function getLog(): ReturnType<typeof createLogger> {
+  if (!cachedLog) cachedLog = createLogger('token-crypto');
+  return cachedLog;
+}
+
+/**
+ * In-memory cache keyed by key-file path. Disk I/O happens once per process;
+ * keying by path lets tests drive distinct ARCHON_HOME overrides without leaking
+ * a cached key across temp dirs.
+ */
+const localKeyCache = new Map<string, Buffer>();
+
+/** Clear the in-memory key cache — exported for test cleanup only. */
+export function clearLocalKeyCache(): void {
+  localKeyCache.clear();
+}
 
 /**
  * Assert the key is the 32 bytes AES-256 requires. Surfaces an Archon-owned,
@@ -45,24 +68,66 @@ export function decryptToken(ciphertext: string, key: Buffer): string {
 }
 
 /**
- * Parse TOKEN_ENCRYPTION_KEY (from `env`, default `process.env`) into a 32-byte
- * Buffer. Throws with a clear message if absent or malformed — callers must
- * validate at startup rather than discovering the failure at runtime. The `env`
- * param lets boot-time validators pass the same env they gate on.
+ * Read or create the local key file at `keyPath` (mode 0600). Returns the
+ * 32-byte key. Throws if the file exists but holds malformed content — it never
+ * silently regenerates, which would orphan every stored credential. Exported so
+ * unit tests can drive it with a temp path.
+ */
+export function readOrCreateLocalKey(keyPath: string): Buffer {
+  const cached = localKeyCache.get(keyPath);
+  if (cached) return cached;
+
+  try {
+    const content = readFileSync(keyPath, 'utf8').trim();
+    if (!HEX_KEY_RE.test(content)) {
+      throw new Error(
+        `Credential key file at ${keyPath} contains malformed content (expected 64-char hex). ` +
+          'Delete the file to generate a new key — stored credentials will need to be re-connected.'
+      );
+    }
+    const key = Buffer.from(content, 'hex');
+    assertKeyLength(key);
+    localKeyCache.set(keyPath, key);
+    return key;
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException;
+    if (e.code !== 'ENOENT') throw err;
+    // ENOENT → fall through and generate a new key below.
+  }
+
+  const newKey = randomBytes(KEY_BYTES);
+  mkdirSync(dirname(keyPath), { recursive: true });
+  writeFileSync(keyPath, newKey.toString('hex') + '\n', { mode: 0o600 });
+  try {
+    chmodSync(keyPath, 0o600); // tighten perms even if the file pre-existed with a looser umask
+  } catch {
+    /* non-fatal on Windows / filesystems without POSIX perms */
+  }
+  getLog().info({ path: keyPath }, 'credential_key.generated');
+  localKeyCache.set(keyPath, newKey);
+  return newKey;
+}
+
+/**
+ * Resolve the AES-256 encryption key via a three-tier fallback:
+ *   1. TOKEN_ENCRYPTION_KEY env var (managed VPS / multi-user — never touches disk)
+ *   2. ~/.archon/credential-key file (reads an existing local key)
+ *   3. Auto-generate and persist to ~/.archon/credential-key (0600) on first use
+ *
+ * This makes the per-user credential vault available by default on every install
+ * while keeping the explicit env var authoritative where operators set one.
+ * Throws only when TOKEN_ENCRYPTION_KEY is set but malformed (misconfiguration).
  */
 export function getEncryptionKey(env: NodeJS.ProcessEnv = process.env): Buffer {
   const hex = env.TOKEN_ENCRYPTION_KEY;
-  if (!hex) {
-    throw new Error(
-      'TOKEN_ENCRYPTION_KEY is required when the GitHub App is configured for per-user tokens. ' +
-        'Generate with: openssl rand -hex 32'
-    );
+  if (hex) {
+    if (!HEX_KEY_RE.test(hex)) {
+      throw new Error(
+        'TOKEN_ENCRYPTION_KEY must be a 64-character hex string (32 bytes). ' +
+          'Generate with: openssl rand -hex 32'
+      );
+    }
+    return Buffer.from(hex, 'hex');
   }
-  if (!/^[0-9a-fA-F]{64}$/.test(hex)) {
-    throw new Error(
-      'TOKEN_ENCRYPTION_KEY must be a 64-character hex string (32 bytes). ' +
-        'Generate with: openssl rand -hex 32'
-    );
-  }
-  return Buffer.from(hex, 'hex');
+  return readOrCreateLocalKey(getCredentialKeyPath());
 }

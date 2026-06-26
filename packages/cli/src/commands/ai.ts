@@ -9,13 +9,14 @@
  *   archon ai alias set|list|unset Edit @custom model aliases (config, not a credential)
  *   archon ai default <provider>   Set the default assistant (config, not a credential)
  *
- * The CREDENTIAL commands (key/list/logout/login) are gated on
- * TOKEN_ENCRYPTION_KEY (isPerUserProviderKeysEnabled); solo installs keep reading
- * provider keys from the environment unchanged. The CONFIG commands
- * (tier/alias/default) write ~/.archon/config.yaml and are ungated — they work on
- * every install. With `--scope user` they instead write the caller's per-user
- * prefs row (Phase 3) resolved via the CLI identity — needs no encryption key
- * (prefs aren't secrets) but does need a resolvable ARCHON_USER_ID/$USER.
+ * The CREDENTIAL commands (key/list/logout/login) require the encryption vault,
+ * which is now available by default on every install (the key is auto-provisioned
+ * at ~/.archon/credential-key when TOKEN_ENCRYPTION_KEY is not set — see
+ * token-crypto.ts). The CONFIG commands (tier/alias/default) write
+ * ~/.archon/config.yaml and are ungated — they work on every install. With
+ * `--scope user` they instead write the caller's per-user prefs row (Phase 3)
+ * resolved via the CLI identity — needs no encryption key (prefs aren't secrets)
+ * but does need a resolvable ARCHON_USER_ID/$USER.
  *
  * The API key is NEVER taken from argv (it would leak into shell history and the
  * process list). It is read from a masked `@clack/prompts` password input on a
@@ -82,14 +83,15 @@ function resolveVendorArg(provider: string): string {
   return vendor;
 }
 
-/** Print the gate explanation and return false when per-user keys are off. */
+/**
+ * Defensive guard for the credential vault. Unreachable in normal use after the
+ * auto-key change (the vault is always available — see token-crypto.ts), but kept
+ * so a future regression that disables the gate fails loudly rather than silently
+ * storing unencryptable secrets.
+ */
 function ensureEnabled(): boolean {
   if (!isPerUserProviderKeysEnabled()) {
-    console.error(
-      'Per-user AI provider keys are not enabled on this install.\n' +
-        'Set TOKEN_ENCRYPTION_KEY (64-char hex) to enable encrypted per-user credentials.\n' +
-        'Solo installs keep reading keys (CLAUDE_API_KEY / OPENAI_API_KEY / …) from the environment.'
-    );
+    console.error('Credential vault unavailable. Check that ~/.archon is writable.');
     return false;
   }
   return true;

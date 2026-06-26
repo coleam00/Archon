@@ -300,10 +300,22 @@ export async function listDecryptedUserProviderCredentials(
     }
   }
   if (out.length < rows.length) {
-    getLog().warn(
-      { userId, total: rows.length, resolved: out.length },
-      'user_provider_key.partial_decrypt_failure'
-    );
+    // All rows failing to decrypt almost always means the encryption key changed
+    // or the key file was deleted — a key-loss/rotation event the operator must
+    // act on. Surface it at ERROR with a re-connect hint; a partial failure
+    // (some rows still resolve) stays at WARN.
+    if (rows.length > 0 && out.length === 0) {
+      getLog().error(
+        { userId, total: rows.length },
+        'user_provider_key.mass_decrypt_failure: stored credentials cannot be decrypted — ' +
+          'the encryption key may have changed or been deleted. Re-connect with: archon ai login <vendor>'
+      );
+    } else {
+      getLog().warn(
+        { userId, total: rows.length, resolved: out.length },
+        'user_provider_key.partial_decrypt_failure'
+      );
+    }
   }
   return out;
 }

@@ -167,6 +167,76 @@ async function defaultLoadDatabaseDeps(): Promise<DatabaseDeps> {
   return { pool, getDatabaseType };
 }
 
+export interface ProviderDeps {
+  listUserProviderKeys: (
+    userId: string
+  ) => Promise<{ provider: string; kind: string; label: string | null }[]>;
+  // `platform` is the literal 'cli' — this check resolves the CLI identity only,
+  // and narrowing it keeps the real (platform-union-typed) db fn assignable here.
+  findOrCreateUserByPlatformIdentity: (
+    platform: 'cli',
+    id: string,
+    name: string
+  ) => Promise<{ id: string }>;
+}
+
+/**
+ * Report how many AI-provider credentials the current CLI user has connected,
+ * plus how to connect when none are. Skip (never fail) on any error — credential
+ * status is informational, and a missing CLI identity or DB hiccup shouldn't make
+ * `archon doctor` exit non-zero.
+ */
+export async function checkConnectedProviders(
+  env: NodeJS.ProcessEnv = process.env,
+  // Injected so tests can drive every branch without the dynamic @archon/core import.
+  loadDeps: () => Promise<ProviderDeps> = defaultLoadProviderDeps
+): Promise<CheckResult> {
+  const label = 'AI credentials';
+  let deps: ProviderDeps;
+  try {
+    deps = await loadDeps();
+  } catch (err) {
+    return {
+      label,
+      status: 'skip',
+      message: `could not load credential module: ${(err as Error).message}`,
+    };
+  }
+  const cliId = env.ARCHON_USER_ID || env.USER || env.USERNAME;
+  if (!cliId) {
+    return { label, status: 'skip', message: 'no CLI identity (set ARCHON_USER_ID or USER)' };
+  }
+  try {
+    const user = await deps.findOrCreateUserByPlatformIdentity('cli', cliId, cliId);
+    const rows = await deps.listUserProviderKeys(user.id);
+    if (rows.length === 0) {
+      return {
+        label,
+        status: 'skip',
+        message: 'none connected — run: archon ai login <vendor>  or  archon ai key set <vendor>',
+      };
+    }
+    const summary = rows.map(r => `${r.provider}(${r.kind})`).join(', ');
+    return { label, status: 'pass', message: `${rows.length} connected: ${summary}` };
+  } catch (err) {
+    return {
+      label,
+      status: 'skip',
+      message: `could not read credentials: ${(err as Error).message}`,
+    };
+  }
+}
+
+async function defaultLoadProviderDeps(): Promise<ProviderDeps> {
+  // Lazy imports for the same reason as defaultLoadDatabaseDeps.
+  const { listUserProviderKeys } = await import('@archon/core');
+  const userDb = await import('@archon/core/db/users');
+  return {
+    listUserProviderKeys,
+    findOrCreateUserByPlatformIdentity: userDb.findOrCreateUserByPlatformIdentity,
+  };
+}
+
 export async function checkWorkspaceWritable(): Promise<CheckResult> {
   const label = 'Workspace';
   const home = getArchonHome();
@@ -301,6 +371,7 @@ export async function doctorCommand(
         checkGhAuth(env),
         checkPi(env),
         checkDatabase(),
+        checkConnectedProviders(env),
         checkWorkspaceWritable(),
         checkBundledDefaults(),
         checkTelemetry(),

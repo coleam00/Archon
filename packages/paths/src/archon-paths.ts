@@ -107,6 +107,16 @@ export function getArchonConfigPath(): string {
 }
 
 /**
+ * Get the path to the local auto-provisioned encryption key file.
+ * Created on first use (0600) when TOKEN_ENCRYPTION_KEY is not set, so the
+ * per-user credential vault works on solo installs with zero env-var setup.
+ * Returns: ~/.archon/credential-key
+ */
+export function getCredentialKeyPath(): string {
+  return join(getArchonHome(), 'credential-key');
+}
+
+/**
  * Get the home-scoped workflows directory (`~/.archon/workflows/`).
  * Workflows placed here are discovered from every repo and apply globally —
  * overridden per-filename by the same name under `<repoRoot>/.archon/workflows/`.
