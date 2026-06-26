@@ -20,17 +20,24 @@ export function Layout(): React.ReactElement {
     setIsContextHidden(false);
     contentEl.scrollTo({ top: 0 });
 
-    const handleScroll = (): void => {
-      setIsContextHidden(contentEl.scrollTop > 24);
+    const handleScroll = (event: Event): void => {
+      const scrollTarget = event.target instanceof HTMLElement ? event.target : contentEl;
+      setIsContextHidden(Math.max(contentEl.scrollTop, scrollTarget.scrollTop) > 24);
     };
 
-    contentEl.addEventListener('scroll', handleScroll, { passive: true });
-    handleScroll();
+    contentEl.addEventListener('scroll', handleScroll, { capture: true, passive: true });
+    handleScroll(new Event('scroll'));
 
     return (): void => {
-      contentEl.removeEventListener('scroll', handleScroll);
+      contentEl.removeEventListener('scroll', handleScroll, { capture: true });
     };
   }, [location.pathname]);
+
+  const handleContentScrollCapture = (event: React.UIEvent<HTMLDivElement>): void => {
+    const contentEl = contentRef.current;
+    const scrollTarget = event.target instanceof HTMLElement ? event.target : contentEl;
+    setIsContextHidden(Math.max(contentEl?.scrollTop ?? 0, scrollTarget?.scrollTop ?? 0) > 24);
+  };
 
   return (
     <div className="flex h-screen min-h-0 flex-col bg-background">
@@ -62,6 +69,7 @@ export function Layout(): React.ReactElement {
         <div
           ref={contentRef}
           id="dashboard-tab-content"
+          onScrollCapture={handleContentScrollCapture}
           className="min-h-0 flex-1 overflow-auto scroll-mt-4"
         >
           <Outlet />
