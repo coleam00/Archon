@@ -7,13 +7,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-26
+
+Per-user AI credentials (API keys + subscription OAuth) with a zero-config
+encryption vault, the run-centric Console as the default UI, opt-in web login,
+model tiers/aliases with per-user overrides, and broad workflow reliability work.
+
+### Added
+
+- **Per-user AI-provider credentials.** Connect API keys and subscriptions (Claude
+  Pro/Max, ChatGPT/Codex, GitHub Copilot) per user; credentials are encrypted at
+  rest and injected into the acting user's runs/chat at execution time. Vendor-
+  canonical credential catalog derived from provider registrations, per-agent
+  credential cards in the console, and an Archon-owned PKCE flow for ChatGPT/Codex
+  subscription login (#1899, #1911, #1921, #1958, #1962, #1973).
+- **Zero-config credential vault.** The credential vault now works out of the box —
+  an encryption key is auto-provisioned at `~/.archon/credential-key` (0600) when
+  `TOKEN_ENCRYPTION_KEY` isn't set, so `archon ai login`/`ai key set` work on a
+  plain CLI/SQLite install. Additive: an unconnected user's ambient API keys are
+  untouched (#2040).
+- **Console is the default UI.** The run-centric console replaces the classic UI
+  (re-rooted under `/legacy`): chat restyle, run provenance, workflow-completion
+  cards, per-node cost/turns, agent-aware model pickers, settings panels, GitHub
+  identity panel, and chat file uploads (#1915, #1819, #1881, #1885, #1890, #1896,
+  #1903, #1907, #1916, #1964).
+- **Opt-in web login** via Better Auth (PostgreSQL) with a user-identity seam, a
+  server-side API gate, and safe-by-default signup posture; per-user GitHub
+  identity via device flow (#1841, #1823).
+- **Model tiers, aliases, and per-user AI preferences.** `small`/`medium`/`large`
+  tiers and `@custom` aliases resolve provider+model+options across providers;
+  per-user tiers/aliases/default-assistant overrides; an AI Settings UI and full
+  `archon ai tier|alias|default` CLI parity (#1867, #1873, #1926, #1948).
+- **CLI tier transparency.** Workflow run output now shows each AI node's resolved
+  `provider/model (← tier)`, plus a one-time notice when a run uses tiers you
+  haven't configured (#2038).
+- **Cross-provider run management** from the CLI — `workflow get/runs --json`,
+  `--detach`, a `manage-run` skill, and a native `manage_run` tool for Claude/Pi;
+  live console updates for out-of-process (CLI) runs via a DB-tail poller +
+  Postgres LISTEN/NOTIFY (#1853, #1861).
+- **Workflow engine:** typed artifacts (`output_type` sidecars), reliable
+  cross-provider structured output (validate + repair + reask + fail-fast),
+  per-node provider session persistence (`persist_session`), recommended workflows
+  pinned per project, and a model-alias resolver wired into execution (#1851,
+  #1883, #1889, #1790, #1929).
+- **`/setproject`** command to bind a conversation to a registered codebase (#1917).
+- **Session-resume outcome** (`resumed`) surfaced with a warning on cold resume
+  (#1842); **unpushed work** in `source/` surfaced after chat turns (#1978); SDK
+  lifecycle events (tasks + hooks) forwarded to the Web UI (#975).
+- **Anonymous telemetry** schema v3/v4: server heartbeat, chat turns, failure
+  taxonomy, activation funnel, and usage totals (tokens/cost) (#1944, #1949).
+- **Archon Studio** builder data model + node variants (PR-1) and a marketing
+  landing page above the docs site (#1870, #1829).
+
+### Changed
+
+- **Bumped `@anthropic-ai/claude-agent-sdk` to 0.3.193** (#2037) and migrated the
+  Pi SDK to `@earendil-works` (#1800); standardized on zod v4 (#1813).
+- PostgreSQL schema is auto-applied on startup; workspace sync is now
+  non-destructive by default (#1810, #1864).
+- `DEFAULT_AI_ASSISTANT` is treated as a fallback default, not a hard override
+  (#1919).
+
 ### Fixed
 
-- **DAG nodes no longer silently complete when `idle_timeout` fires before any output is produced.**
-  Previously, an idle timeout with zero output was incorrectly recorded as `completed`. Now it fails
-  with a clear error: `"Node '<id>' timed out with no output … Consider increasing idle_timeout or
-  reducing prompt size."` Nodes that do produce output before the subprocess hangs still complete
-  with a warning, unchanged (#1807).
+- DAG nodes no longer silently complete when `idle_timeout` fires before any
+  output — they fail with a clear, actionable error (#1807, #1812).
+- Direct chat now resolves credentials from the message sender and delivers Claude
+  subscriptions to Pi in chat; clarified Claude auth posture on per-user installs
+  (#1982, #1984, #2002).
+- Concurrency-safe workflow resume/cancel (CAS guards); Codex session resume
+  captures the thread id; the loader stops dropping workflow-level
+  effort/thinking/fallbackModel/betas/sandbox (#1830, #1840, #1799).
+- SQLite parity for `remote_agent_user_ai_prefs`; the Pi extension loader is
+  reused per process to stop 2nd-session hangs (#2033, #1877).
+
+### Removed
+
+- The stale `CLAUDECODE=1` nested-session warning and the
+  `ARCHON_SUPPRESS_NESTED_CLAUDE_WARNING` env var — running the CLI inside a
+  coding agent is a supported, normal path now (#2039).
 
 ## [0.4.1] - 2026-05-28
 
