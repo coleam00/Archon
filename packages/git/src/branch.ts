@@ -357,7 +357,11 @@ export async function countCommitsAhead(
     );
     const n = parseInt(stdout.trim(), 10);
     return Number.isFinite(n) ? n : 0;
-  } catch {
+  } catch (error) {
+    // Expected: origin/<branch> missing, detached HEAD, not a git repo.
+    // Unexpected (permission denied, timeout, git corruption): same safe default
+    // (0 keeps the reminder silent), but log so it's visible during triage.
+    getLog().debug({ workingPath, branch, err: error as Error }, 'count_commits_ahead_failed');
     return 0;
   }
 }
