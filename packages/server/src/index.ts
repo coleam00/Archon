@@ -41,9 +41,6 @@ if (envPath) {
 import { loadArchonEnv } from '@archon/paths/env-loader';
 loadArchonEnv(process.cwd());
 
-// CLAUDECODE=1 warning is emitted inside stripCwdEnv() (boot import above)
-// BEFORE the marker is deleted from process.env. No duplicate warning here.
-
 // Smart default: fall back to Claude Code's built-in OAuth (`claude /login`)
 // ONLY for solo installs with no explicit credentials. Per-user installs
 // (TOKEN_ENCRYPTION_KEY) deliver Claude auth per-request, so the global-auth
