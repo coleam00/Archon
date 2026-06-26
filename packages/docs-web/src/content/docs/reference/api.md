@@ -412,7 +412,7 @@ All writes validate the provider (registered), effort (provider vocabulary), and
 
 ## AI Provider Credentials
 
-Per-user provider credentials let each user bill their runs and chats to **their own** API key or subscription instead of the shared install key. Unlike the config routes above, these endpoints are **gated**: they require `TOKEN_ENCRYPTION_KEY` (a 64-char hex secret) to be set *and* a resolved web identity (the `X-Archon-User` header, or a Better Auth session). On a solo install with no `TOKEN_ENCRYPTION_KEY`, `GET /api/auth/providers` returns `enabled: false` and the write routes return `404`.
+Per-user provider credentials let each user bill their runs and chats to **their own** API key or subscription instead of the shared install key. These endpoints require a resolved web identity (`X-Archon-User` header or a Better Auth session) — `GET /api/auth/providers` returns `401` without one. The encryption key is auto-provisioned on every install; `TOKEN_ENCRYPTION_KEY` is an optional override for managed deployments.
 
 | Method | Path | Description |
 |--------|------|-------------|

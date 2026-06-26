@@ -13,6 +13,7 @@ import {
   ensureArchonWorkspacesPath,
   getArchonWorktreesPath,
   getArchonConfigPath,
+  getCredentialKeyPath,
   getHomeWorkflowsPath,
   getHomeCommandsPath,
   getHomeScriptsPath,
@@ -226,6 +227,13 @@ describe('archon-paths', () => {
       delete process.env.ARCHON_HOME;
       delete process.env.ARCHON_DOCKER;
       expect(getArchonConfigPath()).toBe(join(homedir(), '.archon', 'config.yaml'));
+    });
+  });
+
+  describe('getCredentialKeyPath', () => {
+    test('returns credential-key inside ARCHON_HOME', () => {
+      process.env.ARCHON_HOME = '/custom/archon';
+      expect(getCredentialKeyPath()).toBe(join('/custom/archon', 'credential-key'));
     });
   });
 

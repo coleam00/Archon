@@ -614,14 +614,21 @@ Solo users don't need any of this — the install-wide setup above is enough.
 
 ### Enabling it
 
-Per-user credentials are gated on a single secret. Set `TOKEN_ENCRYPTION_KEY` (a 64-char hex string) so Archon can encrypt stored credentials at rest (AES-256-GCM):
+The credential vault is available on every install — Archon auto-provisions a local key at
+`~/.archon/credential-key` on first use. **No setup required for a solo install.**
+
+If you're running a managed or multi-user deploy and want to control the encryption key yourself
+(e.g. to rotate it, share it across containers, or keep it in a secrets manager), set
+`TOKEN_ENCRYPTION_KEY` and the local key file is skipped entirely:
 
 ```ini
 # .env — generate with: openssl rand -hex 32
 TOKEN_ENCRYPTION_KEY=<64-char hex>
 ```
 
-Without it, the per-user surface is inert (the routes report `enabled: false`) and Archon keeps reading provider keys from the environment as above. The console's **Agents** section still renders in that state — each agent card shows install-level status (which keys the server environment already carries, plus ambient cloud-chain detection) with the connect/login/disconnect affordances hidden, so a solo install can see *what's authenticated* even though there's nothing per-user to manage.
+> **Rotating `TOKEN_ENCRYPTION_KEY`** (or deleting `~/.archon/credential-key`) invalidates all
+> stored user credentials — everyone must reconnect. `archon doctor` will report a
+> `mass_decrypt_failure` and include a re-connect hint if this happens.
 
 ### Connecting from the console
 

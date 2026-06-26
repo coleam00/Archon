@@ -7,6 +7,7 @@ export {
   ensureArchonWorkspacesPath,
   getArchonWorktreesPath,
   getArchonConfigPath,
+  getCredentialKeyPath,
   getArchonEnvPath,
   getRepoArchonEnvPath,
   getHomeWorkflowsPath,
