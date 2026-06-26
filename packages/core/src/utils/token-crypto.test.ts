@@ -143,7 +143,10 @@ describe('token-crypto', () => {
       const key = readOrCreateLocalKey(keyPath);
       expect(key).toBeInstanceOf(Buffer);
       expect(key.length).toBe(32);
-      expect(statSync(keyPath).mode & 0o777).toBe(0o600);
+      // POSIX-only: Windows does not honor 0600 file modes (statSync reports 0666).
+      if (process.platform !== 'win32') {
+        expect(statSync(keyPath).mode & 0o777).toBe(0o600);
+      }
     });
 
     test('reads an existing valid key file without regenerating', () => {
