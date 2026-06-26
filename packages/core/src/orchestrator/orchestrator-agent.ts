@@ -896,18 +896,6 @@ export async function handleMessage(
       conversationId
     );
 
-    // Persist inbound message for non-web platforms — the web adapter's route
-    // already persists the user message, so we only cover
-    // GitHub/Telegram/Discord/Slack/CLI here. Fire-and-forget: a DB
-    // failure must not break platform delivery (#1182).
-    if (!isWebAdapter(platform)) {
-      messageDb
-        .addMessage(conversation.id, 'user', message, undefined, userId)
-        .catch((e: unknown) => {
-          getLog().warn({ err: e, conversationId }, 'orchestrator.user_message_persist_failed');
-        });
-    }
-
     // Natural-language approval routing — if a workflow is paused in this
     // conversation, treat any non-slash message as the approval response.
     if (!message.startsWith('/')) {
@@ -1094,6 +1082,25 @@ export async function handleMessage(
         }
         return;
       }
+    }
+
+    // Persist the inbound user message for non-web platforms (Slack/Telegram/
+    // GitHub/Discord/CLI) — the web adapter's route persists web turns itself.
+    // Placed AFTER the deterministic-command and approval early-returns so only
+    // AI-bound turns get a user row (no orphaned user message without an
+    // assistant reply), and BEFORE the AI call so the user row's timestamp
+    // precedes the assistant row's. Fire-and-forget: a DB failure must not break
+    // platform delivery (#1182).
+    if (!isWebAdapter(platform)) {
+      messageDb
+        .addMessage(conversation.id, 'user', message, undefined, userId)
+        .catch((e: unknown) => {
+          const err = e instanceof Error ? e : new Error(String(e));
+          getLog().warn(
+            { err, errorType: err.constructor.name, conversationId },
+            'orchestrator.user_message_persist_failed'
+          );
+        });
     }
 
     // 3. Load codebases, discover workflows, build prompt
@@ -1686,7 +1693,11 @@ async function handleStreamMode(
   // MessagePersistence buffer; skip it here to avoid double-write (#1182).
   if (!isWebAdapter(platform) && fullResponse) {
     messageDb.addMessage(conversation.id, 'assistant', fullResponse).catch((e: unknown) => {
-      getLog().warn({ err: e, conversationId }, 'orchestrator.assistant_message_persist_failed');
+      const err = e instanceof Error ? e : new Error(String(e));
+      getLog().warn(
+        { err, errorType: err.constructor.name, conversationId },
+        'orchestrator.assistant_message_persist_failed'
+      );
     });
   }
   await maybeSendResultFooter(platform, conversationId, lastResult);
@@ -1937,7 +1948,11 @@ async function handleBatchMode(
   // MessagePersistence buffer; skip it here to avoid double-write (#1182).
   if (!isWebAdapter(platform) && finalMessage) {
     messageDb.addMessage(conversation.id, 'assistant', finalMessage).catch((e: unknown) => {
-      getLog().warn({ err: e, conversationId }, 'orchestrator.assistant_message_persist_failed');
+      const err = e instanceof Error ? e : new Error(String(e));
+      getLog().warn(
+        { err, errorType: err.constructor.name, conversationId },
+        'orchestrator.assistant_message_persist_failed'
+      );
     });
   }
   await maybeSendResultFooter(platform, conversationId, lastResult);

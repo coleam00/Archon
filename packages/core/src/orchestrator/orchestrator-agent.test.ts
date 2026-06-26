@@ -3183,6 +3183,9 @@ describe('message persistence for non-web platforms', () => {
     mockAddMessage.mockImplementation(() => Promise.reject(new Error('db down')));
 
     await expect(handleMessage(platform, 'conv-1', 'what is this repo?')).resolves.toBeUndefined();
+    // Stream mode delivers chunks during the sendQuery loop — a DB failure must
+    // not stop delivery, so the reply must still have reached the platform.
+    expect(platform.sendMessage).toHaveBeenCalled();
   });
 
   test('passes userId to addMessage when context provides it', async () => {
@@ -3201,5 +3204,30 @@ describe('message persistence for non-web platforms', () => {
       undefined,
       'user-abc'
     );
+    // The assistant row is NULL-attributed by design — it must NOT carry userId.
+    expect(mockAddMessage).toHaveBeenCalledWith(
+      'conv-db-id',
+      'assistant',
+      expect.stringContaining('hello back')
+    );
+    expect(mockAddMessage).toHaveBeenCalledTimes(2);
+  });
+
+  test('does NOT persist a user row for a deterministic slash command (no orphan)', async () => {
+    const platform: IPlatformAdapter = {
+      ...makePlatform(),
+      getPlatformType: mock(() => 'github'),
+      getStreamingMode: mock(() => 'batch' as const),
+    };
+    mockParseCommand.mockReturnValueOnce({ command: 'status', args: [] });
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve({ success: true, message: 'status ok', workflow: undefined })
+    );
+
+    await handleMessage(platform, 'conv-1', '/status');
+
+    // Deterministic slash commands return before the AI dispatch, so persisting a
+    // user row here would orphan it (no paired assistant row in the Web UI history).
+    expect(mockAddMessage).not.toHaveBeenCalled();
   });
 });
