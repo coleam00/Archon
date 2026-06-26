@@ -1183,6 +1183,160 @@ async function executeNodeInternal(
             'dag.system_message_unhandled'
           );
         }
+      } else if (msg.type === 'task_started') {
+        // Subagent task spawned inside this node (Claude Task tool or
+        // inline sub-agent). Forward as a task_activity emitter event so
+        // the Web UI can render it as an expandable sub-item under the
+        // parent node in the run detail view.
+        getWorkflowEventEmitter().emit({
+          type: 'task_activity',
+          runId: workflowRun.id,
+          nodeId: node.id,
+          taskId: msg.taskId,
+          activity: 'started',
+          ...(msg.description !== undefined ? { description: msg.description } : {}),
+          ...(msg.taskType !== undefined ? { taskType: msg.taskType } : {}),
+        });
+        deps.store
+          .createWorkflowEvent({
+            workflow_run_id: workflowRun.id,
+            event_type: 'task_activity',
+            step_name: node.id,
+            data: {
+              task_id: msg.taskId,
+              activity: 'started',
+              ...(msg.description !== undefined ? { description: msg.description } : {}),
+              ...(msg.taskType !== undefined ? { task_type: msg.taskType } : {}),
+            },
+          })
+          .catch((err: Error) => {
+            getLog().error(
+              { err, workflowRunId: workflowRun.id, eventType: 'task_activity' },
+              'workflow_event_persist_failed'
+            );
+          });
+      } else if (msg.type === 'task_progress') {
+        getWorkflowEventEmitter().emit({
+          type: 'task_activity',
+          runId: workflowRun.id,
+          nodeId: node.id,
+          taskId: msg.taskId,
+          activity: 'progress',
+          ...(msg.description !== undefined ? { description: msg.description } : {}),
+          ...(msg.summary !== undefined ? { summary: msg.summary } : {}),
+          ...(msg.usage !== undefined ? { usage: msg.usage } : {}),
+          ...(msg.lastToolName !== undefined ? { lastToolName: msg.lastToolName } : {}),
+        });
+        // task_progress fires every ~30s while a subagent is running. Persist
+        // it for the timeline view but don't log — the volume would dominate.
+        deps.store
+          .createWorkflowEvent({
+            workflow_run_id: workflowRun.id,
+            event_type: 'task_activity',
+            step_name: node.id,
+            data: {
+              task_id: msg.taskId,
+              activity: 'progress',
+              ...(msg.description !== undefined ? { description: msg.description } : {}),
+              ...(msg.summary !== undefined ? { summary: msg.summary } : {}),
+              ...(msg.usage !== undefined ? { usage: msg.usage } : {}),
+              ...(msg.lastToolName !== undefined ? { last_tool_name: msg.lastToolName } : {}),
+            },
+          })
+          .catch((err: Error) => {
+            getLog().error(
+              { err, workflowRunId: workflowRun.id, eventType: 'task_activity' },
+              'workflow_event_persist_failed'
+            );
+          });
+      } else if (msg.type === 'task_notification') {
+        getWorkflowEventEmitter().emit({
+          type: 'task_activity',
+          runId: workflowRun.id,
+          nodeId: node.id,
+          taskId: msg.taskId,
+          activity: msg.status,
+          ...(msg.summary !== undefined ? { summary: msg.summary } : {}),
+          ...(msg.usage !== undefined ? { usage: msg.usage } : {}),
+        });
+        deps.store
+          .createWorkflowEvent({
+            workflow_run_id: workflowRun.id,
+            event_type: 'task_activity',
+            step_name: node.id,
+            data: {
+              task_id: msg.taskId,
+              activity: msg.status,
+              ...(msg.summary !== undefined ? { summary: msg.summary } : {}),
+              ...(msg.usage !== undefined ? { usage: msg.usage } : {}),
+            },
+          })
+          .catch((err: Error) => {
+            getLog().error(
+              { err, workflowRunId: workflowRun.id, eventType: 'task_activity' },
+              'workflow_event_persist_failed'
+            );
+          });
+      } else if (msg.type === 'hook_started') {
+        getWorkflowEventEmitter().emit({
+          type: 'hook_activity',
+          runId: workflowRun.id,
+          nodeId: node.id,
+          hookId: msg.hookId,
+          hookName: msg.hookName,
+          hookEvent: msg.hookEvent,
+          activity: 'started',
+        });
+        deps.store
+          .createWorkflowEvent({
+            workflow_run_id: workflowRun.id,
+            event_type: 'hook_activity',
+            step_name: node.id,
+            data: {
+              hook_id: msg.hookId,
+              hook_name: msg.hookName,
+              hook_event: msg.hookEvent,
+              activity: 'started',
+            },
+          })
+          .catch((err: Error) => {
+            getLog().error(
+              { err, workflowRunId: workflowRun.id, eventType: 'hook_activity' },
+              'workflow_event_persist_failed'
+            );
+          });
+      } else if (msg.type === 'hook_response') {
+        getWorkflowEventEmitter().emit({
+          type: 'hook_activity',
+          runId: workflowRun.id,
+          nodeId: node.id,
+          hookId: msg.hookId,
+          hookName: msg.hookName,
+          hookEvent: msg.hookEvent,
+          activity: 'response',
+          outcome: msg.outcome,
+          ...(msg.exitCode !== undefined ? { exitCode: msg.exitCode } : {}),
+        });
+        deps.store
+          .createWorkflowEvent({
+            workflow_run_id: workflowRun.id,
+            event_type: 'hook_activity',
+            step_name: node.id,
+            data: {
+              hook_id: msg.hookId,
+              hook_name: msg.hookName,
+              hook_event: msg.hookEvent,
+              activity: 'response',
+              outcome: msg.outcome,
+              ...(msg.exitCode !== undefined ? { exit_code: msg.exitCode } : {}),
+            },
+          })
+          .catch((err: Error) => {
+            getLog().error(
+              { err, workflowRunId: workflowRun.id, eventType: 'hook_activity' },
+              'workflow_event_persist_failed'
+            );
+          });
       }
       // rate_limit chunks: already log.warn'd in claude.ts; not surfaced to SSE per design
     }

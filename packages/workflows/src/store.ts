@@ -44,6 +44,12 @@ export const WORKFLOW_EVENT_TYPES = [
   'workflow_cancelled',
   'workflow_artifact',
   'node_session_resumed',
+  // Phase 2 of #975 — subagent task lifecycle (aggregated from provider
+  // task_started / task_progress / task_notification chunks). Stored
+  // alongside other workflow_events for the timeline view; the SSE bridge
+  // fans out task_activity / hook_activity to live Web UI subscribers.
+  'task_activity',
+  'hook_activity',
 ] as const;
 
 export type WorkflowEventType = (typeof WORKFLOW_EVENT_TYPES)[number];

@@ -229,6 +229,58 @@ export type MessageChunk =
       /** Matching ID for the originating `tool` chunk. See `tool` variant above. */
       toolCallId?: string;
     }
+  // ─── Subagent Task Lifecycle (Claude SDK `system` subtypes) ────────────
+  // Forwarded by the Claude provider from SDKTaskStartedMessage /
+  // SDKTaskProgressMessage / SDKTaskNotificationMessage. Downstream (workflow
+  // executor → SSE bridge) aggregates these into `task_activity` emitter
+  // events so the Web UI can render subagent visibility per workflow node.
+  // `skip_transcript` housekeeping tasks are filtered out at the provider
+  // boundary and never reach this surface.
+  | {
+      type: 'task_started';
+      taskId: string;
+      description: string;
+      taskType?: string;
+      prompt?: string;
+      toolUseId?: string;
+    }
+  | {
+      type: 'task_progress';
+      taskId: string;
+      description: string;
+      summary?: string;
+      usage?: { total_tokens: number; tool_uses: number; duration_ms: number };
+      lastToolName?: string;
+      toolUseId?: string;
+    }
+  | {
+      type: 'task_notification';
+      taskId: string;
+      status: 'completed' | 'failed' | 'stopped';
+      summary: string;
+      outputFile: string;
+      usage?: { total_tokens: number; tool_uses: number; duration_ms: number };
+      toolUseId?: string;
+    }
+  // ─── Hook Lifecycle (Claude SDK `system` subtypes) ─────────────────────
+  // Forwarded by the Claude provider from SDKHookStartedMessage /
+  // SDKHookResponseMessage. Same aggregation path as task_* above; the bridge
+  // emits `hook_activity` for inline indicators like
+  // `PreToolUse(Bash) → approved` under the parent node.
+  | {
+      type: 'hook_started';
+      hookId: string;
+      hookName: string;
+      hookEvent: string;
+    }
+  | {
+      type: 'hook_response';
+      hookId: string;
+      hookName: string;
+      hookEvent: string;
+      outcome: 'success' | 'error' | 'cancelled';
+      exitCode?: number;
+    }
   | { type: 'workflow_dispatch'; workerConversationId: string; workflowName: string };
 
 /**
@@ -337,6 +389,13 @@ export interface NodeConfig {
   systemPrompt?: SystemPromptInput;
   fallbackModel?: string;
   idle_timeout?: number;
+  /**
+   * Per-node override for Claude's `agentProgressSummaries` flag (Phase 4 of #975).
+   * When unset, workflow nodes default to `true` (so the Web UI gets AI-generated
+   * `summary` fields on `task_progress` every ~30s). Authors can explicitly set
+   * `false` to opt out for a specific node.
+   */
+  agentProgressSummaries?: boolean;
   [key: string]: unknown;
 }
 

@@ -79,6 +79,13 @@ export function WorkflowDagViewer({
       // baseNodes is derived from dagNodes, so this find should always succeed
       const dagNode = dagNodes.find(dn => dn.id === node.id);
       const display = dagNode ? resolveNodeDisplay(dagNode) : node.data;
+      // Phase 3 of #975 — surface subagent task + hook counts on the graph
+      // card so users see activity even when the run-detail panel isn't open.
+      const totalTaskCount = live?.tasks?.length;
+      const activeTaskCount = live?.tasks?.filter(
+        t => t.activity === 'started' || t.activity === 'progress'
+      ).length;
+      const hookCount = live?.hooks?.length;
       return {
         ...node,
         type: 'executionNode',
@@ -91,6 +98,9 @@ export function WorkflowDagViewer({
           selected: node.id === selectedNodeId,
           currentIteration: live?.currentIteration,
           maxIterations: live?.maxIterations,
+          ...(totalTaskCount !== undefined ? { totalTaskCount } : {}),
+          ...(activeTaskCount !== undefined ? { activeTaskCount } : {}),
+          ...(hookCount !== undefined ? { hookCount } : {}),
         },
       } as ExecutionFlowNode;
     });
