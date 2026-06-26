@@ -2616,6 +2616,91 @@ nodes:
         'interactive_loop_in_non_interactive_workflow'
       );
     });
+
+    it('should reject loop_group with a cyclic body', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'loop-group-cycle.yaml'),
+        `
+name: loop-group-cycle
+description: Cyclic loop_group body
+nodes:
+  - id: grp
+    loop_group:
+      until: DONE
+      max_iterations: 5
+      nodes:
+        - id: a
+          prompt: "a"
+          depends_on: [b]
+        - id: b
+          prompt: "b"
+          depends_on: [a]
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors.length).toBeGreaterThan(0);
+      expect(result.errors[0].error).toContain('loop_group');
+      expect(result.errors[0].error).toContain('Cycle');
+    });
+
+    it('should reject loop_group body depends_on referencing an unknown node', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'loop-group-bad-dep.yaml'),
+        `
+name: loop-group-bad-dep
+description: Body depends_on to unknown node
+nodes:
+  - id: grp
+    loop_group:
+      until: DONE
+      max_iterations: 5
+      nodes:
+        - id: a
+          prompt: "a"
+        - id: b
+          prompt: "b"
+          depends_on: [missing]
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors.length).toBeGreaterThan(0);
+      expect(result.errors[0].error).toContain('loop_group');
+      expect(result.errors[0].error).toContain('unknown node');
+    });
+
+    it('should accept a well-formed loop_group', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'loop-group-ok.yaml'),
+        `
+name: loop-group-ok
+description: Valid loop_group
+nodes:
+  - id: grp
+    loop_group:
+      until: DONE
+      max_iterations: 3
+      nodes:
+        - id: work
+          prompt: "do work"
+          depends_on: []
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
+    });
   });
 
   // -------------------------------------------------------------------------

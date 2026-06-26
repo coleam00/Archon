@@ -4,6 +4,7 @@
 import type { WorkflowDefinition, WorkflowLoadError, DagNode, WorkflowNodeHooks } from './schemas';
 import {
   isLoopNode,
+  isLoopGroupNode,
   isApprovalNode,
   isCancelNode,
   isScriptNode,
@@ -20,6 +21,7 @@ import {
   BASH_NODE_AI_FIELDS,
   SCRIPT_NODE_AI_FIELDS,
   LOOP_NODE_AI_FIELDS,
+  LOOP_GROUP_NODE_AI_FIELDS,
   effortLevelSchema,
   thinkingConfigSchema,
   sandboxSettingsSchema,
@@ -111,6 +113,8 @@ function parseDagNode(raw: unknown, index: number, errors: string[]): DagNode | 
     nonAiNode = { type: 'approval', fields: BASH_NODE_AI_FIELDS };
   } else if (isLoopNode(node)) {
     nonAiNode = { type: 'loop', fields: LOOP_NODE_AI_FIELDS };
+  } else if (isLoopGroupNode(node)) {
+    nonAiNode = { type: 'loop_group', fields: LOOP_GROUP_NODE_AI_FIELDS };
   } else if (isScriptNode(node)) {
     nonAiNode = { type: 'script', fields: SCRIPT_NODE_AI_FIELDS };
   } else if ('bash' in node && typeof node.bash === 'string') {
@@ -214,6 +218,20 @@ function validateDagStructure(nodes: DagNode[]): string | null {
         if (refNodeId !== undefined && !ids.has(refNodeId)) {
           return `Node '${node.id}' references unknown node '$${refNodeId}.output'`;
         }
+      }
+    }
+  }
+
+  // Recursively validate loop_group bodies as scoped sub-DAGs. A loop_group body is
+  // sealed: its depends_on edges resolve within the body (not the outer DAG), and the
+  // body is itself a DAG (unique ids, no cycles, valid $nodeId.output refs). Nested
+  // loop_groups recurse naturally. Outer-DAG cycle/depends_on checks above operate on
+  // the flattened top-level node list and treat each loop_group as one outer node.
+  for (const node of nodes) {
+    if (isLoopGroupNode(node)) {
+      const bodyError = validateDagStructure(node.loop_group.nodes);
+      if (bodyError) {
+        return `loop_group '${node.id}' body: ${bodyError}`;
       }
     }
   }
