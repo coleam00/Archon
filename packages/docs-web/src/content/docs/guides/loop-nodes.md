@@ -335,6 +335,105 @@ If you need to accumulate results across iterations, write them to files in
 | Idle timeout per iteration | Iteration completes with whatever output was collected; loop continues to next iteration |
 | `retry` configured on node | Rejected at parse time — workflow fails to load |
 
+## Cross-Node Loops with `loop_group`
+
+A `loop` node iterates a **single prompt**. A `loop_group` node iterates a
+**multi-node sub-DAG** — a sealed body of nodes that re-runs in full each
+iteration until a completion condition is met. Use it when "iterate until done"
+needs a *pipeline* of steps (e.g. `implement → test → review`), not just one
+repeated step.
+
+```yaml
+name: fix-until-green
+description: Implement, test, and review until tests pass
+nodes:
+  - id: fix-loop
+    loop_group:
+      until: TESTS_PASS        # completion signal in the body's terminal output
+      max_iterations: 5
+      fresh_context: false      # reset body sessions each iteration (default false)
+      nodes:                    # sealed sub-DAG body — repeats as a unit
+        - id: implement
+          prompt: Fix the failing tests. Emit TESTS_PASS only when all pass.
+          depends_on: []
+        - id: test
+          bash: bun test
+          depends_on: [implement]
+        - id: review
+          prompt: Summarize the result; echo TESTS_PASS if tests are green.
+          depends_on: [test]
+```
+
+### How it works
+
+- From the **outer DAG's** perspective, `fix-loop` is one node. The cycle is
+  *encapsulated* inside it — the outer DAG stays acyclic.
+- Each iteration runs the body's topological layers in full (concurrent nodes
+  within a layer run in parallel, same as a normal DAG).
+- The body is **sealed**: a body node's `depends_on` may only reference sibling
+  body nodes, not outer-DAG nodes. Outer context is still reachable via `$nodeId.output`
+  refs in body prompts.
+- Body node events are namespaced `{groupId}.{nodeId}` in the event log.
+- `$fix-loop.output` (visible to the outer DAG) is the **final iteration's
+  terminal-node output**.
+
+### Cross-iteration references: `$LOOP_PREV`
+
+A body node can reference a sibling's output from the **previous iteration**
+with `$LOOP_PREV.<nodeId>.output` (and `$LOOP_PREV.<nodeId>.output.<field>`
+for structured output):
+
+```yaml
+nodes:
+  - id: fix-loop
+    loop_group:
+      until: TESTS_PASS
+      max_iterations: 5
+      nodes:
+        - id: implement
+          prompt: |
+            Previous attempt's test output:
+            $LOOP_PREV.test.output
+            Fix what failed.
+          depends_on: []
+        - id: test
+          bash: bun test
+          depends_on: [implement]
+```
+
+On iteration 1 (no prior iteration), `$LOOP_PREV.*` resolves to an empty
+string. Field access uses the same strict semantics as `$nodeId.output.field`
+(a field not in the producer's declared schema fails the consuming node rather
+than silently degrading).
+
+### Configuration fields
+
+`loop_group` shares the same iteration-control fields as `loop`:
+[`until`](#until), [`max_iterations`](#max_iterations),
+[`fresh_context`](#fresh_context), [`until_bash`](#until_bash),
+[`interactive`](#interactive-and-gate_message), and `gate_message`. The
+difference is the body: `loop` takes a single `prompt`; `loop_group` takes a
+`nodes` array.
+
+### Resume
+
+Resuming a paused `loop_group` (interactive gate, or a cancelled/restarted run)
+**re-runs the current iteration's whole body** in full — the same model as a
+`loop` node re-running its current iteration. Per-body-node resume granularity
+is not supported in v1.
+
+### What is NOT supported on loop_group nodes (v1)
+
+- `retry` (the loop manages its own iteration) — rejected at parse time.
+- `persist_session` for body AI nodes across iterations — body sessions reset
+  per iteration (governed by `fresh_context`).
+- Per-body-node resume (skip-to-failed-body-node) — the whole iteration re-runs.
+- `$LOOP_PREV.<id>.output[N]` history indexing — only the immediately prior
+  iteration is reachable.
+
+Nested `loop_group` inside a `loop_group` body is supported by construction
+(the body is a normal `nodes` array), but is not hardened in v1.
+
 ## See Also
 
 - [Authoring Workflows](/guides/authoring-workflows/) — full workflow reference
