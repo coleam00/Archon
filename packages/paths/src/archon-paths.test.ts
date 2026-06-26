@@ -233,7 +233,7 @@ describe('archon-paths', () => {
   describe('getCredentialKeyPath', () => {
     test('returns credential-key inside ARCHON_HOME', () => {
       process.env.ARCHON_HOME = '/custom/archon';
-      expect(getCredentialKeyPath()).toBe('/custom/archon/credential-key');
+      expect(getCredentialKeyPath()).toBe(join('/custom/archon', 'credential-key'));
     });
   });
 
