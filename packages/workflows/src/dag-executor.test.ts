@@ -9699,4 +9699,227 @@ describe('executeDagWorkflow -- loop_group node', () => {
     expect(callCount).toBe(3);
     expect(result).toBeUndefined();
   });
+
+  it('INSTANCE 1: multi-node body (implement→test→review) completes on iteration 2', async () => {
+    // The body has 3 nodes; only `review` is AI (calls sendQuery). implement+test are
+    // bash. On iteration 1 review does NOT emit DONE; on iteration 2 it does.
+    let reviewCalls = 0;
+    mockSendQueryDag.mockImplementation(function* () {
+      reviewCalls++;
+      const content =
+        reviewCalls === 1 ? 'tests still failing, need another pass' : 'all tests green now\nDONE';
+      yield { type: 'assistant', content };
+      yield { type: 'result', sessionId: `review-sess-${reviewCalls}` };
+    });
+
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('lg-multinode');
+
+    const nodes: DagNode[] = [
+      {
+        id: 'fix-loop',
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 5,
+          fresh_context: false,
+          nodes: [
+            { id: 'implement', bash: 'echo "editing files"', depends_on: [] },
+            { id: 'test', bash: 'echo "running tests"', depends_on: ['implement'] },
+            {
+              id: 'review',
+              prompt: 'Review the test results. Emit DONE only when all tests pass.',
+              depends_on: ['test'],
+            },
+          ],
+        },
+        depends_on: [],
+      },
+    ];
+
+    const result = await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-lg',
+      testDir,
+      { name: 'lg-multinode', nodes },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    // 2 iterations (review called once per iteration); DONE on iteration 2.
+    expect(reviewCalls).toBe(2);
+    expect(result).toContain('all tests green now');
+  });
+
+  it('INSTANCE 2: $LOOP_PREV cross-iteration ref sees prior iteration output', async () => {
+    // The body prompt references $LOOP_PREV.work.output. We assert the mock receives a
+    // prompt that contains the PREVIOUS iteration's output on iteration 2+ (and empty
+    // on iteration 1). Iteration 1 returns "iter-1-draft"; iteration 2's prompt must
+    // contain "iter-1-draft" (carried via $LOOP_PREV), and iteration 2 emits DONE.
+    let callCount = 0;
+    const receivedPrompts: string[] = [];
+    mockSendQueryDag.mockImplementation(function* (prompt: string) {
+      callCount++;
+      receivedPrompts.push(prompt ?? '');
+      const content = callCount === 1 ? 'iter-1-draft' : 'iter-2-final\nDONE';
+      yield { type: 'assistant', content };
+      yield { type: 'result', sessionId: `s-${callCount}` };
+    });
+
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('lg-loopprev');
+
+    const nodes: DagNode[] = [
+      {
+        id: 'draft-loop',
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 5,
+          fresh_context: false,
+          nodes: [
+            {
+              id: 'work',
+              prompt: 'Previous draft:\n$LOOP_PREV.work.output\nImprove it. Emit DONE when final.',
+              depends_on: [],
+            },
+          ],
+        },
+        depends_on: [],
+      },
+    ];
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-lg',
+      testDir,
+      { name: 'lg-loopprev', nodes },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    // Iteration 1 prompt: $LOOP_PREV resolved to '' (no prior iteration).
+    expect(callCount).toBeGreaterThanOrEqual(1);
+    // The first prompt must NOT carry the prior output (there is none).
+    expect(receivedPrompts[0]).not.toContain('iter-1-draft');
+    // Iteration 2 prompt MUST carry iteration 1's output via $LOOP_PREV.
+    expect(callCount).toBe(2);
+    expect(receivedPrompts[1]).toContain('iter-1-draft');
+  });
+
+  it('INSTANCE 3: until_bash deterministic gate completes on exit 0', async () => {
+    // No `until` signal from AI; completion is decided solely by until_bash exit code.
+    // The body is a pure bash node that increments a counter file each iteration;
+    // until_bash exits 0 once the counter reaches 2. No AI node → sendQuery unused.
+    const counterFile = join(testDir, 'iter-counter');
+
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('lg-untilbash');
+
+    const nodes: DagNode[] = [
+      {
+        id: 'bash-loop',
+        loop_group: {
+          until: 'NEVER_EMITTED', // rely on until_bash, not the signal
+          max_iterations: 5,
+          fresh_context: false,
+          until_bash: `test "$(cat ${counterFile} 2>/dev/null || echo 0)" -ge 2`,
+          nodes: [
+            {
+              id: 'bump',
+              bash: `n=$(cat ${counterFile} 2>/dev/null || echo 0); echo $((n+1)) > ${counterFile}; echo "iter $((n+1))"`,
+              depends_on: [],
+            },
+          ],
+        },
+        depends_on: [],
+      },
+    ];
+
+    const result = await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-lg',
+      testDir,
+      { name: 'lg-untilbash', nodes },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    // until_bash exits 0 once the counter reaches 2 → completes after 2 iterations.
+    // The counter file holds the final iteration count (2).
+    const { readFile } = await import('fs/promises');
+    const finalCount = parseInt((await readFile(counterFile, 'utf8')).trim(), 10);
+    expect(finalCount).toBe(2);
+    // The group's output is the terminal body node's (bump) last-iteration stdout.
+    expect(result).toContain('iter 2');
+  });
+
+  it('INSTANCE 4: single-node body degenerates like loop: and completes in 1 iteration', async () => {
+    // A loop_group with a single prompt node that emits DONE on the very first iteration.
+    let calls = 0;
+    mockSendQueryDag.mockImplementation(function* () {
+      calls++;
+      yield { type: 'assistant', content: 'done immediately\nDONE' };
+      yield { type: 'result', sessionId: `s-${calls}` };
+    });
+
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('lg-single');
+
+    const nodes: DagNode[] = [
+      {
+        id: 'once',
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 3,
+          fresh_context: false,
+          nodes: [{ id: 'only', prompt: 'do it, emit DONE', depends_on: [] }],
+        },
+        depends_on: [],
+      },
+    ];
+
+    const result = await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-lg',
+      testDir,
+      { name: 'lg-single', nodes },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    // Single iteration, completed immediately.
+    expect(calls).toBe(1);
+    expect(result).toContain('done immediately');
+  });
 });

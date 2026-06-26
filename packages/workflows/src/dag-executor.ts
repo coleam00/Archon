@@ -2297,8 +2297,10 @@ async function executeLoopGroupNode(
   const group = node.loop_group;
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
 
-  // Body layering is static — compute once, reuse across iterations.
-  const bodyLayers = buildTopologicalLayers(group.nodes);
+  // Body layering is recomputed per iteration from the (possibly $LOOP_PREV-substituted)
+  // body nodes — runLayers walks ctx.layers, so the layers must reference the substituted
+  // nodes for $LOOP_PREV resolution to take effect. depends_on shape is static, so the
+  // layering is stable; only the prompt text changes per iteration.
   const stepNamePrefix = `${node.id}.`;
 
   // Detect interactive loop resume (mirrors executeLoopNode).
@@ -2367,6 +2369,9 @@ async function executeLoopGroupNode(
       prevSnapshot && prevSnapshot.size > 0
         ? group.nodes.map(n => applyLoopPrevToBodyNode(n, prevSnapshot))
         : group.nodes;
+    // Re-layer from the (possibly substituted) body nodes — runLayers walks ctx.layers,
+    // not ctx.nodes, so the layers must reference the substituted nodes to take effect.
+    const iterBodyLayers = buildTopologicalLayers(iterBodyNodes);
 
     // Fresh scoped output map per iteration. Seed it read-only with the outer DAG's
     // upstream outputs so body nodes can reference outer context via $nodeId.output if
@@ -2401,7 +2406,7 @@ async function executeLoopGroupNode(
       persistScopeKey: undefined,
       workflowPersistSessions: false,
       nodes: iterBodyNodes,
-      layers: bodyLayers,
+      layers: iterBodyLayers,
       nodeOutputs: scopedNodeOutputs,
       priorCompletedNodes: undefined, // body re-runs in full each iteration (v1)
       // fresh_context (or iteration 1) starts the body's session threading fresh.
