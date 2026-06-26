@@ -6,8 +6,8 @@
  * `loop:`/`approval:` objects and `output_format` JSON schemas — serializes
  * without a per-field allowlist.
  *
- * Pure and dependency-free: CodeMirror only *renders* the string; this module
- * *produces* it from `toWorkflowDefinition` output and stays unit-testable
+ * Pure and dependency-free: the preview pane only *renders* the string; this
+ * module *produces* it from `toWorkflowDefinition` output and stays unit-testable
  * without a DOM. Not a general YAML emitter — it covers the value shapes the
  * wire `WorkflowDefinition` can contain (scalars, arrays, plain objects).
  */

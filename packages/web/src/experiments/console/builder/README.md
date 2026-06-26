@@ -10,7 +10,9 @@ The in-console workflow builder. Ported from the standalone
   pure-function validation and typed fixtures.
 - **PR-2 (this layer): the visual editor.** React-Flow canvas, custom node
   rendering, palette, inspector (with `when:` builder), validation panel,
-  CodeMirror YAML preview, and editor polish (undo/redo, multi-select,
+  read-only syntax-highlighted YAML preview (reusing the console's existing
+  `react-markdown` + `rehype-highlight` stack — no new highlighting dep), and
+  editor polish (undo/redo, multi-select,
   copy/paste, align/distribute, auto-arrange, smart guides, grid snap, keymap
   help). Rendered as a **controlled component** (`BuilderPage`) driven by an
   in-memory `BuilderWorkflow`, plus a **fixture-backed** `/console/builder`

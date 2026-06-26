@@ -11,7 +11,7 @@ export default tseslint.config(
       'packages/*/dist/**',
       'dist/**',
       'coverage/**',
-      '.agents/**', // Local agent content (skills, plans, reports) — gitignored, not in any tsconfig project
+      '.agents/examples/**',
       'packages/docs-web/**',
       'workspace/**',
       'worktrees/**',
