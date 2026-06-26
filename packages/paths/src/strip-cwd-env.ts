@@ -84,16 +84,6 @@ export function stripCwdEnv(cwd: string = process.cwd()): void {
   // --- Pass 2: Nested Claude Code session markers ---
   // Pattern-matched (not hardcoded) so new CLAUDE_CODE_* markers added by
   // future Claude Code versions are automatically handled.
-  // Emit warning BEFORE deleting — downstream code won't see CLAUDECODE=1.
-  if (process.env.CLAUDECODE === '1' && !process.env.ARCHON_SUPPRESS_NESTED_CLAUDE_WARNING) {
-    process.stderr.write(
-      '\u26a0  Detected CLAUDECODE=1 \u2014 running inside a Claude Code session.\n' +
-        '   If workflows hang silently, this is a known class of issue.\n' +
-        '   Workaround: run `archon serve` from a regular shell.\n' +
-        '   Suppress: set ARCHON_SUPPRESS_NESTED_CLAUDE_WARNING=1\n' +
-        '   Details: https://github.com/coleam00/Archon/issues/1067\n'
-    );
-  }
   if (process.env.CLAUDECODE) {
     Reflect.deleteProperty(process.env, 'CLAUDECODE');
   }
