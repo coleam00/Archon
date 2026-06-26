@@ -13,6 +13,7 @@ import { IHHTPage } from '@/routes/IHHTPage';
 import { SocialContentPage } from '@/routes/SocialContentPage';
 import { PMCPage } from '@/routes/PMCPage';
 import { PMCProspectsPage } from '@/routes/PMCProspectsPage';
+import { TTTSLocalOperatorsPage } from '@/routes/TTTSLocalOperatorsPage';
 import { EWCPage } from '@/routes/EWCPage';
 import { FountainPage } from '@/routes/FountainPage';
 import { TTSPage } from '@/routes/TTSPage';
@@ -95,6 +96,7 @@ export function App(): React.ReactElement {
                 <Route path="/research" element={<ResearchFirehosePage />} />
                 <Route path="/pmc" element={<PMCPage />} />
                 <Route path="/pmc-prospects" element={<PMCProspectsPage />} />
+                <Route path="/ttts-local-operators" element={<TTTSLocalOperatorsPage />} />
                 <Route path="/brt" element={<BRTPage />} />
                 <Route path="/ewc" element={<EWCPage />} />
                 <Route path="/fountain" element={<FountainPage />} />

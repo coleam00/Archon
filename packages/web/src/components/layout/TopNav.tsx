@@ -18,6 +18,7 @@ import {
   LineChart as LineChartIcon,
   Zap,
   Users,
+  Target,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -46,6 +47,7 @@ const coreTabs: readonly NavTab[] = [
   { to: '/solutions', end: false, icon: Briefcase, label: 'Solutions' },
   { to: '/pmc', end: false, icon: Briefcase, label: 'PMC' },
   { to: '/pmc-prospects', end: false, icon: Users, label: 'Prospects' },
+  { to: '/ttts-local-operators', end: false, icon: Target, label: 'Local Ops' },
   { to: '/brt', end: false, icon: BarChart2, label: 'BRT' },
   { to: '/ewc', end: false, icon: Leaf, label: 'EWC' },
   { to: '/fountain', end: false, icon: Droplet, label: 'Fountain WPB' },

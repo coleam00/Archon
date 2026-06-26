@@ -14,6 +14,7 @@ import {
   Share2,
   Megaphone,
   Sparkles,
+  Target,
 } from 'lucide-react';
 import driveIndex from '@/lib/drive-index.generated.json';
 import solutionsData from '@/lib/solutions.generated.json';
@@ -223,6 +224,13 @@ export function StartHerePage(): React.ReactElement {
             icon={Volume2}
             title="TTTS"
             description="Therapeutic Technology Showcase. June 27 closed-door Sarasota session."
+          />
+          <Card
+            to="/ttts-local-operators"
+            icon={Target}
+            title="TTTS Local Operators"
+            description="Deduped health/wellness operator list from HeyReach, LinkedIn, dialer, Instagram-evidence rows, and event summary."
+            badge="335"
           />
           <Card
             to="/ewc"
