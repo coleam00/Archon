@@ -3,6 +3,7 @@ import { Link, useSearchParams } from 'react-router';
 import { Search, ExternalLink, Briefcase, CheckCircle2, Eye, Mail, HardDrive } from 'lucide-react';
 import solutionsData from '@/lib/solutions.generated.json';
 import { STRATEGIC_PARTNERS } from '@/lib/strategic-partners';
+import type { StrategicPartnerProfile } from '@/lib/strategic-partners';
 
 type Status = 'active' | 'exploring' | 'prospect' | 'dormant' | '';
 type Audience = 'all' | 'internal' | 'partner-only' | 'jason-only';
@@ -106,7 +107,8 @@ function strategicPartnerToSolution(partner: (typeof STRATEGIC_PARTNERS)[number]
     type: 'strategic-partner',
     category: 'solution',
     model: partner.category,
-    status: partner.slug === 'gapin-peak-launch' ? 'active' : 'exploring',
+    status:
+      partner.solutionStatus ?? (partner.slug === 'gapin-peak-launch' ? 'active' : 'exploring'),
     audience: 'all',
     website: partner.links[0]?.url ?? '',
     tagline: partner.positioning,
@@ -120,6 +122,20 @@ function strategicPartnerToSolution(partner: (typeof STRATEGIC_PARTNERS)[number]
 
 function isStrategicPartner(slug: string): boolean {
   return STRATEGIC_PARTNERS.some(partner => partner.slug === slug);
+}
+
+const PARTNER_CARD_ACCENT: Record<NonNullable<StrategicPartnerProfile['card']>['accent'], string> =
+  {
+    default: 'border-border bg-surface-elevated hover:border-border hover:bg-surface-hover',
+    emerald: 'border-emerald-300 bg-emerald-50/80 hover:border-emerald-400 hover:bg-emerald-50',
+    violet: 'border-violet-300 bg-violet-50/80 hover:border-violet-400 hover:bg-violet-50',
+    amber: 'border-amber-300 bg-amber-50/80 hover:border-amber-400 hover:bg-amber-50',
+    sky: 'border-sky-300 bg-sky-50/80 hover:border-sky-400 hover:bg-sky-50',
+    rose: 'border-rose-300 bg-gradient-to-br from-rose-50 via-white to-amber-50 hover:border-rose-400 hover:from-rose-50 hover:to-amber-100/70',
+  };
+
+function partnerProfileForSlug(slug: string): StrategicPartnerProfile | undefined {
+  return STRATEGIC_PARTNERS.find(partner => partner.slug === slug);
 }
 
 function formatTimestamp(iso: string): string {
@@ -245,40 +261,71 @@ export function SolutionsPage(): React.ReactElement {
               No solutions match.
             </div>
           )}
-          {filtered.map(s => (
-            <button
-              key={s.slug}
-              type="button"
-              onClick={(): void => {
-                setSelectedSlug(s.slug);
-              }}
-              className={`flex flex-col gap-2 rounded-lg border p-4 text-left transition-colors ${
-                selected?.slug === s.slug
-                  ? 'border-border-bright bg-surface-inset'
-                  : 'border-border bg-surface-elevated hover:border-border hover:bg-surface-hover'
-              }`}
-            >
-              <div className="flex items-start justify-between gap-2">
-                <h2 className="text-base font-semibold text-text-primary">{s.name}</h2>
-                <span
-                  className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${STATUS_STYLE[s.status] ?? STATUS_STYLE['']}`}
-                >
-                  {s.status || 'tbd'}
-                </span>
-              </div>
-              {s.tagline && <p className="text-xs text-text-secondary line-clamp-3">{s.tagline}</p>}
-              <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] text-text-tertiary">
-                {s.model && (
-                  <span className="rounded bg-surface-inset px-1.5 py-0.5">{s.model}</span>
+          {filtered.map(s => {
+            const partner = partnerProfileForSlug(s.slug);
+            const card = partner?.card;
+            const baseCardStyle = card
+              ? PARTNER_CARD_ACCENT[card.accent]
+              : 'border-border bg-surface-elevated hover:border-border hover:bg-surface-hover';
+            return (
+              <button
+                key={s.slug}
+                type="button"
+                onClick={(): void => {
+                  setSelectedSlug(s.slug);
+                }}
+                className={`group relative flex flex-col gap-2 overflow-hidden rounded-lg border p-4 text-left transition-colors ${
+                  selected?.slug === s.slug
+                    ? 'border-border-bright bg-surface-inset'
+                    : baseCardStyle
+                }`}
+              >
+                {card && (
+                  <div className="absolute right-0 top-0 h-16 w-16 rounded-bl-full bg-white/60 blur-0" />
                 )}
-                {s.keyContact && (
-                  <span className="inline-flex items-center gap-1">
-                    <Mail className="h-3 w-3" /> {s.keyContact}
+                <div className="relative flex items-start justify-between gap-2">
+                  <div>
+                    {card && (
+                      <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.22em] text-rose-700">
+                        {card.eyebrow}
+                      </div>
+                    )}
+                    <h2 className="text-base font-semibold text-text-primary">{s.name}</h2>
+                  </div>
+                  <span
+                    className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${STATUS_STYLE[s.status] ?? STATUS_STYLE['']}`}
+                  >
+                    {s.status || 'tbd'}
                   </span>
+                </div>
+                {s.tagline && (
+                  <p className="relative text-xs text-text-secondary line-clamp-3">{s.tagline}</p>
                 )}
-              </div>
-            </button>
-          ))}
+                {card && (
+                  <div className="relative flex flex-wrap gap-1">
+                    {card.highlights.slice(0, 3).map(highlight => (
+                      <span
+                        key={highlight}
+                        className="rounded-full border border-rose-200 bg-white/75 px-2 py-0.5 text-[10px] font-medium text-rose-800"
+                      >
+                        {highlight}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <div className="relative mt-1 flex flex-wrap items-center gap-2 text-[10px] text-text-tertiary">
+                  {s.model && (
+                    <span className="rounded bg-surface-inset/80 px-1.5 py-0.5">{s.model}</span>
+                  )}
+                  {s.keyContact && (
+                    <span className="inline-flex items-center gap-1">
+                      <Mail className="h-3 w-3" /> {s.keyContact}
+                    </span>
+                  )}
+                </div>
+              </button>
+            );
+          })}
         </div>
 
         {/* Detail pane (right) */}

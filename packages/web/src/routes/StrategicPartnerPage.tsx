@@ -8,6 +8,16 @@ import {
   WalletCards,
 } from 'lucide-react';
 import { STRATEGIC_PARTNERS, getStrategicPartner } from '@/lib/strategic-partners';
+import type { StrategicPartnerProfile } from '@/lib/strategic-partners';
+
+const HERO_ACCENT: Record<NonNullable<StrategicPartnerProfile['card']>['accent'], string> = {
+  default: 'bg-[oklch(0.985_0.012_88)]',
+  emerald: 'bg-gradient-to-br from-emerald-50 via-white to-[oklch(0.985_0.012_88)]',
+  violet: 'bg-gradient-to-br from-violet-50 via-white to-[oklch(0.985_0.012_88)]',
+  amber: 'bg-gradient-to-br from-amber-50 via-white to-[oklch(0.985_0.012_88)]',
+  sky: 'bg-gradient-to-br from-sky-50 via-white to-[oklch(0.985_0.012_88)]',
+  rose: 'bg-gradient-to-br from-rose-50 via-white to-amber-50',
+};
 
 function BulletList({ items }: { items: string[] }): React.ReactElement {
   return (
@@ -45,6 +55,8 @@ export function StrategicPartnerPage(): React.ReactElement {
     return <Navigate to="/solutions" replace />;
   }
 
+  const heroAccent = partner.card ? HERO_ACCENT[partner.card.accent] : HERO_ACCENT.default;
+
   return (
     <div className="flex h-full flex-1 flex-col gap-5 overflow-y-auto p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -71,7 +83,7 @@ export function StrategicPartnerPage(): React.ReactElement {
         </div>
       </div>
 
-      <header className="rounded-2xl border border-border bg-[oklch(0.985_0.012_88)] p-6">
+      <header className={`rounded-2xl border border-border p-6 ${heroAccent}`}>
         <div className="mb-3 flex flex-wrap items-center gap-2 text-xs uppercase tracking-wide text-text-tertiary">
           <span>{partner.category}</span>
           <span className="rounded-full border border-border bg-surface-elevated px-2 py-0.5 text-text-secondary">
@@ -92,6 +104,12 @@ export function StrategicPartnerPage(): React.ReactElement {
             <BulletList items={partner.bestFit} />
           </Section>
 
+          {partner.progress && partner.progress.length > 0 && (
+            <Section title="Progress and proof points">
+              <BulletList items={partner.progress} />
+            </Section>
+          )}
+
           <div className="grid gap-5 lg:grid-cols-2">
             <Section title="Offering">
               <BulletList items={partner.offering} />
@@ -109,6 +127,12 @@ export function StrategicPartnerPage(): React.ReactElement {
               <BulletList items={partner.marketInsights} />
             </Section>
           </div>
+
+          {partner.visibilityStrategies && partner.visibilityStrategies.length > 0 && (
+            <Section title="Visibility and growth plays">
+              <BulletList items={partner.visibilityStrategies} />
+            </Section>
+          )}
 
           <Section title="Clinical evidence / diligence links">
             <div className="grid gap-3 md:grid-cols-2">
