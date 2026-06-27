@@ -1,9 +1,7 @@
 {
-  "feature_directory": "specs/001-manual-node-retry-decisions",
-  "spec_file": "specs/001-manual-node-retry-decisions/spec.md",
-  "source_requirement": "plans/grill-me/260621-1239-manual-node-retry-decisions.md",
-  "source_mode": "grill-me normal",
-  "created": "2026-06-21",
-  "ralph_prd_file": "specs/001-manual-node-retry-decisions/prd.json",
-  "ralph_progress_file": "specs/001-manual-node-retry-decisions/progress.txt"
+  "feature_directory": "specs/002-route-loop-decisions",
+  "spec_file": "specs/002-route-loop-decisions/spec.md",
+  "source_requirement": "plans/grill-me/260625-2337-route-loop-decisions.md",
+  "source_mode": "grill-me normal with explicit decision log request",
+  "created": "2026-06-27"
 }
