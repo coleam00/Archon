@@ -144,21 +144,21 @@ This document serves as formal approval to proceed with the project as outlined 
 
 **Project Sponsor**:
 
-Name: ********\_********  
-Signature: ********\_********  
-Date: ******\_\_\_******
+Name: **\*\*\*\***\_**\*\*\*\***  
+Signature: **\*\*\*\***\_**\*\*\*\***  
+Date: **\*\***\_\_\_**\*\***
 
 **Budget Approver**:
 
-Name: ********\_********  
-Signature: ********\_********  
-Date: ******\_\_\_******
+Name: **\*\*\*\***\_**\*\*\*\***  
+Signature: **\*\*\*\***\_**\*\*\*\***  
+Date: **\*\***\_\_\_**\*\***
 
 **Project Owner**:
 
 Name: {{project_owner}}  
-Signature: ********\_********  
-Date: ******\_\_\_******
+Signature: **\*\*\*\***\_**\*\*\*\***  
+Date: **\*\***\_\_\_**\*\***
 
 ---
 

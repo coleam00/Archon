@@ -260,15 +260,15 @@ Any disputes arising from this agreement shall be resolved through {{dispute_res
 
 **Client/Owner Approval**:
 
-Signature: ********\_********  
+Signature: **\*\*\*\***\_**\*\*\*\***  
 Name: {{client_name}}  
-Date: ******\_\_\_******
+Date: **\*\***\_\_\_**\*\***
 
 **Service Provider Approval**:
 
-Signature: ********\_********  
+Signature: **\*\*\*\***\_**\*\*\*\***  
 Name: {{service_provider_name}}  
-Date: ******\_\_\_******
+Date: **\*\***\_\_\_**\*\***
 
 ---
 

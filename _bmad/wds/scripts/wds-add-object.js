@@ -43,7 +43,7 @@ function printUsage() {
       '  --behavior    Behavior description (e.g. "onClick: submit form")',
       '  --component-path  Path to component file (default: "—")',
       '',
-    ].join('\n'),
+    ].join('\n')
   );
 }
 
@@ -65,8 +65,18 @@ function deriveObjectId(pageSlug, sectionName, objectName) {
   return `${pagePrefix}-${sectionSlug}-${objectSlug}`;
 }
 
-function buildObjectBlock({ objectName, objectId, component, componentPath, translationKey, se, en, behavior }) {
-  const compDisplay = componentPath && componentPath !== '—' ? `[${component}](${componentPath})` : component || '—';
+function buildObjectBlock({
+  objectName,
+  objectId,
+  component,
+  componentPath,
+  translationKey,
+  se,
+  en,
+  behavior,
+}) {
+  const compDisplay =
+    componentPath && componentPath !== '—' ? `[${component}](${componentPath})` : component || '—';
 
   const lines = [
     `#### ${objectName}`,
@@ -90,11 +100,11 @@ function buildObjectBlock({ objectName, objectId, component, componentPath, tran
 function insertUnderSection(content, sectionHeading, objectBlock) {
   const lines = content.split('\n');
   const headingLine = `### Section: ${sectionHeading}`;
-  const headingIdx = lines.findIndex((l) => l.trim() === headingLine);
+  const headingIdx = lines.findIndex(l => l.trim() === headingLine);
 
   if (headingIdx === -1) {
     // Section doesn't exist — append it before the next ## heading after ## Page Sections
-    const pageSectionsIdx = lines.findIndex((l) => l.trim() === '## Page Sections');
+    const pageSectionsIdx = lines.findIndex(l => l.trim() === '## Page Sections');
     if (pageSectionsIdx === -1) {
       // Just append at end before last nav row
       return content + `\n${headingLine}\n\n${objectBlock}\n`;

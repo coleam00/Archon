@@ -3123,6 +3123,13 @@ export async function executeDagWorkflow(
       routeTargetIds.add(node.route_loop.routes.exhausted);
     }
   }
+  if (hasRouteLoopNodes) {
+    for (const activation of Object.values(routeLoopMetadata.routeActivations)) {
+      if (routeTargetIds.has(activation.target_node_id)) {
+        activatedRouteTargetIds.add(activation.target_node_id);
+      }
+    }
+  }
 
   layers.forEach((layer, index) => {
     for (const node of layer) {

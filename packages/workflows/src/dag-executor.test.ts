@@ -5914,15 +5914,22 @@ describe('executeDagWorkflow -- route_loop end-to-end TDD', () => {
       includeUnrelatedFixDependent: true,
     });
 
-    expect(calls.filter(call => call.nodeId === 'audit')).toHaveLength(1);
-    expect(calls.map(call => call.nodeId)).toEqual([
-      'fix',
-      'review',
-      'audit',
-      'fix',
-      'review',
-      'done',
-    ]);
+    const nodeIds = calls.map(call => call.nodeId);
+    const firstFixIndex = nodeIds.indexOf('fix');
+    const secondFixIndex = nodeIds.indexOf('fix', firstFixIndex + 1);
+    const firstReviewIndex = nodeIds.indexOf('review');
+    const secondReviewIndex = nodeIds.indexOf('review', firstReviewIndex + 1);
+    const auditIndex = nodeIds.indexOf('audit');
+    const doneIndex = nodeIds.indexOf('done');
+
+    expect(nodeIds.filter(nodeId => nodeId === 'audit')).toHaveLength(1);
+    expect(nodeIds).toHaveLength(6);
+    expect(firstFixIndex).toBe(0);
+    expect(firstReviewIndex).toBeGreaterThan(firstFixIndex);
+    expect(auditIndex).toBeGreaterThan(firstFixIndex);
+    expect(secondFixIndex).toBeGreaterThan(firstReviewIndex);
+    expect(secondReviewIndex).toBeGreaterThan(secondFixIndex);
+    expect(doneIndex).toBeGreaterThan(secondReviewIndex);
   });
 
   it('fails the workflow when durable route-decision persistence rejects a stale write', async () => {
@@ -5967,6 +5974,111 @@ describe('executeDagWorkflow -- route_loop end-to-end TDD', () => {
       attempt: 2,
       execution_seq: 2,
     });
+    expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('hydrates prior route activation metadata on resume', async () => {
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('route-loop-resume-run', {
+      metadata: {
+        loopCounters: { 'review-router': 1 },
+        nodeAttempts: { 'review-router': 1 },
+        executionSeq: 1,
+        routeActivations: {
+          revise: {
+            route_loop_node_id: 'review-router',
+            outcome: 'negative',
+            target_node_id: 'revise',
+            attempt: 1,
+            execution_seq: 1,
+          },
+        },
+      },
+    });
+    const calls: string[] = [];
+
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mock(function* (
+        _prompt: string,
+        _cwd: string,
+        _resumeSessionId?: string,
+        sendOptions?: SendQueryOptions
+      ) {
+        const nodeId = sendOptions?.nodeConfig?.nodeId;
+        if (typeof nodeId !== 'string') {
+          throw new Error('missing route-loop resume node id');
+        }
+        calls.push(nodeId);
+        yield { type: 'assistant' as const, content: `${nodeId} output` };
+        yield { type: 'result' as const, sessionId: `${nodeId}-session` };
+      }),
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-route-loop-resume',
+      testDir,
+      {
+        name: 'route-loop-resume',
+        mutates_checkout: false,
+        nodes: [
+          { id: 'draft', prompt: 'Draft.' },
+          {
+            id: 'review',
+            prompt: 'Review.',
+            depends_on: ['draft'],
+            output_format: {
+              type: 'object',
+              properties: {
+                result: { type: 'string', enum: ['positive', 'negative'] },
+              },
+              required: ['result'],
+            },
+          },
+          {
+            id: 'review-router',
+            depends_on: ['review'],
+            route_loop: {
+              from: 'review',
+              condition: "$review.output.result == 'positive'",
+              max_iterations: 10,
+              routes: {
+                positive: 'done',
+                negative: 'revise',
+                exhausted: 'escalation',
+              },
+            },
+          },
+          { id: 'revise', prompt: 'Revise.', depends_on: ['review-router'] },
+          { id: 'done', prompt: 'Done.', depends_on: ['review-router'] },
+          { id: 'escalation', prompt: 'Escalate.', depends_on: ['review-router'] },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      new Map([
+        ['draft', 'draft output'],
+        ['review', JSON.stringify({ result: 'negative' })],
+        ['review-router', JSON.stringify({ outcome: 'negative', to: 'revise' })],
+      ])
+    );
+
+    expect(calls).toEqual(['revise']);
+    expect(store.persistRouteDecisionTransition).not.toHaveBeenCalled();
     expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
     expect(store.failWorkflowRun).not.toHaveBeenCalled();
   });

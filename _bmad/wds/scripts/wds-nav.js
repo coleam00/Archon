@@ -35,7 +35,7 @@ function printUsage() {
       '  --all         Update all scenarios',
       '  --output      Base path (default: current directory)',
       '',
-    ].join('\n'),
+    ].join('\n')
   );
 }
 
@@ -85,9 +85,9 @@ function getPageFolders(scenarioDir) {
   }
 
   return entries
-    .filter((e) => e.isDirectory())
-    .map((e) => e.name)
-    .filter((name) => {
+    .filter(e => e.isDirectory())
+    .map(e => e.name)
+    .filter(name => {
       // Must have a matching .md file inside
       const mdFile = path.join(scenarioDir, name, `${name}.md`);
       return fs.existsSync(mdFile);
@@ -177,8 +177,8 @@ function main() {
     }
 
     const scenarios = entries
-      .filter((e) => e.isDirectory())
-      .map((e) => e.name)
+      .filter(e => e.isDirectory())
+      .map(e => e.name)
       .sort();
 
     if (scenarios.length === 0) {

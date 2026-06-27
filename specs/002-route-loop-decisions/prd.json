@@ -767,7 +767,7 @@
     },
     {
       "title": "Phase 7.2: Implementation For User Story 5",
-      "completed": false,
+      "completed": true,
       "tasks": [
         {
           "id": "T074",
@@ -775,7 +775,7 @@
           "description": "[US5] Preserve the existing static DAG execution branch for workflows without route-loop nodes in `packages/workflows/src/dag-executor.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 74,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -784,7 +784,7 @@
           "description": "[US5] Hydrate route activation state, counters, attempts, and execution sequence on resume in `packages/workflows/src/dag-executor.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 75,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -793,7 +793,7 @@
           "description": "[US5] Mark route-loop controller nodes ineligible for direct retry in `packages/workflows/src/retry-state.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 76,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -802,7 +802,7 @@
           "description": "[US5] Surface retry guidance toward the node referenced by `route_loop.from` in `packages/core/src/operations/workflow-retry.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 77,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -811,7 +811,7 @@
           "description": "[US5] Render route-loop retry guidance in `packages/web/src/components/workflows/WorkflowNodeRetryAction.tsx`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 78,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -820,7 +820,7 @@
           "description": "[US5] Verify User Story 5 with `bun test packages/workflows/src/retry-state.test.ts packages/core/src/operations/workflow-retry.test.ts packages/web/src/components/workflows/WorkflowNodeRetryAction.test.tsx` for `packages/workflows/src/retry-state.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 79,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -829,7 +829,7 @@
           "description": "[P] Run `bun --filter @archon/workflows test` and fix failures in `packages/workflows/src/dag-executor.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 80,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -838,7 +838,7 @@
           "description": "[P] Run `bun --filter @archon/core test` and fix failures in `packages/core/src/workflows/store-adapter.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 81,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -847,7 +847,7 @@
           "description": "[P] Run `bun --filter @archon/server test` and fix failures in `packages/server/src/routes/schemas/workflow.schemas.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 82,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -856,7 +856,7 @@
           "description": "[P] Run `bun --filter @archon/web test` and fix failures in `packages/web/src/components/workflows/WorkflowExecution.tsx`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 83,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -865,7 +865,7 @@
           "description": "Run `bun run type-check` and fix TypeScript errors in `packages/workflows/src/schemas/route-loop.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 84,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -874,7 +874,7 @@
           "description": "Run `bun run lint --max-warnings 0` and fix lint warnings in `packages/workflows/src/dag-executor.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 85,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -883,7 +883,7 @@
           "description": "Run `bun run format:check` and apply formatting fixes in `packages/workflows/src/schemas/route-loop.ts` and `packages/web/src/components/workflows/DagNodeComponent.tsx`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 86,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -892,7 +892,7 @@
           "description": "Run `bun run dev:server` and `bun --filter @archon/web generate:types`, then verify generated type changes in `packages/web/src/lib/api.generated.d.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 87,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -901,7 +901,7 @@
           "description": "Run `bun run check:bundled`, `bun run check:bundled-skill`, and `bun run check:bundled-schema`, then fix checked artifacts in `packages/workflows/src/defaults/bundled-defaults.generated.ts` only if source changes require regeneration",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 88,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -910,7 +910,7 @@
           "description": "Run final `bun run validate` and fix remaining failures tracked by `package.json`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 89,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -919,7 +919,7 @@
           "description": "Run the manual route-loop smoke workflow from `specs/002-route-loop-decisions/quickstart.md`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 90,
-          "passes": false,
+          "passes": true,
           "notes": ""
         }
       ],

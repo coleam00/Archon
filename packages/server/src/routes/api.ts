@@ -2361,6 +2361,7 @@ export function registerApiRoutes(
       case 'run_not_failed':
       case 'node_not_found':
       case 'node_not_failed':
+      case 'node_not_retryable':
       case 'checkpoint_unavailable':
       case 'git_reset_failed':
         return 400;

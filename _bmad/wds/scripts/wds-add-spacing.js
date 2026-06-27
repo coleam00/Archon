@@ -38,7 +38,7 @@ function printUsage() {
       'Valid types:      space, separator, line',
       'Valid sizes:      zero, sm, md, lg, xl, 2xl, 3xl, flex',
       '',
-    ].join('\n'),
+    ].join('\n')
   );
 }
 
@@ -64,7 +64,7 @@ function buildSpacingBlock(spacingId, reason) {
 
 function appendToSpacingSection(content, spacingBlock) {
   const lines = content.split('\n');
-  const spacingIdx = lines.findIndex((l) => l.trim() === '## Spacing');
+  const spacingIdx = lines.findIndex(l => l.trim() === '## Spacing');
 
   if (spacingIdx === -1) {
     // No spacing section — append before first ## after metadata
@@ -100,17 +100,23 @@ function main() {
   }
 
   if (!VALID_DIRECTIONS.includes(args.direction)) {
-    process.stderr.write(`Error: Invalid direction "${args.direction}". Must be: ${VALID_DIRECTIONS.join(', ')}\n`);
+    process.stderr.write(
+      `Error: Invalid direction "${args.direction}". Must be: ${VALID_DIRECTIONS.join(', ')}\n`
+    );
     process.exit(1);
   }
 
   if (!VALID_TYPES.includes(args.type)) {
-    process.stderr.write(`Error: Invalid type "${args.type}". Must be: ${VALID_TYPES.join(', ')}\n`);
+    process.stderr.write(
+      `Error: Invalid type "${args.type}". Must be: ${VALID_TYPES.join(', ')}\n`
+    );
     process.exit(1);
   }
 
   if (!VALID_SIZES.includes(args.size)) {
-    process.stderr.write(`Error: Invalid size "${args.size}". Must be: ${VALID_SIZES.join(', ')}\n`);
+    process.stderr.write(
+      `Error: Invalid size "${args.size}". Must be: ${VALID_SIZES.join(', ')}\n`
+    );
     process.exit(1);
   }
 
@@ -137,7 +143,9 @@ function main() {
   // Check for duplicate spacing ID
   if (content.includes(`\`${spacingId}\``)) {
     process.stderr.write(`Error: Spacing ID already exists in file: ${spacingId}\n`);
-    process.stderr.write('Use a different combination of direction/type/size or manually edit the file.\n');
+    process.stderr.write(
+      'Use a different combination of direction/type/size or manually edit the file.\n'
+    );
     process.exit(1);
   }
 

@@ -37,7 +37,7 @@ function printUsage() {
       '  --visibility  Visibility value (default: "Public")',
       '  --output      Base path to write to (default: current directory)',
       '',
-    ].join('\n'),
+    ].join('\n')
   );
 }
 
@@ -212,7 +212,14 @@ function main() {
     process.exit(1);
   }
 
-  const content = buildTemplate({ pageSlug, pageName, scenarioSlug, scenarioName, platform, visibility });
+  const content = buildTemplate({
+    pageSlug,
+    pageName,
+    scenarioSlug,
+    scenarioName,
+    platform,
+    visibility,
+  });
 
   try {
     fs.writeFileSync(pageFile, content, 'utf8');

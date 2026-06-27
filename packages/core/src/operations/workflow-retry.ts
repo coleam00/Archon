@@ -19,6 +19,7 @@ import {
   getRetryInvalidatedNodeIds,
   projectLatestEffectiveNodeStates,
 } from '@archon/workflows/retry-state';
+import { isRouteLoopNode } from '@archon/workflows/schemas/dag-node';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 
@@ -29,6 +30,7 @@ export type WorkflowRetryErrorCode =
   | 'run_not_failed'
   | 'node_not_found'
   | 'node_not_failed'
+  | 'node_not_retryable'
   | 'cas_miss'
   | 'path_in_use'
   | 'checkpoint_unavailable'
@@ -159,6 +161,12 @@ export async function prepareWorkflowNodeRetry(
     throw new WorkflowRetryError(
       'node_not_found',
       `Retry target node '${input.nodeId}' is not present in workflow '${input.workflow.name}'`
+    );
+  }
+  if (isRouteLoopNode(targetNode)) {
+    throw new WorkflowRetryError(
+      'node_not_retryable',
+      `Cannot retry route_loop controller node '${input.nodeId}' directly; retry its source node '${targetNode.route_loop.from}' instead`
     );
   }
 

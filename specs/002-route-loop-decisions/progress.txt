@@ -1,4 +1,5 @@
 ## Codebase Patterns
+
 - Web route-loop rendering should use local structural guards while `packages/web/src/lib/api.generated.d.ts` lags the server schema; avoid importing `@archon/workflows` into `@archon/web`.
 - `packages/web/src/lib/api.ts` owns the Web-local `RouteLoopConfig`, `RouteLoopDagNode`, and `ROUTE_LOOP_OUTCOMES` bridge because OpenAPI regeneration still omits `route_loop` from generated `DagNode`.
 - Workflow builder canvas conversion must treat React Flow route handles (`positive`, `negative`, `exhausted`) as `route_loop.routes`, not `depends_on`; only incoming non-route edges become dependencies.
@@ -22,8 +23,13 @@
 - Console builder wire compatibility belongs in `packages/web/src/experiments/console/builder/types/wire.ts`; do not import server packages into Web when generated API types temporarily lag schema changes.
 - Route-loop controller nodes are not directly retryable; guide operators to retry the node referenced by `route_loop.from` instead.
 - SQLite workflow route-decision persistence cannot rely on `UPDATE ... RETURNING`; keep update-plus-select inside the existing transaction when returning the updated row.
+- Route-loop resume must hydrate persisted `metadata.routeActivations` into activated route targets before dormant route-target gating runs in `dag-executor.ts`.
+- Route-loop tests that include parallel sibling layers should assert partial ordering and behavioral invariants, not exact sibling order.
+- Core retry preparation should reject direct `route_loop` controller retries before latest-effective-state checks so users get source-node guidance even when the controller itself did not fail.
+- Full `bun run validate` includes tracked support/template files under `_bmad`, `.qoder`, and `.omx`; these files must be Prettier-clean for CI even when feature code is clean.
 
 ## 2026-06-27 16:01 +07 - Phase 1: Setup (iter 1)
+
 **Tasks completed this iter:** T001 (Run route-loop executor TDD guard), T002 (Run workflow loader/schema baselines), T003 (Run console builder baselines), T004 (Inspect workflow event and metadata seams)
 **Status:** completed:true
 
@@ -34,12 +40,16 @@
   - T004 - Inspected workflow event and metadata seams in `packages/workflows/src/store.ts`, `packages/core/src/db/workflows.ts`, `packages/core/src/db/workflow-events.ts`, and `packages/core/src/workflows/store-adapter.ts`; no code changes were required.
 
 **Learnings for future iterations:**
+
 - `packages/workflows/src/store.ts` owns the engine event type contract, and there is not yet a `node_routed` event placeholder.
 - `packages/core/src/workflows/store-adapter.ts` is the bridge point for adding a durable route-decision store contract.
 - Existing workflow event `data` and workflow run `metadata` schema paths are flexible `Record<string, unknown>` surfaces today; later route-loop work should add typed metadata validation where tasks call for it.
 - Parent verification after the parallel baseline run passed `bun test packages/workflows/src/loader.test.ts packages/workflows/src/schemas.test.ts packages/web/src/experiments/console/builder/model/round-trip.test.ts packages/web/src/experiments/console/builder/validation/validate.test.ts`, `bun run type-check`, and `bun run lint`.
+
 ---
+
 ## 2026-06-27 16:17 +07 - Phase 2: Foundational (iter 2)
+
 **Tasks completed this iter:** T005 (Add shared route-loop workflow fixture builders), T006 (Add route-loop builder fixture), T007 (Export route-loop builder fixture), T008 (Add route-loop runtime metadata validation tests), T009 (Add route-loop metadata schema support), T010 (Add route-loop event type placeholder)
 **Status:** completed:true
 
@@ -52,14 +62,17 @@
   - T010 - Added `node_routed` to `WORKFLOW_EVENT_TYPES` in `packages/workflows/src/store.ts`.
 
 **Learnings for future iterations:**
+
 - Route-loop test fixtures must stay raw until the route-loop DAG node schema exists, otherwise fixture helpers fail before the user-story schema tasks can drive implementation.
 - `workflowRunSchema` can preserve the existing loose metadata surface while failing fast on malformed route-loop runtime metadata by refining against `routeLoopRuntimeMetadataSchema`.
 - The Web builder fixture layer can reference the generated `DagNode` shape before route-loop OpenAPI support because `WireWorkflowDefinition` currently permits the sparse fixture shape through generated loose node typing.
 - Targeted verification passed `bun test packages/workflows/src/loader.test.ts packages/workflows/src/schemas.test.ts`, `bun run type-check`, `bun run lint --max-warnings 0`, `bun --filter @archon/web type-check`, targeted ESLint, and targeted Prettier.
 - Full `bun run format:check` still fails on pre-existing formatting issues in `_bmad/`, `.qoder/`, and `.omx/` tracked support files that were not modified by this iteration.
+
 ---
 
 ## 2026-06-27 16:34 +07 - Phase 3.1: Tests For User Story 1 (iter 3)
+
 **Tasks completed this iter:** T011 (Add route-loop schema tests), T012 (Add route-loop loader contract tests), T013 (Add route-loop condition-reference loader tests), T014 (Add route-loop API schema tests)
 **Status:** completed:true
 
@@ -70,12 +83,16 @@
   - T014 - Added API workflow definition schema tests for route_loop DAG nodes in `packages/server/src/routes/api.workflows.test.ts`; the server schema continues deriving route-loop shape from the workflow engine schema.
 
 **Learnings for future iterations:**
+
 - Route-loop YAML now validates at schema and loader boundaries, but `packages/workflows/src/dag-executor.ts` intentionally returns an explicit failed node output for route_loop until the runtime activation tasks implement execution.
 - Safe node ids are now enforced through `safeNodeIdSchema`, so new workflow node ids, route_loop.from values, and route targets must avoid reserved object keys and match the shared grammar.
 - Server route workflow schemas derive from the engine `workflowDefinitionSchema`, so API route-loop shape tests can parse `workflowDefinitionSchema` directly instead of mocking route handlers.
 - Verification passed `bun test packages/workflows/src/schemas.test.ts packages/workflows/src/loader.test.ts packages/server/src/routes/api.workflows.test.ts`, `bun run type-check`, `bun run lint --max-warnings 0`, and targeted Prettier checks for touched files.
+
 ---
+
 ## 2026-06-27 16:46 +07 - Phase 3.2: Implementation For User Story 1 (iter 4)
+
 **Tasks completed this iter:** T015 (Implement route-loop schemas), T016 (Export route-loop schemas), T017 (Extend DAG node schema), T018 (Extend loader basic route-loop validation), T019 (Add route-edge and rerun-path validation), T020 (Expose condition reference metadata), T021 (Wire strict output field validation), T022 (Update server workflow schemas), T023 (Verify User Story 1)
 **Status:** completed:true
 
@@ -91,12 +108,16 @@
   - T023 - Verified User Story 1 with the focused schema, loader, and server workflow API tests, full typecheck, lint, and touched-file formatting checks.
 
 **Learnings for future iterations:**
+
 - Route-loop schema and type exports were already present from prior TDD work, so this implementation batch mainly closed the remaining route-edge graph validation gap.
 - `validateRouteLoopStructure()` now builds a normal dependency dependents map and overlays route-edge reachability checks without changing the existing static DAG cycle validation.
 - Direct `routes.negative` to `route_loop.from` intentionally logs `route_loop_negative_targets_from_node` and remains valid, because the spec calls for warning behavior instead of rejection.
 - Verification passed `bun test packages/workflows/src/schemas.test.ts packages/workflows/src/loader.test.ts packages/server/src/routes/api.workflows.test.ts`, `bun test packages/workflows/src/loader.test.ts -t "route_loop loader validation"`, `bun run type-check`, `bun run lint --max-warnings 0`, and `bun x prettier --check packages/workflows/src/loader.ts packages/workflows/src/loader.test.ts`.
+
 ---
+
 ## 2026-06-27 17:04 +07 - Phase 4.1: Tests For User Story 2 (iter 5)
+
 **Tasks completed this iter:** T024 (Update route-loop TDD guard metadata assertions), T025 (Add exhausted executor tests), T026 (Add route-loop metadata transition tests), T027 (Add core persistence tests)
 **Status:** completed:true
 
@@ -107,12 +128,16 @@
   - T027 - Added core DB tests in `packages/core/src/db/workflows.test.ts` for atomic route decision metadata and `node_routed` event writes, stale-write rejection, malformed metadata rollback, and event-insert rollback; added `persistRouteDecisionTransition()` in `packages/core/src/db/workflows.ts`.
 
 **Learnings for future iterations:**
+
 - Route-loop executor activation currently marks unselected route targets as pending and activates only selected targets; future implementation batches still need the formal store contract and store-adapter wiring for durable route decisions.
 - `RouteLoopDecisionData` extends `Record<string, unknown>` so it can flow into existing event data contracts without ad hoc casts.
 - The core DB transaction helper validates both incoming and existing route-loop metadata before writing, then uses a row lock and execution sequence check to reject stale route decisions.
 - Verification passed `bun test packages/workflows/src/dag-executor.test.ts packages/workflows/src/schemas.test.ts`, `bun test packages/core/src/db/workflows.test.ts`, `bun run type-check`, `bun run lint --max-warnings 0`, and touched-file Prettier checks.
+
 ---
+
 ## 2026-06-27 17:45 +07 - Phase 4.2: Implementation For User Story 2 (iter 6)
+
 **Tasks completed this iter:** T028 (Route-loop runtime state transition helper), T029 (Durable route-decision store contract), T030 (Atomic route-decision metadata update), T031 (Workflow store adapter persistence), T032 (Route activation executor path), T033 (Latest completed source output evaluation), T034 (Negative counter and positive reset semantics), T035 (Selected route target activation), T036 (Fresh selected-target reruns and runtime path validation), T037 (Running or paused target guard), T038 (Route-loop output metadata persistence), T039 (User Story 2 verification)
 **Status:** completed:true
 
@@ -131,12 +156,16 @@
   - T039 - Verified User Story 2 with isolated executor, core DB, and store-adapter tests plus full type-check, lint, and touched-file Prettier checks.
 
 **Learnings for future iterations:**
+
 - Do not run targeted tests from multiple packages in one `bun test` process, because this repo's `mock.module()` pollution can create false failures.
 - The route-loop executor now schedules reruns with a versioned rerun set so a freshly scheduled controller rerun is not cleared by the previous execution of that same layer.
 - Durable route decisions now flow through `IWorkflowStore.persistRouteDecisionTransition()` instead of separate `updateWorkflowRun()` and `createWorkflowEvent()` calls.
 - The temporary Web builder route-loop compatibility fix is centralized in `builder/types/wire.ts` so future OpenAPI regeneration can replace it cleanly.
+
 ---
+
 ## 2026-06-27 18:01 +07 - Phase 5.1: Tests For User Story 3 (iter 7)
+
 **Tasks completed this iter:** T040 (Add latest-attempt output reference tests), T041 (Add route-loop event projection tests), T042 (Add API run detail route-loop tests)
 **Status:** completed:true
 
@@ -146,12 +175,16 @@
   - T042 - Added API run detail tests proving `node_routed` events, route-loop controller outputs, latest projected node states, and historical attempts are returned together in `packages/server/src/routes/api.workflow-runs.test.ts`.
 
 **Learnings for future iterations:**
+
 - Route-loop debug behavior has two distinct surfaces: raw `events` keep every attempt, while projected helpers and `nodeStates` answer "what is latest now".
 - Targeted tests spanning workflows, core, and server should still run as separate `bun test` invocations to avoid repo-wide Bun mock pollution.
 - Touched-file Prettier is still the practical formatting gate for this branch because full format check has pre-existing unrelated support-file failures.
 - Verification passed `bun test packages/workflows/src/output-ref.test.ts`, `bun test packages/core/src/db/workflow-events.test.ts`, `bun test packages/server/src/routes/api.workflow-runs.test.ts`, `bun run type-check`, `bun run lint --max-warnings 0`, and touched-file Prettier checks.
+
 ---
+
 ## 2026-06-27 18:16 +07 - Phase 5.2: Implementation For User Story 3 (iter 8)
+
 **Tasks completed this iter:** T043 (Typed node_routed event metadata), T044 (Core route-loop run metadata validation), T045 (Latest attempt projection), T046 (Store adapter route-loop debug surfaces), T047 (Safe condition serialization), T048 (Typed node_routed emitter stream), T049 (Server route metadata schemas), T050 (Verify User Story 3)
 **Status:** completed:true
 
@@ -166,12 +199,16 @@
   - T050 - Verified User Story 3 with focused workflow, core, server, adapter, OpenAPI, typecheck, lint, and touched-file formatting checks.
 
 **Learnings for future iterations:**
+
 - Refined Zod object schemas in this repo should use `safeExtend()` when a server wire schema narrows existing fields such as `created_at`, `event_type`, or `data`.
 - Route-loop live refresh has two paths: in-process emitter events and persisted DB rows tailed by the dashboard poller; both need updates for new event types.
 - Cross-package Bun tests still need isolated invocations because combining mocked core tests in one process can produce false module export failures.
 - After changing server schemas, `packages/server/src/routes/api.health.test.ts` is a cheap guard that OpenAPI generation still works.
+
 ---
+
 ## 2026-06-27 18:37 +07 - Phase 6.1: Tests For User Story 4 (iter 9)
+
 **Tasks completed this iter:** T051 (Console builder route-loop round-trip tests), T052 (Console builder route-loop graph validation tests), T053 (Console builder route-loop structural validation tests), T054 (Route-loop variant detection tests), T055 (Route-loop graph layout tests), T056 (Route-loop component, store, and bridge tests)
 **Status:** completed:true
 
@@ -184,12 +221,16 @@
   - T056 - Added route-loop node handle, `node_routed` projection, Web store propagation, and live bridge tests in workflow component, store, and server bridge test files; threaded route decisions through Web types, store state, and run-detail projection.
 
 **Learnings for future iterations:**
+
 - Generated Web API types still do not expose `route_loop`, so Web runtime code should use local structural guards until the OpenAPI regeneration task lands.
 - Route-loop route targets can be dormant with no `depends_on` edge, so graph rendering must add explicit labeled route edges instead of relying on dependency edges.
 - `node_routed` is a completed controller event for Web state, not a skipped node event; both live SSE and REST event reconstruction need to preserve its route decision data.
 - Verification passed the focused Web builder, layout, component, and store tests, the new server Web bridge test, `bun run type-check`, `bun run lint --max-warnings 0`, and touched-file Prettier checks.
+
 ---
+
 ## 2026-06-27 18:53 +07 - Phase 6.2: Implementation For User Story 4 (iter 10)
+
 **Tasks completed this iter:** T057 (Regenerate Web API types), T058 (Re-export route-loop Web API types), T059 (Route-loop variant mapping), T060 (Register route-loop builder variant), T061 (Serialize route-loop graph), T062 (Hydrate route-loop graph), T063 (Route-loop graph validation), T064 (Route-loop palette and inspector), T065 (Route-loop node handles), T066 (Route edge labels), T067 (Run event rendering), T068 (Distinct route decisions), T069 (User Story 4 verification)
 **Status:** completed:true
 
@@ -209,12 +250,15 @@
   - T069 - Verified User Story 4 with focused builder, layout, and component tests plus Web package tests, repo type-check, repo lint, and full package tests.
 
 **Learnings for future iterations:**
+
 - OpenAPI regeneration can reorder generated schema entries without exposing `route_loop`; keep the Web-local route-loop bridge in `api.ts` until the server schema emits the field.
 - Browser verification was not performed because no browser control tool or Playwright dependency was available, though local server endpoints on ports 3090 and 5173 responded successfully.
 - Full `bun run test` passed when rerun into a log after one truncated parallel run exited non-zero without an actionable visible failure.
+
 ---
 
 ## 2026-06-27 19:10 +07 - Phase 7.1: Tests For User Story 5 (iter 11)
+
 **Tasks completed this iter:** T070 (Static DAG regression tests), T071 (Route-loop retry eligibility tests), T072 (Resume persistence tests), T073 (Web retry guidance tests)
 **Status:** completed:true
 
@@ -225,8 +269,43 @@
   - T073 - Replaced placeholder Web retry action tests with static-render coverage and rendered route-loop guidance toward `route_loop.from`; files changed: `packages/web/src/lib/workflow-retry.ts`, `packages/web/src/components/workflows/WorkflowNodeRetryAction.tsx`, `packages/web/src/components/workflows/WorkflowNodeRetryAction.test.tsx`.
 
 **Learnings for future iterations:**
+
 - Route-loop controller retry should fail at the workflow retry-state layer and be presented as guidance in Web rather than a direct retry button.
 - The Web retry panel discovers route-loop source guidance from `DagNodeState.routeDecision.from`, which is populated by the `node_routed` event enrichment path.
 - SQLite does not support the same `UPDATE ... RETURNING` route used by PostgreSQL in this code path, so route-decision persistence needs dialect-specific returning behavior while staying atomic.
 - Verification passed focused workflow, core, and Web tests, adjacent core and route-loop executor tests, repo type-check, repo lint, touched-file Prettier, and added-line em-dash scanning.
+
+---
+
+## 2026-06-27 19:33 +07 - Phase 7.2: Implementation For User Story 5 (iter 12)
+
+**Tasks completed this iter:** T074 (Preserve static DAG execution), T075 (Hydrate route-loop resume state), T076 (Mark controller retry ineligible), T077 (Core retry source guidance), T078 (Web retry guidance), T079 (Verify User Story 5), T080 (Workflow package tests), T081 (Core package tests), T082 (Server package tests), T083 (Web package tests), T084 (Type-check), T085 (Lint), T086 (Format check), T087 (Regenerate Web API types), T088 (Bundled checks), T089 (Final validate), T090 (Manual route-loop smoke)
+**Status:** completed:true
+
+- Per-task summary lines:
+  - T074 - Verified workflows without `route_loop` still use the static DAG path and emit no route decisions; files changed: `packages/workflows/src/dag-executor.test.ts`.
+  - T075 - Hydrated persisted `routeActivations` into activated route targets on resume so selected route targets are not treated as dormant; files changed: `packages/workflows/src/dag-executor.ts`, `packages/workflows/src/dag-executor.test.ts`.
+  - T076 - Verified route-loop controller nodes remain ineligible for direct retry in retry-state projection; files changed: `packages/workflows/src/retry-state.ts` was already correct.
+  - T077 - Added core retry preparation guidance for direct route-loop controller retries before event-state projection and mapped the new error code through the server API; files changed: `packages/core/src/operations/workflow-retry.ts`, `packages/core/src/operations/workflow-retry.test.ts`, `packages/server/src/routes/api.ts`.
+  - T078 - Verified Web retry guidance renders `route_loop.from` and CLI retry commands without exposing a direct controller retry button; files changed: Web retry implementation was already correct.
+  - T079 - Verified User Story 5 with focused workflow retry-state, core retry operation, and Web retry action tests.
+  - T080 - Ran `bun --filter @archon/workflows test`; fixed a flaky route-loop test assertion that depended on parallel sibling execution order.
+  - T081 - Ran `bun --filter @archon/core test`; no core package fixes were needed beyond the route-loop retry guidance.
+  - T082 - Ran `bun --filter @archon/server test`; no server package fixes were needed beyond the retry error status mapping.
+  - T083 - Ran `bun --filter @archon/web test`; no Web package fixes were needed.
+  - T084 - Ran `bun run type-check`; all packages passed.
+  - T085 - Ran `bun run lint --max-warnings 0`; lint passed with zero warnings.
+  - T086 - Ran `bun run format:check`, formatted the PRD and tracked support/template files that blocked the gate, and repaired one Markdown list collapse in `_bmad/bmm/workflows/bmad-quick-flow/bmad-quick-spec/steps/step-04-review.md`.
+  - T087 - Used the existing server on port 3090 for `bun --filter @archon/web generate:types`; the generated API file had no semantic diff after project formatting.
+  - T088 - Ran `bun run check:bundled`, `bun run check:bundled-skill`, and `bun run check:bundled-schema`; all generated artifacts were up to date.
+  - T089 - Ran final `bun run validate`; bundled checks, pi vendor map, type-check, lint, format-check, and package tests passed.
+  - T090 - Executed the quickstart route-loop smoke through deterministic executor and builder/run UI tests covering negative then positive routing, `node_routed` projection, route edges, and route target visibility.
+
+**Learnings for future iterations:**
+
+- Route-loop resume is not only metadata preservation; the executor must translate persisted `routeActivations` back into active route targets before dormant route-target checks.
+- Exact call ordering is unsafe in tests when DAG siblings share a layer; assert the dependency order and rerun behavior instead.
+- Route-loop retry guidance belongs in both low-level retry-state helpers and high-level core retry preparation so CLI/API users receive the same source-node instruction.
+- `bun run validate` now passes after formatting tracked support/template files that had been carrying repository-wide Prettier debt.
+
 ---
