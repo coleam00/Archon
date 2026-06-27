@@ -52,7 +52,7 @@ description: 'Tasks for route loop decisions feature implementation'
 ### Tests For User Story 1
 
 - [ ] T011 [P] [US1] Add schema tests for valid `route_loop` config, exclusive execution mode, default `max_iterations`, and safe id grammar in `packages/workflows/src/schemas.test.ts`
-- [ ] T012 [US1] Add loader tests for required routes, `depends_on` and `from` mismatch, missing targets, self-target routes, `when` rejection, and `trigger_rule` rejection in `packages/workflows/src/loader.test.ts`
+- [ ] T012 [US1] Add loader tests for required routes, `depends_on` and `from` mismatch, missing targets, self-target routes, rejecting `when` on `route_loop`, rejecting `trigger_rule` on `route_loop`, rejecting `when` on the `from` node, and allowing `trigger_rule` on the `from` node in `packages/workflows/src/loader.test.ts`
 - [ ] T013 [US1] Add loader tests for from-only condition references and declared output field references in `packages/workflows/src/loader.test.ts`
 - [ ] T014 [P] [US1] Add OpenAPI workflow definition tests for the `route_loop` DAG node shape in `packages/server/src/routes/api.workflows.test.ts`
 
@@ -62,7 +62,7 @@ description: 'Tasks for route loop decisions feature implementation'
 - [ ] T016 [US1] Export route-loop schemas and type guards from `packages/workflows/src/schemas/index.ts`
 - [ ] T017 [US1] Extend `dagNodeSchema` with mutually exclusive `route_loop` node mode validation in `packages/workflows/src/schemas/dag-node.ts`
 - [ ] T018 [US1] Extend workflow loader validation for `route_loop.depends_on`, `route_loop.from`, route target existence, and unsupported node fields in `packages/workflows/src/loader.ts`
-- [ ] T019 [US1] Add route-edge cycle validation, positive and exhausted exit-path validation, nested route-loop allowance, and self-contained negative path validation in `packages/workflows/src/loader.ts`
+- [ ] T019 [US1] Add route-edge cycle validation, positive and exhausted exit-path validation, nested route-loop allowance, warning behavior when `routes.negative` targets `route_loop.from` directly, and self-contained negative path validation in `packages/workflows/src/loader.ts`
 - [ ] T020 [US1] Expose condition parsing reference metadata needed by route-loop validation in `packages/workflows/src/condition-evaluator.ts`
 - [ ] T021 [US1] Wire strict output field validation for route-loop condition references in `packages/workflows/src/output-ref.ts`
 - [ ] T022 [US1] Update server workflow schemas to include the route-loop DAG node shape in `packages/server/src/routes/schemas/workflow.schemas.ts`
@@ -96,7 +96,7 @@ Verify execution order is `fix`, `review`, `fix`, `review`, `done`, `escalation`
 - [ ] T033 [US2] Evaluate `route_loop.condition` against the latest completed output of `route_loop.from` and fail fast for skipped, failed, missing, pending, or unusable source output in `packages/workflows/src/dag-executor.ts`
 - [ ] T034 [US2] Increment negative counters before selecting `negative` or `exhausted` and reset only the selected loop counter on `positive` in `packages/workflows/src/dag-executor.ts`
 - [ ] T035 [US2] Activate only the selected route target and leave unselected route targets dormant in `packages/workflows/src/dag-executor.ts`
-- [ ] T036 [US2] Rerun completed selected targets as fresh attempts and invalidate only the selected rerun path back to the route-loop controller in `packages/workflows/src/dag-executor.ts`
+- [ ] T036 [US2] Rerun completed selected targets as fresh attempts, validate the selected rerun path self-containment at runtime before invalidating latest-output state, and add executor coverage for stale persisted state, resume, retry, or loader-bypassed rerun paths in `packages/workflows/src/dag-executor.ts` and `packages/workflows/src/dag-executor.test.ts`
 - [ ] T037 [US2] Fail fast when a selected route target is already running or paused in `packages/workflows/src/dag-executor.ts`
 - [ ] T038 [US2] Persist route-loop output metadata from the same route-decision transition that writes `node_routed` in `packages/workflows/src/dag-executor.ts`
 - [ ] T039 [US2] Verify User Story 2 with `bun test packages/workflows/src/dag-executor.test.ts packages/core/src/db/workflows.test.ts` for `packages/workflows/src/dag-executor.test.ts`
@@ -146,7 +146,7 @@ Verify latest attempt projection uses the newest completed output, the event log
 - [ ] T053 [P] [US4] Add structural validation tests for safe node ids and reserved keys in `packages/web/src/experiments/console/builder/validation/structural.test.ts`
 - [ ] T054 [P] [US4] Add route-loop variant detection tests in `packages/web/src/experiments/console/builder/variants/detect.test.ts`
 - [ ] T055 [P] [US4] Add graph layout tests for route edges, outcome labels, and dormant route targets in `packages/web/src/lib/dag-layout.test.ts`
-- [ ] T056 [P] [US4] Add component tests for route-loop node handles and typed route event rendering in `packages/web/src/components/workflows/DagNodeComponent.test.ts`
+- [ ] T056 [P] [US4] Add component, Web store, and SSE/refetch bridge tests for route-loop node handles, typed `node_routed` rendering, and route decision propagation within one live refresh cycle in `packages/web/src/components/workflows/DagNodeComponent.test.ts`, `packages/web/src/components/workflows/WorkflowExecution.test.tsx`, `packages/web/src/stores/workflow-store.test.ts`, and `packages/server/src/adapters/web/workflow-bridge.test.ts`
 
 ### Implementation For User Story 4
 

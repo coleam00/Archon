@@ -1,6 +1,7 @@
 # Analyze Findings - Route Loop Decisions
 
-**Status:** PENDING
+**Status:** ARCHIVED
+**Applied:** 2026-06-27-155333
 **Generated:** 2026-06-27T15:45:46+07:00
 **Spec:** spec.md
 **Plan:** plan.md
@@ -84,6 +85,9 @@ Before:
       After:
 - [ ] T036 [US2] Rerun completed selected targets as fresh attempts, validate the selected rerun path self-containment at runtime before invalidating latest-output state, and add executor coverage for stale persisted state, resume, retry, or loader-bypassed rerun paths in `packages/workflows/src/dag-executor.ts` and `packages/workflows/src/dag-executor.test.ts`
       Rationale: FR-068 requires rerun path self-containment validation at both load time and runtime in `specs/002-route-loop-decisions/spec.md:230`, the execution plan requires runtime validation before latest-output invalidation in `specs/002-route-loop-decisions/plan.md:156`, and D084 says runtime validation specifically guards resume, retry, stale persisted state, and loader-bypassed graph shapes in `plans/grill-me/260625-2337-route-loop-decisions.md:967-971`, so extending T036 is the smallest correct fix because T036 owns executor rerun-path invalidation.
+      Status: applied
+      Applied-at: 2026-06-27T15:53:33+07:00
+      Downstream-ref: specs/002-route-loop-decisions/tasks.md
 
 ### A1
 
@@ -96,6 +100,9 @@ Before:
       After:
 - [ ] T012 [US1] Add loader tests for required routes, `depends_on` and `from` mismatch, missing targets, self-target routes, rejecting `when` on `route_loop`, rejecting `trigger_rule` on `route_loop`, rejecting `when` on the `from` node, and allowing `trigger_rule` on the `from` node in `packages/workflows/src/loader.test.ts`
       Rationale: FR-028 through FR-031 split the validation contract into four distinct outcomes in `specs/002-route-loop-decisions/spec.md:182-185`, and D069 through D072 preserve the same distinction between forbidden route-loop fields and allowed `from` node `trigger_rule` behavior in `plans/grill-me/260625-2337-route-loop-decisions.md:790-828`, so T012 should name those cases explicitly instead of grouping them under ambiguous `when` and `trigger_rule` labels.
+      Status: applied
+      Applied-at: 2026-06-27T15:53:33+07:00
+      Downstream-ref: specs/002-route-loop-decisions/tasks.md
 
 ### U1
 
@@ -108,6 +115,9 @@ Before:
       After:
 - [ ] T056 [P] [US4] Add component, Web store, and SSE/refetch bridge tests for route-loop node handles, typed `node_routed` rendering, and route decision propagation within one live refresh cycle in `packages/web/src/components/workflows/DagNodeComponent.test.ts`, `packages/web/src/components/workflows/WorkflowExecution.test.tsx`, `packages/web/src/stores/workflow-store.test.ts`, and `packages/server/src/adapters/web/workflow-bridge.test.ts`
       Rationale: SC-005 requires run detail to show route decisions within one live refresh cycle in `specs/002-route-loop-decisions/spec.md:337`, the plan explicitly leaves SSE or dashboard refetch updates in scope in `specs/002-route-loop-decisions/plan.md:166`, and the current Web path uses fixed SSE handler and bridge mappings without a `node_routed` case in `packages/web/src/stores/workflow-store.ts:368-374`, `packages/web/src/hooks/useSSE.ts:176-193`, and `packages/server/src/adapters/web/workflow-bridge.ts:228-233`, so the task must verify the event crosses the live propagation path rather than only rendering a static typed event.
+      Status: applied
+      Applied-at: 2026-06-27T15:53:33+07:00
+      Downstream-ref: specs/002-route-loop-decisions/tasks.md
 
 ### V2
 
@@ -120,6 +130,9 @@ Before:
       After:
 - [ ] T019 [US1] Add route-edge cycle validation, positive and exhausted exit-path validation, nested route-loop allowance, warning behavior when `routes.negative` targets `route_loop.from` directly, and self-contained negative path validation in `packages/workflows/src/loader.ts`
       Rationale: FR-027 requires a loader warning when `routes.negative` targets the `from` node directly in `specs/002-route-loop-decisions/spec.md:181`, the implementation plan repeats that warning in `specs/002-route-loop-decisions/plan.md:132`, and D039 explains the shape is valid for polling or flaky checks but should warn in review-fix flows in `plans/grill-me/260625-2337-route-loop-decisions.md:459-463`, so T019 is the right implementation task because it already owns route-edge and negative-path validation in the loader.
+      Status: applied
+      Applied-at: 2026-06-27T15:53:33+07:00
+      Downstream-ref: specs/002-route-loop-decisions/tasks.md
 
 ---
 
@@ -150,5 +163,20 @@ session:
       coverage: 2
       inconsistency: 0
     overflow_dropped: 0
-apply: {}
+apply:
+  applied_at: 2026-06-27T15:53:33+07:00
+  applied_by: Codex
+  resolutions:
+    spec_fix: 4
+    new_OQ: 0
+    accepted_risk: 0
+    out_of_scope: 0
+    skipped: 0
+  unresolved: 0
+  allow_historical_edits: true
+  historical_edits_applied:
+    - V1:specs/002-route-loop-decisions/tasks.md
+    - A1:specs/002-route-loop-decisions/tasks.md
+    - U1:specs/002-route-loop-decisions/tasks.md
+    - V2:specs/002-route-loop-decisions/tasks.md
 ```
