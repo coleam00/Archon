@@ -1,0 +1,394 @@
+# TEA Resources Index
+# Comprehensive index of TEA documentation, knowledge fragments, and online resources
+
+base_urls:
+  online_docs: "https://bmad-code-org.github.io/bmad-method-test-architecture-enterprise"
+  github_repo: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise"
+  github_knowledge: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/tree/main/src/agents/bmad-tea/resources/knowledge"
+
+# Public Documentation (32 files)
+documentation:
+  tutorials:
+    - name: "Getting Started with Test Architect"
+      local: "/docs/tutorials/tea-lite-quickstart.md"
+      online: "/tutorials/tea-lite-quickstart/"
+      description: "30-minute quick start guide to TEA Lite"
+
+  how_to_guides:
+    workflows:
+      - name: "Set Up Test Framework"
+        local: "/docs/how-to/workflows/setup-test-framework.md"
+        online: "/how-to/workflows/setup-test-framework/"
+        workflow: framework
+
+      - name: "Set Up CI Pipeline"
+        local: "/docs/how-to/workflows/setup-ci.md"
+        online: "/how-to/workflows/setup-ci/"
+        workflow: ci
+
+      - name: "Test Design"
+        local: "/docs/how-to/workflows/run-test-design.md"
+        online: "/how-to/workflows/run-test-design/"
+        workflow: test-design
+
+      - name: "ATDD"
+        local: "/docs/how-to/workflows/run-atdd.md"
+        online: "/how-to/workflows/run-atdd/"
+        workflow: atdd
+
+      - name: "Automate"
+        local: "/docs/how-to/workflows/run-automate.md"
+        online: "/how-to/workflows/run-automate/"
+        workflow: automate
+
+      - name: "Test Review"
+        local: "/docs/how-to/workflows/run-test-review.md"
+        online: "/how-to/workflows/run-test-review/"
+        workflow: test-review
+
+      - name: "Trace"
+        local: "/docs/how-to/workflows/run-trace.md"
+        online: "/how-to/workflows/run-trace/"
+        workflow: trace
+
+      - name: "NFR Evidence Audit"
+        local: "/docs/how-to/workflows/run-nfr-assess.md"
+        online: "/how-to/workflows/run-nfr-assess/"
+        workflow: nfr-assess
+
+    customization:
+      - name: "Configure Browser Automation"
+        local: "/docs/how-to/customization/configure-browser-automation.md"
+        online: "/how-to/customization/configure-browser-automation/"
+
+      - name: "Integrate Playwright Utils with TEA"
+        local: "/docs/how-to/customization/integrate-playwright-utils.md"
+        online: "/how-to/customization/integrate-playwright-utils/"
+
+    brownfield:
+      - name: "Running TEA for Enterprise Projects"
+        local: "/docs/how-to/brownfield/use-tea-for-enterprise.md"
+        online: "/how-to/brownfield/use-tea-for-enterprise/"
+
+      - name: "Using TEA with Existing Tests"
+        local: "/docs/how-to/brownfield/use-tea-with-existing-tests.md"
+        online: "/how-to/brownfield/use-tea-with-existing-tests/"
+
+  explanation:
+    - name: "TEA Overview"
+      local: "/docs/explanation/tea-overview.md"
+      online: "/explanation/tea-overview/"
+      topics: ["Architecture", "Engagement models"]
+
+    - name: "Testing as Engineering"
+      local: "/docs/explanation/testing-as-engineering.md"
+      online: "/explanation/testing-as-engineering/"
+      topics: ["Philosophy", "Design principles"]
+
+    - name: "Engagement Models"
+      local: "/docs/explanation/engagement-models.md"
+      online: "/explanation/engagement-models/"
+      topics: ["Lite", "Solo", "Integrated", "Enterprise", "Brownfield"]
+
+    - name: "Risk-Based Testing"
+      local: "/docs/explanation/risk-based-testing.md"
+      online: "/explanation/risk-based-testing/"
+      topics: ["P0-P3 matrix", "Probability × Impact"]
+
+    - name: "Test Quality Standards"
+      local: "/docs/explanation/test-quality-standards.md"
+      online: "/explanation/test-quality-standards/"
+      topics: ["Definition of Done", "7 principles"]
+
+    - name: "Knowledge Base System"
+      local: "/docs/explanation/knowledge-base-system.md"
+      online: "/explanation/knowledge-base-system/"
+      topics: ["Fragment management", "42 fragments"]
+
+    - name: "Network-First Patterns"
+      local: "/docs/explanation/network-first-patterns.md"
+      online: "/explanation/network-first-patterns/"
+      topics: ["Network interception", "Race condition prevention"]
+
+    - name: "Fixture Architecture"
+      local: "/docs/explanation/fixture-architecture.md"
+      online: "/explanation/fixture-architecture/"
+      topics: ["Composition", "mergeTests pattern"]
+
+    - name: "Step-File Architecture"
+      local: "/docs/explanation/step-file-architecture.md"
+      online: "/explanation/step-file-architecture/"
+      topics: ["Micro-file design", "JIT loading", "Sequential enforcement"]
+
+    - name: "Subagent Architecture"
+      local: "/docs/explanation/subagent-architecture.md"
+      online: "/explanation/subagent-architecture/"
+      topics: ["Parallel execution", "Context optimization"]
+
+  reference:
+    - name: "Commands"
+      local: "/docs/reference/commands.md"
+      online: "/reference/commands/"
+
+    - name: "Configuration"
+      local: "/docs/reference/configuration.md"
+      online: "/reference/configuration/"
+
+    - name: "Knowledge Base"
+      local: "/docs/reference/knowledge-base.md"
+      online: "/reference/knowledge-base/"
+      github_link: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/tree/main/src/agents/bmad-tea/resources/knowledge"
+
+    - name: "Troubleshooting"
+      local: "/docs/reference/troubleshooting.md"
+      online: "/reference/troubleshooting/"
+
+# Knowledge Fragments (41 files)
+knowledge_fragments:
+  testing_patterns:
+    - name: "fixture-architecture"
+      path: "/src/agents/bmad-tea/resources/knowledge/fixture-architecture.md"
+      github: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/src/agents/bmad-tea/resources/knowledge/fixture-architecture.md"
+      description: "Composable fixture patterns and mergeTests"
+
+    - name: "fixtures-composition"
+      path: "/src/agents/bmad-tea/resources/knowledge/fixtures-composition.md"
+      github: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/src/agents/bmad-tea/resources/knowledge/fixtures-composition.md"
+      description: "mergeTests composition patterns for combining utilities"
+
+    - name: "network-first"
+      path: "/src/agents/bmad-tea/resources/knowledge/network-first.md"
+      github: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/src/agents/bmad-tea/resources/knowledge/network-first.md"
+      description: "Network interception safeguards"
+
+    - name: "data-factories"
+      path: "/src/agents/bmad-tea/resources/knowledge/data-factories.md"
+      github: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/src/agents/bmad-tea/resources/knowledge/data-factories.md"
+      description: "Data seeding and setup patterns"
+
+    - name: "component-tdd"
+      path: "/src/agents/bmad-tea/resources/knowledge/component-tdd.md"
+      github: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/src/agents/bmad-tea/resources/knowledge/component-tdd.md"
+      description: "TDD red-green-refactor loop"
+
+    - name: "api-testing-patterns"
+      path: "/src/agents/bmad-tea/resources/knowledge/api-testing-patterns.md"
+      github: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/src/agents/bmad-tea/resources/knowledge/api-testing-patterns.md"
+      description: "Pure API testing without browser"
+
+    - name: "test-healing-patterns"
+      path: "/src/agents/bmad-tea/resources/knowledge/test-healing-patterns.md"
+      github: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/src/agents/bmad-tea/resources/knowledge/test-healing-patterns.md"
+      description: "Auto-fix common test failures"
+
+    - name: "selector-resilience"
+      path: "/src/agents/bmad-tea/resources/knowledge/selector-resilience.md"
+      github: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/src/agents/bmad-tea/resources/knowledge/selector-resilience.md"
+      description: "Robust selectors that don't break"
+
+    - name: "timing-debugging"
+      path: "/src/agents/bmad-tea/resources/knowledge/timing-debugging.md"
+      github: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/src/agents/bmad-tea/resources/knowledge/timing-debugging.md"
+      description: "Race condition fixes"
+
+  playwright_utils:
+    - name: "overview"
+      path: "/src/agents/bmad-tea/resources/knowledge/overview.md"
+      github: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/src/agents/bmad-tea/resources/knowledge/overview.md"
+      description: "Playwright Utils overview and installation"
+
+    - name: "api-request"
+      path: "/src/agents/bmad-tea/resources/knowledge/api-request.md"
+      github: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/src/agents/bmad-tea/resources/knowledge/api-request.md"
+      description: "Typed HTTP client with schema validation"
+
+    - name: "network-recorder"
+      path: "/src/agents/bmad-tea/resources/knowledge/network-recorder.md"
+      github: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/src/agents/bmad-tea/resources/knowledge/network-recorder.md"
+      description: "HAR record and playback"
+
+    - name: "intercept-network-call"
+      path: "/src/agents/bmad-tea/resources/knowledge/intercept-network-call.md"
+      github: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/src/agents/bmad-tea/resources/knowledge/intercept-network-call.md"
+      description: "Network spy and stub utilities"
+
+    - name: "recurse"
+      path: "/src/agents/bmad-tea/resources/knowledge/recurse.md"
+      github: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/src/agents/bmad-tea/resources/knowledge/recurse.md"
+      description: "Async polling for eventual consistency"
+
+    - name: "log"
+      path: "/src/agents/bmad-tea/resources/knowledge/log.md"
+      github: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/src/agents/bmad-tea/resources/knowledge/log.md"
+      description: "Test report logging utilities"
+
+    - name: "file-utils"
+      path: "/src/agents/bmad-tea/resources/knowledge/file-utils.md"
+      github: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/src/agents/bmad-tea/resources/knowledge/file-utils.md"
+      description: "CSV/XLSX/PDF/ZIP validation"
+
+    - name: "burn-in"
+      path: "/src/agents/bmad-tea/resources/knowledge/burn-in.md"
+      github: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/src/agents/bmad-tea/resources/knowledge/burn-in.md"
+      description: "Smart test selection via git diff"
+
+    - name: "network-error-monitor"
+      path: "/src/agents/bmad-tea/resources/knowledge/network-error-monitor.md"
+      github: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/src/agents/bmad-tea/resources/knowledge/network-error-monitor.md"
+      description: "HTTP 4xx/5xx detection"
+
+    - name: "contract-testing"
+      path: "/src/agents/bmad-tea/resources/knowledge/contract-testing.md"
+      github: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/src/agents/bmad-tea/resources/knowledge/contract-testing.md"
+      description: "Pact publishing and provider verification"
+
+    - name: "pactjs-utils-overview"
+      path: "/src/agents/bmad-tea/resources/knowledge/pactjs-utils-overview.md"
+      github: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/src/agents/bmad-tea/resources/knowledge/pactjs-utils-overview.md"
+      description: "Pact.js Utils installation and contract testing flows"
+
+    - name: "pactjs-utils-consumer-helpers"
+      path: "/src/agents/bmad-tea/resources/knowledge/pactjs-utils-consumer-helpers.md"
+      github: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/src/agents/bmad-tea/resources/knowledge/pactjs-utils-consumer-helpers.md"
+      description: "Consumer-side Pact helpers (createProviderState, toJsonMap)"
+
+    - name: "pactjs-utils-provider-verifier"
+      path: "/src/agents/bmad-tea/resources/knowledge/pactjs-utils-provider-verifier.md"
+      github: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/src/agents/bmad-tea/resources/knowledge/pactjs-utils-provider-verifier.md"
+      description: "Provider verification options builders"
+
+    - name: "pactjs-utils-request-filter"
+      path: "/src/agents/bmad-tea/resources/knowledge/pactjs-utils-request-filter.md"
+      github: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/src/agents/bmad-tea/resources/knowledge/pactjs-utils-request-filter.md"
+      description: "Request filter for auth injection in provider verification"
+
+    - name: "pact-mcp"
+      path: "/src/agents/bmad-tea/resources/knowledge/pact-mcp.md"
+      github: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/src/agents/bmad-tea/resources/knowledge/pact-mcp.md"
+      description: "SmartBear MCP server for PactFlow tooling setup"
+
+    - name: "pact-consumer-framework-setup"
+      path: "/src/agents/bmad-tea/resources/knowledge/pact-consumer-framework-setup.md"
+      github: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/src/agents/bmad-tea/resources/knowledge/pact-consumer-framework-setup.md"
+      description: "Consumer CDC framework directory structure and CI workflow"
+
+    - name: "pact-consumer-di"
+      path: "/src/agents/bmad-tea/resources/knowledge/pact-consumer-di.md"
+      github: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/src/agents/bmad-tea/resources/knowledge/pact-consumer-di.md"
+      description: "Dependency injection pattern for Pact consumer tests"
+
+    - name: "visual-debugging"
+      path: "/src/agents/bmad-tea/resources/knowledge/visual-debugging.md"
+      github: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/src/agents/bmad-tea/resources/knowledge/visual-debugging.md"
+      description: "Trace viewer workflows and debugging artifacts"
+
+  configuration_governance:
+    - name: "playwright-config"
+      path: "/src/agents/bmad-tea/resources/knowledge/playwright-config.md"
+      github: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/src/agents/bmad-tea/resources/knowledge/playwright-config.md"
+      description: "Environment and timeout guardrails"
+
+    - name: "ci-burn-in"
+      path: "/src/agents/bmad-tea/resources/knowledge/ci-burn-in.md"
+      github: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/src/agents/bmad-tea/resources/knowledge/ci-burn-in.md"
+      description: "CI orchestration and smart selection"
+
+    - name: "selective-testing"
+      path: "/src/agents/bmad-tea/resources/knowledge/selective-testing.md"
+      github: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/src/agents/bmad-tea/resources/knowledge/selective-testing.md"
+      description: "Tag and grep filters"
+
+    - name: "feature-flags"
+      path: "/src/agents/bmad-tea/resources/knowledge/feature-flags.md"
+      github: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/src/agents/bmad-tea/resources/knowledge/feature-flags.md"
+      description: "Feature flag governance and cleanup"
+
+    - name: "risk-governance"
+      path: "/src/agents/bmad-tea/resources/knowledge/risk-governance.md"
+      github: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/src/agents/bmad-tea/resources/knowledge/risk-governance.md"
+      description: "Risk scoring matrix and gate rules"
+
+    - name: "adr-quality-readiness-checklist"
+      path: "/src/agents/bmad-tea/resources/knowledge/adr-quality-readiness-checklist.md"
+      github: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/src/agents/bmad-tea/resources/knowledge/adr-quality-readiness-checklist.md"
+      description: "Quality readiness checklist for decisions and reviews"
+
+  quality_frameworks:
+    - name: "test-quality"
+      path: "/src/agents/bmad-tea/resources/knowledge/test-quality.md"
+      github: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/src/agents/bmad-tea/resources/knowledge/test-quality.md"
+      description: "Definition of Done execution limits"
+
+    - name: "test-levels-framework"
+      path: "/src/agents/bmad-tea/resources/knowledge/test-levels-framework.md"
+      github: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/src/agents/bmad-tea/resources/knowledge/test-levels-framework.md"
+      description: "Unit/Integration/E2E selection criteria"
+
+    - name: "test-priorities-matrix"
+      path: "/src/agents/bmad-tea/resources/knowledge/test-priorities-matrix.md"
+      github: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/src/agents/bmad-tea/resources/knowledge/test-priorities-matrix.md"
+      description: "P0-P3 coverage targets"
+
+    - name: "probability-impact"
+      path: "/src/agents/bmad-tea/resources/knowledge/probability-impact.md"
+      github: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/src/agents/bmad-tea/resources/knowledge/probability-impact.md"
+      description: "Probability × impact scoring definitions"
+
+    - name: "nfr-criteria"
+      path: "/src/agents/bmad-tea/resources/knowledge/nfr-criteria.md"
+      github: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/src/agents/bmad-tea/resources/knowledge/nfr-criteria.md"
+      description: "Non-functional requirements assessment"
+
+  auth_security:
+    - name: "email-auth"
+      path: "/src/agents/bmad-tea/resources/knowledge/email-auth.md"
+      github: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/src/agents/bmad-tea/resources/knowledge/email-auth.md"
+      description: "Magic link extraction and auth state"
+
+    - name: "auth-session"
+      path: "/src/agents/bmad-tea/resources/knowledge/auth-session.md"
+      github: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/src/agents/bmad-tea/resources/knowledge/auth-session.md"
+      description: "Token persistence and multi-user auth"
+
+    - name: "error-handling"
+      path: "/src/agents/bmad-tea/resources/knowledge/error-handling.md"
+      github: "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/src/agents/bmad-tea/resources/knowledge/error-handling.md"
+      description: "Exception handling and retry validation"
+
+# Quick Reference Maps
+session_to_resources:
+  session-01:
+    primary_docs: ["tea-lite-quickstart", "tea-overview", "run-automate"]
+    fragments: []
+
+  session-02:
+    primary_docs: ["testing-as-engineering", "risk-based-testing", "test-quality-standards"]
+    fragments: ["test-quality", "probability-impact"]
+
+  session-03:
+    primary_docs: ["fixture-architecture", "network-first-patterns", "step-file-architecture"]
+    fragments: ["fixture-architecture", "network-first", "data-factories"]
+
+  session-04:
+    primary_docs: ["run-test-design"]
+    fragments: ["test-levels-framework", "test-priorities-matrix"]
+
+  session-05:
+    primary_docs: ["run-atdd", "run-automate"]
+    fragments: ["component-tdd", "api-testing-patterns", "api-request"]
+
+  session-06:
+    primary_docs: ["run-test-review", "run-trace"]
+    fragments: []
+
+  session-07:
+    primary_docs: []
+    fragments: [] # All 42 fragments available via menu-driven exploration
+
+# Web-Browsing Fallback Strategy
+fallback_urls:
+  playwright_docs: "https://playwright.dev/docs/intro"
+  jest_docs: "https://jestjs.io/docs/getting-started"
+  cypress_docs: "https://docs.cypress.io/guides/overview/why-cypress"
+  vitest_docs: "https://vitest.dev/guide/"
+  testing_library: "https://testing-library.com/docs/"

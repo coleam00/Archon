@@ -60,7 +60,6 @@ e2e-screenshots/
 .archon/maintainer-standup/reviewed-prs.json
 
 # Agent artifacts (generated, local only)
-.agents/
 .agents/rca-reports/
 .agents/plans/
 .agents/pr-reviews
