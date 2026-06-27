@@ -67,16 +67,23 @@ mock.module('@archon/workflows/workflow-discovery', () => ({
 mock.module('@archon/workflows/loader', () => ({
   parseWorkflow: mockParseWorkflow,
 }));
-mock.module('@archon/workflows/command-validation', () => ({
-  isValidCommandName: mock(
-    (name: string) =>
-      !name.includes('/') &&
-      !name.includes('\\') &&
-      !name.includes('..') &&
-      !!name &&
-      !name.startsWith('.')
-  ),
-}));
+mock.module('@archon/workflows/command-validation', () => {
+  const isValidCommandName = (name: string) =>
+    !name.includes('/') &&
+    !name.includes('\\') &&
+    !name.includes('..') &&
+    !!name &&
+    !name.startsWith('.');
+  return {
+    isValidCommandName: mock(isValidCommandName),
+    isValidWorkflowName: mock((name: string) => {
+      if (!name) return false;
+      const segments = name.split('/');
+      if (segments.length > 2) return false;
+      return segments.every(isValidCommandName);
+    }),
+  };
+});
 mock.module('@archon/workflows/defaults', () => ({
   BUNDLED_WORKFLOWS: {
     'archon-assist': 'name: archon-assist\ndescription: Archon Assist\nnodes: []',
@@ -347,6 +354,35 @@ describe('GET /api/workflows/:name', () => {
       };
       expect(body.source).toBe('project');
       expect(body.filename).toBe('phase-0-spike.yml');
+      expect(body.workflow).toBeDefined();
+    } finally {
+      await rm(testDir, { recursive: true, force: true });
+    }
+  });
+
+  test('returns a namespaced workflow (one subfolder deep) via percent-encoded slash', async () => {
+    const testDir = join(tmpdir(), `wf-get-ns-test-${Date.now()}`);
+    const workflowDir = join(testDir, '.archon', 'workflows', 'triage');
+    await mkdir(workflowDir, { recursive: true });
+    await writeFile(
+      join(workflowDir, 'review.yaml'),
+      'name: review\ndescription: Triage review\nnodes:\n  - id: plan\n    command: plan\n'
+    );
+
+    try {
+      const app = createTestApp();
+      registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+      mockListCodebases.mockImplementationOnce(async () => [{ default_cwd: testDir }]);
+      const response = await app.request(`/api/workflows/triage%2Freview?cwd=${testDir}`);
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        source: string;
+        filename: string;
+        workflow: { name: string };
+      };
+      expect(body.source).toBe('project');
+      expect(body.filename).toBe('triage/review.yaml');
       expect(body.workflow).toBeDefined();
     } finally {
       await rm(testDir, { recursive: true, force: true });

@@ -79,7 +79,7 @@ import {
 } from '@archon/paths';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { parseWorkflow } from '@archon/workflows/loader';
-import { isValidCommandName } from '@archon/workflows/command-validation';
+import { isValidCommandName, isValidWorkflowName } from '@archon/workflows/command-validation';
 import { BUNDLED_WORKFLOWS, BUNDLED_COMMANDS, isBinaryBuild } from '@archon/workflows/defaults';
 import {
   RESUMABLE_WORKFLOW_STATUSES,
@@ -2970,7 +2970,7 @@ export function registerApiRoutes(
   registerOpenApiRoute(runWorkflowRoute, async c => {
     const workflowName = c.req.param('name') ?? '';
     const userId = await resolveWebUserId(c);
-    if (!isValidCommandName(workflowName)) {
+    if (!isValidWorkflowName(workflowName)) {
       return apiError(c, 400, 'Invalid workflow name');
     }
 
@@ -3574,7 +3574,7 @@ export function registerApiRoutes(
   // GET /api/workflows/:name - Fetch a single workflow definition
   registerOpenApiRoute(getWorkflowRoute, async c => {
     const name = c.req.param('name') ?? '';
-    if (!isValidCommandName(name)) {
+    if (!isValidWorkflowName(name)) {
       return apiError(c, 400, 'Invalid workflow name');
     }
 

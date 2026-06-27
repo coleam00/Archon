@@ -43,9 +43,11 @@ export function makeLoaderMock(): {
  */
 export function makeCommandValidationMock(): {
   isValidCommandName: Mock<() => boolean>;
+  isValidWorkflowName: Mock<() => boolean>;
 } {
   return {
     isValidCommandName: mock(() => true),
+    isValidWorkflowName: mock(() => true),
   };
 }
 
