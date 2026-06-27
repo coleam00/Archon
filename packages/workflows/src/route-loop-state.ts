@@ -4,6 +4,7 @@ import type {
   RouteOutcome,
   RouteLoopRuntimeMetadata,
 } from './schemas';
+import { serializeSafeCondition } from './condition-evaluator';
 import { routeLoopRuntimeMetadataSchema } from './schemas';
 
 export interface RouteLoopTransitionInput {
@@ -32,9 +33,7 @@ export interface RouteLoopTransitionResult {
 }
 
 export function serializeSafeRouteCondition(condition: string): string {
-  return condition
-    .replace(/'[^']*'/g, "'<redacted>'")
-    .replace(/(==|!=|<=|>=|<|>)\s*(-?\d+(?:\.\d+)?|true|false)\b/g, '$1 <redacted>');
+  return serializeSafeCondition(condition);
 }
 
 export function applyRouteLoopTransition(

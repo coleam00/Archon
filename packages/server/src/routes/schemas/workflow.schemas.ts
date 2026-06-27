@@ -4,7 +4,10 @@
 import { z } from '@hono/zod-openapi';
 import { workflowDefinitionSchema as engineWorkflowDefinitionSchema } from '@archon/workflows/schemas/workflow';
 import { workflowRunSchema as engineWorkflowRunSchema } from '@archon/workflows/schemas/workflow-run';
-import { workflowEventRowSchema } from '@archon/core/schemas/workflow-event';
+import {
+  workflowEventRowSchema,
+  routeLoopDecisionEventDataSchema,
+} from '@archon/core/schemas/workflow-event';
 import { dashboardWorkflowRunSchema as coreDashboardWorkflowRunSchema } from '@archon/core/schemas/workflow-run';
 
 /** Workflow definition schema — derived from engine schema via direct subpath import. */
@@ -118,10 +121,17 @@ export const workflowRunListResponseSchema = z
   .openapi('WorkflowRunListResponse');
 
 /** A workflow event record (wire shape). */
-export const workflowEventSchema = workflowEventRowSchema
-  .extend({
-    created_at: z.string().datetime(),
-  })
+const workflowEventBaseSchema = workflowEventRowSchema.safeExtend({
+  created_at: z.string().datetime(),
+});
+
+const routeLoopWorkflowEventSchema = workflowEventBaseSchema.safeExtend({
+  event_type: z.literal('node_routed'),
+  data: routeLoopDecisionEventDataSchema,
+});
+
+export const workflowEventSchema = z
+  .union([routeLoopWorkflowEventSchema, workflowEventBaseSchema])
   .openapi('WorkflowEvent');
 
 export const workflowNodeStateSchema = z

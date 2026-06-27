@@ -3,6 +3,14 @@
  */
 import { z } from '@hono/zod-openapi';
 import { workflowRunSchema, workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
+export {
+  routeLoopRuntimeMetadataSchema,
+  workflowRunMetadataSchema,
+} from '@archon/workflows/schemas/workflow-run';
+export type {
+  RouteLoopRuntimeMetadata,
+  WorkflowRunMetadata,
+} from '@archon/workflows/schemas/workflow-run';
 
 // ---------------------------------------------------------------------------
 // DashboardWorkflowRun

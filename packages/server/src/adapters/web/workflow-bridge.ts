@@ -3,6 +3,7 @@ import {
   getWorkflowEventEmitter,
   type WorkflowEmitterEvent,
 } from '@archon/workflows/event-emitter';
+import type { RouteLoopDecisionData } from '@archon/workflows/route-loop-state';
 import type { WorkflowEventRow } from '@archon/core/db/workflow-events';
 import { SSETransport } from './transport';
 
@@ -91,6 +92,7 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
     case 'node_completed':
     case 'node_failed':
     case 'node_skipped':
+    case 'node_routed':
       return JSON.stringify({
         type: 'dag_node',
         runId: event.runId,
@@ -99,7 +101,7 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
         status:
           event.type === 'node_started'
             ? 'running'
-            : event.type === 'node_completed'
+            : event.type === 'node_completed' || event.type === 'node_routed'
               ? 'completed'
               : event.type === 'node_failed'
                 ? 'failed'
@@ -107,6 +109,7 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
         duration: event.type === 'node_completed' ? event.duration : undefined,
         error: event.type === 'node_failed' ? event.error : undefined,
         reason: event.type === 'node_skipped' ? event.reason : undefined,
+        routeDecision: event.type === 'node_routed' ? event.data : undefined,
         timestamp: Date.now(),
       });
 
@@ -192,6 +195,7 @@ const ROW_NODE_STATUS: Record<string, 'running' | 'completed' | 'failed' | 'skip
   node_completed: 'completed',
   step_completed: 'completed',
   loop_iteration_completed: 'completed',
+  node_routed: 'completed',
   node_failed: 'failed',
   loop_iteration_failed: 'failed',
   node_skipped: 'skipped',
@@ -216,6 +220,7 @@ interface DagNodeSsePayload {
   name: string;
   status: 'running' | 'completed' | 'failed' | 'skipped';
   error?: string;
+  routeDecision?: RouteLoopDecisionData | Record<string, unknown>;
   timestamp: number;
 }
 
@@ -303,6 +308,7 @@ export function mapWorkflowEventRow(row: WorkflowEventRow): string | null {
         row.event_type === 'node_failed' || row.event_type === 'loop_iteration_failed'
           ? dataStr(data, 'error')
           : undefined,
+      routeDecision: row.event_type === 'node_routed' ? data : undefined,
       timestamp,
     };
     return JSON.stringify(payload);

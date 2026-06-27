@@ -8,6 +8,7 @@ import {
   sessionRowSchema,
   sessionMetadataSchema,
   workflowEventRowSchema,
+  routeLoopDecisionEventDataSchema,
   workflowCheckpointRowSchema,
   codebaseEnvVarSchema,
   dashboardWorkflowRunSchema,
@@ -199,6 +200,49 @@ describe('core schemas', () => {
       created_at: '2025-06-01T12:00:00.000Z',
     });
     expect(result.success).toBe(true);
+  });
+
+  test('workflowEventRowSchema validates node_routed metadata', () => {
+    const data = {
+      from: 'review',
+      outcome: 'positive',
+      to: 'done',
+      condition: "$review.output.result == '<redacted>'",
+      condition_result: true,
+      negative_count: 1,
+      max_iterations: 10,
+      attempt: 2,
+      execution_seq: 2,
+    };
+    expect(routeLoopDecisionEventDataSchema.safeParse(data).success).toBe(true);
+
+    const result = workflowEventRowSchema.safeParse({
+      id: 'evt-route',
+      workflow_run_id: 'run-1',
+      event_type: 'node_routed',
+      step_index: null,
+      step_name: 'review-router',
+      data,
+      created_at: '2025-06-01T12:00:00.000Z',
+    });
+    expect(result.success).toBe(true);
+  });
+
+  test('workflowEventRowSchema rejects malformed node_routed metadata', () => {
+    const result = workflowEventRowSchema.safeParse({
+      id: 'evt-route',
+      workflow_run_id: 'run-1',
+      event_type: 'node_routed',
+      step_index: null,
+      step_name: 'review-router',
+      data: {
+        from: 'review',
+        outcome: 'maybe',
+        to: 'done',
+      },
+      created_at: '2025-06-01T12:00:00.000Z',
+    });
+    expect(result.success).toBe(false);
   });
 
   // -----------------------------------------------------------------------

@@ -3617,6 +3617,13 @@ export async function executeDagWorkflow(
                 data: transition.eventData,
               },
             });
+            getWorkflowEventEmitter().emit({
+              type: 'node_routed',
+              runId: workflowRun.id,
+              nodeId: node.id,
+              nodeName: node.id,
+              data: transition.eventData,
+            });
             routeLoopMetadata = routeLoopRuntimeMetadataSchema.parse(persistedRun.metadata);
             activatedRouteTargetIds.add(transition.eventData.to);
             for (const rerunNodeId of selectedRerunNodeIds) {

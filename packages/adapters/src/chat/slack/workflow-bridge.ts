@@ -140,6 +140,10 @@ export class SlackWorkflowBridge {
           });
           this.scheduleStatusUpdate(event.runId);
           break;
+        case 'node_routed':
+          this.upsertNode(event.runId, event.nodeId, event.nodeName, 'completed');
+          this.scheduleStatusUpdate(event.runId);
+          break;
         case 'node_failed':
           this.upsertNode(event.runId, event.nodeId, event.nodeName, 'failed', {
             error: event.error,

@@ -1,4 +1,7 @@
 ## Codebase Patterns
+- `workflowEventRowSchema` now validates `node_routed` data with `routeLoopDecisionEventDataSchema`; server wire schemas that narrow this refined schema must use Zod `safeExtend()`.
+- `serializeSafeCondition()` in `packages/workflows/src/condition-evaluator.ts` is the canonical route-loop condition redaction path; `route-loop-state.ts` delegates to it before persisting route decisions.
+- Adding a new `WorkflowEmitterEvent` variant requires exhaustive handling in the Web bridge, Slack bridge, and persisted dashboard row mapping so live refresh paths stay type-safe.
 - Route-loop debug surfaces should preserve raw historical events while projecting latest node state separately; API tests should assert both `events` history and `nodeStates` latest projection.
 - Route-loop execution now has a minimal route-activation path for the US2 TDD flow: negative routes can re-enter the selected target, positive routes activate only the success target, and exhausted routes remain completed control-flow outcomes.
 - Route-loop runtime transitions are centralized in `packages/workflows/src/route-loop-state.ts`; use `applyRouteLoopTransition()` for negative counters, positive resets, route-loop attempts, execution sequence, route activation metadata, route-loop output, and safe condition redaction.
@@ -138,4 +141,24 @@
 - Targeted tests spanning workflows, core, and server should still run as separate `bun test` invocations to avoid repo-wide Bun mock pollution.
 - Touched-file Prettier is still the practical formatting gate for this branch because full format check has pre-existing unrelated support-file failures.
 - Verification passed `bun test packages/workflows/src/output-ref.test.ts`, `bun test packages/core/src/db/workflow-events.test.ts`, `bun test packages/server/src/routes/api.workflow-runs.test.ts`, `bun run type-check`, `bun run lint --max-warnings 0`, and touched-file Prettier checks.
+---
+## 2026-06-27 18:16 +07 - Phase 5.2: Implementation For User Story 3 (iter 8)
+**Tasks completed this iter:** T043 (Typed node_routed event metadata), T044 (Core route-loop run metadata validation), T045 (Latest attempt projection), T046 (Store adapter route-loop debug surfaces), T047 (Safe condition serialization), T048 (Typed node_routed emitter stream), T049 (Server route metadata schemas), T050 (Verify User Story 3)
+**Status:** completed:true
+
+- Per-task summary lines:
+  - T043 - Added `routeLoopDecisionEventDataSchema`, typed `node_routed` validation in `workflowEventRowSchema`, and core schema coverage in `packages/core/src/schemas/workflow-event.ts` and `packages/core/src/schemas/index.test.ts`.
+  - T044 - Re-exported route-loop workflow run metadata schemas from `packages/core/src/schemas/workflow-run.ts` so core row schemas expose the same validation contract as the workflow engine.
+  - T045 - Verified latest completed route-loop attempts still project through `getEpochAwareCompletedDagNodeOutputs()` without deleting raw historical events in `packages/core/src/db/workflow-events.ts`.
+  - T046 - Verified route-loop decisions and latest route outputs flow through the store adapter and run detail surfaces while preserving raw event history.
+  - T047 - Added `serializeSafeCondition()` in `packages/workflows/src/condition-evaluator.ts` and delegated route-loop transition redaction to it from `packages/workflows/src/route-loop-state.ts`.
+  - T048 - Added typed `node_routed` workflow emitter events, emitted them after durable route-decision persistence in `packages/workflows/src/dag-executor.ts`, and handled them in Web and Slack bridge mappings.
+  - T049 - Updated `packages/server/src/routes/schemas/workflow.schemas.ts` to expose typed `node_routed` metadata and updated dashboard row mapping to carry route decision metadata.
+  - T050 - Verified User Story 3 with focused workflow, core, server, adapter, OpenAPI, typecheck, lint, and touched-file formatting checks.
+
+**Learnings for future iterations:**
+- Refined Zod object schemas in this repo should use `safeExtend()` when a server wire schema narrows existing fields such as `created_at`, `event_type`, or `data`.
+- Route-loop live refresh has two paths: in-process emitter events and persisted DB rows tailed by the dashboard poller; both need updates for new event types.
+- Cross-package Bun tests still need isolated invocations because combining mocked core tests in one process can produce false module export failures.
+- After changing server schemas, `packages/server/src/routes/api.health.test.ts` is a cheap guard that OpenAPI generation still works.
 ---

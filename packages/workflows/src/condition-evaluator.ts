@@ -165,6 +165,46 @@ export function extractConditionReferences(expr: string): ConditionReferencePars
   return { parsed: true, references };
 }
 
+function redactConditionLiterals(expr: string): string {
+  return expr
+    .replace(/'[^']*'/g, "'<redacted>'")
+    .replace(/(==|!=|<=|>=|<|>)\s*(-?\d+(?:\.\d+)?|true|false)\b/g, '$1 <redacted>');
+}
+
+function serializeSafeAtom(atom: string): string {
+  const trimmed = atom.trim();
+  const match = atomPattern.exec(trimmed);
+  if (!match) return redactConditionLiterals(trimmed);
+
+  const [, nodeId, segment1, segment2, operator, quotedValue, unquotedValue] = match;
+  if (
+    nodeId === undefined ||
+    segment1 === undefined ||
+    operator === undefined ||
+    (quotedValue === undefined && unquotedValue === undefined)
+  ) {
+    return redactConditionLiterals(trimmed);
+  }
+
+  if (segment1 !== 'output' && segment2 !== undefined) {
+    return redactConditionLiterals(trimmed);
+  }
+
+  const ref =
+    segment2 === undefined ? `$${nodeId}.${segment1}` : `$${nodeId}.${segment1}.${segment2}`;
+  const redacted = quotedValue !== undefined ? "'<redacted>'" : '<redacted>';
+  return `${ref} ${operator} ${redacted}`;
+}
+
+export function serializeSafeCondition(expr: string): string {
+  const orClauses = splitOutsideQuotes(expr.trim(), '||');
+  const serializedOrClauses = orClauses.map(orClause => {
+    const andAtoms = splitOutsideQuotes(orClause, '&&');
+    return andAtoms.map(serializeSafeAtom).join(' && ');
+  });
+  return serializedOrClauses.join(' || ');
+}
+
 /**
  * Evaluate a single atomic condition expression against upstream node outputs.
  */

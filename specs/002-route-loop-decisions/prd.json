@@ -446,7 +446,7 @@
     },
     {
       "title": "Phase 5.2: Implementation For User Story 3",
-      "completed": false,
+      "completed": true,
       "tasks": [
         {
           "id": "T043",
@@ -454,7 +454,7 @@
           "description": "[US3] Extend the workflow event row schema with typed `node_routed` metadata validation in `packages/core/src/schemas/workflow-event.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 43,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -463,7 +463,7 @@
           "description": "[US3] Extend core workflow run row metadata validation for route-loop metadata fields in `packages/core/src/schemas/workflow-run.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 44,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -472,7 +472,7 @@
           "description": "[US3] Project latest attempt summaries without deleting old attempt events in `packages/core/src/db/workflow-events.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 45,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -481,7 +481,7 @@
           "description": "[US3] Return `node_routed` events and latest route-loop outputs through the workflow store adapter in `packages/core/src/workflows/store-adapter.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 46,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -490,7 +490,7 @@
           "description": "[US3] Add safe condition serialization that preserves references, fields, operators, and boolean structure while redacting literal values in `packages/workflows/src/condition-evaluator.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 47,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -499,7 +499,7 @@
           "description": "[US3] Stream typed `node_routed` events through the workflow event emitter in `packages/workflows/src/event-emitter.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 48,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -508,7 +508,7 @@
           "description": "[US3] Update server run detail schemas for route metadata fields in `packages/server/src/routes/schemas/workflow.schemas.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 49,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -517,7 +517,7 @@
           "description": "[US3] Verify User Story 3 with `bun test packages/workflows/src/output-ref.test.ts packages/core/src/db/workflow-events.test.ts packages/core/src/workflows/store-adapter.test.ts packages/server/src/routes/api.workflow-runs.test.ts` for `packages/core/src/db/workflow-events.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 50,
-          "passes": false,
+          "passes": true,
           "notes": ""
         }
       ],
