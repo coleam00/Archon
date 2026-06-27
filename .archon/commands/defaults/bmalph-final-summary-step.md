@@ -1,11 +1,11 @@
 ---
-description: Summarize the bmalph implementation with TEA fix loop run
+description: Summarize the bmalph implementation with post-dev quality loop and final TEA test review
 argument-hint: (none - reads workflow artifacts)
 ---
 
 # bmalph Final Summary Step
 
-Summarize the bmalph implementation with TEA fix loop run.
+Summarize the bmalph implementation with post-dev quality loop and final TEA test review run.
 
 ## Story Context
 
@@ -22,6 +22,7 @@ Read:
 - `$ARTIFACTS_DIR/bmalph-dev-story-with-tea-fix-loop/decision-log.md`.
 - `$ARTIFACTS_DIR/bmalph-dev-story-with-tea-fix-loop/findings/open-findings.md`.
 - All files under `$ARTIFACTS_DIR/bmalph-dev-story-with-tea-fix-loop/reports/`.
+- `$ARTIFACTS_DIR/bmalph-dev-story-with-tea-fix-loop/reports/post-dev-quality-loop.md` if present.
 - `.ralph/@fix_plan.md` if present.
 - `.ralph/status.json` if present.
 - `_bmad-output/implementation-artifacts/sprint-status.yaml` if present.
@@ -30,7 +31,8 @@ Report:
 
 - Final workflow status.
 - Story worked on.
-- Number of review rounds.
+- Post-dev quality loop result.
+- Final `bmad-testarch-test-review` result.
 - Findings found.
 - Fixes applied.
 - Validation evidence.

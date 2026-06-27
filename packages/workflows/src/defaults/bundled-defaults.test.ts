@@ -54,7 +54,7 @@ describe('bundled-defaults', () => {
         expect(content).toBe(diskContent);
       }
       for (const [name, content] of Object.entries(BUNDLED_WORKFLOWS)) {
-        // Workflows may be .yaml or .yml — prefer .yaml, fall back.
+        // Workflows may be .yaml or .yml - prefer .yaml, fall back.
         let diskContent: string;
         try {
           diskContent = readLF(join(WORKFLOWS_DIR, `${name}.yaml`));
@@ -83,6 +83,17 @@ describe('bundled-defaults', () => {
       const content = BUNDLED_COMMANDS['archon-create-pr'];
       expect(content).toContain('echo "$PR_NUMBER" > "$ARTIFACTS_DIR/.pr-number"');
     });
+
+    it('archon-create-pr should always use BASE_BRANCH for PR base', () => {
+      const content = BUNDLED_COMMANDS['archon-create-pr'];
+      expect(content).toContain('argument-hint: (none - uses $BASE_BRANCH from config or repo)');
+      expect(content).toContain('**Base branch**: $BASE_BRANCH');
+      expect(content).toContain('Always use `$BASE_BRANCH` for `--base`');
+      expect(content).toContain('--base $BASE_BRANCH');
+      expect(content).not.toContain('Base branch override');
+      expect(content).not.toContain('base branch was provided as argument');
+      expect(content).not.toContain('**Default base branch**');
+    });
   });
 
   describe('BUNDLED_WORKFLOWS', () => {
@@ -108,6 +119,12 @@ describe('bundled-defaults', () => {
         'sed "s/SPRINT_COUNT_PLACEHOLDER/$SPRINT_COUNT/" "$ARTIFACTS/state.json" > "$STATE_TMP"'
       );
       expect(content).not.toContain('sed -i "s/SPRINT_COUNT_PLACEHOLDER/$SPRINT_COUNT/"');
+    });
+
+    it('bmad-create-story-with-tea should create PR through archon-create-pr', () => {
+      const content = BUNDLED_WORKFLOWS['bmad-create-story-with-tea'];
+      expect(content).toContain('id: create-pull-request');
+      expect(content).toContain('command: archon-create-pr');
     });
 
     it('should have valid YAML structure', () => {

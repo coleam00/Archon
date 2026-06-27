@@ -17,6 +17,7 @@ import {
   listCodebases,
   getMessages,
   createConversation,
+  getWorkflowRun,
   getWorkflowRunByWorker,
   getHealth,
 } from '@/lib/api';
@@ -38,7 +39,7 @@ import {
 } from '@/lib/message-cache';
 import { useProject } from '@/contexts/ProjectContext';
 import { ensureUtc } from '@/lib/format';
-import { resolveChatHeaderPath } from '@/lib/chat-header';
+import { getLatestWorkflowReference, resolveChatHeaderPath } from '@/lib/chat-header';
 
 function mapMessageRow(row: MessageResponse): ChatMessage {
   let meta: {
@@ -232,6 +233,31 @@ export function ChatInterface({
         .join(','),
     [messages]
   );
+  const latestWorkflowReference = useMemo(() => getLatestWorkflowReference(messages), [messages]);
+  const latestWorkflowReferenceId =
+    latestWorkflowReference?.kind === 'result'
+      ? latestWorkflowReference.runId
+      : latestWorkflowReference?.workerConversationId;
+  const hasCwdOverride = Boolean(cwdOverride?.trim());
+  const { data: workflowWorkingPath } = useQuery<string | null>({
+    queryKey: [
+      'chat-header-workflow-path',
+      latestWorkflowReference?.kind ?? null,
+      latestWorkflowReferenceId ?? null,
+    ],
+    queryFn: async (): Promise<string | null> => {
+      if (!latestWorkflowReference) return null;
+      if (latestWorkflowReference.kind === 'result') {
+        const result = await getWorkflowRun(latestWorkflowReference.runId);
+        return result.run.working_path;
+      }
+
+      const result = await getWorkflowRunByWorker(latestWorkflowReference.workerConversationId);
+      return result?.run.working_path ?? null;
+    },
+    enabled: !isNewChat && !hasCwdOverride && latestWorkflowReference !== undefined,
+    staleTime: 10_000,
+  });
 
   // Hydrate workflow status from message metadata when SSE events were missed.
   // workflowDispatch metadata is persisted in DB messages — scan for it after
@@ -283,7 +309,7 @@ export function ChatInterface({
       ? codebases?.find(cb => cb.id === selectedProjectId)
       : undefined;
   const headerTitle = currentConv?.title ?? 'Chat';
-  const headerSubtitle = resolveChatHeaderPath(currentConv?.cwd, cwdOverride);
+  const headerSubtitle = resolveChatHeaderPath(currentConv?.cwd, cwdOverride, workflowWorkingPath);
 
   const nextId = (): string => {
     messageIdCounter.current += 1;

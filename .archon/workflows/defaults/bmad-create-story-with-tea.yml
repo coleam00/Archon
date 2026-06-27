@@ -1,0 +1,163 @@
+name: bmad-create-story-with-tea
+description: |
+  Use when: User provides a BMAD story_name/story selector and wants to create that story, validate readiness, then run TEA test design and ATDD before dev.
+  Triggers: "bmad create story with tea <story_name>", "create bmad story with tea <story_name>", "CS VS TD AT <story_name>".
+  Does: Triggers existing BMAD and TEA commands in order against the user-provided story_name, passes the created story_file into the readiness gate, risk-based test design, red ATDD generation, then creates the pull request.
+  NOT for: Implementing the story or running post-dev review and fix loops.
+
+provider: codex
+modelReasoningEffort: xhigh
+model: gpt-5.5
+tags: [BMad, TEA, Planning]
+
+nodes:
+  - id: validate-story-name-input
+    bash: |
+      set -e
+
+      if [ -z "${ARGUMENTS:-}" ]; then
+        echo "Missing required story_name input."
+        echo "Run this workflow with a BMAD story key, story id, title, or story file path."
+        exit 1
+      fi
+
+      for required in \
+        ".agents/skills/bmad-create-story/SKILL.md" \
+        ".agents/skills/bmad-testarch-test-design/SKILL.md" \
+        ".agents/skills/bmad-testarch-atdd/SKILL.md" \
+        "_bmad/bmm/config.yaml" \
+        "_bmad/tea/config.yaml"
+      do
+        if [ ! -f "$required" ]; then
+          echo "Missing required BMAD or TEA file: $required"
+          echo "Run this workflow from a BMAD-enabled project checkout."
+          exit 1
+        fi
+      done
+
+      echo "story_name=$ARGUMENTS"
+    timeout: 60000
+    output_type: story-name-input
+
+  - id: create-story
+    prompt: |
+      $bmad-create-story create detail story for $ARGUMENTS, you need read all references documents, 
+      understand comrehensive, spawn sub-agents for help
+    provider: codex
+    depends_on: [validate-story-name-input]
+    context: fresh
+    model: gpt-5.5
+    idle_timeout: 900000
+    output_format:
+      type: object
+      properties:
+        story_name:
+          type: string
+        story_key:
+          type: string
+        story_file:
+          type: string
+        sprint_status:
+          type: string
+        validation_summary:
+          type: string
+      required:
+        - story_name
+        - story_key
+        - story_file
+        - sprint_status
+        - validation_summary
+    output_type: create-story
+
+  - id: validate-story-readiness
+    prompt: |
+      $bmad-create-story validate $create-story.output.story_file
+    provider: codex
+    depends_on: [create-story]
+    context: fresh
+    model: gpt-5.5
+    output_type: story-readiness-gate
+
+  - id: design-risk-based-tests
+    prompt: |
+      $bmad-testarch-test-design $create-story.output.story_file
+      Run the workflow as a Master Test Architect.
+      In Step 3 risk assessment:
+      - Treat every known reviewer concern as evidence, not optional advice.
+      - Convert each concern into a risk or explicit non-risk with rationale.
+      - Score probability and impact.
+      - Mark P0/P1 when the issue can break core behavior, security, data integrity, compatibility, or cross-process contract behavior.
+
+      In Step 4 coverage plan:
+      - Every acceptance criterion must map to atomic test scenarios.
+      - Every high-risk item must map to P0/P1 scenarios.
+      - Every known reviewer concern must map to scenarios or explicit waiver.
+      - Include happy path, negative path, boundary cases, malformed input, stale data, duplicate actions, out-of-order events, partial failure, dependency failure, timeout, cancellation, concurrency/
+      race, rollback, permission/auth, and regression cases where applicable.
+      - Use the project’s real test levels and existing test patterns.
+      - Avoid duplicate coverage unless the risk justifies multiple levels.
+
+      Mandatory output rule:
+      For every acceptance criterion, high-risk item, and reviewer concern:
+      - create a scenario, or
+      - write a waiver with reason, owner, residual risk, and follow-up trigger.
+
+      Do not stop at happy paths.
+      Do not mark coverage complete if P0/P1 edge cases are only implied.
+    provider: codex
+    depends_on: [validate-story-readiness]
+    context: fresh
+    model: gpt-5.5
+    output_type: risk-based-test-design
+
+  - id: generate-red-acceptance-tests
+    prompt: |
+      $bmad-testarch-atdd $create-story.output.story_file
+      Generate red-phase acceptance scaffolds only.
+      Do not implement production code.
+
+      Use the repository’s existing test framework, directories, helpers, and naming patterns discovered during preflight.
+      Do not blindly use generic `tests/api` or Playwright examples if the project uses another structure.
+
+      Mandatory mapping:
+      - Every P0/P1 scenario from the TD artifact must become one of:
+        - executable red test,
+        - skipped red scaffold with expected failure reason,
+        - waiver with reason, owner, residual risk, and follow-up trigger.
+      - Every known reviewer concern must be represented the same way.
+      - Every acceptance criterion must be traceable to generated tests or waiver.
+
+      Red-phase requirements:
+      - Use `test.skip()` only when the target module, route, harness, or dependency seam does not exist yet.
+      - Prefer executable red tests when the boundary already exists.
+      - Each skipped scaffold must state why it is skipped and what implementation should make it activatable.
+      - Assertions must describe expected behavior, not placeholders.
+      - Add deterministic fixtures, builders, spies, mutation counters, or sentinels where needed.
+
+      Coverage requirements:
+      - Include API/contract tests for cross-process or service contracts.
+      - Include E2E or first-party consumer scaffolds when the story exposes behavior through a real user/client surface.
+      - For non-UI backend/API stories, browser UI E2E can be N/A, but first-party consumer E2E must be generated or explicitly waived.
+      - Include no-side-effect checks when behavior is preview/read-only.
+      - Include malformed input, stale state, dependency failure, concurrency/race, and regression cases when present in TD P0/P1.
+
+      Completion:
+      - Produce the ATDD checklist.
+      - List generated files.
+      - List skipped scaffolds and expected failure reasons.
+      - List waivers with owner and residual risk.
+      - Provide exact commands to run the generated tests.
+    provider: codex
+    depends_on: [design-risk-based-tests]
+    context: fresh
+    model: gpt-5.5
+    output_type: red-acceptance-tests
+
+  - id: create-pull-request
+    command: archon-create-pr
+    provider: codex
+    depends_on: [generate-red-acceptance-tests]
+    context: fresh
+    model: gpt-5.5
+    idle_timeout: 900000
+    output_type: pull-request

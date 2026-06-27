@@ -2,7 +2,7 @@ name: bmalph-dev-story-with-tea-fix-loop
 description: |
   Use when: User wants bmalph implementation followed by TEA review gates and an explicit review-fix loop.
   Triggers: "bmalph dev story tea fix loop", "bmalph implementation tea", "bmalph review fix loop".
-  Does: Runs bmalph transition and Ralph implementation, runs TA, CR, RV, NR, and TR as separate DAG nodes, records review findings, reruns BMAD dev-story to fix findings when needed, and repeats review up to three rounds.
+  Does: Runs bmalph transition and Ralph implementation, hands off directly to post-dev-quality-loop for CR/dev/automation remediation, then runs bmad-testarch-test-review as the final TEA gate.
   NOT for: Generic Archon feature work without bmalph/BMAD artifacts, or one-off review without implementation.
 
   Decision log policy:
@@ -11,6 +11,7 @@ description: |
   - Every finding and fix entry must explain what is wrong, how it was fixed, and why that fix decision was chosen.
 
 provider: codex
+modelReasoningEffort: xhigh
 model: gpt-5.5
 tags: [bmalph, TEA, Review]
 
@@ -34,15 +35,15 @@ nodes:
         ".ralph/@AGENT.md" \
         ".ralph/RALPH-REFERENCE.md" \
         ".agents/skills/bmad-bmalph/SKILL.md" \
+        ".agents/skills/bmad-code-review/SKILL.md" \
         ".agents/skills/bmad-dev-story/SKILL.md" \
         ".agents/skills/bmad-dev-story/checklist.md" \
+        ".agents/skills/bmad-testarch-automate/SKILL.md" \
+        ".agents/skills/bmad-testarch-test-review/SKILL.md" \
         "_bmad/bmm/config.yaml" \
         "_bmad/bmm/workflows/4-implementation/bmad-code-review/SKILL.md" \
         ".claude/skills/bmad-tea/SKILL.md" \
-        ".claude/skills/bmad-testarch-automate/SKILL.md" \
-        ".claude/skills/bmad-testarch-test-review/SKILL.md" \
-        ".claude/skills/bmad-testarch-nfr/SKILL.md" \
-        ".claude/skills/bmad-testarch-trace/SKILL.md"
+        ".claude/skills/bmad-testarch-test-review/SKILL.md"
       do
         if [ ! -f "$required" ]; then
           echo "Missing required BMAD skill: $required"
@@ -50,6 +51,31 @@ nodes:
           exit 1
         fi
       done
+
+      POST_DEV_SKILL=""
+      for candidate in \
+        "skills/post-dev-quality-loop/SKILL.md" \
+        ".codex/skills/post-dev-quality-loop/SKILL.md" \
+        ".agents/skills/post-dev-quality-loop/SKILL.md" \
+        ".claude/skills/post-dev-quality-loop/SKILL.md"
+      do
+        if [ -f "$candidate" ]; then
+          POST_DEV_SKILL="$candidate"
+          break
+        fi
+      done
+
+      if [ -z "$POST_DEV_SKILL" ]; then
+        echo "Missing custom post-dev-quality-loop skill."
+        echo "Expected one of:"
+        echo "- skills/post-dev-quality-loop/SKILL.md"
+        echo "- .codex/skills/post-dev-quality-loop/SKILL.md"
+        echo "- .agents/skills/post-dev-quality-loop/SKILL.md"
+        echo "- .claude/skills/post-dev-quality-loop/SKILL.md"
+        exit 1
+      fi
+
+      printf '%s\n' "$POST_DEV_SKILL" > "$RUN_DIR/post-dev-quality-loop-skill.txt"
 
       if [ ! -f "_bmad/config.yaml" ]; then
         echo "Missing _bmad/config.yaml."
@@ -75,7 +101,7 @@ nodes:
         "workflow": "bmalph-dev-story-with-tea-fix-loop",
         "status": "running",
         "round": 1,
-        "maxRounds": 3,
+        "maxRounds": 1,
         "activeStory": "",
         "activeStoryName": "",
         "activeStoryFile": "",
@@ -129,6 +155,7 @@ nodes:
       echo "OPEN_FINDINGS=$RUN_DIR/findings/open-findings.md"
       echo "FIX_PLAN=.ralph/@fix_plan.md"
       echo "RALPH_STATUS=.ralph/status.json"
+      echo "POST_DEV_QUALITY_LOOP_SKILL=$POST_DEV_SKILL"
       echo "TEA_SKILLS=.claude/skills/bmad-testarch-*"
       echo "TEA_CONFIG=_bmad/tea/config.yaml"
     timeout: 60000
@@ -171,58 +198,70 @@ nodes:
         - validation_summary
     output_type: bmalph-implementation
 
-  - id: tea-automate
-    command: bmalph-tea-automate-step
+  - id: post-dev-quality-loop
+    command: bmalph-post-dev-quality-loop-step
     provider: codex
     depends_on: [bmalph-implementation]
     context: fresh
     model: gpt-5.5
-    idle_timeout: 900000
-    output_type: tea-automation
+    idle_timeout: 1800000
+    output_format:
+      type: object
+      properties:
+        current_state:
+          type: string
+          enum: ["review-passed", "remediating", "blocked"]
+        decision_audit_file:
+          type: string
+        skills_run:
+          type: string
+        review_findings:
+          type: string
+        automation_summary:
+          type: string
+        next_bmad_skill:
+          type: string
+      required:
+        - current_state
+        - decision_audit_file
+        - skills_run
+        - review_findings
+        - automation_summary
+        - next_bmad_skill
+    output_type: post-dev-quality-loop
 
-  - id: code-review-r1
-    command: bmalph-code-review-findings-step
-    provider: codex
-    depends_on: [tea-automate]
-    context: fresh
-    model: gpt-5.5
-    idle_timeout: 900000
-    output_type: code-review-findings
+  - id: assert-post-dev-quality
+    depends_on: [post-dev-quality-loop]
+    bash: |
+      set -e
 
-  - id: tea-rv-r1
+      CURRENT_STATE='$post-dev-quality-loop.output.current_state'
+
+      if [ "$CURRENT_STATE" != "review-passed" ]; then
+        echo "post-dev-quality-loop did not finish with review-passed."
+        echo "current_state=$CURRENT_STATE"
+        exit 1
+      fi
+
+      echo "post-dev-quality-loop completed with review-passed."
+    timeout: 60000
+
+  - id: bmad-testarch-test-review
     command: bmalph-tea-rv-findings-step
     provider: codex
-    depends_on: [code-review-r1]
+    depends_on: [assert-post-dev-quality]
     context: fresh
     model: gpt-5.5
     idle_timeout: 900000
     output_type: test-review-findings
 
-  - id: tea-nr-r1
-    command: bmalph-tea-nr-findings-step
-    provider: codex
-    depends_on: [tea-rv-r1]
-    context: fresh
-    model: gpt-5.5
-    idle_timeout: 900000
-    output_type: nfr-findings
-
-  - id: tea-tr-r1
-    command: bmalph-tea-tr-findings-step
-    provider: codex
-    depends_on: [tea-nr-r1]
-    context: fresh
-    model: gpt-5.5
-    idle_timeout: 900000
-    output_type: trace-findings
-
-  - id: collect-findings-r1
+  - id: collect-final-test-review
     command: bmalph-collect-findings-step
     provider: codex
-    depends_on: [tea-tr-r1]
+    depends_on: [bmad-testarch-test-review]
     context: fresh
     model: gpt-5.5
-    output_format: &findings_gate_schema
+    output_format:
       type: object
       properties:
         gate:
@@ -239,118 +278,8 @@ nodes:
       required: [gate, round, findings_count, open_findings_file, decision_log_file]
     output_type: findings-gate
 
-  - id: bmad-dev-story-fix-r1
-    command: bmad-dev-story-step
-    provider: codex
-    depends_on: [collect-findings-r1]
-    when: "$collect-findings-r1.output.gate == 'FAIL'"
-    context: fresh
-    model: gpt-5.5
-    idle_timeout: 900000
-    output_type: bmad-dev-story-fixes
-
-  - id: code-review-r2
-    command: bmalph-code-review-findings-step
-    provider: codex
-    depends_on: [bmad-dev-story-fix-r1]
-    context: fresh
-    model: gpt-5.5
-    idle_timeout: 900000
-    output_type: code-review-findings
-
-  - id: tea-rv-r2
-    command: bmalph-tea-rv-findings-step
-    provider: codex
-    depends_on: [code-review-r2]
-    context: fresh
-    model: gpt-5.5
-    idle_timeout: 900000
-    output_type: test-review-findings
-
-  - id: tea-nr-r2
-    command: bmalph-tea-nr-findings-step
-    provider: codex
-    depends_on: [tea-rv-r2]
-    context: fresh
-    model: gpt-5.5
-    idle_timeout: 900000
-    output_type: nfr-findings
-
-  - id: tea-tr-r2
-    command: bmalph-tea-tr-findings-step
-    provider: codex
-    depends_on: [tea-nr-r2]
-    context: fresh
-    model: gpt-5.5
-    idle_timeout: 900000
-    output_type: trace-findings
-
-  - id: collect-findings-r2
-    command: bmalph-collect-findings-step
-    provider: codex
-    depends_on: [tea-tr-r2]
-    context: fresh
-    model: gpt-5.5
-    output_format: *findings_gate_schema
-    output_type: findings-gate
-
-  - id: bmad-dev-story-fix-r2
-    command: bmad-dev-story-step
-    provider: codex
-    depends_on: [collect-findings-r2]
-    when: "$collect-findings-r2.output.gate == 'FAIL'"
-    context: fresh
-    model: gpt-5.5
-    idle_timeout: 900000
-    output_type: bmad-dev-story-fixes
-
-  - id: code-review-r3
-    command: bmalph-code-review-findings-step
-    provider: codex
-    depends_on: [bmad-dev-story-fix-r2]
-    context: fresh
-    model: gpt-5.5
-    idle_timeout: 900000
-    output_type: code-review-findings
-
-  - id: tea-rv-r3
-    command: bmalph-tea-rv-findings-step
-    provider: codex
-    depends_on: [code-review-r3]
-    context: fresh
-    model: gpt-5.5
-    idle_timeout: 900000
-    output_type: test-review-findings
-
-  - id: tea-nr-r3
-    command: bmalph-tea-nr-findings-step
-    provider: codex
-    depends_on: [tea-rv-r3]
-    context: fresh
-    model: gpt-5.5
-    idle_timeout: 900000
-    output_type: nfr-findings
-
-  - id: tea-tr-r3
-    command: bmalph-tea-tr-findings-step
-    provider: codex
-    depends_on: [tea-nr-r3]
-    context: fresh
-    model: gpt-5.5
-    idle_timeout: 900000
-    output_type: trace-findings
-
-  - id: collect-findings-r3
-    command: bmalph-collect-findings-step
-    provider: codex
-    depends_on: [tea-tr-r3]
-    context: fresh
-    model: gpt-5.5
-    output_format: *findings_gate_schema
-    output_type: findings-gate
-
   - id: assert-review-pass
-    depends_on: [collect-findings-r1, collect-findings-r2, collect-findings-r3]
+    depends_on: [collect-final-test-review]
     trigger_rule: all_done
     bash: |
       set -e
@@ -360,7 +289,7 @@ nodes:
       OPEN_FINDINGS="$ARTIFACTS_DIR/bmalph-dev-story-with-tea-fix-loop/findings/open-findings.md"
 
       if ! grep -qE '"status"[[:space:]]*:[[:space:]]*"complete"' "$STATE"; then
-        echo "BMAD TEA review-fix loop did not complete successfully."
+        echo "BMAD post-dev quality loop and final TEA test review did not complete successfully."
         cat "$STATE"
         exit 1
       fi
@@ -370,7 +299,7 @@ nodes:
         exit 1
       fi
 
-      echo "BMAD TEA review-fix loop completed successfully."
+      echo "BMAD post-dev quality loop and final TEA test review completed successfully."
       echo "Decision log: $DECISIONS"
     timeout: 60000
 

@@ -1,0 +1,653 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Archon Route Loop Builder Mockup</title>
+    <style>
+      :root {
+        --background: #15171c;
+        --surface: #20232a;
+        --surface-elevated: #292d36;
+        --surface-inset: #111317;
+        --surface-hover: #303541;
+        --border: #3a3f4b;
+        --border-bright: #555d6b;
+        --text-primary: #edf0f4;
+        --text-secondary: #a7afbb;
+        --text-tertiary: #737d8c;
+        --primary: #6495ed;
+        --route-loop: #2dd4bf;
+        --success: #34d399;
+        --warning: #fbbf24;
+        --error: #fb7185;
+        --prompt: #c084fc;
+        --bash: #fbbf24;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--background);
+        color: var(--text-primary);
+        font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+        font-size: 12px;
+      }
+
+      .app {
+        height: 100vh;
+        display: grid;
+        grid-template-rows: 48px 1fr 34px;
+      }
+
+      .toolbar,
+      .statusbar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 0 14px;
+        border-bottom: 1px solid var(--border);
+        background: var(--surface);
+      }
+
+      .statusbar {
+        border-top: 1px solid var(--border);
+        border-bottom: 0;
+        color: var(--text-secondary);
+      }
+
+      .title {
+        font-weight: 650;
+      }
+
+      .input {
+        height: 28px;
+        min-width: 180px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--surface-elevated);
+        color: var(--text-secondary);
+        padding: 6px 9px;
+        font-family: inherit;
+      }
+
+      .button {
+        height: 28px;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--surface-elevated);
+        color: var(--text-primary);
+        padding: 0 10px;
+      }
+
+      .button.primary {
+        border-color: var(--primary);
+        background: color-mix(in srgb, var(--primary) 24%, var(--surface));
+      }
+
+      .main {
+        min-height: 0;
+        display: grid;
+        grid-template-columns: 212px 1fr 320px;
+      }
+
+      .library,
+      .inspector {
+        min-height: 0;
+        background: var(--surface);
+        border-right: 1px solid var(--border);
+        overflow: hidden;
+      }
+
+      .inspector {
+        border-right: 0;
+        border-left: 1px solid var(--border);
+      }
+
+      .panel-head {
+        padding: 12px;
+        border-bottom: 1px solid var(--border);
+        color: var(--text-secondary);
+        font-weight: 650;
+        text-transform: uppercase;
+        font-size: 10px;
+      }
+
+      .search {
+        margin-top: 9px;
+        width: 100%;
+      }
+
+      .section {
+        padding: 10px;
+      }
+
+      .section-title {
+        color: var(--text-tertiary);
+        font-size: 10px;
+        text-transform: uppercase;
+        margin: 0 0 8px;
+      }
+
+      .lib-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 30px;
+        border: 1px dashed var(--border);
+        border-radius: 7px;
+        padding: 7px 8px;
+        margin-bottom: 7px;
+        color: var(--text-primary);
+        background: color-mix(in srgb, var(--surface-elevated) 50%, transparent);
+      }
+
+      .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--route-loop);
+        flex: 0 0 auto;
+      }
+
+      .canvas {
+        position: relative;
+        overflow: hidden;
+        background-color: var(--background);
+        background-image: radial-gradient(var(--border) 1px, transparent 1px);
+        background-size: 20px 20px;
+      }
+
+      svg.edges {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+      }
+
+      .node {
+        position: absolute;
+        width: 180px;
+        min-height: 78px;
+        display: flex;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--surface);
+        overflow: hidden;
+        box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.1);
+      }
+
+      .node.route {
+        width: 220px;
+        min-height: 124px;
+        border-color: color-mix(in srgb, var(--route-loop) 45%, var(--border));
+        box-shadow: 0 0 0 1px rgba(45, 212, 191, 0.15);
+      }
+
+      .stripe {
+        width: 3px;
+        background: var(--prompt);
+      }
+
+      .stripe.bash {
+        background: var(--bash);
+      }
+
+      .stripe.route {
+        background: var(--route-loop);
+      }
+
+      .node-body {
+        min-width: 0;
+        flex: 1;
+        padding: 9px 10px;
+      }
+
+      .node-head {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        margin-bottom: 6px;
+      }
+
+      .badge {
+        border-radius: 4px;
+        padding: 3px 5px;
+        background: rgba(192, 132, 252, 0.18);
+        color: var(--prompt);
+        font-size: 9px;
+        font-weight: 700;
+      }
+
+      .badge.bash {
+        background: rgba(251, 191, 36, 0.16);
+        color: var(--bash);
+      }
+
+      .badge.route {
+        background: rgba(45, 212, 191, 0.16);
+        color: var(--route-loop);
+      }
+
+      .node-title {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-weight: 600;
+      }
+
+      .preview {
+        color: var(--text-tertiary);
+        font-family: "JetBrains Mono", ui-monospace, monospace;
+        font-size: 10px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .pills {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        margin-top: 8px;
+      }
+
+      .pill {
+        border-radius: 4px;
+        background: var(--surface-inset);
+        color: var(--text-secondary);
+        padding: 3px 5px;
+        font-size: 10px;
+        font-family: "JetBrains Mono", ui-monospace, monospace;
+      }
+
+      .handle {
+        position: absolute;
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        border: 1px solid var(--background);
+        background: var(--border-bright);
+      }
+
+      .handle.top {
+        top: -5px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: var(--route-loop);
+      }
+
+      .handle.bottom {
+        bottom: -5px;
+        left: 50%;
+        transform: translateX(-50%);
+      }
+
+      .route-port {
+        position: absolute;
+        right: -5px;
+        display: grid;
+        grid-template-columns: 1fr 9px;
+        gap: 6px;
+        align-items: center;
+        color: var(--text-secondary);
+        font-family: "JetBrains Mono", ui-monospace, monospace;
+        font-size: 10px;
+      }
+
+      .route-port span:first-child {
+        transform: translateX(-4px);
+      }
+
+      .route-port .port-dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        border: 1px solid var(--background);
+      }
+
+      .route-port.positive {
+        top: 38px;
+        color: var(--success);
+      }
+
+      .route-port.negative {
+        top: 66px;
+        color: var(--warning);
+      }
+
+      .route-port.exhausted {
+        top: 94px;
+        color: var(--error);
+      }
+
+      .route-port.positive .port-dot {
+        background: var(--success);
+      }
+
+      .route-port.negative .port-dot {
+        background: var(--warning);
+      }
+
+      .route-port.exhausted .port-dot {
+        background: var(--error);
+      }
+
+      .inspector-title {
+        padding: 12px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .tabs {
+        display: flex;
+        gap: 12px;
+        padding: 8px 12px 0;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .tab {
+        padding: 0 0 8px;
+        color: var(--text-secondary);
+      }
+
+      .tab.active {
+        color: var(--text-primary);
+        border-bottom: 1px solid var(--route-loop);
+      }
+
+      .field {
+        display: grid;
+        gap: 5px;
+        margin-bottom: 12px;
+      }
+
+      label {
+        color: var(--text-tertiary);
+        font-size: 10px;
+        text-transform: uppercase;
+      }
+
+      .text-field {
+        min-height: 30px;
+        width: 100%;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--surface-elevated);
+        color: var(--text-primary);
+        padding: 7px 8px;
+        font-family: "JetBrains Mono", ui-monospace, monospace;
+        font-size: 11px;
+      }
+
+      .route-table {
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        overflow: hidden;
+      }
+
+      .route-row {
+        display: grid;
+        grid-template-columns: 90px 1fr;
+        gap: 8px;
+        padding: 8px;
+        border-bottom: 1px solid var(--border);
+        align-items: center;
+      }
+
+      .route-row:last-child {
+        border-bottom: 0;
+      }
+
+      .route-name {
+        font-family: "JetBrains Mono", ui-monospace, monospace;
+      }
+
+      .route-name.positive {
+        color: var(--success);
+      }
+
+      .route-name.negative {
+        color: var(--warning);
+      }
+
+      .route-name.exhausted {
+        color: var(--error);
+      }
+
+      .problems {
+        position: absolute;
+        left: 24px;
+        right: 24px;
+        bottom: 18px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: rgba(32, 35, 42, 0.96);
+        overflow: hidden;
+      }
+
+      .problem-head,
+      .problem-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 10px;
+      }
+
+      .problem-head {
+        border-bottom: 1px solid var(--border);
+        font-weight: 650;
+      }
+
+      .problem-row {
+        color: var(--text-secondary);
+      }
+
+      .error-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--error);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <header class="toolbar">
+        <span class="title">Workflow Builder</span>
+        <input class="input" value="bmad-review-gate">
+        <input class="input" value="Route failed review back to fix work">
+        <button class="button">Validate</button>
+        <button class="button primary">Save</button>
+        <button class="button primary">Run</button>
+      </header>
+
+      <main class="main">
+        <aside class="library">
+          <div class="panel-head">
+            Node Library
+            <input class="input search" value="route">
+          </div>
+          <div class="section">
+            <p class="section-title">Quick Nodes</p>
+            <div class="lib-item"><span class="dot"></span><span>Route Loop</span></div>
+            <div class="lib-item"><span class="dot" style="background: var(--prompt)"></span><span>Prompt</span></div>
+            <div class="lib-item"><span class="dot" style="background: var(--bash)"></span><span>Bash</span></div>
+          </div>
+        </aside>
+
+        <section class="canvas" aria-label="Workflow graph mockup">
+          <svg class="edges" viewBox="0 0 980 650" preserveAspectRatio="none" aria-hidden="true">
+            <defs>
+              <marker id="arrow-neutral" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+                <path d="M0 0 L8 4 L0 8 Z" fill="var(--border-bright)"></path>
+              </marker>
+              <marker id="arrow-success" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+                <path d="M0 0 L8 4 L0 8 Z" fill="var(--success)"></path>
+              </marker>
+              <marker id="arrow-warning" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+                <path d="M0 0 L8 4 L0 8 Z" fill="var(--warning)"></path>
+              </marker>
+              <marker id="arrow-error" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+                <path d="M0 0 L8 4 L0 8 Z" fill="var(--error)"></path>
+              </marker>
+            </defs>
+            <path d="M185 224 V258 H375 V310" fill="none" stroke="var(--border-bright)" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter" marker-end="url(#arrow-neutral)"></path>
+            <path d="M465 350 H550" fill="none" stroke="var(--border-bright)" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter" marker-end="url(#arrow-neutral)"></path>
+            <path d="M775 330 H825 V185 H850" fill="none" stroke="var(--success)" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter" marker-end="url(#arrow-success)"></path>
+            <path d="M775 358 H810 V452 H185 V224" fill="none" stroke="var(--warning)" stroke-width="2" stroke-dasharray="8 5" stroke-linecap="square" stroke-linejoin="miter" marker-end="url(#arrow-warning)"></path>
+            <path d="M775 386 H825 V505 H850" fill="none" stroke="var(--error)" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter" marker-end="url(#arrow-error)"></path>
+          </svg>
+
+          <div class="node" style="left: 95px; top: 145px;">
+            <div class="stripe bash"></div>
+            <div class="node-body">
+              <div class="node-head">
+                <span class="badge bash">CMD</span>
+                <span class="node-title">fix</span>
+              </div>
+              <div class="preview">bmad-dev-story</div>
+              <div class="pills"><span class="pill">attempt 2</span></div>
+            </div>
+            <span class="handle bottom"></span>
+          </div>
+
+          <div class="node" style="left: 285px; top: 310px;">
+            <span class="handle top"></span>
+            <div class="stripe"></div>
+            <div class="node-body">
+              <div class="node-head">
+                <span class="badge">PROMPT</span>
+                <span class="node-title">review</span>
+              </div>
+              <div class="preview">$review.output.result</div>
+              <div class="pills"><span class="pill">output_format</span><span class="pill">attempt 2</span></div>
+            </div>
+            <span class="handle bottom"></span>
+          </div>
+
+          <div class="node route" style="left: 550px; top: 288px;">
+            <span class="handle top"></span>
+            <div class="stripe route"></div>
+            <div class="node-body">
+              <div class="node-head">
+                <span class="badge route">ROUTE</span>
+                <span class="node-title">review-router</span>
+              </div>
+              <div class="preview">$review.output.result == 'positive'</div>
+              <div class="pills"><span class="pill">from: review</span><span class="pill">max: 10</span></div>
+            </div>
+            <div class="route-port positive"><span>positive</span><span class="port-dot"></span></div>
+            <div class="route-port negative"><span>negative</span><span class="port-dot"></span></div>
+            <div class="route-port exhausted"><span>exhausted</span><span class="port-dot"></span></div>
+          </div>
+
+          <div class="node" style="left: 850px; top: 140px;">
+            <span class="handle top"></span>
+            <div class="stripe"></div>
+            <div class="node-body">
+              <div class="node-head">
+                <span class="badge">PROMPT</span>
+                <span class="node-title">merge-ready</span>
+              </div>
+              <div class="preview">Prepare handoff</div>
+              <div class="pills"><span class="pill">not_activated</span></div>
+            </div>
+          </div>
+
+          <div class="node" style="left: 850px; top: 470px; opacity: 0.58;">
+            <span class="handle top"></span>
+            <div class="stripe bash"></div>
+            <div class="node-body">
+              <div class="node-head">
+                <span class="badge bash">CMD</span>
+                <span class="node-title">escalate</span>
+              </div>
+              <div class="preview">Manual review path</div>
+              <div class="pills"><span class="pill">not_activated</span></div>
+            </div>
+          </div>
+
+          <div class="problems">
+            <div class="problem-head">Problems <span style="color: var(--success); font-weight: 500;">0 errors</span></div>
+            <div class="problem-row">
+              <span class="dot" style="background: var(--success)"></span>
+              <span>Route Loop is complete. Positive, negative, and exhausted routes are connected.</span>
+            </div>
+          </div>
+        </section>
+
+        <aside class="inspector">
+          <div class="inspector-title">
+            <span class="dot"></span>
+            <strong>review-router</strong>
+            <span style="color: var(--text-tertiary); margin-left: auto;">ROUTE</span>
+          </div>
+          <div class="tabs">
+            <span class="tab active">Route</span>
+            <span class="tab">Validation</span>
+            <span class="tab">Advanced</span>
+          </div>
+          <div class="section">
+            <div class="field">
+              <label>From Node</label>
+              <div class="text-field">review</div>
+            </div>
+            <div class="field">
+              <label>Condition</label>
+              <div class="text-field">$review.output.result == 'positive'</div>
+            </div>
+            <div class="field">
+              <label>Max Iterations</label>
+              <div class="text-field">10</div>
+            </div>
+            <div class="field">
+              <label>Routes</label>
+              <div class="route-table">
+                <div class="route-row">
+                  <span class="route-name positive">positive</span>
+                  <span class="text-field">merge-ready</span>
+                </div>
+                <div class="route-row">
+                  <span class="route-name negative">negative</span>
+                  <span class="text-field">fix</span>
+                </div>
+                <div class="route-row">
+                  <span class="route-name exhausted">exhausted</span>
+                  <span class="text-field">escalate</span>
+                </div>
+              </div>
+            </div>
+            <div class="field">
+              <label>Runtime Detail Preview</label>
+              <div class="text-field" style="line-height: 1.6;">
+                outcome: negative<br>
+                to: fix<br>
+                negative_count: 1<br>
+                max_iterations: 10
+              </div>
+            </div>
+          </div>
+        </aside>
+      </main>
+
+      <footer class="statusbar">
+        <span>5 nodes</span>
+        <span>5 edges</span>
+        <span>0 errors</span>
+        <span>Route outputs connected: positive, negative, exhausted</span>
+      </footer>
+    </div>
+  </body>
+</html>

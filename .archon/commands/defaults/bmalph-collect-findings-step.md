@@ -1,5 +1,5 @@
 ---
-description: Consolidate current-round findings and update the bmalph TEA review gate
+description: Consolidate final test-review findings and update the bmalph TEA gate
 argument-hint: (none - reads current round from workflow state)
 ---
 
@@ -22,12 +22,16 @@ Use the story selected by the `bmalph-implementation` node:
 
 ## Inputs
 
-Read all current-round finding files under `$ARTIFACTS_DIR/bmalph-dev-story-with-tea-fix-loop/findings/`:
+Read any current-round finding files that exist under `$ARTIFACTS_DIR/bmalph-dev-story-with-tea-fix-loop/findings/`:
 
 - `round-{round}-code-review.md`.
 - `round-{round}-test-review.md`.
 - `round-{round}-nfr.md`.
 - `round-{round}-trace.md`.
+
+In the current bmalph flow, `post-dev-quality-loop` owns the code review and remediation loop.
+The expected final finding file is `round-{round}-test-review.md` from `bmad-testarch-test-review`.
+Do not fail just because the code-review, nfr, or trace finding files are absent.
 
 Also read:
 

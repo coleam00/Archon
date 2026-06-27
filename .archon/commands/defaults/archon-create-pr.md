@@ -1,14 +1,13 @@
 ---
 description: Create a PR from current branch with implementation context
-argument-hint: [base-branch] (default: auto-detected from config or repo)
+argument-hint: (none - uses $BASE_BRANCH from config or repo)
 ---
 
 # Create Pull Request
 
-**Base branch override**: $ARGUMENTS
-**Default base branch**: $BASE_BRANCH
+**Base branch**: $BASE_BRANCH
 
-> If a base branch was provided as argument above, use it for `--base`. Otherwise use the default base branch.
+> Always use `$BASE_BRANCH` for `--base`. Do not infer or override the PR base from `$ARGUMENTS`.
 
 ---
 
@@ -85,7 +84,7 @@ git status --porcelain
 
 **If dirty**:
 
-1. Stage **only** the source files that are part of this change — never `git add -A`, `git add .`, or `git add -u`. List them by name:
+1. Stage **only** the source files that are part of this change - never `git add -A`, `git add .`, or `git add -u`. List them by name:
    ```bash
    git add path/to/file1 path/to/file2 ...
    git status --porcelain  # verify nothing else is staged
@@ -168,7 +167,7 @@ Or if the content is simple:
 gh pr create --fill --base $BASE_BRANCH
 ```
 
-After creating the PR, capture its identifiers for downstream steps. Only write artifacts if PR creation succeeded — never persist stale data from a pre-existing PR:
+After creating the PR, capture its identifiers for downstream steps. Only write artifacts if PR creation succeeded - never persist stale data from a pre-existing PR:
 
 ```bash
 # After creating the PR, capture and persist the PR number for downstream steps
