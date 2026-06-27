@@ -18,10 +18,10 @@ This spec is grounded in the current repository behavior and the full grill-me d
 - The new feature is a route controller loop and must not overload the existing `loop` node contract.
 - The current condition evaluator already supports `$node.output`, `$node.output.field`, `$node.field`, equality, numeric comparisons, `&&`, and `||`.
 - Current `when` parse failures skip nodes fail-closed, while route-loop condition failures must fail fast because the route controller is mandatory control flow.
-- Current event types include workflow events, node lifecycle events, loop iteration events, approval events, and retry events, but no `node_routed` event.
-- Current Web and console graph surfaces have fixed node-kind unions and do not know about `route_loop`.
-- A TDD guard has been added in [packages/workflows/src/dag-executor.test.ts](../../packages/workflows/src/dag-executor.test.ts) under `executeDagWorkflow -- route_loop end-to-end TDD`.
-- That test is expected to fail until the feature is implemented because `route_loop` is not yet a supported node mode.
+- Workflow event types now include `node_routed` for durable route-loop decisions and live Web/Slack bridge projection.
+- Web and console graph surfaces include `route_loop` in their fixed node-kind unions, builder serialization, run detail rendering, and retry guidance.
+- The original TDD guard lives in [packages/workflows/src/dag-executor.test.ts](../../packages/workflows/src/dag-executor.test.ts) under `executeDagWorkflow -- route_loop end-to-end TDD`.
+- The route-loop implementation is complete when that guard and the route-loop loader, persistence, API, and Web projection tests pass.
 
 ## User Scenarios & Testing _(mandatory)_
 
@@ -255,8 +255,8 @@ Verify workflows without `route_loop` still use current static DAG behavior and 
 - **FR-087**: `exhausted` MUST be a completed control-flow outcome and MUST NOT fail the route-loop node.
 - **FR-088**: System MUST emit a `node_routed` event for every route-loop outcome.
 - **FR-089**: `node_routed` events MUST use the same outcome names as YAML: `positive`, `negative`, and `exhausted`.
-- **FR-090**: `node_routed` event data MUST include `from`, `outcome`, `to`, `condition`, `condition_result`, `negative_count`, and `max_iterations`, where `condition` is the persisted safe condition representation rather than the raw author expression.
-- **FR-090A**: The persisted safe condition representation MUST preserve node references, field names, operators, and boolean structure while redacting non-structural literal comparison values and any future grammar token class that can carry secrets, prompts, PII, raw user content, git remotes, or unsafe raw errors.
+- **FR-090**: `node_routed` event data MUST include `from`, `outcome`, `to`, `condition`, `condition_result`, `negative_count`, and `max_iterations`, where `condition` is the persisted safe condition string rather than the raw author expression.
+- **FR-090A**: The persisted safe condition string MUST preserve node references, field names, operators, and boolean structure while redacting non-structural literal comparison values and any future grammar token class that can carry secrets, prompts, PII, raw user content, git remotes, or unsafe raw errors.
 - **FR-091**: `node_routed` event data MUST use snake_case metadata fields.
 - **FR-092**: `node_routed` events MUST include `negative_count` and `max_iterations` for every outcome.
 - **FR-093**: For `positive`, `node_routed` MUST record the negative count before resetting the loop counter.
@@ -336,7 +336,7 @@ Verify workflows without `route_loop` still use current static DAG behavior and 
 - **SC-004**: Existing workflows without `route_loop` continue to pass the current workflow test suite with no changed user-visible behavior.
 - **SC-005**: Run detail shows route decisions, selected targets, and counter state within one live refresh cycle after each route decision.
 - **SC-006**: The builder blocks saving or running route-loop nodes with missing required routes, missing `from`, mismatched input edge, or invalid route target.
-- **SC-007**: The route-loop TDD test in `packages/workflows/src/dag-executor.test.ts` passes after implementation and fails before implementation for the expected missing feature behavior.
+- **SC-007**: The route-loop regression test in `packages/workflows/src/dag-executor.test.ts` passes and covers negative, positive, and dormant exhausted-path behavior.
 
 ## Assumptions
 
@@ -363,13 +363,13 @@ Verify workflows without `route_loop` still use current static DAG behavior and 
 
 ## TDD Verification Artifact
 
-The requested TDD guard is implemented as a failing end-to-end style workflow executor test in [packages/workflows/src/dag-executor.test.ts](../../packages/workflows/src/dag-executor.test.ts).
+The requested TDD guard is implemented as an end-to-end style workflow executor regression test in [packages/workflows/src/dag-executor.test.ts](../../packages/workflows/src/dag-executor.test.ts).
 
 The test builds a route-loop workflow with prompt nodes and a mocked provider.
 The first review attempt returns `negative`, the second review attempt returns `positive`, and the expected execution order is `fix`, `review`, `fix`, `review`, `done`.
 The test also expects `node_routed` events for `negative` and `positive`, asserts that `escalation` does not run, and verifies the run completes rather than fails.
 
-This test intentionally fails before implementation because `route_loop` is not yet a supported node mode.
+This test was the original pre-implementation guard and now fails only if route-loop execution regresses.
 
 ## Decision Coverage Matrix
 

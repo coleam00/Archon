@@ -143,7 +143,7 @@ Rules:
 
 - Field names use snake_case.
 - Outcome values match YAML outcome names.
-- `condition` is a safe persisted representation, not raw author expression with literal values.
+- `condition` is a safe persisted string, not raw author expression with literal values.
 - `negative_count` is included for every outcome.
 - For `positive`, `negative_count` records the count before reset.
 - For `exhausted`, `condition_result` remains `false`.

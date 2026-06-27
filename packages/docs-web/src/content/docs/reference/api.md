@@ -228,6 +228,8 @@ curl -X POST http://localhost:3090/api/workflows/validate \
 ```
 
 Returns `{ valid: true }` or `{ valid: false, errors: ["..."] }`. Does not save anything.
+Workflow definitions can include `route_loop` DAG controller nodes with `from`, `condition`, `max_iterations`, and `routes.positive` / `routes.negative` / `routes.exhausted`.
+Invalid route-loop shapes are rejected during validation before execution.
 
 #### Save a Workflow
 
@@ -311,8 +313,36 @@ curl -X POST http://localhost:3090/api/workflows/runs/{runId}/nodes/{nodeId}/ret
 ```
 
 Retries the selected failed node and its current DAG descendants in the same run. The run must be failed, the node's latest effective status must be `failed`, and Web retry only applies to web-created runs with a web parent conversation. CLI-created or non-web runs should use `archon workflow retry-node <run-id> <node-id>`.
+Route-loop controller nodes are rejected as direct retry targets.
+Retry the node named by `route_loop.from` so the refreshed source output reaches the controller again.
 
 Success returns `{ success, message, runId, nodeId, retryEpoch, invalidatedNodes, safetyCommitSha? }`. The `safetyCommitSha` field is present when Archon created a safety ref before resetting the checkout.
+
+#### Run Detail Route Events
+
+`GET /api/workflows/runs/{runId}` includes raw workflow events and server-derived node states.
+Route-loop decisions appear as `node_routed` events with snake_case route metadata:
+
+```json
+{
+  "event_type": "node_routed",
+  "step_name": "review-router",
+  "data": {
+    "from": "review",
+    "outcome": "negative",
+    "to": "fix",
+    "condition": "$review.output.result == '<redacted>'",
+    "condition_result": false,
+    "negative_count": 1,
+    "max_iterations": 3,
+    "attempt": 1,
+    "execution_seq": 4
+  }
+}
+```
+
+The `condition` value is a safe redacted string, not the raw author expression.
+Historical route attempts remain in `events`, while current node summaries project the latest completed attempt.
 
 #### Approve / Reject a Paused Run
 
@@ -518,6 +548,7 @@ curl -N http://localhost:3090/api/stream/your-conversation-id
 ```
 
 Events are JSON-encoded with a `type` field. See the [Web UI documentation](/adapters/web/#sse-streaming) for the full list of event types.
+Live `node_routed` workflow events are forwarded as `dag_node` SSE payloads with `status: "completed"` and a `routeDecision` object containing the same route metadata.
 
 ---
 

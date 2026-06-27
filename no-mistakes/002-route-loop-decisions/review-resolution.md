@@ -8,21 +8,21 @@ Report Format Version: 1
 - Repository identifier or path: /Users/dale/Desktop/workspace/OceanLabs/workflow-engine/Archon
 - Branch: 002-route-loop-decisions
 - Base commit: 3c6527561c398fc2d2154043d3871cdd42acd472
-- Current/final head commit: 1e3a41e6870e6422649f9c2eaae929e86632683d
-- Review step status: running
+- Current/final head commit: a633a20881905c004843ea4045b6903b4b9659c9
+- Review step status: completed
 - Report lifecycle state: in_progress
 - First generated timestamp: 2026-06-27T13:39:10Z
-- Last refreshed timestamp: 2026-06-27T13:39:10Z
+- Last refreshed timestamp: 2026-06-27T14:10:15Z
 - Finalized timestamp: not finalized
 - Repo report path: /Users/dale/.archon/workspaces/coleam00/archon/worktrees/archon/thread-07a17cd4/no-mistakes/002-route-loop-decisions/review-resolution.md
 
 ## Counts
 
 - Resolved: 0
-- Accepted Without Fix: 0
+- Accepted Without Fix: 1
 - Informational / No Action Required: 0
 - Still Open: 9
-- Total Entries: 9
+- Total Entries: 10
 
 ## Resolved Issues
 
@@ -30,7 +30,41 @@ No issues in this category.
 
 ## Accepted Without Fix
 
-No issues in this category.
+### route-loop-scheduled-target-skipped-by-prior-success
+
+- Finding ID: route-loop-scheduled-target-skipped-by-prior-success
+- Severity: error
+- File and line: packages/workflows/src/dag-executor.ts:3333
+- Action: auto-fix
+- Source: agent
+- Review round ID: 2
+- Description: Route-loop rerun scheduling bypasses the in-memory \`nodeOutputs\` cache, but it still falls through to the older prior-success retry shortcut. In a manual retry where the selected route target was completed earlier but is not a static descendant of the retry target, the new route decision is ignored and the stale output is reused; gate this shortcut for scheduled route reruns and replace the stale cached output when the target executes.
+- Context: unavailable in historical data
+- Suggested/proposed fix: unavailable in historical data
+- Risk level: unavailable in historical data
+- Risk rationale: unavailable in historical data
+- User instructions: not recorded
+- Outcome: Accepted Without Fix
+- Outcome evidence and provenance: Persisted Review terminal decision accepted the finding without a fix.
+- Selection source: not recorded
+- Decision action: approve
+- Decision actor/source: user
+- Decision timestamp: 2026-06-27T14:10:15Z
+- Decision round ID: 01KW4PNCFFTEFWJTFPVZDDB2TY
+- Decision reason: approved without fix
+- Fix round ID: not recorded
+- Applied Solution Source: not applicable
+- Applied solution or attempted solution: not recorded
+- Rationale: not recorded
+- Changed files: not recorded
+- Fix commit SHA: not recorded
+- No-commit reason: not recorded
+- Verification text: accepted without fix by user
+- Follow-up round ID: not recorded
+- Scope-equivalence note: not recorded
+- Verifier source: review terminal decision
+- Evidence reference: persisted review resolution decision 01KW4PNCFFTEFWJTFPVZDDB2TY
+- Evidence quality: structured
 
 ## Informational / No Action Required
 
@@ -54,25 +88,25 @@ No issues in this category.
 - User instructions: not recorded
 - Outcome: Still Open
 - Outcome evidence and provenance: No persisted acceptance or comparable resolved evidence was recorded.
-- Selection source: not recorded
-- Decision action: not recorded
-- Decision actor/source: not recorded
-- Decision timestamp: not recorded
-- Decision round ID: not recorded
-- Decision reason: not recorded
-- Fix round ID: not recorded
-- Applied Solution Source: not applicable
-- Applied solution or attempted solution: not recorded
-- Rationale: not recorded
-- Changed files: not recorded
-- Fix commit SHA: not recorded
+- Selection source: user
+- Decision action: fix
+- Decision actor/source: user
+- Decision timestamp: 2026-06-27T13:39:10Z
+- Decision round ID: 01KW4MWFBAB2NK5WVBVGM6MF1F
+- Decision reason: selected for fix
+- Fix round ID: 2
+- Applied Solution Source: fix agent structured output
+- Applied solution or attempted solution: Static cycle detection now ignores route-loop outcome edges.
+- Rationale: Route outcomes are conditional runtime transitions, not static depends\\\_on edges, so they should not create builder dependency cycles.
+- Changed files: packages/web/src/lib/dag-layout.test.ts, packages/web/src/lib/dag-layout.ts
+- Fix commit SHA: a633a20881905c004843ea4045b6903b4b9659c9
 - No-commit reason: not recorded
 - Verification text: verification inconclusive
 - Follow-up round ID: not recorded
 - Scope-equivalence note: no comparable parsed follow-up evidence
 - Verifier source: report classifier
-- Evidence reference: latest Review evidence round 1
-- Evidence quality: unavailable
+- Evidence reference: persisted review resolution decision 01KW4MWFBAB2NK5WVBVGM6MF1F
+- Evidence quality: structured
 
 ### builder-route-loop-input-source-not-synced
 
@@ -90,25 +124,25 @@ No issues in this category.
 - User instructions: not recorded
 - Outcome: Still Open
 - Outcome evidence and provenance: No persisted acceptance or comparable resolved evidence was recorded.
-- Selection source: not recorded
-- Decision action: not recorded
-- Decision actor/source: not recorded
-- Decision timestamp: not recorded
-- Decision round ID: not recorded
-- Decision reason: not recorded
-- Fix round ID: not recorded
-- Applied Solution Source: not applicable
-- Applied solution or attempted solution: not recorded
-- Rationale: not recorded
-- Changed files: not recorded
-- Fix commit SHA: not recorded
+- Selection source: user
+- Decision action: fix
+- Decision actor/source: user
+- Decision timestamp: 2026-06-27T13:39:10Z
+- Decision round ID: 01KW4MWFBAB2NK5WVBVGM6MF1F
+- Decision reason: selected for fix
+- Fix round ID: 2
+- Applied Solution Source: fix agent structured output
+- Applied solution or attempted solution: Route-loop source data is now the serialization source of truth, with edge connect/delete and inspector updates syncing route data and edges.
+- Rationale: This removes the stale split between route\\\_loop.from and the visible input edge when users reconnect or edit the source.
+- Changed files: packages/web/src/components/workflows/WorkflowBuilder.tsx, packages/web/src/components/workflows/WorkflowCanvas.test.ts, packages/web/src/components/workflows/WorkflowCanvas.tsx
+- Fix commit SHA: a633a20881905c004843ea4045b6903b4b9659c9
 - No-commit reason: not recorded
 - Verification text: verification inconclusive
 - Follow-up round ID: not recorded
 - Scope-equivalence note: no comparable parsed follow-up evidence
 - Verifier source: report classifier
-- Evidence reference: latest Review evidence round 1
-- Evidence quality: unavailable
+- Evidence reference: persisted review resolution decision 01KW4MWFBAB2NK5WVBVGM6MF1F
+- Evidence quality: structured
 
 ### builder-route-loop-route-edge-stale-state
 
@@ -126,25 +160,25 @@ No issues in this category.
 - User instructions: not recorded
 - Outcome: Still Open
 - Outcome evidence and provenance: No persisted acceptance or comparable resolved evidence was recorded.
-- Selection source: not recorded
-- Decision action: not recorded
-- Decision actor/source: not recorded
-- Decision timestamp: not recorded
-- Decision round ID: not recorded
-- Decision reason: not recorded
-- Fix round ID: not recorded
-- Applied Solution Source: not applicable
-- Applied solution or attempted solution: not recorded
-- Rationale: not recorded
-- Changed files: not recorded
-- Fix commit SHA: not recorded
+- Selection source: user
+- Decision action: fix
+- Decision actor/source: user
+- Decision timestamp: 2026-06-27T13:39:10Z
+- Decision round ID: 01KW4MWFBAB2NK5WVBVGM6MF1F
+- Decision reason: selected for fix
+- Fix round ID: 2
+- Applied Solution Source: fix agent structured output
+- Applied solution or attempted solution: Route-loop route targets now serialize from synced node data, and route edge changes clear or rebuild matching route fields.
+- Rationale: Deleting an edge can no longer preserve a hidden old target, and inspector edits are no longer overridden by stale edges.
+- Changed files: packages/web/src/components/workflows/WorkflowBuilder.tsx, packages/web/src/components/workflows/WorkflowCanvas.test.ts, packages/web/src/components/workflows/WorkflowCanvas.tsx
+- Fix commit SHA: a633a20881905c004843ea4045b6903b4b9659c9
 - No-commit reason: not recorded
 - Verification text: verification inconclusive
 - Follow-up round ID: not recorded
 - Scope-equivalence note: no comparable parsed follow-up evidence
 - Verifier source: report classifier
-- Evidence reference: latest Review evidence round 1
-- Evidence quality: unavailable
+- Evidence reference: persisted review resolution decision 01KW4MWFBAB2NK5WVBVGM6MF1F
+- Evidence quality: structured
 
 ### parallel-route-loop-stale-cas
 
@@ -162,25 +196,25 @@ No issues in this category.
 - User instructions: not recorded
 - Outcome: Still Open
 - Outcome evidence and provenance: No persisted acceptance or comparable resolved evidence was recorded.
-- Selection source: not recorded
-- Decision action: not recorded
-- Decision actor/source: not recorded
-- Decision timestamp: not recorded
-- Decision round ID: not recorded
-- Decision reason: not recorded
-- Fix round ID: not recorded
-- Applied Solution Source: not applicable
-- Applied solution or attempted solution: not recorded
-- Rationale: not recorded
-- Changed files: not recorded
-- Fix commit SHA: not recorded
+- Selection source: user
+- Decision action: fix
+- Decision actor/source: user
+- Decision timestamp: 2026-06-27T13:39:10Z
+- Decision round ID: 01KW4MWFBAB2NK5WVBVGM6MF1F
+- Decision reason: selected for fix
+- Fix round ID: 2
+- Applied Solution Source: fix agent structured output
+- Applied solution or attempted solution: Route-loop decisions are serialized through an in-run queue before metadata calculation and persistence.
+- Rationale: Each parallel controller now observes the latest persisted execution sequence before computing its own transition.
+- Changed files: packages/workflows/src/dag-executor.test.ts, packages/workflows/src/dag-executor.ts
+- Fix commit SHA: a633a20881905c004843ea4045b6903b4b9659c9
 - No-commit reason: not recorded
 - Verification text: verification inconclusive
 - Follow-up round ID: not recorded
 - Scope-equivalence note: no comparable parsed follow-up evidence
 - Verifier source: report classifier
-- Evidence reference: latest Review evidence round 1
-- Evidence quality: unavailable
+- Evidence reference: persisted review resolution decision 01KW4MWFBAB2NK5WVBVGM6MF1F
+- Evidence quality: structured
 
 ### route-loop-descendants-stay-skipped
 
@@ -198,25 +232,25 @@ No issues in this category.
 - User instructions: not recorded
 - Outcome: Still Open
 - Outcome evidence and provenance: No persisted acceptance or comparable resolved evidence was recorded.
-- Selection source: not recorded
-- Decision action: not recorded
-- Decision actor/source: not recorded
-- Decision timestamp: not recorded
-- Decision round ID: not recorded
-- Decision reason: not recorded
-- Fix round ID: not recorded
-- Applied Solution Source: not applicable
-- Applied solution or attempted solution: not recorded
-- Rationale: not recorded
-- Changed files: not recorded
-- Fix commit SHA: not recorded
+- Selection source: user
+- Decision action: fix
+- Decision actor/source: user
+- Decision timestamp: 2026-06-27T13:39:10Z
+- Decision round ID: 01KW4MWFBAB2NK5WVBVGM6MF1F
+- Decision reason: selected for fix
+- Fix round ID: 2
+- Applied Solution Source: fix agent structured output
+- Applied solution or attempted solution: Inactive route branches remain pending outside nodeOutputs, and descendants with inactive route-target ancestors wait instead of recording skipped outputs.
+- Rationale: Avoiding cached pending or skipped state lets selected target descendants run naturally after the route decision.
+- Changed files: packages/workflows/src/dag-executor.test.ts, packages/workflows/src/dag-executor.ts
+- Fix commit SHA: a633a20881905c004843ea4045b6903b4b9659c9
 - No-commit reason: not recorded
 - Verification text: verification inconclusive
 - Follow-up round ID: not recorded
 - Scope-equivalence note: no comparable parsed follow-up evidence
 - Verifier source: report classifier
-- Evidence reference: latest Review evidence round 1
-- Evidence quality: unavailable
+- Evidence reference: persisted review resolution decision 01KW4MWFBAB2NK5WVBVGM6MF1F
+- Evidence quality: structured
 
 ### route-loop-resume-replays-decision
 
@@ -234,25 +268,25 @@ No issues in this category.
 - User instructions: not recorded
 - Outcome: Still Open
 - Outcome evidence and provenance: No persisted acceptance or comparable resolved evidence was recorded.
-- Selection source: not recorded
-- Decision action: not recorded
-- Decision actor/source: not recorded
-- Decision timestamp: not recorded
-- Decision round ID: not recorded
-- Decision reason: not recorded
-- Fix round ID: not recorded
-- Applied Solution Source: not applicable
-- Applied solution or attempted solution: not recorded
-- Rationale: not recorded
-- Changed files: not recorded
-- Fix commit SHA: not recorded
+- Selection source: user
+- Decision action: fix
+- Decision actor/source: user
+- Decision timestamp: 2026-06-27T13:39:10Z
+- Decision round ID: 01KW4MWFBAB2NK5WVBVGM6MF1F
+- Decision reason: selected for fix
+- Fix round ID: 2
+- Applied Solution Source: fix agent structured output
+- Applied solution or attempted solution: The route decision transaction now also writes the route controller node\\\_completed output.
+- Rationale: Resume hydration already reads completed-node outputs, so persisting the controller output in the same transaction prevents decision replay.
+- Changed files: packages/core/src/db/workflows.resume-cas.integration.test.ts, packages/core/src/db/workflows.test.ts, packages/core/src/db/workflows.ts, packages/workflows/src/dag-executor.ts, packages/workflows/src/store.ts
+- Fix commit SHA: a633a20881905c004843ea4045b6903b4b9659c9
 - No-commit reason: not recorded
 - Verification text: verification inconclusive
 - Follow-up round ID: not recorded
 - Scope-equivalence note: no comparable parsed follow-up evidence
 - Verifier source: report classifier
-- Evidence reference: latest Review evidence round 1
-- Evidence quality: unavailable
+- Evidence reference: persisted review resolution decision 01KW4MWFBAB2NK5WVBVGM6MF1F
+- Evidence quality: structured
 
 ### route-loop-root-targets-run-early
 
@@ -270,25 +304,25 @@ No issues in this category.
 - User instructions: not recorded
 - Outcome: Still Open
 - Outcome evidence and provenance: No persisted acceptance or comparable resolved evidence was recorded.
-- Selection source: not recorded
-- Decision action: not recorded
-- Decision actor/source: not recorded
-- Decision timestamp: not recorded
-- Decision round ID: not recorded
-- Decision reason: not recorded
-- Fix round ID: not recorded
-- Applied Solution Source: not applicable
-- Applied solution or attempted solution: not recorded
-- Rationale: not recorded
-- Changed files: not recorded
-- Fix commit SHA: not recorded
+- Selection source: user
+- Decision action: fix
+- Decision actor/source: user
+- Decision timestamp: 2026-06-27T13:39:10Z
+- Decision round ID: 01KW4MWFBAB2NK5WVBVGM6MF1F
+- Decision reason: selected for fix
+- Fix round ID: 2
+- Applied Solution Source: fix agent structured output
+- Applied solution or attempted solution: Route targets now activate only when they are on the initial static path to a route controller or selected by a route decision.
+- Rationale: This preserves legitimate initial negative-path setup while preventing positive or exhausted root targets from running before selection.
+- Changed files: packages/workflows/src/dag-executor.test.ts, packages/workflows/src/dag-executor.ts
+- Fix commit SHA: a633a20881905c004843ea4045b6903b4b9659c9
 - No-commit reason: not recorded
 - Verification text: verification inconclusive
 - Follow-up round ID: not recorded
 - Scope-equivalence note: no comparable parsed follow-up evidence
 - Verifier source: report classifier
-- Evidence reference: latest Review evidence round 1
-- Evidence quality: unavailable
+- Evidence reference: persisted review resolution decision 01KW4MWFBAB2NK5WVBVGM6MF1F
+- Evidence quality: structured
 
 ### route-loop-stale-activations-after-retry
 
@@ -306,25 +340,25 @@ No issues in this category.
 - User instructions: not recorded
 - Outcome: Still Open
 - Outcome evidence and provenance: No persisted acceptance or comparable resolved evidence was recorded.
-- Selection source: not recorded
-- Decision action: not recorded
-- Decision actor/source: not recorded
-- Decision timestamp: not recorded
-- Decision round ID: not recorded
-- Decision reason: not recorded
-- Fix round ID: not recorded
-- Applied Solution Source: not applicable
-- Applied solution or attempted solution: not recorded
-- Rationale: not recorded
-- Changed files: not recorded
-- Fix commit SHA: not recorded
+- Selection source: user
+- Decision action: fix
+- Decision actor/source: user
+- Decision timestamp: 2026-06-27T13:39:10Z
+- Decision round ID: 01KW4MWFBAB2NK5WVBVGM6MF1F
+- Decision reason: selected for fix
+- Fix round ID: 2
+- Applied Solution Source: fix agent structured output
+- Applied solution or attempted solution: Resume hydration now uses only the latest activation per controller and ignores activations for retry-invalidated controllers.
+- Rationale: Historical targets no longer remain active after a newer decision or a retry that must re-evaluate the controller.
+- Changed files: packages/workflows/src/dag-executor.test.ts, packages/workflows/src/dag-executor.ts
+- Fix commit SHA: a633a20881905c004843ea4045b6903b4b9659c9
 - No-commit reason: not recorded
 - Verification text: verification inconclusive
 - Follow-up round ID: not recorded
 - Scope-equivalence note: no comparable parsed follow-up evidence
 - Verifier source: report classifier
-- Evidence reference: latest Review evidence round 1
-- Evidence quality: unavailable
+- Evidence reference: persisted review resolution decision 01KW4MWFBAB2NK5WVBVGM6MF1F
+- Evidence quality: structured
 
 ### route-loop-transaction-not-pinned
 
@@ -342,22 +376,22 @@ No issues in this category.
 - User instructions: not recorded
 - Outcome: Still Open
 - Outcome evidence and provenance: No persisted acceptance or comparable resolved evidence was recorded.
-- Selection source: not recorded
-- Decision action: not recorded
-- Decision actor/source: not recorded
-- Decision timestamp: not recorded
-- Decision round ID: not recorded
-- Decision reason: not recorded
-- Fix round ID: not recorded
-- Applied Solution Source: not applicable
-- Applied solution or attempted solution: not recorded
-- Rationale: not recorded
-- Changed files: not recorded
-- Fix commit SHA: not recorded
+- Selection source: user
+- Decision action: fix
+- Decision actor/source: user
+- Decision timestamp: 2026-06-27T13:39:10Z
+- Decision round ID: 01KW4MWFBAB2NK5WVBVGM6MF1F
+- Decision reason: selected for fix
+- Fix round ID: 2
+- Applied Solution Source: fix agent structured output
+- Applied solution or attempted solution: Route decision persistence now uses the database transaction API and a transaction-scoped query function.
+- Rationale: The existing adapter transaction abstraction pins Postgres work to one client and keeps SQLite behavior atomic without duplicating transaction handling.
+- Changed files: packages/core/src/db/workflows.resume-cas.integration.test.ts, packages/core/src/db/workflows.test.ts, packages/core/src/db/workflows.ts
+- Fix commit SHA: a633a20881905c004843ea4045b6903b4b9659c9
 - No-commit reason: not recorded
 - Verification text: verification inconclusive
 - Follow-up round ID: not recorded
 - Scope-equivalence note: no comparable parsed follow-up evidence
 - Verifier source: report classifier
-- Evidence reference: latest Review evidence round 1
-- Evidence quality: unavailable
+- Evidence reference: persisted review resolution decision 01KW4MWFBAB2NK5WVBVGM6MF1F
+- Evidence quality: structured

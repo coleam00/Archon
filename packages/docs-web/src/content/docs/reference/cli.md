@@ -288,6 +288,9 @@ archon workflow retry-node <run-id> <node-id>
 
 `retry-node` streams execution output like `workflow resume` and does **not** support `--json` in v1. The command verifies the recorded working path still points at the expected repository or Archon-managed worktree before any git mutation. For workflows that can mutate the checkout, Archon creates local safety/checkpoint refs under `refs/archon/`, resets tracked files to the selected checkpoint, preserves untracked files, and keeps successful upstream/sibling outputs.
 
+Route-loop controller nodes are not valid retry targets.
+If a failed route-loop run needs a fresh route decision, retry the node named by `route_loop.from`; the new source output will flow through the controller again.
+
 ### `workflow abandon`
 
 Discard a workflow run (marks it as `cancelled`). Use this to unblock a worktree when you don't want to resume — the path lock is released immediately so a new workflow can start.

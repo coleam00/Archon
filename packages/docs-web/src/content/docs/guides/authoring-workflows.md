@@ -20,6 +20,7 @@ A workflow is a **YAML file** that defines a directed acyclic graph (DAG) of com
 - **Conditional branching**: Route to different paths based on node output
 - **Artifact passing**: Output from one node becomes input for downstream nodes
 - **Iterative loops**: Loop nodes repeat until a completion signal
+- **Route loops**: Controller nodes route review outcomes to positive, negative, or exhausted paths
 
 ```yaml
 name: fix-github-issue
@@ -187,6 +188,7 @@ nodes:
 | `bash` | string | Shell script (no AI). Stdout captured as `$nodeId.output`. Optional `timeout` (ms, default 120000) |
 | `script` | string | TypeScript/JavaScript (via `bun`) or Python (via `uv`) — inline code or named reference to `.archon/scripts/`. Stdout captured as `$nodeId.output`. Requires `runtime: bun` or `runtime: uv`. Optional `deps` (uv only) and `timeout` (ms, default 120000). See [Script Nodes](/guides/script-nodes/) |
 | `loop` | object | Iterative AI prompt until completion signal. See [Loop Nodes](/guides/loop-nodes/) |
+| `route_loop` | object | Bounded route controller with `positive`, `negative`, and `exhausted` targets. See [Route Loop Nodes](/guides/route-loop-nodes/) |
 | `approval` | object | Pauses workflow for human review. See [Approval Nodes](/guides/approval-nodes/) |
 | `cancel` | string | Terminates the workflow run with a reason string. Uses existing cancellation plumbing — in-flight parallel nodes are stopped |
 
@@ -203,6 +205,9 @@ nodes:
 | `retry` | object | — | Per-node retry configuration. See [Retry Configuration](#retry-configuration) |
 | `always_run` | boolean | `false` | Opt out of resume caching: re-run this node on resume even if a prior run completed it. See [Opting Out of Resume Caching](#opting-out-of-resume-caching) |
 | `output_type` | string | — | Semantic label for this node's output (e.g. `'plan'`, `'findings'`, `'code'`). When set, the executor writes `$ARTIFACTS_DIR/nodes/<id>.md` + `<id>.meta.json` after the node completes (best-effort) so later nodes and runs can locate output by type instead of guessing filenames. See [The Artifact Chain](#the-artifact-chain) |
+
+`route_loop` controller nodes are a narrow exception to the common-field table: they must declare exactly one `depends_on` entry equal to `route_loop.from`, and they reject `when`, `trigger_rule`, and `retry`.
+They also do not use AI node options such as `provider`, `model`, `output_format`, `allowed_tools`, `hooks`, `mcp`, or `skills`.
 
 **AI node options** — apply to `command` and `prompt` nodes:
 
@@ -394,6 +399,59 @@ status=$emit.output.status
 **Rule:** use `var=$node.output.field`, never `var="$node.output.field"`. This applies whether the output is small (single-quoted inline) or large (`$(cat ...)`). Numeric and boolean fields are injected raw (without quotes), so double-quoting accidentally "works" for them — making the bug intermittent and hard to spot.
 :::
 
+### `route_loop` for Controlled Review Loops
+
+Use `route_loop` when a review or quality gate should route back to explicit fix work on failure, route forward on success, and route to escalation when the retry budget is exhausted.
+It is a controller node, not an AI prompt loop.
+
+```yaml
+nodes:
+  - id: fix
+    prompt: "Make the required fix."
+
+  - id: review
+    depends_on: [fix]
+    prompt: "Review the fix and return JSON."
+    output_format:
+      type: object
+      properties:
+        result:
+          type: string
+          enum: [positive, negative]
+      required: [result]
+
+  - id: review-router
+    depends_on: [review]
+    route_loop:
+      from: review
+      condition: "$review.output.result == 'positive'"
+      max_iterations: 3
+      routes:
+        positive: done
+        negative: fix
+        exhausted: escalation
+
+  - id: done
+    depends_on: [review-router]
+    bash: "echo done"
+
+  - id: escalation
+    depends_on: [review-router]
+    bash: "echo escalation"
+```
+
+`route_loop.condition` uses the same condition grammar as `when:`, but every node reference must point at `route_loop.from`.
+Whole-output conditions do not require `output_format`; field conditions require the source field to be declared in `output_format.properties`.
+If the condition cannot be parsed, or a referenced field is not declared or cannot be resolved, the route-loop node fails instead of silently choosing a route.
+
+`routes.positive` is activated when the condition is true.
+`routes.negative` is activated while false-result budget remains.
+`routes.exhausted` is activated after the false-result budget is consumed.
+Unselected route targets stay dormant and are not marked as skipped.
+
+Each decision emits `node_routed` and completes the route-loop node with JSON route metadata, including `outcome`, selected target, redacted condition, `negative_count`, `max_iterations`, attempt, and execution sequence.
+See [Route Loop Nodes](/guides/route-loop-nodes/) for validation rules, retry behavior, and Web Builder details.
+
 ### `output_format` for Structured JSON
 
 Use `output_format` to enforce JSON output from an AI node. For Claude, the schema is passed via the SDK's `outputFormat` option and `structured_output` is used directly. For Codex (v0.116.0+), the schema is passed via `TurnOptions.outputSchema` and the agent's inline JSON response is used. Both ensure clean JSON for `when:` conditions and `$nodeId.output` substitution:
@@ -584,6 +642,9 @@ archon workflow retry-node <run-id> <node-id>
 ```
 
 Manual node retry preserves completed upstream and sibling outputs, invalidates the target node plus descendants, and runs that branch again with a fresh retry epoch. For workflows that can mutate the checkout, Archon stores local checkpoint/safety refs and resets tracked files before retry execution; `mutates_checkout: false` workflows skip the checkout reset.
+
+Route-loop controller nodes are not directly retryable.
+If a route loop fails or needs a new decision, retry the node named by `route_loop.from`; Archon will run the new source output through the controller again.
 
 **Known limitation**: AI session context from prior nodes is not restored. If a downstream node relies on in-context knowledge from a prior run's session (rather than artifacts), it may need to re-read those artifacts explicitly.
 
@@ -1339,7 +1400,7 @@ Before deploying a workflow:
 ## Summary
 
 1. **Workflows orchestrate commands** — YAML files defining a DAG of execution nodes
-2. **`nodes:` define the graph** — each node runs a command, inline prompt, bash script, or loop
+2. **`nodes:` define the graph** - each node uses a mode such as command, prompt, bash, script, loop, route loop, approval, or cancel
 3. **Artifacts are the glue** — commands communicate via files, not in-memory context
 4. **`context: fresh`** — forces a fresh AI session for a node (works from artifacts only)
 5. **Parallel by default** — nodes in the same topological layer run concurrently
@@ -1357,5 +1418,6 @@ Before deploying a workflow:
 17. **`sandbox`** — OS-level filesystem/network restrictions per node or workflow (Claude only)
 18. **`output_type`** — tag a node's output with a semantic type; the engine writes a typed sidecar (`$ARTIFACTS_DIR/nodes/<id>.md` + `.meta.json`) for cross-node/cross-run lookup by type (any node type)
 19. **Loop nodes** — use `loop:` within a DAG node for iterative execution until completion signal
-20. **Defaults as templates** — browse `.archon/workflows/defaults/` for real examples to copy and modify
-21. **Test thoroughly** — each command, the artifact flow, and edge cases
+20. **Route-loop nodes** - use `route_loop:` to route review outcomes through positive, negative, and exhausted paths
+21. **Defaults as templates** - browse `.archon/workflows/defaults/` for real examples to copy and modify
+22. **Test thoroughly** - each command, the artifact flow, and edge cases

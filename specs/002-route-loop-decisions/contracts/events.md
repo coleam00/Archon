@@ -15,12 +15,7 @@ type WorkflowEventType = 'node_routed' | ExistingWorkflowEventType;
   "from": "review",
   "outcome": "negative",
   "to": "fix",
-  "condition": {
-    "type": "comparison",
-    "left": "$review.output.result",
-    "operator": "==",
-    "right": "<redacted>"
-  },
+  "condition": "$review.output.result == '<redacted>'",
   "condition_result": false,
   "negative_count": 1,
   "max_iterations": 10,
@@ -34,23 +29,23 @@ type WorkflowEventType = 'node_routed' | ExistingWorkflowEventType;
 - `from` is the source node declared by `route_loop.from`.
 - `outcome` is one of `positive`, `negative`, or `exhausted`.
 - `to` is the selected route target.
-- `condition` is the persisted safe condition representation.
+- `condition` is the persisted safe condition string.
 - `condition_result` is true only for `positive`.
 - `negative_count` is included for every outcome.
 - `max_iterations` is included for every outcome.
 - `attempt` is the route-loop controller attempt number.
 - `execution_seq` is the global workflow execution sequence number.
 
-## Safe Condition Representation
+## Safe Condition String
 
-The safe representation must preserve:
+The safe string must preserve:
 
 - Node references.
 - Field names.
 - Operators.
 - Boolean structure.
 
-The safe representation must redact:
+The safe string must redact:
 
 - Literal comparison values.
 - Any future grammar token that can carry secrets.

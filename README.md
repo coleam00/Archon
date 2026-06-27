@@ -217,7 +217,7 @@ Register a project by clicking **+** next to "Project" in the chat sidebar - ent
 **Key pages:**
 - **Chat** - Conversation interface with real-time streaming and tool call visualization
 - **Dashboard** - Mission Control for monitoring running workflows, with filterable history by project, status, and date
-- **Workflow Builder** - Visual drag-and-drop editor for creating DAG workflows with loop nodes
+- **Workflow Builder** - Visual drag-and-drop editor for creating DAG workflows with loop and route-loop nodes
 - **Workflow Execution** - Step-by-step progress view for any running or completed workflow
 
 **Monitoring hub:** The sidebar shows conversations from **all platforms** - not just the web. Workflows kicked off from the CLI, messages from Slack or Telegram, GitHub issue interactions - everything appears in one place.

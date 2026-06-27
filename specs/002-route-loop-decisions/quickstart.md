@@ -5,28 +5,30 @@
 Use Bun from the repository root.
 Do not run root `bun test`, because it mixes Bun `mock.module()` state across packages.
 
-## Run The Existing TDD Guard
+## Run The Route-Loop Regression Guard
 
-The feature spec points to an intentionally failing route-loop TDD guard in `packages/workflows/src/dag-executor.test.ts`.
-Run it before implementation to confirm the missing feature is reproduced.
+The feature spec points to the route-loop end-to-end guard in `packages/workflows/src/dag-executor.test.ts`.
+Run it to verify the implemented route-loop behavior still works.
 
 ```bash
 bun test packages/workflows/src/dag-executor.test.ts -t "reruns a negative route path until the route_loop condition passes"
 bun test packages/workflows/src/dag-executor.test.ts
 ```
 
-Expected pre-implementation result:
+Expected result:
 
-- The route-loop end-to-end TDD case fails because `route_loop` is not yet a supported node mode.
-- The focused TDD guard stops after `fix`, `review` before implementation and expects `fix`, `review`, `fix`, `review`, `done`.
-- Existing non-route DAG tests should continue to describe current behavior.
+- The focused guard passes and verifies `fix`, `review`, `fix`, `review`, `done`.
+- The route-loop tests verify `node_routed` metadata, negative reruns, positive exits, and exhausted exits.
+- Existing non-route DAG tests continue to describe static DAG behavior.
 
-## Implement In Focused Slices
+## Maintenance Focus Areas
 
-Start with schema and loader validation.
-Then implement route activation runtime behavior.
-Then wire events, API projection, and Web authoring.
-Keep the existing `loop` node tests passing after every slice.
+When changing this feature, keep the same slices isolated:
+
+- Schema and loader validation.
+- Route activation runtime behavior.
+- Events, API projection, and Web authoring.
+- Existing `loop` node behavior, which must remain separate from `route_loop`.
 
 ## Focused Validation Commands
 

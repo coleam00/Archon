@@ -1090,15 +1090,15 @@ remote_agent_workflow_runs
 ├── conversation_id (UUID -> remote_agent_conversations.id)
 ├── codebase_id (UUID -> remote_agent_codebases.id)
 ├── workflow_name (VARCHAR)
-├── status (VARCHAR) -- 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
+├── status (VARCHAR) -- 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused'
 ├── parent_conversation_id (UUID) -- Parent chat that dispatched this run
 ├── user_id (UUID -> remote_agent_users.id, ON DELETE SET NULL) -- User who triggered the run
-└── metadata (JSONB)
+└── metadata (JSONB) -- Approval, retry, and route-loop runtime state
 
 remote_agent_workflow_events
 ├── id (UUID)
 ├── workflow_run_id (UUID -> remote_agent_workflow_runs.id)
-├── event_type (VARCHAR) -- see WorkflowEventType
+├── event_type (VARCHAR) -- see WorkflowEventType, including node_routed route-loop decisions
 ├── step_index (INTEGER)
 ├── step_name (VARCHAR)
 ├── data (JSONB) -- Event-specific data

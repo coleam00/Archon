@@ -35,4 +35,4 @@ Route-loop controller nodes must not be directly retryable through API retry sur
 
 ## Security
 
-APIs must return the safe condition representation and must not expose raw comparison literals that can carry secrets, prompts, user message content, PII, git remotes, file paths, or unsafe raw errors.
+APIs must return the safe condition string and must not expose raw comparison literals that can carry secrets, prompts, user message content, PII, git remotes, file paths, or unsafe raw errors.

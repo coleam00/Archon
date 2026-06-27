@@ -32,7 +32,7 @@ Re-check after Phase 1 design._
 - **Type/schema contracts**: PASS - add Zod schemas for `route_loop`, route outcomes, safe route metadata, workflow-run route state, and any server route/event schema changes; derive TypeScript types with `z.infer`; add `node_routed` to runtime event contracts and regenerate Web API types after OpenAPI changes.
 - **Determinism and validation**: PASS - route selection is deterministic condition evaluation plus stored counters; loader validation rejects unsupported graph shapes before execution; validation commands use package test scripts and `bun run validate`, not root `bun test`.
 - **Git/lifecycle safety**: PASS - the feature introduces no new git mutation; resume, pause, cancel, abandon, and manual retry behavior must preserve existing lifecycle ownership rules and must not autonomously mutate ambiguous non-terminal runs.
-- **Observability and security**: PASS - `node_routed` is a typed event with snake_case metadata and a redacted safe condition representation; logs and APIs must not expose raw comparison literals that could contain secrets, user content, prompts, file paths, or git remotes.
+- **Observability and security**: PASS - `node_routed` is a typed event with snake_case metadata and a redacted safe condition string; logs and APIs must not expose raw comparison literals that could contain secrets, user content, prompts, file paths, or git remotes.
 - **UI/brand**: PASS - Web builder and run-detail changes reuse current workflow builder primitives, React Flow graph conventions, and Archon design tokens.
 
 Post-design re-check: PASS.
@@ -161,7 +161,7 @@ The feature is broad because it affects workflow schemas, execution, event proje
 1. Add `node_routed` to `WORKFLOW_EVENT_TYPES` in `packages/workflows/src/store.ts`.
 2. Emit `node_routed` for every route-loop outcome with `from`, `outcome`, `to`, `condition`, `condition_result`, `negative_count`, `max_iterations`, `attempt`, and `execution_seq`.
 3. Persist route-loop node output as the same route metadata and never copy the source node output into route-loop output.
-4. Add safe condition serialization that preserves references, fields, operators, and boolean structure while redacting literal comparison values and future secret-bearing tokens.
+4. Add safe condition string serialization that preserves references, fields, operators, and boolean structure while redacting literal comparison values and future secret-bearing tokens.
 5. Update event listing and run detail projection so route-loop events and latest attempts are returned as first-class data.
 6. Update SSE or dashboard refetch behavior if route decisions need live Web refresh beyond current run-detail polling.
 7. Regenerate frontend API types after any OpenAPI schema changes.
@@ -194,7 +194,7 @@ The feature is broad because it affects workflow schemas, execution, event proje
 - **Silent branch execution**: In route activation mode, route targets run only after explicit activation, not merely because dependencies are satisfied.
 - **Stale output reuse**: Latest-output projection must invalidate rerun paths and resolve `$node.output` to the latest completed attempt.
 - **Partial route state**: Route decision, counter mutation, output write, activation state, and `node_routed` event write must share one transaction or CAS-protected transition.
-- **Sensitive event data**: Store safe condition representations and redact comparison literals before persisting or streaming route metadata.
+- **Sensitive event data**: Store safe condition strings and redact comparison literals before persisting or streaming route metadata.
 - **UI mismatch**: Builder serialization must keep visual route edges, `depends_on`, and `route_loop` YAML in sync before saving or running.
 
 ## Validation Plan
