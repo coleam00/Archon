@@ -1,108 +1,322 @@
 import {
   CalendarDays,
-  MapPin,
-  Target,
-  ShieldAlert,
-  FileText,
-  Users,
-  Sparkles,
+  CheckCircle2,
   ExternalLink,
+  FileText,
+  Mail,
+  MapPin,
+  Phone,
+  ShieldAlert,
+  Sparkles,
+  Target,
+  Users,
   Video,
-  AlertCircle,
 } from 'lucide-react';
 import prospectsData from '@/lib/business-prospects.generated.json';
 import type { BusinessProspect } from '@/components/business/BusinessPage';
 
-/**
- * SADN -- Sarasota Art and Dance Night 2026 partner-outreach engagement.
- *
- * Source of truth:
- *   second-brain/businesses/external-reps/sadn/_sadn.md
- *   second-brain/businesses/external-reps/sadn/messaging/cold-email-touch-1-approved.md
- *
- * Event: 2026-11-15, Art Ovation Hotel, downtown Sarasota
- * Principal: Susan Szantosi (Vividiance LLC)
- */
+interface MetricCardProps {
+  label: string;
+  value: string;
+  note: string;
+  tone?: 'green' | 'amber' | 'rose' | 'purple' | 'blue';
+}
 
-const PRIORITY_CATEGORIES = [
-  'Wealth management & financial advisors',
-  'Private banking',
-  'Luxury real estate agents & brokerages',
-  'Fine jewelry stores',
-  'Interior design firms',
-  'Home builders and remodelers',
-  'Medical spas and cosmetic practices',
-  'Boutique fitness and wellness brands',
-  'Law firms',
-  'Luxury automotive dealerships',
-  'Private aviation and yacht-related',
-  'High-end retail and lifestyle brands',
-  'Upscale restaurants and cocktail lounges',
-  'Local businesses targeting affluent Sarasota residents',
+interface PipelineItem {
+  company: string;
+  lane: string;
+  status: string;
+  next: string;
+}
+
+interface ActionItem {
+  title: string;
+  owner: string;
+  timing: string;
+  proof: string;
+}
+
+interface LaneItem {
+  label: string;
+  rule: string;
+}
+
+const METRICS: MetricCardProps[] = [
+  { label: 'Original batch', value: '47 sent', note: '0 failed, 0 bounces found', tone: 'green' },
+  {
+    label: 'Inbound replies',
+    value: '6',
+    note: 'Robb warm issue, Sarasota Ford review + decline',
+    tone: 'blue',
+  },
+  { label: 'Next wave', value: '50', note: 'Curated targets with lane logic', tone: 'purple' },
+  {
+    label: 'Drafts ready',
+    value: '8',
+    note: 'Gmail drafts staged with reel + sponsor PDF',
+    tone: 'green',
+  },
+  {
+    label: 'Phone path',
+    value: '2',
+    note: 'Holcomb-Kreithen and Dolphin scripts ready',
+    tone: 'amber',
+  },
+  {
+    label: 'Primary goal',
+    value: 'meetings',
+    note: 'Partner conversations before category commitments',
+    tone: 'green',
+  },
 ];
 
-const EXCLUSIONS = [
-  'Art galleries (existing gallery partners)',
-  'Hotels (Art Ovation is venue partner)',
-  'Dance studios',
+const STAGED_DRAFTS: PipelineItem[] = [
+  {
+    company: 'Nautilus Homes',
+    lane: 'Luxury home / design',
+    status: 'Gmail draft ready',
+    next: 'Review and send',
+  },
+  {
+    company: 'John Cannon Homes',
+    lane: 'Luxury home / design',
+    status: 'Gmail draft ready',
+    next: 'Review and send',
+  },
+  {
+    company: 'Shumaker Sarasota',
+    lane: 'Professional prestige',
+    status: 'Gmail draft ready',
+    next: 'Review and send',
+  },
+  {
+    company: 'Douglas Elliman Sarasota',
+    lane: 'Luxury real estate',
+    status: 'Gmail draft ready',
+    next: 'Sent-to-both rule applied',
+  },
+  {
+    company: 'Engel & Volkers LWR',
+    lane: 'Luxury real estate',
+    status: 'Gmail draft ready',
+    next: 'Review and send',
+  },
+  {
+    company: 'Caldwell Trust',
+    lane: 'Wealth / trust',
+    status: 'Gmail draft ready',
+    next: 'Review and send',
+  },
+  {
+    company: 'Cumberland Advisors',
+    lane: 'Wealth advisory',
+    status: 'Gmail draft ready',
+    next: 'Review and send',
+  },
+  {
+    company: 'SRQ Media',
+    lane: 'Media / community',
+    status: 'Gmail draft ready',
+    next: 'Ask for meeting to determine lane',
+  },
 ];
 
-const OUTREACH_CADENCE = [
-  { step: 1, label: 'Email intro OR LinkedIn connection request', timing: 'Day 0' },
-  { step: 2, label: 'Phone call', timing: 'Day 2-3' },
-  { step: 3, label: 'Follow-up email/call', timing: 'Day 7-10' },
-  { step: 4, label: 'Personal invitation to attend the event', timing: 'Day 14+' },
+const HOT_FOLLOW_UPS: PipelineItem[] = [
+  {
+    company: 'Robb & Stucky',
+    lane: 'Luxury design',
+    status: 'Warm reply',
+    next: 'Resend with links, not attachments',
+  },
+  {
+    company: 'Sarasota Ford / Lincoln',
+    lane: 'Luxury auto',
+    status: 'Declined 2026 budget',
+    next: 'Relationship-save note, ask 2027 window',
+  },
+  {
+    company: 'Mercedes-Benz of Sarasota',
+    lane: 'Luxury auto',
+    status: 'Non-responder',
+    next: 'Second follow-up',
+  },
+  {
+    company: 'Sarasota Yacht Club',
+    lane: 'Luxury / community',
+    status: 'Non-responder',
+    next: 'Second follow-up',
+  },
+  {
+    company: 'Northern Trust Sarasota',
+    lane: 'Private wealth',
+    status: 'Non-responder',
+    next: 'Second follow-up',
+  },
+  {
+    company: "Premier Sotheby's",
+    lane: 'Luxury real estate',
+    status: 'Non-responder',
+    next: 'Second follow-up',
+  },
+];
+
+const MANUAL_ACTIONS: ActionItem[] = [
+  {
+    title: 'Send 8 staged drafts',
+    owner: 'Jason',
+    timing: 'Now',
+    proof: 'Draft IDs logged in staging file',
+  },
+  {
+    title: 'Call Holcomb-Kreithen',
+    owner: 'Jason',
+    timing: 'Next call block',
+    proof: 'Phone script ready',
+  },
+  {
+    title: 'Call Dolphin Aviation',
+    owner: 'Jason',
+    timing: 'Next call block',
+    proof: 'Phone script ready',
+  },
+  {
+    title: 'Resend Robb & Stucky links',
+    owner: 'Jason / Carlos',
+    timing: 'Now',
+    proof: 'Warm operational issue',
+  },
+  {
+    title: 'Run second follow-up to top non-responders',
+    owner: 'Carlos stages, Jason sends',
+    timing: 'After staged 8',
+    proof: 'Template in audit brief',
+  },
+];
+
+const RULES: LaneItem[] = [
+  {
+    label: 'Category overlap',
+    rule: 'Pitch multiple prospects first. Use exclusivity only after real interest.',
+  },
+  {
+    label: 'Approved categories',
+    rule: 'Luxury, professional services, wealth, wellness, art/dance adjacent.',
+  },
+  { label: 'Restaurants', rule: 'Case by case only. Must be high-end and strategically useful.' },
+  {
+    label: 'SRQ Media',
+    rule: 'Position as a high-end night of luxury performances. Get the meeting, determine lane later.',
+  },
+  {
+    label: 'Alternate paths',
+    rule: 'Offer cash sponsor, custom activation, VIP alignment, in-kind, media/community, or hybrid.',
+  },
+  { label: 'Landmines', rule: 'Jason confirmed none in the current staged wave.' },
 ];
 
 const ASSETS = [
   {
-    label: 'Community Impact pitch PDF (12 pages)',
-    file: 'small_SarasotaArtAndDance_CommunityImpact.pdf',
-    use: 'Email follow-up attachment (touch 2 if requested)',
+    label: 'Luxury sponsor reel',
+    file: 'video-projects/sarasota-art-dance-luxury-sponsor-reel/sarasota-art-dance-luxury-sponsor-reel.mp4',
+    use: 'Attached to staged sponsor drafts',
   },
   {
-    label: 'Save-the-Date horizontal video',
-    file: 'SADN2026 Save the date_TicketsAvailable_Horizontal.mp4',
-    use: 'Email signature embed',
+    label: 'Susan sponsorship PDF',
+    file: 'businesses/external-reps/sadn/attachments/2026-05-20-susan-small-sponsorship-opportunities.pdf',
+    use: 'Attached to staged sponsor drafts',
   },
   {
-    label: 'Save-the-Date vertical video',
-    file: 'SADN2026 Save the date_Vertical IG.mp4',
-    use: 'Instagram stories / DMs',
+    label: 'Second follow-up template',
+    file: 'intelligence/briefs/2026-06-26-sadn-outreach-audit-and-next-50.md',
+    use: 'Short follow-up for non-responders',
   },
   {
-    label: '2024 recap on YouTube',
-    file: 'youtube.com/watch?v=fvejHofIvvU',
-    use: 'LinkedIn message link (Susan wants this cut down -- Vincent handoff?)',
+    label: 'Phone scripts',
+    file: 'drafts/2026-06-26-sadn-phone-scripts-hk-dolphin.md',
+    use: 'Holcomb-Kreithen and Dolphin Aviation routing calls',
   },
 ];
+
+const VAULT_LINKS = [
+  {
+    label: 'SADN master audit and next 50',
+    path: 'intelligence/briefs/2026-06-26-sadn-outreach-audit-and-next-50.md',
+  },
+  {
+    label: 'Next 50 target list',
+    path: 'businesses/external-reps/sadn/prospects/sadn-next-50-targets-2026-06-26.csv',
+  },
+  {
+    label: 'Draft staging log',
+    path: 'businesses/external-reps/sadn/prospects/sadn-next-wave-10-draft-staging-2026-06-26.md',
+  },
+  {
+    label: 'Contact verification',
+    path: 'businesses/external-reps/sadn/prospects/sadn-next-wave-20-contact-verification-2026-06-26.csv',
+  },
+  { label: 'Phone scripts', path: 'drafts/2026-06-26-sadn-phone-scripts-hk-dolphin.md' },
+  { label: 'Engagement MOC', path: 'businesses/external-reps/sadn/_sadn.md' },
+];
+
+function toneClasses(tone: MetricCardProps['tone']): string {
+  if (tone === 'green') return 'border-emerald-700/30 bg-emerald-100 text-emerald-900';
+  if (tone === 'amber') return 'border-amber-700/30 bg-amber-100 text-amber-900';
+  if (tone === 'rose') return 'border-rose-700/30 bg-rose-100 text-rose-900';
+  if (tone === 'purple') return 'border-purple-700/30 bg-purple-100 text-purple-900';
+  return 'border-blue-700/30 bg-blue-100 text-blue-900';
+}
+
+function MetricCard({ label, value, note, tone = 'blue' }: MetricCardProps): React.ReactElement {
+  return (
+    <div className={`rounded-lg border p-4 ${toneClasses(tone)}`}>
+      <p className="text-[10px] font-medium uppercase tracking-wide opacity-80">{label}</p>
+      <p className="mt-1 text-2xl font-semibold">{value}</p>
+      <p className="mt-1 text-xs opacity-80">{note}</p>
+    </div>
+  );
+}
+
+function PipelineCard({ item }: { item: PipelineItem }): React.ReactElement {
+  return (
+    <div className="rounded-md border border-border bg-surface-inset p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold text-text-primary">{item.company}</p>
+          <p className="mt-1 text-[11px] text-text-tertiary">{item.lane}</p>
+        </div>
+        <span className="rounded-full bg-surface-elevated px-2 py-0.5 text-[10px] font-medium text-text-secondary">
+          {item.status}
+        </span>
+      </div>
+      <p className="mt-2 text-xs text-text-secondary">Next: {item.next}</p>
+    </div>
+  );
+}
 
 export function SADNPage(): React.ReactElement {
   return (
     <div className="flex flex-1 flex-col gap-6 p-6">
-      {/* Header */}
       <div className="flex flex-col gap-2">
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex flex-wrap items-center gap-2">
           <h1 className="text-2xl font-semibold text-text-primary">SADN 2026</h1>
           <span className="rounded border border-amber-700/40 bg-amber-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-800">
             external rep
           </span>
           <span className="rounded border border-emerald-700/40 bg-emerald-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-800">
-            active
+            active outreach
           </span>
-          <span className="rounded bg-surface-inset px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-text-secondary">
-            volunteer mode (comp tbd)
+          <span className="rounded border border-purple-700/40 bg-purple-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-purple-800">
+            luxury partner pipeline
           </span>
         </div>
-        <p className="text-sm text-text-secondary">
-          Sarasota Art and Dance Night 2026 -- partner outreach for Susan Szantosi (Vividiance LLC).
-          3rd annual cultural event. Jason curates business/community partners against Susan's
-          approved ICP and template.
+        <p className="max-w-4xl text-sm text-text-secondary">
+          Sarasota Art and Dance Night partner-outreach command center. Built to keep Susan's
+          sponsor pipeline organized, protect category strategy, and maximize first meetings from a
+          curated, premium prospect universe.
         </p>
       </div>
 
-      {/* Event banner */}
-      <div className="rounded-md border border-purple-700/40 bg-purple-100 p-4">
+      <div className="rounded-lg border border-purple-700/40 bg-purple-100 p-4">
         <div className="flex flex-wrap gap-x-6 gap-y-2">
           <div className="flex items-center gap-2">
             <CalendarDays className="h-4 w-4 text-purple-700" />
@@ -125,208 +339,175 @@ export function SADNPage(): React.ReactElement {
           </div>
         </div>
         <p className="mt-3 text-xs text-purple-800 italic">
-          Visual art + live music + performing arts + social dancing + artist recognition + curated
-          networking. Benefits The Creative Bridge Foundation (501(c)(3)) and the Rising Star Award.
+          High-end evening of art, dance, luxury performances, curated networking, and community
+          visibility.
         </p>
       </div>
 
-      {/* Principal + positioning */}
-      <section className="grid gap-3 sm:grid-cols-2">
-        <div className="rounded-md border border-border bg-surface-elevated p-4">
-          <h3 className="mb-2 text-sm font-semibold text-text-primary">Principal</h3>
-          <dl className="grid grid-cols-[120px_1fr] gap-y-1 text-xs text-text-secondary">
-            <dt className="text-text-tertiary">Name:</dt>
-            <dd>Susan Szantosi</dd>
-            <dt className="text-text-tertiary">Title:</dt>
-            <dd>Founder & Cultural Producer (SADN); CEO Vividiance LLC</dd>
-            <dt className="text-text-tertiary">Email:</dt>
-            <dd>susan@vividiance.com</dd>
-            <dt className="text-text-tertiary">Alt email:</dt>
-            <dd>contact@sarasotaartanddance.com</dd>
-            <dt className="text-text-tertiary">Phone:</dt>
-            <dd>(941) 894-4168</dd>
-            <dt className="text-text-tertiary">Background:</dt>
-            <dd>
-              Multidisciplinary artist + 10yr ballroom competitor. Also founded Women in Velocity +
-              DancingSRQ.
-            </dd>
-          </dl>
-        </div>
-
-        <div className="rounded-md border border-border bg-surface-elevated p-4">
-          <h3 className="mb-2 text-sm font-semibold text-text-primary">
-            Susan-approved positioning
-          </h3>
-          <p className="text-xs text-text-secondary italic mb-2">
-            "Join a movement that strengthens Sarasota's cultural economy."
-          </p>
-          <dl className="grid grid-cols-[100px_1fr] gap-y-1 text-xs text-text-secondary">
-            <dt className="text-text-tertiary">Tone:</dt>
-            <dd>Elegant. Inspiring. Community-driven. High-quality.</dd>
-            <dt className="text-text-tertiary">Frame:</dt>
-            <dd>NOT a one-night sponsorship -- a growing cultural platform</dd>
-            <dt className="text-text-tertiary">Goal:</dt>
-            <dd>Conversation, not immediate sale</dd>
-            <dt className="text-text-tertiary">Differentiator:</dt>
-            <dd>Partners physically present, not just logos on a flyer</dd>
-          </dl>
-        </div>
+      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+        {METRICS.map(metric => (
+          <MetricCard key={metric.label} {...metric} />
+        ))}
       </section>
 
-      {/* ARC overlap warning */}
-      <div className="flex items-start gap-3 rounded-md border border-rose-700/40 bg-rose-100 p-4">
-        <ShieldAlert className="mt-0.5 h-5 w-5 flex-shrink-0 text-rose-700" />
-        <div className="flex flex-col gap-1">
-          <p className="text-sm font-medium text-rose-900">
-            Suppression risk: luxury auto dealerships overlap with ARC Brand Agency
-          </p>
-          <p className="text-xs text-rose-800">
-            "Luxury automotive dealerships" is on Susan's SADN priority list AND on Adam Riley's ARC
-            target list. Never send both an ARC cold pitch and an SADN partnership pitch to the same
-            Sarasota luxury auto contact in the same week. Proposed split:{' '}
-            <span className="font-semibold">ARC owns</span> Sarasota-area independent service
-            centers + smaller shops; <span className="font-semibold">SADN owns</span> dealership
-            principals + sales / marketing directors at brand-name dealerships.
-          </p>
-        </div>
-      </div>
-
-      {/* Prospect categories */}
-      <section className="grid gap-3 lg:grid-cols-2">
-        <div className="flex flex-col gap-2">
-          <div className="flex items-center gap-2">
+      <section className="grid gap-3 lg:grid-cols-[1fr_1fr]">
+        <div className="rounded-lg border border-border bg-surface-elevated p-4">
+          <div className="mb-3 flex items-center gap-2">
             <Target className="h-4 w-4 text-text-secondary" />
             <h2 className="text-base font-semibold text-text-primary">
-              Prioritize ({PRIORITY_CATEGORIES.length})
+              Next actions to win meetings
             </h2>
           </div>
-          <div className="rounded-md border border-border bg-surface-elevated p-4">
-            <ul className="flex flex-col gap-1">
-              {PRIORITY_CATEGORIES.map(cat => (
-                <li key={cat} className="flex items-start gap-2 text-xs text-text-secondary">
-                  <span className="text-emerald-700">+</span>
-                  <span>{cat}</span>
-                </li>
-              ))}
-            </ul>
+          <div className="space-y-2">
+            {MANUAL_ACTIONS.map(action => (
+              <div
+                key={action.title}
+                className="rounded-md border border-border bg-surface-inset p-3"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold text-text-primary">{action.title}</p>
+                    <p className="mt-1 text-xs text-text-secondary">{action.proof}</p>
+                  </div>
+                  <span className="rounded-full bg-surface-elevated px-2 py-0.5 text-[10px] font-medium text-text-secondary">
+                    {action.timing}
+                  </span>
+                </div>
+                <p className="mt-2 text-[11px] text-text-tertiary">Owner: {action.owner}</p>
+              </div>
+            ))}
           </div>
         </div>
 
-        <div className="flex flex-col gap-2">
-          <div className="flex items-center gap-2">
-            <AlertCircle className="h-4 w-4 text-text-secondary" />
-            <h2 className="text-base font-semibold text-text-primary">
-              Exclude ({EXCLUSIONS.length})
-            </h2>
+        <div className="rounded-lg border border-border bg-surface-elevated p-4">
+          <div className="mb-3 flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-text-secondary" />
+            <h2 className="text-base font-semibold text-text-primary">Rules Jason approved</h2>
           </div>
-          <div className="rounded-md border border-border bg-surface-elevated p-4">
-            <ul className="flex flex-col gap-1">
-              {EXCLUSIONS.map(cat => (
-                <li key={cat} className="flex items-start gap-2 text-xs text-text-secondary">
-                  <span className="text-rose-700">-</span>
-                  <span>{cat}</span>
-                </li>
-              ))}
-            </ul>
+          <div className="space-y-2">
+            {RULES.map(rule => (
+              <div
+                key={rule.label}
+                className="rounded-md border border-border bg-surface-inset p-3"
+              >
+                <p className="text-sm font-semibold text-text-primary">{rule.label}</p>
+                <p className="mt-1 text-xs text-text-secondary">{rule.rule}</p>
+              </div>
+            ))}
           </div>
         </div>
       </section>
 
-      {/* Audience */}
-      <section className="flex flex-col gap-3">
-        <div className="flex items-center gap-2">
-          <Users className="h-4 w-4 text-text-secondary" />
-          <h2 className="text-base font-semibold text-text-primary">Audience profile</h2>
+      <section className="grid gap-3 xl:grid-cols-2">
+        <div className="rounded-lg border border-border bg-surface-elevated p-4">
+          <div className="mb-3 flex items-center gap-2">
+            <Mail className="h-4 w-4 text-text-secondary" />
+            <h2 className="text-base font-semibold text-text-primary">
+              8 Gmail drafts ready to send
+            </h2>
+          </div>
+          <div className="grid gap-2 md:grid-cols-2">
+            {STAGED_DRAFTS.map(item => (
+              <PipelineCard key={item.company} item={item} />
+            ))}
+          </div>
         </div>
-        <div className="rounded-md border border-border bg-surface-elevated p-4">
-          <p className="text-xs text-text-secondary">
-            Business owners, professionals, community leaders, philanthropists, arts supporters, and
-            residents who value culture, creativity, and meaningful local connections.
+
+        <div className="rounded-lg border border-border bg-surface-elevated p-4">
+          <div className="mb-3 flex items-center gap-2">
+            <Users className="h-4 w-4 text-text-secondary" />
+            <h2 className="text-base font-semibold text-text-primary">Hot follow-up board</h2>
+          </div>
+          <div className="grid gap-2 md:grid-cols-2">
+            {HOT_FOLLOW_UPS.map(item => (
+              <PipelineCard key={item.company} item={item} />
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="grid gap-3 lg:grid-cols-3">
+        <div className="rounded-lg border border-amber-700/30 bg-amber-100 p-4">
+          <div className="mb-2 flex items-center gap-2">
+            <Phone className="h-4 w-4 text-amber-800" />
+            <h3 className="text-sm font-semibold text-amber-950">Call path</h3>
+          </div>
+          <p className="text-xs text-amber-900">
+            Holcomb-Kreithen and Dolphin Aviation are high-fit but need phone/contact-form routing
+            before email.
+          </p>
+        </div>
+        <div className="rounded-lg border border-emerald-700/30 bg-emerald-100 p-4">
+          <div className="mb-2 flex items-center gap-2">
+            <CheckCircle2 className="h-4 w-4 text-emerald-800" />
+            <h3 className="text-sm font-semibold text-emerald-950">Assets verified</h3>
+          </div>
+          <p className="text-xs text-emerald-900">
+            Sampled staged drafts include the sponsor reel and Susan PDF.
+          </p>
+        </div>
+        <div className="rounded-lg border border-rose-700/30 bg-rose-100 p-4">
+          <div className="mb-2 flex items-center gap-2">
+            <ShieldAlert className="h-4 w-4 text-rose-800" />
+            <h3 className="text-sm font-semibold text-rose-950">Suppression reminder</h3>
+          </div>
+          <p className="text-xs text-rose-900">
+            ARC owns independent service shops. SADN owns luxury sponsors and dealership marketing
+            lanes.
           </p>
         </div>
       </section>
 
-      {/* Outreach cadence */}
-      <section className="flex flex-col gap-3">
-        <div className="flex items-center gap-2">
-          <Sparkles className="h-4 w-4 text-text-secondary" />
-          <h2 className="text-base font-semibold text-text-primary">
-            Outreach cadence (Susan-approved)
-          </h2>
-        </div>
-        <div className="grid gap-2 sm:grid-cols-4">
-          {OUTREACH_CADENCE.map(step => (
-            <div
-              key={step.step}
-              className="rounded-md border border-border bg-surface-elevated p-3"
-            >
-              <div className="mb-1 flex items-center gap-2">
-                <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary/20 text-[10px] font-bold text-primary">
-                  {step.step}
-                </span>
-                <span className="text-[10px] font-mono uppercase tracking-wide text-text-tertiary">
-                  {step.timing}
-                </span>
+      <section className="grid gap-3 lg:grid-cols-2">
+        <div className="rounded-lg border border-border bg-surface-elevated p-4">
+          <div className="mb-3 flex items-center gap-2">
+            <Video className="h-4 w-4 text-text-secondary" />
+            <h2 className="text-base font-semibold text-text-primary">Working assets</h2>
+          </div>
+          <div className="space-y-2">
+            {ASSETS.map(asset => (
+              <div
+                key={asset.file}
+                className="rounded-md border border-border bg-surface-inset p-3"
+              >
+                <p className="text-sm font-semibold text-text-primary">{asset.label}</p>
+                <p className="mt-1 text-xs text-text-secondary">{asset.use}</p>
+                <code className="mt-1 block break-all text-[11px] font-mono text-text-tertiary">
+                  {asset.file}
+                </code>
               </div>
-              <p className="text-xs text-text-primary">{step.label}</p>
-            </div>
-          ))}
+            ))}
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-border bg-surface-elevated p-4">
+          <div className="mb-3 flex items-center gap-2">
+            <FileText className="h-4 w-4 text-text-secondary" />
+            <h2 className="text-base font-semibold text-text-primary">Canon and trackers</h2>
+          </div>
+          <div className="space-y-2">
+            {VAULT_LINKS.map(link => (
+              <div key={link.path} className="rounded-md border border-border bg-surface-inset p-3">
+                <p className="text-sm font-semibold text-text-primary">{link.label}</p>
+                <code className="mt-1 block break-all text-[11px] font-mono text-text-tertiary">
+                  {link.path}
+                </code>
+              </div>
+            ))}
+          </div>
         </div>
       </section>
 
-      {/* Assets */}
-      <section className="flex flex-col gap-3">
-        <div className="flex items-center gap-2">
-          <Video className="h-4 w-4 text-text-secondary" />
-          <h2 className="text-base font-semibold text-text-primary">Assets (Susan's Drive)</h2>
-        </div>
-        <div className="grid gap-2">
-          {ASSETS.map(asset => (
-            <div
-              key={asset.file}
-              className="flex flex-col gap-1 rounded-md border border-border bg-surface-elevated p-3"
-            >
-              <p className="text-sm font-semibold text-text-primary">{asset.label}</p>
-              <p className="text-xs text-text-tertiary">{asset.use}</p>
-              <code className="text-[11px] font-mono text-text-tertiary">{asset.file}</code>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* Open questions for Susan */}
-      <section className="flex flex-col gap-3">
-        <h2 className="text-base font-semibold text-text-primary">Open questions for Susan</h2>
-        <div className="rounded-md border border-border bg-surface-elevated p-4">
-          <ol className="flex flex-col gap-1.5 text-xs text-text-secondary">
-            <li>1. Sponsorship tier sheet -- exact entry / mid / top levels + prices?</li>
-            <li>2. Compensation for Jason -- pure volunteer, commission, or honorarium?</li>
-            <li>
-              3. Sending mailbox -- send from{' '}
-              <code className="rounded bg-surface-inset px-1">jid5274@gmail.com</code> or provision{' '}
-              <code className="rounded bg-surface-inset px-1">jason@sarasotaartanddance.com</code>?
-            </li>
-            <li>
-              4. Calendly handoff -- once prospect says yes to 15-min, book with Jason or Susan?
-            </li>
-            <li>5. Whose CRM -- Jason's Google Sheet (Susan views) or Susan's existing tracker?</li>
-            <li>6. 2024 recap video edit -- Vincent (Creative VA) handoff? Target length?</li>
-          </ol>
-        </div>
-      </section>
-
-      {/* Warm Tier 1 prospects — Jason's prior relationships */}
       <section className="flex flex-col gap-3">
         <div className="flex items-center gap-2">
           <Sparkles className="h-4 w-4 text-emerald-800" />
           <h2 className="text-base font-semibold text-text-primary">
-            Warm Tier 1 prospects — Jason's prior relationships
+            Warm Tier 1 prospects from generated vault data
           </h2>
         </div>
         <p className="text-xs text-text-secondary">
-          Curated from Susan's Sarasota_Businesses sheet + Jason's prior sponsor-track
-          relationships. Voice contract: warm, peer-to-peer, single-sentence flattery max, no em
-          dashes, sign-off "Jason / Call/text: 412.508.3539".
+          Older warm relationship rows remain visible below for context. Use the newer staging log
+          and hot board above for current action.
         </p>
         <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
           {(
@@ -357,37 +538,11 @@ export function SADNPage(): React.ReactElement {
         </div>
       </section>
 
-      {/* Vault paths */}
-      <section className="flex flex-col gap-3">
-        <div className="flex items-center gap-2">
-          <FileText className="h-4 w-4 text-text-secondary" />
-          <h2 className="text-base font-semibold text-text-primary">Canon (vault paths)</h2>
-        </div>
-        <div className="grid gap-2">
-          {[
-            {
-              label: 'SADN engagement MOC + operational playbook',
-              path: 'businesses/external-reps/sadn/_sadn.md',
-            },
-            {
-              label: "Susan's approved cold email + prospect criteria + overlap warning",
-              path: 'businesses/external-reps/sadn/messaging/cold-email-touch-1-approved.md',
-            },
-            {
-              label: 'External-reps chassis (shared rules)',
-              path: 'businesses/external-reps/_external-reps.md',
-            },
-          ].map(link => (
-            <div
-              key={link.path}
-              className="flex flex-col gap-1 rounded-md border border-border bg-surface-elevated p-3"
-            >
-              <p className="text-sm font-semibold text-text-primary">{link.label}</p>
-              <code className="text-[11px] font-mono text-text-tertiary">{link.path}</code>
-            </div>
-          ))}
-        </div>
-      </section>
+      <div className="rounded-lg border border-border bg-surface-elevated p-4 text-xs text-text-secondary">
+        Sender: <code className="rounded bg-surface-inset px-1">jason@sarasotaartanddance.com</code>{' '}
+        with <code className="rounded bg-surface-inset px-1">contact@sarasotaartanddance.com</code>{' '}
+        CC. Every sponsor send should include the locked reel and sponsor PDF.
+      </div>
     </div>
   );
 }
