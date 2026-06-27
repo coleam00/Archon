@@ -931,6 +931,15 @@ ${userComment}`;
 
     // 2. Parse event
     const event = JSON.parse(payload) as WebhookEvent;
+    const webhookOwner = event.repository.owner.login;
+    const webhookRepo = event.repository.name;
+
+    // App-mode optimisation: the webhook payload already includes the
+    // installation id. Prime before authorization or event classification so
+    // sparse but signed payloads still short-circuit the first outbound lookup.
+    if (this.auth.kind === 'app' && event.installation?.id !== undefined) {
+      this.auth.provider.primeInstallationLookup(webhookOwner, webhookRepo, event.installation.id);
+    }
 
     // 2b. Authorization check - verify sender is in whitelist
     const senderUsername = event.sender?.login;
@@ -946,14 +955,6 @@ ${userComment}`;
 
     const { owner, repo, number, comment, eventType, issue, pullRequest, isCloseEvent, isMerged } =
       parsed;
-
-    // App-mode optimisation: the webhook payload already includes the
-    // installation id. Priming the lookup cache skips one HTTP round trip
-    // (`GET /repos/{owner}/{repo}/installation`) before the first outbound API
-    // call to this repo after a restart. No-op when payload lacks installation.
-    if (this.auth.kind === 'app' && event.installation?.id !== undefined) {
-      this.auth.provider.primeInstallationLookup(owner, repo, event.installation.id);
-    }
 
     // 3. Handle close/merge events (cleanup worktree)
     if (isCloseEvent) {

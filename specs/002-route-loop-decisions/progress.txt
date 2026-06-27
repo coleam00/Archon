@@ -8,6 +8,7 @@
 - Route-loop authoring schemas now live in `packages/workflows/src/schemas/route-loop.ts`; loader validation uses the shared safe node-id grammar, while runtime execution still fails fast until executor routing tasks land.
 - Use `extractConditionReferences()` from `packages/workflows/src/condition-evaluator.ts` when loader or validation code needs to inspect condition node refs; do not duplicate the condition grammar.
 - Route-loop loader validation treats route edges as runtime edges layered on top of normal dependencies: only negative routes may re-enter `route_loop.from`, positive and exhausted routes must be exit paths, and retry paths must be self-contained unless negative directly targets `from`, which is warn-only.
+- Console builder wire compatibility belongs in `packages/web/src/experiments/console/builder/types/wire.ts`; do not import server packages into Web when generated API types temporarily lag schema changes.
 
 ## 2026-06-27 16:01 +07 - Phase 1: Setup (iter 1)
 **Tasks completed this iter:** T001 (Run route-loop executor TDD guard), T002 (Run workflow loader/schema baselines), T003 (Run console builder baselines), T004 (Inspect workflow event and metadata seams)
@@ -97,4 +98,28 @@
 - `RouteLoopDecisionData` extends `Record<string, unknown>` so it can flow into existing event data contracts without ad hoc casts.
 - The core DB transaction helper validates both incoming and existing route-loop metadata before writing, then uses a row lock and execution sequence check to reject stale route decisions.
 - Verification passed `bun test packages/workflows/src/dag-executor.test.ts packages/workflows/src/schemas.test.ts`, `bun test packages/core/src/db/workflows.test.ts`, `bun run type-check`, `bun run lint --max-warnings 0`, and touched-file Prettier checks.
+---
+## 2026-06-27 17:45 +07 - Phase 4.2: Implementation For User Story 2 (iter 6)
+**Tasks completed this iter:** T028 (Route-loop runtime state transition helper), T029 (Durable route-decision store contract), T030 (Atomic route-decision metadata update), T031 (Workflow store adapter persistence), T032 (Route activation executor path), T033 (Latest completed source output evaluation), T034 (Negative counter and positive reset semantics), T035 (Selected route target activation), T036 (Fresh selected-target reruns and runtime path validation), T037 (Running or paused target guard), T038 (Route-loop output metadata persistence), T039 (User Story 2 verification)
+**Status:** completed:true
+
+- Per-task summary lines:
+  - T028 - Verified `applyRouteLoopTransition()` drives route-loop counters, attempts, execution sequence, activation metadata, and output payloads in `packages/workflows/src/route-loop-state.ts`.
+  - T029 - Added the durable route-decision transition input and `persistRouteDecisionTransition()` contract to `packages/workflows/src/store.ts`.
+  - T030 - Reused the core DB transaction helper in `packages/core/src/db/workflows.ts` for atomic metadata updates, stale execution sequence checks, and `node_routed` event writes.
+  - T031 - Wired `persistRouteDecisionTransition()` through `packages/core/src/workflows/store-adapter.ts` with adapter coverage in `packages/core/src/workflows/store-adapter.test.ts`.
+  - T032 - Verified the executor now takes the route-loop activation path only when route-loop nodes exist while static DAG behavior remains separate in `packages/workflows/src/dag-executor.ts`.
+  - T033 - Verified route-loop conditions evaluate against a completed `route_loop.from` output and fail fast when the source output is not usable.
+  - T034 - Verified negative counters increment before selecting `negative` or `exhausted`, and positive outcomes reset only the selected loop counter.
+  - T035 - Verified the executor activates only the selected route target and leaves unselected route targets dormant.
+  - T036 - Added selected-route rerun scheduling, stale persistence failure coverage, unrelated-descendant protection, and runtime rerun path self-containment validation in `packages/workflows/src/dag-executor.ts` and `packages/workflows/src/dag-executor.test.ts`.
+  - T037 - Added a fail-fast guard for selected route targets already in `running` or `paused` state.
+  - T038 - Persisted route-loop output metadata through the same route-decision transition that writes the `node_routed` event.
+  - T039 - Verified User Story 2 with isolated executor, core DB, and store-adapter tests plus full type-check, lint, and touched-file Prettier checks.
+
+**Learnings for future iterations:**
+- Do not run targeted tests from multiple packages in one `bun test` process, because this repo's `mock.module()` pollution can create false failures.
+- The route-loop executor now schedules reruns with a versioned rerun set so a freshly scheduled controller rerun is not cleared by the previous execution of that same layer.
+- Durable route decisions now flow through `IWorkflowStore.persistRouteDecisionTransition()` instead of separate `updateWorkflowRun()` and `createWorkflowEvent()` calls.
+- The temporary Web builder route-loop compatibility fix is centralized in `builder/types/wire.ts` so future OpenAPI regeneration can replace it cleanly.
 ---

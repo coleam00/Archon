@@ -284,7 +284,7 @@
     },
     {
       "title": "Phase 4.2: Implementation For User Story 2",
-      "completed": false,
+      "completed": true,
       "tasks": [
         {
           "id": "T028",
@@ -292,7 +292,7 @@
           "description": "[US2] Add a typed route-loop runtime state transition helper in `packages/workflows/src/route-loop-state.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 28,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -301,7 +301,7 @@
           "description": "[US2] Define the durable route-decision store contract in `packages/workflows/src/store.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 29,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -310,7 +310,7 @@
           "description": "[US2] Implement atomic metadata update and stale-write protection for route decisions in `packages/core/src/db/workflows.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 30,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -319,7 +319,7 @@
           "description": "[US2] Wire route-decision persistence through the workflow store adapter in `packages/core/src/workflows/store-adapter.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 31,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -328,7 +328,7 @@
           "description": "[US2] Add the route activation executor path while preserving the existing static DAG path in `packages/workflows/src/dag-executor.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 32,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -337,7 +337,7 @@
           "description": "[US2] Evaluate `route_loop.condition` against the latest completed output of `route_loop.from` and fail fast for skipped, failed, missing, pending, or unusable source output in `packages/workflows/src/dag-executor.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 33,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -346,7 +346,7 @@
           "description": "[US2] Increment negative counters before selecting `negative` or `exhausted` and reset only the selected loop counter on `positive` in `packages/workflows/src/dag-executor.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 34,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -355,7 +355,7 @@
           "description": "[US2] Activate only the selected route target and leave unselected route targets dormant in `packages/workflows/src/dag-executor.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 35,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -364,7 +364,7 @@
           "description": "[US2] Rerun completed selected targets as fresh attempts, validate the selected rerun path self-containment at runtime before invalidating latest-output state, and add executor coverage for stale persisted state, resume, retry, or loader-bypassed rerun paths in `packages/workflows/src/dag-executor.ts` and `packages/workflows/src/dag-executor.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 36,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -373,7 +373,7 @@
           "description": "[US2] Fail fast when a selected route target is already running or paused in `packages/workflows/src/dag-executor.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 37,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -382,7 +382,7 @@
           "description": "[US2] Persist route-loop output metadata from the same route-decision transition that writes `node_routed` in `packages/workflows/src/dag-executor.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 38,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -391,7 +391,7 @@
           "description": "[US2] Verify User Story 2 with `bun test packages/workflows/src/dag-executor.test.ts packages/core/src/db/workflows.test.ts` for `packages/workflows/src/dag-executor.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 39,
-          "passes": false,
+          "passes": true,
           "notes": ""
         }
       ],

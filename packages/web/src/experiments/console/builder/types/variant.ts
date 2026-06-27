@@ -2,9 +2,9 @@
  * Builder type definitions — the in-editor data model for a workflow under edit.
  *
  * A `BuilderNode` partitions a wire `DagNode` into `{ id, variant, base, data }`:
- *   - `variant`  — the discriminant (which of the seven node kinds this is)
- *   - `base`     — shared base fields (depends_on, when, model, …) minus `id`
- *   - `data`     — variant-specific fields, discriminated by `variant`
+ *   - `variant`  - the discriminant (which node kind this is)
+ *   - `base`     - shared base fields (depends_on, when, model, ...) minus `id`
+ *   - `data`     - variant-specific fields, discriminated by `variant`
  *
  * Wire shapes are reached only through `./wire`; the variant id is the
  * console's existing `WorkflowNodeKind` primitive.
@@ -13,7 +13,7 @@ import type { WorkflowNodeKind } from '../../primitives/workflow-graph';
 import type { WireDagNode, WireWorkflowDefinition } from './wire';
 
 /**
- * The seven representable node variants — an alias of the console's
+ * The representable node variants - an alias of the console's
  * `WorkflowNodeKind` primitive so the builder and the graph renderer share one
  * union (the builder does not redefine the kinds).
  */
@@ -26,7 +26,7 @@ export type VariantId = WorkflowNodeKind;
 /**
  * The base-field keys present on every wire `DagNode`, excluding `id` (which is
  * partitioned out separately) and the seven mutually-exclusive mode fields
- * (command/prompt/bash/script/loop/approval/cancel) plus their satellites
+ * (command/prompt/bash/script/loop/route_loop/approval/cancel) plus their satellites
  * (runtime/deps/timeout). Picking from `WireDagNode` keeps `BaseFields` exactly
  * in sync with the generated spec.
  *
@@ -79,6 +79,9 @@ export interface LoopNodeData {
   gate_message?: string;
 }
 
+/** Route-loop controller config. */
+export type RouteLoopNodeData = NonNullable<WireDagNode['route_loop']>;
+
 /** The `on_reject` sub-object on an approval node. */
 export interface ApprovalOnReject {
   prompt: string;
@@ -124,6 +127,7 @@ export interface BashNodeData {
 /** Maps each variant id to its concrete data shape. */
 export interface VariantDataMap {
   loop: LoopNodeData;
+  route_loop: RouteLoopNodeData;
   approval: ApprovalNodeData;
   cancel: CancelNodeData;
   script: ScriptNodeData;

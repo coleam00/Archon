@@ -795,6 +795,111 @@ export function buildTopologicalLayers(nodes: readonly DagNode[]): DagNode[][] {
   return layers;
 }
 
+function buildDependentsMap(nodes: readonly DagNode[]): Map<string, string[]> {
+  const dependents = new Map<string, string[]>();
+  for (const node of nodes) {
+    for (const dep of node.depends_on ?? []) {
+      const existing = dependents.get(dep) ?? [];
+      existing.push(node.id);
+      dependents.set(dep, existing);
+    }
+  }
+  return dependents;
+}
+
+function collectPathNodesToTarget(
+  startId: string,
+  targetId: string,
+  dependents: Map<string, string[]>
+): Set<string> | null {
+  const memo = new Map<string, boolean>();
+  const visiting = new Set<string>();
+
+  const reachesTarget = (nodeId: string): boolean => {
+    if (nodeId === targetId) return true;
+    const cached = memo.get(nodeId);
+    if (cached !== undefined) return cached;
+    if (visiting.has(nodeId)) return false;
+
+    visiting.add(nodeId);
+    const reaches = (dependents.get(nodeId) ?? []).some(childId => reachesTarget(childId));
+    visiting.delete(nodeId);
+    memo.set(nodeId, reaches);
+    return reaches;
+  };
+
+  if (!reachesTarget(startId)) return null;
+
+  const pathNodes = new Set<string>();
+  const collect = (nodeId: string): void => {
+    if (pathNodes.has(nodeId) || !reachesTarget(nodeId)) return;
+    pathNodes.add(nodeId);
+    if (nodeId === targetId) return;
+    for (const childId of dependents.get(nodeId) ?? []) {
+      collect(childId);
+    }
+  };
+
+  collect(startId);
+  return pathNodes;
+}
+
+function validateRuntimeRerunPathSelfContained(
+  routeLoopNode: DagNode,
+  pathNodes: Set<string>,
+  nodesById: Map<string, DagNode>
+): void {
+  if (!isRouteLoopNode(routeLoopNode)) return;
+  if (routeLoopNode.route_loop.routes.negative === routeLoopNode.route_loop.from) return;
+
+  for (const pathNodeId of pathNodes) {
+    const pathNode = nodesById.get(pathNodeId);
+    if (pathNode === undefined) continue;
+    for (const dep of pathNode.depends_on ?? []) {
+      if (!pathNodes.has(dep)) {
+        throw new Error(
+          `route_loop '${routeLoopNode.id}' selected rerun path is not self-contained: node '${pathNode.id}' depends on '${dep}' outside the selected rerun path`
+        );
+      }
+    }
+  }
+}
+
+function collectSelectedRouteRerunNodeIds(params: {
+  routeLoopNode: DagNode;
+  selectedTargetId: string;
+  nodesById: Map<string, DagNode>;
+  dependents: Map<string, string[]>;
+}): Set<string> {
+  const rerunNodeIds = new Set<string>([params.selectedTargetId]);
+  if (!isRouteLoopNode(params.routeLoopNode)) return rerunNodeIds;
+  if (params.selectedTargetId !== params.routeLoopNode.route_loop.routes.negative) {
+    return rerunNodeIds;
+  }
+
+  const rerunPath = collectPathNodesToTarget(
+    params.selectedTargetId,
+    params.routeLoopNode.route_loop.from,
+    params.dependents
+  );
+  if (rerunPath === null) return rerunNodeIds;
+
+  validateRuntimeRerunPathSelfContained(params.routeLoopNode, rerunPath, params.nodesById);
+  for (const nodeId of rerunPath) rerunNodeIds.add(nodeId);
+  rerunNodeIds.add(params.routeLoopNode.id);
+  return rerunNodeIds;
+}
+
+function assertRouteTargetCanBeActivated(
+  targetNodeId: string,
+  nodeOutputs: Map<string, NodeOutput>
+): void {
+  const targetState: string | undefined = nodeOutputs.get(targetNodeId)?.state;
+  if (targetState === 'running' || targetState === 'paused') {
+    throw new Error(`route_loop selected target '${targetNodeId}' is already ${targetState}`);
+  }
+}
+
 /**
  * Execute a single DAG node. Returns NodeExecutionResult regardless of success/failure.
  * Always accumulates assistant text output (for $node_id.output substitution).
@@ -2989,7 +3094,21 @@ export async function executeDagWorkflow(
   const hasRouteLoopNodes = workflow.nodes.some(isRouteLoopNode);
   const routeTargetIds = new Set<string>();
   const activatedRouteTargetIds = new Set<string>();
+  const scheduledRouteRerunNodeIds = new Set<string>();
+  const routeRerunScheduleVersions = new Map<string, number>();
   const nodeLayerIndex = new Map<string, number>();
+  const nodesById = new Map(workflow.nodes.map(node => [node.id, node]));
+  const dependents = buildDependentsMap(workflow.nodes);
+  let routeRerunScheduleVersion = 0;
+  const scheduleRouteRerunNode = (nodeId: string): void => {
+    scheduledRouteRerunNodeIds.add(nodeId);
+    routeRerunScheduleVersion += 1;
+    routeRerunScheduleVersions.set(nodeId, routeRerunScheduleVersion);
+  };
+  const clearRouteRerunNode = (nodeId: string): void => {
+    scheduledRouteRerunNodeIds.delete(nodeId);
+    routeRerunScheduleVersions.delete(nodeId);
+  };
   let routeLoopMetadata: RouteLoopRuntimeMetadata = hasRouteLoopNodes
     ? routeLoopRuntimeMetadataSchema.parse(workflowRun.metadata)
     : routeLoopRuntimeMetadataSchema.parse({});
@@ -3069,6 +3188,8 @@ export async function executeDagWorkflow(
     const layer = layers[layerIdx];
     const isParallelLayer = layer.length > 1;
     const layerExecutableNodes = layer.filter(isCheckpointableExecutableNode);
+    const scheduledAtLayerStart = new Set(scheduledRouteRerunNodeIds);
+    const scheduleVersionsAtLayerStart = new Map(routeRerunScheduleVersions);
     let routeJumpTargetId: string | undefined;
 
     if (isParallelLayer) {
@@ -3096,6 +3217,17 @@ export async function executeDagWorkflow(
             !activatedRouteTargetIds.has(node.id)
           ) {
             return { nodeId: node.id, output: { state: 'pending' as const, output: '' } };
+          }
+
+          if (
+            hasRouteLoopNodes &&
+            nodeOutputs.has(node.id) &&
+            !scheduledRouteRerunNodeIds.has(node.id)
+          ) {
+            return {
+              nodeId: node.id,
+              output: nodeOutputs.get(node.id) ?? { state: 'pending' as const, output: '' },
+            };
           }
 
           // 0. Skip if this node completed successfully in a prior run (resume path).
@@ -3468,25 +3600,31 @@ export async function executeDagWorkflow(
               routeLoop: node.route_loop,
               conditionResult,
             });
-            routeLoopMetadata = transition.metadata;
-            activatedRouteTargetIds.add(transition.eventData.to);
-
-            await deps.store.updateWorkflowRun(workflowRun.id, { metadata: routeLoopMetadata });
-            deps.store
-              .createWorkflowEvent({
-                workflow_run_id: workflowRun.id,
-                event_type: 'node_routed',
+            assertRouteTargetCanBeActivated(transition.eventData.to, nodeOutputs);
+            const selectedRerunNodeIds = collectSelectedRouteRerunNodeIds({
+              routeLoopNode: node,
+              selectedTargetId: transition.eventData.to,
+              nodesById,
+              dependents,
+            });
+            const expectedExecutionSeq = routeLoopMetadata.executionSeq;
+            const persistedRun = await deps.store.persistRouteDecisionTransition({
+              workflow_run_id: workflowRun.id,
+              expected_execution_seq: expectedExecutionSeq,
+              metadata: transition.metadata,
+              event: {
                 step_name: node.id,
                 data: transition.eventData,
-              })
-              .catch((err: Error) => {
-                getLog().error(
-                  { err, workflowRunId: workflowRun.id, eventType: 'node_routed' },
-                  'workflow_event_persist_failed'
-                );
-              });
+              },
+            });
+            routeLoopMetadata = routeLoopRuntimeMetadataSchema.parse(persistedRun.metadata);
+            activatedRouteTargetIds.add(transition.eventData.to);
+            for (const rerunNodeId of selectedRerunNodeIds) {
+              scheduleRouteRerunNode(rerunNodeId);
+            }
 
-            if (transition.eventData.outcome === 'negative') {
+            const targetLayerIndex = nodeLayerIndex.get(transition.eventData.to);
+            if (targetLayerIndex !== undefined && targetLayerIndex <= layerIdx) {
               routeJumpTargetId = transition.eventData.to;
             }
 
@@ -3809,6 +3947,14 @@ export async function executeDagWorkflow(
           lastSequentialSessionId = output.sessionId;
         }
         if (output.state === 'failed') layerHadFailure = true;
+        if (
+          scheduledAtLayerStart.has(nodeId) &&
+          scheduledRouteRerunNodeIds.has(nodeId) &&
+          routeRerunScheduleVersions.get(nodeId) === scheduleVersionsAtLayerStart.get(nodeId) &&
+          output.state !== 'pending'
+        ) {
+          clearRouteRerunNode(nodeId);
+        }
       } else {
         // Should not happen — all errors are caught in the inner try-catch
         // Handle defensively: log the unexpected rejection

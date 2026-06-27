@@ -11,6 +11,7 @@ export type WorkflowNodeKind =
   | 'script'
   | 'approval'
   | 'loop'
+  | 'route_loop'
   | 'cancel';
 
 export type WorkflowNodeStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped';

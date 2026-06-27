@@ -17,6 +17,7 @@ import type {
   ListDashboardRunsOptions,
   DashboardRunsResult,
 } from '../schemas/workflow-run';
+import type { PersistRouteDecisionTransitionInput } from '@archon/workflows/store';
 import { createLogger } from '@archon/paths';
 import { deleteRetryRefsByRunId } from '@archon/git';
 
@@ -759,17 +760,6 @@ export async function updateWorkflowRun(
     getLog().error({ err }, 'db.workflow_run_update_failed');
     throw new Error(`Failed to update workflow run: ${err.message}`);
   }
-}
-
-export interface PersistRouteDecisionTransitionInput {
-  workflow_run_id: string;
-  expected_execution_seq: number;
-  metadata: Record<string, unknown>;
-  event: {
-    step_name: string;
-    data: object;
-    step_index?: number;
-  };
 }
 
 export async function persistRouteDecisionTransition(

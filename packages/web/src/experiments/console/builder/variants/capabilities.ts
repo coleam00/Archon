@@ -19,6 +19,8 @@ export const VARIANT_CAPABILITIES: Record<VariantId, VariantCapabilities> = {
   command: { honorsAiFields: true },
   // Loop forwards model/provider to each iteration's AI call but rejects retry.
   loop: { honorsAiFields: true, forbidsRetry: true },
+  // Route-loop is a controller node. It evaluates already-produced output and routes.
+  route_loop: { honorsAiFields: false, forbidsRetry: true },
   // Approval is a human gate; it makes no provider call (no AI fields) and
   // requires interactive mode because it pauses the run for human input.
   approval: { honorsAiFields: false, requiresInteractive: true },

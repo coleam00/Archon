@@ -15,6 +15,7 @@ const mockCompleteWorkflowRun = mock(() => Promise.resolve());
 const mockFailWorkflowRun = mock(() => Promise.resolve());
 const mockCancelWorkflowRun = mock(() => Promise.resolve());
 const mockPauseWorkflowRun = mock(() => Promise.resolve());
+const mockPersistRouteDecisionTransition = mock(() => Promise.resolve({ id: 'run-1' }));
 
 mock.module('../db/workflows', () => ({
   createWorkflowRun: mockCreateWorkflowRun,
@@ -30,6 +31,7 @@ mock.module('../db/workflows', () => ({
   failWorkflowRun: mockFailWorkflowRun,
   cancelWorkflowRun: mockCancelWorkflowRun,
   pauseWorkflowRun: mockPauseWorkflowRun,
+  persistRouteDecisionTransition: mockPersistRouteDecisionTransition,
 }));
 
 const mockCreateWorkflowEvent = mock(() => Promise.resolve());
@@ -124,6 +126,7 @@ describe('createWorkflowStore', () => {
       'failWorkflowRun',
       'pauseWorkflowRun',
       'cancelWorkflowRun',
+      'persistRouteDecisionTransition',
       'createWorkflowEvent',
       'getCompletedDagNodeOutputs',
       'upsertWorkflowNodeCheckpoint',
@@ -149,6 +152,21 @@ describe('createWorkflowStore', () => {
     const store = createWorkflowStore();
     const result = await store.getWorkflowRunStatus('nonexistent');
     expect(result).toBeNull();
+  });
+
+  test('delegates route decision persistence to DB', async () => {
+    const input: Parameters<IWorkflowStore['persistRouteDecisionTransition']>[0] = {
+      workflow_run_id: 'run-123',
+      expected_execution_seq: 0,
+      metadata: { executionSeq: 1 },
+      event: {
+        step_name: 'router',
+        data: { outcome: 'positive' },
+      },
+    };
+    const store = createWorkflowStore();
+    await store.persistRouteDecisionTransition(input);
+    expect(mockPersistRouteDecisionTransition).toHaveBeenCalledWith(input);
   });
 
   test('createWorkflowEvent catches and logs unexpected throws', async () => {

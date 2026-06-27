@@ -104,6 +104,23 @@ function createMockStore(): IWorkflowStore {
       })
     ),
     updateWorkflowRun: mock(() => Promise.resolve()),
+    persistRouteDecisionTransition: mock(
+      (input: Parameters<IWorkflowStore['persistRouteDecisionTransition']>[0]) =>
+        Promise.resolve({
+          id: input.workflow_run_id,
+          workflow_name: 'mock',
+          conversation_id: 'conv-mock',
+          parent_conversation_id: null,
+          codebase_id: null,
+          status: 'running' as const,
+          user_message: 'mock message',
+          metadata: input.metadata,
+          started_at: new Date(),
+          completed_at: null,
+          last_activity_at: null,
+          working_path: null,
+        })
+    ),
     updateWorkflowActivity: mock(() => Promise.resolve()),
     getWorkflowRunStatus: mock(() => Promise.resolve('running' as const)),
     completeWorkflowRun: mock(() => Promise.resolve()),
@@ -5464,6 +5481,7 @@ describe('executeDagWorkflow -- route_loop end-to-end TDD', () => {
     store: IWorkflowStore;
     calls: { nodeId: string; prompt: string }[];
     routedEvents: RouteLoopEventCall[];
+    routeDecisionCalls: Parameters<IWorkflowStore['persistRouteDecisionTransition']>[0][];
   };
 
   beforeEach(async () => {
@@ -5490,8 +5508,13 @@ describe('executeDagWorkflow -- route_loop end-to-end TDD', () => {
   async function runRouteLoopWorkflow(options: {
     reviewResults: ReviewResult[];
     maxIterations?: number;
+    includeUnrelatedFixDependent?: boolean;
+    persistRouteDecisionTransition?: IWorkflowStore['persistRouteDecisionTransition'];
   }): Promise<RouteLoopRunResult> {
     const store = createMockStore();
+    if (options.persistRouteDecisionTransition) {
+      store.persistRouteDecisionTransition = mock(options.persistRouteDecisionTransition);
+    }
     const mockDeps = createMockDeps(store);
     const platform = createMockPlatform();
     const workflowRun = makeWorkflowRun('route-loop-run');
@@ -5551,6 +5574,9 @@ describe('executeDagWorkflow -- route_loop end-to-end TDD', () => {
             required: ['result'],
           },
         },
+        ...(options.includeUnrelatedFixDependent
+          ? [{ id: 'audit', prompt: 'Audit unrelated fix output.', depends_on: ['fix'] }]
+          : []),
         {
           id: 'review-router',
           depends_on: ['review'],
@@ -5586,19 +5612,30 @@ describe('executeDagWorkflow -- route_loop end-to-end TDD', () => {
       minimalConfig
     );
 
-    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls.map(
-      call => call[0] as RouteLoopEventCall
+    const routeDecisionCalls = (
+      store.persistRouteDecisionTransition as ReturnType<typeof mock>
+    ).mock.calls.map(
+      call => call[0] as Parameters<IWorkflowStore['persistRouteDecisionTransition']>[0]
+    );
+    const routedEvents = routeDecisionCalls.map(
+      call =>
+        ({
+          event_type: 'node_routed',
+          step_name: call.event.step_name,
+          data: call.event.data,
+        }) satisfies RouteLoopEventCall
     );
 
     return {
       store,
       calls,
-      routedEvents: eventCalls.filter(call => call.event_type === 'node_routed'),
+      routedEvents,
+      routeDecisionCalls,
     };
   }
 
   it('reruns a negative route path until the route_loop condition passes', async () => {
-    const { store, calls, routedEvents } = await runRouteLoopWorkflow({
+    const { store, calls, routedEvents, routeDecisionCalls } = await runRouteLoopWorkflow({
       reviewResults: ['negative', 'positive'],
     });
 
@@ -5626,8 +5663,10 @@ describe('executeDagWorkflow -- route_loop end-to-end TDD', () => {
       attempt: 2,
       execution_seq: 2,
     });
-    expect(store.updateWorkflowRun).toHaveBeenLastCalledWith('route-loop-run', {
-      metadata: expect.objectContaining({
+    expect(routeDecisionCalls.map(call => call.expected_execution_seq)).toEqual([0, 1]);
+    expect(routeDecisionCalls[1]?.workflow_run_id).toBe('route-loop-run');
+    expect(routeDecisionCalls[1]?.metadata).toEqual(
+      expect.objectContaining({
         loopCounters: { 'review-router': 0 },
         nodeAttempts: { 'review-router': 2 },
         executionSeq: 2,
@@ -5647,10 +5686,73 @@ describe('executeDagWorkflow -- route_loop end-to-end TDD', () => {
             execution_seq: 2,
           }),
         }),
-      }),
-    });
+      })
+    );
+    expect(store.persistRouteDecisionTransition).toHaveBeenCalledTimes(2);
+    expect(store.updateWorkflowRun).not.toHaveBeenCalledWith('route-loop-run', expect.anything());
+    expect(
+      (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls.some(
+        call => (call[0] as RouteLoopEventCall).event_type === 'node_routed'
+      )
+    ).toBe(false);
     expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
     expect(store.failWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('reruns multiple negative route attempts without clearing a fresh router rerun schedule', async () => {
+    const { calls, routedEvents } = await runRouteLoopWorkflow({
+      reviewResults: ['negative', 'negative', 'positive'],
+    });
+
+    expect(calls.map(call => call.nodeId)).toEqual([
+      'fix',
+      'review',
+      'fix',
+      'review',
+      'fix',
+      'review',
+      'done',
+    ]);
+    expect(routedEvents.map(event => event.data?.outcome)).toEqual([
+      'negative',
+      'negative',
+      'positive',
+    ]);
+    expect(routedEvents.map(event => event.data?.execution_seq)).toEqual([1, 2, 3]);
+  });
+
+  it('does not rerun unrelated completed descendants when revisiting the negative path layer', async () => {
+    const { calls } = await runRouteLoopWorkflow({
+      reviewResults: ['negative', 'positive'],
+      includeUnrelatedFixDependent: true,
+    });
+
+    expect(calls.filter(call => call.nodeId === 'audit')).toHaveLength(1);
+    expect(calls.map(call => call.nodeId)).toEqual([
+      'fix',
+      'review',
+      'audit',
+      'fix',
+      'review',
+      'done',
+    ]);
+  });
+
+  it('fails the workflow when durable route-decision persistence rejects a stale write', async () => {
+    const { store, calls, routedEvents } = await runRouteLoopWorkflow({
+      reviewResults: ['negative'],
+      persistRouteDecisionTransition: async () => {
+        throw new Error('stale route decision');
+      },
+    });
+
+    expect(calls.map(call => call.nodeId)).toEqual(['fix', 'review']);
+    expect(routedEvents).toHaveLength(1);
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(store.failWorkflowRun).toHaveBeenCalledWith(
+      'route-loop-run',
+      expect.stringContaining('stale route decision')
+    );
   });
 
   it('routes to exhausted on the second false result when max_iterations is 1', async () => {
