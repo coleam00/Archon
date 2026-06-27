@@ -87,6 +87,10 @@ function safeTotals(value: unknown): Record<string, number> {
   );
 }
 
+function safeString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
 function splitParts(value?: string): string[] {
   return (value ?? '')
     .split('|')
@@ -129,6 +133,8 @@ export function TTTSLocalOperatorsPage(): React.ReactElement {
   const totals = safeTotals(payload.totals);
   const laneCounts = safeTotals(payload.lane_counts);
   const icpCounts = safeTotals(payload.icp_counts);
+  const googleSheetUrl = safeString(payload.google_sheet_url);
+  const generatedAt = safeString(payload.generated_at);
   const notes = Array.isArray(payload.notes)
     ? payload.notes.filter((n): n is string => typeof n === 'string')
     : [];
@@ -209,9 +215,9 @@ export function TTTSLocalOperatorsPage(): React.ReactElement {
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            {payload.google_sheet_url && (
+            {googleSheetUrl && (
               <a
-                href={payload.google_sheet_url}
+                href={googleSheetUrl}
                 target="_blank"
                 rel="noreferrer"
                 className="inline-flex items-center gap-2 rounded-md border border-primary/40 bg-primary/10 px-3 py-2 text-xs font-medium text-primary hover:bg-primary/15"
@@ -221,7 +227,7 @@ export function TTTSLocalOperatorsPage(): React.ReactElement {
               </a>
             )}
             <span className="rounded-full border border-border bg-surface-elevated px-3 py-2 text-xs text-text-secondary">
-              generated {normalizeDate(payload.generated_at)}
+              generated {normalizeDate(generatedAt)}
             </span>
           </div>
         </div>
