@@ -1,4 +1,5 @@
 ## Codebase Patterns
+- Route-loop debug surfaces should preserve raw historical events while projecting latest node state separately; API tests should assert both `events` history and `nodeStates` latest projection.
 - Route-loop execution now has a minimal route-activation path for the US2 TDD flow: negative routes can re-enter the selected target, positive routes activate only the success target, and exhausted routes remain completed control-flow outcomes.
 - Route-loop runtime transitions are centralized in `packages/workflows/src/route-loop-state.ts`; use `applyRouteLoopTransition()` for negative counters, positive resets, route-loop attempts, execution sequence, route activation metadata, route-loop output, and safe condition redaction.
 - Durable route-decision persistence now has a core DB transaction helper in `packages/core/src/db/workflows.ts`; future store-adapter work should wire route decisions through `persistRouteDecisionTransition()` instead of generic `updateWorkflowRun()` plus best-effort event writes.
@@ -122,4 +123,19 @@
 - The route-loop executor now schedules reruns with a versioned rerun set so a freshly scheduled controller rerun is not cleared by the previous execution of that same layer.
 - Durable route decisions now flow through `IWorkflowStore.persistRouteDecisionTransition()` instead of separate `updateWorkflowRun()` and `createWorkflowEvent()` calls.
 - The temporary Web builder route-loop compatibility fix is centralized in `builder/types/wire.ts` so future OpenAPI regeneration can replace it cleanly.
+---
+## 2026-06-27 18:01 +07 - Phase 5.1: Tests For User Story 3 (iter 7)
+**Tasks completed this iter:** T040 (Add latest-attempt output reference tests), T041 (Add route-loop event projection tests), T042 (Add API run detail route-loop tests)
+**Status:** completed:true
+
+- Per-task summary lines:
+  - T040 - Added latest completed attempt projection coverage for `$node.output` and field resolution in `packages/workflows/src/output-ref.test.ts`, with the shared attempt projection helper in `packages/workflows/src/output-ref.ts`.
+  - T041 - Added core workflow event tests proving prior route attempts and `node_routed` metadata stay in raw event history while latest completed route-loop attempts project correctly in `packages/core/src/db/workflow-events.test.ts`.
+  - T042 - Added API run detail tests proving `node_routed` events, route-loop controller outputs, latest projected node states, and historical attempts are returned together in `packages/server/src/routes/api.workflow-runs.test.ts`.
+
+**Learnings for future iterations:**
+- Route-loop debug behavior has two distinct surfaces: raw `events` keep every attempt, while projected helpers and `nodeStates` answer "what is latest now".
+- Targeted tests spanning workflows, core, and server should still run as separate `bun test` invocations to avoid repo-wide Bun mock pollution.
+- Touched-file Prettier is still the practical formatting gate for this branch because full format check has pre-existing unrelated support-file failures.
+- Verification passed `bun test packages/workflows/src/output-ref.test.ts`, `bun test packages/core/src/db/workflow-events.test.ts`, `bun test packages/server/src/routes/api.workflow-runs.test.ts`, `bun run type-check`, `bun run lint --max-warnings 0`, and touched-file Prettier checks.
 ---

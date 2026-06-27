@@ -947,6 +947,189 @@ describe('GET /api/workflows/runs/:runId', () => {
     ]);
   });
 
+  test('returns route-loop decisions and latest route output while preserving historical attempts', async () => {
+    const negativeDecision = {
+      from: 'review',
+      outcome: 'negative',
+      to: 'fix',
+      condition: "$review.output.result == '<redacted>'",
+      condition_result: false,
+      negative_count: 1,
+      max_iterations: 10,
+      attempt: 1,
+      execution_seq: 3,
+    } satisfies Record<string, unknown>;
+    const positiveDecision = {
+      from: 'review',
+      outcome: 'positive',
+      to: 'done',
+      condition: "$review.output.result == '<redacted>'",
+      condition_result: true,
+      negative_count: 1,
+      max_iterations: 10,
+      attempt: 2,
+      execution_seq: 6,
+    } satisfies Record<string, unknown>;
+    const events: MockWorkflowEvent[] = [
+      {
+        id: 'evt-fix-1',
+        workflow_run_id: 'run-uuid-1',
+        event_type: 'node_completed',
+        step_index: null,
+        step_name: 'fix',
+        data: { node_id: 'fix', node_output: 'fix attempt 1', attempt: 1, execution_seq: 1 },
+        created_at: NOW,
+      },
+      {
+        id: 'evt-review-1',
+        workflow_run_id: 'run-uuid-1',
+        event_type: 'node_completed',
+        step_index: null,
+        step_name: 'review',
+        data: {
+          node_id: 'review',
+          node_output: '{"result":"negative"}',
+          attempt: 1,
+          execution_seq: 2,
+        },
+        created_at: NOW,
+      },
+      {
+        id: 'evt-route-negative',
+        workflow_run_id: 'run-uuid-1',
+        event_type: 'node_routed',
+        step_index: null,
+        step_name: 'review-router',
+        data: negativeDecision,
+        created_at: NOW,
+      },
+      {
+        id: 'evt-router-output-negative',
+        workflow_run_id: 'run-uuid-1',
+        event_type: 'node_completed',
+        step_index: null,
+        step_name: 'review-router',
+        data: {
+          node_id: 'review-router',
+          node_output: JSON.stringify(negativeDecision),
+          structured_output: negativeDecision,
+          attempt: 1,
+          execution_seq: 3,
+          duration_ms: 0,
+        },
+        created_at: NOW,
+      },
+      {
+        id: 'evt-fix-2',
+        workflow_run_id: 'run-uuid-1',
+        event_type: 'node_completed',
+        step_index: null,
+        step_name: 'fix',
+        data: { node_id: 'fix', node_output: 'fix attempt 2', attempt: 2, execution_seq: 4 },
+        created_at: NOW,
+      },
+      {
+        id: 'evt-review-2',
+        workflow_run_id: 'run-uuid-1',
+        event_type: 'node_completed',
+        step_index: null,
+        step_name: 'review',
+        data: {
+          node_id: 'review',
+          node_output: '{"result":"positive"}',
+          attempt: 2,
+          execution_seq: 5,
+        },
+        created_at: NOW,
+      },
+      {
+        id: 'evt-route-positive',
+        workflow_run_id: 'run-uuid-1',
+        event_type: 'node_routed',
+        step_index: null,
+        step_name: 'review-router',
+        data: positiveDecision,
+        created_at: NOW,
+      },
+      {
+        id: 'evt-router-output-positive',
+        workflow_run_id: 'run-uuid-1',
+        event_type: 'node_completed',
+        step_index: null,
+        step_name: 'review-router',
+        data: {
+          node_id: 'review-router',
+          node_output: JSON.stringify(positiveDecision),
+          structured_output: positiveDecision,
+          attempt: 2,
+          execution_seq: 6,
+          duration_ms: 0,
+        },
+        created_at: NOW,
+      },
+      {
+        id: 'evt-done',
+        workflow_run_id: 'run-uuid-1',
+        event_type: 'node_completed',
+        step_index: null,
+        step_name: 'done',
+        data: { node_id: 'done', node_output: 'done', attempt: 1, execution_seq: 7 },
+        created_at: NOW,
+      },
+    ];
+
+    mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_RUNNING_RUN);
+    mockListWorkflowEvents.mockImplementationOnce(async () => events);
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-1');
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      events: MockWorkflowEvent[];
+      nodeStates: Array<{ nodeId: string; status: string; retryEpoch: number; duration?: number }>;
+    };
+
+    const routedEvents = body.events.filter(event => event.event_type === 'node_routed');
+    expect(routedEvents.map(event => event.data)).toEqual([negativeDecision, positiveDecision]);
+    expect(routedEvents.map(event => event.data.attempt)).toEqual([1, 2]);
+    expect(routedEvents.map(event => event.data.execution_seq)).toEqual([3, 6]);
+
+    const reviewAttempts = body.events.filter(
+      event => event.event_type === 'node_completed' && event.step_name === 'review'
+    );
+    expect(reviewAttempts.map(event => event.data.attempt)).toEqual([1, 2]);
+    expect(reviewAttempts.map(event => event.data.node_output)).toEqual([
+      '{"result":"negative"}',
+      '{"result":"positive"}',
+    ]);
+
+    const routeOutputs = body.events.filter(
+      event => event.event_type === 'node_completed' && event.step_name === 'review-router'
+    );
+    expect(routeOutputs.map(event => event.data.attempt)).toEqual([1, 2]);
+    const latestRouteOutput = routeOutputs[routeOutputs.length - 1]?.data.node_output;
+    expect(typeof latestRouteOutput).toBe('string');
+    expect(JSON.parse(latestRouteOutput as string) as Record<string, unknown>).toEqual(
+      positiveDecision
+    );
+
+    expect(body.nodeStates).toEqual(
+      expect.arrayContaining([
+        { nodeId: 'fix', name: 'fix', status: 'completed', retryEpoch: 0 },
+        { nodeId: 'review', name: 'review', status: 'completed', retryEpoch: 0 },
+        {
+          nodeId: 'review-router',
+          name: 'review-router',
+          status: 'completed',
+          retryEpoch: 0,
+          duration: 0,
+        },
+        { nodeId: 'done', name: 'done', status: 'completed', retryEpoch: 0 },
+      ])
+    );
+    expect(body.nodeStates).toHaveLength(4);
+  });
+
   test('returns 404 when run not found', async () => {
     mockGetWorkflowRun.mockImplementationOnce(async () => null);
 

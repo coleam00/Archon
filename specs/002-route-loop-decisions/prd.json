@@ -412,7 +412,7 @@
     },
     {
       "title": "Phase 5.1: Tests For User Story 3",
-      "completed": false,
+      "completed": true,
       "tasks": [
         {
           "id": "T040",
@@ -420,7 +420,7 @@
           "description": "[P] [US3] Add output reference tests asserting `$node.output` resolves to the latest completed attempt in `packages/workflows/src/output-ref.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 40,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -429,7 +429,7 @@
           "description": "[P] [US3] Add event projection tests for prior attempts and `node_routed` metadata preservation in `packages/core/src/db/workflow-events.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 41,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -438,7 +438,7 @@
           "description": "[P] [US3] Add API run detail tests for `node_routed` events, route-loop outputs, latest attempts, and historical attempts in `packages/server/src/routes/api.workflow-runs.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 42,
-          "passes": false,
+          "passes": true,
           "notes": ""
         }
       ],

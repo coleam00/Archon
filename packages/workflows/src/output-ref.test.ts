@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'bun:test';
 
-import { declaredFieldsFromSchema, OutputRefError, resolveNodeOutputField } from './output-ref';
+import {
+  declaredFieldsFromSchema,
+  latestCompletedNodeOutput,
+  OutputRefError,
+  resolveNodeOutputField,
+} from './output-ref';
+import type { NodeOutputAttempt } from './output-ref';
 import type { NodeOutput } from './schemas';
 
 function completed(
@@ -39,6 +45,58 @@ describe('declaredFieldsFromSchema', () => {
 
   it('returns undefined when properties is explicitly null', () => {
     expect(declaredFieldsFromSchema({ type: 'object', properties: null })).toBeUndefined();
+  });
+});
+
+describe('latestCompletedNodeOutput - attempt projection for $node.output', () => {
+  it('resolves $node.output to the highest numbered completed attempt', () => {
+    const attempts: NodeOutputAttempt[] = [
+      { attempt: 1, output: completed('first review') },
+      { attempt: 3, output: completed('third review') },
+      { attempt: 2, output: completed('second review') },
+    ];
+
+    expect(latestCompletedNodeOutput(attempts)?.output).toBe('third review');
+  });
+
+  it('ignores newer non-completed attempts when resolving $node.output', () => {
+    const attempts: NodeOutputAttempt[] = [
+      { attempt: 1, output: completed('last good review') },
+      { attempt: 2, output: { state: 'failed', output: '', error: 'review failed' } },
+      { attempt: 3, output: { state: 'skipped', output: '' } },
+      { attempt: 4, output: { state: 'pending', output: '' } },
+    ];
+
+    expect(latestCompletedNodeOutput(attempts)?.output).toBe('last good review');
+  });
+
+  it('returns undefined when no completed attempt exists', () => {
+    const attempts: NodeOutputAttempt[] = [
+      { attempt: 1, output: { state: 'failed', output: '', error: 'review failed' } },
+      { attempt: 2, output: { state: 'skipped', output: '' } },
+    ];
+
+    expect(latestCompletedNodeOutput(attempts)).toBeUndefined();
+  });
+
+  it('resolves fields from the latest completed attempt output contract', () => {
+    const attempts: NodeOutputAttempt[] = [
+      {
+        attempt: 1,
+        output: completed('{"result":"negative"}', { result: 'negative' }, ['result']),
+      },
+      {
+        attempt: 2,
+        output: completed('{"result":"positive"}', { result: 'positive' }, ['result']),
+      },
+    ];
+    const latest = latestCompletedNodeOutput(attempts);
+
+    if (latest === undefined) throw new Error('expected latest completed attempt');
+    expect(resolveNodeOutputField(latest, 'review', 'result')).toEqual({
+      kind: 'value',
+      value: 'positive',
+    });
   });
 });
 
