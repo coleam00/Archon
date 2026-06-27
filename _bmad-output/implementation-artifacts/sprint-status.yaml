@@ -1,5 +1,5 @@
 # generated: 2026-06-26 23:10:09 +0700
-# last_updated: 2026-06-26 23:10:09 +0700
+# last_updated: 2026-06-27 13:29:35 +0700
 # project: Archon
 # project_key: NOKEY
 # tracking_system: file-system
@@ -41,16 +41,16 @@
 # - Retrospective appends its action items to action_items; sprint-status surfaces open ones
 
 generated: "2026-06-26 23:10:09 +0700"
-last_updated: "2026-06-26 23:10:09 +0700"
+last_updated: "2026-06-27 13:29:35 +0700"
 project: Archon
 project_key: NOKEY
 tracking_system: file-system
 story_location: /Users/dale/Desktop/workspace/OceanLabs/workflow-engine/Archon/_bmad-output/implementation-artifacts
 
 development_status:
-  epic-1: backlog
+  epic-1: in-progress
   1-1-declare-route-loop-as-a-controller-node: backlog
-  1-2-validate-route-loop-source-and-routes: backlog
+  1-2-validate-route-loop-source-and-routes: ready-for-dev
   1-3-validate-route-loop-conditions-strictly: backlog
   1-4-preserve-existing-validation-behavior-outside-route-loop: backlog
   epic-1-retrospective: optional
