@@ -3,5 +3,7 @@
   "spec_file": "specs/002-route-loop-decisions/spec.md",
   "source_requirement": "plans/grill-me/260625-2337-route-loop-decisions.md",
   "source_mode": "grill-me normal with explicit decision log request",
-  "created": "2026-06-27"
+  "created": "2026-06-27",
+  "ralph_prd_file": "specs/002-route-loop-decisions/prd.json",
+  "ralph_progress_file": "specs/002-route-loop-decisions/progress.txt"
 }
