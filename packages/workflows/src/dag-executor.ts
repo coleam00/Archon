@@ -890,6 +890,49 @@ function collectSelectedRouteRerunNodeIds(params: {
   return rerunNodeIds;
 }
 
+function collectRouteLoopInitialPathNodeIds(nodes: readonly DagNode[]): Set<string> {
+  const nodesById = new Map(nodes.map(node => [node.id, node]));
+  const initialPathNodeIds = new Set<string>();
+
+  const visitAncestors = (nodeId: string): void => {
+    const node = nodesById.get(nodeId);
+    if (!node) return;
+    for (const dep of node.depends_on ?? []) {
+      if (initialPathNodeIds.has(dep)) continue;
+      initialPathNodeIds.add(dep);
+      visitAncestors(dep);
+    }
+  };
+
+  for (const node of nodes) {
+    if (!isRouteLoopNode(node)) continue;
+    initialPathNodeIds.add(node.id);
+    visitAncestors(node.id);
+  }
+
+  return initialPathNodeIds;
+}
+
+function collectLatestRouteActivationTargetIds(params: {
+  metadata: RouteLoopRuntimeMetadata;
+  routeTargetIds: Set<string>;
+  invalidatedNodeIds?: readonly string[];
+}): Set<string> {
+  const latestByRouteLoop = new Map<string, RouteLoopRuntimeMetadata['routeActivations'][string]>();
+  const invalidatedNodeIds = new Set(params.invalidatedNodeIds ?? []);
+
+  for (const activation of Object.values(params.metadata.routeActivations)) {
+    if (!params.routeTargetIds.has(activation.target_node_id)) continue;
+    if (invalidatedNodeIds.has(activation.route_loop_node_id)) continue;
+    const existing = latestByRouteLoop.get(activation.route_loop_node_id);
+    if (!existing || activation.execution_seq > existing.execution_seq) {
+      latestByRouteLoop.set(activation.route_loop_node_id, activation);
+    }
+  }
+
+  return new Set(Array.from(latestByRouteLoop.values(), activation => activation.target_node_id));
+}
+
 function assertRouteTargetCanBeActivated(
   targetNodeId: string,
   nodeOutputs: Map<string, NodeOutput>
@@ -3100,6 +3143,7 @@ export async function executeDagWorkflow(
   const nodesById = new Map(workflow.nodes.map(node => [node.id, node]));
   const dependents = buildDependentsMap(workflow.nodes);
   let routeRerunScheduleVersion = 0;
+  let routeDecisionQueue: Promise<void> = Promise.resolve();
   const scheduleRouteRerunNode = (nodeId: string): void => {
     scheduledRouteRerunNodeIds.add(nodeId);
     routeRerunScheduleVersion += 1;
@@ -3114,22 +3158,43 @@ export async function executeDagWorkflow(
     : routeLoopRuntimeMetadataSchema.parse({});
 
   for (const node of workflow.nodes) {
-    if ((node.depends_on ?? []).length === 0) {
-      activatedRouteTargetIds.add(node.id);
-    }
     if (isRouteLoopNode(node)) {
       routeTargetIds.add(node.route_loop.routes.positive);
       routeTargetIds.add(node.route_loop.routes.negative);
       routeTargetIds.add(node.route_loop.routes.exhausted);
     }
   }
-  if (hasRouteLoopNodes) {
-    for (const activation of Object.values(routeLoopMetadata.routeActivations)) {
-      if (routeTargetIds.has(activation.target_node_id)) {
-        activatedRouteTargetIds.add(activation.target_node_id);
+  const routeLoopInitialPathNodeIds = collectRouteLoopInitialPathNodeIds(workflow.nodes);
+  for (const node of workflow.nodes) {
+    if ((node.depends_on ?? []).length === 0) {
+      if (!routeTargetIds.has(node.id) || routeLoopInitialPathNodeIds.has(node.id)) {
+        activatedRouteTargetIds.add(node.id);
       }
     }
   }
+  if (hasRouteLoopNodes) {
+    for (const targetNodeId of collectLatestRouteActivationTargetIds({
+      metadata: routeLoopMetadata,
+      routeTargetIds,
+      invalidatedNodeIds: retryContext?.invalidatedNodeIds,
+    })) {
+      activatedRouteTargetIds.add(targetNodeId);
+    }
+  }
+
+  const serializeRouteDecision = async <T>(operation: () => Promise<T>): Promise<T> => {
+    const previous = routeDecisionQueue;
+    let release!: () => void;
+    routeDecisionQueue = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
+  };
 
   layers.forEach((layer, index) => {
     for (const node of layer) {
@@ -3197,7 +3262,8 @@ export async function executeDagWorkflow(
     const layerExecutableNodes = layer.filter(isCheckpointableExecutableNode);
     const scheduledAtLayerStart = new Set(scheduledRouteRerunNodeIds);
     const scheduleVersionsAtLayerStart = new Map(routeRerunScheduleVersions);
-    let routeJumpTargetId: string | undefined;
+    const activatedRouteTargetsAtLayerStart = new Set(activatedRouteTargetIds);
+    let routeJumpLayerIndex: number | undefined;
 
     if (isParallelLayer) {
       lastSequentialSessionId = undefined; // reset — parallel nodes can't share sessions
@@ -3214,15 +3280,39 @@ export async function executeDagWorkflow(
       );
     }
 
+    const isBlockedByInactiveRouteTarget = (
+      nodeId: string,
+      visiting = new Set<string>()
+    ): boolean => {
+      if (
+        routeTargetIds.has(nodeId) &&
+        !activatedRouteTargetsAtLayerStart.has(nodeId) &&
+        !scheduledAtLayerStart.has(nodeId)
+      ) {
+        return true;
+      }
+      if (visiting.has(nodeId)) return false;
+      visiting.add(nodeId);
+      const node = nodesById.get(nodeId);
+      if (!node) {
+        visiting.delete(nodeId);
+        return false;
+      }
+      for (const dep of node.depends_on ?? []) {
+        if (isBlockedByInactiveRouteTarget(dep, visiting)) {
+          visiting.delete(nodeId);
+          return true;
+        }
+      }
+      visiting.delete(nodeId);
+      return false;
+    };
+
     // Execute all nodes in the layer concurrently
     const layerResults = await Promise.allSettled(
       layer.map(async (node): Promise<{ nodeId: string; output: NodeExecutionResult }> => {
         try {
-          if (
-            hasRouteLoopNodes &&
-            routeTargetIds.has(node.id) &&
-            !activatedRouteTargetIds.has(node.id)
-          ) {
+          if (hasRouteLoopNodes && isBlockedByInactiveRouteTarget(node.id)) {
             return { nodeId: node.id, output: { state: 'pending' as const, output: '' } };
           }
 
@@ -3601,28 +3691,41 @@ export async function executeDagWorkflow(
               };
             }
 
-            const transition = applyRouteLoopTransition({
-              metadata: routeLoopMetadata,
-              routeLoopNodeId: node.id,
-              routeLoop: node.route_loop,
-              conditionResult,
-            });
-            assertRouteTargetCanBeActivated(transition.eventData.to, nodeOutputs);
-            const selectedRerunNodeIds = collectSelectedRouteRerunNodeIds({
-              routeLoopNode: node,
-              selectedTargetId: transition.eventData.to,
-              nodesById,
-              dependents,
-            });
-            const expectedExecutionSeq = routeLoopMetadata.executionSeq;
-            const persistedRun = await deps.store.persistRouteDecisionTransition({
-              workflow_run_id: workflowRun.id,
-              expected_execution_seq: expectedExecutionSeq,
-              metadata: transition.metadata,
-              event: {
-                step_name: node.id,
-                data: transition.eventData,
-              },
+            const { transition, selectedRerunNodeIds } = await serializeRouteDecision(async () => {
+              const nextTransition = applyRouteLoopTransition({
+                metadata: routeLoopMetadata,
+                routeLoopNodeId: node.id,
+                routeLoop: node.route_loop,
+                conditionResult,
+              });
+              assertRouteTargetCanBeActivated(nextTransition.eventData.to, nodeOutputs);
+              const nextSelectedRerunNodeIds = collectSelectedRouteRerunNodeIds({
+                routeLoopNode: node,
+                selectedTargetId: nextTransition.eventData.to,
+                nodesById,
+                dependents,
+              });
+              const expectedExecutionSeq = routeLoopMetadata.executionSeq;
+              const persistedRun = await deps.store.persistRouteDecisionTransition({
+                workflow_run_id: workflowRun.id,
+                expected_execution_seq: expectedExecutionSeq,
+                metadata: nextTransition.metadata,
+                event: {
+                  step_name: node.id,
+                  data: nextTransition.eventData,
+                },
+                completed_event: {
+                  step_name: node.id,
+                  data: withRetryEpochData(workflowRun, retryContext, {
+                    node_output: nextTransition.output.output,
+                  }),
+                },
+              });
+              routeLoopMetadata = routeLoopRuntimeMetadataSchema.parse(persistedRun.metadata);
+              return {
+                transition: nextTransition,
+                selectedRerunNodeIds: nextSelectedRerunNodeIds,
+              };
             });
             getWorkflowEventEmitter().emit({
               type: 'node_routed',
@@ -3631,7 +3734,6 @@ export async function executeDagWorkflow(
               nodeName: node.id,
               data: transition.eventData,
             });
-            routeLoopMetadata = routeLoopRuntimeMetadataSchema.parse(persistedRun.metadata);
             activatedRouteTargetIds.add(transition.eventData.to);
             for (const rerunNodeId of selectedRerunNodeIds) {
               scheduleRouteRerunNode(rerunNodeId);
@@ -3639,7 +3741,10 @@ export async function executeDagWorkflow(
 
             const targetLayerIndex = nodeLayerIndex.get(transition.eventData.to);
             if (targetLayerIndex !== undefined && targetLayerIndex <= layerIdx) {
-              routeJumpTargetId = transition.eventData.to;
+              routeJumpLayerIndex =
+                routeJumpLayerIndex === undefined
+                  ? targetLayerIndex
+                  : Math.min(routeJumpLayerIndex, targetLayerIndex);
             }
 
             return {
@@ -3928,7 +4033,9 @@ export async function executeDagWorkflow(
           }
         }
         if (output.loopIterations !== undefined) totalLoopIterations += output.loopIterations;
-        nodeOutputs.set(nodeId, output);
+        if (output.state !== 'pending') {
+          nodeOutputs.set(nodeId, output);
+        }
         // Typed artifact: when a node declares `output_type`, persist its output
         // as a typed sidecar (nodes/<id>.md + .meta.json) so other nodes and
         // later runs can locate it by type. Best-effort — a metadata write must
@@ -3987,11 +4094,8 @@ export async function executeDagWorkflow(
       getLog().warn({ layerIdx, nodeCount: layer.length }, 'dag_layer_had_failures');
     }
 
-    if (routeJumpTargetId !== undefined) {
-      const targetLayerIndex = nodeLayerIndex.get(routeJumpTargetId);
-      if (targetLayerIndex !== undefined && targetLayerIndex <= layerIdx) {
-        layerIdx = targetLayerIndex - 1;
-      }
+    if (routeJumpLayerIndex !== undefined && routeJumpLayerIndex <= layerIdx) {
+      layerIdx = routeJumpLayerIndex - 1;
     }
 
     // Check for non-running status between DAG layers (cancellation, deletion, pause)

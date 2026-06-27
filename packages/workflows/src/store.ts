@@ -21,6 +21,11 @@ export interface PersistRouteDecisionTransitionInput {
     data: Record<string, unknown>;
     step_index?: number;
   };
+  completed_event: {
+    step_name: string;
+    data: Record<string, unknown>;
+    step_index?: number;
+  };
 }
 
 export type { WorkflowNodeSession } from './schemas';

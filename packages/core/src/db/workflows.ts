@@ -1,7 +1,7 @@
 /**
  * Database operations for workflow runs
  */
-import { pool, getDialect, getDatabaseType } from './connection';
+import { pool, getDialect, getDatabaseType, getDatabase } from './connection';
 import type { IDatabase, SqlDialect } from './adapters/types';
 import type {
   WorkflowRun,
@@ -771,78 +771,90 @@ export async function persistRouteDecisionTransition(
   routeLoopRuntimeMetadataSchema.parse(input.metadata);
 
   try {
-    await pool.query('BEGIN', []);
+    return await getDatabase().withTransaction(async query => {
+      const selectSql = isPostgres
+        ? 'SELECT * FROM remote_agent_workflow_runs WHERE id = $1 FOR UPDATE'
+        : 'SELECT * FROM remote_agent_workflow_runs WHERE id = $1';
+      const selectResult = await query<WorkflowRun>(selectSql, [input.workflow_run_id]);
+      const currentRow = selectResult.rows[0];
+      if (!currentRow) {
+        throw new Error(`Workflow run not found: ${input.workflow_run_id}`);
+      }
 
-    const selectSql = isPostgres
-      ? 'SELECT * FROM remote_agent_workflow_runs WHERE id = $1 FOR UPDATE'
-      : 'SELECT * FROM remote_agent_workflow_runs WHERE id = $1';
-    const selectResult = await pool.query<WorkflowRun>(selectSql, [input.workflow_run_id]);
-    const currentRow = selectResult.rows[0];
-    if (!currentRow) {
-      throw new Error(`Workflow run not found: ${input.workflow_run_id}`);
-    }
+      const currentRun = normalizeWorkflowRun(currentRow);
+      const currentMetadata = routeLoopRuntimeMetadataSchema.parse(currentRun.metadata);
+      if (currentMetadata.executionSeq !== input.expected_execution_seq) {
+        throw new WorkflowRouteDecisionStaleWriteError(
+          input.workflow_run_id,
+          input.expected_execution_seq,
+          currentMetadata.executionSeq
+        );
+      }
 
-    const currentRun = normalizeWorkflowRun(currentRow);
-    const currentMetadata = routeLoopRuntimeMetadataSchema.parse(currentRun.metadata);
-    if (currentMetadata.executionSeq !== input.expected_execution_seq) {
-      throw new WorkflowRouteDecisionStaleWriteError(
-        input.workflow_run_id,
-        input.expected_execution_seq,
-        currentMetadata.executionSeq
-      );
-    }
-
-    const metadataJson = JSON.stringify(input.metadata);
-    let updatedRow: WorkflowRun | undefined;
-    if (isPostgres) {
-      const updateResult = await pool.query<WorkflowRun>(
-        `UPDATE remote_agent_workflow_runs
+      const metadataJson = JSON.stringify(input.metadata);
+      let updatedRow: WorkflowRun | undefined;
+      if (isPostgres) {
+        const updateResult = await query<WorkflowRun>(
+          `UPDATE remote_agent_workflow_runs
          SET metadata = ${dialect.jsonMerge('metadata', 2)}, last_activity_at = ${dialect.now()}
          WHERE id = $1
          RETURNING *`,
-        [input.workflow_run_id, metadataJson]
-      );
-      updatedRow = updateResult.rows[0];
-    } else {
-      const updateResult = await pool.query(
-        `UPDATE remote_agent_workflow_runs
+          [input.workflow_run_id, metadataJson]
+        );
+        updatedRow = updateResult.rows[0];
+      } else {
+        const updateResult = await query(
+          `UPDATE remote_agent_workflow_runs
          SET metadata = ${dialect.jsonMerge('metadata', 2)}, last_activity_at = ${dialect.now()}
          WHERE id = $1`,
-        [input.workflow_run_id, metadataJson]
-      );
-      if (updateResult.rowCount === 0) {
+          [input.workflow_run_id, metadataJson]
+        );
+        if (updateResult.rowCount === 0) {
+          throw new Error(`Workflow run update returned no rows: ${input.workflow_run_id}`);
+        }
+
+        const updatedResult = await query<WorkflowRun>(
+          'SELECT * FROM remote_agent_workflow_runs WHERE id = $1',
+          [input.workflow_run_id]
+        );
+        updatedRow = updatedResult.rows[0];
+      }
+
+      if (!updatedRow) {
         throw new Error(`Workflow run update returned no rows: ${input.workflow_run_id}`);
       }
 
-      const updatedResult = await pool.query<WorkflowRun>(
-        'SELECT * FROM remote_agent_workflow_runs WHERE id = $1',
-        [input.workflow_run_id]
-      );
-      updatedRow = updatedResult.rows[0];
-    }
-
-    if (!updatedRow) {
-      throw new Error(`Workflow run update returned no rows: ${input.workflow_run_id}`);
-    }
-
-    const eventId = dialect.generateUuid();
-    await pool.query(
-      `INSERT INTO remote_agent_workflow_events (id, workflow_run_id, event_type, step_index, step_name, data)
+      const routedEventId = dialect.generateUuid();
+      await query(
+        `INSERT INTO remote_agent_workflow_events (id, workflow_run_id, event_type, step_index, step_name, data)
        VALUES ($1, $2, $3, $4, $5, $6)`,
-      [
-        eventId,
-        input.workflow_run_id,
-        'node_routed',
-        input.event.step_index ?? null,
-        input.event.step_name,
-        JSON.stringify(input.event.data),
-      ]
-    );
+        [
+          routedEventId,
+          input.workflow_run_id,
+          'node_routed',
+          input.event.step_index ?? null,
+          input.event.step_name,
+          JSON.stringify(input.event.data),
+        ]
+      );
 
-    await pool.query('COMMIT', []);
-    return normalizeWorkflowRun(updatedRow);
+      const completedEventId = dialect.generateUuid();
+      await query(
+        `INSERT INTO remote_agent_workflow_events (id, workflow_run_id, event_type, step_index, step_name, data)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+        [
+          completedEventId,
+          input.workflow_run_id,
+          'node_completed',
+          input.completed_event.step_index ?? null,
+          input.completed_event.step_name,
+          JSON.stringify(input.completed_event.data),
+        ]
+      );
+
+      return normalizeWorkflowRun(updatedRow);
+    });
   } catch (error) {
-    await rollback();
     if (error instanceof WorkflowRouteDecisionStaleWriteError) {
       throw error;
     }

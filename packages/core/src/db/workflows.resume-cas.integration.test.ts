@@ -32,6 +32,7 @@ const db = new SqliteAdapter(':memory:');
 
 mock.module('./connection', () => ({
   pool: db,
+  getDatabase: () => db,
   getDialect: () => sqliteDialect,
   getDatabaseType: () => 'sqlite',
 }));
@@ -186,6 +187,10 @@ describe('resumeWorkflowRun - real SQLite (CAS + orphan recovery)', () => {
         step_name: 'review-router',
         data: routedEventData,
       },
+      completed_event: {
+        step_name: 'review-router',
+        data: { node_output: JSON.stringify(routedEventData) },
+      },
     });
 
     await db.query("UPDATE remote_agent_workflow_runs SET status = 'failed' WHERE id = $1", [
@@ -206,11 +211,16 @@ describe('resumeWorkflowRun - real SQLite (CAS + orphan recovery)', () => {
        WHERE workflow_run_id = $1`,
       ['persisted-route-state']
     );
-    expect(events.rows).toHaveLength(1);
+    expect(events.rows).toHaveLength(2);
     expect(events.rows[0]).toMatchObject({
       event_type: 'node_routed',
       step_name: 'review-router',
       data: JSON.stringify(routedEventData),
+    });
+    expect(events.rows[1]).toMatchObject({
+      event_type: 'node_completed',
+      step_name: 'review-router',
+      data: JSON.stringify({ node_output: JSON.stringify(routedEventData) }),
     });
   });
 });

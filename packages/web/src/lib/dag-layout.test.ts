@@ -1,5 +1,10 @@
 import { describe, test, expect } from 'bun:test';
-import { resolveExecutionNodeDisplay, resolveNodeDisplay, dagNodesToReactFlow } from './dag-layout';
+import {
+  resolveExecutionNodeDisplay,
+  resolveNodeDisplay,
+  dagNodesToReactFlow,
+  hasCycle,
+} from './dag-layout';
 import type { DagNode } from '@/lib/api';
 
 type RouteLoopDagNode = DagNode & {
@@ -213,5 +218,26 @@ describe('dagNodesToReactFlow', () => {
       'review',
       'review_router',
     ]);
+  });
+});
+
+describe('hasCycle', () => {
+  test('ignores route_loop outcome edges during static dependency cycle detection', () => {
+    expect(
+      hasCycle(new Set(['review-router', 'fix', 'review']), [
+        { source: 'fix', target: 'review' },
+        { source: 'review', target: 'review-router' },
+        { source: 'review-router', sourceHandle: 'negative', target: 'fix' },
+      ])
+    ).toBe(false);
+  });
+
+  test('detects static dependency cycles', () => {
+    expect(
+      hasCycle(new Set(['a', 'b']), [
+        { source: 'a', target: 'b' },
+        { source: 'b', target: 'a' },
+      ])
+    ).toBe(true);
   });
 });

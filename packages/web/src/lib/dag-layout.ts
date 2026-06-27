@@ -156,6 +156,7 @@ export function dagNodesToReactFlow(dagNodes: readonly DagNode[]): {
     if (!routeLoop) continue;
     for (const outcome of ROUTE_OUTCOMES) {
       const target = routeLoop.routes[outcome];
+      if (!target) continue;
       const baseId = `${dn.id}->${target}`;
       pushEdge({
         id: edgeIds.has(baseId) ? `${baseId}:${outcome}` : baseId,
@@ -182,7 +183,7 @@ export function dagNodesToReactFlow(dagNodes: readonly DagNode[]): {
  */
 export function hasCycle(
   nodeIds: Set<string>,
-  edges: { source: string; target: string }[]
+  edges: { source: string; target: string; sourceHandle?: string | null }[]
 ): boolean {
   const inDegree = new Map<string, number>();
   const adjacency = new Map<string, string[]>();
@@ -193,6 +194,7 @@ export function hasCycle(
   }
 
   for (const edge of edges) {
+    if (ROUTE_OUTCOMES.some(outcome => outcome === edge.sourceHandle)) continue;
     if (nodeIds.has(edge.source) && nodeIds.has(edge.target) && edge.source !== edge.target) {
       inDegree.set(edge.target, (inDegree.get(edge.target) ?? 0) + 1);
       adjacency.get(edge.source)?.push(edge.target);

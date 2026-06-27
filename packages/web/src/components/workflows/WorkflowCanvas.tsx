@@ -54,6 +54,18 @@ function isRouteOutcome(value: unknown): value is RouteLoopOutcome {
   return ROUTE_OUTCOMES.some(outcome => outcome === value);
 }
 
+function routeLoopEdgeLabel(
+  outcome: RouteLoopOutcome
+): Pick<Edge, 'label' | 'labelStyle' | 'labelBgStyle' | 'labelBgPadding' | 'labelBgBorderRadius'> {
+  return {
+    label: outcome,
+    labelStyle: { fill: 'var(--text-secondary)', fontSize: 10, fontWeight: 600 },
+    labelBgStyle: { fill: 'var(--surface)', fillOpacity: 0.9 },
+    labelBgPadding: [4, 2],
+    labelBgBorderRadius: 4,
+  };
+}
+
 function createNodeData(id: string, nodeType: CanvasNodeType, label: string): DagNodeData {
   const data: DagNodeData = {
     id,
@@ -91,23 +103,15 @@ export function reactFlowToDagNodes(rfNodes: DagFlowNode[], rfEdges: Edge[]): Da
 
     if (node.data.nodeType === 'route_loop') {
       const existing = node.data.route_loop ?? defaultRouteLoopConfig();
-      const routes: RouteLoopConfig['routes'] = {
-        positive: existing.routes.positive,
-        negative: existing.routes.negative,
-        exhausted: existing.routes.exhausted,
-      };
-      for (const outcome of ROUTE_OUTCOMES) {
-        const routeEdge = rfEdges.find(e => e.source === node.id && e.sourceHandle === outcome);
-        if (routeEdge) routes[outcome] = routeEdge.target;
-      }
+      const from = existing.from.trim();
       return {
         id: node.id,
-        depends_on: deps.length > 0 ? deps : undefined,
+        depends_on: from ? [from] : undefined,
         route_loop: {
-          from: existing.from || deps[0] || '',
+          from,
           condition: existing.condition || node.data.promptText || '',
           max_iterations: Number.isFinite(existing.max_iterations) ? existing.max_iterations : 10,
-          routes,
+          routes: existing.routes,
         },
       } as DagNode;
     }
@@ -200,10 +204,75 @@ export function WorkflowCanvas({
 
   const onConnect: OnConnect = useCallback(
     (connection: Connection) => {
-      setEdges(eds => addEdge({ ...connection, type: 'smoothstep' }, eds));
+      const sourceHandle = connection.sourceHandle;
+      const routeOutcome = isRouteOutcome(sourceHandle) ? sourceHandle : null;
+      const targetIsRouteLoop =
+        !routeOutcome &&
+        nodes.some(n => n.id === connection.target && n.data.nodeType === 'route_loop');
+      setEdges(eds => {
+        const pruned = eds.filter(edge => {
+          if (
+            routeOutcome &&
+            edge.source === connection.source &&
+            edge.sourceHandle === routeOutcome
+          ) {
+            return false;
+          }
+          if (
+            targetIsRouteLoop &&
+            edge.target === connection.target &&
+            !isRouteOutcome(edge.sourceHandle)
+          ) {
+            return false;
+          }
+          return true;
+        });
+        return addEdge(
+          {
+            ...connection,
+            ...(routeOutcome ? routeLoopEdgeLabel(routeOutcome) : {}),
+            type: 'smoothstep',
+          },
+          pruned
+        );
+      });
+      if (connection.source && connection.target) {
+        setNodes(nds =>
+          nds.map(node => {
+            if (routeOutcome && node.id === connection.source) {
+              const existing = node.data.route_loop ?? defaultRouteLoopConfig();
+              return {
+                ...node,
+                data: {
+                  ...node.data,
+                  route_loop: {
+                    ...existing,
+                    routes: { ...existing.routes, [routeOutcome]: connection.target ?? '' },
+                  },
+                },
+              };
+            }
+            if (targetIsRouteLoop && node.id === connection.target) {
+              const existing = node.data.route_loop ?? defaultRouteLoopConfig();
+              return {
+                ...node,
+                data: {
+                  ...node.data,
+                  depends_on: [connection.source ?? ''],
+                  route_loop: {
+                    ...existing,
+                    from: connection.source ?? '',
+                  },
+                },
+              };
+            }
+            return node;
+          })
+        );
+      }
       onDirty();
     },
-    [setEdges, onDirty]
+    [nodes, setEdges, setNodes, onDirty]
   );
 
   const onDragOver = useCallback((e: React.DragEvent) => {
@@ -274,12 +343,56 @@ export function WorkflowCanvas({
 
   const handleEdgesChange: OnEdgesChange = useCallback(
     changes => {
+      const removedIds = new Set(
+        changes.flatMap(change => (change.type === 'remove' ? [change.id] : []))
+      );
+      const removedEdges = edges.filter(edge => removedIds.has(edge.id));
       onEdgesChange(changes);
+      if (removedEdges.length > 0) {
+        setNodes(nds =>
+          nds.map(node => {
+            if (node.data.nodeType !== 'route_loop') return node;
+            let routeLoop = node.data.route_loop ?? defaultRouteLoopConfig();
+            let changed = false;
+            for (const edge of removedEdges) {
+              if (edge.source === node.id && isRouteOutcome(edge.sourceHandle)) {
+                routeLoop = {
+                  ...routeLoop,
+                  routes: { ...routeLoop.routes, [edge.sourceHandle]: '' },
+                };
+                changed = true;
+              }
+              if (edge.target === node.id && !isRouteOutcome(edge.sourceHandle)) {
+                const replacement = edges.find(
+                  candidate =>
+                    !removedIds.has(candidate.id) &&
+                    candidate.target === node.id &&
+                    !isRouteOutcome(candidate.sourceHandle)
+                );
+                routeLoop = {
+                  ...routeLoop,
+                  from: replacement?.source ?? '',
+                };
+                changed = true;
+              }
+            }
+            if (!changed) return node;
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                depends_on: routeLoop.from ? [routeLoop.from] : undefined,
+                route_loop: routeLoop,
+              },
+            };
+          })
+        );
+      }
       if (changes.some(c => c.type !== 'select')) {
         onDirty();
       }
     },
-    [onEdgesChange, onDirty]
+    [edges, onEdgesChange, setNodes, onDirty]
   );
 
   // Clean up click timer on unmount
