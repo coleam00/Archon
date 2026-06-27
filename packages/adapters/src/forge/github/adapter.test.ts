@@ -1098,6 +1098,8 @@ describe('GitHubAdapter', () => {
   // circuit, refresh-on-401, self-filter against <slug>[bot], clone path.
   // ---------------------------------------------------------------------------
   describe('App mode', () => {
+    let originalAllowedUsers: string | undefined;
+
     /**
      * Build a mock IGitHubAppAuthProvider. Each fake `(owner) → installationId`
      * pair is encoded by hashing owner — tests assert that distinct owners
@@ -1212,6 +1214,8 @@ describe('GitHubAdapter', () => {
     }
 
     beforeEach(() => {
+      originalAllowedUsers = process.env.GITHUB_ALLOWED_USERS;
+      delete process.env.GITHUB_ALLOWED_USERS;
       mockCloneRepository.mockClear();
       mockCloneRepository.mockResolvedValue({ ok: true, value: undefined });
       mockExecFileAsync.mockClear();
@@ -1219,6 +1223,12 @@ describe('GitHubAdapter', () => {
       mockFindCodebaseByRepoUrl.mockClear();
       mockCreateCodebase.mockClear();
       mockFindOrCreateUserByPlatformIdentity.mockClear();
+    });
+
+    afterEach(() => {
+      if (originalAllowedUsers !== undefined) {
+        process.env.GITHUB_ALLOWED_USERS = originalAllowedUsers;
+      }
     });
 
     test('getInstallationToken called once per (owner, repo) for sendMessage', async () => {
