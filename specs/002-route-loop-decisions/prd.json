@@ -110,7 +110,7 @@
     },
     {
       "title": "Phase 3.1: Tests For User Story 1",
-      "completed": false,
+      "completed": true,
       "tasks": [
         {
           "id": "T011",
@@ -118,7 +118,7 @@
           "description": "[P] [US1] Add schema tests for valid `route_loop` config, exclusive execution mode, default `max_iterations`, and safe id grammar in `packages/workflows/src/schemas.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 11,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -127,7 +127,7 @@
           "description": "[US1] Add loader tests for required routes, `depends_on` and `from` mismatch, missing targets, self-target routes, rejecting `when` on `route_loop`, rejecting `trigger_rule` on `route_loop`, rejecting `when` on the `from` node, and allowing `trigger_rule` on the `from` node in `packages/workflows/src/loader.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 12,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -136,7 +136,7 @@
           "description": "[US1] Add loader tests for from-only condition references and declared output field references in `packages/workflows/src/loader.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 13,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -145,7 +145,7 @@
           "description": "[P] [US1] Add OpenAPI workflow definition tests for the `route_loop` DAG node shape in `packages/server/src/routes/api.workflows.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 14,
-          "passes": false,
+          "passes": true,
           "notes": ""
         }
       ],

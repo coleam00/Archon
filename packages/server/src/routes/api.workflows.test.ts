@@ -7,6 +7,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { validationErrorHook } from './openapi-defaults';
 import { makeTestWorkflow, makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
+import { workflowDefinitionSchema } from './schemas/workflow.schemas';
 
 /** Test app factory: includes defaultHook to format validation errors as { error: string }. */
 function createTestApp(): OpenAPIHono {
@@ -103,6 +104,86 @@ mock.module('@archon/core/db/codebases', () => ({
 }));
 
 import { registerApiRoutes } from './api';
+
+describe('workflowDefinitionSchema route_loop shape', () => {
+  const routeLoopWorkflow = {
+    name: 'route-loop-api',
+    description: 'Route-loop API schema test',
+    nodes: [
+      {
+        id: 'fix',
+        prompt: 'Apply the fix',
+      },
+      {
+        id: 'review',
+        depends_on: ['fix'],
+        prompt: 'Review the fix',
+        output_format: {
+          type: 'object',
+          properties: {
+            approved: { type: 'boolean' },
+          },
+        },
+      },
+      {
+        id: 'review-router',
+        depends_on: ['review'],
+        route_loop: {
+          from: 'review',
+          condition: '$review.output.approved == true',
+          routes: {
+            positive: 'done',
+            negative: 'fix',
+            exhausted: 'escalation',
+          },
+        },
+      },
+      {
+        id: 'done',
+        depends_on: ['review-router'],
+        prompt: 'Done',
+      },
+      {
+        id: 'escalation',
+        depends_on: ['review-router'],
+        prompt: 'Escalate',
+      },
+    ],
+  };
+
+  test('accepts the route_loop DAG node shape through the API workflow definition schema', () => {
+    const result = workflowDefinitionSchema.safeParse(routeLoopWorkflow);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.nodes[2]).toEqual(
+        expect.objectContaining({
+          id: 'review-router',
+          route_loop: expect.objectContaining({
+            from: 'review',
+            max_iterations: 10,
+            routes: {
+              positive: 'done',
+              negative: 'fix',
+              exhausted: 'escalation',
+            },
+          }),
+        })
+      );
+    }
+  });
+
+  test('rejects route_loop nodes that also declare another execution mode', () => {
+    const result = workflowDefinitionSchema.safeParse({
+      ...routeLoopWorkflow,
+      nodes: routeLoopWorkflow.nodes.map(node =>
+        node.id === 'review-router' ? { ...node, prompt: 'Invalid extra mode' } : node
+      ),
+    });
+
+    expect(result.success).toBe(false);
+  });
+});
 
 describe('GET /api/workflows', () => {
   test('returns a flat workflows array from discoverWorkflows result', async () => {

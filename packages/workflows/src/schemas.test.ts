@@ -2,6 +2,7 @@ import { describe, test, expect } from 'bun:test';
 import {
   isBashNode,
   isCancelNode,
+  isRouteLoopNode,
   isScriptNode,
   isTriggerRule,
   TRIGGER_RULES,
@@ -9,7 +10,9 @@ import {
   LOOP_NODE_AI_FIELDS,
   approvalOnRejectSchema,
   dagNodeSchema,
+  routeLoopConfigSchema,
   routeLoopRuntimeMetadataSchema,
+  routeOutcomeSchema,
   workflowRunSchema,
 } from './schemas';
 import type {
@@ -21,6 +24,7 @@ import type {
   CancelNode,
   ScriptNode,
   TriggerRule,
+  RouteLoopNode,
 } from './schemas';
 
 // ---------------------------------------------------------------------------
@@ -277,6 +281,100 @@ describe('dagNodeSchema — empty bash/prompt', () => {
     if (!result.success) {
       expect(result.error.issues[0].message).toContain('must have either');
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// dagNodeSchema - RouteLoopNode
+// ---------------------------------------------------------------------------
+
+describe('dagNodeSchema - RouteLoopNode', () => {
+  const routeLoopNode = {
+    id: 'review-router',
+    depends_on: ['review'],
+    route_loop: {
+      from: 'review',
+      condition: '$review.output.approved == true',
+      routes: {
+        positive: 'done',
+        negative: 'fix',
+        exhausted: 'escalation',
+      },
+    },
+  };
+
+  test('parses a valid route_loop node and defaults max_iterations to 10', () => {
+    const result = dagNodeSchema.safeParse(routeLoopNode);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(isRouteLoopNode(result.data)).toBe(true);
+      const node = result.data as RouteLoopNode;
+      expect(node.route_loop).toEqual({
+        from: 'review',
+        condition: '$review.output.approved == true',
+        max_iterations: 10,
+        routes: {
+          positive: 'done',
+          negative: 'fix',
+          exhausted: 'escalation',
+        },
+      });
+    }
+  });
+
+  test('keeps explicit max_iterations inside the bounded route budget range', () => {
+    const result = routeLoopConfigSchema.safeParse({
+      from: 'review',
+      condition: "$review.output == 'ok'",
+      max_iterations: 1,
+      routes: {
+        positive: 'done',
+        negative: 'fix',
+        exhausted: 'escalation',
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.max_iterations).toBe(1);
+    }
+  });
+
+  test('rejects route_loop combined with another execution mode', () => {
+    const result = dagNodeSchema.safeParse({
+      ...routeLoopNode,
+      prompt: 'This must not be accepted.',
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].message).toContain('mutually exclusive');
+    }
+  });
+
+  test('rejects unsafe node ids and route target ids', () => {
+    const unsafeIds = ['1review', 'review.router', '__proto__', 'a'.repeat(65)];
+
+    for (const id of unsafeIds) {
+      expect(dagNodeSchema.safeParse({ ...routeLoopNode, id }).success).toBe(false);
+      expect(
+        routeLoopConfigSchema.safeParse({
+          from: 'review',
+          condition: "$review.output == 'ok'",
+          routes: {
+            positive: id,
+            negative: 'fix',
+            exhausted: 'escalation',
+          },
+        }).success
+      ).toBe(false);
+    }
+  });
+
+  test('exposes exactly the supported route outcomes', () => {
+    expect(routeOutcomeSchema.options).toEqual(['positive', 'negative', 'exhausted']);
+    expect(routeOutcomeSchema.safeParse('retry').success).toBe(false);
   });
 });
 

@@ -16,6 +16,15 @@ export type { StepRetryConfig } from './retry';
 export { loopNodeConfigSchema } from './loop';
 export type { LoopNodeConfig } from './loop';
 
+// Route-loop controller configuration
+export {
+  safeNodeIdSchema,
+  routeOutcomeSchema,
+  routeLoopRoutesSchema,
+  routeLoopConfigSchema,
+} from './route-loop';
+export type { SafeNodeId, RouteOutcome, RouteLoopRoutes, RouteLoopConfig } from './route-loop';
+
 // Hooks
 export {
   workflowHookEventSchema,
@@ -34,6 +43,7 @@ export {
   promptNodeSchema,
   bashNodeSchema,
   loopNodeSchema,
+  routeLoopNodeSchema,
   approvalNodeSchema,
   approvalOnRejectSchema,
   cancelNodeSchema,
@@ -41,6 +51,7 @@ export {
   dagNodeSchema,
   isBashNode,
   isLoopNode,
+  isRouteLoopNode,
   isApprovalNode,
   isCancelNode,
   isScriptNode,
@@ -61,6 +72,7 @@ export type {
   PromptNode,
   BashNode,
   LoopNode,
+  RouteLoopNode,
   ApprovalNode,
   ApprovalOnReject,
   CancelNode,

@@ -5,6 +5,8 @@
 - Console builder round-trip and validation baselines pass before route-loop UI changes, so future builder failures are likely from route-loop serialization or validation work.
 - Route-loop workflow fixtures in `packages/workflows/src/test-utils.ts` intentionally return raw workflow-like objects until `dagNodeSchema` supports `route_loop`; do not parse them as `WorkflowDefinition` before the schema phase.
 - Route-loop runtime metadata validation lives in `packages/workflows/src/schemas/workflow-run.ts` and validates only `loopCounters`, `nodeAttempts`, `executionSeq`, and `routeActivations` while preserving unrelated metadata keys.
+- Route-loop authoring schemas now live in `packages/workflows/src/schemas/route-loop.ts`; loader validation uses the shared safe node-id grammar, while runtime execution still fails fast until executor routing tasks land.
+- Use `extractConditionReferences()` from `packages/workflows/src/condition-evaluator.ts` when loader or validation code needs to inspect condition node refs; do not duplicate the condition grammar.
 
 ## 2026-06-27 16:01 +07 - Phase 1: Setup (iter 1)
 **Tasks completed this iter:** T001 (Run route-loop executor TDD guard), T002 (Run workflow loader/schema baselines), T003 (Run console builder baselines), T004 (Inspect workflow event and metadata seams)
@@ -40,4 +42,21 @@
 - The Web builder fixture layer can reference the generated `DagNode` shape before route-loop OpenAPI support because `WireWorkflowDefinition` currently permits the sparse fixture shape through generated loose node typing.
 - Targeted verification passed `bun test packages/workflows/src/loader.test.ts packages/workflows/src/schemas.test.ts`, `bun run type-check`, `bun run lint --max-warnings 0`, `bun --filter @archon/web type-check`, targeted ESLint, and targeted Prettier.
 - Full `bun run format:check` still fails on pre-existing formatting issues in `_bmad/`, `.qoder/`, and `.omx/` tracked support files that were not modified by this iteration.
+---
+
+## 2026-06-27 16:34 +07 - Phase 3.1: Tests For User Story 1 (iter 3)
+**Tasks completed this iter:** T011 (Add route-loop schema tests), T012 (Add route-loop loader contract tests), T013 (Add route-loop condition-reference loader tests), T014 (Add route-loop API schema tests)
+**Status:** completed:true
+
+- Per-task summary lines:
+  - T011 - Added route_loop schema tests for valid config, default max_iterations, mode exclusivity, safe ids, and supported outcomes; implemented the route-loop schema and DAG node variant in `packages/workflows/src/schemas/route-loop.ts`, `packages/workflows/src/schemas/dag-node.ts`, and `packages/workflows/src/schemas/index.ts`.
+  - T012 - Added loader tests for required routes, depends_on/from mismatch, missing route targets, self-target routes, route_loop when/trigger_rule rejection, from-node when rejection, and from-node trigger_rule allowance; implemented route-loop loader structure validation in `packages/workflows/src/loader.ts`.
+  - T013 - Added loader tests for from-only condition references, compound conditions, declared output field references, whole-output references, and unparseable route_loop conditions; added `extractConditionReferences()` in `packages/workflows/src/condition-evaluator.ts` and reused `declaredFieldsFromSchema()`.
+  - T014 - Added API workflow definition schema tests for route_loop DAG nodes in `packages/server/src/routes/api.workflows.test.ts`; the server schema continues deriving route-loop shape from the workflow engine schema.
+
+**Learnings for future iterations:**
+- Route-loop YAML now validates at schema and loader boundaries, but `packages/workflows/src/dag-executor.ts` intentionally returns an explicit failed node output for route_loop until the runtime activation tasks implement execution.
+- Safe node ids are now enforced through `safeNodeIdSchema`, so new workflow node ids, route_loop.from values, and route targets must avoid reserved object keys and match the shared grammar.
+- Server route workflow schemas derive from the engine `workflowDefinitionSchema`, so API route-loop shape tests can parse `workflowDefinitionSchema` directly instead of mocking route handlers.
+- Verification passed `bun test packages/workflows/src/schemas.test.ts packages/workflows/src/loader.test.ts packages/server/src/routes/api.workflows.test.ts`, `bun run type-check`, `bun run lint --max-warnings 0`, and targeted Prettier checks for touched files.
 ---

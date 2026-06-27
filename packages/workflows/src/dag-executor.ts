@@ -48,6 +48,7 @@ import type {
 import {
   isBashNode,
   isLoopNode,
+  isRouteLoopNode,
   isApprovalNode,
   isCancelNode,
   isScriptNode,
@@ -103,6 +104,7 @@ function dagNodeTelemetryType(node: DagNode): WorkflowNodeType {
   if (isBashNode(node)) return 'bash';
   if (isScriptNode(node)) return 'script';
   if (isLoopNode(node)) return 'loop';
+  if (isRouteLoopNode(node)) return 'route_loop';
   if (isApprovalNode(node)) return 'approval';
   if (isCancelNode(node)) return 'cancel';
   if ('command' in node) return 'command';
@@ -3393,6 +3395,17 @@ export async function executeDagWorkflow(
               config.envVars
             );
             return { nodeId: node.id, output };
+          }
+
+          if (isRouteLoopNode(node)) {
+            return {
+              nodeId: node.id,
+              output: {
+                state: 'failed' as const,
+                output: '',
+                error: 'route_loop execution is not implemented yet',
+              },
+            };
           }
 
           // 4. Resolve per-node provider/model/options

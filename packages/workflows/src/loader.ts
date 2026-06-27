@@ -4,6 +4,7 @@
 import type { WorkflowDefinition, WorkflowLoadError, DagNode, WorkflowNodeHooks } from './schemas';
 import {
   isLoopNode,
+  isRouteLoopNode,
   isApprovalNode,
   isCancelNode,
   isScriptNode,
@@ -27,6 +28,8 @@ import {
 } from './schemas/dag-node';
 import { modelReasoningEffortSchema, webSearchModeSchema } from './schemas/workflow';
 import { workflowNodeHooksSchema } from './schemas/hooks';
+import { extractConditionReferences } from './condition-evaluator';
+import { declaredFieldsFromSchema } from './output-ref';
 import { z } from '@hono/zod-openapi';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -221,6 +224,61 @@ function validateDagStructure(nodes: DagNode[]): string | null {
   return null; // valid
 }
 
+function validateRouteLoopStructure(nodes: DagNode[]): string | null {
+  const nodesById = new Map(nodes.map(node => [node.id, node]));
+
+  for (const node of nodes) {
+    if (!isRouteLoopNode(node)) continue;
+
+    const deps = node.depends_on ?? [];
+    if (deps.length !== 1) {
+      return `Node '${node.id}' route_loop must declare exactly one depends_on entry`;
+    }
+    if (deps[0] !== node.route_loop.from) {
+      return `Node '${node.id}' route_loop depends_on[0] must equal route_loop.from '${node.route_loop.from}'`;
+    }
+
+    const fromNode = nodesById.get(node.route_loop.from);
+    if (fromNode === undefined) {
+      return `Node '${node.id}' route_loop.from references unknown node '${node.route_loop.from}'`;
+    }
+    if (fromNode.when !== undefined) {
+      return `Node '${node.id}' route_loop from node '${fromNode.id}' must not declare when`;
+    }
+
+    const routeEntries = Object.entries(node.route_loop.routes);
+    for (const [outcome, target] of routeEntries) {
+      if (!nodesById.has(target)) {
+        return `Node '${node.id}' route_loop route '${outcome}' targets unknown node '${target}'`;
+      }
+      if (target === node.id) {
+        return `Node '${node.id}' route_loop route '${outcome}' must not target itself`;
+      }
+    }
+
+    const conditionRefs = extractConditionReferences(node.route_loop.condition);
+    if (!conditionRefs.parsed) {
+      return `Node '${node.id}' route_loop.condition could not be parsed: ${conditionRefs.error}`;
+    }
+
+    const declaredFields = declaredFieldsFromSchema(fromNode.output_format);
+    for (const ref of conditionRefs.references) {
+      if (ref.nodeId !== node.route_loop.from) {
+        return `Node '${node.id}' route_loop.condition references node '${ref.nodeId}' but only route_loop.from '${node.route_loop.from}' is allowed`;
+      }
+      if (ref.field === undefined) continue;
+      if (declaredFields === undefined) {
+        return `Node '${node.id}' route_loop.condition references field '${ref.field}', but from node '${fromNode.id}' must declare output_format.properties`;
+      }
+      if (!declaredFields.includes(ref.field)) {
+        return `Node '${node.id}' route_loop.condition references field '${ref.field}', which is not declared in from node '${fromNode.id}' output_format.properties`;
+      }
+    }
+  }
+
+  return null;
+}
+
 export type ParseResult =
   | { workflow: WorkflowDefinition; error: null }
   | { workflow: null; error: WorkflowLoadError };
@@ -321,6 +379,15 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       return {
         workflow: null,
         error: { filename, error: structureError, errorType: 'validation_error' },
+      };
+    }
+
+    const routeLoopStructureError = validateRouteLoopStructure(dagNodes);
+    if (routeLoopStructureError) {
+      getLog().warn({ filename, structureError: routeLoopStructureError }, 'dag_structure_invalid');
+      return {
+        workflow: null,
+        error: { filename, error: routeLoopStructureError, errorType: 'validation_error' },
       };
     }
 

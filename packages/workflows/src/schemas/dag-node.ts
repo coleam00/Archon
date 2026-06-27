@@ -2,8 +2,7 @@
  * Zod schemas for DAG node types.
  *
  * Design: a flat "raw" schema validates all fields (with mutual exclusivity enforced via
- * superRefine), then a transform produces one of the six concrete variant types
- * (CommandNode, PromptNode, BashNode, LoopNode, ApprovalNode, CancelNode) as the DagNode union.
+ * superRefine), then a transform produces the concrete node variant types as the DagNode union.
  * Per-variant schemas (commandNodeSchema etc.) are exported for type derivation only —
  * use dagNodeSchema for validation.
  *
@@ -13,6 +12,7 @@
 import { z } from '@hono/zod-openapi';
 import { stepRetryConfigSchema } from './retry';
 import { loopNodeConfigSchema } from './loop';
+import { routeLoopConfigSchema, safeNodeIdSchema } from './route-loop';
 import { workflowNodeHooksSchema } from './hooks';
 import { isValidCommandName } from '../command-validation';
 
@@ -138,8 +138,8 @@ const AGENT_ID_REGEX = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 // ---------------------------------------------------------------------------
 
 export const dagNodeBaseSchema = z.object({
-  id: z.string(),
-  depends_on: z.array(z.string()).optional(),
+  id: safeNodeIdSchema,
+  depends_on: z.array(safeNodeIdSchema).optional(),
   when: z.string().optional(),
   trigger_rule: triggerRuleSchema.optional(),
   model: z.string().optional(),
@@ -218,6 +218,7 @@ export type CommandNode = z.infer<typeof commandNodeSchema> & {
   prompt?: never;
   bash?: never;
   loop?: never;
+  route_loop?: never;
   approval?: never;
   cancel?: never;
   script?: never;
@@ -232,6 +233,7 @@ export type PromptNode = z.infer<typeof promptNodeSchema> & {
   command?: never;
   bash?: never;
   loop?: never;
+  route_loop?: never;
   approval?: never;
   cancel?: never;
   script?: never;
@@ -251,6 +253,7 @@ export type BashNode = z.infer<typeof bashNodeSchema> & {
   command?: never;
   prompt?: never;
   loop?: never;
+  route_loop?: never;
   approval?: never;
   cancel?: never;
   script?: never;
@@ -274,6 +277,7 @@ export type ScriptNode = z.infer<typeof scriptNodeSchema> & {
   prompt?: never;
   bash?: never;
   loop?: never;
+  route_loop?: never;
   approval?: never;
   cancel?: never;
 };
@@ -292,9 +296,32 @@ export type LoopNode = z.infer<typeof loopNodeSchema> & {
   command?: never;
   prompt?: never;
   bash?: never;
+  route_loop?: never;
   approval?: never;
   cancel?: never;
   script?: never;
+};
+
+/**
+ * Route-loop controller schema - deterministic routing node with three named outcomes.
+ * Runtime execution is implemented separately; this schema owns only the authoring shape.
+ */
+export const routeLoopNodeSchema = dagNodeBaseSchema.extend({
+  route_loop: routeLoopConfigSchema,
+});
+
+/** DAG node that selects positive, negative, or exhausted route targets. */
+export type RouteLoopNode = z.infer<typeof routeLoopNodeSchema> & {
+  command?: never;
+  prompt?: never;
+  bash?: never;
+  loop?: never;
+  approval?: never;
+  cancel?: never;
+  script?: never;
+  when?: never;
+  trigger_rule?: never;
+  retry?: never;
 };
 
 /** Schema for the `on_reject` sub-object on approval nodes. */
@@ -323,6 +350,7 @@ export type ApprovalNode = z.infer<typeof approvalNodeSchema> & {
   prompt?: never;
   bash?: never;
   loop?: never;
+  route_loop?: never;
   cancel?: never;
   script?: never;
 };
@@ -341,16 +369,18 @@ export type CancelNode = z.infer<typeof cancelNodeSchema> & {
   prompt?: never;
   bash?: never;
   loop?: never;
+  route_loop?: never;
   approval?: never;
   script?: never;
 };
 
-/** A single node in a DAG workflow. command, prompt, bash, loop, approval, cancel, and script are mutually exclusive. */
+/** A single node in a DAG workflow. command, prompt, bash, loop, route_loop, approval, cancel, and script are mutually exclusive. */
 export type DagNode =
   | CommandNode
   | PromptNode
   | BashNode
   | LoopNode
+  | RouteLoopNode
   | ApprovalNode
   | CancelNode
   | ScriptNode;
@@ -402,7 +432,7 @@ export const LOOP_NODE_AI_FIELDS: readonly string[] = BASH_NODE_AI_FIELDS.filter
  *
  * Enforces:
  * - Non-empty id
- * - Exactly one of command/prompt/bash/loop (mutual exclusivity)
+ * - Exactly one of command/prompt/bash/loop/route_loop (mutual exclusivity)
  * - command name validity (via isValidCommandName)
  * - idle_timeout must be a finite positive number
  * - retry not allowed on loop nodes
@@ -419,6 +449,7 @@ export const dagNodeSchema = dagNodeBaseSchema
     prompt: z.string().optional(),
     bash: z.string().optional(),
     loop: loopNodeConfigSchema.optional(),
+    route_loop: routeLoopConfigSchema.optional(),
     approval: z
       .object({
         message: z.string().min(1, "'approval.message' must not be empty"),
@@ -451,6 +482,7 @@ export const dagNodeSchema = dagNodeBaseSchema
     const hasPrompt = typeof data.prompt === 'string' && data.prompt.trim().length > 0;
     const hasBash = typeof data.bash === 'string' && data.bash.trim().length > 0;
     const hasLoop = data.loop !== undefined;
+    const hasRouteLoop = data.route_loop !== undefined;
     const hasApproval = data.approval !== undefined;
     const hasCancel = typeof data.cancel === 'string' && data.cancel.trim().length > 0;
     const hasScript = typeof data.script === 'string' && data.script.trim().length > 0;
@@ -460,6 +492,7 @@ export const dagNodeSchema = dagNodeBaseSchema
       hasPrompt,
       hasBash,
       hasLoop,
+      hasRouteLoop,
       hasApproval,
       hasCancel,
       hasScript,
@@ -469,7 +502,7 @@ export const dagNodeSchema = dagNodeBaseSchema
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
-          "'command', 'prompt', 'bash', 'loop', 'approval', 'cancel', and 'script' are mutually exclusive",
+          "'command', 'prompt', 'bash', 'loop', 'route_loop', 'approval', 'cancel', and 'script' are mutually exclusive",
       });
       return z.NEVER;
     }
@@ -501,7 +534,7 @@ export const dagNodeSchema = dagNodeBaseSchema
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
-          "must have either 'command', 'prompt', 'bash', 'loop', 'approval', 'cancel', or 'script'",
+          "must have either 'command', 'prompt', 'bash', 'loop', 'route_loop', 'approval', 'cancel', or 'script'",
       });
       return z.NEVER;
     }
@@ -551,6 +584,30 @@ export const dagNodeSchema = dagNodeBaseSchema
         message: "'retry' is not supported on loop nodes (loop manages its own iteration)",
         path: ['retry'],
       });
+    }
+
+    if (hasRouteLoop) {
+      if (data.when !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "'when' is not supported on route_loop nodes",
+          path: ['when'],
+        });
+      }
+      if (data.trigger_rule !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "'trigger_rule' is not supported on route_loop nodes",
+          path: ['trigger_rule'],
+        });
+      }
+      if (data.retry !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "'retry' is not supported on route_loop nodes",
+          path: ['retry'],
+        });
+      }
     }
 
     // idle_timeout must be finite and positive
@@ -634,6 +691,9 @@ export const dagNodeSchema = dagNodeBaseSchema
         ...(data.timeout !== undefined ? { timeout: data.timeout } : {}),
       } as ScriptNode;
     }
+    if (data.route_loop !== undefined) {
+      return { ...base, route_loop: data.route_loop } as RouteLoopNode;
+    }
     if (data.approval !== undefined) {
       return { ...base, ...shared, approval: data.approval } as ApprovalNode;
     }
@@ -658,6 +718,11 @@ export function isBashNode(node: DagNode): node is BashNode {
 /** Type guard: check if a DAG node is a loop (iterative) node */
 export function isLoopNode(node: DagNode): node is LoopNode {
   return 'loop' in node && typeof node.loop === 'object' && node.loop !== null;
+}
+
+/** Type guard: check if a DAG node is a route-loop controller node */
+export function isRouteLoopNode(node: DagNode): node is RouteLoopNode {
+  return 'route_loop' in node && typeof node.route_loop === 'object' && node.route_loop !== null;
 }
 
 /** Type guard: check if a DAG node is an approval (human-in-the-loop) node */
@@ -691,6 +756,7 @@ export function isTriggerRule(value: unknown): value is TriggerRule {
 export function isPersistableNode(node: DagNode): boolean {
   return (
     !isLoopNode(node) &&
+    !isRouteLoopNode(node) &&
     !isApprovalNode(node) &&
     !isCancelNode(node) &&
     !isScriptNode(node) &&
