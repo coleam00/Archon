@@ -125,8 +125,8 @@ const HOT_FOLLOW_UPS: PipelineItem[] = [
   {
     company: 'Robb & Stucky',
     lane: 'Luxury design',
-    status: 'Warm reply',
-    next: 'Resend with links, not attachments',
+    status: 'Corporate reviewing',
+    next: 'Pending call with corporate review path',
   },
   {
     company: 'Sarasota Ford / Lincoln',
@@ -502,12 +502,13 @@ export function SADNPage(): React.ReactElement {
         <div className="flex items-center gap-2">
           <Sparkles className="h-4 w-4 text-emerald-800" />
           <h2 className="text-base font-semibold text-text-primary">
-            Warm Tier 1 prospects from generated vault data
+            First-wave sent roster from real email log
           </h2>
         </div>
         <p className="text-xs text-text-secondary">
-          Older warm relationship rows remain visible below for context. Use the newer staging log
-          and hot board above for current action.
+          Cleaned active roster from the 2026-06-10 send log. Removed Medge Jaspan, Coral & Reef,
+          Sarasota Personal Medicine, and Valley Bank per Jason. Use this as the live follow-up
+          universe.
         </p>
         <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
           {(
@@ -527,6 +528,12 @@ export function SADNPage(): React.ReactElement {
                 )}
               </div>
               {p.category && <p className="mt-1 text-[11px] text-text-tertiary">{p.category}</p>}
+              {p.email && <p className="mt-1 text-[11px] text-text-tertiary">{p.email}</p>}
+              {p.engagement && (
+                <p className="mt-2 text-[11px] text-text-secondary">
+                  <span className="text-text-tertiary">Status:</span> {p.engagement}
+                </p>
+              )}
               {p.ask && (
                 <p className="mt-2 text-[11px] text-text-secondary">
                   <span className="text-text-tertiary">Ask:</span> {p.ask}
