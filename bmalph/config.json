@@ -1,0 +1,9 @@
+{
+  "name": "archon",
+  "description": "",
+  "createdAt": "2026-06-27T05:45:07.334Z",
+  "platform": "codex",
+  "upstreamVersions": {
+    "bmadCommit": "d1163f85"
+  }
+}

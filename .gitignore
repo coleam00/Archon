@@ -120,3 +120,5 @@ packages/server/.env
 skills-lock.json
 test-results/
 .archon/ralph/
+.ralph/logs/
+_bmad-output/
