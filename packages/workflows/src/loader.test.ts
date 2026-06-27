@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock, type Mock } from 'bun:test';
-import { mkdir, writeFile, rm } from 'fs/promises';
+import { mkdir, writeFile, rm, readdir } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -2903,6 +2903,330 @@ nodes:
         clearRegistry();
         registerBuiltinProviders();
       }
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Route Loop condition strictness ATDD red scaffolds.
+  //
+  // These tests intentionally stay skipped until the route_loop node schema,
+  // route_loop.from contract, and loader condition validation seam exist.
+  // Activate them when Story 1.1 and Story 1.2 prerequisites are present.
+  // -------------------------------------------------------------------------
+
+  describe('route_loop condition loader ATDD', () => {
+    const routeLoopLoaderSkipReason =
+      'skipped red scaffold: route_loop schema and loader validation seam do not exist yet';
+
+    async function writeWorkflowFixture(fileName: string, yaml: string): Promise<string> {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      await writeFile(join(workflowDir, fileName), yaml);
+      return workflowDir;
+    }
+
+    function baseRouteLoopWorkflow(condition: string, reviewOutputFormat = ''): string {
+      return `
+name: route-loop-condition-atdd
+description: Route Loop condition validation ATDD fixture
+nodes:
+  - id: review
+    prompt: "Review the implementation"
+${reviewOutputFormat}
+  - id: gate
+    depends_on: [review]
+    route_loop:
+      from: review
+      condition: "${condition}"
+      routes:
+        positive: accept
+        negative: revise
+        exhausted: stop
+      negative_count: 2
+  - id: accept
+    prompt: "Accept the work"
+  - id: revise
+    prompt: "Revise the work"
+  - id: stop
+    cancel: "Route Loop exhausted"
+`;
+    }
+
+    const declaredReviewResultOutputFormat = `    output_format:
+      type: object
+      properties:
+        result:
+          type: string`;
+
+    it.skip(`[P1] TD-1.3-INT-001 accepts whole-output From Node conditions without output_format and performs no write-side effects - ${routeLoopLoaderSkipReason}`, async () => {
+      const workflowDir = await writeWorkflowFixture(
+        'route-loop-whole-output.yaml',
+        baseRouteLoopWorkflow("$review.output == 'positive'")
+      );
+      const filesBeforeValidation = await readdir(workflowDir);
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+
+      expect(result.errors).toEqual([]);
+      expect(result.workflows).toHaveLength(1);
+      expect(result.workflows[0].workflow.nodes).toHaveLength(5);
+      await expect(readdir(workflowDir)).resolves.toEqual(filesBeforeValidation);
+    });
+
+    it.skip(`[P1] TD-1.3-INT-002 accepts declared structured fields in canonical and shorthand references - ${routeLoopLoaderSkipReason}`, async () => {
+      await writeWorkflowFixture(
+        'route-loop-declared-fields.yaml',
+        baseRouteLoopWorkflow(
+          "$review.output.result == 'positive' && $review.result != 'negative'",
+          declaredReviewResultOutputFormat
+        )
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+
+      expect(result.errors).toEqual([]);
+      expect(result.workflows).toHaveLength(1);
+    });
+
+    it.skip(`[P0] TD-1.3-INT-003 rejects non-From references and names the invalid reference - ${routeLoopLoaderSkipReason}`, async () => {
+      await writeWorkflowFixture(
+        'route-loop-non-from-ref.yaml',
+        `
+name: route-loop-non-from-ref
+description: Route Loop condition references another node
+nodes:
+  - id: review
+    prompt: "Review the implementation"
+  - id: other
+    prompt: "Produce unrelated output"
+  - id: gate
+    depends_on: [review]
+    route_loop:
+      from: review
+      condition: "$other.output == 'positive'"
+      routes:
+        positive: accept
+        negative: revise
+        exhausted: stop
+      negative_count: 2
+  - id: accept
+    prompt: "Accept the work"
+  - id: revise
+    prompt: "Revise the work"
+  - id: stop
+    cancel: "Route Loop exhausted"
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+
+      expect(result.workflows).toEqual([]);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].error).toContain('route_loop');
+      expect(result.errors[0].error).toContain('gate');
+      expect(result.errors[0].error).toContain('$other.output');
+      expect(result.errors[0].error).toContain('from');
+    });
+
+    it.skip(`[P0] TD-1.3-INT-004 rejects invalid atoms hidden behind OR short-circuiting - ${routeLoopLoaderSkipReason}`, async () => {
+      await writeWorkflowFixture(
+        'route-loop-or-hidden-invalid.yaml',
+        baseRouteLoopWorkflow("$review.output == 'positive' || $other.output == 'ok'")
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+
+      expect(result.workflows).toEqual([]);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].error).toContain('gate');
+      expect(result.errors[0].error).toContain('$other.output');
+    });
+
+    it.skip(`[P1] TD-1.3-INT-005 rejects aliases, functions, parentheses, malformed atoms, and shorthand sub-fields - ${routeLoopLoaderSkipReason}`, async () => {
+      const cases: Array<{ fileName: string; condition: string; expected: string }> = [
+        {
+          fileName: 'route-loop-output-alias.yaml',
+          condition: "$output.result == 'positive'",
+          expected: '$output.result',
+        },
+        {
+          fileName: 'route-loop-trim-function.yaml',
+          condition: "trim($review.output) == 'positive'",
+          expected: 'trim',
+        },
+        {
+          fileName: 'route-loop-lower-function.yaml',
+          condition: "lower($review.output) == 'positive'",
+          expected: 'lower',
+        },
+        {
+          fileName: 'route-loop-parentheses.yaml',
+          condition: "($review.output == 'positive')",
+          expected: 'condition',
+        },
+        {
+          fileName: 'route-loop-malformed.yaml',
+          condition: "$review.output = 'positive'",
+          expected: 'condition',
+        },
+        {
+          fileName: 'route-loop-shorthand-subfield.yaml',
+          condition: "$review.result.value == 'positive'",
+          expected: '$review.result.value',
+        },
+      ];
+
+      for (const scenario of cases) {
+        await writeWorkflowFixture(
+          scenario.fileName,
+          baseRouteLoopWorkflow(scenario.condition, declaredReviewResultOutputFormat)
+        );
+      }
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+
+      expect(result.workflows).toEqual([]);
+      expect(result.errors).toHaveLength(cases.length);
+      for (const scenario of cases) {
+        expect(result.errors.some(error => error.error.includes(scenario.expected))).toBe(true);
+      }
+    });
+
+    it.skip(`[P1] TD-1.3-INT-006 rejects undeclared fields and field refs without object properties - ${routeLoopLoaderSkipReason}`, async () => {
+      await writeWorkflowFixture(
+        'route-loop-undeclared-canonical.yaml',
+        baseRouteLoopWorkflow(
+          "$review.output.result == 'positive'",
+          `    output_format:
+      type: object
+      properties:
+        summary:
+          type: string`
+        )
+      );
+      await writeWorkflowFixture(
+        'route-loop-undeclared-shorthand.yaml',
+        baseRouteLoopWorkflow("$review.result == 'positive'")
+      );
+      await writeWorkflowFixture(
+        'route-loop-empty-properties.yaml',
+        baseRouteLoopWorkflow(
+          "$review.output.result == 'positive'",
+          `    output_format:
+      type: object
+      properties: {}`
+        )
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+
+      expect(result.workflows).toEqual([]);
+      expect(result.errors).toHaveLength(3);
+      expect(result.errors.every(error => error.error.includes('gate'))).toBe(true);
+      expect(result.errors.every(error => error.error.includes('result'))).toBe(true);
+    });
+
+    it.skip(`[P1] TD-1.3-INT-007 names route_loop node and no-route-selected behavior for parse failures - ${routeLoopLoaderSkipReason}`, async () => {
+      await writeWorkflowFixture(
+        'route-loop-parse-failure-copy.yaml',
+        baseRouteLoopWorkflow("trim($review.output) == 'positive'")
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+
+      expect(result.workflows).toEqual([]);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].error).toContain('route_loop');
+      expect(result.errors[0].error).toContain('condition');
+      expect(result.errors[0].error).toContain('gate');
+      expect(result.errors[0].error).toMatch(/no route was selected/i);
+      expect(result.errors[0].error).not.toMatch(/negative route was selected/i);
+    });
+
+    it.skip(`[P1] TD-1.3-INT-008 names invalid reference and invalid field details - ${routeLoopLoaderSkipReason}`, async () => {
+      await writeWorkflowFixture(
+        'route-loop-invalid-ref-copy.yaml',
+        baseRouteLoopWorkflow("$other.output == 'positive'")
+      );
+      await writeWorkflowFixture(
+        'route-loop-invalid-field-copy.yaml',
+        baseRouteLoopWorkflow(
+          "$review.output.result == 'positive'",
+          `    output_format:
+      type: object
+      properties:
+        summary:
+          type: string`
+        )
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+
+      expect(result.workflows).toEqual([]);
+      expect(result.errors).toHaveLength(2);
+      expect(result.errors.some(error => error.error.includes('$other.output'))).toBe(true);
+      expect(result.errors.some(error => error.error.includes('result'))).toBe(true);
+      expect(result.errors.every(error => error.error.includes('gate'))).toBe(true);
+    });
+  });
+
+  describe('route_loop ATDD non-route regression guards', () => {
+    it('[P1] TD-1.3-REG-004 keeps existing AI loop prompt reference validation unchanged', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      await writeFile(
+        join(workflowDir, 'loop-valid-ref.yaml'),
+        `
+name: loop-valid-ref
+description: Valid AI loop prompt reference
+nodes:
+  - id: setup
+    bash: "echo ready"
+  - id: my-loop
+    depends_on: [setup]
+    loop:
+      prompt: "Use $setup.output to iterate."
+      until: DONE
+      max_iterations: 3
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+
+      expect(result.errors).toEqual([]);
+      expect(result.workflows).toHaveLength(1);
+      expect(isLoopNode(result.workflows[0].workflow.nodes[1])).toBe(true);
+    });
+
+    it('[P1] TD-1.3-REG-005 keeps normal when and prompt reference validation unchanged', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      await writeFile(
+        join(workflowDir, 'normal-when-prompt-refs.yaml'),
+        `
+name: normal-when-prompt-refs
+description: Normal DAG refs with code documentation stripped
+nodes:
+  - id: classify
+    prompt: "Classify the request"
+  - id: implement
+    depends_on: [classify]
+    when: "$classify.output == 'BUG'"
+    prompt: |
+      Fix this: $classify.output
+
+      Example syntax:
+
+      \`\`\`
+      $unknown.output
+      \`\`\`
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+
+      expect(result.errors).toEqual([]);
+      expect(result.workflows).toHaveLength(1);
     });
   });
 });

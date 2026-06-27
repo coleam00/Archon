@@ -662,4 +662,304 @@ describe('evaluateCondition', () => {
       evaluateCondition("$classify.type == 'BUG' || $test.passed == false", outputs).result
     ).toBe(false);
   });
+
+  // -------------------------------------------------------------------------
+  // Route Loop condition strictness ATDD red scaffolds.
+  //
+  // These tests intentionally stay skipped until condition-evaluator.ts exports
+  // the strict Route Loop condition analysis and runtime entry points.
+  // Activate them when the implementation adds the route_loop condition API.
+  // -------------------------------------------------------------------------
+
+  type RouteLoopConditionReference = {
+    source: string;
+    nodeId: string;
+    field?: string;
+  };
+
+  type RouteLoopConditionIssue = {
+    kind: string;
+    message: string;
+    reference?: string;
+    nodeId?: string;
+    field?: string;
+    routeLoopNodeId?: string;
+    selectedRoute?: string | null;
+    negativeCountConsumed?: boolean;
+  };
+
+  type RouteLoopConditionAnalysis = {
+    valid: boolean;
+    references: RouteLoopConditionReference[];
+    issues: RouteLoopConditionIssue[];
+  };
+
+  type StrictRouteLoopConditionResult = {
+    result: boolean;
+    parsed: true;
+    selectedRoute?: 'positive' | 'negative' | null;
+    negativeCountConsumed: false;
+  };
+
+  type RouteLoopConditionModule = {
+    analyzeRouteLoopCondition: (input: {
+      routeLoopNodeId: string;
+      fromNodeId: string;
+      condition: string;
+      declaredFields?: readonly string[];
+    }) => RouteLoopConditionAnalysis;
+    evaluateRouteLoopConditionStrict: (input: {
+      routeLoopNodeId: string;
+      fromNodeId: string;
+      condition: string;
+      nodeOutputs: Map<string, NodeOutput>;
+    }) => StrictRouteLoopConditionResult;
+  };
+
+  const strictRouteLoopApiSkipReason =
+    'skipped red scaffold: condition-evaluator.ts does not export the strict route_loop analysis and runtime API yet';
+
+  async function loadRouteLoopConditionModule(): Promise<RouteLoopConditionModule> {
+    const module = await import('./condition-evaluator');
+    return module as unknown as typeof module & RouteLoopConditionModule;
+  }
+
+  function makePendingOutput(): NodeOutput {
+    return { state: 'pending', output: '' };
+  }
+
+  describe('route_loop strict condition API ATDD', () => {
+    it.skip(`[P0] TD-1.3-UNIT-001 accepts valid whole-output From Node grammar - ${strictRouteLoopApiSkipReason}`, async () => {
+      const { analyzeRouteLoopCondition } = await loadRouteLoopConditionModule();
+
+      const analysis = analyzeRouteLoopCondition({
+        routeLoopNodeId: 'gate',
+        fromNodeId: 'review',
+        condition: "$review.output == 'positive'",
+      });
+
+      expect(analysis.valid).toBe(true);
+      expect(analysis.issues).toEqual([]);
+      expect(analysis.references).toEqual([
+        { source: '$review.output', nodeId: 'review', field: undefined },
+      ]);
+    });
+
+    it.skip(`[P0] TD-1.3-UNIT-002 normalizes canonical and shorthand field references - ${strictRouteLoopApiSkipReason}`, async () => {
+      const { analyzeRouteLoopCondition } = await loadRouteLoopConditionModule();
+
+      const analysis = analyzeRouteLoopCondition({
+        routeLoopNodeId: 'gate',
+        fromNodeId: 'review',
+        condition: "$review.output.result == 'positive' && $review.result != 'negative'",
+        declaredFields: ['result'],
+      });
+
+      expect(analysis.valid).toBe(true);
+      expect(analysis.issues).toEqual([]);
+      expect(analysis.references).toEqual([
+        { source: '$review.output.result', nodeId: 'review', field: 'result' },
+        { source: '$review.result', nodeId: 'review', field: 'result' },
+      ]);
+    });
+
+    it.skip(`[P0] TD-1.3-UNIT-003 reports a simple non-From reference - ${strictRouteLoopApiSkipReason}`, async () => {
+      const { analyzeRouteLoopCondition } = await loadRouteLoopConditionModule();
+
+      const analysis = analyzeRouteLoopCondition({
+        routeLoopNodeId: 'gate',
+        fromNodeId: 'review',
+        condition: "$other.output == 'positive'",
+      });
+
+      expect(analysis.valid).toBe(false);
+      expect(analysis.issues).toContainEqual(
+        expect.objectContaining({
+          kind: 'invalid_reference',
+          routeLoopNodeId: 'gate',
+          reference: '$other.output',
+          nodeId: 'other',
+        })
+      );
+      expect(analysis.issues[0]?.message).toContain('Route Loop conditions can reference only');
+      expect(analysis.issues[0]?.message).toContain('from');
+    });
+
+    it.skip(`[P0] TD-1.3-UNIT-004 inspects invalid atoms hidden behind OR short-circuiting - ${strictRouteLoopApiSkipReason}`, async () => {
+      const { analyzeRouteLoopCondition } = await loadRouteLoopConditionModule();
+
+      const analysis = analyzeRouteLoopCondition({
+        routeLoopNodeId: 'gate',
+        fromNodeId: 'review',
+        condition: "$review.output == 'positive' || $other.output == 'ok'",
+      });
+
+      expect(analysis.valid).toBe(false);
+      expect(analysis.issues).toContainEqual(
+        expect.objectContaining({
+          kind: 'invalid_reference',
+          reference: '$other.output',
+          nodeId: 'other',
+        })
+      );
+    });
+
+    it.skip(`[P0] TD-1.3-UNIT-005 rejects unsupported grammar extensions - ${strictRouteLoopApiSkipReason}`, async () => {
+      const { analyzeRouteLoopCondition } = await loadRouteLoopConditionModule();
+      const invalidConditions = [
+        "trim($review.output) == 'positive'",
+        "lower($review.output) == 'positive'",
+        "($review.output == 'positive')",
+        "$review.output = 'positive'",
+        "$review.result.value == 'positive'",
+      ];
+
+      for (const condition of invalidConditions) {
+        const analysis = analyzeRouteLoopCondition({
+          routeLoopNodeId: 'gate',
+          fromNodeId: 'review',
+          condition,
+        });
+
+        expect(analysis.valid).toBe(false);
+        expect(analysis.issues).toContainEqual(
+          expect.objectContaining({
+            kind: 'parse_error',
+            routeLoopNodeId: 'gate',
+          })
+        );
+        expect(analysis.issues[0]?.message).toContain('route_loop');
+        expect(analysis.issues[0]?.message).toContain('condition');
+      }
+    });
+
+    it.skip(`[P0] TD-1.3-UNIT-006 rejects $output as a route_loop alias - ${strictRouteLoopApiSkipReason}`, async () => {
+      const { analyzeRouteLoopCondition } = await loadRouteLoopConditionModule();
+
+      const analysis = analyzeRouteLoopCondition({
+        routeLoopNodeId: 'gate',
+        fromNodeId: 'review',
+        condition: "$output.result == 'positive'",
+      });
+
+      expect(analysis.valid).toBe(false);
+      expect(analysis.issues).toContainEqual(
+        expect.objectContaining({
+          kind: 'invalid_reference',
+          reference: '$output.result',
+          nodeId: 'output',
+        })
+      );
+    });
+
+    it.skip(`[P0] TD-1.3-UNIT-007 rejects undeclared From Node fields statically - ${strictRouteLoopApiSkipReason}`, async () => {
+      const { analyzeRouteLoopCondition } = await loadRouteLoopConditionModule();
+
+      for (const condition of [
+        "$review.output.result == 'positive'",
+        "$review.result == 'positive'",
+      ]) {
+        const analysis = analyzeRouteLoopCondition({
+          routeLoopNodeId: 'gate',
+          fromNodeId: 'review',
+          condition,
+          declaredFields: ['summary'],
+        });
+
+        expect(analysis.valid).toBe(false);
+        expect(analysis.issues).toContainEqual(
+          expect.objectContaining({
+            kind: 'invalid_field',
+            routeLoopNodeId: 'gate',
+            nodeId: 'review',
+            field: 'result',
+          })
+        );
+      }
+    });
+
+    it.skip(`[P0] TD-1.3-UNIT-009 hard-fails parse errors at strict runtime - ${strictRouteLoopApiSkipReason}`, async () => {
+      const { evaluateRouteLoopConditionStrict } = await loadRouteLoopConditionModule();
+      const nodeOutputs = new Map([['review', makeOutput('positive')]]);
+
+      expect(() =>
+        evaluateRouteLoopConditionStrict({
+          routeLoopNodeId: 'gate',
+          fromNodeId: 'review',
+          condition: "trim($review.output) == 'positive'",
+          nodeOutputs,
+        })
+      ).toThrow(/route_loop.*condition.*no route was selected/i);
+    });
+
+    it.skip(`[P0] TD-1.3-UNIT-010 propagates output-reference failures at strict runtime - ${strictRouteLoopApiSkipReason}`, async () => {
+      const { evaluateRouteLoopConditionStrict } = await loadRouteLoopConditionModule();
+      const nodeOutputs = new Map([
+        [
+          'review',
+          makeOutput(JSON.stringify({ summary: 'ok' }), 'completed', { summary: 'ok' }, [
+            'summary',
+          ]),
+        ],
+      ]);
+
+      expect(() =>
+        evaluateRouteLoopConditionStrict({
+          routeLoopNodeId: 'gate',
+          fromNodeId: 'review',
+          condition: "$review.output.result == 'positive'",
+          nodeOutputs,
+        })
+      ).toThrow(OutputRefError);
+    });
+
+    it.skip(`[P1] TD-1.3-UNIT-011 fails when From Node output is stale or unavailable - ${strictRouteLoopApiSkipReason}`, async () => {
+      const { evaluateRouteLoopConditionStrict } = await loadRouteLoopConditionModule();
+      const cases: Array<{
+        name: string;
+        nodeOutputs: Map<string, NodeOutput>;
+      }> = [
+        { name: 'missing', nodeOutputs: new Map<string, NodeOutput>() },
+        { name: 'pending', nodeOutputs: new Map([['review', makePendingOutput()]]) },
+        { name: 'skipped', nodeOutputs: new Map([['review', makeOutput('', 'skipped')]]) },
+        { name: 'failed', nodeOutputs: new Map([['review', makeOutput('', 'failed')]]) },
+      ];
+
+      for (const scenario of cases) {
+        expect(() =>
+          evaluateRouteLoopConditionStrict({
+            routeLoopNodeId: 'gate',
+            fromNodeId: 'review',
+            condition: "$review.output == 'positive'",
+            nodeOutputs: scenario.nodeOutputs,
+          })
+        ).toThrow(new RegExp(`route_loop.*${scenario.name}|${scenario.name}.*route_loop`, 'i'));
+      }
+    });
+
+    it.skip(`[P1] TD-1.3-REG-003 keeps strict route_loop APIs inside @archon/workflows - ${strictRouteLoopApiSkipReason}`, async () => {
+      const { analyzeRouteLoopCondition, evaluateRouteLoopConditionStrict } =
+        await loadRouteLoopConditionModule();
+
+      expect(typeof analyzeRouteLoopCondition).toBe('function');
+      expect(typeof evaluateRouteLoopConditionStrict).toBe('function');
+    });
+  });
+
+  describe('route_loop strictness regression guards', () => {
+    it('[P1] TD-1.3-REG-001 keeps ordinary when parse failures fail-closed', () => {
+      const result = evaluateCondition('not a valid condition', new Map<string, NodeOutput>());
+
+      expect(result).toEqual({ result: false, parsed: false });
+    });
+
+    it('[P1] TD-1.3-REG-002 keeps non-route structuredOutput leniency unchanged', () => {
+      const outputs = new Map([['review', makeOutput('prose', 'completed', { summary: 'ok' })]]);
+
+      expect(evaluateCondition("$review.missing == ''", outputs)).toEqual({
+        result: true,
+        parsed: true,
+      });
+    });
+  });
 });
