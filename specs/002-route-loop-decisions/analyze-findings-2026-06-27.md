@@ -27,12 +27,12 @@ The remaining risks are mostly task-level gaps where accepted requirements are p
 
 ## 2. Findings
 
-| ID  | Category           | Severity | Location(s)                                                                    | Summary                                                                                                                                                                                                                           | Recommendation                                                                                                                                                                         | Status |
-| --- | ------------------ | -------- | ------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
-| V1  | Coverage Gap       | HIGH     | spec.md:L230, plan.md:L156, tasks.md:L63-67, tasks.md:L95-100                  | FR-068 and the plan require rerun path self-containment validation at both loader and runtime, but the task list only clearly schedules loader validation and rerun invalidation.                                                 | Add explicit runtime validation and test tasks before or alongside T036 so stale persisted state, resume, retry, or bypassed loader validation cannot invalidate an unsafe rerun path. |        |
-| A1  | Ambiguity          | MEDIUM   | spec.md:L182-185, tasks.md:L55                                                 | T012 says `when` rejection and `trigger_rule` rejection, but the spec has four distinct cases: reject `when` on `route_loop`, reject `trigger_rule` on `route_loop`, reject `when` on `from`, and allow `trigger_rule` on `from`. | Split T012 into explicit test cases, or add a companion task that names all four validation outcomes.                                                                                  |        |
-| U1  | Underspecification | MEDIUM   | spec.md:L337, spec.md:L295-296, plan.md:L166, tasks.md:L127-130, tasks.md:L163 | SC-005 requires route decisions to appear within one live refresh cycle, and the plan calls out SSE or dashboard refetch behavior if needed, but tasks only cover typed event streaming and rendering.                            | Add a task to verify the Web store, SSE bridge, or polling refetch path propagates `node_routed` events with route metadata inside the expected live refresh cycle.                    |        |
-| V2  | Coverage Gap       | MEDIUM   | spec.md:L181, plan.md:L132, tasks.md:L54-68                                    | FR-027 and the plan require a loader warning when `routes.negative` targets `from` directly, but no task explicitly covers the warning behavior or its test.                                                                      | Amend T012 or T019 to add the warning assertion and implementation path for direct negative-to-from routing.                                                                           |        |
+| ID  | Category           | Severity | Location(s)                                                                    | Summary                                                                                                                                                                                                                           | Recommendation                                                                                                                                                                         | Status   |
+| --- | ------------------ | -------- | ------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| V1  | Coverage Gap       | HIGH     | spec.md:L230, plan.md:L156, tasks.md:L63-67, tasks.md:L95-100                  | FR-068 and the plan require rerun path self-containment validation at both loader and runtime, but the task list only clearly schedules loader validation and rerun invalidation.                                                 | Add explicit runtime validation and test tasks before or alongside T036 so stale persisted state, resume, retry, or bypassed loader validation cannot invalidate an unsafe rerun path. | spec-fix |
+| A1  | Ambiguity          | MEDIUM   | spec.md:L182-185, tasks.md:L55                                                 | T012 says `when` rejection and `trigger_rule` rejection, but the spec has four distinct cases: reject `when` on `route_loop`, reject `trigger_rule` on `route_loop`, reject `when` on `from`, and allow `trigger_rule` on `from`. | Split T012 into explicit test cases, or add a companion task that names all four validation outcomes.                                                                                  | spec-fix |
+| U1  | Underspecification | MEDIUM   | spec.md:L337, spec.md:L295-296, plan.md:L166, tasks.md:L127-130, tasks.md:L163 | SC-005 requires route decisions to appear within one live refresh cycle, and the plan calls out SSE or dashboard refetch behavior if needed, but tasks only cover typed event streaming and rendering.                            | Add a task to verify the Web store, SSE bridge, or polling refetch path propagates `node_routed` events with route metadata inside the expected live refresh cycle.                    | spec-fix |
+| V2  | Coverage Gap       | MEDIUM   | spec.md:L181, plan.md:L132, tasks.md:L54-68                                    | FR-027 and the plan require a loader warning when `routes.negative` targets `from` directly, but no task explicitly covers the warning behavior or its test.                                                                      | Amend T012 or T019 to add the warning assertion and implementation path for direct negative-to-from routing.                                                                           | spec-fix |
 
 **Coverage Summary:**
 
@@ -75,35 +75,51 @@ For `spec-fix`, `Before:` must be a verbatim substring that appears exactly once
 
 ### V1
 
-Category:
+Category: spec-fix
 Payload:
 Target: specs/002-route-loop-decisions/tasks.md
-Before: <verbatim substring from target>
-After: <replacement text>
+Before:
+
+- [ ] T036 [US2] Rerun completed selected targets as fresh attempts and invalidate only the selected rerun path back to the route-loop controller in `packages/workflows/src/dag-executor.ts`
+      After:
+- [ ] T036 [US2] Rerun completed selected targets as fresh attempts, validate the selected rerun path self-containment at runtime before invalidating latest-output state, and add executor coverage for stale persisted state, resume, retry, or loader-bypassed rerun paths in `packages/workflows/src/dag-executor.ts` and `packages/workflows/src/dag-executor.test.ts`
+      Rationale: FR-068 requires rerun path self-containment validation at both load time and runtime in `specs/002-route-loop-decisions/spec.md:230`, the execution plan requires runtime validation before latest-output invalidation in `specs/002-route-loop-decisions/plan.md:156`, and D084 says runtime validation specifically guards resume, retry, stale persisted state, and loader-bypassed graph shapes in `plans/grill-me/260625-2337-route-loop-decisions.md:967-971`, so extending T036 is the smallest correct fix because T036 owns executor rerun-path invalidation.
 
 ### A1
 
-Category:
+Category: spec-fix
 Payload:
 Target: specs/002-route-loop-decisions/tasks.md
-Before: <verbatim substring from target>
-After: <replacement text>
+Before:
+
+- [ ] T012 [US1] Add loader tests for required routes, `depends_on` and `from` mismatch, missing targets, self-target routes, `when` rejection, and `trigger_rule` rejection in `packages/workflows/src/loader.test.ts`
+      After:
+- [ ] T012 [US1] Add loader tests for required routes, `depends_on` and `from` mismatch, missing targets, self-target routes, rejecting `when` on `route_loop`, rejecting `trigger_rule` on `route_loop`, rejecting `when` on the `from` node, and allowing `trigger_rule` on the `from` node in `packages/workflows/src/loader.test.ts`
+      Rationale: FR-028 through FR-031 split the validation contract into four distinct outcomes in `specs/002-route-loop-decisions/spec.md:182-185`, and D069 through D072 preserve the same distinction between forbidden route-loop fields and allowed `from` node `trigger_rule` behavior in `plans/grill-me/260625-2337-route-loop-decisions.md:790-828`, so T012 should name those cases explicitly instead of grouping them under ambiguous `when` and `trigger_rule` labels.
 
 ### U1
 
-Category:
+Category: spec-fix
 Payload:
 Target: specs/002-route-loop-decisions/tasks.md
-Before: <verbatim substring from target>
-After: <replacement text>
+Before:
+
+- [ ] T056 [P] [US4] Add component tests for route-loop node handles and typed route event rendering in `packages/web/src/components/workflows/DagNodeComponent.test.ts`
+      After:
+- [ ] T056 [P] [US4] Add component, Web store, and SSE/refetch bridge tests for route-loop node handles, typed `node_routed` rendering, and route decision propagation within one live refresh cycle in `packages/web/src/components/workflows/DagNodeComponent.test.ts`, `packages/web/src/components/workflows/WorkflowExecution.test.tsx`, `packages/web/src/stores/workflow-store.test.ts`, and `packages/server/src/adapters/web/workflow-bridge.test.ts`
+      Rationale: SC-005 requires run detail to show route decisions within one live refresh cycle in `specs/002-route-loop-decisions/spec.md:337`, the plan explicitly leaves SSE or dashboard refetch updates in scope in `specs/002-route-loop-decisions/plan.md:166`, and the current Web path uses fixed SSE handler and bridge mappings without a `node_routed` case in `packages/web/src/stores/workflow-store.ts:368-374`, `packages/web/src/hooks/useSSE.ts:176-193`, and `packages/server/src/adapters/web/workflow-bridge.ts:228-233`, so the task must verify the event crosses the live propagation path rather than only rendering a static typed event.
 
 ### V2
 
-Category:
+Category: spec-fix
 Payload:
 Target: specs/002-route-loop-decisions/tasks.md
-Before: <verbatim substring from target>
-After: <replacement text>
+Before:
+
+- [ ] T019 [US1] Add route-edge cycle validation, positive and exhausted exit-path validation, nested route-loop allowance, and self-contained negative path validation in `packages/workflows/src/loader.ts`
+      After:
+- [ ] T019 [US1] Add route-edge cycle validation, positive and exhausted exit-path validation, nested route-loop allowance, warning behavior when `routes.negative` targets `route_loop.from` directly, and self-contained negative path validation in `packages/workflows/src/loader.ts`
+      Rationale: FR-027 requires a loader warning when `routes.negative` targets the `from` node directly in `specs/002-route-loop-decisions/spec.md:181`, the implementation plan repeats that warning in `specs/002-route-loop-decisions/plan.md:132`, and D039 explains the shape is valid for polling or flaky checks but should warn in review-fix flows in `plans/grill-me/260625-2337-route-loop-decisions.md:459-463`, so T019 is the right implementation task because it already owns route-edge and negative-path validation in the loader.
 
 ---
 
