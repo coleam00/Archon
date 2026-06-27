@@ -28,7 +28,7 @@ import { isIncludeNode } from './schemas';
 import * as archonPaths from '@archon/paths';
 import { BUNDLED_WORKFLOWS, BUNDLED_COMMANDS, isBinaryBuild } from './defaults/bundled-defaults';
 import { createLogger } from '@archon/paths';
-import { isValidCommandName } from './command-validation';
+import { isValidCommandName, MAX_DISCOVERY_DEPTH } from './command-validation';
 import { parseWorkflow } from './loader';
 import { expandWorkflowIncludes } from './include-expander';
 
@@ -81,15 +81,12 @@ interface DirLoadResult {
   errors: WorkflowLoadError[];
 }
 
-/**
- * Maximum subfolder depth we descend into when discovering workflows/commands/scripts.
- *
- * `1` allows one level of grouping (e.g. `.archon/workflows/defaults/foo.yaml`);
- * `0` would mean only files at the root. We stop at 1 deliberately — deeper
- * nesting has never been part of the documented convention and adds no
- * organizational value, just routing ambiguity.
- */
-const MAX_DISCOVERY_DEPTH = 1;
+// `MAX_DISCOVERY_DEPTH` (= 1: one level of grouping, e.g.
+// `.archon/workflows/defaults/foo.yaml`) is imported from `command-validation`,
+// the dependency-free leaf module, so the loader here and the workflow-name
+// validator there share one source of truth and cannot drift apart. We stop at
+// one level deliberately — deeper nesting has never been part of the documented
+// convention and adds only routing ambiguity.
 
 /**
  * Load workflows from a directory, descending at most `MAX_DISCOVERY_DEPTH`
