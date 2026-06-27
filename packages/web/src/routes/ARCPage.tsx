@@ -209,7 +209,11 @@ function MetricCard({ label, value, note, tone = 'blue' }: MetricCardProps): Rea
   );
 }
 
-export function ARCPage(): React.ReactElement {
+interface ARCPageProps {
+  publicView?: boolean;
+}
+
+export function ARCPage({ publicView = false }: ARCPageProps = {}): React.ReactElement {
   return (
     <div className="flex flex-1 flex-col gap-6 p-6">
       <div className="flex flex-col gap-2">
@@ -409,25 +413,27 @@ export function ARCPage(): React.ReactElement {
         </div>
       </section>
 
-      <section className="flex flex-col gap-3">
-        <div className="flex items-center gap-2">
-          <FileText className="h-4 w-4 text-text-secondary" />
-          <h2 className="text-base font-semibold text-text-primary">Canon and working files</h2>
-        </div>
-        <div className="grid gap-2 md:grid-cols-2">
-          {VAULT_LINKS.map(link => (
-            <div
-              key={link.path}
-              className="rounded-md border border-border bg-surface-elevated p-3"
-            >
-              <p className="text-sm font-semibold text-text-primary">{link.label}</p>
-              <code className="mt-1 block text-[11px] font-mono text-text-tertiary">
-                {link.path}
-              </code>
-            </div>
-          ))}
-        </div>
-      </section>
+      {!publicView && (
+        <section className="flex flex-col gap-3">
+          <div className="flex items-center gap-2">
+            <FileText className="h-4 w-4 text-text-secondary" />
+            <h2 className="text-base font-semibold text-text-primary">Canon and working files</h2>
+          </div>
+          <div className="grid gap-2 md:grid-cols-2">
+            {VAULT_LINKS.map(link => (
+              <div
+                key={link.path}
+                className="rounded-md border border-border bg-surface-elevated p-3"
+              >
+                <p className="text-sm font-semibold text-text-primary">{link.label}</p>
+                <code className="mt-1 block text-[11px] font-mono text-text-tertiary">
+                  {link.path}
+                </code>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       <div className="rounded-lg border border-border bg-surface-elevated p-4 text-xs text-text-secondary">
         ARC site:{' '}

@@ -546,7 +546,9 @@
         "category": "Wellness / health",
         "ask": "Cash sponsor / wellness activation",
         "notes": "Sent 2026-06-10 via info@jonesconcierge.health",
-        "apollo_id": "19eb43aa08359e31"
+        "apollo_id": "19eb43aa08359e31",
+        "sponsor_value_lane": "$1,500 / wellness activation sponsor",
+        "next_touch": "Monitor; follow after priority tier."
       },
       {
         "name": "Flow Massage & Wellness",
@@ -559,7 +561,9 @@
         "category": "Wellness / health",
         "ask": "Cash sponsor / wellness activation",
         "notes": "Sent 2026-06-10 via samanthahayneslmt@flowmassagesrq.com",
-        "apollo_id": "19eb43b96bf4acc6"
+        "apollo_id": "19eb43b96bf4acc6",
+        "sponsor_value_lane": "$1,500 / wellness activation sponsor",
+        "next_touch": "Monitor; follow after priority tier."
       },
       {
         "name": "LUX MedSpa & Wellness Center",
@@ -572,7 +576,9 @@
         "category": "Wellness / aesthetics",
         "ask": "Cash sponsor / wellness activation",
         "notes": "Sent 2026-06-10 via info@luxmedspasarasota.com",
-        "apollo_id": "19eb43c8d2d7413f"
+        "apollo_id": "19eb43c8d2d7413f",
+        "sponsor_value_lane": "$1,500 / wellness activation sponsor",
+        "next_touch": "Monitor; follow after priority tier."
       },
       {
         "name": "LernerCohen",
@@ -585,7 +591,9 @@
         "category": "Professional services",
         "ask": "Cash sponsor / professional prestige",
         "notes": "Sent 2026-06-10 via info@lernercohen.com",
-        "apollo_id": "19eb43d83a75a8ca"
+        "apollo_id": "19eb43d83a75a8ca",
+        "sponsor_value_lane": "$1,500-$3,000 / prestige sponsor",
+        "next_touch": "Monitor; follow after priority tier."
       },
       {
         "name": "Precision Health & Aesthetics",
@@ -598,7 +606,9 @@
         "category": "Wellness / aesthetics",
         "ask": "Cash sponsor / wellness activation",
         "notes": "Sent 2026-06-10 via Asi@srqmed.com",
-        "apollo_id": "19eb43e7a030c1d6"
+        "apollo_id": "19eb43e7a030c1d6",
+        "sponsor_value_lane": "$1,500 / wellness activation sponsor",
+        "next_touch": "Send short second follow-up."
       },
       {
         "name": "Reveal Vitality",
@@ -611,7 +621,9 @@
         "category": "Wellness / aesthetics",
         "ask": "Cash sponsor / wellness activation",
         "notes": "Sent 2026-06-10 via info@revealvitality.com",
-        "apollo_id": "19eb43f72554f88e"
+        "apollo_id": "19eb43f72554f88e",
+        "sponsor_value_lane": "$1,500 / wellness activation sponsor",
+        "next_touch": "Send short second follow-up."
       },
       {
         "name": "Sarasota Facial Aesthetics",
@@ -624,7 +636,9 @@
         "category": "Wellness / aesthetics",
         "ask": "Cash sponsor / wellness activation",
         "notes": "Sent 2026-06-10 via contact@sarasotafacialaesthetics.com",
-        "apollo_id": "19eb44067dddb6dc"
+        "apollo_id": "19eb44067dddb6dc",
+        "sponsor_value_lane": "$1,500 / wellness activation sponsor",
+        "next_touch": "Monitor; follow after priority tier."
       },
       {
         "name": "Alvarado Clinical Hypnotherapy",
@@ -637,7 +651,9 @@
         "category": "Wellness / health",
         "ask": "Cash sponsor / wellness activation",
         "notes": "Sent 2026-06-10 via info@alvaradohypnotherapy.com",
-        "apollo_id": "19eb4425514cf747"
+        "apollo_id": "19eb4425514cf747",
+        "sponsor_value_lane": "$1,500 / wellness activation sponsor",
+        "next_touch": "Monitor; follow after priority tier."
       },
       {
         "name": "Beem Light",
@@ -650,7 +666,9 @@
         "category": "Wellness / health",
         "ask": "Cash sponsor / wellness activation",
         "notes": "Sent 2026-06-10 via sarasotasiestakey@beemlightsauna.com",
-        "apollo_id": "19eb4434ba616219"
+        "apollo_id": "19eb4434ba616219",
+        "sponsor_value_lane": "$1,500 / wellness activation sponsor",
+        "next_touch": "Monitor; follow after priority tier."
       },
       {
         "name": "Dermafix Spa Largo / Sarasota (Sheffa Group)",
@@ -663,7 +681,9 @@
         "category": "Wellness / aesthetics",
         "ask": "Cash sponsor / wellness activation",
         "notes": "Sent 2026-06-10 via support@dermafixspalargo.com",
-        "apollo_id": "19eb444430fec1bb"
+        "apollo_id": "19eb444430fec1bb",
+        "sponsor_value_lane": "$1,500 / wellness activation sponsor",
+        "next_touch": "Monitor; follow after priority tier."
       },
       {
         "name": "Oh La Moda",
@@ -676,7 +696,9 @@
         "category": "Luxury home / retail / design",
         "ask": "Cash sponsor / luxury home-design",
         "notes": "Sent 2026-06-10 via ohlalamoda@yahoo.com",
-        "apollo_id": "19eb445387ee74db"
+        "apollo_id": "19eb445387ee74db",
+        "sponsor_value_lane": "$1,500-$3,000 / luxury home-design sponsor",
+        "next_touch": "Monitor; follow after priority tier."
       },
       {
         "name": "Reverence Apparel",
@@ -689,7 +711,9 @@
         "category": "Dance / apparel",
         "ask": "In-kind / community partner",
         "notes": "Sent 2026-06-10 via contact@reverencedance.com",
-        "apollo_id": "19eb447264192f51"
+        "apollo_id": "19eb447264192f51",
+        "sponsor_value_lane": "TBD / in-kind or community partner",
+        "next_touch": "Monitor; follow after priority tier."
       },
       {
         "name": "A. Tifaney & Son",
@@ -702,7 +726,9 @@
         "category": "Luxury home / retail / design",
         "ask": "Cash sponsor / luxury home-design",
         "notes": "Sent 2026-06-10 via contact@webuyyourjewelry.com",
-        "apollo_id": "19eb4481c5d974bf"
+        "apollo_id": "19eb4481c5d974bf",
+        "sponsor_value_lane": "$1,500-$3,000 / luxury home-design sponsor",
+        "next_touch": "Send short second follow-up."
       },
       {
         "name": "Clive Daniel Home (Sarasota)",
@@ -715,7 +741,9 @@
         "category": "Luxury home / retail / design",
         "ask": "Cash sponsor / luxury home-design",
         "notes": "Sent 2026-06-10 via rhoskins@clivedaniel.com",
-        "apollo_id": "19eb44915ff9d8e3"
+        "apollo_id": "19eb44915ff9d8e3",
+        "sponsor_value_lane": "$1,500-$3,000 / luxury home-design sponsor",
+        "next_touch": "Send short second follow-up."
       },
       {
         "name": "John Craig Clothier",
@@ -728,7 +756,9 @@
         "category": "Luxury home / retail / design",
         "ask": "Cash sponsor / luxury home-design",
         "notes": "Sent 2026-06-10 via DeniseT@JohnCraigClothier.com",
-        "apollo_id": "19eb44a0b317d8a4"
+        "apollo_id": "19eb44a0b317d8a4",
+        "sponsor_value_lane": "$1,500-$3,000 / luxury home-design sponsor",
+        "next_touch": "Send short second follow-up."
       },
       {
         "name": "L. Boutique (St. Armands)",
@@ -741,7 +771,9 @@
         "category": "Luxury home / retail / design",
         "ask": "Cash sponsor / luxury home-design",
         "notes": "Sent 2026-06-10 via info@lboutiques.com",
-        "apollo_id": "19eb44b0139a2b13"
+        "apollo_id": "19eb44b0139a2b13",
+        "sponsor_value_lane": "$1,500-$3,000 / luxury home-design sponsor",
+        "next_touch": "Send short second follow-up."
       },
       {
         "name": "Mercedes-Benz of Sarasota",
@@ -754,7 +786,9 @@
         "category": "Luxury auto",
         "ask": "Cash sponsor / luxury activation",
         "notes": "Sent 2026-06-10 via jamie.muldoon@mercedes-benz.com",
-        "apollo_id": "19eb44bf6d7f0121"
+        "apollo_id": "19eb44bf6d7f0121",
+        "sponsor_value_lane": "$1,500-$3,000 / luxury activation sponsor",
+        "next_touch": "Send short second follow-up."
       },
       {
         "name": "Michael Saunders & Company",
@@ -767,7 +801,9 @@
         "category": "Luxury real estate",
         "ask": "Cash sponsor / luxury home-design",
         "notes": "Sent 2026-06-10 via paularees@michaelsaunders.com",
-        "apollo_id": "19eb44cefc0845b0"
+        "apollo_id": "19eb44cefc0845b0",
+        "sponsor_value_lane": "$1,500-$3,000 / luxury home-design sponsor",
+        "next_touch": "Send short second follow-up."
       },
       {
         "name": "Northern Trust (Sarasota)",
@@ -780,7 +816,9 @@
         "category": "Private wealth / banking",
         "ask": "Cash sponsor / professional prestige",
         "notes": "Sent 2026-06-10 via shh2@ntrs.com",
-        "apollo_id": "19eb44de36e04e08"
+        "apollo_id": "19eb44de36e04e08",
+        "sponsor_value_lane": "$1,500-$3,000 / prestige sponsor",
+        "next_touch": "Send short second follow-up."
       },
       {
         "name": "Phillip Jeffries",
@@ -793,7 +831,9 @@
         "category": "Luxury home / retail / design",
         "ask": "Cash sponsor / luxury home-design",
         "notes": "Sent 2026-06-10 via gtroche@phillipjeffries.com",
-        "apollo_id": "19eb44ed8d4ead12"
+        "apollo_id": "19eb44ed8d4ead12",
+        "sponsor_value_lane": "$1,500-$3,000 / luxury home-design sponsor",
+        "next_touch": "Send short second follow-up."
       },
       {
         "name": "Premier Sotheby's International Realty",
@@ -806,7 +846,9 @@
         "category": "Luxury real estate",
         "ask": "Cash sponsor / luxury home-design",
         "notes": "Sent 2026-06-10 via info@premiersir.com",
-        "apollo_id": "19eb44fcc52ccdd2"
+        "apollo_id": "19eb44fcc52ccdd2",
+        "sponsor_value_lane": "$1,500-$3,000 / luxury home-design sponsor",
+        "next_touch": "Send short second follow-up."
       },
       {
         "name": "Robb & Stucky",
@@ -819,7 +861,9 @@
         "category": "Luxury home / retail / design",
         "ask": "Cash sponsor / luxury home-design",
         "notes": "Bobby Garland flagged attachment issue; Robb & Stucky corporate is reviewing and pending a call.",
-        "apollo_id": "19eb450c4401477d"
+        "apollo_id": "19eb450c4401477d",
+        "sponsor_value_lane": "$1,500-$3,000 / luxury design sponsor",
+        "next_touch": "Call Bobby next week; corporate reviewing."
       },
       {
         "name": "Sabal Trust Company",
@@ -832,7 +876,9 @@
         "category": "Private wealth / banking",
         "ask": "Cash sponsor / professional prestige",
         "notes": "Sent 2026-06-10 via info@sabaltrust.com",
-        "apollo_id": "19eb451bb06edd76"
+        "apollo_id": "19eb451bb06edd76",
+        "sponsor_value_lane": "$1,500-$3,000 / prestige sponsor",
+        "next_touch": "Send short second follow-up."
       },
       {
         "name": "Suncoast Porsche",
@@ -845,7 +891,9 @@
         "category": "Luxury auto",
         "ask": "Cash sponsor / luxury activation",
         "notes": "Sent 2026-06-10 via rknab@sunsetautogroup.com",
-        "apollo_id": "19eb452b22f26f5f"
+        "apollo_id": "19eb452b22f26f5f",
+        "sponsor_value_lane": "$1,500-$3,000 / luxury activation sponsor",
+        "next_touch": "Send short second follow-up."
       },
       {
         "name": "Sarasota Yacht Club",
@@ -858,7 +906,9 @@
         "category": "Luxury / private club",
         "ask": "Cash sponsor / hybrid partner",
         "notes": "Sent 2026-06-10 via nermin.gebrail@sarasotayachtclub.org",
-        "apollo_id": "19eb453a99a0174a"
+        "apollo_id": "19eb453a99a0174a",
+        "sponsor_value_lane": "TBD",
+        "next_touch": "Send short second follow-up."
       },
       {
         "name": "Aware House",
@@ -871,7 +921,9 @@
         "category": "Wellness / health",
         "ask": "Cash sponsor / wellness activation",
         "notes": "Sent 2026-06-10 via connect@aware-house.co",
-        "apollo_id": "19eb4549ec913741"
+        "apollo_id": "19eb4549ec913741",
+        "sponsor_value_lane": "$1,500 / wellness activation sponsor",
+        "next_touch": "Monitor; follow after priority tier."
       },
       {
         "name": "Live Well DPC",
@@ -884,7 +936,9 @@
         "category": "Wellness / health",
         "ask": "Cash sponsor / wellness activation",
         "notes": "Sent 2026-06-10 via melissa@livewelldpc.com",
-        "apollo_id": "19eb4559560d42cb"
+        "apollo_id": "19eb4559560d42cb",
+        "sponsor_value_lane": "$1,500 / wellness activation sponsor",
+        "next_touch": "Monitor; follow after priority tier."
       },
       {
         "name": "Natural Primary Care",
@@ -897,7 +951,9 @@
         "category": "Wellness / health",
         "ask": "Cash sponsor / wellness activation",
         "notes": "Sent 2026-06-10 via dr@naturalprimarycare.com",
-        "apollo_id": "19eb4568a6573eb6"
+        "apollo_id": "19eb4568a6573eb6",
+        "sponsor_value_lane": "$1,500 / wellness activation sponsor",
+        "next_touch": "Monitor; follow after priority tier."
       },
       {
         "name": "Opt for Light",
@@ -910,7 +966,9 @@
         "category": "Wellness / health",
         "ask": "Cash sponsor / wellness activation",
         "notes": "Sent 2026-06-10 via vivie@optforlight.com",
-        "apollo_id": "19eb457839e99c3b"
+        "apollo_id": "19eb457839e99c3b",
+        "sponsor_value_lane": "$1,500 / wellness activation sponsor",
+        "next_touch": "Monitor; follow after priority tier."
       },
       {
         "name": "Mindspa",
@@ -923,7 +981,9 @@
         "category": "Wellness / health",
         "ask": "Cash sponsor / wellness activation",
         "notes": "Sent 2026-06-10 via bonni@londonwellness.net",
-        "apollo_id": "19eb45879606b5bb"
+        "apollo_id": "19eb45879606b5bb",
+        "sponsor_value_lane": "$1,500 / wellness activation sponsor",
+        "next_touch": "Monitor; follow after priority tier."
       },
       {
         "name": "Grateful Tonic",
@@ -936,7 +996,9 @@
         "category": "Wellness / health",
         "ask": "Cash sponsor / wellness activation",
         "notes": "Sent 2026-06-10 via jillfreedman1@gmail.com",
-        "apollo_id": "19eb45971878b254"
+        "apollo_id": "19eb45971878b254",
+        "sponsor_value_lane": "$1,500 / wellness activation sponsor",
+        "next_touch": "Monitor; follow after priority tier."
       },
       {
         "name": "Vidal Coaching",
@@ -949,7 +1011,9 @@
         "category": "Wellness / health",
         "ask": "Cash sponsor / wellness activation",
         "notes": "Sent 2026-06-10 via christinad@vidalcoaching.com",
-        "apollo_id": "19eb45a69c80711f"
+        "apollo_id": "19eb45a69c80711f",
+        "sponsor_value_lane": "$1,500 / wellness activation sponsor",
+        "next_touch": "Monitor; follow after priority tier."
       },
       {
         "name": "Express Employment Professionals",
@@ -962,7 +1026,9 @@
         "category": "Business services",
         "ask": "Cash sponsor / hybrid partner",
         "notes": "Sent 2026-06-10 via stacey.crews2@expresspros.com",
-        "apollo_id": "19eb45b610ea939c"
+        "apollo_id": "19eb45b610ea939c",
+        "sponsor_value_lane": "TBD",
+        "next_touch": "Monitor; follow after priority tier."
       },
       {
         "name": "Your Place Physical Therapy",
@@ -975,7 +1041,9 @@
         "category": "Wellness / health",
         "ask": "Cash sponsor / wellness activation",
         "notes": "Sent 2026-06-10 via frankallen@yourplacept.com",
-        "apollo_id": "19eb45c56111ef05"
+        "apollo_id": "19eb45c56111ef05",
+        "sponsor_value_lane": "$1,500 / wellness activation sponsor",
+        "next_touch": "Monitor; follow after priority tier."
       },
       {
         "name": "Handwoven Bands / Todd Alan Studios",
@@ -988,7 +1056,9 @@
         "category": "Luxury home / retail / design",
         "ask": "Cash sponsor / luxury home-design",
         "notes": "Sent 2026-06-10 via Todd@HandWovenBands.com",
-        "apollo_id": "19eb45d4fce8dc6c"
+        "apollo_id": "19eb45d4fce8dc6c",
+        "sponsor_value_lane": "$1,500-$3,000 / luxury home-design sponsor",
+        "next_touch": "Monitor; follow after priority tier."
       },
       {
         "name": "Coldwell Banker Realty (Sarasota)",
@@ -1001,7 +1071,9 @@
         "category": "Luxury real estate",
         "ask": "Cash sponsor / luxury home-design",
         "notes": "Sent 2026-06-10 via matthew.day@floridamoves.com",
-        "apollo_id": "19eb45e44bfeaaa9"
+        "apollo_id": "19eb45e44bfeaaa9",
+        "sponsor_value_lane": "$1,500-$3,000 / luxury home-design sponsor",
+        "next_touch": "Monitor; follow after priority tier."
       },
       {
         "name": "Sarasota Ford Lincoln (Lincoln line)",
@@ -1014,7 +1086,9 @@
         "category": "Luxury auto",
         "ask": "Cash sponsor / luxury activation",
         "notes": "Reviewed then declined due to allocated 2026 budget; preserve for 2027/non-cash lane.",
-        "apollo_id": "19eb45f3b6a8b491"
+        "apollo_id": "19eb45f3b6a8b491",
+        "sponsor_value_lane": "$1,500-$3,000 / luxury activation sponsor",
+        "next_touch": "Relationship-save note; ask 2027 window."
       },
       {
         "name": "Truist Wealth (Sarasota)",
@@ -1027,7 +1101,9 @@
         "category": "Private wealth / banking",
         "ask": "Cash sponsor / professional prestige",
         "notes": "Sent 2026-06-10 via john.kushman@truist.com",
-        "apollo_id": "19eb46032bee8f90"
+        "apollo_id": "19eb46032bee8f90",
+        "sponsor_value_lane": "$1,500-$3,000 / prestige sponsor",
+        "next_touch": "Send short second follow-up."
       },
       {
         "name": "Wells Fargo Private Bank (Sarasota)",
@@ -1040,7 +1116,9 @@
         "category": "Private wealth / banking",
         "ask": "Cash sponsor / professional prestige",
         "notes": "Sent 2026-06-10 via Ryan.M.Muller@wellsfargo.com",
-        "apollo_id": "19eb46128a41d68e"
+        "apollo_id": "19eb46128a41d68e",
+        "sponsor_value_lane": "$1,500-$3,000 / prestige sponsor",
+        "next_touch": "Send short second follow-up."
       },
       {
         "name": "Wilde Lexus Sarasota",
@@ -1053,7 +1131,9 @@
         "category": "Luxury auto",
         "ask": "Cash sponsor / luxury activation",
         "notes": "Sent 2026-06-10 via smathis@lexusofsarasota.com",
-        "apollo_id": "19eb4621e0ed7b25"
+        "apollo_id": "19eb4621e0ed7b25",
+        "sponsor_value_lane": "$1,500-$3,000 / luxury activation sponsor",
+        "next_touch": "Send short second follow-up."
       },
       {
         "name": "Williams Parker Harrison Dietz & Getzen",
@@ -1066,7 +1146,9 @@
         "category": "Professional services",
         "ask": "Cash sponsor / professional prestige",
         "notes": "Sent 2026-06-10 via ediaz@williamsparker.com",
-        "apollo_id": "19eb46312c0220b5"
+        "apollo_id": "19eb46312c0220b5",
+        "sponsor_value_lane": "$1,500-$3,000 / prestige sponsor",
+        "next_touch": "Send short second follow-up."
       },
       {
         "name": "Glow Aesthetics & Wellness (Lakewood Ranch)",
@@ -1079,7 +1161,9 @@
         "category": "Wellness / aesthetics",
         "ask": "Cash sponsor / wellness activation",
         "notes": "Sent 2026-06-10 via Bianca@coastalglowmed.com",
-        "apollo_id": "19eb4640aa469658"
+        "apollo_id": "19eb4640aa469658",
+        "sponsor_value_lane": "$1,500 / wellness activation sponsor",
+        "next_touch": "Monitor; follow after priority tier."
       },
       {
         "name": "Kerkering, Barberio & Co (CPA)",
@@ -1092,7 +1176,9 @@
         "category": "Professional services",
         "ask": "Cash sponsor / professional prestige",
         "notes": "Sent 2026-06-10 via lleutwyler@kbgrp.com",
-        "apollo_id": "19eb464feed956c2"
+        "apollo_id": "19eb464feed956c2",
+        "sponsor_value_lane": "$1,500-$3,000 / prestige sponsor",
+        "next_touch": "Send short second follow-up."
       },
       {
         "name": "Marlow Medical Aesthetics",
@@ -1105,7 +1191,9 @@
         "category": "Wellness / aesthetics",
         "ask": "Cash sponsor / wellness activation",
         "notes": "Sent 2026-06-10 via kimberly@marlowmedspa.com",
-        "apollo_id": "19eb465f58ad8339"
+        "apollo_id": "19eb465f58ad8339",
+        "sponsor_value_lane": "$1,500 / wellness activation sponsor",
+        "next_touch": "Monitor; follow after priority tier."
       },
       {
         "name": "The Plymouth Harbor (Bird Key)",
@@ -1118,7 +1206,9 @@
         "category": "Affluent community",
         "ask": "Cash sponsor / hybrid partner",
         "notes": "Sent 2026-06-10 via info@plymouthharbor.org",
-        "apollo_id": "19eb466eca3d540b"
+        "apollo_id": "19eb466eca3d540b",
+        "sponsor_value_lane": "TBD",
+        "next_touch": "Send short second follow-up."
       }
     ],
     "Fountain": [

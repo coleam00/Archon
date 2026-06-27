@@ -85,6 +85,8 @@ export function App(): React.ReactElement {
         <ProjectProvider>
           <HashRouter>
             <Routes>
+              <Route path="/share/sadn" element={<SADNPage publicView />} />
+              <Route path="/share/arc" element={<ARCPage publicView />} />
               <Route element={<Layout />}>
                 <Route path="/" element={<Navigate to="/welcome" replace />} />
                 <Route path="/welcome" element={<StartHerePage />} />

@@ -42,6 +42,10 @@ export interface BusinessProspect {
   category?: string;
   /** Optional ask label (used for SADN) */
   ask?: string;
+  /** Next recommended touch for command-center prospect boards */
+  next_touch?: string;
+  /** Sponsor dollar/value lane for SADN / external-rep command centers */
+  sponsor_value_lane?: string;
   /** Optional message history (for prospects with multi-touch threads) */
   messages?: ProspectChannelMessage[];
 }

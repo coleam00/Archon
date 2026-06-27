@@ -293,7 +293,11 @@ function PipelineCard({ item }: { item: PipelineItem }): React.ReactElement {
   );
 }
 
-export function SADNPage(): React.ReactElement {
+interface SADNPageProps {
+  publicView?: boolean;
+}
+
+export function SADNPage({ publicView = false }: SADNPageProps = {}): React.ReactElement {
   return (
     <div className="flex flex-1 flex-col gap-6 p-6">
       <div className="flex flex-col gap-2">
@@ -458,45 +462,50 @@ export function SADNPage(): React.ReactElement {
         </div>
       </section>
 
-      <section className="grid gap-3 lg:grid-cols-2">
-        <div className="rounded-lg border border-border bg-surface-elevated p-4">
-          <div className="mb-3 flex items-center gap-2">
-            <Video className="h-4 w-4 text-text-secondary" />
-            <h2 className="text-base font-semibold text-text-primary">Working assets</h2>
+      {!publicView && (
+        <section className="grid gap-3 lg:grid-cols-2">
+          <div className="rounded-lg border border-border bg-surface-elevated p-4">
+            <div className="mb-3 flex items-center gap-2">
+              <Video className="h-4 w-4 text-text-secondary" />
+              <h2 className="text-base font-semibold text-text-primary">Working assets</h2>
+            </div>
+            <div className="space-y-2">
+              {ASSETS.map(asset => (
+                <div
+                  key={asset.file}
+                  className="rounded-md border border-border bg-surface-inset p-3"
+                >
+                  <p className="text-sm font-semibold text-text-primary">{asset.label}</p>
+                  <p className="mt-1 text-xs text-text-secondary">{asset.use}</p>
+                  <code className="mt-1 block break-all text-[11px] font-mono text-text-tertiary">
+                    {asset.file}
+                  </code>
+                </div>
+              ))}
+            </div>
           </div>
-          <div className="space-y-2">
-            {ASSETS.map(asset => (
-              <div
-                key={asset.file}
-                className="rounded-md border border-border bg-surface-inset p-3"
-              >
-                <p className="text-sm font-semibold text-text-primary">{asset.label}</p>
-                <p className="mt-1 text-xs text-text-secondary">{asset.use}</p>
-                <code className="mt-1 block break-all text-[11px] font-mono text-text-tertiary">
-                  {asset.file}
-                </code>
-              </div>
-            ))}
-          </div>
-        </div>
 
-        <div className="rounded-lg border border-border bg-surface-elevated p-4">
-          <div className="mb-3 flex items-center gap-2">
-            <FileText className="h-4 w-4 text-text-secondary" />
-            <h2 className="text-base font-semibold text-text-primary">Canon and trackers</h2>
+          <div className="rounded-lg border border-border bg-surface-elevated p-4">
+            <div className="mb-3 flex items-center gap-2">
+              <FileText className="h-4 w-4 text-text-secondary" />
+              <h2 className="text-base font-semibold text-text-primary">Canon and trackers</h2>
+            </div>
+            <div className="space-y-2">
+              {VAULT_LINKS.map(link => (
+                <div
+                  key={link.path}
+                  className="rounded-md border border-border bg-surface-inset p-3"
+                >
+                  <p className="text-sm font-semibold text-text-primary">{link.label}</p>
+                  <code className="mt-1 block break-all text-[11px] font-mono text-text-tertiary">
+                    {link.path}
+                  </code>
+                </div>
+              ))}
+            </div>
           </div>
-          <div className="space-y-2">
-            {VAULT_LINKS.map(link => (
-              <div key={link.path} className="rounded-md border border-border bg-surface-inset p-3">
-                <p className="text-sm font-semibold text-text-primary">{link.label}</p>
-                <code className="mt-1 block break-all text-[11px] font-mono text-text-tertiary">
-                  {link.path}
-                </code>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
+        </section>
+      )}
 
       <section className="flex flex-col gap-3">
         <div className="flex items-center gap-2">
@@ -537,6 +546,16 @@ export function SADNPage(): React.ReactElement {
               {p.ask && (
                 <p className="mt-2 text-[11px] text-text-secondary">
                   <span className="text-text-tertiary">Ask:</span> {p.ask}
+                </p>
+              )}
+              {p.sponsor_value_lane && (
+                <p className="mt-1 text-[11px] text-text-secondary">
+                  <span className="text-text-tertiary">Value lane:</span> {p.sponsor_value_lane}
+                </p>
+              )}
+              {p.next_touch && (
+                <p className="mt-1 text-[11px] text-text-secondary">
+                  <span className="text-text-tertiary">Next touch:</span> {p.next_touch}
                 </p>
               )}
               {p.notes && <p className="mt-1 text-[11px] italic text-text-secondary">{p.notes}</p>}
