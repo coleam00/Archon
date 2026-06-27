@@ -165,6 +165,8 @@ Verify workflows without `route_loop` still use current static DAG behavior and 
 - **FR-016**: System MUST NOT add node-level `routes` to regular nodes in the first version.
 - **FR-017**: System MUST NOT add public `routes.default` or any terminal sentinel such as `__end__` in the first version.
 - **FR-018**: Each route-loop route target MUST be a short string node id and MUST target exactly one node.
+  Workflow node ids, `route_loop.from`, route-loop route targets, and node references parsed from `route_loop.condition` MUST share the same safe node-id grammar: `[A-Za-z_][A-Za-z0-9_-]{0,63}`.
+  Loader validation and the Web builder MUST reject ids outside that grammar and MUST reject reserved JavaScript object keys `__proto__`, `prototype`, and `constructor`.
 
 #### Validation Rules
 
@@ -198,6 +200,8 @@ Verify workflows without `route_loop` still use current static DAG behavior and 
 - **FR-043**: Every node reference inside `route_loop.condition` MUST reference the node declared in `route_loop.from`.
 - **FR-044**: If multiple gate inputs are needed, authors MUST model a separate gate aggregation node and set `route_loop.from` to that aggregation node.
 - **FR-045**: If `route_loop.condition` reads a field from the `from` node output, that field MUST be declared in the `from` node's `output_format.properties`.
+- **FR-045A**: Before evaluating `route_loop.condition`, runtime MUST resolve field references through the same validated `NodeOutput` contract used by existing `when` evaluation and node-output substitution.
+  Producer `output_format` schema validation MUST have succeeded before a field reference can route, declared fields MUST be enforced, undeclared or unresolvable fields MUST fail the route-loop node, and whole-output references remain allowed without `output_format`.
 - **FR-046**: If `route_loop.condition` reads only the whole output string from the `from` node, `output_format` MUST NOT be required.
 - **FR-047**: If `route_loop.condition` cannot be parsed, the route-loop node MUST fail fast rather than skip.
 - **FR-048**: If `route_loop.condition` references a missing or unresolvable output field, the route-loop node MUST fail fast rather than treat the result as negative.
@@ -239,6 +243,9 @@ Verify workflows without `route_loop` still use current static DAG behavior and 
 - **FR-078**: System MUST store a global execution sequence counter in workflow run metadata.
 - **FR-079**: Per-node attempt numbers MUST be one-based.
 - **FR-080**: Events for executed nodes and route decisions MUST include both the per-node `attempt` and global `execution_seq` where applicable.
+- **FR-080A**: Route-loop counter increments, counter resets, per-node attempt increments, execution sequence increments, route activation state changes, route-loop output writes, and the corresponding `node_routed` event write MUST be performed through one typed, schema-validated workflow-run state transition that commits atomically or fails without partial state.
+- **FR-080B**: Before applying a route-loop state transition, system MUST validate existing `workflow_run.metadata` route-loop fields against runtime schemas and fail fast on malformed loop counters, activation state, attempt counters, or execution sequence data.
+- **FR-080C**: Route-loop state transitions MUST protect against stale writes by using the existing workflow-run lock and transaction boundary or an equivalent compare-and-set claim so resume, retry, and concurrent dispatch cannot overwrite a newer route decision.
 - **FR-081**: The main run summary MUST show only the latest attempt for each node.
 - **FR-082**: Detailed attempt history MUST remain available through the event log.
 - **FR-083**: `$node.output` MUST resolve to the latest completed attempt output for that node.
@@ -248,7 +255,8 @@ Verify workflows without `route_loop` still use current static DAG behavior and 
 - **FR-087**: `exhausted` MUST be a completed control-flow outcome and MUST NOT fail the route-loop node.
 - **FR-088**: System MUST emit a `node_routed` event for every route-loop outcome.
 - **FR-089**: `node_routed` events MUST use the same outcome names as YAML: `positive`, `negative`, and `exhausted`.
-- **FR-090**: `node_routed` event data MUST include `from`, `outcome`, `to`, `condition`, `condition_result`, `negative_count`, and `max_iterations`.
+- **FR-090**: `node_routed` event data MUST include `from`, `outcome`, `to`, `condition`, `condition_result`, `negative_count`, and `max_iterations`, where `condition` is the persisted safe condition representation rather than the raw author expression.
+- **FR-090A**: The persisted safe condition representation MUST preserve node references, field names, operators, and boolean structure while redacting non-structural literal comparison values and any future grammar token class that can carry secrets, prompts, PII, raw user content, git remotes, or unsafe raw errors.
 - **FR-091**: `node_routed` event data MUST use snake_case metadata fields.
 - **FR-092**: `node_routed` events MUST include `negative_count` and `max_iterations` for every outcome.
 - **FR-093**: For `positive`, `node_routed` MUST record the negative count before resetting the loop counter.

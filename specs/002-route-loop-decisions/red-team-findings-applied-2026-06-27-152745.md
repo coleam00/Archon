@@ -4,6 +4,8 @@
 **Target**: `specs/002-route-loop-decisions/spec.md`
 **Feature directory**: `specs/002-route-loop-decisions`
 **Date**: 2026-06-27
+**Status**: ARCHIVED
+**Applied:** 2026-06-27-152745
 **Maintainer**: Kevin Le
 **Lenses**: Trust-Boundary Adversary
 **Selection method**: auto with `--yes`
@@ -53,6 +55,10 @@ The constitution does not declare `## Red Team Trigger Criteria`, so trigger mat
 - **FR-080C**: Route-loop state transitions MUST protect against stale writes by using the existing workflow-run lock and transaction boundary or an equivalent compare-and-set claim so resume, retry, and concurrent dispatch cannot overwrite a newer route decision.
 ```
 
+- Status: applied
+- Applied-at: 2026-06-27T15:27:45+07:00
+- Downstream-ref: specs/002-route-loop-decisions/spec.md:245-248
+
 ### F-RT-002-route-loop-decisions-2026-06-27-002
 
 - Category: spec-fix
@@ -71,8 +77,14 @@ The constitution does not declare `## Red Team Trigger Criteria`, so trigger mat
 - After:
 
 ```markdown
-- **FR-018**: Each route-loop route target MUST be a short string node id and MUST target exactly one node. Workflow node ids, `route_loop.from`, route-loop route targets, and node references parsed from `route_loop.condition` MUST share the same safe node-id grammar: `[A-Za-z_][A-Za-z0-9_-]{0,63}`. Loader validation and the Web builder MUST reject ids outside that grammar and MUST reject reserved JavaScript object keys `__proto__`, `prototype`, and `constructor`.
+- **FR-018**: Each route-loop route target MUST be a short string node id and MUST target exactly one node.
+  Workflow node ids, `route_loop.from`, route-loop route targets, and node references parsed from `route_loop.condition` MUST share the same safe node-id grammar: `[A-Za-z_][A-Za-z0-9_-]{0,63}`.
+  Loader validation and the Web builder MUST reject ids outside that grammar and MUST reject reserved JavaScript object keys `__proto__`, `prototype`, and `constructor`.
 ```
+
+- Status: applied
+- Applied-at: 2026-06-27T15:27:45+07:00
+- Downstream-ref: specs/002-route-loop-decisions/spec.md:167-169
 
 ### F-RT-002-route-loop-decisions-2026-06-27-003
 
@@ -83,6 +95,8 @@ The constitution does not declare `## Red Team Trigger Criteria`, so trigger mat
   Why this category over alternatives: This is not `spec-fix` because adding authorization rules for every lifecycle mutation would contradict CR-001 and broaden the feature beyond route-loop semantics, and it is not `new-OQ` because the spec already answers the scope question.
   Long-term vs band-aid: A band-aid would add route-loop-only permission checks around individual buttons, but the durable fix for multi-user resource policy belongs to a separate authorization feature that can define ownership, visibility, and admin semantics across all workflow lifecycle actions.
 - Reason: Skipped because the requested authorization redesign conflicts with the verified scope boundary in `specs/002-route-loop-decisions/spec.md:301`, which states "This feature preserves Archon's single-developer default and does not add tenancy, resource visibility, or role policy."
+- Status: skipped
+- Applied-at: 2026-06-27T15:27:45+07:00
 
 ### F-RT-002-route-loop-decisions-2026-06-27-004
 
@@ -103,8 +117,13 @@ The constitution does not declare `## Red Team Trigger Criteria`, so trigger mat
 
 ```markdown
 - **FR-045**: If `route_loop.condition` reads a field from the `from` node output, that field MUST be declared in the `from` node's `output_format.properties`.
-- **FR-045A**: Before evaluating `route_loop.condition`, runtime MUST resolve field references through the same validated `NodeOutput` contract used by existing `when` evaluation and node-output substitution. Producer `output_format` schema validation MUST have succeeded before a field reference can route, declared fields MUST be enforced, undeclared or unresolvable fields MUST fail the route-loop node, and whole-output references remain allowed without `output_format`.
+- **FR-045A**: Before evaluating `route_loop.condition`, runtime MUST resolve field references through the same validated `NodeOutput` contract used by existing `when` evaluation and node-output substitution.
+  Producer `output_format` schema validation MUST have succeeded before a field reference can route, declared fields MUST be enforced, undeclared or unresolvable fields MUST fail the route-loop node, and whole-output references remain allowed without `output_format`.
 ```
+
+- Status: applied
+- Applied-at: 2026-06-27T15:27:45+07:00
+- Downstream-ref: specs/002-route-loop-decisions/spec.md:202-204
 
 ### F-RT-002-route-loop-decisions-2026-06-27-005
 
@@ -127,6 +146,10 @@ The constitution does not declare `## Red Team Trigger Criteria`, so trigger mat
 - **FR-090**: `node_routed` event data MUST include `from`, `outcome`, `to`, `condition`, `condition_result`, `negative_count`, and `max_iterations`, where `condition` is the persisted safe condition representation rather than the raw author expression.
 - **FR-090A**: The persisted safe condition representation MUST preserve node references, field names, operators, and boolean structure while redacting non-structural literal comparison values and any future grammar token class that can carry secrets, prompts, PII, raw user content, git remotes, or unsafe raw errors.
 ```
+
+- Status: applied
+- Applied-at: 2026-06-27T15:27:45+07:00
+- Downstream-ref: specs/002-route-loop-decisions/spec.md:258-259
 
 ## 5. Session Metadata
 
@@ -162,9 +185,26 @@ counts_by_severity:
   MEDIUM: 1
   LOW: 0
 resolution_counts:
-  spec-fix: 0
+  spec-fix: 4
   new-OQ: 0
   accepted-risk: 0
   out-of-scope: 0
-unresolved: 5
+  skipped: 1
+unresolved: 0
+apply:
+  applied_at: 2026-06-27T15:27:45+07:00
+  applied_by: Kevin Le
+  resolutions:
+    spec_fix: 4
+    new_OQ: 0
+    accepted_risk: 0
+    out_of_scope: 0
+    skipped: 1
+  unresolved: 0
+  allow_historical_edits: true
+  historical_edits_applied:
+    - 'F-RT-002-route-loop-decisions-2026-06-27-001:specs/002-route-loop-decisions/spec.md'
+    - 'F-RT-002-route-loop-decisions-2026-06-27-002:specs/002-route-loop-decisions/spec.md'
+    - 'F-RT-002-route-loop-decisions-2026-06-27-004:specs/002-route-loop-decisions/spec.md'
+    - 'F-RT-002-route-loop-decisions-2026-06-27-005:specs/002-route-loop-decisions/spec.md'
 ```
