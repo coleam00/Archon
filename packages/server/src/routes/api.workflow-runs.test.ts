@@ -400,6 +400,57 @@ describe('POST /api/workflows/:name/run', () => {
     );
   });
 
+  test('accepts a percent-encoded namespaced name and forwards the decoded name', async () => {
+    // The run route is the launchability path the namespaced-name fix targets,
+    // so exercise it the way the GET route is exercised: a one-subfolder-deep
+    // name (`triage/review`) must pass the real validator and reach the
+    // orchestrator decoded, not as the raw `triage%2Freview`.
+    const { isValidWorkflowName, isValidCommandName } =
+      await import('@archon/workflows/command-validation');
+    const segmentOk = (seg: string) =>
+      !!seg && !seg.startsWith('.') && !seg.includes('\\') && !seg.includes('..');
+    // Real namespaced logic: `triage/review` is valid (one subfolder deep).
+    (isValidWorkflowName as ReturnType<typeof mock>).mockImplementationOnce((name: string) => {
+      if (!name) return false;
+      const segments = name.split('/');
+      if (segments.length > 2) return false;
+      return segments.every(segmentOk);
+    });
+    // Strict command logic that rejects `/`, so this test goes red if the run
+    // route validates with isValidCommandName instead of isValidWorkflowName.
+    (isValidCommandName as ReturnType<typeof mock>).mockImplementationOnce(
+      (name: string) => segmentOk(name) && !name.includes('/')
+    );
+
+    mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
+    mockAddMessage.mockImplementationOnce(async () => ({
+      id: 'msg-1',
+      conversation_id: MOCK_CONV.id,
+      role: 'user' as const,
+      content: 'Run triage',
+      metadata: '{}',
+      created_at: NOW,
+    }));
+    mockHandleMessage.mockImplementationOnce(async () => {});
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/triage%2Freview/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conversationId: 'web-test-abc', message: 'Run triage' }),
+    });
+    expect(response.status).toBe(200);
+
+    expect(mockHandleMessage).toHaveBeenCalledWith(
+      expect.anything(),
+      'web-test-abc',
+      '/workflow run triage/review Run triage',
+      expect.objectContaining({
+        isolationHints: { workflowType: 'thread', workflowId: 'web-test-abc' },
+      })
+    );
+  });
+
   test('persists user message to DB when conversation found', async () => {
     mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
     mockAddMessage.mockImplementationOnce(async () => ({
