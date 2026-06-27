@@ -7,7 +7,28 @@ import type { WorkflowRunStatus } from '@/lib/types';
 import type { components } from '@/lib/api.generated';
 
 export type WorkflowDefinition = components['schemas']['WorkflowDefinition'];
-export type DagNode = components['schemas']['DagNode'];
+type GeneratedDagNode = components['schemas']['DagNode'];
+
+export const ROUTE_LOOP_OUTCOMES = ['positive', 'negative', 'exhausted'] as const;
+
+export type RouteLoopOutcome = (typeof ROUTE_LOOP_OUTCOMES)[number];
+export type RouteLoopRoutes = Record<RouteLoopOutcome, string>;
+
+export interface RouteLoopConfig {
+  from: string;
+  condition: string;
+  max_iterations: number;
+  routes: RouteLoopRoutes;
+}
+
+export type RouteLoopDagNode = GeneratedDagNode & {
+  route_loop: RouteLoopConfig;
+};
+
+export type DagNode = GeneratedDagNode & {
+  route_loop?: RouteLoopConfig;
+};
+export type { RouteLoopDecisionData } from '@/lib/types';
 
 /**
  * Base URL for SSE streams. In dev, bypasses Vite proxy by connecting directly

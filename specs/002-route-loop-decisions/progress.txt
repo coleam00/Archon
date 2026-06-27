@@ -1,5 +1,8 @@
 ## Codebase Patterns
 - Web route-loop rendering should use local structural guards while `packages/web/src/lib/api.generated.d.ts` lags the server schema; avoid importing `@archon/workflows` into `@archon/web`.
+- `packages/web/src/lib/api.ts` owns the Web-local `RouteLoopConfig`, `RouteLoopDagNode`, and `ROUTE_LOOP_OUTCOMES` bridge because OpenAPI regeneration still omits `route_loop` from generated `DagNode`.
+- Workflow builder canvas conversion must treat React Flow route handles (`positive`, `negative`, `exhausted`) as `route_loop.routes`, not `depends_on`; only incoming non-route edges become dependencies.
+- Route-loop controller inspector UI must clear and hide unsupported AI, retry, `when`, and `trigger_rule` fields because the engine rejects those fields on `route_loop` nodes.
 - Route-loop Web validation mirrors the engine contract in two layers: `validation/structural.ts` owns safe node id and reserved key checks, while `validation/graph.ts` owns one-input, required-route, known-target, and `from` mismatch checks.
 - Web route decisions must flow through both live SSE state (`DagNodeEvent.routeDecision`) and REST event projection (`buildWorkflowDagNodeStates`) so `node_routed` survives a one-cycle refresh.
 - React Flow route-loop edges use the outcome as `sourceHandle` and `label`; keep dependency edges unchanged and add duplicate-id guards when multiple outcomes target the same node.
@@ -183,4 +186,28 @@
 - Route-loop route targets can be dormant with no `depends_on` edge, so graph rendering must add explicit labeled route edges instead of relying on dependency edges.
 - `node_routed` is a completed controller event for Web state, not a skipped node event; both live SSE and REST event reconstruction need to preserve its route decision data.
 - Verification passed the focused Web builder, layout, component, and store tests, the new server Web bridge test, `bun run type-check`, `bun run lint --max-warnings 0`, and touched-file Prettier checks.
+---
+## 2026-06-27 18:53 +07 - Phase 6.2: Implementation For User Story 4 (iter 10)
+**Tasks completed this iter:** T057 (Regenerate Web API types), T058 (Re-export route-loop Web API types), T059 (Route-loop variant mapping), T060 (Register route-loop builder variant), T061 (Serialize route-loop graph), T062 (Hydrate route-loop graph), T063 (Route-loop graph validation), T064 (Route-loop palette and inspector), T065 (Route-loop node handles), T066 (Route edge labels), T067 (Run event rendering), T068 (Distinct route decisions), T069 (User Story 4 verification)
+**Status:** completed:true
+
+- Per-task summary lines:
+  - T057 - Regenerated `packages/web/src/lib/api.generated.d.ts`; OpenAPI output still omits `route_loop` from generated `DagNode`, so the local compatibility bridge remains necessary.
+  - T058 - Added Web-local route-loop type aliases and runtime outcome constants in `packages/web/src/lib/api.ts`.
+  - T059 - Verified route-loop variant detection and sparse field mapping in `packages/web/src/experiments/console/builder/variants/route-loop.ts`.
+  - T060 - Verified route-loop registration in `packages/web/src/experiments/console/builder/variants/registry.ts`.
+  - T061 - Updated `packages/web/src/components/workflows/WorkflowCanvas.tsx` so route outcome handles serialize to `route_loop.routes` instead of dependency edges.
+  - T062 - Verified route-loop YAML hydration through existing `dagNodesToReactFlow()` and builder import paths, with route-loop node data flowing into React Flow nodes.
+  - T063 - Verified route-loop graph validation for one input, required routes, invalid targets, and `from` mismatch in `packages/web/src/experiments/console/builder/validation/graph.ts`.
+  - T064 - Added route-loop quick-add and node-library entries plus inspector controls for source, condition, max iterations, and route targets in `NodeLibrary.tsx`, `QuickAddPicker.tsx`, and `NodeInspector.tsx`.
+  - T065 - Added visible route outcome labels and route-loop output handles in `DagNodeComponent.tsx`; added matching execution graph handles in `ExecutionDagNode.tsx`.
+  - T066 - Styled route edge labels in `packages/web/src/lib/dag-layout.ts` so outcome labels stay readable on the graph.
+  - T067 - Verified typed `node_routed` event projection through `WorkflowExecution.tsx`, `WorkflowDagViewer.tsx`, and `ExecutionDagNode.tsx`.
+  - T068 - Kept route decisions confined to route-loop graph/log metadata and did not reuse approval or interactive-loop banner surfaces.
+  - T069 - Verified User Story 4 with focused builder, layout, and component tests plus Web package tests, repo type-check, repo lint, and full package tests.
+
+**Learnings for future iterations:**
+- OpenAPI regeneration can reorder generated schema entries without exposing `route_loop`; keep the Web-local route-loop bridge in `api.ts` until the server schema emits the field.
+- Browser verification was not performed because no browser control tool or Playwright dependency was available, though local server endpoints on ports 3090 and 5173 responded successfully.
+- Full `bun run test` passed when rerun into a log after one truncated parallel run exited non-zero without an actionable visible failure.
 ---

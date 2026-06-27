@@ -92,7 +92,33 @@ function ExecutionDagNodeRender({ data }: NodeProps<ExecutionFlowNode>): React.R
           {data.error.slice(0, 60)}
         </div>
       )}
-      <Handle type="source" position={Position.Bottom} className="!bg-border !w-2 !h-2" />
+      {data.nodeType === 'route_loop' ? (
+        <>
+          <Handle
+            id="positive"
+            type="source"
+            position={Position.Bottom}
+            className="!bg-success !w-2 !h-2"
+            style={{ left: '25%' }}
+          />
+          <Handle
+            id="negative"
+            type="source"
+            position={Position.Bottom}
+            className="!bg-accent !w-2 !h-2"
+            style={{ left: '50%' }}
+          />
+          <Handle
+            id="exhausted"
+            type="source"
+            position={Position.Bottom}
+            className="!bg-error !w-2 !h-2"
+            style={{ left: '75%' }}
+          />
+        </>
+      ) : (
+        <Handle type="source" position={Position.Bottom} className="!bg-border !w-2 !h-2" />
+      )}
     </div>
   );
 }

@@ -136,6 +136,14 @@ function DagNodeRender({ data, selected }: NodeProps<DagFlowNode>): React.ReactE
             {data.mcp && <MetadataPill>mcp</MetadataPill>}
           </div>
         )}
+
+        {data.nodeType === 'route_loop' && (
+          <div className="mt-1 grid grid-cols-3 gap-1 text-center text-[8px] font-medium uppercase text-text-tertiary">
+            <span className="text-success">pos</span>
+            <span className="text-accent">neg</span>
+            <span className="text-error">end</span>
+          </div>
+        )}
       </div>
 
       {data.nodeType === 'route_loop' ? (

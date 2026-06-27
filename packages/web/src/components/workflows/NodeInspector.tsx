@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 import type { DagNodeData } from './DagNodeComponent';
-import type { CommandEntry, DagNode } from '@/lib/api';
+import type { CommandEntry, DagNode, RouteLoopConfig, RouteLoopOutcome } from '@/lib/api';
 import { useProviders } from '@/hooks/useProviders';
 
 // Keep in sync with triggerRuleSchema.options in @archon/workflows/schemas/dag-node.ts
@@ -36,6 +36,42 @@ const labelClass = 'text-[10px] text-text-tertiary uppercase tracking-wide';
 
 const textareaClass =
   'w-full rounded-md border border-border bg-surface px-2 py-1.5 text-xs text-text-primary font-mono placeholder:text-text-tertiary focus:outline-none focus:ring-1 focus:ring-accent resize-y';
+
+const ROUTE_OUTCOMES = [
+  'positive',
+  'negative',
+  'exhausted',
+] as const satisfies readonly RouteLoopOutcome[];
+
+function defaultRouteLoopConfig(): RouteLoopConfig {
+  return {
+    from: '',
+    condition: '',
+    max_iterations: 10,
+    routes: {
+      positive: '',
+      negative: '',
+      exhausted: '',
+    },
+  };
+}
+
+function mergeRouteLoopConfig(
+  current: RouteLoopConfig | undefined,
+  patch: Omit<Partial<RouteLoopConfig>, 'routes'> & {
+    routes?: Partial<RouteLoopConfig['routes']>;
+  }
+): RouteLoopConfig {
+  const base = current ?? defaultRouteLoopConfig();
+  return {
+    ...base,
+    ...patch,
+    routes: {
+      ...base.routes,
+      ...patch.routes,
+    },
+  };
+}
 
 function parseToolsList(value: string): string[] | undefined {
   if (!value.trim()) return undefined;
@@ -216,7 +252,7 @@ function GeneralTab({
           value={node.nodeType}
           onChange={(e): void => {
             const newType = e.target.value as DagNodeData['nodeType'];
-            const updates: Partial<DagNodeData> = { nodeType: newType };
+            const updates: Partial<DagNodeData> = { nodeType: newType, route_loop: undefined };
             if (newType === 'command') {
               updates.promptText = undefined;
               updates.bashScript = undefined;
@@ -235,6 +271,24 @@ function GeneralTab({
               updates.hooks = undefined;
               updates.mcp = undefined;
               updates.skills = undefined;
+            } else if (newType === 'route_loop') {
+              updates.promptText = '';
+              updates.bashScript = undefined;
+              updates.bashTimeout = undefined;
+              updates.label = 'Route';
+              updates.route_loop = node.route_loop ?? defaultRouteLoopConfig();
+              updates.when = undefined;
+              updates.trigger_rule = undefined;
+              updates.retry = undefined;
+              updates.model = undefined;
+              updates.provider = undefined;
+              updates.context = undefined;
+              updates.output_format = undefined;
+              updates.allowed_tools = undefined;
+              updates.denied_tools = undefined;
+              updates.hooks = undefined;
+              updates.mcp = undefined;
+              updates.skills = undefined;
             }
             onUpdate(updates);
           }}
@@ -243,6 +297,7 @@ function GeneralTab({
           <option value="command">Command</option>
           <option value="prompt">Prompt</option>
           <option value="bash">Bash</option>
+          <option value="route_loop">Route Loop</option>
         </select>
       </Field>
 
@@ -308,28 +363,109 @@ function GeneralTab({
         </>
       )}
 
+      {node.nodeType === 'route_loop' && (
+        <>
+          <Field label="Route Source">
+            <input
+              type="text"
+              value={(node.route_loop ?? defaultRouteLoopConfig()).from}
+              onChange={(e): void => {
+                const from = e.target.value;
+                onUpdate({
+                  route_loop: mergeRouteLoopConfig(node.route_loop, { from }),
+                  depends_on: from.trim() ? [from] : undefined,
+                });
+              }}
+              placeholder="review"
+              className={cn(inputClass, 'font-mono')}
+            />
+          </Field>
+
+          <Field label="Condition">
+            <input
+              type="text"
+              value={(node.route_loop ?? defaultRouteLoopConfig()).condition}
+              onChange={(e): void => {
+                const condition = e.target.value;
+                onUpdate({
+                  route_loop: mergeRouteLoopConfig(node.route_loop, { condition }),
+                  promptText: condition,
+                });
+              }}
+              placeholder="$review.output.approved == true"
+              className={cn(inputClass, 'font-mono')}
+            />
+          </Field>
+
+          <Field label="Max Iterations">
+            <input
+              type="number"
+              min={1}
+              max={100}
+              value={(node.route_loop ?? defaultRouteLoopConfig()).max_iterations}
+              onChange={(e): void => {
+                const value = e.target.value;
+                onUpdate({
+                  route_loop: mergeRouteLoopConfig(node.route_loop, {
+                    max_iterations: value ? Number(value) : 10,
+                  }),
+                });
+              }}
+              className={inputClass}
+            />
+          </Field>
+
+          {ROUTE_OUTCOMES.map(outcome => (
+            <Field key={outcome} label={`${outcome} Route`}>
+              <input
+                type="text"
+                value={(node.route_loop ?? defaultRouteLoopConfig()).routes[outcome]}
+                onChange={(e): void => {
+                  onUpdate({
+                    route_loop: mergeRouteLoopConfig(node.route_loop, {
+                      routes: { [outcome]: e.target.value },
+                    }),
+                  });
+                }}
+                placeholder={
+                  outcome === 'positive' ? 'done' : outcome === 'negative' ? 'fix' : 'escalate'
+                }
+                className={cn(inputClass, 'font-mono')}
+              />
+            </Field>
+          ))}
+        </>
+      )}
+
       {/* Dependencies */}
       <Field label="Dependencies">
         <DependencyTags
           values={node.depends_on ?? []}
           onChange={(deps): void => {
-            onUpdate({ depends_on: deps });
+            onUpdate({
+              depends_on: deps,
+              ...(node.nodeType === 'route_loop'
+                ? { route_loop: mergeRouteLoopConfig(node.route_loop, { from: deps?.[0] ?? '' }) }
+                : {}),
+            });
           }}
         />
       </Field>
 
       {/* When condition */}
-      <Field label="When Condition">
-        <input
-          type="text"
-          value={node.when ?? ''}
-          onChange={(e): void => {
-            onUpdate({ when: e.target.value || undefined });
-          }}
-          placeholder="$nodeId.output.field == 'value'"
-          className={cn(inputClass, 'font-mono')}
-        />
-      </Field>
+      {node.nodeType !== 'route_loop' && (
+        <Field label="When Condition">
+          <input
+            type="text"
+            value={node.when ?? ''}
+            onChange={(e): void => {
+              onUpdate({ when: e.target.value || undefined });
+            }}
+            placeholder="$nodeId.output.field == 'value'"
+            className={cn(inputClass, 'font-mono')}
+          />
+        </Field>
+      )}
     </div>
   );
 }
@@ -706,6 +842,8 @@ function DagInspector({
   onClose,
 }: NodeInspectorProps): React.ReactElement {
   const isBash = node.nodeType === 'bash';
+  const isRouteLoop = node.nodeType === 'route_loop';
+  const showAiTabs = !isBash && !isRouteLoop;
 
   return (
     <div key={node.id} className="flex flex-col h-full border-l border-border bg-surface">
@@ -739,15 +877,17 @@ function DagInspector({
           <TabsTrigger value="general" className="text-xs">
             General
           </TabsTrigger>
-          <TabsTrigger value="execution" className="text-xs">
-            Execution
-          </TabsTrigger>
-          {!isBash && (
+          {!isRouteLoop && (
+            <TabsTrigger value="execution" className="text-xs">
+              Execution
+            </TabsTrigger>
+          )}
+          {showAiTabs && (
             <TabsTrigger value="tools" className="text-xs">
               Tools
             </TabsTrigger>
           )}
-          {!isBash && (
+          {showAiTabs && (
             <TabsTrigger value="advanced" className="text-xs">
               Advanced
             </TabsTrigger>
@@ -759,17 +899,19 @@ function DagInspector({
             <GeneralTab node={node} commands={commands} onUpdate={onUpdate} />
           </TabsContent>
 
-          <TabsContent value="execution">
-            <ExecutionTab node={node} onUpdate={onUpdate} />
-          </TabsContent>
+          {!isRouteLoop && (
+            <TabsContent value="execution">
+              <ExecutionTab node={node} onUpdate={onUpdate} />
+            </TabsContent>
+          )}
 
-          {!isBash && (
+          {showAiTabs && (
             <TabsContent value="tools">
               <ToolsTab node={node} onUpdate={onUpdate} />
             </TabsContent>
           )}
 
-          {!isBash && (
+          {showAiTabs && (
             <TabsContent value="advanced">
               <AdvancedTab key={node.id} node={node} onUpdate={onUpdate} />
             </TabsContent>

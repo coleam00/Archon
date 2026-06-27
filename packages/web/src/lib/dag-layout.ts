@@ -163,6 +163,10 @@ export function dagNodesToReactFlow(dagNodes: readonly DagNode[]): {
         sourceHandle: outcome,
         target,
         label: outcome,
+        labelStyle: { fill: 'var(--text-secondary)', fontSize: 10, fontWeight: 600 },
+        labelBgStyle: { fill: 'var(--surface)', fillOpacity: 0.9 },
+        labelBgPadding: [4, 2],
+        labelBgBorderRadius: 4,
         type: 'smoothstep',
       });
     }
