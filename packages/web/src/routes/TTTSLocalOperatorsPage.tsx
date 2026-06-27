@@ -101,6 +101,21 @@ function laneTone(lane?: string): string {
     : 'border-border bg-card text-text-tertiary';
 }
 
+function operatorId(row: LocalOperator, index = 0): string {
+  return (
+    row.ttts_master_id ||
+    row.prospect ||
+    row.company ||
+    row.email ||
+    row.phone ||
+    row.linkedin_url ||
+    row.instagram_handle ||
+    row.website ||
+    row.source_artifacts ||
+    `operator-${index}`
+  );
+}
+
 function normalizeDate(value?: string): string {
   if (!value) return 'n/a';
   const date = new Date(value);
@@ -122,7 +137,7 @@ export function TTTSLocalOperatorsPage(): React.ReactElement {
   const [laneFilter, setLaneFilter] = useState('all');
   const [icpFilter, setIcpFilter] = useState('all');
   const [selectedId, setSelectedId] = useState<string | null>(
-    operators[0]?.ttts_master_id ?? operators[0]?.prospect ?? null
+    operators[0] ? operatorId(operators[0]) : null
   );
 
   const icpOptions = useMemo(() => ['all', ...Object.keys(icpCounts).sort()], [icpCounts]);
@@ -162,9 +177,7 @@ export function TTTSLocalOperatorsPage(): React.ReactElement {
 
   const visible = filtered.slice(0, 250);
   const selected =
-    filtered.find(row => (row.ttts_master_id || row.prospect) === selectedId) ??
-    filtered[0] ??
-    null;
+    filtered.find((row, index) => operatorId(row, index) === selectedId) ?? filtered[0] ?? null;
 
   const metricCards = [
     { label: 'Total operators', value: totals.included ?? operators.length, icon: Users },
@@ -289,10 +302,9 @@ export function TTTSLocalOperatorsPage(): React.ReactElement {
           </div>
 
           <div className="space-y-2 overflow-y-auto pr-1" style={{ maxHeight: 560 }}>
-            {visible.map(row => {
-              const id =
-                row.ttts_master_id || row.prospect || row.company || Math.random().toString();
-              const active = selected === row;
+            {visible.map((row, index) => {
+              const id = operatorId(row, index);
+              const active = selectedId === id;
               return (
                 <button
                   key={id}
@@ -348,6 +360,12 @@ export function TTTSLocalOperatorsPage(): React.ReactElement {
                 </button>
               );
             })}
+            {visible.length === 0 && (
+              <div className="rounded-xl border border-dashed border-border bg-surface-elevated p-4 text-sm text-text-secondary">
+                No operators match the current filters. Clear search or switch lane / ICP filters to
+                restore the active TTTS outreach list.
+              </div>
+            )}
           </div>
         </div>
 
