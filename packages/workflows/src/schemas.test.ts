@@ -695,3 +695,146 @@ describe('LOOP_NODE_AI_FIELDS', () => {
     }
   });
 });
+
+describe('dagNodeSchema route_loop controller ATDD red-phase scaffolds', () => {
+  const routeLoopSchemaActivation =
+    'Skipped until Story 1.1 adds route_loop to dagNodeSchema and exports its typed controller shape.';
+
+  const routeLoopNode = (
+    routeLoopOverrides: Record<string, unknown> = {}
+  ): Record<string, unknown> => ({
+    id: 'review-router',
+    route_loop: {
+      from: 'review',
+      condition: "$review.output.verdict == 'pass'",
+      max_iterations: 3,
+      routes: {
+        positive: 'complete',
+        negative: 'fix',
+        exhausted: 'escalate',
+      },
+      ...routeLoopOverrides,
+    },
+  });
+
+  test.skip(`[TD-001][P0] parses the minimal route_loop controller baseline - ${routeLoopSchemaActivation}`, () => {
+    const result = dagNodeSchema.safeParse(routeLoopNode());
+
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      throw new Error(result.error.message);
+    }
+
+    const node = result.data as unknown as {
+      id: string;
+      route_loop: {
+        from: string;
+        condition: string;
+        max_iterations: number;
+        routes: {
+          positive: string;
+          negative: string;
+          exhausted: string;
+        };
+      };
+    };
+    expect(node.id).toBe('review-router');
+    expect(node.route_loop.from).toBe('review');
+    expect(node.route_loop.condition).toBe("$review.output.verdict == 'pass'");
+    expect(node.route_loop.max_iterations).toBe(3);
+    expect(node.route_loop.routes).toEqual({
+      positive: 'complete',
+      negative: 'fix',
+      exhausted: 'escalate',
+    });
+  });
+
+  test.skip(`[TD-002][P1] rejects route_loop mixed with executable modes and controller-only forbidden fields - ${routeLoopSchemaActivation}`, () => {
+    const invalidNodes: Record<string, unknown>[] = [
+      { ...routeLoopNode(), prompt: 'do work' },
+      { ...routeLoopNode(), command: 'implement' },
+      { ...routeLoopNode(), bash: 'echo unsafe' },
+      {
+        ...routeLoopNode(),
+        loop: { prompt: 'iterate', until: 'DONE', max_iterations: 2 },
+      },
+      { ...routeLoopNode(), approval: { message: 'approve?' } },
+      { ...routeLoopNode(), cancel: 'stop' },
+      { ...routeLoopNode(), script: 'console.log("unsafe")', runtime: 'bun' },
+      { ...routeLoopNode(), when: "$review.output == 'ready'" },
+      { ...routeLoopNode(), trigger_rule: 'all_done' },
+    ];
+
+    for (const node of invalidNodes) {
+      const result = dagNodeSchema.safeParse(node);
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        const messages = result.error.issues.map(issue => issue.message).join('\n');
+        expect(messages).toMatch(/route_loop|mutually exclusive|when|trigger_rule/i);
+      }
+    }
+  });
+
+  test.skip(`[TD-060][P1] rejects a non-string route target value - ${routeLoopSchemaActivation}`, () => {
+    const result = dagNodeSchema.safeParse(
+      routeLoopNode({
+        routes: { positive: 42, negative: 'fix', exhausted: 'escalate' },
+      })
+    );
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.map(issue => issue.path.join('.'))).toContain(
+        'route_loop.routes.positive'
+      );
+    }
+  });
+
+  test.skip(`[TD-061][P1] rejects an empty route target string - ${routeLoopSchemaActivation}`, () => {
+    const result = dagNodeSchema.safeParse(
+      routeLoopNode({
+        routes: { positive: '', negative: 'fix', exhausted: 'escalate' },
+      })
+    );
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const messages = result.error.issues.map(issue => issue.message).join('\n');
+      expect(messages).toMatch(/route_loop\.routes\.positive|non-empty|short string/i);
+    }
+  });
+
+  test.skip(`[TD-062][P1] rejects an object route target - ${routeLoopSchemaActivation}`, () => {
+    const result = dagNodeSchema.safeParse(
+      routeLoopNode({
+        routes: {
+          positive: { id: 'complete' },
+          negative: 'fix',
+          exhausted: 'escalate',
+        },
+      })
+    );
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.map(issue => issue.path.join('.'))).toContain(
+        'route_loop.routes.positive'
+      );
+    }
+  });
+
+  test.skip(`[TD-063][P1] rejects an array or multi-target route value - ${routeLoopSchemaActivation}`, () => {
+    const result = dagNodeSchema.safeParse(
+      routeLoopNode({
+        routes: { positive: ['complete', 'notify'], negative: 'fix', exhausted: 'escalate' },
+      })
+    );
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.map(issue => issue.path.join('.'))).toContain(
+        'route_loop.routes.positive'
+      );
+    }
+  });
+});

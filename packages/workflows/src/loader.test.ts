@@ -1,4 +1,14 @@
-import { describe, it, expect, beforeEach, afterEach, spyOn, mock, type Mock } from 'bun:test';
+import {
+  describe,
+  it,
+  test,
+  expect,
+  beforeEach,
+  afterEach,
+  spyOn,
+  mock,
+  type Mock,
+} from 'bun:test';
 import { mkdir, writeFile, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -2903,6 +2913,704 @@ nodes:
         clearRegistry();
         registerBuiltinProviders();
       }
+    });
+  });
+
+  describe('route_loop loader validation ATDD red-phase scaffolds', () => {
+    const routeLoopLoaderActivation =
+      'Skipped until Story 1.1 adds the route_loop schema baseline and Story 1.2 wires route_loop structural validation into discoverWorkflows.';
+
+    type DiscoveryResult = Awaited<ReturnType<typeof discoverWorkflows>>;
+
+    const routesBlock = `
+      routes:
+        positive: complete
+        negative: fix
+        exhausted: escalate`;
+
+    const targetNodes = `
+  - id: complete
+    prompt: "Mark the workflow complete."
+  - id: fix
+    prompt: "Fix the review finding."
+  - id: escalate
+    prompt: "Escalate the exhausted review."`;
+
+    const writeAndDiscoverRouteLoopWorkflow = async (
+      filename: string,
+      yaml: string
+    ): Promise<DiscoveryResult> => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      await writeFile(join(workflowDir, filename), yaml);
+      return await discoverWorkflows(testDir, { loadDefaults: false });
+    };
+
+    const workflowWithController = (
+      controllerYaml: string,
+      extraNodes: string = targetNodes,
+      fromNode: string = `
+  - id: review
+    prompt: "Review the implementation."`
+    ): string => `
+name: route-loop-atdd
+description: Route loop validation ATDD fixture
+nodes:${fromNode}
+${controllerYaml}${extraNodes}
+`;
+
+    const validController = (routesYaml: string = routesBlock): string => `
+  - id: review-router
+    depends_on: [review]
+    route_loop:
+      from: review
+      condition: "$review.output.verdict == 'pass'"
+      max_iterations: 3${routesYaml}`;
+
+    const expectRouteLoopError = (
+      result: DiscoveryResult,
+      ...expectedFragments: string[]
+    ): void => {
+      expect(result.workflows).toHaveLength(0);
+      expect(result.errors.length).toBeGreaterThan(0);
+      const errorText = result.errors.map(error => error.error).join('\n');
+      for (const fragment of expectedFragments) {
+        expect(errorText).toContain(fragment);
+      }
+    };
+
+    const sourceWiringCases = [
+      {
+        id: 'TD-010',
+        priority: 'P1',
+        name: 'missing route_loop.from fails and names route_loop.from',
+        controller: `
+  - id: review-router
+    depends_on: [review]
+    route_loop:
+      condition: "$review.output.verdict == 'pass'"
+      max_iterations: 3${routesBlock}`,
+        fragments: ['route_loop.from'],
+      },
+      {
+        id: 'TD-020',
+        priority: 'P0',
+        name: 'missing depends_on fails because exactly one source dependency is required',
+        controller: `
+  - id: review-router
+    route_loop:
+      from: review
+      condition: "$review.output.verdict == 'pass'"
+      max_iterations: 3${routesBlock}`,
+        fragments: ['depends_on', 'route_loop.from'],
+      },
+      {
+        id: 'TD-021',
+        priority: 'P0',
+        name: 'empty depends_on fails because exactly one source dependency is required',
+        controller: `
+  - id: review-router
+    depends_on: []
+    route_loop:
+      from: review
+      condition: "$review.output.verdict == 'pass'"
+      max_iterations: 3${routesBlock}`,
+        fragments: ['depends_on', 'route_loop.from'],
+      },
+      {
+        id: 'TD-022',
+        priority: 'P0',
+        name: 'multiple depends_on entries fail even when one matches route_loop.from',
+        controller: `
+  - id: review-router
+    depends_on: [review, setup]
+    route_loop:
+      from: review
+      condition: "$review.output.verdict == 'pass'"
+      max_iterations: 3${routesBlock}`,
+        extraNodes: `${targetNodes}
+  - id: setup
+    prompt: "Prepare context."`,
+        fragments: ['depends_on', 'route_loop.from'],
+      },
+      {
+        id: 'TD-023',
+        priority: 'P0',
+        name: 'mismatched depends_on and route_loop.from fails and names both fields',
+        controller: `
+  - id: review-router
+    depends_on: [setup]
+    route_loop:
+      from: review
+      condition: "$review.output.verdict == 'pass'"
+      max_iterations: 3${routesBlock}`,
+        extraNodes: `${targetNodes}
+  - id: setup
+    prompt: "Prepare context."`,
+        fragments: ['depends_on', 'route_loop.from'],
+      },
+      {
+        id: 'TD-030',
+        priority: 'P1',
+        name: 'From Node with when fails because the source cannot be optional',
+        controller: validController(),
+        fromNode: `
+  - id: review
+    prompt: "Review the implementation."
+    when: "$setup.output == 'ready'"`,
+        extraNodes: `${targetNodes}
+  - id: setup
+    prompt: "Prepare context."`,
+        fragments: ['review', 'when'],
+      },
+    ];
+
+    for (const scenario of sourceWiringCases) {
+      test.skip(`[${scenario.id}][${scenario.priority}] ${scenario.name} - ${routeLoopLoaderActivation}`, async () => {
+        const result = await writeAndDiscoverRouteLoopWorkflow(
+          `${scenario.id.toLowerCase()}.yaml`,
+          workflowWithController(
+            scenario.controller,
+            scenario.extraNodes ?? targetNodes,
+            scenario.fromNode
+          )
+        );
+
+        expectRouteLoopError(result, ...scenario.fragments);
+      });
+    }
+
+    const requiredRouteCases = [
+      {
+        id: 'TD-040',
+        priority: 'P0',
+        name: 'missing route_loop.routes fails and names route_loop.routes',
+        controller: `
+  - id: review-router
+    depends_on: [review]
+    route_loop:
+      from: review
+      condition: "$review.output.verdict == 'pass'"
+      max_iterations: 3`,
+        fragments: ['route_loop.routes'],
+      },
+      {
+        id: 'TD-041',
+        priority: 'P0',
+        name: 'missing routes.positive fails and names positive',
+        routes: `
+      routes:
+        negative: fix
+        exhausted: escalate`,
+        fragments: ['positive'],
+      },
+      {
+        id: 'TD-042',
+        priority: 'P0',
+        name: 'missing routes.negative fails and names negative',
+        routes: `
+      routes:
+        positive: complete
+        exhausted: escalate`,
+        fragments: ['negative'],
+      },
+      {
+        id: 'TD-043',
+        priority: 'P0',
+        name: 'missing routes.exhausted fails and names exhausted',
+        routes: `
+      routes:
+        positive: complete
+        negative: fix`,
+        fragments: ['exhausted'],
+      },
+    ];
+
+    for (const scenario of requiredRouteCases) {
+      test.skip(`[${scenario.id}][${scenario.priority}] ${scenario.name} - ${routeLoopLoaderActivation}`, async () => {
+        const result = await writeAndDiscoverRouteLoopWorkflow(
+          `${scenario.id.toLowerCase()}.yaml`,
+          workflowWithController(scenario.controller ?? validController(scenario.routes))
+        );
+
+        expectRouteLoopError(result, ...scenario.fragments);
+      });
+    }
+
+    const routeTargetCases = [
+      {
+        id: 'TD-050',
+        priority: 'P1',
+        name: 'routes.positive targeting an unknown node fails before runtime',
+        routes: `
+      routes:
+        positive: missing-complete
+        negative: fix
+        exhausted: escalate`,
+        fragments: ['positive', 'missing-complete'],
+      },
+      {
+        id: 'TD-051',
+        priority: 'P1',
+        name: 'routes.negative targeting an unknown node fails before runtime',
+        routes: `
+      routes:
+        positive: complete
+        negative: missing-fix
+        exhausted: escalate`,
+        fragments: ['negative', 'missing-fix'],
+      },
+      {
+        id: 'TD-052',
+        priority: 'P1',
+        name: 'routes.exhausted targeting an unknown node fails before runtime',
+        routes: `
+      routes:
+        positive: complete
+        negative: fix
+        exhausted: missing-escalate`,
+        fragments: ['exhausted', 'missing-escalate'],
+      },
+      {
+        id: 'TD-053',
+        priority: 'P1',
+        name: 'route target pointing to the same controller fails before runtime',
+        routes: `
+      routes:
+        positive: review-router
+        negative: fix
+        exhausted: escalate`,
+        fragments: ['positive', 'review-router'],
+      },
+      {
+        id: 'TD-064',
+        priority: 'P1',
+        name: 'terminal sentinel route target fails before runtime',
+        routes: `
+      routes:
+        positive: __end__
+        negative: fix
+        exhausted: escalate`,
+        fragments: ['positive', '__end__'],
+      },
+    ];
+
+    for (const scenario of routeTargetCases) {
+      test.skip(`[${scenario.id}][${scenario.priority}] ${scenario.name} - ${routeLoopLoaderActivation}`, async () => {
+        const result = await writeAndDiscoverRouteLoopWorkflow(
+          `${scenario.id.toLowerCase()}.yaml`,
+          workflowWithController(validController(scenario.routes))
+        );
+
+        expectRouteLoopError(result, ...scenario.fragments);
+      });
+    }
+
+    test.skip(`[TD-070][TD-071][P2] shared route targets are allowed when graph safety passes - ${routeLoopLoaderActivation}`, async () => {
+      const result = await writeAndDiscoverRouteLoopWorkflow(
+        'td-070-071.yaml',
+        workflowWithController(
+          validController(`
+      routes:
+        positive: complete
+        negative: complete
+        exhausted: complete`)
+        )
+      );
+
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
+    });
+
+    const exitPathCases = [
+      {
+        id: 'TD-080',
+        priority: 'P0',
+        name: 'routes.positive targeting route_loop.from fails',
+        routes: `
+      routes:
+        positive: review
+        negative: fix
+        exhausted: escalate`,
+        fragments: ['positive', 'review', 'exit'],
+      },
+      {
+        id: 'TD-081',
+        priority: 'P0',
+        name: 'routes.exhausted targeting route_loop.from fails',
+        routes: `
+      routes:
+        positive: complete
+        negative: fix
+        exhausted: review`,
+        fragments: ['exhausted', 'review', 'exit'],
+      },
+      {
+        id: 'TD-082',
+        priority: 'P0',
+        name: 'routes.positive targeting the controller fails',
+        routes: `
+      routes:
+        positive: review-router
+        negative: fix
+        exhausted: escalate`,
+        fragments: ['positive', 'review-router'],
+      },
+      {
+        id: 'TD-083',
+        priority: 'P0',
+        name: 'routes.exhausted targeting the controller fails',
+        routes: `
+      routes:
+        positive: complete
+        negative: fix
+        exhausted: review-router`,
+        fragments: ['exhausted', 'review-router'],
+      },
+      {
+        id: 'TD-084',
+        priority: 'P0',
+        name: 'routes.positive entering the negative rerun path fails',
+        routes: `
+      routes:
+        positive: fix
+        negative: fix
+        exhausted: escalate`,
+        fragments: ['positive', 'negative', 'rerun'],
+      },
+      {
+        id: 'TD-085',
+        priority: 'P0',
+        name: 'routes.exhausted entering the negative rerun path fails',
+        routes: `
+      routes:
+        positive: complete
+        negative: fix
+        exhausted: fix`,
+        fragments: ['exhausted', 'negative', 'rerun'],
+      },
+    ];
+
+    for (const scenario of exitPathCases) {
+      test.skip(`[${scenario.id}][${scenario.priority}] ${scenario.name} - ${routeLoopLoaderActivation}`, async () => {
+        const result = await writeAndDiscoverRouteLoopWorkflow(
+          `${scenario.id.toLowerCase()}.yaml`,
+          workflowWithController(validController(scenario.routes))
+        );
+
+        expectRouteLoopError(result, ...scenario.fragments);
+      });
+    }
+
+    test.skip(`[TD-090][P2] direct routes.negative to route_loop.from loads and warns - ${routeLoopLoaderActivation}`, async () => {
+      (mockLogger.warn as Mock<() => undefined>).mockClear();
+      const result = await writeAndDiscoverRouteLoopWorkflow(
+        'td-090.yaml',
+        workflowWithController(
+          validController(`
+      routes:
+        positive: complete
+        negative: review
+        exhausted: escalate`)
+        )
+      );
+
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
+      const warnText = (mockLogger.warn as Mock<() => undefined>).mock.calls
+        .map(call => JSON.stringify(call))
+        .join('\n');
+      expect(warnText).toContain('review-router');
+      expect(warnText).toContain('negative');
+      expect(warnText).toContain('review');
+    });
+
+    test.skip(`[TD-091][P2] negative route exits without returning to from and does not warn solely for exiting - ${routeLoopLoaderActivation}`, async () => {
+      (mockLogger.warn as Mock<() => undefined>).mockClear();
+      const result = await writeAndDiscoverRouteLoopWorkflow(
+        'td-091.yaml',
+        workflowWithController(
+          validController(`
+      routes:
+        positive: complete
+        negative: escalate
+        exhausted: escalate`)
+        )
+      );
+
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
+      const warnText = (mockLogger.warn as Mock<() => undefined>).mock.calls
+        .map(call => JSON.stringify(call))
+        .join('\n');
+      expect(warnText).not.toMatch(/negative.*exit|exit.*negative/i);
+    });
+
+    test.skip(`[TD-100][P1] self-containment violation on the only negative path back to from fails - ${routeLoopLoaderActivation}`, async () => {
+      const result = await writeAndDiscoverRouteLoopWorkflow(
+        'td-100.yaml',
+        workflowWithController(
+          validController(),
+          `${targetNodes}
+  - id: outside-state
+    prompt: "Produce stale outside state."
+  - id: verify-fix
+    prompt: "Verify the fix using outside state."
+    depends_on: [fix, outside-state]
+  - id: review
+    prompt: "Review again."
+    depends_on: [verify-fix]`,
+          `
+  - id: initial-review
+    prompt: "Initial review."`
+        )
+      );
+
+      expectRouteLoopError(result, 'self-contained', 'outside-state');
+    });
+
+    test.skip(`[TD-101][P1] multiple dependency paths back to from load when every path is self-contained - ${routeLoopLoaderActivation}`, async () => {
+      const result = await writeAndDiscoverRouteLoopWorkflow(
+        'td-101.yaml',
+        workflowWithController(
+          validController(),
+          `${targetNodes}
+  - id: patch-a
+    prompt: "Patch path A."
+    depends_on: [fix]
+  - id: patch-b
+    prompt: "Patch path B."
+    depends_on: [fix]
+  - id: review
+    prompt: "Review both patch paths."
+    depends_on: [patch-a, patch-b]`,
+          `
+  - id: initial-review
+    prompt: "Initial review."`
+        )
+      );
+
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
+    });
+
+    test.skip(`[TD-102][P1] multiple dependency paths fail when any path has an outside dependency - ${routeLoopLoaderActivation}`, async () => {
+      const result = await writeAndDiscoverRouteLoopWorkflow(
+        'td-102.yaml',
+        workflowWithController(
+          validController(),
+          `${targetNodes}
+  - id: outside-state
+    prompt: "Produce stale outside state."
+  - id: patch-a
+    prompt: "Patch path A."
+    depends_on: [fix]
+  - id: patch-b
+    prompt: "Patch path B with outside state."
+    depends_on: [fix, outside-state]
+  - id: review
+    prompt: "Review both patch paths."
+    depends_on: [patch-a, patch-b]`,
+          `
+  - id: initial-review
+    prompt: "Initial review."`
+        )
+      );
+
+      expectRouteLoopError(result, 'self-contained', 'outside-state');
+    });
+
+    test.skip(`[TD-110][P1] a different valid route_loop controller can be a route target - ${routeLoopLoaderActivation}`, async () => {
+      const result = await writeAndDiscoverRouteLoopWorkflow(
+        'td-110.yaml',
+        workflowWithController(
+          validController(`
+      routes:
+        positive: nested-router
+        negative: fix
+        exhausted: escalate`),
+          `${targetNodes}
+  - id: nested-review
+    prompt: "Nested review."
+  - id: nested-router
+    depends_on: [nested-review]
+    route_loop:
+      from: nested-review
+      condition: "$nested-review.output.verdict == 'pass'"
+      max_iterations: 2
+      routes:
+        positive: complete
+        negative: fix
+        exhausted: escalate`
+        )
+      );
+
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
+    });
+
+    test.skip(`[TD-111][P1] invalid nested route_loop controller still fails independently - ${routeLoopLoaderActivation}`, async () => {
+      const result = await writeAndDiscoverRouteLoopWorkflow(
+        'td-111.yaml',
+        workflowWithController(
+          validController(`
+      routes:
+        positive: nested-router
+        negative: fix
+        exhausted: escalate`),
+          `${targetNodes}
+  - id: nested-review
+    prompt: "Nested review."
+  - id: nested-router
+    depends_on: [nested-review]
+    route_loop:
+      from: nested-review
+      condition: "$nested-review.output.verdict == 'pass'"
+      max_iterations: 2
+      routes:
+        positive: complete
+        negative: fix`
+        )
+      );
+
+      expectRouteLoopError(result, 'nested-router', 'exhausted');
+    });
+
+    test.skip(`[TD-151][P2] malformed route_loop YAML shape returns validation error instead of throwing - ${routeLoopLoaderActivation}`, async () => {
+      const result = await writeAndDiscoverRouteLoopWorkflow(
+        'td-151.yaml',
+        workflowWithController(`
+  - id: review-router
+    depends_on: [review]
+    route_loop: true`)
+      );
+
+      expectRouteLoopError(result, 'route_loop');
+    });
+
+    it('[TD-120][P1] keeps representative non-route workflow modes loading as before', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      await writeFile(
+        join(workflowDir, 'td-120-non-route.yaml'),
+        `
+name: td-120-non-route
+description: Existing non-route workflow modes still load
+nodes:
+  - id: start
+    prompt: "Start with structured output."
+  - id: build
+    bash: "echo build"
+    depends_on: [start]
+  - id: script-check
+    script: "console.log('checked')"
+    runtime: bun
+    depends_on: [build]
+  - id: ai-loop
+    loop:
+      prompt: "Use $start.output and iterate."
+      until: DONE
+      max_iterations: 2
+    depends_on: [script-check]
+  - id: approval-gate
+    approval:
+      message: "Approve release?"
+    depends_on: [ai-loop]
+    trigger_rule: all_done
+  - id: cancel-on-stop
+    cancel: "Stopped by policy"
+    depends_on: [approval-gate]
+    when: "$start.output == 'stop'"
+  - id: final-command
+    command: implement
+    depends_on: [approval-gate]
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
+    });
+
+    it('[TD-121][P1] still rejects unknown output references in when, prompt, and loop.prompt', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      await writeFile(
+        join(workflowDir, 'td-121-when.yaml'),
+        `
+name: td-121-when
+description: Unknown output ref in when
+nodes:
+  - id: source
+    prompt: "Produce output."
+  - id: consumer
+    prompt: "Consume output."
+    depends_on: [source]
+    when: "$typo.output == 'go'"
+`
+      );
+      await writeFile(
+        join(workflowDir, 'td-121-prompt.yaml'),
+        `
+name: td-121-prompt
+description: Unknown output ref in prompt
+nodes:
+  - id: source
+    prompt: "Produce output."
+  - id: consumer
+    prompt: "Use $typo.output"
+    depends_on: [source]
+`
+      );
+      await writeFile(
+        join(workflowDir, 'td-121-loop.yaml'),
+        `
+name: td-121-loop
+description: Unknown output ref in loop prompt
+nodes:
+  - id: source
+    prompt: "Produce output."
+  - id: consumer-loop
+    loop:
+      prompt: "Use $typo.output"
+      until: DONE
+      max_iterations: 2
+    depends_on: [source]
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows).toHaveLength(0);
+      expect(result.errors).toHaveLength(3);
+      const errorText = result.errors.map(error => error.error).join('\n');
+      expect(errorText).toContain('typo');
+    });
+
+    it('[TD-122][P1] still excludes bash and script bodies from load-time output reference validation', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      await writeFile(
+        join(workflowDir, 'td-122-runtime-refs.yaml'),
+        `
+name: td-122-runtime-refs
+description: Bash and script runtime refs are not loader-validated
+nodes:
+  - id: source
+    prompt: "Produce output."
+  - id: bash-consumer
+    bash: "echo $runtime-only.output"
+    depends_on: [source]
+  - id: script-consumer
+    script: |
+      console.log("$runtime-only.output");
+    runtime: bun
+    depends_on: [source]
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
     });
   });
 });
