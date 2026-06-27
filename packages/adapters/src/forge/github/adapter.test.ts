@@ -1098,6 +1098,21 @@ describe('GitHubAdapter', () => {
   // circuit, refresh-on-401, self-filter against <slug>[bot], clone path.
   // ---------------------------------------------------------------------------
   describe('App mode', () => {
+    let originalAllowedUsers: string | undefined;
+
+    beforeEach(() => {
+      originalAllowedUsers = process.env.GITHUB_ALLOWED_USERS;
+      delete process.env.GITHUB_ALLOWED_USERS;
+    });
+
+    afterEach(() => {
+      if (originalAllowedUsers !== undefined) {
+        process.env.GITHUB_ALLOWED_USERS = originalAllowedUsers;
+      } else {
+        delete process.env.GITHUB_ALLOWED_USERS;
+      }
+    });
+
     /**
      * Build a mock IGitHubAppAuthProvider. Each fake `(owner) → installationId`
      * pair is encoded by hashing owner — tests assert that distinct owners
