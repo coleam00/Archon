@@ -20,6 +20,8 @@
 - Use `extractConditionReferences()` from `packages/workflows/src/condition-evaluator.ts` when loader or validation code needs to inspect condition node refs; do not duplicate the condition grammar.
 - Route-loop loader validation treats route edges as runtime edges layered on top of normal dependencies: only negative routes may re-enter `route_loop.from`, positive and exhausted routes must be exit paths, and retry paths must be self-contained unless negative directly targets `from`, which is warn-only.
 - Console builder wire compatibility belongs in `packages/web/src/experiments/console/builder/types/wire.ts`; do not import server packages into Web when generated API types temporarily lag schema changes.
+- Route-loop controller nodes are not directly retryable; guide operators to retry the node referenced by `route_loop.from` instead.
+- SQLite workflow route-decision persistence cannot rely on `UPDATE ... RETURNING`; keep update-plus-select inside the existing transaction when returning the updated row.
 
 ## 2026-06-27 16:01 +07 - Phase 1: Setup (iter 1)
 **Tasks completed this iter:** T001 (Run route-loop executor TDD guard), T002 (Run workflow loader/schema baselines), T003 (Run console builder baselines), T004 (Inspect workflow event and metadata seams)
@@ -210,4 +212,21 @@
 - OpenAPI regeneration can reorder generated schema entries without exposing `route_loop`; keep the Web-local route-loop bridge in `api.ts` until the server schema emits the field.
 - Browser verification was not performed because no browser control tool or Playwright dependency was available, though local server endpoints on ports 3090 and 5173 responded successfully.
 - Full `bun run test` passed when rerun into a log after one truncated parallel run exited non-zero without an actionable visible failure.
+---
+
+## 2026-06-27 19:10 +07 - Phase 7.1: Tests For User Story 5 (iter 11)
+**Tasks completed this iter:** T070 (Static DAG regression tests), T071 (Route-loop retry eligibility tests), T072 (Resume persistence tests), T073 (Web retry guidance tests)
+**Status:** completed:true
+
+- Per-task summary lines:
+  - T070 - Added static DAG regression coverage proving workflows without `route_loop` keep normal topological execution, resume from prior completed outputs, and do not emit route decisions; files changed: `packages/workflows/src/dag-executor.test.ts`.
+  - T071 - Added retry eligibility coverage for route-loop controllers and rejected direct controller retry in favor of retrying `route_loop.from`; files changed: `packages/workflows/src/retry-state.ts`, `packages/workflows/src/retry-state.test.ts`.
+  - T072 - Added real SQLite resume persistence coverage for route-loop runtime metadata and fixed SQLite route-decision persistence to update then select inside the transaction; files changed: `packages/core/src/db/workflows.ts`, `packages/core/src/db/workflows.resume-cas.integration.test.ts`.
+  - T073 - Replaced placeholder Web retry action tests with static-render coverage and rendered route-loop guidance toward `route_loop.from`; files changed: `packages/web/src/lib/workflow-retry.ts`, `packages/web/src/components/workflows/WorkflowNodeRetryAction.tsx`, `packages/web/src/components/workflows/WorkflowNodeRetryAction.test.tsx`.
+
+**Learnings for future iterations:**
+- Route-loop controller retry should fail at the workflow retry-state layer and be presented as guidance in Web rather than a direct retry button.
+- The Web retry panel discovers route-loop source guidance from `DagNodeState.routeDecision.from`, which is populated by the `node_routed` event enrichment path.
+- SQLite does not support the same `UPDATE ... RETURNING` route used by PostgreSQL in this code path, so route-decision persistence needs dialect-specific returning behavior while staying atomic.
+- Verification passed focused workflow, core, and Web tests, adjacent core and route-loop executor tests, repo type-check, repo lint, touched-file Prettier, and added-line em-dash scanning.
 ---

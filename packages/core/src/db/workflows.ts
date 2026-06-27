@@ -793,14 +793,34 @@ export async function persistRouteDecisionTransition(
     }
 
     const metadataJson = JSON.stringify(input.metadata);
-    const updateResult = await pool.query<WorkflowRun>(
-      `UPDATE remote_agent_workflow_runs
-       SET metadata = ${dialect.jsonMerge('metadata', 2)}, last_activity_at = ${dialect.now()}
-       WHERE id = $1
-       RETURNING *`,
-      [input.workflow_run_id, metadataJson]
-    );
-    const updatedRow = updateResult.rows[0];
+    let updatedRow: WorkflowRun | undefined;
+    if (isPostgres) {
+      const updateResult = await pool.query<WorkflowRun>(
+        `UPDATE remote_agent_workflow_runs
+         SET metadata = ${dialect.jsonMerge('metadata', 2)}, last_activity_at = ${dialect.now()}
+         WHERE id = $1
+         RETURNING *`,
+        [input.workflow_run_id, metadataJson]
+      );
+      updatedRow = updateResult.rows[0];
+    } else {
+      const updateResult = await pool.query(
+        `UPDATE remote_agent_workflow_runs
+         SET metadata = ${dialect.jsonMerge('metadata', 2)}, last_activity_at = ${dialect.now()}
+         WHERE id = $1`,
+        [input.workflow_run_id, metadataJson]
+      );
+      if (updateResult.rowCount === 0) {
+        throw new Error(`Workflow run update returned no rows: ${input.workflow_run_id}`);
+      }
+
+      const updatedResult = await pool.query<WorkflowRun>(
+        'SELECT * FROM remote_agent_workflow_runs WHERE id = $1',
+        [input.workflow_run_id]
+      );
+      updatedRow = updatedResult.rows[0];
+    }
+
     if (!updatedRow) {
       throw new Error(`Workflow run update returned no rows: ${input.workflow_run_id}`);
     }

@@ -5469,6 +5469,193 @@ describe('executeDagWorkflow -- always_run resume opt-out', () => {
   });
 });
 
+describe('executeDagWorkflow -- static DAG execution without route_loop', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(
+      tmpdir(),
+      `dag-static-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    await mkdir(testDir, { recursive: true });
+
+    mockSendQueryDag.mockClear();
+    mockGetAgentProviderDag.mockClear();
+
+    mockSendQueryDag.mockImplementation(function* (
+      _prompt: string,
+      _cwd: string,
+      _resumeSessionId?: string,
+      sendOptions?: SendQueryOptions
+    ) {
+      const nodeId = sendOptions?.nodeConfig?.nodeId;
+      if (typeof nodeId !== 'string') {
+        throw new Error('missing static DAG node id');
+      }
+      yield { type: 'assistant' as const, content: `${nodeId} output` };
+      yield { type: 'result' as const, sessionId: `${nodeId}-session` };
+    });
+  });
+
+  afterEach(async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+    try {
+      await rm(testDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  });
+
+  it('uses static topological execution for workflows without route_loop and records no route decisions', async () => {
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('static-dag-run');
+    const observedCalls: { nodeId: string; prompt: string }[] = [];
+
+    mockSendQueryDag.mockImplementation(function* (
+      prompt: string,
+      _cwd: string,
+      _resumeSessionId?: string,
+      sendOptions?: SendQueryOptions
+    ) {
+      const nodeId = sendOptions?.nodeConfig?.nodeId;
+      if (typeof nodeId !== 'string') {
+        throw new Error('missing static DAG node id');
+      }
+      observedCalls.push({ nodeId, prompt });
+      yield { type: 'assistant' as const, content: `${nodeId} output` };
+      yield { type: 'result' as const, sessionId: `${nodeId}-session` };
+    });
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-static',
+      testDir,
+      {
+        name: 'static-fan-in',
+        mutates_checkout: false,
+        nodes: [
+          { id: 'source', prompt: 'Create source output.' },
+          { id: 'left', prompt: 'Use $source.output on the left.', depends_on: ['source'] },
+          { id: 'right', prompt: 'Use $source.output on the right.', depends_on: ['source'] },
+          {
+            id: 'join',
+            prompt: 'Join $left.output with $right.output.',
+            depends_on: ['left', 'right'],
+          },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(observedCalls.map(call => call.nodeId).at(0)).toBe('source');
+    expect(
+      observedCalls
+        .map(call => call.nodeId)
+        .slice(1, 3)
+        .sort()
+    ).toEqual(['left', 'right']);
+    expect(observedCalls.map(call => call.nodeId).at(3)).toBe('join');
+
+    const leftCall = observedCalls.find(call => call.nodeId === 'left');
+    const rightCall = observedCalls.find(call => call.nodeId === 'right');
+    const joinCall = observedCalls.find(call => call.nodeId === 'join');
+    expect(leftCall?.prompt).toContain('source output');
+    expect(rightCall?.prompt).toContain('source output');
+    expect(joinCall?.prompt).toContain('left output');
+    expect(joinCall?.prompt).toContain('right output');
+    expect(store.persistRouteDecisionTransition).not.toHaveBeenCalled();
+    expect(
+      (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls.some(
+        (call: unknown[]) => (call[0] as { event_type: string }).event_type === 'node_routed'
+      )
+    ).toBe(false);
+    expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('keeps static resume semantics for workflows without route_loop', async () => {
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('static-resume-run');
+    let consumerPrompt = '';
+
+    mockSendQueryDag.mockImplementation(function* (
+      prompt: string,
+      _cwd: string,
+      _resumeSessionId?: string,
+      sendOptions?: SendQueryOptions
+    ) {
+      const nodeId = sendOptions?.nodeConfig?.nodeId;
+      if (nodeId === 'consumer') {
+        consumerPrompt = prompt;
+      }
+      yield { type: 'assistant' as const, content: `${String(nodeId)} output` };
+      yield { type: 'result' as const, sessionId: `${String(nodeId)}-session` };
+    });
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-static-resume',
+      testDir,
+      {
+        name: 'static-resume',
+        mutates_checkout: false,
+        nodes: [
+          { id: 'producer', prompt: 'Produce output.' },
+          { id: 'consumer', prompt: 'Consume $producer.output.', depends_on: ['producer'] },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      new Map([['producer', 'cached static output']])
+    );
+
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+    expect(consumerPrompt).toContain('cached static output');
+    expect(store.persistRouteDecisionTransition).not.toHaveBeenCalled();
+
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const skippedPriorSuccessEvent = eventCalls.find(
+      (call: unknown[]) =>
+        (call[0] as { event_type: string }).event_type === 'node_skipped_prior_success' &&
+        (call[0] as { step_name: string }).step_name === 'producer'
+    );
+    expect(skippedPriorSuccessEvent).toBeDefined();
+    expect(
+      (skippedPriorSuccessEvent![0] as { data: { node_output: string } }).data.node_output
+    ).toBe('cached static output');
+    expect(
+      eventCalls.some(
+        (call: unknown[]) => (call[0] as { event_type: string }).event_type === 'node_routed'
+      )
+    ).toBe(false);
+  });
+});
+
 describe('executeDagWorkflow -- route_loop end-to-end TDD', () => {
   let testDir: string;
   type ReviewResult = 'negative' | 'positive';

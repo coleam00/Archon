@@ -724,7 +724,7 @@
     },
     {
       "title": "Phase 7.1: Tests For User Story 5",
-      "completed": false,
+      "completed": true,
       "tasks": [
         {
           "id": "T070",
@@ -732,7 +732,7 @@
           "description": "[P] [US5] Add regression tests that workflows without `route_loop` still use static DAG execution in `packages/workflows/src/dag-executor.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 70,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -741,7 +741,7 @@
           "description": "[P] [US5] Add retry eligibility tests proving route-loop controller nodes are not directly retryable in `packages/workflows/src/retry-state.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 71,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -750,7 +750,7 @@
           "description": "[P] [US5] Add resume persistence tests for route activation state, loop counters, attempt counters, and execution sequence in `packages/core/src/db/workflows.resume-cas.integration.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 72,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -759,7 +759,7 @@
           "description": "[P] [US5] Add Web retry action tests that guide users toward `route_loop.from` in `packages/web/src/components/workflows/WorkflowNodeRetryAction.test.tsx`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 73,
-          "passes": false,
+          "passes": true,
           "notes": ""
         }
       ],

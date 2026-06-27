@@ -1,4 +1,5 @@
 import type { DagNode, NodeOutput } from './schemas';
+import { isRouteLoopNode } from './schemas';
 
 export const RETRY_EVENT_TYPES = [
   'node_retry_requested',
@@ -71,8 +72,14 @@ export function getRetryInvalidatedNodeIds(
   nodes: readonly DagNode[],
   targetNodeId: string
 ): string[] {
-  if (!nodes.some(node => node.id === targetNodeId)) {
+  const targetNode = nodes.find(node => node.id === targetNodeId);
+  if (!targetNode) {
     throw new Error(`Retry target node not found in current workflow DAG: ${targetNodeId}`);
+  }
+  if (isRouteLoopNode(targetNode)) {
+    throw new Error(
+      `Cannot retry route_loop controller node '${targetNodeId}' directly; retry its source node '${targetNode.route_loop.from}' instead`
+    );
   }
   return [targetNodeId, ...getDagDescendantNodeIds(nodes, targetNodeId)];
 }

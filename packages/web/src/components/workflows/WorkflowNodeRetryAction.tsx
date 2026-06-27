@@ -65,6 +65,32 @@ export function WorkflowNodeRetryAction({
 
   if (actionState.kind === 'hidden') return null;
 
+  if (actionState.kind === 'route-loop-guidance') {
+    return (
+      <div className="border-b border-border bg-surface px-3 py-2 text-xs text-text-secondary">
+        <div className="flex min-w-0 items-start gap-2">
+          <RefreshCw className="mt-0.5 h-3.5 w-3.5 shrink-0 text-text-tertiary" />
+          <div className="min-w-0 space-y-1">
+            <div className="font-medium text-text-primary">Retry the route source node</div>
+            <p>
+              Route-loop controller nodes are not retried directly. Select{' '}
+              <code className="rounded bg-background px-1 font-mono text-[11px] text-text-primary">
+                {actionState.fromNodeId}
+              </code>{' '}
+              from <code className="font-mono text-[11px]">route_loop.from</code> and retry that
+              node to rerun the route decision.
+            </p>
+            {actionState.command && (
+              <code className="block break-all rounded bg-background px-2 py-1 font-mono text-[11px] text-text-secondary">
+                {actionState.command}
+              </code>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (actionState.kind === 'cli') {
     return (
       <div className="border-b border-border bg-surface px-3 py-2 text-xs text-text-secondary">
