@@ -2,6 +2,7 @@ import { describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import * as ts from 'typescript';
 
 import {
   isTelemetryDisabled,
@@ -44,6 +45,34 @@ function restoreEnv(saved: Record<string, string | undefined>): void {
       process.env[key] = saved[key];
     }
   }
+}
+
+function workflowNodeTypeLiterals(): string[] {
+  const sourceText = readFileSync(new URL('./telemetry.ts', import.meta.url), 'utf8');
+  const sourceFile = ts.createSourceFile(
+    'telemetry.ts',
+    sourceText,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS
+  );
+  const literals: string[] = [];
+
+  for (const node of sourceFile.statements) {
+    if (
+      ts.isTypeAliasDeclaration(node) &&
+      node.name.text === 'WorkflowNodeType' &&
+      ts.isUnionTypeNode(node.type)
+    ) {
+      for (const member of node.type.types) {
+        if (ts.isLiteralTypeNode(member) && ts.isStringLiteral(member.literal)) {
+          literals.push(member.literal.text);
+        }
+      }
+    }
+  }
+
+  return literals;
 }
 
 describe('telemetry opt-out detection', () => {
@@ -747,6 +776,10 @@ describe('new capture functions are fire-and-forget no-throw', () => {
         exitReason: 'node_error',
       })
     ).not.toThrow();
+  });
+
+  test('[P1][1.1-INT-008] WorkflowNodeType includes route_loop in the closed telemetry set', () => {
+    expect(workflowNodeTypeLiterals()).toContain('route_loop');
   });
 
   test('captureWorkflowCompleted does not throw (enabled)', async () => {

@@ -2,6 +2,8 @@ import { describe, test, expect } from 'bun:test';
 import {
   isBashNode,
   isCancelNode,
+  isLoopNode,
+  isPersistableNode,
   isScriptNode,
   isTriggerRule,
   TRIGGER_RULES,
@@ -693,5 +695,288 @@ describe('LOOP_NODE_AI_FIELDS', () => {
     for (const field of expectedFields) {
       expect(LOOP_NODE_AI_FIELDS).toContain(field);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Route Loop ATDD red-phase acceptance scaffolds
+// ---------------------------------------------------------------------------
+
+function createRouteLoopConfig(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    from: 'classify',
+    condition: "$classify.output == 'APPROVED'",
+    max_iterations: 3,
+    routes: {
+      positive: 'ship',
+      negative: 'revise',
+      exhausted: 'escalate',
+    },
+    ...overrides,
+  };
+}
+
+function createRouteLoopNode(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: 'route-review',
+    route_loop: createRouteLoopConfig(),
+    ...overrides,
+  };
+}
+
+function expectRouteLoopSchemaError(
+  input: Record<string, unknown>,
+  expectedPatterns: RegExp[]
+): void {
+  const result = dagNodeSchema.safeParse(input);
+  expect(result.success).toBe(false);
+  if (result.success) return;
+
+  const messages = result.error.issues.map(issue => issue.message).join('\n');
+  for (const pattern of expectedPatterns) {
+    expect(messages).toMatch(pattern);
+  }
+}
+
+describe('Route Loop ATDD - schema and controller contract', () => {
+  test('[P1][1.1-UNIT-001] parses a valid route_loop controller node with explicit max_iterations', () => {
+    const result = dagNodeSchema.safeParse(createRouteLoopNode());
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    expect('route_loop' in result.data).toBe(true);
+    const node = result.data as DagNode & { route_loop?: Record<string, unknown> };
+    expect(node.route_loop).toMatchObject({
+      from: 'classify',
+      condition: "$classify.output == 'APPROVED'",
+      max_iterations: 3,
+      routes: {
+        positive: 'ship',
+        negative: 'revise',
+        exhausted: 'escalate',
+      },
+    });
+  });
+
+  test('[P1][1.1-UNIT-002] classifies route_loop as its own controller and not as an AI loop', async () => {
+    const result = dagNodeSchema.safeParse(createRouteLoopNode());
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    const schemas = await import('./schemas');
+    expect(typeof (schemas as Record<string, unknown>).isRouteLoopNode).toBe('function');
+    const isRouteLoopNode = (schemas as { isRouteLoopNode: (node: DagNode) => boolean })
+      .isRouteLoopNode;
+
+    expect(isRouteLoopNode(result.data)).toBe(true);
+    expect(isLoopNode(result.data)).toBe(false);
+  });
+
+  test('[P1][1.1-UNIT-003] preserves existing AI loop classification as distinct from Route Loop', async () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'iterate',
+      loop: {
+        prompt: 'Improve the draft until DONE.',
+        until: 'DONE',
+        max_iterations: 2,
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    const schemas = await import('./schemas');
+    const isRouteLoopNode = (schemas as { isRouteLoopNode?: (node: DagNode) => boolean })
+      .isRouteLoopNode;
+
+    expect(isLoopNode(result.data)).toBe(true);
+    expect(isRouteLoopNode?.(result.data) ?? false).toBe(false);
+  });
+
+  test('[P1][1.1-UNIT-004] rejects missing route_loop.from with a field-specific validation error', () => {
+    expectRouteLoopSchemaError(
+      createRouteLoopNode({ route_loop: createRouteLoopConfig({ from: undefined }) }),
+      [/route_loop/i, /from/i]
+    );
+  });
+
+  test.each([
+    ['missing condition', undefined],
+    ['empty condition', ''],
+    ['blank condition', '   '],
+  ])(
+    '[P1][1.1-UNIT-005] rejects %s with a field-specific validation error',
+    (_caseName, condition) => {
+      expectRouteLoopSchemaError(
+        createRouteLoopNode({ route_loop: createRouteLoopConfig({ condition }) }),
+        [/route_loop/i, /condition/i]
+      );
+    }
+  );
+
+  test('[P1][1.1-UNIT-006] rejects missing route_loop.routes with a field-specific validation error', () => {
+    expectRouteLoopSchemaError(
+      createRouteLoopNode({ route_loop: createRouteLoopConfig({ routes: undefined }) }),
+      [/route_loop/i, /routes/i]
+    );
+  });
+
+  test.each(['positive', 'negative', 'exhausted'])(
+    '[P1][1.1-UNIT-007] rejects missing route_loop.routes.%s',
+    outcome => {
+      const routes = {
+        positive: 'ship',
+        negative: 'revise',
+        exhausted: 'escalate',
+      };
+      delete routes[outcome as keyof typeof routes];
+
+      expectRouteLoopSchemaError(
+        createRouteLoopNode({ route_loop: createRouteLoopConfig({ routes }) }),
+        [/route_loop/i, /routes/i, new RegExp(outcome, 'i')]
+      );
+    }
+  );
+
+  test.each([
+    ['prompt', { id: 'prompt-node', prompt: 'Classify.', routes: { positive: 'ship' } }],
+    ['command', { id: 'command-node', command: 'review', routes: { positive: 'ship' } }],
+    ['bash', { id: 'bash-node', bash: 'echo ok', routes: { positive: 'ship' } }],
+    [
+      'script',
+      {
+        id: 'script-node',
+        script: "console.log('ok')",
+        runtime: 'bun',
+        routes: { positive: 'ship' },
+      },
+    ],
+    [
+      'loop',
+      {
+        id: 'loop-node',
+        loop: { prompt: 'Iterate.', until: 'DONE', max_iterations: 2 },
+        routes: { positive: 'ship' },
+      },
+    ],
+    [
+      'approval',
+      { id: 'approval-node', approval: { message: 'Approve?' }, routes: { positive: 'ship' } },
+    ],
+    ['cancel', { id: 'cancel-node', cancel: 'Stop', routes: { positive: 'ship' } }],
+  ])('[P1][1.1-UNIT-008] rejects top-level routes on %s nodes', (_nodeType, input) => {
+    expectRouteLoopSchemaError(input, [/routes/i, /unsupported|route_loop|regular/i]);
+  });
+
+  test.each(['body', 'nodes', 'steps', 'subgraph'])(
+    '[P1][1.1-UNIT-009] rejects nested route_loop.%s controller bodies',
+    nestedKey => {
+      expectRouteLoopSchemaError(
+        createRouteLoopNode({
+          route_loop: createRouteLoopConfig({ [nestedKey]: [{ id: 'nested', prompt: 'no' }] }),
+        }),
+        [/route_loop/i, new RegExp(nestedKey, 'i'), /nested|subgraph|body|controller/i]
+      );
+    }
+  );
+
+  test.each([
+    ['prompt', { prompt: 'Do AI work.' }],
+    ['command', { command: 'implement' }],
+    ['bash', { bash: 'echo forbidden' }],
+    ['script', { script: "console.log('forbidden')", runtime: 'bun' }],
+    ['approval', { approval: { message: 'Approve?' } }],
+    ['cancel', { cancel: 'Stop now' }],
+    ['loop', { loop: { prompt: 'Iterate.', until: 'DONE', max_iterations: 2 } }],
+  ])('[P0][1.1-UNIT-010] rejects route_loop combined with %s', (field, forbiddenFields) => {
+    expectRouteLoopSchemaError(createRouteLoopNode(forbiddenFields), [
+      /route_loop/i,
+      new RegExp(field, 'i'),
+      /exclusive|controller/i,
+    ]);
+  });
+
+  test('[P0][1.1-UNIT-011] rejects route_loop combined with node-level when', () => {
+    expectRouteLoopSchemaError(createRouteLoopNode({ when: "$classify.output == 'APPROVED'" }), [
+      /route_loop/i,
+      /when/i,
+      /exclusive|controller/i,
+    ]);
+  });
+
+  test('[P0][1.1-UNIT-012] rejects route_loop combined with trigger_rule', () => {
+    expectRouteLoopSchemaError(createRouteLoopNode({ trigger_rule: 'all_done' }), [
+      /route_loop/i,
+      /trigger_rule/i,
+      /exclusive|controller/i,
+    ]);
+  });
+
+  test('[P1][1.1-UNIT-013] reports clear route_loop validation messages naming unsupported fields', () => {
+    expectRouteLoopSchemaError(
+      createRouteLoopNode({
+        prompt: 'Do not run an AI provider.',
+        route_loop: createRouteLoopConfig({ body: [{ id: 'nested', prompt: 'no' }] }),
+      }),
+      [/route_loop/i, /prompt/i, /body/i, /exclusive|controller|unsupported/i]
+    );
+  });
+
+  test('[P1][1.1-UNIT-014] defaults omitted route_loop.max_iterations to 10', () => {
+    const config = createRouteLoopConfig();
+    delete config.max_iterations;
+    const result = dagNodeSchema.safeParse(createRouteLoopNode({ route_loop: config }));
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    const node = result.data as DagNode & { route_loop?: { max_iterations?: number } };
+    expect(node.route_loop?.max_iterations).toBe(10);
+  });
+
+  test.each([1, 100])(
+    '[P1][1.1-UNIT-015] accepts route_loop.max_iterations boundary value %i',
+    maxIterations => {
+      const result = dagNodeSchema.safeParse(
+        createRouteLoopNode({
+          route_loop: createRouteLoopConfig({ max_iterations: maxIterations }),
+        })
+      );
+
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+
+      const node = result.data as DagNode & { route_loop?: { max_iterations?: number } };
+      expect(node.route_loop?.max_iterations).toBe(maxIterations);
+    }
+  );
+
+  test.each([0, 101, -1, 1.5, '5', null, Number.NaN])(
+    '[P1][1.1-UNIT-016] rejects invalid route_loop.max_iterations value %p',
+    maxIterations => {
+      expectRouteLoopSchemaError(
+        createRouteLoopNode({
+          route_loop: createRouteLoopConfig({ max_iterations: maxIterations }),
+        }),
+        [/route_loop/i, /max_iterations/i, /1|100|integer|number/i]
+      );
+    }
+  );
+
+  test('[P1][1.1-UNIT-017] exposes Route Loop schemas and helper through the schema index', async () => {
+    const schemas = (await import('./schemas')) as Record<string, unknown>;
+
+    expect(schemas.routeLoopRoutesSchema).toBeDefined();
+    expect(schemas.routeLoopConfigSchema).toBeDefined();
+    expect(schemas.routeLoopNodeSchema).toBeDefined();
+    expect(typeof schemas.isRouteLoopNode).toBe('function');
+  });
+
+  test('[P1][1.1-UNIT-018] excludes Route Loop controllers from provider session persistence', () => {
+    const routeLoopNode = createRouteLoopNode() as unknown as DagNode;
+
+    expect(isPersistableNode(routeLoopNode)).toBe(false);
   });
 });

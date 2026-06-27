@@ -2905,4 +2905,177 @@ nodes:
       }
     });
   });
+
+  describe('Route Loop ATDD - loader and YAML consumer contract', () => {
+    it('[P1][1.1-INT-001] loads a minimal valid route_loop declaration through discoverWorkflows', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      const yaml = `
+name: route-loop-valid
+description: Valid Route Loop declaration
+provider: claude
+nodes:
+  - id: classify
+    prompt: "Classify the review result."
+  - id: review-route
+    depends_on: [classify]
+    route_loop:
+      from: classify
+      condition: "$classify.output == 'APPROVED'"
+      routes:
+        positive: ship
+        negative: revise
+        exhausted: escalate
+`;
+      await writeFile(join(workflowDir, 'route-loop-valid.yaml'), yaml);
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+
+      expect(result.errors).toEqual([]);
+      expect(result.workflows).toHaveLength(1);
+
+      const routeNode = result.workflows[0].workflow.nodes[1] as unknown as {
+        route_loop?: Record<string, unknown>;
+      };
+      expect(routeNode.route_loop).toMatchObject({
+        from: 'classify',
+        condition: "$classify.output == 'APPROVED'",
+        max_iterations: 10,
+        routes: {
+          positive: 'ship',
+          negative: 'revise',
+          exhausted: 'escalate',
+        },
+      });
+    });
+
+    it('[P1][1.1-INT-002] does not capability-check route_loop controllers for workflow-level persist_sessions', async () => {
+      const { registerProvider } = await import('@archon/providers');
+      registerProvider({
+        id: 'no-resume-route-loop',
+        displayName: 'No Resume Route Loop',
+        builtIn: false,
+        credentials: { kind: 'static', specs: [] },
+        capabilities: {
+          sessionResume: false,
+          mcp: false,
+          hooks: false,
+          skills: false,
+          agents: false,
+          toolRestrictions: false,
+          structuredOutput: false,
+          envInjection: false,
+          costControl: false,
+          effortControl: false,
+          thinkingControl: false,
+          fallbackModel: false,
+          sandbox: false,
+        },
+        factory: () => ({
+          getType: () => 'no-resume-route-loop',
+          getCapabilities: () => ({
+            sessionResume: false,
+            mcp: false,
+            hooks: false,
+            skills: false,
+            agents: false,
+            toolRestrictions: false,
+            structuredOutput: false,
+            envInjection: false,
+            costControl: false,
+            effortControl: false,
+            thinkingControl: false,
+            fallbackModel: false,
+            sandbox: false,
+          }),
+          async *sendQuery() {
+            throw new Error('route_loop controllers must not call providers');
+          },
+        }),
+      });
+
+      try {
+        const workflowDir = join(testDir, '.archon', 'workflows');
+        await mkdir(workflowDir, { recursive: true });
+
+        const yaml = `
+name: route-loop-persist
+description: Route Loop ignores provider session persistence
+provider: no-resume-route-loop
+persist_sessions: true
+nodes:
+  - id: classify
+    bash: "echo APPROVED"
+  - id: review-route
+    depends_on: [classify]
+    route_loop:
+      from: classify
+      condition: "$classify.output == 'APPROVED'"
+      routes:
+        positive: ship
+        negative: revise
+        exhausted: escalate
+`;
+        await writeFile(join(workflowDir, 'route-loop-persist.yaml'), yaml);
+
+        const result = await discoverWorkflows(testDir, { loadDefaults: false });
+
+        expect(result.errors).toEqual([]);
+        expect(result.workflows).toHaveLength(1);
+      } finally {
+        clearRegistry();
+        registerBuiltinProviders();
+      }
+    });
+
+    it('[P1][1.1-INT-003] rejects or route-loop-warns AI-only fields so controllers cannot forward provider config', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      const yaml = `
+name: route-loop-ai-fields
+description: Route Loop with provider-only fields
+provider: claude
+nodes:
+  - id: review-route
+    route_loop:
+      from: classify
+      condition: "$classify.output == 'APPROVED'"
+      routes:
+        positive: ship
+        negative: revise
+        exhausted: escalate
+    provider: claude
+    model: claude-opus-4-6
+    output_format:
+      type: object
+    persist_session: true
+`;
+      await writeFile(join(workflowDir, 'route-loop-ai-fields.yaml'), yaml);
+
+      (mockLogger.warn as Mock<() => undefined>).mockClear();
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      const errors = result.errors.map(error => error.error).join('\n');
+      const warnCalls = (mockLogger.warn as Mock<() => undefined>).mock.calls;
+      const routeLoopWarnings = warnCalls.filter(
+        call => typeof call[1] === 'string' && call[1].includes('route_loop')
+      );
+
+      expect(errors + JSON.stringify(routeLoopWarnings)).toMatch(/route_loop/i);
+      expect(errors + JSON.stringify(routeLoopWarnings)).toMatch(
+        /provider|model|output_format|persist_session/i
+      );
+
+      const parsedNode = result.workflows[0]?.workflow.nodes[0] as
+        | (Record<string, unknown> & { route_loop?: Record<string, unknown> })
+        | undefined;
+      if (parsedNode) {
+        expect(parsedNode.provider).toBeUndefined();
+        expect(parsedNode.model).toBeUndefined();
+        expect(parsedNode.output_format).toBeUndefined();
+        expect(parsedNode.persist_session).toBeUndefined();
+      }
+    });
+  });
 });

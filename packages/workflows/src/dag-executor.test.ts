@@ -9927,3 +9927,206 @@ describe('executeDagWorkflow -- completion telemetry', () => {
     );
   });
 });
+
+describe('executeDagWorkflow -- Route Loop ATDD controller guardrails', () => {
+  let routeLoopTestDir: string;
+
+  beforeEach(async () => {
+    routeLoopTestDir = join(
+      tmpdir(),
+      `dag-route-loop-atdd-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    await mkdir(routeLoopTestDir, { recursive: true });
+    mockSendQueryDag.mockClear();
+    mockGetAgentProviderDag.mockClear();
+    mockCaptureWorkflowCompleted.mockClear();
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'unexpected provider call' };
+      yield { type: 'result', sessionId: 'unexpected-session' };
+    });
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+  });
+
+  afterEach(async () => {
+    await rm(routeLoopTestDir, { recursive: true, force: true });
+  });
+
+  function routeLoopNode(overrides: Record<string, unknown> = {}): DagNode {
+    return {
+      id: 'review-route',
+      route_loop: {
+        from: 'classify',
+        condition: "$classify.output == 'APPROVED'",
+        max_iterations: 3,
+        routes: {
+          positive: 'ship',
+          negative: 'revise',
+          exhausted: 'escalate',
+        },
+      },
+      ...overrides,
+    } as unknown as DagNode;
+  }
+
+  async function runGit(repoPath: string, args: string[]): Promise<string> {
+    const result = await git.execFileAsync('git', args, { cwd: repoPath });
+    return result.stdout.trim();
+  }
+
+  function failedRunMessage(store: IWorkflowStore): string {
+    const failCalls = (store.failWorkflowRun as Mock<(id: string, error: string) => Promise<void>>)
+      .mock.calls;
+    return failCalls.map(call => call[1]).join('\n');
+  }
+
+  it('[P1][1.1-INT-005] fails fast with a clear not-implemented guard when execution reaches route_loop', async () => {
+    const store = createMockStore();
+
+    await executeDagWorkflow(
+      createMockDeps(store),
+      createMockPlatform(),
+      'conv-route-loop',
+      routeLoopTestDir,
+      {
+        name: 'route-loop-guard',
+        mutates_checkout: false,
+        nodes: [
+          { id: 'classify', bash: 'echo APPROVED' },
+          routeLoopNode({ depends_on: ['classify'] }),
+        ],
+      },
+      makeWorkflowRun('route-loop-guard-run'),
+      'claude',
+      undefined,
+      join(routeLoopTestDir, 'artifacts'),
+      join(routeLoopTestDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(failedRunMessage(store)).toMatch(/route_loop/i);
+    expect(failedRunMessage(store)).toMatch(/not implemented/i);
+  });
+
+  it('[P1][1.1-INT-006] does not call the provider when route_loop execution is not implemented', async () => {
+    const providerSendQuery = mock(async function* () {
+      yield { type: 'assistant', content: 'provider should not run for route_loop' };
+    });
+    const store = createMockStore();
+    const deps: WorkflowDeps = {
+      ...createMockDeps(store),
+      getAgentProvider: mock(() => ({
+        sendQuery: providerSendQuery,
+        getType: () => 'claude',
+        getCapabilities: mockClaudeCapabilities,
+      })),
+    };
+
+    await executeDagWorkflow(
+      deps,
+      createMockPlatform(),
+      'conv-route-loop-provider',
+      routeLoopTestDir,
+      {
+        name: 'route-loop-provider-guard',
+        mutates_checkout: false,
+        nodes: [
+          { id: 'classify', bash: 'echo APPROVED' },
+          routeLoopNode({ depends_on: ['classify'] }),
+        ],
+      },
+      makeWorkflowRun('route-loop-provider-run'),
+      'claude',
+      undefined,
+      join(routeLoopTestDir, 'artifacts'),
+      join(routeLoopTestDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(providerSendQuery).not.toHaveBeenCalled();
+    expect(failedRunMessage(store)).toMatch(/route_loop/i);
+    expect(failedRunMessage(store)).toMatch(/not implemented/i);
+  });
+
+  it('[P1][1.1-INT-007] does not create a pre-node git checkpoint for route_loop controllers', async () => {
+    await writeFile(join(routeLoopTestDir, 'README.md'), 'initial\n');
+    await runGit(routeLoopTestDir, ['init']);
+    await runGit(routeLoopTestDir, ['config', 'user.name', 'Archon Test']);
+    await runGit(routeLoopTestDir, ['config', 'user.email', 'archon-test@example.com']);
+    await runGit(routeLoopTestDir, ['add', '.']);
+    await runGit(routeLoopTestDir, ['commit', '-m', 'initial']);
+
+    const upsertCheckpoint = mock(
+      async (data: Parameters<NonNullable<IWorkflowStore['upsertWorkflowNodeCheckpoint']>>[0]) => ({
+        ...data,
+        created_at: new Date(),
+      })
+    );
+    const store = createMockStore();
+    store.upsertWorkflowNodeCheckpoint = upsertCheckpoint;
+
+    await executeDagWorkflow(
+      createMockDeps(store),
+      createMockPlatform(),
+      'conv-route-loop-checkpoint',
+      routeLoopTestDir,
+      {
+        name: 'route-loop-checkpoint-guard',
+        nodes: [routeLoopNode()],
+      },
+      makeWorkflowRun('route-loop-checkpoint-run', {
+        working_path: routeLoopTestDir,
+        metadata: { retry_epoch: 0 },
+      }),
+      'claude',
+      undefined,
+      join(routeLoopTestDir, 'artifacts'),
+      join(routeLoopTestDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(upsertCheckpoint.mock.calls.map(call => call[0].node_id)).not.toContain('review-route');
+  });
+
+  it('[P1][1.1-INT-008] reports route_loop as the failed node type instead of prompt telemetry', async () => {
+    await executeDagWorkflow(
+      createMockDeps(createMockStore()),
+      createMockPlatform(),
+      'conv-route-loop-telemetry',
+      routeLoopTestDir,
+      {
+        name: 'route-loop-telemetry',
+        mutates_checkout: false,
+        nodes: [routeLoopNode()],
+      },
+      makeWorkflowRun('route-loop-telemetry-run'),
+      'claude',
+      undefined,
+      join(routeLoopTestDir, 'artifacts'),
+      join(routeLoopTestDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      undefined,
+      'custom'
+    );
+
+    expect(mockCaptureWorkflowCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: 'failed',
+        failedNodeType: 'route_loop',
+      })
+    );
+  });
+});
