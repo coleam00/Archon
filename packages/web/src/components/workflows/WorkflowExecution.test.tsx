@@ -52,4 +52,35 @@ describe('buildWorkflowDagNodeStates', () => {
       iterations: [{ iteration: 1, status: 'completed', duration: 1500 }],
     });
   });
+
+  test('projects node_routed events as completed route-loop decisions', () => {
+    const routeDecision = {
+      from: 'review',
+      outcome: 'negative',
+      to: 'fix',
+      condition: "$review.output.approved == '<redacted>'",
+      condition_result: false,
+      negative_count: 1,
+      max_iterations: 2,
+      attempt: 1,
+      execution_seq: 4,
+    };
+
+    const nodes = buildWorkflowDagNodeStates(undefined, [
+      workflowEvent({
+        id: 'event-route',
+        event_type: 'node_routed',
+        step_name: 'review-router',
+        data: routeDecision,
+      }),
+    ]);
+
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0]).toMatchObject({
+      nodeId: 'review-router',
+      name: 'review-router',
+      status: 'completed',
+      routeDecision,
+    });
+  });
 });

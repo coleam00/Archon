@@ -5,6 +5,44 @@ import type { DagFlowNode } from '@/components/workflows/DagNodeComponent';
 
 export const NODE_WIDTH = 180;
 export const NODE_HEIGHT = 80;
+const ROUTE_OUTCOMES = ['positive', 'negative', 'exhausted'] as const;
+
+type RouteOutcome = (typeof ROUTE_OUTCOMES)[number];
+
+interface RouteLoopConfig {
+  from: string;
+  condition: string;
+  max_iterations: number;
+  routes: Record<RouteOutcome, string>;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function getRouteLoopConfig(dn: DagNode): RouteLoopConfig | null {
+  const routeLoop = (dn as { route_loop?: unknown }).route_loop;
+  if (!isRecord(routeLoop) || !isRecord(routeLoop.routes)) return null;
+  if (
+    typeof routeLoop.from !== 'string' ||
+    typeof routeLoop.condition !== 'string' ||
+    typeof routeLoop.max_iterations !== 'number'
+  ) {
+    return null;
+  }
+  const routes = routeLoop.routes;
+  if (!ROUTE_OUTCOMES.every(outcome => typeof routes[outcome] === 'string')) return null;
+  return {
+    from: routeLoop.from,
+    condition: routeLoop.condition,
+    max_iterations: routeLoop.max_iterations,
+    routes: {
+      positive: routes.positive as string,
+      negative: routes.negative as string,
+      exhausted: routes.exhausted as string,
+    },
+  };
+}
 
 export function layoutWithDagre(
   nodes: DagFlowNode[],
@@ -45,7 +83,7 @@ export function layoutWithDagre(
 
 export function resolveNodeDisplay(dn: DagNode): {
   label: string;
-  nodeType: 'command' | 'prompt' | 'bash' | 'loop' | 'approval';
+  nodeType: 'command' | 'prompt' | 'bash' | 'loop' | 'route_loop' | 'approval';
   promptText?: string;
   bashScript?: string;
   bashTimeout?: number;
@@ -63,6 +101,10 @@ export function resolveNodeDisplay(dn: DagNode): {
   }
   if ('loop' in dn && dn.loop) {
     return { label: 'Loop', nodeType: 'loop', promptText: dn.loop.prompt };
+  }
+  const routeLoop = getRouteLoopConfig(dn);
+  if (routeLoop) {
+    return { label: 'Route', nodeType: 'route_loop', promptText: routeLoop.condition };
   }
   if ('approval' in dn && dn.approval) {
     return { label: 'Approval', nodeType: 'approval' };
@@ -96,12 +138,31 @@ export function dagNodesToReactFlow(dagNodes: readonly DagNode[]): {
   }));
 
   const edges: Edge[] = [];
+  const edgeIds = new Set<string>();
+  const pushEdge = (edge: Edge): void => {
+    edges.push(edge);
+    edgeIds.add(edge.id);
+  };
   for (const dn of dagNodes) {
     for (const dep of dn.depends_on ?? []) {
-      edges.push({
+      pushEdge({
         id: `${dep}->${dn.id}`,
         source: dep,
         target: dn.id,
+        type: 'smoothstep',
+      });
+    }
+    const routeLoop = getRouteLoopConfig(dn);
+    if (!routeLoop) continue;
+    for (const outcome of ROUTE_OUTCOMES) {
+      const target = routeLoop.routes[outcome];
+      const baseId = `${dn.id}->${target}`;
+      pushEdge({
+        id: edgeIds.has(baseId) ? `${baseId}:${outcome}` : baseId,
+        source: dn.id,
+        sourceHandle: outcome,
+        target,
+        label: outcome,
         type: 'smoothstep',
       });
     }

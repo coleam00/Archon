@@ -525,7 +525,7 @@
     },
     {
       "title": "Phase 6.1: Tests For User Story 4",
-      "completed": false,
+      "completed": true,
       "tasks": [
         {
           "id": "T051",
@@ -533,7 +533,7 @@
           "description": "[P] [US4] Add console builder round-trip tests for route-loop input and output serialization in `packages/web/src/experiments/console/builder/model/round-trip.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 51,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -542,7 +542,7 @@
           "description": "[P] [US4] Add console builder validation tests for one input, required routes, shared route targets, and mismatched `from` in `packages/web/src/experiments/console/builder/validation/graph.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 52,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -551,7 +551,7 @@
           "description": "[P] [US4] Add structural validation tests for safe node ids and reserved keys in `packages/web/src/experiments/console/builder/validation/structural.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 53,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -560,7 +560,7 @@
           "description": "[P] [US4] Add route-loop variant detection tests in `packages/web/src/experiments/console/builder/variants/detect.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 54,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -569,7 +569,7 @@
           "description": "[P] [US4] Add graph layout tests for route edges, outcome labels, and dormant route targets in `packages/web/src/lib/dag-layout.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 55,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -578,7 +578,7 @@
           "description": "[P] [US4] Add component, Web store, and SSE/refetch bridge tests for route-loop node handles, typed `node_routed` rendering, and route decision propagation within one live refresh cycle in `packages/web/src/components/workflows/DagNodeComponent.test.ts`, `packages/web/src/components/workflows/WorkflowExecution.test.tsx`, `packages/web/src/stores/workflow-store.test.ts`, and `packages/server/src/adapters/web/workflow-bridge.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 56,
-          "passes": false,
+          "passes": true,
           "notes": ""
         }
       ],

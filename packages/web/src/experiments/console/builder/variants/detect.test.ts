@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { detectVariant } from './detect';
+import { detectVariant, detectVariantOrNull } from './detect';
 import type { VariantId, WireDagNode } from '../types';
 
 describe('detectVariant', () => {
@@ -35,6 +35,28 @@ describe('detectVariant', () => {
 
   test('defaults to prompt when no mode field is present', () => {
     expect(detectVariant({ id: 'bare' } as WireDagNode)).toBe('prompt');
+  });
+
+  test('returns null when strict detection finds no mode field', () => {
+    expect(detectVariantOrNull({ id: 'bare' } as WireDagNode)).toBeNull();
+  });
+
+  test('detects route_loop when the controller config is present', () => {
+    const node: WireDagNode = {
+      id: 'review-router',
+      route_loop: {
+        from: 'review',
+        condition: "$review.output.status == 'approved'",
+        max_iterations: 3,
+        routes: {
+          positive: 'done',
+          negative: 'fix',
+          exhausted: 'escalate',
+        },
+      },
+    };
+
+    expect(detectVariantOrNull(node)).toBe('route_loop');
   });
 
   test('priority order: route_loop wins over later discriminants when ambiguous', () => {

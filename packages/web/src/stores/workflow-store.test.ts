@@ -122,6 +122,49 @@ describe('handleDagNode', () => {
     expect(wf!.dagNodes).toHaveLength(1);
     expect(wf!.dagNodes[0].status).toBe('completed');
   });
+
+  test('stores route decision metadata from node_routed dag events', () => {
+    const routeDecision = {
+      from: 'review',
+      outcome: 'positive',
+      to: 'done',
+      condition: "$review.output.approved == '<redacted>'",
+      condition_result: true,
+      negative_count: 0,
+      max_iterations: 2,
+      attempt: 2,
+      execution_seq: 7,
+    };
+
+    useWorkflowStore
+      .getState()
+      .handleWorkflowStatus(statusEvent({ runId: 'run-route', workflowName: 'route-wf' }));
+    useWorkflowStore.getState().handleDagNode(
+      dagNodeEvent({
+        runId: 'run-route',
+        nodeId: 'review-router',
+        name: 'Review Router',
+        status: 'completed',
+        routeDecision,
+      } as Partial<DagNodeEvent> & {
+        runId: string;
+        nodeId: string;
+        routeDecision: typeof routeDecision;
+      })
+    );
+
+    const node = useWorkflowStore
+      .getState()
+      .workflows.get('run-route')!
+      .dagNodes.find(n => n.nodeId === 'review-router') as
+      | ({ routeDecision?: typeof routeDecision } & { status: string })
+      | undefined;
+
+    expect(node).toMatchObject({
+      status: 'completed',
+      routeDecision,
+    });
+  });
 });
 
 describe('handleWorkflowArtifact', () => {

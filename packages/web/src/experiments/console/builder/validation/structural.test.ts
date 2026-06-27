@@ -30,6 +30,50 @@ describe('validateStructural', () => {
     expect(issues.some(i => i.rule === 'structural.id.duplicate')).toBe(true);
   });
 
+  test('unsafe route-loop node ids are flagged', () => {
+    const issues = validateStructural(
+      wf([
+        {
+          id: '1review-router',
+          variant: 'route_loop',
+          base: { depends_on: ['review'] },
+          data: {
+            from: 'review',
+            condition: '$review.output.approved == true',
+            max_iterations: 3,
+            routes: { positive: 'done', negative: 'fix', exhausted: 'escalate' },
+          },
+        },
+      ])
+    );
+    expect(
+      issues.some(i => i.rule === 'structural.id.invalid' && i.path.nodeId === '1review-router')
+    ).toBe(true);
+  });
+
+  test('reserved route-loop route keys are flagged', () => {
+    const issues = validateStructural(
+      wf([
+        {
+          id: 'review_router',
+          variant: 'route_loop',
+          base: { depends_on: ['review'] },
+          data: {
+            from: 'review',
+            condition: '$review.output.approved == true',
+            max_iterations: 3,
+            routes: { positive: 'done', negative: 'constructor', exhausted: 'escalate' },
+          },
+        },
+      ])
+    );
+    expect(
+      issues.some(
+        i => i.rule === 'structural.id.reserved' && i.path.field === 'route_loop.routes.negative'
+      )
+    ).toBe(true);
+  });
+
   test('loop empty prompt/until is flagged as missing; bad max_iterations as invalid', () => {
     const issues = validateStructural(
       wf([

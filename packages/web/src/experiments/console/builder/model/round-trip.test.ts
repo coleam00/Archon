@@ -2,7 +2,7 @@ import { describe, test, expect } from 'bun:test';
 import { fromWorkflowDefinition } from './from-workflow';
 import { toWorkflowDefinition } from './to-workflow';
 import { FIXTURES } from '../fixtures';
-import type { WireWorkflowDefinition } from '../types';
+import type { WireDagNode, WireWorkflowDefinition } from '../types';
 
 describe('round-trip fidelity', () => {
   for (const [name, fixture] of Object.entries(FIXTURES)) {
@@ -23,6 +23,63 @@ describe('round-trip fidelity', () => {
       expect(node.data.interactive).toBe(true);
       expect(node.data.gate_message).toBe('Review the latest draft before continuing.');
     }
+  });
+
+  test('route-loop input and route outputs are preserved on import', () => {
+    const bw = fromWorkflowDefinition(FIXTURES.routeLoop).workflow;
+    const node = bw.nodes.find(n => n.id === 'review_router');
+    expect(node?.variant).toBe('route_loop');
+    if (node?.variant === 'route_loop') {
+      expect(node.base.depends_on).toEqual(['review']);
+      expect(node.data.from).toBe('review');
+      expect(node.data.condition).toBe("$review.output.status == 'approved'");
+      expect(node.data.routes).toEqual({
+        positive: 'done',
+        negative: 'fix',
+        exhausted: 'escalate',
+      });
+    }
+  });
+
+  test('route-loop input and route outputs are serialized on export', () => {
+    const def = toWorkflowDefinition({
+      name: 'route-loop-export',
+      description: 'Exports route-loop wiring.',
+      meta: {},
+      nodes: [
+        {
+          id: 'review_router',
+          variant: 'route_loop',
+          base: { depends_on: ['review'] },
+          data: {
+            from: 'review',
+            condition: "$review.output.status == 'approved'",
+            max_iterations: 3,
+            routes: {
+              positive: 'done',
+              negative: 'fix',
+              exhausted: 'escalate',
+            },
+          },
+        },
+      ],
+    });
+
+    const routeLoopNode = def.nodes[0] as WireDagNode;
+    expect(routeLoopNode).toEqual({
+      id: 'review_router',
+      depends_on: ['review'],
+      route_loop: {
+        from: 'review',
+        condition: "$review.output.status == 'approved'",
+        max_iterations: 3,
+        routes: {
+          positive: 'done',
+          negative: 'fix',
+          exhausted: 'escalate',
+        },
+      },
+    });
   });
 
   test('approval on_reject and capture_response survive partitioning', () => {

@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils';
 export interface DagNodeData extends DagNode {
   /** For command nodes: the command name. For prompt nodes: display label ("Prompt"). For bash: display label ("Shell"). */
   label: string;
-  nodeType: 'command' | 'prompt' | 'bash' | 'loop' | 'approval';
+  nodeType: 'command' | 'prompt' | 'bash' | 'loop' | 'route_loop' | 'approval';
   promptText?: string;
   bashScript?: string;
   bashTimeout?: number;
@@ -42,6 +42,12 @@ const TYPE_CONFIG = {
     badgeBg: 'bg-node-loop/20',
     badgeText: 'text-node-loop',
   },
+  route_loop: {
+    badge: 'ROUTE',
+    stripeColor: 'bg-node-loop',
+    badgeBg: 'bg-node-loop/20',
+    badgeText: 'text-node-loop',
+  },
   approval: {
     badge: 'APPROVAL',
     stripeColor: 'bg-node-approval',
@@ -56,6 +62,7 @@ export function getContentPreview(data: DagNodeData): string {
       return data.label;
     case 'prompt':
     case 'loop':
+    case 'route_loop':
       return data.promptText?.split('\n')[0] ?? '';
     case 'bash':
       return data.bashScript?.split('\n')[0] ?? '';
@@ -131,7 +138,33 @@ function DagNodeRender({ data, selected }: NodeProps<DagFlowNode>): React.ReactE
         )}
       </div>
 
-      <Handle type="source" position={Position.Bottom} className="!bg-accent !w-2 !h-2" />
+      {data.nodeType === 'route_loop' ? (
+        <>
+          <Handle
+            id="positive"
+            type="source"
+            position={Position.Bottom}
+            className="!bg-success !w-2 !h-2"
+            style={{ left: '25%' }}
+          />
+          <Handle
+            id="negative"
+            type="source"
+            position={Position.Bottom}
+            className="!bg-accent !w-2 !h-2"
+            style={{ left: '50%' }}
+          />
+          <Handle
+            id="exhausted"
+            type="source"
+            position={Position.Bottom}
+            className="!bg-error !w-2 !h-2"
+            style={{ left: '75%' }}
+          />
+        </>
+      ) : (
+        <Handle type="source" position={Position.Bottom} className="!bg-accent !w-2 !h-2" />
+      )}
     </div>
   );
 }

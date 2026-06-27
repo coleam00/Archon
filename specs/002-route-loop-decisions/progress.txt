@@ -1,4 +1,8 @@
 ## Codebase Patterns
+- Web route-loop rendering should use local structural guards while `packages/web/src/lib/api.generated.d.ts` lags the server schema; avoid importing `@archon/workflows` into `@archon/web`.
+- Route-loop Web validation mirrors the engine contract in two layers: `validation/structural.ts` owns safe node id and reserved key checks, while `validation/graph.ts` owns one-input, required-route, known-target, and `from` mismatch checks.
+- Web route decisions must flow through both live SSE state (`DagNodeEvent.routeDecision`) and REST event projection (`buildWorkflowDagNodeStates`) so `node_routed` survives a one-cycle refresh.
+- React Flow route-loop edges use the outcome as `sourceHandle` and `label`; keep dependency edges unchanged and add duplicate-id guards when multiple outcomes target the same node.
 - `workflowEventRowSchema` now validates `node_routed` data with `routeLoopDecisionEventDataSchema`; server wire schemas that narrow this refined schema must use Zod `safeExtend()`.
 - `serializeSafeCondition()` in `packages/workflows/src/condition-evaluator.ts` is the canonical route-loop condition redaction path; `route-loop-state.ts` delegates to it before persisting route decisions.
 - Adding a new `WorkflowEmitterEvent` variant requires exhaustive handling in the Web bridge, Slack bridge, and persisted dashboard row mapping so live refresh paths stay type-safe.
@@ -161,4 +165,22 @@
 - Route-loop live refresh has two paths: in-process emitter events and persisted DB rows tailed by the dashboard poller; both need updates for new event types.
 - Cross-package Bun tests still need isolated invocations because combining mocked core tests in one process can produce false module export failures.
 - After changing server schemas, `packages/server/src/routes/api.health.test.ts` is a cheap guard that OpenAPI generation still works.
+---
+## 2026-06-27 18:37 +07 - Phase 6.1: Tests For User Story 4 (iter 9)
+**Tasks completed this iter:** T051 (Console builder route-loop round-trip tests), T052 (Console builder route-loop graph validation tests), T053 (Console builder route-loop structural validation tests), T054 (Route-loop variant detection tests), T055 (Route-loop graph layout tests), T056 (Route-loop component, store, and bridge tests)
+**Status:** completed:true
+
+- Per-task summary lines:
+  - T051 - Added route-loop import and export round-trip coverage for `from`, `condition`, `max_iterations`, and all route outputs in `packages/web/src/experiments/console/builder/model/round-trip.test.ts`.
+  - T052 - Added route-loop graph validation tests for one input, required routes, unknown targets, shared targets, and `from` mismatch in `packages/web/src/experiments/console/builder/validation/graph.test.ts`; added matching client graph validation in `graph.ts`.
+  - T053 - Added route-loop structural validation tests for safe node ids and reserved route targets in `packages/web/src/experiments/console/builder/validation/structural.test.ts`; added matching safe-id checks in `structural.ts`.
+  - T054 - Added strict and default route-loop variant detection coverage in `packages/web/src/experiments/console/builder/variants/detect.test.ts`.
+  - T055 - Added route-loop layout tests for route edges, outcome labels, and dormant route targets in `packages/web/src/lib/dag-layout.test.ts`; added route edge generation and local route-loop display guards in `dag-layout.ts`.
+  - T056 - Added route-loop node handle, `node_routed` projection, Web store propagation, and live bridge tests in workflow component, store, and server bridge test files; threaded route decisions through Web types, store state, and run-detail projection.
+
+**Learnings for future iterations:**
+- Generated Web API types still do not expose `route_loop`, so Web runtime code should use local structural guards until the OpenAPI regeneration task lands.
+- Route-loop route targets can be dormant with no `depends_on` edge, so graph rendering must add explicit labeled route edges instead of relying on dependency edges.
+- `node_routed` is a completed controller event for Web state, not a skipped node event; both live SSE and REST event reconstruction need to preserve its route decision data.
+- Verification passed the focused Web builder, layout, component, and store tests, the new server Web bridge test, `bun run type-check`, `bun run lint --max-warnings 0`, and touched-file Prettier checks.
 ---
