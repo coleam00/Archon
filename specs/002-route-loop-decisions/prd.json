@@ -153,7 +153,7 @@
     },
     {
       "title": "Phase 3.2: Implementation For User Story 1",
-      "completed": false,
+      "completed": true,
       "tasks": [
         {
           "id": "T015",
@@ -161,7 +161,7 @@
           "description": "[US1] Implement `routeLoopConfigSchema`, `routeLoopRoutesSchema`, `routeOutcomeSchema`, safe node id validation, and derived types in `packages/workflows/src/schemas/route-loop.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 15,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -170,7 +170,7 @@
           "description": "[US1] Export route-loop schemas and type guards from `packages/workflows/src/schemas/index.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 16,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -179,7 +179,7 @@
           "description": "[US1] Extend `dagNodeSchema` with mutually exclusive `route_loop` node mode validation in `packages/workflows/src/schemas/dag-node.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 17,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -188,7 +188,7 @@
           "description": "[US1] Extend workflow loader validation for `route_loop.depends_on`, `route_loop.from`, route target existence, and unsupported node fields in `packages/workflows/src/loader.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 18,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -197,7 +197,7 @@
           "description": "[US1] Add route-edge cycle validation, positive and exhausted exit-path validation, nested route-loop allowance, warning behavior when `routes.negative` targets `route_loop.from` directly, and self-contained negative path validation in `packages/workflows/src/loader.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 19,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -206,7 +206,7 @@
           "description": "[US1] Expose condition parsing reference metadata needed by route-loop validation in `packages/workflows/src/condition-evaluator.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 20,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -215,7 +215,7 @@
           "description": "[US1] Wire strict output field validation for route-loop condition references in `packages/workflows/src/output-ref.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 21,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -224,7 +224,7 @@
           "description": "[US1] Update server workflow schemas to include the route-loop DAG node shape in `packages/server/src/routes/schemas/workflow.schemas.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 22,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -233,7 +233,7 @@
           "description": "[US1] Verify User Story 1 with `bun test packages/workflows/src/schemas.test.ts packages/workflows/src/loader.test.ts packages/server/src/routes/api.workflows.test.ts` for `packages/workflows/src/loader.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 23,
-          "passes": false,
+          "passes": true,
           "notes": ""
         }
       ],

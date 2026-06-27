@@ -2099,7 +2099,9 @@ nodes:
       overrides: {
         filename?: string;
         condition?: string;
+        extraNodes?: string;
         reviewOutputFormat?: string;
+        reviewDependsOn?: string;
         reviewExtra?: string;
         routerDependsOn?: string;
         routerExtra?: string;
@@ -2116,7 +2118,7 @@ nodes:
   - id: fix
     prompt: "Apply the fix"
   - id: review
-    depends_on: [fix]
+    depends_on: ${overrides.reviewDependsOn ?? '[fix]'}
     prompt: "Review the fix"
 ${overrides.reviewOutputFormat ?? reviewOutputFormat}
 ${overrides.reviewExtra ?? ''}
@@ -2127,6 +2129,7 @@ ${overrides.routerExtra ?? ''}    route_loop:
       condition: ${JSON.stringify(overrides.condition ?? '$review.output.approved == true')}
       routes:
 ${overrides.routes ?? baseRoutes}
+${overrides.extraNodes ?? ''}
   - id: done
     depends_on: [review-router]
     prompt: "Done"
@@ -2297,6 +2300,131 @@ ${overrides.routes ?? baseRoutes}
 
       expect(result.errors).toHaveLength(1);
       expect(result.errors[0].error).toContain('route_loop.condition could not be parsed');
+    });
+
+    it('rejects a positive route that re-enters the negative rerun path', async () => {
+      const result = await discoverRouteLoopWorkflow({
+        routes: `        positive: fix
+        negative: fix
+        exhausted: escalation`,
+      });
+
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].error).toContain("route 'positive'");
+      expect(result.errors[0].error).toContain('must be an exit path');
+    });
+
+    it('rejects an exhausted route that points back to route_loop.from', async () => {
+      const result = await discoverRouteLoopWorkflow({
+        routes: `        positive: done
+        negative: fix
+        exhausted: review`,
+      });
+
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].error).toContain("route 'exhausted'");
+      expect(result.errors[0].error).toContain('must be an exit path');
+    });
+
+    it('accepts a negative route that exits instead of returning to route_loop.from', async () => {
+      const result = await discoverRouteLoopWorkflow({
+        routes: `        positive: done
+        negative: escalation
+        exhausted: escalation`,
+      });
+
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
+    });
+
+    it('warns but accepts when the negative route targets route_loop.from directly', async () => {
+      mockLogger.warn.mockClear();
+
+      const result = await discoverRouteLoopWorkflow({
+        routes: `        positive: done
+        negative: review
+        exhausted: escalation`,
+      });
+
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ nodeId: 'review-router', from: 'review' }),
+        'route_loop_negative_targets_from_node'
+      );
+    });
+
+    it('rejects a negative rerun path with dependencies outside the rerun path', async () => {
+      const result = await discoverRouteLoopWorkflow({
+        reviewDependsOn: '[fix, setup]',
+        extraNodes: `  - id: setup
+    prompt: "Prepare external context"
+`,
+      });
+
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].error).toContain('negative rerun path is not self-contained');
+      expect(result.errors[0].error).toContain("'review' depends on 'setup'");
+    });
+
+    it('accepts a nested route_loop inside a self-contained negative rerun path', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      await writeFile(
+        join(workflowDir, 'nested-route-loop.yaml'),
+        `
+name: nested-route-loop
+description: Nested route loop validation
+nodes:
+  - id: fix
+    prompt: "Apply the fix"
+  - id: nested-review
+    depends_on: [fix]
+    prompt: "Nested review"
+    output_format:
+      type: object
+      properties:
+        ok:
+          type: boolean
+  - id: nested-router
+    depends_on: [nested-review]
+    route_loop:
+      from: nested-review
+      condition: "$nested-review.output.ok == true"
+      routes:
+        positive: review
+        negative: fix
+        exhausted: review
+  - id: review
+    depends_on: [nested-router]
+    prompt: "Review the fix"
+    output_format:
+      type: object
+      properties:
+        approved:
+          type: boolean
+  - id: review-router
+    depends_on: [review]
+    route_loop:
+      from: review
+      condition: "$review.output.approved == true"
+      routes:
+        positive: done
+        negative: fix
+        exhausted: escalation
+  - id: done
+    depends_on: [review-router]
+    prompt: "Done"
+  - id: escalation
+    depends_on: [review-router]
+    prompt: "Escalate"
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
     });
   });
 

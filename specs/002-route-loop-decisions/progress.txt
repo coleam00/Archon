@@ -7,6 +7,7 @@
 - Route-loop runtime metadata validation lives in `packages/workflows/src/schemas/workflow-run.ts` and validates only `loopCounters`, `nodeAttempts`, `executionSeq`, and `routeActivations` while preserving unrelated metadata keys.
 - Route-loop authoring schemas now live in `packages/workflows/src/schemas/route-loop.ts`; loader validation uses the shared safe node-id grammar, while runtime execution still fails fast until executor routing tasks land.
 - Use `extractConditionReferences()` from `packages/workflows/src/condition-evaluator.ts` when loader or validation code needs to inspect condition node refs; do not duplicate the condition grammar.
+- Route-loop loader validation treats route edges as runtime edges layered on top of normal dependencies: only negative routes may re-enter `route_loop.from`, positive and exhausted routes must be exit paths, and retry paths must be self-contained unless negative directly targets `from`, which is warn-only.
 
 ## 2026-06-27 16:01 +07 - Phase 1: Setup (iter 1)
 **Tasks completed this iter:** T001 (Run route-loop executor TDD guard), T002 (Run workflow loader/schema baselines), T003 (Run console builder baselines), T004 (Inspect workflow event and metadata seams)
@@ -59,4 +60,25 @@
 - Safe node ids are now enforced through `safeNodeIdSchema`, so new workflow node ids, route_loop.from values, and route targets must avoid reserved object keys and match the shared grammar.
 - Server route workflow schemas derive from the engine `workflowDefinitionSchema`, so API route-loop shape tests can parse `workflowDefinitionSchema` directly instead of mocking route handlers.
 - Verification passed `bun test packages/workflows/src/schemas.test.ts packages/workflows/src/loader.test.ts packages/server/src/routes/api.workflows.test.ts`, `bun run type-check`, `bun run lint --max-warnings 0`, and targeted Prettier checks for touched files.
+---
+## 2026-06-27 16:46 +07 - Phase 3.2: Implementation For User Story 1 (iter 4)
+**Tasks completed this iter:** T015 (Implement route-loop schemas), T016 (Export route-loop schemas), T017 (Extend DAG node schema), T018 (Extend loader basic route-loop validation), T019 (Add route-edge and rerun-path validation), T020 (Expose condition reference metadata), T021 (Wire strict output field validation), T022 (Update server workflow schemas), T023 (Verify User Story 1)
+**Status:** completed:true
+
+- Per-task summary lines:
+  - T015 - Verified `routeLoopConfigSchema`, `routeLoopRoutesSchema`, `routeOutcomeSchema`, `safeNodeIdSchema`, and derived types in `packages/workflows/src/schemas/route-loop.ts`.
+  - T016 - Verified route-loop schemas, type guards, and types are exported from `packages/workflows/src/schemas/index.ts`.
+  - T017 - Verified `dagNodeSchema` supports exclusive `route_loop` nodes, rejects unsupported route-loop node fields, and preserves the `RouteLoopNode` type guard in `packages/workflows/src/schemas/dag-node.ts`.
+  - T018 - Verified loader checks for `route_loop.depends_on`, `route_loop.from`, route target existence, unsupported `when` and `trigger_rule`, and `from` node constraints in `packages/workflows/src/loader.ts`.
+  - T019 - Added loader graph validation for route-edge re-entry, positive and exhausted exit paths, self-contained negative retry paths, nested route-loop allowance, and warn-only direct negative-to-from routing in `packages/workflows/src/loader.ts` with coverage in `packages/workflows/src/loader.test.ts`.
+  - T020 - Verified `extractConditionReferences()` in `packages/workflows/src/condition-evaluator.ts` exposes parsed node and field references for route-loop validation.
+  - T021 - Verified loader validation reuses `declaredFieldsFromSchema()` from `packages/workflows/src/output-ref.ts` so route-loop field references must match the `from` node output schema.
+  - T022 - Verified server workflow route schemas derive from the engine workflow schema in `packages/server/src/routes/schemas/workflow.schemas.ts`, so route-loop DAG nodes are included in OpenAPI-facing validation.
+  - T023 - Verified User Story 1 with the focused schema, loader, and server workflow API tests, full typecheck, lint, and touched-file formatting checks.
+
+**Learnings for future iterations:**
+- Route-loop schema and type exports were already present from prior TDD work, so this implementation batch mainly closed the remaining route-edge graph validation gap.
+- `validateRouteLoopStructure()` now builds a normal dependency dependents map and overlays route-edge reachability checks without changing the existing static DAG cycle validation.
+- Direct `routes.negative` to `route_loop.from` intentionally logs `route_loop_negative_targets_from_node` and remains valid, because the spec calls for warning behavior instead of rejection.
+- Verification passed `bun test packages/workflows/src/schemas.test.ts packages/workflows/src/loader.test.ts packages/server/src/routes/api.workflows.test.ts`, `bun test packages/workflows/src/loader.test.ts -t "route_loop loader validation"`, `bun run type-check`, `bun run lint --max-warnings 0`, and `bun x prettier --check packages/workflows/src/loader.ts packages/workflows/src/loader.test.ts`.
 ---
