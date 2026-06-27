@@ -44,6 +44,7 @@ import type {
   ThinkingConfig,
   SandboxSettings,
   WorkflowSource,
+  RouteLoopRuntimeMetadata,
 } from './schemas';
 import {
   isBashNode,
@@ -53,7 +54,9 @@ import {
   isCancelNode,
   isScriptNode,
   isApprovalContext,
+  routeLoopRuntimeMetadataSchema,
 } from './schemas';
+import { applyRouteLoopTransition } from './route-loop-state';
 import { formatToolCall } from './utils/tool-formatter';
 import { createLogger, captureWorkflowCompleted } from '@archon/paths';
 import type { WorkflowErrorClass, WorkflowNodeType } from '@archon/paths';
@@ -2983,6 +2986,30 @@ export async function executeDagWorkflow(
   };
   const layers = buildTopologicalLayers(workflow.nodes);
   const nodeOutputs = new Map<string, NodeOutput>();
+  const hasRouteLoopNodes = workflow.nodes.some(isRouteLoopNode);
+  const routeTargetIds = new Set<string>();
+  const activatedRouteTargetIds = new Set<string>();
+  const nodeLayerIndex = new Map<string, number>();
+  let routeLoopMetadata: RouteLoopRuntimeMetadata = hasRouteLoopNodes
+    ? routeLoopRuntimeMetadataSchema.parse(workflowRun.metadata)
+    : routeLoopRuntimeMetadataSchema.parse({});
+
+  for (const node of workflow.nodes) {
+    if ((node.depends_on ?? []).length === 0) {
+      activatedRouteTargetIds.add(node.id);
+    }
+    if (isRouteLoopNode(node)) {
+      routeTargetIds.add(node.route_loop.routes.positive);
+      routeTargetIds.add(node.route_loop.routes.negative);
+      routeTargetIds.add(node.route_loop.routes.exhausted);
+    }
+  }
+
+  layers.forEach((layer, index) => {
+    for (const node of layer) {
+      nodeLayerIndex.set(node.id, index);
+    }
+  });
 
   // Pre-populate nodeOutputs from prior run so already-completed nodes are
   // treated as done for trigger-rule and $nodeId.output substitution purposes.
@@ -3042,6 +3069,7 @@ export async function executeDagWorkflow(
     const layer = layers[layerIdx];
     const isParallelLayer = layer.length > 1;
     const layerExecutableNodes = layer.filter(isCheckpointableExecutableNode);
+    let routeJumpTargetId: string | undefined;
 
     if (isParallelLayer) {
       lastSequentialSessionId = undefined; // reset — parallel nodes can't share sessions
@@ -3062,6 +3090,14 @@ export async function executeDagWorkflow(
     const layerResults = await Promise.allSettled(
       layer.map(async (node): Promise<{ nodeId: string; output: NodeExecutionResult }> => {
         try {
+          if (
+            hasRouteLoopNodes &&
+            routeTargetIds.has(node.id) &&
+            !activatedRouteTargetIds.has(node.id)
+          ) {
+            return { nodeId: node.id, output: { state: 'pending' as const, output: '' } };
+          }
+
           // 0. Skip if this node completed successfully in a prior run (resume path).
           // `always_run: true` opts the node out of resume caching — re-execute even
           // when the prior run completed it.
@@ -3398,13 +3434,65 @@ export async function executeDagWorkflow(
           }
 
           if (isRouteLoopNode(node)) {
+            const fromOutput = nodeOutputs.get(node.route_loop.from);
+            if (fromOutput?.state !== 'completed') {
+              return {
+                nodeId: node.id,
+                output: {
+                  state: 'failed' as const,
+                  output: '',
+                  error: `route_loop '${node.id}' cannot evaluate condition because '${node.route_loop.from}' has not completed successfully`,
+                },
+              };
+            }
+
+            const { result: conditionResult, parsed: conditionParsed } = evaluateCondition(
+              node.route_loop.condition,
+              nodeOutputs
+            );
+
+            if (!conditionParsed) {
+              return {
+                nodeId: node.id,
+                output: {
+                  state: 'failed' as const,
+                  output: '',
+                  error: `route_loop '${node.id}' condition could not be parsed`,
+                },
+              };
+            }
+
+            const transition = applyRouteLoopTransition({
+              metadata: routeLoopMetadata,
+              routeLoopNodeId: node.id,
+              routeLoop: node.route_loop,
+              conditionResult,
+            });
+            routeLoopMetadata = transition.metadata;
+            activatedRouteTargetIds.add(transition.eventData.to);
+
+            await deps.store.updateWorkflowRun(workflowRun.id, { metadata: routeLoopMetadata });
+            deps.store
+              .createWorkflowEvent({
+                workflow_run_id: workflowRun.id,
+                event_type: 'node_routed',
+                step_name: node.id,
+                data: transition.eventData,
+              })
+              .catch((err: Error) => {
+                getLog().error(
+                  { err, workflowRunId: workflowRun.id, eventType: 'node_routed' },
+                  'workflow_event_persist_failed'
+                );
+              });
+
+            if (transition.eventData.outcome === 'negative') {
+              routeJumpTargetId = transition.eventData.to;
+            }
+
             return {
               nodeId: node.id,
-              output: {
-                state: 'failed' as const,
-                output: '',
-                error: 'route_loop execution is not implemented yet',
-              },
+              output: transition.output,
             };
           }
 
@@ -3737,6 +3825,13 @@ export async function executeDagWorkflow(
 
     if (layerHadFailure) {
       getLog().warn({ layerIdx, nodeCount: layer.length }, 'dag_layer_had_failures');
+    }
+
+    if (routeJumpTargetId !== undefined) {
+      const targetLayerIndex = nodeLayerIndex.get(routeJumpTargetId);
+      if (targetLayerIndex !== undefined && targetLayerIndex <= layerIdx) {
+        layerIdx = targetLayerIndex - 1;
+      }
     }
 
     // Check for non-running status between DAG layers (cancellation, deletion, pause)

@@ -25,7 +25,9 @@ import type {
   ScriptNode,
   TriggerRule,
   RouteLoopNode,
+  RouteLoopConfig,
 } from './schemas';
+import { applyRouteLoopTransition } from './route-loop-state';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -532,6 +534,17 @@ describe('workflowRunSchema - route-loop runtime metadata', () => {
     user_id: null,
   };
 
+  const reviewRouteLoop: RouteLoopConfig = {
+    from: 'review',
+    condition: "$review.output.result == 'positive'",
+    max_iterations: 10,
+    routes: {
+      positive: 'done',
+      negative: 'fix',
+      exhausted: 'escalation',
+    },
+  };
+
   test('defaults missing route-loop runtime metadata to empty state', () => {
     expect(routeLoopRuntimeMetadataSchema.parse({})).toEqual({
       loopCounters: {},
@@ -590,6 +603,199 @@ describe('workflowRunSchema - route-loop runtime metadata', () => {
 
       expect(result.success).toBe(false);
     }
+  });
+
+  test('increments loop counter when a negative transition is selected', () => {
+    const transition = applyRouteLoopTransition({
+      metadata: {
+        loopCounters: { 'review-router': 2 },
+        nodeAttempts: {},
+        executionSeq: 0,
+        routeActivations: {},
+      },
+      routeLoopNodeId: 'review-router',
+      conditionResult: false,
+      routeLoop: reviewRouteLoop,
+    });
+
+    expect(transition.metadata.loopCounters['review-router']).toBe(3);
+  });
+
+  test('resets only the selected loop counter when a positive transition is selected', () => {
+    const transition = applyRouteLoopTransition({
+      metadata: {
+        loopCounters: { 'review-router': 3, 'other-router': 2 },
+        nodeAttempts: {},
+        executionSeq: 0,
+        routeActivations: {},
+      },
+      routeLoopNodeId: 'review-router',
+      conditionResult: true,
+      routeLoop: reviewRouteLoop,
+    });
+
+    expect(transition.metadata.loopCounters).toEqual({
+      'review-router': 0,
+      'other-router': 2,
+    });
+  });
+
+  test('increments route-loop attempt when any transition is selected', () => {
+    const transition = applyRouteLoopTransition({
+      metadata: {
+        loopCounters: {},
+        nodeAttempts: { 'review-router': 4 },
+        executionSeq: 0,
+        routeActivations: {},
+      },
+      routeLoopNodeId: 'review-router',
+      conditionResult: true,
+      routeLoop: reviewRouteLoop,
+    });
+
+    expect(transition.metadata.nodeAttempts['review-router']).toBe(5);
+  });
+
+  test('increments execution sequence when any transition is selected', () => {
+    const transition = applyRouteLoopTransition({
+      metadata: {
+        loopCounters: {},
+        nodeAttempts: {},
+        executionSeq: 7,
+        routeActivations: {},
+      },
+      routeLoopNodeId: 'review-router',
+      conditionResult: false,
+      routeLoop: reviewRouteLoop,
+    });
+
+    expect(transition.metadata.executionSeq).toBe(8);
+  });
+
+  test('computes negative transition metadata with counter, attempt, activation, and sequence increments', () => {
+    const transition = applyRouteLoopTransition({
+      metadata: {},
+      routeLoopNodeId: 'review-router',
+      conditionResult: false,
+      routeLoop: {
+        from: 'review',
+        condition: "$review.output.result == 'positive'",
+        max_iterations: 10,
+        routes: {
+          positive: 'done',
+          negative: 'fix',
+          exhausted: 'escalation',
+        },
+      },
+    });
+
+    expect(transition.metadata).toMatchObject({
+      loopCounters: { 'review-router': 1 },
+      nodeAttempts: { 'review-router': 1 },
+      executionSeq: 1,
+      routeActivations: {
+        fix: {
+          route_loop_node_id: 'review-router',
+          outcome: 'negative',
+          target_node_id: 'fix',
+          attempt: 1,
+          execution_seq: 1,
+        },
+      },
+    });
+    expect(transition.eventData).toEqual({
+      from: 'review',
+      outcome: 'negative',
+      to: 'fix',
+      condition: "$review.output.result == '<redacted>'",
+      condition_result: false,
+      negative_count: 1,
+      max_iterations: 10,
+      attempt: 1,
+      execution_seq: 1,
+    });
+  });
+
+  test('computes positive transition metadata by resetting only the selected loop counter', () => {
+    const transition = applyRouteLoopTransition({
+      metadata: {
+        loopCounters: { 'review-router': 3, 'other-router': 2 },
+        nodeAttempts: { 'review-router': 1 },
+        executionSeq: 4,
+        routeActivations: {},
+      },
+      routeLoopNodeId: 'review-router',
+      conditionResult: true,
+      routeLoop: {
+        from: 'review',
+        condition: '$review.output.score >= 80',
+        max_iterations: 10,
+        routes: {
+          positive: 'done',
+          negative: 'fix',
+          exhausted: 'escalation',
+        },
+      },
+    });
+
+    expect(transition.metadata.loopCounters).toEqual({
+      'review-router': 0,
+      'other-router': 2,
+    });
+    expect(transition.metadata.nodeAttempts).toEqual({ 'review-router': 2 });
+    expect(transition.metadata.executionSeq).toBe(5);
+    expect(transition.eventData).toMatchObject({
+      outcome: 'positive',
+      to: 'done',
+      condition: '$review.output.score >= <redacted>',
+      condition_result: true,
+      negative_count: 3,
+      attempt: 2,
+      execution_seq: 5,
+    });
+  });
+
+  test('computes exhausted transition after the incremented negative counter exceeds the limit', () => {
+    const transition = applyRouteLoopTransition({
+      metadata: {
+        loopCounters: { 'review-router': 1 },
+        nodeAttempts: { 'review-router': 1 },
+        executionSeq: 1,
+        routeActivations: {},
+      },
+      routeLoopNodeId: 'review-router',
+      conditionResult: false,
+      routeLoop: {
+        from: 'review',
+        condition: "$review.output.result == 'positive'",
+        max_iterations: 1,
+        routes: {
+          positive: 'done',
+          negative: 'fix',
+          exhausted: 'escalation',
+        },
+      },
+    });
+
+    expect(transition.metadata.loopCounters).toEqual({ 'review-router': 2 });
+    expect(transition.metadata.routeActivations).toMatchObject({
+      escalation: {
+        route_loop_node_id: 'review-router',
+        outcome: 'exhausted',
+        target_node_id: 'escalation',
+        attempt: 2,
+        execution_seq: 2,
+      },
+    });
+    expect(transition.eventData).toMatchObject({
+      outcome: 'exhausted',
+      to: 'escalation',
+      condition_result: false,
+      negative_count: 2,
+      max_iterations: 1,
+      attempt: 2,
+      execution_seq: 2,
+    });
   });
 });
 

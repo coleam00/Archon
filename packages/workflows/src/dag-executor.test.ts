@@ -5454,6 +5454,17 @@ describe('executeDagWorkflow -- always_run resume opt-out', () => {
 
 describe('executeDagWorkflow -- route_loop end-to-end TDD', () => {
   let testDir: string;
+  type ReviewResult = 'negative' | 'positive';
+  type RouteLoopEventCall = {
+    event_type: string;
+    step_name?: string;
+    data?: Record<string, unknown>;
+  };
+  type RouteLoopRunResult = {
+    store: IWorkflowStore;
+    calls: { nodeId: string; prompt: string }[];
+    routedEvents: RouteLoopEventCall[];
+  };
 
   beforeEach(async () => {
     testDir = join(
@@ -5476,7 +5487,10 @@ describe('executeDagWorkflow -- route_loop end-to-end TDD', () => {
     }
   });
 
-  it('reruns a negative route path until the route_loop condition passes', async () => {
+  async function runRouteLoopWorkflow(options: {
+    reviewResults: ReviewResult[];
+    maxIterations?: number;
+  }): Promise<RouteLoopRunResult> {
     const store = createMockStore();
     const mockDeps = createMockDeps(store);
     const platform = createMockPlatform();
@@ -5488,9 +5502,9 @@ describe('executeDagWorkflow -- route_loop end-to-end TDD', () => {
       prompt: string,
       _cwd: string,
       _resumeSessionId?: string,
-      options?: SendQueryOptions
+      sendOptions?: SendQueryOptions
     ) {
-      const nodeId = options?.nodeConfig?.nodeId;
+      const nodeId = sendOptions?.nodeConfig?.nodeId;
       if (typeof nodeId !== 'string') {
         throw new Error('missing node id in route-loop TDD provider');
       }
@@ -5498,7 +5512,10 @@ describe('executeDagWorkflow -- route_loop end-to-end TDD', () => {
 
       if (nodeId === 'review') {
         reviewAttempt++;
-        const result = reviewAttempt === 1 ? 'negative' : 'positive';
+        const result =
+          options.reviewResults[reviewAttempt - 1] ??
+          options.reviewResults[options.reviewResults.length - 1] ??
+          'positive';
         yield { type: 'assistant' as const, content: JSON.stringify({ result }) };
         yield {
           type: 'result' as const,
@@ -5540,7 +5557,7 @@ describe('executeDagWorkflow -- route_loop end-to-end TDD', () => {
           route_loop: {
             from: 'review',
             condition: "$review.output.result == 'positive'",
-            max_iterations: 10,
+            max_iterations: options.maxIterations ?? 10,
             routes: {
               positive: 'done',
               negative: 'fix',
@@ -5569,29 +5586,97 @@ describe('executeDagWorkflow -- route_loop end-to-end TDD', () => {
       minimalConfig
     );
 
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls.map(
+      call => call[0] as RouteLoopEventCall
+    );
+
+    return {
+      store,
+      calls,
+      routedEvents: eventCalls.filter(call => call.event_type === 'node_routed'),
+    };
+  }
+
+  it('reruns a negative route path until the route_loop condition passes', async () => {
+    const { store, calls, routedEvents } = await runRouteLoopWorkflow({
+      reviewResults: ['negative', 'positive'],
+    });
+
     expect(calls.map(call => call.nodeId)).toEqual(['fix', 'review', 'fix', 'review', 'done']);
     expect(calls.some(call => call.nodeId === 'escalation')).toBe(false);
-
-    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls.map(
-      call => call[0] as { event_type: string; step_name?: string; data?: Record<string, unknown> }
-    );
-    const routedEvents = eventCalls.filter(call => call.event_type === 'node_routed');
 
     expect(routedEvents.map(event => event.data?.outcome)).toEqual(['negative', 'positive']);
     expect(routedEvents[0]?.data).toMatchObject({
       from: 'review',
       to: 'fix',
-      condition: "$review.output.result == 'positive'",
+      condition: "$review.output.result == '<redacted>'",
       condition_result: false,
       negative_count: 1,
       max_iterations: 10,
+      attempt: 1,
+      execution_seq: 1,
     });
     expect(routedEvents[1]?.data).toMatchObject({
       from: 'review',
       to: 'done',
+      condition: "$review.output.result == '<redacted>'",
       condition_result: true,
       negative_count: 1,
       max_iterations: 10,
+      attempt: 2,
+      execution_seq: 2,
+    });
+    expect(store.updateWorkflowRun).toHaveBeenLastCalledWith('route-loop-run', {
+      metadata: expect.objectContaining({
+        loopCounters: { 'review-router': 0 },
+        nodeAttempts: { 'review-router': 2 },
+        executionSeq: 2,
+        routeActivations: expect.objectContaining({
+          fix: expect.objectContaining({
+            route_loop_node_id: 'review-router',
+            outcome: 'negative',
+            target_node_id: 'fix',
+            attempt: 1,
+            execution_seq: 1,
+          }),
+          done: expect.objectContaining({
+            route_loop_node_id: 'review-router',
+            outcome: 'positive',
+            target_node_id: 'done',
+            attempt: 2,
+            execution_seq: 2,
+          }),
+        }),
+      }),
+    });
+    expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('routes to exhausted on the second false result when max_iterations is 1', async () => {
+    const { store, calls, routedEvents } = await runRouteLoopWorkflow({
+      reviewResults: ['negative', 'negative'],
+      maxIterations: 1,
+    });
+
+    expect(calls.map(call => call.nodeId)).toEqual([
+      'fix',
+      'review',
+      'fix',
+      'review',
+      'escalation',
+    ]);
+    expect(calls.some(call => call.nodeId === 'done')).toBe(false);
+    expect(routedEvents.map(event => event.data?.outcome)).toEqual(['negative', 'exhausted']);
+    expect(routedEvents[1]?.data).toMatchObject({
+      from: 'review',
+      to: 'escalation',
+      condition: "$review.output.result == '<redacted>'",
+      condition_result: false,
+      negative_count: 2,
+      max_iterations: 1,
+      attempt: 2,
+      execution_seq: 2,
     });
     expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
     expect(store.failWorkflowRun).not.toHaveBeenCalled();

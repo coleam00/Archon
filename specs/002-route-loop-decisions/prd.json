@@ -241,7 +241,7 @@
     },
     {
       "title": "Phase 4.1: Tests For User Story 2",
-      "completed": false,
+      "completed": true,
       "tasks": [
         {
           "id": "T024",
@@ -249,7 +249,7 @@
           "description": "[US2] Update the existing route-loop TDD guard to assert safe condition metadata, route-loop attempt, and execution sequence fields in `packages/workflows/src/dag-executor.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 24,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -258,7 +258,7 @@
           "description": "[US2] Add executor tests for `max_iterations: 1`, exhausted routing on the second false result, and `condition_result: false` on exhausted events in `packages/workflows/src/dag-executor.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 25,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -267,7 +267,7 @@
           "description": "[P] [US2] Add route-loop metadata transition tests for counter increment, positive reset, attempt increment, and sequence increment in `packages/workflows/src/schemas.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 26,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -276,7 +276,7 @@
           "description": "[P] [US2] Add core persistence tests for atomic route-decision metadata and event writes in `packages/core/src/db/workflows.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 27,
-          "passes": false,
+          "passes": true,
           "notes": ""
         }
       ],

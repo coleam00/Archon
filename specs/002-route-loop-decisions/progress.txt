@@ -1,7 +1,7 @@
 ## Codebase Patterns
-- Route-loop execution is currently missing at runtime: the TDD executor guard stops after `fix` and `review` instead of re-entering the negative route.
-- Workflow event persistence is observable-only today: `persistEvent` and core workflow event writes intentionally swallow errors, so route decisions need a dedicated durable store contract for atomic metadata plus event writes.
-- Workflow run metadata is currently shallow-merged JSON in `packages/core/src/db/workflows.ts`; stale-write protection for route decisions needs an explicit helper instead of relying on generic metadata merge.
+- Route-loop execution now has a minimal route-activation path for the US2 TDD flow: negative routes can re-enter the selected target, positive routes activate only the success target, and exhausted routes remain completed control-flow outcomes.
+- Route-loop runtime transitions are centralized in `packages/workflows/src/route-loop-state.ts`; use `applyRouteLoopTransition()` for negative counters, positive resets, route-loop attempts, execution sequence, route activation metadata, route-loop output, and safe condition redaction.
+- Durable route-decision persistence now has a core DB transaction helper in `packages/core/src/db/workflows.ts`; future store-adapter work should wire route decisions through `persistRouteDecisionTransition()` instead of generic `updateWorkflowRun()` plus best-effort event writes.
 - Console builder round-trip and validation baselines pass before route-loop UI changes, so future builder failures are likely from route-loop serialization or validation work.
 - Route-loop workflow fixtures in `packages/workflows/src/test-utils.ts` intentionally return raw workflow-like objects until `dagNodeSchema` supports `route_loop`; do not parse them as `WorkflowDefinition` before the schema phase.
 - Route-loop runtime metadata validation lives in `packages/workflows/src/schemas/workflow-run.ts` and validates only `loopCounters`, `nodeAttempts`, `executionSeq`, and `routeActivations` while preserving unrelated metadata keys.
@@ -81,4 +81,20 @@
 - `validateRouteLoopStructure()` now builds a normal dependency dependents map and overlays route-edge reachability checks without changing the existing static DAG cycle validation.
 - Direct `routes.negative` to `route_loop.from` intentionally logs `route_loop_negative_targets_from_node` and remains valid, because the spec calls for warning behavior instead of rejection.
 - Verification passed `bun test packages/workflows/src/schemas.test.ts packages/workflows/src/loader.test.ts packages/server/src/routes/api.workflows.test.ts`, `bun test packages/workflows/src/loader.test.ts -t "route_loop loader validation"`, `bun run type-check`, `bun run lint --max-warnings 0`, and `bun x prettier --check packages/workflows/src/loader.ts packages/workflows/src/loader.test.ts`.
+---
+## 2026-06-27 17:04 +07 - Phase 4.1: Tests For User Story 2 (iter 5)
+**Tasks completed this iter:** T024 (Update route-loop TDD guard metadata assertions), T025 (Add exhausted executor tests), T026 (Add route-loop metadata transition tests), T027 (Add core persistence tests)
+**Status:** completed:true
+
+- Per-task summary lines:
+  - T024 - Strengthened the route-loop executor guard in `packages/workflows/src/dag-executor.test.ts` to assert safe redacted condition metadata, route-loop attempts, execution sequence, route activation metadata, and completed run state; added minimal route activation support in `packages/workflows/src/dag-executor.ts` and transition logic in `packages/workflows/src/route-loop-state.ts`.
+  - T025 - Added the `max_iterations: 1` exhausted-route executor test in `packages/workflows/src/dag-executor.test.ts`, covering the second false result, `condition_result: false`, and activation of `escalation` instead of `done`.
+  - T026 - Added route-loop metadata transition tests in `packages/workflows/src/schemas.test.ts` for counter increment, positive reset, route-loop attempt increment, execution sequence increment, exhausted selection, and safe condition redaction.
+  - T027 - Added core DB tests in `packages/core/src/db/workflows.test.ts` for atomic route decision metadata and `node_routed` event writes, stale-write rejection, malformed metadata rollback, and event-insert rollback; added `persistRouteDecisionTransition()` in `packages/core/src/db/workflows.ts`.
+
+**Learnings for future iterations:**
+- Route-loop executor activation currently marks unselected route targets as pending and activates only selected targets; future implementation batches still need the formal store contract and store-adapter wiring for durable route decisions.
+- `RouteLoopDecisionData` extends `Record<string, unknown>` so it can flow into existing event data contracts without ad hoc casts.
+- The core DB transaction helper validates both incoming and existing route-loop metadata before writing, then uses a row lock and execution sequence check to reject stale route decisions.
+- Verification passed `bun test packages/workflows/src/dag-executor.test.ts packages/workflows/src/schemas.test.ts`, `bun test packages/core/src/db/workflows.test.ts`, `bun run type-check`, `bun run lint --max-warnings 0`, and touched-file Prettier checks.
 ---
