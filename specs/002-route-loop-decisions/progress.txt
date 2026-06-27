@@ -1,0 +1,22 @@
+## Codebase Patterns
+- Route-loop execution is currently missing at runtime: the TDD executor guard stops after `fix` and `review` instead of re-entering the negative route.
+- Workflow event persistence is observable-only today: `persistEvent` and core workflow event writes intentionally swallow errors, so route decisions need a dedicated durable store contract for atomic metadata plus event writes.
+- Workflow run metadata is currently shallow-merged JSON in `packages/core/src/db/workflows.ts`; stale-write protection for route decisions needs an explicit helper instead of relying on generic metadata merge.
+- Console builder round-trip and validation baselines pass before route-loop UI changes, so future builder failures are likely from route-loop serialization or validation work.
+
+## 2026-06-27 16:01 +07 - Phase 1: Setup (iter 1)
+**Tasks completed this iter:** T001 (Run route-loop executor TDD guard), T002 (Run workflow loader/schema baselines), T003 (Run console builder baselines), T004 (Inspect workflow event and metadata seams)
+**Status:** completed:true
+
+- Per-task summary lines:
+  - T001 - Confirmed the expected pre-implementation route-loop executor failure in `packages/workflows/src/dag-executor.test.ts`; actual execution stops at `fix`, `review` while the expected path is `fix`, `review`, `fix`, `review`, `done`.
+  - T002 - Confirmed workflow loader and schema baselines pass with `bun test packages/workflows/src/loader.test.ts packages/workflows/src/schemas.test.ts`; the sub-agent also ran `bun run type-check` successfully.
+  - T003 - Confirmed console builder round-trip and validation baselines pass with `bun test packages/web/src/experiments/console/builder/model/round-trip.test.ts packages/web/src/experiments/console/builder/validation/validate.test.ts`; the sub-agent also ran `bun run type-check` successfully.
+  - T004 - Inspected workflow event and metadata seams in `packages/workflows/src/store.ts`, `packages/core/src/db/workflows.ts`, `packages/core/src/db/workflow-events.ts`, and `packages/core/src/workflows/store-adapter.ts`; no code changes were required.
+
+**Learnings for future iterations:**
+- `packages/workflows/src/store.ts` owns the engine event type contract, and there is not yet a `node_routed` event placeholder.
+- `packages/core/src/workflows/store-adapter.ts` is the bridge point for adding a durable route-decision store contract.
+- Existing workflow event `data` and workflow run `metadata` schema paths are flexible `Record<string, unknown>` surfaces today; later route-loop work should add typed metadata validation where tasks call for it.
+- Parent verification after the parallel baseline run passed `bun test packages/workflows/src/loader.test.ts packages/workflows/src/schemas.test.ts packages/web/src/experiments/console/builder/model/round-trip.test.ts packages/web/src/experiments/console/builder/validation/validate.test.ts`, `bun run type-check`, and `bun run lint`.
+---

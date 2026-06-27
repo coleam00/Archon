@@ -6,7 +6,7 @@
   "userStories": [
     {
       "title": "Phase 1: Setup",
-      "completed": false,
+      "completed": true,
       "tasks": [
         {
           "id": "T001",
@@ -14,7 +14,7 @@
           "description": "Run `bun test packages/workflows/src/dag-executor.test.ts -t \"reruns a negative route path until the route_loop condition passes\"` and confirm the expected pre-implementation failure in `packages/workflows/src/dag-executor.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 1,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -23,7 +23,7 @@
           "description": "[P] Run `bun test packages/workflows/src/loader.test.ts packages/workflows/src/schemas.test.ts` to capture current workflow schema and loader baseline behavior in `packages/workflows/src/loader.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 2,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -32,7 +32,7 @@
           "description": "[P] Run `bun test packages/web/src/experiments/console/builder/model/round-trip.test.ts packages/web/src/experiments/console/builder/validation/validate.test.ts` to capture current builder baseline behavior in `packages/web/src/experiments/console/builder/model/round-trip.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 3,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -41,7 +41,7 @@
           "description": "[P] Inspect the current workflow event and metadata seams in `packages/workflows/src/store.ts` and `packages/core/src/db/workflows.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 4,
-          "passes": false,
+          "passes": true,
           "notes": ""
         }
       ],
