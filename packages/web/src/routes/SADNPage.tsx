@@ -42,11 +42,16 @@ interface LaneItem {
 }
 
 const METRICS: MetricCardProps[] = [
-  { label: 'Original batch', value: '47 sent', note: '0 failed, 0 bounces found', tone: 'green' },
+  {
+    label: 'Active first-wave',
+    value: '45',
+    note: '47 sent; 2 suppressed from active follow-up board',
+    tone: 'green',
+  },
   {
     label: 'Inbound replies',
-    value: '6',
-    note: 'Robb warm issue, Sarasota Ford review + decline',
+    value: '2 accounts',
+    note: 'Robb corporate review; Sarasota Ford declined 2026 budget',
     tone: 'blue',
   },
   { label: 'Next wave', value: '50', note: 'Curated targets with lane logic', tone: 'purple' },
@@ -180,10 +185,10 @@ const MANUAL_ACTIONS: ActionItem[] = [
     proof: 'Phone script ready',
   },
   {
-    title: 'Resend Robb & Stucky links',
-    owner: 'Jason / Carlos',
-    timing: 'Now',
-    proof: 'Warm operational issue',
+    title: 'Call Bobby at Robb & Stucky',
+    owner: 'Jason',
+    timing: 'Next week',
+    proof: 'Corporate review pending; reminder set for Mon 9am ET',
   },
   {
     title: 'Run second follow-up to top non-responders',
@@ -256,6 +261,10 @@ const VAULT_LINKS = [
   },
   { label: 'Phone scripts', path: 'drafts/2026-06-26-sadn-phone-scripts-hk-dolphin.md' },
   { label: 'Engagement MOC', path: 'businesses/external-reps/sadn/_sadn.md' },
+  {
+    label: 'Google Sheet call tracker',
+    path: 'https://docs.google.com/spreadsheets/d/1brw4czCMDncTtXTQJZXn9__XImjF9manENCda7Mx-Wc/edit',
+  },
 ];
 
 function toneClasses(tone: MetricCardProps['tone']): string {
@@ -515,9 +524,9 @@ export function SADNPage({ publicView = false }: SADNPageProps = {}): React.Reac
           </h2>
         </div>
         <p className="text-xs text-text-secondary">
-          Cleaned active roster from the 2026-06-10 send log. Removed Medge Jaspan, Coral & Reef,
-          Sarasota Personal Medicine, and Valley Bank per Jason. Use this as the live follow-up
-          universe.
+          Cleaned active roster from the 2026-06-10 send log. Full follow-up universe stays visible;
+          suppressed rows are excluded from the active board per Jason. Use this as the live
+          follow-up universe.
         </p>
         <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
           {(
