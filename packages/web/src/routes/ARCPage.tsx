@@ -34,48 +34,88 @@ const TRIAL_STATUS: StatusItem[] = [
   {
     label: 'Lane assigned',
     state: 'done',
-    notes: 'European luxury auto service centers, FL + coastal',
+    notes: 'Florida exotic / European auto service centers + luxury dealership service',
   },
   { label: 'Payee confirmed', state: 'done', notes: 'Elevated Wellness LLC' },
   {
     label: 'Rate',
-    state: 'pending',
-    notes: '$30-35/hr range, exact rate pending Adam confirmation',
+    state: 'done',
+    notes: 'Work log template received; current model tracks $30/hr hourly base',
   },
-  { label: '1099 paperwork', state: 'pending', notes: 'Adam to collect Jason info this week' },
-  { label: 'Prospect list from Adam', state: 'pending', notes: 'ETA 2026-06-04 (24-48h commit)' },
-  { label: 'Content / templates from Adam', state: 'pending', notes: 'ETA 2026-06-04' },
-  { label: 'Current-client examples', state: 'pending', notes: 'ETA 2026-06-04' },
-  { label: 'Google Sheets CRM dashboard', state: 'pending', notes: 'Adam setting up' },
-  { label: 'Apollo enrichment account', state: 'pending', notes: 'Adam to acquire cheap tier' },
+  {
+    label: 'Prospect seed list',
+    state: 'done',
+    notes: '23 Florida shops received; needs enrichment',
+  },
+  {
+    label: 'Email templates',
+    state: 'done',
+    notes: '3 rough ARC templates received; rewrite recommended',
+  },
+  {
+    label: 'Work log',
+    state: 'done',
+    notes: 'Excel tracker received for hours, stages, outcomes, commission',
+  },
+  {
+    label: 'Launch brief',
+    state: 'done',
+    notes: '2026-06-26 ARC campaign launch brief written in vault',
+  },
+  {
+    label: 'Campaign proof assets',
+    state: 'pending',
+    notes: 'Adam to provide past campaigns / promotions',
+  },
+  {
+    label: 'Calendly / booking link',
+    state: 'pending',
+    notes: 'Adam to set up or approve Jason scheduling path',
+  },
   { label: 'Sales mailbox provisioned', state: 'pending', notes: 'Awaiting credentials from Adam' },
   {
-    label: 'Domain spelling confirmed (arc vs ark)',
+    label: 'Domain hygiene confirmed',
     state: 'blocked',
-    notes: 'Doc has both spellings; only arc resolves on web',
+    notes: 'Confirm sending mailbox + SPF / DKIM / DMARC before first send',
   },
-  { label: 'First outbound', state: 'blocked', notes: 'Blocked on all of the above' },
+  {
+    label: 'First outbound',
+    state: 'blocked',
+    notes: 'Blocked on mailbox + proof assets + enriched contacts',
+  },
 ];
 
 const JASON_DELIVERABLES = [
-  { id: 'review-list', text: 'Review prospect list + templates once received', due: '2026-06-06' },
-  { id: 'feedback', text: 'Feedback / plan of action by EOD Fri', due: '2026-06-06' },
-  { id: 'info-1099', text: 'Send Adam personal info for 1099 setup', due: 'this week' },
-  { id: 'dd-info', text: 'Send EWC LLC direct deposit info', due: 'this week' },
-  { id: 'rate-confirm', text: 'Confirm rate ($30 or $35/hr)', due: 'next call' },
+  {
+    id: 'enrich-list',
+    text: 'Enrich the 23-account seed list with owner / GM / service-manager contacts',
+    due: 'Mon',
+  },
+  {
+    id: 'add-lookalikes',
+    text: 'Add 27 lookalike Florida accounts for a 50-account pilot',
+    due: 'Mon',
+  },
+  {
+    id: 'rewrite-copy',
+    text: 'Rewrite ARC templates into a Luxury Service Demand Audit sequence',
+    due: 'Mon',
+  },
+  { id: 'send-test', text: 'Send 5 internal test emails before live launch', due: 'Tue' },
+  {
+    id: 'launch-wave',
+    text: 'Launch first 15-20 live emails once mailbox + proof assets are ready',
+    due: 'Tue',
+  },
 ];
 
 const OPEN_QUESTIONS = [
-  'sales@arcbrandagency.com OR sales@arkbrandagency.com? (only arc resolves on web)',
-  'Preferred outbound channel mix: email-first, LinkedIn-first, or parallel?',
-  'Calling cadence: cold calls expected, or email + LinkedIn only?',
-  'Pitch deck / one-pager: Adam offered to build, worth doing before any outreach?',
-  'Sending domain hygiene: SPF / DKIM / DMARC in place, mailbox warmed?',
-  'CRM permissions: Jason as editor on Google Sheet, or principal-only edits?',
-  'Apollo seat: shared login with Jenna, or separate logins on same account?',
-  'Pay cadence: weekly, bi-weekly, monthly invoice?',
-  "Adam's direct email / phone / LinkedIn (only shared the universal mailbox)",
-  "Adam's HQ location / time zone (Jenna is Tampa; Adam unstated)",
+  'Exact sending mailbox and login credentials?',
+  'SPF / DKIM / DMARC confirmed for the sending domain?',
+  'Calendly link from Adam, or should Jason book manually?',
+  'Two or three past campaign assets Jason can cite on calls?',
+  'Is Adam comfortable with a proof-light first wave if assets are not ready Monday?',
+  'Should first wave include dealerships or only independent service centers?',
 ];
 
 function StatusIcon({ state }: { state: StatusItem['state'] }): React.ReactElement {
@@ -127,9 +167,9 @@ export function ARCPage(): React.ReactElement {
               </a>
             </dd>
             <dt className="text-text-tertiary">Stage:</dt>
-            <dd>Solo operator scaling; still working a day-job he wants to leave</dd>
-            <dt className="text-text-tertiary">Parallel rep:</dt>
-            <dd>Jenna (Tampa) -- aftermarket performance lane</dd>
+            <dd>Launch-ready after mailbox, proof assets, and contact enrichment</dd>
+            <dt className="text-text-tertiary">Public proof:</dt>
+            <dd>G2 Motorsports Park, Glickenhaus, Modded America, Luxia Network</dd>
           </dl>
         </div>
 
@@ -137,36 +177,37 @@ export function ARCPage(): React.ReactElement {
           <h3 className="mb-2 text-sm font-semibold text-text-primary">Jason's lane</h3>
           <dl className="grid grid-cols-[120px_1fr] gap-y-1 text-xs text-text-secondary">
             <dt className="text-text-tertiary">Vertical:</dt>
-            <dd>European luxury auto service centers</dd>
+            <dd>Exotic / European service demand capture</dd>
             <dt className="text-text-tertiary">Brands:</dt>
-            <dd>Porsche · Audi · Lamborghini · Ferrari</dd>
+            <dd>Porsche · BMW · Mercedes · Audi · Ferrari · Lamborghini · McLaren</dd>
             <dt className="text-text-tertiary">Geo:</dt>
-            <dd>Florida + coastal states (independent shops); also open to luxury dealerships</dd>
+            <dd>
+              Florida first: South FL, Tampa Bay/Sarasota, Orlando, Naples/Fort Myers, Jacksonville
+            </dd>
+            <dt className="text-text-tertiary">Offer:</dt>
+            <dd>15-minute Luxury Service Demand Audit</dd>
             <dt className="text-text-tertiary">Product:</dt>
-            <dd>Google Search / PPC (Adam's core); Meta available but scaling down; no SEO</dd>
-            <dt className="text-text-tertiary">Time cap:</dt>
-            <dd>~6 hr/wk soft, 8 hr/wk hard</dd>
-            <dt className="text-text-tertiary">Rate:</dt>
-            <dd>$30-35/hr, paid to Elevated Wellness LLC</dd>
+            <dd>
+              Google Search / PPC around service promotions, launches, and booked appointments
+            </dd>
+            <dt className="text-text-tertiary">First wave:</dt>
+            <dd>50 curated accounts; one primary decision-maker per account</dd>
           </dl>
         </div>
       </section>
 
       {/* Domain warning banner */}
-      <div className="flex items-start gap-3 rounded-md border border-rose-700/40 bg-rose-100 p-4">
-        <AlertCircle className="mt-0.5 h-5 w-5 flex-shrink-0 text-rose-700" />
+      <div className="flex items-start gap-3 rounded-md border border-amber-700/40 bg-amber-100 p-4">
+        <AlertCircle className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-700" />
         <div className="flex flex-col gap-1">
-          <p className="text-sm font-medium text-rose-900">
-            Domain spelling needs confirmation before any outbound
+          <p className="text-sm font-medium text-amber-900">
+            Launch blocker: mailbox + proof assets before live outbound
           </p>
-          <p className="text-xs text-rose-800">
-            The intake doc has both{' '}
-            <code className="rounded bg-surface-inset px-1 py-0.5">sales@arcbrandagency.com</code>{' '}
-            (in the exec summary; matches the public site) and{' '}
-            <code className="rounded bg-surface-inset px-1 py-0.5">sales@arkbrandagency.com</code>{' '}
-            (Adam said verbally twice). Only{' '}
-            <code className="rounded bg-surface-inset px-1 py-0.5">arc</code> resolves on the web.
-            Ask Adam to confirm before provisioning Jason's access.
+          <p className="text-xs text-amber-800">
+            The public site supports ARC's automotive / luxury / motorsport positioning, but the
+            campaign should not go live until Adam provides the sending mailbox, confirms SPF / DKIM
+            / DMARC, shares a scheduling link, and sends 1-2 campaign examples Jason can cite on
+            calls.
           </p>
         </div>
       </div>
@@ -277,11 +318,11 @@ export function ARCPage(): React.ReactElement {
               path: 'businesses/external-reps/arc-brand-agency/_arc-brand-agency.md',
             },
             {
-              label: 'Full intake brief (2026-06-02 onboarding call)',
-              path: 'businesses/external-reps/arc-brand-agency/intake-2026-06-02.md',
+              label: 'Campaign launch brief (2026-06-26)',
+              path: 'intelligence/briefs/2026-06-26-arc-campaign-launch-brief.md',
             },
             {
-              label: 'Operational playbook (data separation, sending hygiene, suppression)',
+              label: 'Operational playbook (launch rules, metrics, sending hygiene)',
               path: 'businesses/external-reps/arc-brand-agency/operations/operational-playbook.md',
             },
             {
