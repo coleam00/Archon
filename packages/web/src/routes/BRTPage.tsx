@@ -15,7 +15,20 @@ import ReactMarkdown from 'react-markdown';
 import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
-import { Zap, Activity, Stethoscope, BarChart3, Microscope } from 'lucide-react';
+import {
+  Zap,
+  Activity,
+  Stethoscope,
+  BarChart3,
+  Microscope,
+  RadioTower,
+  BadgeDollarSign,
+  ShieldCheck,
+  FileText,
+  Users,
+  Target,
+  Sparkles,
+} from 'lucide-react';
 import { parseFrontmatter } from '@/lib/pmc-frontmatter';
 import prospectsData from '@/lib/business-prospects.generated.json';
 import prospectContactsData from '@/lib/pmc-prospect-contacts.generated.json';
@@ -157,15 +170,86 @@ const CLINICAL_EVIDENCE = [
   { study: 'Heredia-Rojas (2011)', focus: 'EMF cellular signaling' },
 ];
 
+const SOURCE_ASSETS = [
+  {
+    title: 'CellCom Flyer Q2 2026',
+    role: 'Flagship device explainer',
+    body: 'Advanced BRT system combining cellular biofeedback and PEMF. Best for post-call sends, product-page support, and ICP-specific one-pagers.',
+    path: 'resources/assets/bioreg/source-documents/cellcom-flyer-q2-2026.pdf',
+    icon: FileText,
+  },
+  {
+    title: 'Clinical Partner Program',
+    role: 'Fastest meeting-generation asset',
+    body: 'Home-rental model for existing Nesta Pro users: between-visit support, templates, onboarding, and a practice-economics hook.',
+    path: 'resources/assets/bioreg/source-documents/bioreg-clinical-partner-program-presentation-april-2026.pdf',
+    icon: BadgeDollarSign,
+  },
+  {
+    title: 'Cellular Communication Deck V2',
+    role: 'Clinical authority narrative',
+    body: 'Positions BRT as a communication and self-regulation layer across regenerative, chiropractic, PEMF, and wellness programs.',
+    path: 'resources/assets/bioreg/source-documents/brt-cellular-communication-deck-v2-2026.pdf',
+    icon: RadioTower,
+  },
+];
+
+const POSITIONING_LANES = [
+  {
+    label: 'Device positioning',
+    title: 'CellCom is the flagship clinical system',
+    body: 'Lead with personalized biofeedback + PEMF, real-time adaptation, broad protocol coverage, onboarding, training, and financing. Keep disease language in the support register.',
+    icon: Activity,
+  },
+  {
+    label: 'Partner program',
+    title: 'The meeting hook is between-visit continuity',
+    body: 'The cleanest first-meeting angle is not device novelty. It is a home-rental layer that creates another patient touchpoint with low operational lift.',
+    icon: Users,
+  },
+  {
+    label: 'Clinical proof posture',
+    title: 'BRT as the coordination layer',
+    body: 'Anchor the education story in nervous-system regulation, cellular communication, HRV/biofeedback, PEMF, and bioelectric signaling. Cite before making clinical-facing claims.',
+    icon: Microscope,
+  },
+  {
+    label: 'Marketing strategy',
+    title: 'Split authority content from sales activation',
+    body: 'Use the Cellular Communication deck for podcasts and LinkedIn authority. Use the Clinical Partner Program for reply-driven outreach and warm post-call follow-up.',
+    icon: Target,
+  },
+];
+
+const PARTNER_PROGRAM_METRICS = [
+  { label: 'Partner device price', value: '$2,395', note: 'Confirm vs older $2,195 note' },
+  { label: 'Monthly financing', value: '$110', note: '24-month deck assumption' },
+  { label: 'Rental cycle', value: '$185-$225', note: '2-week patient home unit rental' },
+  { label: 'Net monthly profit', value: '$420', note: '2 devices, 50% utilization, 1 sale/month' },
+];
+
+const VISIBILITY_STRATEGY = [
+  'Turn the Cellular Communication deck into a 5-part LinkedIn series: nervous system, cellular signaling, bioelectric code, PEMF, between-visit care.',
+  'Build a podcast pitch around: Healing is communication -- why regulation and coordination matter in modern care.',
+  'Create three ICP-specific one-pagers for mental health, chiropractic, and medspa/wellness so outreach mirrors the buyer context.',
+  'Use the Clinical Partner Program as the near-term meeting engine: existing device owners, warm clinics, and revenue-led follow-up.',
+];
+
+const COMPLIANCE_FLAGS = [
+  'Use support language for anxiety, PTSD, ADHD, autism spectrum, addiction recovery, pain, and immune support.',
+  'Do not imply treatment, cure, prevention, FDA clearance, or disease-specific outcomes.',
+  'Confirm public phone number, current partner pricing, and device-specific FDA registration wording before external campaign updates.',
+];
+
 const VALUE_PROPS = [
   {
     title: 'Clinical PEMF + EEG biofeedback',
-    body: '20+ years of LENYO Bioregulation Therapy development. Targets parasympathetic activation — a measurable physiological outcome, not a wellness vibe.',
+    body: '20+ years of LENYO Bioregulation Therapy development. Targets parasympathetic activation -- a measurable physiological outcome, not a wellness vibe.',
     icon: Activity,
   },
   {
     title: 'Nonthermal at 10 µT',
-    body: 'Very low-amplitude PEMF (~20% of Earth\u2019s magnetic field). Direct cellular signaling effect without heating — durable, multi-modality safety profile.',
+    body: 'Very low-amplitude PEMF (~20% of Earth\u2019s magnetic field). Direct cellular signaling effect without heating -- durable, multi-modality safety profile.',
     icon: Zap,
   },
   {
@@ -222,8 +306,8 @@ export function BRTPage(): React.ReactElement {
                 {name}
               </h1>
               <p className="mt-2 max-w-2xl text-base text-text-secondary">
-                Parasympathetic nervous-system activation via 20+ years of LENYO bioregulation
-                science. US distribution + clinical-partner program.
+                A clinical communication-and-self-regulation platform: CellCom flagship, Nesta
+                home-rental partner program, and BRT education engine for practitioner adoption.
               </p>
             </div>
             {doc.frontmatter.website && (
@@ -265,6 +349,127 @@ export function BRTPage(): React.ReactElement {
               <p className="mt-1 text-[11px] text-text-tertiary">{k.sub}</p>
             </div>
           ))}
+        </section>
+
+        {/* Source asset command center */}
+        <section className="overflow-hidden rounded-2xl border border-primary/20 bg-gradient-to-br from-card via-card to-primary/5 shadow-sm">
+          <div className="grid gap-0 lg:grid-cols-[1.05fr_0.95fr]">
+            <div className="border-b border-border p-6 lg:border-r lg:border-b-0">
+              <div className="mb-5 flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-primary">
+                    BioReg command center
+                  </p>
+                  <h2
+                    className="mt-2 text-2xl font-semibold text-text-primary"
+                    style={{ fontFamily: "'Playfair Display', serif" }}
+                  >
+                    Assets, positioning, proof, and market activation
+                  </h2>
+                  <p className="mt-2 max-w-2xl text-sm text-text-secondary">
+                    The dashboard now splits BRT into three operational lanes: flagship device
+                    positioning, partner-program economics, and clinical education for visibility.
+                  </p>
+                </div>
+                <Sparkles className="mt-1 h-5 w-5 shrink-0 text-primary" />
+              </div>
+              <div className="grid gap-3 sm:grid-cols-3">
+                {SOURCE_ASSETS.map(asset => {
+                  // eslint-disable-next-line @typescript-eslint/naming-convention
+                  const Icon = asset.icon;
+                  return (
+                    <article
+                      key={asset.title}
+                      className="rounded-xl border border-border bg-background/80 p-4 transition-all hover:-translate-y-0.5 hover:border-primary/50 hover:shadow-md"
+                    >
+                      <Icon className="mb-3 h-5 w-5 text-primary" />
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-text-tertiary">
+                        {asset.role}
+                      </p>
+                      <h3
+                        className="mt-1 text-sm font-semibold text-text-primary"
+                        style={{ fontFamily: "'Playfair Display', serif" }}
+                      >
+                        {asset.title}
+                      </h3>
+                      <p className="mt-2 text-xs leading-relaxed text-text-secondary">
+                        {asset.body}
+                      </p>
+                      <p className="mt-3 truncate rounded-md bg-primary/5 px-2 py-1 font-mono text-[9px] text-text-tertiary">
+                        {asset.path}
+                      </p>
+                    </article>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="p-6">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-primary">
+                Clinical Partner Program
+              </p>
+              <h3
+                className="mt-2 text-xl font-semibold text-text-primary"
+                style={{ fontFamily: "'Playfair Display', serif" }}
+              >
+                The fastest first-meeting angle
+              </h3>
+              <p className="mt-2 text-sm text-text-secondary">
+                The strongest revenue-led hook is simple: extend care beyond the visit while
+                creating a low-lift home-rental layer.
+              </p>
+              <div className="mt-5 grid grid-cols-2 gap-3">
+                {PARTNER_PROGRAM_METRICS.map(metric => (
+                  <div
+                    key={metric.label}
+                    className="rounded-xl border border-border bg-background/80 p-3"
+                  >
+                    <p className="text-[10px] uppercase tracking-wider text-text-tertiary">
+                      {metric.label}
+                    </p>
+                    <p
+                      className="mt-1 text-2xl font-semibold text-text-primary"
+                      style={{ fontFamily: "'Playfair Display', serif" }}
+                    >
+                      {metric.value}
+                    </p>
+                    <p className="mt-1 text-[10px] text-text-tertiary">{metric.note}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 rounded-xl border border-amber-200/60 bg-amber-50/70 p-3 text-[11px] leading-relaxed text-amber-900">
+                <ShieldCheck className="mr-1 inline h-3.5 w-3.5" /> Pricing and regulatory language
+                are source-backed but flagged for confirmation before external campaign updates.
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Strategic lanes */}
+        <section className="grid gap-4 lg:grid-cols-4">
+          {POSITIONING_LANES.map(lane => {
+            // eslint-disable-next-line @typescript-eslint/naming-convention
+            const Icon = lane.icon;
+            return (
+              <article
+                key={lane.title}
+                className="rounded-xl border border-border bg-card p-5 transition-all hover:border-primary/50 hover:shadow-md"
+              >
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <span className="rounded-full bg-primary/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-primary">
+                    {lane.label}
+                  </span>
+                  <Icon className="h-4 w-4 text-primary" />
+                </div>
+                <h3
+                  className="text-sm font-semibold text-text-primary"
+                  style={{ fontFamily: "'Playfair Display', serif" }}
+                >
+                  {lane.title}
+                </h3>
+                <p className="mt-2 text-xs leading-relaxed text-text-secondary">{lane.body}</p>
+              </article>
+            );
+          })}
         </section>
 
         {/* Value props */}
@@ -354,7 +559,7 @@ export function BRTPage(): React.ReactElement {
                 className="text-sm font-semibold text-text-primary"
                 style={{ fontFamily: "'Playfair Display', serif" }}
               >
-                ICP segment mix — {ICP_TOTAL} active contacts
+                ICP segment mix -- {ICP_TOTAL} active contacts
               </h3>
               <span className="text-[10px] text-text-tertiary">Apollo load</span>
             </div>
@@ -392,32 +597,78 @@ export function BRTPage(): React.ReactElement {
           </div>
         </section>
 
-        {/* Clinical credibility tile */}
-        <section className="rounded-xl border border-border bg-card p-5">
-          <div className="mb-3 flex items-baseline justify-between">
-            <h3
-              className="text-sm font-semibold text-text-primary"
-              style={{ fontFamily: "'Playfair Display', serif" }}
-            >
-              <Microscope className="inline h-4 w-4 text-primary" /> Clinical evidence
-            </h3>
-            <span className="text-[10px] text-text-tertiary">From BRT White Paper V2</span>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            {CLINICAL_EVIDENCE.map(e => (
-              <div
-                key={e.study}
-                className="rounded-lg border border-border bg-background p-3 transition-colors hover:border-primary/40"
+        {/* Clinical proof + visibility strategy */}
+        <section className="grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
+          <div className="rounded-xl border border-border bg-card p-5">
+            <div className="mb-3 flex items-baseline justify-between">
+              <h3
+                className="text-sm font-semibold text-text-primary"
+                style={{ fontFamily: "'Playfair Display', serif" }}
               >
-                <p
-                  className="text-sm font-medium text-text-primary"
-                  style={{ fontFamily: "'Playfair Display', serif" }}
+                <Microscope className="inline h-4 w-4 text-primary" /> Clinical proof posture
+              </h3>
+              <span className="text-[10px] text-text-tertiary">White paper + 2026 deck</span>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {CLINICAL_EVIDENCE.map(e => (
+                <div
+                  key={e.study}
+                  className="rounded-lg border border-border bg-background p-3 transition-colors hover:border-primary/40"
                 >
-                  {e.study}
-                </p>
-                <p className="mt-1 text-xs text-text-secondary">{e.focus}</p>
-              </div>
-            ))}
+                  <p
+                    className="text-sm font-medium text-text-primary"
+                    style={{ fontFamily: "'Playfair Display', serif" }}
+                  >
+                    {e.study}
+                  </p>
+                  <p className="mt-1 text-xs text-text-secondary">{e.focus}</p>
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 rounded-lg border border-border bg-background p-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-text-tertiary">
+                Citation leads to verify
+              </p>
+              <p className="mt-2 text-xs leading-relaxed text-text-secondary">
+                Porges, Tracey, Thayer, Levin, Markov, Ross, Liboff, Lehrer, McCraty, and Gevirtz.
+                Use these as research leads before publishing clinical-facing long-form claims.
+              </p>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-border bg-card p-5">
+            <div className="mb-3 flex items-baseline justify-between">
+              <h3
+                className="text-sm font-semibold text-text-primary"
+                style={{ fontFamily: "'Playfair Display', serif" }}
+              >
+                <Target className="inline h-4 w-4 text-primary" /> Visibility and marketing strategy
+              </h3>
+              <span className="text-[10px] text-text-tertiary">Meetings + authority</span>
+            </div>
+            <div className="space-y-3">
+              {VISIBILITY_STRATEGY.map((item, idx) => (
+                <div
+                  key={item}
+                  className="flex gap-3 rounded-lg border border-border bg-background p-3"
+                >
+                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[11px] font-semibold text-primary">
+                    {idx + 1}
+                  </span>
+                  <p className="text-xs leading-relaxed text-text-secondary">{item}</p>
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 rounded-lg border border-rose-200/60 bg-rose-50/70 p-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-rose-900">
+                Compliance guardrails
+              </p>
+              <ul className="mt-2 space-y-1.5 text-[11px] leading-relaxed text-rose-900">
+                {COMPLIANCE_FLAGS.map(flag => (
+                  <li key={flag}>• {flag}</li>
+                ))}
+              </ul>
+            </div>
           </div>
         </section>
 
@@ -428,7 +679,7 @@ export function BRTPage(): React.ReactElement {
               className="text-sm font-semibold text-text-primary"
               style={{ fontFamily: "'Playfair Display', serif" }}
             >
-              Top engaged BRT contacts — Apollo replied
+              Top engaged BRT contacts -- Apollo replied
             </h3>
             <span className="text-[10px] text-text-tertiary">
               {BRT_PROSPECTS.length} of{' '}
