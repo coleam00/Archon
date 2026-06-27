@@ -49,7 +49,7 @@
     },
     {
       "title": "Phase 2: Foundational",
-      "completed": false,
+      "completed": true,
       "tasks": [
         {
           "id": "T005",
@@ -57,7 +57,7 @@
           "description": "[P] Add shared route-loop workflow fixture builders in `packages/workflows/src/test-utils.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 5,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -66,7 +66,7 @@
           "description": "[P] Add a route-loop builder fixture in `packages/web/src/experiments/console/builder/fixtures/route-loop.fixture.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 6,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -75,7 +75,7 @@
           "description": "Export the route-loop builder fixture from `packages/web/src/experiments/console/builder/fixtures/index.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 7,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -84,7 +84,7 @@
           "description": "[P] Add failing tests for route-loop runtime metadata validation in `packages/workflows/src/schemas.test.ts`",
           "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
           "priority": 8,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -93,7 +93,7 @@
           "description": "Add route-loop metadata schema support for `loopCounters`, `nodeAttempts`, `executionSeq`, and `routeActivations` in `packages/workflows/src/schemas/workflow-run.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 9,
-          "passes": false,
+          "passes": true,
           "notes": ""
         },
         {
@@ -102,7 +102,7 @@
           "description": "Add the initial route-loop event type contract placeholder in `packages/workflows/src/store.ts`",
           "acceptanceCriteria": ["Typecheck passes"],
           "priority": 10,
-          "passes": false,
+          "passes": true,
           "notes": ""
         }
       ],

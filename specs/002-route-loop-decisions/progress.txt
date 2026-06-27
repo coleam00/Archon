@@ -3,6 +3,8 @@
 - Workflow event persistence is observable-only today: `persistEvent` and core workflow event writes intentionally swallow errors, so route decisions need a dedicated durable store contract for atomic metadata plus event writes.
 - Workflow run metadata is currently shallow-merged JSON in `packages/core/src/db/workflows.ts`; stale-write protection for route decisions needs an explicit helper instead of relying on generic metadata merge.
 - Console builder round-trip and validation baselines pass before route-loop UI changes, so future builder failures are likely from route-loop serialization or validation work.
+- Route-loop workflow fixtures in `packages/workflows/src/test-utils.ts` intentionally return raw workflow-like objects until `dagNodeSchema` supports `route_loop`; do not parse them as `WorkflowDefinition` before the schema phase.
+- Route-loop runtime metadata validation lives in `packages/workflows/src/schemas/workflow-run.ts` and validates only `loopCounters`, `nodeAttempts`, `executionSeq`, and `routeActivations` while preserving unrelated metadata keys.
 
 ## 2026-06-27 16:01 +07 - Phase 1: Setup (iter 1)
 **Tasks completed this iter:** T001 (Run route-loop executor TDD guard), T002 (Run workflow loader/schema baselines), T003 (Run console builder baselines), T004 (Inspect workflow event and metadata seams)
@@ -19,4 +21,23 @@
 - `packages/core/src/workflows/store-adapter.ts` is the bridge point for adding a durable route-decision store contract.
 - Existing workflow event `data` and workflow run `metadata` schema paths are flexible `Record<string, unknown>` surfaces today; later route-loop work should add typed metadata validation where tasks call for it.
 - Parent verification after the parallel baseline run passed `bun test packages/workflows/src/loader.test.ts packages/workflows/src/schemas.test.ts packages/web/src/experiments/console/builder/model/round-trip.test.ts packages/web/src/experiments/console/builder/validation/validate.test.ts`, `bun run type-check`, and `bun run lint`.
+---
+## 2026-06-27 16:17 +07 - Phase 2: Foundational (iter 2)
+**Tasks completed this iter:** T005 (Add shared route-loop workflow fixture builders), T006 (Add route-loop builder fixture), T007 (Export route-loop builder fixture), T008 (Add route-loop runtime metadata validation tests), T009 (Add route-loop metadata schema support), T010 (Add route-loop event type placeholder)
+**Status:** completed:true
+
+- Per-task summary lines:
+  - T005 - Added raw route-loop workflow fixture builders and typed fixture node/config helpers in `packages/workflows/src/test-utils.ts`.
+  - T006 - Added the sparse Web builder route-loop fixture in `packages/web/src/experiments/console/builder/fixtures/route-loop.fixture.ts`.
+  - T007 - Exported the route-loop fixture and registered it in the builder `FIXTURES` map in `packages/web/src/experiments/console/builder/fixtures/index.ts`.
+  - T008 - Added workflow-run route-loop runtime metadata validation tests in `packages/workflows/src/schemas.test.ts`.
+  - T009 - Added route-loop runtime metadata schemas for `loopCounters`, `nodeAttempts`, `executionSeq`, and `routeActivations` in `packages/workflows/src/schemas/workflow-run.ts` and exported them from `packages/workflows/src/schemas/index.ts`.
+  - T010 - Added `node_routed` to `WORKFLOW_EVENT_TYPES` in `packages/workflows/src/store.ts`.
+
+**Learnings for future iterations:**
+- Route-loop test fixtures must stay raw until the route-loop DAG node schema exists, otherwise fixture helpers fail before the user-story schema tasks can drive implementation.
+- `workflowRunSchema` can preserve the existing loose metadata surface while failing fast on malformed route-loop runtime metadata by refining against `routeLoopRuntimeMetadataSchema`.
+- The Web builder fixture layer can reference the generated `DagNode` shape before route-loop OpenAPI support because `WireWorkflowDefinition` currently permits the sparse fixture shape through generated loose node typing.
+- Targeted verification passed `bun test packages/workflows/src/loader.test.ts packages/workflows/src/schemas.test.ts`, `bun run type-check`, `bun run lint --max-warnings 0`, `bun --filter @archon/web type-check`, targeted ESLint, and targeted Prettier.
+- Full `bun run format:check` still fails on pre-existing formatting issues in `_bmad/`, `.qoder/`, and `.omx/` tracked support files that were not modified by this iteration.
 ---

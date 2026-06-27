@@ -9,6 +9,8 @@ import {
   LOOP_NODE_AI_FIELDS,
   approvalOnRejectSchema,
   dagNodeSchema,
+  routeLoopRuntimeMetadataSchema,
+  workflowRunSchema,
 } from './schemas';
 import type {
   WorkflowDefinition,
@@ -408,6 +410,87 @@ describe('dagNodeSchema — new Claude SDK options', () => {
       // bash nodes don't get AI-only fields in the transform
       expect('effort' in result.data).toBe(false);
       expect('thinking' in result.data).toBe(false);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// workflowRunSchema - route-loop runtime metadata
+// ---------------------------------------------------------------------------
+
+describe('workflowRunSchema - route-loop runtime metadata', () => {
+  const baseRun = {
+    id: 'run-1',
+    workflow_name: 'route-loop-workflow',
+    conversation_id: 'conv-1',
+    parent_conversation_id: null,
+    codebase_id: null,
+    status: 'running',
+    user_message: 'Run the workflow',
+    started_at: new Date('2026-06-27T00:00:00.000Z'),
+    completed_at: null,
+    last_activity_at: null,
+    working_path: null,
+    user_id: null,
+  };
+
+  test('defaults missing route-loop runtime metadata to empty state', () => {
+    expect(routeLoopRuntimeMetadataSchema.parse({})).toEqual({
+      loopCounters: {},
+      nodeAttempts: {},
+      executionSeq: 0,
+      routeActivations: {},
+    });
+  });
+
+  test('accepts typed route-loop runtime metadata on workflow runs', () => {
+    const result = workflowRunSchema.safeParse({
+      ...baseRun,
+      metadata: {
+        approval: { nodeId: 'gate', message: 'Approve?' },
+        loopCounters: { 'review-router': 2 },
+        nodeAttempts: { fix: 3, review: 3, 'review-router': 2 },
+        executionSeq: 8,
+        routeActivations: {
+          fix: {
+            route_loop_node_id: 'review-router',
+            outcome: 'negative',
+            target_node_id: 'fix',
+            attempt: 2,
+            execution_seq: 6,
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  test('rejects malformed route-loop runtime metadata before route decisions mutate state', () => {
+    const malformedRuns = [
+      { loopCounters: { router: -1 } },
+      { nodeAttempts: { review: 0 } },
+      { executionSeq: 1.5 },
+      {
+        routeActivations: {
+          fix: {
+            route_loop_node_id: 'router',
+            outcome: 'retry',
+            target_node_id: 'fix',
+            attempt: 1,
+            execution_seq: 4,
+          },
+        },
+      },
+    ];
+
+    for (const metadata of malformedRuns) {
+      const result = workflowRunSchema.safeParse({
+        ...baseRun,
+        metadata,
+      });
+
+      expect(result.success).toBe(false);
     }
   });
 });
