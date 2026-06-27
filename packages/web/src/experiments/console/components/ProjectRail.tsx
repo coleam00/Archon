@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef, useState, type ReactElement } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router';
-import { Settings, Workflow, ArrowLeft, type LucideIcon } from 'lucide-react';
+import { Settings, Workflow, ArrowLeft, PenTool, type LucideIcon } from 'lucide-react';
 import { ProjectRow } from './ProjectRow';
 import { EnvVarsDialog } from './EnvVarsDialog';
 import { useEntity, invalidate } from '../store/cache';
@@ -54,22 +54,30 @@ function writeRailWidth(w: number): void {
 const RAIL_NAV_LINK_CLASS =
   'flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-1.5 text-left text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary';
 
-/** A row in the rail's bottom nav menu (Settings / Workflows / Old UI). */
+/** A row in the rail's bottom nav menu (Builder / Settings / Workflows / Old UI). */
 function RailNavLink({
   to,
   icon: Icon,
   label,
   title,
+  badge,
 }: {
   to: string;
   icon: LucideIcon;
   label: string;
   title?: string;
+  /** Optional pill after the label (rail-header "console" pill styling). */
+  badge?: string;
 }): ReactElement {
   return (
     <Link to={to} title={title} className={RAIL_NAV_LINK_CLASS}>
       <Icon aria-hidden className="h-3.5 w-3.5 shrink-0" />
-      <span>{label}</span>
+      <span className="truncate">{label}</span>
+      {badge !== undefined ? (
+        <span className="shrink-0 rounded-full border border-border px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest text-text-tertiary">
+          {badge}
+        </span>
+      ) : null}
     </Link>
   );
 }
@@ -297,6 +305,13 @@ export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
       {/* Nav menu — settings + the classic-UI escape hatches, under Add project
           and separated from it by the border-t divider. */}
       <div className="flex flex-col gap-0.5 border-t border-border px-2.5 py-2">
+        <RailNavLink
+          to="/console/builder"
+          icon={PenTool}
+          label="Workflow Builder"
+          title="Visual workflow builder (beta)"
+          badge="beta"
+        />
         <RailNavLink
           to="/console/settings"
           icon={Settings}
