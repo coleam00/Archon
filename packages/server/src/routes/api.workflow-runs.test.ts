@@ -494,9 +494,9 @@ describe('POST /api/workflows/:name/run', () => {
     expect([400, 404]).toContain(response.status);
   });
 
-  test('returns 400 when isValidCommandName rejects the name', async () => {
-    const { isValidCommandName } = await import('@archon/workflows/command-validation');
-    (isValidCommandName as ReturnType<typeof mock>).mockReturnValueOnce(false);
+  test('returns 400 when isValidWorkflowName rejects the name', async () => {
+    const { isValidWorkflowName } = await import('@archon/workflows/command-validation');
+    (isValidWorkflowName as ReturnType<typeof mock>).mockReturnValueOnce(false);
 
     const { app } = makeApp();
     const response = await app.request('/api/workflows/.hidden/run', {
