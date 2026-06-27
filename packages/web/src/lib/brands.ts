@@ -11,7 +11,7 @@
  * If a sequence has no prefix or an unknown prefix, it surfaces in the
  * "Unassigned" subtab so we can fix or rename in Apollo.
  *
- * See: ~/repos/jid5274/second-brain/specs/apollo-wiring-spec.md
+ * See: ~/repos/jid5274/second-brain/projects/internal-projects/integration-roadmap/apollo-wiring-spec.md
  */
 
 export interface BrandDef {
