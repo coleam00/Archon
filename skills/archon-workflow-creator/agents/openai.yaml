@@ -1,0 +1,4 @@
+interface:
+  display_name: "Archon Workflow Creator"
+  short_description: "Create valid Archon workflow YAML"
+  default_prompt: "Use $archon-workflow-creator to design and validate an Archon workflow for my project."
