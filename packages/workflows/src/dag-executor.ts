@@ -2437,7 +2437,8 @@ async function executeLoopGroupNode(
     // means the loop must stop now, skipping snapshot/completion handling for this
     // iteration. Re-check before proceeding.
     const postBodyStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
-    if (postBodyStatus !== null && postBodyStatus !== 'running' && postBodyStatus !== 'paused') {
+    // null (run row gone / deleted) is a stop condition too — treat it as 'deleted'.
+    if (postBodyStatus !== 'running' && postBodyStatus !== 'paused') {
       const effectiveStatus = postBodyStatus ?? 'deleted';
       getLog().info(
         { workflowRunId: workflowRun.id, nodeId: node.id, iteration: i, status: effectiveStatus },
@@ -2683,19 +2684,17 @@ function applyLoopPrevToBodyNode(
   loopUserInput: string
 ): DagNode {
   // Substitute $LOOP_USER_INPUT (user free-text) and $LOOP_PREV.* refs.
-  // `escapedForBash` is true for fields that end up in a shell subprocess (bash/script/
-  // cancel-reason), matching substituteNodeOutputRefs' shell-safety contract — values
-  // carrying shell metacharacters are quoted so a prior-iteration output or user input
-  // can't inject executable shell. AI-bound fields (prompt/approval.message/command) use
-  // false. For shell fields, $LOOP_USER_INPUT is shell-quoted before splicing (user input
-  // is free-text; unquoted it could break or inject into the bash/script command).
+  // Resolve $LOOP_PREV FIRST, then splice $LOOP_USER_INPUT — so user input containing a
+  // literal "$LOOP_PREV." is not itself reprocessed as a workflow-ref. `escapedForBash`
+  // is true for shell-bound fields (bash/script/cancel-reason): $LOOP_PREV values are
+  // shell-quoted per substituteNodeOutputRefs' contract, and $LOOP_USER_INPUT is
+  // shell-quoted before splicing (user input is free-text; unquoted it could break or
+  // inject into the bash/script command). AI-bound fields (prompt/approval.message/
+  // command) use the raw user input.
   const sub = (s: string, escapedForBash = false): string => {
+    const prevResolved = substituteLoopPrevRefs(s, loopPrevOutputs, escapedForBash);
     const userInputForField = escapedForBash ? shellQuote(loopUserInput) : loopUserInput;
-    return substituteLoopPrevRefs(
-      s.replace(/\$LOOP_USER_INPUT/g, userInputForField),
-      loopPrevOutputs,
-      escapedForBash
-    );
+    return prevResolved.replace(/\$LOOP_USER_INPUT/g, userInputForField);
   };
   if (isLoopNode(node)) return { ...node, loop: { ...node.loop, prompt: sub(node.loop.prompt) } };
   if (isLoopGroupNode(node)) {
