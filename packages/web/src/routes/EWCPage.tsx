@@ -1,11 +1,23 @@
 import overviewRaw from '@second-brain/businesses/pmc/ewc/overview.md?raw';
 import { BusinessPage, type BusinessProspect } from '@/components/business/BusinessPage';
 import prospectsData from '@/lib/business-prospects.generated.json';
+import localOperatorData from '@/lib/ttts-local-operators.generated.json';
 
 const VAULT_PATH = 'second-brain/businesses/pmc/ewc/overview.md';
 
 const PROSPECTS =
   (prospectsData.by_business as Record<string, BusinessProspect[]> | undefined)?.EWC ?? [];
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const numberField = (record: Record<string, unknown>, key: string): number => {
+  const value = record[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+};
+
+const localOperatorTotals = isRecord(localOperatorData.totals) ? localOperatorData.totals : {};
+const hotFollowUpRows = numberField(localOperatorTotals, 'hot_follow_up');
 
 const VALUE_PROPS = [
   {
@@ -121,7 +133,7 @@ const SECTIONS = [
 
 const KPIS = [
   { label: 'Composite rank', value: '#5 (19/30)' },
-  { label: 'Outbound contacts', value: '0 (planned: 50)' },
+  { label: 'Hot follow-up rows', value: String(hotFollowUpRows) },
   { label: 'Public landing', value: 'live' },
   { label: 'First mtg target', value: '3 (30d)' },
 ];
