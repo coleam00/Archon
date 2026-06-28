@@ -9,6 +9,14 @@ const ROUTE_OUTCOMES = ['positive', 'negative', 'exhausted'] as const;
 
 type RouteOutcome = (typeof ROUTE_OUTCOMES)[number];
 
+// Dagre uses edge insertion order to break sibling ties. Insert the rightmost
+// route first so the final horizontal order matches the route output handles.
+const ROUTE_LAYOUT_OUTCOMES = [
+  'exhausted',
+  'negative',
+  'positive',
+] as const satisfies readonly RouteOutcome[];
+
 interface RouteLoopConfig {
   from: string;
   condition: string;
@@ -139,12 +147,26 @@ export function dagNodesToReactFlow(dagNodes: readonly DagNode[]): {
 
   const edges: Edge[] = [];
   const edgeIds = new Set<string>();
+  const routeTargetsByController = new Map<string, Set<string>>();
   const pushEdge = (edge: Edge): void => {
     edges.push(edge);
     edgeIds.add(edge.id);
   };
+
+  for (const dn of dagNodes) {
+    const routeLoop = getRouteLoopConfig(dn);
+    if (!routeLoop) continue;
+    const routeTargets = new Set<string>();
+    for (const outcome of ROUTE_OUTCOMES) {
+      const target = routeLoop.routes[outcome];
+      if (target) routeTargets.add(target);
+    }
+    routeTargetsByController.set(dn.id, routeTargets);
+  }
+
   for (const dn of dagNodes) {
     for (const dep of dn.depends_on ?? []) {
+      if (routeTargetsByController.get(dep)?.has(dn.id)) continue;
       pushEdge({
         id: `${dep}->${dn.id}`,
         source: dep,
@@ -154,7 +176,7 @@ export function dagNodesToReactFlow(dagNodes: readonly DagNode[]): {
     }
     const routeLoop = getRouteLoopConfig(dn);
     if (!routeLoop) continue;
-    for (const outcome of ROUTE_OUTCOMES) {
+    for (const outcome of ROUTE_LAYOUT_OUTCOMES) {
       const target = routeLoop.routes[outcome];
       if (!target) continue;
       const baseId = `${dn.id}->${target}`;

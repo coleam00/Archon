@@ -58,6 +58,51 @@ function routeLoopDagNodes(): DagNode[] {
   ];
 }
 
+function routeTargetDagNodes(): DagNode[] {
+  const routeLoopNode: RouteLoopDagNode = {
+    id: 'code-review-gate',
+    depends_on: ['code-review'],
+    route_loop: {
+      from: 'code-review',
+      condition: "$code-review.output.status == 'approved'",
+      max_iterations: 3,
+      routes: {
+        positive: 'tea-rv',
+        negative: 'fix-feedback',
+        exhausted: 'review-loop-error',
+      },
+    },
+  };
+
+  return [
+    {
+      id: 'code-review',
+      prompt: 'Review the implementation.',
+    },
+    routeLoopNode,
+    {
+      id: 'tea-rv',
+      depends_on: ['code-review-gate'],
+      command: 'bmad-tea-rv-findings-step',
+    },
+    {
+      id: 'tea-nr',
+      depends_on: ['tea-rv'],
+      command: 'bmad-tea-nr-findings-step',
+    },
+    {
+      id: 'fix-feedback',
+      depends_on: ['code-review-gate'],
+      prompt: 'Fix review feedback.',
+    },
+    {
+      id: 'review-loop-error',
+      depends_on: ['code-review-gate'],
+      bash: 'echo review loop exhausted',
+    },
+  ];
+}
+
 describe('resolveNodeDisplay', () => {
   test('loop node returns label Loop, nodeType loop, and promptText from loop.prompt', () => {
     const dn: DagNode = {
@@ -218,6 +263,50 @@ describe('dagNodesToReactFlow', () => {
       'review',
       'review_router',
     ]);
+  });
+
+  test('route_loop route targets do not also render plain dependency edges from the controller', () => {
+    const { edges } = dagNodesToReactFlow(routeTargetDagNodes());
+    const reviewLoopErrorEdges = edges.filter(
+      edge => edge.source === 'code-review-gate' && edge.target === 'review-loop-error'
+    );
+    const teaRvEdges = edges.filter(
+      edge => edge.source === 'code-review-gate' && edge.target === 'tea-rv'
+    );
+
+    expect(
+      reviewLoopErrorEdges.filter(
+        edge => edge.sourceHandle === undefined || edge.sourceHandle === null
+      )
+    ).toEqual([]);
+
+    expect(reviewLoopErrorEdges).toEqual([
+      expect.objectContaining({
+        sourceHandle: 'exhausted',
+        label: 'exhausted',
+      }),
+    ]);
+
+    expect(teaRvEdges).toEqual([
+      expect.objectContaining({
+        sourceHandle: 'positive',
+        label: 'positive',
+      }),
+    ]);
+  });
+
+  test('route_loop branches are positioned to match their output handles', () => {
+    const { nodes } = dagNodesToReactFlow(routeTargetDagNodes());
+    const positionById = new Map(nodes.map(node => [node.id, node.position]));
+    const teaRvPosition = positionById.get('tea-rv');
+    const teaNrPosition = positionById.get('tea-nr');
+    const reviewLoopErrorPosition = positionById.get('review-loop-error');
+
+    expect(teaRvPosition).toBeDefined();
+    expect(teaNrPosition).toBeDefined();
+    expect(reviewLoopErrorPosition).toBeDefined();
+    expect(teaRvPosition!.x).toBeLessThan(reviewLoopErrorPosition!.x);
+    expect(teaNrPosition!.x).toBeLessThan(reviewLoopErrorPosition!.x);
   });
 });
 
