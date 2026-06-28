@@ -483,10 +483,11 @@ export function substituteLoopPrevRefs(
     /\$LOOP_PREV\.([a-zA-Z_][a-zA-Z0-9_-]*)\.output(?:\.([a-zA-Z_][a-zA-Z0-9_]*))?/g,
     (match, nodeId: string, field: string | undefined) => {
       const nodeOutput = loopPrevOutputs?.get(nodeId);
-      if (!nodeOutput) {
+      if (!nodeOutput || nodeOutput.state === 'skipped' || nodeOutput.state === 'pending') {
         // No prior-iteration output for this body node (iteration 1, or the node was
-        // skipped last iteration). Resolve to empty rather than throwing — the author
-        // opted into a cross-iteration ref, and absence on the first pass is expected.
+        // skipped / hasn't settled last iteration). Resolve to empty rather than
+        // throwing — the author opted into a cross-iteration ref, and absence on the
+        // first pass (or after a skipped node) is expected.
         getLog().debug({ nodeId, match }, 'loop_group_prev_ref_no_prior_output');
         return escapedForBash ? "''" : '';
       }
@@ -2285,6 +2286,10 @@ async function executeLoopGroupNode(
   workflowRun: WorkflowRun,
   node: LoopGroupNode,
   workflowProvider: string,
+  workflowModel: string | undefined,
+  workflowLevelOptions: WorkflowLevelOptions,
+  aiProfile: ResolvedAiProfile | undefined,
+  workflowPreset: ModelAliasPreset | undefined,
   _resolvedOptions: SendQueryOptions | undefined,
   artifactsDir: string,
   logDir: string,
@@ -2316,6 +2321,10 @@ async function executeLoopGroupNode(
   let lastIterationOutput = '';
   let loopTotalCostUsd: number | undefined;
   let loopTotalTokens: TokenUsage | undefined;
+  // Loop-level session cursor: threaded across iterations when fresh_context is false
+  // (so a body AI node resumes the prior iteration's session), reset to undefined when
+  // fresh_context is true or on iteration 1. runLayers mutates this in place each call.
+  let loopLastSequentialSessionId: string | undefined;
 
   const logEventStoreError = (err: Error, iteration: number): void => {
     getLog().error({ err, nodeId: node.id, iteration }, 'loop_group_node.iteration_event_failed');
@@ -2389,30 +2398,32 @@ async function executeLoopGroupNode(
       workflowName: node.id,
       config,
       workflowProvider,
-      workflowModel: undefined,
-      workflowLevelOptions: {
-        effort: undefined,
-        thinking: undefined,
-        fallbackModel: undefined,
-        betas: undefined,
-        sandbox: undefined,
-      },
-      aiProfile: undefined,
-      workflowPreset: undefined,
+      // Forward inherited workflow-level model/tier/options/profile so body AI nodes
+      // resolve model aliases and workflow defaults the same way top-level nodes do.
+      workflowModel,
+      workflowLevelOptions,
+      aiProfile,
+      workflowPreset,
       artifactsDir,
       logDir,
       baseBranch,
       docsDir,
       configuredCommandFolder: undefined,
       issueContext,
+      // persist_session across iterations is out of v1 scope (body sessions reset per
+      // iteration, governed by fresh_context). Pass undefined/false so body nodes don't
+      // participate in cross-run session persistence inside the loop.
       persistScopeKey: undefined,
       workflowPersistSessions: false,
       nodes: iterBodyNodes,
       layers: iterBodyLayers,
       nodeOutputs: scopedNodeOutputs,
       priorCompletedNodes: undefined, // body re-runs in full each iteration (v1)
-      // fresh_context (or iteration 1) starts the body's session threading fresh.
-      lastSequentialSessionId: undefined,
+      // Thread the loop-level session cursor: fresh_context (or iteration 1) starts fresh;
+      // otherwise carry the prior iteration's last sequential session forward so a body AI
+      // node resumes the prior iteration's conversation.
+      lastSequentialSessionId:
+        group.fresh_context || i === startIteration ? undefined : loopLastSequentialSessionId,
       totalCostUsd: 0,
       totalTokensIn: 0,
       totalTokensOut: 0,
@@ -2420,6 +2431,9 @@ async function executeLoopGroupNode(
       stepNamePrefix,
     };
     await runLayers(iterCtx);
+    // Carry the body's final sequential session into the next iteration (unless
+    // fresh_context forces a reset, handled above by seeding undefined).
+    loopLastSequentialSessionId = iterCtx.lastSequentialSessionId;
 
     // Carry prior-iteration snapshot forward for $LOOP_PREV.* on the next iteration.
     loopPrevOutputs = new Map(scopedNodeOutputs);
@@ -2444,10 +2458,13 @@ async function executeLoopGroupNode(
     }
 
     // Completion gate: until-signal in the terminal output, and/or until_bash exit 0.
+    // Short-circuit: if the until-signal already detected completion, skip the
+    // until_bash subprocess (avoids unnecessary side effects and shell cost) — OR
+    // semantics mean the group is already complete.
     const signalDetected = detectCompletionSignal(iterationOutput, group.until);
 
     let bashComplete = false;
-    if (group.until_bash) {
+    if (group.until_bash && !signalDetected) {
       try {
         const { prompt: bashPrompt } = substituteWorkflowVariables(
           group.until_bash,
@@ -2651,8 +2668,17 @@ function applyLoopPrevToBodyNode(
   loopPrevOutputs: Map<string, NodeOutput> | undefined,
   loopUserInput: string
 ): DagNode {
-  const sub = (s: string): string =>
-    substituteLoopPrevRefs(s.replace(/\$LOOP_USER_INPUT/g, loopUserInput), loopPrevOutputs, false);
+  // Substitute $LOOP_USER_INPUT (always a plain string) and $LOOP_PREV.* refs.
+  // `escapedForBash` is true for fields that end up in a shell subprocess (bash/script/
+  // cancel-reason), matching substituteNodeOutputRefs' shell-safety contract — values
+  // carrying shell metacharacters are quoted so a prior-iteration output can't inject
+  // executable shell. AI-bound fields (prompt/approval.message/command) use false.
+  const sub = (s: string, escapedForBash = false): string =>
+    substituteLoopPrevRefs(
+      s.replace(/\$LOOP_USER_INPUT/g, loopUserInput),
+      loopPrevOutputs,
+      escapedForBash
+    );
   if (isLoopNode(node)) return { ...node, loop: { ...node.loop, prompt: sub(node.loop.prompt) } };
   if (isLoopGroupNode(node)) {
     // Nested loop_group: recurse into the body (each body node gets $LOOP_PREV resolved
@@ -2671,9 +2697,9 @@ function applyLoopPrevToBodyNode(
   if (isApprovalNode(node)) {
     return { ...node, approval: { ...node.approval, message: sub(node.approval.message) } };
   }
-  if (isBashNode(node)) return { ...node, bash: sub(node.bash) };
-  if (isScriptNode(node)) return { ...node, script: sub(node.script) };
-  if (isCancelNode(node)) return { ...node, cancel: sub(node.cancel) };
+  if (isBashNode(node)) return { ...node, bash: sub(node.bash, true) };
+  if (isScriptNode(node)) return { ...node, script: sub(node.script, true) };
+  if (isCancelNode(node)) return { ...node, cancel: sub(node.cancel, true) };
   if ('command' in node && typeof node.command === 'string')
     return { ...node, command: sub(node.command) };
   if ('prompt' in node && typeof node.prompt === 'string')
@@ -3889,6 +3915,10 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               workflowRun,
               node,
               loopGroupProvider,
+              workflowModel,
+              workflowLevelOptions,
+              aiProfile,
+              workflowPreset,
               loopGroupOptions,
               artifactsDir,
               logDir,

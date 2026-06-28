@@ -10219,11 +10219,10 @@ describe('executeDagWorkflow -- loop_group node', () => {
     expect(result).toBeUndefined();
   });
 
-  it('EDGE G: until signal OR until_bash — signal alone completes without running until_bash', async () => {
+  it('EDGE G: until signal OR until_bash — signal short-circuits until_bash (not executed)', async () => {
     // Both until and until_bash are set. The AI emits the until signal on iteration 1;
-    // completionDetected = signalDetected (true) || bashComplete. We assert the group
-    // completes on iteration 1 and until_bash is NOT the deciding factor (it would also
-    // exit non-zero, but signal wins via short-circuit OR evaluated after).
+    // completionDetected = signalDetected (true) short-circuits before until_bash runs.
+    // We prove until_bash was skipped via a sentinel file it would create if executed.
     let calls = 0;
     mockSendQueryDag.mockImplementation(function* () {
       calls++;
@@ -10234,6 +10233,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();
     const workflowRun = makeWorkflowRun('lg-or');
+    const sentinel = join(testDir, 'untilbash-ran');
 
     const nodes: DagNode[] = [
       {
@@ -10242,7 +10242,9 @@ describe('executeDagWorkflow -- loop_group node', () => {
           until: 'DONE',
           max_iterations: 3,
           fresh_context: false,
-          until_bash: 'false', // always exits non-zero (never completes via bash)
+          // Creates a sentinel file + exits 0. If this runs, the file exists; if the
+          // until-signal short-circuits, the file is never created.
+          until_bash: `touch ${sentinel}`,
           nodes: [{ id: 'work', prompt: 'do work, emit DONE', depends_on: [] }],
         },
         depends_on: [],
@@ -10265,9 +10267,17 @@ describe('executeDagWorkflow -- loop_group node', () => {
       minimalConfig
     );
 
-    // Signal completed on iteration 1 despite until_bash always failing.
+    // Signal completed on iteration 1.
     expect(calls).toBe(1);
     expect(result).toContain('done');
+    // until_bash was short-circuited (sentinel file NOT created).
+    let sentinelExists = true;
+    try {
+      await readFile(sentinel, 'utf8');
+    } catch {
+      sentinelExists = false;
+    }
+    expect(sentinelExists).toBe(false);
   });
 
   it('EDGE I: max_iterations=1 single-shot completes when signal present, fails otherwise', async () => {
@@ -10546,6 +10556,101 @@ describe('executeDagWorkflow -- loop_group node', () => {
       >
     ).mock.calls;
     expect(pauseCalls2.length).toBe(0);
+  });
+
+  it('INTERACTIVE resume: $LOOP_PREV is NOT preserved across the pause/resume boundary (v1 known limitation)', async () => {
+    // v1 behavior: on interactive resume, loopPrevOutputs resets to undefined (the prior
+    // process's body-output snapshot is not persisted in ApprovalContext). So the resumed
+    // iteration's $LOOP_PREV.<bodyNode>.output resolves to '' — NOT to the paused run's
+    // iteration-1 output. This test locks the current behavior; persisting $LOOP_PREV
+    // across resume is a tracked follow-up (CodeRabbit finding #5).
+    mockSendQueryDag.mockImplementationOnce(function* () {
+      yield { type: 'assistant', content: 'iter1 body output XYZ' };
+      yield { type: 'result', sessionId: 'lg-prev-sess-1' };
+    });
+
+    const mockDeps1 = createMockDeps();
+    const workflow = {
+      name: 'lg-resume-prev',
+      nodes: [
+        {
+          id: 'refine',
+          loop_group: {
+            until: 'APPROVED',
+            max_iterations: 5,
+            fresh_context: false,
+            interactive: true,
+            gate_message: 'Review.',
+            nodes: [
+              {
+                id: 'work',
+                prompt: 'PREV=<<$LOOP_PREV.work.output>> USER=$LOOP_USER_INPUT. Draft or APPROVED.',
+                depends_on: [],
+              },
+            ],
+          },
+          depends_on: [],
+        },
+      ] as DagNode[],
+    };
+    await executeDagWorkflow(
+      mockDeps1,
+      createMockPlatform(),
+      'conv-lg',
+      testDir,
+      workflow,
+      makeWorkflowRun('lg-prev-fresh'),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    // Iteration 1 prompt: $LOOP_PREV resolved to '' (no prior iteration in this process).
+    const iter1Prompt = mockSendQueryDag.mock.calls[0][0] as string;
+    expect(iter1Prompt).toContain('PREV=<<>>');
+
+    // ---- Resume: iteration 2.
+    mockSendQueryDag.mockImplementationOnce(function* () {
+      yield { type: 'assistant', content: 'final\nAPPROVED' };
+      yield { type: 'result', sessionId: 'lg-prev-sess-2' };
+    });
+    await executeDagWorkflow(
+      createMockDeps(),
+      createMockPlatform(),
+      'conv-lg',
+      testDir,
+      workflow,
+      makeWorkflowRun('lg-prev-resume', {
+        metadata: {
+          approval: {
+            type: 'interactive_loop',
+            nodeId: 'refine',
+            iteration: 1,
+            sessionId: 'lg-prev-sess-1',
+            message: 'Review.',
+          },
+          loop_user_input: 'ok',
+        },
+      }),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    // Resumed iteration 2: $LOOP_PREV is '' (v1 does not persist the prior body snapshot
+    // across resume), NOT 'iter1 body output XYZ'.
+    const resumePrompt = mockSendQueryDag.mock.calls[1][0] as string;
+    expect(resumePrompt).toContain('PREV=<<>>');
+    expect(resumePrompt).not.toContain('iter1 body output XYZ');
+    expect(resumePrompt).toContain('USER=ok');
   });
 
   // --- Dimension 3: cost/token accumulation across iterations ---

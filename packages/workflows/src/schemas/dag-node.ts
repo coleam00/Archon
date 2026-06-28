@@ -707,9 +707,14 @@ export const dagNodeSchema = dagNodeBaseSchema
     if (data.cancel !== undefined && data.cancel.trim().length > 0) {
       return { ...base, ...shared, cancel: data.cancel.trim() } as CancelNode;
     }
-    // loop_group — guaranteed by superRefine to be defined at this point
+    // loop_group — guaranteed by superRefine to be defined at this point.
+    // Spread aiOnly so per-node model/provider (and other AI overrides allowed by
+    // LOOP_GROUP_NODE_AI_FIELDS) are preserved on the parsed node — the executor forwards
+    // them to body AI nodes unless overridden per-node (same forwarding `loop:` uses, but
+    // `loop:` historically drops them at parse; loop_group keeps them to support group-level
+    // model/provider overrides that apply to every body AI node).
     if (data.loop_group !== undefined) {
-      return { ...base, loop_group: data.loop_group } as LoopGroupNode;
+      return { ...base, ...aiOnly, loop_group: data.loop_group } as LoopGroupNode;
     }
     // loop — guaranteed by superRefine to be defined at this point
     if (!data.loop) throw new Error('unreachable: loop must be defined after superRefine');
