@@ -3980,7 +3980,12 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
           }
 
           // 4. Resolve per-node provider/model/options
-          const { provider, options: nodeOptions } = await resolveNodeProviderAndModel(
+          const {
+            provider,
+            model: resolvedNodeModel,
+            options: nodeOptions,
+            tier: resolvedTier,
+          } = await resolveNodeProviderAndModel(
             node,
             workflowProvider,
             workflowModel,
@@ -4107,7 +4112,9 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               // ensures the source is never mutated, so retries can safely resume from it.
               resumeSessionId,
               configuredCommandFolder,
-              issueContext
+              issueContext,
+              resolvedNodeModel,
+              resolvedTier
             );
 
             if (output.state !== 'failed') break;
@@ -4146,6 +4153,38 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
             );
 
             await new Promise(resolve => setTimeout(resolve, delayMs));
+          }
+
+          // Cold-resume surfacing: this node requested a session resume but the
+          // provider reported it came back cold (resumed === false) — the prior
+          // context is gone. Every provider's cold fallback is already a clean
+          // fresh session, so the run we just completed is a valid fresh-context
+          // result; we keep it and persist its fresh session id below. Surface the
+          // lost continuity to the user (no silent failure) so a degraded run isn't
+          // mistaken for a normal resumed one — but do NOT re-run: a replay would
+          // only repeat the same fresh run at double the cost and side effects.
+          if (
+            resumeSessionId !== undefined &&
+            output.state === 'completed' &&
+            output.resumed === false
+          ) {
+            // Mask the session id: it's a resumable artifact, so log only an
+            // 8-char preview (same policy as the node_session_resumed event above).
+            getLog().warn(
+              {
+                nodeId: node.id,
+                provider,
+                workflowRunId: workflowRun.id,
+                resumeSessionId: `${resumeSessionId.slice(0, 8)}…`,
+              },
+              'dag.session_resume_failed'
+            );
+            await safeSendMessage(
+              platform,
+              conversationId,
+              `⚠️ Node \`${node.id}\`: could not resume the prior session — continued with a fresh session, so the earlier context was not restored.`,
+              { workflowId: workflowRun.id, nodeName: node.id }
+            );
           }
 
           // Persist (or drop) the node's provider session ID for the next run in this scope.
