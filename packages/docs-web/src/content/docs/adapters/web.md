@@ -159,6 +159,7 @@ Click on a workflow run (from the dashboard or progress card) to open the execut
 - The full DAG graph with per-node status
 - Step-by-step logs for each node
 - Artifacts produced by the workflow
+- Route-loop decisions, including selected target and redacted condition metadata
 - Actions to resume, retry eligible failed DAG nodes, cancel, or abandon the run
 
 ## Workflow Builder
@@ -166,8 +167,9 @@ Click on a workflow run (from the dashboard or progress card) to open the execut
 The Workflow Builder at `/legacy/workflows/builder` provides a visual editor for creating and modifying workflow YAML files. Features include:
 
 - **DAG canvas** -- Drag-and-drop nodes to build your workflow graph visually
-- **Node palette** -- Drag command, prompt, and bash nodes from a sidebar library. Additional node types (`script`, `loop`, `approval`, `cancel`) are editable via the Code / Split view
+- **Node palette** -- Drag command, prompt, bash, and route-loop nodes from a sidebar library. Additional node types (`script`, `loop`, `approval`, `cancel`) are editable via the Code / Split view
 - **Node inspector** -- Click a node to configure its properties (command, prompt text, dependencies, model overrides, hooks, MCP servers, etc.) in a tabbed panel
+- **Route-loop authoring** -- Configure one source input plus `positive`, `negative`, and `exhausted` route targets for bounded review loops
 - **View modes** -- Toggle between Visual, Split, and Code views. Split mode shows the canvas and YAML side by side.
 - **Command picker** -- Browse available commands when configuring command nodes
 - **Validation panel** -- Real-time validation feedback as you build
@@ -191,7 +193,7 @@ Events streamed over SSE include:
 | `workflow_step` | Workflow node status change |
 | `workflow_status` | Overall workflow run status update |
 | `workflow_dispatch` | Workflow started for this conversation |
-| `dag_node` | DAG node progress update |
+| `dag_node` | DAG node progress update. Route-loop decisions arrive as completed `dag_node` events with `routeDecision` metadata. |
 | `workflow_artifact` | Artifact produced by a workflow |
 | `conversation_lock` | Lock/unlock indicator |
 | `session_info` | Session metadata |

@@ -18,7 +18,7 @@ mock.module('@archon/paths', () => ({
 
 // --- Imports (after mocks) ---
 
-import { evaluateCondition } from './condition-evaluator';
+import { evaluateCondition, serializeSafeCondition } from './condition-evaluator';
 import { OutputRefError } from './output-ref';
 import type { NodeOutput } from './schemas';
 
@@ -51,6 +51,22 @@ function makeOutput(
     ...(declaredFields !== undefined ? { declaredFields } : {}),
   };
 }
+
+describe('serializeSafeCondition', () => {
+  it('redacts literal values while preserving refs, operators, and boolean structure', () => {
+    expect(
+      serializeSafeCondition(
+        "$review.output.result == 'positive' && $review.output.score >= 80 || $review.flag != true"
+      )
+    ).toBe(
+      "$review.output.result == '<redacted>' && $review.output.score >= <redacted> || $review.flag != <redacted>"
+    );
+  });
+
+  it('redacts parse-fallback literals for malformed conditions', () => {
+    expect(serializeSafeCondition("not-valid == 'secret'")).toBe("not-valid == '<redacted>'");
+  });
+});
 
 describe('evaluateCondition', () => {
   it('== operator: returns true when output matches', () => {

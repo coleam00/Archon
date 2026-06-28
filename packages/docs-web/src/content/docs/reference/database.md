@@ -94,10 +94,12 @@ The database has 19 tables, all prefixed with `remote_agent_`:
    - Tracks active workflows per conversation
    - Locks concurrent execution per `working_path`: a second dispatch on a path with an active run (status `pending`/`running`/`paused`) is auto-cancelled with an actionable message. Stale `pending` rows older than 5 minutes are treated as orphaned and ignored.
    - Stores workflow state, step progress, and parent conversation linkage
+   - Stores route-loop runtime metadata in `metadata` when a workflow uses `route_loop`: negative counters, node attempts, execution sequence, and route activations
    - Nullable `user_id` records which user triggered the run
 
 6. **`remote_agent_workflow_events`** - Step-level workflow event log
    - Records step transitions, artifacts, and errors per workflow run
+   - Records `node_routed` route-loop decisions with safe redacted condition metadata
    - Lean UI-relevant events (verbose logs stored in JSONL files)
    - Enables workflow run detail views and debugging
    - Indexed on `created_at` (`idx_workflow_events_created_at`) for the dashboard event poller's cross-run tail. On PostgreSQL an `AFTER INSERT` trigger (`archon_workflow_event_notify`) calls `pg_notify('archon_dashboard_event', …)` so runs started out of process (the `archon` CLI / `--detach`) stream live to the console; on SQLite the poller picks them up within its interval. The trigger is Postgres-only and best-effort (a role without `CREATE TRIGGER` degrades to poll-only, not a boot failure).

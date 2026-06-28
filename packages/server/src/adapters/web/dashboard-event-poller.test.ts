@@ -109,6 +109,31 @@ describe('mapWorkflowEventRow', () => {
     expect(e).toMatchObject({ type: 'dag_node', status: 'skipped', nodeId: 'plan' });
   });
 
+  test('node_routed → dag_node completed with route decision metadata', () => {
+    const decision = {
+      from: 'review',
+      outcome: 'positive',
+      to: 'done',
+      condition: "$review.output.result == '<redacted>'",
+      condition_result: true,
+      negative_count: 1,
+      max_iterations: 10,
+      attempt: 2,
+      execution_seq: 2,
+    };
+    const e = JSON.parse(
+      mapWorkflowEventRow(
+        row({ event_type: 'node_routed', step_name: 'review-router', data: decision })
+      ) as string
+    );
+    expect(e).toMatchObject({
+      type: 'dag_node',
+      status: 'completed',
+      nodeId: 'review-router',
+      routeDecision: decision,
+    });
+  });
+
   test('approval_requested → workflow_status paused with approval', () => {
     const e = JSON.parse(
       mapWorkflowEventRow(

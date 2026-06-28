@@ -9,6 +9,7 @@ sidebar:
 ---
 
 Archon substitutes variables in command files, inline prompts, bash scripts, and `script:` node bodies before execution. There are three categories of variables: workflow variables (substituted by the workflow engine), positional arguments (substituted by the command handler), and node output references (DAG workflows only).
+`route_loop.condition` does not receive workflow variables, but it does evaluate node output references with the same condition grammar as `when:`.
 
 ## Workflow Variables
 
@@ -59,11 +60,16 @@ These variables are substituted by the command handler when commands are invoked
 ## Node Output References
 
 In DAG workflows, nodes can reference the output of any completed upstream node. These are substituted after workflow variables.
+`when:` conditions and `route_loop.condition` expressions also read node output references, but they do not perform full workflow-variable substitution.
 
 | Pattern | Resolves to | Notes |
 |---------|-------------|-------|
 | `$nodeId.output` | Full output string of the referenced node | The node must be a declared dependency (in `depends_on`) |
-| `$nodeId.output.field` | A specific JSON field from the node's output | Requires the upstream node to use `output_format` for structured JSON |
+| `$nodeId.output.field` | A specific JSON field from the node's output | Requires the upstream node to expose structured fields through `output_format` or a route-loop output |
+
+For `route_loop.condition`, every node reference must point at the node declared in `route_loop.from`.
+Whole-output references are allowed without `output_format`; field references require the `from` node to declare that field in `output_format.properties`.
+If the condition cannot be parsed, or a referenced field is not declared or cannot be resolved, the route-loop controller fails instead of routing negative.
 
 ### Shell Quoting in `bash:` vs `script:`
 
@@ -116,19 +122,19 @@ Positional arguments (`$1` through `$9`) are substituted separately by the comma
 
 ## Variable Availability by Context
 
-| Variable | Workflow nodes | Direct command invocation | `when:` conditions |
-|----------|---------------|--------------------------|-------------------|
-| `$ARGUMENTS` / `$USER_MESSAGE` | Yes | Yes (as `$ARGUMENTS`) | No |
-| `$1` ... `$9` | No | Yes | No |
-| `$WORKFLOW_ID` | Yes | No | No |
-| `$ARTIFACTS_DIR` | Yes | No | No |
-| `$BASE_BRANCH` | Yes | No | No |
-| `$DOCS_DIR` | Yes | No | No |
-| `$CONTEXT` / aliases | Yes | No | No |
-| `$LOOP_USER_INPUT` | Yes (loop nodes) | No | No |
-| `$REJECTION_REASON` | Yes (`on_reject` only) | No | No |
-| `$LOOP_PREV_OUTPUT` | Yes (loop nodes) | No | No |
-| `$nodeId.output` | Yes (DAG nodes) | No | Yes |
+| Variable | Workflow nodes | Direct command invocation | `when:` conditions | `route_loop.condition` |
+|----------|---------------|--------------------------|-------------------|------------------------|
+| `$ARGUMENTS` / `$USER_MESSAGE` | Yes | Yes (as `$ARGUMENTS`) | No | No |
+| `$1` ... `$9` | No | Yes | No | No |
+| `$WORKFLOW_ID` | Yes | No | No | No |
+| `$ARTIFACTS_DIR` | Yes | No | No | No |
+| `$BASE_BRANCH` | Yes | No | No | No |
+| `$DOCS_DIR` | Yes | No | No | No |
+| `$CONTEXT` / aliases | Yes | No | No | No |
+| `$LOOP_USER_INPUT` | Yes (loop nodes) | No | No | No |
+| `$REJECTION_REASON` | Yes (`on_reject` only) | No | No | No |
+| `$LOOP_PREV_OUTPUT` | Yes (loop nodes) | No | No | No |
+| `$nodeId.output` | Yes (DAG nodes) | No | Yes | Yes, source node only |
 
 ## Authentication Environment Variables
 

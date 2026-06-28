@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { Box, FileText, Terminal, Zap, Plug, ChevronRight } from 'lucide-react';
+import { Box, FileText, GitBranch, Terminal, Zap, Plug, ChevronRight } from 'lucide-react';
 import type { CommandEntry } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { useClickOutside } from '@/hooks/useClickOutside';
 import { CommandPicker } from './CommandPicker';
 
+type QuickAddNodeType = 'command' | 'prompt' | 'bash' | 'route_loop';
+
 interface QuickAddPickerProps {
   position: { x: number; y: number };
   onAddNode: (
-    type: 'command' | 'prompt' | 'bash',
+    type: QuickAddNodeType,
     options?: { commandName?: string; skills?: string[]; mcp?: string }
   ) => void;
   onClose: () => void;
@@ -193,6 +195,23 @@ export function QuickAddPicker({
           <div className="flex-1 min-w-0">
             <div className="text-xs font-medium text-text-primary">Bash</div>
             <div className="text-[10px] text-text-tertiary">Shell script</div>
+          </div>
+        </button>
+
+        {/* Route Loop */}
+        <button
+          type="button"
+          onClick={(): void => {
+            onAddNode('route_loop');
+          }}
+          className="w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors hover:bg-surface-hover cursor-pointer"
+        >
+          <span className="text-text-secondary">
+            <GitBranch className="size-4" />
+          </span>
+          <div className="flex-1 min-w-0">
+            <div className="text-xs font-medium text-text-primary">Route Loop</div>
+            <div className="text-[10px] text-text-tertiary">Branch on review outcome</div>
           </div>
         </button>
 

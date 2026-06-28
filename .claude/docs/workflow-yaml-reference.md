@@ -168,6 +168,25 @@ Nodes are sorted topologically (Kahn's algorithm). Nodes in the same layer run c
   timeout: 120000
 ```
 
+**`route_loop:`** - Controller node, no AI. Routes one source node result to positive, negative, or exhausted targets.
+```yaml
+- id: review-router
+  depends_on: [review]
+  route_loop:
+    from: review
+    condition: "$review.output.result == 'positive'"
+    max_iterations: 10
+    routes:
+      positive: done
+      negative: fix
+      exhausted: escalation
+```
+
+Route-loop nodes must declare exactly one `depends_on` entry equal to `route_loop.from`.
+They reject `when`, `trigger_rule`, `retry`, and AI-only fields.
+The condition reuses the `when:` grammar, but every node reference must point at `route_loop.from`.
+Field references require the source node to declare the field in `output_format.properties`.
+
 ### AI-Only Fields (command/prompt nodes)
 
 | Field | Type | Default | Description |
@@ -206,10 +225,11 @@ when: "$classify.output.complexity != 'trivial'"
 ```
 
 **Pattern**: `$nodeId.output[.field] OPERATOR 'value'`
-- **Operators**: `==` and `!=` only
+- **Operators**: `==`, `!=`, `<`, `>`, `<=`, and `>=`
 - **Field access**: dot-notation into JSON from `output_format` nodes
-- **Values**: single-quoted string literals
+- **Values**: single-quoted string literals, or unquoted numbers and booleans
 - **Fail behavior**: unparseable expressions → `false` (node skipped)
+- **Route loops**: `route_loop.condition` uses this grammar but fails the controller on parse or field-resolution errors instead of skipping
 
 ---
 
@@ -262,11 +282,14 @@ Per-node overrides validated independently. If a node's model implies a provider
 
 ## DAG Structural Validation
 
-Four rules enforced at `loader.ts:370-439`:
+Route-loop validation adds controller-specific rules on top of normal DAG validation.
+
+Core rules enforced by the loader:
 1. **Unique IDs** — no duplicates
 2. **Valid depends_on** — all referenced IDs must exist
 3. **No cycles** — Kahn's algorithm; cycles fail with involved IDs
 4. **Valid $nodeId.output references** — scanned in `when:` and `prompt:` fields
+5. **Valid route loops** - `depends_on[0]` equals `route_loop.from`, all three route targets exist, route targets do not point to the controller itself, positive and exhausted routes are exit paths, and negative retry paths are self-contained when they loop back to `from`
 
 ---
 

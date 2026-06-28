@@ -4,6 +4,8 @@ import { cn } from '@/lib/utils';
 import { categorizeCommands } from '@/lib/command-categories';
 import type { CommandEntry } from '@/lib/api';
 
+type LibraryNodeType = 'command' | 'prompt' | 'bash' | 'route_loop';
+
 interface NodeLibraryProps {
   commands: CommandEntry[];
   isLoading: boolean;
@@ -13,9 +15,10 @@ const NODE_TYPE_COLORS: Record<string, string> = {
   command: 'bg-node-command',
   prompt: 'bg-node-prompt',
   bash: 'bg-node-bash',
+  route_loop: 'bg-node-loop',
 };
 
-function onDragStart(e: React.DragEvent, type: 'command' | 'prompt' | 'bash', name: string): void {
+function onDragStart(e: React.DragEvent, type: LibraryNodeType, name: string): void {
   e.dataTransfer.setData('application/reactflow-type', type);
   e.dataTransfer.setData('application/reactflow-command', name);
   e.dataTransfer.effectAllowed = 'move';
@@ -36,7 +39,7 @@ function DraggableItem({
   name,
   displayName,
 }: {
-  type: 'command' | 'prompt' | 'bash';
+  type: LibraryNodeType;
   name: string;
   displayName: string;
 }): React.ReactElement {
@@ -104,7 +107,9 @@ export function NodeLibrary({ commands, isLoading }: NodeLibraryProps): React.Re
   const showQuickNodes =
     !search.trim() ||
     'prompt'.includes(search.toLowerCase()) ||
-    'bash'.includes(search.toLowerCase());
+    'bash'.includes(search.toLowerCase()) ||
+    'route loop'.includes(search.toLowerCase()) ||
+    'route_loop'.includes(search.toLowerCase());
 
   return (
     <div className="flex flex-col h-full overflow-hidden border-r border-border bg-surface">
@@ -131,9 +136,10 @@ export function NodeLibrary({ commands, isLoading }: NodeLibraryProps): React.Re
           <div className="flex flex-col gap-2 p-2">
             {/* Quick Nodes */}
             {showQuickNodes && (
-              <CollapsibleSection title="Quick Nodes" count={2} defaultOpen>
+              <CollapsibleSection title="Quick Nodes" count={3} defaultOpen>
                 <DraggableItem type="prompt" name="Prompt" displayName="Prompt" />
                 <DraggableItem type="bash" name="Shell" displayName="Bash" />
+                <DraggableItem type="route_loop" name="Route" displayName="Route Loop" />
               </CollapsibleSection>
             )}
 

@@ -4,9 +4,9 @@ The **data layer** of the in-console workflow builder. Ported from the standalon
 `archon-workflow-studio` as part of the Archon Studio integration
 ([coleam00/Archon#1863](https://github.com/coleam00/Archon/issues/1863)).
 
-This is **PR-1: data only**. It makes the four node variants the production
-builder can't yet represent — `loop`, `approval`, `cancel`, `script` — plus the
-three existing kinds (`prompt`, `bash`, `command`) representable and
+This is **PR-1: data only**. It makes the five node variants the production
+builder could not originally represent - `loop`, `route_loop`, `approval`,
+`cancel`, `script` - plus the three existing kinds (`prompt`, `bash`, `command`) representable and
 round-trippable in the console's data layer, with pure-function validation and
 typed fixtures.
 
@@ -66,6 +66,8 @@ optionals omitted, empty `depends_on` dropped); the exporter matches this, and
 fixtures are authored already-sparse so the round-trip is exact. Note
 `loop.fresh_context` is always present (engine default `false`, generated type
 required) and is preserved verbatim.
+`route_loop` carries `from`, `condition`, `max_iterations`, and the three route
+targets (`positive`, `negative`, `exhausted`) through the same round-trip.
 
 ## Known limitations (deferred)
 
@@ -76,3 +78,5 @@ not engine-producible wire input and is dropped (with an import warning) rather
 than carried. The earlier generated-type drift (`persist_session`, `output_type`,
 workflow-level `persist_sessions`/`requires` missing from the spec) was resolved
 by regenerating `api.generated.d.ts`; those fields now round-trip verbatim.
+`route_loop` is still added locally in `types/wire.ts` because the generated
+OpenAPI `DagNode` type does not expose that union arm yet.

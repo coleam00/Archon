@@ -91,6 +91,23 @@ function createMockStore(): IWorkflowStore {
       })
     ),
     updateWorkflowRun: mock(() => Promise.resolve()),
+    persistRouteDecisionTransition: mock(
+      (input: Parameters<IWorkflowStore['persistRouteDecisionTransition']>[0]) =>
+        Promise.resolve({
+          id: input.workflow_run_id,
+          workflow_name: 'mock',
+          conversation_id: 'conv-mock',
+          parent_conversation_id: null,
+          codebase_id: null,
+          status: 'running' as const,
+          user_message: 'mock message',
+          metadata: input.metadata,
+          started_at: new Date(),
+          completed_at: null,
+          last_activity_at: null,
+          working_path: null,
+        })
+    ),
     updateWorkflowActivity: mock(() => Promise.resolve()),
     getWorkflowRunStatus: mock(() => Promise.resolve('running' as const)),
     completeWorkflowRun: mock(() => Promise.resolve()),

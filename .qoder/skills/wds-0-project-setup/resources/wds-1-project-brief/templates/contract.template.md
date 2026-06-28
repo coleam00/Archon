@@ -280,15 +280,15 @@ Any disputes arising from this contract shall be resolved through {{dispute_reso
 
 **Client Approval**:
 
-Signature: ********\_********  
+Signature: **\*\*\*\***\_**\*\*\*\***  
 Name: {{client_name}}  
-Date: ******\_\_\_******
+Date: **\*\***\_\_\_**\*\***
 
 **Contractor Approval**:
 
-Signature: ********\_********  
+Signature: **\*\*\*\***\_**\*\*\*\***  
 Name: {{contractor_name}}  
-Date: ******\_\_\_******
+Date: **\*\***\_\_\_**\*\***
 
 ---
 

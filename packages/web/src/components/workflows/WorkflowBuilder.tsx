@@ -3,7 +3,12 @@ import { useSearchParams, useNavigate } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { ReactFlowProvider, useNodesState, useEdgesState, useViewport } from '@xyflow/react';
 import type { Edge } from '@xyflow/react';
-import type { WorkflowDefinition, WorkflowSource } from '@/lib/api';
+import type {
+  RouteLoopConfig,
+  RouteLoopOutcome,
+  WorkflowDefinition,
+  WorkflowSource,
+} from '@/lib/api';
 
 import { useProject } from '@/contexts/ProjectContext';
 import {
@@ -34,6 +39,54 @@ const NODE_LIBRARY_WIDTH_KEY = 'archon:nodeLibraryWidth';
 const NODE_LIBRARY_MIN_WIDTH = 160;
 const NODE_LIBRARY_MAX_WIDTH = 400;
 const NODE_LIBRARY_DEFAULT_WIDTH = 208; // w-52
+const ROUTE_OUTCOMES = [
+  'positive',
+  'negative',
+  'exhausted',
+] as const satisfies readonly RouteLoopOutcome[];
+
+function routeLoopEdgeLabel(
+  outcome: RouteLoopOutcome
+): Pick<Edge, 'label' | 'labelStyle' | 'labelBgStyle' | 'labelBgPadding' | 'labelBgBorderRadius'> {
+  return {
+    label: outcome,
+    labelStyle: { fill: 'var(--text-secondary)', fontSize: 10, fontWeight: 600 },
+    labelBgStyle: { fill: 'var(--surface)', fillOpacity: 0.9 },
+    labelBgPadding: [4, 2],
+    labelBgBorderRadius: 4,
+  };
+}
+
+function routeLoopConfigToEdges(nodeId: string, routeLoop: RouteLoopConfig): Edge[] {
+  const routeEdges = ROUTE_OUTCOMES.flatMap(outcome => {
+    const target = routeLoop.routes[outcome].trim();
+    if (!target) return [];
+    return [
+      {
+        id: `${nodeId}->${target}:${outcome}`,
+        source: nodeId,
+        sourceHandle: outcome,
+        target,
+        type: 'smoothstep',
+        ...routeLoopEdgeLabel(outcome),
+      },
+    ] satisfies Edge[];
+  });
+  const from = routeLoop.from.trim();
+  return [
+    ...(from
+      ? [
+          {
+            id: `${from}->${nodeId}`,
+            source: from,
+            target: nodeId,
+            type: 'smoothstep',
+          } satisfies Edge,
+        ]
+      : []),
+    ...routeEdges,
+  ];
+}
 
 function NodeLibraryPanel({
   commands,
@@ -246,9 +299,24 @@ function WorkflowBuilderInner(): React.ReactElement {
       setNodes(nds =>
         nds.map(n => (n.id === selectedNodeId ? { ...n, data: { ...n.data, ...updates } } : n))
       );
+      const routeLoopUpdate = updates.route_loop;
+      if (selectedNodeId && routeLoopUpdate) {
+        setEdges(eds => [
+          ...eds.filter(
+            edge =>
+              !(
+                (edge.source === selectedNodeId &&
+                  ROUTE_OUTCOMES.some(outcome => outcome === edge.sourceHandle)) ||
+                (edge.target === selectedNodeId &&
+                  !ROUTE_OUTCOMES.some(outcome => outcome === edge.sourceHandle))
+              )
+          ),
+          ...routeLoopConfigToEdges(selectedNodeId, routeLoopUpdate),
+        ]);
+      }
       markDirty();
     },
-    [selectedNodeId, setNodes, markDirty]
+    [selectedNodeId, setNodes, setEdges, markDirty]
   );
 
   const handleNodeDeleteById = useCallback(

@@ -7,6 +7,10 @@
 import type { BuilderNode, BuilderWorkflow, Issue } from '../types';
 import { makeIssue } from './make-issue';
 
+const ROUTE_OUTCOMES = ['positive', 'negative', 'exhausted'] as const;
+
+type RouteOutcome = (typeof ROUTE_OUTCOMES)[number];
+
 /** A node's direct dependencies (empty when unset). */
 function depsOf(node: BuilderNode): string[] {
   return node.base.depends_on ?? [];
@@ -25,6 +29,66 @@ function checkRefs(nodes: BuilderNode[], idSet: Set<string>): Issue[] {
             source: 'client-debounced',
             message: `node '${node.id}' depends on unknown node '${dep}'`,
             path: { nodeId: node.id, field: 'depends_on' },
+          })
+        );
+      }
+    }
+  }
+  return issues;
+}
+
+function checkRouteLoopGraph(nodes: BuilderNode[], idSet: Set<string>): Issue[] {
+  const issues: Issue[] = [];
+  for (const node of nodes) {
+    if (node.variant !== 'route_loop') continue;
+
+    const deps = depsOf(node);
+    if (deps.length !== 1) {
+      issues.push(
+        makeIssue({
+          rule: 'graph.route_loop.input.count',
+          severity: 'error',
+          source: 'client-debounced',
+          message: 'route_loop requires exactly one input node',
+          path: { nodeId: node.id, field: 'depends_on' },
+        })
+      );
+    } else if (node.data.from !== deps[0]) {
+      issues.push(
+        makeIssue({
+          rule: 'graph.route_loop.from.mismatch',
+          severity: 'error',
+          source: 'client-debounced',
+          message: `route_loop.from must match its input node '${deps[0]}'`,
+          path: { nodeId: node.id, field: 'route_loop.from' },
+        })
+      );
+    }
+
+    const routes = node.data.routes as Record<RouteOutcome, string>;
+    for (const outcome of ROUTE_OUTCOMES) {
+      const target = routes[outcome];
+      const field = `route_loop.routes.${outcome}`;
+      if (target.trim().length === 0) {
+        issues.push(
+          makeIssue({
+            rule: 'graph.route_loop.route.missing',
+            severity: 'error',
+            source: 'client-debounced',
+            message: `route_loop requires a ${outcome} route target`,
+            path: { nodeId: node.id, field },
+          })
+        );
+        continue;
+      }
+      if (!idSet.has(target)) {
+        issues.push(
+          makeIssue({
+            rule: 'graph.route_loop.route.unknown',
+            severity: 'error',
+            source: 'client-debounced',
+            message: `route_loop route '${outcome}' targets unknown node '${target}'`,
+            path: { nodeId: node.id, field },
           })
         );
       }
@@ -80,5 +144,9 @@ function checkCycles(nodes: BuilderNode[], idSet: Set<string>): Issue[] {
 /** Validate `depends_on` reference integrity and acyclicity. */
 export function validateGraph(workflow: BuilderWorkflow): Issue[] {
   const idSet = new Set<string>(workflow.nodes.map(n => n.id));
-  return [...checkRefs(workflow.nodes, idSet), ...checkCycles(workflow.nodes, idSet)];
+  return [
+    ...checkRefs(workflow.nodes, idSet),
+    ...checkRouteLoopGraph(workflow.nodes, idSet),
+    ...checkCycles(workflow.nodes, idSet),
+  ];
 }

@@ -2,7 +2,7 @@ import { memo } from 'react';
 import { Handle, Position } from '@xyflow/react';
 import type { NodeProps, Node } from '@xyflow/react';
 import type { DagNodeData } from './DagNodeComponent';
-import type { WorkflowStepStatus } from '@/lib/types';
+import type { RouteLoopDecisionData, WorkflowStepStatus } from '@/lib/types';
 import { formatDurationMs } from '@/lib/format';
 import { StatusIcon } from './StatusIcon';
 
@@ -13,6 +13,7 @@ export interface ExecutionNodeData extends DagNodeData {
   selected?: boolean;
   currentIteration?: number;
   maxIterations?: number;
+  routeDecision?: RouteLoopDecisionData | Record<string, unknown>;
 }
 
 export type ExecutionFlowNode = Node<ExecutionNodeData>;
@@ -30,6 +31,7 @@ const TYPE_COLORS: Record<string, string> = {
   prompt: 'text-accent-bright',
   bash: 'text-amber-400',
   loop: 'text-orange-400',
+  route_loop: 'text-node-loop',
   approval: 'text-node-approval',
 };
 
@@ -38,12 +40,21 @@ const TYPE_LABELS: Record<string, string> = {
   bash: 'BASH',
   prompt: 'PROMPT',
   loop: 'LOOP',
+  route_loop: 'ROUTE',
   approval: 'APPROVAL',
 };
+
+function formatRouteDecisionField(value: unknown, fallback: string): string {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return fallback;
+}
 
 function ExecutionDagNodeRender({ data }: NodeProps<ExecutionFlowNode>): React.ReactElement {
   const style = (data.status && STATUS_STYLES[data.status]) ?? DEFAULT_STYLE;
   const typeLabel = TYPE_LABELS[data.nodeType] ?? 'PROMPT';
+  const routeOutcome = formatRouteDecisionField(data.routeDecision?.outcome, 'route');
+  const routeTarget = formatRouteDecisionField(data.routeDecision?.to, '');
 
   return (
     <div
@@ -71,12 +82,43 @@ function ExecutionDagNodeRender({ data }: NodeProps<ExecutionFlowNode>): React.R
           {data.currentIteration}/{data.maxIterations} iterations
         </div>
       )}
+      {data.routeDecision && (
+        <div className="text-[10px] text-text-tertiary mt-0.5 truncate">
+          {routeOutcome} {'->'} {routeTarget}
+        </div>
+      )}
       {data.error && (
         <div className="text-[10px] text-error mt-1 truncate" title={data.error}>
           {data.error.slice(0, 60)}
         </div>
       )}
-      <Handle type="source" position={Position.Bottom} className="!bg-border !w-2 !h-2" />
+      {data.nodeType === 'route_loop' ? (
+        <>
+          <Handle
+            id="positive"
+            type="source"
+            position={Position.Bottom}
+            className="!bg-success !w-2 !h-2"
+            style={{ left: '25%' }}
+          />
+          <Handle
+            id="negative"
+            type="source"
+            position={Position.Bottom}
+            className="!bg-accent !w-2 !h-2"
+            style={{ left: '50%' }}
+          />
+          <Handle
+            id="exhausted"
+            type="source"
+            position={Position.Bottom}
+            className="!bg-error !w-2 !h-2"
+            style={{ left: '75%' }}
+          />
+        </>
+      ) : (
+        <Handle type="source" position={Position.Bottom} className="!bg-border !w-2 !h-2" />
+      )}
     </div>
   );
 }

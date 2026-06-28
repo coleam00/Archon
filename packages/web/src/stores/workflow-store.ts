@@ -255,6 +255,9 @@ export const useWorkflowStore = create<WorkflowStoreState>()(
                 duration: event.duration,
                 error: event.error,
                 reason: event.reason,
+                routeDecision:
+                  event.routeDecision ??
+                  (existingIdx >= 0 ? dagNodes[existingIdx].routeDecision : undefined),
               };
 
               if (existingIdx >= 0) {

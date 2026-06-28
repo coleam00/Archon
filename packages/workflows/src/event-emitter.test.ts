@@ -79,6 +79,26 @@ function makeNodeSkippedEvent(runId = 'run-1'): WorkflowEmitterEvent {
   };
 }
 
+function makeNodeRoutedEvent(runId = 'run-1'): WorkflowEmitterEvent {
+  return {
+    type: 'node_routed',
+    runId,
+    nodeId: 'review-router',
+    nodeName: 'review-router',
+    data: {
+      from: 'review',
+      outcome: 'positive',
+      to: 'done',
+      condition: "$review.output.result == '<redacted>'",
+      condition_result: true,
+      negative_count: 1,
+      max_iterations: 10,
+      attempt: 2,
+      execution_seq: 2,
+    },
+  };
+}
+
 function makeArtifactEvent(runId = 'run-1'): WorkflowEmitterEvent {
   return {
     type: 'workflow_artifact',
@@ -293,6 +313,7 @@ describe('WorkflowEventEmitter', () => {
           error: 'fail',
         },
         makeNodeSkippedEvent(),
+        makeNodeRoutedEvent(),
         makeArtifactEvent(),
       ];
 

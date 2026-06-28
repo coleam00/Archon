@@ -44,6 +44,12 @@ function isTerminal(status: WorkflowRunStatus): boolean {
   return TERMINAL_STATUSES.includes(status);
 }
 
+function formatRouteDecisionField(value: unknown, fallback: string): string {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return fallback;
+}
+
 interface WorkflowRunQueryData {
   workflowState: WorkflowState;
   workerPlatformId: string | null;
@@ -80,7 +86,7 @@ function buildDagNodeStatesFromEvents(events: WorkflowEventResponse[]): DagNodeS
     const status =
       e.event_type === 'node_started'
         ? 'running'
-        : e.event_type === 'node_completed'
+        : e.event_type === 'node_completed' || e.event_type === 'node_routed'
           ? 'completed'
           : e.event_type === 'node_failed'
             ? 'failed'
@@ -94,6 +100,7 @@ function buildDagNodeStatesFromEvents(events: WorkflowEventResponse[]): DagNodeS
         duration: e.data.duration_ms as number | undefined,
         error: e.data.error as string | undefined,
         reason: e.data.reason as 'when_condition' | 'trigger_rule' | undefined,
+        routeDecision: e.event_type === 'node_routed' ? e.data : undefined,
       });
     }
   }
@@ -148,6 +155,32 @@ function enrichDagNodesWithLoopIterations(
   return Array.from(nodeMap.values());
 }
 
+function enrichDagNodesWithRouteDecisions(
+  nodes: DagNodeState[],
+  events: WorkflowEventResponse[]
+): DagNodeState[] {
+  const nodeMap = new Map(nodes.map(node => [node.nodeId, node]));
+  for (const e of events.filter(ev => ev.event_type === 'node_routed')) {
+    const nodeId = e.step_name ?? '';
+    if (!nodeId) continue;
+    const existing = nodeMap.get(nodeId);
+    nodeMap.set(nodeId, {
+      ...existing,
+      nodeId,
+      name: existing?.name ?? nodeId,
+      status: 'completed',
+      duration: existing?.duration,
+      error: existing?.error,
+      reason: existing?.reason,
+      currentIteration: existing?.currentIteration,
+      maxIterations: existing?.maxIterations,
+      iterations: existing?.iterations,
+      routeDecision: e.data,
+    });
+  }
+  return Array.from(nodeMap.values());
+}
+
 export function buildWorkflowDagNodeStates(
   nodeStates: WorkflowRunNodeState[] | undefined,
   events: WorkflowEventResponse[]
@@ -155,7 +188,10 @@ export function buildWorkflowDagNodeStates(
   const baseNodes = nodeStates
     ? nodeStates.map(toDagNodeState)
     : buildDagNodeStatesFromEvents(events);
-  return enrichDagNodesWithLoopIterations(baseNodes, events);
+  return enrichDagNodesWithLoopIterations(
+    enrichDagNodesWithRouteDecisions(baseNodes, events),
+    events
+  );
 }
 
 interface WorkflowExecutionProps {
@@ -434,6 +470,7 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
       if (e.event_type === 'node_started') startedNodes.add(nodeId);
       if (
         e.event_type === 'node_completed' ||
+        e.event_type === 'node_routed' ||
         e.event_type === 'node_failed' ||
         e.event_type === 'node_skipped'
       ) {
@@ -482,6 +519,8 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
           return `[${ts}] Node started: ${e.step_name ?? 'node'}`;
         case 'node_completed':
           return `[${ts}] Node completed: ${e.step_name ?? 'node'}`;
+        case 'node_routed':
+          return `[${ts}] Route decision: ${formatRouteDecisionField(e.data.outcome, 'unknown')} -> ${formatRouteDecisionField(e.data.to, 'unknown')}`;
         case 'node_failed':
           return `[${ts}] Node failed: ${e.step_name ?? 'node'}: ${(e.data.error as string | undefined) ?? 'Unknown error'}`;
         case 'node_skipped':

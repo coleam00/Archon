@@ -123,6 +123,102 @@ describe('workflow-events', () => {
       );
     });
 
+    test('preserves prior route attempts and node_routed metadata in event history', async () => {
+      const negativeRouteDecision = {
+        from: 'review',
+        outcome: 'negative',
+        to: 'fix',
+        condition: "$review.output.result == '<redacted>'",
+        condition_result: false,
+        negative_count: 1,
+        max_iterations: 10,
+        attempt: 1,
+        execution_seq: 1,
+      };
+      const positiveRouteDecision = {
+        from: 'review',
+        outcome: 'positive',
+        to: 'done',
+        condition: "$review.output.result == '<redacted>'",
+        condition_result: true,
+        negative_count: 1,
+        max_iterations: 10,
+        attempt: 2,
+        execution_seq: 2,
+      };
+
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          {
+            ...mockEvent,
+            id: 'evt-review-1',
+            event_type: 'node_completed',
+            step_name: 'review',
+            data: JSON.stringify({
+              node_id: 'review',
+              node_output: '{"result":"negative"}',
+              attempt: 1,
+              execution_seq: 1,
+            }),
+          },
+          {
+            ...mockEvent,
+            id: 'evt-routed-1',
+            event_type: 'node_routed',
+            step_name: 'review-router',
+            data: JSON.stringify(negativeRouteDecision),
+          },
+          {
+            ...mockEvent,
+            id: 'evt-review-2',
+            event_type: 'node_completed',
+            step_name: 'review',
+            data: JSON.stringify({
+              node_id: 'review',
+              node_output: '{"result":"positive"}',
+              attempt: 2,
+              execution_seq: 2,
+            }),
+          },
+          {
+            ...mockEvent,
+            id: 'evt-routed-2',
+            event_type: 'node_routed',
+            step_name: 'review-router',
+            data: JSON.stringify(positiveRouteDecision),
+          },
+        ])
+      );
+
+      const result = await listWorkflowEvents('run-route-loop');
+
+      expect(result.map(event => event.id)).toEqual([
+        'evt-review-1',
+        'evt-routed-1',
+        'evt-review-2',
+        'evt-routed-2',
+      ]);
+      expect(
+        result.filter(event => event.event_type === 'node_completed').map(event => event.data)
+      ).toEqual([
+        {
+          node_id: 'review',
+          node_output: '{"result":"negative"}',
+          attempt: 1,
+          execution_seq: 1,
+        },
+        {
+          node_id: 'review',
+          node_output: '{"result":"positive"}',
+          attempt: 2,
+          execution_seq: 2,
+        },
+      ]);
+      expect(
+        result.filter(event => event.event_type === 'node_routed').map(event => event.data)
+      ).toEqual([negativeRouteDecision, positiveRouteDecision]);
+    });
+
     test('returns empty array for no results', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
 
@@ -449,6 +545,81 @@ describe('workflow-events', () => {
       const result = await getEpochAwareCompletedDagNodeOutputs('run-multi-retry');
 
       expect(result).toEqual(new Map([['b', 'B2']]));
+    });
+
+    test('projects the latest completed route-loop attempt without dropping prior attempts', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          {
+            ...mockEvent,
+            id: 'evt-review-1',
+            event_type: 'node_completed',
+            step_name: 'review',
+            data: {
+              node_id: 'review',
+              node_output: '{"result":"negative"}',
+              attempt: 1,
+              execution_seq: 1,
+            },
+          },
+          {
+            ...mockEvent,
+            id: 'evt-routed-1',
+            event_type: 'node_routed',
+            step_name: 'review-router',
+            data: {
+              from: 'review',
+              outcome: 'negative',
+              to: 'fix',
+              condition: "$review.output.result == '<redacted>'",
+              condition_result: false,
+              negative_count: 1,
+              max_iterations: 10,
+              attempt: 1,
+              execution_seq: 1,
+            },
+          },
+          {
+            ...mockEvent,
+            id: 'evt-review-2',
+            event_type: 'node_completed',
+            step_name: 'review',
+            data: {
+              node_id: 'review',
+              node_output: '{"result":"positive"}',
+              attempt: 2,
+              execution_seq: 2,
+            },
+          },
+          {
+            ...mockEvent,
+            id: 'evt-routed-2',
+            event_type: 'node_routed',
+            step_name: 'review-router',
+            data: {
+              from: 'review',
+              outcome: 'positive',
+              to: 'done',
+              condition: "$review.output.result == '<redacted>'",
+              condition_result: true,
+              negative_count: 1,
+              max_iterations: 10,
+              attempt: 2,
+              execution_seq: 2,
+            },
+          },
+        ])
+      );
+
+      const result = await getEpochAwareCompletedDagNodeOutputs('run-route-loop');
+
+      expect(result).toEqual(new Map([['review', '{"result":"positive"}']]));
+      expect(mockQuery).toHaveBeenCalledWith(
+        `SELECT * FROM remote_agent_workflow_events
+       WHERE workflow_run_id = $1
+       ORDER BY created_at ASC`,
+        ['run-route-loop']
+      );
     });
   });
 

@@ -8,8 +8,16 @@ import { approvalFixture } from './approval.fixture';
 import { cancelFixture } from './cancel.fixture';
 import { scriptFixture } from './script.fixture';
 import { mixedFixture } from './mixed.fixture';
+import { routeLoopFixture } from './route-loop.fixture';
 
-export { loopFixture, approvalFixture, cancelFixture, scriptFixture, mixedFixture };
+export {
+  loopFixture,
+  approvalFixture,
+  cancelFixture,
+  scriptFixture,
+  mixedFixture,
+  routeLoopFixture,
+};
 
 /** All builder fixtures keyed by name, for table-driven tests. */
 export const FIXTURES: Record<string, WireWorkflowDefinition> = {
@@ -18,4 +26,5 @@ export const FIXTURES: Record<string, WireWorkflowDefinition> = {
   cancel: cancelFixture,
   script: scriptFixture,
   mixed: mixedFixture,
+  routeLoop: routeLoopFixture,
 };

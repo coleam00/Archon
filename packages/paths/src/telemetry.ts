@@ -602,6 +602,7 @@ export type WorkflowNodeType =
   | 'bash'
   | 'script'
   | 'loop'
+  | 'route_loop'
   | 'approval'
   | 'cancel';
 

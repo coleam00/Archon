@@ -38,7 +38,7 @@ function printUsage() {
       '  --all         Validate all scenarios',
       '  --output      Base path (default: current directory)',
       '',
-    ].join('\n'),
+    ].join('\n')
   );
 }
 
@@ -53,7 +53,15 @@ const REQUIRED_SECTIONS = [
   '## Checklist',
 ];
 
-const REQUIRED_METADATA_PROPS = ['Scenario', 'Page Number', 'Platform', 'Page Type', 'Viewport', 'Interaction', 'Visibility'];
+const REQUIRED_METADATA_PROPS = [
+  'Scenario',
+  'Page Number',
+  'Platform',
+  'Page Type',
+  'Viewport',
+  'Interaction',
+  'Visibility',
+];
 
 const KEBAB_CASE_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
@@ -82,7 +90,7 @@ function extractSpacingIds(content) {
 // Count nav rows: lines starting with '←'
 function countNavRows(content) {
   const lines = content.split('\n');
-  return lines.filter((l) => l.trim().startsWith('←')).length;
+  return lines.filter(l => l.trim().startsWith('←')).length;
 }
 
 // Check Swedish + English content: for each object block, look for SE and EN rows
@@ -121,14 +129,24 @@ function validatePage(filePath) {
   const warnings = [];
 
   if (!fs.existsSync(filePath)) {
-    return { errors: [`File not found: ${filePath}`], warnings: [], objectCount: 0, spacingCount: 0 };
+    return {
+      errors: [`File not found: ${filePath}`],
+      warnings: [],
+      objectCount: 0,
+      spacingCount: 0,
+    };
   }
 
   let content;
   try {
     content = fs.readFileSync(filePath, 'utf8');
   } catch (error) {
-    return { errors: [`Cannot read file: ${error.message}`], warnings: [], objectCount: 0, spacingCount: 0 };
+    return {
+      errors: [`Cannot read file: ${error.message}`],
+      warnings: [],
+      objectCount: 0,
+      spacingCount: 0,
+    };
   }
 
   const pageSlug = path.basename(filePath, '.md');
@@ -226,8 +244,8 @@ function getPageFiles(scenarioDir) {
   }
 
   return entries
-    .filter((e) => e.isDirectory())
-    .map((e) => {
+    .filter(e => e.isDirectory())
+    .map(e => {
       const mdFile = path.join(scenarioDir, e.name, `${e.name}.md`);
       return fs.existsSync(mdFile) ? mdFile : null;
     })
@@ -276,7 +294,7 @@ function main() {
       process.stderr.write(`Error reading scenarios: ${error.message}\n`);
       process.exit(1);
     }
-    for (const e of entries.filter((e) => e.isDirectory()).sort()) {
+    for (const e of entries.filter(e => e.isDirectory()).sort()) {
       const pages = getPageFiles(path.join(scenariosBase, e.name));
       filesToValidate.push(...pages);
     }

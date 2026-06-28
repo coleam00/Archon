@@ -18,6 +18,63 @@ describe('retry DAG state projection', () => {
     expect(getRetryInvalidatedNodeIds(nodes, 'b')).toEqual(['b', 'c']);
   });
 
+  test('rejects direct retry of route-loop controller nodes', () => {
+    const nodes = [
+      { id: 'fix', prompt: 'Fix the issue' },
+      { id: 'review', prompt: 'Review the fix', depends_on: ['fix'] },
+      {
+        id: 'review-router',
+        depends_on: ['review'],
+        route_loop: {
+          from: 'review',
+          condition: "$review.output.result == 'positive'",
+          max_iterations: 10,
+          routes: {
+            positive: 'done',
+            negative: 'fix',
+            exhausted: 'escalation',
+          },
+        },
+      },
+      { id: 'done', prompt: 'Finish', depends_on: ['review-router'] },
+      { id: 'escalation', prompt: 'Escalate', depends_on: ['review-router'] },
+    ] satisfies DagNode[];
+
+    expect(() => getRetryInvalidatedNodeIds(nodes, 'review-router')).toThrow(
+      "Cannot retry route_loop controller node 'review-router' directly; retry its source node 'review' instead"
+    );
+  });
+
+  test('allows retry of the route-loop source node while invalidating its controller path', () => {
+    const nodes = [
+      { id: 'fix', prompt: 'Fix the issue' },
+      { id: 'review', prompt: 'Review the fix', depends_on: ['fix'] },
+      {
+        id: 'review-router',
+        depends_on: ['review'],
+        route_loop: {
+          from: 'review',
+          condition: "$review.output.result == 'positive'",
+          max_iterations: 10,
+          routes: {
+            positive: 'done',
+            negative: 'fix',
+            exhausted: 'escalation',
+          },
+        },
+      },
+      { id: 'done', prompt: 'Finish', depends_on: ['review-router'] },
+      { id: 'escalation', prompt: 'Escalate', depends_on: ['review-router'] },
+    ] satisfies DagNode[];
+
+    expect(getRetryInvalidatedNodeIds(nodes, 'review')).toEqual([
+      'review',
+      'review-router',
+      'done',
+      'escalation',
+    ]);
+  });
+
   test('preserves upstream and sibling completed outputs from earlier retry epochs', () => {
     const states = projectLatestEffectiveNodeStates([
       { event_type: 'node_completed', step_name: 'a', data: { node_output: 'A0' } },

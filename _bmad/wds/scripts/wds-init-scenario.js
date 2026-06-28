@@ -35,7 +35,7 @@ function printUsage() {
       '  --description   Short description of the scenario',
       '  --output        Base path to write to (default: current directory)',
       '',
-    ].join('\n'),
+    ].join('\n')
   );
 }
 
@@ -62,8 +62,12 @@ function buildReadme({ scenarioName, scenarioSlug, description }) {
     '',
     '## Notes',
     '',
-    '- Add pages with: `node src/scripts/wds-init-page.js --scenario "' + scenarioName + '" --page "01 Start"`',
-    '- Update navigation after adding pages: `node src/scripts/wds-nav.js --scenario "' + scenarioName + '"`',
+    '- Add pages with: `node src/scripts/wds-init-page.js --scenario "' +
+      scenarioName +
+      '" --page "01 Start"`',
+    '- Update navigation after adding pages: `node src/scripts/wds-nav.js --scenario "' +
+      scenarioName +
+      '"`',
     '- Validate pages: `node src/scripts/wds-validate.js --scenario "' + scenarioName + '"`',
     '',
   ].join('\n');

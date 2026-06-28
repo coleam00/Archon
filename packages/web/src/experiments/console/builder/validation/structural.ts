@@ -6,6 +6,43 @@
 import type { BuilderNode, BuilderWorkflow, Issue } from '../types';
 import { makeIssue } from './make-issue';
 
+const SAFE_NODE_ID_PATTERN = /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/;
+const RESERVED_NODE_IDS = new Set(['__proto__', 'prototype', 'constructor']);
+const ROUTE_OUTCOMES = ['positive', 'negative', 'exhausted'] as const;
+
+type RouteOutcome = (typeof ROUTE_OUTCOMES)[number];
+
+function isReservedNodeId(id: string): boolean {
+  return RESERVED_NODE_IDS.has(id);
+}
+
+function checkSafeNodeId(nodeId: string, field: string, value: string): Issue[] {
+  const issues: Issue[] = [];
+  if (!SAFE_NODE_ID_PATTERN.test(value)) {
+    issues.push(
+      makeIssue({
+        rule: 'structural.id.invalid',
+        severity: 'error',
+        source: 'client-instant',
+        message: 'node id must match [A-Za-z_][A-Za-z0-9_-]{0,63}',
+        path: { nodeId, field },
+      })
+    );
+  }
+  if (isReservedNodeId(value)) {
+    issues.push(
+      makeIssue({
+        rule: 'structural.id.reserved',
+        severity: 'error',
+        source: 'client-instant',
+        message: 'node id must not be a reserved object key',
+        path: { nodeId, field },
+      })
+    );
+  }
+  return issues;
+}
+
 /** Empty (or whitespace-only) ids and duplicate ids across the node list. */
 function checkIds(nodes: BuilderNode[]): Issue[] {
   const issues: Issue[] = [];
@@ -24,6 +61,7 @@ function checkIds(nodes: BuilderNode[]): Issue[] {
       );
       continue;
     }
+    issues.push(...checkSafeNodeId(id, 'id', id));
     if (seen.has(id)) {
       issues.push(
         makeIssue({
@@ -92,6 +130,27 @@ function checkRequiredFields(node: BuilderNode): Issue[] {
       if (!Number.isInteger(node.data.max_iterations) || node.data.max_iterations <= 0)
         invalid('loop.max_iterations', 'loop requires a positive integer max_iterations');
       break;
+    case 'route_loop': {
+      if (node.data.from.trim().length === 0)
+        missing('route_loop.from', 'route_loop requires a source node');
+      if (node.data.condition.trim().length === 0)
+        missing('route_loop.condition', 'route_loop requires a condition');
+      if (!Number.isInteger(node.data.max_iterations) || node.data.max_iterations <= 0)
+        invalid(
+          'route_loop.max_iterations',
+          'route_loop requires a positive integer max_iterations'
+        );
+      const routes = node.data.routes as Record<RouteOutcome, string>;
+      for (const outcome of ROUTE_OUTCOMES) {
+        const target = routes[outcome];
+        if (target.trim().length === 0) {
+          missing(`route_loop.routes.${outcome}`, `route_loop requires a ${outcome} route`);
+        } else {
+          issues.push(...checkSafeNodeId(node.id, `route_loop.routes.${outcome}`, target));
+        }
+      }
+      break;
+    }
     case 'approval':
       if (node.data.message.trim().length === 0)
         missing('approval.message', 'approval requires a message');

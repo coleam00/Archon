@@ -2,6 +2,7 @@ import { describe, test, expect } from 'bun:test';
 import {
   isBashNode,
   isCancelNode,
+  isRouteLoopNode,
   isScriptNode,
   isTriggerRule,
   TRIGGER_RULES,
@@ -9,6 +10,10 @@ import {
   LOOP_NODE_AI_FIELDS,
   approvalOnRejectSchema,
   dagNodeSchema,
+  routeLoopConfigSchema,
+  routeLoopRuntimeMetadataSchema,
+  routeOutcomeSchema,
+  workflowRunSchema,
 } from './schemas';
 import type {
   WorkflowDefinition,
@@ -19,7 +24,10 @@ import type {
   CancelNode,
   ScriptNode,
   TriggerRule,
+  RouteLoopNode,
+  RouteLoopConfig,
 } from './schemas';
+import { applyRouteLoopTransition } from './route-loop-state';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -279,6 +287,100 @@ describe('dagNodeSchema — empty bash/prompt', () => {
 });
 
 // ---------------------------------------------------------------------------
+// dagNodeSchema - RouteLoopNode
+// ---------------------------------------------------------------------------
+
+describe('dagNodeSchema - RouteLoopNode', () => {
+  const routeLoopNode = {
+    id: 'review-router',
+    depends_on: ['review'],
+    route_loop: {
+      from: 'review',
+      condition: '$review.output.approved == true',
+      routes: {
+        positive: 'done',
+        negative: 'fix',
+        exhausted: 'escalation',
+      },
+    },
+  };
+
+  test('parses a valid route_loop node and defaults max_iterations to 10', () => {
+    const result = dagNodeSchema.safeParse(routeLoopNode);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(isRouteLoopNode(result.data)).toBe(true);
+      const node = result.data as RouteLoopNode;
+      expect(node.route_loop).toEqual({
+        from: 'review',
+        condition: '$review.output.approved == true',
+        max_iterations: 10,
+        routes: {
+          positive: 'done',
+          negative: 'fix',
+          exhausted: 'escalation',
+        },
+      });
+    }
+  });
+
+  test('keeps explicit max_iterations inside the bounded route budget range', () => {
+    const result = routeLoopConfigSchema.safeParse({
+      from: 'review',
+      condition: "$review.output == 'ok'",
+      max_iterations: 1,
+      routes: {
+        positive: 'done',
+        negative: 'fix',
+        exhausted: 'escalation',
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.max_iterations).toBe(1);
+    }
+  });
+
+  test('rejects route_loop combined with another execution mode', () => {
+    const result = dagNodeSchema.safeParse({
+      ...routeLoopNode,
+      prompt: 'This must not be accepted.',
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].message).toContain('mutually exclusive');
+    }
+  });
+
+  test('rejects unsafe node ids and route target ids', () => {
+    const unsafeIds = ['1review', 'review.router', '__proto__', 'a'.repeat(65)];
+
+    for (const id of unsafeIds) {
+      expect(dagNodeSchema.safeParse({ ...routeLoopNode, id }).success).toBe(false);
+      expect(
+        routeLoopConfigSchema.safeParse({
+          from: 'review',
+          condition: "$review.output == 'ok'",
+          routes: {
+            positive: id,
+            negative: 'fix',
+            exhausted: 'escalation',
+          },
+        }).success
+      ).toBe(false);
+    }
+  });
+
+  test('exposes exactly the supported route outcomes', () => {
+    expect(routeOutcomeSchema.options).toEqual(['positive', 'negative', 'exhausted']);
+    expect(routeOutcomeSchema.safeParse('retry').success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // dagNodeSchema — Claude SDK options
 // ---------------------------------------------------------------------------
 
@@ -409,6 +511,291 @@ describe('dagNodeSchema — new Claude SDK options', () => {
       expect('effort' in result.data).toBe(false);
       expect('thinking' in result.data).toBe(false);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// workflowRunSchema - route-loop runtime metadata
+// ---------------------------------------------------------------------------
+
+describe('workflowRunSchema - route-loop runtime metadata', () => {
+  const baseRun = {
+    id: 'run-1',
+    workflow_name: 'route-loop-workflow',
+    conversation_id: 'conv-1',
+    parent_conversation_id: null,
+    codebase_id: null,
+    status: 'running',
+    user_message: 'Run the workflow',
+    started_at: new Date('2026-06-27T00:00:00.000Z'),
+    completed_at: null,
+    last_activity_at: null,
+    working_path: null,
+    user_id: null,
+  };
+
+  const reviewRouteLoop: RouteLoopConfig = {
+    from: 'review',
+    condition: "$review.output.result == 'positive'",
+    max_iterations: 10,
+    routes: {
+      positive: 'done',
+      negative: 'fix',
+      exhausted: 'escalation',
+    },
+  };
+
+  test('defaults missing route-loop runtime metadata to empty state', () => {
+    expect(routeLoopRuntimeMetadataSchema.parse({})).toEqual({
+      loopCounters: {},
+      nodeAttempts: {},
+      executionSeq: 0,
+      routeActivations: {},
+    });
+  });
+
+  test('accepts typed route-loop runtime metadata on workflow runs', () => {
+    const result = workflowRunSchema.safeParse({
+      ...baseRun,
+      metadata: {
+        approval: { nodeId: 'gate', message: 'Approve?' },
+        loopCounters: { 'review-router': 2 },
+        nodeAttempts: { fix: 3, review: 3, 'review-router': 2 },
+        executionSeq: 8,
+        routeActivations: {
+          fix: {
+            route_loop_node_id: 'review-router',
+            outcome: 'negative',
+            target_node_id: 'fix',
+            attempt: 2,
+            execution_seq: 6,
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  test('rejects malformed route-loop runtime metadata before route decisions mutate state', () => {
+    const malformedRuns = [
+      { loopCounters: { router: -1 } },
+      { nodeAttempts: { review: 0 } },
+      { executionSeq: 1.5 },
+      {
+        routeActivations: {
+          fix: {
+            route_loop_node_id: 'router',
+            outcome: 'retry',
+            target_node_id: 'fix',
+            attempt: 1,
+            execution_seq: 4,
+          },
+        },
+      },
+    ];
+
+    for (const metadata of malformedRuns) {
+      const result = workflowRunSchema.safeParse({
+        ...baseRun,
+        metadata,
+      });
+
+      expect(result.success).toBe(false);
+    }
+  });
+
+  test('increments loop counter when a negative transition is selected', () => {
+    const transition = applyRouteLoopTransition({
+      metadata: {
+        loopCounters: { 'review-router': 2 },
+        nodeAttempts: {},
+        executionSeq: 0,
+        routeActivations: {},
+      },
+      routeLoopNodeId: 'review-router',
+      conditionResult: false,
+      routeLoop: reviewRouteLoop,
+    });
+
+    expect(transition.metadata.loopCounters['review-router']).toBe(3);
+  });
+
+  test('resets only the selected loop counter when a positive transition is selected', () => {
+    const transition = applyRouteLoopTransition({
+      metadata: {
+        loopCounters: { 'review-router': 3, 'other-router': 2 },
+        nodeAttempts: {},
+        executionSeq: 0,
+        routeActivations: {},
+      },
+      routeLoopNodeId: 'review-router',
+      conditionResult: true,
+      routeLoop: reviewRouteLoop,
+    });
+
+    expect(transition.metadata.loopCounters).toEqual({
+      'review-router': 0,
+      'other-router': 2,
+    });
+  });
+
+  test('increments route-loop attempt when any transition is selected', () => {
+    const transition = applyRouteLoopTransition({
+      metadata: {
+        loopCounters: {},
+        nodeAttempts: { 'review-router': 4 },
+        executionSeq: 0,
+        routeActivations: {},
+      },
+      routeLoopNodeId: 'review-router',
+      conditionResult: true,
+      routeLoop: reviewRouteLoop,
+    });
+
+    expect(transition.metadata.nodeAttempts['review-router']).toBe(5);
+  });
+
+  test('increments execution sequence when any transition is selected', () => {
+    const transition = applyRouteLoopTransition({
+      metadata: {
+        loopCounters: {},
+        nodeAttempts: {},
+        executionSeq: 7,
+        routeActivations: {},
+      },
+      routeLoopNodeId: 'review-router',
+      conditionResult: false,
+      routeLoop: reviewRouteLoop,
+    });
+
+    expect(transition.metadata.executionSeq).toBe(8);
+  });
+
+  test('computes negative transition metadata with counter, attempt, activation, and sequence increments', () => {
+    const transition = applyRouteLoopTransition({
+      metadata: {},
+      routeLoopNodeId: 'review-router',
+      conditionResult: false,
+      routeLoop: {
+        from: 'review',
+        condition: "$review.output.result == 'positive'",
+        max_iterations: 10,
+        routes: {
+          positive: 'done',
+          negative: 'fix',
+          exhausted: 'escalation',
+        },
+      },
+    });
+
+    expect(transition.metadata).toMatchObject({
+      loopCounters: { 'review-router': 1 },
+      nodeAttempts: { 'review-router': 1 },
+      executionSeq: 1,
+      routeActivations: {
+        fix: {
+          route_loop_node_id: 'review-router',
+          outcome: 'negative',
+          target_node_id: 'fix',
+          attempt: 1,
+          execution_seq: 1,
+        },
+      },
+    });
+    expect(transition.eventData).toEqual({
+      from: 'review',
+      outcome: 'negative',
+      to: 'fix',
+      condition: "$review.output.result == '<redacted>'",
+      condition_result: false,
+      negative_count: 1,
+      max_iterations: 10,
+      attempt: 1,
+      execution_seq: 1,
+    });
+  });
+
+  test('computes positive transition metadata by resetting only the selected loop counter', () => {
+    const transition = applyRouteLoopTransition({
+      metadata: {
+        loopCounters: { 'review-router': 3, 'other-router': 2 },
+        nodeAttempts: { 'review-router': 1 },
+        executionSeq: 4,
+        routeActivations: {},
+      },
+      routeLoopNodeId: 'review-router',
+      conditionResult: true,
+      routeLoop: {
+        from: 'review',
+        condition: '$review.output.score >= 80',
+        max_iterations: 10,
+        routes: {
+          positive: 'done',
+          negative: 'fix',
+          exhausted: 'escalation',
+        },
+      },
+    });
+
+    expect(transition.metadata.loopCounters).toEqual({
+      'review-router': 0,
+      'other-router': 2,
+    });
+    expect(transition.metadata.nodeAttempts).toEqual({ 'review-router': 2 });
+    expect(transition.metadata.executionSeq).toBe(5);
+    expect(transition.eventData).toMatchObject({
+      outcome: 'positive',
+      to: 'done',
+      condition: '$review.output.score >= <redacted>',
+      condition_result: true,
+      negative_count: 3,
+      attempt: 2,
+      execution_seq: 5,
+    });
+  });
+
+  test('computes exhausted transition after the incremented negative counter exceeds the limit', () => {
+    const transition = applyRouteLoopTransition({
+      metadata: {
+        loopCounters: { 'review-router': 1 },
+        nodeAttempts: { 'review-router': 1 },
+        executionSeq: 1,
+        routeActivations: {},
+      },
+      routeLoopNodeId: 'review-router',
+      conditionResult: false,
+      routeLoop: {
+        from: 'review',
+        condition: "$review.output.result == 'positive'",
+        max_iterations: 1,
+        routes: {
+          positive: 'done',
+          negative: 'fix',
+          exhausted: 'escalation',
+        },
+      },
+    });
+
+    expect(transition.metadata.loopCounters).toEqual({ 'review-router': 2 });
+    expect(transition.metadata.routeActivations).toMatchObject({
+      escalation: {
+        route_loop_node_id: 'review-router',
+        outcome: 'exhausted',
+        target_node_id: 'escalation',
+        attempt: 2,
+        execution_seq: 2,
+      },
+    });
+    expect(transition.eventData).toMatchObject({
+      outcome: 'exhausted',
+      to: 'escalation',
+      condition_result: false,
+      negative_count: 2,
+      max_iterations: 1,
+      attempt: 2,
+      execution_seq: 2,
+    });
   });
 });
 

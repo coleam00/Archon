@@ -11,6 +11,7 @@
  */
 import { EventEmitter } from 'events';
 import type { ArtifactType } from './schemas';
+import type { RouteLoopDecisionData } from './route-loop-state';
 import { createLogger } from '@archon/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -113,6 +114,14 @@ interface NodeSkippedEvent {
   reason: 'when_condition' | 'when_condition_parse_error' | 'trigger_rule' | 'prior_success';
 }
 
+interface NodeRoutedEvent {
+  type: 'node_routed';
+  runId: string;
+  nodeId: string;
+  nodeName: string;
+  data: RouteLoopDecisionData;
+}
+
 interface ToolStartedEvent {
   type: 'tool_started';
   runId: string;
@@ -153,6 +162,7 @@ export type WorkflowEmitterEvent =
   | NodeCompletedEvent
   | NodeFailedEvent
   | NodeSkippedEvent
+  | NodeRoutedEvent
   | WorkflowArtifactEvent
   | ToolStartedEvent
   | ToolCompletedEvent

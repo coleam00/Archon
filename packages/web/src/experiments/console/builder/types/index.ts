@@ -5,6 +5,7 @@ export type {
   WireBaseKey,
   BaseFields,
   LoopNodeData,
+  RouteLoopNodeData,
   ApprovalOnReject,
   ApprovalNodeData,
   CancelNodeData,

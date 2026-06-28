@@ -64,7 +64,10 @@ function initDevMode() {
   setupHoverHighlight(tooltip);
   setupClickCopy();
 
-  console.log('%c💡 Dev Mode available: Press Ctrl+E or click the Dev Mode button', 'color: #0066CC; font-weight: bold;');
+  console.log(
+    '%c💡 Dev Mode available: Press Ctrl+E or click the Dev Mode button',
+    'color: #0066CC; font-weight: bold;'
+  );
 }
 
 // ============================================================================
@@ -73,7 +76,7 @@ function initDevMode() {
 
 function setupKeyboardShortcuts() {
   // Track Shift key for container selection
-  document.addEventListener('keydown', (e) => {
+  document.addEventListener('keydown', e => {
     if (e.key === 'Shift') {
       // Don't activate if user is typing in a form field
       if (isTypingInField()) {
@@ -83,7 +86,10 @@ function setupKeyboardShortcuts() {
       shiftKeyPressed = true;
       document.body.classList.add('shift-held');
       if (devModeActive) {
-        console.log('%c⬆️ Shift held: Click any element to copy its Object ID', 'color: #10B981; font-weight: bold;');
+        console.log(
+          '%c⬆️ Shift held: Click any element to copy its Object ID',
+          'color: #10B981; font-weight: bold;'
+        );
       }
     }
 
@@ -94,12 +100,15 @@ function setupKeyboardShortcuts() {
     }
   });
 
-  document.addEventListener('keyup', (e) => {
+  document.addEventListener('keyup', e => {
     if (e.key === 'Shift') {
       shiftKeyPressed = false;
       document.body.classList.remove('shift-held');
       if (devModeActive) {
-        console.log('%c⬇️ Shift released: Prototype works normally (hold Shift to copy)', 'color: #6b7280;');
+        console.log(
+          '%c⬇️ Shift released: Prototype works normally (hold Shift to copy)',
+          'color: #6b7280;'
+        );
       }
     }
   });
@@ -133,7 +142,10 @@ function setupToggleButton(toggleButton, tooltip) {
 
     if (devModeActive) {
       console.log('%c🔧 DEV MODE ACTIVE', 'color: #0066CC; font-size: 16px; font-weight: bold;');
-      console.log('%c⚠️ Hold SHIFT + Click any element to copy its Object ID', 'color: #FFB800; font-size: 14px; font-weight: bold;');
+      console.log(
+        '%c⚠️ Hold SHIFT + Click any element to copy its Object ID',
+        'color: #FFB800; font-size: 14px; font-weight: bold;'
+      );
       console.log('%cWithout Shift: Prototype works normally', 'color: #6b7280;');
       console.log('%cPress Ctrl+E to toggle Dev Mode', 'color: #6b7280;');
     } else {
@@ -247,7 +259,7 @@ function setupClickCopy() {
 
       return false;
     },
-    true,
+    true
   ); // Capture phase
 }
 
@@ -273,7 +285,11 @@ function isSystemElement(id) {
 }
 
 function isToggleButton(element) {
-  return element.id === 'dev-mode-toggle' || element.closest('#dev-mode-toggle') || element.classList.contains('dev-mode-toggle');
+  return (
+    element.id === 'dev-mode-toggle' ||
+    element.closest('#dev-mode-toggle') ||
+    element.classList.contains('dev-mode-toggle')
+  );
 }
 
 function isTypingInField() {
@@ -342,7 +358,7 @@ function copyToClipboard(text) {
       .then(() => {
         console.log(`📋 Copied to clipboard: ${text}`);
       })
-      .catch((error) => {
+      .catch(error => {
         console.error('Dev Mode error:', error);
         fallbackCopy(text);
       });

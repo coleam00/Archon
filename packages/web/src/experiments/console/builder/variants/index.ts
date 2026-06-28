@@ -10,6 +10,7 @@ export {
   type VariantRegistryEntry,
 } from './registry';
 export { defaultLoopData, loopFromDag, loopToDag } from './loop';
+export { defaultRouteLoopData, routeLoopFromDag, routeLoopToDag } from './route-loop';
 export { defaultApprovalData, approvalFromDag, approvalToDag } from './approval';
 export { defaultCancelData, cancelFromDag, cancelToDag } from './cancel';
 export { defaultScriptData, scriptFromDag, scriptToDag } from './script';

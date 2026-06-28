@@ -1,19 +1,23 @@
 /**
  * Database operations for workflow runs
  */
-import { pool, getDialect, getDatabaseType } from './connection';
+import { pool, getDialect, getDatabaseType, getDatabase } from './connection';
 import type { IDatabase, SqlDialect } from './adapters/types';
 import type {
   WorkflowRun,
   WorkflowRunStatus,
   ApprovalContext,
 } from '@archon/workflows/schemas/workflow-run';
-import { TERMINAL_WORKFLOW_STATUSES } from '@archon/workflows/schemas/workflow-run';
+import {
+  TERMINAL_WORKFLOW_STATUSES,
+  routeLoopRuntimeMetadataSchema,
+} from '@archon/workflows/schemas/workflow-run';
 import type {
   DashboardWorkflowRun,
   ListDashboardRunsOptions,
   DashboardRunsResult,
 } from '../schemas/workflow-run';
+import type { PersistRouteDecisionTransitionInput } from '@archon/workflows/store';
 import { createLogger } from '@archon/paths';
 import { deleteRetryRefsByRunId } from '@archon/git';
 
@@ -29,6 +33,19 @@ function rollback(): Promise<void> {
 
 /** Guard error for deleteWorkflowRun — re-thrown without wrapping in the outer catch. */
 class WorkflowRunGuardError extends Error {}
+
+export class WorkflowRouteDecisionStaleWriteError extends Error {
+  constructor(
+    public readonly runId: string,
+    public readonly expectedExecutionSeq: number,
+    public readonly actualExecutionSeq: number
+  ) {
+    super(
+      `Workflow route decision stale write rejected (id: ${runId}, expected executionSeq: ${String(expectedExecutionSeq)}, actual executionSeq: ${String(actualExecutionSeq)})`
+    );
+    this.name = 'WorkflowRouteDecisionStaleWriteError';
+  }
+}
 
 /**
  * Normalize a WorkflowRun row from the database.
@@ -742,6 +759,111 @@ export async function updateWorkflowRun(
     const err = error as Error;
     getLog().error({ err }, 'db.workflow_run_update_failed');
     throw new Error(`Failed to update workflow run: ${err.message}`);
+  }
+}
+
+export async function persistRouteDecisionTransition(
+  input: PersistRouteDecisionTransitionInput
+): Promise<WorkflowRun> {
+  const dialect = getDialect();
+  const isPostgres = getDatabaseType() === 'postgresql';
+
+  routeLoopRuntimeMetadataSchema.parse(input.metadata);
+
+  try {
+    return await getDatabase().withTransaction(async query => {
+      const selectSql = isPostgres
+        ? 'SELECT * FROM remote_agent_workflow_runs WHERE id = $1 FOR UPDATE'
+        : 'SELECT * FROM remote_agent_workflow_runs WHERE id = $1';
+      const selectResult = await query<WorkflowRun>(selectSql, [input.workflow_run_id]);
+      const currentRow = selectResult.rows[0];
+      if (!currentRow) {
+        throw new Error(`Workflow run not found: ${input.workflow_run_id}`);
+      }
+
+      const currentRun = normalizeWorkflowRun(currentRow);
+      const currentMetadata = routeLoopRuntimeMetadataSchema.parse(currentRun.metadata);
+      if (currentMetadata.executionSeq !== input.expected_execution_seq) {
+        throw new WorkflowRouteDecisionStaleWriteError(
+          input.workflow_run_id,
+          input.expected_execution_seq,
+          currentMetadata.executionSeq
+        );
+      }
+
+      const metadataJson = JSON.stringify(input.metadata);
+      let updatedRow: WorkflowRun | undefined;
+      if (isPostgres) {
+        const updateResult = await query<WorkflowRun>(
+          `UPDATE remote_agent_workflow_runs
+         SET metadata = ${dialect.jsonMerge('metadata', 2)}, last_activity_at = ${dialect.now()}
+         WHERE id = $1
+         RETURNING *`,
+          [input.workflow_run_id, metadataJson]
+        );
+        updatedRow = updateResult.rows[0];
+      } else {
+        const updateResult = await query(
+          `UPDATE remote_agent_workflow_runs
+         SET metadata = ${dialect.jsonMerge('metadata', 2)}, last_activity_at = ${dialect.now()}
+         WHERE id = $1`,
+          [input.workflow_run_id, metadataJson]
+        );
+        if (updateResult.rowCount === 0) {
+          throw new Error(`Workflow run update returned no rows: ${input.workflow_run_id}`);
+        }
+
+        const updatedResult = await query<WorkflowRun>(
+          'SELECT * FROM remote_agent_workflow_runs WHERE id = $1',
+          [input.workflow_run_id]
+        );
+        updatedRow = updatedResult.rows[0];
+      }
+
+      if (!updatedRow) {
+        throw new Error(`Workflow run update returned no rows: ${input.workflow_run_id}`);
+      }
+
+      const routedEventId = dialect.generateUuid();
+      await query(
+        `INSERT INTO remote_agent_workflow_events (id, workflow_run_id, event_type, step_index, step_name, data)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+        [
+          routedEventId,
+          input.workflow_run_id,
+          'node_routed',
+          input.event.step_index ?? null,
+          input.event.step_name,
+          JSON.stringify(input.event.data),
+        ]
+      );
+
+      const completedEventId = dialect.generateUuid();
+      await query(
+        `INSERT INTO remote_agent_workflow_events (id, workflow_run_id, event_type, step_index, step_name, data)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+        [
+          completedEventId,
+          input.workflow_run_id,
+          'node_completed',
+          input.completed_event.step_index ?? null,
+          input.completed_event.step_name,
+          JSON.stringify(input.completed_event.data),
+        ]
+      );
+
+      return normalizeWorkflowRun(updatedRow);
+    });
+  } catch (error) {
+    if (error instanceof WorkflowRouteDecisionStaleWriteError) {
+      throw error;
+    }
+    const err = error as Error;
+    getLog().error(
+      { err, workflowRunId: input.workflow_run_id },
+      'db.workflow_route_decision_transition_failed'
+    );
+    throw new Error(`Failed to persist route decision transition: ${err.message}`);
   }
 }
 

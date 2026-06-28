@@ -39,6 +39,8 @@ function textBodies(node: BuilderNode): string[] {
       return [node.data.message];
     case 'loop':
       return [node.data.prompt];
+    case 'route_loop':
+      return [node.data.condition];
     case 'cancel':
       return [];
   }

@@ -113,6 +113,20 @@ export interface LoopIterationEvent extends BaseSSEEvent {
   duration?: number;
 }
 
+export type RouteLoopOutcome = 'positive' | 'negative' | 'exhausted';
+
+export interface RouteLoopDecisionData extends Record<string, unknown> {
+  from: string;
+  outcome: RouteLoopOutcome;
+  to: string;
+  condition: string;
+  condition_result: boolean;
+  negative_count: number;
+  max_iterations: number;
+  attempt: number;
+  execution_seq: number;
+}
+
 // DAG node status (emitted during DAG workflow execution)
 export interface DagNodeEvent extends BaseSSEEvent {
   type: 'dag_node';
@@ -123,6 +137,7 @@ export interface DagNodeEvent extends BaseSSEEvent {
   duration?: number;
   error?: string;
   reason?: 'when_condition' | 'trigger_rule';
+  routeDecision?: RouteLoopDecisionData | Record<string, unknown>;
 }
 
 // Workflow tool activity (tool_started / tool_completed from executor)
@@ -254,6 +269,7 @@ export interface DagNodeState {
   currentIteration?: number;
   maxIterations?: number;
   iterations?: LoopIterationInfo[];
+  routeDecision?: RouteLoopDecisionData | Record<string, unknown>;
 }
 
 export interface WorkflowArtifact {

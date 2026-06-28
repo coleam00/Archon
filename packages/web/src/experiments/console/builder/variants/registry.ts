@@ -17,6 +17,7 @@ import { defaultScriptData, scriptFromDag, scriptToDag } from './script';
 import { commandFromDag, commandToDag, defaultCommandData } from './command';
 import { defaultPromptData, promptFromDag, promptToDag } from './prompt';
 import { bashFromDag, bashToDag, defaultBashData } from './bash';
+import { defaultRouteLoopData, routeLoopFromDag, routeLoopToDag } from './route-loop';
 
 /** Canonical variant order (three existing kinds, then the four new variants). */
 export const VARIANTS: readonly VariantId[] = [
@@ -25,6 +26,7 @@ export const VARIANTS: readonly VariantId[] = [
   'bash',
   'script',
   'loop',
+  'route_loop',
   'approval',
   'cancel',
 ];
@@ -86,6 +88,14 @@ export const VARIANT_REGISTRY: { [K in VariantId]: VariantRegistryEntry<K> } = {
     wireKeys: ['loop'],
     capabilities: VARIANT_CAPABILITIES.loop,
   },
+  route_loop: {
+    label: 'Route Loop',
+    defaultData: defaultRouteLoopData,
+    fromDag: routeLoopFromDag,
+    toDag: routeLoopToDag,
+    wireKeys: ['route_loop'],
+    capabilities: VARIANT_CAPABILITIES.route_loop,
+  },
   approval: {
     label: 'Approval',
     defaultData: defaultApprovalData,
@@ -125,6 +135,8 @@ export function nodeDataToDag(node: BuilderNode): Partial<WireDagNode> {
   switch (node.variant) {
     case 'loop':
       return loopToDag(node.data);
+    case 'route_loop':
+      return routeLoopToDag(node.data);
     case 'approval':
       return approvalToDag(node.data);
     case 'cancel':

@@ -156,6 +156,8 @@ function kindGlyph(k: WorkflowNodeKind): string {
   switch (k) {
     case 'loop':
       return '↻';
+    case 'route_loop':
+      return '⇄';
     case 'approval':
       return '◈';
     case 'cancel':

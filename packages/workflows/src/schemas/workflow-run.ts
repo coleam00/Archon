@@ -97,6 +97,58 @@ export const nodeOutputSchema = z.discriminatedUnion('state', [
 export type NodeOutput = z.infer<typeof nodeOutputSchema>;
 
 // ---------------------------------------------------------------------------
+// RouteLoopRuntimeMetadata
+// ---------------------------------------------------------------------------
+
+const nonNegativeIntegerSchema = z.number().int().min(0);
+const positiveIntegerSchema = z.number().int().min(1);
+
+export const routeLoopMetadataOutcomeSchema = z.enum(['positive', 'negative', 'exhausted']);
+
+export type RouteLoopMetadataOutcome = z.infer<typeof routeLoopMetadataOutcomeSchema>;
+
+export const routeActivationSchema = z.object({
+  route_loop_node_id: z.string().min(1),
+  outcome: routeLoopMetadataOutcomeSchema,
+  target_node_id: z.string().min(1),
+  attempt: positiveIntegerSchema,
+  execution_seq: positiveIntegerSchema,
+});
+
+export type RouteActivation = z.infer<typeof routeActivationSchema>;
+
+export const routeLoopRuntimeMetadataSchema = z
+  .object({
+    loopCounters: z.record(z.string(), nonNegativeIntegerSchema).default({}),
+    nodeAttempts: z.record(z.string(), positiveIntegerSchema).default({}),
+    executionSeq: nonNegativeIntegerSchema.default(0),
+    routeActivations: z.record(z.string(), routeActivationSchema).default({}),
+  })
+  .passthrough();
+
+export type RouteLoopRuntimeMetadata = z.infer<typeof routeLoopRuntimeMetadataSchema>;
+
+export const workflowRunMetadataSchema = z
+  .record(z.string(), z.unknown())
+  .superRefine((metadata, ctx) => {
+    const result = routeLoopRuntimeMetadataSchema.safeParse(metadata);
+
+    if (result.success) {
+      return;
+    }
+
+    for (const issue of result.error.issues) {
+      ctx.addIssue({
+        code: 'custom',
+        path: issue.path,
+        message: issue.message,
+      });
+    }
+  });
+
+export type WorkflowRunMetadata = z.infer<typeof workflowRunMetadataSchema>;
+
+// ---------------------------------------------------------------------------
 // WorkflowRun
 // ---------------------------------------------------------------------------
 
@@ -111,7 +163,7 @@ export const workflowRunSchema = z.object({
   codebase_id: z.string().nullable(),
   status: workflowRunStatusSchema,
   user_message: z.string(),
-  metadata: z.record(z.string(), z.unknown()),
+  metadata: workflowRunMetadataSchema,
   started_at: z.date(),
   completed_at: z.date().nullable(),
   last_activity_at: z.date().nullable(),

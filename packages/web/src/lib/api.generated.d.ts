@@ -3816,16 +3816,6 @@ export interface components {
       events: components['schemas']['WorkflowEvent'][];
       nodeStates: components['schemas']['WorkflowNodeState'][];
     };
-    WorkflowNodeState: {
-      nodeId: string;
-      name: string;
-      /** @enum {string} */
-      status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
-      retryEpoch: number;
-      duration?: number;
-      error?: string;
-      reason?: string;
-    };
     WorkflowEvent: {
       id: string;
       workflow_run_id: string;
@@ -3837,6 +3827,16 @@ export interface components {
       };
       /** Format: date-time */
       created_at: string;
+    };
+    WorkflowNodeState: {
+      nodeId: string;
+      name: string;
+      /** @enum {string} */
+      status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+      retryEpoch: number;
+      duration?: number;
+      error?: string;
+      reason?: string;
     };
     ValidateWorkflowResponse: {
       valid: boolean;

@@ -78,6 +78,26 @@ export function declaredFieldsFromSchema(
 
 export type FieldResolution = { kind: 'value'; value: unknown } | { kind: 'empty' };
 
+export interface NodeOutputAttempt {
+  attempt: number;
+  output: NodeOutput;
+}
+
+export function latestCompletedNodeOutput(
+  attempts: Iterable<NodeOutputAttempt>
+): NodeOutput | undefined {
+  let latest: NodeOutputAttempt | undefined;
+
+  for (const attempt of attempts) {
+    if (attempt.output.state !== 'completed') continue;
+    if (latest === undefined || attempt.attempt > latest.attempt) {
+      latest = attempt;
+    }
+  }
+
+  return latest?.output;
+}
+
 /** Strip a single markdown code fence (```json … ```) some models/scripts wrap JSON in. */
 const FENCE_RE = /^[\s\S]*?```(?:json)?\s*\n([\s\S]*?)\n\s*```[\s\S]*$/;
 

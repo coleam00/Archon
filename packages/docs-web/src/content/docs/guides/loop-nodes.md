@@ -17,6 +17,9 @@ Use loop nodes for autonomous multi-step work: implement N stories from a PRD,
 iterate on a design until validation passes, or refine output until quality
 criteria are met.
 
+Use [`route_loop` nodes](/guides/route-loop-nodes/) instead when the loop body is multiple DAG nodes and a review result should route to explicit positive, negative, or exhausted targets.
+`loop:` repeats one AI prompt; `route_loop:` is a controller that reads an existing node output and selects a graph path.
+
 ## Quick Start
 
 ```yaml

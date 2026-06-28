@@ -1,6 +1,62 @@
 import { describe, test, expect } from 'bun:test';
-import { resolveExecutionNodeDisplay, resolveNodeDisplay, dagNodesToReactFlow } from './dag-layout';
+import {
+  resolveExecutionNodeDisplay,
+  resolveNodeDisplay,
+  dagNodesToReactFlow,
+  hasCycle,
+} from './dag-layout';
 import type { DagNode } from '@/lib/api';
+
+type RouteLoopDagNode = DagNode & {
+  route_loop: {
+    from: string;
+    condition: string;
+    max_iterations: number;
+    routes: {
+      positive: string;
+      negative: string;
+      exhausted: string;
+    };
+  };
+};
+
+function routeLoopDagNodes(): DagNode[] {
+  const routeLoopNode: RouteLoopDagNode = {
+    id: 'review_router',
+    depends_on: ['review'],
+    route_loop: {
+      from: 'review',
+      condition: "$review.output.status == 'approved'",
+      max_iterations: 3,
+      routes: {
+        positive: 'done',
+        negative: 'fix',
+        exhausted: 'escalate',
+      },
+    },
+  };
+
+  return [
+    {
+      id: 'fix',
+      prompt: 'Revise the implementation based on the latest review.',
+    },
+    {
+      id: 'review',
+      depends_on: ['fix'],
+      prompt: 'Review the implementation and emit JSON with a status field.',
+    },
+    routeLoopNode,
+    {
+      id: 'done',
+      bash: "echo 'approved'",
+    },
+    {
+      id: 'escalate',
+      bash: "echo 'review exhausted'",
+    },
+  ];
+}
 
 describe('resolveNodeDisplay', () => {
   test('loop node returns label Loop, nodeType loop, and promptText from loop.prompt', () => {
@@ -98,5 +154,90 @@ describe('dagNodesToReactFlow', () => {
     const approvalFlowNode = nodes.find(n => n.id === 'approval-1');
     expect(loopFlowNode?.data.nodeType).toBe('loop');
     expect(approvalFlowNode?.data.nodeType).toBe('approval');
+  });
+
+  test('route_loop nodes create route edges to each configured target', () => {
+    const { edges } = dagNodesToReactFlow(routeLoopDagNodes());
+
+    expect(edges).toContainEqual(
+      expect.objectContaining({
+        id: 'review_router->done',
+        source: 'review_router',
+        target: 'done',
+      })
+    );
+    expect(edges).toContainEqual(
+      expect.objectContaining({
+        id: 'review_router->fix',
+        source: 'review_router',
+        target: 'fix',
+      })
+    );
+    expect(edges).toContainEqual(
+      expect.objectContaining({
+        id: 'review_router->escalate',
+        source: 'review_router',
+        target: 'escalate',
+      })
+    );
+  });
+
+  test('route_loop route edges include outcome labels', () => {
+    const { edges } = dagNodesToReactFlow(routeLoopDagNodes());
+
+    expect(edges).toContainEqual(
+      expect.objectContaining({
+        source: 'review_router',
+        target: 'done',
+        label: 'positive',
+      })
+    );
+    expect(edges).toContainEqual(
+      expect.objectContaining({
+        source: 'review_router',
+        target: 'fix',
+        label: 'negative',
+      })
+    );
+    expect(edges).toContainEqual(
+      expect.objectContaining({
+        source: 'review_router',
+        target: 'escalate',
+        label: 'exhausted',
+      })
+    );
+  });
+
+  test('route_loop route targets remain visible when they have no depends_on edge', () => {
+    const { nodes } = dagNodesToReactFlow(routeLoopDagNodes());
+
+    expect(nodes.map(node => node.id).sort()).toEqual([
+      'done',
+      'escalate',
+      'fix',
+      'review',
+      'review_router',
+    ]);
+  });
+});
+
+describe('hasCycle', () => {
+  test('ignores route_loop outcome edges during static dependency cycle detection', () => {
+    expect(
+      hasCycle(new Set(['review-router', 'fix', 'review']), [
+        { source: 'fix', target: 'review' },
+        { source: 'review', target: 'review-router' },
+        { source: 'review-router', sourceHandle: 'negative', target: 'fix' },
+      ])
+    ).toBe(false);
+  });
+
+  test('detects static dependency cycles', () => {
+    expect(
+      hasCycle(new Set(['a', 'b']), [
+        { source: 'a', target: 'b' },
+        { source: 'b', target: 'a' },
+      ])
+    ).toBe(true);
   });
 });

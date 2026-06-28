@@ -92,6 +92,13 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     failOrphanedRuns: mock(async () => ({ count: 0 })),
     createWorkflowRun: mock(async () => makeRun()),
     updateWorkflowRun: mock(async () => {}),
+    persistRouteDecisionTransition: mock(
+      async (input: Parameters<IWorkflowStore['persistRouteDecisionTransition']>[0]) => ({
+        ...makeRun(),
+        id: input.workflow_run_id,
+        metadata: input.metadata,
+      })
+    ),
     failWorkflowRun: mock(async () => {}),
     getWorkflowRun: mock(async () => ({ ...makeRun(), status: 'completed' as const })),
     getWorkflowRunStatus: mock(async () => 'completed' as const),

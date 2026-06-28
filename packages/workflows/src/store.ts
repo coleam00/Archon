@@ -12,6 +12,22 @@ import type {
   WorkflowNodeSession,
 } from './schemas';
 
+export interface PersistRouteDecisionTransitionInput {
+  workflow_run_id: string;
+  expected_execution_seq: number;
+  metadata: Record<string, unknown>;
+  event: {
+    step_name: string;
+    data: Record<string, unknown>;
+    step_index?: number;
+  };
+  completed_event: {
+    step_name: string;
+    data: Record<string, unknown>;
+    step_index?: number;
+  };
+}
+
 export type { WorkflowNodeSession } from './schemas';
 
 /** Composite primary key identifying a single persisted node session row. */
@@ -57,6 +73,7 @@ export const WORKFLOW_EVENT_TYPES = [
   'node_skipped',
   'node_skipped_prior_success',
   'node_always_run_reset',
+  'node_routed',
   'loop_iteration_started',
   'loop_iteration_completed',
   'loop_iteration_failed',
@@ -117,6 +134,7 @@ export interface IWorkflowStore {
     id: string,
     updates: Partial<Pick<WorkflowRun, 'status' | 'metadata'>>
   ): Promise<void>;
+  persistRouteDecisionTransition(input: PersistRouteDecisionTransitionInput): Promise<WorkflowRun>;
   updateWorkflowActivity(id: string): Promise<void>;
   getWorkflowRunStatus(id: string): Promise<WorkflowRunStatus | null>;
   completeWorkflowRun(id: string, metadata?: Record<string, unknown>): Promise<void>;

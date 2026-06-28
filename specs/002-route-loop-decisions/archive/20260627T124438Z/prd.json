@@ -1,0 +1,947 @@
+{
+  "project": "'Tasks for route loop decisions feature implementation'",
+  "branchName": "002-route-loop-decisions",
+  "description": "Route Loop Decisions",
+  "specDirectory": "specs/002-route-loop-decisions",
+  "userStories": [
+    {
+      "title": "Phase 1: Setup",
+      "completed": true,
+      "tasks": [
+        {
+          "id": "T001",
+          "title": "Run `bun test packages/workflows/src/dag-executor.test.ts -t \"reruns a negative ",
+          "description": "Run `bun test packages/workflows/src/dag-executor.test.ts -t \"reruns a negative route path until the route_loop condition passes\"` and confirm the expected pre-implementation failure in `packages/workflows/src/dag-executor.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 1,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T002",
+          "title": "[P] Run `bun test packages/workflows/src/loader.test.ts packages/workflows/src/s",
+          "description": "[P] Run `bun test packages/workflows/src/loader.test.ts packages/workflows/src/schemas.test.ts` to capture current workflow schema and loader baseline behavior in `packages/workflows/src/loader.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 2,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T003",
+          "title": "[P] Run `bun test packages/web/src/experiments/console/builder/model/round-trip.",
+          "description": "[P] Run `bun test packages/web/src/experiments/console/builder/model/round-trip.test.ts packages/web/src/experiments/console/builder/validation/validate.test.ts` to capture current builder baseline behavior in `packages/web/src/experiments/console/builder/model/round-trip.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 3,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T004",
+          "title": "[P] Inspect the current workflow event and metadata seams in `packages/workflows",
+          "description": "[P] Inspect the current workflow event and metadata seams in `packages/workflows/src/store.ts` and `packages/core/src/db/workflows.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 4,
+          "passes": true,
+          "notes": ""
+        }
+      ],
+      "tasksIds": ["T001", "T002", "T003", "T004"]
+    },
+    {
+      "title": "Phase 2: Foundational",
+      "completed": true,
+      "tasks": [
+        {
+          "id": "T005",
+          "title": "[P] Add shared route-loop workflow fixture builders in `packages/workflows/src/t",
+          "description": "[P] Add shared route-loop workflow fixture builders in `packages/workflows/src/test-utils.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 5,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T006",
+          "title": "[P] Add a route-loop builder fixture in `packages/web/src/experiments/console/bu",
+          "description": "[P] Add a route-loop builder fixture in `packages/web/src/experiments/console/builder/fixtures/route-loop.fixture.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 6,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T007",
+          "title": "Export the route-loop builder fixture from `packages/web/src/experiments/console",
+          "description": "Export the route-loop builder fixture from `packages/web/src/experiments/console/builder/fixtures/index.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 7,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T008",
+          "title": "[P] Add failing tests for route-loop runtime metadata validation in `packages/wo",
+          "description": "[P] Add failing tests for route-loop runtime metadata validation in `packages/workflows/src/schemas.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 8,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T009",
+          "title": "Add route-loop metadata schema support for `loopCounters`, `nodeAttempts`, `exec",
+          "description": "Add route-loop metadata schema support for `loopCounters`, `nodeAttempts`, `executionSeq`, and `routeActivations` in `packages/workflows/src/schemas/workflow-run.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 9,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T010",
+          "title": "Add the initial route-loop event type contract placeholder in `packages/workflow",
+          "description": "Add the initial route-loop event type contract placeholder in `packages/workflows/src/store.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 10,
+          "passes": true,
+          "notes": ""
+        }
+      ],
+      "tasksIds": ["T005", "T006", "T007", "T008", "T009", "T010"]
+    },
+    {
+      "title": "Phase 3.1: Tests For User Story 1",
+      "completed": true,
+      "tasks": [
+        {
+          "id": "T011",
+          "title": "[P] [US1] Add schema tests for valid `route_loop` config, exclusive execution mo",
+          "description": "[P] [US1] Add schema tests for valid `route_loop` config, exclusive execution mode, default `max_iterations`, and safe id grammar in `packages/workflows/src/schemas.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 11,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T012",
+          "title": "[US1] Add loader tests for required routes, `depends_on` and `from` mismatch, mi",
+          "description": "[US1] Add loader tests for required routes, `depends_on` and `from` mismatch, missing targets, self-target routes, rejecting `when` on `route_loop`, rejecting `trigger_rule` on `route_loop`, rejecting `when` on the `from` node, and allowing `trigger_rule` on the `from` node in `packages/workflows/src/loader.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 12,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T013",
+          "title": "[US1] Add loader tests for from-only condition references and declared output fi",
+          "description": "[US1] Add loader tests for from-only condition references and declared output field references in `packages/workflows/src/loader.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 13,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T014",
+          "title": "[P] [US1] Add OpenAPI workflow definition tests for the `route_loop` DAG node sh",
+          "description": "[P] [US1] Add OpenAPI workflow definition tests for the `route_loop` DAG node shape in `packages/server/src/routes/api.workflows.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 14,
+          "passes": true,
+          "notes": ""
+        }
+      ],
+      "tasksIds": ["T011", "T012", "T013", "T014"]
+    },
+    {
+      "title": "Phase 3.2: Implementation For User Story 1",
+      "completed": true,
+      "tasks": [
+        {
+          "id": "T015",
+          "title": "[US1] Implement `routeLoopConfigSchema`, `routeLoopRoutesSchema`, `routeOutcomeS",
+          "description": "[US1] Implement `routeLoopConfigSchema`, `routeLoopRoutesSchema`, `routeOutcomeSchema`, safe node id validation, and derived types in `packages/workflows/src/schemas/route-loop.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 15,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T016",
+          "title": "[US1] Export route-loop schemas and type guards from `packages/workflows/src/sch",
+          "description": "[US1] Export route-loop schemas and type guards from `packages/workflows/src/schemas/index.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 16,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T017",
+          "title": "[US1] Extend `dagNodeSchema` with mutually exclusive `route_loop` node mode vali",
+          "description": "[US1] Extend `dagNodeSchema` with mutually exclusive `route_loop` node mode validation in `packages/workflows/src/schemas/dag-node.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 17,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T018",
+          "title": "[US1] Extend workflow loader validation for `route_loop.depends_on`, `route_loop",
+          "description": "[US1] Extend workflow loader validation for `route_loop.depends_on`, `route_loop.from`, route target existence, and unsupported node fields in `packages/workflows/src/loader.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 18,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T019",
+          "title": "[US1] Add route-edge cycle validation, positive and exhausted exit-path validati",
+          "description": "[US1] Add route-edge cycle validation, positive and exhausted exit-path validation, nested route-loop allowance, warning behavior when `routes.negative` targets `route_loop.from` directly, and self-contained negative path validation in `packages/workflows/src/loader.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 19,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T020",
+          "title": "[US1] Expose condition parsing reference metadata needed by route-loop validatio",
+          "description": "[US1] Expose condition parsing reference metadata needed by route-loop validation in `packages/workflows/src/condition-evaluator.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 20,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T021",
+          "title": "[US1] Wire strict output field validation for route-loop condition references in",
+          "description": "[US1] Wire strict output field validation for route-loop condition references in `packages/workflows/src/output-ref.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 21,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T022",
+          "title": "[US1] Update server workflow schemas to include the route-loop DAG node shape in",
+          "description": "[US1] Update server workflow schemas to include the route-loop DAG node shape in `packages/server/src/routes/schemas/workflow.schemas.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 22,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T023",
+          "title": "[US1] Verify User Story 1 with `bun test packages/workflows/src/schemas.test.ts ",
+          "description": "[US1] Verify User Story 1 with `bun test packages/workflows/src/schemas.test.ts packages/workflows/src/loader.test.ts packages/server/src/routes/api.workflows.test.ts` for `packages/workflows/src/loader.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 23,
+          "passes": true,
+          "notes": ""
+        }
+      ],
+      "tasksIds": ["T015", "T016", "T017", "T018", "T019", "T020", "T021", "T022", "T023"]
+    },
+    {
+      "title": "Phase 4.1: Tests For User Story 2",
+      "completed": true,
+      "tasks": [
+        {
+          "id": "T024",
+          "title": "[US2] Update the existing route-loop TDD guard to assert safe condition metadata",
+          "description": "[US2] Update the existing route-loop TDD guard to assert safe condition metadata, route-loop attempt, and execution sequence fields in `packages/workflows/src/dag-executor.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 24,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T025",
+          "title": "[US2] Add executor tests for `max_iterations: 1`, exhausted routing on the secon",
+          "description": "[US2] Add executor tests for `max_iterations: 1`, exhausted routing on the second false result, and `condition_result: false` on exhausted events in `packages/workflows/src/dag-executor.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 25,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T026",
+          "title": "[P] [US2] Add route-loop metadata transition tests for counter increment, positi",
+          "description": "[P] [US2] Add route-loop metadata transition tests for counter increment, positive reset, attempt increment, and sequence increment in `packages/workflows/src/schemas.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 26,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T027",
+          "title": "[P] [US2] Add core persistence tests for atomic route-decision metadata and even",
+          "description": "[P] [US2] Add core persistence tests for atomic route-decision metadata and event writes in `packages/core/src/db/workflows.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 27,
+          "passes": true,
+          "notes": ""
+        }
+      ],
+      "tasksIds": ["T024", "T025", "T026", "T027"]
+    },
+    {
+      "title": "Phase 4.2: Implementation For User Story 2",
+      "completed": true,
+      "tasks": [
+        {
+          "id": "T028",
+          "title": "[US2] Add a typed route-loop runtime state transition helper in `packages/workfl",
+          "description": "[US2] Add a typed route-loop runtime state transition helper in `packages/workflows/src/route-loop-state.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 28,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T029",
+          "title": "[US2] Define the durable route-decision store contract in `packages/workflows/sr",
+          "description": "[US2] Define the durable route-decision store contract in `packages/workflows/src/store.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 29,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T030",
+          "title": "[US2] Implement atomic metadata update and stale-write protection for route deci",
+          "description": "[US2] Implement atomic metadata update and stale-write protection for route decisions in `packages/core/src/db/workflows.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 30,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T031",
+          "title": "[US2] Wire route-decision persistence through the workflow store adapter in `pac",
+          "description": "[US2] Wire route-decision persistence through the workflow store adapter in `packages/core/src/workflows/store-adapter.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 31,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T032",
+          "title": "[US2] Add the route activation executor path while preserving the existing stati",
+          "description": "[US2] Add the route activation executor path while preserving the existing static DAG path in `packages/workflows/src/dag-executor.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 32,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T033",
+          "title": "[US2] Evaluate `route_loop.condition` against the latest completed output of `ro",
+          "description": "[US2] Evaluate `route_loop.condition` against the latest completed output of `route_loop.from` and fail fast for skipped, failed, missing, pending, or unusable source output in `packages/workflows/src/dag-executor.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 33,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T034",
+          "title": "[US2] Increment negative counters before selecting `negative` or `exhausted` and",
+          "description": "[US2] Increment negative counters before selecting `negative` or `exhausted` and reset only the selected loop counter on `positive` in `packages/workflows/src/dag-executor.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 34,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T035",
+          "title": "[US2] Activate only the selected route target and leave unselected route targets",
+          "description": "[US2] Activate only the selected route target and leave unselected route targets dormant in `packages/workflows/src/dag-executor.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 35,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T036",
+          "title": "[US2] Rerun completed selected targets as fresh attempts, validate the selected ",
+          "description": "[US2] Rerun completed selected targets as fresh attempts, validate the selected rerun path self-containment at runtime before invalidating latest-output state, and add executor coverage for stale persisted state, resume, retry, or loader-bypassed rerun paths in `packages/workflows/src/dag-executor.ts` and `packages/workflows/src/dag-executor.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 36,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T037",
+          "title": "[US2] Fail fast when a selected route target is already running or paused in `pa",
+          "description": "[US2] Fail fast when a selected route target is already running or paused in `packages/workflows/src/dag-executor.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 37,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T038",
+          "title": "[US2] Persist route-loop output metadata from the same route-decision transition",
+          "description": "[US2] Persist route-loop output metadata from the same route-decision transition that writes `node_routed` in `packages/workflows/src/dag-executor.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 38,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T039",
+          "title": "[US2] Verify User Story 2 with `bun test packages/workflows/src/dag-executor.tes",
+          "description": "[US2] Verify User Story 2 with `bun test packages/workflows/src/dag-executor.test.ts packages/core/src/db/workflows.test.ts` for `packages/workflows/src/dag-executor.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 39,
+          "passes": true,
+          "notes": ""
+        }
+      ],
+      "tasksIds": [
+        "T028",
+        "T029",
+        "T030",
+        "T031",
+        "T032",
+        "T033",
+        "T034",
+        "T035",
+        "T036",
+        "T037",
+        "T038",
+        "T039"
+      ]
+    },
+    {
+      "title": "Phase 5.1: Tests For User Story 3",
+      "completed": true,
+      "tasks": [
+        {
+          "id": "T040",
+          "title": "[P] [US3] Add output reference tests asserting `$node.output` resolves to the la",
+          "description": "[P] [US3] Add output reference tests asserting `$node.output` resolves to the latest completed attempt in `packages/workflows/src/output-ref.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 40,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T041",
+          "title": "[P] [US3] Add event projection tests for prior attempts and `node_routed` metada",
+          "description": "[P] [US3] Add event projection tests for prior attempts and `node_routed` metadata preservation in `packages/core/src/db/workflow-events.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 41,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T042",
+          "title": "[P] [US3] Add API run detail tests for `node_routed` events, route-loop outputs,",
+          "description": "[P] [US3] Add API run detail tests for `node_routed` events, route-loop outputs, latest attempts, and historical attempts in `packages/server/src/routes/api.workflow-runs.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 42,
+          "passes": true,
+          "notes": ""
+        }
+      ],
+      "tasksIds": ["T040", "T041", "T042"]
+    },
+    {
+      "title": "Phase 5.2: Implementation For User Story 3",
+      "completed": true,
+      "tasks": [
+        {
+          "id": "T043",
+          "title": "[US3] Extend the workflow event row schema with typed `node_routed` metadata val",
+          "description": "[US3] Extend the workflow event row schema with typed `node_routed` metadata validation in `packages/core/src/schemas/workflow-event.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 43,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T044",
+          "title": "[US3] Extend core workflow run row metadata validation for route-loop metadata f",
+          "description": "[US3] Extend core workflow run row metadata validation for route-loop metadata fields in `packages/core/src/schemas/workflow-run.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 44,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T045",
+          "title": "[US3] Project latest attempt summaries without deleting old attempt events in `p",
+          "description": "[US3] Project latest attempt summaries without deleting old attempt events in `packages/core/src/db/workflow-events.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 45,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T046",
+          "title": "[US3] Return `node_routed` events and latest route-loop outputs through the work",
+          "description": "[US3] Return `node_routed` events and latest route-loop outputs through the workflow store adapter in `packages/core/src/workflows/store-adapter.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 46,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T047",
+          "title": "[US3] Add safe condition serialization that preserves references, fields, operat",
+          "description": "[US3] Add safe condition serialization that preserves references, fields, operators, and boolean structure while redacting literal values in `packages/workflows/src/condition-evaluator.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 47,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T048",
+          "title": "[US3] Stream typed `node_routed` events through the workflow event emitter in `p",
+          "description": "[US3] Stream typed `node_routed` events through the workflow event emitter in `packages/workflows/src/event-emitter.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 48,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T049",
+          "title": "[US3] Update server run detail schemas for route metadata fields in `packages/se",
+          "description": "[US3] Update server run detail schemas for route metadata fields in `packages/server/src/routes/schemas/workflow.schemas.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 49,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T050",
+          "title": "[US3] Verify User Story 3 with `bun test packages/workflows/src/output-ref.test.",
+          "description": "[US3] Verify User Story 3 with `bun test packages/workflows/src/output-ref.test.ts packages/core/src/db/workflow-events.test.ts packages/core/src/workflows/store-adapter.test.ts packages/server/src/routes/api.workflow-runs.test.ts` for `packages/core/src/db/workflow-events.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 50,
+          "passes": true,
+          "notes": ""
+        }
+      ],
+      "tasksIds": ["T043", "T044", "T045", "T046", "T047", "T048", "T049", "T050"]
+    },
+    {
+      "title": "Phase 6.1: Tests For User Story 4",
+      "completed": true,
+      "tasks": [
+        {
+          "id": "T051",
+          "title": "[P] [US4] Add console builder round-trip tests for route-loop input and output s",
+          "description": "[P] [US4] Add console builder round-trip tests for route-loop input and output serialization in `packages/web/src/experiments/console/builder/model/round-trip.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 51,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T052",
+          "title": "[P] [US4] Add console builder validation tests for one input, required routes, s",
+          "description": "[P] [US4] Add console builder validation tests for one input, required routes, shared route targets, and mismatched `from` in `packages/web/src/experiments/console/builder/validation/graph.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 52,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T053",
+          "title": "[P] [US4] Add structural validation tests for safe node ids and reserved keys in",
+          "description": "[P] [US4] Add structural validation tests for safe node ids and reserved keys in `packages/web/src/experiments/console/builder/validation/structural.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 53,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T054",
+          "title": "[P] [US4] Add route-loop variant detection tests in `packages/web/src/experiment",
+          "description": "[P] [US4] Add route-loop variant detection tests in `packages/web/src/experiments/console/builder/variants/detect.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 54,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T055",
+          "title": "[P] [US4] Add graph layout tests for route edges, outcome labels, and dormant ro",
+          "description": "[P] [US4] Add graph layout tests for route edges, outcome labels, and dormant route targets in `packages/web/src/lib/dag-layout.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 55,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T056",
+          "title": "[P] [US4] Add component, Web store, and SSE/refetch bridge tests for route-loop ",
+          "description": "[P] [US4] Add component, Web store, and SSE/refetch bridge tests for route-loop node handles, typed `node_routed` rendering, and route decision propagation within one live refresh cycle in `packages/web/src/components/workflows/DagNodeComponent.test.ts`, `packages/web/src/components/workflows/WorkflowExecution.test.tsx`, `packages/web/src/stores/workflow-store.test.ts`, and `packages/server/src/adapters/web/workflow-bridge.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 56,
+          "passes": true,
+          "notes": ""
+        }
+      ],
+      "tasksIds": ["T051", "T052", "T053", "T054", "T055", "T056"]
+    },
+    {
+      "title": "Phase 6.2: Implementation For User Story 4",
+      "completed": true,
+      "tasks": [
+        {
+          "id": "T057",
+          "title": "[US4] Regenerate OpenAPI-derived Web API types after server schema changes in `p",
+          "description": "[US4] Regenerate OpenAPI-derived Web API types after server schema changes in `packages/web/src/lib/api.generated.d.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 57,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T058",
+          "title": "[US4] Re-export route-loop API types and local runtime constants from `packages/",
+          "description": "[US4] Re-export route-loop API types and local runtime constants from `packages/web/src/lib/api.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 58,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T059",
+          "title": "[US4] Add route-loop variant detection and field mapping in `packages/web/src/ex",
+          "description": "[US4] Add route-loop variant detection and field mapping in `packages/web/src/experiments/console/builder/variants/route-loop.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 59,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T060",
+          "title": "[US4] Register the route-loop builder variant in `packages/web/src/experiments/c",
+          "description": "[US4] Register the route-loop builder variant in `packages/web/src/experiments/console/builder/variants/registry.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 60,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T061",
+          "title": "[US4] Serialize route-loop input and outcome edges to workflow YAML in `packages",
+          "description": "[US4] Serialize route-loop input and outcome edges to workflow YAML in `packages/web/src/experiments/console/builder/model/to-workflow.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 61,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T062",
+          "title": "[US4] Hydrate route-loop YAML into builder nodes and route edges in `packages/we",
+          "description": "[US4] Hydrate route-loop YAML into builder nodes and route edges in `packages/web/src/experiments/console/builder/model/from-workflow.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 62,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T063",
+          "title": "[US4] Add route-loop graph validation issues for missing routes, second inputs, ",
+          "description": "[US4] Add route-loop graph validation issues for missing routes, second inputs, invalid targets, and mismatched `from` in `packages/web/src/experiments/console/builder/validation/graph.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 63,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T064",
+          "title": "[US4] Render the route-loop palette entry and inspector controls in `packages/we",
+          "description": "[US4] Render the route-loop palette entry and inspector controls in `packages/web/src/components/workflows/NodeLibrary.tsx` and `packages/web/src/components/workflows/NodeInspector.tsx`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 64,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T065",
+          "title": "[US4] Render route-loop controller styling and three output handles in `packages",
+          "description": "[US4] Render route-loop controller styling and three output handles in `packages/web/src/components/workflows/DagNodeComponent.tsx`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 65,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T066",
+          "title": "[US4] Render route edges separately with outcome labels in `packages/web/src/lib",
+          "description": "[US4] Render route edges separately with outcome labels in `packages/web/src/lib/dag-layout.ts` and `packages/web/src/components/workflows/WorkflowDagViewer.tsx`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 66,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T067",
+          "title": "[US4] Render typed `node_routed` run events and dormant route targets in `packag",
+          "description": "[US4] Render typed `node_routed` run events and dormant route targets in `packages/web/src/components/workflows/WorkflowExecution.tsx` and `packages/web/src/components/workflows/ExecutionDagNode.tsx`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 67,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T068",
+          "title": "[US4] Keep approval gates and interactive-loop input banners visually distinct f",
+          "description": "[US4] Keep approval gates and interactive-loop input banners visually distinct from route-loop decisions in `packages/web/src/components/workflows/WorkflowExecution.tsx`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 68,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T069",
+          "title": "[US4] Verify User Story 4 with builder, layout, and component tests in `packages",
+          "description": "[US4] Verify User Story 4 with builder, layout, and component tests in `packages/web/src/experiments/console/builder/model/round-trip.test.ts` and `packages/web/src/components/workflows/WorkflowExecution.test.tsx`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 69,
+          "passes": true,
+          "notes": ""
+        }
+      ],
+      "tasksIds": [
+        "T057",
+        "T058",
+        "T059",
+        "T060",
+        "T061",
+        "T062",
+        "T063",
+        "T064",
+        "T065",
+        "T066",
+        "T067",
+        "T068",
+        "T069"
+      ]
+    },
+    {
+      "title": "Phase 7.1: Tests For User Story 5",
+      "completed": true,
+      "tasks": [
+        {
+          "id": "T070",
+          "title": "[P] [US5] Add regression tests that workflows without `route_loop` still use sta",
+          "description": "[P] [US5] Add regression tests that workflows without `route_loop` still use static DAG execution in `packages/workflows/src/dag-executor.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 70,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T071",
+          "title": "[P] [US5] Add retry eligibility tests proving route-loop controller nodes are no",
+          "description": "[P] [US5] Add retry eligibility tests proving route-loop controller nodes are not directly retryable in `packages/workflows/src/retry-state.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 71,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T072",
+          "title": "[P] [US5] Add resume persistence tests for route activation state, loop counters",
+          "description": "[P] [US5] Add resume persistence tests for route activation state, loop counters, attempt counters, and execution sequence in `packages/core/src/db/workflows.resume-cas.integration.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 72,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T073",
+          "title": "[P] [US5] Add Web retry action tests that guide users toward `route_loop.from` i",
+          "description": "[P] [US5] Add Web retry action tests that guide users toward `route_loop.from` in `packages/web/src/components/workflows/WorkflowNodeRetryAction.test.tsx`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 73,
+          "passes": true,
+          "notes": ""
+        }
+      ],
+      "tasksIds": ["T070", "T071", "T072", "T073"]
+    },
+    {
+      "title": "Phase 7.2: Implementation For User Story 5",
+      "completed": true,
+      "tasks": [
+        {
+          "id": "T074",
+          "title": "[US5] Preserve the existing static DAG execution branch for workflows without ro",
+          "description": "[US5] Preserve the existing static DAG execution branch for workflows without route-loop nodes in `packages/workflows/src/dag-executor.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 74,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T075",
+          "title": "[US5] Hydrate route activation state, counters, attempts, and execution sequence",
+          "description": "[US5] Hydrate route activation state, counters, attempts, and execution sequence on resume in `packages/workflows/src/dag-executor.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 75,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T076",
+          "title": "[US5] Mark route-loop controller nodes ineligible for direct retry in `packages/",
+          "description": "[US5] Mark route-loop controller nodes ineligible for direct retry in `packages/workflows/src/retry-state.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 76,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T077",
+          "title": "[US5] Surface retry guidance toward the node referenced by `route_loop.from` in ",
+          "description": "[US5] Surface retry guidance toward the node referenced by `route_loop.from` in `packages/core/src/operations/workflow-retry.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 77,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T078",
+          "title": "[US5] Render route-loop retry guidance in `packages/web/src/components/workflows",
+          "description": "[US5] Render route-loop retry guidance in `packages/web/src/components/workflows/WorkflowNodeRetryAction.tsx`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 78,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T079",
+          "title": "[US5] Verify User Story 5 with `bun test packages/workflows/src/retry-state.test",
+          "description": "[US5] Verify User Story 5 with `bun test packages/workflows/src/retry-state.test.ts packages/core/src/operations/workflow-retry.test.ts packages/web/src/components/workflows/WorkflowNodeRetryAction.test.tsx` for `packages/workflows/src/retry-state.test.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 79,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T080",
+          "title": "[P] Run `bun --filter @archon/workflows test` and fix failures in `packages/work",
+          "description": "[P] Run `bun --filter @archon/workflows test` and fix failures in `packages/workflows/src/dag-executor.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 80,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T081",
+          "title": "[P] Run `bun --filter @archon/core test` and fix failures in `packages/core/src/",
+          "description": "[P] Run `bun --filter @archon/core test` and fix failures in `packages/core/src/workflows/store-adapter.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 81,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T082",
+          "title": "[P] Run `bun --filter @archon/server test` and fix failures in `packages/server/",
+          "description": "[P] Run `bun --filter @archon/server test` and fix failures in `packages/server/src/routes/schemas/workflow.schemas.ts`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 82,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T083",
+          "title": "[P] Run `bun --filter @archon/web test` and fix failures in `packages/web/src/co",
+          "description": "[P] Run `bun --filter @archon/web test` and fix failures in `packages/web/src/components/workflows/WorkflowExecution.tsx`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 83,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T084",
+          "title": "Run `bun run type-check` and fix TypeScript errors in `packages/workflows/src/sc",
+          "description": "Run `bun run type-check` and fix TypeScript errors in `packages/workflows/src/schemas/route-loop.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 84,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T085",
+          "title": "Run `bun run lint --max-warnings 0` and fix lint warnings in `packages/workflows",
+          "description": "Run `bun run lint --max-warnings 0` and fix lint warnings in `packages/workflows/src/dag-executor.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 85,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T086",
+          "title": "Run `bun run format:check` and apply formatting fixes in `packages/workflows/src",
+          "description": "Run `bun run format:check` and apply formatting fixes in `packages/workflows/src/schemas/route-loop.ts` and `packages/web/src/components/workflows/DagNodeComponent.tsx`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 86,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T087",
+          "title": "Run `bun run dev:server` and `bun --filter @archon/web generate:types`, then ver",
+          "description": "Run `bun run dev:server` and `bun --filter @archon/web generate:types`, then verify generated type changes in `packages/web/src/lib/api.generated.d.ts`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 87,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T088",
+          "title": "Run `bun run check:bundled`, `bun run check:bundled-skill`, and `bun run check:b",
+          "description": "Run `bun run check:bundled`, `bun run check:bundled-skill`, and `bun run check:bundled-schema`, then fix checked artifacts in `packages/workflows/src/defaults/bundled-defaults.generated.ts` only if source changes require regeneration",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 88,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T089",
+          "title": "Run final `bun run validate` and fix remaining failures tracked by `package.json",
+          "description": "Run final `bun run validate` and fix remaining failures tracked by `package.json`",
+          "acceptanceCriteria": ["Typecheck passes"],
+          "priority": 89,
+          "passes": true,
+          "notes": ""
+        },
+        {
+          "id": "T090",
+          "title": "Run the manual route-loop smoke workflow from `specs/002-route-loop-decisions/qu",
+          "description": "Run the manual route-loop smoke workflow from `specs/002-route-loop-decisions/quickstart.md`",
+          "acceptanceCriteria": ["Typecheck passes", "Tests pass"],
+          "priority": 90,
+          "passes": true,
+          "notes": ""
+        }
+      ],
+      "tasksIds": [
+        "T074",
+        "T075",
+        "T076",
+        "T077",
+        "T078",
+        "T079",
+        "T080",
+        "T081",
+        "T082",
+        "T083",
+        "T084",
+        "T085",
+        "T086",
+        "T087",
+        "T088",
+        "T089",
+        "T090"
+      ]
+    }
+  ]
+}

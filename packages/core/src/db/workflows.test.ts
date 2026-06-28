@@ -1,8 +1,13 @@
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
 import { createQueryResult, mockPostgresDialect } from '../test/mocks/database';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import type { QueryResult } from './adapters/types';
 
 const mockQuery = mock(() => Promise.resolve(createQueryResult([])));
+const mockWithTransaction = mock(
+  async <T>(fn: <U>(sql: string, params?: unknown[]) => Promise<QueryResult<U>>): Promise<T> =>
+    fn(mockQuery as <U>(sql: string, params?: unknown[]) => Promise<QueryResult<U>>)
+);
 const mockDeleteRetryRefsByRunId = mock(async () => ({
   deletedRefs: [] as string[],
   warnings: [] as string[],
@@ -13,6 +18,13 @@ mock.module('./connection', () => ({
   pool: {
     query: mockQuery,
   },
+  getDatabase: () => ({
+    query: mockQuery,
+    withTransaction: mockWithTransaction,
+    close: mock(() => Promise.resolve()),
+    dialect: 'postgres',
+    sql: mockPostgresDialect,
+  }),
   getDialect: () => mockPostgresDialect,
   getDatabaseType: () => 'postgresql' as const,
 }));
@@ -32,6 +44,8 @@ import {
   completeWorkflowRun,
   failWorkflowRun,
   updateWorkflowActivity,
+  persistRouteDecisionTransition,
+  WorkflowRouteDecisionStaleWriteError,
   findResumableRun,
   resumeWorkflowRun,
   cancelWorkflowRun,
@@ -45,6 +59,10 @@ describe('workflows database', () => {
   beforeEach(() => {
     mockQuery.mockReset();
     mockQuery.mockImplementation(() => Promise.resolve(createQueryResult([])));
+    mockWithTransaction.mockReset();
+    mockWithTransaction.mockImplementation(async fn =>
+      fn(mockQuery as <U>(sql: string, params?: unknown[]) => Promise<QueryResult<U>>)
+    );
     mockDeleteRetryRefsByRunId.mockClear();
     mockDeleteRetryRefsByRunId.mockResolvedValue({ deletedRefs: [], warnings: [] });
   });
@@ -266,6 +284,183 @@ describe('workflows database', () => {
       await updateWorkflowRun('workflow-run-123', {});
 
       expect(mockQuery).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('persistRouteDecisionTransition', () => {
+    const nextRouteMetadata = {
+      loopCounters: { 'review-router': 1 },
+      nodeAttempts: { 'review-router': 1 },
+      executionSeq: 1,
+      routeActivations: {
+        fix: {
+          route_loop_node_id: 'review-router',
+          outcome: 'negative',
+          target_node_id: 'fix',
+          attempt: 1,
+          execution_seq: 1,
+        },
+      },
+    };
+    const eventData = {
+      from: 'review',
+      outcome: 'negative',
+      to: 'fix',
+      condition: "$review.output.result == '<redacted>'",
+      condition_result: false,
+      negative_count: 1,
+      max_iterations: 10,
+      attempt: 1,
+      execution_seq: 1,
+    };
+
+    test('atomically writes route metadata and route node events in one transaction', async () => {
+      const updatedRun = { ...mockWorkflowRun, metadata: nextRouteMetadata };
+      mockQuery
+        .mockResolvedValueOnce(createQueryResult([{ ...mockWorkflowRun, metadata: {} }]))
+        .mockResolvedValueOnce(createQueryResult([updatedRun]))
+        .mockResolvedValueOnce(createQueryResult([], 1))
+        .mockResolvedValueOnce(createQueryResult([], 1));
+
+      const result = await persistRouteDecisionTransition({
+        workflow_run_id: 'workflow-run-123',
+        expected_execution_seq: 0,
+        metadata: nextRouteMetadata,
+        event: {
+          step_name: 'review-router',
+          data: eventData,
+        },
+        completed_event: {
+          step_name: 'review-router',
+          data: { node_output: JSON.stringify(eventData) },
+        },
+      });
+
+      expect(result).toEqual(updatedRun);
+      expect(mockWithTransaction).toHaveBeenCalledTimes(1);
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        1,
+        'SELECT * FROM remote_agent_workflow_runs WHERE id = $1 FOR UPDATE',
+        ['workflow-run-123']
+      );
+
+      const [updateSql, updateParams] = mockQuery.mock.calls[1] as [string, unknown[]];
+      expect(updateSql).toContain('UPDATE remote_agent_workflow_runs');
+      expect(updateSql).toContain('metadata = metadata || $2::jsonb');
+      expect(updateSql).toContain('RETURNING *');
+      expect(updateParams).toEqual(['workflow-run-123', JSON.stringify(nextRouteMetadata)]);
+
+      const [routedInsertSql, routedInsertParams] = mockQuery.mock.calls[2] as [string, unknown[]];
+      expect(routedInsertSql).toContain('INSERT INTO remote_agent_workflow_events');
+      expect(routedInsertParams.slice(1)).toEqual([
+        'workflow-run-123',
+        'node_routed',
+        null,
+        'review-router',
+        JSON.stringify(eventData),
+      ]);
+
+      const [completedInsertSql, completedInsertParams] = mockQuery.mock.calls[3] as [
+        string,
+        unknown[],
+      ];
+      expect(completedInsertSql).toContain('INSERT INTO remote_agent_workflow_events');
+      expect(completedInsertParams.slice(1)).toEqual([
+        'workflow-run-123',
+        'node_completed',
+        null,
+        'review-router',
+        JSON.stringify({ node_output: JSON.stringify(eventData) }),
+      ]);
+    });
+
+    test('rolls back route metadata when the node_routed event write fails', async () => {
+      const updatedRun = { ...mockWorkflowRun, metadata: nextRouteMetadata };
+      mockQuery
+        .mockResolvedValueOnce(createQueryResult([{ ...mockWorkflowRun, metadata: {} }]))
+        .mockResolvedValueOnce(createQueryResult([updatedRun]))
+        .mockRejectedValueOnce(new Error('event insert failed'));
+
+      await expect(
+        persistRouteDecisionTransition({
+          workflow_run_id: 'workflow-run-123',
+          expected_execution_seq: 0,
+          metadata: nextRouteMetadata,
+          event: {
+            step_name: 'review-router',
+            data: eventData,
+          },
+          completed_event: {
+            step_name: 'review-router',
+            data: { node_output: JSON.stringify(eventData) },
+          },
+        })
+      ).rejects.toThrow('Failed to persist route decision transition: event insert failed');
+
+      const sqlCalls = mockQuery.mock.calls.map(call => call[0] as string);
+      expect(sqlCalls.some(sql => sql.includes('UPDATE remote_agent_workflow_runs'))).toBe(true);
+      expect(sqlCalls.some(sql => sql.includes('INSERT INTO remote_agent_workflow_events'))).toBe(
+        true
+      );
+      expect(mockWithTransaction).toHaveBeenCalledTimes(1);
+    });
+
+    test('rejects stale route decision writes before mutating metadata or events', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([{ ...mockWorkflowRun, metadata: { executionSeq: 2 } }])
+      );
+
+      await expect(
+        persistRouteDecisionTransition({
+          workflow_run_id: 'workflow-run-123',
+          expected_execution_seq: 1,
+          metadata: nextRouteMetadata,
+          event: {
+            step_name: 'review-router',
+            data: eventData,
+          },
+          completed_event: {
+            step_name: 'review-router',
+            data: { node_output: JSON.stringify(eventData) },
+          },
+        })
+      ).rejects.toThrow(WorkflowRouteDecisionStaleWriteError);
+
+      const sqlCalls = mockQuery.mock.calls.map(call => call[0] as string);
+      expect(sqlCalls.some(sql => sql.includes('UPDATE remote_agent_workflow_runs'))).toBe(false);
+      expect(sqlCalls.some(sql => sql.includes('INSERT INTO remote_agent_workflow_events'))).toBe(
+        false
+      );
+      expect(mockWithTransaction).toHaveBeenCalledTimes(1);
+    });
+
+    test('rolls back malformed existing route metadata before mutating state', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([{ ...mockWorkflowRun, metadata: { executionSeq: 1.5 } }])
+      );
+
+      await expect(
+        persistRouteDecisionTransition({
+          workflow_run_id: 'workflow-run-123',
+          expected_execution_seq: 1,
+          metadata: nextRouteMetadata,
+          event: {
+            step_name: 'review-router',
+            data: eventData,
+          },
+          completed_event: {
+            step_name: 'review-router',
+            data: { node_output: JSON.stringify(eventData) },
+          },
+        })
+      ).rejects.toThrow('Failed to persist route decision transition');
+
+      const sqlCalls = mockQuery.mock.calls.map(call => call[0] as string);
+      expect(sqlCalls.some(sql => sql.includes('UPDATE remote_agent_workflow_runs'))).toBe(false);
+      expect(sqlCalls.some(sql => sql.includes('INSERT INTO remote_agent_workflow_events'))).toBe(
+        false
+      );
+      expect(mockWithTransaction).toHaveBeenCalledTimes(1);
     });
   });
 

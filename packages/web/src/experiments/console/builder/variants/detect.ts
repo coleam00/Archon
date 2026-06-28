@@ -4,9 +4,9 @@
  * The mode fields are mutually exclusive in a valid node, so for well-formed
  * input any presence order resolves identically. For malformed/ambiguous nodes
  * the priority order below is a builder-specific choice so resolution stays
- * deterministic (the engine has no fallback — it rejects nodes whose mode-field
- * count is not exactly one): `loop → approval → cancel → bash → script →
- * command → prompt`.
+ * deterministic (the engine has no fallback - it rejects nodes whose mode-field
+ * count is not exactly one): `route_loop -> loop -> approval -> cancel -> bash
+ * -> script -> command -> prompt`.
  */
 import type { VariantId, WireDagNode } from '../types';
 
@@ -17,6 +17,7 @@ import type { VariantId, WireDagNode } from '../types';
  * silently becoming an empty prompt node.
  */
 export function detectVariantOrNull(node: WireDagNode): VariantId | null {
+  if (node.route_loop !== undefined) return 'route_loop';
   if (node.loop !== undefined) return 'loop';
   if (node.approval !== undefined) return 'approval';
   if (node.cancel !== undefined) return 'cancel';

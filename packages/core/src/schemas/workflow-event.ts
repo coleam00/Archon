@@ -4,18 +4,53 @@
 import { z } from '@hono/zod-openapi';
 
 // ---------------------------------------------------------------------------
+// Event data schemas
+// ---------------------------------------------------------------------------
+
+export const routeLoopDecisionEventDataSchema = z
+  .object({
+    from: z.string().min(1),
+    outcome: z.enum(['positive', 'negative', 'exhausted']),
+    to: z.string().min(1),
+    condition: z.string(),
+    condition_result: z.boolean(),
+    negative_count: z.number().int().nonnegative(),
+    max_iterations: z.number().int().min(1),
+    attempt: z.number().int().min(1),
+    execution_seq: z.number().int().min(1),
+  })
+  .passthrough();
+
+export type RouteLoopDecisionEventData = z.infer<typeof routeLoopDecisionEventDataSchema>;
+
+// ---------------------------------------------------------------------------
 // WorkflowEventRow
 // ---------------------------------------------------------------------------
 
-export const workflowEventRowSchema = z.object({
-  id: z.string(),
-  workflow_run_id: z.string(),
-  event_type: z.string(),
-  step_index: z.number().nullable(),
-  step_name: z.string().nullable(),
-  data: z.record(z.string(), z.unknown()),
-  created_at: z.string(),
-});
+export const workflowEventRowSchema = z
+  .object({
+    id: z.string(),
+    workflow_run_id: z.string(),
+    event_type: z.string(),
+    step_index: z.number().nullable(),
+    step_name: z.string().nullable(),
+    data: z.record(z.string(), z.unknown()),
+    created_at: z.string(),
+  })
+  .superRefine((row, ctx) => {
+    if (row.event_type !== 'node_routed') return;
+
+    const result = routeLoopDecisionEventDataSchema.safeParse(row.data);
+    if (result.success) return;
+
+    for (const issue of result.error.issues) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['data', ...issue.path],
+        message: issue.message,
+      });
+    }
+  });
 
 export type WorkflowEventRow = z.infer<typeof workflowEventRowSchema>;
 

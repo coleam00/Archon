@@ -4,6 +4,7 @@
 import type { WorkflowDefinition, WorkflowLoadError, DagNode, WorkflowNodeHooks } from './schemas';
 import {
   isLoopNode,
+  isRouteLoopNode,
   isApprovalNode,
   isCancelNode,
   isScriptNode,
@@ -27,6 +28,8 @@ import {
 } from './schemas/dag-node';
 import { modelReasoningEffortSchema, webSearchModeSchema } from './schemas/workflow';
 import { workflowNodeHooksSchema } from './schemas/hooks';
+import { extractConditionReferences } from './condition-evaluator';
+import { declaredFieldsFromSchema } from './output-ref';
 import { z } from '@hono/zod-openapi';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -221,6 +224,164 @@ function validateDagStructure(nodes: DagNode[]): string | null {
   return null; // valid
 }
 
+function buildDependentsMap(nodes: DagNode[]): Map<string, string[]> {
+  const dependents = new Map<string, string[]>();
+  for (const node of nodes) {
+    for (const dep of node.depends_on ?? []) {
+      dependents.set(dep, [...(dependents.get(dep) ?? []), node.id]);
+    }
+  }
+  return dependents;
+}
+
+function collectPathNodesToTarget(
+  startId: string,
+  targetId: string,
+  dependents: Map<string, string[]>
+): Set<string> | null {
+  const memo = new Map<string, boolean>();
+  const visiting = new Set<string>();
+
+  const reachesTarget = (nodeId: string): boolean => {
+    if (nodeId === targetId) return true;
+    const cached = memo.get(nodeId);
+    if (cached !== undefined) return cached;
+    if (visiting.has(nodeId)) return false;
+
+    visiting.add(nodeId);
+    const reaches = (dependents.get(nodeId) ?? []).some(childId => reachesTarget(childId));
+    visiting.delete(nodeId);
+    memo.set(nodeId, reaches);
+    return reaches;
+  };
+
+  if (!reachesTarget(startId)) return null;
+
+  const pathNodes = new Set<string>();
+  const collect = (nodeId: string): void => {
+    if (pathNodes.has(nodeId) || !reachesTarget(nodeId)) return;
+    pathNodes.add(nodeId);
+    if (nodeId === targetId) return;
+    for (const childId of dependents.get(nodeId) ?? []) {
+      collect(childId);
+    }
+  };
+
+  collect(startId);
+  return pathNodes;
+}
+
+function validateNegativeRerunPathSelfContained(
+  routeLoopNode: DagNode,
+  pathNodes: Set<string>,
+  nodesById: Map<string, DagNode>
+): string | null {
+  if (!isRouteLoopNode(routeLoopNode)) return null;
+  const negativeTarget = routeLoopNode.route_loop.routes.negative;
+  if (negativeTarget === routeLoopNode.route_loop.from) return null;
+
+  for (const pathNodeId of pathNodes) {
+    const pathNode = nodesById.get(pathNodeId);
+    if (pathNode === undefined) continue;
+    for (const dep of pathNode.depends_on ?? []) {
+      if (!pathNodes.has(dep)) {
+        return `Node '${routeLoopNode.id}' route_loop negative rerun path is not self-contained: node '${pathNode.id}' depends on '${dep}' outside the selected rerun path`;
+      }
+    }
+  }
+
+  return null;
+}
+
+function validateRouteLoopStructure(nodes: DagNode[]): string | null {
+  const nodesById = new Map(nodes.map(node => [node.id, node]));
+  const dependents = buildDependentsMap(nodes);
+
+  for (const node of nodes) {
+    if (!isRouteLoopNode(node)) continue;
+
+    const deps = node.depends_on ?? [];
+    if (deps.length !== 1) {
+      return `Node '${node.id}' route_loop must declare exactly one depends_on entry`;
+    }
+    if (deps[0] !== node.route_loop.from) {
+      return `Node '${node.id}' route_loop depends_on[0] must equal route_loop.from '${node.route_loop.from}'`;
+    }
+
+    const fromNode = nodesById.get(node.route_loop.from);
+    if (fromNode === undefined) {
+      return `Node '${node.id}' route_loop.from references unknown node '${node.route_loop.from}'`;
+    }
+    if (fromNode.when !== undefined) {
+      return `Node '${node.id}' route_loop from node '${fromNode.id}' must not declare when`;
+    }
+
+    const routeEntries = Object.entries(node.route_loop.routes);
+    for (const [outcome, target] of routeEntries) {
+      if (!nodesById.has(target)) {
+        return `Node '${node.id}' route_loop route '${outcome}' targets unknown node '${target}'`;
+      }
+      if (target === node.id) {
+        return `Node '${node.id}' route_loop route '${outcome}' must not target itself`;
+      }
+    }
+
+    const negativeTarget = node.route_loop.routes.negative;
+    if (negativeTarget === node.route_loop.from) {
+      getLog().warn(
+        { nodeId: node.id, from: node.route_loop.from, target: negativeTarget },
+        'route_loop_negative_targets_from_node'
+      );
+    }
+
+    const negativeRerunPath = collectPathNodesToTarget(
+      negativeTarget,
+      node.route_loop.from,
+      dependents
+    );
+    if (negativeRerunPath !== null) {
+      const selfContainedError = validateNegativeRerunPathSelfContained(
+        node,
+        negativeRerunPath,
+        nodesById
+      );
+      if (selfContainedError !== null) return selfContainedError;
+    }
+
+    const exitRouteEntries = [
+      ['positive', node.route_loop.routes.positive],
+      ['exhausted', node.route_loop.routes.exhausted],
+    ] as const;
+    for (const [outcome, target] of exitRouteEntries) {
+      const reentryPath = collectPathNodesToTarget(target, node.route_loop.from, dependents);
+      if (reentryPath !== null) {
+        return `Node '${node.id}' route_loop route '${outcome}' must be an exit path: target '${target}' reaches route_loop.from '${node.route_loop.from}'`;
+      }
+    }
+
+    const conditionRefs = extractConditionReferences(node.route_loop.condition);
+    if (!conditionRefs.parsed) {
+      return `Node '${node.id}' route_loop.condition could not be parsed: ${conditionRefs.error}`;
+    }
+
+    const declaredFields = declaredFieldsFromSchema(fromNode.output_format);
+    for (const ref of conditionRefs.references) {
+      if (ref.nodeId !== node.route_loop.from) {
+        return `Node '${node.id}' route_loop.condition references node '${ref.nodeId}' but only route_loop.from '${node.route_loop.from}' is allowed`;
+      }
+      if (ref.field === undefined) continue;
+      if (declaredFields === undefined) {
+        return `Node '${node.id}' route_loop.condition references field '${ref.field}', but from node '${fromNode.id}' must declare output_format.properties`;
+      }
+      if (!declaredFields.includes(ref.field)) {
+        return `Node '${node.id}' route_loop.condition references field '${ref.field}', which is not declared in from node '${fromNode.id}' output_format.properties`;
+      }
+    }
+  }
+
+  return null;
+}
+
 export type ParseResult =
   | { workflow: WorkflowDefinition; error: null }
   | { workflow: null; error: WorkflowLoadError };
@@ -321,6 +482,15 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       return {
         workflow: null,
         error: { filename, error: structureError, errorType: 'validation_error' },
+      };
+    }
+
+    const routeLoopStructureError = validateRouteLoopStructure(dagNodes);
+    if (routeLoopStructureError) {
+      getLog().warn({ filename, structureError: routeLoopStructureError }, 'dag_structure_invalid');
+      return {
+        workflow: null,
+        error: { filename, error: routeLoopStructureError, errorType: 'validation_error' },
       };
     }
 

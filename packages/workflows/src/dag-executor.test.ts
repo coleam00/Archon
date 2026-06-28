@@ -61,6 +61,7 @@ import { OutputRefError } from './output-ref';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
 import { buildAiProfile } from './model-validation';
+import type { SendQueryOptions } from '@archon/providers/types';
 
 // --- Mock helpers ---
 
@@ -103,6 +104,23 @@ function createMockStore(): IWorkflowStore {
       })
     ),
     updateWorkflowRun: mock(() => Promise.resolve()),
+    persistRouteDecisionTransition: mock(
+      (input: Parameters<IWorkflowStore['persistRouteDecisionTransition']>[0]) =>
+        Promise.resolve({
+          id: input.workflow_run_id,
+          workflow_name: 'mock',
+          conversation_id: 'conv-mock',
+          parent_conversation_id: null,
+          codebase_id: null,
+          status: 'running' as const,
+          user_message: 'mock message',
+          metadata: input.metadata,
+          started_at: new Date(),
+          completed_at: null,
+          last_activity_at: null,
+          working_path: null,
+        })
+    ),
     updateWorkflowActivity: mock(() => Promise.resolve()),
     getWorkflowRunStatus: mock(() => Promise.resolve('running' as const)),
     completeWorkflowRun: mock(() => Promise.resolve()),
@@ -5448,6 +5466,968 @@ describe('executeDagWorkflow -- always_run resume opt-out', () => {
         (call[0] as { step_name: string }).step_name === 'producer'
     );
     expect(resetEvent).toBeUndefined();
+  });
+});
+
+describe('executeDagWorkflow -- static DAG execution without route_loop', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(
+      tmpdir(),
+      `dag-static-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    await mkdir(testDir, { recursive: true });
+
+    mockSendQueryDag.mockClear();
+    mockGetAgentProviderDag.mockClear();
+
+    mockSendQueryDag.mockImplementation(function* (
+      _prompt: string,
+      _cwd: string,
+      _resumeSessionId?: string,
+      sendOptions?: SendQueryOptions
+    ) {
+      const nodeId = sendOptions?.nodeConfig?.nodeId;
+      if (typeof nodeId !== 'string') {
+        throw new Error('missing static DAG node id');
+      }
+      yield { type: 'assistant' as const, content: `${nodeId} output` };
+      yield { type: 'result' as const, sessionId: `${nodeId}-session` };
+    });
+  });
+
+  afterEach(async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+    try {
+      await rm(testDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  });
+
+  it('uses static topological execution for workflows without route_loop and records no route decisions', async () => {
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('static-dag-run');
+    const observedCalls: { nodeId: string; prompt: string }[] = [];
+
+    mockSendQueryDag.mockImplementation(function* (
+      prompt: string,
+      _cwd: string,
+      _resumeSessionId?: string,
+      sendOptions?: SendQueryOptions
+    ) {
+      const nodeId = sendOptions?.nodeConfig?.nodeId;
+      if (typeof nodeId !== 'string') {
+        throw new Error('missing static DAG node id');
+      }
+      observedCalls.push({ nodeId, prompt });
+      yield { type: 'assistant' as const, content: `${nodeId} output` };
+      yield { type: 'result' as const, sessionId: `${nodeId}-session` };
+    });
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-static',
+      testDir,
+      {
+        name: 'static-fan-in',
+        mutates_checkout: false,
+        nodes: [
+          { id: 'source', prompt: 'Create source output.' },
+          { id: 'left', prompt: 'Use $source.output on the left.', depends_on: ['source'] },
+          { id: 'right', prompt: 'Use $source.output on the right.', depends_on: ['source'] },
+          {
+            id: 'join',
+            prompt: 'Join $left.output with $right.output.',
+            depends_on: ['left', 'right'],
+          },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(observedCalls.map(call => call.nodeId).at(0)).toBe('source');
+    expect(
+      observedCalls
+        .map(call => call.nodeId)
+        .slice(1, 3)
+        .sort()
+    ).toEqual(['left', 'right']);
+    expect(observedCalls.map(call => call.nodeId).at(3)).toBe('join');
+
+    const leftCall = observedCalls.find(call => call.nodeId === 'left');
+    const rightCall = observedCalls.find(call => call.nodeId === 'right');
+    const joinCall = observedCalls.find(call => call.nodeId === 'join');
+    expect(leftCall?.prompt).toContain('source output');
+    expect(rightCall?.prompt).toContain('source output');
+    expect(joinCall?.prompt).toContain('left output');
+    expect(joinCall?.prompt).toContain('right output');
+    expect(store.persistRouteDecisionTransition).not.toHaveBeenCalled();
+    expect(
+      (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls.some(
+        (call: unknown[]) => (call[0] as { event_type: string }).event_type === 'node_routed'
+      )
+    ).toBe(false);
+    expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('keeps static resume semantics for workflows without route_loop', async () => {
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('static-resume-run');
+    let consumerPrompt = '';
+
+    mockSendQueryDag.mockImplementation(function* (
+      prompt: string,
+      _cwd: string,
+      _resumeSessionId?: string,
+      sendOptions?: SendQueryOptions
+    ) {
+      const nodeId = sendOptions?.nodeConfig?.nodeId;
+      if (nodeId === 'consumer') {
+        consumerPrompt = prompt;
+      }
+      yield { type: 'assistant' as const, content: `${String(nodeId)} output` };
+      yield { type: 'result' as const, sessionId: `${String(nodeId)}-session` };
+    });
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-static-resume',
+      testDir,
+      {
+        name: 'static-resume',
+        mutates_checkout: false,
+        nodes: [
+          { id: 'producer', prompt: 'Produce output.' },
+          { id: 'consumer', prompt: 'Consume $producer.output.', depends_on: ['producer'] },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      new Map([['producer', 'cached static output']])
+    );
+
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+    expect(consumerPrompt).toContain('cached static output');
+    expect(store.persistRouteDecisionTransition).not.toHaveBeenCalled();
+
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const skippedPriorSuccessEvent = eventCalls.find(
+      (call: unknown[]) =>
+        (call[0] as { event_type: string }).event_type === 'node_skipped_prior_success' &&
+        (call[0] as { step_name: string }).step_name === 'producer'
+    );
+    expect(skippedPriorSuccessEvent).toBeDefined();
+    expect(
+      (skippedPriorSuccessEvent![0] as { data: { node_output: string } }).data.node_output
+    ).toBe('cached static output');
+    expect(
+      eventCalls.some(
+        (call: unknown[]) => (call[0] as { event_type: string }).event_type === 'node_routed'
+      )
+    ).toBe(false);
+  });
+});
+
+describe('executeDagWorkflow -- route_loop end-to-end TDD', () => {
+  let testDir: string;
+  type ReviewResult = 'negative' | 'positive';
+  type RouteLoopEventCall = {
+    event_type: string;
+    step_name?: string;
+    data?: Record<string, unknown>;
+  };
+  type RouteLoopRunResult = {
+    store: IWorkflowStore;
+    calls: { nodeId: string; prompt: string }[];
+    routedEvents: RouteLoopEventCall[];
+    routeDecisionCalls: Parameters<IWorkflowStore['persistRouteDecisionTransition']>[0][];
+  };
+
+  beforeEach(async () => {
+    testDir = join(
+      tmpdir(),
+      `dag-route-loop-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    await mkdir(testDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+    try {
+      await rm(testDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  });
+
+  async function runRouteLoopWorkflow(options: {
+    reviewResults: ReviewResult[];
+    maxIterations?: number;
+    includeUnrelatedFixDependent?: boolean;
+    routeTargetsAreRoots?: boolean;
+    includeDoneDependent?: boolean;
+    persistRouteDecisionTransition?: IWorkflowStore['persistRouteDecisionTransition'];
+  }): Promise<RouteLoopRunResult> {
+    const store = createMockStore();
+    if (options.persistRouteDecisionTransition) {
+      store.persistRouteDecisionTransition = mock(options.persistRouteDecisionTransition);
+    }
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('route-loop-run');
+    const calls: { nodeId: string; prompt: string }[] = [];
+    let reviewAttempt = 0;
+
+    const routeLoopSendQuery = mock(function* (
+      prompt: string,
+      _cwd: string,
+      _resumeSessionId?: string,
+      sendOptions?: SendQueryOptions
+    ) {
+      const nodeId = sendOptions?.nodeConfig?.nodeId;
+      if (typeof nodeId !== 'string') {
+        throw new Error('missing node id in route-loop TDD provider');
+      }
+      calls.push({ nodeId, prompt });
+
+      if (nodeId === 'review') {
+        reviewAttempt++;
+        const result =
+          options.reviewResults[reviewAttempt - 1] ??
+          options.reviewResults[options.reviewResults.length - 1] ??
+          'positive';
+        yield { type: 'assistant' as const, content: JSON.stringify({ result }) };
+        yield {
+          type: 'result' as const,
+          sessionId: `review-${String(reviewAttempt)}`,
+          structuredOutput: { result },
+        };
+        return;
+      }
+
+      yield { type: 'assistant' as const, content: `${nodeId} complete` };
+      yield { type: 'result' as const, sessionId: `${nodeId}-session` };
+    });
+
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: routeLoopSendQuery,
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+
+    const workflow = {
+      name: 'route-loop-e2e',
+      nodes: [
+        { id: 'fix', prompt: 'Fix the story.' },
+        {
+          id: 'review',
+          prompt: 'Review the latest fix.',
+          depends_on: ['fix'],
+          output_format: {
+            type: 'object',
+            properties: {
+              result: { type: 'string', enum: ['positive', 'negative'] },
+            },
+            required: ['result'],
+          },
+        },
+        ...(options.includeUnrelatedFixDependent
+          ? [{ id: 'audit', prompt: 'Audit unrelated fix output.', depends_on: ['fix'] }]
+          : []),
+        {
+          id: 'review-router',
+          depends_on: ['review'],
+          route_loop: {
+            from: 'review',
+            condition: "$review.output.result == 'positive'",
+            max_iterations: options.maxIterations ?? 10,
+            routes: {
+              positive: 'done',
+              negative: 'fix',
+              exhausted: 'escalation',
+            },
+          },
+        },
+        {
+          id: 'done',
+          prompt: 'Summarize success.',
+          ...(options.routeTargetsAreRoots ? {} : { depends_on: ['review-router'] }),
+        },
+        ...(options.includeDoneDependent
+          ? [{ id: 'publish', prompt: 'Publish success.', depends_on: ['done'] }]
+          : []),
+        {
+          id: 'escalation',
+          prompt: 'Escalate failure.',
+          ...(options.routeTargetsAreRoots ? {} : { depends_on: ['review-router'] }),
+        },
+      ],
+    } as unknown as Parameters<typeof executeDagWorkflow>[4];
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-route-loop',
+      testDir,
+      workflow,
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const routeDecisionCalls = (
+      store.persistRouteDecisionTransition as ReturnType<typeof mock>
+    ).mock.calls.map(
+      call => call[0] as Parameters<IWorkflowStore['persistRouteDecisionTransition']>[0]
+    );
+    const routedEvents = routeDecisionCalls.map(
+      call =>
+        ({
+          event_type: 'node_routed',
+          step_name: call.event.step_name,
+          data: call.event.data,
+        }) satisfies RouteLoopEventCall
+    );
+
+    return {
+      store,
+      calls,
+      routedEvents,
+      routeDecisionCalls,
+    };
+  }
+
+  it('reruns a negative route path until the route_loop condition passes', async () => {
+    const { store, calls, routedEvents, routeDecisionCalls } = await runRouteLoopWorkflow({
+      reviewResults: ['negative', 'positive'],
+    });
+
+    expect(calls.map(call => call.nodeId)).toEqual(['fix', 'review', 'fix', 'review', 'done']);
+    expect(calls.some(call => call.nodeId === 'escalation')).toBe(false);
+
+    expect(routedEvents.map(event => event.data?.outcome)).toEqual(['negative', 'positive']);
+    expect(routedEvents[0]?.data).toMatchObject({
+      from: 'review',
+      to: 'fix',
+      condition: "$review.output.result == '<redacted>'",
+      condition_result: false,
+      negative_count: 1,
+      max_iterations: 10,
+      attempt: 1,
+      execution_seq: 1,
+    });
+    expect(routedEvents[1]?.data).toMatchObject({
+      from: 'review',
+      to: 'done',
+      condition: "$review.output.result == '<redacted>'",
+      condition_result: true,
+      negative_count: 1,
+      max_iterations: 10,
+      attempt: 2,
+      execution_seq: 2,
+    });
+    expect(routeDecisionCalls.map(call => call.expected_execution_seq)).toEqual([0, 1]);
+    expect(routeDecisionCalls[1]?.workflow_run_id).toBe('route-loop-run');
+    expect(routeDecisionCalls[1]?.metadata).toEqual(
+      expect.objectContaining({
+        loopCounters: { 'review-router': 0 },
+        nodeAttempts: { 'review-router': 2 },
+        executionSeq: 2,
+        routeActivations: expect.objectContaining({
+          fix: expect.objectContaining({
+            route_loop_node_id: 'review-router',
+            outcome: 'negative',
+            target_node_id: 'fix',
+            attempt: 1,
+            execution_seq: 1,
+          }),
+          done: expect.objectContaining({
+            route_loop_node_id: 'review-router',
+            outcome: 'positive',
+            target_node_id: 'done',
+            attempt: 2,
+            execution_seq: 2,
+          }),
+        }),
+      })
+    );
+    expect(store.persistRouteDecisionTransition).toHaveBeenCalledTimes(2);
+    expect(store.updateWorkflowRun).not.toHaveBeenCalledWith('route-loop-run', expect.anything());
+    expect(
+      (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls.some(
+        call => (call[0] as RouteLoopEventCall).event_type === 'node_routed'
+      )
+    ).toBe(false);
+    expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('does not run root route targets before the route_loop selects them', async () => {
+    const { calls } = await runRouteLoopWorkflow({
+      reviewResults: ['positive'],
+      routeTargetsAreRoots: true,
+    });
+
+    expect(calls.map(call => call.nodeId)).toEqual(['fix', 'review', 'done']);
+    expect(calls.some(call => call.nodeId === 'escalation')).toBe(false);
+  });
+
+  it('runs selected route target descendants after the selected target', async () => {
+    const { calls } = await runRouteLoopWorkflow({
+      reviewResults: ['positive'],
+      routeTargetsAreRoots: true,
+      includeDoneDependent: true,
+    });
+
+    expect(calls.map(call => call.nodeId)).toEqual(['fix', 'review', 'done', 'publish']);
+  });
+
+  it('reruns multiple negative route attempts without clearing a fresh router rerun schedule', async () => {
+    const { calls, routedEvents } = await runRouteLoopWorkflow({
+      reviewResults: ['negative', 'negative', 'positive'],
+    });
+
+    expect(calls.map(call => call.nodeId)).toEqual([
+      'fix',
+      'review',
+      'fix',
+      'review',
+      'fix',
+      'review',
+      'done',
+    ]);
+    expect(routedEvents.map(event => event.data?.outcome)).toEqual([
+      'negative',
+      'negative',
+      'positive',
+    ]);
+    expect(routedEvents.map(event => event.data?.execution_seq)).toEqual([1, 2, 3]);
+  });
+
+  it('does not rerun unrelated completed descendants when revisiting the negative path layer', async () => {
+    const { calls } = await runRouteLoopWorkflow({
+      reviewResults: ['negative', 'positive'],
+      includeUnrelatedFixDependent: true,
+    });
+
+    const nodeIds = calls.map(call => call.nodeId);
+    const firstFixIndex = nodeIds.indexOf('fix');
+    const secondFixIndex = nodeIds.indexOf('fix', firstFixIndex + 1);
+    const firstReviewIndex = nodeIds.indexOf('review');
+    const secondReviewIndex = nodeIds.indexOf('review', firstReviewIndex + 1);
+    const auditIndex = nodeIds.indexOf('audit');
+    const doneIndex = nodeIds.indexOf('done');
+
+    expect(nodeIds.filter(nodeId => nodeId === 'audit')).toHaveLength(1);
+    expect(nodeIds).toHaveLength(6);
+    expect(firstFixIndex).toBe(0);
+    expect(firstReviewIndex).toBeGreaterThan(firstFixIndex);
+    expect(auditIndex).toBeGreaterThan(firstFixIndex);
+    expect(secondFixIndex).toBeGreaterThan(firstReviewIndex);
+    expect(secondReviewIndex).toBeGreaterThan(secondFixIndex);
+    expect(doneIndex).toBeGreaterThan(secondReviewIndex);
+  });
+
+  it('fails the workflow when durable route-decision persistence rejects a stale write', async () => {
+    const { store, calls, routedEvents } = await runRouteLoopWorkflow({
+      reviewResults: ['negative'],
+      persistRouteDecisionTransition: async () => {
+        throw new Error('stale route decision');
+      },
+    });
+
+    expect(calls.map(call => call.nodeId)).toEqual(['fix', 'review']);
+    expect(routedEvents).toHaveLength(1);
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(store.failWorkflowRun).toHaveBeenCalledWith(
+      'route-loop-run',
+      expect.stringContaining('stale route decision')
+    );
+  });
+
+  it('routes to exhausted on the second false result when max_iterations is 1', async () => {
+    const { store, calls, routedEvents } = await runRouteLoopWorkflow({
+      reviewResults: ['negative', 'negative'],
+      maxIterations: 1,
+    });
+
+    expect(calls.map(call => call.nodeId)).toEqual([
+      'fix',
+      'review',
+      'fix',
+      'review',
+      'escalation',
+    ]);
+    expect(calls.some(call => call.nodeId === 'done')).toBe(false);
+    expect(routedEvents.map(event => event.data?.outcome)).toEqual(['negative', 'exhausted']);
+    expect(routedEvents[1]?.data).toMatchObject({
+      from: 'review',
+      to: 'escalation',
+      condition: "$review.output.result == '<redacted>'",
+      condition_result: false,
+      negative_count: 2,
+      max_iterations: 1,
+      attempt: 2,
+      execution_seq: 2,
+    });
+    expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('serializes parallel route_loop decisions against the latest execution sequence', async () => {
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('parallel-route-loop-run');
+
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mock(function* (
+        _prompt: string,
+        _cwd: string,
+        _resumeSessionId?: string,
+        sendOptions?: SendQueryOptions
+      ) {
+        const nodeId = String(sendOptions?.nodeConfig?.nodeId ?? '');
+        yield { type: 'assistant' as const, content: JSON.stringify({ result: 'positive' }) };
+        yield {
+          type: 'result' as const,
+          sessionId: `${nodeId}-session`,
+          structuredOutput: { result: 'positive' },
+        };
+      }),
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-parallel-route-loop',
+      testDir,
+      {
+        name: 'parallel-route-loop',
+        mutates_checkout: false,
+        nodes: [
+          {
+            id: 'review-a',
+            prompt: 'Review A.',
+            output_format: {
+              type: 'object',
+              properties: { result: { type: 'string', enum: ['positive'] } },
+              required: ['result'],
+            },
+          },
+          {
+            id: 'review-b',
+            prompt: 'Review B.',
+            output_format: {
+              type: 'object',
+              properties: { result: { type: 'string', enum: ['positive'] } },
+              required: ['result'],
+            },
+          },
+          {
+            id: 'router-a',
+            depends_on: ['review-a'],
+            route_loop: {
+              from: 'review-a',
+              condition: "$review-a.output.result == 'positive'",
+              max_iterations: 1,
+              routes: {
+                positive: 'done-a',
+                negative: 'fix-a',
+                exhausted: 'escalate-a',
+              },
+            },
+          },
+          {
+            id: 'router-b',
+            depends_on: ['review-b'],
+            route_loop: {
+              from: 'review-b',
+              condition: "$review-b.output.result == 'positive'",
+              max_iterations: 1,
+              routes: {
+                positive: 'done-b',
+                negative: 'fix-b',
+                exhausted: 'escalate-b',
+              },
+            },
+          },
+          { id: 'done-a', prompt: 'Done A.', depends_on: ['router-a'] },
+          { id: 'done-b', prompt: 'Done B.', depends_on: ['router-b'] },
+          { id: 'fix-a', prompt: 'Fix A.', depends_on: ['router-a'] },
+          { id: 'fix-b', prompt: 'Fix B.', depends_on: ['router-b'] },
+          { id: 'escalate-a', prompt: 'Escalate A.', depends_on: ['router-a'] },
+          { id: 'escalate-b', prompt: 'Escalate B.', depends_on: ['router-b'] },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const expectedSeqs = (
+      store.persistRouteDecisionTransition as ReturnType<typeof mock>
+    ).mock.calls.map(
+      call =>
+        (call[0] as Parameters<IWorkflowStore['persistRouteDecisionTransition']>[0])
+          .expected_execution_seq
+    );
+
+    expect(expectedSeqs.sort()).toEqual([0, 1]);
+  });
+
+  it('hydrates prior route activation metadata on resume', async () => {
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('route-loop-resume-run', {
+      metadata: {
+        loopCounters: { 'review-router': 1 },
+        nodeAttempts: { 'review-router': 1 },
+        executionSeq: 1,
+        routeActivations: {
+          revise: {
+            route_loop_node_id: 'review-router',
+            outcome: 'negative',
+            target_node_id: 'revise',
+            attempt: 1,
+            execution_seq: 1,
+          },
+        },
+      },
+    });
+    const calls: string[] = [];
+
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mock(function* (
+        _prompt: string,
+        _cwd: string,
+        _resumeSessionId?: string,
+        sendOptions?: SendQueryOptions
+      ) {
+        const nodeId = sendOptions?.nodeConfig?.nodeId;
+        if (typeof nodeId !== 'string') {
+          throw new Error('missing route-loop resume node id');
+        }
+        calls.push(nodeId);
+        yield { type: 'assistant' as const, content: `${nodeId} output` };
+        yield { type: 'result' as const, sessionId: `${nodeId}-session` };
+      }),
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-route-loop-resume',
+      testDir,
+      {
+        name: 'route-loop-resume',
+        mutates_checkout: false,
+        nodes: [
+          { id: 'draft', prompt: 'Draft.' },
+          {
+            id: 'review',
+            prompt: 'Review.',
+            depends_on: ['draft'],
+            output_format: {
+              type: 'object',
+              properties: {
+                result: { type: 'string', enum: ['positive', 'negative'] },
+              },
+              required: ['result'],
+            },
+          },
+          {
+            id: 'review-router',
+            depends_on: ['review'],
+            route_loop: {
+              from: 'review',
+              condition: "$review.output.result == 'positive'",
+              max_iterations: 10,
+              routes: {
+                positive: 'done',
+                negative: 'revise',
+                exhausted: 'escalation',
+              },
+            },
+          },
+          { id: 'revise', prompt: 'Revise.', depends_on: ['review-router'] },
+          { id: 'done', prompt: 'Done.', depends_on: ['review-router'] },
+          { id: 'escalation', prompt: 'Escalate.', depends_on: ['review-router'] },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      new Map([
+        ['draft', 'draft output'],
+        ['review', JSON.stringify({ result: 'negative' })],
+        ['review-router', JSON.stringify({ outcome: 'negative', to: 'revise' })],
+      ])
+    );
+
+    expect(calls).toEqual(['revise']);
+    expect(store.persistRouteDecisionTransition).not.toHaveBeenCalled();
+    expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('hydrates only the latest activation for a route_loop controller on resume', async () => {
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('route-loop-latest-activation-run', {
+      metadata: {
+        loopCounters: { 'review-router': 0 },
+        nodeAttempts: { 'review-router': 2 },
+        executionSeq: 2,
+        routeActivations: {
+          revise: {
+            route_loop_node_id: 'review-router',
+            outcome: 'negative',
+            target_node_id: 'revise',
+            attempt: 1,
+            execution_seq: 1,
+          },
+          done: {
+            route_loop_node_id: 'review-router',
+            outcome: 'positive',
+            target_node_id: 'done',
+            attempt: 2,
+            execution_seq: 2,
+          },
+        },
+      },
+    });
+    const calls: string[] = [];
+
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mock(function* (
+        _prompt: string,
+        _cwd: string,
+        _resumeSessionId?: string,
+        sendOptions?: SendQueryOptions
+      ) {
+        const nodeId = String(sendOptions?.nodeConfig?.nodeId ?? '');
+        calls.push(nodeId);
+        yield { type: 'assistant' as const, content: `${nodeId} output` };
+        yield { type: 'result' as const, sessionId: `${nodeId}-session` };
+      }),
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-route-loop-latest-activation',
+      testDir,
+      {
+        name: 'route-loop-latest-activation',
+        mutates_checkout: false,
+        nodes: [
+          { id: 'draft', prompt: 'Draft.' },
+          { id: 'review', prompt: 'Review.', depends_on: ['draft'] },
+          {
+            id: 'review-router',
+            depends_on: ['review'],
+            route_loop: {
+              from: 'review',
+              condition: "$review.output.result == 'positive'",
+              max_iterations: 10,
+              routes: {
+                positive: 'done',
+                negative: 'revise',
+                exhausted: 'escalation',
+              },
+            },
+          },
+          { id: 'revise', prompt: 'Revise.', depends_on: ['review-router'] },
+          { id: 'done', prompt: 'Done.', depends_on: ['review-router'] },
+          { id: 'escalation', prompt: 'Escalate.', depends_on: ['review-router'] },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      new Map([
+        ['draft', 'draft output'],
+        ['review', JSON.stringify({ result: 'positive' })],
+        ['review-router', JSON.stringify({ outcome: 'positive', to: 'done' })],
+      ])
+    );
+
+    expect(calls).toEqual(['done']);
+    expect(store.persistRouteDecisionTransition).not.toHaveBeenCalled();
+  });
+
+  it('ignores historical route activations for retry-invalidated controllers', async () => {
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('route-loop-retry-activation-run', {
+      metadata: {
+        loopCounters: { 'review-router': 0 },
+        nodeAttempts: { 'review-router': 1 },
+        executionSeq: 1,
+        routeActivations: {
+          done: {
+            route_loop_node_id: 'review-router',
+            outcome: 'positive',
+            target_node_id: 'done',
+            attempt: 1,
+            execution_seq: 1,
+          },
+        },
+      },
+    });
+    const calls: string[] = [];
+
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mock(function* (
+        _prompt: string,
+        _cwd: string,
+        _resumeSessionId?: string,
+        sendOptions?: SendQueryOptions
+      ) {
+        const nodeId = String(sendOptions?.nodeConfig?.nodeId ?? '');
+        calls.push(nodeId);
+        if (nodeId === 'review') {
+          yield { type: 'assistant' as const, content: JSON.stringify({ result: 'positive' }) };
+          yield {
+            type: 'result' as const,
+            sessionId: 'review-session',
+            structuredOutput: { result: 'positive' },
+          };
+          return;
+        }
+        yield { type: 'assistant' as const, content: `${nodeId} output` };
+        yield { type: 'result' as const, sessionId: `${nodeId}-session` };
+      }),
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-route-loop-retry-activation',
+      testDir,
+      {
+        name: 'route-loop-retry-activation',
+        mutates_checkout: false,
+        nodes: [
+          { id: 'fix', prompt: 'Fix.' },
+          {
+            id: 'review',
+            prompt: 'Review.',
+            depends_on: ['fix'],
+            output_format: {
+              type: 'object',
+              properties: { result: { type: 'string', enum: ['positive'] } },
+              required: ['result'],
+            },
+          },
+          {
+            id: 'review-router',
+            depends_on: ['review'],
+            route_loop: {
+              from: 'review',
+              condition: "$review.output.result == 'positive'",
+              max_iterations: 10,
+              routes: {
+                positive: 'done',
+                negative: 'fix',
+                exhausted: 'escalation',
+              },
+            },
+          },
+          { id: 'done', prompt: 'Done.' },
+          { id: 'escalation', prompt: 'Escalate.' },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      new Map([['fix', 'cached fix']]),
+      undefined,
+      undefined,
+      undefined,
+      {
+        targetNodeId: 'review',
+        retryEpoch: 1,
+        invalidatedNodeIds: ['review', 'review-router', 'done', 'escalation'],
+      }
+    );
+
+    expect(calls).toEqual(['review', 'done']);
   });
 });
 

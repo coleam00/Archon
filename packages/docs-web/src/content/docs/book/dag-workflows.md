@@ -20,6 +20,7 @@ That's what **DAG workflows** (Directed Acyclic Graphs) are for. Instead of a st
 |---------------|--------------|
 | Simple sequence, one after another | Sequential `nodes:` with `depends_on` |
 | Repeat until done | `loop:` node |
+| Route a review loop through fix, pass, or escalation paths | `route_loop:` node |
 | Skip a node based on previous output | `when:` condition |
 | Fan out to different handlers based on classified input | `output_format` + `when:` routing |
 | Express exactly which nodes depend on which | `depends_on` edges |
@@ -233,7 +234,7 @@ The classify-and-route example uses `none_failed_min_one_success` on `implement`
 
 ## Node Types
 
-Archon supports seven node types. Exactly one mode field is required per node:
+Archon supports eight node types. Exactly one mode field is required per node:
 
 | Type | Syntax | When to use |
 |------|--------|-------------|
@@ -242,6 +243,7 @@ Archon supports seven node types. Exactly one mode field is required per node:
 | **Bash** | `bash: "shell command"` | Run a shell script without AI. Stdout is captured as `$nodeId.output`. Deterministic operations only. |
 | **Script** | `script: "..." ` + `runtime: bun \| uv` | Run TypeScript/JavaScript (bun) or Python (uv) without AI. Inline code or named reference to `.archon/scripts/`. Stdout captured as `$nodeId.output`. See [Script Nodes](/guides/script-nodes/). |
 | **Loop** | `loop: { prompt: "...", until: SIGNAL }` | Repeat an AI prompt until a completion signal appears in the output. See [Loop Nodes](/guides/loop-nodes/). |
+| **Route Loop** | `route_loop: { from, condition, routes }` | Route a source node's review result to positive, negative, or exhausted targets. See [Route Loop Nodes](/guides/route-loop-nodes/). |
 | **Approval** | `approval: { message: "..." }` | Pause the workflow for a human approve/reject decision. See [Approval Nodes](/guides/approval-nodes/). |
 | **Cancel** | `cancel: "reason string"` | Terminate the workflow run (status: cancelled, not failed). Usually gated with `when:`. |
 
@@ -290,6 +292,27 @@ Archon supports seven node types. Exactly one mode field is required per node:
     max_iterations: 20
     fresh_context: true
 ```
+
+**Route Loop** is for bounded review loops where the routing decision belongs in the graph instead of inside an AI prompt:
+
+```yaml
+- id: review-router
+  depends_on: [review]
+  route_loop:
+    from: review
+    condition: "$review.output.result == 'positive'"
+    max_iterations: 3
+    routes:
+      positive: done
+      negative: fix
+      exhausted: escalation
+```
+
+The controller reads the latest completed output from `route_loop.from`.
+`positive` activates the success target, `negative` activates the configured retry path while budget remains, and `exhausted` activates the fallback target after the false-result budget is consumed.
+Unselected targets stay dormant, not skipped.
+The route-loop node emits a `node_routed` event and exposes JSON route metadata as `$review-router.output`.
+See [Route Loop Nodes](/guides/route-loop-nodes/) for validation and retry rules.
 
 **Approval** pauses the workflow for human review. The downstream nodes don't run until the user approves in chat, CLI, or web UI:
 
@@ -342,6 +365,9 @@ The Web UI shows a retry action for eligible failed nodes on web-created failed 
 | No-reset workflows | If `mutates_checkout: false` is set, Archon skips checkout checkpoint/reset setup and retries the node without resetting files. |
 
 `retry-node` is different from `resume`. `archon workflow resume <run-id>` resumes a failed run and skips completed nodes, while `retry-node` deliberately invalidates one failed node plus descendants so that branch can run again with a fresh retry epoch.
+
+Route-loop controller nodes cannot be retried directly.
+Retry the node named by `route_loop.from` so the fresh source output flows through the controller again.
 
 ---
 

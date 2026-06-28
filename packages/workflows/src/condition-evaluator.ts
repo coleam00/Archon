@@ -117,6 +117,94 @@ function splitOutsideQuotes(expr: string, sep: string): string[] {
 const atomPattern =
   /^\$([a-zA-Z_][a-zA-Z0-9_-]*)\.([a-zA-Z_][a-zA-Z0-9_]*)(?:\.([a-zA-Z_][a-zA-Z0-9_]*))?\s*(==|!=|<=|>=|<|>)\s*(?:'([^']*)'|(-?\d+(?:\.\d+)?|true|false))$/;
 
+export interface ConditionReference {
+  nodeId: string;
+  field?: string;
+}
+
+export type ConditionReferenceParseResult =
+  | { parsed: true; references: ConditionReference[] }
+  | { parsed: false; error: string };
+
+/**
+ * Extract node-output references from a condition using the same atom grammar
+ * as runtime evaluation. This is intentionally narrow: parse failures stay
+ * visible to route-loop loader validation instead of being silently ignored.
+ */
+export function extractConditionReferences(expr: string): ConditionReferenceParseResult {
+  const references: ConditionReference[] = [];
+  const orClauses = splitOutsideQuotes(expr.trim(), '||');
+
+  for (const orClause of orClauses) {
+    const andAtoms = splitOutsideQuotes(orClause, '&&');
+    for (const atom of andAtoms) {
+      const match = atomPattern.exec(atom.trim());
+      if (!match) {
+        return { parsed: false, error: `condition atom could not be parsed: ${atom}` };
+      }
+
+      const [, nodeId, segment1, segment2] = match;
+      if (nodeId === undefined || segment1 === undefined) {
+        return { parsed: false, error: `condition atom could not be parsed: ${atom}` };
+      }
+
+      let field: string | undefined;
+      if (segment1 === 'output') {
+        field = segment2;
+      } else {
+        if (segment2 !== undefined) {
+          return { parsed: false, error: `condition atom could not be parsed: ${atom}` };
+        }
+        field = segment1;
+      }
+
+      references.push(field === undefined ? { nodeId } : { nodeId, field });
+    }
+  }
+
+  return { parsed: true, references };
+}
+
+function redactConditionLiterals(expr: string): string {
+  return expr
+    .replace(/'[^']*'/g, "'<redacted>'")
+    .replace(/(==|!=|<=|>=|<|>)\s*(-?\d+(?:\.\d+)?|true|false)\b/g, '$1 <redacted>');
+}
+
+function serializeSafeAtom(atom: string): string {
+  const trimmed = atom.trim();
+  const match = atomPattern.exec(trimmed);
+  if (!match) return redactConditionLiterals(trimmed);
+
+  const [, nodeId, segment1, segment2, operator, quotedValue, unquotedValue] = match;
+  if (
+    nodeId === undefined ||
+    segment1 === undefined ||
+    operator === undefined ||
+    (quotedValue === undefined && unquotedValue === undefined)
+  ) {
+    return redactConditionLiterals(trimmed);
+  }
+
+  if (segment1 !== 'output' && segment2 !== undefined) {
+    return redactConditionLiterals(trimmed);
+  }
+
+  const ref =
+    segment2 === undefined ? `$${nodeId}.${segment1}` : `$${nodeId}.${segment1}.${segment2}`;
+  const redacted = quotedValue !== undefined ? "'<redacted>'" : '<redacted>';
+  return `${ref} ${operator} ${redacted}`;
+}
+
+export function serializeSafeCondition(expr: string): string {
+  const orClauses = splitOutsideQuotes(expr.trim(), '||');
+  const serializedOrClauses = orClauses.map(orClause => {
+    const andAtoms = splitOutsideQuotes(orClause, '&&');
+    return andAtoms.map(serializeSafeAtom).join(' && ');
+  });
+  return serializedOrClauses.join(' || ');
+}
+
 /**
  * Evaluate a single atomic condition expression against upstream node outputs.
  */

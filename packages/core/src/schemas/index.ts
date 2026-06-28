@@ -32,12 +32,14 @@ export type { Session, SessionMetadata } from './session';
 // WorkflowEvent
 export {
   workflowEventRowSchema,
+  routeLoopDecisionEventDataSchema,
   nodeRetryRequestedEventDataSchema,
   nodeRetryResetEventDataSchema,
   nodeRetryFailedEventDataSchema,
 } from './workflow-event';
 export type {
   WorkflowEventRow,
+  RouteLoopDecisionEventData,
   NodeRetryRequestedEventData,
   NodeRetryResetEventData,
   NodeRetryFailedEventData,
@@ -56,9 +58,13 @@ export {
   dashboardWorkflowRunSchema,
   listDashboardRunsOptionsSchema,
   dashboardRunsResultSchema,
+  routeLoopRuntimeMetadataSchema,
+  workflowRunMetadataSchema,
 } from './workflow-run';
 export type {
   DashboardWorkflowRun,
   ListDashboardRunsOptions,
   DashboardRunsResult,
+  RouteLoopRuntimeMetadata,
+  WorkflowRunMetadata,
 } from './workflow-run';
