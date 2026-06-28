@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-06-21T14:04:25.189850Z",
+  "generated_at": "2026-06-28T14:04:12.925016Z",
   "vault_path": "second-brain/contacts",
-  "count": 43,
+  "count": 44,
   "contacts": [
     {
       "id": "team/andrea-redassich",
@@ -17,6 +17,21 @@
       "preview": "Stub for Andrea Redassich, surfaced in 2026-04-29 AI Session. Role/scope/access level all unresolved per open question #45 \u2014 full involvement TBD pending Jason confirmation.",
       "tags": ["team", "person", "status/stub", "parent/pmc"],
       "vaultPath": "contacts/team/andrea-redassich.md"
+    },
+    {
+      "id": "team/antonio-aja",
+      "slug": "antonio-aja",
+      "category": "team",
+      "name": "Antonio",
+      "role": "AJA Productions video-production partner",
+      "company": "",
+      "email": "",
+      "linkedin": "",
+      "phone": "",
+      "status": "active",
+      "preview": "Antonio is Jason's AJA Productions video partner for BioReg / TTTS short-form content, DaVinci Resolve workflow setup, and September-event footage conversion.",
+      "tags": ["contact", "partner", "video-production", "bioreg", "ttts", "client/jid5274"],
+      "vaultPath": "contacts/team/antonio-aja.md"
     },
     {
       "id": "team/ed",

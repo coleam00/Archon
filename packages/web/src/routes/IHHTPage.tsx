@@ -48,6 +48,34 @@ const SECTIONS = [
       },
     ],
   },
+  {
+    heading: 'Open questions',
+    items: [
+      {
+        slug: 'licensing-model',
+        title: 'IHHT-CellIT licensing model',
+        description:
+          'Confirm per-device vs. per-clinic economics before locking the sales narrative.',
+        badge: 'confirm',
+        badgeTone: 'amber' as const,
+      },
+      {
+        slug: 'reimbursement-path',
+        title: 'Cardiac-rehab reimbursement path',
+        description: 'Clarify whether a CPT-code path exists for the cardiac-rehab application.',
+        badge: 'research',
+        badgeTone: 'amber' as const,
+      },
+      {
+        slug: 'content-owner',
+        title: 'VA content owner',
+        description:
+          'Assign IHHT content delivery ownership across social, creative, and outbound support.',
+        badge: 'assign',
+        badgeTone: 'amber' as const,
+      },
+    ],
+  },
 ];
 
 const KPIS = [
