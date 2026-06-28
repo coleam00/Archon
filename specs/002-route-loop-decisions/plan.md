@@ -153,7 +153,7 @@ The feature is broad because it affects workflow schemas, execution, event proje
 8. Activate only the selected route target and do not mark unselected route targets as skipped.
 9. When a selected target already completed, create a new attempt and invalidate only the selected rerun path back to the route-loop node.
 10. Fail fast if a selected target is running or paused.
-11. Validate rerun path self-containment at load time and at runtime before invalidating latest-output state.
+11. Validate negative rerun plan shape at load time and assert external prerequisite completion at runtime before invalidating latest-output state.
 12. Keep provider session behavior unchanged and do not automatically inject route context into negative target prompts.
 
 ### Phase 4 - Events, Projection, And APIs

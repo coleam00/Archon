@@ -62,7 +62,7 @@ description: 'Tasks for route loop decisions feature implementation'
 - [x] T016 [US1] Export route-loop schemas and type guards from `packages/workflows/src/schemas/index.ts`
 - [x] T017 [US1] Extend `dagNodeSchema` with mutually exclusive `route_loop` node mode validation in `packages/workflows/src/schemas/dag-node.ts`
 - [x] T018 [US1] Extend workflow loader validation for `route_loop.depends_on`, `route_loop.from`, route target existence, and unsupported node fields in `packages/workflows/src/loader.ts`
-- [x] T019 [US1] Add route-edge cycle validation, positive and exhausted exit-path validation, nested route-loop allowance, warning behavior when `routes.negative` targets `route_loop.from` directly, and self-contained negative path validation in `packages/workflows/src/loader.ts`
+- [x] T019 [US1] Add route-edge cycle validation, positive and exhausted exit-path validation, nested route-loop allowance, warning behavior when `routes.negative` targets `route_loop.from` directly, and negative rerun plan validation in `packages/workflows/src/loader.ts`
 - [x] T020 [US1] Expose condition parsing reference metadata needed by route-loop validation in `packages/workflows/src/condition-evaluator.ts`
 - [x] T021 [US1] Wire strict output field validation for route-loop condition references in `packages/workflows/src/output-ref.ts`
 - [x] T022 [US1] Update server workflow schemas to include the route-loop DAG node shape in `packages/server/src/routes/schemas/workflow.schemas.ts`

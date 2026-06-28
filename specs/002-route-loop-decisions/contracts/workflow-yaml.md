@@ -84,7 +84,8 @@ The loader must reject:
 - Route-loop node that declares `when` or `trigger_rule`.
 - Condition that references any node other than `from`.
 - Positive or exhausted route that re-enters the negative loop path.
-- First-version negative retry path that depends on nodes outside the rerun path.
+
+At runtime, the engine must fail a selected negative retry path when any external prerequisite is not completed.
 
 ## Compatibility
 

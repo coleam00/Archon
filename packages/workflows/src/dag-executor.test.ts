@@ -5696,6 +5696,7 @@ describe('executeDagWorkflow -- route_loop end-to-end TDD', () => {
     reviewResults: ReviewResult[];
     maxIterations?: number;
     includeUnrelatedFixDependent?: boolean;
+    includeExternalPrerequisites?: boolean;
     routeTargetsAreRoots?: boolean;
     includeDoneDependent?: boolean;
     persistRouteDecisionTransition?: IWorkflowStore['persistRouteDecisionTransition'];
@@ -5750,11 +5751,21 @@ describe('executeDagWorkflow -- route_loop end-to-end TDD', () => {
     const workflow = {
       name: 'route-loop-e2e',
       nodes: [
-        { id: 'fix', prompt: 'Fix the story.' },
+        ...(options.includeExternalPrerequisites
+          ? [
+              { id: 'prepare', prompt: 'Prepare stable state.' },
+              { id: 'config', prompt: 'Load review config.', depends_on: ['prepare'] },
+            ]
+          : []),
+        {
+          id: 'fix',
+          prompt: 'Fix the story.',
+          ...(options.includeExternalPrerequisites ? { depends_on: ['prepare'] } : {}),
+        },
         {
           id: 'review',
           prompt: 'Review the latest fix.',
-          depends_on: ['fix'],
+          depends_on: options.includeExternalPrerequisites ? ['fix', 'config'] : ['fix'],
           output_format: {
             type: 'object',
             properties: {
@@ -5897,6 +5908,335 @@ describe('executeDagWorkflow -- route_loop end-to-end TDD', () => {
     ).toBe(false);
     expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
     expect(store.failWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('reruns the selected negative path while reusing completed external prerequisites', async () => {
+    const { calls, routedEvents } = await runRouteLoopWorkflow({
+      reviewResults: ['negative', 'positive'],
+      includeExternalPrerequisites: true,
+    });
+
+    const nodeIds = calls.map(call => call.nodeId);
+
+    expect(nodeIds[0]).toBe('prepare');
+    expect(nodeIds.slice(1, 3).sort()).toEqual(['config', 'fix']);
+    expect(nodeIds.slice(3)).toEqual(['review', 'fix', 'review', 'done']);
+    expect(nodeIds.filter(nodeId => nodeId === 'prepare')).toHaveLength(1);
+    expect(nodeIds.filter(nodeId => nodeId === 'config')).toHaveLength(1);
+    expect(nodeIds.filter(nodeId => nodeId === 'fix')).toHaveLength(2);
+    expect(nodeIds.filter(nodeId => nodeId === 'review')).toHaveLength(2);
+    expect(routedEvents.map(event => event.data?.outcome)).toEqual(['negative', 'positive']);
+  });
+
+  it('reruns a non-root from node when the negative route targets route_loop.from directly', async () => {
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('direct-from-route-loop-run');
+    const calls: string[] = [];
+    let reviewAttempt = 0;
+
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mock(function* (
+        _prompt: string,
+        _cwd: string,
+        _resumeSessionId?: string,
+        sendOptions?: SendQueryOptions
+      ) {
+        const nodeId = sendOptions?.nodeConfig?.nodeId;
+        if (typeof nodeId !== 'string') {
+          throw new Error('missing node id in direct-from route-loop provider');
+        }
+        calls.push(nodeId);
+
+        if (nodeId === 'review') {
+          reviewAttempt++;
+          const result = reviewAttempt === 1 ? 'negative' : 'positive';
+          yield { type: 'assistant' as const, content: JSON.stringify({ result }) };
+          yield {
+            type: 'result' as const,
+            sessionId: `review-${String(reviewAttempt)}`,
+            structuredOutput: { result },
+          };
+          return;
+        }
+
+        yield { type: 'assistant' as const, content: `${nodeId} complete` };
+        yield { type: 'result' as const, sessionId: `${nodeId}-session` };
+      }),
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-direct-from-route-loop',
+      testDir,
+      {
+        name: 'direct-from-route-loop',
+        mutates_checkout: false,
+        nodes: [
+          { id: 'start', prompt: 'Start.' },
+          {
+            id: 'review',
+            prompt: 'Review.',
+            depends_on: ['start'],
+            output_format: {
+              type: 'object',
+              properties: {
+                result: { type: 'string', enum: ['positive', 'negative'] },
+              },
+              required: ['result'],
+            },
+          },
+          {
+            id: 'review-router',
+            depends_on: ['review'],
+            route_loop: {
+              from: 'review',
+              condition: "$review.output.result == 'positive'",
+              max_iterations: 2,
+              routes: {
+                positive: 'done',
+                negative: 'review',
+                exhausted: 'escalation',
+              },
+            },
+          },
+          { id: 'done', prompt: 'Done.', depends_on: ['review-router'] },
+          { id: 'escalation', prompt: 'Escalate.', depends_on: ['review-router'] },
+        ],
+      } as unknown as Parameters<typeof executeDagWorkflow>[4],
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const routedEvents = (
+      store.persistRouteDecisionTransition as ReturnType<typeof mock>
+    ).mock.calls.map(
+      call =>
+        (call[0] as Parameters<IWorkflowStore['persistRouteDecisionTransition']>[0]).event.data
+    );
+
+    expect(calls).toEqual(['start', 'review', 'review', 'done']);
+    expect(routedEvents.map(event => event.outcome)).toEqual(['negative', 'positive']);
+    expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('does not unblock a route target through another route_loop initial path', async () => {
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('cross-loop-route-target-run');
+    const calls: string[] = [];
+
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mock(function* (
+        _prompt: string,
+        _cwd: string,
+        _resumeSessionId?: string,
+        sendOptions?: SendQueryOptions
+      ) {
+        const nodeId = sendOptions?.nodeConfig?.nodeId;
+        if (typeof nodeId !== 'string') {
+          throw new Error('missing node id in cross-loop route target provider');
+        }
+        calls.push(nodeId);
+
+        if (nodeId === 'a-review' || nodeId === 'b-review') {
+          const result = nodeId === 'a-review' ? 'negative' : 'positive';
+          yield { type: 'assistant' as const, content: JSON.stringify({ result }) };
+          yield {
+            type: 'result' as const,
+            sessionId: `${nodeId}-session`,
+            structuredOutput: { result },
+          };
+          return;
+        }
+
+        yield { type: 'assistant' as const, content: `${nodeId} complete` };
+        yield { type: 'result' as const, sessionId: `${nodeId}-session` };
+      }),
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-cross-loop-route-target',
+      testDir,
+      {
+        name: 'cross-loop-route-target',
+        mutates_checkout: false,
+        nodes: [
+          { id: 'a-start', prompt: 'Start A.' },
+          {
+            id: 'a-review',
+            prompt: 'Review A.',
+            depends_on: ['a-start'],
+            output_format: {
+              type: 'object',
+              properties: {
+                result: { type: 'string', enum: ['positive', 'negative'] },
+              },
+              required: ['result'],
+            },
+          },
+          {
+            id: 'a-router',
+            depends_on: ['a-review'],
+            route_loop: {
+              from: 'a-review',
+              condition: "$a-review.output.result == 'positive'",
+              max_iterations: 1,
+              routes: {
+                positive: 'shared',
+                negative: 'a-retry',
+                exhausted: 'a-error',
+              },
+            },
+          },
+          { id: 'a-retry', prompt: 'Retry A.', depends_on: ['a-router'] },
+          { id: 'a-error', prompt: 'Error A.', depends_on: ['a-router'] },
+          { id: 'shared', prompt: 'Shared target.' },
+          {
+            id: 'b-review',
+            prompt: 'Review B.',
+            depends_on: ['shared'],
+            output_format: {
+              type: 'object',
+              properties: {
+                result: { type: 'string', enum: ['positive', 'negative'] },
+              },
+              required: ['result'],
+            },
+          },
+          {
+            id: 'b-router',
+            depends_on: ['b-review'],
+            route_loop: {
+              from: 'b-review',
+              condition: "$b-review.output.result == 'positive'",
+              max_iterations: 1,
+              routes: {
+                positive: 'b-done',
+                negative: 'shared',
+                exhausted: 'b-error',
+              },
+            },
+          },
+          { id: 'b-done', prompt: 'Done B.', depends_on: ['b-router'] },
+          { id: 'b-error', prompt: 'Error B.', depends_on: ['b-router'] },
+        ],
+      } as unknown as Parameters<typeof executeDagWorkflow>[4],
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(calls).toEqual(['a-start', 'a-review', 'a-retry']);
+    expect(calls).not.toContain('shared');
+    expect(calls).not.toContain('b-review');
+    expect(calls).not.toContain('b-done');
+    expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('fails the route_loop when an external rerun prerequisite is not completed', async () => {
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('missing-external-prereq-route-loop-run');
+    const calls: string[] = [];
+
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mock(function* (
+        _prompt: string,
+        _cwd: string,
+        _resumeSessionId?: string,
+        sendOptions?: SendQueryOptions
+      ) {
+        const nodeId = sendOptions?.nodeConfig?.nodeId;
+        if (typeof nodeId !== 'string') {
+          throw new Error('missing node id in missing-prereq route-loop provider');
+        }
+        calls.push(nodeId);
+        yield { type: 'assistant' as const, content: `${nodeId} complete` };
+        yield { type: 'result' as const, sessionId: `${nodeId}-session` };
+      }),
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-missing-external-prereq-route-loop',
+      testDir,
+      {
+        name: 'missing-external-prereq-route-loop',
+        mutates_checkout: false,
+        nodes: [
+          { id: 'setup', prompt: 'Setup.', when: '1 == 0' },
+          { id: 'fix', prompt: 'Fix.', depends_on: ['setup'] },
+          { id: 'review', prompt: 'Review.', depends_on: ['fix'] },
+          {
+            id: 'review-router',
+            depends_on: ['review'],
+            route_loop: {
+              from: 'review',
+              condition: "$review.output == 'positive'",
+              max_iterations: 2,
+              routes: {
+                positive: 'done',
+                negative: 'fix',
+                exhausted: 'escalation',
+              },
+            },
+          },
+          { id: 'done', prompt: 'Done.', depends_on: ['review-router'] },
+          { id: 'escalation', prompt: 'Escalate.', depends_on: ['review-router'] },
+        ],
+      } as unknown as Parameters<typeof executeDagWorkflow>[4],
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      new Map([
+        ['fix', 'prior fix'],
+        ['review', 'negative'],
+      ])
+    );
+
+    expect(calls).toEqual([]);
+    expect(store.persistRouteDecisionTransition).not.toHaveBeenCalled();
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(store.failWorkflowRun).toHaveBeenCalledWith(
+      'missing-external-prereq-route-loop-run',
+      expect.stringContaining(
+        "route_loop 'review-router' cannot activate negative target 'fix' because external prerequisite 'setup' for rerun node 'fix' is not completed"
+      )
+    );
   });
 
   it('does not run root route targets before the route_loop selects them', async () => {
