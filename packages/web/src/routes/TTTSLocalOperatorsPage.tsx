@@ -52,6 +52,44 @@ interface LocalOperatorPayload {
   operators?: LocalOperator[];
 }
 
+const LOCAL_OPERATOR_STRING_FIELDS = [
+  'priority',
+  'relationship_lane',
+  'prospect',
+  'title',
+  'company',
+  'icp_bucket',
+  'fit_score',
+  'city',
+  'state',
+  'phone',
+  'email',
+  'website',
+  'linkedin_url',
+  'instagram_handle',
+  'source_channels',
+  'source_systems',
+  'evidence_type',
+  'outreach_status',
+  'interest_level',
+  'event_attendance_status',
+  'last_signal_date',
+  'last_message_or_note',
+  'campaign_or_context',
+  'recommended_next_action',
+  'owner',
+  'ttts_master_id',
+  'heyreach_campaign_id',
+  'heyreach_lead_status',
+  'heyreach_connection_status',
+  'heyreach_message_status',
+  'dial_status',
+  'meeting_status',
+  'suppression_status',
+  'source_artifacts',
+  'notes',
+] as const satisfies readonly (keyof LocalOperator)[];
+
 const LANE_OPTIONS = [
   'all',
   'P0 attended / RSVP follow-up',
@@ -71,12 +109,6 @@ const LANE_TONES: Record<string, string> = {
   'P4 attempted -- repair channel': 'border-red-700/30 bg-red-100 text-red-800',
 };
 
-function safeOperators(value: unknown): LocalOperator[] {
-  return Array.isArray(value)
-    ? value.filter((row): row is LocalOperator => typeof row === 'object' && row !== null)
-    : [];
-}
-
 function safeTotals(value: unknown): Record<string, number> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return {};
   return Object.fromEntries(
@@ -89,6 +121,24 @@ function safeTotals(value: unknown): Record<string, number> {
 
 function safeString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function safeOperator(row: unknown): LocalOperator | null {
+  if (typeof row !== 'object' || row === null || Array.isArray(row)) return null;
+
+  const source = row as Record<string, unknown>;
+  const normalized: LocalOperator = {};
+  for (const field of LOCAL_OPERATOR_STRING_FIELDS) {
+    const value = safeString(source[field]);
+    if (value) normalized[field] = value;
+  }
+
+  return normalized;
+}
+
+function safeOperators(value: unknown): LocalOperator[] {
+  if (!Array.isArray(value)) return [];
+  return value.map(row => safeOperator(row)).filter((row): row is LocalOperator => row !== null);
 }
 
 function splitParts(value?: string): string[] {
