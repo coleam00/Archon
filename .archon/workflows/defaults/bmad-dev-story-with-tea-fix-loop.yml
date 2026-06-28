@@ -109,44 +109,17 @@ nodes:
     output_type: bmad-state
 
   - id: dev-story
-    command: bmad-dev-story-step
+    prompt: |
+      bmad-dev-story $ARGUMENTS
     provider: codex
     depends_on: [prepare-bmad-state]
     context: fresh
     model: gpt-5.5
     idle_timeout: 900000
-    output_format:
-      type: object
-      properties:
-        story_name:
-          type: string
-        story_key:
-          type: string
-        story_file:
-          type: string
-        sprint_status:
-          type: string
-        implementation_summary:
-          type: string
-        files_changed:
-          type: string
-        tests_run:
-          type: string
-        validation_summary:
-          type: string
-      required:
-        - story_name
-        - story_key
-        - story_file
-        - sprint_status
-        - implementation_summary
-        - files_changed
-        - tests_run
-        - validation_summary
     output_type: dev-story
 
   - id: tea-automate
-    command: bmad-tea-automate-step
+    command: bmad-testarch-automate
     provider: codex
     depends_on: [dev-story]
     context: fresh
@@ -154,49 +127,14 @@ nodes:
     idle_timeout: 900000
     output_type: tea-automation
 
-  - id: code-review-r1
-    command: bmad-code-review-findings-step
+  - id: code-review
+    command: bmad-code-review
     provider: codex
     depends_on: [tea-automate]
     context: fresh
     model: gpt-5.5
     idle_timeout: 900000
-    output_type: code-review-findings
-
-  - id: tea-rv-r1
-    command: bmad-tea-rv-findings-step
-    provider: codex
-    depends_on: [code-review-r1]
-    context: fresh
-    model: gpt-5.5
-    idle_timeout: 900000
-    output_type: test-review-findings
-
-  - id: tea-nr-r1
-    command: bmad-tea-nr-findings-step
-    provider: codex
-    depends_on: [tea-rv-r1]
-    context: fresh
-    model: gpt-5.5
-    idle_timeout: 900000
-    output_type: nfr-findings
-
-  - id: tea-tr-r1
-    command: bmad-tea-tr-findings-step
-    provider: codex
-    depends_on: [tea-nr-r1]
-    context: fresh
-    model: gpt-5.5
-    idle_timeout: 900000
-    output_type: trace-findings
-
-  - id: collect-findings-r1
-    command: bmad-collect-findings-step
-    provider: codex
-    depends_on: [tea-tr-r1]
-    context: fresh
-    model: gpt-5.5
-    output_format: &findings_gate_schema
+    output_format: &code_review_gate_schema
       type: object
       properties:
         gate:
@@ -210,122 +148,57 @@ nodes:
           type: string
         decision_log_file:
           type: string
-      required: [gate, round, findings_count, open_findings_file, decision_log_file]
-    output_type: findings-gate
-
-  - id: dev-story-fix-r1
-    command: bmad-dev-story-step
-    provider: codex
-    depends_on: [collect-findings-r1]
-    when: "$collect-findings-r1.output.gate == 'FAIL'"
-    context: fresh
-    model: gpt-5.5
-    idle_timeout: 900000
-    output_type: dev-story-fixes
-
-  - id: code-review-r2
-    command: bmad-code-review-findings-step
-    provider: codex
-    depends_on: [dev-story-fix-r1]
-    context: fresh
-    model: gpt-5.5
-    idle_timeout: 900000
+        code_review_report:
+          type: string
+      required:
+        - gate
+        - round
+        - findings_count
+        - open_findings_file
+        - decision_log_file
+        - code_review_report
     output_type: code-review-findings
 
-  - id: tea-rv-r2
-    command: bmad-tea-rv-findings-step
+  - id: code-review-gate
+    depends_on: [code-review]
+    route_loop:
+      from: code-review
+      condition: "$code-review.output.gate == 'PASS'"
+      max_iterations: 2
+      routes:
+        positive: tea-rv
+        negative: dev-story
+        exhausted: review-loop-error
+
+  - id: tea-rv
+    command: bmad-testarch-test-review
     provider: codex
-    depends_on: [code-review-r2]
+    depends_on: [code-review-gate]
     context: fresh
     model: gpt-5.5
     idle_timeout: 900000
     output_type: test-review-findings
 
-  - id: tea-nr-r2
-    command: bmad-tea-nr-findings-step
+  - id: tea-nr
+    command: bmad-testarch-nfr
     provider: codex
-    depends_on: [tea-rv-r2]
+    depends_on: [tea-rv]
     context: fresh
     model: gpt-5.5
     idle_timeout: 900000
     output_type: nfr-findings
 
-  - id: tea-tr-r2
-    command: bmad-tea-tr-findings-step
+  - id: tea-tr
+    command: bmad-testarch-trace
     provider: codex
-    depends_on: [tea-nr-r2]
+    depends_on: [tea-nr]
     context: fresh
     model: gpt-5.5
     idle_timeout: 900000
     output_type: trace-findings
 
-  - id: collect-findings-r2
-    command: bmad-collect-findings-step
-    provider: codex
-    depends_on: [tea-tr-r2]
-    context: fresh
-    model: gpt-5.5
-    output_format: *findings_gate_schema
-    output_type: findings-gate
-
-  - id: dev-story-fix-r2
-    command: bmad-dev-story-step
-    provider: codex
-    depends_on: [collect-findings-r2]
-    when: "$collect-findings-r2.output.gate == 'FAIL'"
-    context: fresh
-    model: gpt-5.5
-    idle_timeout: 900000
-    output_type: dev-story-fixes
-
-  - id: code-review-r3
-    command: bmad-code-review-findings-step
-    provider: codex
-    depends_on: [dev-story-fix-r2]
-    context: fresh
-    model: gpt-5.5
-    idle_timeout: 900000
-    output_type: code-review-findings
-
-  - id: tea-rv-r3
-    command: bmad-tea-rv-findings-step
-    provider: codex
-    depends_on: [code-review-r3]
-    context: fresh
-    model: gpt-5.5
-    idle_timeout: 900000
-    output_type: test-review-findings
-
-  - id: tea-nr-r3
-    command: bmad-tea-nr-findings-step
-    provider: codex
-    depends_on: [tea-rv-r3]
-    context: fresh
-    model: gpt-5.5
-    idle_timeout: 900000
-    output_type: nfr-findings
-
-  - id: tea-tr-r3
-    command: bmad-tea-tr-findings-step
-    provider: codex
-    depends_on: [tea-nr-r3]
-    context: fresh
-    model: gpt-5.5
-    idle_timeout: 900000
-    output_type: trace-findings
-
-  - id: collect-findings-r3
-    command: bmad-collect-findings-step
-    provider: codex
-    depends_on: [tea-tr-r3]
-    context: fresh
-    model: gpt-5.5
-    output_format: *findings_gate_schema
-    output_type: findings-gate
-
-  - id: assert-review-pass
-    depends_on: [collect-findings-r1, collect-findings-r2, collect-findings-r3]
-    trigger_rule: all_done
+  - id: review-loop-error
+    depends_on: [code-review-gate]
     bash: |
       set -e
 
@@ -333,26 +206,21 @@ nodes:
       DECISIONS="$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop/decision-log.md"
       OPEN_FINDINGS="$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop/findings/open-findings.md"
 
-      if ! grep -qE '"status"[[:space:]]*:[[:space:]]*"complete"' "$STATE"; then
-        echo "BMAD TEA review-fix loop did not complete successfully."
-        cat "$STATE"
-        exit 1
-      fi
-
-      if grep -q "Status: OPEN" "$OPEN_FINDINGS"; then
-        echo "Open findings remain after final review pass."
-        exit 1
-      fi
-
-      echo "BMAD TEA review-fix loop completed successfully."
+      echo "BMAD code-review fix loop exhausted its retry budget."
+      echo "State: $STATE"
       echo "Decision log: $DECISIONS"
+      echo "Open findings: $OPEN_FINDINGS"
+
+      if [ -f "$STATE" ]; then
+        cat "$STATE"
+      fi
+
+      exit 1
     timeout: 60000
 
-  - id: final-summary
-    command: bmad-final-summary-step
+  - id: create-pull-request
+    command: archon-create-pr
     provider: codex
-    depends_on: [assert-review-pass]
-    trigger_rule: all_done
+    depends_on: [tea-tr]
     context: fresh
     model: gpt-5.5
-    output_type: summary

@@ -2354,7 +2354,7 @@ ${overrides.extraNodes ?? ''}
       );
     });
 
-    it('rejects a negative rerun path with dependencies outside the rerun path', async () => {
+    it('accepts a negative rerun path with external prerequisites outside the rerun path', async () => {
       const result = await discoverRouteLoopWorkflow({
         reviewDependsOn: '[fix, setup]',
         extraNodes: `  - id: setup
@@ -2362,12 +2362,11 @@ ${overrides.extraNodes ?? ''}
 `,
       });
 
-      expect(result.errors).toHaveLength(1);
-      expect(result.errors[0].error).toContain('negative rerun path is not self-contained');
-      expect(result.errors[0].error).toContain("'review' depends on 'setup'");
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
     });
 
-    it('accepts a nested route_loop inside a self-contained negative rerun path', async () => {
+    it('accepts a nested route_loop inside a negative rerun path', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(workflowDir, { recursive: true });
       await writeFile(

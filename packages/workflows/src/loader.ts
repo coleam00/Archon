@@ -271,28 +271,6 @@ function collectPathNodesToTarget(
   return pathNodes;
 }
 
-function validateNegativeRerunPathSelfContained(
-  routeLoopNode: DagNode,
-  pathNodes: Set<string>,
-  nodesById: Map<string, DagNode>
-): string | null {
-  if (!isRouteLoopNode(routeLoopNode)) return null;
-  const negativeTarget = routeLoopNode.route_loop.routes.negative;
-  if (negativeTarget === routeLoopNode.route_loop.from) return null;
-
-  for (const pathNodeId of pathNodes) {
-    const pathNode = nodesById.get(pathNodeId);
-    if (pathNode === undefined) continue;
-    for (const dep of pathNode.depends_on ?? []) {
-      if (!pathNodes.has(dep)) {
-        return `Node '${routeLoopNode.id}' route_loop negative rerun path is not self-contained: node '${pathNode.id}' depends on '${dep}' outside the selected rerun path`;
-      }
-    }
-  }
-
-  return null;
-}
-
 function validateRouteLoopStructure(nodes: DagNode[]): string | null {
   const nodesById = new Map(nodes.map(node => [node.id, node]));
   const dependents = buildDependentsMap(nodes);
@@ -332,20 +310,6 @@ function validateRouteLoopStructure(nodes: DagNode[]): string | null {
         { nodeId: node.id, from: node.route_loop.from, target: negativeTarget },
         'route_loop_negative_targets_from_node'
       );
-    }
-
-    const negativeRerunPath = collectPathNodesToTarget(
-      negativeTarget,
-      node.route_loop.from,
-      dependents
-    );
-    if (negativeRerunPath !== null) {
-      const selfContainedError = validateNegativeRerunPathSelfContained(
-        node,
-        negativeRerunPath,
-        nodesById
-      );
-      if (selfContainedError !== null) return selfContainedError;
     }
 
     const exitRouteEntries = [

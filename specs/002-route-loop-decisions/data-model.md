@@ -36,7 +36,9 @@ Validation rules:
 - Each target must exist in the workflow.
 - No target may point to the same route-loop node.
 - `positive` and `exhausted` must be exit paths and must not re-enter the negative rerun path.
-- `negative` may exit or may target an upstream self-contained path back to `from`.
+- `negative` may exit or may target an upstream path back to `from`.
+- A negative rerun plan may identify external prerequisites outside that path.
+- Runtime must assert those external prerequisites are already completed and must not rerun them.
 
 ## RouteOutcome
 

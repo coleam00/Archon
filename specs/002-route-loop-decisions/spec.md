@@ -131,7 +131,7 @@ Verify workflows without `route_loop` still use current static DAG behavior and 
 - The negative route targets a node after the route-loop node rather than an upstream path.
 - The negative route path exits instead of returning to the `from` node.
 - The negative route path contains multiple paths back to `from`.
-- The negative route path contains a node that depends on a node outside the rerun path.
+- The negative route path contains a node that depends on an external prerequisite outside the rerun path.
 - Positive and exhausted routes try to re-enter the loop path.
 - Different outcomes share a target node.
 - Negative and exhausted share a target node.
@@ -226,8 +226,10 @@ Verify workflows without `route_loop` still use current static DAG behavior and 
 - **FR-064**: When multiple dependency paths lead from the negative target back to `route_loop.from`, system MUST rerun all nodes on those paths before re-evaluating the route-loop node.
 - **FR-065**: When a negative rerun path is selected, system MUST invalidate only nodes on the selected path back to the router for latest-output readiness.
 - **FR-066**: System MUST NOT delete old attempt history during rerun path invalidation.
-- **FR-067**: First-version route-loop rerun paths MUST NOT include nodes that depend on nodes outside the rerun path.
-- **FR-068**: System MUST validate rerun path self-containment at load time and at runtime.
+- **FR-067**: A negative rerun path MAY include nodes that depend on external prerequisite nodes outside the selected rerun path.
+- **FR-067A**: External prerequisite nodes MUST NOT be rerun as part of the negative rerun path.
+- **FR-067B**: Runtime MUST fail the route-loop node if any external prerequisite for a selected negative rerun path is missing, skipped, failed, pending, or otherwise not completed.
+- **FR-068**: System MUST validate negative rerun plan shape at load time and MUST assert external prerequisite completion at runtime before invalidating latest-output state.
 - **FR-069**: Every node on a selected rerun path MUST run normally.
 - **FR-070**: System MUST NOT add a `rerun: false` exclusion behavior in the first version.
 
