@@ -37,6 +37,14 @@ export function classifyAndFormatError(error: Error): string {
     return '⚠️ Claude authentication error. Run `/login` inside Claude Code or check your API key configuration.';
   }
 
+  // Not logged in — no credential reached the subprocess. On a multi-user
+  // install this means the user hasn't connected a provider yet; on a solo
+  // install it means no key / no `claude login`. Name both connect surfaces
+  // instead of leaking the raw CLI string (#1983).
+  if (message.includes('Not logged in') || message.includes('Please run /login')) {
+    return '⚠️ Not logged in to the AI provider. Connect a subscription or API key in Settings → Agents, or set credentials in your environment (e.g. `claude /login` or `CLAUDE_API_KEY`).';
+  }
+
   // Codex-specific auth errors — 401 retry exhaustion
   // Codex surfaces auth failures as "exceeded retry limit, last status: 401 Unauthorized"
   // Recovery: `codex login` in terminal.

@@ -8,6 +8,12 @@
 // when `bun run dev:server` is run from inside a target repo those keys leak
 // into the server process. stripCwdEnv() removes them before ~/.archon/.env loads.
 import '@archon/paths/strip-cwd-env-boot';
+// Pure env→bool boot helper (zero deps) — safe to import before the heavier
+// application imports below. Decides the Claude global-auth sentinel posture.
+import {
+  shouldDefaultClaudeGlobalAuth,
+  hasClaudeBootAuthPosture,
+} from './boot/claude-auth-posture';
 
 // Load environment variables — after CWD stripping, before application imports.
 import { config } from 'dotenv';
@@ -35,15 +41,11 @@ if (envPath) {
 import { loadArchonEnv } from '@archon/paths/env-loader';
 loadArchonEnv(process.cwd());
 
-// CLAUDECODE=1 warning is emitted inside stripCwdEnv() (boot import above)
-// BEFORE the marker is deleted from process.env. No duplicate warning here.
-
-// Smart default: use Claude Code's built-in OAuth if no explicit credentials
-if (
-  !process.env.CLAUDE_API_KEY &&
-  !process.env.CLAUDE_CODE_OAUTH_TOKEN &&
-  process.env.CLAUDE_USE_GLOBAL_AUTH === undefined
-) {
+// Smart default: fall back to Claude Code's built-in OAuth (`claude /login`)
+// ONLY for solo installs with no explicit credentials. Per-user installs
+// (TOKEN_ENCRYPTION_KEY) deliver Claude auth per-request, so the global-auth
+// sentinel is skipped there — it's misleading, not load-bearing (#1983).
+if (shouldDefaultClaudeGlobalAuth(process.env)) {
   process.env.CLAUDE_USE_GLOBAL_AUTH = 'true';
 }
 
@@ -261,14 +263,11 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   // Database auto-detected: SQLite (default) or PostgreSQL (if DATABASE_URL set)
   // No required environment variables - SQLite works out of the box
 
-  // Validate AI assistant credentials (warn if missing, don't fail)
-  // Using || intentionally: empty string should be treated as missing credential
-  // CLAUDE_USE_GLOBAL_AUTH=true: Use Claude Code's built-in OAuth (from `claude /login`)
-  const hasClaudeCredentials = Boolean(
-    process.env.CLAUDE_API_KEY ||
-    process.env.CLAUDE_CODE_OAUTH_TOKEN ||
-    process.env.CLAUDE_USE_GLOBAL_AUTH
-  );
+  // Validate AI assistant credentials (warn if missing, don't fail).
+  // A per-user install (TOKEN_ENCRYPTION_KEY) is a valid posture even with no
+  // shared Claude key — auth is delivered per request from the encrypted store,
+  // so it must NOT trip the no-credentials exit (#1983).
+  const hasClaudeCredentials = hasClaudeBootAuthPosture(process.env);
   const hasCodexCredentials = process.env.CODEX_ID_TOKEN && process.env.CODEX_ACCESS_TOKEN;
 
   if (!hasClaudeCredentials && !hasCodexCredentials) {

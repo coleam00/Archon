@@ -31,6 +31,13 @@ export const VARIANTS: readonly VariantId[] = [
   'cancel',
 ];
 
+const VARIANT_SET: ReadonlySet<string> = new Set(VARIANTS);
+
+/** Narrow an untrusted string to a `VariantId` (e.g. a drag-and-drop payload). */
+export function isVariantId(value: string): value is VariantId {
+  return VARIANT_SET.has(value);
+}
+
 /** A registry entry for one variant, typed against that variant's data shape. */
 export interface VariantRegistryEntry<K extends VariantId> {
   label: string;
@@ -41,9 +48,11 @@ export interface VariantRegistryEntry<K extends VariantId> {
   /**
    * The wire keys this variant's converters consume from `variantSpecific`.
    * The importer warns about (and drops) any other key that lands there, so a
-   * field the round-trip cannot carry is never lost silently.
+   * field the round-trip cannot carry is never lost silently. Typed as
+   * `keyof WireDagNode` so a typo or a renamed wire field fails to compile
+   * rather than silently classifying every key as unsupported.
    */
-  wireKeys: readonly string[];
+  wireKeys: readonly (keyof WireDagNode)[];
 }
 
 /** Per-variant registry. Strongly typed per key. */

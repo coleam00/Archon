@@ -5,6 +5,7 @@ export { VARIANT_CAPABILITIES, type VariantCapabilities } from './capabilities';
 export {
   VARIANTS,
   VARIANT_REGISTRY,
+  isVariantId,
   variantDataFromDag,
   nodeDataToDag,
   type VariantRegistryEntry,

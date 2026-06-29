@@ -86,7 +86,7 @@ archon setup --spawn              # open in a new terminal window
 
 ### `doctor`
 
-Verify your Archon setup. Runs a checklist of common failure points: Claude binary spawn, gh CLI auth, Pi auth (when Pi is configured as default), database reachability, workspace writability, bundled defaults, telemetry state, and adapter token pings (Slack/Telegram, best-effort).
+Verify your Archon setup. Runs a checklist of common failure points: Claude binary spawn, gh CLI auth, Pi auth (when Pi is configured as default), database reachability, workspace writability, bundled defaults, telemetry state, AI credentials (connected provider count, best-effort), and adapter token pings (Slack/Telegram, best-effort).
 
 ```bash
 archon doctor
@@ -112,10 +112,10 @@ The command prints a `verification_uri` and a one-time `user_code`; visit the UR
 
 Manage **per-user AI-provider credentials** (API keys + subscriptions) and **model-tier config**. CLI identity is resolved from `ARCHON_USER_ID` (explicit override) or `$USER` / `$USERNAME`, mapped to a stable Archon user via the `cli` platform identity — the same as [`auth github`](#auth-github).
 
-The credential subcommands (`key set`, `login`, `list`, `logout`) only work on **multi-user installs** with `TOKEN_ENCRYPTION_KEY` set; on a solo install they exit with an explanatory error. The config subcommands (`tier`, `alias`, `default`) are **ungated** — they write `~/.archon/config.yaml` and work everywhere.
+The credential subcommands (`key set`, `login`, `list`, `logout`) work on **any install** — the vault is auto-provisioned. CLI identity is resolved from `ARCHON_USER_ID` or `$USER`/`$USERNAME`. The config subcommands (`tier`, `alias`, `default`) are **ungated** — they write `~/.archon/config.yaml` and need no identity.
 
 ```bash
-# --- Provider credentials (require TOKEN_ENCRYPTION_KEY) ---
+# --- Provider credentials (any install — vault auto-provisioned) ---
 archon ai key set <vendor>       # connect an API key (masked prompt or piped stdin — never argv)
 archon ai login <vendor>         # connect a subscription via OAuth (anthropic, openai, or github-copilot)
 archon ai list                   # list connected credentials (metadata only, no secrets)

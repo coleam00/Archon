@@ -1091,10 +1091,21 @@ export class WorktreeProvider implements IIsolationProvider {
         : `origin/${baseBranch}`;
 
     try {
-      // Try to create with new branch
+      // `--no-track` keeps `branch.<name>.merge` unset; otherwise `gh pr view`
+      // (no PR number) resolves to the base branch's PR via upstream config.
       await execFileAsync(
         'git',
-        ['-C', repoPath, 'worktree', 'add', worktreePath, '-b', branchName, startPoint],
+        [
+          '-C',
+          repoPath,
+          'worktree',
+          'add',
+          '--no-track',
+          worktreePath,
+          '-b',
+          branchName,
+          startPoint,
+        ],
         {
           timeout: GIT_OPERATION_TIMEOUT_MS,
         }

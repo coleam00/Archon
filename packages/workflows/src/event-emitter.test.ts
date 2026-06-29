@@ -315,6 +315,50 @@ describe('WorkflowEventEmitter', () => {
         makeNodeSkippedEvent(),
         makeNodeRoutedEvent(),
         makeArtifactEvent(),
+        {
+          type: 'task_activity',
+          runId: 'run-1',
+          nodeId: 'plan',
+          taskId: 't-1',
+          activity: 'started',
+          description: 'Analyzing the repo',
+        },
+        {
+          type: 'task_activity',
+          runId: 'run-1',
+          nodeId: 'plan',
+          taskId: 't-1',
+          activity: 'progress',
+          summary: 'Reading auth module',
+          usage: { total_tokens: 1234, tool_uses: 3, duration_ms: 28000 },
+        },
+        {
+          type: 'task_activity',
+          runId: 'run-1',
+          nodeId: 'plan',
+          taskId: 't-1',
+          activity: 'completed',
+          summary: 'Plan ready',
+        },
+        {
+          type: 'hook_activity',
+          runId: 'run-1',
+          nodeId: 'plan',
+          hookId: 'h-1',
+          hookName: 'Bash',
+          hookEvent: 'PreToolUse',
+          activity: 'started',
+        },
+        {
+          type: 'hook_activity',
+          runId: 'run-1',
+          nodeId: 'plan',
+          hookId: 'h-1',
+          hookName: 'Bash',
+          hookEvent: 'PreToolUse',
+          activity: 'response',
+          outcome: 'success',
+        },
       ];
 
       for (const event of events) {
@@ -634,6 +678,67 @@ describe('WorkflowEventEmitter', () => {
       // Only the run-target event should arrive
       expect(targetEvents).toHaveLength(1);
       expect(targetEvents[0]).toMatchObject({ runId: 'run-target' });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // NodeStartedEvent optional model fields (provider/model/tier)
+  // -------------------------------------------------------------------------
+
+  describe('NodeStartedEvent — optional model fields', () => {
+    it('passes through an event with no provider/model/tier (bash/script-like)', () => {
+      const emitter = getWorkflowEventEmitter();
+      const received: WorkflowEmitterEvent[] = [];
+      emitter.subscribe(e => received.push(e));
+
+      emitter.emit({ type: 'node_started', runId: 'run-1', nodeId: 'build', nodeName: 'build' });
+
+      const evt = received[0] as Extract<WorkflowEmitterEvent, { type: 'node_started' }>;
+      expect(evt).toMatchObject({ type: 'node_started', nodeId: 'build' });
+      expect(evt.provider).toBeUndefined();
+      expect(evt.model).toBeUndefined();
+      expect(evt.tier).toBeUndefined();
+    });
+
+    it('passes through provider/model/tier for tier-resolved AI nodes', () => {
+      const emitter = getWorkflowEventEmitter();
+      const received: WorkflowEmitterEvent[] = [];
+      emitter.subscribe(e => received.push(e));
+
+      emitter.emit({
+        type: 'node_started',
+        runId: 'run-2',
+        nodeId: 'implement',
+        nodeName: 'implement',
+        provider: 'claude',
+        model: 'opus',
+        tier: 'large',
+      });
+
+      const evt = received[0] as Extract<WorkflowEmitterEvent, { type: 'node_started' }>;
+      expect(evt.provider).toBe('claude');
+      expect(evt.model).toBe('opus');
+      expect(evt.tier).toBe('large');
+    });
+
+    it('passes through provider/model without tier for literal-model AI nodes', () => {
+      const emitter = getWorkflowEventEmitter();
+      const received: WorkflowEmitterEvent[] = [];
+      emitter.subscribe(e => received.push(e));
+
+      emitter.emit({
+        type: 'node_started',
+        runId: 'run-3',
+        nodeId: 'classify',
+        nodeName: 'classify',
+        provider: 'claude',
+        model: 'claude-haiku-4-5',
+      });
+
+      const evt = received[0] as Extract<WorkflowEmitterEvent, { type: 'node_started' }>;
+      expect(evt.provider).toBe('claude');
+      expect(evt.model).toBe('claude-haiku-4-5');
+      expect(evt.tier).toBeUndefined();
     });
   });
 });

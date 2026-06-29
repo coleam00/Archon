@@ -156,6 +156,35 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
         timestamp: Date.now(),
       });
 
+    case 'task_activity':
+      return JSON.stringify({
+        type: 'workflow_task_activity',
+        runId: event.runId,
+        nodeId: event.nodeId,
+        taskId: event.taskId,
+        activity: event.activity,
+        ...(event.description !== undefined ? { description: event.description } : {}),
+        ...(event.summary !== undefined ? { summary: event.summary } : {}),
+        ...(event.usage !== undefined ? { usage: event.usage } : {}),
+        ...(event.lastToolName !== undefined ? { lastToolName: event.lastToolName } : {}),
+        ...(event.taskType !== undefined ? { taskType: event.taskType } : {}),
+        timestamp: Date.now(),
+      });
+
+    case 'hook_activity':
+      return JSON.stringify({
+        type: 'workflow_hook_activity',
+        runId: event.runId,
+        nodeId: event.nodeId,
+        hookId: event.hookId,
+        hookName: event.hookName,
+        hookEvent: event.hookEvent,
+        activity: event.activity,
+        ...(event.outcome !== undefined ? { outcome: event.outcome } : {}),
+        ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
+        timestamp: Date.now(),
+      });
+
     default: {
       const exhaustiveCheck: never = event;
       getLog().warn(

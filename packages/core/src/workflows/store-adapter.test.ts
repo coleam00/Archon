@@ -279,6 +279,18 @@ describe('createWorkflowDeps', () => {
       expect(result).toEqual({ env: {}, files: [] });
     });
 
+    // Regression guard for #2035: enabling the credential vault (auto-key on by
+    // default) must be ADDITIVE. An unconnected user yields an empty env bag, so
+    // their ambient ANTHROPIC_API_KEY / OPENAI_API_KEY pass through untouched —
+    // there is no scrub on the AI-provider path (unlike the GitHub org-token path).
+    // A future change that scrubbed ambient provider keys would fail this.
+    test('getUserProviderEnv is additive: unconnected user gets empty env (no ambient scrub)', async () => {
+      mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([]);
+      const deps = createWorkflowDeps();
+      const result = await deps.getUserProviderEnv?.('u-unconnected', '/tmp/art');
+      expect(result).toEqual({ env: {}, files: [] });
+    });
+
     test('getUserProviderEnv aggregates env from multiple providers', async () => {
       mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([
         { provider: 'openrouter', cred: { kind: 'api_key', apiKey: 'or-k' } },

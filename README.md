@@ -294,11 +294,13 @@ The Web UI and CLI work out of the box. Optionally connect a chat platform for r
                            │
                            ▼
 ┌─────────────────────────────────────────────────────────┐
-│             SQLite / PostgreSQL (12 Tables)             │
+│          SQLite / PostgreSQL (14 core tables)           │
 │  Codebases • Conversations • Sessions • Workflow Runs   │
 │   Isolation Environments • Messages • Workflow Events   │
 │    Users • User Identities • Workflow Node Sessions     │
 │         Codebase Env Vars • User GitHub Tokens          │
+│           User Provider Keys • User AI Prefs            │
+│          (+ Better Auth tables, Postgres only)          │
 └─────────────────────────────────────────────────────────┘
 ```
 

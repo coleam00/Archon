@@ -158,13 +158,15 @@ afterEach(() => {
   errSpy.mockRestore();
 });
 
-describe('gate (TOKEN_ENCRYPTION_KEY off)', () => {
+describe('gate (vault unavailable — defensive guard)', () => {
   it('every command exits 1 with guidance and never touches the store', async () => {
+    // The vault is enabled by default now (auto-key), so this branch is only
+    // reachable as a defensive guard; assert it still fails closed.
     enabled = false;
     expect(await aiKeySetCommand('openrouter')).toBe(1);
     expect(await aiListCommand()).toBe(1);
     expect(await aiLogoutCommand('openrouter')).toBe(1);
-    expect(out()).toContain('TOKEN_ENCRYPTION_KEY');
+    expect(out()).toContain('Credential vault unavailable');
     expect(mockPersist).not.toHaveBeenCalled();
     expect(mockList).not.toHaveBeenCalled();
     expect(mockDelete).not.toHaveBeenCalled();

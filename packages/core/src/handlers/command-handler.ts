@@ -178,8 +178,53 @@ async function formatRepoContext(
 }
 
 export function parseCommand(text: string): { command: string; args: string[] } {
-  // Match quoted strings or non-whitespace sequences
-  const matches = text.match(/"[^"]+"|'[^']+'|\S+/g) ?? [];
+  const matches: string[] = [];
+  let current = '';
+  let quote: '"' | "'" | null = null;
+  let escaping = false;
+  let hasToken = false;
+
+  for (const char of text.trim()) {
+    if (quote) {
+      hasToken = true;
+      if (escaping) {
+        current += char;
+        escaping = false;
+      } else if (char === '\\') {
+        escaping = true;
+      } else if (char === quote) {
+        quote = null;
+      } else {
+        current += char;
+      }
+      continue;
+    }
+
+    if (/\s/.test(char)) {
+      if (hasToken) {
+        matches.push(current);
+        current = '';
+        hasToken = false;
+      }
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      quote = char;
+      hasToken = true;
+      continue;
+    }
+
+    current += char;
+    hasToken = true;
+  }
+
+  if (escaping) {
+    current += '\\';
+  }
+  if (hasToken) {
+    matches.push(current);
+  }
 
   if (matches.length === 0 || !matches[0]) {
     return { command: '', args: [] };
@@ -190,15 +235,17 @@ export function parseCommand(text: string): { command: string; args: string[] } 
   }
 
   const command = matches[0].substring(1); // Remove leading '/'
-  const args = matches.slice(1).map(arg => {
-    // Remove surrounding quotes if present
-    if ((arg.startsWith('"') && arg.endsWith('"')) || (arg.startsWith("'") && arg.endsWith("'"))) {
-      return arg.slice(1, -1);
-    }
-    return arg;
-  });
+  const args = matches.slice(1);
 
   return { command, args };
+}
+
+function findWorkflowLoadError(
+  loadErrors: readonly WorkflowLoadError[],
+  workflowName: string
+): WorkflowLoadError | undefined {
+  // Stripping the .yaml/.yml extension already covers the exact-filename cases.
+  return loadErrors.find(error => error.filename.replace(/\.ya?ml$/, '') === workflowName);
 }
 
 /**
@@ -696,10 +743,46 @@ async function handleWorkflowCommand(
       }
       try {
         const run = await resumeWorkflow(runId);
-        const pathInfo = run.working_path ? `\nPath: \`${run.working_path}\`` : '';
+        let workflowEntries: readonly WorkflowWithSource[];
+        let loadErrors: readonly WorkflowLoadError[];
+        try {
+          const result = await discoverWorkflowsWithConfig(workflowCwd, loadConfig);
+          workflowEntries = result.workflows;
+          loadErrors = result.errors;
+        } catch (error) {
+          const err = error as Error;
+          getLog().error({ err, cwd: workflowCwd, runId }, 'cmd.workflow_resume_discovery_failed');
+          return {
+            success: false,
+            message: `Failed to load workflows: ${err.message}\n\nCheck .archon/workflows/ for YAML syntax issues.`,
+          };
+        }
+        const workflows = workflowEntries.map(ws => ws.workflow);
+        const workflow = resolveWorkflowName(run.workflow_name, workflows);
+        if (!workflow) {
+          const loadError = findWorkflowLoadError(loadErrors, run.workflow_name);
+          if (loadError) {
+            return {
+              success: false,
+              message: `Workflow \`${run.workflow_name}\` failed to load: ${loadError.error}\n\nFix the YAML file and try again.`,
+            };
+          }
+          return {
+            success: false,
+            message:
+              `Workflow \`${run.workflow_name}\` for run ${runId} was not found.\n\n` +
+              'Use /workflow list to check available workflows.',
+          };
+        }
         return {
           success: true,
-          message: `Workflow run \`${run.workflow_name}\` (${runId}) is ready to resume.${pathInfo}\nRun the same workflow again to auto-resume from completed nodes.`,
+          message: `Resuming workflow: \`${workflow.name}\``,
+          workflow: {
+            definition: workflow,
+            args: run.user_message,
+            resumeRunId: run.id,
+            resumeRun: run,
+          },
         };
       } catch (error) {
         const err = error as Error;
@@ -818,7 +901,9 @@ async function handleWorkflowCommand(
     case 'run': {
       // Directly invoke a workflow by name (bypasses AI router)
       const workflowName = args[1];
-      const workflowArgs = args.slice(2).join(' ');
+      const restArgs = args.slice(2);
+      const force = restArgs.includes('--force');
+      const workflowArgs = restArgs.filter(arg => arg !== '--force').join(' ');
 
       if (!workflowName) {
         return {
@@ -876,12 +961,7 @@ async function handleWorkflowCommand(
 
       if (!workflow) {
         // Check if the requested workflow had a load error
-        const loadError = loadErrors.find(
-          e =>
-            e.filename.replace(/\.ya?ml$/, '') === workflowName ||
-            e.filename === `${workflowName}.yaml` ||
-            e.filename === `${workflowName}.yml`
-        );
+        const loadError = findWorkflowLoadError(loadErrors, workflowName);
         if (loadError) {
           return {
             success: false,
@@ -907,6 +987,7 @@ async function handleWorkflowCommand(
         workflow: {
           definition: workflow,
           args: workflowArgs,
+          force: force ? true : undefined,
         },
       };
     }

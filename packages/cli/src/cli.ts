@@ -20,9 +20,6 @@ import { parseArgs } from 'util';
 import { resolve } from 'path';
 import { existsSync } from 'fs';
 
-// CLAUDECODE=1 warning is emitted inside stripCwdEnv() (boot import above)
-// BEFORE the marker is deleted from process.env. No duplicate warning here.
-
 // Smart defaults for Claude auth
 // If no explicit tokens, default to global auth from `claude /login`
 if (!process.env.CLAUDE_API_KEY && !process.env.CLAUDE_CODE_OAUTH_TOKEN) {

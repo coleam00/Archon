@@ -344,8 +344,31 @@ describe('OpencodeProvider', () => {
         type: 'system',
         content: '⚠️ Could not resume OpenCode session. Starting fresh conversation.',
       },
-      { type: 'result', sessionId: 'fresh-session' },
+      // A requested resume that fell back to a fresh session is reported as cold.
+      { type: 'result', sessionId: 'fresh-session', resumed: false },
     ]);
+  });
+
+  test('reports resumed:true on the result when the prior session is found', async () => {
+    const runtime = makeRuntime({
+      sessionGet: mock(async () => ({ data: { id: 'resumed-session' } })),
+    });
+    runtimeQueue.push(runtime);
+    scriptedEvents = [
+      {
+        type: 'session.idle',
+        properties: { sessionID: 'resumed-session' },
+      },
+    ];
+
+    const { chunks, error } = await consume(
+      new OpencodeProvider().sendQuery('hi', '/tmp', 'resumed-session', {
+        assistantConfig: TEST_MODEL,
+      })
+    );
+
+    expect(error).toBeUndefined();
+    expect(chunks).toEqual([{ type: 'result', sessionId: 'resumed-session', resumed: true }]);
   });
 
   test('structured output success includes parsed payload on result chunk', async () => {

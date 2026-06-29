@@ -16,7 +16,7 @@ import type {
   AttachedFile,
 } from '../types';
 import type { SendQueryOptions, TokenUsage } from '@archon/providers/types';
-import { ConversationNotFoundError } from '../types';
+import { ConversationNotFoundError, isWebAdapter } from '../types';
 import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
 import * as sessionDb from '../db/sessions';
@@ -43,6 +43,7 @@ import type {
   WorkflowLoadError,
   WorkflowSource,
 } from '@archon/workflows/schemas/workflow';
+import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { isPerUserGitHubEnabled } from '../github-auth/config';
 import { getDecryptedAccessToken } from '../db/user-github-token-store';
 import { isPerUserProviderKeysEnabled } from '../credentials/config';
@@ -61,6 +62,7 @@ import {
   formatWorkflowContextSection,
 } from './prompt-builder';
 import type { WorkflowResultContext } from './prompt-builder';
+import { reportUnpushedWorkInSource } from './post-message-reminder';
 import * as messageDb from '../db/messages';
 import * as workflowDb from '../db/workflows';
 import * as workflowEventDb from '../db/workflow-events';
@@ -477,6 +479,76 @@ function filterToolIndicators(assistantMessages: string[]): string {
 
 // ─── Workflow Dispatch ──────────────────────────────────────────────────────
 
+interface WorkflowDispatchOptions {
+  force?: boolean;
+  resumeRunId?: string;
+  resumeRun?: WorkflowRun;
+}
+
+const FAILED_RUN_PROMPT_PREVIEW_MAX = 160;
+
+function escapeWorkflowCommandArg(value: string): string {
+  return value.replace(/[\\"`]/g, '\\$&');
+}
+
+function formatPriorRunPromptPreview(message: string | null): string {
+  const normalized = (message ?? '').replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return '(no message stored)';
+  }
+  if (normalized.length <= FAILED_RUN_PROMPT_PREVIEW_MAX) {
+    return normalized;
+  }
+  return `${normalized.slice(0, FAILED_RUN_PROMPT_PREVIEW_MAX)}…`;
+}
+
+function buildFailedRunResumePrompt(
+  workflowName: string,
+  resumableRun: WorkflowRun,
+  userMessage: string
+): string {
+  const escapedMessage = escapeWorkflowCommandArg(userMessage);
+  const baseCommand = `/workflow run ${workflowName}`;
+  const priorPreview = formatPriorRunPromptPreview(resumableRun.user_message);
+  // This prompt fires for any non-paused resumable run — that includes a stale
+  // 'running' orphan (started but never finished), not only 'failed' runs, so
+  // the wording must track the actual status rather than hardcoding "failed".
+  const stateLabel = resumableRun.status === 'running' ? 'interrupted' : resumableRun.status;
+
+  return [
+    '---',
+    '',
+    `Found a prior ${stateLabel} run of **${workflowName}** (run \`${resumableRun.id}\`).`,
+    '',
+    '**Run prompt was:**',
+    '',
+    `> ${priorPreview}`,
+    '',
+    '---',
+    '',
+    '**Choose how to proceed:**',
+    '',
+    '**1. Resume that run** (re-runs the prompt shown above, not your current message):',
+    '```',
+    `/workflow resume ${resumableRun.id}`,
+    '```',
+    '',
+    '**2. Discard the failed run, then start fresh with your current message:**',
+    '```',
+    `/workflow abandon ${resumableRun.id}`,
+    '```',
+    'then re-run your command:',
+    '```',
+    `${baseCommand} "${escapedMessage}"`,
+    '```',
+    '',
+    '**3. Start fresh with your current message, leave the failed run as-is** (skips the resume check):',
+    '```',
+    `${baseCommand} --force "${escapedMessage}"`,
+    '```',
+  ].join('\n');
+}
+
 /**
  * Dispatch a workflow after the orchestrator resolves a project.
  * Auto-attaches the project to the conversation, resolves isolation, and executes.
@@ -498,7 +570,8 @@ async function dispatchOrchestratorWorkflow(
    * report their real name, custom ones report "custom"). Optional: callers
    * that don't have it readily in scope omit it and the run reports "custom".
    */
-  source?: WorkflowSource
+  source?: WorkflowSource,
+  options?: WorkflowDispatchOptions
 ): Promise<void> {
   // Capability gate: hard-fail before any worktree/clone/AI cost if the
   // workflow declares `requires: [github]` and the originating user hasn't
@@ -571,12 +644,46 @@ async function dispatchOrchestratorWorkflow(
   // is in a resumable state (paused/failed-by-approval) in this conversation+codebase
   // before dispatching fresh. This ensures chat platforms (slack, telegram, discord,
   // github) resume after approval gates just like web does.
-  const resumableRun = await workflowDb.findResumableRunByParentConversation(
-    workflow.name,
-    conversation.id,
-    codebase.id
-  );
+  const resumableRun = options?.force
+    ? null
+    : (options?.resumeRun ??
+      (await workflowDb.findResumableRunByParentConversation(
+        workflow.name,
+        conversation.id,
+        codebase.id
+      )));
+  if (options?.resumeRun && !options.resumeRun.working_path) {
+    getLog().warn(
+      {
+        runId: options.resumeRun.id,
+        workflowName: workflow.name,
+        platformType: platform.getPlatformType(),
+      },
+      'orchestrator.resume_missing_working_path'
+    );
+    await platform.sendMessage(
+      conversationId,
+      `Cannot resume ${options.resumeRun.id}: missing working path.`
+    );
+    return;
+  }
   if (resumableRun?.working_path) {
+    if (resumableRun.status !== 'paused' && resumableRun.id !== options?.resumeRunId) {
+      getLog().info(
+        {
+          workflowName: workflow.name,
+          resumableRunId: resumableRun.id,
+          platformType: platform.getPlatformType(),
+        },
+        'orchestrator.failed_resume_user_prompted'
+      );
+      await platform.sendMessage(
+        conversationId,
+        buildFailedRunResumePrompt(workflow.name, resumableRun, userMessage)
+      );
+      return;
+    }
+
     getLog().info(
       {
         workflowName: workflow.name,
@@ -748,6 +855,7 @@ interface DiscoverResult {
   syncResult?: WorkspaceSyncResult;
   syncError?: string;
   config?: MergedConfig;
+  codebase?: Codebase | null;
 }
 
 /** Discover global + repo-specific workflows, merge by name (repo overrides global) */
@@ -757,6 +865,7 @@ async function discoverAllWorkflows(conversation: Conversation): Promise<Discove
   let syncResult: WorkspaceSyncResult | undefined;
   let syncError: string | undefined;
   let config: MergedConfig | undefined;
+  let codebase: Codebase | null | undefined;
 
   try {
     // Home-scoped workflows at ~/.archon/workflows/ are discovered automatically
@@ -771,7 +880,7 @@ async function discoverAllWorkflows(conversation: Conversation): Promise<Discove
 
   if (conversation.codebase_id) {
     try {
-      const codebase = await codebaseDb.getCodebase(conversation.codebase_id);
+      codebase = await codebaseDb.getCodebase(conversation.codebase_id);
       if (codebase) {
         // Sync canonical source with remote before the AI reads codebase state.
         // This path must remain non-destructive: users and agents can write to source/.
@@ -814,7 +923,7 @@ async function discoverAllWorkflows(conversation: Conversation): Promise<Discove
     }
   }
 
-  return { workflows, errors: allErrors, syncResult, syncError, config };
+  return { workflows, errors: allErrors, syncResult, syncError, config, codebase };
 }
 
 /** Build the user-facing prompt with message and optional contexts */
@@ -1001,7 +1110,8 @@ export async function handleMessage(
             pausedRun.user_message,
             isolationHints,
             userId,
-            workflowSource
+            workflowSource,
+            { resumeRunId: pausedRun.id, resumeRun: pausedRun }
           );
           getLog().info(
             { conversationId, workflowRunId: pausedRun.id, workflowName: pausedRun.workflow_name },
@@ -1080,11 +1190,35 @@ export async function handleMessage(
             result.workflow.definition,
             result.workflow.args ?? message,
             isolationHints,
-            userId
+            userId,
+            {
+              force: result.workflow.force,
+              resumeRunId: result.workflow.resumeRunId,
+              resumeRun: result.workflow.resumeRun,
+            }
           );
         }
         return;
       }
+    }
+
+    // Persist the inbound user message for non-web platforms (Slack/Telegram/
+    // GitHub/Discord/CLI) — the web adapter's route persists web turns itself.
+    // Placed AFTER the deterministic-command and approval early-returns so only
+    // AI-bound turns get a user row (no orphaned user message without an
+    // assistant reply), and BEFORE the AI call so the user row's timestamp
+    // precedes the assistant row's. Fire-and-forget: a DB failure must not break
+    // platform delivery (#1182).
+    if (!isWebAdapter(platform)) {
+      messageDb
+        .addMessage(conversation.id, 'user', message, undefined, userId)
+        .catch((e: unknown) => {
+          const err = e instanceof Error ? e : new Error(String(e));
+          getLog().warn(
+            { err, errorType: err.constructor.name, conversationId },
+            'orchestrator.user_message_persist_failed'
+          );
+        });
     }
 
     // 3. Load codebases, discover workflows, build prompt
@@ -1095,6 +1229,7 @@ export async function handleMessage(
       syncResult,
       syncError,
       config: discoveredConfig,
+      codebase: discoveredCodebase,
     } = await discoverAllWorkflows(conversation);
     const workflows: readonly WorkflowDefinition[] = workflowsWithSource.map(ws => ws.workflow);
     if (workflowErrors.length > 0) {
@@ -1468,6 +1603,22 @@ export async function handleMessage(
       );
     }
 
+    // Direct-chat turns may have written to source/. If there is local-only state
+    // (uncommitted edits, unpushed commits), surface a one-line reminder so the
+    // user can push or commit + push before the next worktree creation or
+    // re-clone reclaims that work. No-op when no codebase is attached.
+    // Use the codebase already fetched by discoverAllWorkflows — no second DB call.
+    if (discoveredCodebase) {
+      try {
+        await reportUnpushedWorkInSource(conversationId, discoveredCodebase, platform);
+      } catch (err) {
+        getLog().warn(
+          { err: err as Error, conversationId, codebaseId: conversation.codebase_id },
+          'orchestrator.post_message_reminder_failed'
+        );
+      }
+    }
+
     getLog().debug({ conversationId }, 'orchestrator_message_completed');
   } catch (error) {
     const err = toError(error);
@@ -1598,7 +1749,11 @@ async function handleStreamMode(
           },
           'ai_result_error'
         );
-        const syntheticError = new Error(msg.errorSubtype ?? 'AI result error');
+        // Carry the SDK error detail (not just the subtype code) into the
+        // formatter so it can classify actionable cases like "Not logged in"
+        // rather than emitting a generic message (#1983).
+        const errorDetail = [msg.errorSubtype, ...(msg.errors ?? [])].filter(Boolean).join(': ');
+        const syntheticError = new Error(errorDetail || 'AI result error');
         await platform.sendMessage(conversationId, classifyAndFormatError(syntheticError));
         if (newSessionId) {
           await tryPersistSessionId(session.id, newSessionId);
@@ -1671,7 +1826,19 @@ async function handleStreamMode(
     return;
   }
 
-  // Text was already streamed — nothing more to send
+  // Text was already streamed — nothing more to send.
+  // Persist the assistant reply for non-web platforms so it appears in the
+  // Web UI conversation history. The web adapter persists through its
+  // MessagePersistence buffer; skip it here to avoid double-write (#1182).
+  if (!isWebAdapter(platform) && fullResponse) {
+    messageDb.addMessage(conversation.id, 'assistant', fullResponse).catch((e: unknown) => {
+      const err = e instanceof Error ? e : new Error(String(e));
+      getLog().warn(
+        { err, errorType: err.constructor.name, conversationId },
+        'orchestrator.assistant_message_persist_failed'
+      );
+    });
+  }
   await maybeSendResultFooter(platform, conversationId, lastResult);
   // Anonymous telemetry: one completed direct-chat turn. The workflow-invocation
   // and project-registration paths return above without reaching this — those
@@ -1812,7 +1979,11 @@ async function handleBatchMode(
           },
           'ai_result_error'
         );
-        const syntheticError = new Error(msg.errorSubtype ?? 'AI result error');
+        // Carry the SDK error detail (not just the subtype code) into the
+        // formatter so it can classify actionable cases like "Not logged in"
+        // rather than emitting a generic message (#1983).
+        const errorDetail = [msg.errorSubtype, ...(msg.errors ?? [])].filter(Boolean).join(': ');
+        const syntheticError = new Error(errorDetail || 'AI result error');
         await platform.sendMessage(conversationId, classifyAndFormatError(syntheticError));
         if (newSessionId) {
           await tryPersistSessionId(session.id, newSessionId);
@@ -1915,6 +2086,18 @@ async function handleBatchMode(
   // No orchestrator commands — send the clean response
   getLog().debug({ messageLength: finalMessage.length }, 'sending_final_message');
   await platform.sendMessage(conversationId, finalMessage);
+  // Persist the assistant reply for non-web platforms so it appears in the
+  // Web UI conversation history. The web adapter persists through its
+  // MessagePersistence buffer; skip it here to avoid double-write (#1182).
+  if (!isWebAdapter(platform) && finalMessage) {
+    messageDb.addMessage(conversation.id, 'assistant', finalMessage).catch((e: unknown) => {
+      const err = e instanceof Error ? e : new Error(String(e));
+      getLog().warn(
+        { err, errorType: err.constructor.name, conversationId },
+        'orchestrator.assistant_message_persist_failed'
+      );
+    });
+  }
   await maybeSendResultFooter(platform, conversationId, lastResult);
   // Anonymous telemetry: one completed direct-chat turn (same exclusion
   // rationale as the stream-mode capture in handleStreamMode above).
@@ -2252,7 +2435,8 @@ async function handleWorkflowRunCommand(
   workflow: WorkflowDefinition,
   userMessage: string,
   isolationHints?: HandleMessageContext['isolationHints'],
-  userId?: string
+  userId?: string,
+  options?: WorkflowDispatchOptions
 ): Promise<void> {
   // Check if conversation has a project
   if (conversation.codebase_id) {
@@ -2273,7 +2457,9 @@ async function handleWorkflowRunCommand(
       workflow,
       userMessage,
       isolationHints,
-      userId
+      userId,
+      undefined,
+      options
     );
     return;
   }
@@ -2352,7 +2538,8 @@ async function handleWorkflowRunCommand(
       userMessage,
       isolationHints,
       userId,
-      resolvedEntry?.source
+      resolvedEntry?.source,
+      options
     );
     return;
   }

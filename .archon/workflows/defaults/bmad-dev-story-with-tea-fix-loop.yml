@@ -119,7 +119,8 @@ nodes:
     output_type: dev-story
 
   - id: tea-automate
-    command: bmad-testarch-automate
+    prompt: |
+      bmad-testarch-automate $ARGUMENTS
     provider: codex
     depends_on: [dev-story]
     context: fresh
@@ -171,7 +172,8 @@ nodes:
         exhausted: review-loop-error
 
   - id: tea-rv
-    command: bmad-testarch-test-review
+    prompt: |
+      bmad-testarch-test-review $ARGUMENTS
     provider: codex
     depends_on: [code-review-gate]
     context: fresh
@@ -180,7 +182,8 @@ nodes:
     output_type: test-review-findings
 
   - id: tea-nr
-    command: bmad-testarch-nfr
+    prompt: |
+      bmad-testarch-nfr $ARGUMENTS
     provider: codex
     depends_on: [tea-rv]
     context: fresh
@@ -189,7 +192,8 @@ nodes:
     output_type: nfr-findings
 
   - id: tea-tr
-    command: bmad-testarch-trace
+    prompt: |
+      bmad-testarch-trace $ARGUMENTS
     provider: codex
     depends_on: [tea-nr]
     context: fresh

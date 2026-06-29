@@ -17,6 +17,7 @@ import { createMockLogger } from '../test/mocks/logger';
 import { makeTestWorkflow, makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 import type { Codebase, Conversation, IPlatformAdapter } from '../types';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
+import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 
 // ─── Mock setup (ALL mocks must come before the module under test import) ────
 
@@ -62,6 +63,7 @@ mock.module('@archon/paths', () => ({
   getArchonWorkspacesPath: mock(() => '/home/test/.archon/workspaces'),
   ensureArchonWorkspacesPath: mockEnsureArchonWorkspacesPath,
   getArchonHome: mock(() => '/home/test/.archon'),
+  getCredentialKeyPath: mock(() => '/home/test/.archon/credential-key'),
   captureChatTurn: mockCaptureChatTurn,
   captureCodebaseRegistered: mock(() => undefined),
 }));
@@ -168,10 +170,11 @@ mock.module('../workflows/store-adapter', () => ({
 
 const mockGetPausedWorkflowRun = mock(() => Promise.resolve(null as unknown));
 const mockFindResumableRunByParentConversation = mock(() => Promise.resolve(null as unknown));
+const mockUpdateWorkflowRun = mock(() => Promise.resolve());
 mock.module('../db/workflows', () => ({
   getPausedWorkflowRun: mockGetPausedWorkflowRun,
   findResumableRunByParentConversation: mockFindResumableRunByParentConversation,
-  updateWorkflowRun: mock(() => Promise.resolve()),
+  updateWorkflowRun: mockUpdateWorkflowRun,
 }));
 
 const mockCreateWorkflowEvent = mock(() => Promise.resolve());
@@ -204,9 +207,10 @@ mock.module('./prompt-builder', () => ({
   ),
 }));
 
+const mockAddMessage = mock(() => Promise.resolve());
 const mockGetRecentWorkflowResultMessages = mock(() => Promise.resolve([]));
 mock.module('../db/messages', () => ({
-  addMessage: mock(() => Promise.resolve()),
+  addMessage: mockAddMessage,
   listMessages: mock(() => Promise.resolve([])),
   getRecentWorkflowResultMessages: mockGetRecentWorkflowResultMessages,
 }));
@@ -229,10 +233,23 @@ mock.module('../utils/worktree-sync', () => ({
 mock.module('@archon/git', () => ({
   syncWorkspace: mockSyncWorkspace,
   toRepoPath: mockToRepoPath,
+  toBranchName: mock((b: string) => b),
+  // Stubs for post-message-reminder (loaded transitively by orchestrator-agent).
+  // Return null/0/false so the reminder short-circuits without emitting an event.
+  getCurrentBranch: mock(() => Promise.resolve(null)),
+  countCommitsAhead: mock(() => Promise.resolve(0)),
+  hasUncommittedChanges: mock(() => Promise.resolve(false)),
 }));
 
 mock.module('fs', () => ({
   existsSync: mock(() => true),
+  // token-crypto.ts imports these from node:fs for the auto-provisioned credential
+  // key. readFileSync returns a valid 64-hex key so getEncryptionKey() resolves
+  // without any real disk write when the per-user credential path is exercised.
+  readFileSync: mock(() => 'a'.repeat(64)),
+  writeFileSync: mock(() => undefined),
+  mkdirSync: mock(() => undefined),
+  chmodSync: mock(() => undefined),
 }));
 
 // Credential feature mocks (per-user AI-provider credentials).
@@ -1368,14 +1385,39 @@ describe('workflow dispatch routing — interactive flag', () => {
     };
   }
 
-  function makeWorkflowResult(interactive?: boolean) {
+  function makeWorkflowResult(
+    interactive?: boolean,
+    options: { force?: boolean; resumeRunId?: string; resumeRun?: WorkflowRun; args?: string } = {}
+  ) {
     return {
       success: true,
       message: 'ok',
       workflow: {
         definition: makeTestWorkflow({ name: 'test-workflow', interactive }),
-        args: 'test message',
+        args: options.args ?? 'test message',
+        force: options.force,
+        resumeRunId: options.resumeRunId,
+        resumeRun: options.resumeRun,
       },
+    };
+  }
+
+  function makeResumableRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
+    return {
+      id: 'resumable-run-1',
+      workflow_name: 'test-workflow',
+      conversation_id: 'conv-1',
+      parent_conversation_id: 'conv-1',
+      codebase_id: 'codebase-1',
+      status: 'failed',
+      user_message: 'old failed prompt',
+      metadata: {},
+      started_at: new Date(),
+      completed_at: null,
+      last_activity_at: null,
+      working_path: '/repos/test-repo/worktrees/feature',
+      user_id: null,
+      ...overrides,
     };
   }
 
@@ -1384,6 +1426,8 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockDispatchBackgroundWorkflow.mockClear();
     mockFindResumableRunByParentConversation.mockClear();
     mockHydrateResumableRun.mockClear();
+    mockUpdateWorkflowRun.mockClear();
+    mockUpdateWorkflowRun.mockImplementation(() => Promise.resolve());
     mockHandleCommand.mockReset();
     mockHandleCommand.mockImplementation(() =>
       Promise.resolve({ success: true, message: 'ok', workflow: undefined })
@@ -1418,7 +1462,214 @@ describe('workflow dispatch routing — interactive flag', () => {
     expect(opts.baseBranch).toBe('develop');
   });
 
-  test('foreground_resume_detected: passes parentConversationId to executeWorkflow when a resumable run exists', async () => {
+  test('failed_resume_user_prompted: failed runs are not auto-resumed', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve(makeResumableRun())
+    );
+
+    const platform = makePlatform(); // getPlatformType returns 'web'
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+
+    expect(mockHydrateResumableRun).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+    expect(platform.sendMessage).toHaveBeenCalledWith(
+      'conv-1',
+      expect.stringContaining('Found a prior failed run of **test-workflow**')
+    );
+    expect(platform.sendMessage).toHaveBeenCalledWith(
+      'conv-1',
+      expect.stringContaining('/workflow resume resumable-run-1')
+    );
+    expect(platform.sendMessage).toHaveBeenCalledWith(
+      'conv-1',
+      expect.stringContaining('/workflow abandon resumable-run-1')
+    );
+    expect(platform.sendMessage).toHaveBeenCalledWith(
+      'conv-1',
+      expect.stringContaining('/workflow run test-workflow --force "test message"')
+    );
+  });
+
+  test('failed_resume_user_prompted: stale running orphan gates with status-accurate copy', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    // findResumableRunByParentConversation also surfaces stale 'running' orphans,
+    // not just 'failed' runs — the prompt must not mislabel them as "failed".
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve(makeResumableRun({ status: 'running' }))
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+
+    // Gate still fires (no silent auto-resume) ...
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(platform.sendMessage).toHaveBeenCalledWith(
+      'conv-1',
+      expect.stringContaining('/workflow resume resumable-run-1')
+    );
+    // ... but the copy reflects the real status, not "failed".
+    expect(platform.sendMessage).toHaveBeenCalledWith(
+      'conv-1',
+      expect.stringContaining('Found a prior interrupted run of **test-workflow**')
+    );
+    expect(platform.sendMessage).not.toHaveBeenCalledWith(
+      'conv-1',
+      expect.stringContaining('Found a prior failed run')
+    );
+  });
+
+  test('failed_resume_user_prompted: prompt includes normalized truncated prior prompt preview', async () => {
+    const priorMessage = `line one\n${'x'.repeat(220)}`;
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve(
+        makeResumableRun({
+          id: 'resumable-run-preview',
+          user_message: priorMessage,
+        })
+      )
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+
+    const prompt = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.at(-1)?.[1] as
+      | string
+      | undefined;
+    expect(prompt).toContain(`> line one ${'x'.repeat(151)}…`);
+    expect(prompt).not.toContain('\nline one\n');
+  });
+
+  test('failed_resume_user_prompted: escapes backslash, double quote, and backtick in suggested commands', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve(makeWorkflowResult(true, { args: 'fix \\ path "quoted" `tick`' }))
+    );
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve(
+        makeResumableRun({
+          id: 'resumable-run-escape',
+        })
+      )
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+
+    const prompt = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.at(-1)?.[1] as
+      | string
+      | undefined;
+    expect(prompt).toContain('/workflow run test-workflow "fix \\\\ path \\"quoted\\" \\`tick\\`"');
+    expect(prompt).toContain(
+      '/workflow run test-workflow --force "fix \\\\ path \\"quoted\\" \\`tick\\`"'
+    );
+  });
+
+  test('--force flag: skips resume detection and dispatches a fresh run', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve(makeWorkflowResult(true, { force: true }))
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow --force');
+
+    expect(mockFindResumableRunByParentConversation).not.toHaveBeenCalled();
+    expect(mockHydrateResumableRun).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).toHaveBeenCalled();
+    const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
+    expect(callArgs[3]).toBe('/test/cwd');
+  });
+
+  test('resumeRunId option: failed run resumes when resumeRunId matches', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve(makeWorkflowResult(true, { resumeRunId: 'resumable-run-1' }))
+    );
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve(makeResumableRun())
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow resume resumable-run-1');
+
+    expect(mockHydrateResumableRun).toHaveBeenCalled();
+    expect(mockExecuteWorkflow).toHaveBeenCalled();
+    expect(platform.sendMessage).not.toHaveBeenCalledWith(
+      'conv-1',
+      expect.stringContaining('Found a prior failed run')
+    );
+  });
+
+  test('resumeRun option: hydrates the requested run without latest-run lookup', async () => {
+    const requestedRun = makeResumableRun({
+      id: 'old-run',
+      user_message: 'requested prompt',
+      working_path: '/repos/test-repo/worktrees/old',
+    });
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve(
+        makeWorkflowResult(true, { resumeRunId: requestedRun.id, resumeRun: requestedRun })
+      )
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow resume old-run');
+
+    expect(mockFindResumableRunByParentConversation).not.toHaveBeenCalled();
+    expect(mockHydrateResumableRun).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ id: 'old-run' })
+    );
+    expect(mockExecuteWorkflow).toHaveBeenCalled();
+    const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
+    expect(callArgs[3]).toBe('/repos/test-repo/worktrees/old');
+    expect(platform.sendMessage).not.toHaveBeenCalledWith(
+      'conv-1',
+      expect.stringContaining('Found a prior failed run')
+    );
+  });
+
+  test('resumeRun option: reports requested run with missing working path', async () => {
+    const requestedRun = makeResumableRun({
+      id: 'old-run-missing-path',
+      user_message: 'requested prompt',
+      working_path: null,
+    });
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve(
+        makeWorkflowResult(true, { resumeRunId: requestedRun.id, resumeRun: requestedRun })
+      )
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow resume old-run-missing-path');
+
+    expect(mockFindResumableRunByParentConversation).not.toHaveBeenCalled();
+    expect(mockHydrateResumableRun).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(platform.sendMessage).toHaveBeenCalledWith(
+      'conv-1',
+      'Cannot resume old-run-missing-path: missing working path.'
+    );
+  });
+
+  test('foreground_resume_detected: passes parentConversationId to executeWorkflow when a paused run exists', async () => {
     // Regression for the foreground-resume branch: when
     // findResumableRunByParentConversation returns a paused run, the
     // orchestrator must hydrate it (single DB roundtrip — no second
@@ -1431,13 +1682,11 @@ describe('workflow dispatch routing — interactive flag', () => {
     );
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
     mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve({
-        id: 'resumable-run-1',
-        workflow_name: 'test-workflow',
-        working_path: '/repos/test-repo/worktrees/feature',
-        parent_conversation_id: 'conv-1',
-        status: 'failed',
-      })
+      Promise.resolve(
+        makeResumableRun({
+          status: 'paused',
+        })
+      )
     );
 
     const platform = makePlatform(); // getPlatformType returns 'web'
@@ -1470,13 +1719,12 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
     mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve({
-        id: 'empty-prior-run',
-        workflow_name: 'test-workflow',
-        working_path: '/repos/test-repo/worktrees/feature',
-        parent_conversation_id: 'conv-1',
-        status: 'failed',
-      })
+      Promise.resolve(
+        makeResumableRun({
+          id: 'empty-prior-run',
+          status: 'paused',
+        })
+      )
     );
     mockHydrateResumableRun.mockReturnValueOnce(Promise.resolve(null));
 
@@ -1689,6 +1937,11 @@ describe('natural-language approval routing', () => {
     mockGetCodebase.mockReset();
     mockGetCodebase.mockImplementation(() => Promise.resolve(null));
     mockExecuteWorkflow.mockClear();
+    mockFindResumableRunByParentConversation.mockReset();
+    mockFindResumableRunByParentConversation.mockImplementation(() => Promise.resolve(null));
+    mockHydrateResumableRun.mockClear();
+    mockUpdateWorkflowRun.mockClear();
+    mockUpdateWorkflowRun.mockImplementation(() => Promise.resolve());
     mockDiscoverWorkflowsWithConfig.mockReset();
     mockDiscoverWorkflowsWithConfig.mockImplementation(() =>
       Promise.resolve({ workflows: [], errors: [] })
@@ -1705,6 +1958,16 @@ describe('natural-language approval routing', () => {
     mockDiscoverWorkflowsWithConfig.mockImplementation(() =>
       Promise.resolve({ workflows: [{ workflow: approvalWorkflow }], errors: [] })
     );
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve(
+        makePausedRun({
+          id: 'run-1',
+          status: 'failed',
+          working_path: '/repos/test-repo',
+          parent_conversation_id: 'conv-1',
+        })
+      )
+    );
 
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', 'looks good, proceed with implementation');
@@ -1717,9 +1980,18 @@ describe('natural-language approval routing', () => {
       expect.stringContaining('Resuming')
     );
     // Workflow should be executed
+    expect(mockUpdateWorkflowRun).toHaveBeenCalledWith('run-1', {
+      status: 'failed',
+      metadata: { approval_response: 'approved', rejection_reason: '', rejection_count: 0 },
+    });
+    expect(mockHydrateResumableRun).toHaveBeenCalled();
     expect(mockExecuteWorkflow).toHaveBeenCalled();
     // NL approval path captures the binary resolution
     expect(mockCaptureApprovalResolved).toHaveBeenCalledWith({ resolution: 'approved' });
+    expect(platform.sendMessage).not.toHaveBeenCalledWith(
+      'conv-1',
+      expect.stringContaining('Found a prior failed run')
+    );
   });
 
   test('slash command bypasses approval interception — getPausedWorkflowRun not called', async () => {
@@ -3122,5 +3394,159 @@ describe('per-user AI prefs in chat + tier-fallback nudge', () => {
       string,
     ][];
     expect(sendCalls.some(c => c[1].includes("isn't configured"))).toBe(false);
+  });
+});
+
+// ─── Message persistence for non-web platforms (regression for #1182) ────────
+
+describe('message persistence for non-web platforms', () => {
+  beforeEach(() => {
+    mockAddMessage.mockReset();
+    mockAddMessage.mockImplementation(() => Promise.resolve());
+    mockGetOrCreateConversation.mockReset();
+    mockGetCodebase.mockReset();
+    mockGetCodebaseEnvVars.mockReset();
+    mockLoadConfig.mockReset();
+    mockSendQuery.mockClear();
+
+    mockGetOrCreateConversation.mockImplementation(() =>
+      Promise.resolve(makeConversation({ id: 'conv-db-id', platform_conversation_id: 'conv-1' }))
+    );
+    mockGetCodebase.mockImplementation(() => Promise.resolve(null));
+    mockGetCodebaseEnvVars.mockImplementation(() => Promise.resolve({}));
+    mockLoadConfig.mockImplementation(() =>
+      Promise.resolve({ assistants: { claude: {}, codex: {} }, envVars: {} })
+    );
+    mockSendQuery.mockImplementation(async function* () {
+      yield { type: 'assistant', content: 'hello back' };
+      yield { type: 'result', sessionId: 'sess-1' };
+    });
+  });
+
+  test('persists user + assistant messages for non-web platform (batch mode)', async () => {
+    const platform: IPlatformAdapter = {
+      ...makePlatform(),
+      getPlatformType: mock(() => 'github'),
+      getStreamingMode: mock(() => 'batch' as const),
+    };
+
+    await handleMessage(platform, 'conv-1', 'what is this repo?');
+
+    // Inbound user message must land in the DB so the Web UI history is non-empty.
+    expect(mockAddMessage).toHaveBeenCalledWith(
+      'conv-db-id',
+      'user',
+      'what is this repo?',
+      undefined,
+      undefined
+    );
+    // Outbound assistant reply must also be persisted (matches what was sent).
+    expect(mockAddMessage).toHaveBeenCalledWith(
+      'conv-db-id',
+      'assistant',
+      expect.stringContaining('hello back')
+    );
+    expect(mockAddMessage).toHaveBeenCalledTimes(2);
+  });
+
+  test('persists user + assistant messages for non-web platform (stream mode)', async () => {
+    const platform: IPlatformAdapter = {
+      ...makePlatform(),
+      getPlatformType: mock(() => 'telegram'),
+      getStreamingMode: mock(() => 'stream' as const),
+    };
+
+    await handleMessage(platform, 'conv-1', 'what is this repo?');
+
+    expect(mockAddMessage).toHaveBeenCalledWith(
+      'conv-db-id',
+      'user',
+      'what is this repo?',
+      undefined,
+      undefined
+    );
+    expect(mockAddMessage).toHaveBeenCalledWith(
+      'conv-db-id',
+      'assistant',
+      expect.stringContaining('hello back')
+    );
+    expect(mockAddMessage).toHaveBeenCalledTimes(2);
+  });
+
+  test('does NOT call addMessage for web platform (web adapter owns persistence)', async () => {
+    const platform = makePlatform(); // makePlatform defaults getPlatformType to 'web'
+
+    await handleMessage(platform, 'conv-1', 'what is this repo?');
+
+    expect(mockAddMessage).not.toHaveBeenCalled();
+  });
+
+  test('platform delivery is not blocked when persistence rejects', async () => {
+    const platform: IPlatformAdapter = {
+      ...makePlatform(),
+      getPlatformType: mock(() => 'github'),
+      getStreamingMode: mock(() => 'batch' as const),
+    };
+    mockAddMessage.mockImplementation(() => Promise.reject(new Error('db down')));
+
+    await expect(handleMessage(platform, 'conv-1', 'what is this repo?')).resolves.toBeUndefined();
+    expect(platform.sendMessage).toHaveBeenCalled();
+  });
+
+  test('platform delivery is not blocked when persistence rejects (stream mode)', async () => {
+    const platform: IPlatformAdapter = {
+      ...makePlatform(),
+      getPlatformType: mock(() => 'telegram'),
+      getStreamingMode: mock(() => 'stream' as const),
+    };
+    mockAddMessage.mockImplementation(() => Promise.reject(new Error('db down')));
+
+    await expect(handleMessage(platform, 'conv-1', 'what is this repo?')).resolves.toBeUndefined();
+    // Stream mode delivers chunks during the sendQuery loop — a DB failure must
+    // not stop delivery, so the reply must still have reached the platform.
+    expect(platform.sendMessage).toHaveBeenCalled();
+  });
+
+  test('passes userId to addMessage when context provides it', async () => {
+    const platform: IPlatformAdapter = {
+      ...makePlatform(),
+      getPlatformType: mock(() => 'github'),
+      getStreamingMode: mock(() => 'batch' as const),
+    };
+
+    await handleMessage(platform, 'conv-1', 'what is this repo?', { userId: 'user-abc' });
+
+    expect(mockAddMessage).toHaveBeenCalledWith(
+      'conv-db-id',
+      'user',
+      'what is this repo?',
+      undefined,
+      'user-abc'
+    );
+    // The assistant row is NULL-attributed by design — it must NOT carry userId.
+    expect(mockAddMessage).toHaveBeenCalledWith(
+      'conv-db-id',
+      'assistant',
+      expect.stringContaining('hello back')
+    );
+    expect(mockAddMessage).toHaveBeenCalledTimes(2);
+  });
+
+  test('does NOT persist a user row for a deterministic slash command (no orphan)', async () => {
+    const platform: IPlatformAdapter = {
+      ...makePlatform(),
+      getPlatformType: mock(() => 'github'),
+      getStreamingMode: mock(() => 'batch' as const),
+    };
+    mockParseCommand.mockReturnValueOnce({ command: 'status', args: [] });
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve({ success: true, message: 'status ok', workflow: undefined })
+    );
+
+    await handleMessage(platform, 'conv-1', '/status');
+
+    // Deterministic slash commands return before the AI dispatch, so persisting a
+    // user row here would orphan it (no paired assistant row in the Web UI history).
+    expect(mockAddMessage).not.toHaveBeenCalled();
   });
 });

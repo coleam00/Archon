@@ -551,3 +551,398 @@ describe('handleLoopIteration', () => {
     expect(node.maxIterations).toBe(2);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 3 of #975 — subagent task + hook activity aggregation
+// ---------------------------------------------------------------------------
+
+import type { WorkflowTaskActivityEvent, WorkflowHookActivityEvent } from '@/lib/types';
+
+function taskEvent(
+  overrides: Partial<WorkflowTaskActivityEvent> & { runId: string; nodeId: string; taskId: string }
+): WorkflowTaskActivityEvent {
+  return {
+    type: 'workflow_task_activity',
+    activity: 'started',
+    timestamp: 1000,
+    ...overrides,
+  };
+}
+
+function hookEvent(
+  overrides: Partial<WorkflowHookActivityEvent> & {
+    runId: string;
+    nodeId: string;
+    hookId: string;
+  }
+): WorkflowHookActivityEvent {
+  return {
+    type: 'workflow_hook_activity',
+    hookName: 'Bash',
+    hookEvent: 'PreToolUse',
+    activity: 'started',
+    timestamp: 1000,
+    ...overrides,
+  };
+}
+
+describe('handleTaskActivity', () => {
+  test('no-ops when node not yet in dagNodes (SSE ordering tolerance)', () => {
+    useWorkflowStore.getState().handleWorkflowStatus(statusEvent({ runId: 'run-t1' }));
+    useWorkflowStore.getState().handleTaskActivity(
+      taskEvent({
+        runId: 'run-t1',
+        nodeId: 'absent-node',
+        taskId: 't-1',
+        description: 'Doing work',
+      })
+    );
+    const wf = useWorkflowStore.getState().workflows.get('run-t1');
+    expect(wf).toBeDefined();
+    expect(wf!.dagNodes.find(n => n.nodeId === 'absent-node')).toBeUndefined();
+  });
+
+  test('adds task row when started arrives after node', () => {
+    useWorkflowStore.getState().handleWorkflowStatus(statusEvent({ runId: 'run-t2' }));
+    useWorkflowStore
+      .getState()
+      .handleDagNode(dagNodeEvent({ runId: 'run-t2', nodeId: 'plan', name: 'Plan' }));
+    useWorkflowStore.getState().handleTaskActivity(
+      taskEvent({
+        runId: 'run-t2',
+        nodeId: 'plan',
+        taskId: 't-1',
+        activity: 'started',
+        description: 'Analyzing the bug',
+        taskType: 'general-purpose',
+      })
+    );
+
+    const node = useWorkflowStore
+      .getState()
+      .workflows.get('run-t2')!
+      .dagNodes.find(n => n.nodeId === 'plan')!;
+    expect(node.tasks).toHaveLength(1);
+    expect(node.tasks?.[0]).toMatchObject({
+      taskId: 't-1',
+      activity: 'started',
+      description: 'Analyzing the bug',
+      taskType: 'general-purpose',
+    });
+  });
+
+  test('progress updates the existing task row in place (mutates, not appends)', () => {
+    useWorkflowStore.getState().handleWorkflowStatus(statusEvent({ runId: 'run-t3' }));
+    useWorkflowStore
+      .getState()
+      .handleDagNode(dagNodeEvent({ runId: 'run-t3', nodeId: 'plan', name: 'Plan' }));
+    useWorkflowStore.getState().handleTaskActivity(
+      taskEvent({
+        runId: 'run-t3',
+        nodeId: 'plan',
+        taskId: 't-1',
+        activity: 'started',
+        description: 'Started',
+      })
+    );
+    useWorkflowStore.getState().handleTaskActivity(
+      taskEvent({
+        runId: 'run-t3',
+        nodeId: 'plan',
+        taskId: 't-1',
+        activity: 'progress',
+        summary: 'Reading stack trace',
+        lastToolName: 'Read',
+        timestamp: 2000,
+      })
+    );
+    const node = useWorkflowStore
+      .getState()
+      .workflows.get('run-t3')!
+      .dagNodes.find(n => n.nodeId === 'plan')!;
+    expect(node.tasks).toHaveLength(1);
+    expect(node.tasks?.[0]).toMatchObject({
+      taskId: 't-1',
+      activity: 'progress',
+      summary: 'Reading stack trace',
+      lastToolName: 'Read',
+      updatedAt: 2000,
+    });
+    // Description seeded by started must survive a progress event that omits it
+    expect(node.tasks?.[0].description).toBe('Started');
+  });
+
+  test('completed activity transitions the row to completed', () => {
+    useWorkflowStore.getState().handleWorkflowStatus(statusEvent({ runId: 'run-t4' }));
+    useWorkflowStore
+      .getState()
+      .handleDagNode(dagNodeEvent({ runId: 'run-t4', nodeId: 'plan', name: 'Plan' }));
+    useWorkflowStore
+      .getState()
+      .handleTaskActivity(
+        taskEvent({ runId: 'run-t4', nodeId: 'plan', taskId: 't-1', activity: 'started' })
+      );
+    useWorkflowStore.getState().handleTaskActivity(
+      taskEvent({
+        runId: 'run-t4',
+        nodeId: 'plan',
+        taskId: 't-1',
+        activity: 'completed',
+        summary: 'Done',
+      })
+    );
+    const node = useWorkflowStore
+      .getState()
+      .workflows.get('run-t4')!
+      .dagNodes.find(n => n.nodeId === 'plan')!;
+    expect(node.tasks?.[0].activity).toBe('completed');
+    expect(node.tasks?.[0].summary).toBe('Done');
+  });
+
+  test('handles out-of-order notification before started (seeds a row)', () => {
+    useWorkflowStore.getState().handleWorkflowStatus(statusEvent({ runId: 'run-t5' }));
+    useWorkflowStore
+      .getState()
+      .handleDagNode(dagNodeEvent({ runId: 'run-t5', nodeId: 'plan', name: 'Plan' }));
+    useWorkflowStore.getState().handleTaskActivity(
+      taskEvent({
+        runId: 'run-t5',
+        nodeId: 'plan',
+        taskId: 't-1',
+        activity: 'completed',
+        summary: 'Done before started arrived',
+        timestamp: 5000,
+      })
+    );
+    const node = useWorkflowStore
+      .getState()
+      .workflows.get('run-t5')!
+      .dagNodes.find(n => n.nodeId === 'plan')!;
+    expect(node.tasks).toHaveLength(1);
+    expect(node.tasks?.[0].activity).toBe('completed');
+    // The seeded row must carry the event's metadata (not just taskId/activity).
+    expect(node.tasks?.[0].summary).toBe('Done before started arrived');
+  });
+
+  test('late started after a seeded terminal event does not regress activity or drop metadata', () => {
+    useWorkflowStore.getState().handleWorkflowStatus(statusEvent({ runId: 'run-t7' }));
+    useWorkflowStore
+      .getState()
+      .handleDagNode(dagNodeEvent({ runId: 'run-t7', nodeId: 'plan', name: 'Plan' }));
+    // completed arrives first (out-of-order), carrying metadata
+    useWorkflowStore.getState().handleTaskActivity(
+      taskEvent({
+        runId: 'run-t7',
+        nodeId: 'plan',
+        taskId: 't-1',
+        activity: 'completed',
+        summary: 'Done',
+        lastToolName: 'Bash',
+        timestamp: 5000,
+      })
+    );
+    // a late started must not wipe the completed state or its metadata
+    useWorkflowStore.getState().handleTaskActivity(
+      taskEvent({
+        runId: 'run-t7',
+        nodeId: 'plan',
+        taskId: 't-1',
+        activity: 'started',
+        description: 'Plan the work',
+        timestamp: 1000,
+      })
+    );
+    const task = useWorkflowStore
+      .getState()
+      .workflows.get('run-t7')!
+      .dagNodes.find(n => n.nodeId === 'plan')!.tasks?.[0];
+    expect(task?.activity).toBe('completed');
+    expect(task?.summary).toBe('Done');
+    expect(task?.lastToolName).toBe('Bash');
+    // the late started still backfills the description it carried
+    expect(task?.description).toBe('Plan the work');
+  });
+
+  test('preserves tasks array after a later dag_node event for the same node', () => {
+    useWorkflowStore.getState().handleWorkflowStatus(statusEvent({ runId: 'run-t6' }));
+    useWorkflowStore
+      .getState()
+      .handleDagNode(dagNodeEvent({ runId: 'run-t6', nodeId: 'plan', name: 'Plan' }));
+    useWorkflowStore
+      .getState()
+      .handleTaskActivity(
+        taskEvent({ runId: 'run-t6', nodeId: 'plan', taskId: 't-1', activity: 'started' })
+      );
+    // Simulate the node completing — tasks array must survive
+    useWorkflowStore.getState().handleDagNode(
+      dagNodeEvent({
+        runId: 'run-t6',
+        nodeId: 'plan',
+        name: 'Plan',
+        status: 'completed',
+        duration: 5000,
+      })
+    );
+    const node = useWorkflowStore
+      .getState()
+      .workflows.get('run-t6')!
+      .dagNodes.find(n => n.nodeId === 'plan')!;
+    expect(node.status).toBe('completed');
+    expect(node.tasks).toHaveLength(1);
+  });
+});
+
+describe('handleHookActivity', () => {
+  test('adds hook row on started', () => {
+    useWorkflowStore.getState().handleWorkflowStatus(statusEvent({ runId: 'run-h1' }));
+    useWorkflowStore
+      .getState()
+      .handleDagNode(dagNodeEvent({ runId: 'run-h1', nodeId: 'plan', name: 'Plan' }));
+    useWorkflowStore.getState().handleHookActivity(
+      hookEvent({
+        runId: 'run-h1',
+        nodeId: 'plan',
+        hookId: 'h-1',
+        hookName: 'Bash',
+        hookEvent: 'PreToolUse',
+        activity: 'started',
+      })
+    );
+    const node = useWorkflowStore
+      .getState()
+      .workflows.get('run-h1')!
+      .dagNodes.find(n => n.nodeId === 'plan')!;
+    expect(node.hooks).toHaveLength(1);
+    expect(node.hooks?.[0]).toMatchObject({
+      hookId: 'h-1',
+      hookName: 'Bash',
+      hookEvent: 'PreToolUse',
+      activity: 'started',
+    });
+  });
+
+  test('response overwrites the started row with outcome and exitCode', () => {
+    useWorkflowStore.getState().handleWorkflowStatus(statusEvent({ runId: 'run-h2' }));
+    useWorkflowStore
+      .getState()
+      .handleDagNode(dagNodeEvent({ runId: 'run-h2', nodeId: 'plan', name: 'Plan' }));
+    useWorkflowStore.getState().handleHookActivity(
+      hookEvent({
+        runId: 'run-h2',
+        nodeId: 'plan',
+        hookId: 'h-1',
+        hookName: 'Bash',
+        hookEvent: 'PreToolUse',
+        activity: 'started',
+      })
+    );
+    useWorkflowStore.getState().handleHookActivity(
+      hookEvent({
+        runId: 'run-h2',
+        nodeId: 'plan',
+        hookId: 'h-1',
+        hookName: 'Bash',
+        hookEvent: 'PreToolUse',
+        activity: 'response',
+        outcome: 'success',
+        exitCode: 0,
+      })
+    );
+    const node = useWorkflowStore
+      .getState()
+      .workflows.get('run-h2')!
+      .dagNodes.find(n => n.nodeId === 'plan')!;
+    expect(node.hooks).toHaveLength(1);
+    expect(node.hooks?.[0]).toMatchObject({
+      hookId: 'h-1',
+      activity: 'response',
+      outcome: 'success',
+      exitCode: 0,
+    });
+  });
+
+  test('out-of-order response (before started) seeds a response row', () => {
+    useWorkflowStore.getState().handleWorkflowStatus(statusEvent({ runId: 'run-h3' }));
+    useWorkflowStore
+      .getState()
+      .handleDagNode(dagNodeEvent({ runId: 'run-h3', nodeId: 'plan', name: 'Plan' }));
+    useWorkflowStore.getState().handleHookActivity(
+      hookEvent({
+        runId: 'run-h3',
+        nodeId: 'plan',
+        hookId: 'h-1',
+        hookName: 'Bash',
+        hookEvent: 'PreToolUse',
+        activity: 'response',
+        outcome: 'error',
+      })
+    );
+    const node = useWorkflowStore
+      .getState()
+      .workflows.get('run-h3')!
+      .dagNodes.find(n => n.nodeId === 'plan')!;
+    expect(node.hooks).toHaveLength(1);
+    expect(node.hooks?.[0].outcome).toBe('error');
+  });
+
+  test('late started after a seeded response does not regress activity or drop outcome', () => {
+    useWorkflowStore.getState().handleWorkflowStatus(statusEvent({ runId: 'run-h5' }));
+    useWorkflowStore
+      .getState()
+      .handleDagNode(dagNodeEvent({ runId: 'run-h5', nodeId: 'plan', name: 'Plan' }));
+    // response arrives first (out-of-order)
+    useWorkflowStore.getState().handleHookActivity(
+      hookEvent({
+        runId: 'run-h5',
+        nodeId: 'plan',
+        hookId: 'h-1',
+        activity: 'response',
+        outcome: 'success',
+        timestamp: 5000,
+      })
+    );
+    // a late started must not regress 'response' → 'started' or drop the outcome
+    useWorkflowStore.getState().handleHookActivity(
+      hookEvent({
+        runId: 'run-h5',
+        nodeId: 'plan',
+        hookId: 'h-1',
+        activity: 'started',
+        timestamp: 1000,
+      })
+    );
+    const hook = useWorkflowStore
+      .getState()
+      .workflows.get('run-h5')!
+      .dagNodes.find(n => n.nodeId === 'plan')!.hooks?.[0];
+    expect(hook?.activity).toBe('response');
+    expect(hook?.outcome).toBe('success');
+  });
+
+  test('preserves hooks array after a later dag_node event for the same node', () => {
+    useWorkflowStore.getState().handleWorkflowStatus(statusEvent({ runId: 'run-h4' }));
+    useWorkflowStore
+      .getState()
+      .handleDagNode(dagNodeEvent({ runId: 'run-h4', nodeId: 'plan', name: 'Plan' }));
+    useWorkflowStore
+      .getState()
+      .handleHookActivity(
+        hookEvent({ runId: 'run-h4', nodeId: 'plan', hookId: 'h-1', activity: 'started' })
+      );
+    useWorkflowStore.getState().handleDagNode(
+      dagNodeEvent({
+        runId: 'run-h4',
+        nodeId: 'plan',
+        name: 'Plan',
+        status: 'completed',
+        duration: 2000,
+      })
+    );
+    const node = useWorkflowStore
+      .getState()
+      .workflows.get('run-h4')!
+      .dagNodes.find(n => n.nodeId === 'plan')!;
+    expect(node.status).toBe('completed');
+    expect(node.hooks).toHaveLength(1);
+  });
+});

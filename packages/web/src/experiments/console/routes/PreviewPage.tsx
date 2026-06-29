@@ -1,7 +1,10 @@
-import type { CSSProperties, ReactElement } from 'react';
+import { useState, type CSSProperties, type ReactElement } from 'react';
 import { RunCard } from '../components/RunCard';
 import { ProjectTile } from '../components/ProjectTile';
 import { OriginBadge } from '../components/OriginBadge';
+import { BuilderPage } from '../builder/BuilderPage';
+import { FIXTURES } from '../builder/fixtures';
+import { importWorkflowDefinition } from '../builder/model';
 import type { Run } from '../primitives/run';
 
 /**
@@ -126,6 +129,51 @@ function Section({
   );
 }
 
+const BUILDER_FIXTURE_KEYS = Object.keys(FIXTURES);
+
+/**
+ * Workflow Builder preview: fixture switcher over PR-1's typed fixtures so a
+ * reviewer can see all seven node variants rendering with no server running.
+ */
+function BuilderPreview(): ReactElement {
+  const [fixtureKey, setFixtureKey] = useState<string>('mixed');
+  const definition = FIXTURES[fixtureKey];
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap gap-2">
+        {BUILDER_FIXTURE_KEYS.map(key => (
+          <button
+            key={key}
+            type="button"
+            onClick={(): void => {
+              setFixtureKey(key);
+            }}
+            className={`rounded border px-2.5 py-1 font-mono text-[11.5px] transition-colors ${
+              key === fixtureKey
+                ? 'border-accent-bright/60 bg-surface-elevated text-text-primary'
+                : 'border-border bg-surface text-text-secondary hover:bg-surface-hover'
+            }`}
+          >
+            {key}
+          </button>
+        ))}
+      </div>
+      <div className="h-[640px] overflow-hidden rounded border border-border">
+        {definition !== undefined ? (
+          <BuilderPage
+            key={fixtureKey}
+            initialWorkflow={importWorkflowDefinition(definition, fixtureKey)}
+          />
+        ) : null}
+      </div>
+      <p className="text-[11px] text-text-tertiary">
+        Fixture-backed only — no server I/O. Drag from the palette, connect nodes, edit in the
+        inspector, and watch the YAML tab update.
+      </p>
+    </div>
+  );
+}
+
 export function PreviewPage(): ReactElement {
   return (
     <div className="flex h-full flex-col overflow-y-auto">
@@ -137,6 +185,10 @@ export function PreviewPage(): ReactElement {
       </header>
 
       <main className="mx-auto flex w-full max-w-[1000px] flex-col gap-10 px-6 py-8">
+        <Section title="Workflow Builder · fixture-backed">
+          <BuilderPreview />
+        </Section>
+
         <Section title="Run cards · every status">
           <div className="flex flex-col gap-2">
             {SAMPLE_RUNS.map(run => (

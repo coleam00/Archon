@@ -150,6 +150,44 @@ export interface WorkflowToolActivityEvent extends BaseSSEEvent {
   durationMs?: number;
 }
 
+export interface WorkflowTaskUsage {
+  total_tokens: number;
+  tool_uses: number;
+  duration_ms: number;
+}
+
+export type WorkflowTaskActivity = 'started' | 'progress' | 'completed' | 'failed' | 'stopped';
+
+// Subagent task activity emitted by workflow DAG execution.
+export interface WorkflowTaskActivityEvent extends BaseSSEEvent {
+  type: 'workflow_task_activity';
+  runId: string;
+  nodeId: string;
+  taskId: string;
+  activity: WorkflowTaskActivity;
+  description?: string;
+  summary?: string;
+  usage?: WorkflowTaskUsage;
+  lastToolName?: string;
+  taskType?: string;
+}
+
+export type WorkflowHookActivity = 'started' | 'response';
+export type WorkflowHookOutcome = 'success' | 'error' | 'cancelled';
+
+// Hook callback activity emitted by workflow DAG execution.
+export interface WorkflowHookActivityEvent extends BaseSSEEvent {
+  type: 'workflow_hook_activity';
+  runId: string;
+  nodeId: string;
+  hookId: string;
+  hookName: string;
+  hookEvent: string;
+  activity: WorkflowHookActivity;
+  outcome?: WorkflowHookOutcome;
+  exitCode?: number;
+}
+
 // Workflow artifact
 export interface WorkflowArtifactEvent extends BaseSSEEvent {
   type: 'workflow_artifact';
@@ -202,6 +240,8 @@ export type SSEEvent =
   | DagNodeEvent
   | LoopIterationEvent
   | WorkflowToolActivityEvent
+  | WorkflowTaskActivityEvent
+  | WorkflowHookActivityEvent
   | WorkflowArtifactEvent
   | WorkflowDispatchEvent
   | WorkflowOutputPreviewEvent
@@ -259,6 +299,29 @@ export interface ErrorDisplay {
 
 // Workflow UI State types
 
+export interface DagTaskInfo {
+  taskId: string;
+  activity: WorkflowTaskActivity;
+  startedAt: number;
+  updatedAt: number;
+  description?: string;
+  summary?: string;
+  usage?: WorkflowTaskUsage;
+  lastToolName?: string;
+  taskType?: string;
+}
+
+export interface DagHookInfo {
+  hookId: string;
+  hookName: string;
+  hookEvent: string;
+  activity: WorkflowHookActivity;
+  startedAt: number;
+  updatedAt: number;
+  outcome?: WorkflowHookOutcome;
+  exitCode?: number;
+}
+
 export interface DagNodeState {
   nodeId: string;
   name: string;
@@ -269,6 +332,8 @@ export interface DagNodeState {
   currentIteration?: number;
   maxIterations?: number;
   iterations?: LoopIterationInfo[];
+  tasks?: DagTaskInfo[];
+  hooks?: DagHookInfo[];
   routeDecision?: RouteLoopDecisionData | Record<string, unknown>;
 }
 

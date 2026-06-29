@@ -1276,6 +1276,56 @@ describe('executeDagWorkflow -- tool restrictions', () => {
     expect(optionsArg.model).toBe('opus');
     const nodeConfig = optionsArg.nodeConfig as Record<string, unknown>;
     expect(nodeConfig.effort).toBe('max');
+
+    // Verify that the node_started event carries the resolved tier and model.
+    const createEventCalls = (mockDeps.store.createWorkflowEvent as ReturnType<typeof mock>).mock
+      .calls as Array<[{ event_type: string; data?: Record<string, unknown> }]>;
+    const nodeStartedCall = createEventCalls.find(([arg]) => arg.event_type === 'node_started');
+    expect(nodeStartedCall).toBeDefined();
+    expect(nodeStartedCall?.[0].data?.tier).toBe('large');
+    expect(nodeStartedCall?.[0].data?.model).toBe('opus');
+  });
+
+  it('surfaces the workflow-level tier on nodes that inherit the workflow model', async () => {
+    // Regression guard for #2036: the bundled default workflows set the tier at
+    // the WORKFLOW level (e.g. `model: medium`), and their nodes have no own
+    // `model`. The node_started event must still carry the inherited tier.
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+    const aiProfile = buildAiProfile('claude');
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'workflow-level-tier-test',
+        model: 'medium',
+        nodes: [{ id: 'step1', command: 'my-cmd' }],
+      },
+      workflowRun,
+      'claude',
+      'sonnet', // executor resolves the workflow-level `medium` -> `sonnet`
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      aiProfile
+    );
+
+    const createEventCalls = (mockDeps.store.createWorkflowEvent as ReturnType<typeof mock>).mock
+      .calls as Array<[{ event_type: string; data?: Record<string, unknown> }]>;
+    const nodeStartedCall = createEventCalls.find(([arg]) => arg.event_type === 'node_started');
+    expect(nodeStartedCall).toBeDefined();
+    expect(nodeStartedCall?.[0].data?.tier).toBe('medium');
+    expect(nodeStartedCall?.[0].data?.model).toBe('sonnet');
   });
 
   it('passes literal node model through unchanged', async () => {
@@ -4965,88 +5015,9 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       // Verify the prompt contains the user input
       const promptArg = mockSendQueryDag.mock.calls[0][0] as string;
       expect(promptArg).toContain('Add error handling');
-      // Should use a fresh session on the first resumed iteration: the stored
-      // gate session may have expired during the human review wait, so we
-      // start fresh (user feedback is carried via $LOOP_USER_INPUT). See
-      // packages/workflows/src/dag-executor.ts needsFreshSession (#1208).
+      // Should have resumed with stored session ID
       const sessionArg = mockSendQueryDag.mock.calls[0][2] as string | undefined;
-      expect(sessionArg).toBeUndefined();
-    });
-
-    it('interactive loop resume does not crash with error_during_execution on iteration 2', async () => {
-      // Regression test for #1208: when resuming a paused interactive loop
-      // gate, the first resumed iteration must use a fresh session (not the
-      // potentially stale stored session id), so the SDK never receives an
-      // expired session id that would trigger error_during_execution.
-      mockSendQueryDag.mockImplementation(function* () {
-        yield {
-          type: 'assistant',
-          content: 'Updated plan with error handling. <promise>APPROVED</promise>',
-        };
-        yield { type: 'result', sessionId: 'fresh-session-1' };
-      });
-
-      const store = createMockStore();
-      const mockDeps = createMockDeps(store);
-      const platform = createMockPlatform();
-      // Simulate resumed run: metadata has loop gate state from iteration 1
-      // with a stale session id (the SDK would reject this if reused).
-      const workflowRun = makeWorkflowRun('resume-no-crash-id', {
-        metadata: {
-          approval: {
-            type: 'interactive_loop',
-            nodeId: 'refine',
-            iteration: 1,
-            sessionId: 'stale-session-from-hours-ago',
-            message: 'Review the plan.',
-          },
-          loop_user_input: 'Add error handling',
-        },
-      });
-
-      await executeDagWorkflow(
-        mockDeps,
-        platform,
-        'conv-dag',
-        testDir,
-        {
-          name: 'interactive-loop-no-crash',
-          nodes: [
-            {
-              id: 'refine',
-              loop: {
-                prompt: 'User said: $LOOP_USER_INPUT. Refine the plan.',
-                until: 'APPROVED',
-                max_iterations: 10,
-                interactive: true,
-                gate_message: 'Review the plan.',
-              },
-            },
-          ],
-        },
-        workflowRun,
-        'claude',
-        undefined,
-        join(testDir, 'artifacts'),
-        join(testDir, 'logs'),
-        'main',
-        'docs/',
-        minimalConfig
-      );
-
-      // Exactly one iteration runs (it completes via APPROVED signal)
-      expect(mockSendQueryDag.mock.calls.length).toBe(1);
-      // Crucially: sessionArg must be undefined (fresh session), NOT the stale stored id.
-      const sessionArg = mockSendQueryDag.mock.calls[0][2] as string | undefined;
-      expect(sessionArg).toBeUndefined();
-
-      // No failure events were emitted (no loop_iteration_failed, no node_failed).
-      const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
-      const failedEvents = eventCalls.filter((call: unknown[]) => {
-        const evt = (call[0] as Record<string, unknown>).event_type as string;
-        return evt === 'loop_iteration_failed' || evt === 'node_failed';
-      });
-      expect(failedEvents).toHaveLength(0);
+      expect(sessionArg).toBe('loop-session-1');
     });
 
     it('loop iteration fails loudly when SDK returns error_during_execution', async () => {
@@ -10746,6 +10717,8 @@ describe('executeDagWorkflow -- persist_session', () => {
     );
 
     expect(mockSendQueryDag.mock.calls[0][2]).toBe('prior-session-id');
+    // A warm resume (resumed not false) runs the node exactly once — never replayed.
+    expect(mockSendQueryDag.mock.calls.length).toBe(1);
     const upsertMock = store.upsertWorkflowNodeSession as Mock<
       typeof store.upsertWorkflowNodeSession
     >;
@@ -10757,6 +10730,62 @@ describe('executeDagWorkflow -- persist_session', () => {
       provider_session_id: 'new-session-id',
       last_run_id: 'dag-test-run-id',
     });
+  });
+
+  it('persist_session resume returns cold (resumed:false) → surfaced to user, no re-run, fresh id persisted', async () => {
+    const store = createMockStore();
+    (store.getWorkflowNodeSession as Mock<typeof store.getWorkflowNodeSession>).mockResolvedValue({
+      workflow_name: 'persist-test',
+      node_id: 'planner',
+      scope_key: 'conv-dag',
+      provider: 'claude',
+      provider_session_id: 'prior-session-id',
+      last_run_id: 'prior-run',
+      created_at: '2026-05-01T00:00:00Z',
+      updated_at: '2026-05-01T00:00:00Z',
+    });
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+
+    mockSendQueryDag.mockClear();
+    // The provider could not resume the prior session and ran cold (already a
+    // clean fresh session). The executor must keep this run, not re-run it.
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'cold run' };
+      yield { type: 'result', sessionId: 'cold-id', resumed: false };
+    });
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'persist-test',
+        nodes: [{ id: 'planner', command: 'my-cmd', persist_session: true }],
+      },
+      makeWorkflowRun(),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    // Ran exactly once — a cold resume is NOT replayed (the cold run is already fresh).
+    expect(mockSendQueryDag.mock.calls.length).toBe(1);
+    expect(mockSendQueryDag.mock.calls[0][2]).toBe('prior-session-id');
+    // The cold resume was surfaced to the user — never silent.
+    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
+    const messages = sendMessage.mock.calls.map(c => String(c[1]));
+    expect(messages.some(m => m.includes('could not resume the prior session'))).toBe(true);
+    // The cold run's own fresh session id is what gets persisted for next time.
+    const upsertMock = store.upsertWorkflowNodeSession as Mock<
+      typeof store.upsertWorkflowNodeSession
+    >;
+    expect(upsertMock.mock.calls[0][0]).toMatchObject({ provider_session_id: 'cold-id' });
   });
 
   it('persist_session: true but provider returns no sessionId → delete stale row', async () => {

@@ -106,6 +106,11 @@ export function getArchonConfigPath(): string {
   return join(getArchonHome(), 'config.yaml');
 }
 
+/** Path where the auto-provisioned encryption key is stored (~/.archon/credential-key). */
+export function getCredentialKeyPath(): string {
+  return join(getArchonHome(), 'credential-key');
+}
+
 /**
  * Get the home-scoped workflows directory (`~/.archon/workflows/`).
  * Workflows placed here are discovered from every repo and apply globally —
