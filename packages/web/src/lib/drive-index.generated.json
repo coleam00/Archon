@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-24T23:28:03+00:00",
+  "generated_at": "2026-06-29T23:37:23+00:00",
   "vault_path": "second-brain/resources/drive-index",
   "count": 22,
   "folders": [
@@ -178,11 +178,25 @@
       "folderId": "1hxiUwSZEGBQA00gVkhHWV1y5IztPVsyl",
       "parentId": "1A3A1hYHC7_sulft0c2WD2DhVqOMG_dQN",
       "audience": "internal",
-      "lastSynced": "2026-06-24T17:01:08+00:00",
-      "fileCount": 68,
+      "lastSynced": "2026-06-29T21:00:09+00:00",
+      "fileCount": 70,
       "vaultPath": "second-brain/resources/drive-index/bioreg-assets.md",
       "driveUrl": "https://drive.google.com/drive/folders/1hxiUwSZEGBQA00gVkhHWV1y5IztPVsyl",
       "files": [
+        {
+          "name": "Elias Arjan Healthspan Collective Call Prep revised 2026-06-29",
+          "type": "g-document",
+          "modified": "2026-06-29",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1qC3yAkwNvzca5-CypXJzoYrvYIODzUcXNp8GumwmdPQ/edit?usp=drivesdk"
+        },
+        {
+          "name": "Elias Arjan Healthspan PRUVN Call Prep 2026-06-29",
+          "type": "g-document",
+          "modified": "2026-06-29",
+          "size": "",
+          "link": "https://docs.google.com/document/d/1NOjFMXEu8OntVhpltsYIl_bO4OO7MNAF3FwRbNmqaIk/edit?usp=drivesdk"
+        },
         {
           "name": "Michael Cohen NRBS Webinar Prep -- EMDR + Neurofeedback (2026-06-24)",
           "type": "g-document",
