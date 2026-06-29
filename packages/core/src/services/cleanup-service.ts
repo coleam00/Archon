@@ -331,6 +331,16 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
 
         // Check if branch is merged
         const mainRepoPath = toRepoPath(env.codebase_default_cwd);
+        const mainRepoExists = await worktreeExists(toWorktreePath(env.codebase_default_cwd));
+        if (!mainRepoExists) {
+          report.skipped.push({ id: env.id, reason: 'codebase checkout path missing' });
+          getLog().warn(
+            { envId: env.id, codebaseDefaultCwd: env.codebase_default_cwd },
+            'skip_cleanup_missing_codebase_checkout'
+          );
+          continue;
+        }
+
         const mainBranch = await resolveBaseBranch(mainRepoPath, env.codebase_default_cwd);
         const merged = await isBranchMerged(
           mainRepoPath,

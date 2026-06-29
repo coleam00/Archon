@@ -135,7 +135,7 @@ describe('cleanup-service', () => {
     mockLoadRepoConfig.mockClear();
     // Reset defaults
     mockHasUncommittedChanges.mockResolvedValue(false);
-    mockWorktreeExists.mockResolvedValue(false);
+    mockWorktreeExists.mockImplementation(() => Promise.resolve(false));
     mockGetDefaultBranch.mockResolvedValue('main');
     mockIsBranchMerged.mockResolvedValue(false);
     mockGetLastCommitDate.mockResolvedValue(null);
@@ -477,7 +477,7 @@ describe('runScheduledCleanup', () => {
     mockLoadRepoConfig.mockClear();
     // Reset defaults
     mockHasUncommittedChanges.mockResolvedValue(false);
-    mockWorktreeExists.mockResolvedValue(false);
+    mockWorktreeExists.mockImplementation(() => Promise.resolve(false));
     mockGetDefaultBranch.mockResolvedValue('main');
     mockIsBranchMerged.mockResolvedValue(false);
     mockGetLastCommitDate.mockResolvedValue(null);
@@ -654,7 +654,7 @@ describe('runScheduledCleanup', () => {
       },
     ]);
     // worktreeExists returns true (path exists)
-    mockWorktreeExists.mockResolvedValueOnce(true);
+    mockWorktreeExists.mockResolvedValueOnce(true).mockResolvedValueOnce(true);
     // getDefaultBranch returns 'main' (default)
     // isBranchMerged returns true
     mockIsBranchMerged.mockResolvedValueOnce(true);
@@ -696,6 +696,38 @@ describe('runScheduledCleanup', () => {
 
     // Should not be in removed (Telegram is persistent)
     expect(report.removed).toHaveLength(0);
+  });
+
+  test('skips environment when codebase checkout path is missing', async () => {
+    mockListAllActiveWithCodebase.mockResolvedValueOnce([
+      {
+        id: 'env-missing-codebase',
+        working_path: '/workspace/repo/worktrees/no-mistakes',
+        branch_name: 'no-mistakes',
+        status: 'active',
+        created_by_platform: 'github',
+        created_at: new Date(),
+        codebase_default_cwd: '/workspace/repo/no-mistakes',
+        codebase_id: 'codebase-1',
+        workflow_type: 'issue',
+        workflow_id: '10',
+        provider: 'worktree',
+        metadata: {},
+      },
+    ]);
+    mockWorktreeExists.mockImplementation((path: string) =>
+      Promise.resolve(path === '/workspace/repo/worktrees/no-mistakes')
+    );
+
+    const report = await runScheduledCleanup();
+
+    expect(mockGetDefaultBranch).not.toHaveBeenCalled();
+    expect(mockIsBranchMerged).not.toHaveBeenCalled();
+    expect(report.errors).toHaveLength(0);
+    expect(report.skipped).toContainEqual({
+      id: 'env-missing-codebase',
+      reason: 'codebase checkout path missing',
+    });
   });
 
   test('continues processing after error on one environment', async () => {
@@ -987,7 +1019,7 @@ describe('cleanupMergedWorktrees', () => {
     mockGetPrState.mockReset();
     mockGetPrState.mockResolvedValue('NONE');
     mockHasUncommittedChanges.mockResolvedValue(false);
-    mockWorktreeExists.mockResolvedValue(false);
+    mockWorktreeExists.mockImplementation(() => Promise.resolve(false));
   });
 
   test('removes merged branches without uncommitted changes', async () => {
@@ -1247,7 +1279,7 @@ describe('resolveBaseBranch via runScheduledCleanup (issue #1419)', () => {
     mockLoadRepoConfig.mockClear();
     mockDeleteOldSessions.mockClear();
     // Defaults
-    mockWorktreeExists.mockResolvedValue(true);
+    mockWorktreeExists.mockImplementation(() => Promise.resolve(true));
     mockHasUncommittedChanges.mockResolvedValue(false);
     mockIsBranchMerged.mockResolvedValue(false);
     mockLoadRepoConfig.mockResolvedValue({});
@@ -1387,7 +1419,7 @@ describe('onConversationClosed', () => {
     mockWorktreeExists.mockClear();
     mockHasUncommittedChanges.mockClear();
     // Reset defaults
-    mockWorktreeExists.mockResolvedValue(false);
+    mockWorktreeExists.mockImplementation(() => Promise.resolve(false));
     mockHasUncommittedChanges.mockResolvedValue(false);
   });
 
@@ -1549,7 +1581,7 @@ describe('cleanupStaleWorktrees', () => {
     mockUpdateStatus.mockClear();
     // Reset defaults
     mockHasUncommittedChanges.mockResolvedValue(false);
-    mockWorktreeExists.mockResolvedValue(false);
+    mockWorktreeExists.mockImplementation(() => Promise.resolve(false));
   });
 
   test('removes stale worktrees without uncommitted changes', async () => {
