@@ -19,6 +19,7 @@ import {
 import driveIndex from '@/lib/drive-index.generated.json';
 import solutionsData from '@/lib/solutions.generated.json';
 import contactsData from '@/lib/contacts.generated.json';
+import localOperatorData from '@/lib/ttts-local-operators.generated.json';
 import { isContactStub } from '@/lib/contact-utils';
 
 interface CardProps {
@@ -74,6 +75,10 @@ export function StartHerePage(): React.ReactElement {
   const drivePayload = driveIndex as { count?: unknown; folders?: unknown };
   const solutionsPayload = solutionsData as { count?: unknown; solutions?: unknown };
   const contactsPayload = contactsData as { contacts?: unknown };
+  const localOperatorPayload = localOperatorData as {
+    totals?: { included?: unknown };
+    operators?: unknown;
+  };
   const driveFolders = (Array.isArray(drivePayload.folders) ? drivePayload.folders : []).filter(
     (folder): folder is DriveFolderSnapshot => typeof folder === 'object' && folder !== null
   );
@@ -95,6 +100,13 @@ export function StartHerePage(): React.ReactElement {
     .join(', ');
   // Filter out TBD-stub contacts the same way ContactsPage does so the count matches
   const realContactsCount = contacts.filter(c => !isContactStub(c)).length;
+  const localOperatorRows = Array.isArray(localOperatorPayload.operators)
+    ? localOperatorPayload.operators
+    : [];
+  const localOperatorCount = safeCount(
+    localOperatorPayload.totals?.included,
+    localOperatorRows.length
+  );
   const solutionsDescription = solutionsNames
     ? `${solutionsCount} third-party solutions Jason represents or integrates: ${solutionsNames}.`
     : `${solutionsCount} third-party solutions Jason represents or integrates. Awaiting solutions snapshot names.`;
@@ -230,7 +242,7 @@ export function StartHerePage(): React.ReactElement {
             icon={Target}
             title="TTTS Local Operators"
             description="Deduped health/wellness operator list from HeyReach, LinkedIn, dialer, Instagram-evidence rows, and event summary."
-            badge="335"
+            badge={localOperatorCount.toLocaleString()}
           />
           <Card
             to="/ewc"
