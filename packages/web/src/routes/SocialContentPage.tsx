@@ -134,6 +134,18 @@ const ACTIVE_SEQUENCES: Record<string, ActiveSequence[]> = {
         'Demoted from top objective 2026-05-13. Pivoted to invitation-only Sarasota session. BD asset feeding PMC + EWC pipelines.',
     },
   ],
+  ewc: [
+    {
+      id: 'ewc-practice-transformation-avatars',
+      name: 'EWC Practice Transformation Outbound — 3 avatar variants',
+      status: 'drafting',
+      channel: 'email',
+      touches: 5,
+      vaultPath: 'businesses/pmc/ewc/apollo-sequence-spec.md',
+      notes:
+        'Spec-ready 5-step Apollo sequence for Frustrated PCP, Ambitious DPC Founder, and Medical Spa Owner lanes. Pending Jason Option A ratification before Apollo launch.',
+    },
+  ],
   ihht: [],
   qep: [],
 };
