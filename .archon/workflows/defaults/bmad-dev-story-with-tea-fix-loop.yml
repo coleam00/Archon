@@ -164,7 +164,7 @@ nodes:
     route_loop:
       from: code-review
       condition: "$code-review.output.gate == 'PASS'"
-      max_iterations: 2
+      max_iterations: 20
       routes:
         positive: tea-rv
         negative: dev-story
