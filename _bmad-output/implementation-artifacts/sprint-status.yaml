@@ -1,5 +1,5 @@
-# generated: 2026-06-26 23:10:09 +0700
-# last_updated: 2026-06-26 23:10:09 +0700
+# generated: 2026-06-30 10:50:10 +0700
+# last_updated: 2026-06-30 10:50:10 +0700
 # project: Archon
 # project_key: NOKEY
 # tracking_system: file-system
@@ -13,14 +13,14 @@
 #   - done: All stories in epic completed
 #
 # Epic Status Transitions:
-#   - backlog -> in-progress: Automatically when first story is created (via create-story)
+#   - backlog -> in-progress: Automatically when first story is created via create-story
 #   - in-progress -> done: Manually when all stories reach 'done' status
 #
 # Story Status:
 #   - backlog: Story only exists in epic file
 #   - ready-for-dev: Story file created in stories folder
 #   - in-progress: Developer actively working on implementation
-#   - review: Ready for code review (via Dev's code-review workflow)
+#   - review: Ready for code review via Dev's code-review workflow
 #   - done: Story completed
 #
 # Retrospective Status:
@@ -37,39 +37,37 @@
 # - Epic transitions to 'in-progress' automatically when first story is created
 # - Stories can be worked in parallel if team capacity allows
 # - Developer typically creates next story after previous one is 'done' to incorporate learnings
-# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+# - Dev moves story to 'review', then runs code-review in a fresh context
 # - Retrospective appends its action items to action_items; sprint-status surfaces open ones
 
-generated: "2026-06-26 23:10:09 +0700"
-last_updated: "2026-06-26 23:10:09 +0700"
+generated: "2026-06-30 10:50:10 +0700"
+last_updated: "2026-06-30 10:50:10 +0700"
 project: Archon
 project_key: NOKEY
 tracking_system: file-system
 story_location: /Users/dale/Desktop/workspace/OceanLabs/workflow-engine/Archon/_bmad-output/implementation-artifacts
 
 development_status:
-  epic-1: backlog
-  1-1-declare-route-loop-as-a-controller-node: backlog
-  1-2-validate-route-loop-source-and-routes: backlog
-  1-3-validate-route-loop-conditions-strictly: backlog
-  1-4-preserve-existing-validation-behavior-outside-route-loop: backlog
-  epic-1-retrospective: optional
-  epic-2: backlog
-  2-1-execute-route-workflows-through-activation: backlog
-  2-2-select-route-outcomes-with-bounded-counters: backlog
-  2-3-rerun-selected-paths-as-fresh-attempts: backlog
-  2-4-persist-route-decisions-before-activation: backlog
-  2-5-preserve-provider-session-and-context-behavior: backlog
-  epic-2-retrospective: optional
-  epic-3: backlog
-  3-1-preserve-route-state-on-resume: backlog
-  3-2-continue-route-flow-after-retry-node: backlog
-  3-3-preserve-existing-lifecycle-commands: backlog
-  3-4-project-route-aware-run-state-for-review: backlog
-  epic-3-retrospective: optional
-  epic-4: backlog
-  4-1-render-route-loop-in-the-production-builder: backlog
-  4-2-synchronize-route-loop-input-and-output-edges: backlog
-  4-3-validate-route-loop-save-and-run-in-the-builder: backlog
-  4-4-round-trip-route-loop-through-builder-surfaces: backlog
-  epic-4-retrospective: optional
+  epic-a1: backlog
+  a1-1-add-versioned-v2-workflow-baseline: backlog
+  a1-2-preserve-story-input-resolution: backlog
+  epic-a1-retrospective: optional
+  epic-a2: backlog
+  a2-1-wire-ds-ta-cr-sequence: backlog
+  epic-a2-retrospective: optional
+  epic-a3: backlog
+  a3-1-add-gate-planner-flags: backlog
+  a3-2-wire-rv-and-nr-sibling-branches: backlog
+  a3-3-join-tr-as-final-gate: backlog
+  epic-a3-retrospective: optional
+  epic-a4: backlog
+  a4-1-aggregate-quality-gate-summary: backlog
+  a4-2-route-quality-loop-and-error-paths: backlog
+  epic-a4-retrospective: optional
+  epic-a5: backlog
+  a5-1-orchestrate-decision-needed-follow-up: backlog
+  a5-2-generate-pr-handoff-with-evidence-links: backlog
+  epic-a5-retrospective: optional
+  epic-a6: backlog
+  a6-1-validate-the-vertical-slice: backlog
+  epic-a6-retrospective: optional
