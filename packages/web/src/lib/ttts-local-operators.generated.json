@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-30T06:27:06-07:00",
+  "generated_at": "2026-06-30T16:32:43.785503Z",
   "source_counts": {
     "canonical_master": 171,
     "heyreach_campaign_476670": 205,
@@ -9,23 +9,23 @@
     "platform_warm_signals": 13
   },
   "totals": {
-    "included": 327,
+    "included": 328,
     "excluded_not_interested": 8,
     "review_held_out": 48,
     "hot_follow_up": 127,
-    "future_event_nurture": 14,
+    "future_event_nurture": 15,
     "repair_channel": 137,
-    "with_phone": 125,
-    "with_email": 50,
+    "with_phone": 161,
+    "with_email": 72,
     "with_linkedin": 300,
-    "with_website": 48,
-    "with_instagram": 5
+    "with_website": 82,
+    "with_instagram": 12
   },
   "lane_counts": {
     "P0 attended / RSVP follow-up": 5,
     "P1 September / collaboration": 117,
     "P1 book next conversation": 5,
-    "P2 future event nurture": 14,
+    "P2 future event nurture": 15,
     "P3 reached -- no reply yet": 49,
     "P4 attempted -- repair channel": 137
   },
@@ -54,7 +54,8 @@
     "FITNESS - COLLABORATOR": 1,
     "FITNESS": 2,
     "": 123,
-    "Fitness": 2
+    "Fitness": 2,
+    "LOCAL BUSINESS - AUTO": 1
   },
   "notes": [
     "Inventory includes health/wellness/local operator rows from source-backed HeyReach, LinkedIn/Sales Nav capture, dial outcomes, and Jason-attached event summary.",
@@ -12163,6 +12164,43 @@
       "suppression_status": "",
       "source_artifacts": "/tmp/ttts_campaign_476670_leads_full.jsonl",
       "notes": ""
+    },
+    {
+      "priority": "P2-336",
+      "relationship_lane": "P2 future event nurture",
+      "prospect": "Jim Taylor",
+      "title": "Owner / Operator",
+      "company": "Jim Taylor European Auto",
+      "icp_bucket": "LOCAL BUSINESS - AUTO",
+      "fit_score": "3",
+      "city": "Sarasota",
+      "state": "Florida",
+      "phone": "",
+      "email": "",
+      "website": "",
+      "linkedin_url": "",
+      "instagram_handle": "",
+      "source_channels": "Manual / Jason add",
+      "source_systems": "Jason Telegram request",
+      "evidence_type": "manual user-supplied",
+      "outreach_status": "manual include",
+      "interest_level": "",
+      "event_attendance_status": "",
+      "last_signal_date": "2026-06-30",
+      "last_message_or_note": "Jason asked to add Jim Taylor European Auto in Sarasota as a new row.",
+      "campaign_or_context": "TTTS local operator inventory",
+      "recommended_next_action": "Verify contact info, then qualify for September local sponsor/collaboration fit.",
+      "owner": "Jason / Carlos",
+      "ttts_master_id": "",
+      "heyreach_campaign_id": "",
+      "heyreach_lead_status": "",
+      "heyreach_connection_status": "",
+      "heyreach_message_status": "",
+      "dial_status": "",
+      "meeting_status": "",
+      "suppression_status": "",
+      "source_artifacts": "Telegram request 2026-06-30",
+      "notes": "Manual add only; contact info not verified yet; non-health local business, keep separate for sponsor/vendor/local relationship review."
     }
   ],
   "google_sheet_url": "https://docs.google.com/spreadsheets/d/1-aaN0NqbfXLX7b3e82WZayp-72MSKRBV5yHunFGm_Yk/edit?usp=drivesdk"
