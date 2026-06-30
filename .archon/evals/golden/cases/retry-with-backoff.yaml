@@ -1,0 +1,68 @@
+id: retry-with-backoff
+tags: [resilience, utility, strong]
+task: |
+  Add `retry<T>(fn: () => Promise<T>, opts): Promise<T>` that retries a failing async
+  function with exponential backoff + jitter, up to a max attempt count, and throws
+  the last error if all attempts fail. Make attempts/base delay configurable and
+  cover the success-after-retry and exhausted-retries paths with tests.
+
+reference: |
+  A strong solution:
+  - Retries up to maxAttempts, exponential backoff with jitter between tries.
+  - Resolves as soon as fn succeeds; throws the LAST error when exhausted (never swallows).
+  - Validates options (maxAttempts >= 1).
+  - Deterministic, fake-timer-free tests for: first-try success, success on a later try,
+    and exhaustion throwing the final error.
+
+candidate: |
+  // src/util/retry.ts
+  export interface RetryOptions {
+    maxAttempts?: number;   // default 3
+    baseDelayMs?: number;   // default 50
+    jitter?: () => number;  // injectable for deterministic tests; default Math.random
+  }
+
+  export async function retry<T>(fn: () => Promise<T>, opts: RetryOptions = {}): Promise<T> {
+    const maxAttempts = opts.maxAttempts ?? 3;
+    if (maxAttempts < 1) throw new Error("retry: maxAttempts must be >= 1");
+    const base = opts.baseDelayMs ?? 50;
+    const jitter = opts.jitter ?? Math.random;
+    let lastErr: unknown;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        return await fn();
+      } catch (e) {
+        lastErr = e;
+        if (attempt === maxAttempts) break;
+        const delay = base * 2 ** (attempt - 1) * (1 + jitter());
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
+    throw lastErr;
+  }
+
+  // src/util/retry.test.ts
+  import { describe, it, expect } from "bun:test";
+  import { retry } from "./retry";
+
+  const opts = { baseDelayMs: 0, jitter: () => 0 }; // no real waiting in tests
+  describe("retry", () => {
+    it("returns immediately on first success", async () => {
+      let calls = 0;
+      const r = await retry(async () => { calls++; return "ok"; }, opts);
+      expect(r).toBe("ok"); expect(calls).toBe(1);
+    });
+    it("succeeds on a later attempt", async () => {
+      let calls = 0;
+      const r = await retry(async () => { calls++; if (calls < 3) throw new Error("flaky"); return "ok"; }, opts);
+      expect(r).toBe("ok"); expect(calls).toBe(3);
+    });
+    it("throws the last error when exhausted", async () => {
+      let calls = 0;
+      await expect(retry(async () => { calls++; throw new Error(`fail-${calls}`); }, { ...opts, maxAttempts: 2 }))
+        .rejects.toThrow("fail-2");
+    });
+    it("rejects invalid maxAttempts", async () => {
+      await expect(retry(async () => "x", { maxAttempts: 0 })).rejects.toThrow(/>= 1/);
+    });
+  });

@@ -1,0 +1,19 @@
+{
+  "name": "golden",
+  "description": "The standing QUALITY BAR. Every case here is code Archon should consider GOOD — correct, complete, safe, well-tested. Run it against a known-good state, then bless its scorecard mean_by_dim into baseline.json. Later runs flag any dimension that slips below the floor or regresses past tolerance vs the baseline.",
+  "scale": "Each dimension is scored 1-5 by the judge (5 = excellent, 1 = absent/broken).",
+  "dimensions": ["correctness", "completeness", "maintainability", "safety", "verification"],
+  "weights": {
+    "correctness": 0.30,
+    "completeness": 0.20,
+    "maintainability": 0.15,
+    "safety": 0.15,
+    "verification": 0.20
+  },
+  "thresholds": {
+    "overall_min": 4.0,
+    "dim_floor": 3.5,
+    "case_min": 3,
+    "regression_tolerance": 0.5
+  }
+}
