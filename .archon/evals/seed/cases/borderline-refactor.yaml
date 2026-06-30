@@ -1,0 +1,27 @@
+id: borderline-refactor
+tags: [refactor, mediocre]
+task: |
+  Refactor `getUser` to stop swallowing errors and to validate its input. It
+  currently returns null on any failure, hiding real errors from callers.
+
+reference: |
+  A strong solution distinguishes "not found" (legitimately null/empty) from
+  real failures (DB down, bad input) — surfacing the latter rather than
+  swallowing them — and validates the id before querying. The candidate below
+  is a partial improvement: it adds a light id check but STILL catches and
+  swallows all errors into null, so a DB outage is indistinguishable from a
+  missing user. Expect mid scores: better on completeness/maintainability than
+  the original, weak on safety (still swallows) and correctness (failure ==
+  not-found ambiguity remains).
+
+candidate: |
+  // src/users.ts  (after)
+  export async function getUser(id: string): Promise<User | null> {
+    if (!id) return null;               // light validation added
+    try {
+      const row = await db.query("SELECT * FROM users WHERE id = $1", [id]);
+      return row ?? null;
+    } catch {
+      return null;                       // still swallows ALL errors
+    }
+  }

@@ -1,0 +1,132 @@
+name: standing-eval-suite
+description: |
+  EXPERIMENTAL: the "standing eval suite" right-edge of the vibe-coding SDLC
+  (companion to agentic-eval-gate, which is one-shot-diff only). Scores a curated,
+  version-controlled set of LABELLED cases against a 5-dimension rubric, aggregates
+  deterministically, compares to a committed baseline, and gates — so quality is
+  measured over TIME, not per-change. This is "evals are the new tests" + the
+  quality flywheel: when something escapes the gate, add a case and it can never
+  regress silently again.
+
+  Dataset lives at `.archon/evals/<suite>/`:
+    suite.json      — rubric dims + weights + thresholds (+ optional baseline.json)
+    cases/*.yaml    — one labelled case each (task / candidate / reference)
+  Select a suite with the EVAL_SUITE env var (default: seed).
+
+  v1 SCOPE (this file): scores PRE-SUPPLIED candidates carried in each case
+  (`candidate:`). Read-only — never edits the repo. Deterministic aggregation;
+  the LLM judge only scores 1-5 per dimension.
+
+  NOT YET (v2): regenerating candidates by invoking a target workflow per case
+  (needs worktree isolation), per-case fan-out via a loop node for large suites,
+  N-vote judging, and an `eval add-case` flywheel helper.
+
+  Model routing (the paper's "routing as a financial lever"): scoring uses the
+  `medium` tier; the readable verdict uses `small`; load + aggregate use no model.
+
+  IMPLEMENTATION NOTE: the two deterministic nodes are NAMED scripts
+  (.archon/scripts/eval-*.ts), not inline `script: |` bodies. Inline multi-line
+  scripts are passed to `bun -e` as one argv string and truncate at the first
+  newline on Windows — named scripts run via `bun run <file>` and are safe.
+
+tags: [eval, suite, regression, agentic-engineering, sdlc]
+provider: claude
+mutates_checkout: false
+# Read the operator's LIVE checkout (where .archon/evals/<suite> lives), not an
+# isolated empty worktree. No $BASE_BRANCH / base tokens anywhere (not even in
+# comments) — they force eager base resolution that hard-fails on no-origin repos.
+worktree:
+  enabled: false
+
+nodes:
+  # ─── 1. LOAD SUITE (deterministic, no AI) ─────────────────────────────
+  # Validates the dataset exists and writes the case-path queue for the judge.
+  - id: load-suite
+    script: eval-load-suite
+    runtime: bun
+    timeout: 30000
+
+  # ─── 2. SCORE CASES (reasoning judge) ─────────────────────────────────
+  # One judge pass over the whole (small) dataset. v2 replaces this with a
+  # loop: node (one fresh-context iteration per case) for large suites.
+  - id: score-cases
+    depends_on: [load-suite]
+    model: medium
+    context: fresh
+    allowed_tools: [Read, Write, Bash]
+    prompt: |
+      You are a strict eval JUDGE. Score each labelled case on a fixed 5-dimension
+      rubric. Be conservative: when evidence for a dimension is absent, score it
+      LOW — "set the bar at the eval, not the demo." Do NOT edit any repo files.
+
+      ## Where the cases are
+      The file `$ARTIFACTS_DIR/eval/queue.txt` contains one absolute path per line,
+      each pointing at a YAML case file. Read that list, then Read EVERY case file.
+      Each case has: `id`, `task` (the spec), `candidate` (the work under test),
+      and `reference` (what a correct/strong solution looks like).
+
+      ## The 5 dimensions (score each 1-5: 5 = excellent, 1 = absent/broken)
+      - correctness    — does the candidate actually satisfy the task?
+      - completeness    — are ALL acceptance criteria met, not just the happy path?
+      - maintainability — clarity, structure, fit with conventions.
+      - safety          — input validation, error handling, secrets/auth/shell/SQL/paths.
+      - verification    — were tests/checks ACTUALLY present for the new behavior?
+                          New/changed behavior with no tests scores LOW here.
+
+      Judge the candidate against the reference and the task. Give a one-line
+      rationale per dimension grounded in what the candidate actually contains.
+
+      ## Output (REQUIRED)
+      Write a single JSON ARRAY to `$ARTIFACTS_DIR/eval/results.json` using the
+      Write tool — one object per case, in this exact shape:
+      [
+        {
+          "case_id": "<the case id>",
+          "scores": {
+            "correctness":    { "score": 1, "rationale": "..." },
+            "completeness":   { "score": 1, "rationale": "..." },
+            "maintainability":{ "score": 1, "rationale": "..." },
+            "safety":         { "score": 1, "rationale": "..." },
+            "verification":   { "score": 1, "rationale": "..." }
+          }
+        }
+      ]
+      Include EVERY case from the queue exactly once. Valid JSON only (no comments,
+      no trailing commas). After writing, reply with a one-line confirmation of how
+      many cases you scored.
+
+  # ─── 3. AGGREGATE (deterministic gate, no AI) ─────────────────────────
+  # The authoritative gate. Pure JSON math + scorecard + trend line.
+  - id: aggregate
+    depends_on: [score-cases]
+    script: eval-aggregate
+    runtime: bun
+    timeout: 30000
+
+  # ─── 4. VERDICT (cheap readable synthesis) ────────────────────────────
+  # The aggregate node already decided the gate. This only narrates it for humans.
+  - id: verdict
+    depends_on: [aggregate]
+    model: small
+    context: fresh
+    allowed_tools: []
+    prompt: |
+      The deterministic scorecard below already contains the AUTHORITATIVE gate
+      decision. Restate it for a human — do NOT recompute or override it. If the
+      gate is FAIL, lead with the concrete blocking reasons (dimension-floor
+      failures, per-case failures, regressions).
+
+      ## Scorecard
+      $aggregate.output
+    output_format:
+      type: object
+      properties:
+        gate:
+          type: string
+          enum: [PASS, FAIL]
+        overall: { type: number }
+        blocking:
+          type: array
+          items: { type: string }
+        summary: { type: string }
+      required: [gate, summary]
