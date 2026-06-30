@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-29T06:26:58-07:00",
+  "generated_at": "2026-06-30T06:27:06-07:00",
   "source_counts": {
     "canonical_master": 171,
     "heyreach_campaign_476670": 205,
@@ -2480,13 +2480,13 @@
       "fit_score": "4",
       "city": "Sarasota",
       "state": "Florida",
-      "phone": "",
+      "phone": "941-359-8900",
       "email": "",
       "website": "",
       "linkedin_url": "https://www.linkedin.com/in/ACwAAAQxMPgBhXDJpBaB92QjtuYPLTEaam52XBk",
       "instagram_handle": "",
       "source_channels": "HeyReach inbox/LinkedIn",
-      "source_systems": "Canonical master / platform reconcile",
+      "source_systems": "Canonical master / platform reconcile | NPI Registry",
       "evidence_type": "source-backed",
       "outreach_status": "invite sent / open follow-up",
       "interest_level": "September TTTS invite - review fit",
@@ -2504,8 +2504,8 @@
       "dial_status": "",
       "meeting_status": "",
       "suppression_status": "",
-      "source_artifacts": "intelligence/prospects/2026-06-19-ttts-canonical-master-prospect-sheet.xlsx",
-      "notes": "full_list_fit_score_4; phone=not_found; canonical=net-new-canonical-append"
+      "source_artifacts": "intelligence/prospects/2026-06-19-ttts-canonical-master-prospect-sheet.xlsx | daily-public-source-contact-enrichment-2026-06-30",
+      "notes": "full_list_fit_score_4; phone=not_found; canonical=net-new-canonical-append | Daily enrichment 2026-06-30: NPI Registry returned exact organization match ALDRICH CARDIOVASCULAR INSTITUTE, Lakewood Ranch FL, phone 941-359-8900. Source: https://npiregistry.cms.hhs.gov/api/?version=2.1&organization_name=Aldrich+Cardiovascular+Institute&state=FL&limit=10"
     },
     {
       "priority": "P2",
@@ -8141,13 +8141,13 @@
       "fit_score": "",
       "city": "Sarasota",
       "state": "FL",
-      "phone": "",
-      "email": "",
+      "phone": "941-344-2082",
+      "email": "hello@wellnessrealmsrq.com",
       "website": "https://wellnessrealmsrq.com",
       "linkedin_url": "https://www.linkedin.com/in/jessica-kruse-aprn",
-      "instagram_handle": "",
+      "instagram_handle": "wellness_realm_srq",
       "source_channels": "HeyReach/LinkedIn",
-      "source_systems": "Canonical master / platform reconcile",
+      "source_systems": "Canonical master / platform reconcile | official website contact page",
       "evidence_type": "source-backed",
       "outreach_status": "CannotViewProfileDoesnotExist",
       "interest_level": "",
@@ -8165,8 +8165,8 @@
       "dial_status": "",
       "meeting_status": "",
       "suppression_status": "needs-review",
-      "source_artifacts": "intelligence/prospects/2026-06-19-ttts-canonical-master-prospect-sheet.xlsx",
-      "notes": "researcher-bot-ttts-local; lane:clinical_icp; heyreach-ready"
+      "source_artifacts": "intelligence/prospects/2026-06-19-ttts-canonical-master-prospect-sheet.xlsx | daily-public-source-contact-enrichment-2026-06-30",
+      "notes": "researcher-bot-ttts-local; lane:clinical_icp; heyreach-ready | Daily enrichment 2026-06-30: Official Wellness Realm contact page lists 941-344-2082, hello@wellnessrealmsrq.com, Sarasota address, and public Instagram wellness_realm_srq. Source: https://wellnessrealmsrq.com/contact/"
     },
     {
       "priority": "P2",
@@ -8178,13 +8178,13 @@
       "fit_score": "",
       "city": "Sarasota",
       "state": "FL",
-      "phone": "",
-      "email": "",
+      "phone": "941-344-2082",
+      "email": "hello@wellnessrealmsrq.com",
       "website": "https://wellnessrealmsrq.com",
       "linkedin_url": "https://www.linkedin.com/in/miranda-pisinger-aprn",
-      "instagram_handle": "",
+      "instagram_handle": "wellness_realm_srq",
       "source_channels": "HeyReach/LinkedIn",
-      "source_systems": "Canonical master / platform reconcile",
+      "source_systems": "Canonical master / platform reconcile | official website contact page",
       "evidence_type": "source-backed",
       "outreach_status": "CannotViewProfileDoesnotExist",
       "interest_level": "",
@@ -8202,8 +8202,8 @@
       "dial_status": "",
       "meeting_status": "",
       "suppression_status": "needs-review",
-      "source_artifacts": "intelligence/prospects/2026-06-19-ttts-canonical-master-prospect-sheet.xlsx",
-      "notes": "researcher-bot-ttts-local; lane:clinical_icp; heyreach-ready"
+      "source_artifacts": "intelligence/prospects/2026-06-19-ttts-canonical-master-prospect-sheet.xlsx | daily-public-source-contact-enrichment-2026-06-30",
+      "notes": "researcher-bot-ttts-local; lane:clinical_icp; heyreach-ready | Daily enrichment 2026-06-30: Official Wellness Realm contact page lists 941-344-2082, hello@wellnessrealmsrq.com, Sarasota address, and public Instagram wellness_realm_srq. Source: https://wellnessrealmsrq.com/contact/"
     },
     {
       "priority": "P4-199",
