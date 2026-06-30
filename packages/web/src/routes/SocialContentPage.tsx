@@ -31,6 +31,13 @@ interface CampaignPillar {
   surface: string;
 }
 
+interface EmptySequenceGuidance {
+  headline: string;
+  body: string;
+  vaultPath: string;
+  badge: string;
+}
+
 const CAMPAIGN_PILLARS: CampaignPillar[] = [
   {
     num: 1,
@@ -65,10 +72,21 @@ const COMPLIANCE_GATES = [
   'Medical-adjacent: no FDA disease claims on BRT content. No specific medical advice. Composite cases labeled.',
 ];
 
-/**
- * Real active sequences per brand, sourced from the vault.
- * Metrics live behind the "needs API wiring" banner until Apollo is connected.
- */
+const EMPTY_SEQUENCE_GUIDANCE: Record<string, EmptySequenceGuidance> = {
+  ihht: {
+    headline: 'IHHT outbound is in build, not missing.',
+    body: 'Clinical evidence is shipped; the current blocker is the demo script plus IHHT-led Apollo sequence for cardiac rehab, performance, and longevity clinics.',
+    vaultPath: 'businesses/pmc/iht/clinical-evidence-one-pager.md',
+    badge: 'asset ready · sequence pending',
+  },
+  qep: {
+    headline: 'QEP is deliberately held out of outbound.',
+    body: 'Current motion stays Fountain-only until Jason and Blake confirm scope, commercial structure, and white-label permissions. Do not create a QEP-named Apollo sequence yet.',
+    vaultPath: 'businesses/pmc/qep/overview.md#open-questions',
+    badge: 'blocked on Blake/Jason decisions',
+  },
+};
+
 const ACTIVE_SEQUENCES: Record<string, ActiveSequence[]> = {
   pmc: [
     {
@@ -202,6 +220,7 @@ export function SocialContentPage(): React.ReactElement {
   const [activeSlug, setActiveSlug] = useState<string>(BRANDS[0].slug);
   const activeBrand = BRANDS.find(b => b.slug === activeSlug) ?? BRANDS[0];
   const sequences = ACTIVE_SEQUENCES[activeSlug] ?? [];
+  const emptyGuidance = EMPTY_SEQUENCE_GUIDANCE[activeSlug];
 
   return (
     <div className="flex flex-1 flex-col gap-6 p-6">
@@ -383,20 +402,40 @@ export function SocialContentPage(): React.ReactElement {
         </div>
         {sequences.length === 0 ? (
           <div className="rounded-md border border-dashed border-border bg-surface-elevated p-6 text-center">
-            <p className="text-sm text-text-secondary">
-              No active sequences for {activeBrand.label} yet.
-            </p>
-            <p className="mt-1 text-xs text-text-tertiary">
-              When a sequence launches in Apollo, prefix the name with{' '}
-              <code className="rounded bg-surface-inset px-1 py-0.5 font-mono text-text-primary">
-                [{activeBrand.apolloPrefix}]
-              </code>{' '}
-              and add a vault doc under{' '}
-              <code className="rounded bg-surface-inset px-1 py-0.5 font-mono text-text-primary">
-                businesses/pmc/{activeBrand.slug}/
-              </code>
-              .
-            </p>
+            {emptyGuidance ? (
+              <>
+                <span className="mb-3 inline-flex rounded-full border border-amber-700/40 bg-amber-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-amber-800">
+                  {emptyGuidance.badge}
+                </span>
+                <p className="text-sm font-semibold text-text-primary">{emptyGuidance.headline}</p>
+                <p className="mx-auto mt-1 max-w-2xl text-xs text-text-secondary">
+                  {emptyGuidance.body}
+                </p>
+                <p className="mt-3 text-[11px] font-mono text-text-tertiary">
+                  <span className="text-text-tertiary">Vault:</span>{' '}
+                  <code className="rounded bg-surface-inset px-1 py-0.5">
+                    {emptyGuidance.vaultPath}
+                  </code>
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-sm text-text-secondary">
+                  No active sequences for {activeBrand.label} yet.
+                </p>
+                <p className="mt-1 text-xs text-text-tertiary">
+                  When a sequence launches in Apollo, prefix the name with{' '}
+                  <code className="rounded bg-surface-inset px-1 py-0.5 font-mono text-text-primary">
+                    [{activeBrand.apolloPrefix}]
+                  </code>{' '}
+                  and add a vault doc under{' '}
+                  <code className="rounded bg-surface-inset px-1 py-0.5 font-mono text-text-primary">
+                    businesses/pmc/{activeBrand.slug}/
+                  </code>
+                  .
+                </p>
+              </>
+            )}
           </div>
         ) : (
           <div className="grid gap-3">
