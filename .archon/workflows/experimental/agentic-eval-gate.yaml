@@ -118,12 +118,12 @@ nodes:
         have() { grep -q "\"$1\"" package.json; }
         runner=npm; command -v bun >/dev/null 2>&1 && runner=bun
 
-        if have '"type-check"'; then
+        if have 'type-check'; then
           echo "=== type-check ==="
           if $runner run type-check >/tmp/tc.log 2>&1; then TYPECHECK=pass; else TYPECHECK=fail; fi
           tail -30 /tmp/tc.log
         fi
-        if have '"lint"'; then
+        if have 'lint'; then
           echo "=== lint ==="
           if $runner run lint >/tmp/lint.log 2>&1; then LINT=pass; else LINT=fail; fi
           tail -30 /tmp/lint.log
