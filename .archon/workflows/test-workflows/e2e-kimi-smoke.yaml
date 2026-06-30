@@ -1,0 +1,131 @@
+# E2E smoke test — Kimi (kimi-for-coding) via the Pi community provider
+# Verifies: Pi can resolve and call Kimi using the user's local credentials
+#   (api_key entry in ~/.pi/agent/auth.json, connected via `pi /login` →
+#   "Kimi For Coding", or `archon ai key set kimi-coding`).
+# Design: mirrors e2e-minimax-smoke.yaml / e2e-pi-smoke.yaml structure. Three nodes
+#   verify (1) the model responds at all, (2) it can self-identify, (3) it can
+#   produce parseable JSON via output_format (best-effort on Pi). The final bash
+#   node fails fast if any signal is missing.
+# Auth: requires a `kimi-coding` entry in ~/.pi/agent/auth.json. No env vars —
+#   do NOT set KIMI_API_KEY in ~/.archon/.env (Archon force-injects it over the
+#   Pi auth store, so a stale value there yields a 401 even when login is valid).
+name: e2e-kimi-smoke
+description: |
+  Use when: Verifying that Kimi (kimi-for-coding) loads via the Pi provider with the
+            user's local Pi auth (api_key in ~/.pi/agent/auth.json).
+  Triggers: "kimi smoke", "test kimi", "verify kimi", "kimi test".
+  Does: Sends three tiny prompts to Kimi (math, self-identification, structured JSON),
+        asserts non-empty output and basic plausibility.
+  NOT for: Production work — connectivity / capability sanity check only.
+
+provider: pi
+model: kimi-coding/kimi-for-coding
+
+worktree:
+  enabled: false # Smoke test — no need to isolate
+
+nodes:
+  # 1. Connectivity — does Pi resolve the model and stream a response?
+  - id: hello
+    prompt: 'What is 2+2? Answer with just the number, nothing else.'
+    allowed_tools: []
+    effort: low
+    idle_timeout: 60000
+
+  # 2. Self-identification — INFORMATIONAL ONLY. Do not assert on the result.
+  #    LLMs are unreliable narrators about their own identity, and Pi's system
+  #    prompt mentions OpenAI-codex defaults, which causes many models to
+  #    pattern-match and claim that identity. The real proof of routing is in
+  #    Pi's session jsonl (provider=kimi-coding, real billing).
+  - id: identify
+    prompt: 'Without using any tools, on a single short line, tell me which model and provider you are.'
+    allowed_tools: []
+    idle_timeout: 60000
+    depends_on: [hello]
+
+  # 3. Structured output — exercises Pi's best-effort output_format path
+  #    (schema appended to prompt + JSON extracted from result text).
+  - id: json
+    prompt: |
+      Return a JSON object with two fields, no fences and no prose:
+        - "name":     your model name (string)
+        - "ok":       always true (boolean)
+    allowed_tools: []
+    idle_timeout: 60000
+    depends_on: [hello]
+    output_format:
+      type: object
+      properties:
+        name:
+          type: string
+        ok:
+          type: boolean
+      required: [name, ok]
+
+  # 4. Assertions — fail loudly if any node returned empty / unparseable.
+  - id: assert
+    depends_on: [hello, identify, json]
+    bash: |
+      math="$hello.output"
+      ident="$identify.output"
+      jname="$json.output.name"
+      jok="$json.output.ok"
+
+      echo "── results ──"
+      echo "math      = $math"
+      echo "identify  = $ident"
+      echo "json.name = $jname"
+      echo "json.ok   = $jok"
+      echo "──────────────"
+
+      if [ -z "$math" ] || [ -z "$ident" ]; then
+        echo "FAIL: empty output from hello or identify node"
+        exit 1
+      fi
+      if [ -z "$jname" ] || [ -z "$jok" ]; then
+        echo "FAIL: structured-output fields missing — Pi best-effort JSON parse failed"
+        exit 1
+      fi
+
+      # Real proof of routing: Pi writes a session jsonl per call. Find ALL
+      # session jsonls modified in the last 10 minutes (generous window —
+      # smoke's three Pi nodes + assert can collectively take several
+      # minutes on a slow network; capped at 10 to avoid matching old runs).
+      # Check each for the kimi routing signal — any one matching is
+      # sufficient evidence. This avoids:
+      #   - brittle path-encoding assumptions about Pi's per-cwd session dir,
+      #   - non-deterministic `head -1` over `find` output (find doesn't
+      #     guarantee any order),
+      #   - JSON field-order brittleness in a single combined regex
+      #     (`provider` may appear before or after `modelId` in the jsonl).
+      # NOTE: if this FAILs while the nodes clearly ran on Kimi, confirm the
+      # exact `provider`/`modelId` strings Pi writes for kimi-coding in a real
+      # session jsonl and adjust the two greps below to match.
+      recent_sessions=$(find "$HOME/.pi/agent/sessions" -name '*.jsonl' -mmin -10 -print 2>/dev/null)
+      if [ -z "$recent_sessions" ]; then
+        echo "FAIL: no Pi session jsonl modified in the last 10 minutes"
+        exit 1
+      fi
+
+      matched=""
+      while IFS= read -r session; do
+        # Two separate greps for order-independence — JSON field ordering
+        # isn't part of Pi's contract, so a single regex with `.*` between
+        # the two fields would silently false-FAIL if Pi ever reorders.
+        if grep -q '"provider":"kimi-coding"' "$session" \
+           && grep -q '"modelId":"kimi-for-coding"' "$session"; then
+          matched="$session"
+          break
+        fi
+      done <<< "$recent_sessions"
+
+      if [ -n "$matched" ]; then
+        echo "PASS: Pi session log confirms provider=kimi-coding, modelId=kimi-for-coding"
+        echo "      session: $matched"
+      else
+        echo "FAIL: no recent Pi session log confirmed kimi routing — possible misroute"
+        echo "      checked sessions:"
+        echo "$recent_sessions" | sed 's/^/        /'
+        exit 1
+      fi
+      echo "PASS: smoke complete"

@@ -1,0 +1,264 @@
+name: agentic-eval-gate
+description: |
+  EXPERIMENTAL: Verification gate from the "New SDLC with vibe coding" whitepaper
+  (Osmani/Saboo/Kartakis). Embodies its core discipline — "set the bar at the eval,
+  not the demo" — by judging the CURRENT diff two ways the paper distinguishes:
+
+    1. OUTPUT eval     — is the final result correct vs the spec / "done means"?
+    2. TRAJECTORY eval — was the path sound? Were required checks (tests, lint,
+                         type-check, error handling, security) ACTUALLY run, or
+                         skipped while still looking correct?
+
+  Key principle: the gate RUNS the checks itself rather than trusting the
+  implementer's summary. A change can pass the output eval and still FAIL the gate
+  if the trajectory skipped a required verification step.
+
+  Read-only: it never edits files. Run it standalone before merging, or after a build
+  workflow (e.g. opus-plan-kimi-build) so every build has to clear the bar before it
+  ships.
+
+  Usage: pass the task / acceptance criteria as the run message ($ARGUMENTS). With
+  no message it falls back to evaluating the diff against its own apparent intent.
+
+  Model routing (the paper's "routing as a financial lever"): bash nodes use no
+  model; the two evals use the `medium` tier (reasoning); the merge uses `small`.
+
+tags: [eval, verification, gate, agentic-engineering, sdlc]
+provider: claude
+mutates_checkout: false
+# Evaluate the operator's ACTUAL working tree, not an empty isolated worktree.
+worktree:
+  enabled: false
+
+nodes:
+  # ─── 1. DIFF (deterministic, no AI) ───────────────────────────────────
+  # Robust diff that survives Windows worktrees and fresh single-commit checkouts.
+  # (Same hardened logic proven in cross-model-code-review.)
+  - id: get-diff
+    bash: |
+      if [ -f .git ]; then
+        gitdir=$(sed -n 's/^gitdir: //p' .git)
+        if command -v cygpath >/dev/null 2>&1; then
+          export GIT_DIR=$(cygpath -u "$gitdir")
+        else
+          export GIT_DIR=$(echo "$gitdir" | sed 's|^\([A-Za-z]\):|/\L\1|; s|\\|/|g')
+        fi
+      fi
+
+      echo "=== BRANCH ==="
+      git branch --show-current
+
+      # Resolve base in-shell only. We deliberately do NOT use Archon's magic
+      # base-branch variable (its token, even inside a comment, forces eager base
+      # resolution before the node runs and hard-fails on repos with no `origin`,
+      # e.g. a local-only checkout). Optional plain override: EVAL_BASE. Otherwise
+      # origin/HEAD, else main. base-mode is only reached when the tree is clean
+      # anyway, so a missing base never blocks the gate.
+      BASE="${EVAL_BASE:-}"
+      [ -z "$BASE" ] && BASE=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
+      case "$BASE" in ""|HEAD) BASE=main ;; esac
+      echo "=== BASE ==="
+      echo "base = $BASE"
+
+      STATUS_PORC="$(git status --porcelain)"
+      HAS_PARENT="$(git rev-parse --verify --quiet HEAD~1 || true)"
+      EMPTY_TREE="$(git hash-object -t tree /dev/null)"
+      if [ -n "$STATUS_PORC" ]; then
+        MODE=worktree; LABEL="(uncommitted working-tree changes vs HEAD)"
+      elif git rev-parse --verify --quiet "origin/$BASE" >/dev/null && [ -n "$(git log --oneline "origin/$BASE..HEAD" 2>/dev/null)" ]; then
+        MODE=base; LABEL="(this branch vs origin/$BASE)"
+      elif [ -n "$HAS_PARENT" ]; then
+        MODE=last; LABEL="(fallback: last commit)"
+      else
+        MODE=root; LABEL="(root commit: full initial tree vs empty tree)"
+      fi
+
+      run_diff() {
+        case "$MODE" in
+          worktree) git diff "$@" HEAD ;;
+          base)     git diff "$@" "origin/$BASE...HEAD" ;;
+          last)     git diff "$@" HEAD~1..HEAD ;;
+          root)     git diff "$@" "$EMPTY_TREE" HEAD ;;
+        esac
+      }
+
+      echo "=== DIFF ==="
+      echo "$LABEL"
+      DIFF_OUT="$(run_diff)"
+      if [ -n "$DIFF_OUT" ]; then
+        echo "$DIFF_OUT"
+      else
+        echo "NO CHANGES DETECTED - working tree clean and nothing to compare against."
+        echo "Evaluators: state there is nothing to evaluate; do not invent findings."
+      fi
+      echo "=== CHANGED FILES ==="
+      run_diff --name-only
+
+  # ─── 2. RUN CHECKS (deterministic trajectory signal, no AI) ───────────
+  # "Run the eval, don't trust the demo." Executes only FAST, SAFE gates that
+  # actually exist (type-check, lint). Deliberately does NOT run the full test
+  # suite (slow; and on this repo the root `bun test` is forbidden — see
+  # CLAUDE.md) — it REPORTS that gap so the trajectory eval can weigh it.
+  # Always exits 0: it records results for the gate to judge, it is not the gate.
+  - id: run-checks
+    depends_on: [get-diff]
+    bash: |
+      if [ -f .git ]; then
+        gitdir=$(sed -n 's/^gitdir: //p' .git)
+        if command -v cygpath >/dev/null 2>&1; then
+          export GIT_DIR=$(cygpath -u "$gitdir")
+        else
+          export GIT_DIR=$(echo "$gitdir" | sed 's|^\([A-Za-z]\):|/\L\1|; s|\\|/|g')
+        fi
+      fi
+
+      TYPECHECK=skipped; LINT=skipped; TESTS=not-run
+
+      if [ -f package.json ]; then
+        have() { grep -q "\"$1\"" package.json; }
+        runner=npm; command -v bun >/dev/null 2>&1 && runner=bun
+
+        if have '"type-check"'; then
+          echo "=== type-check ==="
+          if $runner run type-check >/tmp/tc.log 2>&1; then TYPECHECK=pass; else TYPECHECK=fail; fi
+          tail -30 /tmp/tc.log
+        fi
+        if have '"lint"'; then
+          echo "=== lint ==="
+          if $runner run lint >/tmp/lint.log 2>&1; then LINT=pass; else LINT=fail; fi
+          tail -30 /tmp/lint.log
+        fi
+        echo "NOTE: full test/validate suite intentionally NOT run by this gate (speed + root-test safety). The trajectory eval must treat test coverage as UNVERIFIED unless the diff itself adds/updates tests."
+      else
+        echo "No package.json — no JS gates to run. Trajectory eval should rely on the diff + spec only."
+      fi
+
+      echo "=== CHECKS SUMMARY ==="
+      echo "{\"type_check\":\"$TYPECHECK\",\"lint\":\"$LINT\",\"tests\":\"$TESTS\"}"
+
+  # ─── 3. OUTPUT EVAL (reasoning) ───────────────────────────────────────
+  # "Is the final result correct?" — vs the spec's acceptance criteria.
+  - id: output-eval
+    depends_on: [get-diff]
+    model: medium
+    context: fresh
+    allowed_tools: [Read, Grep, Glob, Bash]
+    prompt: |
+      You are an OUTPUT evaluator. Decide whether the change below actually
+      satisfies its specification — not whether it looks plausible. Verify against
+      the real code: open changed files, run targeted read-only checks if useful.
+      Do NOT edit anything.
+
+      ## Spec / acceptance criteria (may be terse or empty)
+      $ARGUMENTS
+
+      ## Diff under evaluation
+      $get-diff.output
+
+      ## How to judge
+      - Derive concrete acceptance criteria from the spec. If the spec is empty,
+        infer the change's apparent intent from the diff and judge against that.
+      - For EACH criterion decide met / not-met / partial, and cite file:line
+        evidence you actually verified (not a guess).
+      - If there are no changes to evaluate, return verdict "fail" with a single
+        criterion explaining there was nothing to evaluate.
+    output_format:
+      type: object
+      properties:
+        verdict:
+          type: string
+          enum: [pass, partial, fail]
+        criteria:
+          type: array
+          items:
+            type: object
+            properties:
+              criterion: { type: string }
+              status:
+                type: string
+                enum: [met, partial, not-met]
+              evidence: { type: string }
+            required: [criterion, status]
+        summary: { type: string }
+      required: [verdict, summary]
+
+  # ─── 4. TRAJECTORY EVAL (reasoning) ───────────────────────────────────
+  # "Was the path sound?" — were required checks actually run, or skipped?
+  - id: trajectory-eval
+    depends_on: [get-diff, run-checks]
+    model: medium
+    context: fresh
+    allowed_tools: [Read, Grep, Glob, Bash]
+    prompt: |
+      You are a TRAJECTORY evaluator. A change can be correct-looking yet unsound
+      because required verification was skipped. Judge the PROCESS, not just the
+      output. Do NOT edit anything.
+
+      ## Spec (may be empty)
+      $ARGUMENTS
+
+      ## Diff
+      $get-diff.output
+
+      ## Deterministic gate results (type-check / lint actually executed by the gate)
+      $run-checks.output
+
+      ## What to flag as a skipped/unsound step
+      - New or changed behavior with NO added/updated tests (the gate did not run
+        the suite — so absence of test changes in the diff = UNVERIFIED, flag it).
+      - type-check or lint reported "fail" above.
+      - New error paths swallowed, or new external input unvalidated.
+      - Security-sensitive surface (auth, file paths, secrets, shell, SQL) touched
+        without a corresponding guard.
+      List every skipped/unsound step concretely with file:line where relevant.
+    output_format:
+      type: object
+      properties:
+        soundness:
+          type: string
+          enum: [sound, unsound]
+        skipped_checks:
+          type: array
+          items: { type: string }
+        risks:
+          type: array
+          items: { type: string }
+        summary: { type: string }
+      required: [soundness, summary]
+
+  # ─── 5. VERDICT (cheap synthesis = the gate) ──────────────────────────
+  - id: verdict
+    depends_on: [output-eval, trajectory-eval]
+    model: small
+    context: fresh
+    allowed_tools: []
+    prompt: |
+      You are the gate. Combine the two evaluations into ONE decision.
+
+      Rule: gate = PASS only if BOTH hold:
+        - output eval verdict is "pass"  (NOT partial, NOT fail), AND
+        - trajectory eval soundness is "sound".
+      Otherwise gate = FAIL. List every blocking reason. "set the bar at the
+      eval, not the demo" — when uncertain, FAIL and say what evidence is missing.
+
+      ## Output eval
+      verdict: $output-eval.output.verdict
+      $output-eval.output.summary
+
+      ## Trajectory eval
+      soundness: $trajectory-eval.output.soundness
+      $trajectory-eval.output.summary
+
+      Produce the structured gate decision and a short human-readable rationale.
+    output_format:
+      type: object
+      properties:
+        gate:
+          type: string
+          enum: [PASS, FAIL]
+        blocking:
+          type: array
+          items: { type: string }
+        recommendation: { type: string }
+        summary: { type: string }
+      required: [gate, summary]

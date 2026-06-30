@@ -1,0 +1,198 @@
+name: opus-plan-kimi-build
+description: |
+  EXPERIMENTAL (cross-model): Build loop on the PIV pattern (Plan → Implement →
+  Validate). Claude Opus does ALL the reasoning (plan, review, and the fix-plan);
+  Kimi (kimi-for-coding via the Pi provider) does ALL the code-writing. Opus never
+  edits source; Kimi never decides what to change.
+
+  Phases:
+  1. plan      (Opus)  — explore the codebase, write a concrete file-level plan. No edits.
+  2. implement (Kimi)  — apply the plan, make the actual file edits, summarize.
+  3. review    (Opus)  — Validate: read the diff, find issues by severity, AND turn the
+                         blocking ones into a concrete FIX-PLAN (re-Plan). No edits.
+  4. fix       (Kimi)  — apply Opus's fix-plan exactly (no-op if the review said "ship").
+  5. re-review (Opus)  — re-Validate: confirm each fix landed and resolved the finding;
+                         final verdict ship / needs work. No edits.
+
+  Why Opus owns the fix-plan (not Kimi auto-patching): deciding which findings are real
+  and exactly what to change is reasoning work — that's Opus's job; Kimi is the hands.
+  This closes the PIV loop (Validate → re-Plan → Implement). Single pass; if re-review
+  says "needs work", re-run the workflow. Pair with `agentic-eval-gate` as a standalone
+  pre-merge gate.
+
+  Models: the Opus nodes use the `large` tier (→ Claude Opus by default; override via
+  `tiers.large` in config). The Kimi nodes use `pi` + `kimi-coding/kimi-for-coding`.
+  Kimi has no native structured-output mode — these nodes use free-form prompts only.
+
+  Credentials: connect Kimi once with `archon ai key set kimi-coding` (or run `pi` then
+  `/login` → "Kimi For Coding" → paste your sk- key). Do NOT also set KIMI_API_KEY in
+  ~/.archon/.env — Archon force-injects that value over the Pi auth store, so a stale
+  key there yields a 401 "API Key invalid or expired" even when your login is valid.
+  Claude/Opus uses your normal Claude credentials (subscription login or ANTHROPIC_API_KEY).
+
+  Use when: a well-defined build or fix task where you want Opus planning + reviewing
+  and Kimi writing the code.
+  Triggers: "build it with kimi", "opus plan kimi build", "plan and implement with kimi".
+  NOT for: questions/exploration, pure reviews, or tasks with no concrete build target.
+
+tags: [plan, implement, review, fix, cross-model, kimi, opus, piv]
+mutates_checkout: true
+
+nodes:
+  # ─── PLAN (Opus) ──────────────────────────────────────────────────────
+  - id: plan
+    provider: claude
+    model: large
+    context: fresh
+    allowed_tools: [Read, Grep, Glob, Bash]
+    prompt: |
+      You are a senior software engineer acting as a planner. Your sole job in this
+      phase is to produce a concrete, actionable implementation plan. Do NOT edit
+      any files (you may run read-only git/grep to ground the plan).
+
+      ## Task
+
+      $ARGUMENTS
+
+      ## Instructions
+
+      1. Explore the codebase (Read, Grep, Glob, `git` read-only) to understand the
+         relevant code paths, existing patterns, and the files that must change.
+      2. Identify every file that must be created or modified.
+      3. For each change, describe exactly what to add, remove, or modify and why.
+      4. Call out edge cases, failure modes, and invariants to preserve.
+      5. Add a "Done means" section: concrete, checkable success criteria, plus the
+         build/lint/test command(s) to verify (if any exist).
+
+      Output the plan as a structured document with clear sections. Be specific —
+      exact file paths, function names, signatures. The implementer (Kimi) receives
+      ONLY this plan output, not the original task message or your exploration.
+
+  # ─── IMPLEMENT (Kimi) ─────────────────────────────────────────────────
+  - id: implement
+    depends_on: [plan]
+    provider: pi
+    model: kimi-coding/kimi-for-coding
+    context: fresh
+    allowed_tools: [Read, Write, Edit, Bash]
+    prompt: |
+      You are an expert software engineer. Implement the plan below exactly, making
+      the necessary file edits. Follow existing code style and patterns. Do not add
+      unrequested changes or refactors outside the plan's scope.
+
+      ## Implementation Plan
+
+      $plan.output
+
+      ## Instructions
+
+      1. Read any file before editing it.
+      2. Apply each change described in the plan.
+      3. Run any build/lint/test command the plan specifies, and fix what you broke.
+      4. Do NOT commit, push, or open a PR — just leave the working tree changed.
+      5. End with a short summary:
+         - Files created or modified (one per line, one-line description each)
+         - Any deviation from the plan (and why)
+         - Anything the reviewer should know
+
+  # ─── REVIEW = Validate + re-Plan (Opus) ───────────────────────────────
+  - id: review
+    depends_on: [implement]
+    provider: claude
+    model: large
+    context: fresh
+    allowed_tools: [Read, Grep, Glob, Bash]
+    prompt: |
+      You are a senior engineer doing a post-implementation review. Do NOT edit any
+      files. You produce two things: a findings list AND a concrete fix-plan that the
+      implementer (Kimi) will apply verbatim — Kimi does not decide anything, so your
+      fix-plan must be precise and self-contained.
+
+      ## Original Plan
+
+      $plan.output
+
+      ## Implementer's Summary
+
+      $implement.output
+
+      ## Instructions
+
+      1. Run `git diff` and `git status` to see exactly what changed; read the changed
+         files in context (don't trust the summary's file list — verify against git).
+      2. Check each plan item was actually implemented and is correct. Hunt for
+         correctness bugs, off-by-one, missing error handling, security issues, broken
+         invariants, regressions, and unmet "Done means" criteria. Cite file:line.
+      3. Group findings by severity: CRITICAL / HIGH / MEDIUM / LOW.
+
+      ## Output (exactly these sections)
+
+      ### Findings
+      The ranked list with file:line and a one-line description each.
+
+      ### Fix Plan
+      For every CRITICAL and HIGH finding (and any low-risk MEDIUM worth doing now),
+      write a precise, file-level instruction the implementer can apply without
+      judgment: which file, which function/line, the exact change, and why. If there
+      are NO blocking issues, write exactly: `NO FIXES NEEDED`.
+
+      ### Verdict
+      One line: `VERDICT: ship` (no blocking issues) or `VERDICT: needs work`.
+
+  # ─── FIX = re-Implement Opus's fix-plan (Kimi) ────────────────────────
+  - id: fix
+    depends_on: [review]
+    provider: pi
+    model: kimi-coding/kimi-for-coding
+    context: fresh
+    allowed_tools: [Read, Write, Edit, Bash]
+    prompt: |
+      You are the implementer (Kimi) again. Apply the reviewer's FIX PLAN below
+      exactly, with minimal-diff discipline — change ONLY what each item specifies.
+      You do not add scope or re-interpret findings; the reviewer already decided.
+
+      ## Reviewer output (findings + fix plan + verdict)
+
+      $review.output
+
+      ## Instructions
+
+      1. If the Fix Plan section is `NO FIXES NEEDED` (or the verdict is `ship` with no
+         fix items), make NO changes and say so — stop here.
+      2. Otherwise apply each fix-plan item precisely. Read each file before editing.
+      3. Re-run any build/lint/test command and confirm it passes after your edits.
+      4. Do NOT commit, push, or open a PR.
+      5. End with: which fix-plan items you applied, and any you could not (with the
+         exact blocker) — do not silently skip.
+
+  # ─── RE-REVIEW = re-Validate (Opus) ───────────────────────────────────
+  - id: re-review
+    depends_on: [fix]
+    provider: claude
+    model: large
+    context: fresh
+    allowed_tools: [Read, Grep, Glob, Bash]
+    prompt: |
+      You are the reviewer confirming the fixes. Do NOT edit any files.
+
+      ## Your earlier review (findings + fix plan)
+
+      $review.output
+
+      ## What the implementer reported doing
+
+      $fix.output
+
+      ## Instructions
+
+      1. Run `git diff` to see the FULL current state of the change.
+      2. For each item in your Fix Plan, confirm it was applied and actually resolves
+         the finding (not just superficially). Check no new bugs were introduced and
+         the original plan's "Done means" criteria now hold.
+      3. If the Fix Plan was `NO FIXES NEEDED`, just confirm the original change still
+         looks correct.
+
+      ## Output
+      A short per-item status (resolved / not resolved / new issue), then one line:
+      `VERDICT: ship` or `VERDICT: needs work` — if needs work, list exactly what
+      remains so the operator can re-run the workflow.
