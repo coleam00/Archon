@@ -5,7 +5,7 @@
  * disabled/over-quota store falls back to `undefined`, never throws (mirrors
  * `ProjectRail`'s railWidth guard).
  */
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router';
 
 const STORAGE_KEY = 'archon.console.builderProject';
@@ -34,13 +34,24 @@ export interface BuilderProjectState {
 
 export function useBuilderProject(): BuilderProjectState {
   const [searchParams] = useSearchParams();
-  const paramProject = searchParams.get('project') ?? undefined;
+  // Treat an absent OR empty `?project=` as "no selection" so a bare `project=`
+  // never shadows the persisted default.
+  const paramProject = searchParams.get('project') || undefined;
 
-  // Seed once: the deep-link param wins over the persisted default. Later URL
-  // changes are driven by `setProjectId` callers, not re-read here.
+  // Seed from the deep-link param, else the persisted default.
   const [projectId, setProjectIdState] = useState<string | undefined>(
     () => paramProject ?? readStored()
   );
+
+  // Follow later `?project=` changes while the route stays mounted (browser
+  // back/forward, or a link to another builder project). Without this the hook
+  // would keep the stale seed and `BuilderConnected`'s sync effect would push it
+  // back into the URL, fighting the navigation.
+  useEffect((): void => {
+    if (paramProject === undefined || paramProject === projectId) return;
+    setProjectIdState(paramProject);
+    writeStored(paramProject);
+  }, [paramProject, projectId]);
 
   const setProjectId = useCallback((id: string | undefined): void => {
     setProjectIdState(id);

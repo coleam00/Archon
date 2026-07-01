@@ -11,6 +11,10 @@ describe('buildWorkflowPath', () => {
   test('encodes special characters in the name', () => {
     expect(buildWorkflowPath('a b', '/repo')).toBe('/api/workflows/a%20b?cwd=%2Frepo');
   });
+
+  test('uses encodeURIComponent (not encodeURI) — a literal % is escaped', () => {
+    expect(buildWorkflowPath('50%off', '/repo')).toBe('/api/workflows/50%25off?cwd=%2Frepo');
+  });
 });
 
 describe('buildSavePath', () => {

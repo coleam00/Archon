@@ -63,8 +63,8 @@ that scaffolded this surface has been completed; ongoing work is driven by
 user feedback during dogfooding rather than a milestone roadmap. Issues and
 ideas land via the PR template's UX Journey section.
 
-In progress: the `builder/` subtree (Archon Studio workflow builder). PR-1
-ships the data layer — types, variant registry, round-trip model, validation —
-with no route mount; PR-2 adds the canvas UI; PR-3 wires connected mode
-(`/console/builder[/:name]`, project picker, load/save/rename/delete through the
-workflow API, dirty + nav guard, bundled Save-as). See `builder/README.md`.
+The `builder/` subtree (Archon Studio workflow builder): PR-1 (data layer —
+types, variant registry, round-trip model, validation) and PR-2 (the canvas UI)
+are merged; PR-3 wires connected mode (`/console/builder[/:name]`, project
+picker, load/save/rename/delete through the workflow API, dirty + nav guard,
+bundled Save-as) and is in review. See `builder/README.md`.

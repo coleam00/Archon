@@ -1,5 +1,5 @@
 import { requestJson } from '../lib/http';
-import { toWorkflow, type Workflow } from '../primitives/workflow';
+import { toWorkflow, type Workflow, type WorkflowSource } from '../primitives/workflow';
 import type { WorkflowGraphNode } from '../primitives/workflow-graph';
 import type { WireWorkflowDefinition } from '../builder/types/wire';
 
@@ -88,13 +88,17 @@ export async function getWorkflowGraph(name: string, cwd?: string): Promise<Work
 // extracted into pure builders so it can be unit-tested without `fetch`.
 // ---------------------------------------------------------------------------
 
-/** Where a loaded workflow lives. Read-only iff `source === 'bundled'`. */
-export type WorkflowSource = 'project' | 'global' | 'bundled';
+/**
+ * Where a loaded workflow lives. Read-only iff `source === 'bundled'`.
+ * Re-exported from `primitives/workflow` (single source of truth) so the union
+ * cannot silently diverge between the list primitive and the CRUD verbs.
+ */
+export type { WorkflowSource };
 
 /** Save target — bundled opens read-only, so Save-as always writes a project override. */
 export type WorkflowSaveSource = 'project' | 'global';
 
-/** `GET /api/workflows/:name` response (observed live — see plan Spike #2). */
+/** `GET /api/workflows/:name` response. */
 export interface GetWorkflowResponse {
   workflow: WireWorkflowDefinition;
   filename: string;
@@ -108,11 +112,12 @@ export interface LoadedWorkflow {
   source: WorkflowSource;
 }
 
-/** `POST /api/workflows/validate` response — HTTP 200 even when `valid` is false. */
-export interface ValidateWorkflowResponse {
-  valid: boolean;
-  errors?: string[];
-}
+/**
+ * `POST /api/workflows/validate` response — HTTP 200 even when invalid.
+ * Discriminated on `valid` so a `valid:false` body always carries the (possibly
+ * empty) `errors` field and the `valid:true` branch cannot claim errors.
+ */
+export type ValidateWorkflowResponse = { valid: true } | { valid: false; errors?: string[] };
 
 /** Build the single-name GET/PUT/DELETE path with an encoded `?cwd=` query. */
 export function buildWorkflowPath(name: string, cwd: string): string {
@@ -158,9 +163,9 @@ export async function deleteWorkflow(
 }
 
 /**
- * Server-tier validation. Spike #2: returns HTTP 200 even when invalid, so
- * `requestJson` will NOT throw — branch on `valid` and map `errors[]` into the
- * issue panel. NO `?cwd=` (validation is stateless).
+ * Server-tier validation. Returns HTTP 200 even when invalid, so `requestJson`
+ * will NOT throw — branch on `valid` and map `errors[]` into the issue panel.
+ * NO `?cwd=` (validation is stateless).
  */
 export function validateWorkflow(
   definition: WireWorkflowDefinition

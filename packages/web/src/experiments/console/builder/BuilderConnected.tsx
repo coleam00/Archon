@@ -7,7 +7,7 @@
  * a project override.
  *
  * Nav guard: the app is a non-data `<BrowserRouter>`, so `useBlocker` is
- * unavailable (Spike #1). We use `beforeunload` (reload/close) plus a
+ * unavailable. We use `beforeunload` (reload/close) plus a
  * `confirmIfDirty` wrapper around this header's OWN navigation controls. The
  * browser Back button and `ProjectRail` clicks are NOT intercepted — a known
  * limitation; a data-router migration is out of scope for PR-3.
@@ -31,12 +31,15 @@ import { makeIssue } from './validation/make-issue';
 import { useBuilderProject } from './connect/use-builder-project';
 import {
   blockingErrors,
+  clientIssue,
+  errorDetail,
+  errorToIssues,
   isReadOnlySource,
-  saveTargetFor,
-  serverErrorToIssues,
-  serverValidationToIssues,
-  planRename,
   isValidWorkflowName,
+  planRename,
+  renameReasonMessage,
+  saveTargetFor,
+  validationFailureToIssues,
 } from './connect/save-logic';
 import type { BuilderWorkflow, Issue, WireWorkflowDefinition } from './types';
 import {
@@ -44,11 +47,11 @@ import {
   saveWorkflow,
   deleteWorkflow,
   validateWorkflow,
+  listWorkflows,
   type LoadedWorkflow,
   type WorkflowSource,
 } from '../skills/workflows';
 import { listProjects, type WorkflowListResult } from '../skills';
-import { listWorkflows } from '../skills/workflows';
 import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
 import { HttpError } from '../lib/http';
@@ -63,32 +66,6 @@ interface BuilderNavState {
 }
 
 const IDLE_LIST_KEY = 'workflows:idle';
-
-/** Human-readable reason for a blocked rename. */
-function renameReasonMessage(reason: 'collision' | 'invalid-name' | 'noop', to: string): string {
-  switch (reason) {
-    case 'collision':
-      return `A workflow named "${to}" already exists in this project.`;
-    case 'invalid-name':
-      return `"${to}" is not a valid workflow name (no "/", "\\", "..", leading dot, or empty).`;
-    case 'noop':
-      return 'The new name is the same as the current one.';
-  }
-}
-
-/** Map a thrown error to panel issues: HttpError → server detail, else a fallback. */
-function errorToIssues(e: unknown, rule: string, fallback: string): Issue[] {
-  if (e instanceof HttpError) return serverErrorToIssues(e);
-  return [
-    makeIssue({
-      rule,
-      severity: 'error',
-      source: 'server',
-      message: e instanceof Error ? e.message : fallback,
-      path: {},
-    }),
-  ];
-}
 
 function EmptyState({ children }: { children: ReactNode }): ReactElement {
   return (
@@ -178,7 +155,9 @@ export function BuilderConnected(): ReactElement {
   // cache, which re-runs the loader and yields a fresh `imported` for the SAME
   // workflow; resetting on that refetch would clobber live edits and silently
   // clear `dirty` in the window between Save resolving and the refetch landing.
-  // BuilderPage is keyed by the same identity, so it remounts in lockstep.
+  // BuilderPage is keyed by the same identity, so it remounts in lockstep. When
+  // `imported` becomes null (picker view / still loading) the ref is cleared so
+  // the next load re-initializes cleanly.
   const editorKey = `${cwd ?? ''}:${name ?? ''}:${String(isCreateMode)}`;
   const initedKeyRef = useRef<string | null>(null);
   useEffect(() => {
@@ -230,8 +209,7 @@ export function BuilderConnected(): ReactElement {
     [imported, serverIssues]
   );
 
-  const pid = projectId ?? '';
-  const projectQuery = `?project=${encodeURIComponent(pid)}`;
+  const projectQuery = `?project=${encodeURIComponent(projectId ?? '')}`;
 
   // --- Save ----------------------------------------------------------------
   const doSave = useCallback(async (): Promise<void> => {
@@ -242,13 +220,10 @@ export function BuilderConnected(): ReactElement {
     const blocking = blockingErrors(runValidation(currentWorkflow));
     if (blocking.length > 0) {
       setServerIssues([
-        makeIssue({
-          rule: 'save.blocked',
-          severity: 'error',
-          source: 'client-instant',
-          message: `Cannot save: fix ${String(blocking.length)} blocking error(s) first.`,
-          path: {},
-        }),
+        clientIssue(
+          'save.blocked',
+          `Cannot save: fix ${String(blocking.length)} blocking error(s) first.`
+        ),
       ]);
       return;
     }
@@ -257,7 +232,7 @@ export function BuilderConnected(): ReactElement {
     try {
       const validation = await validateWorkflow(definition);
       if (!validation.valid) {
-        setServerIssues(serverValidationToIssues(validation.errors ?? []));
+        setServerIssues(validationFailureToIssues(validation.errors));
         return;
       }
       const saved = await saveWorkflow(name, definition, {
@@ -294,6 +269,9 @@ export function BuilderConnected(): ReactElement {
       navigate(`/console/builder${projectQuery}`);
     } catch (e) {
       setServerIssues(errorToIssues(e, 'delete.failed', 'Delete failed (unknown error).'));
+    } finally {
+      // The success path navigates away, but this route reuses one component
+      // instance across `builder` and `builder/:name`, so clear busy either way.
       setBusy(false);
     }
   }, [name, cwd, effectiveSource, navigate, projectQuery]);
@@ -306,15 +284,7 @@ export function BuilderConnected(): ReactElement {
     const to = raw.trim();
     const plan = planRename({ from: name, to, existingNames });
     if (!plan.ok) {
-      setServerIssues([
-        makeIssue({
-          rule: 'rename.blocked',
-          severity: 'error',
-          source: 'client-instant',
-          message: renameReasonMessage(plan.reason, to),
-          path: {},
-        }),
-      ]);
+      setServerIssues([clientIssue('rename.blocked', renameReasonMessage(plan.reason, to))]);
       return;
     }
 
@@ -326,7 +296,7 @@ export function BuilderConnected(): ReactElement {
       };
       const validation = await validateWorkflow(definition);
       if (!validation.valid) {
-        setServerIssues(serverValidationToIssues(validation.errors ?? []));
+        setServerIssues(validationFailureToIssues(validation.errors));
         return;
       }
       // New-then-old: the new file is authoritative even if the old delete fails.
@@ -335,13 +305,12 @@ export function BuilderConnected(): ReactElement {
       try {
         await deleteWorkflow(name, { cwd, source: saveTargetFor(effectiveSource) });
       } catch (delErr) {
-        const detail = delErr instanceof Error ? delErr.message : String(delErr);
         notices = [
           makeIssue({
             rule: 'rename.delete.failed',
             severity: 'warning',
             source: 'server',
-            message: `Renamed to "${to}", but removing the old file "${name}" failed (${detail}). Delete it manually.`,
+            message: `Renamed to "${to}", but removing the old file "${name}" failed (${errorDetail(delErr)}). Delete it manually.`,
             path: {},
           }),
         ];
@@ -367,27 +336,11 @@ export function BuilderConnected(): ReactElement {
     if (raw === null) return;
     const nm = raw.trim();
     if (!isValidWorkflowName(nm)) {
-      setServerIssues([
-        makeIssue({
-          rule: 'new.invalid-name',
-          severity: 'error',
-          source: 'client-instant',
-          message: renameReasonMessage('invalid-name', nm),
-          path: {},
-        }),
-      ]);
+      setServerIssues([clientIssue('new.invalid-name', renameReasonMessage('invalid-name', nm))]);
       return;
     }
     if (existingNames.includes(nm)) {
-      setServerIssues([
-        makeIssue({
-          rule: 'new.collision',
-          severity: 'error',
-          source: 'client-instant',
-          message: renameReasonMessage('collision', nm),
-          path: {},
-        }),
-      ]);
+      setServerIssues([clientIssue('new.collision', renameReasonMessage('collision', nm))]);
       return;
     }
     const seed: BuilderWorkflow = {
@@ -412,8 +365,15 @@ export function BuilderConnected(): ReactElement {
   const onPickProject = useCallback(
     (id: string): void => {
       confirmIfDirty(() => {
-        setProjectId(id);
-        navigate(`/console/builder?project=${encodeURIComponent(id)}`);
+        // The "Select a project…" option has value ""; normalize it to the
+        // hook's no-selection contract (`undefined`) and omit `?project=`.
+        const next = id === '' ? undefined : id;
+        setProjectId(next);
+        navigate(
+          next === undefined
+            ? '/console/builder'
+            : `/console/builder?project=${encodeURIComponent(next)}`
+        );
       });
     },
     [confirmIfDirty, setProjectId, navigate]
@@ -429,9 +389,9 @@ export function BuilderConnected(): ReactElement {
     [confirmIfDirty, navigate, projectQuery, name]
   );
 
-  // Ensure the currently-open name is selectable even if not in the list (e.g. a
-  // bundled workflow opened by direct GET that the list also surfaces, or a
-  // subfoldered one). Dedupe.
+  // Ensure the currently-open name is selectable even when it isn't in the list
+  // yet — e.g. a create-mode name (no file on disk), or before the list fetch
+  // resolves. Dedupe.
   const openOptions = useMemo(() => {
     const names = new Set(existingNames);
     if (name !== undefined) names.add(name);
@@ -441,7 +401,12 @@ export function BuilderConnected(): ReactElement {
   const saveLabel = readOnly ? 'Save as' : 'Save';
   const canSave = !busy && (readOnly || dirty || isCreateMode);
   const workflowOpen = name !== undefined && imported !== null;
-  const notFound = name !== undefined && !isCreateMode && loadView.error !== undefined;
+  // Split a genuine 404 (workflow doesn't exist → offer New) from other load
+  // failures (500/403/network) — the latter must NOT masquerade as "not found",
+  // which would mislead and invite a duplicate via "Create a new workflow".
+  const loadError = name !== undefined && !isCreateMode ? loadView.error : undefined;
+  const notFound = loadError instanceof HttpError && loadError.status === 404;
+  const workflowLoadError = loadError !== undefined && !notFound ? loadError : undefined;
   // Surface list-load failures instead of masking them as empty states — a
   // transient backend error otherwise reads as "no projects / no workflows".
   const listFetchError = projectsView.error ?? listView.error;
@@ -575,6 +540,16 @@ export function BuilderConnected(): ReactElement {
             Select a project to load its workflows. Workflows are discovered and saved per project
             (the project's <span className="font-mono">cwd</span>).
           </EmptyState>
+        ) : workflowLoadError !== undefined ? (
+          <EmptyState>
+            <p>
+              Failed to load <span className="font-mono">{name}</span>:{' '}
+              {errorDetail(workflowLoadError)}
+            </p>
+            <p className="mt-2">
+              The workflow may still exist — retry once the server is reachable.
+            </p>
+          </EmptyState>
         ) : notFound ? (
           <EmptyState>
             <p>
@@ -617,7 +592,7 @@ export function BuilderConnected(): ReactElement {
           )
         ) : imported !== null && currentWorkflow !== null ? (
           <BuilderPage
-            key={`${cwd ?? ''}:${name}:${String(isCreateMode)}`}
+            key={editorKey}
             initialWorkflow={imported.workflow}
             onChange={handleChange}
             extraIssues={extraIssues}

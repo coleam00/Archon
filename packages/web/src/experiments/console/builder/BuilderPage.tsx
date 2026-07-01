@@ -53,7 +53,7 @@ interface BuilderPageProps {
    * panel alongside the debounced `runValidation` output and deduped by id, so a
    * re-validation never clobbers a server/import issue.
    */
-  extraIssues?: Issue[];
+  extraIssues?: readonly Issue[];
 }
 
 const VALIDATION_DEBOUNCE_MS = 300;

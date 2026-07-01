@@ -17,8 +17,10 @@ export const SSE_BASE_URL = import.meta.env.DEV
 export class HttpError extends Error {
   readonly status: number;
   readonly path: string;
-  /** The (≤200-char truncated) server error body — apiError's JSON `{error, detail?}`,
-   *  possibly cut off. Consumers must guard `JSON.parse` and fall back to the raw text. */
+  /** The server error body — apiError's JSON `{error, detail?}`, capped at 200
+   *  chars of content with a `...` suffix appended when cut off (so up to ~203
+   *  chars, possibly mid-JSON). Consumers must guard `JSON.parse` and fall back
+   *  to the raw text. */
   readonly bodySnippet: string;
   constructor(status: number, path: string, bodySnippet: string) {
     super(`API error ${status.toString()} (${path}): ${bodySnippet}`);

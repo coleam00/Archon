@@ -8,7 +8,7 @@ The in-console workflow builder. Ported from the standalone
   builder can't represent — `loop`, `approval`, `cancel`, `script` — plus the
   three existing kinds (`prompt`, `bash`, `command`), round-trippable with
   pure-function validation and typed fixtures.
-- **PR-2 (this layer): the visual editor.** React-Flow canvas, custom node
+- **PR-2 (merged): the visual editor.** React-Flow canvas, custom node
   rendering, palette, inspector (with `when:` builder), validation panel,
   read-only syntax-highlighted YAML preview (reusing the console's existing
   `react-markdown` + `rehype-highlight` stack — no new highlighting dep), and
