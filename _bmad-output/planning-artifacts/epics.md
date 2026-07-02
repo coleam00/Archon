@@ -1,288 +1,328 @@
 ---
-title: Archon Epics Handoff - Hermes Agent Workflow Commander
+title: Archon Epics Handoff - BMAD TEA V2 Workflow Orchestration
 status: handoff
-created: '2026-07-02'
-updated: '2026-07-02'
-storyOwnershipNote: >
-  Story numbering is kept identical to the parent workspace's epics.md (Epic 3) so
-  cross-references between Archon, hermes-agent, and the parent stay unambiguous.
-  This file contains ONLY Archon-owned stories. Parent Epic 1 (contract fixtures and
-  handoff generation) is parent-workspace work, not something Archon implements.
+created: "2026-06-30"
+updated: "2026-06-30"
+source_parent_epics: ../../../_bmad-output/planning-artifacts/epics-bmad-tea-workflow-orchestration-2026-06-29/epics.md
 ---
 
-# Archon Epics: Hermes Agent Workflow Commander
+# Archon Epics: BMAD TEA V2 Workflow Orchestration
 
 ## Overview
 
-This file contains the Archon-owned subset of the parent Hermes Agent Workflow Commander epics (all from parent Epic 3: "Workflow Provider Control And Event Delivery"). It excludes all hermes-agent-owned work. Cross-project dependencies on hermes-agent are recorded explicitly per story.
+This file contains the Archon-owned subset of the parent BMAD TEA v2 workflow orchestration epics.
+It is local planning input for implementation inside `archon`.
+It excludes BMAD-METHOD and BMAD-TEA implementation work except where dependency notes are required.
+No Archon story may require traversal out of `archon` to read parent workspace planning files during implementation.
 
-**Blocked dependency (all stories below):** every story references shared contract fixtures (workflow command envelope, workflow event envelope, workflow provider binding schema) from parent Stories 1.3a/1.3b/1.3c. As of this handoff (2026-07-02), those fixtures do not exist yet — only a README placeholder exists at `_bmad-output/planning-artifacts/contracts/workflow-commander/` in the parent workspace. No story below should move to implementation-ready until those fixtures exist here or are regenerated into this local handoff.
+## Epic A1: Safe V2 Workflow Entrypoint
 
-## Archon-Owned Stories (7 of 35 parent stories)
+Archon can expose a separate v2 workflow without changing the current baseline workflow.
 
-### Story 3.1: Implement Archon Workflow Provider Binding Lifecycle
+### Story A1.1: Add Versioned V2 Workflow Baseline
 
-As an implementation coordinator,
-I want Archon to manage provider-neutral reverse event bindings with provider and name identity,
-So that external controllers can receive workflow events without Hermes-specific Archon commands or model names.
+As an Archon workflow maintainer,
+I want a separate v2 BMAD implementation workflow,
+So that the operator can validate the redesigned orchestration without changing the current baseline workflow.
 
-**Requirements Covered:** FR-7.
+**Requirements Covered:** A-FR-1.
 
-**Implementation Scope:** Archon-owned reverse workflow event binding persistence, lifecycle commands, status JSON, and diagnostics for provider `archon`.
-
-Depends on: shared Workflow Provider Binding payload schema, generic `provider`/`name` vocabulary, event route field, binding status result shape, malformed JSON failure shape (from parent Story 1.3a — blocked, see above).
-Contract needed: Workflow Provider Binding payload schema.
-Blocking behavior: Cannot be marked complete until shared Workflow Provider Binding examples and status result fixtures exist locally.
-Integration validation: Validates create, rotate, disable, status, stale, disabled, rotated, missing, and conflicting provider binding fixtures without introducing Hermes-specific fields.
-
-**Acceptance Criteria:**
-
-**Given** Archon stores a workflow provider binding
-**When** the binding is created or updated
-**Then** Archon persists the controller by project or codebase reference plus generic `provider` and `name`
-**And** the record includes the workflow event route or target reference required for event delivery.
-
-**Given** a workflow provider binding is inspected
-**When** Archon returns status JSON
-**Then** the response can represent missing, valid, stale, disabled, rotated, and conflicting states
-**And** the response uses the shared status result shape from the contract fixtures.
-
-**Given** a workflow provider binding needs rotation, removal, or disabling
-**When** Archon performs the lifecycle action
-**Then** Archon returns parseable CLI JSON with correlation id, actor when available, timestamp, resulting binding state, and machine-readable error shape when failed
-**And** Archon does not expose Hermes-specific command names or fields.
-
-**Given** a provider binding command receives malformed input or cannot produce valid JSON
-**When** the command fails
-**Then** Archon returns a machine-readable failure envelope
-**And** downstream consumers can fail closed without inspecting human-readable text.
-
-**Depends on hermes-agent:** none directly — this is the producer-side foundation `hermes-agent` Story 3.2 consumes.
-Contract needed: Workflow Provider Binding payload schema and status result shape (this story's own output).
-Blocking behavior: `hermes-agent` Story 3.2 cannot register/diagnose bindings until this story's CLI surface exists.
-Integration validation: Both sides validate against the same shared Workflow Provider Binding fixture.
-
----
-
-### Story 3.3a: Define Shared Workflow Provider Command Envelope
-
-As an implementation coordinator,
-I want workflow provider commands to share one versioned result envelope,
-So that external controllers can fail closed and validate command output consistently.
-
-**Requirements Covered:** FR-8.
-
-**Implementation Scope:** Provider-neutral command result envelope, schema version, success flag, correlation id, workflow run reference, binding reference when applicable, machine-readable result payload, machine-readable error shape, timeout classification, and schema mismatch classification. Provider `archon` implements the first adapter-specific CLI mapping.
-
-Depends on: shared envelope schema (parent Story 1.3a — blocked, see above).
-Contract needed: Shared workflow command success envelope, error envelope, timeout representation, schema mismatch representation, workflow run reference, binding reference, and correlation id.
-Blocking behavior: Provider command-family stories cannot be marked complete until they use the shared envelope and return parseable JSON for success and failure.
-Integration validation: Validates shared envelope fixtures for success, failure, timeout, malformed request, schema mismatch, and unexpected state without introducing Hermes-specific command names.
+Depends on: none.
+Contract needed: Archon workflow YAML schema and bundled-default registry contract.
+Blocking behavior: No downstream v2 workflow story can complete until the v2 workflow exists and the original workflow is verified unchanged.
+Integration validation: Archon workflow validation proves the source workflow and bundled default are consistent.
 
 **Acceptance Criteria:**
 
-**Given** any workflow control command returns a success result
-**When** Archon serializes the response
-**Then** the result includes schema version, success flag, correlation id, workflow run reference when applicable, binding reference when applicable, and machine-readable result payload.
+**Given** `bmad-dev-story-with-tea-fix-loop.yml` exists
+**When** the v2 workflow is added
+**Then** `bmad-dev-story-with-tea-fix-loop.yml` remains unchanged
+**And** `bmad-dev-story-with-tea-fix-loop-v2.yml` exists as the redesign surface.
 
-**Given** any workflow control command returns a failure result
-**When** Archon serializes the response
-**Then** the result includes schema version, success flag, correlation id if available, machine-readable error code, diagnostic category, and machine-readable details.
+**Given** Archon loads default workflow definitions
+**When** the v2 workflow is registered or bundled
+**Then** the v2 workflow is discoverable through the same default workflow path as other bundled workflows
+**And** source and bundled defaults stay consistent.
 
-**Given** an external controller consumes a workflow control result
-**When** malformed JSON, schema mismatch, timeout, unexpected exit code, or unexpected state occurs
-**Then** the shared envelope lets the controller fail closed without relying on human-readable output.
+### Story A1.2: Preserve Story Input Resolution
 
----
+As an Archon workflow maintainer,
+I want v2 to accept the same `$ARGUMENTS` story input as the current workflow,
+So that operators can run v2 against existing BMAD stories without changing create-story behavior.
 
-### Story 3.3b: Provide Archon Start And Status CLI JSON
+**Requirements Covered:** A-FR-1.
 
-As an implementation coordinator,
-I want provider `archon` to expose workflow start and status through parseable CLI JSON,
-So that external controllers can create and inspect workflow references without using the Archon dashboard.
-
-**Requirements Covered:** FR-8.
-
-**Implementation Scope:** Provider `archon` workflow start and status commands using the shared envelope from Story 3.3a.
-
-Depends on: Story 3.3a (this file).
-Contract needed: Workflow command start, status, timeout, success, and error envelope schemas.
-Blocking behavior: Cannot be marked complete until both commands use the shared envelope and match shared fixtures.
-Integration validation: Validates start and status fixtures for success, failure, timeout, malformed request, and unexpected state without introducing Hermes-specific command names.
+Depends on: Story A1.1.
+Contract needed: `$ARGUMENTS` story reference and normalized `story_ref`.
+Blocking behavior: Quality gate stories cannot complete until each node can preserve or validate the same `story_ref`.
+Integration validation: A validation fixture proves invalid, missing, ambiguous, and mismatched story input produce `ERROR`.
 
 **Acceptance Criteria:**
 
-**Given** a workflow run can be started from Archon CLI
-**When** Archon starts the run
-**Then** Archon returns parseable JSON with schema version, success flag, correlation id, workflow run reference, binding reference when applicable, and machine-readable result payload
-**And** the command accepts the project cwd or codebase reference needed by the controller contract.
+**Given** the operator invokes v2 with `$ARGUMENTS`
+**When** the workflow starts
+**Then** the workflow preserves `$ARGUMENTS` as the input contract
+**And** no change is required to `bmad-create-story-with-tea`.
 
-**Given** a workflow run is inspected from Archon CLI
-**When** Archon returns status
-**Then** the result includes run state, workflow name, workflow run reference, correlation id when available, and machine-readable error shape when failed
-**And** the result matches the shared status fixture.
+**Given** downstream route-facing contracts are emitted
+**When** story identity is validated
+**Then** every contract uses the same `story_ref`
+**And** mismatch produces `ERROR`.
 
-**Given** a start or status command fails
-**When** Archon returns the failure
-**Then** the response includes schema version, success flag, correlation id if available, machine-readable error code, and diagnostic category
-**And** consumers can fail closed on malformed JSON, schema mismatch, timeout, or unexpected exit code.
+## Epic A2: Core BMAD And TEA Quality Pipeline
 
-**Depends on hermes-agent:** none directly — `hermes-agent` Story 3.4a consumes this.
-Contract needed: start/status envelope shape (this story's own output).
-Blocking behavior: `hermes-agent` Story 3.4a cannot start/inspect provider runs until this exists.
-Integration validation: Both sides validate against the same shared start/status fixtures.
+Archon can run the core `DS -> TA -> CR` pipeline and consume BMAD-owned quality contracts.
 
----
+### Story A2.1: Wire DS TA CR Sequence
 
-### Story 3.3c: Provide Archon Provider Decision Command CLI JSON
+As an Archon workflow maintainer,
+I want v2 to run development, test automation, and BMAD-native code review in sequence,
+So that the workflow reaches a structured quality decision point.
 
-As an implementation coordinator,
-I want provider `archon` to expose approve and reject through parseable CLI JSON,
-So that human gate decisions can be sent through external controllers without relying on human-readable output.
+**Requirements Covered:** A-FR-2.
 
-**Requirements Covered:** FR-8, FR-14.
-
-**Implementation Scope:** Provider `archon` approve and reject commands using the shared envelope from Story 3.3a.
-
-Depends on: Story 3.3a, Story 3.3b (this file).
-Contract needed: Workflow command approve, reject, timeout, success, and error envelope schemas.
-Blocking behavior: Cannot be marked complete until approve and reject commands use the shared envelope and keep command results distinct from human gate decisions.
-Integration validation: Validates approve and reject fixtures for success, failure, timeout, malformed request, and unexpected state without introducing Hermes-specific command names.
+Depends on: Story A1.2, BMAD-METHOD Story M1.1, and BMAD-TEA Story T1.1.
+Contract needed: `code-review-auto.gate.json` and test automation evidence pointer.
+Blocking behavior: This story cannot complete until BMAD-METHOD exposes `bmad-code-review-auto` and BMAD-TEA exposes automation evidence usable by `gate-planner`.
+Integration validation: A fixture run proves `dev-story`, `tea-automate`, and `code-review-auto` share the same `story_ref`.
 
 **Acceptance Criteria:**
 
-**Given** a workflow run accepts an approval or rejection
-**When** Archon performs the action
-**Then** Archon returns parseable JSON for the action result
-**And** the result can be consumed without relying on human-readable output.
+**Given** v2 runs the core pipeline
+**When** the pipeline reaches `code-review-auto`
+**Then** Archon invokes BMAD-METHOD `bmad-code-review-auto`
+**And** downstream routing reads the emitted JSON contract.
 
-**Given** an approve or reject command fails
-**When** Archon returns the failure
-**Then** the response uses the shared workflow command envelope
-**And** consumers can fail closed on malformed JSON, schema mismatch, timeout, unexpected state, or unexpected exit code.
+**Given** `dev-story`, `tea-automate`, or `code-review-auto` fails with execution or contract errors
+**When** the workflow evaluates the failure
+**Then** the result is `ERROR`
+**And** it does not route back to `dev-story` as ordinary quality work.
 
-**Depends on hermes-agent:** none directly — `hermes-agent` Story 3.4b sends these commands; Story 4.3 owns the authoritative human decision record (Archon's response is transport evidence only, not proof gate evidence was sufficient).
-Contract needed: approve/reject envelope shape (this story's own output).
-Blocking behavior: `hermes-agent` cannot send decision commands until this exists.
-Integration validation: Both sides validate against the same shared approve/reject fixtures.
+## Epic A3: Conditional TEA Release Gates
 
----
+Archon can run `RV` and `NR` conditionally and join resolved branches into final traceability.
 
-### Story 3.3d: Provide Archon Recovery Command CLI JSON
+### Story A3.1: Add Gate Planner Flags
 
-As an implementation coordinator,
-I want provider `archon` to expose resume, retry, and cancel through parseable CLI JSON,
-So that external controllers can route recovery actions consistently.
+As an Archon workflow maintainer,
+I want `gate-planner` to emit conditional release-gate flags,
+So that `RV`, `NR`, and `TR` are planned from structured evidence.
 
-**Requirements Covered:** FR-8.
+**Requirements Covered:** A-FR-3.
 
-**Implementation Scope:** Provider `archon` resume, retry, and cancel commands using the shared envelope from Story 3.3a.
-
-Depends on: Story 3.3a, Story 3.3b (this file).
-Contract needed: Workflow command resume, retry, cancel, timeout, success, and error envelope schemas.
-Blocking behavior: Cannot be marked complete until resume, retry, and cancel commands use the shared envelope and represent unexpected state machine outcomes.
-Integration validation: Validates resume, retry, cancel, timeout, and unexpected-state fixtures without introducing Hermes-specific command names.
+Depends on: Story A2.1.
+Contract needed: `gate-planner.json`.
+Blocking behavior: Optional TEA branch stories cannot complete until `gate-planner.json` includes `run_rv`, `run_nr`, `run_tr`, and reasons.
+Integration validation: Fixtures prove true and false values for `run_rv` and `run_nr`.
 
 **Acceptance Criteria:**
 
-**Given** a workflow run accepts resume, retry, or cancel
-**When** Archon performs the action
-**Then** Archon returns parseable JSON for the action result
-**And** the result can be consumed without relying on human-readable output.
+**Given** CR and TA evidence are available
+**When** `gate-planner` runs
+**Then** it emits `run_rv`, `run_nr`, `run_tr`, and reasons
+**And** invalid evidence produces `ERROR`.
 
-**Given** a resume, retry, or cancel command fails
-**When** Archon returns the failure
-**Then** the response uses the shared workflow command envelope
-**And** consumers can fail closed on malformed JSON, schema mismatch, timeout, unexpected state, or unexpected exit code.
+### Story A3.2: Wire RV And NR Sibling Branches
 
-**Depends on hermes-agent:** none directly — `hermes-agent` Story 3.4c consumes this.
+As an Archon workflow maintainer,
+I want `RV` and `NR` to run as conditional sibling branches,
+So that optional gate execution is explicit and observable.
 
----
+**Requirements Covered:** A-FR-3.
 
-### Story 3.5: Produce Signed Typed Archon Workflow Events From Outbox
-
-As a workflow operator,
-I want provider `archon` to emit workflow events through a signed typed event outbox,
-So that workflow execution remains independent while Hermes receives compatible event notifications.
-
-**Requirements Covered:** FR-9.
-
-**Implementation Scope:** Provider `archon` event producer, outbox, signature metadata, and delivery attempts.
-
-Depends on: shared workflow event envelope schema (parent Story 1.3b — blocked, see above), Story 3.1, Story 3.3a, Story 3.3b (this file).
-Contract needed: Workflow event envelope schema, workflow provider event route and binding reference, signature metadata shape, replay metadata, idempotency key, and workflow delivery status shape.
-Blocking behavior: Cannot be completed until shared workflow event examples exist locally and the provider binding surface (Story 3.1) can supply an event route and binding reference.
-Integration validation: Validates signed workflow event fixtures and Hermes event rejection fixtures without introducing Hermes-specific Archon model names.
+Depends on: Story A3.1 and BMAD-TEA Stories T2.1 and T3.1.
+Contract needed: `tea-rv.gate.json`, `tea-rv-skipped.gate.json`, `tea-nr.gate.json`, and `tea-nr-skipped.gate.json`.
+Blocking behavior: This story cannot complete until real and skipped contracts are available for both branches.
+Integration validation: DAG validation and fixtures prove each true and false flag resolves exactly one branch contract.
 
 **Acceptance Criteria:**
 
-**Given** Archon emits a workflow event for a bound project or codebase
-**When** the event is eligible for Hermes notification
-**Then** Archon writes the event to a non-blocking event outbox
-**And** Archon workflow execution continues even if workflow event delivery later fails.
+**Given** `run_rv` is true
+**When** DAG conditions are evaluated
+**Then** `tea-rv` runs
+**And** `tea-rv-skipped` does not run.
 
-**Given** Archon prepares a workflow event payload for delivery
-**When** the payload is serialized
-**Then** it includes schema version, event id, event type, occurred timestamp, provider binding reference, workflow run reference, project or codebase reference, signature metadata, and idempotency key
-**And** it matches the shared workflow event envelope example.
+**Given** `run_rv` is false
+**When** DAG conditions are evaluated
+**Then** `tea-rv-skipped` emits `SKIPPED`
+**And** downstream nodes can distinguish skip from missing evidence.
 
-**Given** workflow event delivery fails, retries, or reaches terminal failure
-**When** Archon records delivery status
-**Then** it persists retry state, last attempt time if available, last error category, terminal failure state when applicable, and affected workflow run reference
-**And** it keeps workflow execution independent from workflow event delivery success.
+**Given** `run_nr` is true or false
+**When** DAG conditions are evaluated
+**Then** exactly one of `tea-nr` or `tea-nr-skipped` resolves.
 
-**Given** Archon emits duplicate or retried workflow event delivery attempts
-**When** events are delivered
-**Then** each payload carries stable event id and idempotency key values
-**And** Hermes can detect duplicate-safe delivery from those fields.
+### Story A3.3: Join TR As Final Gate
 
-**Depends on hermes-agent:** `hermes-agent` Stories 3.6a/3.6b/3.6c consume these events.
-Contract needed: workflow event envelope schema (this story's own output).
-Blocking behavior: `hermes-agent` cannot validate/ingest events until this exists.
-Integration validation: Both sides validate against the same shared workflow event fixtures and rejection-case fixtures (bad signature, stale timestamp, duplicate event id, wrong binding, unknown project, schema mismatch, wrong-profile-secret).
+As an Archon workflow maintainer,
+I want `TR` to run after resolved RV and NR branch outputs,
+So that traceability is evaluated as the final release gate.
 
----
+**Requirements Covered:** A-FR-3.
 
-### Story 3.7: Expose Archon Workflow Event Delivery Health
-
-As an implementation coordinator,
-I want provider `archon` to expose workflow event delivery and outbox health as parseable status,
-So that external controllers can distinguish delayed, failed, duplicated, and terminal event delivery states.
-
-**Requirements Covered:** FR-10.
-
-**Implementation Scope:** Provider `archon` workflow event delivery status persistence, retry status, terminal failure diagnostics, and CLI status output.
-
-Depends on: shared delivery status schema (parent Story 1.3a — blocked, see above), Story 3.1, Story 3.5 (this file).
-Contract needed: Workflow delivery status schema, retry state, terminal failure category, duplicate-safe marker, and reconciliation-needed marker.
-Blocking behavior: Cannot be marked complete until delivery status is persisted independently of workflow execution success.
-Integration validation: Validates healthy, delayed, retrying, failed, duplicated, terminal failure, and waiting-for-reconciliation fixtures without blocking workflow execution.
+Depends on: Story A3.2 and BMAD-TEA Story T4.1.
+Contract needed: `tea-tr.gate.json` and `tea-tr-skipped.gate.json`.
+Blocking behavior: This story cannot complete until TR can consume resolved RV and NR outputs.
+Integration validation: DAG validation proves `trigger_rule` and dependencies behave under run and skip cases.
 
 **Acceptance Criteria:**
 
-**Given** Archon workflow event delivery is delayed or retrying
-**When** Archon reports delivery status through CLI JSON
-**Then** the status includes retry state, last attempt time if available, next action if available, and whether user action is required
-**And** the status links to the affected workflow event and workflow run reference.
+**Given** `run_tr` is true
+**When** RV and NR branches resolve
+**Then** `tea-tr` runs with a valid trigger rule
+**And** it consumes either real gate contracts or skipped contracts.
 
-**Given** Archon workflow event delivery reaches terminal failure
-**When** Archon records the failure
-**Then** Archon exposes delivery status, last error category, affected event type, workflow run reference, and recovery option
-**And** Archon does not block workflow execution solely because event notification failed.
+**Given** `run_tr` is false
+**When** the TR branch resolves
+**Then** `tea-tr-skipped` emits `SKIPPED`
+**And** the summary can still run from a resolved TR role contract.
 
-**Given** Archon retries or redelivers a workflow event
-**When** Archon reports outbox health
-**Then** the status preserves event id and idempotency key
-**And** consumers can classify duplicate delivery without mutating project work.
+## Epic A4: One Quality Route Loop
 
-**Depends on hermes-agent:** `hermes-agent` Story 3.8 displays this status.
-Contract needed: delivery status schema (this story's own output).
-Blocking behavior: `hermes-agent` Story 3.8 cannot surface health until this exists.
-Integration validation: Both sides validate against the same shared delivery-status fixture.
+Archon can aggregate quality results and route exactly one bounded fix loop.
 
-## Validation Command
+### Story A4.1: Aggregate Quality Gate Summary
 
-```text
-cd Archon
-bun run validate
-```
+As an Archon workflow maintainer,
+I want `quality-gate-summary` to aggregate source gate contracts,
+So that the workflow has one route-facing quality decision.
+
+**Requirements Covered:** A-FR-4.
+
+Depends on: Stories A2.1, A3.2, and A3.3.
+Contract needed: `quality-gate-summary.json`.
+Blocking behavior: This story cannot complete until one resolved contract exists for CR, RV, NR, and TR roles.
+Integration validation: Fixtures prove PASS, FAIL, decision-needed-only PASS, missing contract ERROR, and story mismatch ERROR.
+
+**Acceptance Criteria:**
+
+**Given** source gate contracts are available
+**When** summary runs
+**Then** it reads JSON contracts only
+**And** it emits `quality-gate-summary.json`.
+
+**Given** blocking findings exist
+**When** summary aggregates outputs
+**Then** it emits `FAIL`.
+
+**Given** only decision-needed findings exist
+**When** summary aggregates outputs
+**Then** it can emit `PASS`
+**And** it preserves `decision_needed_count`.
+
+### Story A4.2: Route Quality Loop And Error Paths
+
+As an Archon workflow maintainer,
+I want one bounded quality route loop after summary,
+So that fixable quality findings return to development while errors stop cleanly.
+
+**Requirements Covered:** A-FR-5.
+
+Depends on: Story A4.1.
+Contract needed: route-loop configuration and review-loop error artifact.
+Blocking behavior: This story cannot complete until PASS, FAIL, ERROR, and exhaustion paths are validated.
+Integration validation: A workflow fixture proves FAIL routes to `dev-story`, PASS routes forward, ERROR does not route to `dev-story`, and exhaustion writes `review-loop-error`.
+
+**Acceptance Criteria:**
+
+**Given** summary emits `FAIL`
+**When** `quality-route-loop` runs
+**Then** the route returns to `dev-story`
+**And** the next round keeps the same `story_ref`.
+
+**Given** summary emits `PASS`
+**When** `quality-route-loop` runs
+**Then** the route continues to `decision-needed-check`.
+
+**Given** loop budget is exhausted
+**When** routing runs
+**Then** `review-loop-error` records open findings and round count.
+
+## Epic A5: Decision Needed And PR Handoff Orchestration
+
+Archon can turn deferred decisions into Linear follow-up and prepare PR handoff evidence.
+
+### Story A5.1: Orchestrate Decision Needed Follow-Up
+
+As an Archon workflow maintainer,
+I want `decision-needed-check` to create or reuse Linear issues and invoke the BMAD-METHOD sync contract,
+So that deferred human-judgment items are tracked in Linear and recorded in BMAD artifacts before PR preparation.
+
+**Requirements Covered:** A-FR-6.
+
+Depends on: Story A4.2, BMAD-METHOD Story M3.1, and BMAD-METHOD Story M3.2.
+Contract needed: `decision-needed.json`, Linear issue fields, BMAD-METHOD sync request and response, and `decision-needed-check.json`.
+Blocking behavior: PR preparation cannot run when Linear issue creation fails, the BMAD-METHOD sync contract is unavailable, or BMAD-METHOD sync returns `ERROR`.
+Integration validation: Fixtures prove created, reused, no-op, sync-success, sync-failure, and sync-contract-missing outcomes.
+
+**Acceptance Criteria:**
+
+**Given** unresolved `decision_needed` findings exist
+**When** `decision-needed-check` runs
+**Then** it creates or reuses Linear issues
+**And** sends Linear issue id, Linear URL, finding id, and story reference to the BMAD-METHOD sync contract.
+
+**Given** BMAD-METHOD sync succeeds
+**When** `decision-needed-check` emits output
+**Then** `decision-needed-check.json` records the created or reused issue count, synced count, and deferred status.
+
+**Given** BMAD-METHOD sync fails or is unavailable
+**When** `decision-needed-check` emits output
+**Then** it emits `ERROR`
+**And** the workflow does not continue to PR preparation.
+
+### Story A5.2: Generate PR Handoff With Evidence Links
+
+As a human reviewer,
+I want the PR handoff to show all quality and deferred-decision evidence,
+So that I can review the PR without reading Archon node logs.
+
+**Requirements Covered:** A-FR-7.
+
+Depends on: Story A5.1.
+Contract needed: PR handoff artifact shape and evidence link fields.
+Blocking behavior: PR handoff cannot be complete until CR, RV, NR, TR, summary, and decision-needed evidence links are available.
+Integration validation: A fixture proves deferred decisions are listed when present and absent decisions are explicitly reported when none exist.
+
+**Acceptance Criteria:**
+
+**Given** PR handoff is generated
+**When** quality evidence exists
+**Then** the handoff links CR, RV, NR, TR, quality summary, and decision-needed-check artifacts.
+
+**Given** deferred decision-needed items exist
+**When** the handoff is generated
+**Then** it lists each item with finding id, title, source gate, Linear issue id, Linear URL, and deferred status.
+
+## Epic A6: End-To-End Archon Validation
+
+Archon can prove the v2 workflow through a representative story run.
+
+### Story A6.1: Validate The Vertical Slice
+
+As an Archon workflow maintainer,
+I want one full v2 workflow run to prove the route behavior,
+So that the operator can trust the workflow before broad use.
+
+**Requirements Covered:** A-FR-1 through A-FR-7.
+
+Depends on: Stories A1.1 through A5.2, BMAD-METHOD Stories M3.2 and M4.1, and BMAD-TEA Story T5.1.
+Contract needed: selected proof story, workflow run evidence, quality contracts, skipped contracts, decision-needed-check output, and PR handoff.
+Blocking behavior: This story cannot complete until all cross-project contracts are available.
+Integration validation: One run proves first-round CR `FAIL`, route to `dev-story`, second-round pass, conditional TEA branch behavior, final TR, optional decision-needed handling, and PR handoff links.
+
+**Acceptance Criteria:**
+
+**Given** the proof story is selected
+**When** v2 runs end to end
+**Then** first-round `CR` can produce a patch finding that routes back to `dev-story`
+**And** a later round clears blocking findings and routes forward.
+
+**Given** conditional gates are planned
+**When** the proof run reaches TEA gates
+**Then** at least one optional branch runs or skips with an explicit contract
+**And** `TR` runs as final traceability gate when release evaluation proceeds.
+
+**Given** the workflow completes
+**When** evidence is reviewed
+**Then** the old workflow remains unchanged
+**And** the v2 workflow evidence is linked from the PR handoff.

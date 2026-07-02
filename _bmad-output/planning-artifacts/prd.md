@@ -1,106 +1,161 @@
 ---
-title: Archon Planning Handoff - Hermes Agent Workflow Commander
+title: Archon PRD Handoff - BMAD TEA V2 Workflow Orchestration
 status: handoff
-created: '2026-07-02'
-updated: '2026-07-02'
-source: workflow-engine parent workspace, materialized per cross-project-isolated-handoff-contract.md
+created: "2026-06-30"
+updated: "2026-06-30"
+source_parent_prd: ../../../_bmad-output/planning-artifacts/prds/prd-workflow-engine-2026-06-29/prd.md
+source_parent_epics: ../../../_bmad-output/planning-artifacts/epics-bmad-tea-workflow-orchestration-2026-06-29/epics.md
 ---
 
-# PRD: Archon Slice For Hermes Agent Workflow Commander
+# Archon PRD Handoff: BMAD TEA V2 Workflow Orchestration
 
-## Purpose
+## Document Purpose
 
-Hermes Agent Workflow Commander makes Hermes Agent the human-facing command center for BMAD planning, Archon workflow execution, GitHub PR state, and local project work.
-Archon is the first workflow provider Hermes controls. This document defines only the requirements Archon must satisfy as that provider — not the full cross-project product.
-The full parent PRD lives at `_bmad-output/planning-artifacts/prds/prd-workflow-engine-2026-06-26/prd.md` in the parent workspace; this file exists so no Archon implementation agent needs to read it.
+This document is the local Archon product requirements handoff for the BMAD TEA v2 workflow orchestration feature.
+It contains only the Archon-owned requirements needed for isolated implementation inside this repository.
+It is intended to be read with `architecture.md` and `epics.md` in this same folder.
+Implementation agents must not traverse out of this repository to read parent workspace planning files.
 
-## Scope Boundary
+## Product Context
 
-Archon owns the provider `archon` implementation of: Workflow Provider Binding (reverse binding from codebase/project to controller identity), Archon CLI JSON producer contracts, workflow run state, retry/resume/cancel behavior, workflow event production, event outbox, delivery status, and signed workflow event production.
+The operator needs a generalized Archon workflow that can run BMAD story implementation with BMAD TEA quality evidence and a single fix loop.
+The workflow must preserve BMAD-METHOD ownership of story, development, and code-review semantics.
+The workflow must preserve BMAD-TEA ownership of test automation evidence, test quality review, NFR review, and traceability review.
+Archon owns orchestration, DAG wiring, route decisions, branch conditions, loop behavior, external issue-sync orchestration, and final PR handoff wiring.
 
-Archon does **not** own: Project Binding, BMAD mount, materialization, Project Work Items, HILT gates, Story Timeline, reconciliation, or any user-facing dashboard surface — those belong to `hermes-agent` (see its own local handoff).
+The v2 workflow must be created as `bmad-dev-story-with-tea-fix-loop-v2.yml`.
+The existing `bmad-dev-story-with-tea-fix-loop.yml` is the baseline and must not be modified by this feature.
+The workflow input remains `$ARGUMENTS`.
+The v2 workflow must not require changes to `bmad-create-story-with-tea`.
 
-Archon must not require Hermes-specific command names or model vocabulary — all controller identity uses generic `provider` and `name` fields.
+## Scope
 
-## Functional Requirements Owned By Archon
+Archon owns these capabilities:
 
-### FR-7: Register generic workflow provider bindings
+- Add and register `bmad-dev-story-with-tea-fix-loop-v2.yml`.
+- Keep the source workflow and bundled default workflow registry consistent.
+- Invoke BMAD-METHOD `bmad-code-review-auto` directly for `CR`.
+- Wire `dev-story`, `tea-automate`, `code-review-auto`, `gate-planner`, `tea-rv`, `tea-rv-skipped`, `tea-nr`, `tea-nr-skipped`, `tea-tr`, `tea-tr-skipped`, `quality-gate-summary`, `quality-route-loop`, `decision-needed-check`, `review-loop-error`, and `create-pull-request`.
+- Route only on stable JSON contracts.
+- Treat markdown reports as human evidence, not route APIs.
+- Use `when:` expressions and skipped-contract nodes for optional TEA gates.
+- Use one `route_loop` after `quality-gate-summary`.
+- Route quality `FAIL` back to `dev-story`.
+- Route `PASS` forward to `decision-needed-check`.
+- Route tooling, schema, contract, evidence, and external sync `ERROR` to explicit error handling.
+- Create or reuse Linear follow-up issues for unresolved `decision_needed` findings before PR preparation.
+- Link CR, RV, NR, TR, quality summary, and decision-needed evidence in final workflow output and PR handoff.
+- Validate the v2 workflow through Archon's existing workflow validation process.
 
-Archon can create or update the provider-side workflow binding for a project using generic `provider` and `name` vocabulary.
+Archon does not own these capabilities:
 
-**Consequences (testable):**
-- Archon never exposes provider commands or models named specifically for Hermes.
-- Workflow provider binding vocabulary uses `provider` and `name`, not `profile`, `agent_name`, `agent`, or `agent_provider`.
-- Archon's stored binding can be compared against a consumer's Project Binding metadata to detect disagreement (Archon exposes enough state for the consumer to do this).
-- Archon surfaces binding rotation, removal, stale delivery, and missing binding states as actionable diagnostics via CLI JSON.
+- BMAD-METHOD review layers, triage vocabulary, or `bmad-code-review-auto` internals.
+- BMAD-TEA gate semantics, TEA report content, or TEA evidence generation internals.
+- Changing `bmad-create-story-with-tea`.
+- Hermes callback behavior or Hermes-specific contract fields.
+- The full lifecycle after Linear decision-needed issue creation and sync.
 
-### FR-8: Expose provider workflow control through CLI JSON
+## Functional Requirements
 
-Archon exposes start, status, approve, reject, resume, retry, and cancel for workflow runs through Archon CLI JSON — this is the producer side of the provider adapter Hermes calls.
+### A-FR-1: Add Versioned V2 Workflow Without Changing Baseline
 
-**Consequences (testable):**
-- Archon returns parseable JSON responses for every CLI call whose result updates consumer state.
-- Archon does not expose an HTTP API for this state-changing control path — CLI only.
-- Every response includes schema version, success flag, correlation id, workflow run reference when applicable, binding reference when applicable, machine-readable result payload, and machine-readable error shape when failed.
-- Archon fails closed (returns a machine-readable error envelope) rather than emitting unstructured text on malformed input or unexpected state.
+Archon must add `bmad-dev-story-with-tea-fix-loop-v2.yml` as the redesign surface.
+Archon must keep `bmad-dev-story-with-tea-fix-loop.yml` unchanged.
+The v2 workflow must accept `$ARGUMENTS` as the story input contract.
+The v2 workflow must not require changes to `bmad-create-story-with-tea`.
 
-### FR-9: Produce signed typed workflow events
+Acceptance criteria:
 
-Archon emits signed workflow events for workflow completion, failure, approval-requested, delivery-failed, and artifact events through a non-blocking outbox, consumed by Hermes at `/p/{profile}/webhooks/workflow-events/{provider}`.
+- Given the existing workflow file exists, when v2 is added, then the existing workflow remains unchanged and the new v2 workflow exists.
+- Given Archon loads default workflows, when v2 is registered, then the workflow is discoverable through the same default workflow mechanism as other bundled workflows.
+- Given Archon validates workflows, when validation runs, then the v2 workflow passes schema and DAG validation.
 
-**Consequences (testable):**
-- Archon writes events to a durable, non-blocking outbox — workflow execution continues even if event delivery later fails.
-- Every event includes schema version, event id, event type, occurred timestamp, provider binding reference, workflow run reference, project/codebase reference, signature metadata, and idempotency key.
-- Archon delivers duplicate-safe event ids so consumers can detect redelivery.
-- Archon does not need to know how Hermes validates events (schema/signature/replay/idempotency/profile/binding) — only that its events must satisfy that contract; the shared event envelope schema and rejection fixtures are the source of truth (`_bmad-output/planning-artifacts/contracts/workflow-commander/`, not yet populated — see "Blocked Dependencies" below).
+### A-FR-2: Invoke BMAD-Owned Code Review Auto
 
-### FR-10: Surface provider event delivery and outbox health
+Archon must invoke BMAD-METHOD `bmad-code-review-auto` directly for the `CR` step.
+Archon must not use a wrapper that reinterprets BMAD findings.
+Archon must consume the `code-review-auto.gate.json` route contract.
 
-Archon can report whether workflow event delivery is healthy, delayed, failed, duplicated, or waiting for reconciliation.
+Acceptance criteria:
 
-**Consequences (testable):**
-- Archon persists delivery status, retry status, last error, and terminal failure diagnostics independent of workflow execution success.
-- Archon does not block workflow execution solely because event delivery failed.
-- Archon exposes this status through CLI JSON so a consumer can request or display it.
+- Given the v2 workflow reaches `code-review-auto`, when it invokes code review, then it calls the BMAD-METHOD automation surface.
+- Given `code-review-auto.gate.json` exists, when downstream nodes route, then they read the JSON contract and not the markdown review report.
+- Given the BMAD-METHOD contract is missing or invalid, when Archon validates the node output, then the workflow enters `ERROR`.
 
-## Non-Functional Requirements Relevant To Archon
+### A-FR-3: Plan Conditional TEA Release Gates
 
-- **NFR-1 (Reliability):** Workflow events are delivery acceleration, not the only source of truth — Archon must not assume Hermes has processed an event just because delivery succeeded.
-- **NFR-5 (Security):** Archon's events must be signed and schema-versioned so a consumer can reject invalid ones (signature, schema, replay, binding, provider, authorization) — Archon owns producing correct signed events, not the rejection logic itself.
-- **NFR-6 (Security):** Event secrets must be scoped correctly so a signed event cannot be replayed against the wrong profile.
-- **NFR-9 (Auditability):** Archon persists workflow commands, workflow events, and delivery state with enough detail for audit.
-- **NFR-14 (Usability):** Archon's error and delivery-health responses expose diagnostic categories and machine-readable detail, not raw stack traces.
-- **NFR-15 (Maintainability):** Archon's implementation keeps ownership bounded to provider `archon` surfaces — it does not reach into Hermes-owned concerns (Project Binding, gates, reconciliation).
-- **NFR-16 (Maintainability):** All new provider integration surfaces stay generic (`provider`/`name` vocabulary) — never Hermes-specific.
+Archon must add a `gate-planner` node that emits `gate-planner.json`.
+The planner output must include `run_rv`, `run_nr`, `run_tr`, and reasons.
+Archon must model `RV` and `NR` as sibling branches controlled by `when:` expressions.
+Each optional branch must have a skipped-contract node.
+`TR` must join resolved `RV` and `NR` branches before final traceability evaluation.
 
-## Non-Goals (Archon-relevant subset)
+Acceptance criteria:
 
-- Archon will not expose an HTTP API for the Hermes-to-Archon state-changing control path — CLI only, per architecture AD-3.
-- Archon will not add Hermes-specific commands or model vocabulary.
-- Archon will not implement Project Binding, materialization, HILT gates, or Story Timeline — those are `hermes-agent`'s responsibility.
+- Given `gate-planner.json` has `run_rv: true`, when the DAG evaluates `RV`, then `tea-rv` runs.
+- Given `gate-planner.json` has `run_rv: false`, when the DAG evaluates `RV`, then `tea-rv-skipped` emits a `SKIPPED` contract.
+- Given `gate-planner.json` has `run_nr: true`, when the DAG evaluates `NR`, then `tea-nr` runs.
+- Given `gate-planner.json` has `run_nr: false`, when the DAG evaluates `NR`, then `tea-nr-skipped` emits a `SKIPPED` contract.
+- Given `run_tr` is true, when `RV` and `NR` are resolved, then `tea-tr` joins the resolved contracts.
 
-## Glossary (Archon-relevant terms)
+### A-FR-4: Aggregate One Route Contract
 
-- **Workflow Provider** — Archon is the first implementation, under provider key `archon`.
-- **Workflow Provider Binding** — the persisted reverse binding from a project/codebase to controller `provider` + `name` + event route, owned by Archon.
-- **Controller Identity** — the generic `provider` + `name` pair identifying an external controller.
-- **Workflow Event** — a signed, typed, schema-versioned event Archon emits (completed, failed, approval-requested, delivery-failed, artifact).
+Archon must run `quality-gate-summary` after CR, RV, NR, and TR are resolved.
+`quality-gate-summary` must read only JSON contracts.
+It must emit `quality-gate-summary.json` as the only route source for the quality loop.
 
-## Blocked Dependencies
+Acceptance criteria:
 
-The shared contract fixtures this PRD's FRs reference (workflow command envelope, workflow event envelope, workflow provider binding schema — see `_bmad-output/planning-artifacts/contracts/workflow-commander/README.md`) are **not yet created** in the parent workspace as of this handoff (2026-07-02). Parent workspace Stories 1.3a/1.3b/1.3c produce them. Archon producer stories (see local `epics.md`) should not be marked implementation-ready until those fixtures exist here or are regenerated into this local handoff.
+- Given one or more source gate contracts contain blocking findings, when summary runs, then it emits `gate: FAIL`.
+- Given no source gate contains blocking findings, when summary runs, then it emits `gate: PASS`.
+- Given only `decision_needed` findings remain, when summary runs, then it can still emit `gate: PASS` and preserve `decision_needed_count`.
+- Given any source contract is missing, invalid, untrusted, or has a mismatched `story_ref`, when summary validates input, then it emits or routes to `ERROR`.
 
-## Cross-Project Dependencies
+### A-FR-5: Use One Quality Route Loop
 
-Archon's producer work is consumed by `hermes-agent`'s adapter/consumer stories (see `hermes-agent/_bmad-output/planning-artifacts/epics.md`, Epic "Workflow Provider Control And Event Delivery — Hermes Consumer Side"). Story-level dependency records use:
+Archon must use a single `quality-route-loop` after `quality-gate-summary`.
+The negative route must return to `dev-story`.
+The positive route must continue to `decision-needed-check`.
+Loop exhaustion must route to `review-loop-error`.
+`ERROR` outcomes must not route back to `dev-story`.
 
-```text
-Depends on: <subproject> Story <id or title>
-Contract needed: <API/event/file/interface/schema>
-Blocking behavior: <what must exist before this story can be completed>
-Integration validation: <how both sides will be proven compatible>
-```
+Acceptance criteria:
 
-## Source
+- Given summary emits `FAIL`, when the route loop runs, then the workflow returns to `dev-story`.
+- Given summary emits `PASS`, when the route loop runs, then the workflow continues to `decision-needed-check`.
+- Given the loop exhausts, when routing runs, then `review-loop-error` records the open findings and exhausted round count.
+- Given any gate emits `ERROR`, when routing runs, then the workflow follows an explicit error path.
 
-Derived from the parent workspace's `prds/prd-workflow-engine-2026-06-26/prd.md` and `epics.md`, both current as of 2026-07-02 (post `bmad-correct-course` pass — see parent `sprint-change-proposal-2026-07-02.md`).
+### A-FR-6: Orchestrate Decision-Needed Follow-Up Before PR
+
+Archon must run `decision-needed-check` after the route loop passes and before PR preparation.
+If unresolved `decision_needed` findings exist, Archon must create or reuse Linear issues and sync references back into BMAD artifacts through the owning contract.
+If issue creation or sync fails, the workflow must not continue to PR preparation.
+
+Acceptance criteria:
+
+- Given `decision_needed_count > 0`, when `decision-needed-check` runs, then it creates or reuses one Linear issue per unresolved finding.
+- Given a Linear issue is created, when sync completes, then the issue id and URL are written back to BMAD artifacts.
+- Given issue creation or sync fails, when the node emits output, then it emits `ERROR`.
+- Given no decision-needed findings exist, when the node runs, then it emits a successful no-op result.
+
+### A-FR-7: Prepare PR Handoff With Quality Evidence
+
+Archon must link quality evidence in the final workflow output and PR handoff.
+The handoff must show whether decision-needed items were deferred to Linear.
+The handoff must not imply deferred human-judgment work was fixed in the PR.
+
+Acceptance criteria:
+
+- Given PR handoff is generated, when quality evidence exists, then the handoff links CR, RV, NR, TR, quality summary, and decision-needed-check artifacts.
+- Given deferred decision-needed items exist, when the handoff is generated, then each item lists finding id, title, source gate, Linear issue id, Linear URL, and deferred status.
+- Given no deferred items exist, when the handoff is generated, then it explicitly states that no decision-needed items were deferred.
+
+## Non-Functional Requirements
+
+- Archon must fail closed on missing, invalid, or untrusted JSON contracts.
+- Archon must preserve the same `story_ref` across all route-facing contracts for a workflow run.
+- Archon must keep workflow source and bundled defaults consistent.
+- Archon must keep route logic explicit through `when:`, `trigger_rule`, `output_format`, and `route_loop`.
+- Archon must not parse markdown reports for routing.
+- Archon must keep Hermes-specific callback behavior out of this v2 scope.
