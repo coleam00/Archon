@@ -9,7 +9,10 @@ This command is a review-only node.
 Do not fix code.
 Do not edit implementation files.
 
-Read `$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop/state.json` to determine the current review round.
+Detect the active workflow directory first.
+Use `$ARTIFACTS_DIR/bmad-dev-story-fix-loop` when that state file exists.
+Otherwise use `$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop`.
+Read the active workflow directory's `state.json` to determine the current review round.
 Use that round number when naming files and findings.
 
 ## Story Context
@@ -32,8 +35,8 @@ Read these files before acting:
 - `_bmad-output/project-context.md` if present.
 - `_bmad-output/implementation-artifacts/sprint-status.yaml`.
 - The active story file.
-- `$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop/decision-log.md`.
-- `$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop/findings/open-findings.md`.
+- The active workflow directory's `decision-log.md`.
+- The active workflow directory's `findings/open-findings.md`.
 - The current git diff.
 
 ## Non-Interactive Route Contract
@@ -63,9 +66,9 @@ Return `gate: "PASS"` only when `findings_count` is zero and the BMAD review com
 ## Task
 
 Run BMAD code-review as a finding-only pass.
-For round 1, review the dev-story and TEA automation output.
+For round 1, review the dev-story output and any TEA automation output when present.
 For later rounds, verify whether earlier fixes resolved prior concerns and whether new concerns were introduced.
-Write findings to `$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop/findings/round-{round}-code-review.md`.
+Write findings to the active workflow directory's `findings/round-{round}-code-review.md`.
 If there are no findings, write that explicitly.
 Document non-blocking `defer` and `dismiss` findings in the round report, but do not write them as `Status: OPEN` route-loop findings.
 
@@ -80,12 +83,12 @@ Each blocking finding must include:
 - Status: OPEN.
 
 This workflow routes directly from code review back to dev-story, so this command owns route-loop finding consolidation in addition to BMAD's native story handoff.
-When code review finds open issues, rewrite `$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop/findings/open-findings.md` with the current code-review findings.
+When code review finds open issues, rewrite the active workflow directory's `findings/open-findings.md` with the current code-review findings.
 Assign finding IDs in the form `R{round}-F{number}`.
-Append a matching `### Finding R{round}-F{number}` entry to `$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop/decision-log.md` for every open code-review finding.
+Append a matching `### Finding R{round}-F{number}` entry to the active workflow directory's `decision-log.md` for every open code-review finding.
 Each decision-log finding entry must include source gate, severity, what is wrong, evidence, why this is a defect, required fix direction, and `Status: OPEN`.
 
-When code review finds no open issues, rewrite `$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop/findings/open-findings.md` so there are no current open code-review findings.
+When code review finds no open issues, rewrite the active workflow directory's `findings/open-findings.md` so there are no current open code-review findings.
 If no other open findings are present, write `No open findings yet.` under the heading.
 Do not select a new story.
 Do not fix code.

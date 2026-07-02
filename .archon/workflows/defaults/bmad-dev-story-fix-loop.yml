@@ -1,9 +1,9 @@
-name: bmad-dev-story-with-tea-fix-loop
+name: bmad-dev-story-fix-loop
 description: |
-  Use when: User wants a BMAD dev-story implementation where each BMAD or TEA step is its own Archon node.
-  Triggers: "bmad dev story tea fix loop", "dev story with tea", "DS TA RV NR TR CR", "bmad review fix loop".
-  Does: Runs DS, TA, CR, RV, NR, and TR as separate DAG nodes, records review findings, reruns BMAD dev-story to fix them when needed, and repeats review up to three rounds.
-  NOT for: Generic Archon feature work without BMAD artifacts, or one-off review without implementation.
+  Use when: User wants a BMAD dev-story implementation with a BMAD code-review fix loop.
+  Triggers: "bmad dev story fix loop", "dev story code review loop", "bmad review fix loop".
+  Does: Runs BMAD dev-story, runs BMAD code-review, reruns BMAD dev-story to fix review findings when needed, and repeats until code review passes or the route-loop retry budget is exhausted.
+  NOT for: TEA review gates, generic Archon feature work without BMAD artifacts, or one-off review without implementation.
 
   Decision log policy:
   - Every finding must be written as a decision-log finding entry.
@@ -12,23 +12,19 @@ description: |
 
 provider: codex
 model: gpt-5.5
-tags: [BMad, TEA, Review]
+tags: [BMad, Review]
 
 nodes:
   - id: prepare-bmad-state
     bash: |
       set -e
 
-      RUN_DIR="$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop"
+      RUN_DIR="$ARTIFACTS_DIR/bmad-dev-story-fix-loop"
       mkdir -p "$RUN_DIR/findings" "$RUN_DIR/reports"
 
       for required in \
         ".agents/skills/bmad-dev-story/SKILL.md" \
-        ".agents/skills/bmad-code-review/SKILL.md" \
-        ".agents/skills/bmad-testarch-automate/SKILL.md" \
-        ".agents/skills/bmad-testarch-test-review/SKILL.md" \
-        ".agents/skills/bmad-testarch-nfr/SKILL.md" \
-        ".agents/skills/bmad-testarch-trace/SKILL.md"
+        ".agents/skills/bmad-code-review/SKILL.md"
       do
         if [ ! -f "$required" ]; then
           echo "Missing required BMAD skill: $required"
@@ -51,10 +47,10 @@ nodes:
 
       cat > "$RUN_DIR/state.json" << 'JSON'
       {
-        "workflow": "bmad-dev-story-with-tea-fix-loop",
+        "workflow": "bmad-dev-story-fix-loop",
         "status": "running",
         "round": 1,
-        "maxRounds": 3,
+        "maxFailedReviews": 3,
         "activeStory": "",
         "activeStoryName": "",
         "activeStoryFile": "",
@@ -64,7 +60,7 @@ nodes:
       JSON
 
       cat > "$RUN_DIR/decision-log.md" << 'MARKDOWN'
-      # BMAD Dev Story With TEA Fix Loop Decision Log
+      # BMAD Dev Story Fix Loop Decision Log
 
       Every finding and every fix must be logged here.
       Each full sentence goes on its own physical line.
@@ -118,22 +114,12 @@ nodes:
     idle_timeout: 900000
     output_type: dev-story
 
-  - id: tea-automate
-    prompt: |
-      bmad-testarch-automate $ARGUMENTS
+  - id: code-review
+    command: bmad-code-review
     provider: codex
     depends_on: [dev-story]
     context: fresh
     model: gpt-5.5
-    idle_timeout: 900000
-    output_type: tea-automation
-
-  - id: code-review
-    command: bmad-code-review
-    depends_on: [tea-automate]
-    context: fresh
-    provider: claude
-    model: sonnet
     idle_timeout: 900000
     output_format: &code_review_gate_schema
       type: object
@@ -167,48 +153,25 @@ nodes:
       condition: "$code-review.output.gate == 'PASS'"
       max_iterations: 20
       routes:
-        positive: tea-rv
+        positive: create-pull-request
         negative: dev-story
         exhausted: review-loop-error
 
-  - id: tea-rv
-    prompt: |
-      bmad-testarch-test-review $ARGUMENTS
+  - id: create-pull-request
+    command: archon-create-pr
     provider: codex
     depends_on: [code-review-gate]
     context: fresh
     model: gpt-5.5
-    idle_timeout: 900000
-    output_type: test-review-findings
-
-  - id: tea-nr
-    prompt: |
-      bmad-testarch-nfr $ARGUMENTS
-    provider: claude
-    model: sonnet
-    depends_on: [tea-rv]
-    context: fresh
-    idle_timeout: 900000
-    output_type: nfr-findings
-
-  - id: tea-tr
-    prompt: |
-      bmad-testarch-trace $ARGUMENTS
-    provider: claude
-    depends_on: [tea-nr]
-    context: fresh
-    model: sonnet
-    idle_timeout: 900000
-    output_type: trace-findings
 
   - id: review-loop-error
     depends_on: [code-review-gate]
     bash: |
       set -e
 
-      STATE="$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop/state.json"
-      DECISIONS="$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop/decision-log.md"
-      OPEN_FINDINGS="$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop/findings/open-findings.md"
+      STATE="$ARTIFACTS_DIR/bmad-dev-story-fix-loop/state.json"
+      DECISIONS="$ARTIFACTS_DIR/bmad-dev-story-fix-loop/decision-log.md"
+      OPEN_FINDINGS="$ARTIFACTS_DIR/bmad-dev-story-fix-loop/findings/open-findings.md"
 
       echo "BMAD code-review fix loop exhausted its retry budget."
       echo "State: $STATE"
@@ -221,10 +184,3 @@ nodes:
 
       exit 1
     timeout: 60000
-
-  - id: create-pull-request
-    command: archon-create-pr
-    provider: claude
-    depends_on: [tea-tr]
-    context: fresh
-    model: haiku
