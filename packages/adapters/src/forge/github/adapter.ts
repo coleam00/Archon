@@ -1009,6 +1009,15 @@ ${userComment}`;
         : deliveryId
           ? `delivery:${deliveryId}`
           : undefined;
+    // seen() marks the key on first sight, before the downstream work below.
+    // That is deliberate: the duplicates this guards against are dual
+    // subscriptions delivering the same comment near-simultaneously, so the
+    // check must claim the key before either delivery finishes processing.
+    // Marking only after success would let both concurrent deliveries pass the
+    // check first and double-process. The tradeoff is that a redelivery of a
+    // comment whose first processing threw within the TTL window is dropped;
+    // that is acceptable here since the route treats webhooks as
+    // fire-and-forget and failures are logged rather than retried.
     if (dedupKey && this.deliveryDedup.seen(dedupKey)) {
       getLog().info(
         { eventType, owner, repo, number, deliveryId },

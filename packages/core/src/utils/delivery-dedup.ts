@@ -99,7 +99,7 @@ export class DeliveryDeduplicator {
         if (next.done) break;
         this.entries.delete(next.value);
       }
-      getLog().debug({ evictCount, size: this.entries.size }, 'evicted_oldest_entries');
+      getLog().debug({ evictCount, size: this.entries.size }, 'delivery_dedup.entries_evicted');
     }
   }
 }
