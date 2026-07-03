@@ -134,6 +134,8 @@ export interface IWorkflowStore {
     name: string;
     repository_url: string | null;
     default_cwd: string;
+    /** Project kind — 'folder' routes path resolution to _folder/<slug>/ storage. */
+    kind: 'repo' | 'folder';
   } | null>;
 
   // Per-node provider sessions persisted across workflow re-runs (opt-in via

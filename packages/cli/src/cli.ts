@@ -155,6 +155,7 @@ Options:
   --branch, -b <name>        Create worktree for branch (or reuse existing)
   --from, --from-branch <name> Create new branch from specific start point
   --no-worktree              Run on branch directly without worktree isolation
+  --folder                   Register the current non-git directory as a folder project and run in place
   --resume                   Resume the most recent failed run of the workflow (mutually exclusive with --branch)
   --spawn                    Open setup wizard in a new terminal window (for setup command)
   --quiet, -q                Reduce log verbosity to warnings and errors only
@@ -179,6 +180,7 @@ Examples:
   archon workflow run plan --cwd /path/to/repo "Add dark mode"
   archon workflow run implement --branch feature-auth "Implement auth"
   archon workflow run quick-fix --no-worktree "Fix typo"
+  archon workflow run assist --folder "List every repo under this multi-repo root"
   archon workflow run archon-assist --detach "Investigate the flaky test"
   archon workflow runs --json
   archon workflow get <run-id> --json
@@ -275,6 +277,7 @@ async function main(): Promise<number> {
         from: { type: 'string' },
         'from-branch': { type: 'string' },
         'no-worktree': { type: 'boolean' },
+        folder: { type: 'boolean' },
         resume: { type: 'boolean' },
         spawn: { type: 'boolean' },
         quiet: { type: 'boolean', short: 'q' },
@@ -318,6 +321,7 @@ async function main(): Promise<number> {
   const fromBranch =
     (values.from as string | undefined) ?? (values['from-branch'] as string | undefined);
   const noWorktree = values['no-worktree'] as boolean | undefined;
+  const folderFlag = values.folder as boolean | undefined;
   const resumeFlag = values.resume as boolean | undefined;
   const spawnFlag = values.spawn as boolean | undefined;
   const jsonFlag = values.json as boolean | undefined;
@@ -395,14 +399,41 @@ async function main(): Promise<number> {
 
       // Validate git repository and resolve to root
       const repoRoot = await git.findRepoRoot(cwd);
-      if (!repoRoot) {
-        console.error('Error: Not in a git repository.');
-        console.error('The Archon CLI must be run from within a git repository.');
-        console.error('Either navigate to a git repo or use --cwd to specify one.');
-        return 1;
+      if (repoRoot) {
+        // Use repo root as working directory (handles subdirectory case)
+        effectiveCwd = repoRoot;
+      } else {
+        // Not a git repo. It may still be a registered FOLDER project (a
+        // multi-repo root or plain ops folder). Consult the DB before rejecting.
+        // DB errors here must NOT crash pre-dispatch (the DB may be unreachable
+        // and `archon help`-class UX must survive) — fall through to the error.
+        let folderCodebase: { default_cwd: string; kind: 'repo' | 'folder' } | null = null;
+        try {
+          const codebaseDb = await import('@archon/core/db/codebases');
+          folderCodebase =
+            (await codebaseDb.findCodebaseByDefaultCwd(cwd)) ??
+            (await codebaseDb.findCodebaseByPathPrefix(cwd));
+        } catch (dbError) {
+          getLog().debug({ err: dbError as Error, cwd }, 'cli.folder_project_gate_lookup_failed');
+        }
+
+        if (folderCodebase?.kind === 'folder') {
+          // Registered folder project — run in place at its root.
+          effectiveCwd = folderCodebase.default_cwd;
+        } else if (folderFlag && command === 'workflow' && subcommand === 'run') {
+          // First-use `workflow run --folder` from an unregistered non-git dir:
+          // let it through so the run command registers the folder project.
+          effectiveCwd = cwd;
+        } else {
+          console.error('Error: Not in a git repository.');
+          console.error('The Archon CLI must be run from within a git repository.');
+          console.error('Either navigate to a git repo or use --cwd to specify one.');
+          console.error(
+            'Or register this folder as a project: run with --folder, or use /register-project in chat.'
+          );
+          return 1;
+        }
       }
-      // Use repo root as working directory (handles subdirectory case)
-      effectiveCwd = repoRoot;
     }
 
     switch (command) {
@@ -490,6 +521,7 @@ async function main(): Promise<number> {
               branchName,
               fromBranch,
               noWorktree,
+              folder: folderFlag,
               resume: resumeFlag,
               quiet: values.quiet as boolean | undefined,
               verbose: values.verbose as boolean | undefined,

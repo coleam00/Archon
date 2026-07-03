@@ -34,6 +34,11 @@ import {
   getProjectLogsPath,
   getRunArtifactsPath,
   getRunLogPath,
+  slugifyFolderName,
+  getFolderProjectRoot,
+  getFolderProjectArtifactsPath,
+  getFolderProjectLogsPath,
+  getFolderRunArtifactsPath,
   resolveProjectRootFromCwd,
   ensureProjectStructure,
   createProjectSourceSymlink,
@@ -513,6 +518,92 @@ describe('archon-paths', () => {
       delete process.env.ARCHON_DOCKER;
       expect(getRunLogPath('acme', 'widget', 'run-123')).toBe(
         join(homedir(), '.archon', 'workspaces', 'acme', 'widget', 'logs', 'run-123.jsonl')
+      );
+    });
+  });
+
+  describe('slugifyFolderName', () => {
+    test('lowercases and keeps safe characters', () => {
+      expect(slugifyFolderName('Platform')).toBe('platform');
+      expect(slugifyFolderName('my_app.v2-beta')).toBe('my_app.v2-beta');
+    });
+
+    test('replaces spaces and unsafe runs with a single dash', () => {
+      expect(slugifyFolderName('My App')).toBe('my-app');
+      expect(slugifyFolderName('a  //  b')).toBe('a-b');
+      expect(slugifyFolderName('ops client!!!folder')).toBe('ops-client-folder');
+    });
+
+    test('trims leading/trailing dashes', () => {
+      expect(slugifyFolderName('  spaced  ')).toBe('spaced');
+      expect(slugifyFolderName('***edge***')).toBe('edge');
+    });
+
+    test('falls back to "folder" for names that slugify to empty', () => {
+      expect(slugifyFolderName('///')).toBe('folder');
+      expect(slugifyFolderName('日本語')).toBe('folder');
+      expect(slugifyFolderName('')).toBe('folder');
+    });
+
+    test('output always satisfies SAFE_NAME (via path helpers)', () => {
+      // A slug that produces a valid single path segment (no separators)
+      for (const name of ['My App', 'a/b/c', '  x  ', 'café résumé']) {
+        const slug = slugifyFolderName(name);
+        expect(slug).toMatch(/^[a-zA-Z0-9._-]+$/);
+      }
+    });
+  });
+
+  describe('folder-project paths', () => {
+    function clearEnv(): void {
+      delete process.env.WORKSPACE_PATH;
+      delete process.env.ARCHON_HOME;
+      delete process.env.ARCHON_DOCKER;
+    }
+
+    test('getFolderProjectRoot returns _folder/<slug>/', () => {
+      clearEnv();
+      expect(getFolderProjectRoot('platform')).toBe(
+        join(homedir(), '.archon', 'workspaces', '_folder', 'platform')
+      );
+    });
+
+    test('getFolderProjectArtifactsPath returns _folder/<slug>/artifacts/', () => {
+      clearEnv();
+      expect(getFolderProjectArtifactsPath('platform')).toBe(
+        join(homedir(), '.archon', 'workspaces', '_folder', 'platform', 'artifacts')
+      );
+    });
+
+    test('getFolderProjectLogsPath returns _folder/<slug>/logs/', () => {
+      clearEnv();
+      expect(getFolderProjectLogsPath('platform')).toBe(
+        join(homedir(), '.archon', 'workspaces', '_folder', 'platform', 'logs')
+      );
+    });
+
+    test('getFolderRunArtifactsPath returns _folder/<slug>/artifacts/runs/{id}/', () => {
+      clearEnv();
+      expect(getFolderRunArtifactsPath('platform', 'run-123')).toBe(
+        join(
+          homedir(),
+          '.archon',
+          'workspaces',
+          '_folder',
+          'platform',
+          'artifacts',
+          'runs',
+          'run-123'
+        )
+      );
+    });
+
+    test('respects ARCHON_HOME override', () => {
+      delete process.env.WORKSPACE_PATH;
+      delete process.env.ARCHON_DOCKER;
+      process.env.ARCHON_HOME = join('/', 'custom', 'archon');
+      expect(getFolderRunArtifactsPath('ops', 'r1')).toBe(
+        join('/', 'custom', 'archon', 'workspaces', '_folder', 'ops', 'artifacts', 'runs', 'r1')
       );
     });
   });

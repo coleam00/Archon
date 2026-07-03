@@ -145,11 +145,17 @@ async function getCurrentBranch(repoPath: string): Promise<string> {
  * @returns Formatted context string. Never throws - falls back gracefully on errors.
  */
 async function formatRepoContext(
-  codebase: { name: string; default_cwd: string } | null,
+  codebase: { name: string; default_cwd: string; kind?: 'repo' | 'folder' } | null,
   isolationEnvId: string | null
 ): Promise<string> {
   if (!codebase) {
     return 'No codebase configured';
+  }
+
+  // Folder projects have no git — show an honest "no git" label instead of a
+  // branch (a folder root may not be a repo at all).
+  if (codebase.kind === 'folder') {
+    return `${codebase.name} (folder — no git)`;
   }
 
   // If in a worktree, use the worktree's branch name from database
@@ -284,6 +290,15 @@ async function handleWorktreeCommand(
   const codebase = await codebaseDb.getCodebase(conversation.codebase_id);
   if (!codebase) {
     return { success: false, message: 'Codebase not found.' };
+  }
+
+  // Worktrees are a git-repo concept — folder projects run in place and have no
+  // worktree lifecycle. Reject clearly rather than failing deep in git.
+  if (codebase.kind === 'folder') {
+    return {
+      success: false,
+      message: `/worktree is not applicable to folder projects. "${codebase.name}" runs in place (no git worktree).`,
+    };
   }
 
   const mainPath = codebase.default_cwd;

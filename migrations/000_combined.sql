@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS remote_agent_codebases (
   default_cwd VARCHAR(500) NOT NULL,
   default_branch VARCHAR(255),
   ai_assistant_type VARCHAR(20) DEFAULT 'claude',
+  kind VARCHAR(10) NOT NULL DEFAULT 'repo',
   allow_env_keys BOOLEAN NOT NULL DEFAULT FALSE,
   commands JSONB DEFAULT '{}'::jsonb,
   created_at TIMESTAMP DEFAULT NOW(),
@@ -386,6 +387,12 @@ ALTER TABLE remote_agent_codebases
 -- From migration 023: detected default branch on codebases
 ALTER TABLE remote_agent_codebases
   ADD COLUMN IF NOT EXISTS default_branch VARCHAR(255);
+
+-- From migration 024: project kind discriminator ('repo' | 'folder').
+-- Folder projects are non-git workspaces (multi-repo roots or plain ops folders)
+-- that run in place with named artifact/log storage under _folder/<slug>/.
+ALTER TABLE remote_agent_codebases
+  ADD COLUMN IF NOT EXISTS kind VARCHAR(10) NOT NULL DEFAULT 'repo';
 
 -- User identity foreign keys (nullable on the four primary tables).
 -- All FKs use ON DELETE SET NULL so future user deletion never cascades destructively.

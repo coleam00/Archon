@@ -28,6 +28,11 @@ mock.module('@archon/paths', () => ({
   parseOwnerRepo: mock(() => null),
   getRunArtifactsPath: mock(() => '/tmp/artifacts'),
   getProjectLogsPath: mock(() => '/tmp/logs'),
+  slugifyFolderName: mock((name: string) => name),
+  getFolderRunArtifactsPath: mock(
+    (slug: string, runId: string) => `/tmp/_folder/${slug}/artifacts/runs/${runId}`
+  ),
+  getFolderProjectLogsPath: mock((slug: string) => `/tmp/_folder/${slug}/logs`),
   captureWorkflowInvoked: mockCaptureWorkflowInvoked,
   captureWorkflowCompleted: mockCaptureWorkflowCompleted,
 }));
@@ -66,7 +71,7 @@ clearRegistry();
 registerBuiltinProviders();
 
 // --- Import after mocks ---
-import { executeWorkflow, hydrateResumableRun } from './executor';
+import { executeWorkflow, hydrateResumableRun, resolveProjectPaths } from './executor';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
 import type { WorkflowDefinition, WorkflowRun } from './schemas';
@@ -1358,5 +1363,71 @@ describe('hydrateResumableRun', () => {
     });
     const deps = makeDeps(store);
     await expect(hydrateResumableRun(deps, candidate)).rejects.toThrow('DB write failed');
+  });
+});
+
+describe('resolveProjectPaths', () => {
+  const RUN_ID = 'run-xyz';
+
+  it('routes folder projects to _folder/<slug>/ storage', async () => {
+    const store = makeStore({
+      getCodebase: mock(async () => ({
+        id: 'cb-folder',
+        name: 'My Platform',
+        repository_url: null,
+        default_cwd: '/tmp/platform',
+        kind: 'folder' as const,
+      })),
+    });
+    const deps = makeDeps(store);
+
+    const paths = await resolveProjectPaths(deps, '/tmp/platform', RUN_ID, 'cb-folder');
+
+    // slugifyFolderName is mocked to identity, so slug === name here
+    expect(paths.artifactsDir).toBe('/tmp/_folder/My Platform/artifacts/runs/run-xyz');
+    expect(paths.logDir).toBe('/tmp/_folder/My Platform/logs');
+  });
+
+  it('routes repo projects to owner/repo/ storage (unchanged)', async () => {
+    const paths = await import('@archon/paths');
+    (paths.parseOwnerRepo as ReturnType<typeof mock>).mockReturnValueOnce({
+      owner: 'acme',
+      repo: 'widget',
+    });
+    const store = makeStore({
+      getCodebase: mock(async () => ({
+        id: 'cb-repo',
+        name: 'acme/widget',
+        repository_url: 'https://github.com/acme/widget',
+        default_cwd: '/repos/widget',
+        kind: 'repo' as const,
+      })),
+    });
+    const deps = makeDeps(store);
+
+    const result = await resolveProjectPaths(deps, '/repos/widget', RUN_ID, 'cb-repo');
+
+    // getRunArtifactsPath/getProjectLogsPath are mocked to constants
+    expect(result.artifactsDir).toBe('/tmp/artifacts');
+    expect(result.logDir).toBe('/tmp/logs');
+  });
+
+  it('falls back to cwd-based paths when no codebase is registered', async () => {
+    const store = makeStore({ getCodebase: mock(async () => null) });
+    const deps = makeDeps(store);
+
+    const result = await resolveProjectPaths(deps, '/some/cwd', RUN_ID, 'missing-id');
+
+    expect(result.artifactsDir).toBe('/some/cwd/.archon/artifacts/runs/run-xyz');
+    expect(result.logDir).toBe('/some/cwd/.archon/logs');
+  });
+
+  it('falls back to cwd-based paths when no codebaseId is provided', async () => {
+    const deps = makeDeps();
+
+    const result = await resolveProjectPaths(deps, '/some/cwd', RUN_ID);
+
+    expect(result.artifactsDir).toBe('/some/cwd/.archon/artifacts/runs/run-xyz');
+    expect(result.logDir).toBe('/some/cwd/.archon/logs');
   });
 });

@@ -18,16 +18,18 @@ export async function createCodebase(data: {
   default_cwd: string;
   default_branch?: string | null;
   ai_assistant_type?: string;
+  kind?: 'repo' | 'folder';
 }): Promise<Codebase> {
   const assistantType = data.ai_assistant_type ?? process.env.DEFAULT_AI_ASSISTANT ?? 'claude';
   const result = await pool.query<Codebase>(
-    'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, default_branch, ai_assistant_type) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+    'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, default_branch, ai_assistant_type, kind) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
     [
       data.name,
       data.repository_url ?? null,
       data.default_cwd,
       data.default_branch ?? null,
       assistantType,
+      data.kind ?? 'repo',
     ]
   );
   if (!result.rows[0]) {

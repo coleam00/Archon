@@ -798,10 +798,30 @@ describe('CommandHandler', () => {
           repository_url: 'https://github.com/user/my-repo',
           default_cwd: '/workspace/my-repo',
           ai_assistant_type: 'claude',
+          kind: 'repo',
           commands: {},
           created_at: new Date(),
           updated_at: new Date(),
         });
+      });
+
+      test('rejects /worktree on a folder project as not applicable', async () => {
+        mockGetCodebase.mockResolvedValueOnce({
+          id: 'codebase-123',
+          name: 'platform',
+          repository_url: null,
+          default_cwd: '/tmp/platform',
+          ai_assistant_type: 'claude',
+          kind: 'folder',
+          commands: {},
+          created_at: new Date(),
+          updated_at: new Date(),
+        });
+
+        const result = await handleCommand(conversationWithCodebase, '/worktree create feat-x');
+
+        expect(result.success).toBe(false);
+        expect(result.message).toContain('not applicable to folder projects');
       });
 
       describe('create', () => {

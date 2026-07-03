@@ -28,7 +28,7 @@ import { getAgentProvider, getProviderCapabilities } from '@archon/providers';
 import { buildManageRunTool } from './manage-run-tool';
 import { getArchonWorkspacesPath, ensureArchonWorkspacesPath } from '@archon/paths';
 import { syncArchonToWorktree } from '../utils/worktree-sync';
-import { execFileAsync, syncWorkspace, toBranchName, toRepoPath } from '@archon/git';
+import { execFileAsync, findRepoRoot, syncWorkspace, toBranchName, toRepoPath } from '@archon/git';
 import type { WorkspaceSyncResult } from '@archon/git';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { findWorkflow, resolveWorkflowName } from '@archon/workflows/router';
@@ -882,23 +882,31 @@ async function discoverAllWorkflows(conversation: Conversation): Promise<Discove
         // Sync canonical source with remote before the AI reads codebase state.
         // This path must remain non-destructive: users and agents can write to source/.
         // Non-fatal: if fetch fails (network, no remote), proceed with local state.
-        try {
-          syncResult = await syncWorkspace(
-            toRepoPath(codebase.default_cwd),
-            codebase.default_branch ? toBranchName(codebase.default_branch) : undefined
-          );
+        // Folder projects have no git repo to sync — skip entirely.
+        if (codebase.kind === 'folder') {
           getLog().debug(
-            {
-              codebaseId: codebase.id,
-              repoPath: codebase.default_cwd,
-              ...syncResult,
-            },
-            'workspace.sync_completed'
+            { codebaseId: codebase.id, path: codebase.default_cwd },
+            'workspace.sync_skipped_folder_project'
           );
-        } catch (err) {
-          const error = err as Error;
-          syncError = error.message;
-          getLog().warn({ err: error, codebaseId: codebase.id }, 'workspace.sync_failed');
+        } else {
+          try {
+            syncResult = await syncWorkspace(
+              toRepoPath(codebase.default_cwd),
+              codebase.default_branch ? toBranchName(codebase.default_branch) : undefined
+            );
+            getLog().debug(
+              {
+                codebaseId: codebase.id,
+                repoPath: codebase.default_cwd,
+                ...syncResult,
+              },
+              'workspace.sync_completed'
+            );
+          } catch (err) {
+            const error = err as Error;
+            syncError = error.message;
+            getLog().warn({ err: error, codebaseId: codebase.id }, 'workspace.sync_failed');
+          }
         }
         const workflowCwd = conversation.cwd ?? codebase.default_cwd;
         await syncArchonToWorktree(workflowCwd);
@@ -2275,19 +2283,34 @@ async function handleRegisterProject(
 
   // Use config default provider instead of hardcoding 'claude'
   const config = await loadConfig();
-  const detectedBranch = await detectCurrentGitBranch(projectPath);
+
+  // Detect whether the path is a git repository. Non-git paths (multi-repo roots
+  // or plain ops folders) register as folder projects — run-in-place, no branch.
+  // findRepoRoot returns null for a definitive "not a repo" and throws for other
+  // cases (e.g. an unreadable path); treat a throw as non-repo (folder), matching
+  // the POST /api/codebases handler.
+  let repoRoot: string | null = null;
+  try {
+    repoRoot = await findRepoRoot(projectPath);
+  } catch (err) {
+    getLog().debug({ err: err as Error, projectPath }, 'project.register_repo_detect_inconclusive');
+  }
+  const kind: 'repo' | 'folder' = repoRoot ? 'repo' : 'folder';
+  const detectedBranch = kind === 'repo' ? await detectCurrentGitBranch(projectPath) : null;
   const codebase = await codebaseDb.createCodebase({
     name: projectName,
     default_cwd: projectPath,
     default_branch: detectedBranch,
     ai_assistant_type: config.assistant,
+    kind,
   });
 
   getLog().info(
-    { name: projectName, path: projectPath, id: codebase.id },
+    { name: projectName, path: projectPath, id: codebase.id, kind },
     'project.register_completed'
   );
-  return `Project "${projectName}" registered successfully!\nPath: ${projectPath}\nID: ${codebase.id}`;
+  const kindNote = kind === 'folder' ? '\nKind: folder project (no git — runs in place)' : '';
+  return `Project "${projectName}" registered successfully!\nPath: ${projectPath}\nID: ${codebase.id}${kindNote}`;
 }
 
 async function detectCurrentGitBranch(projectPath: string): Promise<string | null> {

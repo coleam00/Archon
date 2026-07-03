@@ -6,6 +6,8 @@ export interface Project {
   defaultBranch: string;
   repositoryUrl: string | null;
   lastSyncedAt: string | null;
+  /** 'folder' = non-git workspace running in place; 'repo' = git repository. */
+  kind: 'repo' | 'folder';
 }
 
 interface RawCodebase {
@@ -14,6 +16,7 @@ interface RawCodebase {
   default_cwd: string;
   default_branch?: string | null;
   repository_url: string | null;
+  kind?: 'repo' | 'folder';
   updated_at: string;
   created_at: string;
 }
@@ -26,5 +29,7 @@ export function toProject(raw: RawCodebase): Project {
     defaultBranch: raw.default_branch ?? 'main',
     repositoryUrl: raw.repository_url,
     lastSyncedAt: raw.updated_at,
+    // Backfill to 'repo' for older payloads (pre-kind); never leaves it undefined.
+    kind: raw.kind ?? 'repo',
   };
 }

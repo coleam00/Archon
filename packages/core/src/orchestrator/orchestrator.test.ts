@@ -1492,11 +1492,13 @@ describe('orchestrator-agent handleMessage', () => {
 
       await handleMessage(platform, 'chat-456', '/register-project my-app /home/user/my-app');
 
+      // The path is not a git repo → registers as a folder project.
       expect(mockCreateCodebase).toHaveBeenCalledWith({
         name: 'my-app',
         default_cwd: '/home/user/my-app',
         default_branch: null,
         ai_assistant_type: 'claude',
+        kind: 'folder',
       });
       expect(platform.sendMessage).toHaveBeenCalledWith(
         'chat-456',
@@ -1533,6 +1535,7 @@ describe('orchestrator-agent handleMessage', () => {
           default_cwd: projectPath,
           default_branch: 'develop',
           ai_assistant_type: 'claude',
+          kind: 'repo',
         });
       } finally {
         await rm(projectPath, { recursive: true, force: true });

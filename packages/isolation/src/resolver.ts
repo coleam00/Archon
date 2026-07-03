@@ -101,6 +101,13 @@ export class IsolationResolver {
       return { status: 'none', cwd: '/workspace' };
     }
 
+    // 2b. Folder projects run in place — no worktree. Return the REAL folder
+    // path (not the '/workspace' docker sentinel) so chat/workflows land in the
+    // actual project directory.
+    if (request.codebase.kind === 'folder') {
+      return { status: 'none', cwd: request.codebase.defaultCwd };
+    }
+
     const codebase = request.codebase;
     const hints = request.hints;
     const workflowType: IsolationWorkflowType = hints?.workflowType ?? 'thread';

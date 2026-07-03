@@ -188,6 +188,42 @@ describe('IsolationResolver', () => {
     }
   });
 
+  test('folder project — returns none with the real folder cwd (not /workspace)', async () => {
+    const resolver = createResolver();
+
+    const result = await resolver.resolve({
+      existingEnvId: null,
+      codebase: { id: 'cb-folder', defaultCwd: '/tmp/platform', name: 'platform', kind: 'folder' },
+      platformType: 'web',
+    });
+
+    expect(result.status).toBe('none');
+    if (result.status === 'none') {
+      // Must be the real folder path, NOT the '/workspace' docker sentinel.
+      expect(result.cwd).toBe('/tmp/platform');
+    }
+  });
+
+  test('repo kind (explicit) — proceeds to normal worktree resolution', async () => {
+    const env = makeEnvRow();
+    const resolver = createResolver({
+      store: makeMockStore({
+        findActiveByWorkflow: async (_cid, wt, wid) =>
+          wt === 'issue' && wid === '42' ? env : null,
+      }),
+    });
+
+    const result = await resolver.resolve({
+      existingEnvId: null,
+      codebase: { ...defaultCodebase, kind: 'repo' },
+      hints: { workflowType: 'issue', workflowId: '42' },
+      platformType: 'web',
+    });
+
+    // kind: 'repo' must NOT short-circuit — it resolves a worktree as usual.
+    expect(result.status).toBe('resolved');
+  });
+
   test('workflow reuse — returns resolved with workflow_reuse method', async () => {
     const env = makeEnvRow();
     const resolver = createResolver({

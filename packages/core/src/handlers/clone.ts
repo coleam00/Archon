@@ -2,7 +2,7 @@
  * Standalone repository clone/register logic.
  * Extracted from command-handler.ts for reuse by REST endpoints.
  */
-import { access, rm } from 'fs/promises';
+import { access, rm, stat } from 'fs/promises';
 import { join, basename, resolve } from 'path';
 import * as codebaseDb from '../db/codebases';
 import { sanitizeError } from '../utils/credential-sanitizer';
@@ -11,9 +11,12 @@ import {
   expandTilde,
   getCommandFolderSearchPaths,
   ensureProjectStructure,
+  ensureFolderProjectStructure,
+  getFolderProjectRoot,
   getProjectSourcePath,
   createProjectSourceSymlink,
   parseOwnerRepo,
+  slugifyFolderName,
 } from '@archon/paths';
 import { findMarkdownFilesRecursive } from '../utils/commands';
 import { createLogger } from '@archon/paths';
@@ -465,4 +468,78 @@ export async function registerRepository(localPath: string): Promise<RegisterRes
 
   // default_cwd is the real local path (not the symlink)
   return registerRepoAtPath(localPath, name, remoteUrl);
+}
+
+/**
+ * Register a folder project (`kind: 'folder'`) — any directory that is NOT
+ * required to be a git repository. Used for multi-repo roots (N service repos
+ * under one root) and plain business-ops folders with no git at all.
+ *
+ * Unlike {@link registerRepository}, this performs NO git validation and creates
+ * NO `source/` symlink: a folder project runs in place at its real path. Named
+ * artifact/log storage lives under `~/.archon/workspaces/_folder/<slug>/`.
+ */
+export async function registerFolder(localPath: string, name?: string): Promise<RegisterResult> {
+  const resolvedPath = resolve(expandTilde(localPath));
+
+  // Validate the path exists and is a directory (no git check).
+  let isDirectory = false;
+  try {
+    isDirectory = (await stat(resolvedPath)).isDirectory();
+  } catch (error) {
+    throw new Error(`Path does not exist: ${resolvedPath} (${(error as Error).message})`);
+  }
+  if (!isDirectory) {
+    throw new Error(`Path is not a directory: ${resolvedPath}`);
+  }
+
+  // Already registered by path — return the existing record unchanged.
+  const existing = await codebaseDb.findCodebaseByDefaultCwd(resolvedPath);
+  if (existing) {
+    return {
+      codebaseId: existing.id,
+      name: existing.name,
+      repositoryUrl: existing.repository_url,
+      defaultCwd: existing.default_cwd,
+      defaultBranch: existing.default_branch ?? null,
+      commandCount: 0,
+      alreadyExisted: true,
+    };
+  }
+
+  const projectName = name?.trim() || basename(resolvedPath);
+  const slug = slugifyFolderName(projectName);
+
+  // Create the _folder/<slug>/{artifacts,logs} storage structure (no source/,
+  // no worktrees/ — folder projects are never git-isolated).
+  await ensureFolderProjectStructure(slug);
+
+  const suggestedAssistant = await resolveDefaultAssistant(resolvedPath);
+  const codebase = await codebaseDb.createCodebase({
+    name: projectName,
+    default_cwd: resolvedPath,
+    ai_assistant_type: suggestedAssistant,
+    kind: 'folder',
+  });
+
+  getLog().info(
+    {
+      name: projectName,
+      path: resolvedPath,
+      id: codebase.id,
+      slug,
+      storage: getFolderProjectRoot(slug),
+    },
+    'project.register_folder_completed'
+  );
+
+  return {
+    codebaseId: codebase.id,
+    name: codebase.name,
+    repositoryUrl: null,
+    defaultCwd: resolvedPath,
+    defaultBranch: null,
+    commandCount: 0,
+    alreadyExisted: false,
+  };
 }
