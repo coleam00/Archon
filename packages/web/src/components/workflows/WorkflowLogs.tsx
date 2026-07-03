@@ -6,13 +6,16 @@ import { getMessages } from '@/lib/api';
 import { ensureUtc, formatDurationMs } from '@/lib/format';
 import type { MessageResponse } from '@/lib/api';
 import { workflowSSEHandlers } from '@/stores/workflow-store';
-import type { ChatMessage, ToolCallDisplay, ErrorDisplay } from '@/lib/types';
+import { isTerminalStatus } from '@/lib/workflow-utils';
+import type { ChatMessage, ToolCallDisplay, ErrorDisplay, WorkflowRunStatus } from '@/lib/types';
 import type { ToolEvent } from './WorkflowExecution';
 
 interface WorkflowLogsProps {
   conversationId: string;
   startedAt?: number;
   isRunning?: boolean;
+  workflowStatus?: WorkflowRunStatus;
+  completedAt?: number;
   currentlyExecuting?: { nodeName: string; startedAt: number } | null;
   toolEvents?: ToolEvent[];
   /** Timestamp of the selected node's start — used to scroll the message list. */
@@ -21,10 +24,33 @@ interface WorkflowLogsProps {
   nodeScrollTrigger?: number;
 }
 
-function hydrateMessages(
+function terminalToolStatus(status: WorkflowRunStatus | undefined): ToolCallDisplay['status'] {
+  if (status === 'cancelled') return 'cancelled';
+  if (status === 'failed') return 'stopped';
+  return undefined;
+}
+
+function settleOpenToolCallForWorkflowStatus(
+  tool: ToolCallDisplay,
+  workflowStatus: WorkflowRunStatus | undefined,
+  completedAt: number | undefined
+): ToolCallDisplay {
+  if (!workflowStatus || !isTerminalStatus(workflowStatus)) return tool;
+  if (tool.output !== undefined || tool.duration !== undefined) return tool;
+
+  return {
+    ...tool,
+    duration: Math.max(0, (completedAt ?? Date.now()) - tool.startedAt),
+    status: terminalToolStatus(workflowStatus),
+  };
+}
+
+export function hydrateMessages(
   rows: MessageResponse[],
   startedAt?: number,
-  toolEvents?: ToolEvent[]
+  toolEvents?: ToolEvent[],
+  workflowStatus?: WorkflowRunStatus,
+  completedAt?: number
 ): ChatMessage[] {
   const hydrated: ChatMessage[] = rows.map(row => {
     let meta: {
@@ -45,15 +71,21 @@ function hydrateMessages(
     // Restore tool calls persisted in message metadata (written by persistence.ts flush).
     // This ensures historical tool calls are visible immediately on page load,
     // without waiting for the toolEvents prop from the workflow_events table.
-    const persistedTools: ToolCallDisplay[] | undefined = meta.toolCalls?.map((tc, i) => ({
-      id: `${row.id}-tool-${String(i)}`,
-      name: tc.name,
-      input: tc.input,
-      output: tc.output,
-      duration: tc.duration,
-      startedAt: ts,
-      isExpanded: false,
-    }));
+    const persistedTools: ToolCallDisplay[] | undefined = meta.toolCalls?.map((tc, i) =>
+      settleOpenToolCallForWorkflowStatus(
+        {
+          id: `${row.id}-tool-${String(i)}`,
+          name: tc.name,
+          input: tc.input,
+          output: tc.output,
+          duration: tc.duration,
+          startedAt: ts,
+          isExpanded: false,
+        },
+        workflowStatus,
+        completedAt
+      )
+    );
     return {
       id: row.id,
       role: row.role,
@@ -126,25 +158,37 @@ function hydrateMessages(
       if (target) {
         if (!target.toolCalls) target.toolCalls = [];
         if (!target.toolCalls.some(tc => tc.id === te.id)) {
-          target.toolCalls.push({
-            id: te.id,
-            name: te.name,
-            input: te.input,
-            startedAt: teTimestamp,
-            isExpanded: false,
-            duration: te.duration,
-          });
+          target.toolCalls.push(
+            settleOpenToolCallForWorkflowStatus(
+              {
+                id: te.id,
+                name: te.name,
+                input: te.input,
+                startedAt: teTimestamp,
+                isExpanded: false,
+                duration: te.duration,
+              },
+              workflowStatus,
+              completedAt
+            )
+          );
         }
       } else {
         // No assistant message to attach to — collect for synthetic message
-        unattached.push({
-          id: te.id,
-          name: te.name,
-          input: te.input,
-          startedAt: teTimestamp,
-          isExpanded: false,
-          duration: te.duration,
-        });
+        unattached.push(
+          settleOpenToolCallForWorkflowStatus(
+            {
+              id: te.id,
+              name: te.name,
+              input: te.input,
+              startedAt: teTimestamp,
+              isExpanded: false,
+              duration: te.duration,
+            },
+            workflowStatus,
+            completedAt
+          )
+        );
       }
     }
 
@@ -178,6 +222,8 @@ export function WorkflowLogs({
   conversationId,
   startedAt,
   isRunning,
+  workflowStatus,
+  completedAt,
   currentlyExecuting,
   toolEvents,
   scrollToNodeTimestamp,
@@ -204,10 +250,10 @@ export function WorkflowLogs({
   // Poll for messages from DB — 3s while running (or during grace period), disabled when terminal.
   // staleTime: 0 ensures post-completion navigation always fetches fresh data on mount.
   const { data: queryMessages } = useQuery({
-    queryKey: ['workflowMessages', conversationId],
+    queryKey: ['workflowMessages', conversationId, workflowStatus, completedAt],
     queryFn: async (): Promise<ChatMessage[]> => {
       const rows = await getMessages(conversationId);
-      return hydrateMessages(rows, startedAt, toolEvents);
+      return hydrateMessages(rows, startedAt, toolEvents, workflowStatus, completedAt);
     },
     refetchInterval: isRunning || gracePolling ? 3000 : false,
     staleTime: 0,
@@ -221,6 +267,7 @@ export function WorkflowLogs({
       // Finalize any in-flight SSE tool calls that never received tool_result.
       // This is a safety net for when onLockChange fires late or is missed.
       const now = Date.now();
+      const status = terminalToolStatus(workflowStatus);
       setSseMessages(prev =>
         prev.map(msg => {
           const hasOpenTool = msg.toolCalls?.some(tc => tc.duration === undefined && !tc.output);
@@ -229,7 +276,9 @@ export function WorkflowLogs({
             ...msg,
             isStreaming: false,
             toolCalls: msg.toolCalls?.map(tc =>
-              tc.duration === undefined && !tc.output ? { ...tc, duration: now - tc.startedAt } : tc
+              tc.duration === undefined && !tc.output
+                ? { ...tc, duration: now - tc.startedAt, ...(status ? { status } : {}) }
+                : tc
             ),
           };
         })
@@ -249,7 +298,7 @@ export function WorkflowLogs({
     }
     prevIsRunningRef.current = isRunning;
     return undefined;
-  }, [isRunning, conversationId, queryClient]);
+  }, [isRunning, conversationId, queryClient, workflowStatus]);
 
   // When DB messages arrive, prune SSE messages to avoid duplicates.
   // DB is canonical for completed content. SSE messages may carry both completed

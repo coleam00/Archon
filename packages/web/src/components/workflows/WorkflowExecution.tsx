@@ -16,6 +16,7 @@ import { useWorkflowStore } from '@/stores/workflow-store';
 import { getWorkflowRun, getWorkflowRunByWorker, getCodebase, getWorkflow } from '@/lib/api';
 import { ensureUtc, formatDurationMs } from '@/lib/format';
 import { selectInitialNode } from '@/lib/select-initial-node';
+import { settleRunningDagNodesForTerminalStatus } from '@/lib/workflow-utils';
 import type {
   WorkflowState,
   ArtifactType,
@@ -245,12 +246,17 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
     queryKey: ['workflowRun', runId],
     queryFn: async (): Promise<WorkflowRunQueryData> => {
       const data = await getWorkflowRun(runId);
+      const status = data.run.status;
+      const dagNodes = settleRunningDagNodesForTerminalStatus(
+        status,
+        buildWorkflowDagNodeStates(data.nodeStates, data.events)
+      );
       return {
         workflowState: {
           runId: data.run.id,
           workflowName: data.run.workflow_name,
-          status: data.run.status,
-          dagNodes: buildWorkflowDagNodeStates(data.nodeStates, data.events),
+          status,
+          dagNodes,
           artifacts: data.events
             .filter(e => e.event_type === 'workflow_artifact')
             .map(e => {
@@ -419,6 +425,13 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
       });
       return initialData;
     }
+    if (isTerminal(initialData.status)) return initialData;
+
+    const dagNodes = settleRunningDagNodesForTerminalStatus(
+      liveWorkflow.status,
+      liveWorkflow.dagNodes.length > 0 ? liveWorkflow.dagNodes : initialData.dagNodes
+    );
+
     // Merge: use liveWorkflow's dynamic status but preserve initialData's
     // structural data when liveWorkflow is sparse (missed earlier events).
     return {
@@ -428,7 +441,7 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
       error: liveWorkflow.error ?? initialData.error,
       // SSE accumulates dagNodes/artifacts incrementally — prefer them when populated,
       // otherwise fall back to the REST snapshot.
-      dagNodes: liveWorkflow.dagNodes.length > 0 ? liveWorkflow.dagNodes : initialData.dagNodes,
+      dagNodes,
       artifacts: liveWorkflow.artifacts.length > 0 ? liveWorkflow.artifacts : initialData.artifacts,
 
       currentIteration: liveWorkflow.currentIteration ?? initialData.currentIteration,
@@ -629,6 +642,8 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
             conversationId={logsPlatformId}
             startedAt={initialData?.startedAt}
             isRunning={isRunning}
+            workflowStatus={workflow.status}
+            completedAt={workflow.completedAt}
             currentlyExecuting={currentlyExecuting}
             toolEvents={toolEvents}
             scrollToNodeTimestamp={scrollToNodeTimestamp}

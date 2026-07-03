@@ -170,10 +170,36 @@ describe('workflow retry preparation operation', () => {
     expect(result.preservedCompletedOutputs).toEqual(new Map([['a', 'A0']]));
   });
 
-  test('rejects retry when the run is not failed or the target node is not failed', async () => {
+  test('prepares retry for a cancelled run with a failed target node', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makeRun({ status: 'cancelled' }));
+
+    const result = await prepareWorkflowNodeRetry(makeRequest());
+
+    expect(result.runId).toBe('run-1');
+    expect(result.invalidatedNodeIds).toEqual(['b', 'c']);
+    expect(mockClaimWorkflowRunForNodeRetry).toHaveBeenCalledWith('run-1');
+  });
+
+  test('prepares retry for a cancelled run with an interrupted running target node', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makeRun({ status: 'cancelled' }));
+    mockListWorkflowEvents.mockResolvedValueOnce([
+      { event_type: 'node_completed', step_name: 'a', data: { node_output: 'A0' } },
+      { event_type: 'node_started', step_name: 'b', data: {} },
+      { event_type: 'node_skipped', step_name: 'c', data: { reason: 'dependency_failed' } },
+    ]);
+
+    const result = await prepareWorkflowNodeRetry(makeRequest());
+
+    expect(result.runId).toBe('run-1');
+    expect(result.invalidatedNodeIds).toEqual(['b', 'c']);
+    expect(result.preservedCompletedOutputs).toEqual(new Map([['a', 'A0']]));
+    expect(mockClaimWorkflowRunForNodeRetry).toHaveBeenCalledWith('run-1');
+  });
+
+  test('rejects retry when the run is not retryable or the target node is not failed', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(makeRun({ status: 'running' }));
     await expect(prepareWorkflowNodeRetry(makeRequest())).rejects.toMatchObject({
-      code: 'run_not_failed',
+      code: 'run_not_retryable',
     });
 
     mockGetWorkflowRun.mockResolvedValueOnce(makeRun());

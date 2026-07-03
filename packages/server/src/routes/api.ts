@@ -82,10 +82,15 @@ import { isValidCommandName } from '@archon/workflows/command-validation';
 import { projectLatestEffectiveNodeStates } from '@archon/workflows/retry-state';
 import { BUNDLED_WORKFLOWS, BUNDLED_COMMANDS, isBinaryBuild } from '@archon/workflows/defaults';
 import {
+  RETRYABLE_WORKFLOW_STATUSES,
   RESUMABLE_WORKFLOW_STATUSES,
   TERMINAL_WORKFLOW_STATUSES,
 } from '@archon/workflows/schemas/workflow-run';
-import type { ApprovalContext, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import type {
+  ApprovalContext,
+  WorkflowRun,
+  WorkflowRunStatus,
+} from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
 import type { MessageRow } from '@archon/core/schemas/message';
 import type { DashboardWorkflowRun } from '@archon/core/schemas/workflow-run';
@@ -144,6 +149,38 @@ function projectApiWorkflowNodeStates(events: readonly WorkflowEventRow[]): ApiW
       ...(state.reason ? { reason: state.reason } : {}),
     };
   });
+}
+
+function terminalApiNodeStatus(status: WorkflowRunStatus): ApiWorkflowNodeState['status'] {
+  return status === 'completed' ? 'completed' : 'failed';
+}
+
+function terminalApiNodeError(status: WorkflowRunStatus): string | undefined {
+  if (status === 'cancelled') return 'Cancelled by user';
+  if (status === 'failed') return 'Workflow stopped';
+  return undefined;
+}
+
+function settleApiWorkflowNodeStatesForRunStatus(
+  status: WorkflowRunStatus,
+  nodeStates: ApiWorkflowNodeState[]
+): ApiWorkflowNodeState[] {
+  if (!TERMINAL_WORKFLOW_STATUSES.includes(status)) return nodeStates;
+
+  const nextStatus = terminalApiNodeStatus(status);
+  const fallbackError = terminalApiNodeError(status);
+  let changed = false;
+  const nextNodeStates = nodeStates.map(nodeState => {
+    if (nodeState.status !== 'running') return nodeState;
+    changed = true;
+    return {
+      ...nodeState,
+      status: nextStatus,
+      ...(fallbackError && !nodeState.error ? { error: fallbackError } : {}),
+    };
+  });
+
+  return changed ? nextNodeStates : nodeStates;
 }
 import * as conversationDb from '@archon/core/db/conversations';
 import * as codebaseDb from '@archon/core/db/codebases';
@@ -814,7 +851,7 @@ const retryWorkflowNodeRoute = createRoute({
   method: 'post',
   path: '/api/workflows/runs/{runId}/nodes/{nodeId}/retry',
   tags: ['Workflows'],
-  summary: 'Retry one failed DAG node and its descendants',
+  summary: 'Retry one failed DAG node and its descendants for a failed or cancelled run',
   request: { params: retryWorkflowNodeParamsSchema },
   responses: {
     200: {
@@ -2358,7 +2395,7 @@ export function registerApiRoutes(
       case 'cas_miss':
       case 'path_in_use':
         return 409;
-      case 'run_not_failed':
+      case 'run_not_retryable':
       case 'node_not_found':
       case 'node_not_failed':
       case 'node_not_retryable':
@@ -3469,8 +3506,12 @@ export function registerApiRoutes(
       if (!run) {
         return apiError(c, 404, 'Workflow run not found');
       }
-      if (run.status !== 'failed') {
-        return apiError(c, 400, `Cannot retry workflow in '${run.status}' status`);
+      if (!RETRYABLE_WORKFLOW_STATUSES.includes(run.status)) {
+        return apiError(
+          c,
+          400,
+          `Cannot retry workflow in '${run.status}' status. Only failed or cancelled runs can be retried.`
+        );
       }
 
       const auth = await authorizeWorkflowNodeRetry(c, run);
@@ -3860,7 +3901,10 @@ export function registerApiRoutes(
           conversation_platform_id: conversationPlatformId ?? null,
         },
         events,
-        nodeStates: projectApiWorkflowNodeStates(events),
+        nodeStates: settleApiWorkflowNodeStatesForRunStatus(
+          run.status,
+          projectApiWorkflowNodeStates(events)
+        ),
       });
     } catch (error) {
       getLog().error({ err: error }, 'get_workflow_run_failed');

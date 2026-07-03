@@ -311,7 +311,7 @@ archon workflow run <name> --cwd /path/to/repo "<message>"
 | `archon workflow runs` | List recent runs of every status for this project |
 | `archon workflow get <id>` | Show detail for a single run (any status) |
 | `archon workflow resume <id>` | Resume a failed workflow |
-| `archon workflow retry-node <id> <node-id>` | Retry one failed DAG node |
+| `archon workflow retry-node <id> <node-id>` | Retry one failed DAG node in a failed/cancelled run |
 | `archon workflow abandon <id>` | Abandon a non-terminal run |
 | `archon workflow approve <id> [comment]` | Approve an interactive loop gate |
 | `archon workflow reject <id> [--reason "..."]` | Reject an approval gate |

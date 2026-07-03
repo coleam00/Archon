@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { devtools, subscribeWithSelector } from 'zustand/middleware';
 import { queryClient } from '@/lib/query-client';
 import { getWorkflowRun } from '@/lib/api';
-import { isTerminalStatus } from '@/lib/workflow-utils';
+import { isTerminalStatus, settleRunningDagNodesForTerminalStatus } from '@/lib/workflow-utils';
 import type {
   WorkflowState,
   DagNodeState,
@@ -207,9 +207,13 @@ export const useWorkflowStore = create<WorkflowStoreState>()(
               if (isTerminalStatus(existing.status) && event.status === 'running') {
                 return state;
               }
+              const dagNodes = isTerminalStatus(event.status)
+                ? settleRunningDagNodesForTerminalStatus(event.status, existing.dagNodes)
+                : existing.dagNodes;
               next.set(event.runId, {
                 ...existing,
                 status: event.status,
+                dagNodes,
                 error: event.error,
                 completedAt: isTerminalStatus(event.status) ? event.timestamp : undefined,
                 approval: event.status === 'paused' ? event.approval : undefined,
@@ -250,6 +254,8 @@ export const useWorkflowStore = create<WorkflowStoreState>()(
         set(
           state =>
             updateWorkflow(state, event.runId, wf => {
+              if (isTerminalStatus(wf.status) && event.status === 'running') return wf;
+
               const dagNodes = [...wf.dagNodes];
               const existingIdx = dagNodes.findIndex(n => n.nodeId === event.nodeId);
 

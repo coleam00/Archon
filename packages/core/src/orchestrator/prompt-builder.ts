@@ -238,7 +238,7 @@ Run these from within the project's git repo (any subdirectory works — they re
 - \`archon workflow run <workflow> "<message>" --detach\` — start a run in the background (returns immediately)
 - \`archon workflow approve <run-id> [--json]\` / \`archon workflow reject <run-id> [reason] [--json]\` — resolve a paused approval gate
 - \`archon workflow resume <run-id>\` — re-run a failed/paused run, skipping completed nodes (run as a background task; \`--json\` validates only)
-- \`archon workflow retry-node <run-id> <node-id>\` — retry one failed DAG node; use \`get --verbose\` to find node IDs
+- \`archon workflow retry-node <run-id> <node-id>\` — retry one failed DAG node in a failed/cancelled run; use \`get --verbose\` to find node IDs
 - \`archon workflow abandon <run-id> [--json]\` — cancel a non-terminal run
 
 When the user asks what's running, whether a run passed/failed, or to approve / reject / resume / retry a failed DAG node / cancel a run, use these commands directly instead of invoking a workflow. The \`manage-run\` skill has the full reference if it is loaded.`;

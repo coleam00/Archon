@@ -947,6 +947,63 @@ describe('GET /api/workflows/runs/:runId', () => {
     ]);
   });
 
+  test('does not project running nodeStates for cancelled runs with incomplete node history', async () => {
+    mockGetWorkflowRun.mockImplementationOnce(async () => ({
+      ...MOCK_RUNNING_RUN,
+      status: 'cancelled',
+      completed_at: NOW,
+    }));
+    mockListWorkflowEvents.mockImplementationOnce(async () => [
+      {
+        id: 'evt-prepare-start',
+        workflow_run_id: 'run-uuid-1',
+        event_type: 'node_started',
+        step_index: null,
+        step_name: 'prepare',
+        data: {},
+        created_at: NOW,
+      },
+      {
+        id: 'evt-prepare-done',
+        workflow_run_id: 'run-uuid-1',
+        event_type: 'node_completed',
+        step_index: null,
+        step_name: 'prepare',
+        data: { duration_ms: 13 },
+        created_at: NOW,
+      },
+      {
+        id: 'evt-dev-story-start',
+        workflow_run_id: 'run-uuid-1',
+        event_type: 'node_started',
+        step_index: null,
+        step_name: 'dev-story',
+        data: { provider: 'codex' },
+        created_at: NOW,
+      },
+    ]);
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-1');
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      run: { status: string };
+      nodeStates: Array<{ nodeId: string; status: string; retryEpoch: number; error?: string }>;
+    };
+
+    expect(body.run.status).toBe('cancelled');
+    expect(body.nodeStates).toEqual([
+      { nodeId: 'prepare', name: 'prepare', status: 'completed', retryEpoch: 0, duration: 13 },
+      {
+        nodeId: 'dev-story',
+        name: 'dev-story',
+        status: 'failed',
+        retryEpoch: 0,
+        error: 'Cancelled by user',
+      },
+    ]);
+  });
+
   test('returns route-loop decisions and latest route output while preserving historical attempts', async () => {
     const negativeDecision = {
       from: 'review',
@@ -2136,6 +2193,50 @@ describe('GET /api/runs/:runId/artifacts', () => {
 });
 
 describe('POST /api/workflows/runs/:runId/nodes/:nodeId/retry', () => {
+  beforeEach(() => {
+    mockGetWorkflowRun.mockReset();
+  });
+
+  test('allows cancelled runs through status validation before web ownership checks', async () => {
+    mockGetWorkflowRun.mockImplementationOnce(async () => ({
+      ...MOCK_FAILED_RUN,
+      id: 'run-cancelled-retry',
+      status: 'cancelled',
+      parent_conversation_id: null,
+    }));
+
+    const { app } = makeApp();
+    const response = await app.request(
+      '/api/workflows/runs/run-cancelled-retry/nodes/dev-story/retry',
+      { method: 'POST' }
+    );
+
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain('created outside the web UI');
+    expect(body.error).toContain('archon workflow retry-node run-cancelled-retry dev-story');
+  });
+
+  test('rejects active runs before retry ownership checks', async () => {
+    mockGetWorkflowRun.mockImplementationOnce(async () => ({
+      ...MOCK_RUNNING_RUN,
+      id: 'run-running-retry',
+      status: 'running',
+      parent_conversation_id: null,
+    }));
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-running-retry/nodes/build/retry', {
+      method: 'POST',
+    });
+
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toBe(
+      "Cannot retry workflow in 'running' status. Only failed or cancelled runs can be retried."
+    );
+  });
+
   test.todo(
     'returns success and dispatches a prepared retry run for eligible web-owned runs',
     () => {}
@@ -2145,7 +2246,10 @@ describe('POST /api/workflows/runs/:runId/nodes/:nodeId/retry', () => {
   test.todo('returns 403 when the requester cannot mutate the workflow run', () => {});
   test.todo('returns 404 when the target run or failed node does not exist', () => {});
   test.todo('returns 409 when retry preparation detects an ineligible run state', () => {});
-  test.todo('allows retry only for failed runs created from Web conversations', () => {});
+  test.todo(
+    'allows retry only for failed or cancelled runs created from Web conversations',
+    () => {}
+  );
   test.todo('rejects CLI-created runs with actionable workflow retry-node guidance', () => {});
   test.todo('rejects non-web parent conversations with CLI retry guidance', () => {});
 });

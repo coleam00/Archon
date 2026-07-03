@@ -1,6 +1,9 @@
 import type { DagNodeState, WorkflowRunStatus } from '@/lib/types';
 
-export type WorkflowRetryRunIneligibility = 'run-not-failed' | 'cli-created' | 'missing-web-parent';
+export type WorkflowRetryRunIneligibility =
+  | 'run-not-retryable'
+  | 'cli-created'
+  | 'missing-web-parent';
 
 export interface WorkflowRetryRunContext {
   runId: string;
@@ -37,6 +40,10 @@ export function isRetryableFailedNode(node: RetryableNodeState): boolean {
   return node.retryEpoch === node.latestRetryEpoch;
 }
 
+function isRetryableRunStatus(status: WorkflowRunStatus): boolean {
+  return status === 'failed' || status === 'cancelled';
+}
+
 export function getRouteLoopRetryFromNodeId(node: RetryableNodeState): string | null {
   const routeDecision = node.routeDecision;
   if (!routeDecision) return null;
@@ -48,7 +55,7 @@ export function getRouteLoopRetryFromNodeId(node: RetryableNodeState): string | 
 export function getWorkflowRetryRunIneligibility(
   run: WorkflowRetryRunContext
 ): WorkflowRetryRunIneligibility | null {
-  if (run.status !== 'failed') return 'run-not-failed';
+  if (!isRetryableRunStatus(run.status)) return 'run-not-retryable';
   if (!run.parentPlatformId) {
     return run.conversationPlatformId ? 'cli-created' : 'missing-web-parent';
   }
@@ -60,7 +67,7 @@ export function getWorkflowNodeRetryActionState(
   node: RetryableNodeState
 ): WorkflowNodeRetryActionState {
   const routeLoopFromNodeId = getRouteLoopRetryFromNodeId(node);
-  if (run.status === 'failed' && routeLoopFromNodeId) {
+  if (isRetryableRunStatus(run.status) && routeLoopFromNodeId) {
     const ineligible = getWorkflowRetryRunIneligibility(run);
     return {
       kind: 'route-loop-guidance',

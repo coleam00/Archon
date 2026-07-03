@@ -122,7 +122,7 @@ Commands:
   workflow status            Show status of running/paused workflows
   workflow runs              List recent runs (all statuses) for this project
   workflow get <run-id>      Show detail for a single run (any status)
-  workflow retry-node <run-id> <node-id> Retry one failed DAG node
+  workflow retry-node <run-id> <node-id> Retry one failed DAG node in a failed/cancelled run
   workflow search [query]    Search the workflow marketplace
   workflow install <slug>    Install a workflow from the marketplace
   isolation list             List all active worktrees/environments

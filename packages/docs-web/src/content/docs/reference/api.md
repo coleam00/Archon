@@ -268,7 +268,7 @@ Only user-defined workflows can be deleted. Bundled defaults cannot be removed.
 | GET | `/api/workflows/runs/by-worker/{platformId}` | Look up a run by worker conversation ID |
 | POST | `/api/workflows/runs/{runId}/cancel` | Cancel a running workflow |
 | POST | `/api/workflows/runs/{runId}/resume` | Resume a failed workflow |
-| POST | `/api/workflows/runs/{runId}/nodes/{nodeId}/retry` | Retry one failed DAG node and its descendants |
+| POST | `/api/workflows/runs/{runId}/nodes/{nodeId}/retry` | Retry one failed DAG node in a failed/cancelled run |
 | POST | `/api/workflows/runs/{runId}/abandon` | Abandon a non-terminal run |
 | POST | `/api/workflows/runs/{runId}/approve` | Approve a paused workflow |
 | POST | `/api/workflows/runs/{runId}/reject` | Reject a paused workflow |

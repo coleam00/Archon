@@ -280,7 +280,8 @@ In `--json` mode the command is a non-blocking control-plane ack: it validates t
 
 ### `workflow retry-node`
 
-Retry one failed DAG node and its current DAG descendants in the same workflow run. Use this when a specific node failed after earlier work succeeded and you want that branch to run again with a fresh retry epoch.
+Retry one failed DAG node and its current DAG descendants in a failed or cancelled workflow run.
+Use this when a specific node failed after earlier work succeeded and you want that branch to run again with a fresh retry epoch.
 
 ```bash
 archon workflow retry-node <run-id> <node-id>

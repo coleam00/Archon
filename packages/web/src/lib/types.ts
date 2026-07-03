@@ -287,6 +287,7 @@ export interface ToolCallDisplay {
   input: Record<string, unknown>;
   output?: string;
   duration?: number;
+  status?: 'cancelled' | 'stopped';
   startedAt: number;
   isExpanded: boolean;
 }

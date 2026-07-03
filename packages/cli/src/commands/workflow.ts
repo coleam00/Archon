@@ -28,7 +28,10 @@ import type {
   WorkflowSource,
   WorkflowWithSource,
 } from '@archon/workflows/schemas/workflow';
-import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
+import {
+  RETRYABLE_WORKFLOW_STATUSES,
+  workflowRunStatusSchema,
+} from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import {
   approveWorkflow,
@@ -1583,8 +1586,10 @@ export async function workflowRetryNodeCommand(
   if (!run) {
     throw new Error(`Workflow run not found: ${runId}`);
   }
-  if (run.status !== 'failed') {
-    throw new Error(`Cannot retry workflow run '${runId}' with status '${run.status}'.`);
+  if (!RETRYABLE_WORKFLOW_STATUSES.includes(run.status)) {
+    throw new Error(
+      `Cannot retry workflow run '${runId}' with status '${run.status}'. Only failed or cancelled runs can be retried.`
+    );
   }
 
   const pathContext = await verifyRetryWorkingPath(run);

@@ -31,6 +31,12 @@ export const RESUMABLE_WORKFLOW_STATUSES: readonly WorkflowRunStatus[] = [
   'paused',
 ] as const;
 
+/** Statuses that allow a user to retry one failed DAG node. */
+export const RETRYABLE_WORKFLOW_STATUSES: readonly WorkflowRunStatus[] = [
+  'failed',
+  'cancelled',
+] as const;
+
 // ---------------------------------------------------------------------------
 // WorkflowStepStatus
 // ---------------------------------------------------------------------------

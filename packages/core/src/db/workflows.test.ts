@@ -465,7 +465,7 @@ describe('workflows database', () => {
   });
 
   describe('claimWorkflowRunForNodeRetry', () => {
-    test('claims a failed run, clears completion, and increments metadata retry_epoch in one CAS update', async () => {
+    test('claims a retryable run, clears completion, and increments metadata retry_epoch in one CAS update', async () => {
       const claimedRun = {
         ...mockWorkflowRun,
         status: 'running' as const,
@@ -483,7 +483,7 @@ describe('workflows database', () => {
       expect(updateSql).toContain("SET status = 'running'");
       expect(updateSql).toContain('completed_at = NULL');
       expect(updateSql).toContain("jsonb_set(\n         COALESCE(metadata, '{}'::jsonb)");
-      expect(updateSql).toContain("WHERE id = $1 AND status = 'failed'");
+      expect(updateSql).toContain("WHERE id = $1 AND status IN ('failed', 'cancelled')");
       expect(updateParams).toEqual(['workflow-run-123']);
       expect(mockQuery).toHaveBeenNthCalledWith(
         2,
@@ -492,7 +492,7 @@ describe('workflows database', () => {
       );
     });
 
-    test('throws retry claim conflict when the failed -> running CAS misses', async () => {
+    test('throws retry claim conflict when the retryable -> running CAS misses', async () => {
       mockQuery
         .mockResolvedValueOnce(createQueryResult([], 0))
         .mockResolvedValueOnce(createQueryResult([{ status: 'running' }]));

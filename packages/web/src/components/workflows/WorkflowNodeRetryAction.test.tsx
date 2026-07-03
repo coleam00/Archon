@@ -82,6 +82,13 @@ describe('WorkflowNodeRetryAction', () => {
     expect(markup).toContain('Retry');
   });
 
+  test('renders a retry action for a failed node in a cancelled run', () => {
+    const markup = renderRetryAction({ node: failedNode(), runStatus: 'cancelled' });
+
+    expect(markup).toContain('Failed node: Build');
+    expect(markup).toContain('Retry');
+  });
+
   test('guides route-loop controllers toward route_loop.from instead of direct retry', () => {
     const markup = renderRetryAction({ node: routeLoopNode() });
 
@@ -105,7 +112,7 @@ describe('WorkflowNodeRetryAction', () => {
     expect(markup).not.toContain('archon workflow retry-node run-123 review-router');
   });
 
-  test('hides route-loop guidance outside failed runs', () => {
+  test('hides route-loop guidance outside retryable runs', () => {
     const markup = renderRetryAction({
       node: routeLoopNode(),
       runStatus: 'completed',

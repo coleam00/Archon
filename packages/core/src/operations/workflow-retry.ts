@@ -22,12 +22,13 @@ import {
 import { isRouteLoopNode } from '@archon/workflows/schemas/dag-node';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import { RETRYABLE_WORKFLOW_STATUSES } from '@archon/workflows/schemas/workflow-run';
 
 export type WorkflowRetryRequesterSurface = 'web' | 'cli';
 
 export type WorkflowRetryErrorCode =
   | 'run_not_found'
-  | 'run_not_failed'
+  | 'run_not_retryable'
   | 'node_not_found'
   | 'node_not_failed'
   | 'node_not_retryable'
@@ -149,10 +150,10 @@ export async function prepareWorkflowNodeRetry(
   if (!run) {
     throw new WorkflowRetryError('run_not_found', `Workflow run not found: ${input.runId}`);
   }
-  if (run.status !== 'failed') {
+  if (!RETRYABLE_WORKFLOW_STATUSES.includes(run.status)) {
     throw new WorkflowRetryError(
-      'run_not_failed',
-      `Cannot retry workflow run ${input.runId} with status '${run.status}'`
+      'run_not_retryable',
+      `Cannot retry workflow run ${input.runId} with status '${run.status}'. Only failed or cancelled runs can be retried.`
     );
   }
 
@@ -172,7 +173,9 @@ export async function prepareWorkflowNodeRetry(
 
   const events = await workflowEventDb.listWorkflowEvents(input.runId);
   const latestNodeState = projectLatestEffectiveNodeStates(events).get(input.nodeId);
-  if (latestNodeState?.state !== 'failed') {
+  const cancelledRunInterruptedTarget =
+    run.status === 'cancelled' && latestNodeState?.state === 'running';
+  if (latestNodeState?.state !== 'failed' && !cancelledRunInterruptedTarget) {
     throw new WorkflowRetryError(
       'node_not_failed',
       `Cannot retry node '${input.nodeId}' because its latest effective status is '${latestNodeState?.state ?? 'unknown'}'`

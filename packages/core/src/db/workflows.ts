@@ -9,6 +9,7 @@ import type {
   ApprovalContext,
 } from '@archon/workflows/schemas/workflow-run';
 import {
+  RETRYABLE_WORKFLOW_STATUSES,
   TERMINAL_WORKFLOW_STATUSES,
   routeLoopRuntimeMetadataSchema,
 } from '@archon/workflows/schemas/workflow-run';
@@ -141,10 +142,14 @@ export class WorkflowRetryNotClaimableError extends Error {
   ) {
     super(
       `Workflow run is not retry-claimable (id: ${runId}, status: ${currentStatus}). ` +
-        'It may have already been retried, resumed, completed, or cancelled.'
+        'It may have already been retried, resumed, completed, or become active.'
     );
     this.name = 'WorkflowRetryNotClaimableError';
   }
+}
+
+function retryableWorkflowRunStatusesSql(): string {
+  return RETRYABLE_WORKFLOW_STATUSES.map(status => `'${status}'`).join(', ');
 }
 
 function retryEpochMetadataSetExpression(): string {
@@ -623,7 +628,7 @@ export async function claimWorkflowRunForNodeRetry(id: string): Promise<Workflow
            started_at = ${dialect.now()},
            last_activity_at = ${dialect.now()},
            metadata = ${retryEpochMetadataSetExpression()}
-       WHERE id = $1 AND status = 'failed'`,
+       WHERE id = $1 AND status IN (${retryableWorkflowRunStatusesSql()})`,
       [id]
     );
   } catch (error) {

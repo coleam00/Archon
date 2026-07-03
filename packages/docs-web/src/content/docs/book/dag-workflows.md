@@ -344,7 +344,8 @@ nodes:
 
 ## Retry a Failed Node
 
-When a DAG run fails, you can retry the failed node instead of resuming the whole failed run. Node retry reuses the same workflow run, reruns the selected failed node and its current DAG descendants, and preserves successful upstream and sibling outputs.
+When a DAG run fails or is cancelled, you can retry the failed node instead of resuming the whole failed run.
+Node retry reuses the same workflow run, reruns the selected failed node and its current DAG descendants, and preserves successful upstream and sibling outputs.
 
 Use node retry when one node failed after earlier work succeeded:
 
@@ -352,7 +353,8 @@ Use node retry when one node failed after earlier work succeeded:
 archon workflow retry-node <run-id> <node-id>
 ```
 
-The Web UI shows a retry action for eligible failed nodes on web-created failed runs. If the run was created from the CLI or another non-web surface, use the CLI command above from the run's repository or Archon-managed worktree.
+The Web UI shows a retry action for eligible failed nodes on web-created failed or cancelled runs.
+If the run was created from the CLI or another non-web surface, use the CLI command above from the run's repository or Archon-managed worktree.
 
 | Behavior | What happens |
 |----------|--------------|

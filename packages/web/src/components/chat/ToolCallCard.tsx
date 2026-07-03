@@ -10,7 +10,9 @@ interface ToolCallCardProps {
 export function ToolCallCard({ tool }: ToolCallCardProps): React.ReactElement {
   const [expanded, setExpanded] = useState(tool.isExpanded);
   const [showAllOutput, setShowAllOutput] = useState(false);
-  const isRunning = tool.output === undefined && tool.duration === undefined;
+  const isTerminalWithoutResult = tool.status === 'cancelled' || tool.status === 'stopped';
+  const isRunning =
+    !isTerminalWithoutResult && tool.output === undefined && tool.duration === undefined;
 
   // Live elapsed counter — ticks every second while tool is running
   const [elapsed, setElapsed] = useState(0);
@@ -38,13 +40,22 @@ export function ToolCallCard({ tool }: ToolCallCardProps): React.ReactElement {
     .map(line => line.trim())
     .find(line => line.length > 0)
     ?.slice(0, 80);
-  const statusLabel = isRunning ? 'Running' : tool.output !== undefined ? 'Complete' : 'Done';
+  const statusLabel = isRunning
+    ? 'Running'
+    : tool.status === 'cancelled'
+      ? 'Cancelled'
+      : tool.status === 'stopped'
+        ? 'Stopped'
+        : tool.output !== undefined
+          ? 'Complete'
+          : 'Done';
 
   return (
     <div
       className={cn(
         'rounded-lg border border-border bg-surface transition-colors hover:border-border-bright',
-        isRunning && 'border-l-2 border-l-primary'
+        isRunning && 'border-l-2 border-l-primary',
+        tool.status === 'cancelled' && 'border-l-2 border-l-error'
       )}
     >
       {/* Header - clickable to expand */}

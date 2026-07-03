@@ -262,6 +262,45 @@ describe('handleWorkflowStatus — terminal guard', () => {
     const wf = useWorkflowStore.getState().workflows.get('run-tg2');
     expect(wf!.completedAt).toBeUndefined();
   });
+
+  test('settles running DAG nodes when workflow is cancelled', () => {
+    useWorkflowStore.getState().handleWorkflowStatus(statusEvent({ runId: 'run-tg3' }));
+    useWorkflowStore
+      .getState()
+      .handleDagNode(dagNodeEvent({ runId: 'run-tg3', nodeId: 'dev-story', name: 'Dev Story' }));
+
+    useWorkflowStore
+      .getState()
+      .handleWorkflowStatus(statusEvent({ runId: 'run-tg3', status: 'cancelled' }));
+
+    const wf = useWorkflowStore.getState().workflows.get('run-tg3');
+    expect(wf!.status).toBe('cancelled');
+    expect(wf!.dagNodes).toEqual([
+      {
+        nodeId: 'dev-story',
+        name: 'Dev Story',
+        status: 'failed',
+        error: 'Cancelled by user',
+        duration: undefined,
+        reason: undefined,
+        routeDecision: undefined,
+      },
+    ]);
+  });
+
+  test('ignores late running DAG node events after terminal status', () => {
+    useWorkflowStore
+      .getState()
+      .handleWorkflowStatus(statusEvent({ runId: 'run-tg4', status: 'cancelled' }));
+
+    useWorkflowStore
+      .getState()
+      .handleDagNode(dagNodeEvent({ runId: 'run-tg4', nodeId: 'dev-story', name: 'Dev Story' }));
+
+    const wf = useWorkflowStore.getState().workflows.get('run-tg4');
+    expect(wf!.status).toBe('cancelled');
+    expect(wf!.dagNodes).toEqual([]);
+  });
 });
 
 describe('hydrateWorkflow', () => {
