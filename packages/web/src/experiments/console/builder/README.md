@@ -24,6 +24,13 @@ The in-console workflow builder. Ported from the standalone
   Save flow with a dirty indicator + nav guard, server-tier validation surfaced
   into the issue panel, and full CRUD — with bundled workflows opening read-only
   and saving as a project override. See **PR-3 specifics** below.
+- **PR-4 (shipped): Marketplace Submission.** A `Submit` affordance that bundles
+  a saved workflow (plus referenced `command:`/`script:` files), commits it to
+  the project's own GitHub repo via the Git Data API, runs pre-flight gates
+  mirroring marketplace CI, forks `coleam00/Archon`, and opens a PR editing
+  `packages/docs-web/src/data/marketplace.ts`. This is a **deliberate,
+  ADR-recorded break** from the "pure web / zero backend" rule PR-1–3 held — see
+  **PR-4 specifics** below and `docs/adr/0001-marketplace-submission-is-server-assisted.md`.
 
 `BuilderPage` stays a **controlled component**: it takes
 `initialWorkflow: BuilderWorkflow` as a prop and reports edits via `onChange`.
@@ -53,7 +60,10 @@ builder/
 │                 #   sub-forms), WhenBuilder, IssueList, YamlPreview, Toolbar
 ├── BuilderPage.tsx       # PR-2: the controlled assembly (+ PR-3 extraIssues prop)
 ├── BuilderConnected.tsx  # PR-3: connected /console/builder[/:name] route
+│                         #   (+ PR-4: mounts the Submit affordance + modal)
 ├── connect/              # PR-3: pure save/rename/issue logic + selected-project hook
+├── marketplace/          # PR-4: SubmitModal.tsx (self-attestation checklist + result)
+├── docs/adr/             # Architecture decisions (ADR-0001: server-assisted Submit)
 └── **/*.test.ts  # bun:test units (pure logic only — no DOM, no mock.module)
 ```
 
@@ -150,6 +160,39 @@ in isolation — reviewable by construction.
 - **Subdir limitation (known).** `GET /api/workflows/:name` does not recurse into
   `.archon/workflows/<subdir>/`; subfoldered workflows won't load via the
   single-name route and surface a "not found" empty state (offers New).
+
+## PR-4 specifics (Marketplace Submission)
+
+- **New server surface (breaks the "zero backend" rule on purpose).** A `POST
+  /api/marketplace/submit` route drives a new
+  `packages/server/src/services/marketplace-publish/` service (origin probe,
+  bundle assembly, pre-flight gates, registry-entry edit, Octokit
+  fork/commit/PR orchestration). The **client** stays inside the console
+  isolation contract below — it only ever calls the one skill verb
+  (`submitToMarketplace`, `skills/marketplace.ts`) and never talks to GitHub
+  directly. See ADR-0001 for the full rationale and the S5 transport amendment
+  (Git Data API, not local `git push`).
+- **Submit affordance.** A header button next to Save, disabled while the
+  workflow is dirty, unsaved (create mode), or a read-only bundled default —
+  the server re-reads the workflow file from disk and never trusts a
+  client-sent definition, so it must already be on disk as a project file.
+- **The self-attestation checklist** (`SubmitModal.tsx`) is the verbatim
+  CONTRIBUTING.md checklist; all four items are required client-side AND
+  re-enforced server-side (`z.literal(true)` × 4) — the client gate is never
+  trusted alone.
+- **Credential requirement.** Submit needs a GitHub credential resolvable by
+  the server: the caller's connected per-user GitHub identity, or an
+  install-level `GITHUB_TOKEN`/`GH_TOKEN`. No credential → a 422 with
+  connect-or-configure guidance surfaced verbatim in the modal.
+- **Result surface.** Success shows the opened PR URL; failure shows a status-
+  mapped message (`httpErrorToMessage` in `skills/marketplace.ts`) — 409 means
+  the workflow's slug is already registered by a different GitHub author, 422
+  carries the server's actionable block reason verbatim, and a 500 after the
+  bundle commit already landed says so explicitly (the project repo write is a
+  real, persistent side effect even if the rest of the flow failed).
+- **Visible side effect.** A successful Submit commits `.archon/marketplace/<slug>/`
+  to the **project's own repo's default branch** — this happens before the PR
+  step and is not undone by a later failure.
 
 ## Round-trip contract
 

@@ -25,6 +25,7 @@ import {
 } from 'react';
 import { useNavigate, useParams, useLocation, useSearchParams } from 'react-router';
 import { BuilderPage } from './BuilderPage';
+import { SubmitModal } from './marketplace/SubmitModal';
 import { fromWorkflowDefinition, toWorkflowDefinition } from './model';
 import { runValidation } from './validation';
 import { makeIssue } from './validation/make-issue';
@@ -146,6 +147,7 @@ export function BuilderConnected(): ReactElement {
   // Source can flip after a bundled Save-as (bundled → project override).
   const [sourceOverride, setSourceOverride] = useState<WorkflowSource | null>(null);
   const [busy, setBusy] = useState(false);
+  const [submitOpen, setSubmitOpen] = useState(false);
 
   const effectiveSource = sourceOverride ?? loadedSource;
   const readOnly = isReadOnlySource(effectiveSource);
@@ -401,6 +403,16 @@ export function BuilderConnected(): ReactElement {
   const saveLabel = readOnly ? 'Save as' : 'Save';
   const canSave = !busy && (readOnly || dirty || isCreateMode);
   const workflowOpen = name !== undefined && imported !== null;
+  // Submit needs a saved project workflow on disk: readOnly (bundled) has no
+  // project-local file yet (Save as first), create mode hasn't saved, and a
+  // dirty edit hasn't landed on disk — the server re-reads the file, it never
+  // trusts a client-sent definition.
+  const submitDisabled = busy || dirty || isCreateMode || readOnly;
+  const submitTitle = readOnly
+    ? 'Save as a project override before submitting'
+    : dirty || isCreateMode
+      ? 'Save before submitting'
+      : undefined;
   // Split a genuine 404 (workflow doesn't exist → offer New) from other load
   // failures (500/403/network) — the latter must NOT masquerade as "not found",
   // which would mislead and invite a duplicate via "Create a new workflow".
@@ -489,6 +501,17 @@ export function BuilderConnected(): ReactElement {
               className="rounded-[8px] bg-accent-bright px-3 py-1 text-[12px] font-semibold text-white/95 transition-opacity hover:brightness-110 disabled:pointer-events-none disabled:opacity-40"
             >
               {saveLabel}
+            </button>
+            <button
+              type="button"
+              disabled={submitDisabled}
+              title={submitTitle}
+              onClick={(): void => {
+                setSubmitOpen(true);
+              }}
+              className="rounded-[8px] border border-border bg-surface px-2.5 py-1 text-[12px] text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:opacity-40"
+            >
+              Submit
             </button>
             {!isCreateMode ? (
               <button
@@ -601,6 +624,17 @@ export function BuilderConnected(): ReactElement {
           <EmptyState>Loading workflow…</EmptyState>
         )}
       </div>
+
+      {workflowOpen && name !== undefined && cwd !== undefined ? (
+        <SubmitModal
+          open={submitOpen}
+          onClose={() => {
+            setSubmitOpen(false);
+          }}
+          workflowName={name}
+          cwd={cwd}
+        />
+      ) : null}
     </div>
   );
 }
