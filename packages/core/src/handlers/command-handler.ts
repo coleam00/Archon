@@ -8,7 +8,7 @@ import { type Conversation, type CommandResult, ConversationNotFoundError } from
 import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
 import * as sessionDb from '../db/sessions';
-import { listWorktrees, execFileAsync, toRepoPath } from '@archon/git';
+import { listWorktrees, execFileAsync, listChildRepos, toRepoPath } from '@archon/git';
 import { getIsolationProvider } from '@archon/isolation';
 import * as isolationEnvDb from '../db/isolation-environments';
 import {
@@ -144,6 +144,18 @@ async function getCurrentBranch(repoPath: string): Promise<string> {
  *
  * @returns Formatted context string. Never throws - falls back gracefully on errors.
  */
+/**
+ * Format a folder project's contained git repos for status display.
+ * Truncates the visible list at 10 and appends a "(+N more)" count.
+ */
+function formatChildRepos(childRepos: string[]): string {
+  const MAX_SHOWN = 10;
+  const shown = childRepos.slice(0, MAX_SHOWN);
+  const remaining = childRepos.length - shown.length;
+  const suffix = remaining > 0 ? `, … (+${String(remaining)} more)` : '';
+  return `Contains ${String(childRepos.length)} git repo${childRepos.length === 1 ? '' : 's'}: ${shown.join(', ')}${suffix}`;
+}
+
 async function formatRepoContext(
   codebase: { name: string; default_cwd: string; kind?: 'repo' | 'folder' } | null,
   isolationEnvId: string | null
@@ -1092,6 +1104,13 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
         if (conversation.cwd) {
           msg += `\n- Working Directory: ${conversation.cwd}`;
         }
+        // For a folder project, surface the git repos contained under its root.
+        if (codebase.kind === 'folder') {
+          const childRepos = await listChildRepos(codebase.default_cwd);
+          if (childRepos.length > 0) {
+            msg += `\n- ${formatChildRepos(childRepos)}`;
+          }
+        }
       } else {
         msg += '\n\n## Conversation Context\n- Project: None — orchestrator will route as needed';
       }
@@ -1128,8 +1147,9 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
         );
       }
 
-      // Add worktree breakdown if codebase is configured
-      if (codebase) {
+      // Add worktree breakdown if codebase is configured. Folder projects run in
+      // place and have no worktrees — skip the breakdown entirely.
+      if (codebase && codebase.kind !== 'folder') {
         try {
           const breakdown = await getWorktreeStatusBreakdown(codebase.id, codebase.default_cwd);
           msg += `\n\nWorktrees: ${String(breakdown.total)} active`;

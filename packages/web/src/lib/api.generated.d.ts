@@ -3289,7 +3289,6 @@ export interface components {
       modelReasoningEffort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
       /** @enum {string} */
       webSearchMode?: 'disabled' | 'cached' | 'live';
-      additionalDirectories?: string[];
       interactive?: boolean;
       /** @enum {string} */
       effort?: 'low' | 'medium' | 'high' | 'max';

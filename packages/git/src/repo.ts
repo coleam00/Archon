@@ -1,3 +1,6 @@
+import { existsSync } from 'fs';
+import { readdir } from 'fs/promises';
+import { join } from 'path';
 import { createLogger } from '@archon/paths';
 import { execFileAsync } from './exec';
 import { getDefaultBranch } from './branch';
@@ -43,6 +46,29 @@ export async function findRepoRoot(startPath: string): Promise<RepoPath | null> 
     getLog().error({ startPath, err, stderr: err.stderr }, 'find_repo_root_failed');
     throw new Error(`Failed to find repo root for ${startPath}: ${err.message}`);
   }
+}
+
+/**
+ * List the immediate child directories of `rootPath` that are themselves git
+ * repositories (contain a `.git` directory or file). One level only — no
+ * recursion. Used to surface the contained repos of a folder project (a
+ * multi-repo root). Returns the child names (basenames), sorted.
+ *
+ * Never throws: returns [] if `rootPath` can't be read (missing, not a
+ * directory, permission denied) — the caller treats "no child repos" and
+ * "unreadable root" identically.
+ */
+export async function listChildRepos(rootPath: string): Promise<string[]> {
+  let names: string[];
+  try {
+    names = await readdir(rootPath);
+  } catch (error) {
+    getLog().debug({ rootPath, err: error as Error }, 'list_child_repos_read_failed');
+    return [];
+  }
+  // existsSync follows symlinks and matches both a `.git` directory (normal
+  // clone) and a `.git` file (worktree/submodule pointer).
+  return names.filter(name => existsSync(join(rootPath, name, '.git'))).sort();
 }
 
 /**

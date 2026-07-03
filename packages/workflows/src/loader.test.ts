@@ -389,10 +389,13 @@ nodes:
       expect(workflows[0].model).toBe('claude-opus-4-7[1m]');
     });
 
-    it('should parse codex options fields', async () => {
+    it('should parse codex options fields (and ignore the removed additionalDirectories field)', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(workflowDir, { recursive: true });
 
+      // additionalDirectories was a dead workflow-level field (parsed but never
+      // consumed by the DAG executor) — it has been removed. A YAML that still
+      // declares it must load fine, with the field simply ignored.
       const yaml = `name: codex-options
 description: Codex options are parsed
 provider: codex
@@ -414,7 +417,8 @@ nodes:
       expect(workflows).toHaveLength(1);
       expect(workflows[0].modelReasoningEffort).toBe('medium');
       expect(workflows[0].webSearchMode).toBe('live');
-      expect(workflows[0].additionalDirectories).toEqual(['/repo/a']);
+      // The removed field is not carried onto the workflow object.
+      expect((workflows[0] as Record<string, unknown>).additionalDirectories).toBeUndefined();
     });
 
     it('should round-trip workflow-level effort/thinking/fallbackModel/betas/sandbox', async () => {

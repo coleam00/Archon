@@ -167,6 +167,72 @@ async function defaultLoadDatabaseDeps(): Promise<DatabaseDeps> {
   return { pool, getDatabaseType };
 }
 
+interface FolderCodebase {
+  name: string;
+  default_cwd: string;
+  kind: 'repo' | 'folder';
+}
+
+export interface FolderProjectDeps {
+  findCodebaseByDefaultCwd: (cwd: string) => Promise<FolderCodebase | null>;
+  findCodebaseByPathPrefix: (cwd: string) => Promise<FolderCodebase | null>;
+  listChildRepos: (rootPath: string) => Promise<string[]>;
+}
+
+async function defaultLoadFolderProjectDeps(): Promise<FolderProjectDeps> {
+  const codebaseDb = await import('@archon/core/db/codebases');
+  const { listChildRepos } = await import('@archon/git');
+  return {
+    findCodebaseByDefaultCwd: codebaseDb.findCodebaseByDefaultCwd,
+    findCodebaseByPathPrefix: codebaseDb.findCodebaseByPathPrefix,
+    listChildRepos,
+  };
+}
+
+/**
+ * When the current directory is a registered folder project, report it and list
+ * the git repos contained under its root. Skips quietly (not a failure) for a
+ * normal git-repo cwd, an unregistered directory, or when the DB is unavailable.
+ */
+export async function checkFolderProject(
+  cwd: string = process.cwd(),
+  loadDeps: () => Promise<FolderProjectDeps> = defaultLoadFolderProjectDeps
+): Promise<CheckResult> {
+  const label = 'Folder project';
+  let deps: FolderProjectDeps;
+  try {
+    deps = await loadDeps();
+  } catch (err) {
+    getLog().debug({ err }, 'doctor.folder_project_module_load_failed');
+    return { label, status: 'skip', message: 'unavailable (module load failed)' };
+  }
+  let codebase: FolderCodebase | null;
+  try {
+    codebase =
+      (await deps.findCodebaseByDefaultCwd(cwd)) ?? (await deps.findCodebaseByPathPrefix(cwd));
+  } catch (err) {
+    getLog().debug({ err, cwd }, 'doctor.folder_project_lookup_failed');
+    return { label, status: 'skip', message: 'could not check (database unavailable)' };
+  }
+  if (codebase?.kind !== 'folder') {
+    return { label, status: 'skip', message: 'cwd is not a registered folder project' };
+  }
+  const childRepos = await deps.listChildRepos(codebase.default_cwd);
+  const shown = childRepos.slice(0, 10);
+  const remaining = childRepos.length - shown.length;
+  const reposMsg =
+    childRepos.length > 0
+      ? `${String(childRepos.length)} contained repo(s): ${shown.join(', ')}${
+          remaining > 0 ? `, … (+${String(remaining)} more)` : ''
+        }`
+      : 'no contained git repos';
+  return {
+    label,
+    status: 'pass',
+    message: `"${codebase.name}" (runs in place) — ${reposMsg}`,
+  };
+}
+
 export interface ProviderDeps {
   listUserProviderKeys: (
     userId: string
@@ -371,6 +437,7 @@ export async function doctorCommand(
         checkGhAuth(env),
         checkPi(env),
         checkDatabase(),
+        checkFolderProject(),
         checkConnectedProviders(env),
         checkWorkspaceWritable(),
         checkBundledDefaults(),
