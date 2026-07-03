@@ -87,6 +87,7 @@ import { cloneRepository, registerRepository, registerFolder } from './clone';
 let spyFsAccess: ReturnType<typeof spyOn>;
 let spyFsRm: ReturnType<typeof spyOn>;
 let spyFsStat: ReturnType<typeof spyOn>;
+let spyFsRealpath: ReturnType<typeof spyOn>;
 let spyExecFileAsync: ReturnType<typeof spyOn>;
 
 function setupSpies(): void {
@@ -99,6 +100,10 @@ function setupSpies(): void {
   spyFsStat = spyOn(fsPromises, 'stat').mockResolvedValue({
     isDirectory: () => true,
   } as Awaited<ReturnType<typeof fsPromises.stat>>);
+  // Default: realpath is identity (no symlink to resolve) — the symlink
+  // canonicalization test overrides this to return a distinct real path.
+  spyFsRealpath = spyOn(fsPromises, 'realpath').mockImplementation(((p: string) =>
+    Promise.resolve(p)) as unknown as typeof fsPromises.realpath);
   spyExecFileAsync = spyOn(gitUtils, 'execFileAsync').mockResolvedValue({
     stdout: '',
     stderr: '',
@@ -108,6 +113,7 @@ function setupSpies(): void {
 function restoreSpies(): void {
   spyFsAccess?.mockRestore();
   spyFsRm?.mockRestore();
+  spyFsRealpath?.mockRestore();
   spyFsStat?.mockRestore();
   spyExecFileAsync?.mockRestore();
 }
@@ -1110,10 +1116,37 @@ describe('registerFolder', () => {
 
   // ── Validation ─────────────────────────────────────────────────────────
   test('throws when the path does not exist', async () => {
-    spyFsStat.mockRejectedValueOnce(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+    // realpath is the first existence gate (runs before stat).
+    spyFsRealpath.mockRejectedValueOnce(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
 
     await expect(registerFolder('/tmp/does-not-exist')).rejects.toThrow('Path does not exist');
     expect(mockCreateCodebase.mock.calls.length).toBe(0);
+  });
+
+  // ── Symlink canonicalization (regression) ──────────────────────────────
+  test('stores the realpath-canonicalized path so symlinked roots match on lookup', async () => {
+    // Simulate macOS /tmp → /private/tmp: realpath maps the symlink to its real target.
+    spyFsRealpath.mockImplementationOnce(((p: string) =>
+      Promise.resolve(p === '/tmp/platform' ? '/private/tmp/platform' : p)) as unknown as never);
+    mockFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
+    mockCreateCodebase.mockResolvedValueOnce(
+      makeCodebase({
+        id: 'folder-uuid-1',
+        name: 'platform',
+        repository_url: null,
+        default_cwd: '/private/tmp/platform',
+      }) as ReturnType<typeof makeCodebase>
+    );
+
+    const result = await registerFolder('/tmp/platform');
+
+    // The already-registered check and the stored default_cwd both use the REAL
+    // path, matching what process.cwd() (and thus the gate/doctor) resolves to.
+    expect(mockFindCodebaseByDefaultCwd).toHaveBeenCalledWith('/private/tmp/platform');
+    expect(mockCreateCodebase).toHaveBeenCalledWith(
+      expect.objectContaining({ default_cwd: '/private/tmp/platform', kind: 'folder' })
+    );
+    expect(result.defaultCwd).toBe('/private/tmp/platform');
   });
 
   test('throws when the path is a file, not a directory', async () => {

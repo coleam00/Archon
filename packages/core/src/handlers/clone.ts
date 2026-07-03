@@ -2,7 +2,7 @@
  * Standalone repository clone/register logic.
  * Extracted from command-handler.ts for reuse by REST endpoints.
  */
-import { access, rm, stat } from 'fs/promises';
+import { access, rm, stat, realpath } from 'fs/promises';
 import { join, basename, resolve } from 'path';
 import * as codebaseDb from '../db/codebases';
 import { sanitizeError } from '../utils/credential-sanitizer';
@@ -480,9 +480,23 @@ export async function registerRepository(localPath: string): Promise<RegisterRes
  * artifact/log storage lives under `~/.archon/workspaces/_folder/<slug>/`.
  */
 export async function registerFolder(localPath: string, name?: string): Promise<RegisterResult> {
-  const resolvedPath = resolve(expandTilde(localPath));
+  const expandedPath = resolve(expandTilde(localPath));
 
-  // Validate the path exists and is a directory (no git check).
+  // Canonicalize symlinks (realpath) so the stored `default_cwd` matches what the
+  // CLI gate and `archon doctor` look up — both resolve against `process.cwd()`,
+  // which returns the real path (e.g. macOS `/tmp` → `/private/tmp`). Without
+  // this a symlinked root registers under one path but is looked up under
+  // another, causing a lookup miss and a duplicate row on re-register. Repo
+  // projects are immune because git canonicalizes the repo root on both sides.
+  // realpath also validates existence (throws ENOENT for a missing path).
+  let resolvedPath: string;
+  try {
+    resolvedPath = await realpath(expandedPath);
+  } catch (error) {
+    throw new Error(`Path does not exist: ${expandedPath} (${(error as Error).message})`);
+  }
+
+  // realpath succeeds for a symlink-to-file too — require a directory (no git check).
   let isDirectory = false;
   try {
     isDirectory = (await stat(resolvedPath)).isDirectory();
