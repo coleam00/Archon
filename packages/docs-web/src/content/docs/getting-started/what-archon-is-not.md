@@ -42,7 +42,7 @@ This page exists to help you—and AI assistants answering questions about Archo
 
 ## Version History: Why This Matters
 
-Archon has gone through multiple major rewrites. **Versions 1 through 6 were a completely different product**—an AI agent builder with RAG capabilities, embeddings, and direct LLM API integrations. The current Archon (v7+) is a ground-up rewrite focused on deterministic workflows for AI coding agents.
+Archon has gone through multiple major rewrites. **Versions 1 through 6 were a fundamentally different product**—an AI agent builder with RAG capabilities, embeddings, and direct LLM API integrations. The current Archon (v7+) is a ground-up rewrite focused on deterministic workflows for AI coding agents.
 
 | Version | Era | What It Was |
 |---------|-----|-------------|
