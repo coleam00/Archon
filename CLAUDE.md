@@ -209,6 +209,9 @@ bun run cli workflow run implement --branch feature-auth "Add auth"
 # Opt out of isolation (run in live checkout)
 bun run cli workflow run quick-fix --no-worktree "Fix typo"
 
+# Register the current non-git directory as a folder project and run in place (no worktree)
+bun run cli workflow run assist --folder "List every repo under this multi-repo root"
+
 # Run in a detached background child (returns immediately; find it via `workflow runs`)
 bun run cli workflow run implement "Add auth" --detach
 
@@ -650,6 +653,9 @@ curl http://localhost:3637/api/conversations/<conversationId>/messages
 │   │   │   └── nodes/            # Typed node-output sidecars (<id>.md + <id>.meta.json) for nodes with output_type
 │   │   └── uploads/{convId}/     # Web UI file uploads (ephemeral)
 │   └── logs/                     # Workflow execution logs
+├── workspaces/_folder/<slug>/    # Folder project (non-git; runs in place — no source/ or worktrees/)
+│   ├── artifacts/                # Workflow artifacts (NEVER in git)
+│   └── logs/                     # Workflow execution logs
 ├── vendor/codex/                  # Codex native binary (binary builds, user-placed)
 ├── web-dist/<version>/            # Cached web UI dist (archon serve, binary only)
 ├── update-check.json              # Update check cache (binary builds, 24h TTL)
@@ -895,7 +901,7 @@ Pattern: Use `classifyIsolationError()` (from `@archon/isolation`) to map git er
 
 **Codebases:**
 - `GET /api/codebases` / `GET /api/codebases/:id` - List / fetch codebases
-- `POST /api/codebases` - Register a codebase (clone or local path)
+- `POST /api/codebases` - Register a codebase (clone or local path). A non-git local `path` now auto-registers as a folder project (`kind: 'folder'`, runs in place) instead of erroring
 - `DELETE /api/codebases/:id` - Delete a codebase and clean up resources
 - `GET /api/codebases/:id/env` - List env var keys for a codebase (never returns values)
 - `PUT /api/codebases/:id/env` / `DELETE /api/codebases/:id/env/:key` - Upsert / delete a single codebase env var

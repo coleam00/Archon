@@ -273,7 +273,7 @@ archon workflow run archon-fix-github-issue --branch fix/issue-42 "Fix issue #42
 
 That's it. The CLI auto-detects the git repo, uses SQLite for state tracking (`~/.archon/archon.db`), and streams output to stdout.
 
-> **The target directory must be a git repository.** Archon uses git worktrees for isolation, so it needs a `.git` folder. If your project isn't a git repo yet, run `git init && git add . && git commit -m "initial commit"` first.
+> **The target directory is usually a git repository.** Archon uses git worktrees for isolation, so a git repo gets a `.git` folder and per-run branch isolation. But a non-git directory — a multi-repo root or an ops folder — can be registered as a [folder project](/getting-started/concepts/#folder-projects-non-git-workspaces) with `--folder` instead, running in place with no worktree. If you want git isolation and your project isn't a repo yet, run `git init && git add . && git commit -m "initial commit"` first.
 
 ---
 

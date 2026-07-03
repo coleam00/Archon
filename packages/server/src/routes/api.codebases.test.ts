@@ -483,6 +483,33 @@ describe('POST /api/codebases', () => {
     expect(mockRegisterRepository).not.toHaveBeenCalled();
   });
 
+  test('when findRepoRoot throws (inconclusive), falls back to registerFolder', async () => {
+    // A genuine git error (not "not a git repository") must not crash the route —
+    // it falls through to registerFolder (which does authoritative validation).
+    mockFindRepoRoot.mockRejectedValueOnce(new Error('git: command timed out'));
+    mockRegisterFolder.mockImplementationOnce(async () => ({
+      codebaseId: 'folder-uuid-2',
+      alreadyExisted: false,
+    }));
+    mockGetCodebase.mockImplementationOnce(async () => ({
+      ...MOCK_CODEBASE,
+      id: 'folder-uuid-2',
+      repository_url: null,
+      kind: 'folder',
+    }));
+
+    const app = makeApp();
+    const response = await app.request('/api/codebases', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: '/tmp/ambiguous' }),
+    });
+
+    expect(response.status).toBe(201);
+    expect(mockRegisterFolder).toHaveBeenCalledWith('/tmp/ambiguous');
+    expect(mockRegisterRepository).not.toHaveBeenCalled();
+  });
+
   test('returns 400 when both url and path are provided', async () => {
     const app = makeApp();
     const response = await app.request('/api/codebases', {

@@ -139,12 +139,6 @@ async function getCurrentBranch(repoPath: string): Promise<string> {
 }
 
 /**
- * Format repository context for user-facing display.
- * Shows "owner/repo @ branch" instead of filesystem paths.
- *
- * @returns Formatted context string. Never throws - falls back gracefully on errors.
- */
-/**
  * Format a folder project's contained git repos for status display.
  * Truncates the visible list at 10 and appends a "(+N more)" count.
  */
@@ -156,6 +150,12 @@ function formatChildRepos(childRepos: string[]): string {
   return `Contains ${String(childRepos.length)} git repo${childRepos.length === 1 ? '' : 's'}: ${shown.join(', ')}${suffix}`;
 }
 
+/**
+ * Format repository context for user-facing display.
+ * Shows "owner/repo @ branch" instead of filesystem paths.
+ *
+ * @returns Formatted context string. Never throws - falls back gracefully on errors.
+ */
 async function formatRepoContext(
   codebase: { name: string; default_cwd: string; kind?: 'repo' | 'folder' } | null,
   isolationEnvId: string | null
@@ -1097,6 +1097,7 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
       const codebase = conversation.codebase_id
         ? await codebaseDb.getCodebase(conversation.codebase_id)
         : null;
+      const isFolderProject = codebase?.kind === 'folder';
 
       if (codebase?.name) {
         const repoContext = await formatRepoContext(codebase, conversation.isolation_env_id);
@@ -1105,7 +1106,7 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
           msg += `\n- Working Directory: ${conversation.cwd}`;
         }
         // For a folder project, surface the git repos contained under its root.
-        if (codebase.kind === 'folder') {
+        if (isFolderProject) {
           const childRepos = await listChildRepos(codebase.default_cwd);
           if (childRepos.length > 0) {
             msg += `\n- ${formatChildRepos(childRepos)}`;
@@ -1149,7 +1150,7 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
 
       // Add worktree breakdown if codebase is configured. Folder projects run in
       // place and have no worktrees — skip the breakdown entirely.
-      if (codebase && codebase.kind !== 'folder') {
+      if (codebase && !isFolderProject) {
         try {
           const breakdown = await getWorktreeStatusBreakdown(codebase.id, codebase.default_cwd);
           msg += `\n\nWorktrees: ${String(breakdown.total)} active`;

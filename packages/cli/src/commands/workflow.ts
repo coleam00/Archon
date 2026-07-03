@@ -290,6 +290,46 @@ function folderWorktreePolicyError(workflowName: string): Error {
 }
 
 /**
+ * Error for a failed `--folder` project registration. Distinct from
+ * {@link buildRegistrationFailureError} (which mentions worktrees / `--no-worktree`)
+ * because no worktree is ever created for a folder project — that hint would be
+ * misleading here.
+ */
+function buildFolderRegistrationFailureError(error: Error): Error {
+  return new Error(
+    'Cannot register folder project.\n' +
+      `Error: ${error.message}\n` +
+      'Hint: Check that the directory is readable and your Archon home ' +
+      '(~/.archon) is writable, then retry.'
+  );
+}
+
+/**
+ * Fail fast if `--branch`/`--from` (git-worktree-only options) are used against a
+ * folder project. Called at three sites — flag-declared (pre-detach), the detach
+ * fast-path, and post-lookup (authoritative) — so the check lives in one place.
+ */
+function assertNoWorktreeOptionsForFolder(
+  isFolderProject: boolean,
+  options: WorkflowRunOptions
+): void {
+  if (isFolderProject && (options.branchName !== undefined || options.fromBranch !== undefined)) {
+    throw folderWorktreeOptionError();
+  }
+}
+
+/** Fail fast if a `worktree.enabled: true` workflow is run against a folder project. */
+function assertWorkflowNotWorktreePinnedForFolder(
+  isFolderProject: boolean,
+  pinnedEnabled: boolean | undefined,
+  workflowName: string
+): void {
+  if (isFolderProject && pinnedEnabled === true) {
+    throw folderWorktreePolicyError(workflowName);
+  }
+}
+
+/**
  * Resolve the provider used for CLI conversation titles from the workflow itself.
  * This keeps auxiliary title generation aligned with workflow execution instead
  * of falling back to a stale conversation default.
@@ -672,17 +712,15 @@ export async function workflowRunCommand(
   // workflows synchronously (no DB needed). The authoritative kind-based guard
   // for ALREADY-registered folder projects (no --folder flag) lives after the
   // codebase lookup below. Fail fast — never silently ignore the flags.
-  if (options.folder && (options.branchName !== undefined || options.fromBranch !== undefined)) {
-    throw folderWorktreeOptionError();
-  }
-  if (options.folder && pinnedEnabled === true) {
-    throw folderWorktreePolicyError(workflow.name);
-  }
+  assertNoWorktreeOptionsForFolder(options.folder === true, options);
+  assertWorkflowNotWorktreePinnedForFolder(options.folder === true, pinnedEnabled, workflow.name);
 
   // --detach: hand the whole run to a detached background child and return now.
-  // Done BEFORE any DB/worktree work (the child does all of it) but AFTER workflow
-  // resolution + flag validation above, so unknown-workflow / bad-flag errors are
-  // still surfaced synchronously to the caller rather than lost in the child.
+  // Done AFTER workflow resolution + flag validation above (so unknown-workflow /
+  // bad-flag errors surface synchronously to the caller, not lost in the child)
+  // and before any *worktree* work (the child creates the worktree). A read-only
+  // codebase lookup does happen here — see the folder-detection probe below —
+  // to decide folder-vs-repo branch pinning before forking.
   if (options.detach) {
     const childConversationId = options.conversationId ?? generateConversationId();
     const extraArgs: string[] = [];
@@ -706,9 +744,7 @@ export async function workflowRunCommand(
     }
     // Surface worktree-option conflicts synchronously in the parent rather than
     // letting the child fail after fork.
-    if (detachIsFolder && (options.branchName !== undefined || options.fromBranch !== undefined)) {
-      throw folderWorktreeOptionError();
-    }
+    assertNoWorktreeOptionsForFolder(detachIsFolder, options);
     // Pin a generated branch only when isolating AND the caller didn't pass
     // --branch (an explicit --branch is already in argv). Without this, the child
     // would generate its own timestamped branch and fork a second worktree.
@@ -846,6 +882,15 @@ export async function workflowRunCommand(
     }
   }
 
+  // A --folder registration failure must be fatal regardless of the workflow's
+  // worktree policy. Otherwise, for a `worktree.enabled: false` workflow (e.g.
+  // the bundled `archon-assist`, the flagship `--folder` example), wantsIsolation
+  // is false, so the later isolation fail-fast branch never fires and the run
+  // would silently proceed against the bare cwd with no registered project.
+  if (options.folder && !codebase && codebaseRegistrationError) {
+    throw buildFolderRegistrationFailureError(codebaseRegistrationError);
+  }
+
   // Handle isolation (worktree creation)
   let workingCwd = cwd;
   let isolationEnvId: string | undefined;
@@ -915,19 +960,15 @@ export async function workflowRunCommand(
     console.log('');
   }
 
+  const isFolderCodebase = codebase?.kind === 'folder';
+
   // Authoritative folder guards for an already-registered folder project run
   // WITHOUT the --folder flag (the flag-based guards above only fire when the
   // caller declared intent). Fail fast before any worktree work.
-  if (codebase?.kind === 'folder') {
-    if (options.branchName !== undefined || options.fromBranch !== undefined) {
-      throw folderWorktreeOptionError();
-    }
-    if (pinnedEnabled === true) {
-      throw folderWorktreePolicyError(workflow.name);
-    }
-  }
+  assertNoWorktreeOptionsForFolder(isFolderCodebase, options);
+  assertWorkflowNotWorktreePinnedForFolder(isFolderCodebase, pinnedEnabled, workflow.name);
 
-  if (codebase?.kind === 'folder') {
+  if (isFolderCodebase) {
     // Folder projects run in place at their root — no worktree isolation. The
     // agent's cwd is the folder root, so it sees every child folder/repo, and
     // per-service git (branch/commit/PR) is the agent's job via bash/gh. Stated

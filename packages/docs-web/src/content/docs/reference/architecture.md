@@ -1053,6 +1053,7 @@ remote_agent_codebases
 ├── default_cwd (VARCHAR)
 ├── default_branch (VARCHAR, nullable) -- detected branch used as sync context when available
 ├── ai_assistant_type (VARCHAR) -- registered provider identifier (e.g. 'claude', 'codex')
+├── kind (VARCHAR, default 'repo') -- 'repo' | 'folder' (folder projects are non-git, run in place)
 └── commands (JSONB) -- {command_name: {path, description}}
 
 remote_agent_conversations

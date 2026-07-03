@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS remote_agent_codebases (
   default_cwd VARCHAR(500) NOT NULL,
   default_branch VARCHAR(255),
   ai_assistant_type VARCHAR(20) DEFAULT 'claude',
-  kind VARCHAR(10) NOT NULL DEFAULT 'repo',
+  kind VARCHAR(10) NOT NULL DEFAULT 'repo' CHECK (kind IN ('repo', 'folder')),
   allow_env_keys BOOLEAN NOT NULL DEFAULT FALSE,
   commands JSONB DEFAULT '{}'::jsonb,
   created_at TIMESTAMP DEFAULT NOW(),

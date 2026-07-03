@@ -10,6 +10,7 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { execFileAsync } from '@archon/git';
 import { BUNDLED_IS_BINARY, getArchonHome, createLogger, getTelemetryStatus } from '@archon/paths';
+import type { Codebase } from '@archon/core';
 
 // Env vars that indicate a Pi backend API key is configured. Keep in sync with
 // `PI_BACKENDS` in setup.ts — these are the auth signals checkPi inspects.
@@ -167,11 +168,7 @@ async function defaultLoadDatabaseDeps(): Promise<DatabaseDeps> {
   return { pool, getDatabaseType };
 }
 
-interface FolderCodebase {
-  name: string;
-  default_cwd: string;
-  kind: 'repo' | 'folder';
-}
+type FolderCodebase = Pick<Codebase, 'name' | 'default_cwd' | 'kind'>;
 
 export interface FolderProjectDeps {
   findCodebaseByDefaultCwd: (cwd: string) => Promise<FolderCodebase | null>;
@@ -220,12 +217,13 @@ export async function checkFolderProject(
   const childRepos = await deps.listChildRepos(codebase.default_cwd);
   const shown = childRepos.slice(0, 10);
   const remaining = childRepos.length - shown.length;
-  const reposMsg =
-    childRepos.length > 0
-      ? `${String(childRepos.length)} contained repo(s): ${shown.join(', ')}${
-          remaining > 0 ? `, … (+${String(remaining)} more)` : ''
-        }`
-      : 'no contained git repos';
+  let reposMsg: string;
+  if (childRepos.length === 0) {
+    reposMsg = 'no contained git repos';
+  } else {
+    const moreSuffix = remaining > 0 ? `, … (+${String(remaining)} more)` : '';
+    reposMsg = `${String(childRepos.length)} contained repo(s): ${shown.join(', ')}${moreSuffix}`;
+  }
   return {
     label,
     status: 'pass',

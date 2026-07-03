@@ -471,6 +471,23 @@ export async function registerRepository(localPath: string): Promise<RegisterRes
 }
 
 /**
+ * Build an accurate path-validation error from a `realpath`/`stat` failure —
+ * `ENOENT` really is "does not exist", but `EACCES`/`ENOTDIR`/`ELOOP` are not,
+ * and mislabeling them "Path does not exist" sends the user chasing a typo
+ * instead of a permissions/symlink problem. The raw errno message is preserved.
+ */
+function pathValidationError(path: string, error: Error): Error {
+  const reasonByCode: Record<string, string> = {
+    EACCES: 'Permission denied',
+    ENOTDIR: 'A path segment is not a directory',
+    ELOOP: 'Too many symbolic links',
+  };
+  const code = (error as NodeJS.ErrnoException).code ?? '';
+  const reason = reasonByCode[code] ?? 'Path does not exist';
+  return new Error(`${reason}: ${path} (${error.message})`);
+}
+
+/**
  * Register a folder project (`kind: 'folder'`) — any directory that is NOT
  * required to be a git repository. Used for multi-repo roots (N service repos
  * under one root) and plain business-ops folders with no git at all.
@@ -483,17 +500,17 @@ export async function registerFolder(localPath: string, name?: string): Promise<
   const expandedPath = resolve(expandTilde(localPath));
 
   // Canonicalize symlinks (realpath) so the stored `default_cwd` matches what the
-  // CLI gate and `archon doctor` look up — both resolve against `process.cwd()`,
-  // which returns the real path (e.g. macOS `/tmp` → `/private/tmp`). Without
-  // this a symlinked root registers under one path but is looked up under
-  // another, causing a lookup miss and a duplicate row on re-register. Repo
-  // projects are immune because git canonicalizes the repo root on both sides.
-  // realpath also validates existence (throws ENOENT for a missing path).
+  // lookups resolve to: `archon doctor` uses `process.cwd()` (which resolves
+  // symlinks — e.g. macOS `/tmp` → `/private/tmp`) and the CLI gate realpaths its
+  // cwd too. Without this a symlinked root registers under one path but is looked
+  // up under another, causing a lookup miss and a duplicate row on re-register.
+  // Repo projects are immune because git canonicalizes the repo root on both
+  // sides. realpath also validates existence (throws ENOENT for a missing path).
   let resolvedPath: string;
   try {
     resolvedPath = await realpath(expandedPath);
   } catch (error) {
-    throw new Error(`Path does not exist: ${expandedPath} (${(error as Error).message})`);
+    throw pathValidationError(expandedPath, error as Error);
   }
 
   // realpath succeeds for a symlink-to-file too — require a directory (no git check).
@@ -501,7 +518,7 @@ export async function registerFolder(localPath: string, name?: string): Promise<
   try {
     isDirectory = (await stat(resolvedPath)).isDirectory();
   } catch (error) {
-    throw new Error(`Path does not exist: ${resolvedPath} (${(error as Error).message})`);
+    throw pathValidationError(resolvedPath, error as Error);
   }
   if (!isDirectory) {
     throw new Error(`Path is not a directory: ${resolvedPath}`);

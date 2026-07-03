@@ -2712,15 +2712,17 @@ export function registerApiRoutes(
       } else {
         const localPath = body.path ?? '';
         // Detect git-ness. A resolvable repo root → register as a repo project;
-        // anything else → folder project. findRepoRoot only returns null for a
-        // definitive "not a git repository"; it throws for other cases (e.g. a
-        // path that doesn't exist), so treat a throw as "not a repo" and let
-        // registerFolder do the authoritative existence validation (clean error).
+        // anything else → folder project. findRepoRoot returns null ONLY for a
+        // definitive "not a git repository"; it throws for other cases (a
+        // nonexistent path — handled cleanly by registerFolder's own existence
+        // check below — or a genuine git error like git-missing/timeout). A
+        // genuine git error on an existing repo would misclassify it as folder,
+        // so log the throw at WARN (visible), not debug, rather than swallowing.
         let repoRoot: string | null = null;
         try {
           repoRoot = await findRepoRoot(localPath);
         } catch (err) {
-          getLog().debug({ err, path: localPath }, 'add_codebase_repo_detect_inconclusive');
+          getLog().warn({ err, path: localPath }, 'add_codebase_repo_detect_failed');
         }
         result = repoRoot ? await registerRepository(localPath) : await registerFolder(localPath);
       }

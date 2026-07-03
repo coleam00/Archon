@@ -18,7 +18,7 @@ loadArchonEnv(process.cwd());
 
 import { parseArgs } from 'util';
 import { resolve } from 'path';
-import { existsSync } from 'fs';
+import { existsSync, realpathSync } from 'fs';
 
 // Smart defaults for Claude auth
 // If no explicit tokens, default to global auth from `claude /login`
@@ -405,17 +405,39 @@ async function main(): Promise<number> {
       } else {
         // Not a git repo. It may still be a registered FOLDER project (a
         // multi-repo root or plain ops folder). Consult the DB before rejecting.
-        // DB errors here must NOT crash pre-dispatch (the DB may be unreachable
-        // and `archon help`-class UX must survive) — fall through to the error.
+        // Canonicalize symlinks first so the lookup matches the realpath'd
+        // default_cwd that registration stores: process.cwd() resolves symlinks,
+        // but an explicit --cwd does not, so realpath here covers both. (cwd is
+        // already validated to exist above; fall back to cwd if realpath fails.)
+        let realCwd = cwd;
+        try {
+          realCwd = realpathSync(cwd);
+        } catch {
+          // keep the resolved cwd
+        }
+        // The DB may be unreachable. A lookup failure must NOT crash pre-dispatch
+        // (workflow/isolation commands still need to surface a clear error rather
+        // than a stack trace) — capture it and, if connection-shaped, report
+        // "database unavailable" instead of the misleading "not a git repository".
         let folderCodebase: { default_cwd: string; kind: 'repo' | 'folder' } | null = null;
+        let gateLookupError: Error | null = null;
         try {
           const codebaseDb = await import('@archon/core/db/codebases');
           folderCodebase =
-            (await codebaseDb.findCodebaseByDefaultCwd(cwd)) ??
-            (await codebaseDb.findCodebaseByPathPrefix(cwd));
+            (await codebaseDb.findCodebaseByDefaultCwd(realCwd)) ??
+            (await codebaseDb.findCodebaseByPathPrefix(realCwd));
         } catch (dbError) {
-          getLog().debug({ err: dbError as Error, cwd }, 'cli.folder_project_gate_lookup_failed');
+          gateLookupError = dbError as Error;
+          getLog().warn(
+            { err: gateLookupError, cwd: realCwd },
+            'cli.folder_project_gate_lookup_failed'
+          );
         }
+
+        const looksLikeConnectionError = (e: Error): boolean => {
+          const m = e.message.toLowerCase();
+          return m.includes('econnrefused') || m.includes('etimedout') || m.includes('connect');
+        };
 
         if (folderCodebase?.kind === 'folder') {
           // Registered folder project — run in place at its root.
@@ -423,7 +445,17 @@ async function main(): Promise<number> {
         } else if (folderFlag && command === 'workflow' && subcommand === 'run') {
           // First-use `workflow run --folder` from an unregistered non-git dir:
           // let it through so the run command registers the folder project.
-          effectiveCwd = cwd;
+          effectiveCwd = realCwd;
+        } else if (gateLookupError && looksLikeConnectionError(gateLookupError)) {
+          // A DB outage would otherwise be mis-reported as "not a git repository".
+          console.error(
+            'Error: Could not verify project registration — the database is unavailable.'
+          );
+          console.error(`  ${gateLookupError.message}`);
+          console.error(
+            '  Check that your database is running (or DATABASE_URL is set), then retry.'
+          );
+          return 1;
         } else {
           console.error('Error: Not in a git repository.');
           console.error('The Archon CLI must be run from within a git repository.');

@@ -999,6 +999,50 @@ describe('workflowRunCommand', () => {
     ).rejects.toThrow('Worktree options require a git-repo project');
   });
 
+  it('rejects --folder --branch synchronously (flag-based, before any DB/registration)', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const core = await import('@archon/core');
+
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+      errors: [],
+    });
+    const registerSpy = core.registerFolder as ReturnType<typeof mock>;
+    const registerBefore = registerSpy.mock.calls.length;
+
+    await expect(
+      workflowRunCommand('/test/path', 'assist', 'hello', { folder: true, branchName: 'x' })
+    ).rejects.toThrow('Worktree options require a git-repo project');
+    // The flag-based guard fires before any registration work.
+    expect(registerSpy.mock.calls.length).toBe(registerBefore);
+  });
+
+  it('rejects a worktree-pinned workflow against a registered folder project', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const codebaseDb = await import('@archon/core/db/codebases');
+
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [
+        makeTestWorkflowWithSource({
+          name: 'assist',
+          description: 'Help',
+          worktree: { enabled: true },
+        }),
+      ],
+      errors: [],
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-folder',
+      name: 'platform',
+      default_cwd: '/test/path',
+      kind: 'folder',
+    });
+
+    await expect(workflowRunCommand('/test/path', 'assist', 'hello', {})).rejects.toThrow(
+      'requires a worktree'
+    );
+  });
+
   it('creates worktree with auto-generated branch when no --branch given', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     const { executeWorkflow } = await import('@archon/workflows/executor');
@@ -2354,6 +2398,47 @@ describe('workflowRunCommand — detach', () => {
     const execAfter = (executeWorkflow as ReturnType<typeof mock>).mock.calls.length;
     expect(execAfter).toBe(execBefore);
     expect(consoleSpy).toHaveBeenCalledWith("Started 'assist' in the background.");
+  });
+
+  it('does NOT pin a --branch on the detached child for a registered folder project', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const paths = await import('@archon/paths');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+      errors: [],
+    });
+    (paths.getArchonHome as ReturnType<typeof mock>).mockImplementationOnce(() => {
+      throw new Error('no home in test');
+    });
+    // Detach folder probe: exact miss, then path-prefix resolves a folder project.
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+    (codebaseDb.findCodebaseByPathPrefix as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-folder',
+      name: 'platform',
+      default_cwd: '/test/path',
+      kind: 'folder',
+    });
+
+    const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue({
+      unref: mock(() => undefined),
+    } as unknown as ReturnType<typeof Bun.spawn>);
+    const savedArgv = process.argv;
+    process.argv = ['bun', '/abs/cli.ts', 'workflow', 'run', 'assist', 'hello', '--detach'];
+    let spawnCmd: string[] = [];
+    try {
+      await workflowRunCommand('/test/path', 'assist', 'hello', { detach: true });
+      spawnCmd = (
+        (spawnSpy.mock.calls[0]?.[0] as { cmd: string[] } | undefined)?.cmd ?? []
+      ).slice();
+    } finally {
+      process.argv = savedArgv;
+      spawnSpy.mockRestore();
+    }
+
+    expect(spawnCmd).not.toContain('--detach');
+    expect(spawnCmd).not.toContain('--branch'); // folder project → no worktree branch
+    expect(spawnCmd).toContain('--conversation-id');
   });
 
   it('--detach --json emits a structured ack', async () => {
