@@ -227,4 +227,4 @@ nodes:
     provider: claude
     depends_on: [tea-tr]
     context: fresh
-    model: haiku
+    model: sonnet
