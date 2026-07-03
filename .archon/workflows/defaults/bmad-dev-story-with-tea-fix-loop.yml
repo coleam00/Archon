@@ -111,10 +111,10 @@ nodes:
   - id: dev-story
     prompt: |
       bmad-dev-story $ARGUMENTS
-    provider: codex
+    provider: claude
     depends_on: [prepare-bmad-state]
     context: fresh
-    model: gpt-5.5
+    model: sonnet
     idle_timeout: 900000
     output_type: dev-story
 
@@ -132,8 +132,8 @@ nodes:
     command: bmad-code-review
     depends_on: [tea-automate]
     context: fresh
-    provider: claude
-    model: sonnet
+    provider: codex
+    model: gpt-5.5
     idle_timeout: 900000
     output_format: &code_review_gate_schema
       type: object
