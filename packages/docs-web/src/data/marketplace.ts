@@ -161,7 +161,8 @@ export const marketplaceEntries: MarketplaceEntry[] = [
     author: 'TheSmokeDev',
     description:
       'Point-and-shoot programmatic SEO/GEO page factory. Scan any website, then expand it into hundreds of validated 2,800+ word answer-first pages with hard uniqueness gates and packet-only facts. Never deploys - generation ends at a validation report.',
-    sourceUrl: 'https://github.com/TheSmokeDev/token-max-site-factory/tree/main/marketplace/token-max-site-factory',
+    sourceUrl:
+      'https://github.com/TheSmokeDev/token-max-site-factory/tree/d01735a1e731ff00400621d0110d112488eaa68d/marketplace/token-max-site-factory',
     sha: 'd01735a1e731ff00400621d0110d112488eaa68d',
     tags: ['automation', 'development'],
     archonVersionCompat: '>=0.5.0',
