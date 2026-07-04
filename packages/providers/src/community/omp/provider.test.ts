@@ -264,6 +264,45 @@ describe('OmpProvider.sendQuery', () => {
     expect(error?.message).toContain('GEMINI_API_KEY');
   });
 
+  test('env-var hint names MINIMAX_TOKEN_PLAN_API_KEY for minimax-token-plan provider (F6)', async () => {
+    mockDiscoverAuthStorage.mockImplementation(async () => ({
+      setRuntimeApiKey: mock(() => undefined),
+      getApiKey: mock(async () => undefined),
+    }));
+    // Override the model-resolution mock for this provider only.
+    mockFind.mockImplementationOnce(() => ({
+      provider: 'minimax-token-plan',
+      id: 'MiniMax-M3',
+      api: 'openai-completions',
+    }));
+    const { error } = await consume(
+      new OmpProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'minimax-token-plan/MiniMax-M3',
+      })
+    );
+    expect(error?.message).toContain('no credentials');
+    expect(error?.message).toContain('MINIMAX_TOKEN_PLAN_API_KEY');
+  });
+
+  test('env-var hint names ALIBABA_CODING_PLAN_API_KEY for alibaba-coding-plan provider (F6)', async () => {
+    mockDiscoverAuthStorage.mockImplementation(async () => ({
+      setRuntimeApiKey: mock(() => undefined),
+      getApiKey: mock(async () => undefined),
+    }));
+    mockFind.mockImplementationOnce(() => ({
+      provider: 'alibaba-coding-plan',
+      id: 'qwen3.7-plus',
+      api: 'openai-completions',
+    }));
+    const { error } = await consume(
+      new OmpProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'alibaba-coding-plan/qwen3.7-plus',
+      })
+    );
+    expect(error?.message).toContain('no credentials');
+    expect(error?.message).toContain('ALIBABA_CODING_PLAN_API_KEY');
+  });
+
   test('prompt failure throws enriched error with recovery note, diagnostics, and cause', async () => {
     mockPrompt.mockImplementationOnce(async () => {
       throw new Error('boom failure'); // UNKNOWN classification → no retry

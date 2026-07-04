@@ -61,6 +61,8 @@ export const OMP_PROVIDER_ENV_VARS: Record<string, string> = {
   xai: 'XAI_API_KEY',
   openrouter: 'OPENROUTER_API_KEY',
   huggingface: 'HUGGINGFACE_API_KEY',
+  'minimax-token-plan': 'MINIMAX_TOKEN_PLAN_API_KEY',
+  'alibaba-coding-plan': 'ALIBABA_CODING_PLAN_API_KEY',
 };
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
