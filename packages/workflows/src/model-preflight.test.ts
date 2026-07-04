@@ -86,6 +86,49 @@ describe('collectOmpModelPaths', () => {
     });
     expect(collectOmpModelPaths(workflow)).toEqual(['cursor/composer-2.5']);
   });
+  test('includes workflow-level on_failure_model in preflight paths (F1 fix)', () => {
+    // Workflow with no per-node on_failure_model but a root pin — the cascade
+    // means the root pin IS a path that downstream OMP nodes may resolve to.
+    // Before this fix, collectOmpModelPaths ignored workflow.on_failure_model
+    // entirely, so missing credentials for the root fallback would only fail
+    // at runtime instead of blocking the run at validate time.
+    const workflow = makeWorkflow([{ id: 'a', prompt: 'p' } as DagNode], {
+      provider: 'omp',
+      model: 'minimax-token-plan/MiniMax-M3',
+      on_failure_model: 'alibaba-coding-plan/qwen3.7-plus',
+    });
+    const paths = collectOmpModelPaths(workflow);
+    expect(paths).toContain('minimax-token-plan/MiniMax-M3');
+    expect(paths).toContain('alibaba-coding-plan/qwen3.7-plus');
+  });
+
+  test('does not include workflow-level on_failure_model when provider is not omp', () => {
+    // Non-omp workflows never reach the OMP preflight, regardless of any
+    // on_failure_model pin — the cascade only routes when OMP is the provider.
+    const workflow = makeWorkflow([{ id: 'a', prompt: 'p' } as DagNode], {
+      provider: 'claude',
+      on_failure_model: 'alibaba-coding-plan/qwen3.7-plus',
+    });
+    expect(collectOmpModelPaths(workflow)).toEqual([]);
+  });
+
+  test('workflow-level on_failure_model is added once even with multiple omp nodes', () => {
+    // Set-deduplication: every OMP node in the same workflow inherits the
+    // same root fallback, but the preflight call should only check it once.
+    const workflow = makeWorkflow(
+      [
+        { id: 'a', prompt: 'p' } as DagNode,
+        { id: 'b', prompt: 'p' } as DagNode,
+        { id: 'c', prompt: 'p' } as DagNode,
+      ],
+      { provider: 'omp', on_failure_model: 'alibaba-coding-plan/qwen3.7-plus' }
+    );
+    const paths = collectOmpModelPaths(workflow);
+    const rootFallbackOccurrences = paths.filter(
+      p => p === 'alibaba-coding-plan/qwen3.7-plus'
+    ).length;
+    expect(rootFallbackOccurrences).toBe(1);
+  });
 });
 
 describe('validateOmpModelLiveness', () => {

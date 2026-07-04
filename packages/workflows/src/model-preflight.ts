@@ -33,6 +33,12 @@ export function collectOmpModelPaths(
   const paths = new Set<string>();
   const wfProvider = workflow.provider ?? defaultProvider;
   if (wfProvider === 'omp' && workflow.model) paths.add(workflow.model);
+  // Workflow-level on_failure_model: any OMP node without a per-node pin
+  // inherits this — surface it for preflight so missing credentials block
+  // the run BEFORE the first node reaches the breaker.
+  if (wfProvider === 'omp' && workflow.on_failure_model) {
+    paths.add(workflow.on_failure_model);
+  }
   for (const node of workflow.nodes) {
     const provider = node.provider ?? wfProvider;
     if (provider !== 'omp') continue;

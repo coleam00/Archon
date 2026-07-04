@@ -127,6 +127,29 @@ describe('Workflow Loader', () => {
       expect(result.workflows[0].workflow.worktree).toEqual({ enabled: true });
     });
 
+    it('should round-trip workflow-level on_failure_model (F1 fix)', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      // Real YAML fixture — exercise parseWorkflow from the producer's actual
+      // input format. Before this fix, workflowBaseSchema silently stripped
+      // on_failure_model at the root, so the cascade in dag-executor never
+      // fired for workflows like deploy-to-all-hosts.yaml and
+      // memexia-beads-mechanical.yaml that pin at the workflow level.
+      const yaml = [
+        'name: failover-test',
+        'description: workflow-level on_failure_model round-trip',
+        'on_failure_model: alibaba-coding-plan/qwen3.7-plus',
+        'nodes:',
+        '  - id: n',
+        '    prompt: p',
+      ].join('\n');
+      await writeFile(join(workflowDir, 'failover-test.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows[0].workflow.on_failure_model).toBe(
+        'alibaba-coding-plan/qwen3.7-plus'
+      );
+    });
+
     it('should omit worktree block when not present (policy is caller-decides)', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(workflowDir, { recursive: true });

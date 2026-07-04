@@ -65,6 +65,14 @@ export const workflowBaseSchema = z.object({
   effort: effortLevelSchema.optional(),
   thinking: thinkingConfigSchema.optional(),
   fallbackModel: z.string().min(1).optional(),
+  /**
+   * Workflow-layer model routing: provider/model path that any node inherits
+   * unless it sets its own `on_failure_model`. Per-node pins win; the cascade
+   * covers nodes that only declared a primary model. Mirrors `fallbackModel`
+   * (Claude SDK passthrough) and `model` semantics — string only, validated
+   * by OMP preflight when `provider === 'omp'`.
+   */
+  on_failure_model: z.string().min(1).optional(),
   betas: z.array(z.string().min(1)).nonempty("'betas' must be a non-empty array").optional(),
   sandbox: sandboxSettingsSchema.optional(),
   worktree: workflowWorktreePolicySchema.optional(),

@@ -528,3 +528,54 @@ describe('validateWorkflowResources — on_failure_model + fallbackModel both se
     expect(issues.find(i => i.field === 'on_failure_model')).toBeUndefined();
   });
 });
+
+// =============================================================================
+// validateWorkflowResources — workflow-level on_failure_model cascade warning (F1)
+// =============================================================================
+
+describe('validateWorkflowResources — workflow-level on_failure_model cascade', () => {
+  test('warns when AI node lacks per-node on_failure_model but workflow root sets one', async () => {
+    const workflow = {
+      name: 'cascade-warn',
+      description: 'root pin, no per-node pin',
+      provider: 'omp',
+      on_failure_model: 'alibaba-coding-plan/qwen3.7-plus',
+      nodes: [{ id: 'inheritor', prompt: 'do the thing' } as DagNode],
+    } as WorkflowDefinition;
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    const warning = issues.find(
+      i => i.level === 'warning' && i.field === 'on_failure_model' && i.nodeId === 'inheritor'
+    );
+    expect(warning).toBeDefined();
+    expect(warning!.message).toContain('inherits');
+    expect(warning!.message).toContain('alibaba-coding-plan/qwen3.7-plus');
+  });
+
+  test('does NOT warn when AI node sets its own on_failure_model', async () => {
+    const workflow = {
+      name: 'cascade-silent',
+      description: 'root pin, per-node override',
+      provider: 'omp',
+      on_failure_model: 'alibaba-coding-plan/qwen3.7-plus',
+      nodes: [
+        {
+          id: 'explicit',
+          prompt: 'do the thing',
+          on_failure_model: 'anthropic/claude-haiku-4-5',
+        } as DagNode,
+      ],
+    } as WorkflowDefinition;
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    expect(
+      issues.find(
+        i => i.level === 'warning' && i.field === 'on_failure_model' && i.nodeId === 'explicit'
+      )
+    ).toBeUndefined();
+  });
+
+  test('does NOT warn when workflow has no root on_failure_model', async () => {
+    const workflow = makeWorkflow('no-root-pin', [{ id: 'n', prompt: 'p' } as DagNode], 'omp');
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    expect(issues.find(i => i.field === 'on_failure_model')).toBeUndefined();
+  });
+});

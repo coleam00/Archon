@@ -156,6 +156,16 @@ interface WorkflowLevelOptions {
   effort?: EffortLevel;
   thinking?: ThinkingConfig;
   fallbackModel?: string;
+  /**
+   * Workflow-layer Archon routing: provider/model path that any node inherits
+   * when it has no per-node `on_failure_model`. Mirrors `fallbackModel`
+   * precedence semantics but operates at the Archon (not Claude SDK) layer.
+   * Field name is snake_case to match the producer (workflowBaseSchema +
+   * dagNodeBaseSchema) so the executor's `workflow` input — typed
+   * `{ name; nodes } & WorkflowLevelOptions` against the parsed
+   * `WorkflowDefinition` — exposes the field directly without renaming.
+   */
+  on_failure_model?: string;
   betas?: string[];
   sandbox?: SandboxSettings;
 }
@@ -2588,6 +2598,7 @@ export async function executeDagWorkflow(
     effort: workflow.effort,
     thinking: workflow.thinking,
     fallbackModel: workflow.fallbackModel,
+    on_failure_model: workflow.on_failure_model,
     betas: workflow.betas,
     sandbox: workflow.sandbox,
   };
@@ -2986,7 +2997,7 @@ export async function executeDagWorkflow(
           const nodeFallback =
             'on_failure_model' in node && typeof node.on_failure_model === 'string'
               ? node.on_failure_model
-              : undefined;
+              : workflowLevelOptions.on_failure_model;
           let activeOptions = nodeOptions;
           let activeModel = primaryModel;
           let usedFallback = false;

@@ -2411,6 +2411,133 @@ describe('executeDagWorkflow -- model circuit breaker + on_failure_model', () =>
     });
     expect(node4Breaker.length).toBeGreaterThan(0);
   });
+
+  // F1 regression: workflow-level on_failure_model must cascade to nodes that
+  // lack their own per-node on_failure_model. Before this fix, nodeFallback at
+  // dag-executor.ts:2987 read ONLY `node.on_failure_model`, so any workflow that
+  // set the root pin (e.g. `deploy-to-all-hosts.yaml`, `memexia-beads-mechanical.yaml`)
+  // and relied on inheritance had dead failover pins.
+  it('cascades workflow-level on_failure_model to nodes without a per-node pin', async () => {
+    // Primary always fails FATAL; workflow-level fallback always succeeds.
+    mockSendQueryDag.mockImplementation(function* (
+      _prompt: string,
+      _cwd: string,
+      _resume?: string,
+      options?: { model?: string }
+    ) {
+      if (options?.model === 'primary-model') {
+        throw new Error('401 unauthorized: bad api key');
+      }
+      yield { type: 'assistant', content: 'rescued by workflow-root fallback' };
+      yield { type: 'result', sessionId: 'wf-root-fallback-sess' };
+    });
+
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('dag-wf-root-fallback-run');
+
+    // Node WITHOUT a per-node on_failure_model — must inherit from the workflow root.
+    const nodes: DagNode[] = [
+      {
+        id: 'inheritor',
+        prompt: 'go',
+        model: 'primary-model',
+      } as DagNode,
+    ];
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-wf-root-fallback',
+      testDir,
+      {
+        name: 'wf-root-fallback-test',
+        nodes,
+        on_failure_model: 'workflow-root-fallback-model',
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    // The node was rescued by the workflow-level fallback model — without the fix
+    // the call to `workflow-root-fallback-model` never happens.
+    const fallbackCalls = mockSendQueryDag.mock.calls.filter(
+      call => (call[3] as { model?: string } | undefined)?.model === 'workflow-root-fallback-model'
+    );
+    expect(fallbackCalls.length).toBe(1);
+
+    // Sanity: the node WAS routed to the broken primary (which failed) once.
+    const primaryCalls = mockSendQueryDag.mock.calls.filter(
+      call => (call[3] as { model?: string } | undefined)?.model === 'primary-model'
+    );
+    expect(primaryCalls.length).toBe(1);
+  });
+
+  it('per-node on_failure_model takes precedence over workflow-level pin', async () => {
+    // Primary fails; both workflow-level and per-node backups exist; per-node
+    // wins. This guards against a regression where the cascade silently
+    // overrides an explicit per-node pin.
+    mockSendQueryDag.mockImplementation(function* (
+      _prompt: string,
+      _cwd: string,
+      _resume?: string,
+      options?: { model?: string }
+    ) {
+      if (options?.model === 'primary-model') {
+        throw new Error('401 unauthorized: bad api key');
+      }
+      yield { type: 'assistant', content: 'rescued' };
+      yield { type: 'result', sessionId: 'prec-sess' };
+    });
+
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('dag-per-node-precedence-run');
+
+    const nodes: DagNode[] = [
+      {
+        id: 'explicit-pin',
+        prompt: 'go',
+        model: 'primary-model',
+        on_failure_model: 'per-node-fallback-model',
+      } as DagNode,
+    ];
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-per-node-prec',
+      testDir,
+      {
+        name: 'per-node-precedence-test',
+        nodes,
+        on_failure_model: 'workflow-root-fallback-model',
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const perNodeCalls = mockSendQueryDag.mock.calls.filter(
+      call => (call[3] as { model?: string } | undefined)?.model === 'per-node-fallback-model'
+    );
+    const wfRootCalls = mockSendQueryDag.mock.calls.filter(
+      call => (call[3] as { model?: string } | undefined)?.model === 'workflow-root-fallback-model'
+    );
+    expect(perNodeCalls.length).toBe(1);
+    expect(wfRootCalls.length).toBe(0);
+  });
 });
 
 describe('executeDagWorkflow -- tool_called event persistence', () => {

@@ -328,6 +328,34 @@ export async function validateWorkflowResources(
   for (const node of workflow.nodes) {
     const provider = resolveProvider(node, workflow.provider, defaultProvider);
 
+    // --- AI node missing on_failure_model when workflow root sets it ---
+    // The cascade only covers nodes that have a primary model. If the workflow
+    // pins on_failure_model at the root and an AI node has no per-node pin,
+    // the node IS inheriting the root pin (F1 cascade) — but it's also a
+    // signal the author may have forgotten the per-node override, so surface
+    // a hint-level warning that explains the inheritance. CI signal: if the
+    // warning fires, the run still works; if the author intended a different
+    // model for that node, they need to add the per-node pin explicitly.
+    if (
+      workflow.on_failure_model &&
+      typeof workflow.on_failure_model === 'string' &&
+      'prompt' in node &&
+      typeof node.prompt === 'string' &&
+      !(
+        'on_failure_model' in node &&
+        typeof node.on_failure_model === 'string' &&
+        node.on_failure_model.length > 0
+      )
+    ) {
+      issues.push({
+        level: 'warning',
+        nodeId: node.id,
+        field: 'on_failure_model',
+        message: `AI node inherits on_failure_model='${workflow.on_failure_model}' from the workflow root — no per-node pin set`,
+        hint: 'Add an explicit on_failure_model on this node if it needs a different fallback than the workflow default',
+      });
+    }
+
     // --- on_failure_model vs fallbackModel: warn when both are set ---
     // They look like synonyms but differ: `on_failure_model` is Archon
     // workflow-layer routing (switch model on failure / open breaker, any

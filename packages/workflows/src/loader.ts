@@ -424,6 +424,20 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       getLog().warn({ filename, value: raw.tags }, 'invalid_tags_block_ignored');
     }
 
+    // Workflow-level on_failure_model: cascade target for OMP nodes that lack
+    // a per-node pin. Non-empty string only — empty/invalid values are dropped
+    // (same warn-and-ignore pattern as `interactive` / `modelReasoningEffort`)
+    // so a typo in one workflow doesn't fail the whole discovery pass.
+    let onFailureModel: string | undefined;
+    if (typeof raw.on_failure_model === 'string' && raw.on_failure_model.length > 0) {
+      onFailureModel = raw.on_failure_model;
+    } else if (raw.on_failure_model !== undefined) {
+      getLog().warn(
+        { filename, value: raw.on_failure_model },
+        'invalid_on_failure_model_value_ignored'
+      );
+    }
+
     return {
       workflow: {
         name: raw.name,
@@ -438,6 +452,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
         nodes: dagNodes,
         ...(worktreePolicy ? { worktree: worktreePolicy } : {}),
         ...(tags !== undefined ? { tags } : {}),
+        ...(onFailureModel !== undefined ? { on_failure_model: onFailureModel } : {}),
       },
       error: null,
     };
