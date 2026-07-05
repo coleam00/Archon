@@ -18,6 +18,7 @@ import { isLoopNode, isApprovalNode, isScriptNode, isBashNode } from './schemas'
 import { executeDagWorkflow } from './dag-executor';
 import { logWorkflowStart, logWorkflowError } from './logger';
 import { formatDuration, parseDbTimestamp } from './utils/duration';
+import { keepAwake } from './utils/keep-awake';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { isRegisteredProvider, getRegisteredProviders } from '@archon/providers';
 import {
@@ -711,7 +712,16 @@ export async function executeWorkflow(
   const userProviderEnv = await resolveUserProviderEnvForWorkflow(deps, userId, artifactsDir);
   config.envVars = { ...config.envVars, ...userProviderEnv };
 
-  // Wrap execution in try-catch to ensure workflow is marked as failed on any error
+  // Wrap execution in try-catch to ensure workflow is marked as failed on any error.
+  //
+  // Hold a Windows keep-awake request for exactly the executing window so an
+  // unattended machine cannot enter Modern Standby mid-DAG and freeze this
+  // process (a thawed executor spawns bash children that exit 66 — see the
+  // 2026-07-05 mid-run-death record). Placed HERE, not at function top, so the
+  // early-return validation paths above never leak an unpaired acquire; the
+  // matching release is the first statement of this try's finally. No-op off
+  // Windows / on FFI failure, and refcounted so concurrent runs share one request.
+  keepAwake.acquire();
   try {
     getLog().info(
       {
@@ -977,6 +987,10 @@ export async function executeWorkflow(
     // Return failure result instead of re-throwing
     return { success: false, workflowRunId: workflowRun.id, error: err.message };
   } finally {
+    // Release the keep-awake request FIRST — before the backstop DB calls that
+    // may throw — so it always pairs with the acquire above this try, on every
+    // exit path (success, thrown error, or backstop failure).
+    keepAwake.release();
     // Defensive backstop: if the workflow run is still 'running' after all
     // normal and exceptional code paths, flip it to 'failed' to prevent zombie
     // accumulation. Guards against any future code path that exits without
