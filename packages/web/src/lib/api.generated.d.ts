@@ -1755,7 +1755,7 @@ export interface paths {
     };
     get?: never;
     put?: never;
-    /** Retry one failed DAG node and its descendants */
+    /** Retry one failed DAG node and its descendants for a failed or cancelled run */
     post: {
       parameters: {
         query?: never;
@@ -3691,6 +3691,17 @@ export interface components {
         interactive?: boolean;
         gate_message?: string;
       };
+      route_loop?: {
+        from: string;
+        condition: string;
+        /** @default 10 */
+        max_iterations: number;
+        routes: {
+          positive: string;
+          negative: string;
+          exhausted: string;
+        };
+      };
       approval?: {
         message: string;
         capture_response?: boolean;
@@ -3816,18 +3827,43 @@ export interface components {
       events: components['schemas']['WorkflowEvent'][];
       nodeStates: components['schemas']['WorkflowNodeState'][];
     };
-    WorkflowEvent: {
-      id: string;
-      workflow_run_id: string;
-      event_type: string;
-      step_index: number | null;
-      step_name: string | null;
-      data: {
-        [key: string]: unknown;
-      };
-      /** Format: date-time */
-      created_at: string;
-    };
+    WorkflowEvent:
+      | {
+          id: string;
+          workflow_run_id: string;
+          /** @enum {string} */
+          event_type: 'node_routed';
+          step_index: number | null;
+          step_name: string | null;
+          data: {
+            from: string;
+            /** @enum {string} */
+            outcome: 'positive' | 'negative' | 'exhausted';
+            to: string;
+            condition: string;
+            condition_result: boolean;
+            negative_count: number;
+            max_iterations: number;
+            attempt: number;
+            execution_seq: number;
+          } & {
+            [key: string]: unknown;
+          };
+          /** Format: date-time */
+          created_at: string;
+        }
+      | {
+          id: string;
+          workflow_run_id: string;
+          event_type: string;
+          step_index: number | null;
+          step_name: string | null;
+          data: {
+            [key: string]: unknown;
+          };
+          /** Format: date-time */
+          created_at: string;
+        };
     WorkflowNodeState: {
       nodeId: string;
       name: string;
@@ -3837,6 +3873,27 @@ export interface components {
       duration?: number;
       error?: string;
       reason?: string;
+      provider?: string;
+      model?: string;
+      tier?: string;
+      /** @enum {string} */
+      modelReasoningEffort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+      /** @enum {string} */
+      effort?: 'low' | 'medium' | 'high' | 'max';
+      thinking?:
+        | {
+            /** @enum {string} */
+            type: 'adaptive';
+          }
+        | {
+            /** @enum {string} */
+            type: 'enabled';
+            budgetTokens?: number;
+          }
+        | {
+            /** @enum {string} */
+            type: 'disabled';
+          };
     };
     ValidateWorkflowResponse: {
       valid: boolean;

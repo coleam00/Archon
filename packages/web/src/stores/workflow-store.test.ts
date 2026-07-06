@@ -123,6 +123,41 @@ describe('handleDagNode', () => {
     expect(wf!.dagNodes[0].status).toBe('completed');
   });
 
+  test('preserves runtime AI metadata when later node events omit it', () => {
+    useWorkflowStore
+      .getState()
+      .handleWorkflowStatus(statusEvent({ runId: 'run-meta', workflowName: 'dag-wf' }));
+    useWorkflowStore.getState().handleDagNode(
+      dagNodeEvent({
+        runId: 'run-meta',
+        nodeId: 'create-story',
+        name: 'Create Story',
+        provider: 'codex',
+        model: 'gpt-5.5',
+        tier: 'large',
+        modelReasoningEffort: 'xhigh',
+      })
+    );
+    useWorkflowStore.getState().handleDagNode(
+      dagNodeEvent({
+        runId: 'run-meta',
+        nodeId: 'create-story',
+        name: 'Create Story',
+        status: 'completed',
+        duration: 1200,
+      })
+    );
+
+    const node = useWorkflowStore.getState().workflows.get('run-meta')!.dagNodes[0];
+    expect(node).toMatchObject({
+      status: 'completed',
+      provider: 'codex',
+      model: 'gpt-5.5',
+      tier: 'large',
+      modelReasoningEffort: 'xhigh',
+    });
+  });
+
   test('stores route decision metadata from node_routed dag events', () => {
     const routeDecision = {
       from: 'review',

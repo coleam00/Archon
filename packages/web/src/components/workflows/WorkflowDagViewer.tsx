@@ -8,12 +8,13 @@ import {
   MiniMap,
 } from '@xyflow/react';
 import type { Edge, NodeTypes } from '@xyflow/react';
-import type { DagNodeState, WorkflowStepStatus } from '@/lib/types';
+import type { DagNodeState, RuntimeNodeMetadata, WorkflowStepStatus } from '@/lib/types';
 import type { DagNode } from '@/lib/api';
 import { dagNodesToReactFlow, resolveExecutionNodeDisplay } from '@/lib/dag-layout';
 import { formatDurationMs } from '@/lib/format';
 import {
   executionDagNode,
+  formatRuntimeMetadata,
   type ExecutionFlowNode,
   type ExecutionNodeData,
 } from './ExecutionDagNode';
@@ -42,7 +43,7 @@ interface WorkflowDagViewerProps {
   dagNodes: readonly DagNode[];
   liveStatus: readonly DagNodeState[];
   isRunning: boolean;
-  currentlyExecuting?: { nodeName: string; startedAt: number };
+  currentlyExecuting?: { nodeName: string; startedAt: number } & RuntimeNodeMetadata;
   selectedNodeId?: string | null;
   onNodeClick?: (nodeId: string) => void;
 }
@@ -92,6 +93,12 @@ export function WorkflowDagViewer({
           currentIteration: live?.currentIteration,
           maxIterations: live?.maxIterations,
           routeDecision: live?.routeDecision,
+          provider: live?.provider,
+          model: live?.model,
+          tier: live?.tier,
+          modelReasoningEffort: live?.modelReasoningEffort,
+          effort: live?.effort,
+          thinking: live?.thinking,
         },
       } as ExecutionFlowNode;
     });
@@ -111,6 +118,8 @@ export function WorkflowDagViewer({
     });
   }, [layoutedEdges, statusMap]);
 
+  const executingMetadata = currentlyExecuting ? formatRuntimeMetadata(currentlyExecuting) : null;
+
   return (
     <div className="h-full w-full relative">
       {isRunning && currentlyExecuting && (
@@ -118,6 +127,11 @@ export function WorkflowDagViewer({
           <span className="inline-block w-2 h-2 rounded-full bg-accent-bright animate-pulse" />
           <span className="text-text-secondary">Executing:</span>
           <span className="font-medium text-text-primary">{currentlyExecuting.nodeName}</span>
+          {executingMetadata && (
+            <span className="max-w-[220px] truncate text-text-secondary" title={executingMetadata}>
+              {executingMetadata}
+            </span>
+          )}
           <span className="text-text-tertiary">
             {formatDurationMs(Date.now() - currentlyExecuting.startedAt)}
           </span>

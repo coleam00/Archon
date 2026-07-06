@@ -844,6 +844,65 @@ describe('GET /api/workflows/runs/:runId', () => {
     ]);
   });
 
+  test('preserves runtime AI metadata from node_started after later node completion', async () => {
+    const events: MockWorkflowEvent[] = [
+      {
+        id: 'evt-start',
+        workflow_run_id: 'run-uuid-1',
+        event_type: 'node_started',
+        step_index: null,
+        step_name: 'create-story',
+        data: {
+          provider: 'codex',
+          model: 'gpt-5.5',
+          tier: 'large',
+          modelReasoningEffort: 'xhigh',
+        },
+        created_at: NOW,
+      },
+      {
+        id: 'evt-complete',
+        workflow_run_id: 'run-uuid-1',
+        event_type: 'node_completed',
+        step_index: null,
+        step_name: 'create-story',
+        data: { duration_ms: 1500, node_output: 'done' },
+        created_at: NOW,
+      },
+    ];
+    mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_RUNNING_RUN);
+    mockListWorkflowEvents.mockImplementationOnce(async () => events);
+    mockGetConversationById.mockImplementationOnce(async () => ({
+      id: 'conv-uuid-1',
+      platform_conversation_id: 'web-conv-abc',
+    }));
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-1');
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      nodeStates: Array<{
+        nodeId: string;
+        status: string;
+        provider?: string;
+        model?: string;
+        tier?: string;
+        modelReasoningEffort?: string;
+      }>;
+    };
+
+    expect(body.nodeStates).toEqual([
+      expect.objectContaining({
+        nodeId: 'create-story',
+        status: 'completed',
+        provider: 'codex',
+        model: 'gpt-5.5',
+        tier: 'large',
+        modelReasoningEffort: 'xhigh',
+      }),
+    ]);
+  });
+
   test('projects invalidated retry epoch nodes as pending before new lifecycle events arrive', async () => {
     mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_RUNNING_RUN);
     mockListWorkflowEvents.mockImplementationOnce(async () => [
@@ -988,7 +1047,13 @@ describe('GET /api/workflows/runs/:runId', () => {
     expect(response.status).toBe(200);
     const body = (await response.json()) as {
       run: { status: string };
-      nodeStates: Array<{ nodeId: string; status: string; retryEpoch: number; error?: string }>;
+      nodeStates: Array<{
+        nodeId: string;
+        status: string;
+        retryEpoch: number;
+        provider?: string;
+        error?: string;
+      }>;
     };
 
     expect(body.run.status).toBe('cancelled');
@@ -999,6 +1064,7 @@ describe('GET /api/workflows/runs/:runId', () => {
         name: 'dev-story',
         status: 'failed',
         retryEpoch: 0,
+        provider: 'codex',
         error: 'Cancelled by user',
       },
     ]);

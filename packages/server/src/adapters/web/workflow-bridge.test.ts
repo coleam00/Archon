@@ -3,6 +3,33 @@ import type { WorkflowEmitterEvent } from '@archon/workflows/event-emitter';
 import { mapWorkflowEvent } from './workflow-bridge';
 
 describe('mapWorkflowEvent', () => {
+  test('maps live node_started events with runtime AI metadata', () => {
+    const event: WorkflowEmitterEvent = {
+      type: 'node_started',
+      runId: 'run-ai',
+      nodeId: 'create-story',
+      nodeName: 'create-story',
+      provider: 'codex',
+      model: 'gpt-5.5',
+      tier: 'large',
+      modelReasoningEffort: 'xhigh',
+    };
+
+    const mapped = mapWorkflowEvent(event);
+
+    expect(mapped).not.toBeNull();
+    expect(JSON.parse(mapped as string)).toMatchObject({
+      type: 'dag_node',
+      runId: 'run-ai',
+      nodeId: 'create-story',
+      status: 'running',
+      provider: 'codex',
+      model: 'gpt-5.5',
+      tier: 'large',
+      modelReasoningEffort: 'xhigh',
+    });
+  });
+
   test('maps live node_routed events to completed dag_node events with route decision metadata', () => {
     const routeDecision = {
       from: 'review',
