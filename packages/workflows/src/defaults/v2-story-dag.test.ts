@@ -80,8 +80,14 @@ const MOCK_RUN = {
 /**
  * Build a store where createWorkflowEvent writes into `nodeState` via closure.
  * Bun's mock() has no mockImplementation — closures are the idiomatic approach.
+ *
+ * runFailedRef.value is set to true whenever failWorkflowRun is called, which is
+ * how the dag-executor signals a terminal workflow failure (it never throws).
  */
-function createTrackedStore(nodeState: Record<string, NodeEventState>): IWorkflowStore {
+function createTrackedStore(
+  nodeState: Record<string, NodeEventState>,
+  runFailedRef: { value: boolean }
+): IWorkflowStore {
   return {
     createWorkflowRun: mock(() => Promise.resolve({ ...MOCK_RUN })),
     getWorkflowRun: mock(() => Promise.resolve(null)),
@@ -100,7 +106,12 @@ function createTrackedStore(nodeState: Record<string, NodeEventState>): IWorkflo
     updateWorkflowActivity: mock(() => Promise.resolve()),
     getWorkflowRunStatus: mock(() => Promise.resolve('running' as const)),
     completeWorkflowRun: mock(() => Promise.resolve()),
-    failWorkflowRun: mock(() => Promise.resolve()),
+    // failWorkflowRun is called (not throw) when any DAG node fails — that is
+    // the executor's terminal-failure signal. Track it here for run.runFailed.
+    failWorkflowRun: mock(() => {
+      runFailedRef.value = true;
+      return Promise.resolve();
+    }),
     pauseWorkflowRun: mock(() => Promise.resolve()),
     cancelWorkflowRun: mock(() => Promise.resolve()),
     // createWorkflowEvent is fire-and-forget in the executor (not awaited).
@@ -300,9 +311,12 @@ async function runV2Dag(opts: {
 
   const nodeState: Record<string, NodeEventState> = {};
   const providerCalls: string[] = [];
+  // runFailedRef.value is set by the store's failWorkflowRun mock. The dag-executor
+  // NEVER throws on node failure — it calls failWorkflowRun() and returns normally.
+  // Tracking via the store mock is the only reliable way to detect a failed run.
+  const runFailedRef = { value: false };
 
-  // createTrackedStore uses a closure over nodeState — no mockImplementation needed
-  const store = createTrackedStore(nodeState);
+  const store = createTrackedStore(nodeState, runFailedRef);
   const nodeResponses = opts.nodeResponses ?? {};
   const deps = createMockDepsWithResponses(store, nodeResponses, providerCalls);
 
@@ -310,7 +324,6 @@ async function runV2Dag(opts: {
   // ARGUMENTS is derived from workflowRun.user_message by the executor
   const workflowRun = makeWorkflowRun(opts.cwd, opts.arguments ?? '');
 
-  let runFailed = false;
   try {
     await executeDagWorkflow(
       deps,
@@ -334,10 +347,11 @@ async function runV2Dag(opts: {
       minimalConfig
     );
   } catch {
-    runFailed = true;
+    // Executor threw — treat as run failure regardless of store mock state
+    runFailedRef.value = true;
   }
 
-  return { nodeState, providerCalls, runFailed };
+  return { nodeState, providerCalls, runFailed: runFailedRef.value };
 }
 
 // ── Fixture lifecycle ──────────────────────────────────────────────────────
@@ -386,8 +400,9 @@ describe('AC3/AC4 — v2 DAG skip propagation (mocked-provider harness)', () => 
     expect(run.providerCalls, 'no provider must be called when story resolution fails').toEqual([]);
   });
 
-  it('DAG-A4-1 [P0] guard fails (story_ref mismatch) → verify-story-identity fails → code-review-gate SKIPPED → tea-rv/nr/tr + create-pull-request SKIPPED', async () => {
-    // code-review returns a WRONG story_ref → verify-story-identity bash exits 1
+  it('DAG-A4-1 [P0] guard fails (story_ref mismatch, gate FAIL) → verify-story-identity fails → code-review-gate SKIPPED → dev-story NOT re-entered, run failed', async () => {
+    // Use gate: "FAIL" — the dangerous case where the negative route would normally
+    // send traffic back to dev-story. A story_ref mismatch must block this entirely.
     const wrongRef = 'a2-1-some-other-story';
     const canonicalKey = 'a1-2-preserve-story-input-resolution';
 
@@ -396,13 +411,13 @@ describe('AC3/AC4 — v2 DAG skip propagation (mocked-provider harness)', () => 
       arguments: canonicalKey,
       nodeResponses: {
         'code-review': {
-          gate: 'PASS',
+          gate: 'FAIL', // Would normally trigger negative route → dev-story
           round: 1,
-          findings_count: 0,
+          findings_count: 3,
           open_findings_file: 'findings/open-findings.md',
           decision_log_file: 'decision-log.md',
-          code_review_report: 'No findings.',
-          story_ref: wrongRef, // MISMATCH — triggers verify guard failure
+          code_review_report: 'Findings found.',
+          story_ref: wrongRef, // MISMATCH — verify guard must intercept before routing
         },
       },
     });
@@ -410,8 +425,21 @@ describe('AC3/AC4 — v2 DAG skip propagation (mocked-provider harness)', () => 
     // The guard bash node must fail (story_ref mismatch → bash exits 1)
     expect(run.nodeState['verify-story-identity']).toBe('failed');
 
-    // code-review-gate depends on verify-story-identity (all_success) → skipped
+    // code-review-gate depends on verify-story-identity (all_success) → skipped.
+    // Because code-review-gate is SKIPPED, the route_loop fires NEITHER the positive
+    // (tea-rv) NOR the negative (dev-story) route. Identity errors are not quality work.
     expect(run.nodeState['code-review-gate']).toBe('skipped');
+
+    // The run must be marked failed by the executor (verify-story-identity failure
+    // causes dag-executor to call failWorkflowRun — it does not throw).
+    expect(run.runFailed, 'workflow must be marked failed on identity mismatch').toBe(true);
+
+    // dev-story is called exactly once (initial execution), never a second time via
+    // the negative route — proving the mismatch guard prevented re-entry.
+    expect(
+      run.providerCalls.filter(c => c === 'dev-story').length,
+      'dev-story must be invoked exactly once (no re-entry via negative route on mismatch)'
+    ).toBe(1);
 
     // Nodes downstream of a skipped route_loop may have no event emitted (undefined)
     // or be explicitly skipped — what matters is they NEVER completed.
@@ -439,13 +467,13 @@ describe('AC3/AC4 — v2 DAG skip propagation (mocked-provider harness)', () => 
           code_review_report: 'No findings.',
           story_ref: canonicalKey, // MATCH — guard passes
         },
-        // Remaining AI nodes get empty responses so they complete without errors
+        // All remaining AI nodes respond so they complete without errors
         'dev-story': {},
         'tea-automate': {},
         'tea-rv': {},
         'tea-nr': {},
         'tea-tr': {},
-        'archon-create-pr': {},
+        'create-pull-request': {},
       },
     });
 
@@ -455,11 +483,20 @@ describe('AC3/AC4 — v2 DAG skip propagation (mocked-provider harness)', () => 
       'verify-story-identity should complete when story_ref matches'
     ).toBe('completed');
 
-    // tea-rv must not be skipped — positive route taken
+    // tea-rv must have been invoked by the provider — the positive route actually ran.
+    // This proves the route_loop activated tea-rv rather than skipping it.
+    expect(run.providerCalls, 'tea-rv must appear in providerCalls on the happy path').toContain(
+      'tea-rv'
+    );
+
+    // tea-rv nodeState must be completed — undefined is NOT acceptable.
+    // (Previously the assertion allowed undefined, masking the case where tea-rv never ran.)
     expect(
-      run.nodeState['tea-rv'] === 'completed' || run.nodeState['tea-rv'] === undefined,
-      'tea-rv should not be skipped on the happy path'
-    ).toBe(true);
-    expect(run.nodeState['tea-rv']).not.toBe('skipped');
+      run.nodeState['tea-rv'],
+      'tea-rv must be completed, not skipped or absent, on the happy path'
+    ).toBe('completed');
+
+    // The run must not be marked failed on the happy path
+    expect(run.runFailed, 'workflow must succeed on the happy path').toBe(false);
   });
 });
