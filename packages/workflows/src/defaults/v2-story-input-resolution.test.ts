@@ -325,6 +325,14 @@ describe('v2 story-input resolution (Story a1.2)', () => {
       expect(parsed.story_ref).toBe(CANONICAL_KEY);
     });
 
+    it('BASH-A2-4c [P1] title substring beginning with hyphen resolves to canonical key (R2-F3)', () => {
+      // grep -qF without '--' treats "-substring" as a flag; adding -- fixes it.
+      const r = runResolveNode('-preserve-story-input-resolution');
+      expect(r.exitCode, `stderr: ${r.stderr}`).toBe(0);
+      const parsed = JSON.parse(r.stdout.trim()) as { story_ref?: string };
+      expect(parsed.story_ref).toBe(CANONICAL_KEY);
+    });
+
     it('BASH-A3-8 [P2] identical valid input twice → deterministic same story_ref (idempotent)', () => {
       const a = runResolveNode(CANONICAL_KEY);
       const b = runResolveNode(CANONICAL_KEY);
@@ -380,6 +388,15 @@ describe('v2 story-input resolution (Story a1.2)', () => {
       const r = runResolveNode('a1-2 ; echo pwned * ');
       expect(r.exitCode).not.toBe(0);
       expect(r.stdout).not.toContain('pwned');
+    });
+
+    it('BASH-A3-9 [P1] ARGUMENTS with embedded newline → non-zero + clear message (R2-F2)', () => {
+      // resolver hand-builds JSON; an unescaped newline in story_arguments would
+      // produce invalid JSON even after backslash/quote escaping.
+      // Fix: reject inputs containing control characters before matching.
+      const r = runResolveNode('a1-2-preserve\nstory-input-resolution');
+      expect(r.exitCode).not.toBe(0);
+      expect(`${r.stdout}${r.stderr}`.toLowerCase()).toMatch(/control/);
     });
 
     it('BASH-A3-7 [P2] malformed sprint-status (no development_status:) → non-zero, no partial match', () => {

@@ -144,8 +144,18 @@ nodes:
       fi
 
       INPUT="$ARGUMENTS"
+
+      # Reject input containing control characters (newlines, carriage returns, etc.)
+      # that would produce invalid JSON string literals in the emitted contract.
+      case "$INPUT" in
+        *$'\n'*|*$'\r'*)
+          echo "Story input contains control characters (newline or carriage return). Use only printable characters." >&2
+          exit 1
+          ;;
+      esac
+
       # Normalize input: strip directory prefix for story-file path input form
-      INPUT_BASENAME=$(basename "$INPUT")
+      INPUT_BASENAME=$(basename -- "$INPUT")
       MATCHED_KEY=""
       MATCH_COUNT=0
 
@@ -169,7 +179,7 @@ nodes:
         else
           # 4. Kebab-normalized substring match against key slug
           INPUT_KEBAB=$(echo "$INPUT" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr '_' '-')
-          if echo "$KEY" | grep -qF "$INPUT_KEBAB" 2>/dev/null; then
+          if echo "$KEY" | grep -qF -- "$INPUT_KEBAB" 2>/dev/null; then
             MATCH=1
           fi
         fi
@@ -231,11 +241,7 @@ nodes:
     output_type: tea-automation
 
   - id: code-review
-    prompt: |
-      bmad-code-review $ARGUMENTS
-
-      The canonical story key for this review is: $resolve-story-input.output.story_ref
-      You MUST set the story_ref field in your structured output to exactly this value.
+    command: bmad-code-review
     depends_on: [tea-automate]
     context: fresh
     provider: codex
@@ -259,7 +265,7 @@ nodes:
           type: string
         story_ref:
           type: string
-          description: "The canonical sprint-status story key for this review (e.g. 'a1-2-preserve-story-input-resolution'). Must match the story key pinned at the top of this review session."
+          description: "The canonical story key for this run is $resolve-story-input.output.story_ref. Set this field to exactly that value."
       required:
         - gate
         - round
