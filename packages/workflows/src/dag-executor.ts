@@ -91,6 +91,7 @@ import {
 } from './executor-shared';
 import {
   isLiteralSpec,
+  isTierName,
   resolveModelSpec,
   routePresetEffort,
   type ModelAliasPreset,
@@ -347,6 +348,11 @@ type NodeExecutionResult = NodeOutput & {
   loopIterations?: number;
 };
 
+interface NodeObservabilityMetadata {
+  tier?: string;
+  model?: string;
+}
+
 /** Throttle state for cancel checks (reads — no write contention in WAL mode) */
 const lastNodeCancelCheck = new Map<string, number>();
 const CANCEL_CHECK_INTERVAL_MS = 10_000;
@@ -529,16 +535,19 @@ async function resolveNodeProviderAndModel(
   _cwd: string,
   workflowLevelOptions: WorkflowLevelOptions,
   aiProfile?: ResolvedAiProfile,
-  workflowPreset?: ModelAliasPreset
+  workflowPreset?: ModelAliasPreset,
+  workflowTier?: string
 ): Promise<{
   provider: string;
   model: string | undefined;
+  tier: string | undefined;
   options: SendQueryOptions | undefined;
 }> {
   const configuredProvider: string = node.provider ?? workflowProvider;
   let provider: string = configuredProvider;
   let preset: ModelAliasPreset | undefined;
   let model: string | undefined;
+  let tier: string | undefined;
 
   if (node.model) {
     if (aiProfile) {
@@ -547,6 +556,7 @@ async function resolveNodeProviderAndModel(
         model = modelSpec.literal;
       } else {
         preset = modelSpec;
+        if (isTierName(node.model)) tier = node.model;
         provider = modelSpec.provider;
         model = modelSpec.model;
         if (node.provider && node.provider !== provider) {
@@ -594,6 +604,9 @@ async function resolveNodeProviderAndModel(
       : (providerAssistantConfig?.model as string | undefined);
   const effectivePreset =
     preset ?? (!node.model && provider === workflowProvider ? workflowPreset : undefined);
+  if (!tier && !node.model && effectivePreset && workflowTier) {
+    tier = workflowTier;
+  }
 
   // Get provider capabilities for capability warnings (static lookup, no instantiation)
   const caps = getProviderCapabilities(provider);
@@ -708,7 +721,7 @@ async function resolveNodeProviderAndModel(
     assistantConfig,
   };
 
-  return { provider, model, options };
+  return { provider, model, tier, options };
 }
 
 /** Evaluate trigger rule for a node given its upstream states */
@@ -955,7 +968,8 @@ async function executeNodeInternal(
   nodeOutputs: Map<string, NodeOutput>,
   resumeSessionId: string | undefined,
   configuredCommandFolder?: string,
-  issueContext?: string
+  issueContext?: string,
+  nodeObservability?: NodeObservabilityMetadata
 ): Promise<NodeExecutionResult> {
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -970,7 +984,12 @@ async function executeNodeInternal(
       workflow_run_id: workflowRun.id,
       event_type: 'node_started',
       step_name: node.id,
-      data: withRetryEpochData(workflowRun, undefined, { command: node.command ?? null, provider }),
+      data: withRetryEpochData(workflowRun, undefined, {
+        command: node.command ?? null,
+        provider,
+        ...(nodeObservability?.tier ? { tier: nodeObservability.tier } : {}),
+        ...(nodeObservability?.model ? { model: nodeObservability.model } : {}),
+      }),
     })
     .catch((err: Error) => {
       getLog().error(
@@ -1062,6 +1081,7 @@ async function executeNodeInternal(
   let nodeStopReason: string | undefined;
   let nodeNumTurns: number | undefined;
   let nodeModelUsage: Record<string, unknown> | undefined;
+  let nodeResumed: boolean | undefined;
   const batchMessages: string[] = [];
 
   // Create per-node abort controller for idle timeout cleanup
@@ -1286,6 +1306,7 @@ async function executeNodeInternal(
         if (msg.stopReason !== undefined) nodeStopReason = msg.stopReason;
         if (msg.numTurns !== undefined) nodeNumTurns = msg.numTurns;
         if (msg.modelUsage) nodeModelUsage = msg.modelUsage;
+        if (msg.resumed !== undefined) nodeResumed = msg.resumed;
         if (msg.structuredOutput !== undefined) structuredOutput = msg.structuredOutput;
         // Fail the node if the SDK reports a cost cap exceeded error
         if (msg.isError && msg.errorSubtype === 'error_max_budget_usd') {
@@ -1716,6 +1737,7 @@ async function executeNodeInternal(
       sessionId: newSessionId,
       costUsd: nodeCostUsd,
       ...(nodeTokens !== undefined ? { tokens: nodeTokens } : {}),
+      ...(nodeResumed !== undefined ? { resumed: nodeResumed } : {}),
       ...(structuredOutput !== undefined ? { structuredOutput } : {}),
       ...(declaredFields !== undefined ? { declaredFields } : {}),
     };
@@ -2348,14 +2370,11 @@ async function executeLoopNode(
         logEventStoreError(err, i);
       });
 
-    // Session threading. Force a fresh session on the first iteration of an
-    // interactive loop resume: the stored session id from the gate metadata
-    // may be stale after a human review wait — passing it to the SDK can
-    // trigger errors (e.g. error_during_execution on Claude SDK).
-    // User feedback is carried via $LOOP_USER_INPUT, so session continuity is
-    // not required for the first resumed iteration.
-    const needsFreshSession =
-      loop.fresh_context || i === 1 || (isLoopResume && i === startIteration);
+    // Session threading. Fresh loop runs start iteration 1 without a prior
+    // session. Resumed interactive loops continue from the session captured
+    // in the gate metadata so the provider can retain loop context while
+    // $LOOP_USER_INPUT carries the human's review response.
+    const needsFreshSession = loop.fresh_context || i === 1;
     const resumeSessionId = needsFreshSession ? undefined : currentSessionId;
 
     // Stream AI response for this iteration
@@ -2915,7 +2934,8 @@ async function executeApprovalNode(
   configuredCommandFolder?: string,
   issueContext?: string,
   aiProfile?: ResolvedAiProfile,
-  workflowPreset?: ModelAliasPreset
+  workflowPreset?: ModelAliasPreset,
+  workflowTier?: string
 ): Promise<NodeOutput> {
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
 
@@ -2996,7 +3016,12 @@ async function executeApprovalNode(
       ...(node.idle_timeout ? { idle_timeout: node.idle_timeout } : {}),
     };
 
-    const { provider, options: nodeOptions } = await resolveNodeProviderAndModel(
+    const {
+      provider,
+      model,
+      tier,
+      options: nodeOptions,
+    } = await resolveNodeProviderAndModel(
       syntheticNode,
       workflowProvider,
       workflowModel,
@@ -3007,7 +3032,8 @@ async function executeApprovalNode(
       cwd,
       workflowLevelOptions,
       aiProfile,
-      workflowPreset
+      workflowPreset,
+      workflowTier
     );
 
     const output = await executeNodeInternal(
@@ -3026,7 +3052,8 @@ async function executeApprovalNode(
       nodeOutputs,
       undefined, // fresh session
       configuredCommandFolder,
-      issueContext
+      issueContext,
+      { tier, model }
     );
 
     if (output.state === 'failed') {
@@ -3091,6 +3118,7 @@ export async function executeDagWorkflow(
   cwd: string,
   workflow: {
     name: string;
+    model?: string;
     nodes: readonly DagNode[];
     /** Workflow-level default for per-node `persist_session` (read directly here). */
     persist_sessions?: boolean;
@@ -3123,6 +3151,17 @@ export async function executeDagWorkflow(
     betas: workflow.betas,
     sandbox: workflow.sandbox,
   };
+  let effectiveWorkflowPreset = workflowPreset;
+  if (!effectiveWorkflowPreset && workflow.model && aiProfile) {
+    const workflowModelSpec = resolveModelSpec(aiProfile, workflow.model);
+    if (!isLiteralSpec(workflowModelSpec)) {
+      effectiveWorkflowPreset = workflowModelSpec;
+    }
+  }
+  const workflowTier =
+    effectiveWorkflowPreset && workflow.model && isTierName(workflow.model)
+      ? workflow.model
+      : undefined;
   const layers = buildTopologicalLayers(workflow.nodes);
   const nodeOutputs = new Map<string, NodeOutput>();
   const hasRouteLoopNodes = workflow.nodes.some(isRouteLoopNode);
@@ -3568,7 +3607,8 @@ export async function executeDagWorkflow(
                 cwd,
                 workflowLevelOptions,
                 aiProfile,
-                workflowPreset
+                effectiveWorkflowPreset,
+                workflowTier
               );
 
             const output = await executeLoopNode(
@@ -3612,7 +3652,8 @@ export async function executeDagWorkflow(
               configuredCommandFolder,
               issueContext,
               aiProfile,
-              workflowPreset
+              effectiveWorkflowPreset,
+              workflowTier
             );
             return { nodeId: node.id, output };
           }
@@ -3767,7 +3808,12 @@ export async function executeDagWorkflow(
           }
 
           // 4. Resolve per-node provider/model/options
-          const { provider, options: nodeOptions } = await resolveNodeProviderAndModel(
+          const {
+            provider,
+            model,
+            tier,
+            options: nodeOptions,
+          } = await resolveNodeProviderAndModel(
             node,
             workflowProvider,
             workflowModel,
@@ -3778,7 +3824,8 @@ export async function executeDagWorkflow(
             cwd,
             workflowLevelOptions,
             aiProfile,
-            workflowPreset
+            effectiveWorkflowPreset,
+            workflowTier
           );
 
           // 5. Determine session — parallel or context:fresh → always fresh
@@ -3894,7 +3941,8 @@ export async function executeDagWorkflow(
               // ensures the source is never mutated, so retries can safely resume from it.
               resumeSessionId,
               configuredCommandFolder,
-              issueContext
+              issueContext,
+              { tier, model }
             );
 
             if (output.state !== 'failed') break;
@@ -3933,6 +3981,21 @@ export async function executeDagWorkflow(
             );
 
             await new Promise(resolve => setTimeout(resolve, delayMs));
+          }
+
+          if (
+            effectivePersist &&
+            !bypassesPersistence &&
+            persistScopeKey &&
+            output.state === 'completed' &&
+            output.resumed === false
+          ) {
+            await safeSendMessage(
+              platform,
+              conversationId,
+              `⚠️ Node \`${node.id}\` could not resume the prior session (${provider}); it continued in a fresh session and saved the new session for next time.`,
+              { workflowId: workflowRun.id, nodeName: node.id }
+            );
           }
 
           // Persist (or drop) the node's provider session ID for the next run in this scope.

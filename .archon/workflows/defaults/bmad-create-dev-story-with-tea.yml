@@ -46,14 +46,84 @@ nodes:
     timeout: 60000
     output_type: story-name-input
 
+  - id: prepare-bmad-state
+    bash: |
+      set -e
+
+      RUN_DIR="$ARTIFACTS_DIR/bmad-create-dev-story-with-tea"
+      mkdir -p "$RUN_DIR/findings" "$RUN_DIR/reports"
+
+      cat > "$RUN_DIR/state.json" << 'JSON'
+      {
+        "workflow": "bmad-create-dev-story-with-tea",
+        "status": "running",
+        "round": 1,
+        "maxFailedReviews": 20,
+        "activeStory": "",
+        "activeStoryName": "",
+        "activeStoryFile": "",
+        "decisionLogFile": "decision-log.md",
+        "openFindingsFile": "findings/open-findings.md"
+      }
+      JSON
+
+      cat > "$RUN_DIR/decision-log.md" << 'MARKDOWN'
+      # BMAD Create Dev Story With TEA Decision Log
+
+      Every finding and every fix must be logged here.
+      Each full sentence goes on its own physical line.
+
+      ## Created Story
+
+      The created story details are recorded in state.json after the create-story node completes.
+
+      ## Required Finding Entry
+
+      ### Finding {finding_id}
+
+      - Source gate:
+      - Severity:
+      - What is wrong:
+      - Evidence:
+      - Why this is a defect:
+      - Required fix direction:
+      - Status:
+
+      ## Required Fix Entry
+
+      ### Fix {finding_id}
+
+      - What was fixed:
+      - How it was fixed:
+      - Why this fix was chosen:
+      - Alternatives considered:
+      - Files changed:
+      - Validation:
+      - Status:
+      MARKDOWN
+
+      cat > "$RUN_DIR/findings/open-findings.md" << 'MARKDOWN'
+      # Open Review Findings
+
+      No open findings yet.
+      MARKDOWN
+
+      echo "RUN_DIR=$RUN_DIR"
+      echo "STATE_FILE=$RUN_DIR/state.json"
+      echo "DECISION_LOG=$RUN_DIR/decision-log.md"
+      echo "OPEN_FINDINGS=$RUN_DIR/findings/open-findings.md"
+    depends_on: [validate-story-name-input]
+    timeout: 60000
+    output_type: bmad-state
+
   - id: create-story
     prompt: |
       $bmad-create-story create detailed story for $ARGUMENTS.
       Read all reference documents, understand the context comprehensively, and spawn sub-agents if useful.
-    provider: claude
-    depends_on: [validate-story-name-input]
+    provider: codex
+    depends_on: [prepare-bmad-state]
     context: fresh
-    model: opus
+    model: gpt-5.5
     idle_timeout: 900000
     output_format:
       type: object
@@ -76,11 +146,57 @@ nodes:
         - validation_summary
     output_type: create-story
 
+  - id: record-created-story-state
+    bash: |
+      set -e
+
+      RUN_DIR="$ARTIFACTS_DIR/bmad-create-dev-story-with-tea"
+      STATE="$RUN_DIR/state.json"
+      STORY_NAME=$create-story.output.story_name
+      STORY_KEY=$create-story.output.story_key
+      STORY_FILE=$create-story.output.story_file
+      SPRINT_STATUS=$create-story.output.sprint_status
+
+      if [ ! -f "$STATE" ]; then
+        echo "Missing BMAD create-dev-story state file: $STATE"
+        exit 1
+      fi
+
+      STATE="$STATE" \
+      STORY_NAME="$STORY_NAME" \
+      STORY_KEY="$STORY_KEY" \
+      STORY_FILE="$STORY_FILE" \
+      SPRINT_STATUS="$SPRINT_STATUS" \
+      bun -e '
+        import { readFileSync, renameSync, writeFileSync } from "fs";
+
+        const statePath = process.env.STATE;
+        if (!statePath) throw new Error("STATE is required");
+
+        const state = JSON.parse(readFileSync(statePath, "utf8"));
+        state.activeStory = process.env.STORY_KEY ?? "";
+        state.activeStoryName = process.env.STORY_NAME ?? "";
+        state.activeStoryFile = process.env.STORY_FILE ?? "";
+        state.sprintStatus = process.env.SPRINT_STATUS ?? "";
+
+        const tmpPath = `${statePath}.tmp`;
+        writeFileSync(tmpPath, `${JSON.stringify(state, null, 2)}\n`);
+        renameSync(tmpPath, statePath);
+      '
+
+      echo "ACTIVE_STORY=$STORY_KEY"
+      echo "ACTIVE_STORY_NAME=$STORY_NAME"
+      echo "ACTIVE_STORY_FILE=$STORY_FILE"
+      echo "SPRINT_STATUS=$SPRINT_STATUS"
+    depends_on: [create-story]
+    timeout: 60000
+    output_type: created-story-state
+
   - id: validate-story-readiness
     prompt: |
       $bmad-create-story validate $create-story.output.story_file
     provider: codex
-    depends_on: [create-story]
+    depends_on: [record-created-story-state]
     context: fresh
     model: gpt-5.5
     output_type: story-readiness-gate
@@ -110,10 +226,10 @@ nodes:
 
       Do not stop at happy paths.
       Do not mark coverage complete if P0/P1 edge cases are only implied.
-    provider: claude
+    provider: codex
     depends_on: [validate-story-readiness]
     context: fresh
-    model: opus
+    model: gpt-5.5
     output_type: risk-based-test-design
 
   - id: generate-red-acceptance-tests
@@ -167,10 +283,12 @@ nodes:
       Use the TEA risk-based test design and red acceptance scaffolds produced by earlier nodes as implementation guidance.
       Before making changes, read `$ARTIFACTS_DIR/bmad-create-dev-story-with-tea/findings/open-findings.md` and `$ARTIFACTS_DIR/bmad-create-dev-story-with-tea/decision-log.md`.
       If open findings exist, treat this invocation as a fix pass and append the required fix entries to the decision log.
-    provider: claude
+      On fix passes, rewrite open-findings.md so fixed findings are pending re-review and update state.json to the next review round.
+      Keep activeStoryFile in state.json set to $create-story.output.story_file.
+    provider: codex
     depends_on: [generate-red-acceptance-tests]
     context: fresh
-    model: sonnet
+    model: gpt-5.5
     idle_timeout: 900000
     output_type: dev-story
 

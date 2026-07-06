@@ -29,6 +29,7 @@ package-lock.json
 .agents/
 .claude/
 .archon/
+.omx/
 
 # Website (Astro/Starlight - uses own formatting)
 packages/docs-web/

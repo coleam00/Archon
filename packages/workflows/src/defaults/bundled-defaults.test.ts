@@ -137,7 +137,12 @@ describe('bundled-defaults', () => {
 
     it('bmad-create-dev-story-with-tea should create story before dev loop and PR after review gate', () => {
       const content = BUNDLED_WORKFLOWS['bmad-create-dev-story-with-tea'];
+      expect(content).toContain('id: prepare-bmad-state');
+      expect(content).toContain('RUN_DIR="$ARTIFACTS_DIR/bmad-create-dev-story-with-tea"');
       expect(content).toContain('id: create-story');
+      expect(content).toContain('id: record-created-story-state');
+      expect(content).toContain('state.activeStoryFile = process.env.STORY_FILE');
+      expect(content).toContain('depends_on: [record-created-story-state]');
       expect(content).toContain('id: generate-red-acceptance-tests');
       expect(content).toContain('id: dev-story');
       expect(content).toContain('bmad-dev-story $create-story.output.story_file');
