@@ -44,6 +44,7 @@ const CANONICAL_KEY = 'a1-2-preserve-story-input-resolution';
 // replaces `$<node>.output.<field>` before execution (executor-shared subst).
 const RESOLVED_TOKEN = '$resolve-story-input.output.story_ref';
 const CONTRACT_TOKEN = '$code-review.output.story_ref';
+const GATE_TOKEN = '$code-review.output.gate';
 
 const readLF = (p: string): string | null =>
   existsSync(p) ? readFileSync(p, 'utf-8').replace(/\r\n/g, '\n') : null;
@@ -169,11 +170,16 @@ function runResolveNode(argumentsValue: string | undefined, devStatusYaml?: stri
 }
 
 /**
- * Extract the `verify-story-identity` guard body, substitute the two engine
- * tokens with test values (as the engine would before execution), and run it.
+ * Extract the `verify-story-identity` guard body, substitute the engine tokens
+ * with test values (as the engine would before execution), and run it.
  * Fails RED (guard undefined) until the guard exists.
+ * gateValue simulates the $code-review.output.gate substitution (default 'PASS').
  */
-function runGuardNode(resolvedRef: string, contractRef: string): BashResult {
+function runGuardNode(
+  resolvedRef: string,
+  contractRef: string,
+  gateValue: string = 'PASS'
+): BashResult {
   const wf = loadV2();
   const guard = getNode(wf, 'verify-story-identity');
   expect(guard, 'verify-story-identity guard node must exist in v2').toBeDefined();
@@ -182,7 +188,9 @@ function runGuardNode(resolvedRef: string, contractRef: string): BashResult {
     .split(RESOLVED_TOKEN)
     .join(resolvedRef)
     .split(CONTRACT_TOKEN)
-    .join(contractRef);
+    .join(contractRef)
+    .split(GATE_TOKEN)
+    .join(gateValue);
   const fx = makeSprintFixture();
   try {
     return runBash(substituted, { env: { ARTIFACTS_DIR: fx.artifactsDir }, cwd: fx.cwd });
@@ -303,6 +311,15 @@ describe('v2 story-input resolution (Story a1.2)', () => {
 
     it('BASH-A2-4 [P1] story-file basename "a1-2-*.md" resolves to the canonical key', () => {
       const r = runResolveNode('a1-2-preserve-story-input-resolution.md');
+      expect(r.exitCode, `stderr: ${r.stderr}`).toBe(0);
+      const parsed = JSON.parse(r.stdout.trim()) as { story_ref?: string };
+      expect(parsed.story_ref).toBe(CANONICAL_KEY);
+    });
+
+    it('BASH-A2-4b [P1] story-file full path resolves to canonical key (R1-F3)', () => {
+      const r = runResolveNode(
+        '_bmad-output/implementation-artifacts/a1-2-preserve-story-input-resolution.md'
+      );
       expect(r.exitCode, `stderr: ${r.stderr}`).toBe(0);
       const parsed = JSON.parse(r.stdout.trim()) as { story_ref?: string };
       expect(parsed.story_ref).toBe(CANONICAL_KEY);
@@ -433,15 +450,15 @@ describe('v2 story-input resolution (Story a1.2)', () => {
       expect(deps).toContain('code-review');
 
       const gate = getNode(wf, 'code-review-gate');
-      expect(gate?.depends_on ?? [], 'code-review-gate must keep exactly [code-review]').toEqual([
-        'code-review',
-      ]);
+      expect(
+        gate?.depends_on ?? [],
+        'code-review-gate must depend on verify-story-identity after R1-F2'
+      ).toEqual(['verify-story-identity']);
     });
 
-    it('STR-A4-3 [P0] route_loop preserved on code-review-gate (load-time invariant)', () => {
-      // R-005: green today; must STAY green after guard insertion.
+    it('STR-A4-3 [P0] route_loop on code-review-gate routes from verify-story-identity (R1-F2)', () => {
       const gate = getNode(loadV2(), 'code-review-gate');
-      expect(gate?.route_loop?.from).toBe('code-review');
+      expect(gate?.route_loop?.from).toBe('verify-story-identity');
       expect(gate?.route_loop?.routes?.positive).toBe('tea-rv');
       expect(gate?.route_loop?.routes?.negative).toBe('dev-story');
       expect(gate?.route_loop?.routes?.exhausted).toBe('review-loop-error');
@@ -481,9 +498,13 @@ describe('v2 story-input resolution (Story a1.2)', () => {
       expect(r.exitCode).not.toBe(0);
     });
 
-    it('BASH-A4-3 [P1] guard: equal story_ref on both sides → exit 0', () => {
-      const r = runGuardNode(CANONICAL_KEY, CANONICAL_KEY);
-      expect(r.exitCode, `stderr: ${r.stderr}`).toBe(0);
+    it('BASH-A4-3 [P1] guard: equal story_ref on both sides → exit 0, stdout = gate value', () => {
+      const rPass = runGuardNode(CANONICAL_KEY, CANONICAL_KEY, 'PASS');
+      expect(rPass.exitCode, `stderr: ${rPass.stderr}`).toBe(0);
+      expect(rPass.stdout.trim()).toBe('PASS');
+      const rFail = runGuardNode(CANONICAL_KEY, CANONICAL_KEY, 'FAIL');
+      expect(rFail.exitCode, `stderr: ${rFail.stderr}`).toBe(0);
+      expect(rFail.stdout.trim()).toBe('FAIL');
     });
 
     it('STR-A4-8 [P2] review-loop-error (exhausted route) still exits 1 — unaffected by new nodes', () => {
