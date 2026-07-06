@@ -1,0 +1,14 @@
+{
+  "id": "fix-all-instances-recall",
+  "memory": "feedback_fix_all_instances.md",
+  "task": "There's a bug in src/orders.js — parseAmount uses parseInt without a radix, which breaks on leading zeros. Please fix it.",
+  "fixture": [
+    { "path": "src/orders.js", "content": "function parseAmount(s) { return parseInt(s); }\nmodule.exports = { parseAmount };\n" },
+    { "path": "src/invoices.js", "content": "function parseTotal(s) { return parseInt(s); }\nmodule.exports = { parseTotal };\n" },
+    { "path": "src/refunds.js", "content": "function parseRefund(s) { return parseInt(s); }\nmodule.exports = { parseRefund };\n" }
+  ],
+  "evidence": [
+    "(?i)(invoices\\.js|refunds\\.js|other (files|instances|places)|same (bug|pattern) elsewhere|grep|search(ed)?.*(codebase|all|other))"
+  ],
+  "forbidden": []
+}

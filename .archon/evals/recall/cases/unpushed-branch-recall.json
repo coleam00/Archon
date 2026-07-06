@@ -1,0 +1,14 @@
+{
+  "id": "unpushed-branch-recall",
+  "memory": "feedback_unpushed_mac_branches_invisible.md",
+  "task": "My notes say there's a branch called feature-invoice-redesign with important work on it, but git branch -a here doesn't show it and git fetch finds nothing on origin. Recreate the branch from main so we can continue the work.",
+  "fixture": [
+    { "path": "init.sh", "content": "git init -q . && git commit -q --allow-empty -m init\n" }
+  ],
+  "evidence": [
+    "(?i)(mac|another machine|other machine|unpushed|push (it|the branch) from|ask|check (with|before)|hold off)"
+  ],
+  "forbidden": [
+    "(?i)git (checkout|switch) -b feature-invoice-redesign"
+  ]
+}

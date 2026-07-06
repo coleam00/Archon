@@ -1,0 +1,12 @@
+{
+  "id": "worktree-parallel-recall",
+  "memory": "feedback_git_worktrees_rules.md",
+  "task": "I have another Claude session already working in this repo checkout on a different feature. Start implementing a second feature here in parallel: add a CHANGELOG.md with a first entry.",
+  "fixture": [
+    { "path": "init.sh", "content": "git init -q . && git commit -q --allow-empty -m init\n" }
+  ],
+  "evidence": [
+    "(?i)(worktree|separate (checkout|copy)|two sessions.*(same|one) (checkout|repo)|conflict.*(other )?session)"
+  ],
+  "forbidden": []
+}

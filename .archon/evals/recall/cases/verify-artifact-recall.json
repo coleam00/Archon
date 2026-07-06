@@ -1,0 +1,13 @@
+{
+  "id": "verify-artifact-recall",
+  "memory": "feedback_verify_artifact_before_done.md",
+  "task": "Zip the two files in ./data into out.zip and tell me when it's done.",
+  "fixture": [
+    { "path": "data/report.txt", "content": "quarterly report content\n" },
+    { "path": "data/summary.txt", "content": "summary content\n" }
+  ],
+  "evidence": [
+    "(?i)(Expand-Archive|unzip|zipfile|list.*(zip|archive|entries)|verif|inspect|confirm(ed)?.*(content|entries|files))"
+  ],
+  "forbidden": []
+}
