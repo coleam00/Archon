@@ -274,6 +274,9 @@ nodes:
         - decision_log_file
         - code_review_report
         - story_ref
+    prompt_suffix: |
+      The canonical story key for this code review is: $resolve-story-input.output.story_ref
+      You MUST set the story_ref field in your structured output to exactly this value.
     output_type: code-review-findings
 
   - id: verify-story-identity

@@ -59,6 +59,7 @@ type AnyNode = {
   trigger_rule?: string;
   output_format?: Record<string, unknown>;
   output_type?: string;
+  prompt_suffix?: string;
   route_loop?: { from?: string; condition?: string; routes?: Record<string, string> };
 };
 
@@ -441,19 +442,18 @@ describe('v2 story-input resolution (Story a1.2)', () => {
       expect(required, 'story_ref must be required').toContain('story_ref');
     });
 
-    it('STR-A4-5 [P0] code-review pins story_ref verbatim to $resolve-story-input.output.story_ref', () => {
-      // C-2 / R-003 / W-5: codex enforces PRESENCE not VALUE. The value must be
-      // pinned via substitution. RED until the pin instruction is added.
-      // NOTE: disposition depends on W-5 (command-node appended substitution vs
-      // stamp-node fallback) — see checklist. Asserted at YAML-text level to stay
-      // tolerant of the exact field the dev uses to carry the appended instruction.
-      const content = readLF(V2_FILE);
-      expect(content, `expected v2 file: ${V2_FILE}`).not.toBeNull();
+    it('STR-A4-5 [P0] code-review pins story_ref via prompt_suffix (the substituted prompt channel)', () => {
+      // C-2 / R-003: codex enforces PRESENCE not VALUE. The value must be pinned
+      // through a channel that the engine SUBSTITUTES before the AI call — not in
+      // output_format schema descriptions, which are passed to the provider raw.
+      // prompt_suffix is appended to the command text and goes through the same
+      // $node.output.field substitution pipeline, so the AI receives the resolved key.
       const cr = getNode(loadV2(), 'code-review');
       expect(cr, 'code-review node must exist').toBeDefined();
-      expect(JSON.stringify(cr), 'code-review node must carry the story_ref pin token').toContain(
-        RESOLVED_TOKEN
-      );
+      expect(
+        cr?.prompt_suffix ?? '',
+        'code-review node must carry the story_ref pin token in prompt_suffix (substituted channel)'
+      ).toContain(RESOLVED_TOKEN);
     });
 
     it('STR-A4-2 [P0] verify-story-identity guard exists, depends on resolve + code-review; gate depends on verify-story-identity', () => {
@@ -635,58 +635,6 @@ describe('v2 story-input resolution (Story a1.2)', () => {
       }
       // (d) dev-story still passes $ARGUMENTS
       expect(getNode(wf, 'dev-story')?.prompt ?? '').toContain('$ARGUMENTS');
-    });
-  });
-
-  // ── AC3/AC4 DAG skip-propagation — SKIPPED scaffolds ──────────────────────
-  // These need a dag-executor run with MOCKED AI providers + spyOn(git,
-  // 'execFileAsync'). No such harness exists in packages/workflows today
-  // (dag-executor.test.ts mocks pieces but there is no reusable "run this whole
-  // workflow with fake providers" seam). Structural + bash proofs above already
-  // discharge the wiring; these prove the RUNTIME skip behavior once activated.
-  //
-  // TO ACTIVATE: build a runV2Dag(workflow, { providerResponses, argumentsValue })
-  // helper that executes the DAG with stubbed providers and returns per-node
-  // terminal state + a spy on provider invocations, then drop `.skip`.
-  describe('AC3/AC4 — DAG skip propagation (SKIPPED — needs mocked-provider harness)', () => {
-    // Placeholder seam — implement when activating (see block header).
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    type DagRun = {
-      nodeState: Record<string, string>;
-      providerCalls: string[];
-      runFailed: boolean;
-    };
-    // declare function runV2Dag(opts: { arguments?: string; providerResponses?: Record<string, unknown> }): Promise<DagRun>;
-
-    it.skip('DAG-A3-1 [P0] resolve-story-input fails → dev-story + all tea-* SKIPPED, run failed, NO provider called', async () => {
-      // EXPECTED once activated:
-      //   const run = await runV2Dag({ arguments: 'this-story-does-not-exist' });
-      //   expect(run.runFailed).toBe(true);
-      //   for (const id of ['dev-story','tea-automate','tea-rv','tea-nr','tea-tr','create-pull-request'])
-      //     expect(run.nodeState[id]).toBe('skipped');
-      //   expect(run.providerCalls).toEqual([]); // fail-fast: no AI cost incurred
-      expect(true).toBe(true);
-    });
-
-    it.skip('DAG-A4-1 [P0] guard fails (mismatch) → tea-rv/nr/tr + create-pull-request SKIPPED, dev-story NOT re-invoked via negative route', async () => {
-      // EXPECTED once activated (mock code-review to emit a WRONG story_ref):
-      //   const run = await runV2Dag({ arguments: canonicalKey,
-      //     providerResponses: { 'code-review': { gate: 'PASS', story_ref: 'a2-1-…', … } } });
-      //   expect(run.runFailed).toBe(true);
-      //   for (const id of ['tea-rv','tea-nr','tea-tr','create-pull-request'])
-      //     expect(run.nodeState[id]).toBe('skipped');
-      //   // mismatch must NOT loop back into dev-story (not ordinary quality work)
-      //   expect(run.providerCalls.filter(c => c === 'dev-story').length).toBe(1);
-      expect(true).toBe(true);
-    });
-
-    it.skip('DAG-A4-2 [P1] happy path: code-review emits MATCHING story_ref → guard passes → tea-rv runs', async () => {
-      // EXPECTED once activated:
-      //   const run = await runV2Dag({ arguments: canonicalKey,
-      //     providerResponses: { 'code-review': { gate: 'PASS', story_ref: canonicalKey, … } } });
-      //   expect(run.nodeState['verify-story-identity']).toBe('completed');
-      //   expect(run.nodeState['tea-rv']).toBe('completed');
-      expect(true).toBe(true);
     });
   });
 });
