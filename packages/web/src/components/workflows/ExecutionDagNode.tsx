@@ -111,7 +111,7 @@ function ExecutionDagNodeRender({ data }: NodeProps<ExecutionFlowNode>): React.R
       )}
       {runtimeMetadata && (
         <div
-          className="mt-0.5 max-w-[190px] truncate text-[10px] text-text-secondary"
+          className="mx-auto mt-0.5 w-full max-w-[190px] truncate text-center text-[10px] text-text-secondary"
           title={runtimeMetadata}
         >
           {runtimeMetadata}

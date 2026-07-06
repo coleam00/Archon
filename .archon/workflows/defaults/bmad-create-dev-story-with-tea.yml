@@ -11,7 +11,7 @@ description: |
   - Every finding and fix entry must explain what is wrong, how it was fixed, and why that fix decision was chosen.
 
 provider: codex
-modelReasoningEffort: xhigh
+modelReasoningeffort: high
 model: gpt-5.5
 tags: [BMad, TEA, Planning, Review]
 
@@ -124,7 +124,7 @@ nodes:
     depends_on: [prepare-bmad-state]
     context: fresh
     model: opus
-    effort: xhigh
+    effort: high
     idle_timeout: 900000
     output_format:
       type: object
@@ -231,7 +231,7 @@ nodes:
     depends_on: [validate-story-readiness]
     context: fresh
     model: opus
-    effort: xhigh
+    effort: high
     output_type: risk-based-test-design
 
   - id: generate-red-acceptance-tests
@@ -272,7 +272,7 @@ nodes:
       - List waivers with owner and residual risk.
       - Provide exact commands to run the generated tests.
     provider: claude
-    effort: xhigh
+    effort: high
     depends_on: [design-risk-based-tests]
     context: fresh
     model: opus
@@ -289,7 +289,7 @@ nodes:
       On fix passes, rewrite open-findings.md so fixed findings are pending re-review and update state.json to the next review round.
       Keep activeStoryFile in state.json set to $create-story.output.story_file.
     provider: claude
-    effort: xhigh
+    effort: high
     depends_on: [generate-red-acceptance-tests]
     context: fresh
     model: sonnet
@@ -342,7 +342,7 @@ nodes:
   - id: create-pull-request
     command: archon-create-pr
     provider: claude
-    effort: xhigh
+    effort: high
     depends_on: [code-review-gate]
     context: fresh
     model: sonnet
