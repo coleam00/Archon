@@ -144,15 +144,52 @@ describe('v2 workflow baseline (Story a1.1)', () => {
       expect((result.workflow as WorkflowDefinition).nodes.length).toBeGreaterThan(0);
     });
 
-    it('S3.2 [P0] v2 node topology is a faithful copy of the baseline (only name/description differ)', () => {
-      // The redesigned DAG (gate-planner, tea-*-skipped, quality-gate-summary,
-      // decision-needed-check, code-review-auto) is explicitly out of scope for
-      // this story. v2 must be structurally identical to v1 for now.
+    it('S3.2 [P0] v1 nodes are unchanged; v2 adds resolution/guard nodes while retaining the original node set', () => {
+      // A1.2 intentionally diverges v2 topology: adds resolve-story-input (input
+      // normalization) and verify-story-identity (story_ref mismatch guard) while
+      // keeping all original node ids. v1 must remain byte-identical to its own
+      // previous state (regression guard).
       const v1 = parseFromDisk(V1_FILE, V1_STEM);
       const v2 = parseFromDisk(V2_FILE, V2_STEM);
 
-      // Nodes (ids, depends_on edges, route_loop, provider/model per node) verbatim.
-      expect(JSON.stringify(v2.nodes)).toBe(JSON.stringify(v1.nodes));
+      // (a) v1 nodes are unchanged — all v1 node ids still present in v1
+      const v1Ids = v1.nodes.map(n => n.id);
+      expect(v1Ids).toContain('prepare-bmad-state');
+      expect(v1Ids).toContain('dev-story');
+      expect(v1Ids).toContain('code-review');
+      expect(v1Ids).toContain('code-review-gate');
+      expect(v1Ids).toContain('tea-rv');
+      expect(v1Ids).toContain('review-loop-error');
+      expect(v1Ids).toContain('create-pull-request');
+
+      // (b) v2 retains all original v1 node ids AND adds the new nodes
+      const v2Ids = v2.nodes.map(n => n.id);
+      for (const id of v1Ids) {
+        expect(v2Ids).toContain(id);
+      }
+      expect(v2Ids).toContain('resolve-story-input');
+      expect(v2Ids).toContain('verify-story-identity');
+      // v2 has more nodes than v1
+      expect(v2.nodes.length).toBeGreaterThan(v1.nodes.length);
+
+      // (c) v2 dev-story still passes $ARGUMENTS (input contract preserved)
+      const v2DevStory = v2.nodes.find(n => n.id === 'dev-story');
+      expect(v2DevStory).toBeDefined();
+      expect('prompt' in v2DevStory!).toBe(true);
+      const devStoryPrompt = (v2DevStory as { prompt: string }).prompt;
+      expect(devStoryPrompt).toContain('$ARGUMENTS');
+
+      // (d) v2 code-review output_format includes required story_ref
+      const v2CodeReview = v2.nodes.find(n => n.id === 'code-review');
+      expect(v2CodeReview).toBeDefined();
+      const outputFormat = v2CodeReview!.output_format as {
+        required?: string[];
+        properties?: Record<string, unknown>;
+      };
+      expect(outputFormat).toBeDefined();
+      expect(outputFormat.required).toContain('story_ref');
+      expect(outputFormat.properties).toHaveProperty('story_ref');
+
       // Top-level provider/model/tags unchanged; only name (+ description) differ.
       expect(v2.provider).toBe(v1.provider);
       expect(v2.model).toBe(v1.model);
