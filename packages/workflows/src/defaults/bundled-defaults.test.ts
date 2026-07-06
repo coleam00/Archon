@@ -94,6 +94,14 @@ describe('bundled-defaults', () => {
       expect(content).not.toContain('base branch was provided as argument');
       expect(content).not.toContain('**Default base branch**');
     });
+
+    it('bmad-code-review should discover create-dev-story-with-tea state', () => {
+      const content = BUNDLED_COMMANDS['bmad-code-review'];
+      expect(content).toContain('$ARTIFACTS_DIR/bmad-create-dev-story-with-tea');
+      expect(content).toContain(
+        'Use the active story from the workflow state when `activeStoryFile` is set.'
+      );
+    });
   });
 
   describe('BUNDLED_WORKFLOWS', () => {
@@ -124,6 +132,17 @@ describe('bundled-defaults', () => {
     it('bmad-create-story-with-tea should create PR through archon-create-pr', () => {
       const content = BUNDLED_WORKFLOWS['bmad-create-story-with-tea'];
       expect(content).toContain('id: create-pull-request');
+      expect(content).toContain('command: archon-create-pr');
+    });
+
+    it('bmad-create-dev-story-with-tea should create story before dev loop and PR after review gate', () => {
+      const content = BUNDLED_WORKFLOWS['bmad-create-dev-story-with-tea'];
+      expect(content).toContain('id: create-story');
+      expect(content).toContain('id: generate-red-acceptance-tests');
+      expect(content).toContain('id: dev-story');
+      expect(content).toContain('bmad-dev-story $create-story.output.story_file');
+      expect(content).toContain('route_loop:');
+      expect(content).toContain('positive: create-pull-request');
       expect(content).toContain('command: archon-create-pr');
     });
 

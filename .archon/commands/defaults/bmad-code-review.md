@@ -9,15 +9,19 @@ This command is a review-only node.
 Do not fix code.
 Do not edit implementation files.
 
-Detect the active workflow directory first.
-Use `$ARTIFACTS_DIR/bmad-dev-story-fix-loop` when that state file exists.
-Otherwise use `$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop`.
+Detect the active workflow directory first by checking for a `state.json` file in this order:
+
+- `$ARTIFACTS_DIR/bmad-create-dev-story-with-tea`.
+- `$ARTIFACTS_DIR/bmad-dev-story-fix-loop`.
+- `$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop`.
+
 Read the active workflow directory's `state.json` to determine the current review round.
 Use that round number when naming files and findings.
 
 ## Story Context
 
-Use the story requested by the workflow caller:
+Use the active story from the workflow state when `activeStoryFile` is set.
+Otherwise use the story requested by the workflow caller:
 
 - Story argument: $ARGUMENTS.
 - Resolve the active story from `_bmad-output/implementation-artifacts/sprint-status.yaml` and `_bmad-output/implementation-artifacts/`.
@@ -66,7 +70,7 @@ Return `gate: "PASS"` only when `findings_count` is zero and the BMAD review com
 ## Task
 
 Run BMAD code-review as a finding-only pass.
-For round 1, review the dev-story output and any TEA automation output when present.
+For round 1, review the dev-story output and any TEA test design, ATDD, or automation output when present.
 For later rounds, verify whether earlier fixes resolved prior concerns and whether new concerns were introduced.
 Write findings to the active workflow directory's `findings/round-{round}-code-review.md`.
 If there are no findings, write that explicitly.

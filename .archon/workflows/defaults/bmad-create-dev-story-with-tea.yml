@@ -1,0 +1,248 @@
+name: bmad-create-dev-story-with-tea
+description: |
+  Use when: User provides a BMAD story_name/story selector and wants one workflow to create the story, validate readiness, produce TEA test design and red ATDD, implement the created story, and run the BMAD code-review fix loop before opening a PR.
+  Triggers: "bmad create dev story with tea <story_name>", "create and dev bmad story with tea <story_name>", "CS VS TD AT DS CR <story_name>".
+  Does: Runs BMAD create-story, validates the created story, runs TEA test design and red ATDD, runs BMAD dev-story against the created story file, reruns BMAD dev-story to fix code-review findings when needed, and creates the pull request after the review gate passes.
+  NOT for: Post-dev TEA review gates, generic Archon feature work without BMAD artifacts, or implementing an already-created story without story creation.
+
+  Decision log policy:
+  - Every finding must be written as a decision-log finding entry.
+  - Every fix must be written as a decision-log fix entry.
+  - Every finding and fix entry must explain what is wrong, how it was fixed, and why that fix decision was chosen.
+
+provider: codex
+modelReasoningEffort: xhigh
+model: gpt-5.5
+tags: [BMad, TEA, Planning, Review]
+
+nodes:
+  - id: validate-story-name-input
+    bash: |
+      set -e
+
+      if [ -z "${ARGUMENTS:-}" ]; then
+        echo "Missing required story_name input."
+        echo "Run this workflow with a BMAD story key, story id, title, or story file path."
+        exit 1
+      fi
+
+      for required in \
+        ".agents/skills/bmad-create-story/SKILL.md" \
+        ".agents/skills/bmad-dev-story/SKILL.md" \
+        ".agents/skills/bmad-code-review/SKILL.md" \
+        ".agents/skills/bmad-testarch-test-design/SKILL.md" \
+        ".agents/skills/bmad-testarch-atdd/SKILL.md" \
+        "_bmad/bmm/config.yaml" \
+        "_bmad/tea/config.yaml"
+      do
+        if [ ! -f "$required" ]; then
+          echo "Missing required BMAD or TEA file: $required"
+          echo "Run this workflow from a BMAD-enabled project checkout."
+          exit 1
+        fi
+      done
+
+      echo "story_name=$ARGUMENTS"
+    timeout: 60000
+    output_type: story-name-input
+
+  - id: create-story
+    prompt: |
+      $bmad-create-story create detailed story for $ARGUMENTS.
+      Read all reference documents, understand the context comprehensively, and spawn sub-agents if useful.
+    provider: claude
+    depends_on: [validate-story-name-input]
+    context: fresh
+    model: opus
+    idle_timeout: 900000
+    output_format:
+      type: object
+      properties:
+        story_name:
+          type: string
+        story_key:
+          type: string
+        story_file:
+          type: string
+        sprint_status:
+          type: string
+        validation_summary:
+          type: string
+      required:
+        - story_name
+        - story_key
+        - story_file
+        - sprint_status
+        - validation_summary
+    output_type: create-story
+
+  - id: validate-story-readiness
+    prompt: |
+      $bmad-create-story validate $create-story.output.story_file
+    provider: codex
+    depends_on: [create-story]
+    context: fresh
+    model: gpt-5.5
+    output_type: story-readiness-gate
+
+  - id: design-risk-based-tests
+    prompt: |
+      $bmad-testarch-test-design $create-story.output.story_file
+      Run the workflow as a Master Test Architect.
+      In Step 3 risk assessment:
+      - Treat every known reviewer concern as evidence, not optional advice.
+      - Convert each concern into a risk or explicit non-risk with rationale.
+      - Score probability and impact.
+      - Mark P0/P1 when the issue can break core behavior, security, data integrity, compatibility, or cross-process contract behavior.
+
+      In Step 4 coverage plan:
+      - Every acceptance criterion must map to atomic test scenarios.
+      - Every high-risk item must map to P0/P1 scenarios.
+      - Every known reviewer concern must map to scenarios or explicit waiver.
+      - Include happy path, negative path, boundary cases, malformed input, stale data, duplicate actions, out-of-order events, partial failure, dependency failure, timeout, cancellation, concurrency/race, rollback, permission/auth, and regression cases where applicable.
+      - Use the project's real test levels and existing test patterns.
+      - Avoid duplicate coverage unless the risk justifies multiple levels.
+
+      Mandatory output rule:
+      For every acceptance criterion, high-risk item, and reviewer concern:
+      - create a scenario, or
+      - write a waiver with reason, owner, residual risk, and follow-up trigger.
+
+      Do not stop at happy paths.
+      Do not mark coverage complete if P0/P1 edge cases are only implied.
+    provider: claude
+    depends_on: [validate-story-readiness]
+    context: fresh
+    model: opus
+    output_type: risk-based-test-design
+
+  - id: generate-red-acceptance-tests
+    prompt: |
+      $bmad-testarch-atdd $create-story.output.story_file
+      Generate red-phase acceptance scaffolds only.
+      Do not implement production code.
+
+      Use the repository's existing test framework, directories, helpers, and naming patterns discovered during preflight.
+      Do not blindly use generic `tests/api` or Playwright examples if the project uses another structure.
+
+      Mandatory mapping:
+      - Every P0/P1 scenario from the TD artifact must become one of:
+        - executable red test,
+        - skipped red scaffold with expected failure reason,
+        - waiver with reason, owner, residual risk, and follow-up trigger.
+      - Every known reviewer concern must be represented the same way.
+      - Every acceptance criterion must be traceable to generated tests or waiver.
+
+      Red-phase requirements:
+      - Use `test.skip()` only when the target module, route, harness, or dependency seam does not exist yet.
+      - Prefer executable red tests when the boundary already exists.
+      - Each skipped scaffold must state why it is skipped and what implementation should make it activatable.
+      - Assertions must describe expected behavior, not placeholders.
+      - Add deterministic fixtures, builders, spies, mutation counters, or sentinels where needed.
+
+      Coverage requirements:
+      - Include API/contract tests for cross-process or service contracts.
+      - Include E2E or first-party consumer scaffolds when the story exposes behavior through a real user/client surface.
+      - For non-UI backend/API stories, browser UI E2E can be N/A, but first-party consumer E2E must be generated or explicitly waived.
+      - Include no-side-effect checks when behavior is preview/read-only.
+      - Include malformed input, stale state, dependency failure, concurrency/race, and regression cases when present in TD P0/P1.
+
+      Completion:
+      - Produce the ATDD checklist.
+      - List generated files.
+      - List skipped scaffolds and expected failure reasons.
+      - List waivers with owner and residual risk.
+      - Provide exact commands to run the generated tests.
+    provider: codex
+    depends_on: [design-risk-based-tests]
+    context: fresh
+    model: gpt-5.5
+    output_type: red-acceptance-tests
+
+  - id: dev-story
+    prompt: |
+      bmad-dev-story $create-story.output.story_file
+
+      Implement the story file created earlier in this workflow.
+      Use the TEA risk-based test design and red acceptance scaffolds produced by earlier nodes as implementation guidance.
+      Before making changes, read `$ARTIFACTS_DIR/bmad-create-dev-story-with-tea/findings/open-findings.md` and `$ARTIFACTS_DIR/bmad-create-dev-story-with-tea/decision-log.md`.
+      If open findings exist, treat this invocation as a fix pass and append the required fix entries to the decision log.
+    provider: claude
+    depends_on: [generate-red-acceptance-tests]
+    context: fresh
+    model: sonnet
+    idle_timeout: 900000
+    output_type: dev-story
+
+  - id: code-review
+    command: bmad-code-review
+    provider: codex
+    depends_on: [dev-story]
+    context: fresh
+    model: gpt-5.5
+    idle_timeout: 900000
+    output_format: &code_review_gate_schema
+      type: object
+      properties:
+        gate:
+          type: string
+          enum: ["PASS", "FAIL"]
+        round:
+          type: number
+        findings_count:
+          type: number
+        open_findings_file:
+          type: string
+        decision_log_file:
+          type: string
+        code_review_report:
+          type: string
+      required:
+        - gate
+        - round
+        - findings_count
+        - open_findings_file
+        - decision_log_file
+        - code_review_report
+    output_type: code-review-findings
+
+  - id: code-review-gate
+    depends_on: [code-review]
+    route_loop:
+      from: code-review
+      condition: "$code-review.output.gate == 'PASS'"
+      max_iterations: 20
+      routes:
+        positive: create-pull-request
+        negative: dev-story
+        exhausted: review-loop-error
+
+  - id: create-pull-request
+    command: archon-create-pr
+    provider: claude
+    depends_on: [code-review-gate]
+    context: fresh
+    model: sonnet
+    idle_timeout: 900000
+    output_type: pull-request
+
+  - id: review-loop-error
+    depends_on: [code-review-gate]
+    bash: |
+      set -e
+
+      STATE="$ARTIFACTS_DIR/bmad-create-dev-story-with-tea/state.json"
+      DECISIONS="$ARTIFACTS_DIR/bmad-create-dev-story-with-tea/decision-log.md"
+      OPEN_FINDINGS="$ARTIFACTS_DIR/bmad-create-dev-story-with-tea/findings/open-findings.md"
+
+      echo "BMAD code-review fix loop exhausted its retry budget."
+      echo "State: $STATE"
+      echo "Decision log: $DECISIONS"
+      echo "Open findings: $OPEN_FINDINGS"
+
+      if [ -f "$STATE" ]; then
+        cat "$STATE"
+      fi
+
+      exit 1
+    timeout: 60000
