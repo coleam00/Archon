@@ -348,7 +348,8 @@ EOF
 
 ## Phase 8: PR - Create Pull Request
 
-**Before creating a PR**, check if one already exists for this issue or branch using `gh pr list`. If a PR already exists, skip creation and use the existing one.
+**Before creating a PR**, resolve the target repository from `$PR_REMOTE` and check if one already exists for this issue or branch using `gh pr list --repo "$PR_REPO"`.
+If a PR already exists, skip creation and use the existing one.
 
 ### 8.1 Push to Remote
 
@@ -374,16 +375,27 @@ Look for the project's PR template at `.github/pull_request_template.md`, `.gith
 Write the prepared body to `$ARTIFACTS_DIR/pr-body.md`, then:
 
 ```bash
+HEAD_BRANCH=$(git branch --show-current)
+PR_REPO=$(gh repo view "$(git remote get-url "$PR_REMOTE")" --json nameWithOwner -q .nameWithOwner)
+ORIGIN_REPO=$(gh repo view "$(git remote get-url origin)" --json nameWithOwner -q .nameWithOwner)
+ORIGIN_OWNER=${ORIGIN_REPO%%/*}
+if [ "$ORIGIN_REPO" = "$PR_REPO" ]; then
+  PR_HEAD="$HEAD_BRANCH"
+else
+  PR_HEAD="${ORIGIN_OWNER}:$HEAD_BRANCH"
+fi
 gh pr create --title "Fix: {title} (#{number})" \
+  --repo "$PR_REPO" \
   --body-file $ARTIFACTS_DIR/pr-body.md \
-  --base $BASE_BRANCH
+  --base "$BASE_BRANCH" \
+  --head "$PR_HEAD"
 ```
 
 ### 8.3 Get PR Number
 
 ```bash
-PR_URL=$(gh pr view --json url -q '.url')
-PR_NUMBER=$(gh pr view --json number -q '.number')
+PR_NUMBER=$(gh pr list --repo "$PR_REPO" --head "$PR_HEAD" --state open --json number -q '.[0].number')
+PR_URL=$(gh pr view "$PR_NUMBER" --repo "$PR_REPO" --json url -q '.url')
 ```
 
 **PHASE_8_CHECKPOINT:**

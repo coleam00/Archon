@@ -456,9 +456,11 @@ describe('v2 story-input resolution (Story a1.2)', () => {
       );
     });
 
-    it('STR-A4-2 [P0] verify-story-identity guard exists, depends on resolve + code-review, NOT on the gate', () => {
-      // R-005: the guard must be a separate node — adding a second depends_on to
-      // code-review-gate would break the route_loop single-depends_on==from rule.
+    it('STR-A4-2 [P0] verify-story-identity guard exists, depends on resolve + code-review; gate depends on code-review', () => {
+      // R3-F2 fix: the guard remains a separate node but code-review-gate now routes
+      // from code-review (which carries story_ref in its output_format). The guard
+      // blocks the positive path by being a required dependency of tea-rv (not of
+      // code-review-gate itself — that would violate the single-depends_on==from rule).
       const wf = loadV2();
       const guard = getNode(wf, 'verify-story-identity');
       expect(guard, 'verify-story-identity guard node must exist').toBeDefined();
@@ -469,13 +471,14 @@ describe('v2 story-input resolution (Story a1.2)', () => {
       const gate = getNode(wf, 'code-review-gate');
       expect(
         gate?.depends_on ?? [],
-        'code-review-gate must depend on verify-story-identity after R1-F2'
-      ).toEqual(['verify-story-identity']);
+        'code-review-gate must depend on code-review (route source, R3-F2 fix)'
+      ).toEqual(['code-review']);
     });
 
-    it('STR-A4-3 [P0] route_loop on code-review-gate routes from verify-story-identity (R1-F2)', () => {
+    it('STR-A4-3 [P0] route_loop on code-review-gate routes from code-review with field-access condition (R3-F2)', () => {
       const gate = getNode(loadV2(), 'code-review-gate');
-      expect(gate?.route_loop?.from).toBe('verify-story-identity');
+      expect(gate?.route_loop?.from).toBe('code-review');
+      expect(gate?.route_loop?.condition).toBe("$code-review.output.gate == 'PASS'");
       expect(gate?.route_loop?.routes?.positive).toBe('tea-rv');
       expect(gate?.route_loop?.routes?.negative).toBe('dev-story');
       expect(gate?.route_loop?.routes?.exhausted).toBe('review-loop-error');
@@ -515,13 +518,47 @@ describe('v2 story-input resolution (Story a1.2)', () => {
       expect(r.exitCode).not.toBe(0);
     });
 
-    it('BASH-A4-3 [P1] guard: equal story_ref on both sides → exit 0, stdout = gate value', () => {
+    it('BASH-A4-3 [P1] guard: equal story_ref on both sides → exit 0, stdout passes gate value through', () => {
+      // Guard is a pure pass-through: it validates identity and echoes the gate
+      // value from code-review. story_ref traceability lives in code-review's
+      // output_format (the route source), not in the guard's stdout (R3-F2 fix).
       const rPass = runGuardNode(CANONICAL_KEY, CANONICAL_KEY, 'PASS');
       expect(rPass.exitCode, `stderr: ${rPass.stderr}`).toBe(0);
       expect(rPass.stdout.trim()).toBe('PASS');
+
       const rFail = runGuardNode(CANONICAL_KEY, CANONICAL_KEY, 'FAIL');
       expect(rFail.exitCode, `stderr: ${rFail.stderr}`).toBe(0);
       expect(rFail.stdout.trim()).toBe('FAIL');
+    });
+
+    it('STR-A4-9 [P0] R3-F2 fix: route source is code-review (carries story_ref); positive path requires guard', () => {
+      // R3-F2 fix: the route-facing contract that controls routing is code-review's
+      // output_format (which declares gate + story_ref as required). The guard
+      // (verify-story-identity) blocks the positive path by being a required
+      // dependency of tea-rv — if the guard exits 1 on mismatch, tea-rv is skipped
+      // (all_success trigger_rule) and the run fails via anyFailed.
+      const wf = loadV2();
+
+      // Route source code-review declares story_ref in its output_format
+      const cr = getNode(wf, 'code-review');
+      expect(cr, 'code-review node must exist').toBeDefined();
+      const crProps = ((cr?.output_format ?? {}).properties ?? {}) as Record<string, unknown>;
+      expect(crProps.story_ref, 'code-review output_format must declare story_ref').toBeDefined();
+
+      // Gate routes from code-review using field access on gate
+      const gate = getNode(wf, 'code-review-gate');
+      expect(gate?.route_loop?.from).toBe('code-review');
+      expect(
+        gate?.route_loop?.condition,
+        'condition must use field access on code-review gate'
+      ).toContain('code-review.output.gate');
+
+      // Positive route (tea-rv) requires verify-story-identity to pass
+      const teaRv = getNode(wf, 'tea-rv');
+      expect(
+        teaRv?.depends_on ?? [],
+        'tea-rv must depend on verify-story-identity to block mismatch on positive path'
+      ).toContain('verify-story-identity');
     });
 
     it('STR-A4-8 [P2] review-loop-error (exhausted route) still exits 1 — unaffected by new nodes', () => {

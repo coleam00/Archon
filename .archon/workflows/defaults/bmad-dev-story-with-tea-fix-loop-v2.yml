@@ -265,7 +265,7 @@ nodes:
           type: string
         story_ref:
           type: string
-          description: "The canonical story key for this run is $resolve-story-input.output.story_ref. Set this field to exactly that value."
+          description: "Resolved canonical story key; must match $resolve-story-input.output.story_ref (enforced by verify-story-identity guard)."
       required:
         - gate
         - round
@@ -307,10 +307,10 @@ nodes:
     output_type: story-identity-verified
 
   - id: code-review-gate
-    depends_on: [verify-story-identity]
+    depends_on: [code-review]
     route_loop:
-      from: verify-story-identity
-      condition: "$verify-story-identity.output == 'PASS'"
+      from: code-review
+      condition: "$code-review.output.gate == 'PASS'"
       max_iterations: 20
       routes:
         positive: tea-rv
@@ -321,7 +321,7 @@ nodes:
     prompt: |
       bmad-testarch-test-review $ARGUMENTS
     provider: codex
-    depends_on: [code-review-gate]
+    depends_on: [code-review-gate, verify-story-identity]
     context: fresh
     model: gpt-5.5
     idle_timeout: 900000
