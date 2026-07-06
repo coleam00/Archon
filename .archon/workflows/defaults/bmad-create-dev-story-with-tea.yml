@@ -120,10 +120,10 @@ nodes:
     prompt: |
       $bmad-create-story create detailed story for $ARGUMENTS.
       Read all reference documents, understand the context comprehensively, and spawn sub-agents if useful.
-    provider: codex
+    provider: claude
     depends_on: [prepare-bmad-state]
     context: fresh
-    model: gpt-5.5
+    model: opus
     idle_timeout: 900000
     output_format:
       type: object
@@ -226,10 +226,10 @@ nodes:
 
       Do not stop at happy paths.
       Do not mark coverage complete if P0/P1 edge cases are only implied.
-    provider: codex
+    provider: claude
     depends_on: [validate-story-readiness]
     context: fresh
-    model: gpt-5.5
+    model: opus
     output_type: risk-based-test-design
 
   - id: generate-red-acceptance-tests
@@ -269,10 +269,10 @@ nodes:
       - List skipped scaffolds and expected failure reasons.
       - List waivers with owner and residual risk.
       - Provide exact commands to run the generated tests.
-    provider: codex
+    provider: claude
     depends_on: [design-risk-based-tests]
     context: fresh
-    model: gpt-5.5
+    model: opus
     output_type: red-acceptance-tests
 
   - id: dev-story
@@ -285,10 +285,10 @@ nodes:
       If open findings exist, treat this invocation as a fix pass and append the required fix entries to the decision log.
       On fix passes, rewrite open-findings.md so fixed findings are pending re-review and update state.json to the next review round.
       Keep activeStoryFile in state.json set to $create-story.output.story_file.
-    provider: codex
+    provider: claude
     depends_on: [generate-red-acceptance-tests]
     context: fresh
-    model: gpt-5.5
+    model: sonnet
     idle_timeout: 900000
     output_type: dev-story
 
