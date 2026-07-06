@@ -173,10 +173,10 @@ nodes:
          - `$ARTIFACTS_DIR/investigation.md` or `$ARTIFACTS_DIR/plan.md`
          - `$ARTIFACTS_DIR/implementation.md`
          - `$ARTIFACTS_DIR/validation.md`
-      4. Resolve the PR target repository from `$PR_REMOTE`, compute `PR_HEAD`, and check if a PR already exists for this branch: `gh pr list --repo "$PR_REPO" --head "$PR_HEAD"`
+      4. Check if a PR already exists for this branch: `gh pr list --head $(git branch --show-current)`
          - If PR exists, skip creation and capture its number
       5. Look for the project's PR template at `.github/pull_request_template.md`, `.github/PULL_REQUEST_TEMPLATE.md`, or `docs/PULL_REQUEST_TEMPLATE.md`. Read whichever one exists.
-      6. Create a DRAFT PR: `gh pr create --repo "$PR_REPO" --draft --base "$BASE_BRANCH" --head "$PR_HEAD"`
+      6. Create a DRAFT PR: `gh pr create --draft --base $BASE_BRANCH`
          - Title: concise, imperative mood, under 70 chars
          - Body: if a PR template was found, fill in **every section** with details from the artifacts. Don't skip sections or leave placeholders. If no template, write a body with summary, changes, validation evidence, and `Fixes #...`.
          - **PR body file location**: if you write the body to a file (e.g. for `--body-file`), the file MUST live at `$ARTIFACTS_DIR/pr-body.md` or under `/tmp/` — NEVER inside the worktree. Files like `.pr-body.md` at the repo root will be picked up by later commits.
@@ -184,21 +184,13 @@ nodes:
       7. Capture PR identifiers:
          ```bash
          HEAD_BRANCH=$(git branch --show-current)
-         PR_REPO=$(gh repo view "$(git remote get-url "$PR_REMOTE")" --json nameWithOwner -q .nameWithOwner)
-         ORIGIN_REPO=$(gh repo view "$(git remote get-url origin)" --json nameWithOwner -q .nameWithOwner)
-         ORIGIN_OWNER=${ORIGIN_REPO%%/*}
-         if [ "$ORIGIN_REPO" = "$PR_REPO" ]; then
-           PR_HEAD="$HEAD_BRANCH"
-         else
-           PR_HEAD="${ORIGIN_OWNER}:$HEAD_BRANCH"
-         fi
-         PR_NUMBER=$(gh pr list --repo "$PR_REPO" --head "$PR_HEAD" --state open --json number -q '.[0].number')
+         PR_NUMBER=$(gh pr list --head "$HEAD_BRANCH" --state open --json number -q '.[0].number')
          if [ -z "$PR_NUMBER" ]; then
            echo "No open PR found for branch $HEAD_BRANCH — PR creation failed" >&2
            exit 1
          fi
          echo "$PR_NUMBER" > "$ARTIFACTS_DIR/.pr-number"
-         PR_URL=$(gh pr view "$PR_NUMBER" --repo "$PR_REPO" --json url -q '.url')
+         PR_URL=$(gh pr view "$PR_NUMBER" --json url -q '.url')
          echo "$PR_URL" > "$ARTIFACTS_DIR/.pr-url"
          ```
     depends_on: [validate]
@@ -212,24 +204,16 @@ nodes:
     bash: |
       set -euo pipefail
       HEAD_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-      PR_REPO=$(gh repo view "$(git remote get-url "$PR_REMOTE")" --json nameWithOwner -q .nameWithOwner)
-      ORIGIN_REPO=$(gh repo view "$(git remote get-url origin)" --json nameWithOwner -q .nameWithOwner)
-      ORIGIN_OWNER=${ORIGIN_REPO%%/*}
-      if [ "$ORIGIN_REPO" = "$PR_REPO" ]; then
-        PR_HEAD="$HEAD_BRANCH"
-      else
-        PR_HEAD="${ORIGIN_OWNER}:$HEAD_BRANCH"
-      fi
-      PR_NUMBER=$(gh pr list --repo "$PR_REPO" --head "$PR_HEAD" --state open --json number -q '.[0].number')
+      PR_NUMBER=$(gh pr list --head "$HEAD_BRANCH" --state open --json number -q '.[0].number')
       if [ -z "$PR_NUMBER" ]; then
         echo "No open PR found for branch $HEAD_BRANCH" >&2
         exit 1
       fi
       EXPECTED="$BASE_BRANCH"
-      ACTUAL=$(gh pr view "$PR_NUMBER" --repo "$PR_REPO" --json baseRefName -q '.baseRefName')
+      ACTUAL=$(gh pr view "$PR_NUMBER" --json baseRefName -q '.baseRefName')
       if [ "$ACTUAL" != "$EXPECTED" ]; then
         echo "Base mismatch on PR #$PR_NUMBER: expected=$EXPECTED actual=$ACTUAL — re-targeting" >&2
-        gh pr edit "$PR_NUMBER" --repo "$PR_REPO" --base "$EXPECTED"
+        gh pr edit "$PR_NUMBER" --base "$EXPECTED"
       else
         echo "PR base verified: $EXPECTED"
       fi

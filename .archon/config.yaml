@@ -1,8 +1,5 @@
 worktree:
   baseBranch: dev
 
-github:
-  prRemote: origin
-
 docs:
   path: packages/docs-web/src/content/docs

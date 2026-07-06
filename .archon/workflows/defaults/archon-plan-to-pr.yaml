@@ -71,24 +71,16 @@ nodes:
     bash: |
       set -euo pipefail
       HEAD_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-      PR_REPO=$(gh repo view "$(git remote get-url "$PR_REMOTE")" --json nameWithOwner -q .nameWithOwner)
-      ORIGIN_REPO=$(gh repo view "$(git remote get-url origin)" --json nameWithOwner -q .nameWithOwner)
-      ORIGIN_OWNER=${ORIGIN_REPO%%/*}
-      if [ "$ORIGIN_REPO" = "$PR_REPO" ]; then
-        PR_HEAD="$HEAD_BRANCH"
-      else
-        PR_HEAD="${ORIGIN_OWNER}:$HEAD_BRANCH"
-      fi
-      PR_NUMBER=$(gh pr list --repo "$PR_REPO" --head "$PR_HEAD" --state open --json number -q '.[0].number')
+      PR_NUMBER=$(gh pr list --head "$HEAD_BRANCH" --state open --json number -q '.[0].number')
       if [ -z "$PR_NUMBER" ]; then
         echo "No open PR found for branch $HEAD_BRANCH" >&2
         exit 1
       fi
       EXPECTED="$BASE_BRANCH"
-      ACTUAL=$(gh pr view "$PR_NUMBER" --repo "$PR_REPO" --json baseRefName -q '.baseRefName')
+      ACTUAL=$(gh pr view "$PR_NUMBER" --json baseRefName -q '.baseRefName')
       if [ "$ACTUAL" != "$EXPECTED" ]; then
         echo "Base mismatch on PR #$PR_NUMBER: expected=$EXPECTED actual=$ACTUAL — re-targeting" >&2
-        gh pr edit "$PR_NUMBER" --repo "$PR_REPO" --base "$EXPECTED"
+        gh pr edit "$PR_NUMBER" --base "$EXPECTED"
       else
         echo "PR base verified: $EXPECTED"
       fi

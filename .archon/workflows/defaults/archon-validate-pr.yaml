@@ -20,8 +20,6 @@ nodes:
 
   - id: fetch-pr
     bash: |
-      PR_REPO=$(gh repo view "$(git remote get-url "$PR_REMOTE")" --json nameWithOwner -q .nameWithOwner)
-
       # Extract PR number from arguments
       PR_NUMBER=$(echo "$ARGUMENTS" | grep -oE '/pull/[0-9]+' | grep -oE '[0-9]+' | head -1)
       # Fallback: extract first number if no URL path found (e.g., "validate PR 42")
@@ -30,15 +28,7 @@ nodes:
       fi
       if [ -z "$PR_NUMBER" ]; then
         # Try getting PR from current branch
-        HEAD_BRANCH=$(git branch --show-current)
-        ORIGIN_REPO=$(gh repo view "$(git remote get-url origin)" --json nameWithOwner -q .nameWithOwner)
-        ORIGIN_OWNER=${ORIGIN_REPO%%/*}
-        if [ "$ORIGIN_REPO" = "$PR_REPO" ]; then
-          PR_HEAD="$HEAD_BRANCH"
-        else
-          PR_HEAD="${ORIGIN_OWNER}:$HEAD_BRANCH"
-        fi
-        PR_NUMBER=$(gh pr list --repo "$PR_REPO" --head "$PR_HEAD" --state open --json number -q '.[0].number')
+        PR_NUMBER=$(gh pr view --json number -q '.number' 2>/dev/null)
       fi
 
       if [ -z "$PR_NUMBER" ]; then
@@ -47,10 +37,9 @@ nodes:
       fi
 
       echo "$PR_NUMBER" > "$ARTIFACTS_DIR/.pr-number"
-      echo "$PR_REPO" > "$ARTIFACTS_DIR/.pr-repo"
 
       # Fetch full PR details
-      gh pr view "$PR_NUMBER" --repo "$PR_REPO" --json number,title,body,url,headRefName,baseRefName,files,additions,deletions,changedFiles,state,author,labels,isDraft
+      gh pr view "$PR_NUMBER" --json number,title,body,url,headRefName,baseRefName,files,additions,deletions,changedFiles,state,author,labels,isDraft
 
   - id: find-ports
     bash: |
@@ -73,9 +62,8 @@ nodes:
 
       # Get PR branch info
       PR_NUMBER=$(cat "$ARTIFACTS_DIR/.pr-number")
-      PR_REPO=$(cat "$ARTIFACTS_DIR/.pr-repo")
-      PR_HEAD=$(gh pr view "$PR_NUMBER" --repo "$PR_REPO" --json headRefName -q '.headRefName')
-      PR_BASE=$(gh pr view "$PR_NUMBER" --repo "$PR_REPO" --json baseRefName -q '.baseRefName')
+      PR_HEAD=$(gh pr view "$PR_NUMBER" --json headRefName -q '.headRefName')
+      PR_BASE=$(gh pr view "$PR_NUMBER" --json baseRefName -q '.baseRefName')
 
       echo "$CANONICAL_REPO" > "$ARTIFACTS_DIR/.canonical-repo"
       echo "$WORKTREE_PATH" > "$ARTIFACTS_DIR/.worktree-path"

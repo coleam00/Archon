@@ -169,7 +169,6 @@ nodes:
       - `$<nodeId>.output` — stdout from a bash/script node or AI response from a prompt node
       - `$<nodeId>.output.field` — JSON field from a node with output_format
       - `$BASE_BRANCH` — base git branch
-      - `$PR_REMOTE` — git remote whose repository is the PR target
 
       ## Rules
       1. The `name:` field MUST match: $extract-intent.output.workflow_name
