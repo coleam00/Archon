@@ -91,7 +91,8 @@ import type {
   WorkflowRun,
   WorkflowRunStatus,
 } from '@archon/workflows/schemas/workflow-run';
-import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
+import type { EffortLevel, ThinkingConfig } from '@archon/workflows/schemas/dag-node';
+import type { ModelReasoningEffort, WorkflowDefinition } from '@archon/workflows/schemas/workflow';
 import type { MessageRow } from '@archon/core/schemas/message';
 import type { DashboardWorkflowRun } from '@archon/core/schemas/workflow-run';
 import type { WorkflowEventRow } from '@archon/core/schemas/workflow-event';
@@ -112,11 +113,54 @@ interface ApiWorkflowNodeState {
   duration?: number;
   error?: string;
   reason?: string;
+  provider?: string;
+  model?: string;
+  tier?: string;
+  modelReasoningEffort?: ModelReasoningEffort;
+  effort?: EffortLevel;
+  thinking?: ThinkingConfig;
+}
+
+function isModelReasoningEffort(value: unknown): value is ModelReasoningEffort {
+  return (
+    value === 'minimal' ||
+    value === 'low' ||
+    value === 'medium' ||
+    value === 'high' ||
+    value === 'xhigh'
+  );
+}
+
+function isEffortLevel(value: unknown): value is EffortLevel {
+  return value === 'low' || value === 'medium' || value === 'high' || value === 'max';
+}
+
+function isThinkingConfig(value: unknown): value is ThinkingConfig {
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
+  if (record.type !== 'adaptive' && record.type !== 'enabled' && record.type !== 'disabled') {
+    return false;
+  }
+  return record.budgetTokens === undefined || typeof record.budgetTokens === 'number';
+}
+
+function projectRuntimeNodeMetadata(data: Record<string, unknown>): Partial<ApiWorkflowNodeState> {
+  return {
+    ...(typeof data.provider === 'string' ? { provider: data.provider } : {}),
+    ...(typeof data.model === 'string' ? { model: data.model } : {}),
+    ...(typeof data.tier === 'string' ? { tier: data.tier } : {}),
+    ...(isModelReasoningEffort(data.modelReasoningEffort)
+      ? { modelReasoningEffort: data.modelReasoningEffort }
+      : {}),
+    ...(isEffortLevel(data.effort) ? { effort: data.effort } : {}),
+    ...(isThinkingConfig(data.thinking) ? { thinking: data.thinking } : {}),
+  };
 }
 
 function projectApiWorkflowNodeStates(events: readonly WorkflowEventRow[]): ApiWorkflowNodeState[] {
   const projected = projectLatestEffectiveNodeStates(events);
   const latestLifecycleData = new Map<string, Record<string, unknown>>();
+  const runtimeMetadata = new Map<string, Partial<ApiWorkflowNodeState>>();
   for (const event of events) {
     const nodeId =
       typeof event.data.node_id === 'string'
@@ -133,6 +177,10 @@ function projectApiWorkflowNodeStates(events: readonly WorkflowEventRow[]): ApiW
       event.event_type === 'node_skipped_prior_success'
     ) {
       latestLifecycleData.set(nodeId, event.data);
+      runtimeMetadata.set(nodeId, {
+        ...(runtimeMetadata.get(nodeId) ?? {}),
+        ...projectRuntimeNodeMetadata(event.data),
+      });
     }
   }
 
@@ -144,6 +192,7 @@ function projectApiWorkflowNodeStates(events: readonly WorkflowEventRow[]): ApiW
       name: state.node_id,
       status: state.state,
       retryEpoch: state.retry_epoch,
+      ...(runtimeMetadata.get(state.node_id) ?? {}),
       ...(typeof duration === 'number' ? { duration } : {}),
       ...(state.error ? { error: state.error } : {}),
       ...(state.reason ? { reason: state.reason } : {}),

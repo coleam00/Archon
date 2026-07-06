@@ -110,6 +110,14 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
         error: event.type === 'node_failed' ? event.error : undefined,
         reason: event.type === 'node_skipped' ? event.reason : undefined,
         routeDecision: event.type === 'node_routed' ? event.data : undefined,
+        ...(event.type === 'node_started' && event.provider ? { provider: event.provider } : {}),
+        ...(event.type === 'node_started' && event.model ? { model: event.model } : {}),
+        ...(event.type === 'node_started' && event.tier ? { tier: event.tier } : {}),
+        ...(event.type === 'node_started' && event.modelReasoningEffort
+          ? { modelReasoningEffort: event.modelReasoningEffort }
+          : {}),
+        ...(event.type === 'node_started' && event.effort ? { effort: event.effort } : {}),
+        ...(event.type === 'node_started' && event.thinking ? { thinking: event.thinking } : {}),
         timestamp: Date.now(),
       });
 
@@ -205,6 +213,30 @@ function dataStr(data: Record<string, unknown>, ...keys: string[]): string | und
   return undefined;
 }
 
+interface RuntimeNodeMetadataPayload {
+  provider?: string;
+  model?: string;
+  tier?: string;
+  modelReasoningEffort?: string;
+  effort?: string;
+  thinking?: unknown;
+}
+
+function runtimeNodeMetadataFromData(data: Record<string, unknown>): RuntimeNodeMetadataPayload {
+  return {
+    ...(typeof data.provider === 'string' ? { provider: data.provider } : {}),
+    ...(typeof data.model === 'string' ? { model: data.model } : {}),
+    ...(typeof data.tier === 'string' ? { tier: data.tier } : {}),
+    ...(typeof data.modelReasoningEffort === 'string'
+      ? { modelReasoningEffort: data.modelReasoningEffort }
+      : {}),
+    ...(typeof data.effort === 'string' ? { effort: data.effort } : {}),
+    ...(typeof data.thinking === 'object' && data.thinking !== null
+      ? { thinking: data.thinking }
+      : {}),
+  };
+}
+
 /** DB event_type → run-level status, emitted as a `workflow_status` SSE event. */
 const ROW_WORKFLOW_STATUS: Record<string, 'running' | 'completed' | 'failed' | 'cancelled'> = {
   workflow_started: 'running',
@@ -250,6 +282,12 @@ interface DagNodeSsePayload {
   status: 'running' | 'completed' | 'failed' | 'skipped';
   error?: string;
   routeDecision?: RouteLoopDecisionData | Record<string, unknown>;
+  provider?: string;
+  model?: string;
+  tier?: string;
+  modelReasoningEffort?: string;
+  effort?: string;
+  thinking?: unknown;
   timestamp: number;
 }
 
@@ -338,6 +376,7 @@ export function mapWorkflowEventRow(row: WorkflowEventRow): string | null {
           ? dataStr(data, 'error')
           : undefined,
       routeDecision: row.event_type === 'node_routed' ? data : undefined,
+      ...runtimeNodeMetadataFromData(data),
       timestamp,
     };
     return JSON.stringify(payload);

@@ -41,6 +41,7 @@ import type {
   TriggerRule,
   WorkflowRun,
   EffortLevel,
+  ModelReasoningEffort,
   ThinkingConfig,
   SandboxSettings,
   WorkflowSource,
@@ -54,6 +55,9 @@ import {
   isCancelNode,
   isScriptNode,
   isApprovalContext,
+  effortLevelSchema,
+  modelReasoningEffortSchema,
+  thinkingConfigSchema,
   routeLoopRuntimeMetadataSchema,
 } from './schemas';
 import { applyRouteLoopTransition } from './route-loop-state';
@@ -96,6 +100,7 @@ import {
   routePresetEffort,
   type ModelAliasPreset,
   type ResolvedAiProfile,
+  type TierName,
 } from './model-validation';
 
 /**
@@ -349,8 +354,32 @@ type NodeExecutionResult = NodeOutput & {
 };
 
 interface NodeObservabilityMetadata {
-  tier?: string;
+  tier?: TierName;
   model?: string;
+  modelReasoningEffort?: ModelReasoningEffort;
+  effort?: EffortLevel;
+  thinking?: ThinkingConfig;
+}
+
+function buildNodeObservabilityMetadata(
+  tier: string | undefined,
+  model: string | undefined,
+  nodeOptions: SendQueryOptions | undefined
+): NodeObservabilityMetadata {
+  const resolvedTier = tier && isTierName(tier) ? tier : undefined;
+  const modelReasoningEffort = modelReasoningEffortSchema.safeParse(
+    nodeOptions?.assistantConfig?.modelReasoningEffort
+  );
+  const effort = effortLevelSchema.safeParse(nodeOptions?.nodeConfig?.effort);
+  const thinking = thinkingConfigSchema.safeParse(nodeOptions?.nodeConfig?.thinking);
+
+  return {
+    ...(resolvedTier ? { tier: resolvedTier } : {}),
+    ...(model ? { model } : {}),
+    ...(modelReasoningEffort.success ? { modelReasoningEffort: modelReasoningEffort.data } : {}),
+    ...(effort.success ? { effort: effort.data } : {}),
+    ...(thinking.success ? { thinking: thinking.data } : {}),
+  };
 }
 
 /** Throttle state for cancel checks (reads — no write contention in WAL mode) */
@@ -989,6 +1018,11 @@ async function executeNodeInternal(
         provider,
         ...(nodeObservability?.tier ? { tier: nodeObservability.tier } : {}),
         ...(nodeObservability?.model ? { model: nodeObservability.model } : {}),
+        ...(nodeObservability?.modelReasoningEffort
+          ? { modelReasoningEffort: nodeObservability.modelReasoningEffort }
+          : {}),
+        ...(nodeObservability?.effort ? { effort: nodeObservability.effort } : {}),
+        ...(nodeObservability?.thinking ? { thinking: nodeObservability.thinking } : {}),
       }),
     })
     .catch((err: Error) => {
@@ -1004,6 +1038,14 @@ async function executeNodeInternal(
     runId: workflowRun.id,
     nodeId: node.id,
     nodeName: node.command ?? node.id,
+    provider,
+    ...(nodeObservability?.tier ? { tier: nodeObservability.tier } : {}),
+    ...(nodeObservability?.model ? { model: nodeObservability.model } : {}),
+    ...(nodeObservability?.modelReasoningEffort
+      ? { modelReasoningEffort: nodeObservability.modelReasoningEffort }
+      : {}),
+    ...(nodeObservability?.effort ? { effort: nodeObservability.effort } : {}),
+    ...(nodeObservability?.thinking ? { thinking: nodeObservability.thinking } : {}),
   });
 
   // Load prompt
@@ -3053,7 +3095,7 @@ async function executeApprovalNode(
       undefined, // fresh session
       configuredCommandFolder,
       issueContext,
-      { tier, model }
+      buildNodeObservabilityMetadata(tier, model, nodeOptions)
     );
 
     if (output.state === 'failed') {
@@ -3942,7 +3984,7 @@ export async function executeDagWorkflow(
               resumeSessionId,
               configuredCommandFolder,
               issueContext,
-              { tier, model }
+              buildNodeObservabilityMetadata(tier, model, nodeOptions)
             );
 
             if (output.state !== 'failed') break;

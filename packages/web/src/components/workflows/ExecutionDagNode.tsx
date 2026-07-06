@@ -2,11 +2,11 @@ import { memo } from 'react';
 import { Handle, Position } from '@xyflow/react';
 import type { NodeProps, Node } from '@xyflow/react';
 import type { DagNodeData } from './DagNodeComponent';
-import type { RouteLoopDecisionData, WorkflowStepStatus } from '@/lib/types';
+import type { RouteLoopDecisionData, RuntimeNodeMetadata, WorkflowStepStatus } from '@/lib/types';
 import { formatDurationMs } from '@/lib/format';
 import { StatusIcon } from './StatusIcon';
 
-export interface ExecutionNodeData extends DagNodeData {
+export interface ExecutionNodeData extends DagNodeData, RuntimeNodeMetadata {
   status?: WorkflowStepStatus;
   duration?: number;
   error?: string;
@@ -50,15 +50,42 @@ function formatRouteDecisionField(value: unknown, fallback: string): string {
   return fallback;
 }
 
+function formatThinkingMetadata(thinking: RuntimeNodeMetadata['thinking']): string | null {
+  if (!thinking) return null;
+  if (thinking.type === 'enabled' && thinking.budgetTokens !== undefined) {
+    return `${thinking.type} ${String(thinking.budgetTokens)}`;
+  }
+  return thinking.type;
+}
+
+export function formatRuntimeMetadata(metadata: RuntimeNodeMetadata): string | null {
+  if (!metadata.provider) return null;
+  const modelOrTier = metadata.model ?? metadata.tier;
+  const reasoning =
+    metadata.modelReasoningEffort ?? metadata.effort ?? formatThinkingMetadata(metadata.thinking);
+  return [metadata.provider, modelOrTier, reasoning].filter(Boolean).join(' - ');
+}
+
 function ExecutionDagNodeRender({ data }: NodeProps<ExecutionFlowNode>): React.ReactElement {
   const style = (data.status && STATUS_STYLES[data.status]) ?? DEFAULT_STYLE;
   const typeLabel = TYPE_LABELS[data.nodeType] ?? 'PROMPT';
   const routeOutcome = formatRouteDecisionField(data.routeDecision?.outcome, 'route');
   const routeTarget = formatRouteDecisionField(data.routeDecision?.to, '');
+  const runtimeMetadata =
+    data.status === 'running'
+      ? formatRuntimeMetadata({
+          provider: data.provider,
+          model: data.model,
+          tier: data.tier,
+          modelReasoningEffort: data.modelReasoningEffort,
+          effort: data.effort,
+          thinking: data.thinking,
+        })
+      : null;
 
   return (
     <div
-      className={`rounded-lg border border-border px-3 py-2 min-w-[140px] transition-all duration-300 ${style}${data.selected ? ' ring-2 ring-accent-bright' : ''}`}
+      className={`rounded-lg border border-border px-3 py-2 min-w-[180px] max-w-[220px] transition-all duration-300 ${style}${data.selected ? ' ring-2 ring-accent-bright' : ''}`}
     >
       <Handle type="target" position={Position.Top} className="!bg-border !w-2 !h-2" />
       <div className="flex items-center gap-2">
@@ -80,6 +107,14 @@ function ExecutionDagNodeRender({ data }: NodeProps<ExecutionFlowNode>): React.R
       {data.currentIteration !== undefined && data.maxIterations !== undefined && (
         <div className="text-[10px] text-text-tertiary mt-0.5">
           {data.currentIteration}/{data.maxIterations} iterations
+        </div>
+      )}
+      {runtimeMetadata && (
+        <div
+          className="mt-0.5 max-w-[190px] truncate text-[10px] text-text-secondary"
+          title={runtimeMetadata}
+        >
+          {runtimeMetadata}
         </div>
       )}
       {data.routeDecision && (

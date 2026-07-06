@@ -24,6 +24,10 @@ import type {
   DagNodeState,
   WorkflowStepStatus,
   LoopIterationInfo,
+  RuntimeThinkingMetadata,
+  RuntimeEffortLevel,
+  RuntimeModelReasoningEffort,
+  RuntimeNodeMetadata,
 } from '@/lib/types';
 
 import type { WorkflowEventResponse } from '@/lib/api';
@@ -65,6 +69,42 @@ type WorkflowRunNodeState = NonNullable<
   Awaited<ReturnType<typeof getWorkflowRun>>['nodeStates']
 >[number];
 
+function isRuntimeModelReasoningEffort(value: unknown): value is RuntimeModelReasoningEffort {
+  return (
+    value === 'minimal' ||
+    value === 'low' ||
+    value === 'medium' ||
+    value === 'high' ||
+    value === 'xhigh'
+  );
+}
+
+function isRuntimeEffortLevel(value: unknown): value is RuntimeEffortLevel {
+  return value === 'low' || value === 'medium' || value === 'high' || value === 'max';
+}
+
+function isRuntimeThinkingMetadata(value: unknown): value is RuntimeThinkingMetadata {
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
+  if (record.type !== 'adaptive' && record.type !== 'enabled' && record.type !== 'disabled') {
+    return false;
+  }
+  return record.budgetTokens === undefined || typeof record.budgetTokens === 'number';
+}
+
+function runtimeMetadataFromEventData(data: Record<string, unknown>): Partial<DagNodeState> {
+  return {
+    ...(typeof data.provider === 'string' ? { provider: data.provider } : {}),
+    ...(typeof data.model === 'string' ? { model: data.model } : {}),
+    ...(typeof data.tier === 'string' ? { tier: data.tier } : {}),
+    ...(isRuntimeModelReasoningEffort(data.modelReasoningEffort)
+      ? { modelReasoningEffort: data.modelReasoningEffort }
+      : {}),
+    ...(isRuntimeEffortLevel(data.effort) ? { effort: data.effort } : {}),
+    ...(isRuntimeThinkingMetadata(data.thinking) ? { thinking: data.thinking } : {}),
+  };
+}
+
 function toDagNodeState(nodeState: WorkflowRunNodeState): DagNodeState {
   return {
     nodeId: nodeState.nodeId,
@@ -76,6 +116,12 @@ function toDagNodeState(nodeState: WorkflowRunNodeState): DagNodeState {
       nodeState.reason === 'when_condition' || nodeState.reason === 'trigger_rule'
         ? nodeState.reason
         : undefined,
+    provider: nodeState.provider,
+    model: nodeState.model,
+    tier: nodeState.tier,
+    modelReasoningEffort: nodeState.modelReasoningEffort,
+    effort: nodeState.effort,
+    thinking: nodeState.thinking,
   };
 }
 
@@ -93,16 +139,21 @@ function buildDagNodeStatesFromEvents(events: WorkflowEventResponse[]): DagNodeS
             ? 'failed'
             : 'skipped';
     const existing = nodeMap.get(nodeId);
+    const runtimeMetadata = runtimeMetadataFromEventData(e.data);
     if (!existing || status !== 'running') {
       nodeMap.set(nodeId, {
+        ...existing,
         nodeId,
         name: nodeId,
         status: status as WorkflowStepStatus,
         duration: e.data.duration_ms as number | undefined,
         error: e.data.error as string | undefined,
         reason: e.data.reason as 'when_condition' | 'trigger_rule' | undefined,
+        ...runtimeMetadata,
         routeDecision: e.event_type === 'node_routed' ? e.data : undefined,
       });
+    } else {
+      nodeMap.set(nodeId, { ...existing, ...runtimeMetadata });
     }
   }
   return Array.from(nodeMap.values());
@@ -470,7 +521,9 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
   }, [workflow?.status]);
 
   // Derive the currently executing node/step from events data
-  const currentlyExecuting = useMemo((): { nodeName: string; startedAt: number } | null => {
+  const currentlyExecuting = useMemo(():
+    | ({ nodeName: string; startedAt: number } & RuntimeNodeMetadata)
+    | null => {
     if (!queryData?.events || workflow?.status !== 'running') return null;
     const events = queryData.events;
 
@@ -501,6 +554,7 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
           return {
             nodeName: nodeId,
             startedAt: new Date(ensureUtc(startEvent.created_at)).getTime(),
+            ...runtimeMetadataFromEventData(startEvent.data),
           };
         }
       }

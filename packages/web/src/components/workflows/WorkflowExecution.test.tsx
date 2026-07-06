@@ -83,4 +83,37 @@ describe('buildWorkflowDagNodeStates', () => {
       routeDecision,
     });
   });
+
+  test('preserves runtime AI metadata from node_started event fallback', () => {
+    const nodes = buildWorkflowDagNodeStates(undefined, [
+      workflowEvent({
+        id: 'event-start',
+        event_type: 'node_started',
+        step_name: 'create-story',
+        data: {
+          provider: 'codex',
+          model: 'gpt-5.5',
+          tier: 'large',
+          modelReasoningEffort: 'xhigh',
+        },
+      }),
+      workflowEvent({
+        id: 'event-complete',
+        event_type: 'node_completed',
+        step_name: 'create-story',
+        data: { duration_ms: 1200 },
+      }),
+    ]);
+
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0]).toMatchObject({
+      nodeId: 'create-story',
+      status: 'completed',
+      provider: 'codex',
+      model: 'gpt-5.5',
+      tier: 'large',
+      modelReasoningEffort: 'xhigh',
+      duration: 1200,
+    });
+  });
 });

@@ -12,6 +12,22 @@ export type WorkflowRunStatus =
   | 'paused';
 export type WorkflowStepStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
 export type ArtifactType = 'pr' | 'commit' | 'file_created' | 'file_modified' | 'branch';
+export type RuntimeModelReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+export type RuntimeEffortLevel = 'low' | 'medium' | 'high' | 'max';
+
+export type RuntimeThinkingMetadata =
+  | { type: 'adaptive' }
+  | { type: 'enabled'; budgetTokens?: number }
+  | { type: 'disabled' };
+
+export interface RuntimeNodeMetadata {
+  provider?: string;
+  model?: string;
+  tier?: string;
+  modelReasoningEffort?: RuntimeModelReasoningEffort;
+  effort?: RuntimeEffortLevel;
+  thinking?: RuntimeThinkingMetadata;
+}
 
 // Base SSE event
 interface BaseSSEEvent {
@@ -138,6 +154,12 @@ export interface DagNodeEvent extends BaseSSEEvent {
   error?: string;
   reason?: 'when_condition' | 'trigger_rule';
   routeDecision?: RouteLoopDecisionData | Record<string, unknown>;
+  provider?: string;
+  model?: string;
+  tier?: string;
+  modelReasoningEffort?: RuntimeModelReasoningEffort;
+  effort?: RuntimeEffortLevel;
+  thinking?: RuntimeThinkingMetadata;
 }
 
 // Workflow tool activity (tool_started / tool_completed from executor)
@@ -330,6 +352,12 @@ export interface DagNodeState {
   duration?: number;
   error?: string;
   reason?: 'when_condition' | 'trigger_rule';
+  provider?: string;
+  model?: string;
+  tier?: string;
+  modelReasoningEffort?: RuntimeModelReasoningEffort;
+  effort?: RuntimeEffortLevel;
+  thinking?: RuntimeThinkingMetadata;
   currentIteration?: number;
   maxIterations?: number;
   iterations?: LoopIterationInfo[];

@@ -2,7 +2,11 @@
  * Zod schemas for workflow API endpoints.
  */
 import { z } from '@hono/zod-openapi';
-import { workflowDefinitionSchema as engineWorkflowDefinitionSchema } from '@archon/workflows/schemas/workflow';
+import {
+  modelReasoningEffortSchema,
+  workflowDefinitionSchema as engineWorkflowDefinitionSchema,
+} from '@archon/workflows/schemas/workflow';
+import { effortLevelSchema, thinkingConfigSchema } from '@archon/workflows/schemas/dag-node';
 import { workflowRunSchema as engineWorkflowRunSchema } from '@archon/workflows/schemas/workflow-run';
 import {
   workflowEventRowSchema,
@@ -143,6 +147,12 @@ export const workflowNodeStateSchema = z
     duration: z.number().optional(),
     error: z.string().optional(),
     reason: z.string().optional(),
+    provider: z.string().optional(),
+    model: z.string().optional(),
+    tier: z.string().optional(),
+    modelReasoningEffort: modelReasoningEffortSchema.optional(),
+    effort: effortLevelSchema.optional(),
+    thinking: thinkingConfigSchema.optional(),
   })
   .openapi('WorkflowNodeState');
 

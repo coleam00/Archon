@@ -267,6 +267,17 @@ export const useWorkflowStore = create<WorkflowStoreState>()(
                 duration: event.duration,
                 error: event.error,
                 reason: event.reason,
+                provider:
+                  event.provider ?? (existingIdx >= 0 ? dagNodes[existingIdx].provider : undefined),
+                model: event.model ?? (existingIdx >= 0 ? dagNodes[existingIdx].model : undefined),
+                tier: event.tier ?? (existingIdx >= 0 ? dagNodes[existingIdx].tier : undefined),
+                modelReasoningEffort:
+                  event.modelReasoningEffort ??
+                  (existingIdx >= 0 ? dagNodes[existingIdx].modelReasoningEffort : undefined),
+                effort:
+                  event.effort ?? (existingIdx >= 0 ? dagNodes[existingIdx].effort : undefined),
+                thinking:
+                  event.thinking ?? (existingIdx >= 0 ? dagNodes[existingIdx].thinking : undefined),
                 routeDecision:
                   event.routeDecision ??
                   (existingIdx >= 0 ? dagNodes[existingIdx].routeDecision : undefined),

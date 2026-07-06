@@ -91,6 +91,32 @@ describe('mapWorkflowEventRow', () => {
     expect(e).toMatchObject({ type: 'dag_node', status: 'running', nodeId: 'plan' });
   });
 
+  test('node_started carries runtime AI metadata from persisted event data', () => {
+    const e = JSON.parse(
+      mapWorkflowEventRow(
+        row({
+          event_type: 'node_started',
+          step_name: 'create-story',
+          data: {
+            provider: 'claude',
+            model: 'sonnet',
+            effort: 'max',
+            thinking: { type: 'enabled', budgetTokens: 4000 },
+          },
+        })
+      ) as string
+    );
+    expect(e).toMatchObject({
+      type: 'dag_node',
+      status: 'running',
+      nodeId: 'create-story',
+      provider: 'claude',
+      model: 'sonnet',
+      effort: 'max',
+      thinking: { type: 'enabled', budgetTokens: 4000 },
+    });
+  });
+
   test('loop_iteration_started → dag_node running', () => {
     const e = JSON.parse(
       mapWorkflowEventRow(
