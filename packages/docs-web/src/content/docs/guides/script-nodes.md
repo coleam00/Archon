@@ -61,7 +61,7 @@ The file `.archon/scripts/fetch-github-pages.ts` is loaded and executed with
 ## How It Works
 
 1. **Substitute variables.** `$ARGUMENTS`, `$WORKFLOW_ID`, `$ARTIFACTS_DIR`,
-   `$BASE_BRANCH`, `$DOCS_DIR`, and upstream `$nodeId.output` references are
+   `$BASE_BRANCH`, `$PR_REMOTE`, `$DOCS_DIR`, and upstream `$nodeId.output` references are
    substituted into the `script` text before execution.
 2. **Detect inline vs named.** If the `script` value contains a newline or any
    shell metacharacter (see [Inline vs Named Scripts](#inline-vs-named-scripts)

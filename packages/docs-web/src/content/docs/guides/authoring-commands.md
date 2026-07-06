@@ -229,6 +229,7 @@ Archon replaces variables in command text before sending to the AI. The most com
 | `$1`, `$2`, `$3` | Positional arguments (direct invocation only) |
 | `$ARTIFACTS_DIR` | Pre-created artifacts directory for this workflow run |
 | `$BASE_BRANCH` | Base branch (auto-detected or configured) |
+| `$PR_REMOTE` | Git remote whose repository is the PR target |
 | `$DOCS_DIR` | Documentation directory path (default: `docs/`) |
 | `$WORKFLOW_ID` | Unique workflow run ID |
 | `$CONTEXT` | GitHub issue/PR context (if available) |

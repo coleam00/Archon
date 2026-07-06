@@ -398,6 +398,7 @@ export const CONTEXT_VAR_PATTERN_STR =
  * - $USER_MESSAGE, $ARGUMENTS - The user's trigger message
  * - $ARTIFACTS_DIR - External artifacts directory for this workflow run
  * - $BASE_BRANCH - The base branch (from config or auto-detected)
+ * - $PR_REMOTE - Git remote whose repository is the PR target (default 'origin')
  * - $CONTEXT, $EXTERNAL_CONTEXT, $ISSUE_CONTEXT - GitHub issue/PR context (if available)
  * - $DOCS_DIR - Documentation directory path (configured or default 'docs/')
  * - $LOOP_USER_INPUT - User feedback from interactive loop approval. Only populated on the
@@ -421,7 +422,7 @@ export function substituteWorkflowVariables(
   loopUserInput?: string,
   rejectionReason?: string,
   loopPrevOutput?: string,
-  options?: { shellSafe?: boolean }
+  options?: { shellSafe?: boolean; prRemote?: string }
 ): { prompt: string; contextSubstituted: boolean } {
   // Fail fast if the prompt references $BASE_BRANCH but no base branch could be resolved
   if (!baseBranch && prompt.includes('$BASE_BRANCH')) {
@@ -433,6 +434,7 @@ export function substituteWorkflowVariables(
 
   // Defensive: ensure docsDir always has a value (callers should resolve, but guard here)
   const resolvedDocsDir = docsDir || 'docs/';
+  const resolvedPrRemote = options?.prRemote ?? 'origin';
 
   // Substitute basic variables
   // When shellSafe is true, skip user-controlled variables — they will be passed
@@ -441,6 +443,7 @@ export function substituteWorkflowVariables(
     .replace(/\$WORKFLOW_ID/g, workflowId)
     .replace(/\$ARTIFACTS_DIR/g, artifactsDir)
     .replace(/\$BASE_BRANCH/g, baseBranch)
+    .replace(/\$PR_REMOTE/g, resolvedPrRemote)
     .replace(/\$DOCS_DIR/g, resolvedDocsDir);
 
   if (!options?.shellSafe) {
@@ -486,6 +489,7 @@ export function substituteWorkflowVariables(
  * @param artifactsDir - The external artifacts directory for $ARTIFACTS_DIR substitution
  * @param baseBranch - The resolved base branch for $BASE_BRANCH substitution
  * @param docsDir - The resolved docs directory for $DOCS_DIR substitution
+ * @param prRemote - The configured PR target remote for $PR_REMOTE substitution
  * @param issueContext - Optional GitHub issue/PR context to substitute or append
  * @param logLabel - Human-readable label for logging (e.g., 'workflow step prompt')
  * @returns The final prompt with variables substituted and context optionally appended
@@ -498,7 +502,8 @@ export function buildPromptWithContext(
   baseBranch: string,
   docsDir: string,
   issueContext: string | undefined,
-  logLabel: string
+  logLabel: string,
+  prRemote = 'origin'
 ): string {
   const { prompt, contextSubstituted } = substituteWorkflowVariables(
     template,
@@ -507,7 +512,11 @@ export function buildPromptWithContext(
     artifactsDir,
     baseBranch,
     docsDir,
-    issueContext
+    issueContext,
+    undefined,
+    undefined,
+    undefined,
+    { prRemote }
   );
 
   if (issueContext && !contextSubstituted) {

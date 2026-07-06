@@ -386,6 +386,7 @@ function getDefaults(): MergedConfig {
       loadDefaultCommands: true,
       loadDefaultWorkflows: true,
     },
+    prRemote: 'origin',
   };
 }
 
@@ -562,6 +563,25 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
   // Propagate base branch for $BASE_BRANCH substitution in workflow commands
   if (repo.worktree?.baseBranch?.trim()) {
     result.baseBranch = repo.worktree.baseBranch.trim();
+  }
+
+  // Propagate PR target remote for $PR_REMOTE substitution in workflow commands.
+  // Remote existence depends on repo git state, so validation here is limited to
+  // rejecting empty config values.
+  if (repo.github?.prRemote !== undefined) {
+    const rawPrRemote = repo.github.prRemote as unknown;
+    if (typeof rawPrRemote !== 'string') {
+      throw new Error(
+        'github.prRemote in repo config (.archon/config.yaml) must be a non-empty string'
+      );
+    }
+    const trimmed = rawPrRemote.trim();
+    if (!trimmed) {
+      throw new Error(
+        'github.prRemote in repo config (.archon/config.yaml) must be a non-empty string'
+      );
+    }
+    result.prRemote = trimmed;
   }
 
   // Propagate docs path for $DOCS_DIR substitution in workflow commands

@@ -70,6 +70,35 @@ describe('substituteWorkflowVariables', () => {
     expect(prompt).toBe('Merge into develop');
   });
 
+  it('replaces $PR_REMOTE with configured remote', () => {
+    const { prompt } = substituteWorkflowVariables(
+      'Target PRs at $PR_REMOTE',
+      'run-1',
+      'msg',
+      '/tmp',
+      'main',
+      'docs/',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { prRemote: 'upstream' }
+    );
+    expect(prompt).toBe('Target PRs at upstream');
+  });
+
+  it('defaults $PR_REMOTE to origin', () => {
+    const { prompt } = substituteWorkflowVariables(
+      'Target PRs at $PR_REMOTE',
+      'run-1',
+      'msg',
+      '/tmp',
+      'main',
+      'docs/'
+    );
+    expect(prompt).toBe('Target PRs at origin');
+  });
+
   it('throws when $BASE_BRANCH is referenced but empty', () => {
     expect(() =>
       substituteWorkflowVariables('Merge into $BASE_BRANCH', 'run-1', 'msg', '/tmp', '', 'docs/')
@@ -324,7 +353,7 @@ describe('substituteWorkflowVariables', () => {
 
   it('still replaces system-controlled variables when shellSafe is true', () => {
     const { prompt } = substituteWorkflowVariables(
-      'cd $ARTIFACTS_DIR && git checkout $BASE_BRANCH # $WORKFLOW_ID $DOCS_DIR',
+      'cd $ARTIFACTS_DIR && git checkout $BASE_BRANCH # $WORKFLOW_ID $DOCS_DIR $PR_REMOTE',
       'run-1',
       'msg',
       '/tmp/artifacts',
@@ -334,9 +363,9 @@ describe('substituteWorkflowVariables', () => {
       undefined,
       undefined,
       undefined,
-      { shellSafe: true }
+      { shellSafe: true, prRemote: 'upstream' }
     );
-    expect(prompt).toBe('cd /tmp/artifacts && git checkout main # run-1 docs/');
+    expect(prompt).toBe('cd /tmp/artifacts && git checkout main # run-1 docs/ upstream');
   });
 });
 

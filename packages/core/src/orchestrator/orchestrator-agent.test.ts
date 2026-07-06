@@ -2513,7 +2513,12 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
     mockGetRecentWorkflowResultMessages.mockImplementation(() => Promise.resolve([]));
     mockLoadConfig.mockReset();
     mockLoadConfig.mockImplementation(() =>
-      Promise.resolve({ assistants: { claude: {}, codex: {} }, envVars: {}, assistant: 'claude' })
+      Promise.resolve({
+        assistants: { claude: {}, codex: {} },
+        envVars: {},
+        assistant: 'claude',
+        prRemote: 'origin',
+      })
     );
     mockGetPausedWorkflowRun.mockReset();
     mockGetPausedWorkflowRun.mockImplementation(() => Promise.resolve(null));

@@ -6,8 +6,10 @@ argument-hint: (none - uses $BASE_BRANCH from config or repo)
 # Create Pull Request
 
 **Base branch**: $BASE_BRANCH
+**PR target remote**: $PR_REMOTE
 
 > Always use `$BASE_BRANCH` for `--base`. Do not infer or override the PR base from `$ARGUMENTS`.
+> Always resolve the PR target repository from `$PR_REMOTE` and pass `--repo "$PR_REPO"` to every `gh pr` command.
 
 ---
 
@@ -18,12 +20,21 @@ Extract the issue number from the current branch name or context (e.g., `fix/iss
 ```bash
 BRANCH=$(git branch --show-current)
 ISSUE_NUM=$(echo "$BRANCH" | grep -oE '[0-9]+' | tail -1)
+PR_REPO=$(gh repo view "$(git remote get-url "$PR_REMOTE")" --json nameWithOwner -q .nameWithOwner)
+ORIGIN_REPO=$(gh repo view "$(git remote get-url origin)" --json nameWithOwner -q .nameWithOwner)
+ORIGIN_OWNER=${ORIGIN_REPO%%/*}
+if [ "$ORIGIN_REPO" = "$PR_REPO" ]; then
+  PR_HEAD="$BRANCH"
+else
+  PR_HEAD="${ORIGIN_OWNER}:$BRANCH"
+fi
 ```
 
 If an issue number was found, search for open PRs that already reference it:
 
 ```bash
 gh pr list \
+  --repo "$PR_REPO" \
   --search "Fixes #${ISSUE_NUM} OR Closes #${ISSUE_NUM}" \
   --state open \
   --json number,url,headRefName
@@ -156,15 +167,17 @@ cat > $ARTIFACTS_DIR/pr-body.md <<'EOF'
 EOF
 
 gh pr create \
+  --repo "$PR_REPO" \
   --title "[title]" \
   --body-file $ARTIFACTS_DIR/pr-body.md \
-  --base $BASE_BRANCH
+  --base "$BASE_BRANCH" \
+  --head "$PR_HEAD"
 ```
 
 Or if the content is simple:
 
 ```bash
-gh pr create --fill --base $BASE_BRANCH
+gh pr create --repo "$PR_REPO" --fill --base "$BASE_BRANCH" --head "$PR_HEAD"
 ```
 
 After creating the PR, capture its identifiers for downstream steps. Only write artifacts if PR creation succeeded - never persist stale data from a pre-existing PR:
@@ -172,9 +185,9 @@ After creating the PR, capture its identifiers for downstream steps. Only write 
 ```bash
 # After creating the PR, capture and persist the PR number for downstream steps
 # IMPORTANT: Only write artifacts after confirmed successful PR creation
-if gh pr view --json number,url -q '.number,.url' > /dev/null 2>&1; then
-  PR_NUMBER=$(gh pr view --json number -q '.number')
-  PR_URL=$(gh pr view --json url -q '.url')
+PR_NUMBER=$(gh pr list --repo "$PR_REPO" --head "$PR_HEAD" --state open --json number -q '.[0].number')
+if [ -n "$PR_NUMBER" ]; then
+  PR_URL=$(gh pr view "$PR_NUMBER" --repo "$PR_REPO" --json url -q '.url')
   echo "$PR_NUMBER" > "$ARTIFACTS_DIR/.pr-number"
   echo "$PR_URL" > "$ARTIFACTS_DIR/.pr-url"
 else
@@ -218,7 +231,8 @@ Nothing to create a PR for.
 ### Branch Already Has PR
 
 ```bash
-gh pr view --web
+PR_NUMBER=$(gh pr list --repo "$PR_REPO" --head "$PR_HEAD" --state open --json number -q '.[0].number')
+gh pr view "$PR_NUMBER" --repo "$PR_REPO" --web
 ```
 
 Opens the existing PR instead of creating a duplicate.

@@ -127,6 +127,7 @@ function makeDeps(store?: IWorkflowStore): WorkflowDeps {
         assistant: 'claude' as const,
         assistants: { claude: {}, codex: {} },
         baseBranch: '',
+        prRemote: 'origin',
         commands: { folder: '' },
       })
     ),

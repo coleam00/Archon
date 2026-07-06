@@ -118,6 +118,7 @@ function makeDeps(store?: IWorkflowStore): WorkflowDeps {
           codex: {},
         },
         baseBranch: '',
+        prRemote: 'origin',
         commands: { folder: '' },
       })
     ),
@@ -497,6 +498,7 @@ describe('executeWorkflow', () => {
             assistant: 'claude' as const,
             assistants: { claude: {}, codex: {} },
             baseBranch: '',
+            prRemote: 'origin',
             commands: { folder: '' },
             docsPath: 'packages/docs-web/src/content/docs',
           })
@@ -556,6 +558,7 @@ describe('executeWorkflow', () => {
             codex: {},
           },
           baseBranch: 'main',
+          prRemote: 'origin',
           commands: { folder: '' },
         })
       );
@@ -736,6 +739,7 @@ describe('executeWorkflow', () => {
         assistant: 'claude' as const,
         assistants: { claude: {}, codex: {} },
         baseBranch: '',
+        prRemote: 'origin',
         commands: { folder: '' },
         envVars: { FILE_KEY: 'file_val' },
       });
@@ -1184,6 +1188,7 @@ describe('telemetry wiring', () => {
           assistant: 'claude',
           assistants: { claude: {}, codex: {} },
           baseBranch: '',
+          prRemote: 'origin',
           commands: { folder: '' },
           tiers: {
             large: { provider: 'codex', model: 'gpt-5.5', effort: 'high' },
@@ -1230,6 +1235,7 @@ describe('telemetry wiring', () => {
           assistant: 'claude',
           assistants: { claude: {}, codex: {} },
           baseBranch: '',
+          prRemote: 'origin',
           commands: { folder: '' },
           tiers: {
             large: { provider: 'claude', model: 'opus' },

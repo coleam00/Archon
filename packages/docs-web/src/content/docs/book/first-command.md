@@ -144,6 +144,7 @@ You should see the AI find your auth module tests, run them, and produce a struc
 | `$ARTIFACTS_DIR` | Absolute path to this run's artifact directory | `/home/user/.archon/workspaces/owner/repo/artifacts/runs/abc123/` |
 | `$WORKFLOW_ID` | Unique ID for the current workflow run | `abc123def456` |
 | `$BASE_BRANCH` | The base branch for the current worktree | `main` |
+| `$PR_REMOTE` | Git remote whose repository is the PR target | `origin` |
 | `$DOCS_DIR` | Documentation directory path | `docs/` |
 
 Use `$ARTIFACTS_DIR` whenever your command writes output files that a later step needs to read. Use `$1`, `$2`, `$3` when you want to treat arguments as structured positional inputs rather than a single string.
