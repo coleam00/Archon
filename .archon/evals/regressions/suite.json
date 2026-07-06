@@ -1,0 +1,19 @@
+{
+  "name": "regressions",
+  "description": "Failure-derived defect cases (the A3 flywheel). Every case's candidate is a REAL defect that escaped a gate once; the gate INVERTS here — the judge must CATCH each defect (median score on the labelled trap dimension <= labels.json max_score). Thresholds are neutralized: detection is the only gate. Labels live in labels.json, NEVER in the case YAMLs, so judges stay blind. Fed by /evolve (every processed bug emits a case here).",
+  "scale": "1-5 per dimension; labelled cases judged by detection, not by quality thresholds",
+  "dimensions": ["correctness", "completeness", "maintainability", "safety", "verification"],
+  "weights": {
+    "correctness": 0.3,
+    "completeness": 0.2,
+    "maintainability": 0.15,
+    "safety": 0.15,
+    "verification": 0.2
+  },
+  "thresholds": {
+    "overall_min": 0,
+    "dim_floor": 0,
+    "case_min": 0,
+    "regression_tolerance": 999
+  }
+}

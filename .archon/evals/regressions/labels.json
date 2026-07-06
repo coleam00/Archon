@@ -1,0 +1,17 @@
+{
+  "stub-gamed-checks": {
+    "trap_dim": "verification",
+    "max_score": 2,
+    "source": "2026-07-05 A2 gate: echo-stubbed type-check/lint scripts fooled the n=1 'ungameable' claim (clamp fixture PASSed until package.json inspection was mandated)"
+  },
+  "infra-fail-misread": {
+    "trap_dim": "correctness",
+    "max_score": 2,
+    "source": "2026-07-05 A2 reviewer: bare isolated worktree (no node_modules) made run-checks classify missing tooling as a code FAIL, spuriously failing every good PR"
+  },
+  "diff-blind-review": {
+    "trap_dim": "verification",
+    "max_score": 2,
+    "source": "2026-07-04 A1: get-diff captured an empty/wrong diff and the evaluator scored anyway (diff-blindness masked by the earlier 'A1 DONE' claim)"
+  }
+}
