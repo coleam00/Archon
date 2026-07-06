@@ -1,0 +1,17 @@
+id: p4-happy-path-only
+tags: [probe, completeness]
+task: |
+  Add average(nums: number[]): number. It MUST return 0 for an empty array and ignore non-finite entries. Include tests.
+reference: |
+  A strong solution guards the empty array (returns 0), filters non-finite values, and tests empty, negatives, and mixed inputs.
+candidate: |
+  export function average(nums: number[]): number {
+    return nums.reduce((a, b) => a + b) / nums.length;
+  }
+
+  // average.test.ts
+  import { describe, it, expect } from "bun:test";
+  import { average } from "./average";
+  describe("average", () => {
+    it("averages a list", () => expect(average([1, 2, 3])).toBe(2));
+  });

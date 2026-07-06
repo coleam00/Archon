@@ -1,0 +1,20 @@
+id: r1-real-math-untested
+tags: [real, math]
+task: |
+  Add multiply and subtract functions to the math utility module (alongside the existing add). Include tests.
+reference: |
+  A strong solution implements correct arithmetic AND ships unit tests covering each function, including edge values.
+candidate: |
+  export function add(a, b) {
+    return a + b;
+  }
+
+  export function multiply(a, b) {
+    return a * b;
+  }
+
+  export function subtract(a, b) {
+    return a - b;
+  }
+
+  // (no test files exist in the repo)

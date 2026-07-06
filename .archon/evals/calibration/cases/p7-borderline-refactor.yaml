@@ -1,0 +1,18 @@
+id: p7-borderline-refactor
+tags: [probe, borderline]
+task: |
+  Refactor loadConfig() for readability WITHOUT changing behavior. The original was: `return { ...defaults, ...(userConfig ?? {}) };`
+reference: |
+  A strong solution improves readability while preserving behavior exactly — including the null-safe handling when userConfig is undefined — and tests the missing-userConfig case.
+candidate: |
+  // before: return { ...defaults, ...(userConfig ?? {}) };
+  export function loadConfig(userConfig: Partial<Config>): Config {
+    return { ...defaults, ...userConfig };
+  }
+
+  // config.test.ts
+  import { describe, it, expect } from "bun:test";
+  import { loadConfig } from "./config";
+  describe("loadConfig", () => {
+    it("merges user over defaults", () => expect(loadConfig({ port: 9000 }).port).toBe(9000));
+  });

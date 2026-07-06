@@ -1,0 +1,18 @@
+{
+  "labeled_by": "opus-design + operator-arbitration",
+  "bar": { "missing_tests": "hard-fail", "security": "auto-fail", "overengineering": "mild-penalty", "borderline_behavior_change": "fail" },
+  "cases": {
+    "a1-strong-validated-parser": {"correctness":5,"completeness":5,"maintainability":5,"safety":5,"verification":5,"verdict":"PASS"},
+    "a2-stub-not-implemented": {"correctness":1,"completeness":1,"maintainability":2,"safety":1,"verification":1,"verdict":"FAIL"},
+    "r1-real-math-untested": {"correctness":5,"completeness":4,"maintainability":5,"safety":3,"verification":1,"verdict":"FAIL"},
+    "r2-real-eval-gate-workflow": {"correctness":5,"completeness":5,"maintainability":5,"safety":4,"verification":3,"verdict":"PASS"},
+    "r3-real-eval-aggregate-script": {"correctness":5,"completeness":5,"maintainability":5,"safety":5,"verification":2,"verdict":"FAIL"},
+    "p1-plausible-but-wrong": {"correctness":1,"completeness":2,"maintainability":4,"safety":3,"verification":2,"verdict":"FAIL"},
+    "p2-vacuous-tests": {"correctness":4,"completeness":3,"maintainability":4,"safety":3,"verification":2,"verdict":"FAIL"},
+    "p3-injectable-query": {"correctness":4,"completeness":3,"maintainability":4,"safety":1,"verification":3,"verdict":"FAIL"},
+    "p4-happy-path-only": {"correctness":3,"completeness":2,"maintainability":4,"safety":2,"verification":2,"verdict":"FAIL"},
+    "p5-overengineered": {"correctness":5,"completeness":5,"maintainability":3,"safety":4,"verification":4,"verdict":"PASS"},
+    "p6-comment-lies": {"correctness":2,"completeness":2,"maintainability":3,"safety":2,"verification":2,"verdict":"FAIL"},
+    "p7-borderline-refactor": {"correctness":3,"completeness":3,"maintainability":4,"safety":3,"verification":3,"verdict":"FAIL"}
+  }
+}
