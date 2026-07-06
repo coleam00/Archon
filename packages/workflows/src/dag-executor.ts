@@ -994,6 +994,7 @@ async function executeNodeInternal(
   logDir: string,
   baseBranch: string,
   docsDir: string,
+  prRemote: string,
   nodeOutputs: Map<string, NodeOutput>,
   resumeSessionId: string | undefined,
   configuredCommandFolder?: string,
@@ -1095,7 +1096,8 @@ async function executeNodeInternal(
       baseBranch,
       docsDir,
       issueContext,
-      `dag node '${node.id}' prompt`
+      `dag node '${node.id}' prompt`,
+      prRemote
     );
   } catch (error) {
     const err = error as Error;
@@ -1860,6 +1862,7 @@ async function executeBashNode(
   logDir: string,
   baseBranch: string,
   docsDir: string,
+  prRemote: string,
   nodeOutputs: Map<string, NodeOutput>,
   issueContext?: string,
   envVars?: Record<string, string>
@@ -1904,7 +1907,7 @@ async function executeBashNode(
     undefined,
     undefined,
     undefined,
-    { shellSafe: true }
+    { shellSafe: true, prRemote }
   );
   const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, true, logDir);
 
@@ -1914,6 +1917,7 @@ async function executeBashNode(
     ARTIFACTS_DIR: artifactsDir,
     LOG_DIR: logDir,
     BASE_BRANCH: baseBranch,
+    PR_REMOTE: prRemote,
     USER_MESSAGE: workflowRun.user_message,
     ARGUMENTS: workflowRun.user_message,
     LOOP_USER_INPUT: '',
@@ -2043,6 +2047,7 @@ async function executeScriptNode(
   logDir: string,
   baseBranch: string,
   docsDir: string,
+  prRemote: string,
   nodeOutputs: Map<string, NodeOutput>,
   issueContext?: string,
   envVars?: Record<string, string>
@@ -2083,7 +2088,11 @@ async function executeScriptNode(
     artifactsDir,
     baseBranch,
     docsDir,
-    issueContext
+    issueContext,
+    undefined,
+    undefined,
+    undefined,
+    { prRemote }
   );
   const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, false);
 
@@ -2093,6 +2102,7 @@ async function executeScriptNode(
     ARTIFACTS_DIR: artifactsDir,
     LOG_DIR: logDir,
     BASE_BRANCH: baseBranch,
+    PR_REMOTE: prRemote,
     ...(envVars ?? {}),
   };
 
@@ -2327,6 +2337,7 @@ async function executeLoopNode(
   logDir: string,
   baseBranch: string,
   docsDir: string,
+  prRemote: string,
   nodeOutputs: Map<string, NodeOutput>,
   config: WorkflowConfig,
   issueContext?: string
@@ -2443,7 +2454,8 @@ async function executeLoopNode(
         issueContext,
         i === startIteration ? loopUserInput : '',
         undefined, // rejectionReason
-        i === startIteration ? '' : lastIterationOutput
+        i === startIteration ? '' : lastIterationOutput,
+        { prRemote }
       );
       const finalPrompt = substituteNodeOutputRefs(substitutedPrompt, nodeOutputs);
 
@@ -2741,7 +2753,7 @@ async function executeLoopNode(
           undefined,
           undefined,
           undefined,
-          { shellSafe: true }
+          { shellSafe: true, prRemote }
         );
         const substitutedBash = substituteNodeOutputRefs(
           bashPrompt,
@@ -2756,6 +2768,7 @@ async function executeLoopNode(
             ...process.env,
             USER_MESSAGE: workflowRun.user_message,
             ARGUMENTS: workflowRun.user_message,
+            PR_REMOTE: prRemote,
             LOOP_USER_INPUT: i === startIteration ? (loopUserInput ?? '') : '',
             LOOP_PREV_OUTPUT: prevIterationOutput,
             REJECTION_REASON: '',
@@ -2970,6 +2983,7 @@ async function executeApprovalNode(
   logDir: string,
   baseBranch: string,
   docsDir: string,
+  prRemote: string,
   nodeOutputs: Map<string, NodeOutput>,
   config: WorkflowConfig,
   workflowLevelOptions: WorkflowLevelOptions,
@@ -3035,7 +3049,9 @@ async function executeApprovalNode(
       docsDir,
       issueContext,
       undefined, // loopUserInput
-      rejectionReason
+      rejectionReason,
+      undefined,
+      { prRemote }
     );
 
     // Build a synthetic PromptNode to reuse executeNodeInternal.
@@ -3091,6 +3107,7 @@ async function executeApprovalNode(
       logDir,
       baseBranch,
       docsDir,
+      prRemote,
       nodeOutputs,
       undefined, // fresh session
       configuredCommandFolder,
@@ -3185,6 +3202,7 @@ export async function executeDagWorkflow(
   retryContext?: WorkflowRetryContext
 ): Promise<string | undefined> {
   const dagStartTime = Date.now();
+  const prRemote = config.prRemote;
   const retryEpoch = getRunRetryEpoch(workflowRun, retryContext);
   const workflowLevelOptions = {
     effort: workflow.effort,
@@ -3628,6 +3646,7 @@ export async function executeDagWorkflow(
               logDir,
               baseBranch,
               docsDir,
+              prRemote,
               nodeOutputs,
               issueContext,
               config.envVars
@@ -3666,6 +3685,7 @@ export async function executeDagWorkflow(
               logDir,
               baseBranch,
               docsDir,
+              prRemote,
               nodeOutputs,
               config,
               issueContext
@@ -3688,6 +3708,7 @@ export async function executeDagWorkflow(
               logDir,
               baseBranch,
               docsDir,
+              prRemote,
               nodeOutputs,
               config,
               workflowLevelOptions,
@@ -3745,6 +3766,7 @@ export async function executeDagWorkflow(
               logDir,
               baseBranch,
               docsDir,
+              prRemote,
               nodeOutputs,
               issueContext,
               config.envVars
@@ -3978,6 +4000,7 @@ export async function executeDagWorkflow(
               logDir,
               baseBranch,
               docsDir,
+              prRemote,
               nodeOutputs,
               // Always pass the prior session ID — forkSession:true in executeNodeInternal
               // ensures the source is never mutated, so retries can safely resume from it.

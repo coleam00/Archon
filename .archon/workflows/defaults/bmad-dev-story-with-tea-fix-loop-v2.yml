@@ -1,0 +1,230 @@
+name: bmad-dev-story-with-tea-fix-loop-v2
+description: |
+  Use when: User wants the v2 redesign surface of the BMAD dev-story implementation where each BMAD or TEA step is its own Archon node (v2 redesign surface).
+  Triggers: "bmad dev story tea fix loop v2", "dev story with tea v2", "DS TA RV NR TR CR v2", "bmad review fix loop v2", "bmad dev story tea v2".
+  Does: Runs DS, TA, CR, RV, NR, and TR as separate DAG nodes, records review findings, reruns BMAD dev-story to fix them when needed, and repeats review up to three rounds.
+  NOT for: Generic Archon feature work without BMAD artifacts, or one-off review without implementation.
+
+  Decision log policy:
+  - Every finding must be written as a decision-log finding entry.
+  - Every fix must be written as a decision-log fix entry.
+  - Every finding and fix entry must explain what is wrong, how it was fixed, and why that fix decision was chosen.
+
+provider: codex
+model: gpt-5.5
+tags: [BMad, TEA, Review]
+
+nodes:
+  - id: prepare-bmad-state
+    bash: |
+      set -e
+
+      RUN_DIR="$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop"
+      mkdir -p "$RUN_DIR/findings" "$RUN_DIR/reports"
+
+      for required in \
+        ".agents/skills/bmad-dev-story/SKILL.md" \
+        ".agents/skills/bmad-code-review/SKILL.md" \
+        ".agents/skills/bmad-testarch-automate/SKILL.md" \
+        ".agents/skills/bmad-testarch-test-review/SKILL.md" \
+        ".agents/skills/bmad-testarch-nfr/SKILL.md" \
+        ".agents/skills/bmad-testarch-trace/SKILL.md"
+      do
+        if [ ! -f "$required" ]; then
+          echo "Missing required BMAD skill: $required"
+          echo "Run this workflow from a BMAD-enabled project checkout."
+          exit 1
+        fi
+      done
+
+      if [ ! -f "_bmad/bmm/config.yaml" ]; then
+        echo "Missing _bmad/bmm/config.yaml."
+        echo "Run this workflow from the BMAD project root."
+        exit 1
+      fi
+
+      if [ ! -f "_bmad-output/implementation-artifacts/sprint-status.yaml" ]; then
+        echo "Missing _bmad-output/implementation-artifacts/sprint-status.yaml."
+        echo "Run bmad sprint planning first, or provide a BMAD project with implementation artifacts."
+        exit 1
+      fi
+
+      cat > "$RUN_DIR/state.json" << 'JSON'
+      {
+        "workflow": "bmad-dev-story-with-tea-fix-loop",
+        "status": "running",
+        "round": 1,
+        "maxRounds": 3,
+        "activeStory": "",
+        "activeStoryName": "",
+        "activeStoryFile": "",
+        "decisionLogFile": "decision-log.md",
+        "openFindingsFile": "findings/open-findings.md"
+      }
+      JSON
+
+      cat > "$RUN_DIR/decision-log.md" << 'MARKDOWN'
+      # BMAD Dev Story With TEA Fix Loop Decision Log
+
+      Every finding and every fix must be logged here.
+      Each full sentence goes on its own physical line.
+
+      ## Required Finding Entry
+
+      ### Finding {finding_id}
+
+      - Source gate:
+      - Severity:
+      - What is wrong:
+      - Evidence:
+      - Why this is a defect:
+      - Required fix direction:
+      - Status:
+
+      ## Required Fix Entry
+
+      ### Fix {finding_id}
+
+      - What was fixed:
+      - How it was fixed:
+      - Why this fix was chosen:
+      - Alternatives considered:
+      - Files changed:
+      - Validation:
+      - Status:
+      MARKDOWN
+
+      cat > "$RUN_DIR/findings/open-findings.md" << 'MARKDOWN'
+      # Open Review Findings
+
+      No open findings yet.
+      MARKDOWN
+
+      echo "RUN_DIR=$RUN_DIR"
+      echo "STATE_FILE=$RUN_DIR/state.json"
+      echo "DECISION_LOG=$RUN_DIR/decision-log.md"
+      echo "OPEN_FINDINGS=$RUN_DIR/findings/open-findings.md"
+      echo "SPRINT_STATUS=_bmad-output/implementation-artifacts/sprint-status.yaml"
+    timeout: 60000
+    output_type: bmad-state
+
+  - id: dev-story
+    prompt: |
+      bmad-dev-story $ARGUMENTS
+    provider: claude
+    depends_on: [prepare-bmad-state]
+    context: fresh
+    model: sonnet
+    idle_timeout: 900000
+    output_type: dev-story
+
+  - id: tea-automate
+    prompt: |
+      bmad-testarch-automate $ARGUMENTS
+    provider: codex
+    depends_on: [dev-story]
+    context: fresh
+    model: gpt-5.5
+    idle_timeout: 900000
+    output_type: tea-automation
+
+  - id: code-review
+    command: bmad-code-review
+    depends_on: [tea-automate]
+    context: fresh
+    provider: codex
+    model: gpt-5.5
+    idle_timeout: 900000
+    output_format: &code_review_gate_schema
+      type: object
+      properties:
+        gate:
+          type: string
+          enum: ["PASS", "FAIL"]
+        round:
+          type: number
+        findings_count:
+          type: number
+        open_findings_file:
+          type: string
+        decision_log_file:
+          type: string
+        code_review_report:
+          type: string
+      required:
+        - gate
+        - round
+        - findings_count
+        - open_findings_file
+        - decision_log_file
+        - code_review_report
+    output_type: code-review-findings
+
+  - id: code-review-gate
+    depends_on: [code-review]
+    route_loop:
+      from: code-review
+      condition: "$code-review.output.gate == 'PASS'"
+      max_iterations: 20
+      routes:
+        positive: tea-rv
+        negative: dev-story
+        exhausted: review-loop-error
+
+  - id: tea-rv
+    prompt: |
+      bmad-testarch-test-review $ARGUMENTS
+    provider: codex
+    depends_on: [code-review-gate]
+    context: fresh
+    model: gpt-5.5
+    idle_timeout: 900000
+    output_type: test-review-findings
+
+  - id: tea-nr
+    prompt: |
+      bmad-testarch-nfr $ARGUMENTS
+    provider: claude
+    model: sonnet
+    depends_on: [tea-rv]
+    context: fresh
+    idle_timeout: 900000
+    output_type: nfr-findings
+
+  - id: tea-tr
+    prompt: |
+      bmad-testarch-trace $ARGUMENTS
+    provider: claude
+    depends_on: [tea-nr]
+    context: fresh
+    model: sonnet
+    idle_timeout: 900000
+    output_type: trace-findings
+
+  - id: review-loop-error
+    depends_on: [code-review-gate]
+    bash: |
+      set -e
+
+      STATE="$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop/state.json"
+      DECISIONS="$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop/decision-log.md"
+      OPEN_FINDINGS="$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop/findings/open-findings.md"
+
+      echo "BMAD code-review fix loop exhausted its retry budget."
+      echo "State: $STATE"
+      echo "Decision log: $DECISIONS"
+      echo "Open findings: $OPEN_FINDINGS"
+
+      if [ -f "$STATE" ]; then
+        cat "$STATE"
+      fi
+
+      exit 1
+    timeout: 60000
+
+  - id: create-pull-request
+    command: archon-create-pr
+    provider: claude
+    depends_on: [tea-tr]
+    context: fresh
+    model: sonnet

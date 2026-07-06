@@ -1016,6 +1016,7 @@ All workflows support variable substitution in prompts and commands. The most co
 | `$WORKFLOW_ID` | Unique ID for this workflow run |
 | `$ARTIFACTS_DIR` | Pre-created artifacts directory for this workflow run |
 | `$BASE_BRANCH` | Base branch (auto-detected or configured) |
+| `$PR_REMOTE` | Git remote whose repository is the PR target |
 | `$DOCS_DIR` | Documentation directory path (default: `docs/`) |
 | `$CONTEXT` | GitHub issue/PR context (if available) |
 | `$nodeId.output` | Output of a completed upstream node |

@@ -149,6 +149,10 @@ worktree:
                         # ~/.archon/workspaces/<owner>/<repo>/worktrees/.
                         # Must be relative; no absolute, no `..` segments.
 
+# GitHub settings
+github:
+  prRemote: origin  # Optional: set to upstream when PRs should target an upstream repo
+
 # Documentation directory
 docs:
   path: docs  # Optional: default is docs/
@@ -241,6 +245,10 @@ worktree:
 1. If `worktree.baseBranch` is set: Uses the configured branch. **Fails with an error** if the branch doesn't exist on remote (no silent fallback).
 2. If omitted: Auto-detects the default branch via `git remote show origin`. Works without any config for standard repos.
 3. If auto-detection fails and a workflow references `$BASE_BRANCH`: Fails with an error explaining the resolution chain.
+
+**PR remote behavior:** The `github.prRemote` setting controls which git remote's GitHub repository is used for pull request lookup and creation.
+When not configured, `$PR_REMOTE` defaults to `origin`.
+Set `github.prRemote: upstream` in forked checkouts when branches are pushed to `origin` but PRs should target the upstream repository.
 
 **Docs path behavior:** The `docs.path` setting controls where the `$DOCS_DIR` variable points. When not configured, `$DOCS_DIR` defaults to `docs/`. Unlike `$BASE_BRANCH`, this variable always has a safe default and never throws an error. Configure it when your documentation lives outside the standard `docs/` directory (e.g., `packages/docs-web/src/content/docs`).
 

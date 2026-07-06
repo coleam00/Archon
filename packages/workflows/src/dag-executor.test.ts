@@ -190,6 +190,7 @@ function createMockDeps(storeOverride?: IWorkflowStore): WorkflowDeps {
     loadConfig: mock(() =>
       Promise.resolve({
         assistant: 'claude' as const,
+        prRemote: 'origin',
         commands: {},
         defaults: { loadDefaultCommands: false, loadDefaultWorkflows: false },
         assistants: { claude: {}, codex: {} },
@@ -209,6 +210,7 @@ function createMockPlatform(): IWorkflowPlatform {
 
 const minimalConfig: WorkflowConfig = {
   assistant: 'claude',
+  prRemote: 'origin',
   assistants: { claude: {}, codex: {} },
   commands: {},
   defaults: { loadDefaultCommands: false, loadDefaultWorkflows: false },
@@ -1849,14 +1851,14 @@ describe('executeDagWorkflow -- bash nodes', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
-      { ...minimalConfig, envVars: { MY_SECRET: 'abc123' } }
+      { ...minimalConfig, prRemote: 'upstream', envVars: { MY_SECRET: 'abc123' } }
     );
 
     expect(execSpy).toHaveBeenCalledWith(
       'bash',
       ['-c', 'echo ok'],
       expect.objectContaining({
-        env: expect.objectContaining({ MY_SECRET: 'abc123' }),
+        env: expect.objectContaining({ MY_SECRET: 'abc123', PR_REMOTE: 'upstream' }),
       })
     );
     execSpy.mockRestore();
@@ -9730,8 +9732,8 @@ describe('executeDagWorkflow -- script nodes', () => {
     const nodes: DagNode[] = [
       {
         id: 'script-out',
-        // Print the run ID and artifacts dir — after substitution these are real values
-        script: 'console.log("id=$WORKFLOW_ID artifacts=$ARTIFACTS_DIR")',
+        // Print system variables after substitution so the downstream prompt can inspect them.
+        script: 'console.log("id=$WORKFLOW_ID artifacts=$ARTIFACTS_DIR remote=$PR_REMOTE")',
         runtime: 'bun',
       },
       { id: 'check', command: 'check-output', depends_on: ['script-out'] },
@@ -9750,7 +9752,7 @@ describe('executeDagWorkflow -- script nodes', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
-      minimalConfig
+      { ...minimalConfig, prRemote: 'upstream' }
     );
 
     // The downstream AI node should have received the substituted output
@@ -9758,7 +9760,9 @@ describe('executeDagWorkflow -- script nodes', () => {
     const prompt = mockSendQueryDag.mock.calls[0][0] as string;
     // The script output should contain the actual run ID (not the literal variable name)
     expect(prompt).toContain('wf-subst-run-id');
+    expect(prompt).toContain('remote=upstream');
     expect(prompt).not.toContain('$WORKFLOW_ID');
+    expect(prompt).not.toContain('$PR_REMOTE');
   });
 
   it('named script not found at runtime results in failed state and platform message', async () => {
@@ -9870,14 +9874,14 @@ describe('executeDagWorkflow -- script nodes', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
-      { ...minimalConfig, envVars: { MY_SECRET: 'abc123' } }
+      { ...minimalConfig, prRemote: 'upstream', envVars: { MY_SECRET: 'abc123' } }
     );
 
     expect(execSpy).toHaveBeenCalledWith(
       'bun',
       ['--no-env-file', '-e', 'console.log("ok")'],
       expect.objectContaining({
-        env: expect.objectContaining({ MY_SECRET: 'abc123' }),
+        env: expect.objectContaining({ MY_SECRET: 'abc123', PR_REMOTE: 'upstream' }),
       })
     );
     execSpy.mockRestore();

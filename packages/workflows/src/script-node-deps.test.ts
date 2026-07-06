@@ -138,6 +138,7 @@ function createMockDeps(): WorkflowDeps {
     loadConfig: mock(() =>
       Promise.resolve({
         assistant: 'claude' as const,
+        prRemote: 'origin',
         commands: {},
         defaults: { loadDefaultCommands: false, loadDefaultWorkflows: false },
         assistants: { claude: {}, codex: {} },
@@ -174,6 +175,7 @@ function makeWorkflowRun(id: string): WorkflowRun {
 
 const minimalConfig: WorkflowConfig = {
   assistant: 'claude',
+  prRemote: 'origin',
   assistants: { claude: {}, codex: {} },
   commands: {},
   defaults: { loadDefaultCommands: false, loadDefaultWorkflows: false },

@@ -41,15 +41,15 @@
 # - Retrospective appends its action items to action_items; sprint-status surfaces open ones
 
 generated: "2026-06-30 10:50:10 +0700"
-last_updated: "2026-06-30 10:50:10 +0700"
+last_updated: "2026-07-07 00:11:03 +0700"
 project: Archon
 project_key: NOKEY
 tracking_system: file-system
 story_location: /Users/dale/Desktop/workspace/OceanLabs/workflow-engine/Archon/_bmad-output/implementation-artifacts
 
 development_status:
-  epic-a1: backlog
-  a1-1-add-versioned-v2-workflow-baseline: backlog
+  epic-a1: in-progress
+  a1-1-add-versioned-v2-workflow-baseline: done
   a1-2-preserve-story-input-resolution: backlog
   epic-a1-retrospective: optional
   epic-a2: backlog

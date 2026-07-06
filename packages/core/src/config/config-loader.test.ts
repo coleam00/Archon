@@ -476,6 +476,105 @@ worktree:
       expect(config.baseBranch).toBeUndefined();
     });
 
+    test('defaults prRemote to origin when not configured', async () => {
+      const error = new Error('ENOENT') as NodeJS.ErrnoException;
+      error.code = 'ENOENT';
+      mockFsReadFile.mockRejectedValue(error);
+
+      const config = await loadConfig('/test/repo');
+      expect(config.prRemote).toBe('origin');
+    });
+
+    test('propagates prRemote from repo github config', async () => {
+      const pathMatches = (path: string, pattern: string): boolean => {
+        const normalizedPath = path.replace(/\\/g, '/');
+        return normalizedPath.includes(pattern);
+      };
+
+      mockFsReadFile.mockImplementation(async (path: string) => {
+        if (pathMatches(path, '/repo/.archon/config.yaml')) {
+          return `
+github:
+  prRemote: upstream
+`;
+        }
+        const error = new Error('ENOENT') as NodeJS.ErrnoException;
+        error.code = 'ENOENT';
+        throw error;
+      });
+
+      const config = await loadConfig('/test/repo');
+      expect(config.prRemote).toBe('upstream');
+    });
+
+    test('trims whitespace from prRemote', async () => {
+      const pathMatches = (path: string, pattern: string): boolean => {
+        const normalizedPath = path.replace(/\\/g, '/');
+        return normalizedPath.includes(pattern);
+      };
+
+      mockFsReadFile.mockImplementation(async (path: string) => {
+        if (pathMatches(path, '/repo/.archon/config.yaml')) {
+          return `
+github:
+  prRemote: "  upstream  "
+`;
+        }
+        const error = new Error('ENOENT') as NodeJS.ErrnoException;
+        error.code = 'ENOENT';
+        throw error;
+      });
+
+      const config = await loadConfig('/test/repo');
+      expect(config.prRemote).toBe('upstream');
+    });
+
+    test('rejects whitespace-only prRemote', async () => {
+      const pathMatches = (path: string, pattern: string): boolean => {
+        const normalizedPath = path.replace(/\\/g, '/');
+        return normalizedPath.includes(pattern);
+      };
+
+      mockFsReadFile.mockImplementation(async (path: string) => {
+        if (pathMatches(path, '/repo/.archon/config.yaml')) {
+          return `
+github:
+  prRemote: "   "
+`;
+        }
+        const error = new Error('ENOENT') as NodeJS.ErrnoException;
+        error.code = 'ENOENT';
+        throw error;
+      });
+
+      await expect(loadConfig('/test/repo')).rejects.toThrow(
+        'github.prRemote in repo config (.archon/config.yaml) must be a non-empty string'
+      );
+    });
+
+    test('rejects non-string prRemote', async () => {
+      const pathMatches = (path: string, pattern: string): boolean => {
+        const normalizedPath = path.replace(/\\/g, '/');
+        return normalizedPath.includes(pattern);
+      };
+
+      mockFsReadFile.mockImplementation(async (path: string) => {
+        if (pathMatches(path, '/repo/.archon/config.yaml')) {
+          return `
+github:
+  prRemote: 123
+`;
+        }
+        const error = new Error('ENOENT') as NodeJS.ErrnoException;
+        error.code = 'ENOENT';
+        throw error;
+      });
+
+      await expect(loadConfig('/test/repo')).rejects.toThrow(
+        'github.prRemote in repo config (.archon/config.yaml) must be a non-empty string'
+      );
+    });
+
     test('global aliases are propagated to merged config', async () => {
       mockFsReadFile.mockResolvedValue(`
 aliases:

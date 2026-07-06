@@ -89,6 +89,7 @@ substitution:
 | `$ARGUMENTS` / `$USER_MESSAGE` | Original user message |
 | `$ARTIFACTS_DIR` | Workflow artifacts directory |
 | `$BASE_BRANCH` | Repository base branch |
+| `$PR_REMOTE` | Git remote whose repository is the PR target |
 | `$DOCS_DIR` | Documentation directory path (default: `docs/`) |
 | `$WORKFLOW_ID` | Current workflow run ID |
 | `$nodeId.output` | Output from upstream nodes |

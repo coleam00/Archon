@@ -74,6 +74,7 @@ export interface WorkflowConfig {
   /** Default assistant provider (validated against provider registry at runtime) */
   assistant: string;
   baseBranch?: string;
+  prRemote: string;
   docsPath?: string;
   envVars?: Record<string, string>;
   aliases?: RawAliasesConfig;

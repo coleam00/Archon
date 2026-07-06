@@ -78,6 +78,7 @@ Commands support variable substitution. The most commonly used variables:
 | `$ARGUMENTS` | The user's input message |
 | `$ARTIFACTS_DIR` | Pre-created directory for workflow artifacts |
 | `$BASE_BRANCH` | The base branch (auto-detected or configured) |
+| `$PR_REMOTE` | Git remote whose repository is the PR target |
 | `$DOCS_DIR` | Documentation directory path (default: `docs/`) |
 | `$WORKFLOW_ID` | Unique ID for the current workflow run |
 

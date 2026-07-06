@@ -225,6 +225,18 @@ export interface RepoConfig {
   };
 
   /**
+   * GitHub integration settings for this repository.
+   */
+  github?: {
+    /**
+     * Git remote whose repository should be used as the pull request target.
+     * Branch pushes still go to origin; this controls gh pr lookup/create/view/edit.
+     * @default 'origin'
+     */
+    prRemote?: string;
+  };
+
+  /**
    * Documentation directory settings
    */
   docs?: {
@@ -327,6 +339,12 @@ export interface MergedConfig {
    * When undefined, workflows referencing $BASE_BRANCH will fail with an error.
    */
   baseBranch?: string;
+  /**
+   * Git remote whose repository should be used as the pull request target.
+   * Used for $PR_REMOTE substitution in workflow commands.
+   * @default 'origin'
+   */
+  prRemote: string;
   /**
    * Docs directory path from repo config (docs.path).
    * Used for $DOCS_DIR substitution in workflow commands.

@@ -89,10 +89,40 @@ describe('bundled-defaults', () => {
       expect(content).toContain('argument-hint: (none - uses $BASE_BRANCH from config or repo)');
       expect(content).toContain('**Base branch**: $BASE_BRANCH');
       expect(content).toContain('Always use `$BASE_BRANCH` for `--base`');
-      expect(content).toContain('--base $BASE_BRANCH');
+      expect(content).toContain('--base "$BASE_BRANCH"');
       expect(content).not.toContain('Base branch override');
       expect(content).not.toContain('base branch was provided as argument');
       expect(content).not.toContain('**Default base branch**');
+    });
+
+    it('archon-create-pr should target the configured PR remote repository', () => {
+      const content = BUNDLED_COMMANDS['archon-create-pr'];
+      expect(content).toContain('**PR target remote**: $PR_REMOTE');
+      expect(content).toContain('git remote get-url "$PR_REMOTE"');
+      expect(content).toContain('--repo "$PR_REPO"');
+      expect(content).toContain('--head "$PR_HEAD"');
+    });
+
+    it('archon-finalize-pr should target the configured PR remote repository', () => {
+      const content = BUNDLED_COMMANDS['archon-finalize-pr'];
+      expect(content).toContain('**PR target remote**: $PR_REMOTE');
+      expect(content).toContain('git remote get-url "$PR_REMOTE"');
+      expect(content).toContain('gh pr list --repo "$PR_REPO" --head "$PR_HEAD"');
+      expect(content).toContain('gh pr edit {pr-number} --repo "$PR_REPO"');
+      expect(content).toContain('gh pr ready {pr-number} --repo "$PR_REPO"');
+    });
+
+    it('bundled PR creation defaults should not rely on implicit gh repo inference', () => {
+      const contents = [
+        ...Object.values(BUNDLED_COMMANDS),
+        ...Object.values(BUNDLED_WORKFLOWS),
+      ].join('\n');
+      expect(contents).not.toContain('gh pr create --base $BASE_BRANCH');
+      expect(contents).not.toContain('gh pr create --base "$BASE_BRANCH"');
+      expect(contents).not.toContain('gh pr create --draft --base $BASE_BRANCH');
+      expect(contents).not.toContain('gh pr create --draft --base "$BASE_BRANCH"');
+      expect(contents).not.toContain('gh pr create --fill --base $BASE_BRANCH');
+      expect(contents).not.toContain('gh pr create --fill --base "$BASE_BRANCH"');
     });
 
     it('bmad-code-review should discover create-dev-story-with-tea state', () => {
