@@ -307,10 +307,10 @@ nodes:
     output_type: story-identity-verified
 
   - id: code-review-gate
-    depends_on: [code-review]
+    depends_on: [verify-story-identity]
     route_loop:
-      from: code-review
-      condition: "$code-review.output.gate == 'PASS'"
+      from: verify-story-identity
+      condition: "$verify-story-identity.output == 'PASS'"
       max_iterations: 20
       routes:
         positive: tea-rv
@@ -321,7 +321,7 @@ nodes:
     prompt: |
       bmad-testarch-test-review $ARGUMENTS
     provider: codex
-    depends_on: [code-review-gate, verify-story-identity]
+    depends_on: [code-review-gate]
     context: fresh
     model: gpt-5.5
     idle_timeout: 900000

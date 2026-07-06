@@ -456,11 +456,11 @@ describe('v2 story-input resolution (Story a1.2)', () => {
       );
     });
 
-    it('STR-A4-2 [P0] verify-story-identity guard exists, depends on resolve + code-review; gate depends on code-review', () => {
-      // R3-F2 fix: the guard remains a separate node but code-review-gate now routes
-      // from code-review (which carries story_ref in its output_format). The guard
-      // blocks the positive path by being a required dependency of tea-rv (not of
-      // code-review-gate itself — that would violate the single-depends_on==from rule).
+    it('STR-A4-2 [P0] verify-story-identity guard exists, depends on resolve + code-review; gate depends on verify-story-identity', () => {
+      // R4-F2 fix: code-review-gate now routes from verify-story-identity (bash guard)
+      // using a bare-output condition so the loader does not require output_format on
+      // the from node. When verify-story-identity exits 1 on mismatch, code-review-gate
+      // is SKIPPED (all_success trigger), preventing dev-story from being activated.
       const wf = loadV2();
       const guard = getNode(wf, 'verify-story-identity');
       expect(guard, 'verify-story-identity guard node must exist').toBeDefined();
@@ -471,14 +471,17 @@ describe('v2 story-input resolution (Story a1.2)', () => {
       const gate = getNode(wf, 'code-review-gate');
       expect(
         gate?.depends_on ?? [],
-        'code-review-gate must depend on code-review (route source, R3-F2 fix)'
-      ).toEqual(['code-review']);
+        'code-review-gate must depend on verify-story-identity (R4-F2 fix)'
+      ).toEqual(['verify-story-identity']);
     });
 
-    it('STR-A4-3 [P0] route_loop on code-review-gate routes from code-review with field-access condition (R3-F2)', () => {
+    it('STR-A4-3 [P0] route_loop on code-review-gate routes from verify-story-identity with bare-output condition (R4-F2)', () => {
+      // Bare-output condition avoids the loader's output_format.properties check
+      // (only triggered when a .field accessor is present). This allows a bash node
+      // to be the from source while still providing deterministic routing.
       const gate = getNode(loadV2(), 'code-review-gate');
-      expect(gate?.route_loop?.from).toBe('code-review');
-      expect(gate?.route_loop?.condition).toBe("$code-review.output.gate == 'PASS'");
+      expect(gate?.route_loop?.from).toBe('verify-story-identity');
+      expect(gate?.route_loop?.condition).toBe("$verify-story-identity.output == 'PASS'");
       expect(gate?.route_loop?.routes?.positive).toBe('tea-rv');
       expect(gate?.route_loop?.routes?.negative).toBe('dev-story');
       expect(gate?.route_loop?.routes?.exhausted).toBe('review-loop-error');
@@ -531,34 +534,38 @@ describe('v2 story-input resolution (Story a1.2)', () => {
       expect(rFail.stdout.trim()).toBe('FAIL');
     });
 
-    it('STR-A4-9 [P0] R3-F2 fix: route source is code-review (carries story_ref); positive path requires guard', () => {
-      // R3-F2 fix: the route-facing contract that controls routing is code-review's
-      // output_format (which declares gate + story_ref as required). The guard
-      // (verify-story-identity) blocks the positive path by being a required
-      // dependency of tea-rv — if the guard exits 1 on mismatch, tea-rv is skipped
-      // (all_success trigger_rule) and the run fails via anyFailed.
+    it('STR-A4-9 [P0] R4-F2 fix: code-review-gate routes from verify-story-identity; mismatch blocks ALL routes', () => {
+      // R4-F2 fix: the route_loop now gates from verify-story-identity (Archon-owned
+      // bash guard) using a bare-output condition. A mismatch causes verify-story-identity
+      // to exit 1 → code-review-gate is SKIPPED (all_success) → dev-story is never
+      // activated on either positive OR negative route.
+      // R4-F1 fix: verify-story-identity IS the deterministic Archon-owned enforcement
+      // path — it reads the engine-resolved story_ref via substitution and confirms
+      // identity before any routing decision fires.
       const wf = loadV2();
 
-      // Route source code-review declares story_ref in its output_format
+      // code-review still declares story_ref for reference; guard enforces the value
       const cr = getNode(wf, 'code-review');
       expect(cr, 'code-review node must exist').toBeDefined();
       const crProps = ((cr?.output_format ?? {}).properties ?? {}) as Record<string, unknown>;
       expect(crProps.story_ref, 'code-review output_format must declare story_ref').toBeDefined();
 
-      // Gate routes from code-review using field access on gate
+      // Gate routes from verify-story-identity with bare-output condition
       const gate = getNode(wf, 'code-review-gate');
-      expect(gate?.route_loop?.from).toBe('code-review');
-      expect(
-        gate?.route_loop?.condition,
-        'condition must use field access on code-review gate'
-      ).toContain('code-review.output.gate');
+      expect(gate?.route_loop?.from).toBe('verify-story-identity');
+      expect(gate?.route_loop?.condition).toBe("$verify-story-identity.output == 'PASS'");
 
-      // Positive route (tea-rv) requires verify-story-identity to pass
-      const teaRv = getNode(wf, 'tea-rv');
+      // Guard is directly upstream of code-review-gate
       expect(
-        teaRv?.depends_on ?? [],
-        'tea-rv must depend on verify-story-identity to block mismatch on positive path'
+        gate?.depends_on ?? [],
+        'code-review-gate must depend on verify-story-identity (R4-F2 fix)'
       ).toContain('verify-story-identity');
+
+      // tea-rv depends on code-review-gate (which transitively depends on the guard)
+      const teaRv = getNode(wf, 'tea-rv');
+      expect(teaRv?.depends_on ?? [], 'tea-rv must depend on code-review-gate').toContain(
+        'code-review-gate'
+      );
     });
 
     it('STR-A4-8 [P2] review-loop-error (exhausted route) still exits 1 — unaffected by new nodes', () => {
