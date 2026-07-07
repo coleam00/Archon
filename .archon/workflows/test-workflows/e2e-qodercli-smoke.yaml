@@ -1,0 +1,58 @@
+# E2E smoke test — Qoder CLI community provider
+# Verifies: real local qodercli auth/binary, provider selection, model routing,
+#   reasoning-effort routing, structured-output parsing, and $nodeId.output refs.
+# Auth: run `qodercli login` first; this intentionally uses the real local CLI.
+name: e2e-qodercli-smoke
+description: 'Smoke test for the Qoder CLI community provider on this local machine.'
+provider: qodercli
+model: Lite
+effort: low
+mutates_checkout: false
+
+nodes:
+  # 1. Simple prompt — verifies the local qodercli process starts and streams output.
+  - id: simple
+    prompt: 'What is 2+2? Answer with just the number, nothing else.'
+    idle_timeout: 60000
+
+  # 2. Structured prompt — verifies best-effort JSON parsing and schema validation.
+  - id: structured
+    depends_on: [simple]
+    prompt: |
+      Return JSON only.
+      Set status to "qodercli-ok" and provider to "qodercli".
+    output_format:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: ['qodercli-ok']
+        provider:
+          type: string
+          enum: ['qodercli']
+      required: [status, provider]
+      additionalProperties: false
+    idle_timeout: 60000
+
+  # 3. Assert both nodes produced usable outputs.
+  - id: assert
+    depends_on: [simple, structured]
+    bash: |
+      simple_out=$simple.output
+      status=$structured.output.status
+      provider=$structured.output.provider
+
+      if [ -z "$simple_out" ]; then
+        echo "FAIL: simple node returned empty output"
+        exit 1
+      fi
+      if [ "$status" != "qodercli-ok" ]; then
+        echo "FAIL: structured status was '$status'"
+        exit 1
+      fi
+      if [ "$provider" != "qodercli" ]; then
+        echo "FAIL: structured provider was '$provider'"
+        exit 1
+      fi
+
+      echo "PASS: simple=$simple_out status=$status provider=$provider"
