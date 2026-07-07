@@ -1088,6 +1088,10 @@ async function executeNodeInternal(
   } else {
     // node is PromptNode — prompt: string is guaranteed by the discriminated union
     rawPrompt = node.prompt;
+    // prompt_suffix participates in the same substitution pipeline as command bodies.
+    if (node.prompt_suffix) {
+      rawPrompt += '\n\n' + node.prompt_suffix;
+    }
   }
 
   // Standard variable substitution

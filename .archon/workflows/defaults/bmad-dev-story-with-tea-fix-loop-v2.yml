@@ -177,9 +177,11 @@ nodes:
         elif [ "$INPUT_BASENAME" = "${KEY}.md" ]; then
           MATCH=1
         else
-          # 4. Kebab-normalized substring match against key slug
+          # 4. Kebab-normalized substring match against key slug.
+          # Require at least one alphanumeric character to prevent punctuation-only
+          # input (e.g. "-", whitespace → "-") from matching hyphen separators in a key.
           INPUT_KEBAB=$(echo "$INPUT" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr '_' '-')
-          if echo "$KEY" | grep -qF -- "$INPUT_KEBAB" 2>/dev/null; then
+          if echo "$INPUT_KEBAB" | grep -qE '[a-z0-9]' && echo "$KEY" | grep -qF -- "$INPUT_KEBAB" 2>/dev/null; then
             MATCH=1
           fi
         fi

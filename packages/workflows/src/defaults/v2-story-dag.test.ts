@@ -398,6 +398,10 @@ describe('AC3/AC4 — v2 DAG skip propagation (mocked-provider harness)', () => 
     }
 
     expect(run.providerCalls, 'no provider must be called when story resolution fails').toEqual([]);
+
+    // AC #3 and AC #5: failed story resolution must mark the workflow run failed.
+    // The executor calls failWorkflowRun() (never throws) — tracked via runFailedRef.
+    expect(run.runFailed, 'workflow must be marked failed when story resolution fails').toBe(true);
   });
 
   it('DAG-A4-1 [P0] guard fails (story_ref mismatch, gate FAIL) → verify-story-identity fails → code-review-gate SKIPPED → dev-story NOT re-entered, run failed', async () => {

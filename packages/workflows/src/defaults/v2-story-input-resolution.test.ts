@@ -400,6 +400,19 @@ describe('v2 story-input resolution (Story a1.2)', () => {
       expect(`${r.stdout}${r.stderr}`.toLowerCase()).toMatch(/control/);
     });
 
+    it('BASH-A3-10 [P1] punctuation-only input (single hyphen) → non-zero, no match (R6-F3)', () => {
+      // "-" normalizes to "-" which matches hyphen separators in the only story key.
+      // The resolver must require at least one alphanumeric char before substring-matching.
+      const r = runResolveNode('-');
+      expect(r.exitCode).not.toBe(0);
+    });
+
+    it('BASH-A3-11 [P1] whitespace-only input normalized to hyphens → non-zero (R6-F3)', () => {
+      // " " normalizes to "-" (tr ' ' '-') and must not match the only story key.
+      const r = runResolveNode(' ');
+      expect(r.exitCode).not.toBe(0);
+    });
+
     it('BASH-A3-7 [P2] malformed sprint-status (no development_status:) → non-zero, no partial match', () => {
       const r = runResolveNode(CANONICAL_KEY, 'garbage: true\nnot_a_status_block: []\n');
       expect(r.exitCode).not.toBe(0);
