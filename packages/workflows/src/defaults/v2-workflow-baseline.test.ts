@@ -163,10 +163,13 @@ describe('v2 workflow baseline (Story a1.1)', () => {
       expect(v1Ids).toContain('create-pull-request');
 
       // (b) v2 retains all original v1 node ids AND adds the new nodes
+      // A2.1 renamed code-review → code-review-auto in v2; exclude from retention check.
       const v2Ids = v2.nodes.map(n => n.id);
       for (const id of v1Ids) {
+        if (id === 'code-review') continue;
         expect(v2Ids).toContain(id);
       }
+      expect(v2Ids).toContain('code-review-auto');
       expect(v2Ids).toContain('resolve-story-input');
       expect(v2Ids).toContain('verify-story-identity');
       // v2 has more nodes than v1
@@ -179,8 +182,8 @@ describe('v2 workflow baseline (Story a1.1)', () => {
       const devStoryPrompt = (v2DevStory as { prompt: string }).prompt;
       expect(devStoryPrompt).toContain('$ARGUMENTS');
 
-      // (d) v2 code-review output_format includes required story_ref
-      const v2CodeReview = v2.nodes.find(n => n.id === 'code-review');
+      // (d) v2 code-review-auto output_format includes required story_ref
+      const v2CodeReview = v2.nodes.find(n => n.id === 'code-review-auto');
       expect(v2CodeReview).toBeDefined();
       const outputFormat = v2CodeReview!.output_format as {
         required?: string[];

@@ -242,19 +242,25 @@ nodes:
     idle_timeout: 900000
     output_type: tea-automation
 
-  - id: code-review
-    command: bmad-code-review
+  - id: code-review-auto
+    command: bmad-code-review-auto
     depends_on: [tea-automate]
     context: fresh
     provider: codex
     model: gpt-5.5
     idle_timeout: 900000
-    output_format: &code_review_gate_schema
+    output_format: &code_review_auto_gate_schema
       type: object
       properties:
+        contract_version:
+          type: string
+        workflow:
+          type: string
+        node:
+          type: string
         gate:
           type: string
-          enum: ["PASS", "FAIL"]
+          enum: ["PASS", "FAIL", "CONCERNS", "ERROR"]
         round:
           type: number
         findings_count:
@@ -269,6 +275,9 @@ nodes:
           type: string
           description: "Resolved canonical story key; must match $resolve-story-input.output.story_ref (enforced by verify-story-identity guard)."
       required:
+        - contract_version
+        - workflow
+        - node
         - gate
         - round
         - findings_count
@@ -277,17 +286,17 @@ nodes:
         - code_review_report
         - story_ref
     prompt_suffix: |
-      The canonical story key for this code review is: $resolve-story-input.output.story_ref
+      The canonical story key for this automated code review is: $resolve-story-input.output.story_ref
       You MUST set the story_ref field in your structured output to exactly this value.
-    output_type: code-review-findings
+    output_type: code-review-auto
 
   - id: verify-story-identity
     bash: |
       set -e
 
       RESOLVED_REF=$resolve-story-input.output.story_ref
-      CONTRACT_REF=$code-review.output.story_ref
-      GATE=$code-review.output.gate
+      CONTRACT_REF=$code-review-auto.output.story_ref
+      GATE=$code-review-auto.output.gate
 
       if [ -z "$RESOLVED_REF" ]; then
         echo "ERROR: resolved story_ref is empty — resolution node did not produce a story_ref." >&2
@@ -295,7 +304,7 @@ nodes:
       fi
 
       if [ -z "$CONTRACT_REF" ]; then
-        echo "ERROR: code-review contract story_ref is missing or empty." >&2
+        echo "ERROR: code-review-auto contract story_ref is missing or empty." >&2
         exit 1
       fi
 
@@ -306,9 +315,22 @@ nodes:
         exit 1
       fi
 
+      # ERROR gate is a tooling or contract failure, not fixable quality work —
+      # convert to a hard node failure so it never feeds the dev-story fix loop.
+      if [ "$GATE" = "ERROR" ]; then
+        echo "ERROR: code-review-auto reported gate=ERROR — tooling or contract failure." >&2
+        exit 1
+      fi
+
+      # CONCERNS is non-blocking — treat as PASS so it does not trigger rework.
+      if [ "$GATE" = "CONCERNS" ]; then
+        printf '%s' "PASS"
+        exit 0
+      fi
+
       printf '%s' "$GATE"
     timeout: 60000
-    depends_on: [resolve-story-input, code-review]
+    depends_on: [resolve-story-input, code-review-auto]
     output_type: story-identity-verified
 
   - id: code-review-gate

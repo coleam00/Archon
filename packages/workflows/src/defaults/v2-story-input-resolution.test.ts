@@ -43,8 +43,8 @@ const CANONICAL_KEY = 'a1-2-preserve-story-input-resolution';
 // Substitution tokens the guard body is expected to carry verbatim; the engine
 // replaces `$<node>.output.<field>` before execution (executor-shared subst).
 const RESOLVED_TOKEN = '$resolve-story-input.output.story_ref';
-const CONTRACT_TOKEN = '$code-review.output.story_ref';
-const GATE_TOKEN = '$code-review.output.gate';
+const CONTRACT_TOKEN = '$code-review-auto.output.story_ref';
+const GATE_TOKEN = '$code-review-auto.output.gate';
 
 const readLF = (p: string): string | null =>
   existsSync(p) ? readFileSync(p, 'utf-8').replace(/\r\n/g, '\n') : null;
@@ -174,7 +174,7 @@ function runResolveNode(argumentsValue: string | undefined, devStatusYaml?: stri
  * Extract the `verify-story-identity` guard body, substitute the engine tokens
  * with test values (as the engine would before execution), and run it.
  * Fails RED (guard undefined) until the guard exists.
- * gateValue simulates the $code-review.output.gate substitution (default 'PASS').
+ * gateValue simulates the $code-review-auto.output.gate substitution (default 'PASS').
  */
 function runGuardNode(
   resolvedRef: string,
@@ -455,30 +455,24 @@ describe('v2 story-input resolution (Story a1.2)', () => {
 
   // ── AC4: Route-facing contract carries story_ref; mismatch → ERROR ─────────
   describe('AC4 — route-facing contract identity + mismatch guard', () => {
-    it('STR-A4-1 [P0] code-review output_format includes required story_ref (string)', () => {
-      // RED: current code-review schema has gate/round/findings_count/… but NO story_ref.
+    it('STR-A4-1 [P0] code-review-auto output_format includes required story_ref (string)', () => {
       const wf = loadV2();
-      const cr = getNode(wf, 'code-review');
-      expect(cr, 'code-review node must exist').toBeDefined();
+      const cr = getNode(wf, 'code-review-auto');
+      expect(cr, 'code-review-auto node must exist').toBeDefined();
       const of = cr?.output_format ?? {};
       const props = (of.properties ?? {}) as Record<string, { type?: string }>;
       const required = (of.required ?? []) as string[];
-      expect(props.story_ref, 'code-review schema must declare story_ref').toBeDefined();
+      expect(props.story_ref, 'code-review-auto schema must declare story_ref').toBeDefined();
       expect(props.story_ref?.type).toBe('string');
       expect(required, 'story_ref must be required').toContain('story_ref');
     });
 
-    it('STR-A4-5 [P0] code-review pins story_ref via prompt_suffix (the substituted prompt channel)', () => {
-      // C-2 / R-003: codex enforces PRESENCE not VALUE. The value must be pinned
-      // through a channel that the engine SUBSTITUTES before the AI call — not in
-      // output_format schema descriptions, which are passed to the provider raw.
-      // prompt_suffix is appended to the command text and goes through the same
-      // $node.output.field substitution pipeline, so the AI receives the resolved key.
-      const cr = getNode(loadV2(), 'code-review');
-      expect(cr, 'code-review node must exist').toBeDefined();
+    it('STR-A4-5 [P0] code-review-auto pins story_ref via prompt_suffix (the substituted prompt channel)', () => {
+      const cr = getNode(loadV2(), 'code-review-auto');
+      expect(cr, 'code-review-auto node must exist').toBeDefined();
       expect(
         cr?.prompt_suffix ?? '',
-        'code-review node must carry the story_ref pin token in prompt_suffix (substituted channel)'
+        'code-review-auto node must carry the story_ref pin token in prompt_suffix (substituted channel)'
       ).toContain(RESOLVED_TOKEN);
     });
 
@@ -492,7 +486,7 @@ describe('v2 story-input resolution (Story a1.2)', () => {
       expect(guard, 'verify-story-identity guard node must exist').toBeDefined();
       const deps = guard?.depends_on ?? [];
       expect(deps).toContain('resolve-story-input');
-      expect(deps).toContain('code-review');
+      expect(deps).toContain('code-review-auto');
 
       const gate = getNode(wf, 'code-review-gate');
       expect(
@@ -570,11 +564,14 @@ describe('v2 story-input resolution (Story a1.2)', () => {
       // identity before any routing decision fires.
       const wf = loadV2();
 
-      // code-review still declares story_ref for reference; guard enforces the value
-      const cr = getNode(wf, 'code-review');
-      expect(cr, 'code-review node must exist').toBeDefined();
+      // code-review-auto declares story_ref for reference; guard enforces the value
+      const cr = getNode(wf, 'code-review-auto');
+      expect(cr, 'code-review-auto node must exist').toBeDefined();
       const crProps = ((cr?.output_format ?? {}).properties ?? {}) as Record<string, unknown>;
-      expect(crProps.story_ref, 'code-review output_format must declare story_ref').toBeDefined();
+      expect(
+        crProps.story_ref,
+        'code-review-auto output_format must declare story_ref'
+      ).toBeDefined();
 
       // Gate routes from verify-story-identity with bare-output condition
       const gate = getNode(wf, 'code-review-gate');
@@ -649,7 +646,7 @@ describe('v2 story-input resolution (Story a1.2)', () => {
         'prepare-bmad-state',
         'dev-story',
         'tea-automate',
-        'code-review',
+        'code-review-auto',
         'code-review-gate',
         'tea-rv',
         'tea-nr',

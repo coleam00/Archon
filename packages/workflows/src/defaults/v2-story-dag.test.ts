@@ -6,7 +6,7 @@
  * and irreversible, so mixing it with v2-story-input-resolution.test.ts
  * (which avoids mock.module() entirely) would corrupt both test files.
  *
- * Covers: DAG-A3-1, DAG-A4-1, DAG-A4-2
+ * Covers: DAG-A2-1 (CR fail, ERROR gate, shared story_ref), DAG-A3-1, DAG-A4-1, DAG-A4-2
  */
 
 import { describe, it, expect, mock, beforeAll, afterAll } from 'bun:test';
@@ -274,7 +274,7 @@ async function buildFixtureDir(baseDir: string): Promise<string> {
 
   // Command files for AI nodes (empty stubs — AI is mocked)
   await mkdir(join(cwd, '.archon/commands'), { recursive: true });
-  for (const cmd of ['bmad-code-review', 'archon-create-pr']) {
+  for (const cmd of ['bmad-code-review', 'bmad-code-review-auto', 'archon-create-pr']) {
     await writeFile(join(cwd, '.archon/commands', `${cmd}.md`), `# ${cmd}`);
   }
 
@@ -370,7 +370,7 @@ afterAll(async () => {
 
 // ── Tests ──────────────────────────────────────────────────────────────────
 
-describe('AC3/AC4 — v2 DAG skip propagation (mocked-provider harness)', () => {
+describe('A2.1 — v2 DAG DS→TA→CR sequence (mocked-provider harness)', () => {
   it('DAG-A3-1 [P0] resolve-story-input fails → all downstream AI nodes SKIPPED, run failed, NO provider called', async () => {
     const run = await runV2Dag({
       cwd: cwdFixture,
@@ -381,7 +381,12 @@ describe('AC3/AC4 — v2 DAG skip propagation (mocked-provider harness)', () => 
     expect(run.nodeState['resolve-story-input']).toBe('failed');
 
     // Direct AI dependents get explicit node_skipped events
-    for (const nodeId of ['dev-story', 'tea-automate', 'code-review', 'verify-story-identity']) {
+    for (const nodeId of [
+      'dev-story',
+      'tea-automate',
+      'code-review-auto',
+      'verify-story-identity',
+    ]) {
       expect(
         run.nodeState[nodeId],
         `${nodeId} must be skipped when resolve-story-input fails`
@@ -414,7 +419,10 @@ describe('AC3/AC4 — v2 DAG skip propagation (mocked-provider harness)', () => 
       cwd: cwdFixture,
       arguments: canonicalKey,
       nodeResponses: {
-        'code-review': {
+        'code-review-auto': {
+          contract_version: '1.0',
+          workflow: 'bmad-dev-story-with-tea-fix-loop-v2',
+          node: 'code-review-auto',
           gate: 'FAIL', // Would normally trigger negative route → dev-story
           round: 1,
           findings_count: 3,
@@ -455,14 +463,17 @@ describe('AC3/AC4 — v2 DAG skip propagation (mocked-provider harness)', () => 
     }
   });
 
-  it('DAG-A4-2 [P1] happy path: code-review emits MATCHING story_ref → verify-story-identity passes → code-review-gate positive route → tea-rv runs', async () => {
+  it('DAG-A4-2 [P1] happy path (AC1+AC3): code-review-auto emits MATCHING story_ref with full contract → verify-story-identity passes → code-review-gate positive route → tea-rv runs; same story_ref threads through DS, TA, CR', async () => {
     const canonicalKey = 'a1-2-preserve-story-input-resolution';
 
     const run = await runV2Dag({
       cwd: cwdFixture,
       arguments: canonicalKey,
       nodeResponses: {
-        'code-review': {
+        'code-review-auto': {
+          contract_version: '1.0',
+          workflow: 'bmad-dev-story-with-tea-fix-loop-v2',
+          node: 'code-review-auto',
           gate: 'PASS',
           round: 1,
           findings_count: 0,
@@ -502,5 +513,132 @@ describe('AC3/AC4 — v2 DAG skip propagation (mocked-provider harness)', () => 
 
     // The run must not be marked failed on the happy path
     expect(run.runFailed, 'workflow must succeed on the happy path').toBe(false);
+  });
+
+  it('DAG-A2-1-CR-FAIL [P0] (AC2) code-review-auto execution failure → verify-story-identity SKIPPED → code-review-gate does not activate dev-story negative route → run failed', async () => {
+    const canonicalKey = 'a1-2-preserve-story-input-resolution';
+
+    // No nodeResponse for code-review-auto → provider yields empty structuredOutput →
+    // output_format validation fails on the enforced codex provider → node state:'failed'.
+    const run = await runV2Dag({
+      cwd: cwdFixture,
+      arguments: canonicalKey,
+      nodeResponses: {
+        'dev-story': {},
+        'tea-automate': {},
+      },
+    });
+
+    // code-review-auto must have failed (schema-invalid output on enforced provider)
+    expect(
+      run.nodeState['code-review-auto'],
+      'code-review-auto must fail when it produces no valid structured output'
+    ).toBe('failed');
+
+    // verify-story-identity depends_on code-review-auto (all_success) → SKIPPED
+    expect(
+      run.nodeState['verify-story-identity'],
+      'verify-story-identity must be skipped when code-review-auto fails'
+    ).toBe('skipped');
+
+    // code-review-gate depends on verify-story-identity → SKIPPED
+    expect(
+      run.nodeState['code-review-gate'],
+      'code-review-gate must be skipped when verify-story-identity is skipped'
+    ).toBe('skipped');
+
+    // dev-story invoked exactly once (initial run only — not re-entered via negative route)
+    expect(
+      run.providerCalls.filter(c => c === 'dev-story').length,
+      'dev-story must be invoked exactly once (no re-entry on CR failure)'
+    ).toBe(1);
+
+    expect(run.runFailed, 'workflow must be marked failed on CR execution failure').toBe(true);
+  });
+
+  it('DAG-A2-1-ERROR-GATE [P0] (AC2) code-review-auto returns gate=ERROR → verify-story-identity exits non-zero → dev-story NOT re-entered → run failed', async () => {
+    const canonicalKey = 'a1-2-preserve-story-input-resolution';
+
+    const run = await runV2Dag({
+      cwd: cwdFixture,
+      arguments: canonicalKey,
+      nodeResponses: {
+        'code-review-auto': {
+          contract_version: '1.0',
+          workflow: 'bmad-dev-story-with-tea-fix-loop-v2',
+          node: 'code-review-auto',
+          gate: 'ERROR',
+          round: 1,
+          findings_count: 0,
+          open_findings_file: 'findings/open-findings.md',
+          decision_log_file: 'decision-log.md',
+          code_review_report: '',
+          story_ref: canonicalKey,
+        },
+        'dev-story': {},
+        'tea-automate': {},
+      },
+    });
+
+    // verify-story-identity must fail (ERROR gate → bash exits 1)
+    expect(
+      run.nodeState['verify-story-identity'],
+      'verify-story-identity must fail when gate is ERROR'
+    ).toBe('failed');
+
+    // code-review-gate SKIPPED (depends on failed verify-story-identity)
+    expect(
+      run.nodeState['code-review-gate'],
+      'code-review-gate must be skipped when verify-story-identity fails'
+    ).toBe('skipped');
+
+    // dev-story invoked exactly once (no re-entry via negative route)
+    expect(
+      run.providerCalls.filter(c => c === 'dev-story').length,
+      'dev-story must be invoked exactly once (ERROR must not feed fix loop)'
+    ).toBe(1);
+
+    expect(run.runFailed, 'workflow must be marked failed on ERROR gate').toBe(true);
+  });
+
+  it('DAG-A2-1-SHARED-REF [P0] (AC3) happy-path run: dev-story, tea-automate, and code-review-auto all invoked with same story_ref threading through', async () => {
+    const canonicalKey = 'a1-2-preserve-story-input-resolution';
+
+    const run = await runV2Dag({
+      cwd: cwdFixture,
+      arguments: canonicalKey,
+      nodeResponses: {
+        'code-review-auto': {
+          contract_version: '1.0',
+          workflow: 'bmad-dev-story-with-tea-fix-loop-v2',
+          node: 'code-review-auto',
+          gate: 'PASS',
+          round: 1,
+          findings_count: 0,
+          open_findings_file: 'findings/open-findings.md',
+          decision_log_file: 'decision-log.md',
+          code_review_report: 'No findings.',
+          story_ref: canonicalKey,
+        },
+        'dev-story': {},
+        'tea-automate': {},
+        'tea-rv': {},
+        'tea-nr': {},
+        'tea-tr': {},
+        'create-pull-request': {},
+      },
+    });
+
+    // All three core pipeline nodes must have been invoked by the provider,
+    // proving the resolved story_ref from resolve-story-input threads through each.
+    for (const nodeId of ['dev-story', 'tea-automate', 'code-review-auto']) {
+      expect(run.providerCalls, `${nodeId} must be invoked in the core pipeline`).toContain(nodeId);
+    }
+
+    // verify-story-identity must complete (story_ref match confirmed)
+    expect(run.nodeState['verify-story-identity']).toBe('completed');
+
+    // The run must succeed
+    expect(run.runFailed, 'workflow must succeed on shared story_ref happy path').toBe(false);
   });
 });
