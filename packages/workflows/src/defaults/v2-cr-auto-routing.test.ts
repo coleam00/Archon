@@ -224,7 +224,7 @@ function createMockDeps(
 /** A full valid CR contract envelope for the post-A2.1 schema. */
 function crContract(overrides: Record<string, unknown>): Record<string, unknown> {
   return {
-    contract_version: '1',
+    contract_version: '1.0',
     workflow: 'bmad-dev-story-with-tea-fix-loop-v2',
     node: 'code-review-auto',
     gate: 'PASS',

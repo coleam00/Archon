@@ -45,6 +45,9 @@ const CANONICAL_KEY = 'a1-2-preserve-story-input-resolution';
 const RESOLVED_TOKEN = '$resolve-story-input.output.story_ref';
 const CONTRACT_TOKEN = '$code-review-auto.output.story_ref';
 const GATE_TOKEN = '$code-review-auto.output.gate';
+const CONTRACT_VERSION_TOKEN = '$code-review-auto.output.contract_version';
+const CONTRACT_WORKFLOW_TOKEN = '$code-review-auto.output.workflow';
+const CONTRACT_NODE_TOKEN = '$code-review-auto.output.node';
 
 const readLF = (p: string): string | null =>
   existsSync(p) ? readFileSync(p, 'utf-8').replace(/\r\n/g, '\n') : null;
@@ -175,11 +178,17 @@ function runResolveNode(argumentsValue: string | undefined, devStatusYaml?: stri
  * with test values (as the engine would before execution), and run it.
  * Fails RED (guard undefined) until the guard exists.
  * gateValue simulates the $code-review-auto.output.gate substitution (default 'PASS').
+ * envelope overrides allow testing invalid contract metadata (R1-F4).
  */
 function runGuardNode(
   resolvedRef: string,
   contractRef: string,
-  gateValue: string = 'PASS'
+  gateValue: string = 'PASS',
+  envelope: {
+    contractVersion?: string;
+    workflow?: string;
+    node?: string;
+  } = {}
 ): BashResult {
   const wf = loadV2();
   const guard = getNode(wf, 'verify-story-identity');
@@ -191,7 +200,13 @@ function runGuardNode(
     .split(CONTRACT_TOKEN)
     .join(contractRef)
     .split(GATE_TOKEN)
-    .join(gateValue);
+    .join(gateValue)
+    .split(CONTRACT_VERSION_TOKEN)
+    .join(envelope.contractVersion ?? '1.0')
+    .split(CONTRACT_WORKFLOW_TOKEN)
+    .join(envelope.workflow ?? 'bmad-dev-story-with-tea-fix-loop-v2')
+    .split(CONTRACT_NODE_TOKEN)
+    .join(envelope.node ?? 'code-review-auto');
   const fx = makeSprintFixture();
   try {
     return runBash(substituted, { env: { ARTIFACTS_DIR: fx.artifactsDir }, cwd: fx.cwd });
@@ -552,6 +567,27 @@ describe('v2 story-input resolution (Story a1.2)', () => {
       const rFail = runGuardNode(CANONICAL_KEY, CANONICAL_KEY, 'FAIL');
       expect(rFail.exitCode, `stderr: ${rFail.stderr}`).toBe(0);
       expect(rFail.stdout.trim()).toBe('FAIL');
+    });
+
+    it('BASH-A4-4 [P0] guard: wrong contract_version → non-zero (envelope validation)', () => {
+      const r = runGuardNode(CANONICAL_KEY, CANONICAL_KEY, 'PASS', {
+        contractVersion: '1',
+      });
+      expect(r.exitCode, `stderr: ${r.stderr}`).not.toBe(0);
+    });
+
+    it('BASH-A4-5 [P0] guard: wrong workflow → non-zero (envelope validation)', () => {
+      const r = runGuardNode(CANONICAL_KEY, CANONICAL_KEY, 'PASS', {
+        workflow: 'some-other-workflow',
+      });
+      expect(r.exitCode, `stderr: ${r.stderr}`).not.toBe(0);
+    });
+
+    it('BASH-A4-6 [P0] guard: wrong node → non-zero (envelope validation)', () => {
+      const r = runGuardNode(CANONICAL_KEY, CANONICAL_KEY, 'PASS', {
+        node: 'code-review',
+      });
+      expect(r.exitCode, `stderr: ${r.stderr}`).not.toBe(0);
     });
 
     it('STR-A4-9 [P0] R4-F2 fix: code-review-gate routes from verify-story-identity; mismatch blocks ALL routes', () => {

@@ -24,7 +24,7 @@ nodes:
 
       for required in \
         ".agents/skills/bmad-dev-story/SKILL.md" \
-        ".agents/skills/bmad-code-review/SKILL.md" \
+        ".agents/skills/bmad-code-review-auto/SKILL.md" \
         ".agents/skills/bmad-testarch-automate/SKILL.md" \
         ".agents/skills/bmad-testarch-test-review/SKILL.md" \
         ".agents/skills/bmad-testarch-nfr/SKILL.md" \
@@ -225,6 +225,8 @@ nodes:
   - id: dev-story
     prompt: |
       bmad-dev-story $ARGUMENTS
+    prompt_suffix: |
+      The canonical story key resolved for this pipeline run is: $resolve-story-input.output.story_ref
     provider: claude
     depends_on: [prepare-bmad-state, resolve-story-input]
     context: fresh
@@ -235,6 +237,8 @@ nodes:
   - id: tea-automate
     prompt: |
       bmad-testarch-automate $ARGUMENTS
+    prompt_suffix: |
+      The canonical story key resolved for this pipeline run is: $resolve-story-input.output.story_ref
     provider: codex
     depends_on: [dev-story]
     context: fresh
@@ -297,6 +301,9 @@ nodes:
       RESOLVED_REF=$resolve-story-input.output.story_ref
       CONTRACT_REF=$code-review-auto.output.story_ref
       GATE=$code-review-auto.output.gate
+      CONTRACT_VERSION=$code-review-auto.output.contract_version
+      CONTRACT_WORKFLOW=$code-review-auto.output.workflow
+      CONTRACT_NODE=$code-review-auto.output.node
 
       if [ -z "$RESOLVED_REF" ]; then
         echo "ERROR: resolved story_ref is empty — resolution node did not produce a story_ref." >&2
@@ -312,6 +319,23 @@ nodes:
         echo "ERROR: story_ref mismatch detected. This is not a quality finding — it is an identity error." >&2
         echo "  Resolved: $RESOLVED_REF" >&2
         echo "  Contract: $CONTRACT_REF" >&2
+        exit 1
+      fi
+
+      # Contract envelope validation — a stale or wrong producer contract must not
+      # drive routing even if gate and story_ref happen to be present.
+      if [ "$CONTRACT_VERSION" != "1.0" ]; then
+        echo "ERROR: contract_version mismatch — expected 1.0, got '$CONTRACT_VERSION'." >&2
+        exit 1
+      fi
+
+      if [ "$CONTRACT_WORKFLOW" != "bmad-dev-story-with-tea-fix-loop-v2" ]; then
+        echo "ERROR: workflow mismatch — expected bmad-dev-story-with-tea-fix-loop-v2, got '$CONTRACT_WORKFLOW'." >&2
+        exit 1
+      fi
+
+      if [ "$CONTRACT_NODE" != "code-review-auto" ]; then
+        echo "ERROR: node mismatch — expected code-review-auto, got '$CONTRACT_NODE'." >&2
         exit 1
       fi
 

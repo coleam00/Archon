@@ -244,7 +244,7 @@ async function buildFixtureDir(baseDir: string): Promise<string> {
   // Required BMAD skill files
   const skills = [
     'bmad-dev-story',
-    'bmad-code-review',
+    'bmad-code-review-auto',
     'bmad-testarch-automate',
     'bmad-testarch-test-review',
     'bmad-testarch-nfr',
