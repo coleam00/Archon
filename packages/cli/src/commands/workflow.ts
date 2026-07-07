@@ -28,6 +28,7 @@ import {
 } from '@archon/paths';
 import { join } from 'node:path';
 import { mkdirSync, openSync, closeSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { resolveWorkflowName } from '@archon/workflows/router';
@@ -192,11 +193,17 @@ function spawnDetachedWorkflowRun(
   }
 
   try {
-    const child = Bun.spawn({
-      cmd,
+    // Node's spawn with `detached: true` makes the child a new process-group
+    // leader, so it survives the parent's exit. Bun.spawn + unref() does NOT
+    // detach on Windows — the child was killed ~1s in (at worktree_creating)
+    // when the launching shell/console tore down. Mirrors setup.ts's proven
+    // `spawn(..., { detached: true })` pattern. `windowsHide` keeps it headless.
+    const child = spawn(cmd[0], cmd.slice(1), {
       cwd,
       env: process.env,
       stdio: ['ignore', logFd ?? 'ignore', logFd ?? 'ignore'],
+      detached: true,
+      windowsHide: true,
     });
     child.unref();
   } finally {
