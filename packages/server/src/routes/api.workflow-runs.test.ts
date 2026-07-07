@@ -903,6 +903,48 @@ describe('GET /api/workflows/runs/:runId', () => {
     ]);
   });
 
+  test('preserves Qoder max reasoning metadata from node_started', async () => {
+    const events: MockWorkflowEvent[] = [
+      {
+        id: 'evt-start',
+        workflow_run_id: 'run-uuid-1',
+        event_type: 'node_started',
+        step_index: null,
+        step_name: 'create-story',
+        data: {
+          provider: 'qodercli',
+          model: 'qoder-pro',
+          tier: 'large',
+          modelReasoningEffort: 'max',
+        },
+        created_at: NOW,
+      },
+    ];
+    mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_RUNNING_RUN);
+    mockListWorkflowEvents.mockImplementationOnce(async () => events);
+    mockGetConversationById.mockImplementationOnce(async () => ({
+      id: 'conv-uuid-1',
+      platform_conversation_id: 'web-conv-abc',
+    }));
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-1');
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      nodeStates: Array<{
+        nodeId: string;
+        modelReasoningEffort?: string;
+      }>;
+    };
+
+    expect(body.nodeStates).toEqual([
+      expect.objectContaining({
+        nodeId: 'create-story',
+        modelReasoningEffort: 'max',
+      }),
+    ]);
+  });
+
   test('projects invalidated retry epoch nodes as pending before new lifecycle events arrive', async () => {
     mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_RUNNING_RUN);
     mockListWorkflowEvents.mockImplementationOnce(async () => [

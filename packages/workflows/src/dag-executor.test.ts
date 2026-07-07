@@ -38,13 +38,19 @@ mock.module('@archon/paths', () => ({
 }));
 
 // --- Bootstrap provider registry (after path mocks, before dag-executor import) ---
-import { registerBuiltinProviders, registerPiProvider, clearRegistry } from '@archon/providers';
+import {
+  registerBuiltinProviders,
+  registerPiProvider,
+  registerQoderCliProvider,
+  clearRegistry,
+} from '@archon/providers';
 clearRegistry();
 registerBuiltinProviders();
 // Pi is a community provider (best-effort structured output) — register it so the
 // reask-loop tests can resolve `getProviderCapabilities('pi')` to 'best-effort'.
 // deps.getAgentProvider is mocked, so the real Pi SDK is never loaded.
 registerPiProvider();
+registerQoderCliProvider();
 
 // --- Imports (after mocks) ---
 import {
@@ -1188,6 +1194,71 @@ describe('executeDagWorkflow -- tool restrictions', () => {
     const nodeConfig = optionsArg.nodeConfig as Record<string, unknown>;
     expect(assistantConfig.modelReasoningEffort).toBe('medium');
     expect(nodeConfig.effort).toBeUndefined();
+  });
+
+  it('routes Qoder tier max effort to assistantConfig and node-start metadata', async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'qodercli',
+      getCapabilities: () => ({
+        ...mockCodexCapabilities(),
+        structuredOutput: 'best-effort' as const,
+        effortControl: true,
+        thinkingControl: true,
+        toolRestrictions: true,
+      }),
+    }));
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+    const aiProfile = buildAiProfile('claude', {
+      repoTiers: {
+        large: { provider: 'qodercli', model: 'qoder-pro', effort: 'max' },
+      },
+    });
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'qoder-tier-effort-test',
+        nodes: [{ id: 'step1', command: 'my-cmd', model: 'large' }],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      aiProfile
+    );
+
+    expect(mockGetAgentProviderDag.mock.calls[0][0]).toBe('qodercli');
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    expect(optionsArg.model).toBe('qoder-pro');
+    const assistantConfig = optionsArg.assistantConfig as Record<string, unknown>;
+    const nodeConfig = optionsArg.nodeConfig as Record<string, unknown>;
+    expect(assistantConfig.modelReasoningEffort).toBe('max');
+    expect(nodeConfig.effort).toBeUndefined();
+
+    const nodeStartedCall = store.createWorkflowEvent.mock.calls.find(
+      call => call[0].event_type === 'node_started'
+    );
+    expect(nodeStartedCall?.[0].data).toMatchObject({
+      provider: 'qodercli',
+      model: 'qoder-pro',
+      tier: 'large',
+      modelReasoningEffort: 'max',
+    });
   });
 
   it('applies inherited workflow tier effort to nodes without model overrides', async () => {

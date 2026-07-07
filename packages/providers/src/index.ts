@@ -95,3 +95,16 @@ export {
   resolveCopilotBinaryPath,
   fileExists as copilotFileExists,
 } from './community/copilot/binary-resolver';
+
+export {
+  QoderCliProvider,
+  parseQoderCliConfig,
+  registerQoderCliProvider,
+  buildQoderCliArgs,
+  type QoderCliProviderDefaults,
+} from './community/qodercli';
+export {
+  resolveQoderCliBinaryPath,
+  isExecutableFile as qoderCliIsExecutableFile,
+  resolveFromPath as qoderCliResolveFromPath,
+} from './community/qodercli/binary-resolver';

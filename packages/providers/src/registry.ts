@@ -20,6 +20,7 @@ import { CODEX_CAPABILITIES } from './codex/capabilities';
 import { registerCopilotProvider } from './community/copilot/registration';
 import { registerOpencodeProvider } from './community/opencode/registration';
 import { registerPiProvider } from './community/pi/registration';
+import { registerQoderCliProvider } from './community/qodercli/registration';
 import { UnknownProviderError } from './errors';
 import { createLogger } from '@archon/paths';
 
@@ -179,6 +180,7 @@ export function registerCommunityProviders(): void {
   registerOpencodeProvider();
   registerPiProvider();
   registerCopilotProvider();
+  registerQoderCliProvider();
 }
 
 /** @internal Test-only — clears the registry. Not for production use. */

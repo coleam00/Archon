@@ -3316,6 +3316,46 @@ describe('per-user AI prefs in chat + tier-fallback nudge', () => {
     expect(mockSendQuery).toHaveBeenCalled();
   });
 
+  test('uses assistant model as tier fallback for qodercli direct chat and title generation', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(
+        makeConversation({
+          ai_assistant_type: 'qodercli',
+          title: null,
+        } as Partial<Conversation>)
+      )
+    );
+    mockLoadConfig.mockImplementationOnce(() =>
+      Promise.resolve({
+        assistants: {
+          claude: {},
+          codex: {},
+          qodercli: { model: 'qoder-pro', modelReasoningEffort: 'high' },
+        },
+        envVars: {},
+      })
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'Hello');
+
+    const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
+    expect(requestOptions.model).toBe('qoder-pro');
+    expect(requestOptions.assistantConfig).toEqual({
+      model: 'qoder-pro',
+      modelReasoningEffort: 'high',
+    });
+    expect(mockGenerateAndSetTitle).toHaveBeenCalledWith(
+      'conv-1',
+      'Hello',
+      'qodercli',
+      expect.any(String),
+      undefined,
+      expect.objectContaining({ model: 'qoder-pro' }),
+      expect.objectContaining({ model: 'qoder-pro' })
+    );
+  });
+
   test("nudges once per conversation (not per message) when tier 'large' falls back", async () => {
     // 'unknownprov' has no built-in tier defaults; config sets only `small`,
     // so the chat's 'large' request resolves via the fallback chain. A distinct

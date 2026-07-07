@@ -3,9 +3,12 @@ import { describe, expect, test } from 'bun:test';
 import {
   buildAiProfile,
   isLiteralSpec,
+  isEffortValidForProvider,
   resolveModelSpec,
   resolveTierWithFallback,
+  routePresetEffort,
   TIER_NAMES,
+  validEffortsForProvider,
   type ModelAliasPreset,
   type ResolvedAiProfile,
 } from './model-validation';
@@ -521,5 +524,29 @@ describe('isLiteralSpec type guard', () => {
 
   test('returns false for a ModelAliasPreset', () => {
     expect(isLiteralSpec({ provider: 'claude', model: 'opus' })).toBe(false);
+  });
+});
+
+describe('effort routing', () => {
+  test('routes qodercli tier effort to modelReasoningEffort', () => {
+    expect(routePresetEffort('qodercli', 'high')).toEqual({
+      field: 'modelReasoningEffort',
+      value: 'high',
+    });
+    expect(routePresetEffort('qodercli', 'max')).toEqual({
+      field: 'modelReasoningEffort',
+      value: 'max',
+    });
+  });
+
+  test('rejects unsupported qodercli effort values', () => {
+    expect(routePresetEffort('qodercli', 'minimal')).toBeNull();
+    expect(routePresetEffort('qodercli', 'xhigh')).toBeNull();
+  });
+
+  test('validates qodercli effort vocabulary up front', () => {
+    expect(validEffortsForProvider('qodercli')).toEqual(['low', 'medium', 'high', 'max']);
+    expect(isEffortValidForProvider('qodercli', 'high')).toBe(true);
+    expect(isEffortValidForProvider('qodercli', 'xhigh')).toBe(false);
   });
 });

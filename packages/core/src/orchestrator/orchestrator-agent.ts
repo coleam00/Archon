@@ -75,6 +75,7 @@ import {
   resolveModelSpec,
   resolveTierWithFallback,
   routePresetEffort,
+  TIER_NAMES,
   type ModelAliasPreset,
   type TierName,
 } from '@archon/workflows/model-validation';
@@ -117,6 +118,27 @@ function applyPresetToRequestOptions(
       modelReasoningEffort: routed.value,
     };
   }
+}
+
+function withAssistantModelTierFallback(
+  aiProfile: ReturnType<typeof buildAiProfile>,
+  provider: string,
+  assistantConfig: Record<string, unknown> | undefined
+): ReturnType<typeof buildAiProfile> {
+  const rawModel = assistantConfig?.model;
+  if (typeof rawModel !== 'string') return aiProfile;
+  const model = rawModel.trim();
+  if (model.length === 0) return aiProfile;
+
+  const aliases = { ...aiProfile.aliases };
+  let changed = false;
+  for (const tier of TIER_NAMES) {
+    if (aliases[tier] === undefined) {
+      aliases[tier] = { provider, model };
+      changed = true;
+    }
+  }
+  return changed ? { ...aiProfile, aliases } : aiProfile;
 }
 
 interface ResolvedModelRequest {
@@ -1365,6 +1387,11 @@ export async function handleMessage(
         userTiers: userAiPrefs.tiers,
         userAliases: userAiPrefs.aliases,
       });
+      aiProfile = withAssistantModelTierFallback(
+        aiProfile,
+        configuredProviderKey,
+        config.assistants[configuredProviderKey]
+      );
     } catch (profileErr) {
       // Structurally invalid STORED prefs (corrupt DB row) must not break the
       // user's chat — degrade to config-only. A broken config layer still
@@ -1378,6 +1405,11 @@ export async function handleMessage(
         repoTiers: config.tiers,
         repoAliases: config.aliases,
       });
+      aiProfile = withAssistantModelTierFallback(
+        aiProfile,
+        configuredProviderKey,
+        config.assistants[configuredProviderKey]
+      );
     }
     const chatRequest = resolveModelRequest(aiProfile, 'large', configuredProviderKey);
     // Tier-fallback nudge (mirrors dag.model_provider_conflict): chat asks for

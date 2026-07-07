@@ -92,7 +92,7 @@ import type {
   WorkflowRunStatus,
 } from '@archon/workflows/schemas/workflow-run';
 import type { EffortLevel, ThinkingConfig } from '@archon/workflows/schemas/dag-node';
-import type { ModelReasoningEffort, WorkflowDefinition } from '@archon/workflows/schemas/workflow';
+import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
 import type { MessageRow } from '@archon/core/schemas/message';
 import type { DashboardWorkflowRun } from '@archon/core/schemas/workflow-run';
 import type { WorkflowEventRow } from '@archon/core/schemas/workflow-event';
@@ -116,19 +116,9 @@ interface ApiWorkflowNodeState {
   provider?: string;
   model?: string;
   tier?: string;
-  modelReasoningEffort?: ModelReasoningEffort;
+  modelReasoningEffort?: string;
   effort?: EffortLevel;
   thinking?: ThinkingConfig;
-}
-
-function isModelReasoningEffort(value: unknown): value is ModelReasoningEffort {
-  return (
-    value === 'minimal' ||
-    value === 'low' ||
-    value === 'medium' ||
-    value === 'high' ||
-    value === 'xhigh'
-  );
 }
 
 function isEffortLevel(value: unknown): value is EffortLevel {
@@ -149,7 +139,7 @@ function projectRuntimeNodeMetadata(data: Record<string, unknown>): Partial<ApiW
     ...(typeof data.provider === 'string' ? { provider: data.provider } : {}),
     ...(typeof data.model === 'string' ? { model: data.model } : {}),
     ...(typeof data.tier === 'string' ? { tier: data.tier } : {}),
-    ...(isModelReasoningEffort(data.modelReasoningEffort)
+    ...(typeof data.modelReasoningEffort === 'string'
       ? { modelReasoningEffort: data.modelReasoningEffort }
       : {}),
     ...(isEffortLevel(data.effort) ? { effort: data.effort } : {}),

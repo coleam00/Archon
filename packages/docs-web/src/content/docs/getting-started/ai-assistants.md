@@ -1,6 +1,6 @@
 ---
 title: AI Assistants
-description: Configure Claude Code, Codex, OpenCode, GitHub Copilot, and Pi as AI assistants for Archon.
+description: Configure Claude Code, Codex, Qoder CLI, OpenCode, GitHub Copilot, and Pi as AI assistants for Archon.
 category: getting-started
 area: clients
 audience: [user]
@@ -9,7 +9,8 @@ sidebar:
   order: 4
 ---
 
-You must configure **at least one** AI assistant. All four can be configured and mixed within workflows.
+You must configure **at least one** AI assistant.
+All supported assistants can be configured and mixed within workflows.
 
 ## Structured output guarantees
 
@@ -18,7 +19,7 @@ When a workflow node sets `output_format`, the guarantee level depends on the pr
 | Provider | Tier | How it works | On a validation miss |
 |----------|------|--------------|----------------------|
 | Claude, Codex, OpenCode | **enforced** | The SDK/backend grammar-constrains decoding (`output_config.format` / `outputSchema` / `format:{json_schema}`). | The node **fails** — a refusal or `max_tokens` truncation can still bypass grammar enforcement, so the parsed output is validated post-parse for these too. No reask (a failure here is a genuine edge). |
-| Pi, Copilot | **best-effort** | The schema is appended to the prompt; JSON is extracted from the response and structurally repaired (trailing commas, single quotes, truncated tails). | The executor re-asks (prompt + the schema errors) up to **3×**; if still invalid, the node **fails loudly**. |
+| Pi, Copilot, Qoder CLI | **best-effort** | The schema is appended to the prompt; JSON is extracted from the response and structurally repaired (trailing commas, single quotes, truncated tails). | The executor re-asks (prompt + the schema errors) up to **3×**; if still invalid, the node **fails loudly**. |
 
 In all cases the parsed output is **validated against your `output_format` schema** before downstream nodes see it, and a node that declares `output_format` but produces no schema-valid output **fails** rather than silently degrading. See [Authoring Workflows → `output_format`](/guides/authoring-workflows/#output_format-for-structured-json) for field-access (`$node.output.field`) semantics.
 
@@ -248,6 +249,67 @@ DEFAULT_AI_ASSISTANT=codex
 Codex supports skills via filesystem auto-discovery from `.agents/skills/`. Run `archon skill install` (or `archon setup`) to install the bundled `archon` and `manage-run` skills for both Claude Code and Codex.
 
 See [Per-Node Skills](/guides/skills/#codex-compatibility) for behavior details and limitations.
+
+## Qoder CLI (Community Provider)
+
+**CLI-backed community provider.**
+Archon invokes your locally installed `qodercli` executable in non-interactive print mode.
+
+Qoder CLI is registered as `builtIn: false`, so it behaves like a bundled community provider rather than a core built-in.
+Authentication remains owned by Qoder.
+Run `qodercli login` before using it from Archon.
+
+### Install
+
+Install Qoder CLI using Qoder's normal installer.
+Confirm Archon can see it:
+
+```bash
+qodercli --version
+qodercli status -o json
+```
+
+If Archon cannot resolve the binary, set one of:
+
+```ini
+QODERCLI_BIN_PATH=/absolute/path/to/qodercli
+```
+
+```yaml
+assistants:
+  qodercli:
+    qodercliBinaryPath: /absolute/path/to/qodercli
+```
+
+Archon also probes `~/.archon/vendor/qodercli/qodercli`, `~/.local/bin/qodercli`, common Homebrew/system paths, and PATH.
+
+### Configuration Options
+
+```yaml
+assistants:
+  qodercli:
+    model: qoder-pro
+    modelReasoningEffort: high  # 'low' | 'medium' | 'high' | 'max'
+    permissionMode: bypass_permissions
+    settingSources:
+      - project
+      - user
+```
+
+`model` maps to `qodercli --model`.
+`modelReasoningEffort` maps to `qodercli --reasoning-effort`.
+Workflow tiers and aliases can also route `effort` to Qoder:
+
+```yaml
+tiers:
+  large:
+    provider: qodercli
+    model: qoder-pro
+    effort: high
+```
+
+Qoder structured output is best-effort.
+Archon appends the JSON schema instruction to the prompt, parses the final CLI output, and validates it before downstream nodes can read it.
 
 ## OpenCode (Community Provider)
 

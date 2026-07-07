@@ -226,7 +226,7 @@ export function isLiteralSpec(spec: ResolvedModelSpec): spec is { literal: strin
 }
 
 /** Effort vocabularies per provider. Claude uses the generic node `effort`;
- *  Codex uses `modelReasoningEffort` (distinct enum). */
+ *  Codex and Qoder CLI use provider defaults (`modelReasoningEffort`). */
 export const CLAUDE_EFFORTS: ReadonlySet<string> = new Set(['low', 'medium', 'high', 'max']);
 export const CODEX_REASONING_EFFORTS: ReadonlySet<string> = new Set([
   'minimal',
@@ -234,6 +234,12 @@ export const CODEX_REASONING_EFFORTS: ReadonlySet<string> = new Set([
   'medium',
   'high',
   'xhigh',
+]);
+export const QODERCLI_REASONING_EFFORTS: ReadonlySet<string> = new Set([
+  'low',
+  'medium',
+  'high',
+  'max',
 ]);
 
 /** Where a preset's `effort` should land for the resolved provider. */
@@ -243,7 +249,7 @@ export type EffortRouting =
 
 /**
  * Route a preset's `effort` to the field the resolved provider understands —
- * Claude's generic node `effort` or Codex's `modelReasoningEffort`. Returns
+ * Claude's generic node `effort` or provider-level `modelReasoningEffort`. Returns
  * `null` when the value isn't valid for that provider (e.g. a cross-provider
  * mismatch like `effort: 'max'` on Codex); callers MUST surface that rather
  * than silently dropping it. Single source of truth for both the DAG executor
@@ -254,6 +260,9 @@ export function routePresetEffort(provider: string, effort: string): EffortRouti
     return { field: 'effort', value: effort };
   }
   if (provider === 'codex' && CODEX_REASONING_EFFORTS.has(effort)) {
+    return { field: 'modelReasoningEffort', value: effort };
+  }
+  if (provider === 'qodercli' && QODERCLI_REASONING_EFFORTS.has(effort)) {
     return { field: 'modelReasoningEffort', value: effort };
   }
   return null;
@@ -269,6 +278,7 @@ export function routePresetEffort(provider: string, effort: string): EffortRouti
 export function validEffortsForProvider(provider: string): readonly string[] | null {
   if (provider === 'claude') return [...CLAUDE_EFFORTS];
   if (provider === 'codex') return [...CODEX_REASONING_EFFORTS];
+  if (provider === 'qodercli') return [...QODERCLI_REASONING_EFFORTS];
   return null;
 }
 

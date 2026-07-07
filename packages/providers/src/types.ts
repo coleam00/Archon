@@ -79,6 +79,35 @@ export interface CopilotProviderDefaults {
 }
 
 /**
+ * Community provider defaults for Qoder CLI.
+ */
+export interface QoderCliProviderDefaults {
+  [key: string]: unknown;
+  /** Default model name/modelID passed to `qodercli --model`. */
+  model?: string;
+  /** Reasoning level passed to `qodercli --reasoning-effort`. */
+  modelReasoningEffort?: 'low' | 'medium' | 'high' | 'max';
+  /**
+   * Absolute path to the qodercli executable. Overrides PATH/autodetect.
+   * Environment variable `QODERCLI_BIN_PATH` has higher precedence.
+   */
+  qodercliBinaryPath?: string;
+  /** Override Qoder's user-level config root for this run. */
+  configDir?: string;
+  /**
+   * Permission mode passed to `qodercli --permission-mode`.
+   * Defaults to `bypass_permissions` in non-interactive Archon runs.
+   */
+  permissionMode?: 'default' | 'accept_edits' | 'bypass_permissions' | 'dont_ask' | 'auto';
+  /** Optional qodercli output format override. */
+  outputFormat?: string;
+  /** Setting sources to load (`user`, `project`, `local`). */
+  settingSources?: ('user' | 'project' | 'local')[];
+  /** Optional MCP config path or inline JSON passed to `qodercli --mcp-config`. */
+  mcpConfig?: string;
+}
+
+/**
  * Community provider defaults for Pi (@earendil-works/pi-coding-agent).
  * v1 minimal shape; extend as capabilities are wired in.
  */

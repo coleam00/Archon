@@ -976,6 +976,29 @@ assistants:
       expect(safe.assistants.codex).not.toHaveProperty('additionalDirectories');
     });
 
+    test('exposes only safe qodercli assistant fields', async () => {
+      mockFsReadFile.mockResolvedValue(`
+assistants:
+  qodercli:
+    model: qoder-fast
+    modelReasoningEffort: high
+    permissionMode: bypass_permissions
+    outputFormat: text
+    qodercliBinaryPath: /sensitive/qodercli
+    configDir: /sensitive/qoder-config
+`);
+      const config = await loadConfig();
+      const safe = toSafeConfig(config);
+      expect(safe.assistants.qodercli).toEqual({
+        model: 'qoder-fast',
+        modelReasoningEffort: 'high',
+        permissionMode: 'bypass_permissions',
+        outputFormat: 'text',
+      });
+      expect(safe.assistants.qodercli).not.toHaveProperty('qodercliBinaryPath');
+      expect(safe.assistants.qodercli).not.toHaveProperty('configDir');
+    });
+
     test('preserves non-sensitive fields', async () => {
       mockFsReadFile.mockResolvedValue('defaultAssistant: codex');
       const config = await loadConfig();

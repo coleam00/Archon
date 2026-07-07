@@ -14,6 +14,7 @@ import {
 import { registerPiProvider } from './community/pi/registration';
 import { registerCopilotProvider } from './community/copilot/registration';
 import { registerOpencodeProvider } from './community/opencode/registration';
+import { registerQoderCliProvider } from './community/qodercli/registration';
 import { UnknownProviderError } from './errors';
 import type { ProviderRegistration, IAgentProvider, ProviderCapabilities } from './types';
 
@@ -259,6 +260,7 @@ describe('registry', () => {
       expect(isRegisteredProvider('opencode')).toBe(true);
       expect(isRegisteredProvider('pi')).toBe(true);
       expect(isRegisteredProvider('copilot')).toBe(true);
+      expect(isRegisteredProvider('qodercli')).toBe(true);
     });
 
     test('is idempotent', () => {
@@ -267,9 +269,11 @@ describe('registry', () => {
       const opencodeCount = getRegisteredProviders().filter(p => p.id === 'opencode').length;
       const piCount = getRegisteredProviders().filter(p => p.id === 'pi').length;
       const copilotCount = getRegisteredProviders().filter(p => p.id === 'copilot').length;
+      const qoderCliCount = getRegisteredProviders().filter(p => p.id === 'qodercli').length;
       expect(opencodeCount).toBe(1);
       expect(piCount).toBe(1);
       expect(copilotCount).toBe(1);
+      expect(qoderCliCount).toBe(1);
     });
   });
 
@@ -424,6 +428,54 @@ describe('registry', () => {
         .map(p => p.id)
         .sort();
       expect(ids).toEqual(['claude', 'codex', 'copilot']);
+    });
+  });
+
+  describe('registerQoderCliProvider (community provider)', () => {
+    test('registers qodercli with builtIn: false', () => {
+      registerQoderCliProvider();
+      const reg = getRegistration('qodercli');
+      expect(reg.id).toBe('qodercli');
+      expect(reg.displayName).toBe('Qoder CLI');
+      expect(reg.builtIn).toBe(false);
+    });
+
+    test('is idempotent', () => {
+      registerQoderCliProvider();
+      expect(() => registerQoderCliProvider()).not.toThrow();
+      const entries = getRegisteredProviders().filter(p => p.id === 'qodercli');
+      expect(entries).toHaveLength(1);
+    });
+
+    test('declares CLI-backed capabilities', () => {
+      registerQoderCliProvider();
+      const caps = getProviderCapabilities('qodercli');
+      expect(caps.sessionResume).toBe(true);
+      expect(caps.mcp).toBe(true);
+      expect(caps.envInjection).toBe(true);
+      expect(caps.effortControl).toBe(true);
+      expect(caps.thinkingControl).toBe(true);
+      expect(caps.toolRestrictions).toBe(true);
+      expect(caps.structuredOutput).toBe('best-effort');
+      expect(caps.hooks).toBe(false);
+      expect(caps.skills).toBe(false);
+      expect(caps.agents).toBe(false);
+      expect(caps.nativeTools).toBe(false);
+    });
+
+    test('appears in getProviderInfoList with builtIn: false', () => {
+      registerQoderCliProvider();
+      const info = getProviderInfoList().find(p => p.id === 'qodercli');
+      expect(info).toBeDefined();
+      expect(info?.builtIn).toBe(false);
+    });
+
+    test('does not collide with built-ins', () => {
+      registerQoderCliProvider();
+      const ids = getRegisteredProviders()
+        .map(p => p.id)
+        .sort();
+      expect(ids).toEqual(['claude', 'codex', 'qodercli']);
     });
   });
 });
