@@ -71,17 +71,14 @@ function ExecutionDagNodeRender({ data }: NodeProps<ExecutionFlowNode>): React.R
   const typeLabel = TYPE_LABELS[data.nodeType] ?? 'PROMPT';
   const routeOutcome = formatRouteDecisionField(data.routeDecision?.outcome, 'route');
   const routeTarget = formatRouteDecisionField(data.routeDecision?.to, '');
-  const runtimeMetadata =
-    data.status === 'running'
-      ? formatRuntimeMetadata({
-          provider: data.provider,
-          model: data.model,
-          tier: data.tier,
-          modelReasoningEffort: data.modelReasoningEffort,
-          effort: data.effort,
-          thinking: data.thinking,
-        })
-      : null;
+  const runtimeMetadata = formatRuntimeMetadata({
+    provider: data.provider,
+    model: data.model,
+    tier: data.tier,
+    modelReasoningEffort: data.modelReasoningEffort,
+    effort: data.effort,
+    thinking: data.thinking,
+  });
 
   return (
     <div

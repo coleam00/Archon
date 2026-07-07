@@ -288,11 +288,11 @@ nodes:
       If open findings exist, treat this invocation as a fix pass and append the required fix entries to the decision log.
       On fix passes, rewrite open-findings.md so fixed findings are pending re-review and update state.json to the next review round.
       Keep activeStoryFile in state.json set to $create-story.output.story_file.
-    provider: claude
+    provider: qodercli
     effort: high
     depends_on: [generate-red-acceptance-tests]
     context: fresh
-    model: sonnet
+    model: Qwen3.7-Plus
     idle_timeout: 900000
     output_type: dev-story
 
@@ -341,11 +341,11 @@ nodes:
 
   - id: create-pull-request
     command: archon-create-pr
-    provider: claude
+    provider: qodercli
     effort: high
     depends_on: [code-review-gate]
     context: fresh
-    model: sonnet
+    model: Kimi-K2.7-Code
     idle_timeout: 900000
     output_type: pull-request
 
