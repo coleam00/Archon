@@ -174,19 +174,19 @@ describe('A2.1 — CR auto surface + contract envelope (v2 YAML structural red)'
       expect(deps).not.toContain('code-review');
     });
 
-    it.skip('SKIP-1 [P0] a real `bmad-code-review-auto` command file exists on disk (cross-project dep M1.1)', () => {
+    it.skip('SKIP-1 [P0] the real BMAD auto-review skill exists upstream (cross-project dep M1.1)', () => {
       // SKIPPED: BLOCKER-1 — BMAD-METHOD has not yet shipped `bmad-code-review-auto`.
-      // A repo-wide search found only the interactive `bmad-code-review`. The story
-      // wires the node + contract + routing against a fixture-mocked command stub
-      // (dev path b). ACTIVATE this test once the upstream command lands at
-      // .archon/commands/defaults/bmad-code-review-auto.md (or a
-      // .agents/skills/bmad-code-review-auto/ skill), then unskip and assert the
-      // command file resolves and declares the gate contract. Until then, invoking
-      // the real BMAD review surface is unverifiable in-repo.
-      const cmd = join(REPO_ROOT, '.archon/commands/defaults/bmad-code-review-auto.md');
-      expect(existsSync(cmd), 'bmad-code-review-auto command must exist once M1.1 ships').toBe(
-        true
-      );
+      // The local placeholder command at .archon/commands/defaults/bmad-code-review-auto.md
+      // satisfies workflow validation and test fixtures but is NOT the real review
+      // implementation. This scaffold asserts the actual upstream dependency that
+      // production execution requires: the BMAD-METHOD skill directory. ACTIVATE
+      // once BMAD-METHOD ships the skill, then assert SKILL.md declares the gate
+      // contract. Until then, the cross-project blocker cannot be verified in-repo.
+      const skill = join(REPO_ROOT, '.agents/skills/bmad-code-review-auto/SKILL.md');
+      expect(
+        existsSync(skill),
+        'bmad-code-review-auto upstream skill must exist once M1.1 ships'
+      ).toBe(true);
     });
   });
 

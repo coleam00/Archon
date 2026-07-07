@@ -522,6 +522,39 @@ describe('AC3 — DS/TA/CR operate on the same resolved story_ref', () => {
       ).toContain(CANONICAL_KEY);
     }
   });
+
+  it('AC3.3 [P0] non-canonical alias input → all three core nodes receive the resolved canonical key (R2-F1)', async () => {
+    // The original failure mode was alias input drifting from canonical CR
+    // verification. AC3.2 starts from the canonical key, which does not exercise
+    // the resolver path that end users actually trigger. This test passes the
+    // epic.story alias 'a1.2' and asserts the resolver's canonical output threads
+    // through every downstream prompt.
+    const aliasInput = 'a1.2';
+    expect(aliasInput).not.toBe(CANONICAL_KEY);
+
+    const run = await runV2Dag({
+      cwd: cwdFixture,
+      arguments: aliasInput,
+      nodeResponses: {
+        'dev-story': {},
+        'tea-automate': {},
+        'code-review-auto': crContract({ gate: 'PASS' }),
+        'tea-rv': {},
+        'tea-nr': {},
+        'tea-tr': {},
+        'create-pull-request': {},
+      },
+    });
+
+    expect(run.runFailed).toBe(false);
+    for (const nodeId of ['dev-story', 'tea-automate', 'code-review-auto']) {
+      expect(run.promptsByNode[nodeId], `${nodeId} must have been invoked`).toBeDefined();
+      expect(
+        run.promptsByNode[nodeId],
+        `${nodeId} prompt must carry the resolved canonical story_ref, not the raw alias`
+      ).toContain(CANONICAL_KEY);
+    }
+  });
 });
 
 // ── Q1 — CONCERNS routing decision (pending maintainer confirmation) ────────
