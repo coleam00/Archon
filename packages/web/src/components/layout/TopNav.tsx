@@ -1,9 +1,18 @@
 import { NavLink, Link, useNavigate } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
-import { LayoutDashboard, MessageSquare, Workflow, Settings, LogOut } from 'lucide-react';
+import {
+  LayoutDashboard,
+  MessageSquare,
+  Workflow,
+  Settings,
+  LogOut,
+  Sun,
+  Moon,
+} from 'lucide-react';
 import { listDashboardRuns, getUpdateCheck, getAuthStatus } from '@/lib/api';
 import { useSession, signOut } from '@/lib/auth-client';
 import { cn } from '@/lib/utils';
+import { useTheme } from '@/hooks/useTheme';
 
 const tabs = [
   { to: '/legacy/chat', end: false, icon: MessageSquare, label: 'Chat' },
@@ -14,6 +23,7 @@ const tabs = [
 
 export function TopNav(): React.ReactElement {
   const navigate = useNavigate();
+  const { theme, toggleTheme } = useTheme();
 
   // Web-auth identity strip (only shown when auth is enabled).
   const { data: authStatus } = useQuery({
@@ -86,6 +96,14 @@ export function TopNav(): React.ReactElement {
         </NavLink>
       ))}
       <div className="ml-auto flex items-center gap-3">
+        <button
+          onClick={toggleTheme}
+          className="rounded-md p-1.5 text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors"
+          title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+          aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+        >
+          {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+        </button>
         {/* CTA to the experimental console. Uses the brand magenta→teal
             gradient via inline style because the old UI's tokens don't
             include the brand-gradient variables. Sized to read as a
