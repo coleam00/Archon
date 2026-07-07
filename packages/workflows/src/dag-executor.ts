@@ -1080,9 +1080,18 @@ async function executeNodeInternal(
       return { state: 'failed', output: '', error: errMsg };
     }
     rawPrompt = promptResult.content;
+    // prompt_suffix is resolved through the same substitution pipeline as the command
+    // body, so $node.output.field refs in the suffix resolve to runtime values.
+    if (node.prompt_suffix) {
+      rawPrompt += '\n\n' + node.prompt_suffix;
+    }
   } else {
     // node is PromptNode — prompt: string is guaranteed by the discriminated union
     rawPrompt = node.prompt;
+    // prompt_suffix participates in the same substitution pipeline as command bodies.
+    if (node.prompt_suffix) {
+      rawPrompt += '\n\n' + node.prompt_suffix;
+    }
   }
 
   // Standard variable substitution

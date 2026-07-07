@@ -201,6 +201,13 @@ export const dagNodeBaseSchema = z.object({
   // of guessing filenames. Valid on every node type (bash/script produce typed
   // outputs too) — not an AI-only field.
   output_type: z.string().min(1).optional(),
+  // Appended to the command file text before the standard variable substitution
+  // pipeline runs. $node.output.field refs in the suffix are substituted just
+  // like refs in the command body — this makes it the correct channel for
+  // injecting a runtime-resolved value (e.g. a canonically resolved story key)
+  // that the AI must echo back in its structured output.
+  // Only meaningful on command nodes; unsupported on bash/script nodes (warning issued by loader).
+  prompt_suffix: z.string().optional(),
 });
 
 export type DagNodeBase = z.infer<typeof dagNodeBaseSchema>;
@@ -409,6 +416,7 @@ export const BASH_NODE_AI_FIELDS: readonly string[] = [
   'betas',
   'sandbox',
   'persist_session',
+  'prompt_suffix',
 ];
 
 /** AI-specific fields that are meaningless on script nodes — same as bash nodes */
@@ -663,6 +671,7 @@ export const dagNodeSchema = dagNodeBaseSchema
       ...(data.betas !== undefined ? { betas: data.betas } : {}),
       ...(data.sandbox !== undefined ? { sandbox: data.sandbox } : {}),
       ...(data.persist_session !== undefined ? { persist_session: data.persist_session } : {}),
+      ...(data.prompt_suffix !== undefined ? { prompt_suffix: data.prompt_suffix } : {}),
     };
 
     if (data.command !== undefined && data.command.trim().length > 0) {

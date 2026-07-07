@@ -2,7 +2,7 @@ name: bmad-dev-story-with-tea-fix-loop-v2
 description: |
   Use when: User wants the v2 redesign surface of the BMAD dev-story implementation where each BMAD or TEA step is its own Archon node (v2 redesign surface).
   Triggers: "bmad dev story tea fix loop v2", "dev story with tea v2", "DS TA RV NR TR CR v2", "bmad review fix loop v2", "bmad dev story tea v2".
-  Does: Runs DS, TA, CR, RV, NR, and TR as separate DAG nodes, records review findings, reruns BMAD dev-story to fix them when needed, and repeats review up to three rounds.
+  Does: Resolves and validates story input to a canonical story key, runs DS, TA, CR, RV, NR, and TR as separate DAG nodes, records review findings, reruns BMAD dev-story to fix them when needed, and repeats review up to three rounds.
   NOT for: Generic Archon feature work without BMAD artifacts, or one-off review without implementation.
 
   Decision log policy:
@@ -108,11 +108,125 @@ nodes:
     timeout: 60000
     output_type: bmad-state
 
+  - id: resolve-story-input
+    bash: |
+      set -e
+
+      # Guard: input must be provided
+      if [ -z "${ARGUMENTS:-}" ]; then
+        echo "Missing required story input." >&2
+        echo "Run this workflow with a BMAD story key, story id (e.g. a1.2), title, or story file path." >&2
+        exit 1
+      fi
+
+      SPRINT_STATUS="_bmad-output/implementation-artifacts/sprint-status.yaml"
+
+      if [ ! -f "$SPRINT_STATUS" ]; then
+        echo "Missing sprint-status.yaml at $SPRINT_STATUS." >&2
+        exit 1
+      fi
+
+      # Extract story keys from development_status section only.
+      # Excludes keys starting with 'epic-' and keys ending with '-retrospective'.
+      STORY_KEYS=$(awk '
+        /^development_status:/{f=1; next}
+        f && /^[^ ]/{f=0}
+        f && /^  /{
+          key=substr($0,3); sub(/:.*/,"",key); gsub(/[ \t]/,"",key)
+          if (key ~ /^[a-z][a-z0-9]*-[0-9]+-/ && key !~ /^epic-/ && key !~ /-retrospective$/)
+            print key
+        }
+      ' "$SPRINT_STATUS" || true)
+
+      if [ -z "$STORY_KEYS" ]; then
+        echo "No story keys found in $SPRINT_STATUS under development_status." >&2
+        exit 1
+      fi
+
+      INPUT="$ARGUMENTS"
+
+      # Reject input containing control characters (newlines, carriage returns, etc.)
+      # that would produce invalid JSON string literals in the emitted contract.
+      case "$INPUT" in
+        *$'\n'*|*$'\r'*)
+          echo "Story input contains control characters (newline or carriage return). Use only printable characters." >&2
+          exit 1
+          ;;
+      esac
+
+      # Normalize input: strip directory prefix for story-file path input form
+      INPUT_BASENAME=$(basename -- "$INPUT")
+      MATCHED_KEY=""
+      MATCH_COUNT=0
+
+      for KEY in $STORY_KEYS; do
+        # Derive epic.story id form (e.g. a1-2-... → a1.2)
+        EPIC_PART=$(echo "$KEY" | cut -d'-' -f1)
+        STORY_NUM=$(echo "$KEY" | cut -d'-' -f2)
+        STORY_ID="${EPIC_PART}.${STORY_NUM}"
+
+        MATCH=0
+
+        # 1. Exact story key match
+        if [ "$INPUT" = "$KEY" ]; then
+          MATCH=1
+        # 2. epic.story id match (e.g. a1.2)
+        elif [ "$INPUT" = "$STORY_ID" ]; then
+          MATCH=1
+        # 3. story-file basename match (accepts both bare basename and full path)
+        elif [ "$INPUT_BASENAME" = "${KEY}.md" ]; then
+          MATCH=1
+        else
+          # 4. Kebab-normalized substring match against key slug.
+          # Require at least one alphanumeric character to prevent punctuation-only
+          # input (e.g. "-", whitespace → "-") from matching hyphen separators in a key.
+          INPUT_KEBAB=$(printf '%s\n' "$INPUT" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr '_' '-')
+          if printf '%s\n' "$INPUT_KEBAB" | grep -qE '[a-z0-9]' && printf '%s\n' "$KEY" | grep -qF -- "$INPUT_KEBAB" 2>/dev/null; then
+            MATCH=1
+          fi
+        fi
+
+        if [ "$MATCH" = "1" ]; then
+          MATCH_COUNT=$((MATCH_COUNT + 1))
+          MATCHED_KEY="$KEY"
+        fi
+      done
+
+      # Validate resolution result
+      if [ "$MATCH_COUNT" -eq 0 ]; then
+        echo "No story found matching the given input." >&2
+        echo "Available story keys:" >&2
+        echo "$STORY_KEYS" >&2
+        exit 1
+      fi
+
+      if [ "$MATCH_COUNT" -gt 1 ]; then
+        echo "Ambiguous story input: matches $MATCH_COUNT stories." >&2
+        echo "Provide a more specific story key or id." >&2
+        exit 1
+      fi
+
+      # Exactly one match — extract canonical fields
+      EPIC_PART=$(echo "$MATCHED_KEY" | cut -d'-' -f1)
+      STORY_NUM=$(echo "$MATCHED_KEY" | cut -d'-' -f2)
+      STORY_ID_OUT="${EPIC_PART}.${STORY_NUM}"
+
+      # JSON-escape the story_arguments field (INPUT may contain special chars).
+      # MATCHED_KEY and STORY_ID_OUT contain only safe chars (lowercase, digits, hyphens, dots).
+      INPUT_ESCAPED=$(printf '%s' "$INPUT" | sed 's/\\/\\\\/g; s/"/\\"/g')
+
+      # Emit a single JSON object so $resolve-story-input.output.<field> access works downstream
+      printf '{"story_ref":"%s","story_id":"%s","story_arguments":"%s"}' \
+        "$MATCHED_KEY" "$STORY_ID_OUT" "$INPUT_ESCAPED"
+    timeout: 60000
+    depends_on: [prepare-bmad-state]
+    output_type: story-ref
+
   - id: dev-story
     prompt: |
       bmad-dev-story $ARGUMENTS
     provider: claude
-    depends_on: [prepare-bmad-state]
+    depends_on: [prepare-bmad-state, resolve-story-input]
     context: fresh
     model: sonnet
     idle_timeout: 900000
@@ -151,6 +265,9 @@ nodes:
           type: string
         code_review_report:
           type: string
+        story_ref:
+          type: string
+          description: "Resolved canonical story key; must match $resolve-story-input.output.story_ref (enforced by verify-story-identity guard)."
       required:
         - gate
         - round
@@ -158,13 +275,47 @@ nodes:
         - open_findings_file
         - decision_log_file
         - code_review_report
+        - story_ref
+    prompt_suffix: |
+      The canonical story key for this code review is: $resolve-story-input.output.story_ref
+      You MUST set the story_ref field in your structured output to exactly this value.
     output_type: code-review-findings
 
+  - id: verify-story-identity
+    bash: |
+      set -e
+
+      RESOLVED_REF=$resolve-story-input.output.story_ref
+      CONTRACT_REF=$code-review.output.story_ref
+      GATE=$code-review.output.gate
+
+      if [ -z "$RESOLVED_REF" ]; then
+        echo "ERROR: resolved story_ref is empty — resolution node did not produce a story_ref." >&2
+        exit 1
+      fi
+
+      if [ -z "$CONTRACT_REF" ]; then
+        echo "ERROR: code-review contract story_ref is missing or empty." >&2
+        exit 1
+      fi
+
+      if [ "$RESOLVED_REF" != "$CONTRACT_REF" ]; then
+        echo "ERROR: story_ref mismatch detected. This is not a quality finding — it is an identity error." >&2
+        echo "  Resolved: $RESOLVED_REF" >&2
+        echo "  Contract: $CONTRACT_REF" >&2
+        exit 1
+      fi
+
+      printf '%s' "$GATE"
+    timeout: 60000
+    depends_on: [resolve-story-input, code-review]
+    output_type: story-identity-verified
+
   - id: code-review-gate
-    depends_on: [code-review]
+    depends_on: [verify-story-identity]
     route_loop:
-      from: code-review
-      condition: "$code-review.output.gate == 'PASS'"
+      from: verify-story-identity
+      condition: "$verify-story-identity.output == 'PASS'"
       max_iterations: 20
       routes:
         positive: tea-rv
