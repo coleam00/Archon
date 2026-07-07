@@ -334,6 +334,19 @@ describe('v2 story-input resolution (Story a1.2)', () => {
       expect(parsed.story_ref).toBe(CANONICAL_KEY);
     });
 
+    it('BASH-A2-4d [P1] short leading-hyphen substring "-n" resolves to unique matching key (R6-F4)', () => {
+      // echo "-n" is silently treated as an option by bash, emitting no data, so the
+      // alphanumeric guard and key-search both fail. printf '%s\n' "-n" always emits
+      // the literal string and handles any leading-hyphen input correctly.
+      const singleStory = `development_status:
+  a1-2-new-feature: ready-for-dev
+`;
+      const r = runResolveNode('-n', singleStory);
+      expect(r.exitCode, `stderr: ${r.stderr}`).toBe(0);
+      const parsed = JSON.parse(r.stdout.trim()) as { story_ref?: string };
+      expect(parsed.story_ref).toBe('a1-2-new-feature');
+    });
+
     it('BASH-A3-8 [P2] identical valid input twice → deterministic same story_ref (idempotent)', () => {
       const a = runResolveNode(CANONICAL_KEY);
       const b = runResolveNode(CANONICAL_KEY);

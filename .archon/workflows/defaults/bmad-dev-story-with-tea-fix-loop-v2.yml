@@ -180,8 +180,8 @@ nodes:
           # 4. Kebab-normalized substring match against key slug.
           # Require at least one alphanumeric character to prevent punctuation-only
           # input (e.g. "-", whitespace → "-") from matching hyphen separators in a key.
-          INPUT_KEBAB=$(echo "$INPUT" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr '_' '-')
-          if echo "$INPUT_KEBAB" | grep -qE '[a-z0-9]' && echo "$KEY" | grep -qF -- "$INPUT_KEBAB" 2>/dev/null; then
+          INPUT_KEBAB=$(printf '%s\n' "$INPUT" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr '_' '-')
+          if printf '%s\n' "$INPUT_KEBAB" | grep -qE '[a-z0-9]' && printf '%s\n' "$KEY" | grep -qF -- "$INPUT_KEBAB" 2>/dev/null; then
             MATCH=1
           fi
         fi
