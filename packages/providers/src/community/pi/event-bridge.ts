@@ -307,10 +307,6 @@ export async function* bridgeSession(
   // passes through untouched.
   const wantsStructured = jsonSchema !== undefined;
   let assistantBuffer = '';
-  // Track text streamed via text_delta for the current assistant turn.
-  // Reset at each turn_start so only the final turn's text is compared
-  // against finalAssembledText (see streaming-tail completion below).
-  let currentTurnText = '';
   // Assembled text of the final assistant message from agent_end.messages.
   // Set synchronously inside the subscribe callback before the result chunk
   // is pushed to the queue, so it is always ready when the yield loop
@@ -319,18 +315,28 @@ export async function* bridgeSession(
 
   const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
     try {
-      if (event.type === 'turn_start') {
-        currentTurnText = '';
-      }
       if (event.type === 'agent_end') {
         finalAssembledText = extractLastAssistantText(event.messages);
+        // Always reset assistantBuffer on agent_end to prevent stale
+        // text_delta content from being parsed as structured output.
+        if (wantsStructured) {
+          assistantBuffer = finalAssembledText ?? '';
+        }
+      }
+      // On agent_end, emit the full assembled text BEFORE the result chunk
+      // so callers receive assistant text before the terminal result.
+      if (event.type === 'agent_end' && finalAssembledText) {
+        queue.push({ kind: 'chunk', chunk: { type: 'assistant', content: finalAssembledText } });
       }
       for (const chunk of mapPiEvent(event)) {
-        if (chunk.type === 'assistant') {
-          currentTurnText += chunk.content;
-        }
         if (wantsStructured && chunk.type === 'assistant') {
           assistantBuffer += chunk.content;
+        }
+        // Suppress text_delta chunks — Pi's streaming can drop newlines and
+        // spaces. Instead, emit the full assembled text at agent_end (below).
+        // Tool calls, tool results, system messages, and thinking chunks pass through.
+        if (chunk.type === 'assistant') {
+          continue; // will be emitted as assembledText at agent_end
         }
         queue.push({ kind: 'chunk', chunk });
       }
@@ -374,42 +380,12 @@ export async function* bridgeSession(
       // it unconditionally and let the caller decide whether resume is
       // meaningful (capability-gated at the registry level).
       if (item.chunk.type === 'result') {
-        // Streaming tail completion: Pi occasionally fails to flush the last
-        // characters of an assistant turn as text_delta events, leaving them
-        // present only in agent_end.messages. Detect the gap and emit the
-        // missing suffix as a corrective assistant chunk so the orchestrator's
-        // allMessages accumulator receives the full command text.
-        // Condition: assembled text is strictly longer, starts with what was
-        // streamed (ensuring we emit an extension, not a replacement), and is
-        // not undefined (no assistant message in transcript — treated as clean).
-        if (
-          finalAssembledText !== undefined &&
-          finalAssembledText.length > currentTurnText.length &&
-          finalAssembledText.startsWith(currentTurnText)
-        ) {
-          const tail = finalAssembledText.slice(currentTurnText.length);
-          yield { type: 'assistant', content: tail };
-          if (wantsStructured) {
-            assistantBuffer += tail;
-          }
-          getLog().warn(
-            {
-              streamedLen: currentTurnText.length,
-              assembledLen: finalAssembledText.length,
-              tailLen: tail.length,
-            },
-            'pi.event-bridge.streaming_tail_completed'
-          );
-        }
         let terminal: MessageChunk = item.chunk;
         if (session.sessionId) {
           terminal = { ...terminal, sessionId: session.sessionId };
         }
         // Best-effort structured output: parse the accumulated assistant
-        // transcript as JSON and attach. On parse failure, leave it off —
-        // the dag-executor's existing dag.structured_output_missing path
-        // warns and downstream $node.output.field refs degrade to '' instead
-        // of propagating bogus data.
+        // transcript as JSON and attach.
         if (wantsStructured) {
           const parsed = tryParseStructuredOutput(assistantBuffer);
           if (parsed !== undefined) {
