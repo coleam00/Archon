@@ -91,6 +91,12 @@ nodes:
       - safety          — input validation, error handling, secrets/auth/shell/SQL/paths.
       - verification    — were tests/checks ACTUALLY present for the new behavior?
                           New/changed behavior with no tests scores LOW here.
+                          MANDATORY inspection: read any check/CI script the
+                          candidate claims (package.json scripts, shell steps). A
+                          "check" that does not execute real tooling — echo/no-op
+                          stubs, commands whose exit code cannot reflect the
+                          code's state — is NOT verification: treat it as absent
+                          (score 1-2) no matter how real the unit tests are.
 
       Judge the candidate against the reference and the task. Give a one-line
       rationale per dimension grounded in what the candidate actually contains.
@@ -139,6 +145,12 @@ nodes:
       - safety          — input validation, error handling, secrets/auth/shell/SQL/paths.
       - verification    — were tests/checks ACTUALLY present for the new behavior?
                           New/changed behavior with no tests scores LOW here.
+                          MANDATORY inspection: read any check/CI script the
+                          candidate claims (package.json scripts, shell steps). A
+                          "check" that does not execute real tooling — echo/no-op
+                          stubs, commands whose exit code cannot reflect the
+                          code's state — is NOT verification: treat it as absent
+                          (score 1-2) no matter how real the unit tests are.
 
       Judge the candidate against the reference and the task. Give a one-line
       rationale per dimension grounded in what the candidate actually contains.
@@ -187,6 +199,12 @@ nodes:
       - safety          — input validation, error handling, secrets/auth/shell/SQL/paths.
       - verification    — were tests/checks ACTUALLY present for the new behavior?
                           New/changed behavior with no tests scores LOW here.
+                          MANDATORY inspection: read any check/CI script the
+                          candidate claims (package.json scripts, shell steps). A
+                          "check" that does not execute real tooling — echo/no-op
+                          stubs, commands whose exit code cannot reflect the
+                          code's state — is NOT verification: treat it as absent
+                          (score 1-2) no matter how real the unit tests are.
 
       Judge the candidate against the reference and the task. Give a one-line
       rationale per dimension grounded in what the candidate actually contains.
