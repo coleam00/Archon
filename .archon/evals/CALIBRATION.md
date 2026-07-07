@@ -37,8 +37,10 @@ so the leak wasn't driving detection.
 dimension could throw a *false* regression.
 
 **Justified next hardening (deferred):** median-of-3 **N-vote** on the `score-cases` node
-collapses that wobble and makes the baseline robust. Cheaper blunt alternative: widen
-`golden` `regression_tolerance` 0.5 → 0.7.
+collapses that wobble and makes the baseline robust. **IMPLEMENTED (2026-07-06)**: score-1/2/3
+median-of-3 voting is now live in the workflow; no tolerance override needed.
+Fallback (if reverting to single-vote): widen `golden` `regression_tolerance` 0.5 → 1.5+
+to accommodate the observed ±1 drift (0.7 is insufficient for single-vote stability).
 
 ## Caveat for future case authors
 

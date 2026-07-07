@@ -52,6 +52,10 @@ worktree:
   enabled: false
 
 nodes:
+  # NOTE: score-1/2/3 prompts are currently duplicated; they differ only in output filename.
+  # Future: extract shared judge prompt to a separate template when Archon adds workflow
+  # templating/includes support. For now, keep all three in sync manually.
+
   # ─── 1. LOAD SUITE (deterministic, no AI) ─────────────────────────────
   # Validates the dataset exists and writes the case-path queue for the judge.
   - id: load-suite
@@ -71,6 +75,7 @@ nodes:
     model: medium
     context: fresh
     allowed_tools: [Read, Write]
+    timeout: 300000
     prompt: |
       You are a strict eval JUDGE. Score each labelled case on a fixed 5-dimension
       rubric. Be conservative: when evidence for a dimension is absent, score it
@@ -79,8 +84,12 @@ nodes:
       ## Where the cases are
       The file `$ARTIFACTS_DIR/eval/queue.txt` contains one absolute path per line,
       each pointing at a YAML case file. Read that list, then Read EVERY case file.
-      Read ONLY queue.txt and the case files it lists — do NOT read labels.json,
-      human-labels.json, baseline.json, suite.json, or any other file.
+
+      **CRITICAL BLINDNESS CONSTRAINT:** Read ONLY queue.txt and the exact case files it lists.
+      Do NOT read, attempt to read, infer, or reference labels.json, human-labels.json,
+      baseline.json, suite.json, or ANY other file in the eval directory. Violation ruins
+      the calibration. If you find yourself considering reading any file not in the queue,
+      STOP and explain why you need it instead of reading it.
       Each case has: `id`, `task` (the spec), `candidate` (the work under test),
       and `reference` (what a correct/strong solution looks like).
 
@@ -125,6 +134,7 @@ nodes:
     model: medium
     context: fresh
     allowed_tools: [Read, Write]
+    timeout: 300000
     prompt: |
       You are a strict eval JUDGE. Score each labelled case on a fixed 5-dimension
       rubric. Be conservative: when evidence for a dimension is absent, score it
@@ -133,8 +143,12 @@ nodes:
       ## Where the cases are
       The file `$ARTIFACTS_DIR/eval/queue.txt` contains one absolute path per line,
       each pointing at a YAML case file. Read that list, then Read EVERY case file.
-      Read ONLY queue.txt and the case files it lists — do NOT read labels.json,
-      human-labels.json, baseline.json, suite.json, or any other file.
+
+      **CRITICAL BLINDNESS CONSTRAINT:** Read ONLY queue.txt and the exact case files it lists.
+      Do NOT read, attempt to read, infer, or reference labels.json, human-labels.json,
+      baseline.json, suite.json, or ANY other file in the eval directory. Violation ruins
+      the calibration. If you find yourself considering reading any file not in the queue,
+      STOP and explain why you need it instead of reading it.
       Each case has: `id`, `task` (the spec), `candidate` (the work under test),
       and `reference` (what a correct/strong solution looks like).
 
@@ -179,6 +193,7 @@ nodes:
     model: medium
     context: fresh
     allowed_tools: [Read, Write]
+    timeout: 300000
     prompt: |
       You are a strict eval JUDGE. Score each labelled case on a fixed 5-dimension
       rubric. Be conservative: when evidence for a dimension is absent, score it
@@ -187,8 +202,12 @@ nodes:
       ## Where the cases are
       The file `$ARTIFACTS_DIR/eval/queue.txt` contains one absolute path per line,
       each pointing at a YAML case file. Read that list, then Read EVERY case file.
-      Read ONLY queue.txt and the case files it lists — do NOT read labels.json,
-      human-labels.json, baseline.json, suite.json, or any other file.
+
+      **CRITICAL BLINDNESS CONSTRAINT:** Read ONLY queue.txt and the exact case files it lists.
+      Do NOT read, attempt to read, infer, or reference labels.json, human-labels.json,
+      baseline.json, suite.json, or ANY other file in the eval directory. Violation ruins
+      the calibration. If you find yourself considering reading any file not in the queue,
+      STOP and explain why you need it instead of reading it.
       Each case has: `id`, `task` (the spec), `candidate` (the work under test),
       and `reference` (what a correct/strong solution looks like).
 
@@ -245,6 +264,7 @@ nodes:
     model: small
     context: fresh
     allowed_tools: []
+    timeout: 60000
     prompt: |
       The deterministic scorecard below already contains the AUTHORITATIVE gate
       decision. Restate it for a human — do NOT recompute or override it. If the

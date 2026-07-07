@@ -12,6 +12,8 @@ import { readFileSync } from "fs";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 
+// FUTURE: derive DIMENSIONS from suite.json manifest instead of hardcoding
+// so the comparison auto-adapts when suite rubric evolves
 const DIMENSIONS = ["correctness", "completeness", "maintainability", "safety", "verification"] as const;
 type Dim = typeof DIMENSIONS[number];
 
@@ -22,7 +24,7 @@ interface DimScore {
 
 interface JudgeResult {
   case_id: string;
-  scores: Record<Dim, DimScore>;
+  scores: Partial<Record<Dim, DimScore>>;
 }
 
 interface HumanCase {

@@ -37,8 +37,13 @@ function lastScorecard(suite: string): Scorecard | null {
   if (!existsSync(historyPath)) return null;
   const lines = readFileSync(historyPath, 'utf8').split(/\r?\n/).filter(Boolean);
   for (let i = lines.length - 1; i >= 0; i--) {
-    const sc = JSON.parse(lines[i]) as Scorecard;
-    if (sc.suite === suite) return sc;
+    try {
+      const sc = JSON.parse(lines[i]) as Scorecard;
+      if (sc.suite === suite) return sc;
+    } catch {
+      // Skip malformed lines; continue searching for valid history
+      continue;
+    }
   }
   return null;
 }

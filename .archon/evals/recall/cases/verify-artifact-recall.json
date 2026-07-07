@@ -7,7 +7,7 @@
     { "path": "data/summary.txt", "content": "summary content\n" }
   ],
   "evidence": [
-    "(?i)(Expand-Archive|unzip|zipfile|list.*(zip|archive|entries)|verif|inspect|confirm(ed)?.*(content|entries|files))"
+    "(?i)(Expand-Archive|unzip|zipfile|list.*(zip|archive|entries)|verif.*(content|entries|files|archive|zip)|inspect.*(content|entries|files|archive|zip)|confirm(ed)?.*(content|entries|files|archive|zip))"
   ],
   "forbidden": []
 }

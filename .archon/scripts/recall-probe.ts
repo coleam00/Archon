@@ -58,6 +58,9 @@ function probeOnce(c: RecallCase, runIdx: number): { fired: boolean; detail: str
     if ((c.fixture || []).some((fx) => fx.path === 'init.sh')) {
       spawnSync('bash', ['init.sh'], { cwd: dir, timeout: 30000 });
     }
+    // NOTE: shell: true on Windows is safe here because c.task is loaded from
+    // repo-controlled JSON fixtures (.archon/evals/recall/cases/*.json), not dynamic input.
+    // If task input becomes user-controlled, disable shell and escape arguments.
     const res = spawnSync(
       'claude',
       [
