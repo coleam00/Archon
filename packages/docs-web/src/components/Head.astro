@@ -1,0 +1,36 @@
+---
+/**
+ * Custom Head component override for Starlight.
+ * Adds JSON-LD structured data (schema.org TechArticle) to improve LLM citation accuracy and SEO.
+ */
+const { starlightRoute } = Astro.locals;
+const { head, entry, siteTitle } = starlightRoute;
+
+// Build the canonical URL for this page (same approach Starlight uses internally)
+const siteUrl = Astro.site?.href ?? 'https://archon.diy';
+const pageUrl = new URL(Astro.url.pathname, siteUrl).href;
+
+// Extract page metadata with fallbacks
+const pageTitle = entry.data.title ?? siteTitle ?? 'Archon';
+const pageDescription = entry.data.description ?? 'Archon documentation';
+
+// Build JSON-LD structured data for TechArticle
+const jsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'TechArticle',
+  headline: pageTitle,
+  description: pageDescription,
+  url: pageUrl,
+  isPartOf: {
+    '@type': 'WebSite',
+    name: 'Archon',
+    url: siteUrl,
+  },
+};
+---
+
+{/* Render original Starlight head elements */}
+{head.map(({ tag: Tag, attrs, content }) => <Tag {...attrs} set:html={content} />)}
+
+{/* Add JSON-LD structured data */}
+<script type="application/ld+json" set:html={JSON.stringify(jsonLd)} />
