@@ -1,0 +1,25 @@
+---
+/**
+ * Custom Head component override for Starlight.
+ * Adds:
+ * 1. <link rel="alternate" type="text/markdown"> pointing to .md version of each page
+ *
+ * This improves AI/LLM discoverability by advertising markdown availability.
+ */
+const { starlightRoute } = Astro.locals;
+const { head, entry } = starlightRoute;
+
+// Build the markdown alternate URL
+// HTML pages are at /path/to/page/ -> .md files are at /path/to/page.md
+const pathname = Astro.url.pathname;
+// Remove trailing slash and add .md extension
+const mdPath = pathname.endsWith('/') ? pathname.slice(0, -1) + '.md' : pathname + '.md';
+const siteUrl = Astro.site?.href ?? 'https://archon.diy';
+const mdUrl = new URL(mdPath, siteUrl).href;
+---
+
+{/* Render original Starlight head elements */}
+{head.map(({ tag: Tag, attrs, content }) => <Tag {...attrs} set:html={content} />)}
+
+{/* Add alternate link to markdown version */}
+<link rel="alternate" type="text/markdown" href={mdUrl} title={`${entry.data.title} (Markdown)`} />
