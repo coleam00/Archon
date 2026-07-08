@@ -126,8 +126,13 @@ nodes:
         }
       ]
       Include EVERY case from the queue exactly once. Valid JSON only (no comments,
-      no trailing commas). After writing, reply with a one-line confirmation of how
-      many cases you scored.
+      no trailing commas).
+      **CRITICAL: When writing JSON strings that contain backslashes, quotes, or
+      special characters (from code examples, regex patterns, etc.), escape them
+      properly: backslash becomes \\, quote becomes \", newline becomes \n, etc.
+      Your rationale text will contain code/regex examples — ensure all special
+      characters are JSON-escaped. Use JSON.stringify() semantics.**
+      After writing, reply with a one-line confirmation of how many cases you scored.
 
   - id: score-2
     depends_on: [load-suite]
@@ -185,8 +190,13 @@ nodes:
         }
       ]
       Include EVERY case from the queue exactly once. Valid JSON only (no comments,
-      no trailing commas). After writing, reply with a one-line confirmation of how
-      many cases you scored.
+      no trailing commas).
+      **CRITICAL: When writing JSON strings that contain backslashes, quotes, or
+      special characters (from code examples, regex patterns, etc.), escape them
+      properly: backslash becomes \\, quote becomes \", newline becomes \n, etc.
+      Your rationale text will contain code/regex examples — ensure all special
+      characters are JSON-escaped. Use JSON.stringify() semantics.**
+      After writing, reply with a one-line confirmation of how many cases you scored.
 
   - id: score-3
     depends_on: [load-suite]
@@ -244,8 +254,13 @@ nodes:
         }
       ]
       Include EVERY case from the queue exactly once. Valid JSON only (no comments,
-      no trailing commas). After writing, reply with a one-line confirmation of how
-      many cases you scored.
+      no trailing commas).
+      **CRITICAL: When writing JSON strings that contain backslashes, quotes, or
+      special characters (from code examples, regex patterns, etc.), escape them
+      properly: backslash becomes \\, quote becomes \", newline becomes \n, etc.
+      Your rationale text will contain code/regex examples — ensure all special
+      characters are JSON-escaped. Use JSON.stringify() semantics.**
+      After writing, reply with a one-line confirmation of how many cases you scored.
 
   # ─── 3. AGGREGATE (deterministic gate, no AI) ─────────────────────────
   # The authoritative gate. Median-of-3 per case per dimension, queue-identity
