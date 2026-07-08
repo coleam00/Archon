@@ -18,6 +18,15 @@ export default defineConfig({
           tag: 'script',
           content: `if(!localStorage.getItem('archon-theme-init')){localStorage.setItem('archon-theme-init','1');localStorage.setItem('starlight-theme','dark');document.documentElement.dataset.theme='dark';}`,
         },
+        {
+          tag: 'link',
+          attrs: {
+            rel: 'llms',
+            type: 'text/plain',
+            href: '/llms.txt',
+            title: 'LLM-optimized documentation index',
+          },
+        },
       ],
       social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/coleam00/Archon' }],
       editLink: {
