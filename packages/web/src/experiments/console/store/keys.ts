@@ -11,6 +11,10 @@ export const K = {
   projects: 'projects' as const,
   project: (id: string): string => `project:${id}`,
   workflows: (cwd: string): string => `workflows:${cwd}`,
+  // Encode both parts: workflow names may contain `:`, so a raw join could let
+  // distinct (cwd, name) pairs collapse to the same cache key.
+  workflow: (cwd: string, name: string): string =>
+    `workflow:${encodeURIComponent(cwd)}:${encodeURIComponent(name)}`,
   worktrees: (projectId: string): string => `worktrees:${projectId}`,
   runs: (scope: Scope): string => `runs:${scopeKey(scope)}`,
   run: (id: string): string => `run:${id}`,

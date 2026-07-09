@@ -38,6 +38,8 @@ import {
   DeviceFlowError,
   GithubIdentityConflictError,
   getUserGithubTokenRecord,
+  getDecryptedAccessToken,
+  getUserGithubNoreplyEmail,
   deleteUserGithubToken,
   isPerUserProviderKeysEnabled,
   persistProviderApiKey,
@@ -57,7 +59,14 @@ import {
   setUserDefaultProvider,
 } from '@archon/core';
 import type { UserTiersPatch, UserAliasesPatch, AliasesPatch } from '@archon/core';
-import { removeWorktree, toRepoPath, toWorktreePath } from '@archon/git';
+import { Octokit } from '@octokit/rest';
+import {
+  removeWorktree,
+  toRepoPath,
+  toWorktreePath,
+  findRepoRoot,
+  getRemoteUrl,
+} from '@archon/git';
 import {
   createLogger,
   getWorkflowFolderSearchPaths,
@@ -87,6 +96,14 @@ import type { ApprovalContext, WorkflowRun } from '@archon/workflows/schemas/wor
 import type { MessageRow } from '@archon/core/schemas/message';
 import type { DashboardWorkflowRun } from '@archon/core/schemas/workflow-run';
 import { findMarkdownFilesRecursive } from '@archon/core/utils/commands';
+import {
+  submitToMarketplace,
+  SubmitBlockedError,
+  PostCommitFailureError,
+  type PublishDeps,
+} from '../services/marketplace-publish/publish';
+import { buildMarketplaceBundle } from '../services/marketplace-publish/bundle';
+import { runPreflightGates } from '../services/marketplace-publish/preflight';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -208,6 +225,10 @@ import {
   dashboardWorkflowRunSchema,
   workflowRunStatusSchema,
 } from './schemas/workflow.schemas';
+import {
+  submitMarketplaceBodySchema,
+  marketplaceSubmitResponseSchema,
+} from './schemas/marketplace.schemas';
 
 // Read app version: use build-time constant in binary, package.json in dev
 let appVersion = 'unknown';
@@ -339,6 +360,31 @@ const deleteWorkflowRoute = createRoute({
     400: jsonError('Bad request'),
     404: jsonError('Not found'),
     500: jsonError('Server error'),
+  },
+});
+
+const marketplaceSubmitRoute = createRoute({
+  method: 'post',
+  path: '/api/marketplace/submit',
+  tags: ['Marketplace'],
+  summary: 'Submit a saved workflow to the community marketplace',
+  request: {
+    body: {
+      content: { 'application/json': { schema: submitMarketplaceBodySchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: marketplaceSubmitResponseSchema } },
+      description: 'PR opened against the marketplace registry',
+    },
+    400: jsonError('Invalid cwd or request body'),
+    409: jsonError('Slug already registered by a different author'),
+    422: jsonError('Blocked before any write (credential/origin/preflight/bundle)'),
+    500: jsonError(
+      'Server error (may include a landed-bundle detail if the commit already happened)'
+    ),
   },
 });
 
@@ -1320,7 +1366,7 @@ export function registerApiRoutes(
 ): void {
   function apiError(
     c: Context,
-    status: 400 | 401 | 404 | 422 | 500 | 503,
+    status: 400 | 401 | 404 | 409 | 422 | 500 | 503,
     message: string,
     detail?: string
   ): Response {
@@ -3710,6 +3756,66 @@ export function registerApiRoutes(
       }
       getLog().error({ err, name }, 'workflow.delete_failed');
       return apiError(c, 500, 'Failed to delete workflow');
+    }
+  });
+
+  // POST /api/marketplace/submit - Submit a saved workflow to the community marketplace.
+  // Soft identity (resolveWebUserId, NOT requireWebUser) — solo-PAT installs have no
+  // web identity, and the PAT path must still work for them (S7).
+  registerOpenApiRoute(marketplaceSubmitRoute, async c => {
+    const userId = await resolveWebUserId(c);
+    const body = getValidatedBody(c, submitMarketplaceBodySchema);
+
+    if (!(await validateCwd(body.cwd))) {
+      return apiError(c, 400, 'Invalid cwd: must match a registered codebase path');
+    }
+
+    const deps: PublishDeps = {
+      octokitFactory: token => new Octokit({ auth: token }),
+      isPerUserGitHubEnabled,
+      getDecryptedAccessToken,
+      getUserGithubTokenRecord,
+      getUserGithubNoreplyEmail,
+      findRepoRoot,
+      getRemoteUrl,
+      readFile: path => readFile(path, 'utf-8'),
+      parseWorkflow,
+      buildMarketplaceBundle,
+      runPreflightGates,
+      sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
+      serverCwd: process.cwd(),
+      env: process.env,
+      appVersion,
+    };
+
+    try {
+      const result = await submitToMarketplace(deps, {
+        userId,
+        cwd: body.cwd,
+        workflowName: body.workflowName,
+        attestation: body.attestation,
+      });
+      return c.json(result);
+    } catch (err) {
+      if (err instanceof SubmitBlockedError) {
+        const status = err.block.kind === 'collision' ? 409 : 422;
+        return apiError(c, status, err.message);
+      }
+      if (err instanceof PostCommitFailureError) {
+        // The bundle commit already landed — the detail MUST say so (the user
+        // has a visible, persistent side effect even though the flow failed).
+        return apiError(
+          c,
+          500,
+          'Marketplace submission failed after the bundle was committed',
+          `The bundle landed on ${err.bundleRepo}@${err.bundleCommitSha}. ${err.message}`
+        );
+      }
+      getLog().error(
+        { err: err as Error, userId, workflowName: body.workflowName },
+        'marketplace.submit_failed'
+      );
+      return apiError(c, 500, 'Marketplace submission failed');
     }
   });
 
