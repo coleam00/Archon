@@ -167,4 +167,16 @@ export const marketplaceEntries: MarketplaceEntry[] = [
     tags: ['review', 'automation'],
     archonVersionCompat: '>=0.3.0',
   },
+  {
+    slug: 'pocock-skills-workflow-family',
+    name: 'Matt Pocock Skills Workflow Family',
+    author: 'seanrobertwright',
+    description:
+      "Matt Pocock's 'Skills for Real Engineers' (v1.1.0) as six workflows that mount the real SKILL.md files into nodes: spec-to-ship (tracer-bullet tickets -> TDD frontier loop -> two-axis Standards|Spec review -> PR), conservative AFK triage, a diagnosing-bugs pipeline that refuses to theorize without a red feedback loop, an AFK wayfinder frontier, architecture health scans, and repo init. Interactive grilling stays human — the spec issue is the handoff artifact into the AFK back half.",
+    sourceUrl:
+      'https://github.com/seanrobertwright/archon-pocock-workflow/tree/629e57716ea72bb8cf2f77fc7728d3845aa2cf92',
+    sha: '629e57716ea72bb8cf2f77fc7728d3845aa2cf92',
+    tags: ['development', 'planning', 'review', 'automation'],
+    archonVersionCompat: '>=0.5.0',
+  },
 ];
