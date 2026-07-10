@@ -2883,4 +2883,69 @@ describe('WorktreeProvider', () => {
       expect(worktreeExistsSpy).toHaveBeenCalledTimes(1);
     });
   });
+  describe('transient .git/config.lock retry (issue #640)', () => {
+    const baseRequest: IsolationRequest = {
+      codebaseId: 'cb-123',
+      canonicalRepoPath: '/workspace/repo',
+      workflowType: 'issue',
+      identifier: '42',
+    };
+
+    function makeConfigLockError(): Error & { stderr: string; code?: number } {
+      const err = new Error('Command failed: git worktree add -b ...') as Error & {
+        stderr: string;
+        code?: number;
+      };
+      err.stderr = 'error: could not lock config file .git/config: File exists\n';
+      err.code = 1;
+      return err;
+    }
+
+    test('recovers from a transient config.lock error on `worktree add -b`', async () => {
+      worktreeExistsSpy.mockResolvedValue(false);
+
+      // First worktree-add call fails with the canonical .git/config.lock collision.
+      // Subsequent calls succeed. Mirrors the real-world race observed in PR #624.
+      execSpy.mockRejectedValueOnce(makeConfigLockError());
+      execSpy.mockResolvedValue({ stdout: '', stderr: '' });
+
+      await expect(provider.create(baseRequest)).resolves.toBeDefined();
+
+      // The retry path means `worktree add` is invoked at least twice.
+      const worktreeAddCalls = execSpy.mock.calls.filter((call: unknown[]) => {
+        const args = call[1] as string[];
+        return args.includes('worktree') && args.includes('add') && args.includes('-b');
+      });
+      expect(worktreeAddCalls.length).toBeGreaterThanOrEqual(2);
+    });
+
+    test('surfaces error after exhausting retries on persistent config.lock collision', async () => {
+      worktreeExistsSpy.mockResolvedValue(false);
+
+      // Always reject with config.lock — after 3 retries the surface error must be
+      // thrown so callers can distinguish transient races from persistent breakage.
+      execSpy.mockRejectedValue(makeConfigLockError());
+
+      await expect(provider.create(baseRequest)).rejects.toThrow();
+    });
+
+    test('does NOT retry on non-lock git errors', async () => {
+      worktreeExistsSpy.mockResolvedValue(false);
+
+      const fatalError = new Error('fatal: unable to access repository') as Error & {
+        stderr: string;
+      };
+      fatalError.stderr = 'fatal: unable to access repository';
+      execSpy.mockRejectedValueOnce(fatalError);
+
+      await expect(provider.create(baseRequest)).rejects.toThrow('fatal: unable to access');
+
+      // Exactly one worktree-add attempt — no retry on non-lock errors.
+      const worktreeAddCalls = execSpy.mock.calls.filter((call: unknown[]) => {
+        const args = call[1] as string[];
+        return args.includes('worktree') && args.includes('add') && args.includes('-b');
+      });
+      expect(worktreeAddCalls).toHaveLength(1);
+    });
+  });
 });

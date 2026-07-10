@@ -1,6 +1,7 @@
 import { createLogger } from '@archon/paths';
 import { execFileAsync } from './exec';
 import { getDefaultBranch } from './branch';
+import { execGitWithRetry } from './git-retry';
 import type { RepoPath, BranchName, GitResult, WorkspaceSyncResult } from './types';
 import { toRepoPath } from './types';
 
@@ -99,11 +100,21 @@ export async function syncWorkspace(
   const shouldReset = options?.resetAfterFetch ?? true;
   const branchToSync = baseBranch ?? (await getDefaultBranch(workspacePath));
 
-  // Fetch from origin to ensure origin/<branchToSync> is up-to-date
+  // Fetch from origin to ensure origin/<branchToSync> is up-to-date.
+  // Wrapped with execGitWithRetry to absorb transient .git/config.lock collisions
+  // during burst `archon workflow run` dispatches against the same canonical
+  // checkout (issue #640). The fetch itself only touches FETCH_HEAD, but
+  // packing this in the same retry surface keeps future config-writing
+  // additions (e.g. remote tracking updates) under the same protection.
   try {
-    await execFileAsync('git', ['-C', workspacePath, 'fetch', 'origin', branchToSync], {
-      timeout: 60000,
-    });
+    await execGitWithRetry(
+      execFileAsync,
+      'git',
+      ['-C', workspacePath, 'fetch', 'origin', branchToSync],
+      {
+        timeout: 60000,
+      }
+    );
   } catch (error) {
     const err = error as Error;
     const errorMessage = err.message.toLowerCase();
