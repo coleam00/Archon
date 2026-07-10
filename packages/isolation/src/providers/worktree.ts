@@ -11,6 +11,7 @@ import { isAbsolute, join, normalize as normalizePath, resolve, sep } from 'path
 import { createLogger } from '@archon/paths';
 import {
   execFileAsync,
+  execGitWithRetry,
   findWorktreeByBranch,
   getCanonicalRepoPath,
   getWorktreeBase,
@@ -915,41 +916,63 @@ export class WorktreeProvider implements IIsolationProvider {
   }
 
   /**
-   * Create worktree for same-repo PR using the actual branch
+   * Create worktree for same-repo PR using the actual branch.
+   *
+   * Every git call below can write `.git/config` (upstream-tracking entries
+   * from `worktree add -b` and `branch --set-upstream-to`, plus a transient
+   * remote-tracking refresh on `fetch`). Under concurrent
+   * `WorktreeProvider.create()` calls on the same canonical repo (issue #640:
+   * `pr_autopilot` burst dispatch), these collide on `.git/config.lock`.
+   * They are routed through `execGitWithRetry` so a transient collision backs
+   * off and retries instead of failing the dispatch. Pure-read or
+   * branch-deletion calls elsewhere in the file are intentionally NOT
+   * wrapped — they don't touch config.lock.
    */
   private async createFromSameRepoPR(
     repoPath: string,
     worktreePath: string,
     prBranch: string
   ): Promise<void> {
-    // Fetch the PR's actual branch
-    await execFileAsync('git', ['-C', repoPath, 'fetch', 'origin', prBranch], {
+    // Fetch the PR's actual branch — also wrapped so concurrent fetches
+    // don't race a transient lock during remote-tracking-config refresh.
+    await execGitWithRetry(execFileAsync, 'git', ['-C', repoPath, 'fetch', 'origin', prBranch], {
       timeout: GIT_OPERATION_TIMEOUT_MS,
     });
 
     // Try to create worktree with the branch
     try {
-      // If branch doesn't exist locally, create it tracking remote
-      await execFileAsync(
+      // If branch doesn't exist locally, create it tracking remote. This is
+      // the PRIMARY `.git/config.lock` collision point — git writes an
+      // upstream-tracking section under the lock. With retry it now survives
+      // the transient collision.
+      await execGitWithRetry(
+        execFileAsync,
         'git',
         ['-C', repoPath, 'worktree', 'add', worktreePath, '-b', prBranch, `origin/${prBranch}`],
         { timeout: GIT_OPERATION_TIMEOUT_MS }
       );
     } catch (error) {
       const err = error as Error & { stderr?: string };
-      // Branch already exists locally - use it directly
+      // Branch already exists locally — `worktree add <existing>` does NOT
+      // write a new upstream section, but we still wrap for parity.
       if (err.stderr?.includes('already exists')) {
-        await execFileAsync('git', ['-C', repoPath, 'worktree', 'add', worktreePath, prBranch], {
-          timeout: GIT_OPERATION_TIMEOUT_MS,
-        });
+        await execGitWithRetry(
+          execFileAsync,
+          'git',
+          ['-C', repoPath, 'worktree', 'add', worktreePath, prBranch],
+          { timeout: GIT_OPERATION_TIMEOUT_MS }
+        );
       } else {
         throw error;
       }
     }
 
-    // Set up tracking for push/pull (non-fatal - worktree is usable without it)
+    // Set up tracking for push/pull. `branch --set-upstream-to` rewrites
+    // `.git/config`, so retry on the transient lock error. The worktree is
+    // usable without tracking, so final failure remains non-fatal.
     try {
-      await execFileAsync(
+      await execGitWithRetry(
+        execFileAsync,
         'git',
         ['-C', worktreePath, 'branch', '--set-upstream-to', `origin/${prBranch}`],
         { timeout: GIT_OPERATION_TIMEOUT_MS }
@@ -975,10 +998,15 @@ export class WorktreeProvider implements IIsolationProvider {
     const reviewBranch = `pr-${prNumber}-review`;
 
     if (prSha) {
-      // SHA provided: create at specific commit for reproducible reviews
-      await execFileAsync('git', ['-C', repoPath, 'fetch', 'origin', `pull/${prNumber}/head`], {
-        timeout: GIT_OPERATION_TIMEOUT_MS,
-      });
+      // SHA provided: create at specific commit for reproducible reviews.
+      // The fetch can write remote-tracking config under .git/config.lock —
+      // wrap it so a concurrent same-repo PR fetch backs off and retries.
+      await execGitWithRetry(
+        execFileAsync,
+        'git',
+        ['-C', repoPath, 'fetch', 'origin', `pull/${prNumber}/head`],
+        { timeout: GIT_OPERATION_TIMEOUT_MS }
+      );
 
       await execFileAsync('git', ['-C', repoPath, 'worktree', 'add', worktreePath, prSha], {
         timeout: GIT_OPERATION_TIMEOUT_MS,
@@ -994,11 +1022,14 @@ export class WorktreeProvider implements IIsolationProvider {
         reviewBranch
       );
     } else {
-      // No SHA: fetch and create review branch
+      // No SHA: fetch and create review branch. The `fetch ... :reviewBranch`
+      // form updates remote-tracking refs (which can race .git/config.lock
+      // under concurrent same-repo PR dispatches) — wrap it.
       await this.createBranchWithStaleRetry(
         repoPath,
         () =>
-          execFileAsync(
+          execGitWithRetry(
+            execFileAsync,
             'git',
             ['-C', repoPath, 'fetch', 'origin', `pull/${prNumber}/head:${reviewBranch}`],
             { timeout: GIT_OPERATION_TIMEOUT_MS }
@@ -1057,13 +1088,16 @@ export class WorktreeProvider implements IIsolationProvider {
         : `origin/${baseBranch}`;
 
     try {
-      // Try to create with new branch
-      await execFileAsync(
+      // Try to create with new branch. This is the PRIMARY `.git/config.lock`
+      // collision site under concurrent same-repo `WorktreeProvider.create()`
+      // calls (issue #640): `worktree add -b <new> <start>` writes an
+      // upstream-tracking section under the lock. Route through the retry
+      // helper so a transient collision backs off instead of failing.
+      await execGitWithRetry(
+        execFileAsync,
         'git',
         ['-C', repoPath, 'worktree', 'add', worktreePath, '-b', branchName, startPoint],
-        {
-          timeout: GIT_OPERATION_TIMEOUT_MS,
-        }
+        { timeout: GIT_OPERATION_TIMEOUT_MS }
       );
     } catch (error) {
       const err = error as Error & { stderr?: string };
@@ -1081,14 +1115,22 @@ export class WorktreeProvider implements IIsolationProvider {
 
         // Branch exists but no explicit start-point override — reset it to the
         // intended start-point before checking out, so we don't inherit stale
-        // commits from a previous run or external tool.
+        // commits from a previous run or external tool. `branch -f` can also
+        // rewrite upstream-tracking entries under .git/config.lock when the
+        // branch had a configured upstream — wrap it for parity.
         getLog().warn(
           { branchName, startPoint, repoPath },
           'worktree.branch_exists_resetting_to_start_point'
         );
-        await execFileAsync('git', ['-C', repoPath, 'branch', '-f', branchName, startPoint], {
-          timeout: 10000,
-        });
+        await execGitWithRetry(
+          execFileAsync,
+          'git',
+          ['-C', repoPath, 'branch', '-f', branchName, startPoint],
+          { timeout: 10000 }
+        );
+        // `worktree add <existingBranch>` does NOT write upstream-tracking
+        // entries, so the bare `execFileAsync` here is intentional — wrapping
+        // would add latency without changing behavior.
         await execFileAsync('git', ['-C', repoPath, 'worktree', 'add', worktreePath, branchName], {
           timeout: GIT_OPERATION_TIMEOUT_MS,
         });
