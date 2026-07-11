@@ -3,6 +3,7 @@ import type { OmpSession } from './sdk-loader';
 
 import { AsyncQueue } from './async-queue';
 import type { MessageChunk, TokenUsage } from '../../types';
+import { tryParseStructuredOutput } from '../../shared/structured-output';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -96,36 +97,6 @@ export function buildResultChunk(messages: readonly unknown[]): MessageChunk {
         }
       : {}),
   };
-}
-
-export function tryParseStructuredOutput(text: string): unknown {
-  const trimmed = text.trim();
-  if (trimmed.length === 0) return undefined;
-  const cleaned = trimmed
-    .replace(/^```(?:json)?\s*\n?/i, '')
-    .replace(/\n?\s*```\s*$/, '')
-    .trim();
-
-  try {
-    return JSON.parse(cleaned);
-  } catch {
-    // fall through
-  }
-
-  const firstBrace = cleaned.indexOf('{');
-  const firstBracket = cleaned.indexOf('[');
-  const firstJsonRoot = [firstBrace, firstBracket]
-    .filter(index => index > 0)
-    .sort((a, b) => a - b)[0];
-  if (firstJsonRoot !== undefined) {
-    try {
-      return JSON.parse(cleaned.slice(firstJsonRoot));
-    } catch {
-      // fall through
-    }
-  }
-
-  return undefined;
 }
 
 interface ToolCallIdField {
@@ -236,6 +207,16 @@ function mapAutoCompactionEnd(event: Record<string, unknown>): MessageChunk[] {
   return [{ type: 'system', content: `✓ OMP auto-compaction completed (${action}).` }];
 }
 
+function mapNotice(event: Record<string, unknown>): MessageChunk[] {
+  const message = typeof event.message === 'string' ? event.message : undefined;
+  if (!message) return [];
+
+  const source =
+    typeof event.source === 'string' && event.source.length > 0 ? event.source : undefined;
+  const level = typeof event.level === 'string' && event.level.length > 0 ? event.level : 'info';
+  return [{ type: 'system', content: `${source ? `${source}: ` : ''}${level}: ${message}` }];
+}
+
 export function mapOmpEvent(event: { type?: string } & Record<string, unknown>): MessageChunk[] {
   switch (event.type) {
     case 'message_update':
@@ -258,6 +239,8 @@ export function mapOmpEvent(event: { type?: string } & Record<string, unknown>):
       return mapAutoCompactionStart(event);
     case 'auto_compaction_end':
       return mapAutoCompactionEnd(event);
+    case 'notice':
+      return mapNotice(event);
     default:
       return [];
   }

@@ -646,7 +646,7 @@ Archon still chooses the initial model from the node/workflow model first, then 
 
 `allowed_tools`, `denied_tools`, and `assistants.omp.toolNames` use OMP tool names. Common safe read/analysis tools are `read`, `search`, `find`, `lsp`, `web_search`, `ast_grep`, `ast_edit`, `task`, `todo`, and `ask`.
 
-Tools that can modify files, run code, access the network, or change session state should be enabled intentionally: `bash`, `eval`, `write`, `edit`, `browser`, `ssh`, `github`, `checkpoint`, `rewind`, `job`, `irc`, `render_mermaid`, and `search_tool_bm25`. Legacy aliases are accepted for existing workflows: `grep` → `search`, `python` → `eval`, `fetch` → `read`, `poll` → `job`, and `todo_write` → `todo`. Hidden SDK tools such as `yield`, `resolve`, and `exit_plan_mode` are only useful for OMP-internal workflows.
+Tools that can modify files, run code, access the network, or change session state should be enabled intentionally: `bash`, `eval`, `write`, `edit`, `browser`, `ssh`, `github`, `checkpoint`, `rewind`, `job`, `irc`, `render_mermaid`, `generate_image`, `memory_edit`, `learn`, `manage_skill`, and `search_tool_bm25`. Legacy aliases are accepted for existing workflows: `grep` → `search`, `python` → `eval`, `fetch` → `read`, `poll` → `job`, and `todo_write` → `todo`. Hidden SDK tools such as `yield`, `resolve`, `goal`, `report_finding`, and `report_tool_issue` are only useful for OMP-internal workflows.
 
 ### Oh My Pi capabilities
 
@@ -660,7 +660,7 @@ Tools that can modify files, run code, access the network, or change session sta
 | Auth env override | ✅ | provider API-key env vars such as `ANTHROPIC_API_KEY` are passed to OMP auth storage as runtime overrides; Hugging Face uses `HUGGINGFACE_HUB_TOKEN` then `HF_TOKEN` |
 | OMP config env | ✅ | `assistants.omp.env` applies session-scoped process env for in-process OMP extensions, does not override shell env, and removes keys Archon created after the prompt |
 | OMP interactivity | ✅ | `assistants.omp.interactive: false` passes `hasUI: false` and skips Archon's OMP UI bridge |
-| OMP SDK deadline | ✅ | Workflow node `idle_timeout` is also passed to OMP as an absolute SDK deadline; Archon's idle watchdog still owns workflow timeout behavior |
+| Node idle timeout | ✅ | Archon's workflow idle watchdog owns `idle_timeout` and aborts the OMP session through the provider abort signal; it is not forwarded as an OMP SDK option |
 | OMP spawn controls | ✅ | `assistants.omp.spawns` is passed through to the OMP SDK as its spawn allowlist expression; omit it to keep the SDK default |
 | OMP extension flags | ✅ when an extension runner loads | `assistants.omp.extensionFlags` calls OMP `extensionRunner.setFlagValue()` before the first prompt; Archon emits a warning if no runner is present |
 | OMP settings overrides | ✅ | `assistants.omp.settings.retry`, `compaction`, `snapcompact`, `contextPromotion`, `model.loopGuard`, `tools`, `providers`, `task`, `memory`, `mnemopi`, `hindsight`, `modelRoles`, `enabledModels`, `modelProviderOrder`, `disabledProviders`, and `disabledExtensions` are passed to `Settings.isolated(...)`; secret-bearing Mnemopi/Hindsight fields and raw arbitrary settings are not exposed |

@@ -17,6 +17,7 @@ import type {
   ProviderCapabilities,
   SendQueryOptions,
 } from '../../types';
+import { augmentPromptForJsonSchema } from '../../shared/structured-output';
 import { OMP_CAPABILITIES } from './capabilities';
 import { parseOmpConfig } from './config';
 import { bridgeSession } from './event-bridge';
@@ -182,20 +183,6 @@ function createBashEnvInjectionExtension(
           : env;
     });
   };
-}
-
-export function augmentPromptForJsonSchema(
-  prompt: string,
-  schema: Record<string, unknown>
-): string {
-  return `${prompt}
-
----
-
-CRITICAL: Respond with ONLY valid JSON matching the schema below. No prose before or after the JSON. No markdown code fences. Just the raw JSON value as your final message.
-
-Schema:
-${JSON.stringify(schema, null, 2)}`;
 }
 
 function toOmpSystemPromptBlocks(
@@ -368,29 +355,25 @@ function getToolName(tool: unknown): string | undefined {
   return typeof name === 'string' ? name : undefined;
 }
 
-function filterDeniedMcpTools(
-  mcp: ResolvedOmpMcp,
-  deniedTools: readonly string[] | undefined
-): Pick<ResolvedOmpMcp, 'customTools' | 'toolNames'> {
-  if (!deniedTools || deniedTools.length === 0) {
-    return { customTools: mcp.customTools, toolNames: mcp.toolNames };
-  }
+function filterExtraToolsByPolicy<T>(
+  tools: readonly T[],
+  getName: (tool: T) => string | undefined,
+  allowedTools: ReadonlySet<string> | undefined,
+  deniedTools: ReadonlySet<string>
+): T[] {
+  if (allowedTools === undefined && deniedTools.size === 0) return [...tools];
 
-  const denied = new Set(deniedTools.map(name => name.toLowerCase()));
-  const customTools = mcp.customTools.filter(tool => {
-    const toolName = getToolName(tool);
-    return toolName === undefined || !denied.has(toolName.toLowerCase());
+  return tools.filter(tool => {
+    const toolName = getName(tool);
+    if (toolName === undefined) return allowedTools === undefined;
+    const normalized = toolName.toLowerCase();
+    if (deniedTools.has(normalized)) return false;
+    return allowedTools === undefined || allowedTools.has(normalized);
   });
-  const toolNames = mcp.toolNames.filter(name => !denied.has(name.toLowerCase()));
-  return { customTools, toolNames };
 }
 
-function deadlineFromIdleTimeout(nodeConfig: SendQueryOptions['nodeConfig']): number | undefined {
-  const idleTimeout = nodeConfig?.idle_timeout;
-  if (typeof idleTimeout !== 'number' || !Number.isFinite(idleTimeout) || idleTimeout <= 0) {
-    return undefined;
-  }
-  return Date.now() + idleTimeout;
+function toLowerToolSet(names: readonly string[] | undefined): Set<string> {
+  return new Set((names ?? []).map(name => name.toLowerCase()));
 }
 
 /**
@@ -408,89 +391,108 @@ export class OmpProvider implements IAgentProvider {
   ): AsyncGenerator<MessageChunk> {
     const assistantConfig = requestOptions?.assistantConfig ?? {};
     const ompConfig = parseOmpConfig(assistantConfig);
-    let configEnvKeysApplied: string[] = [];
-
-    const parsed = requireParsedModelRef(requestOptions?.model ?? ompConfig.model);
-    const sdk = await this.sdkLoader();
-    const authStorage = await discoverAuthStorageOrThrow(sdk, ompConfig.agentDir, parsed.provider);
-
     const nodeConfig = requestOptions?.nodeConfig;
-    const { level: thinkingLevel, warning: thinkingWarning } = resolveOmpThinkingLevel(nodeConfig);
-    if (thinkingWarning) yield { type: 'system', content: `⚠️ ${thinkingWarning}` };
-
-    const { toolNames, unknownTools, unknownDeniedTools } = resolveOmpToolNames(
-      nodeConfig,
-      ompConfig
-    );
-    if (unknownDeniedTools.length > 0) {
-      throw new Error(
-        `Oh My Pi denied_tools contains unknown tool names: ${unknownDeniedTools.join(', ')}. Fix the tool name or remove it so Archon does not leave the tool enabled by mistake.`
-      );
-    }
-    if (unknownTools.length > 0) {
-      yield {
-        type: 'system',
-        content: `⚠️ Oh My Pi ignored unknown tool names: ${unknownTools.join(', ')}.`,
-      };
-    }
-
-    const { skills, missing: missingSkills } = await resolveOmpSkills(
-      sdk,
-      cwd,
-      nodeConfig?.skills,
-      ompConfig.agentDir
-    );
-    if (missingSkills.length > 0) {
-      yield {
-        type: 'system',
-        content: `⚠️ Oh My Pi could not resolve skill names: ${missingSkills.join(', ')}.`,
-      };
-    }
-
-    const { sessionManager, resumeFailed } = await resolveOmpSession(
-      sdk,
-      cwd,
-      resumeSessionId,
-      ompConfig.agentDir,
-      requestOptions?.forkSession === true
-    );
-    if (resumeFailed) {
-      yield {
-        type: 'system',
-        content: '⚠️ Could not resume Oh My Pi session. Starting fresh conversation.',
-      };
-    }
-
-    const systemPromptBlocks = toOmpSystemPromptBlocks(
-      requestOptions?.systemPrompt ?? nodeConfig?.systemPrompt
-    );
-    const fallbackModel = requireParsedFallbackModelRef(
-      requestOptions?.fallbackModel ?? nodeConfig?.fallbackModel
-    );
-    let settingsOverrides: Record<string, unknown> = {};
-    const interactive = ompConfig.interactive !== false;
-    const extensionsDisabled = ompConfig.disableExtensionDiscovery === true;
-    const uiBridge = interactive ? createArchonOmpUIBridge() : undefined;
-    // Env-free sessions may run together, but sessions that inject assistants.omp.env
-    // need exclusive access so other prompts never observe temporary process.env state.
+    const parsed = requireParsedModelRef(requestOptions?.model ?? ompConfig.model);
     const requiresExclusiveConfigEnvLease = hasConfigEnv(ompConfig.env);
     const releaseConfigEnvLease = await acquireConfigEnvLease(
       requiresExclusiveConfigEnvLease,
       requestOptions?.abortSignal
     );
-    if (requiresExclusiveConfigEnvLease) {
-      configEnvKeysApplied = applyConfigEnv(ompConfig.env);
-      if (configEnvKeysApplied.length > 0) {
-        getLog().debug({ keys: configEnvKeysApplied }, 'omp.config_env_applied');
-      }
-    }
-
+    let configEnvKeysApplied: string[] = [];
     let resolvedMcp: ResolvedOmpMcp | undefined;
     let sendQueryError: unknown;
     let disconnectError: Error | undefined;
     let sdkManagedMcp: OmpMcpManager | undefined;
     let sessionForCleanup: OmpSession | undefined;
+
     try {
+      if (requiresExclusiveConfigEnvLease) {
+        configEnvKeysApplied = applyConfigEnv(ompConfig.env);
+        if (configEnvKeysApplied.length > 0) {
+          getLog().debug({ keys: configEnvKeysApplied }, 'omp.config_env_applied');
+        }
+      }
+
+      const { level: thinkingLevel, warning: thinkingWarning } =
+        resolveOmpThinkingLevel(nodeConfig);
+      if (thinkingWarning) yield { type: 'system', content: `⚠️ ${thinkingWarning}` };
+
+      const nativeToolRequestNames = toLowerToolSet(
+        requestOptions?.nativeTools?.map(tool => tool.name)
+      );
+      const { toolNames, unknownTools, unknownDeniedTools } = resolveOmpToolNames(
+        nodeConfig,
+        ompConfig
+      );
+      const unsupportedDeniedTools = unknownDeniedTools.filter(
+        name => !nativeToolRequestNames.has(name.toLowerCase())
+      );
+      if (unsupportedDeniedTools.length > 0) {
+        throw new Error(
+          `Oh My Pi denied_tools contains unknown tool names: ${unsupportedDeniedTools.join(', ')}. Fix the tool name or remove it so Archon does not leave the tool enabled by mistake.`
+        );
+      }
+      const unsupportedAllowedTools = unknownTools.filter(
+        name => !nativeToolRequestNames.has(name.toLowerCase())
+      );
+      if (unsupportedAllowedTools.length > 0) {
+        yield {
+          type: 'system',
+          content: `⚠️ Oh My Pi ignored unknown tool names: ${unsupportedAllowedTools.join(', ')}.`,
+        };
+      }
+
+      const allowedExtraToolNames = nodeConfig?.allowed_tools
+        ? new Set([...nodeConfig.allowed_tools, ...toolNames].map(name => name.toLowerCase()))
+        : undefined;
+      const deniedExtraToolNames = toLowerToolSet(nodeConfig?.denied_tools);
+
+      const sdk = await this.sdkLoader();
+      const authStorage = await discoverAuthStorageOrThrow(
+        sdk,
+        ompConfig.agentDir,
+        parsed.provider
+      );
+
+      const { skills, missing: missingSkills } = await resolveOmpSkills(
+        sdk,
+        cwd,
+        nodeConfig?.skills,
+        ompConfig.agentDir
+      );
+      if (missingSkills.length > 0) {
+        yield {
+          type: 'system',
+          content: `⚠️ Oh My Pi could not resolve skill names: ${missingSkills.join(', ')}.`,
+        };
+      }
+
+      const { sessionManager, resumeFailed } = await resolveOmpSession(
+        sdk,
+        cwd,
+        resumeSessionId,
+        ompConfig.agentDir,
+        requestOptions?.forkSession === true,
+        requestOptions?.persistSession !== false
+      );
+      if (resumeFailed) {
+        yield {
+          type: 'system',
+          content: '⚠️ Could not resume Oh My Pi session. Starting fresh conversation.',
+        };
+      }
+
+      const systemPromptBlocks = toOmpSystemPromptBlocks(
+        requestOptions?.systemPrompt ?? nodeConfig?.systemPrompt
+      );
+      const fallbackModel = requireParsedFallbackModelRef(
+        requestOptions?.fallbackModel ?? nodeConfig?.fallbackModel
+      );
+      let settingsOverrides: Record<string, unknown> = {};
+      const interactive = ompConfig.interactive !== false;
+      const extensionsDisabled = ompConfig.disableExtensionDiscovery === true;
+      const uiBridge = interactive ? createArchonOmpUIBridge() : undefined;
+
       const appliedConfigEnv = selectAppliedConfigEnv(ompConfig.env, configEnvKeysApplied);
       const runtimeOverride =
         getRuntimeAuthOverride(parsed.provider, requestOptions?.env) ??
@@ -563,24 +565,43 @@ export class OmpProvider implements IAgentProvider {
         }
       }
 
-      const effectiveMcpTools = resolvedMcp
-        ? filterDeniedMcpTools(resolvedMcp, nodeConfig?.denied_tools)
-        : undefined;
+      const effectiveMcpCustomTools = resolvedMcp
+        ? filterExtraToolsByPolicy(
+            resolvedMcp.customTools,
+            getToolName,
+            allowedExtraToolNames,
+            deniedExtraToolNames
+          )
+        : [];
+      const effectiveMcpToolNames = resolvedMcp
+        ? filterExtraToolsByPolicy(
+            resolvedMcp.toolNames,
+            name => name,
+            allowedExtraToolNames,
+            deniedExtraToolNames
+          )
+        : [];
       const nativeTools =
         requestOptions?.nativeTools && requestOptions.nativeTools.length > 0
           ? buildOmpNativeToolDefinitions(requestOptions.nativeTools)
           : [];
-      const nativeToolNames = nativeTools.map(tool => tool.name);
+      const effectiveNativeTools = filterExtraToolsByPolicy(
+        nativeTools,
+        tool => tool.name,
+        allowedExtraToolNames,
+        deniedExtraToolNames
+      );
+      const nativeToolNames = effectiveNativeTools.map(tool => tool.name);
       const customTools =
-        effectiveMcpTools || nativeTools.length > 0
-          ? [...(effectiveMcpTools?.customTools ?? []), ...nativeTools]
+        effectiveMcpCustomTools.length > 0 || effectiveNativeTools.length > 0
+          ? [...effectiveMcpCustomTools, ...effectiveNativeTools]
           : undefined;
+      const extraToolNames = [...effectiveMcpToolNames, ...nativeToolNames];
       const effectiveToolNames =
-        effectiveMcpTools || nativeToolNames.length > 0
-          ? mergeToolNames(toolNames, [...(effectiveMcpTools?.toolNames ?? []), ...nativeToolNames])
-          : toolNames;
+        extraToolNames.length > 0 ? mergeToolNames(toolNames, extraToolNames) : toolNames;
       const envInjectionExtension = createBashEnvInjectionExtension(requestOptions?.env);
-      const sdkDeadline = deadlineFromIdleTimeout(nodeConfig);
+      const enableSdkMcp = nodeConfig?.mcp ? true : ompConfig.enableMCP === true;
+      const hasStartupUi = interactive && !(enableSdkMcp && !resolvedMcp);
       const sessionOptions: OmpCreateAgentSessionOptions = {
         cwd,
         ...(ompConfig.agentDir ? { agentDir: ompConfig.agentDir } : {}),
@@ -591,7 +612,7 @@ export class OmpProvider implements IAgentProvider {
         sessionManager,
         settings,
         skills,
-        enableMCP: nodeConfig?.mcp ? true : ompConfig.enableMCP === true,
+        enableMCP: enableSdkMcp,
         enableLsp: ompConfig.enableLsp !== false,
         ...(ompConfig.disableExtensionDiscovery !== undefined
           ? { disableExtensionDiscovery: ompConfig.disableExtensionDiscovery }
@@ -604,9 +625,8 @@ export class OmpProvider implements IAgentProvider {
         ...(systemPromptBlocks !== undefined ? { systemPrompt: systemPromptBlocks } : {}),
         ...(resolvedMcp ? { mcpManager: resolvedMcp.manager } : {}),
         ...(customTools ? { customTools } : {}),
-        ...(sdkDeadline !== undefined ? { deadline: sdkDeadline } : {}),
         toolNames: effectiveToolNames,
-        hasUI: interactive,
+        hasUI: hasStartupUi,
       };
 
       logSessionStart({

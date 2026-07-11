@@ -54,6 +54,23 @@ describe('loadMcpConfig', () => {
     expect(result.servers).toEqual(config.mcpServers);
   });
 
+  test('loads mcpServers wrapper with metadata and disabledServers', async () => {
+    const config = {
+      $schema: 'https://example.com/mcp.schema.json',
+      disabledServers: ['disabled'],
+      mcpServers: {
+        github: { command: 'npx', args: ['-y', '@mcp/server-github'] },
+        disabled: { command: 'npx', args: ['disabled-server'] },
+      },
+    };
+    await writeFile(join(testDir, 'wrapped-metadata.json'), JSON.stringify(config));
+
+    const result = await loadMcpConfig('wrapped-metadata.json', testDir);
+
+    expect(result.serverNames).toEqual(['github']);
+    expect(result.servers).toEqual({ github: config.mcpServers.github });
+  });
+
   test('filters disabled servers before connecting', async () => {
     const config = {
       enabled: { command: 'npx', args: ['enabled-server'] },

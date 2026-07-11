@@ -14,10 +14,10 @@ export function parseOmpModelRef(raw: string): OmpModelRef | undefined {
   const idx = raw.indexOf('/');
   if (idx <= 0 || idx === raw.length - 1) return undefined;
 
-  const provider = raw.slice(0, idx);
+  const provider = raw.slice(0, idx).trim().toLowerCase();
   const modelId = raw.slice(idx + 1);
 
-  if (!/^[a-z][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)*$/.test(provider)) return undefined;
+  if (provider.length === 0) return undefined;
   if (modelId.length === 0) return undefined;
 
   return { provider, modelId };

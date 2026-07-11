@@ -5,11 +5,11 @@ import { join } from 'path';
 
 import {
   acquireConfigEnvLease,
-  augmentPromptForJsonSchema,
   extensionFlagWarning,
   mcpEnvWarning,
   OmpProvider,
 } from './provider';
+import { augmentPromptForJsonSchema } from '../../shared/structured-output';
 import type {
   OmpAuthStorage,
   OmpCodingAgentSdk,
@@ -230,8 +230,11 @@ function makeSdk(options: FakeSdkOptions = {}): OmpCodingAgentSdk {
       getDefaultSessionDir() {
         return '/tmp/omp-sessions';
       },
-      create() {
-        return {};
+      create(cwd?: string, sessionDir?: string) {
+        return { kind: 'create', cwd, sessionDir };
+      },
+      inMemory(cwd?: string) {
+        return { kind: 'inMemory', cwd };
       },
       async list() {
         return options.sessions ?? [];
@@ -304,31 +307,7 @@ describe('OmpProvider', () => {
     });
   });
 
-  test('passes SDK deadline from node idle_timeout', async () => {
-    const originalNow = Date.now;
-    let sessionOptions: OmpCreateAgentSessionOptions | undefined;
-    Date.now = () => 1_700_000_000_000;
-    try {
-      const provider = new OmpProvider(async () =>
-        makeSdk({
-          onCreateAgentSession(options) {
-            sessionOptions = options;
-          },
-        })
-      );
-
-      await collectChunks(provider, {
-        model: 'anthropic/claude-sonnet-4-5',
-        nodeConfig: { idle_timeout: 2500 },
-      });
-    } finally {
-      Date.now = originalNow;
-    }
-
-    expect(sessionOptions?.deadline).toBe(1_700_000_002_500);
-  });
-
-  test('omits SDK deadline when node idle_timeout is absent', async () => {
+  test('uses in-memory OMP sessions when persistSession is false', async () => {
     let sessionOptions: OmpCreateAgentSessionOptions | undefined;
     const provider = new OmpProvider(async () =>
       makeSdk({
@@ -338,9 +317,12 @@ describe('OmpProvider', () => {
       })
     );
 
-    await collectChunks(provider, { model: 'anthropic/claude-sonnet-4-5' });
+    await collectChunks(provider, {
+      model: 'anthropic/claude-sonnet-4-5',
+      persistSession: false,
+    });
 
-    expect(sessionOptions?.deadline).toBeUndefined();
+    expect(sessionOptions?.sessionManager).toEqual({ kind: 'inMemory', cwd: '/repo' });
   });
 
   test('passes configured spawns through to OMP SDK', async () => {
@@ -741,6 +723,29 @@ describe('OmpProvider', () => {
     }
   });
 
+  test('applies config env before loading the OMP SDK', async () => {
+    const original = process.env.OMP_PROVIDER_TEST_SDK_LOAD;
+    delete process.env.OMP_PROVIDER_TEST_SDK_LOAD;
+    let observedDuringSdkLoad: string | undefined;
+    const provider = new OmpProvider(async () => {
+      observedDuringSdkLoad = process.env.OMP_PROVIDER_TEST_SDK_LOAD;
+      return makeSdk();
+    });
+
+    try {
+      await collectChunks(provider, {
+        model: 'anthropic/claude-sonnet-4-5',
+        assistantConfig: { env: { OMP_PROVIDER_TEST_SDK_LOAD: 'configured' } },
+      });
+
+      expect(observedDuringSdkLoad).toBe('configured');
+      expect(process.env.OMP_PROVIDER_TEST_SDK_LOAD).toBeUndefined();
+    } finally {
+      if (original === undefined) delete process.env.OMP_PROVIDER_TEST_SDK_LOAD;
+      else process.env.OMP_PROVIDER_TEST_SDK_LOAD = original;
+    }
+  });
+
   test('ANTHROPIC_OAUTH_TOKEN routes into setRuntimeApiKey for anthropic (#1984)', async () => {
     let runtimeOverride: [string, string] | undefined;
     const provider = new OmpProvider(async () =>
@@ -757,6 +762,30 @@ describe('OmpProvider', () => {
     });
 
     expect(runtimeOverride).toEqual(['anthropic', 'sk-ant-oat01-bearer']);
+  });
+
+  test('normalizes mixed-case model provider before runtime auth lookup', async () => {
+    let runtimeOverride: [string, string] | undefined;
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        onSetRuntimeApiKey(providerName, apiKey) {
+          runtimeOverride = [providerName, apiKey];
+        },
+        onFindModel(providerName, modelId) {
+          if (providerName === 'anthropic' && modelId === 'claude-sonnet-4-5') {
+            return { provider: providerName, id: modelId };
+          }
+          return undefined;
+        },
+      })
+    );
+
+    await collectChunks(provider, {
+      model: 'Anthropic/claude-sonnet-4-5',
+      env: { ANTHROPIC_API_KEY: 'request-key' },
+    });
+
+    expect(runtimeOverride).toEqual(['anthropic', 'request-key']);
   });
 
   test('CLAUDE_CODE_OAUTH_TOKEN routes into setRuntimeApiKey for anthropic', async () => {
@@ -1398,7 +1427,7 @@ describe('OmpProvider', () => {
       );
 
       expect(connectArgs?.configs).toEqual({
-        github: { command: 'npx', args: ['-y', '@mcp/server-github'] },
+        github: { command: 'npx', args: ['-y', '@mcp/server-github'], cwd: temp.dir },
       });
       expect(connectArgs?.sources.github).toEqual({
         provider: 'archon',
@@ -1450,7 +1479,7 @@ describe('OmpProvider', () => {
       await temp.cleanup();
     }
   });
-  test('adds loaded MCP tool names to OMP toolNames allowlist', async () => {
+  test('does not add unlisted MCP tools when allowed_tools is set', async () => {
     const temp = await writeTempMcpConfig({ github: { command: 'npx' } });
     let sessionOptions: OmpCreateAgentSessionOptions | undefined;
     const provider = new OmpProvider(async () =>
@@ -1472,7 +1501,8 @@ describe('OmpProvider', () => {
         temp.dir
       );
 
-      expect(sessionOptions?.toolNames).toEqual(['read', 'mcp__github_create_issue']);
+      expect(sessionOptions?.toolNames).toEqual(['read']);
+      expect(sessionOptions?.customTools).toBeUndefined();
     } finally {
       await temp.cleanup();
     }
@@ -1499,7 +1529,7 @@ describe('OmpProvider', () => {
           model: 'anthropic/claude-sonnet-4-5',
           nodeConfig: {
             mcp: 'mcp.json',
-            allowed_tools: ['read'],
+            allowed_tools: ['read', 'mcp__github_list_issues'],
             denied_tools: ['mcp__github_create_issue'],
           },
         },
@@ -1591,7 +1621,7 @@ describe('OmpProvider', () => {
           model: 'anthropic/claude-sonnet-4-5',
           nodeConfig: {
             mcp: 'mcp.json',
-            allowed_tools: ['read'],
+            allowed_tools: ['read', 'mcp__github_list_issues', 'manage_run'],
             denied_tools: ['mcp__github_create_issue'],
           },
           nativeTools: [
@@ -1695,7 +1725,7 @@ describe('OmpProvider', () => {
       );
 
       expect(connectArgs?.configs).toEqual({
-        github: { command: 'npx', env: { GITHUB_TOKEN: 'configured-token' } },
+        github: { command: 'npx', env: { GITHUB_TOKEN: 'configured-token' }, cwd: temp.dir },
       });
       expect(process.env.OMP_PROVIDER_MCP_TOKEN).toBeUndefined();
     } finally {
@@ -1732,7 +1762,7 @@ describe('OmpProvider', () => {
       );
 
       expect(connectArgs?.configs).toEqual({
-        github: { command: 'npx', env: { GITHUB_TOKEN: 'request-token' } },
+        github: { command: 'npx', env: { GITHUB_TOKEN: 'request-token' }, cwd: temp.dir },
       });
       expect(chunks).not.toContainEqual({
         type: 'system',
@@ -1929,6 +1959,7 @@ describe('OmpProvider', () => {
     expect(sessionOptions?.enableMCP).toBe(true);
     expect(sessionOptions?.mcpManager).toBeUndefined();
     expect(sessionOptions?.customTools).toBeUndefined();
+    expect(sessionOptions?.hasUI).toBe(false);
   });
 
   test('disconnects SDK-managed MCP manager when broad OMP discovery is enabled', async () => {
@@ -1962,7 +1993,7 @@ describe('augmentPromptForJsonSchema', () => {
       type: 'array',
       items: { type: 'string' },
     });
-    expect(result).toContain('Respond with ONLY valid JSON matching the schema below');
+    expect(result).toContain('Respond with ONLY a JSON object matching the schema below');
     expect(result).toContain('"type": "array"');
   });
 });

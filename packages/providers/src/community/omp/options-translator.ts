@@ -3,12 +3,13 @@ import type { OmpCodingAgentSdk } from './sdk-loader';
 import type { NodeConfig } from '../../types';
 import type { OmpProviderDefaults } from './config';
 
-export type OmpThinkingLevel = 'auto' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+export type OmpThinkingLevel = 'auto' | 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
 type OmpSkill = Awaited<ReturnType<OmpCodingAgentSdk['discoverSkills']>>['skills'][number];
 
 const OMP_NATIVE_LEVELS: ReadonlySet<OmpThinkingLevel> = new Set<OmpThinkingLevel>([
   'auto',
+  'off',
   'minimal',
   'low',
   'medium',
@@ -36,7 +37,6 @@ export const DEFAULT_OMP_TOOL_NAMES = [
   'todo',
   'web_search',
   'write',
-  'render_mermaid',
   'inspect_image',
 ] as const;
 
@@ -51,14 +51,18 @@ const KNOWN_OMP_TOOL_NAMES = new Set<string>([
   'irc',
   'yield',
   'resolve',
-  'exit_plan_mode',
+  'goal',
+  'render_mermaid',
+  'generate_image',
   'search_tool_bm25',
+  'memory_edit',
   'retain',
   'recall',
   'reflect',
+  'learn',
+  'manage_skill',
   'report_finding',
   'report_tool_issue',
-  'generate_image',
 ]);
 
 const LEGACY_OMP_TOOL_ALIASES: Record<string, string> = {
@@ -163,8 +167,6 @@ export function resolveOmpThinkingLevel(nodeConfig?: NodeConfig): ResolvedThinki
   if (!nodeConfig) return { level: undefined };
 
   const { thinking, effort } = nodeConfig;
-  if (thinking === 'off' || effort === 'off') return { level: undefined };
-
   const level = normalizeToThinkingLevel(thinking) ?? normalizeToThinkingLevel(effort);
   if (level) return { level };
 

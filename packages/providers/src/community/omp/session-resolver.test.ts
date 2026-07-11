@@ -14,6 +14,9 @@ function sdkWithSessions(
       create(cwd: string, sessionDir?: string) {
         return { kind: 'create', cwd, sessionDir };
       },
+      inMemory(cwd?: string) {
+        return { kind: 'inMemory', cwd };
+      },
       async list() {
         return sessions;
       },
@@ -32,6 +35,31 @@ describe('resolveOmpSession', () => {
     await expect(resolveOmpSession(sdkWithSessions([]), '/repo', undefined)).resolves.toEqual({
       sessionManager: { kind: 'create', cwd: '/repo', sessionDir: undefined },
       resumeFailed: false,
+    });
+  });
+
+  test('uses in-memory session when persistence is disabled', async () => {
+    await expect(
+      resolveOmpSession(sdkWithSessions([]), '/repo', undefined, undefined, false, false)
+    ).resolves.toEqual({
+      sessionManager: { kind: 'inMemory', cwd: '/repo' },
+      resumeFailed: false,
+    });
+  });
+
+  test('marks resume failed when persistence is disabled with a resume id', async () => {
+    await expect(
+      resolveOmpSession(
+        sdkWithSessions([{ id: 'abc', path: '/s/abc.jsonl' }]),
+        '/repo',
+        'abc',
+        undefined,
+        false,
+        false
+      )
+    ).resolves.toEqual({
+      sessionManager: { kind: 'inMemory', cwd: '/repo' },
+      resumeFailed: true,
     });
   });
 

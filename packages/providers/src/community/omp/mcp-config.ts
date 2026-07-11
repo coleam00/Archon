@@ -51,17 +51,45 @@ function expandEnvVarsInRecord(
   return result;
 }
 
+function disabledServerSet(value: unknown, mcpPath: string): Set<string> {
+  if (value === undefined) return new Set();
+  if (!Array.isArray(value) || !value.every(item => typeof item === 'string')) {
+    throw new Error(`MCP config field "disabledServers" must be a string array: ${mcpPath}`);
+  }
+  return new Set(value);
+}
+
+function withoutDisabledServers(
+  servers: Record<string, unknown>,
+  disabledServers: ReadonlySet<string>
+): Record<string, unknown> {
+  if (disabledServers.size === 0) return servers;
+
+  const enabledServers: Record<string, unknown> = {};
+  for (const [name, server] of Object.entries(servers)) {
+    if (!disabledServers.has(name)) enabledServers[name] = server;
+  }
+  return enabledServers;
+}
+
 function normalizeMcpConfig(
   parsed: Record<string, unknown>,
   mcpPath: string
 ): Record<string, unknown> {
-  const keys = Object.keys(parsed);
-  if (!keys.includes('mcpServers')) return parsed;
+  const disabledServers = disabledServerSet(parsed.disabledServers, mcpPath);
+  if (!Object.hasOwn(parsed, 'mcpServers')) {
+    const servers = { ...parsed };
+    delete servers.$schema;
+    delete servers.disabledServers;
+    return withoutDisabledServers(servers, disabledServers);
+  }
 
-  if (keys.length > 1) {
-    throw new Error(
-      `MCP config cannot mix top-level "mcpServers" with other keys: ${mcpPath}. Use either a direct server map or { "mcpServers": { ... } }.`
-    );
+  for (const key of Object.keys(parsed)) {
+    if (key !== '$schema' && key !== 'disabledServers' && key !== 'mcpServers') {
+      throw new Error(
+        `MCP config cannot mix top-level "mcpServers" with unsupported key "${key}": ${mcpPath}. Use either a direct server map or { "mcpServers": { ... } }.`
+      );
+    }
   }
 
   const servers = parsed.mcpServers;
@@ -69,7 +97,7 @@ function normalizeMcpConfig(
     throw new Error(`MCP config field "mcpServers" must be a JSON object: ${mcpPath}`);
   }
 
-  return servers;
+  return withoutDisabledServers(servers, disabledServers);
 }
 
 function expandEnvVars(config: Record<string, unknown>, envSource: EnvSource): LoadedMcpConfig {

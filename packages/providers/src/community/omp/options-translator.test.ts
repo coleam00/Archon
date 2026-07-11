@@ -22,6 +22,11 @@ describe('resolveOmpThinkingLevel', () => {
     expect(resolveOmpThinkingLevel({ effort: 'low', thinking: 'auto' }).level).toBe('auto');
   });
 
+  test('passes through OMP off thinking selector', () => {
+    expect(resolveOmpThinkingLevel({ effort: 'off' }).level).toBe('off');
+    expect(resolveOmpThinkingLevel({ effort: 'high', thinking: 'off' }).level).toBe('off');
+  });
+
   test('warns on unsupported object thinking', () => {
     const result = resolveOmpThinkingLevel({ thinking: { type: 'enabled' } });
     expect(result.level).toBeUndefined();
@@ -37,12 +42,39 @@ describe('resolveOmpToolNames', () => {
       unknownDeniedTools: [],
     });
     expect(DEFAULT_OMP_TOOL_NAMES).toContain('todo');
+    expect(DEFAULT_OMP_TOOL_NAMES).toContain('inspect_image');
     expect(DEFAULT_OMP_TOOL_NAMES).not.toContain('todo_write');
+    expect(DEFAULT_OMP_TOOL_NAMES).not.toContain('render_mermaid');
+    expect(DEFAULT_OMP_TOOL_NAMES).not.toContain('generate_image');
   });
 
   test('uses current OMP tool names', () => {
-    expect(resolveOmpToolNames({ allowed_tools: ['eval', 'search', 'read', 'job'] })).toEqual({
-      toolNames: ['eval', 'search', 'read', 'job'],
+    expect(
+      resolveOmpToolNames({
+        allowed_tools: [
+          'eval',
+          'search',
+          'read',
+          'job',
+          'memory_edit',
+          'learn',
+          'manage_skill',
+          'render_mermaid',
+          'generate_image',
+        ],
+      })
+    ).toEqual({
+      toolNames: [
+        'eval',
+        'search',
+        'read',
+        'job',
+        'memory_edit',
+        'learn',
+        'manage_skill',
+        'render_mermaid',
+        'generate_image',
+      ],
       unknownTools: [],
       unknownDeniedTools: [],
     });

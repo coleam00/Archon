@@ -1,11 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
-import {
-  bridgeSession,
-  buildResultChunk,
-  mapOmpEvent,
-  tryParseStructuredOutput,
-} from './event-bridge';
+import { bridgeSession, buildResultChunk, mapOmpEvent } from './event-bridge';
+import { tryParseStructuredOutput } from '../../shared/structured-output';
 import type { OmpSession } from './sdk-loader';
 
 describe('mapOmpEvent', () => {
@@ -50,6 +46,17 @@ describe('mapOmpEvent', () => {
         toolCallId: '3',
       })
     ).toEqual([{ type: 'tool', toolName: 'read', toolInput: {}, toolCallId: '3' }]);
+  });
+
+  test('maps notice events to system chunks', () => {
+    expect(
+      mapOmpEvent({
+        type: 'notice',
+        level: 'warning',
+        message: 'Credential refresh failed',
+        source: 'auth',
+      })
+    ).toEqual([{ type: 'system', content: 'auth: warning: Credential refresh failed' }]);
   });
 });
 
@@ -154,8 +161,8 @@ describe('tryParseStructuredOutput', () => {
     expect(tryParseStructuredOutput('done\n{"ok":true}')).toEqual({ ok: true });
   });
 
-  test('parses preamble-prefixed JSON arrays', () => {
-    expect(tryParseStructuredOutput('done\n[\"a\",\"b\"]')).toEqual(['a', 'b']);
+  test('rejects non-object JSON roots', () => {
+    expect(tryParseStructuredOutput('done\n["a","b"]')).toBeUndefined();
   });
 });
 

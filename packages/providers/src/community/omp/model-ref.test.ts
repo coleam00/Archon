@@ -24,14 +24,25 @@ describe('parseOmpModelRef', () => {
     });
   });
 
+  test('allows custom OMP provider ids for SDK resolution', () => {
+    expect(parseOmpModelRef('my_provider/foo')).toEqual({
+      provider: 'my_provider',
+      modelId: 'foo',
+    });
+  });
+
+  test('normalizes provider id casing before SDK and env lookup', () => {
+    expect(parseOmpModelRef('Anthropic/claude')).toEqual({
+      provider: 'anthropic',
+      modelId: 'claude',
+    });
+  });
+
   test('rejects malformed refs', () => {
     expect(parseOmpModelRef('')).toBeUndefined();
     expect(parseOmpModelRef('anthropic')).toBeUndefined();
     expect(parseOmpModelRef('/model')).toBeUndefined();
     expect(parseOmpModelRef('anthropic/')).toBeUndefined();
-    expect(parseOmpModelRef('Anthropic/claude')).toBeUndefined();
-    expect(parseOmpModelRef('anthropic_beta/claude')).toBeUndefined();
-    expect(parseOmpModelRef('anthropic..beta/claude')).toBeUndefined();
-    expect(parseOmpModelRef('anthropic./claude')).toBeUndefined();
+    expect(parseOmpModelRef(' /model')).toBeUndefined();
   });
 });

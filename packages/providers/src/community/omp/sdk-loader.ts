@@ -118,7 +118,6 @@ export interface OmpCreateAgentSessionOptions {
   systemPrompt?: string[] | ((defaultPrompt: string[]) => string[]);
   mcpManager?: OmpMcpManager;
   customTools?: unknown[];
-  deadline?: number;
   toolNames: string[];
   hasUI: boolean;
 }
@@ -132,6 +131,7 @@ export interface OmpCodingAgentSdk {
   SessionManager: {
     getDefaultSessionDir(cwd: string, agentDir?: string): string;
     create(cwd: string, sessionDir?: string): OmpSessionManager;
+    inMemory?(cwd?: string): OmpSessionManager;
     list(cwd: string, sessionDir?: string): Promise<OmpSessionInfo[]>;
     open(filePath: string, sessionDir?: string): Promise<OmpSessionManager>;
     forkFrom?(filePath: string, cwd: string, sessionDir?: string): Promise<OmpSessionManager>;

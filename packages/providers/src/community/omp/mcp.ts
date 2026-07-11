@@ -74,6 +74,27 @@ function buildSources(
   return sources;
 }
 
+function withDefaultStdioCwd(
+  servers: Record<string, unknown>,
+  cwd: string
+): Record<string, unknown> {
+  const resolved: Record<string, unknown> = {};
+  for (const [name, server] of Object.entries(servers)) {
+    if (typeof server !== 'object' || server === null || Array.isArray(server)) {
+      resolved[name] = server;
+      continue;
+    }
+    const config = server as Record<string, unknown>;
+    const type = config.type;
+    if ((type === undefined || type === 'stdio') && config.cwd === undefined) {
+      resolved[name] = { ...config, cwd };
+    } else {
+      resolved[name] = config;
+    }
+  }
+  return resolved;
+}
+
 export async function resolveOmpMcp(
   sdk: Pick<OmpCodingAgentSdk, 'MCPManager'>,
   cwd: string,
@@ -85,8 +106,12 @@ export async function resolveOmpMcp(
   const manager = new sdk.MCPManager(cwd, null);
   manager.setAuthStorage(authStorage);
   const resolvedPath = isAbsolute(mcpPath) ? mcpPath : resolve(cwd, mcpPath);
+  const serverConfigs = withDefaultStdioCwd(servers, cwd);
   try {
-    const result = await manager.connectServers(servers, buildSources(serverNames, resolvedPath));
+    const result = await manager.connectServers(
+      serverConfigs,
+      buildSources(serverNames, resolvedPath)
+    );
 
     const toolNames = result.tools
       .map(getToolName)

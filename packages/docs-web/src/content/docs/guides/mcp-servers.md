@@ -181,16 +181,16 @@ Codex nodes pass the same MCP config as per-node `mcp_servers` overrides to the
 Codex SDK, so the servers are available for that node without requiring global
 `~/.codex/config.toml` setup.
 
-Oh My Pi uses its runtime's actual loaded MCP tool names instead of Claude wildcards,
-but workflow authors configure the same `mcp:` JSON file and do not need to list
-those MCP tools manually. In Claude and Oh My Pi nodes, MCP tools merge with any
-existing `allowed_tools` on the node.
+
+Oh My Pi uses its runtime's actual loaded MCP tool names instead of Claude wildcards.
+Without `allowed_tools`, loaded node-scoped MCP tools are available alongside the
+node's normal OMP tools. If you set `allowed_tools`, list each `mcp__server_tool` explicitly.
 
 ## MCP-Only Nodes
 
-For providers that support tool restrictions, combine `mcp` with
-`allowed_tools: []` to create nodes that can only use MCP tools and have no
-access to built-in tools (Bash, Read, Write, etc.):
+For Claude nodes, combine `mcp` with `allowed_tools: []` to create nodes that
+can only use MCP tools and have no access to built-in tools (Bash, Read, Write,
+etc.):
 
 ```yaml
 nodes:
@@ -200,10 +200,22 @@ nodes:
     allowed_tools: []
 ```
 
+Oh My Pi filters loaded MCP tools whenever any allowlist is present. For OMP
+MCP-only nodes, list each MCP tool explicitly and omit built-ins:
+
+```yaml
+nodes:
+  - id: query-db
+    provider: omp
+    prompt: "Find all users who signed up in the last 24 hours"
+    mcp: .archon/mcp/postgres.json
+    allowed_tools:
+      - mcp__postgres_query
+```
+
 This is useful for sandboxing — the AI can only interact through the MCP server
 and cannot touch the filesystem or run shell commands. Codex currently does not
-support Archon's `allowed_tools` / `denied_tools` restrictions, so this pattern
-is enforced for Claude and Oh My Pi nodes but not Codex nodes.
+support Archon's `allowed_tools` / `denied_tools` restrictions.
 
 ## Connection Failure Handling
 
@@ -381,7 +393,7 @@ bun run cli workflow run archon-smart-pr-review "Review PR #123"
 | Remove built-in tools | No | Yes | Yes |
 | Inject context | No | No | Yes |
 | Modify tool input | No | No | Yes |
-| Sandbox to MCP only | `mcp` + `allowed_tools: []` | — | — |
+| Sandbox to MCP only | Claude: `mcp` + `allowed_tools: []`; OMP: explicit `mcp__server_tool` names | — | — |
 
 ## Limitations
 

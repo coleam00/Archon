@@ -31,9 +31,18 @@ export async function resolveOmpSession(
   cwd: string,
   resumeSessionId: string | undefined,
   agentDir?: string,
-  forkSession = false
+  forkSession = false,
+  persistSession = true
 ): Promise<ResolvedOmpSession> {
-  const dir = sessionsDir(sdk, agentDir, cwd);
+  const dir = persistSession ? sessionsDir(sdk, agentDir, cwd) : undefined;
+
+  if (!persistSession) {
+    const inMemorySession = sdk.SessionManager.inMemory?.(cwd);
+    if (!inMemorySession) {
+      throw new Error('Oh My Pi SDK does not support in-memory sessions for persistSession=false.');
+    }
+    return { sessionManager: inMemorySession, resumeFailed: resumeSessionId !== undefined };
+  }
 
   if (!resumeSessionId) {
     return { sessionManager: sdk.SessionManager.create(cwd, dir), resumeFailed: false };
