@@ -167,4 +167,16 @@ export const marketplaceEntries: MarketplaceEntry[] = [
     tags: ['automation', 'development'],
     archonVersionCompat: '>=0.5.0',
   },
+  {
+    slug: 'image-node-factory',
+    name: 'Image Node Factory',
+    author: 'TheSmokeDev',
+    description:
+      'One visual brief in, a grounded image prompt pack out (optional Codex-rendered bitmaps). Template selection cites a pinned, checksum-verified 511-case style corpus; a deterministic validator fails the run on any citation that does not resolve. Renders are opt-in and every concept ships baked and overlay variants.',
+    sourceUrl:
+      'https://github.com/TheSmokeDev/image-node-factory/tree/da7af16e3a3ba6fca7b58dd7a596dad24689a3f6/marketplace/image-node-factory',
+    sha: 'da7af16e3a3ba6fca7b58dd7a596dad24689a3f6',
+    tags: ['automation', 'development'],
+    archonVersionCompat: '>=0.5.0',
+  },
 ];
