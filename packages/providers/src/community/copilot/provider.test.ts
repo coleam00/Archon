@@ -489,7 +489,6 @@ describe('CopilotProvider.sendQuery', () => {
     await collect(gen);
 
     expect(lastClientOpts?.baseDirectory).toBe('/custom/copilot-home');
-
   });
 
   test('COPILOT_GITHUB_TOKEN is always used (intent signal)', async () => {
