@@ -2398,3 +2398,56 @@ describe('runAttention', () => {
     expect(attention).toMatchObject({ kind: 'unreadable', reason: 'malformed_gate' });
   });
 });
+
+// ---------------------------------------------------------------------------
+// dagNodeSchema — LoopNode model/provider forwarding
+//
+// Regression coverage: the transform's loop branch previously returned only
+// { ...base, loop } and dropped node-level `model`/`provider`, so a loop node's
+// per-node model override was silently stripped at parse time and the executor
+// always fell back to the workflow-level model. LOOP_NODE_AI_FIELDS excludes
+// these two fields precisely because the loop executor DOES forward them, so the
+// transform must preserve them.
+// ---------------------------------------------------------------------------
+
+describe('dagNodeSchema — LoopNode model/provider', () => {
+  const loopNode = {
+    id: 'build',
+    model: 'sonnet',
+    provider: 'claude',
+    loop: { command: 'ralph-build', until: 'PLAN_COMPLETE', max_iterations: 100 },
+  };
+
+  /** Parse and narrow to a LoopNode, failing the test if either step doesn't hold. */
+  const parseLoop = (input: unknown) => {
+    const result = dagNodeSchema.safeParse(input);
+    expect(result.success).toBe(true);
+    if (!result.success) throw new Error('expected a valid loop node');
+    const node = result.data as DagNode;
+    expect(isLoopNode(node)).toBe(true);
+    if (!isLoopNode(node)) throw new Error('expected a loop node');
+    return node;
+  };
+
+  test('preserves node-level model on a loop node', () => {
+    expect(parseLoop(loopNode).model).toBe('sonnet');
+  });
+
+  test('preserves node-level provider on a loop node', () => {
+    expect(parseLoop(loopNode).provider).toBe('claude');
+  });
+
+  test('parsed loop node is still recognized by isLoopNode', () => {
+    // parseLoop asserts the guard; this case pins it as its own regression.
+    expect(isLoopNode(parseLoop(loopNode))).toBe(true);
+  });
+
+  test('omits model/provider when not set (no undefined keys leak in)', () => {
+    const node = parseLoop({
+      id: 'build',
+      loop: { command: 'ralph-build', until: 'PLAN_COMPLETE', max_iterations: 100 },
+    });
+    expect('model' in node).toBe(false);
+    expect('provider' in node).toBe(false);
+  });
+});
