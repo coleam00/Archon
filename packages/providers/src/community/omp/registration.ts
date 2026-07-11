@@ -12,5 +12,7 @@ export function registerOmpProvider(): void {
     factory: () => new OmpProvider(),
     capabilities: OMP_CAPABILITIES,
     builtIn: false,
+    // OMP discovers providers and credentials through its runtime catalog.
+    credentials: { kind: 'dynamic' },
   });
 }

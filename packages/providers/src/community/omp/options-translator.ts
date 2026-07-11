@@ -3,7 +3,15 @@ import type { OmpCodingAgentSdk } from './sdk-loader';
 import type { NodeConfig } from '../../types';
 import type { OmpProviderDefaults } from './config';
 
-export type OmpThinkingLevel = 'auto' | 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+export type OmpThinkingLevel =
+  | 'auto'
+  | 'off'
+  | 'minimal'
+  | 'low'
+  | 'medium'
+  | 'high'
+  | 'xhigh'
+  | 'max';
 
 type OmpSkill = Awaited<ReturnType<OmpCodingAgentSdk['discoverSkills']>>['skills'][number];
 
@@ -15,6 +23,7 @@ const OMP_NATIVE_LEVELS: ReadonlySet<OmpThinkingLevel> = new Set<OmpThinkingLeve
   'medium',
   'high',
   'xhigh',
+  'max',
 ]);
 
 const ARCHON_FALLBACK_ROLE = 'archon';
@@ -25,8 +34,8 @@ export const DEFAULT_OMP_TOOL_NAMES = [
   'eval',
   'ssh',
   'edit',
-  'find',
-  'search',
+  'glob',
+  'grep',
   'ast_grep',
   'ast_edit',
   'lsp',
@@ -67,7 +76,8 @@ const KNOWN_OMP_TOOL_NAMES = new Set<string>([
 
 const LEGACY_OMP_TOOL_ALIASES: Record<string, string> = {
   python: 'eval',
-  grep: 'search',
+  find: 'glob',
+  search: 'grep',
   poll: 'job',
   fetch: 'read',
   todo_write: 'todo',
@@ -148,7 +158,6 @@ export interface ResolvedThinkingLevel {
 
 function normalizeToThinkingLevel(value: unknown): OmpThinkingLevel | undefined {
   if (typeof value !== 'string') return undefined;
-  if (value === 'max') return 'xhigh';
   if (OMP_NATIVE_LEVELS.has(value as OmpThinkingLevel)) return value as OmpThinkingLevel;
   return undefined;
 }

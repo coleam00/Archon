@@ -212,7 +212,7 @@ nodes:
 | `provider` | string | inherited | Per-node provider override (any registered provider, e.g. `'claude'`, `'codex'`, `'pi'`, `'omp'`) |
 | `model` | string | inherited | Per-node model override. Oh My Pi uses `<omp-provider-id>/<model-id>` (for example `anthropic/claude-sonnet-4-5` or `openrouter/qwen/qwen3-coder`) |
 | `output_format` | object | — | JSON Schema for structured output. SDK-enforced on Claude/Codex/OpenCode; best-effort on Pi/Copilot/Oh My Pi (schema appended to prompt, JSON extracted + repaired). The parsed output is validated against the schema (every provider); a node that declares `output_format` but returns no schema-valid output **fails** rather than degrading silently. |
-| `allowed_tools` | string[] | — | Whitelist of built-in tools. `[]` = no tools. Supported by Claude, Pi, and Oh My Pi (use each provider's tool names; OMP uses `search`, not `grep`) |
+| `allowed_tools` | string[] | — | Whitelist of built-in tools. `[]` = no tools. Supported by Claude, Pi, and Oh My Pi (use each provider's tool names; current OMP uses `grep` and `glob`) |
 | `denied_tools` | string[] | — | Tools to remove. Applied after `allowed_tools`. Supported by Claude, Pi, and Oh My Pi |
 | `hooks` | object | — | Per-node SDK hook callbacks. Claude only. See [Hooks](/guides/hooks/) |
 | `mcp` | string | — | Path to MCP server config JSON file. Supported by Claude, Codex, and Oh My Pi. See [MCP Servers](/guides/mcp-servers/) |
@@ -421,12 +421,12 @@ nodes:
 
 - The output is captured as a JSON string and available via `$classify.output` (full JSON) or `$classify.output.type` (field access)
 - Use `output_format` when downstream nodes need to branch on specific values via `when:`
-- **Validated + reask + fail-fast.** The parsed output is validated against your schema for *every* provider (a net for refusals / `max_tokens` truncation that bypass even SDK enforcement). On a miss, best-effort providers (Pi/Copilot) re-ask up to 3× with the schema errors appended; enforced providers fail immediately. A node that declares `output_format` but still has no schema-valid output **fails** — it no longer completes-with-prose and silently feeds `''` downstream.
+- **Validated + reask + fail-fast.** The parsed output is validated against your schema for *every* provider (a net for refusals / `max_tokens` truncation that bypass even SDK enforcement). On a miss, best-effort providers (Pi/Copilot/Oh My Pi) re-ask up to 3× with the schema errors appended; enforced providers fail immediately. A node that declares `output_format` but still has no schema-valid output **fails** — it no longer completes-with-prose and silently feeds `''` downstream.
 - **Field access is strict.** `$classify.output.type` resolves only when `type` is in the schema. A reference to a field **not declared** in the schema fails the consuming node (a typo no longer silently becomes `''`); a field you declared **optional** but the model omitted resolves to `''`. For schemaless `bash`/`script` nodes, a `.field` ref requires the output to be JSON containing that key — otherwise the consuming node fails, so always emit every key you reference (or use whole-text `$node.output`).
 
 ### `allowed_tools` and `denied_tools` for Tool Restrictions
 
-Restrict which built-in tools a node can use without relying on prompt instructions. Restrictions are enforced for Claude, OpenCode, Pi, Copilot, and Oh My Pi. Tool names are provider-specific: Claude uses Claude SDK names, Pi uses `grep`, and Oh My Pi uses `search`.
+Restrict which built-in tools a node can use without relying on prompt instructions. Restrictions are enforced for Claude, OpenCode, Pi, Copilot, and Oh My Pi. Tool names are provider-specific; current Pi and Oh My Pi releases both use `grep` and `glob`.
 
 ```yaml
 nodes:
@@ -438,7 +438,7 @@ nodes:
     provider: omp
     model: anthropic/claude-sonnet-4-5
     command: code-review
-    allowed_tools: [read, search, find] # OMP-style names
+    allowed_tools: [read, grep, glob]   # OMP-style names
 
   - id: no-tools
     command: summarize

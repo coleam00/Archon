@@ -12,9 +12,9 @@ import {
 } from './options-translator';
 
 describe('resolveOmpThinkingLevel', () => {
-  test('maps effort max to xhigh and thinking wins', () => {
-    expect(resolveOmpThinkingLevel({ effort: 'max' }).level).toBe('xhigh');
-    expect(resolveOmpThinkingLevel({ effort: 'low', thinking: 'high' }).level).toBe('high');
+  test('passes through OMP max thinking selector', () => {
+    expect(resolveOmpThinkingLevel({ effort: 'max' }).level).toBe('max');
+    expect(resolveOmpThinkingLevel({ effort: 'low', thinking: 'max' }).level).toBe('max');
   });
 
   test('passes through OMP auto thinking selector', () => {
@@ -53,7 +53,8 @@ describe('resolveOmpToolNames', () => {
       resolveOmpToolNames({
         allowed_tools: [
           'eval',
-          'search',
+          'grep',
+          'glob',
           'read',
           'job',
           'memory_edit',
@@ -66,7 +67,8 @@ describe('resolveOmpToolNames', () => {
     ).toEqual({
       toolNames: [
         'eval',
-        'search',
+        'grep',
+        'glob',
         'read',
         'job',
         'memory_edit',
@@ -90,9 +92,11 @@ describe('resolveOmpToolNames', () => {
 
   test('maps legacy OMP tool aliases to current names', () => {
     expect(
-      resolveOmpToolNames({ allowed_tools: ['python', 'grep', 'fetch', 'poll', 'todo_write'] })
+      resolveOmpToolNames({
+        allowed_tools: ['python', 'search', 'find', 'fetch', 'poll', 'todo_write'],
+      })
     ).toEqual({
-      toolNames: ['eval', 'search', 'read', 'job', 'todo'],
+      toolNames: ['eval', 'grep', 'glob', 'read', 'job', 'todo'],
       unknownTools: [],
       unknownDeniedTools: [],
     });
@@ -100,7 +104,7 @@ describe('resolveOmpToolNames', () => {
 
   test('honors allowed and denied tools in OMP namespace', () => {
     expect(
-      resolveOmpToolNames({ allowed_tools: ['read', 'ssh', 'grep'], denied_tools: ['search'] })
+      resolveOmpToolNames({ allowed_tools: ['read', 'ssh', 'search'], denied_tools: ['grep'] })
     ).toEqual({ toolNames: ['read', 'ssh'], unknownTools: [], unknownDeniedTools: [] });
   });
 
