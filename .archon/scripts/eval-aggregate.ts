@@ -138,13 +138,24 @@ function median(nums: number[]): number {
 }
 // Rationale kept from the first vote whose score equals the median (grounded, not synthesized).
 const medianByCase: Record<string, CaseScores> = {};
+// Non-gating divergence signal: median-of-N de-flakes ±1 wobble between judges,
+// but a >=2-point spread on the same case+dim means the judges substantively
+// disagreed, not just wobbled — that disagreement is exactly what median-of-N
+// would otherwise mask. Surfaced for humans in the scorecard; does not affect
+// PASS/FAIL.
+const highVariance: Array<{ case_id: string; dim: string; spread: number }> = [];
 for (const id of expectedIds) {
   const scores: CaseScores = {};
   for (const d of dims) {
     const voteScores = votes.map((v) => v.find((r) => r.case_id === id)!.scores[d]);
-    const med = median(voteScores.map((x) => x.score));
+    const scoreNums = voteScores.map((x) => x.score);
+    const med = median(scoreNums);
     const src = voteScores.find((x) => x.score === med) || voteScores[0];
     scores[d] = { score: med, rationale: src.rationale };
+    const spread = Math.max(...scoreNums) - Math.min(...scoreNums);
+    if (spread >= 2) {
+      highVariance.push({ case_id: id, dim: d, spread });
+    }
   }
   medianByCase[id] = scores;
 }
@@ -231,6 +242,7 @@ const scorecard = {
   case_min: t.case_min,
   case_failures: caseFailures,
   detection_misses: detectionMisses,
+  high_variance: highVariance,
   baseline_used: baselineUsed,
   regressions,
   scored_at: new Date().toISOString(),
