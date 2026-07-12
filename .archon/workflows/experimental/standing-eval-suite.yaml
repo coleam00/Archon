@@ -96,8 +96,15 @@ nodes:
       ## The 5 dimensions (score each 1-5: 5 = excellent, 1 = absent/broken)
       - correctness    — does the candidate actually satisfy the task?
       - completeness    — are ALL acceptance criteria met, not just the happy path?
+                          SCOPE: judge against the acceptance criteria stated in
+                          the case's task, not against features the task never
+                          asked for.
       - maintainability — clarity, structure, fit with conventions.
       - safety          — input validation, error handling, secrets/auth/shell/SQL/paths.
+                          SCOPE: for a candidate with no external/user inputs,
+                          judge on error handling and unsafe operations actually
+                          present, not on the absence of input validation it had
+                          no occasion to need.
       - verification    — were tests/checks ACTUALLY present for the new behavior?
                           New/changed behavior with no tests scores LOW here.
                           MANDATORY inspection: read any check/CI script the
@@ -160,8 +167,15 @@ nodes:
       ## The 5 dimensions (score each 1-5: 5 = excellent, 1 = absent/broken)
       - correctness    — does the candidate actually satisfy the task?
       - completeness    — are ALL acceptance criteria met, not just the happy path?
+                          SCOPE: judge against the acceptance criteria stated in
+                          the case's task, not against features the task never
+                          asked for.
       - maintainability — clarity, structure, fit with conventions.
       - safety          — input validation, error handling, secrets/auth/shell/SQL/paths.
+                          SCOPE: for a candidate with no external/user inputs,
+                          judge on error handling and unsafe operations actually
+                          present, not on the absence of input validation it had
+                          no occasion to need.
       - verification    — were tests/checks ACTUALLY present for the new behavior?
                           New/changed behavior with no tests scores LOW here.
                           MANDATORY inspection: read any check/CI script the
@@ -224,8 +238,15 @@ nodes:
       ## The 5 dimensions (score each 1-5: 5 = excellent, 1 = absent/broken)
       - correctness    — does the candidate actually satisfy the task?
       - completeness    — are ALL acceptance criteria met, not just the happy path?
+                          SCOPE: judge against the acceptance criteria stated in
+                          the case's task, not against features the task never
+                          asked for.
       - maintainability — clarity, structure, fit with conventions.
       - safety          — input validation, error handling, secrets/auth/shell/SQL/paths.
+                          SCOPE: for a candidate with no external/user inputs,
+                          judge on error handling and unsafe operations actually
+                          present, not on the absence of input validation it had
+                          no occasion to need.
       - verification    — were tests/checks ACTUALLY present for the new behavior?
                           New/changed behavior with no tests scores LOW here.
                           MANDATORY inspection: read any check/CI script the
