@@ -48,3 +48,20 @@ The shipped `seed`/`golden` `reference:` fields currently hint the expected verd
 ("expect mid scores", "should score low on verification"), so a standard run partly tests
 reading-comprehension. Use BLIND references (ideal-only, no defect naming) to test
 *independent* detection.
+
+## Prompt edits require a re-bless (human-gated)
+
+Any change to the `score-1/2/3` judge prompt (rubric wording, scope anchors, output
+format) can shift what the judge scores identical candidates — the calibration above
+was measured against the prompt as it read at run time, not against the rubric in the
+abstract. A prompt edit invalidates the committed `<suite>/baseline.json` numbers until
+someone re-runs the suite and re-blesses.
+
+This is deliberately **human-gated**, not automatic: the loop must never edit its own
+success criteria (`baseline.json`, `suite.json` thresholds) to make its own diff pass.
+If a prompt change makes a golden suite regress, that is a signal to a human, not
+something the changing process resolves by rewriting the baseline.
+
+See the "Bless a baseline (close the flywheel)" procedure in
+[`.archon/evals/README.md`](README.md#bless-a-baseline-close-the-flywheel) for the exact
+re-bless steps.
