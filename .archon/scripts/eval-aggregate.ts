@@ -36,6 +36,15 @@ const dims: string[] = manifest.dimensions;
 const weights: Record<string, number> = manifest.weights;
 const t = manifest.thresholds;
 
+// A missing/typo'd threshold key makes `x < undefined` evaluate false in JS,
+// silently disabling that floor check. Fail loud instead.
+for (const key of ['overall_min', 'dim_floor', 'case_min', 'regression_tolerance']) {
+  if (typeof t?.[key] !== 'number') {
+    console.error(`suite.json thresholds.${key} is missing or non-numeric (${JSON.stringify(t?.[key])}) — this would silently disable a gate check. Gate FAILS.`);
+    process.exit(1);
+  }
+}
+
 // ---------- Expected case ids from the queue (identity source of truth) ----------
 // The id is regex-extracted from each queued YAML (top-level `id:` line) — no yaml
 // package needed (bun can't resolve it from checkout root here).
@@ -68,6 +77,16 @@ const voteFiles = readdirSync(evalDir)
   .sort();
 if (voteFiles.length === 0) {
   console.error(`No results-<n>.json vote files in ${evalDir} — judges produced nothing. Gate FAILS.`);
+  process.exit(1);
+}
+// A judge node can complete its turn without writing its results-<n>.json (the
+// score nodes have no output_format enforcing the write), which would silently
+// degrade median-of-N to median-of-fewer. Require the expected vote count.
+const expectedVotes = Math.max(1, Number(process.env.EVAL_VOTES || 3));
+if (voteFiles.length !== expectedVotes) {
+  console.error(
+    `Expected ${expectedVotes} vote file(s) but found ${voteFiles.length} (${voteFiles.join(', ')}) — a judge vote is missing; median-of-N is compromised. Gate FAILS. (Set EVAL_VOTES to change the expected count.)`,
+  );
   process.exit(1);
 }
 const votes: VoteResult[] = [];
@@ -143,6 +162,10 @@ if (existsSync(labelsPath)) {
     }
     if (!dims.includes(lab.trap_dim)) {
       console.error(`labels.json case "${id}" has unknown trap_dim "${lab.trap_dim}" — gate FAILS.`);
+      process.exit(1);
+    }
+    if (typeof lab.max_score !== 'number') {
+      console.error(`labels.json case "${id}" has a missing or non-numeric max_score (${JSON.stringify(lab.max_score)}) — 'median > undefined' is always false, so the detection miss could never fire. Gate FAILS.`);
       process.exit(1);
     }
   }

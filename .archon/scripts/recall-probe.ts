@@ -17,7 +17,7 @@
  */
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync, appendFileSync, rmSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join, dirname, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 
 interface RecallCase {
@@ -46,17 +46,33 @@ if (cases.length === 0) {
 }
 if (runs === 1) console.log('[recall] RECALL_RUNS=1 — one run is a smoke, NOT calibration.');
 
+// JS RegExp has no PCRE-style inline flag group like (?i); translate a leading
+// one (e.g. (?i), (?im)) into the flags argument. The harness always wants 'm'.
+function compileProbe(pattern: string): RegExp {
+  const m = pattern.match(/^\(\?([imsuy]+)\)/);
+  const flags = [...new Set('m' + (m ? m[1] : ''))].join('');
+  return new RegExp(m ? pattern.slice(m[0].length) : pattern, flags);
+}
+
 function probeOnce(c: RecallCase, runIdx: number): { fired: boolean; detail: string } {
   const dir = join(tmpdir(), 'recall-probe', `${c.id}-${Date.now()}-${runIdx}`);
   mkdirSync(dir, { recursive: true });
   try {
     for (const fx of c.fixture || []) {
       const p = join(dir, fx.path);
+      const resolved = resolve(p);
+      if (resolved !== resolve(dir) && !resolved.startsWith(resolve(dir) + sep)) {
+        console.error(`recall case "${c.id}" fixture path escapes the sandbox: ${fx.path}`);
+        process.exit(1);
+      }
       mkdirSync(dirname(p), { recursive: true });
       writeFileSync(p, fx.content);
     }
     if ((c.fixture || []).some((fx) => fx.path === 'init.sh')) {
-      spawnSync('bash', ['init.sh'], { cwd: dir, timeout: 30000 });
+      const initRes = spawnSync('bash', ['init.sh'], { cwd: dir, timeout: 30000, encoding: 'utf8' });
+      if (initRes.error || initRes.status !== 0) {
+        return { fired: false, detail: `init.sh failed (exit ${initRes.status}${initRes.error ? `, ${initRes.error.message}` : ''}) — fixture broken, not a memory-recall signal` };
+      }
     }
     // NOTE: shell: true on Windows is safe here because c.task is loaded from
     // repo-controlled JSON fixtures (.archon/evals/recall/cases/*.json), not dynamic input.
@@ -74,11 +90,17 @@ function probeOnce(c: RecallCase, runIdx: number): { fired: boolean; detail: str
       { cwd: dir, timeout: 300000, encoding: 'utf8', shell: process.platform === 'win32' },
     );
     const transcript = `${res.stdout || ''}\n${res.stderr || ''}`;
-    if (res.status !== 0 && !transcript.trim()) {
-      return { fired: false, detail: `session error (exit ${res.status})` };
+    if (res.error) {
+      return { fired: false, detail: `session failed to run: ${res.error.message}` };
     }
-    const missing = c.evidence.filter((e) => !new RegExp(e, 'm').test(transcript));
-    const violated = c.forbidden.filter((f) => new RegExp(f, 'm').test(transcript));
+    if (res.status !== 0) {
+      // A session that errored (rate limit, crash, timeout) after emitting partial
+      // stream-json must not be scored on that truncated output — it is not a
+      // valid recall data point.
+      return { fired: false, detail: `session error (exit ${res.status})${transcript.trim() ? ' — partial output discarded' : ''}` };
+    }
+    const missing = c.evidence.filter((e) => !compileProbe(e).test(transcript));
+    const violated = c.forbidden.filter((f) => compileProbe(f).test(transcript));
     if (violated.length > 0) return { fired: false, detail: `forbidden matched: ${violated[0]}` };
     if (missing.length > 0) return { fired: false, detail: `evidence missing: ${missing[0]}` };
     return { fired: true, detail: 'ok' };
