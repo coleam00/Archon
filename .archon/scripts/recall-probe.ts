@@ -69,25 +69,42 @@ function probeOnce(c: RecallCase, runIdx: number): { fired: boolean; detail: str
       writeFileSync(p, fx.content);
     }
     if ((c.fixture || []).some((fx) => fx.path === 'init.sh')) {
-      const initRes = spawnSync('bash', ['init.sh'], { cwd: dir, timeout: 30000, encoding: 'utf8' });
+      // Provide a git identity so a fixture `git commit` doesn't fail 128 in a
+      // throwaway dir with no configured user.name/user.email.
+      const initRes = spawnSync('bash', ['init.sh'], {
+        cwd: dir,
+        timeout: 30000,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: 'archon-eval',
+          GIT_AUTHOR_EMAIL: 'eval@archon.local',
+          GIT_COMMITTER_NAME: 'archon-eval',
+          GIT_COMMITTER_EMAIL: 'eval@archon.local',
+        },
+      });
       if (initRes.error || initRes.status !== 0) {
-        return { fired: false, detail: `init.sh failed (exit ${initRes.status}${initRes.error ? `, ${initRes.error.message}` : ''}) — fixture broken, not a memory-recall signal` };
+        const lastErr = (initRes.stderr || '').trim().split('\n').pop() || '';
+        return { fired: false, detail: `init.sh failed (exit ${initRes.status}${initRes.error ? `, ${initRes.error.message}` : ''}${lastErr ? `: ${lastErr}` : ''}) — fixture broken, not a memory-recall signal` };
       }
     }
-    // NOTE: shell: true on Windows is safe here because c.task is loaded from
-    // repo-controlled JSON fixtures (.archon/evals/recall/cases/*.json), not dynamic input.
-    // If task input becomes user-controlled, disable shell and escape arguments.
+    // The prompt is passed via STDIN, not as an argv element. On Windows `claude`
+    // resolves to claude.cmd, which Node can only spawn with shell:true — and
+    // shell:true does NOT quote argv, so a multi-word `-p <task>` gets split at
+    // spaces (the prompt is truncated to its first word, silently mismeasuring
+    // recall). `claude -p` with no inline prompt reads the prompt from stdin; the
+    // remaining flags contain no spaces, so they survive shell:true intact.
     const res = spawnSync(
       'claude',
       [
-        '-p', c.task,
+        '-p',
         '--model', 'sonnet',
         '--output-format', 'stream-json',
         '--verbose',
         '--max-turns', '12',
         '--allowedTools', 'Bash,Read,Write,Edit,Glob,Grep',
       ],
-      { cwd: dir, timeout: 300000, encoding: 'utf8', shell: process.platform === 'win32' },
+      { cwd: dir, input: c.task, timeout: 300000, encoding: 'utf8', shell: process.platform === 'win32' },
     );
     const transcript = `${res.stdout || ''}\n${res.stderr || ''}`;
     if (res.error) {
