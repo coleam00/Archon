@@ -3640,19 +3640,6 @@ async function executeApprovalNode(
 }
 
 /**
- * Shared context for {@link runLayers}. Bundles the run-level invariants (deps, platform,
- * run record, resolved provider/model/options, paths, config) together with the per-subgraph
- * mutable state (the node set + its pre-computed topological layers, the shared output map,
- * session threading, usage accumulators, and resume cache).
- *
- * The top-level DAG and each `loop_group` body iteration construct their own context: the
- * top-level call uses `workflow.nodes` / a fresh `nodeOutputs`; a loop-group body uses the
- * group's `nodes` / a per-iteration scoped `nodeOutputs` (reset each iteration) and a
- * `stepNamePrefix` of `'{groupId}.'` that namespaces runLayers' OWN control events
- * (skip/trigger_rule/when). Body lifecycle events emitted inside executeNodeInternal /
- * executeBashNode / executeScriptNode still use the raw node id (known v1 limitation).
- */
-/**
  * True when a node participates in cross-run session persistence: a command/prompt
  * node (see {@link isPersistableNode}) that hasn't opted out via `context: 'fresh'`,
  * with `persist_session: true` set directly or inherited from the workflow-level
@@ -3700,6 +3687,19 @@ async function buildColdResumeRecoveryPointer(
   }
 }
 
+/**
+ * Shared context for {@link runLayers}. Bundles the run-level invariants (deps, platform,
+ * run record, resolved provider/model/options, paths, config) together with the per-subgraph
+ * mutable state (the node set + its pre-computed topological layers, the shared output map,
+ * session threading, usage accumulators, and resume cache).
+ *
+ * The top-level DAG and each `loop_group` body iteration construct their own context: the
+ * top-level call uses `workflow.nodes` / a fresh `nodeOutputs`; a loop-group body uses the
+ * group's `nodes` / a per-iteration scoped `nodeOutputs` (reset each iteration) and a
+ * `stepNamePrefix` of `'{groupId}.'` that namespaces runLayers' OWN control events
+ * (skip/trigger_rule/when). Body lifecycle events emitted inside executeNodeInternal /
+ * executeBashNode / executeScriptNode still use the raw node id (known v1 limitation).
+ */
 interface RunLayersContext {
   // --- run-level invariants (shared by top-level DAG and loop_group body) ---
   deps: WorkflowDeps;
