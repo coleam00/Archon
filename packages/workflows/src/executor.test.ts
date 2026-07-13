@@ -3,7 +3,7 @@
  * Covers concurrent-run guards, model/provider resolution, and resume logic
  * that the inner dag-executor.test.ts cannot reach.
  */
-import { describe, it, expect, mock, beforeEach } from 'bun:test';
+import { describe, it, expect, mock, beforeEach, spyOn } from 'bun:test';
 
 // --- Mock logger ---
 const mockLogFn = mock(() => {});
@@ -67,6 +67,7 @@ registerBuiltinProviders();
 
 // --- Import after mocks ---
 import { executeWorkflow, hydrateResumableRun } from './executor';
+import { keepAwake } from './utils/keep-awake';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
 import type { WorkflowDefinition, WorkflowRun } from './schemas';
@@ -188,6 +189,8 @@ describe('executeWorkflow', () => {
       );
       expect(result.success).toBe(false);
       expect(result.error).toContain('Database error');
+      // Blocked before the execution window — keep-awake must never have fired.
+      expect(keepAwake.activeCount()).toBe(0);
     });
 
     it('blocks workflow when another is actively running', async () => {
@@ -211,6 +214,61 @@ describe('executeWorkflow', () => {
       );
       expect(result.success).toBe(false);
       expect(result.error).toContain('already active');
+    });
+
+    // -----------------------------------------------------------------------
+    // Keep-awake pairing (acquire before the run's try, release in its finally)
+    // -----------------------------------------------------------------------
+
+    // Safe to spy on the real singleton: off-Windows its native fn is
+    // undefined, so acquire/release only touch the refcount.
+    it('acquires and releases keep-awake exactly once on a successful run', async () => {
+      const acquireSpy = spyOn(keepAwake, 'acquire');
+      const releaseSpy = spyOn(keepAwake, 'release');
+      try {
+        const result = await executeWorkflow(
+          makeDeps(),
+          makePlatform(),
+          'conv-1',
+          '/tmp',
+          makeWorkflow(),
+          'test message',
+          'db-conv-1'
+        );
+        expect(result.workflowRunId).toBe('run-123');
+        expect(acquireSpy).toHaveBeenCalledTimes(1);
+        expect(releaseSpy).toHaveBeenCalledTimes(1);
+        expect(keepAwake.activeCount()).toBe(0);
+      } finally {
+        acquireSpy.mockRestore();
+        releaseSpy.mockRestore();
+      }
+    });
+
+    it('still releases keep-awake when the DAG throws an unhandled error', async () => {
+      mockExecuteDagWorkflow.mockImplementationOnce(async () => {
+        throw new Error('DAG exploded');
+      });
+      const acquireSpy = spyOn(keepAwake, 'acquire');
+      const releaseSpy = spyOn(keepAwake, 'release');
+      try {
+        const result = await executeWorkflow(
+          makeDeps(),
+          makePlatform(),
+          'conv-1',
+          '/tmp',
+          makeWorkflow(),
+          'test message',
+          'db-conv-1'
+        );
+        expect(result.success).toBe(false);
+        expect(acquireSpy).toHaveBeenCalledTimes(1);
+        expect(releaseSpy).toHaveBeenCalledTimes(1);
+        expect(keepAwake.activeCount()).toBe(0);
+      } finally {
+        acquireSpy.mockRestore();
+        releaseSpy.mockRestore();
+      }
     });
 
     it('passes self-id and started_at to the lock query so self is excluded', async () => {

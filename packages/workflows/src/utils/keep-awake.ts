@@ -10,9 +10,10 @@
  * collapsing the DAG tail; other casualties present as zombie `running` rows.
  *
  * Best-effort by design: on non-Windows, or if `bun:ffi` / kernel32 is
- * unavailable, every method is a no-op. A keep-awake failure must NEVER block
- * or fail a workflow run (intentional, documented fallback — the CLAUDE.md
- * fail-fast rule's sanctioned exception).
+ * unavailable, every method is a no-op, and the native calls themselves are
+ * try/catch-guarded. A keep-awake failure must NEVER block or fail a workflow
+ * run (intentional, documented fallback — the CLAUDE.md fail-fast rule's
+ * sanctioned exception).
  *
  * The screen is allowed to turn off — we request `ES_SYSTEM_REQUIRED` only, not
  * `ES_DISPLAY_REQUIRED`. The per-thread execution state is cleared by the OS on
@@ -40,11 +41,15 @@ type SetExecStateFn = (flags: number) => number;
 export interface KeepAwake {
   acquire(): void;
   release(): void;
-  /** Current refcount — exposed for tests and diagnostics. */
+  /** Current refcount — exposed for tests. */
   activeCount(): number;
 }
 
-/** Lazy-initialized logger (deferred so it has no module-load side effects). */
+/**
+ * Lazy-initialized logger. Deferred until first use in the common case; the
+ * one import-time invocation is `loadNative()`'s catch path (Windows dlopen
+ * failure), which is acceptable — it's already an error-reporting path.
+ */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('workflow.keep-awake');
@@ -76,23 +81,45 @@ export function createKeepAwake(
     acquire(): void {
       count += 1;
       if (!native || count !== 1) return;
-      const previous = native(ACQUIRE_FLAGS);
-      if (previous === 0) {
-        // API failure: refcount already incremented so release stays paired.
-        getLog().warn({ flags: ACQUIRE_FLAGS }, 'keepawake.acquire_failed');
-        return;
+      // try/catch enforces the module contract: a throwing FFI call here would
+      // otherwise escape into executeWorkflow BEFORE its try block and leave
+      // the run row stuck 'running' — the exact zombie class this module fights.
+      try {
+        const previous = native(ACQUIRE_FLAGS);
+        if (previous === 0) {
+          // API failure: refcount already incremented so release stays paired.
+          getLog().warn({ flags: ACQUIRE_FLAGS }, 'keepawake.acquire_failed');
+          return;
+        }
+        getLog().info({ activeCount: count }, 'keepawake.acquire_completed');
+      } catch (error) {
+        getLog().warn({ err: error as Error, flags: ACQUIRE_FLAGS }, 'keepawake.acquire_failed');
       }
-      getLog().info({ activeCount: count }, 'keepawake.acquire_completed');
     },
     release(): void {
       if (count === 0) {
-        getLog().warn({}, 'keepawake.release_unbalanced');
+        // Should never fire (executor pairs acquire/release via try/finally);
+        // include a stack so an unbalanced call site is findable if it does.
+        getLog().warn({ stack: new Error().stack }, 'keepawake.release_unbalanced');
         return;
       }
       count -= 1;
       if (!native || count !== 0) return;
-      native(RELEASE_FLAGS);
-      getLog().info({ activeCount: count }, 'keepawake.release_completed');
+      // try/catch: a throw from the first statement of the executor's finally
+      // would replace the run's return value and skip the zombie backstop.
+      try {
+        const previous = native(RELEASE_FLAGS);
+        if (previous === 0) {
+          // Failed clear leaves ES_SYSTEM_REQUIRED asserted until process exit
+          // — the host cannot sleep. Nothing more we can do, but never say
+          // "completed" when the OS said no.
+          getLog().warn({ flags: RELEASE_FLAGS }, 'keepawake.release_failed');
+          return;
+        }
+        getLog().info({ activeCount: count }, 'keepawake.release_completed');
+      } catch (error) {
+        getLog().warn({ err: error as Error, flags: RELEASE_FLAGS }, 'keepawake.release_failed');
+      }
     },
     activeCount(): number {
       return count;
@@ -102,13 +129,10 @@ export function createKeepAwake(
 
 /**
  * Load the native `SetThreadExecutionState` from kernel32.dll via `bun:ffi`.
- * Returns `undefined` off-Windows or on any load failure.
- *
- * Intentional, documented fallback: keep-awake is best-effort — a missing
- * symbol or FFI failure must never block workflow execution, and the OS clears
- * the per-thread execution state on process exit regardless. `bun:ffi` itself
- * resolves on all platforms; only the `dlopen('kernel32.dll')` is Windows-only,
- * so it stays behind the platform guard.
+ * Returns `undefined` off-Windows or on any load failure (best-effort — see
+ * the module doc above for why). `bun:ffi` itself resolves on all platforms;
+ * only the `dlopen('kernel32.dll')` call is Windows-only, so it stays behind
+ * the platform guard.
  */
 function loadNative(): SetExecStateFn | undefined {
   if (process.platform !== 'win32') return undefined;
@@ -127,11 +151,12 @@ function loadNative(): SetExecStateFn | undefined {
 }
 
 /**
- * Process-wide keep-awake singleton. Refcounted so concurrent runs in one
- * server process hold a single execution-state request until the LAST finishes.
+ * Process-wide keep-awake singleton (see `createKeepAwake` above for the
+ * refcounting rationale).
  *
- * Bun runs all JS on one thread, so acquire and clear land on the same thread —
- * a hard requirement of the per-thread `SetThreadExecutionState` API. Do NOT
- * move these calls into a Worker.
+ * Workflow execution never runs in a Worker thread in this codebase, so
+ * acquire and clear always land on the same (main) thread — a hard requirement
+ * of the per-thread `SetThreadExecutionState` API. If workflow execution ever
+ * moves to a Worker, do NOT call these from it.
  */
 export const keepAwake: KeepAwake = createKeepAwake(loadNative(), process.platform);

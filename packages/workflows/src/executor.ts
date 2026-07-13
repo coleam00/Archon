@@ -714,13 +714,11 @@ export async function executeWorkflow(
 
   // Wrap execution in try-catch to ensure workflow is marked as failed on any error.
   //
-  // Hold a Windows keep-awake request for exactly the executing window so an
-  // unattended machine cannot enter Modern Standby mid-DAG and freeze this
-  // process (a thawed executor spawns bash children that exit 66 — see the
-  // 2026-07-05 mid-run-death record). Placed HERE, not at function top, so the
+  // Hold a Windows keep-awake request for the executing window (see
+  // utils/keep-awake.ts for the Modern Standby / mid-run-death rationale and
+  // best-effort semantics). Placed HERE, not at function top, so the
   // early-return validation paths above never leak an unpaired acquire; the
-  // matching release is the first statement of this try's finally. No-op off
-  // Windows / on FFI failure, and refcounted so concurrent runs share one request.
+  // matching release is the first statement of this try's finally.
   keepAwake.acquire();
   try {
     getLog().info(

@@ -81,6 +81,23 @@ describe('createKeepAwake (win32)', () => {
     expect(fake.calls).toEqual([ACQUIRE, RELEASE]);
     expect(ka.activeCount()).toBe(0);
   });
+
+  test('a THROWING native fn never propagates and keeps the refcount paired', () => {
+    let calls = 0;
+    const throwing = (): number => {
+      calls += 1;
+      throw new Error('FFI call failed');
+    };
+    const ka = createKeepAwake(throwing, 'win32');
+
+    expect(() => ka.acquire()).not.toThrow();
+    expect(ka.activeCount()).toBe(1);
+
+    expect(() => ka.release()).not.toThrow();
+    expect(ka.activeCount()).toBe(0);
+
+    expect(calls).toBe(2); // both the 0→1 and 1→0 transitions attempted the call
+  });
 });
 
 describe('createKeepAwake (disabled: non-win32 or no native fn)', () => {
