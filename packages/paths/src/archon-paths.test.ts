@@ -562,7 +562,17 @@ describe('archon-paths', () => {
       delete process.env.ARCHON_DOCKER;
       const root = getProjectArtifactsPath('acme', 'widget');
       expect(getScopeArtifactsPath(root, 'wf', 'scope')).toBe(
-        join(homedir(), '.archon', 'workspaces', 'acme', 'widget', 'artifacts', 'scopes', 'wf', 'scope')
+        join(
+          homedir(),
+          '.archon',
+          'workspaces',
+          'acme',
+          'widget',
+          'artifacts',
+          'scopes',
+          'wf',
+          'scope'
+        )
       );
     });
   });

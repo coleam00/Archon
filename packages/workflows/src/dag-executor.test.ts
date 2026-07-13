@@ -55,6 +55,7 @@ import {
   applyLoopPrevToBodyNode,
   executeDagWorkflow,
 } from './dag-executor';
+import { writeNodeArtifact } from './artifacts-index';
 import { loadMcpConfig } from '@archon/providers/mcp/config';
 import type { DagNode, BashNode, ScriptNode, NodeOutput, WorkflowRun } from './schemas';
 import { discoverWorkflows } from './workflow-discovery';
@@ -9092,6 +9093,293 @@ describe('executeDagWorkflow -- persist_session', () => {
       typeof store.upsertWorkflowNodeSession
     >;
     expect(upsertMock.mock.calls[0][0]).toMatchObject({ provider_session_id: 'cold-id' });
+  });
+
+  // --- #1846: cross-invocation artifact scope + cold-resume pointer recovery ---
+
+  /** Arm the mocks for a cold resume: a persisted prior session that the provider
+   *  reports back as not resumed (fresh fallback). */
+  function armColdResume(store: ReturnType<typeof createMockStore>): void {
+    (store.getWorkflowNodeSession as Mock<typeof store.getWorkflowNodeSession>).mockResolvedValue({
+      workflow_name: 'persist-test',
+      node_id: 'planner',
+      scope_key: 'conv-dag',
+      provider: 'claude',
+      provider_session_id: 'prior-session-id',
+      last_run_id: 'prior-run',
+      created_at: '2026-05-01T00:00:00Z',
+      updated_at: '2026-05-01T00:00:00Z',
+    });
+    mockSendQueryDag.mockClear();
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'cold run' };
+      yield { type: 'result', sessionId: 'cold-id', resumed: false };
+    });
+  }
+
+  it('cold resume with prior scope artifacts → warning carries a by-reference pointer', async () => {
+    const scopeDir = join(testDir, 'scope-artifacts');
+    // A PRIOR invocation left a typed artifact in the stable scope dir.
+    await writeNodeArtifact(
+      scopeDir,
+      {
+        nodeId: 'planner',
+        outputType: 'plan',
+        runId: 'prior-run',
+        producedAt: '2026-05-01T00:00:00Z',
+      },
+      'the prior plan'
+    );
+    const store = createMockStore();
+    armColdResume(store);
+    const platform = createMockPlatform();
+
+    await executeDagWorkflow(
+      createMockDeps(store),
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'persist-test',
+        nodes: [{ id: 'planner', command: 'my-cmd', persist_session: true }],
+      },
+      makeWorkflowRun(),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      scopeDir
+    );
+
+    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
+    const messages = sendMessage.mock.calls.map(c => String(c[1]));
+    const coldMessage = messages.find(m => m.includes('could not resume the prior session'));
+    expect(coldMessage).toBeDefined();
+    // By reference: the message names the artifact file's path — never its content.
+    expect(coldMessage).toContain('available for recovery');
+    expect(coldMessage).toContain(join(scopeDir, 'nodes', 'planner.md'));
+    expect(coldMessage).not.toContain('the prior plan');
+    // The #1842 invariant holds: the cold run is kept, never replayed.
+    expect(mockSendQueryDag.mock.calls.length).toBe(1);
+  });
+
+  it('cold resume with scope artifacts only from the CURRENT run → plain warning, no pointer', async () => {
+    const scopeDir = join(testDir, 'scope-artifacts');
+    // Only this run's own mirror exists — it recovers nothing.
+    await writeNodeArtifact(
+      scopeDir,
+      {
+        nodeId: 'planner',
+        outputType: 'plan',
+        runId: 'dag-test-run-id',
+        producedAt: '2026-05-01T00:00:00Z',
+      },
+      'this run output'
+    );
+    const store = createMockStore();
+    armColdResume(store);
+    const platform = createMockPlatform();
+
+    await executeDagWorkflow(
+      createMockDeps(store),
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'persist-test',
+        nodes: [{ id: 'planner', command: 'my-cmd', persist_session: true }],
+      },
+      makeWorkflowRun(),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      scopeDir
+    );
+
+    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
+    const messages = sendMessage.mock.calls.map(c => String(c[1]));
+    expect(messages.some(m => m.includes('could not resume the prior session'))).toBe(true);
+    expect(messages.some(m => m.includes('available for recovery'))).toBe(false);
+  });
+
+  it('cold resume with an empty/absent scope dir → plain warning, no pointer', async () => {
+    const store = createMockStore();
+    armColdResume(store);
+    const platform = createMockPlatform();
+
+    await executeDagWorkflow(
+      createMockDeps(store),
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'persist-test',
+        nodes: [{ id: 'planner', command: 'my-cmd', persist_session: true }],
+      },
+      makeWorkflowRun(),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      join(testDir, 'scope-artifacts-never-created')
+    );
+
+    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
+    const messages = sendMessage.mock.calls.map(c => String(c[1]));
+    expect(messages.some(m => m.includes('could not resume the prior session'))).toBe(true);
+    expect(messages.some(m => m.includes('available for recovery'))).toBe(false);
+  });
+
+  it('persist node with output_type mirrors its typed sidecar into the scope dir', async () => {
+    const scopeDir = join(testDir, 'scope-artifacts');
+
+    await executeDagWorkflow(
+      createMockDeps(),
+      createMockPlatform(),
+      'conv-dag',
+      testDir,
+      {
+        name: 'persist-test',
+        nodes: [{ id: 'planner', command: 'my-cmd', persist_session: true, output_type: 'plan' }],
+      },
+      makeWorkflowRun(),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      scopeDir
+    );
+
+    // Written to BOTH the per-run dir and the durable scope dir.
+    const runCopy = await readFile(join(testDir, 'artifacts', 'nodes', 'planner.md'), 'utf8');
+    const scopeCopy = await readFile(join(scopeDir, 'nodes', 'planner.md'), 'utf8');
+    expect(runCopy).toBe('AI response');
+    expect(scopeCopy).toBe('AI response');
+    const scopeMeta = JSON.parse(
+      await readFile(join(scopeDir, 'nodes', 'planner.meta.json'), 'utf8')
+    ) as Record<string, unknown>;
+    expect(scopeMeta).toMatchObject({
+      nodeId: 'planner',
+      outputType: 'plan',
+      runId: 'dag-test-run-id',
+    });
+  });
+
+  it('non-persist node with output_type does NOT mirror into the scope dir', async () => {
+    const scopeDir = join(testDir, 'scope-artifacts');
+
+    await executeDagWorkflow(
+      createMockDeps(),
+      createMockPlatform(),
+      'conv-dag',
+      testDir,
+      {
+        name: 'persist-test',
+        // scope dir present (another node opted in), but THIS node doesn't persist.
+        nodes: [{ id: 'planner', command: 'my-cmd', output_type: 'plan' }],
+      },
+      makeWorkflowRun(),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      scopeDir
+    );
+
+    // Run-dir sidecar exists; the scope dir stays untouched.
+    const runCopy = await readFile(join(testDir, 'artifacts', 'nodes', 'planner.md'), 'utf8');
+    expect(runCopy).toBe('AI response');
+    let scopeWrote = true;
+    try {
+      await readFile(join(scopeDir, 'nodes', 'planner.md'), 'utf8');
+    } catch {
+      scopeWrote = false;
+    }
+    expect(scopeWrote).toBe(false);
+  });
+
+  it('scope mirror write failure is non-fatal — node completes, run-dir sidecar intact', async () => {
+    const scopeDir = join(testDir, 'scope-artifacts');
+    // Force the scope write to fail: a FILE where the nodes/ dir must go.
+    await mkdir(scopeDir, { recursive: true });
+    await writeFile(join(scopeDir, 'nodes'), 'not a directory', 'utf8');
+
+    await executeDagWorkflow(
+      createMockDeps(),
+      createMockPlatform(),
+      'conv-dag',
+      testDir,
+      {
+        name: 'persist-test',
+        nodes: [{ id: 'planner', command: 'my-cmd', persist_session: true, output_type: 'plan' }],
+      },
+      makeWorkflowRun(),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      scopeDir
+    );
+
+    // Node ran and the run-dir sidecar was still written (mirror is best-effort).
+    expect(mockSendQueryDag.mock.calls.length).toBe(1);
+    const runCopy = await readFile(join(testDir, 'artifacts', 'nodes', 'planner.md'), 'utf8');
+    expect(runCopy).toBe('AI response');
   });
 
   it('persist_session: true but provider returns no sessionId → delete stale row', async () => {

@@ -52,6 +52,7 @@ import {
   isApprovalNode,
   isCancelNode,
   isScriptNode,
+  isPersistableNode,
   isApprovalContext,
 } from './schemas';
 import { formatToolCall } from './utils/tool-formatter';
@@ -60,7 +61,7 @@ import type { WorkflowErrorClass, WorkflowNodeType } from '@archon/paths';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { evaluateCondition } from './condition-evaluator';
 import { declaredFieldsFromSchema, resolveNodeOutputField } from './output-ref';
-import { writeNodeArtifact } from './artifacts-index';
+import { writeNodeArtifact, readNodeArtifacts } from './artifacts-index';
 import {
   logNodeStart,
   logNodeComplete,
@@ -2419,9 +2420,11 @@ async function executeLoopGroupNode(
       issueContext,
       // persist_session across iterations is out of v1 scope (body sessions reset per
       // iteration, governed by fresh_context). Pass undefined/false so body nodes don't
-      // participate in cross-run session persistence inside the loop.
+      // participate in cross-run session persistence inside the loop — and therefore
+      // no scope-artifact mirroring either.
       persistScopeKey: undefined,
       workflowPersistSessions: false,
+      scopeArtifactsDir: undefined,
       layers: iterBodyLayers,
       nodeOutputs: scopedNodeOutputs,
       priorCompletedNodes: undefined, // body re-runs in full each iteration (v1)
@@ -3649,6 +3652,54 @@ async function executeApprovalNode(
  * (skip/trigger_rule/when). Body lifecycle events emitted inside executeNodeInternal /
  * executeBashNode / executeScriptNode still use the raw node id (known v1 limitation).
  */
+/**
+ * True when a node participates in cross-run session persistence: a command/prompt
+ * node (see {@link isPersistableNode}) that hasn't opted out via `context: 'fresh'`,
+ * with `persist_session: true` set directly or inherited from the workflow-level
+ * `persist_sessions` default. Mirrors the executor's `effectivePersist` +
+ * `bypassesPersistence` gates so the scope-artifact mirror targets exactly the
+ * nodes whose sessions are persisted.
+ */
+function nodeUsesPersistedScope(node: DagNode, workflowPersistSessions: boolean): boolean {
+  if (!isPersistableNode(node)) return false;
+  if (node.context === 'fresh') return false;
+  const nodePersist = 'persist_session' in node ? node.persist_session : undefined;
+  return nodePersist ?? workflowPersistSessions;
+}
+
+/**
+ * Build the by-reference recovery suffix for a cold-resume warning (#1846): list
+ * the typed artifacts that PRIOR invocations of this workflow+scope left in the
+ * stable scope dir, as absolute file paths — never pasted content. Entries
+ * produced by the current run are excluded (they can't recover anything the
+ * fresh session doesn't already have). Returns `''` when there is nothing to
+ * point at, or when the scope dir can't be read — recovery is best-effort and
+ * must never turn a successful (if cold) node into a failure.
+ */
+async function buildColdResumeRecoveryPointer(
+  scopeArtifactsDir: string,
+  currentRunId: string,
+  nodeId: string
+): Promise<string> {
+  try {
+    const priorArtifacts = (await readNodeArtifacts(scopeArtifactsDir))
+      .filter(entry => entry.runId !== currentRunId)
+      .sort((a, b) => (a.producedAt < b.producedAt ? 1 : -1));
+    if (priorArtifacts.length === 0) return '';
+    const lines = priorArtifacts.map(
+      entry =>
+        `- ${entry.outputType} (\`${entry.nodeId}\`): ${joinPath(scopeArtifactsDir, entry.path)}`
+    );
+    return `\nArtifacts from the previous invocation are available for recovery (read on demand):\n${lines.join('\n')}`;
+  } catch (err) {
+    getLog().warn(
+      { err: err as Error, scopeArtifactsDir, nodeId },
+      'dag.cold_resume_artifacts_read_failed'
+    );
+    return '';
+  }
+}
+
 interface RunLayersContext {
   // --- run-level invariants (shared by top-level DAG and loop_group body) ---
   deps: WorkflowDeps;
@@ -3674,6 +3725,15 @@ interface RunLayersContext {
   persistScopeKey: string | undefined;
   /** Workflow-level default for per-node `persist_session` (opt-in). */
   workflowPersistSessions: boolean;
+  /**
+   * Stable cross-invocation artifact scope dir (`scopes/<workflow>/<scope>/`), or
+   * undefined when the workflow doesn't use session persistence. When set,
+   * persistence-participating nodes with `output_type` mirror their typed sidecars
+   * here, and a cold session resume points the user at the prior invocation's
+   * artifacts by reference (#1846). Always undefined for loop_group bodies
+   * (which also run with `persistScopeKey: undefined`).
+   */
+  scopeArtifactsDir: string | undefined;
 
   // --- per-subgraph mutable state (varies between top-level DAG and loop_group body) ---
   /** Pre-computed topological layers (caller builds once — body shape is static). runLayers walks ONLY these; there is deliberately no flat node list here. */
@@ -3725,6 +3785,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
     issueContext,
     persistScopeKey,
     workflowPersistSessions,
+    scopeArtifactsDir,
     layers,
     priorCompletedNodes,
     stepNamePrefix,
@@ -4289,6 +4350,16 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
             output.state === 'completed' &&
             output.resumed === false
           ) {
+            // By-reference recovery (#1846): the prior session is gone, but prior
+            // invocations of this workflow+scope may have left typed artifacts in
+            // the stable scope dir. Point at them (paths only — never pasted
+            // content) so the lost context is recoverable on demand. Entries from
+            // THIS run are excluded — they were produced by the current (fresh)
+            // invocation and recover nothing. Best-effort: a scope-dir read
+            // failure degrades to the plain warning, never fails the node.
+            const recoveryPointer = scopeArtifactsDir
+              ? await buildColdResumeRecoveryPointer(scopeArtifactsDir, workflowRun.id, node.id)
+              : '';
             // Mask the session id: it's a resumable artifact, so log only an
             // 8-char preview (same policy as the node_session_resumed event above).
             getLog().warn(
@@ -4297,13 +4368,14 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                 provider,
                 workflowRunId: workflowRun.id,
                 resumeSessionId: `${resumeSessionId.slice(0, 8)}…`,
+                priorArtifactsFound: recoveryPointer !== '',
               },
               'dag.session_resume_failed'
             );
             await safeSendMessage(
               platform,
               conversationId,
-              `⚠️ Node \`${node.id}\`: could not resume the prior session — continued with a fresh session, so the earlier context was not restored.`,
+              `⚠️ Node \`${node.id}\`: could not resume the prior session — continued with a fresh session, so the earlier context was not restored.${recoveryPointer}`,
               { workflowId: workflowRun.id, nodeName: node.id }
             );
           }
@@ -4426,25 +4498,37 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
         // never fail an otherwise-successful node.
         const completedNode = nodeById.get(nodeId);
         if (output.state === 'completed' && completedNode?.output_type) {
+          const meta = {
+            nodeId,
+            outputType: completedNode.output_type,
+            runId: workflowRun.id,
+            producedAt: new Date().toISOString(),
+            // `sessionId` may be undefined (e.g. bash/script nodes have no
+            // session); writeNodeArtifact omits it from the metadata when so.
+            sessionId: output.sessionId,
+          };
           try {
-            await writeNodeArtifact(
-              artifactsDir,
-              {
-                nodeId,
-                outputType: completedNode.output_type,
-                runId: workflowRun.id,
-                producedAt: new Date().toISOString(),
-                // `sessionId` may be undefined (e.g. bash/script nodes have no
-                // session); writeNodeArtifact omits it from the metadata when so.
-                sessionId: output.sessionId,
-              },
-              output.output
-            );
+            await writeNodeArtifact(artifactsDir, meta, output.output);
           } catch (err) {
             getLog().warn(
               { err: err as Error, nodeId, workflowRunId: workflowRun.id },
               'artifacts.write_failed'
             );
+          }
+          // Scope mirror (#1846): persistence-participating nodes also write their
+          // typed sidecar into the stable `scopes/<workflow>/<scope>/` dir, so the
+          // NEXT invocation can recover this output by reference if its persisted
+          // session comes back cold. Per-node files; concurrent same-scope runs are
+          // last-writer-wins for a given node. Best-effort, like the run-dir write.
+          if (scopeArtifactsDir && nodeUsesPersistedScope(completedNode, workflowPersistSessions)) {
+            try {
+              await writeNodeArtifact(scopeArtifactsDir, meta, output.output);
+            } catch (err) {
+              getLog().warn(
+                { err: err as Error, nodeId, workflowRunId: workflowRun.id, scopeArtifactsDir },
+                'artifacts.scope_write_failed'
+              );
+            }
           }
         }
         if (output.state === 'completed' && !isParallelLayer && output.sessionId !== undefined) {
@@ -4536,7 +4620,13 @@ export async function executeDagWorkflow(
   /** Discovery source — telemetry only (custom-vs-default + name redaction). */
   source?: WorkflowSource,
   aiProfile?: ResolvedAiProfile,
-  workflowPreset?: ModelAliasPreset
+  workflowPreset?: ModelAliasPreset,
+  /**
+   * Stable cross-invocation artifact scope dir (`scopes/<workflow>/<scope>/`),
+   * resolved by executor.ts when the workflow uses session persistence (#1846).
+   * Undefined otherwise — no mirroring, no cold-resume pointer.
+   */
+  scopeArtifactsDir?: string
 ): Promise<string | undefined> {
   const dagStartTime = Date.now();
   const workflowTier = workflow.model && isTierName(workflow.model) ? workflow.model : undefined;
@@ -4617,6 +4707,9 @@ export async function executeDagWorkflow(
     issueContext,
     persistScopeKey,
     workflowPersistSessions,
+    // Scope-keyed persistence surface: without a scope key there is no durable
+    // scope to mirror into or recover from, so the dir is dropped alongside it.
+    scopeArtifactsDir: persistScopeKey !== undefined ? scopeArtifactsDir : undefined,
     layers,
     nodeOutputs,
     priorCompletedNodes,

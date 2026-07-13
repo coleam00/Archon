@@ -9,6 +9,7 @@ import * as archonPaths from '@archon/paths';
 import { createLogger, captureWorkflowInvoked, captureWorkflowCompleted } from '@archon/paths';
 import { getDefaultBranch, toRepoPath } from '@archon/git';
 import type {
+  DagNode,
   WorkflowDefinition,
   WorkflowRun,
   WorkflowExecutionResult,
@@ -227,6 +228,10 @@ async function resolveUserProviderEnvForWorkflow(
  * Folder projects route to `_folder/<slug>/` storage; falls back to cwd-based
  * paths for unregistered repos.
  *
+ * `artifactsRoot` is the parent of the `runs/` layout (`.../artifacts`) — the base
+ * that run-scoped (`runs/<id>/`) and scope-scoped (`scopes/<workflow>/<scope>/`,
+ * #1846) storage both hang off, whichever branch resolved it.
+ *
  * Exported for unit testing of the kind-based branch selection.
  */
 export async function resolveProjectPaths(
@@ -234,7 +239,7 @@ export async function resolveProjectPaths(
   cwd: string,
   workflowRunId: string,
   codebaseId?: string
-): Promise<{ artifactsDir: string; logDir: string }> {
+): Promise<{ artifactsDir: string; logDir: string; artifactsRoot: string }> {
   if (codebaseId) {
     try {
       const codebase = await deps.store.getCodebase(codebaseId);
@@ -246,6 +251,7 @@ export async function resolveProjectPaths(
           return {
             artifactsDir: archonPaths.getFolderRunArtifactsPath(slug, workflowRunId),
             logDir: archonPaths.getFolderProjectLogsPath(slug),
+            artifactsRoot: archonPaths.getFolderProjectArtifactsPath(slug),
           };
         }
         const parsed = archonPaths.parseOwnerRepo(codebase.name);
@@ -253,6 +259,7 @@ export async function resolveProjectPaths(
           return {
             artifactsDir: archonPaths.getRunArtifactsPath(parsed.owner, parsed.repo, workflowRunId),
             logDir: archonPaths.getProjectLogsPath(parsed.owner, parsed.repo),
+            artifactsRoot: archonPaths.getProjectArtifactsPath(parsed.owner, parsed.repo),
           };
         }
         getLog().warn({ codebaseName: codebase.name }, 'codebase_name_not_owner_repo_format');
@@ -269,7 +276,29 @@ export async function resolveProjectPaths(
   return {
     artifactsDir: join(cwd, '.archon', 'artifacts', 'runs', workflowRunId),
     logDir: join(cwd, '.archon', 'logs'),
+    artifactsRoot: join(cwd, '.archon', 'artifacts'),
   };
+}
+
+/**
+ * Resolve the stable cross-invocation artifact scope dir for a run (#1846), or
+ * undefined when the feature doesn't apply. Applies only when the workflow uses
+ * cross-run session persistence (workflow-level `persist_sessions` or any node
+ * `persist_session: true`) AND the run has a conversation scope — the same
+ * opt-in + scope key the session store uses. No persistence → no new dirs,
+ * default behavior unchanged.
+ */
+export function resolveScopeArtifactsDir(
+  workflow: { name: string; nodes: readonly DagNode[]; persist_sessions?: boolean },
+  conversationId: string | null | undefined,
+  artifactsRoot: string
+): string | undefined {
+  if (!conversationId) return undefined;
+  const usesPersistence =
+    workflow.persist_sessions === true ||
+    workflow.nodes.some(n => 'persist_session' in n && n.persist_session === true);
+  if (!usesPersistence) return undefined;
+  return archonPaths.getScopeArtifactsPath(artifactsRoot, workflow.name, conversationId);
 }
 
 /**
@@ -683,11 +712,27 @@ export async function executeWorkflow(
   }
 
   // Resolve external artifact and log directories
-  const { artifactsDir, logDir } = await resolveProjectPaths(deps, cwd, workflowRun.id, codebaseId);
+  const { artifactsDir, logDir, artifactsRoot } = await resolveProjectPaths(
+    deps,
+    cwd,
+    workflowRun.id,
+    codebaseId
+  );
+
+  // Stable cross-invocation artifact scope (#1846): only for persist_session
+  // workflows with a conversation scope. Undefined otherwise — zero new dirs.
+  const scopeArtifactsDir = resolveScopeArtifactsDir(
+    workflow,
+    workflowRun.conversation_id,
+    artifactsRoot
+  );
 
   // Pre-create the artifacts directory so commands can write to it immediately
+  // (and the durable scope dir, when the workflow opted into one — same disk,
+  // same failure mode, same fatal treatment).
   try {
     await mkdir(artifactsDir, { recursive: true });
+    if (scopeArtifactsDir) await mkdir(scopeArtifactsDir, { recursive: true });
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
     getLog().error(
@@ -904,7 +949,8 @@ export async function executeWorkflow(
       dagPriorCompletedNodes,
       source,
       aiProfile,
-      workflowPreset
+      workflowPreset,
+      scopeArtifactsDir
     );
 
     // executeDagWorkflow throws on fatal errors; check DB status for result
