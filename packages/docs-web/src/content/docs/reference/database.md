@@ -139,9 +139,9 @@ The database has 18 tables, all prefixed with `remote_agent_`:
     - `kind` records `api_key` vs `oauth`; resolved + injected into the user's runs/chat env at execution time
     - `provider` holds **vendor-canonical** credential ids (`anthropic`, `openai`, `github-copilot`, plus Pi backend vendors) — legacy `claude`/`codex`/`copilot` rows are renamed by an idempotent startup data fix (the vendor row wins when both exist)
 
-14. **`remote_agent_user_ai_prefs`** - Per-user AI preferences (personal model tiers, `@custom` aliases, default assistant)
+14. **`remote_agent_user_ai_prefs`** - Per-user AI preferences (personal model tiers, `@custom` aliases, default assistant + default chat model)
     - NON-encrypted (model names aren't secrets); one row per user (`UNIQUE(user_id)`), cascades on user deletion
-    - `tiers` / `aliases` are JSON-as-TEXT; folded into model resolution as the highest-precedence layer. Resolution follows the **acting user**: workflow runs use the run starter; chat turns use the message **sender** (the conversation creator's row is only a fallback when no sender identity resolves)
+    - `tiers` / `aliases` are JSON-as-TEXT; folded into model resolution as the highest-precedence layer. `default_model` pins the user's direct-chat model (written atomically with `default_provider`; applied only when the effective chat provider matches — workflows still resolve the `large` tier). Resolution follows the **acting user**: workflow runs use the run starter; chat turns use the message **sender** (the conversation creator's row is only a fallback when no sender identity resolves)
     - Editable via the console "Just me" scope, `archon ai … --scope user`, or `/api/auth/me/ai-prefs*`
 
 15–18. **`remote_agent_auth_user` / `remote_agent_auth_session` / `remote_agent_auth_account` / `remote_agent_auth_verification`** - Better Auth tables for opt-in web login

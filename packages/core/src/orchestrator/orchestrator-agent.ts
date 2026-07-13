@@ -143,6 +143,58 @@ function resolveModelRequest(
   return { provider: spec.provider, model: spec.model, preset: spec };
 }
 
+/**
+ * Resolve the model request for the MAIN chat turn (#1998).
+ *
+ * Model precedence (chat call-site only — workflows keep resolving `large`):
+ *   1. per-user `default_model` — applied only when the user's
+ *      `default_provider` matches the effective provider (a stale pin must
+ *      never ride a different provider). Routed through resolveModelRequest so
+ *      `@alias` and tier refs keep working; an unresolvable ref (e.g. deleted
+ *      alias) degrades to the tier path with a warning instead of failing chat.
+ *   2. tier `large` from CONFIGURED tiers (user > repo > global).
+ *   3. install `assistants.<p>.model` — outranks the BUILT-IN tier default
+ *      only, never a configured tier ('inherit' means "SDK default", skip).
+ *   4. built-in tier default.
+ *
+ * Title generation is NOT routed through this — it keeps the `small` tier.
+ * With no user prefs and no `assistants.<p>.model`, this reduces byte-for-byte
+ * to the previous `resolveModelRequest(aiProfile, 'large', provider)` call.
+ * Exported for tests.
+ */
+export function resolveChatModelRequest(
+  aiProfile: ReturnType<typeof buildAiProfile>,
+  configuredProviderKey: string,
+  userAiPrefs: UserAiPrefs,
+  config: Pick<MergedConfig, 'assistants' | 'tiers'>
+): ResolvedModelRequest {
+  if (
+    userAiPrefs.defaultModel !== undefined &&
+    userAiPrefs.defaultProvider === configuredProviderKey
+  ) {
+    try {
+      return resolveModelRequest(aiProfile, userAiPrefs.defaultModel, configuredProviderKey);
+    } catch (err) {
+      getLog().warn(
+        { err: err as Error, defaultModel: userAiPrefs.defaultModel },
+        'orchestrator.user_default_model_invalid'
+      );
+    }
+  }
+  const request = resolveModelRequest(aiProfile, 'large', configuredProviderKey);
+  const matchedTierConfigured =
+    request.matchedTier !== undefined &&
+    (config.tiers?.[request.matchedTier] !== undefined ||
+      userAiPrefs.tiers?.[request.matchedTier] !== undefined);
+  if (request.matchedTier !== undefined && !matchedTierConfigured) {
+    const installModel = config.assistants[request.provider]?.model;
+    if (typeof installModel === 'string' && installModel !== '' && installModel !== 'inherit') {
+      return { ...request, model: installModel };
+    }
+  }
+  return request;
+}
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export interface WorkflowInvocation {
@@ -1384,7 +1436,12 @@ export async function handleMessage(
         repoAliases: config.aliases,
       });
     }
-    const chatRequest = resolveModelRequest(aiProfile, 'large', configuredProviderKey);
+    // Main chat model: per-user default_model > configured `large` tier >
+    // install assistants.<p>.model > built-in tier default (#1998).
+    const chatRequest = resolveChatModelRequest(aiProfile, configuredProviderKey, userAiPrefs, {
+      assistants: config.assistants,
+      tiers: config.tiers,
+    });
     // Tier-fallback nudge (mirrors dag.model_provider_conflict): chat asks for
     // 'large'; when that tier is unset and a sibling preset answered, tell the
     // user ONCE PER CONVERSATION, non-blocking — the dedup Set below is what

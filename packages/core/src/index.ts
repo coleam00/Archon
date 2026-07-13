@@ -246,7 +246,7 @@ export {
   getUserAiPrefs,
   setUserTiers,
   setUserAliases,
-  setUserDefaultProvider,
+  setUserDefault,
   clearUserAiPrefs,
   type UserAiPrefs,
   type UserTiersPatch,

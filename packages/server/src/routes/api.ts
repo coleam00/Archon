@@ -55,7 +55,7 @@ import {
   getUserAiPrefs,
   setUserTiers,
   setUserAliases,
-  setUserDefaultProvider,
+  setUserDefault,
 } from '@archon/core';
 import type { UserTiersPatch, UserAliasesPatch, AliasesPatch } from '@archon/core';
 import { findRepoRoot, removeWorktree, toRepoPath, toWorktreePath } from '@archon/git';
@@ -194,7 +194,7 @@ import {
   userAiPrefsResponseSchema,
   updateUserTiersBodySchema,
   updateUserAliasesBodySchema,
-  updateUserDefaultProviderBodySchema,
+  updateUserDefaultBodySchema,
 } from './schemas/user-ai-prefs.schemas';
 import { mapDeviceFlowErrorToPollStatus } from './auth-poll-status';
 import {
@@ -1232,10 +1232,11 @@ const userAiPrefsDefaultRoute = createRoute({
   method: 'patch',
   path: '/api/auth/me/ai-prefs/default',
   tags: ['Auth'],
-  summary: 'Set (or clear with null) the current web user’s default assistant',
+  summary:
+    'Set (or clear with null) the current web user’s default assistant + default chat model (written atomically; omitted model clears any pin)',
   request: {
     body: {
-      content: { 'application/json': { schema: updateUserDefaultProviderBodySchema } },
+      content: { 'application/json': { schema: updateUserDefaultBodySchema } },
       required: true,
     },
   },
@@ -1833,7 +1834,7 @@ export function registerApiRoutes(
   registerOpenApiRoute(userAiPrefsDefaultRoute, async c => {
     const web = await requireWebUser(c, 'Web authentication required to update AI preferences');
     if ('error' in web) return web.error;
-    const { provider } = getValidatedBody(c, updateUserDefaultProviderBodySchema);
+    const { provider, model } = getValidatedBody(c, updateUserDefaultBodySchema);
     if (provider !== null && !isRegisteredProvider(provider)) {
       return apiError(
         c,
@@ -1843,8 +1844,13 @@ export function registerApiRoutes(
           .join(', ')}`
       );
     }
+    if (provider === null && typeof model === 'string') {
+      return apiError(c, 400, 'Cannot set a default model without a default provider');
+    }
     try {
-      await setUserDefaultProvider(web.userId, provider);
+      // Atomic write: provider + model always land together — an omitted
+      // model clears any previous pin so it can't ride a provider switch.
+      await setUserDefault(web.userId, provider, model ?? null);
       return c.json(await getUserAiPrefs(web.userId));
     } catch (err) {
       getLog().error(
