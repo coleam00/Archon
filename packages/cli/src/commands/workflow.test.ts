@@ -2364,6 +2364,7 @@ describe('workflowRunCommand — detach', () => {
 
     const execBefore = (executeWorkflow as ReturnType<typeof mock>).mock.calls.length;
     const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue({
+      pid: 12345,
       unref: mock(() => undefined),
     } as unknown as ReturnType<typeof Bun.spawn>);
     const savedArgv = process.argv;
@@ -2372,11 +2373,15 @@ describe('workflowRunCommand — detach', () => {
     // Capture call data BEFORE mockRestore() — restoring a spy clears its recorded calls.
     let spawnCallCount = 0;
     let spawnCmd: string[] = [];
-    let spawnOptions: { cwd: string; cmd: string[] } | undefined;
+    let spawnOptions:
+      | { cwd: string; cmd: string[]; detached?: boolean; windowsHide?: boolean }
+      | undefined;
     try {
       await workflowRunCommand('/test/path', 'assist', 'hello', { detach: true });
       spawnCallCount = spawnSpy.mock.calls.length;
-      spawnOptions = spawnSpy.mock.calls[0]?.[0] as { cwd: string; cmd: string[] } | undefined;
+      spawnOptions = spawnSpy.mock.calls[0]?.[0] as
+        | { cwd: string; cmd: string[]; detached?: boolean; windowsHide?: boolean }
+        | undefined;
       spawnCmd = (spawnOptions?.cmd ?? []).slice();
     } finally {
       process.argv = savedArgv;
@@ -2384,6 +2389,10 @@ describe('workflowRunCommand — detach', () => {
     }
 
     expect(spawnCallCount).toBe(1);
+    // The actual Windows fix: the child must be spawned into its own process
+    // group, or the launching shell's teardown kills it (~1s in).
+    expect(spawnOptions?.detached).toBe(true);
+    expect(spawnOptions?.windowsHide).toBe(true);
     expect(spawnCmd).not.toContain('--detach');
     expect(spawnCmd).toContain('--branch');
     expect(spawnCmd).toContain('--conversation-id');
@@ -2421,6 +2430,7 @@ describe('workflowRunCommand — detach', () => {
     });
 
     const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue({
+      pid: 12345,
       unref: mock(() => undefined),
     } as unknown as ReturnType<typeof Bun.spawn>);
     const savedArgv = process.argv;
@@ -2452,6 +2462,7 @@ describe('workflowRunCommand — detach', () => {
       throw new Error('no home in test');
     });
     const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue({
+      pid: 12345,
       unref: mock(() => undefined),
     } as unknown as ReturnType<typeof Bun.spawn>);
     const savedArgv = process.argv;
@@ -2476,6 +2487,38 @@ describe('workflowRunCommand — detach', () => {
     const parsed = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
     expect(parsed).toMatchObject({ ok: true, action: 'run', detached: true, workflow: 'assist' });
     expect(typeof parsed.conversationId).toBe('string');
+  });
+
+  it('throws (no false success ack) when the detached child fails to spawn', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const paths = await import('@archon/paths');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+      errors: [],
+    });
+    (paths.getArchonHome as ReturnType<typeof mock>).mockImplementationOnce(() => {
+      throw new Error('no home in test');
+    });
+    // Node's spawn does not throw synchronously on a bad executable — the only
+    // synchronous failure signal is an undefined pid.
+    const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue({
+      pid: undefined,
+      unref: mock(() => undefined),
+    } as unknown as ReturnType<typeof Bun.spawn>);
+    const savedArgv = process.argv;
+    process.argv = ['bun', '/abs/cli.ts', 'workflow', 'run', 'assist', 'hello', '--detach'];
+
+    try {
+      await expect(
+        workflowRunCommand('/test/path', 'assist', 'hello', { detach: true })
+      ).rejects.toThrow(/Failed to start detached workflow child/);
+    } finally {
+      process.argv = savedArgv;
+      spawnSpy.mockRestore();
+    }
+    // The success ack must never have been printed.
+    const logged = consoleSpy.mock.calls.map(call => String(call[0]));
+    expect(logged).not.toContain("Started 'assist' in the background.");
   });
 });
 

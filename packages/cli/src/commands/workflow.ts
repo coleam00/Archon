@@ -29,6 +29,7 @@ import {
 } from '@archon/paths';
 import { join } from 'node:path';
 import { mkdirSync, openSync, closeSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { resolveWorkflowName } from '@archon/workflows/router';
@@ -199,12 +200,34 @@ function spawnDetachedWorkflowRun(
   }
 
   try {
-    const child = Bun.spawn({
-      cmd,
+    // Node's spawn with `detached: true` puts the child in its own process
+    // group so it survives the parent's exit. Bun.spawn + unref() does NOT
+    // detach on Windows — the child was killed ~1s in (at worktree_creating)
+    // when the launching shell/console tore down. `detached: true` is the
+    // standard fix, also used by setup.ts's trySpawn(); if a kill-on-close Job
+    // Object wrapper ever defeats it, a `start /b` breakaway fallback is the
+    // next step. `windowsHide` keeps the child headless.
+    const child = spawn(cmd[0], cmd.slice(1), {
       cwd,
       env: process.env,
       stdio: ['ignore', logFd ?? 'ignore', logFd ?? 'ignore'],
+      detached: true,
+      windowsHide: true,
     });
+    // Unlike Bun.spawn, Node's spawn does NOT throw synchronously on a bad
+    // executable or cwd — the failure arrives as an async 'error' event, which
+    // would crash the CLI as an uncaught exception without this listener.
+    child.on('error', (error: Error) => {
+      getLog().error(
+        { err: error, execPath: cmd[0], conversationId },
+        'cli.detached_run_spawn_failed'
+      );
+    });
+    // pid is set synchronously iff the OS-level spawn succeeded (same check as
+    // setup.ts's trySpawn) — fail fast instead of acking a run that never started.
+    if (child.pid === undefined) {
+      throw new Error(`Failed to start detached workflow child (executable: ${cmd[0]})`);
+    }
     child.unref();
   } finally {
     // The child inherits its own dup of the log fd; close the parent's copy so a
@@ -779,7 +802,13 @@ export async function workflowRunCommand(
     } else {
       console.log(`Started '${workflow.name}' in the background.`);
       console.log('Track it with: archon workflow runs');
-      if (logPath) console.log(`Child output: ${logPath}`);
+      if (logPath) {
+        console.log(`Child output: ${logPath}`);
+      } else {
+        // Log file couldn't be opened — the child runs with its output discarded,
+        // so if it dies before creating a run record there will be no trail.
+        console.warn('Warning: could not open a log file — child output will not be captured.');
+      }
     }
     return;
   }
