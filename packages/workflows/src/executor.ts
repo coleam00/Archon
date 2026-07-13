@@ -224,9 +224,12 @@ async function resolveUserProviderEnvForWorkflow(
 /**
  * Resolve the artifacts and log directories for a workflow run.
  * Looks up the codebase by ID once, parses owner/repo, and returns project-scoped paths.
- * Falls back to cwd-based paths for unregistered repos.
+ * Folder projects route to `_folder/<slug>/` storage; falls back to cwd-based
+ * paths for unregistered repos.
+ *
+ * Exported for unit testing of the kind-based branch selection.
  */
-async function resolveProjectPaths(
+export async function resolveProjectPaths(
   deps: WorkflowDeps,
   cwd: string,
   workflowRunId: string,
@@ -236,6 +239,15 @@ async function resolveProjectPaths(
     try {
       const codebase = await deps.store.getCodebase(codebaseId);
       if (codebase) {
+        // Folder projects run in place — route their named storage to
+        // _folder/<slug>/ instead of owner/repo/ (the name isn't owner/repo).
+        if (codebase.kind === 'folder') {
+          const slug = archonPaths.slugifyFolderName(codebase.name);
+          return {
+            artifactsDir: archonPaths.getFolderRunArtifactsPath(slug, workflowRunId),
+            logDir: archonPaths.getFolderProjectLogsPath(slug),
+          };
+        }
         const parsed = archonPaths.parseOwnerRepo(codebase.name);
         if (parsed) {
           return {

@@ -315,6 +315,12 @@ export interface ResolveRequest {
     id: string;
     defaultCwd: string;
     name: string;
+    /**
+     * Project kind. `'folder'` projects run in place at `defaultCwd` with no
+     * worktree isolation; the resolver short-circuits to `{ status: 'none' }`.
+     * Optional/absent is treated as `'repo'` (unchanged worktree behavior).
+     */
+    kind?: 'repo' | 'folder';
   } | null;
   hints?: IsolationHints;
   platformType: string;

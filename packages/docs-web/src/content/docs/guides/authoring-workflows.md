@@ -795,9 +795,6 @@ provider: codex
 model: gpt-5.3-codex
 modelReasoningEffort: medium    # 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
 webSearchMode: live             # 'disabled' | 'cached' | 'live'
-additionalDirectories:
-  - /absolute/path/to/other/repo
-  - /path/to/shared/library
 ```
 
 **Model reasoning effort:**
@@ -809,11 +806,6 @@ additionalDirectories:
 - `disabled` - No web access (default)
 - `cached` - Use cached search results
 - `live` - Real-time web search
-
-**Additional directories:**
-- Codex can access files outside the codebase
-- Useful for shared libraries, documentation repos
-- Must be absolute paths
 
 ### Web Execution Mode
 

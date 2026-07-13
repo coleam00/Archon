@@ -90,7 +90,12 @@ export {
 // Handlers
 // =============================================================================
 export { handleCommand, parseCommand } from './handlers/command-handler';
-export { cloneRepository, registerRepository, type RegisterResult } from './handlers/clone';
+export {
+  cloneRepository,
+  registerRepository,
+  registerFolder,
+  type RegisterResult,
+} from './handlers/clone';
 
 // =============================================================================
 // Config

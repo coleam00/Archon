@@ -48,6 +48,7 @@ export {
 export {
   findRepoRoot,
   getRemoteUrl,
+  listChildRepos,
   syncWorkspace,
   cloneRepository,
   syncRepository,

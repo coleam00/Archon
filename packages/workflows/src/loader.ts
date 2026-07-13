@@ -418,17 +418,6 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       { valid: webSearchModeSchema.options }
     );
 
-    // Filter additionalDirectories — warn on non-strings (preserve original behavior)
-    const additionalDirectories = Array.isArray(raw.additionalDirectories)
-      ? raw.additionalDirectories.filter((d: unknown) => {
-          if (typeof d !== 'string') {
-            getLog().warn({ filename, value: d }, 'non_string_additional_directory_filtered');
-            return false;
-          }
-          return true;
-        })
-      : undefined;
-
     const interactive = typeof raw.interactive === 'boolean' ? raw.interactive : undefined;
     if (raw.interactive !== undefined && typeof raw.interactive !== 'boolean') {
       getLog().warn({ filename, value: raw.interactive }, 'invalid_interactive_value_ignored');
@@ -569,7 +558,6 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
         model,
         modelReasoningEffort,
         webSearchMode,
-        additionalDirectories,
         interactive,
         ...(mutatesCheckout !== undefined ? { mutates_checkout: mutatesCheckout } : {}),
         ...(effort !== undefined ? { effort } : {}),

@@ -448,6 +448,77 @@ export function getRunLogPath(owner: string, repo: string, workflowRunId: string
   return join(getProjectLogsPath(owner, repo), `${workflowRunId}.jsonl`);
 }
 
+// =============================================================================
+// Folder-project ("_folder") path functions
+// =============================================================================
+//
+// Folder projects (kind: 'folder') are non-git workspaces — a multi-repo root
+// or a plain ops folder. They run in place at their real directory, so there is
+// no `source/` symlink and no `worktrees/` directory. Their named artifact and
+// log storage lives under a `_folder` pseudo-owner, mirroring the `_local`
+// pseudo-owner convention used for locally-registered repos.
+
+/**
+ * Slugify a folder-project display name into a filesystem-safe segment.
+ * Lowercases, keeps `[a-z0-9._-]`, collapses any other run of characters to a
+ * single `-`, and trims leading/trailing `-`. The result always satisfies
+ * {@link SAFE_NAME}. Falls back to `'folder'` when the name slugifies to empty
+ * (e.g. a name that is entirely separators or unicode).
+ *
+ * Note: distinct display names can collide (e.g. "My App" and "my-app" both →
+ * "my-app"); runs stay separated by run-id subdirectories, so collisions only
+ * co-mingle listing-level artifacts. Accepted for now — see plan Questionables.
+ */
+export function slugifyFolderName(name: string): string {
+  const slug = name
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return slug.length > 0 && SAFE_NAME.test(slug) ? slug : 'folder';
+}
+
+/**
+ * Get the project root directory for a folder project.
+ * Returns: ~/.archon/workspaces/_folder/<slug>/
+ */
+export function getFolderProjectRoot(slug: string): string {
+  return join(getArchonWorkspacesPath(), '_folder', slug);
+}
+
+/**
+ * Get the artifacts directory for a folder project.
+ * Returns: ~/.archon/workspaces/_folder/<slug>/artifacts/
+ */
+export function getFolderProjectArtifactsPath(slug: string): string {
+  return join(getFolderProjectRoot(slug), 'artifacts');
+}
+
+/**
+ * Get the logs directory for a folder project.
+ * Returns: ~/.archon/workspaces/_folder/<slug>/logs/
+ */
+export function getFolderProjectLogsPath(slug: string): string {
+  return join(getFolderProjectRoot(slug), 'logs');
+}
+
+/**
+ * Get the artifacts directory for a specific folder-project workflow run.
+ * Returns: ~/.archon/workspaces/_folder/<slug>/artifacts/runs/{id}/
+ */
+export function getFolderRunArtifactsPath(slug: string, workflowRunId: string): string {
+  return join(getFolderProjectArtifactsPath(slug), 'runs', workflowRunId);
+}
+
+/**
+ * Ensure the on-disk storage directories for a folder project exist.
+ * Creates artifacts/ and logs/ under _folder/<slug>/ (no source/ or worktrees/ —
+ * folder projects run at their real path and are never git-isolated).
+ */
+export async function ensureFolderProjectStructure(slug: string): Promise<void> {
+  const dirs = [getFolderProjectArtifactsPath(slug), getFolderProjectLogsPath(slug)];
+  await Promise.all(dirs.map(dir => mkdir(dir, { recursive: true })));
+}
+
 /**
  * Resolve the project root path from a working directory path.
  * If the path is under ~/.archon/workspaces/owner/repo/..., returns the project root.

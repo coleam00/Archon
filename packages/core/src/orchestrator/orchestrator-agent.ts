@@ -6,7 +6,7 @@
  * - Can answer directly or invoke workflows
  * - Does NOT require a project to be selected before starting a conversation
  */
-import { existsSync } from 'fs';
+import { existsSync, realpathSync } from 'fs';
 import { createLogger, captureChatTurn, captureApprovalResolved } from '@archon/paths';
 import type {
   IPlatformAdapter,
@@ -28,7 +28,7 @@ import { getAgentProvider, getProviderCapabilities } from '@archon/providers';
 import { buildManageRunTool } from './manage-run-tool';
 import { getArchonWorkspacesPath, ensureArchonWorkspacesPath } from '@archon/paths';
 import { syncArchonToWorktree } from '../utils/worktree-sync';
-import { execFileAsync, syncWorkspace, toBranchName, toRepoPath } from '@archon/git';
+import { execFileAsync, findRepoRoot, syncWorkspace, toBranchName, toRepoPath } from '@archon/git';
 import type { WorkspaceSyncResult } from '@archon/git';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { findWorkflow, resolveWorkflowName } from '@archon/workflows/router';
@@ -882,23 +882,31 @@ async function discoverAllWorkflows(conversation: Conversation): Promise<Discove
         // Sync canonical source with remote before the AI reads codebase state.
         // This path must remain non-destructive: users and agents can write to source/.
         // Non-fatal: if fetch fails (network, no remote), proceed with local state.
-        try {
-          syncResult = await syncWorkspace(
-            toRepoPath(codebase.default_cwd),
-            codebase.default_branch ? toBranchName(codebase.default_branch) : undefined
-          );
+        // Folder projects have no git repo to sync — skip entirely.
+        if (codebase.kind === 'folder') {
           getLog().debug(
-            {
-              codebaseId: codebase.id,
-              repoPath: codebase.default_cwd,
-              ...syncResult,
-            },
-            'workspace.sync_completed'
+            { codebaseId: codebase.id, path: codebase.default_cwd },
+            'workspace.sync_skipped_folder_project'
           );
-        } catch (err) {
-          const error = err as Error;
-          syncError = error.message;
-          getLog().warn({ err: error, codebaseId: codebase.id }, 'workspace.sync_failed');
+        } else {
+          try {
+            syncResult = await syncWorkspace(
+              toRepoPath(codebase.default_cwd),
+              codebase.default_branch ? toBranchName(codebase.default_branch) : undefined
+            );
+            getLog().debug(
+              {
+                codebaseId: codebase.id,
+                repoPath: codebase.default_cwd,
+                ...syncResult,
+              },
+              'workspace.sync_completed'
+            );
+          } catch (err) {
+            const error = err as Error;
+            syncError = error.message;
+            getLog().warn({ err: error, codebaseId: codebase.id }, 'workspace.sync_failed');
+          }
         }
         const workflowCwd = conversation.cwd ?? codebase.default_cwd;
         await syncArchonToWorktree(workflowCwd);
@@ -2265,6 +2273,19 @@ async function handleRegisterProject(
     return `Path does not exist: ${projectPath}`;
   }
 
+  // Canonicalize symlinks so the stored default_cwd matches what the CLI gate and
+  // `archon doctor` look up (both resolve against process.cwd(), which resolves
+  // symlinks — e.g. macOS /tmp → /private/tmp). Mirrors registerFolder; without
+  // it a symlinked path registers under one path but is looked up under another.
+  // Best-effort: existsSync already validated the path, so fall back to it if
+  // realpath fails for a rare reason (permission on a parent, race).
+  let canonicalPath = projectPath;
+  try {
+    canonicalPath = realpathSync(projectPath);
+  } catch (err) {
+    getLog().warn({ err: err as Error, projectPath }, 'project.register_realpath_failed');
+  }
+
   // Check if codebase already exists with this name
   const existing = await codebaseDb.listCodebases();
   const alreadyExists = existing.find(c => c.name.toLowerCase() === projectName.toLowerCase());
@@ -2275,19 +2296,46 @@ async function handleRegisterProject(
 
   // Use config default provider instead of hardcoding 'claude'
   const config = await loadConfig();
-  const detectedBranch = await detectCurrentGitBranch(projectPath);
+
+  // Detect whether the path is a git repository. Non-git paths (multi-repo roots
+  // or plain ops folders) register as folder projects — run-in-place, no branch.
+  // findRepoRoot returns null ONLY for a definitive "not a git repository"; it
+  // throws for genuine failures (git missing, timeout, permission). Since `kind`
+  // is persisted and mis-setting it to 'folder' permanently strips a real repo's
+  // worktree/branch capability, we do NOT silently treat a throw as folder: log
+  // loudly and tell the user so they can re-register after resolving the error.
+  let repoRoot: string | null = null;
+  let repoDetectFailed = false;
+  try {
+    repoRoot = await findRepoRoot(canonicalPath);
+  } catch (err) {
+    repoDetectFailed = true;
+    getLog().warn(
+      { err: err as Error, projectPath: canonicalPath },
+      'project.register_repo_detect_failed'
+    );
+  }
+  const kind: 'repo' | 'folder' = repoRoot ? 'repo' : 'folder';
+  const detectedBranch = kind === 'repo' ? await detectCurrentGitBranch(canonicalPath) : null;
   const codebase = await codebaseDb.createCodebase({
     name: projectName,
-    default_cwd: projectPath,
+    default_cwd: canonicalPath,
     default_branch: detectedBranch,
     ai_assistant_type: config.assistant,
+    kind,
   });
 
   getLog().info(
-    { name: projectName, path: projectPath, id: codebase.id },
+    { name: projectName, path: canonicalPath, id: codebase.id, kind },
     'project.register_completed'
   );
-  return `Project "${projectName}" registered successfully!\nPath: ${projectPath}\nID: ${codebase.id}`;
+  let kindNote = kind === 'folder' ? '\nKind: folder project (no git — runs in place)' : '';
+  if (repoDetectFailed) {
+    kindNote +=
+      '\n⚠️ Could not determine git status (git error) — registered as a folder project. ' +
+      'If this should be a git repo, resolve the error and re-register.';
+  }
+  return `Project "${projectName}" registered successfully!\nPath: ${canonicalPath}\nID: ${codebase.id}${kindNote}`;
 }
 
 async function detectCurrentGitBranch(projectPath: string): Promise<string | null> {

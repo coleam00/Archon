@@ -112,7 +112,6 @@ archon workflow run my-workflow "auth refresh-tokens"
 | `model` | No | string | Model for all nodes (`sonnet`, `opus`, `haiku`, or full model ID) |
 | `modelReasoningEffort` | No | string | Codex only: `minimal` \| `low` \| `medium` \| `high` \| `xhigh` |
 | `webSearchMode` | No | string | Codex only: `disabled` \| `cached` \| `live` |
-| `additionalDirectories` | No | string[] | Extra directories available to the AI |
 
 ### Node Options (DAG)
 

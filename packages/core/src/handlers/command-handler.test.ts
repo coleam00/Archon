@@ -552,6 +552,37 @@ describe('CommandHandler', () => {
         expect(result.message).toContain('my-repo');
       });
 
+      test('folder project: shows "(folder — no git)", lists child repos, skips worktrees', async () => {
+        const conversation = { ...baseConversation, codebase_id: 'cb-folder' };
+        mockGetCodebase.mockResolvedValue({
+          id: 'cb-folder',
+          name: 'platform',
+          repository_url: null,
+          default_cwd: '/tmp/platform',
+          ai_assistant_type: 'claude',
+          kind: 'folder',
+          commands: {},
+          created_at: new Date(),
+          updated_at: new Date(),
+        });
+        mockGetActiveSession.mockResolvedValue(null);
+        const childReposSpy = spyOn(gitUtils, 'listChildRepos').mockResolvedValue([
+          'auth-service',
+          'billing-service',
+        ]);
+
+        try {
+          const result = await handleCommand(conversation, '/status');
+          expect(result.success).toBe(true);
+          expect(result.message).toContain('platform (folder — no git)');
+          expect(result.message).toContain('Contains 2 git repos: auth-service, billing-service');
+          // Worktree breakdown is skipped for folder projects.
+          expect(result.message).not.toContain('Worktrees:');
+        } finally {
+          childReposSpy.mockRestore();
+        }
+      });
+
       test('should show project-less status when no codebase attached', async () => {
         const conversation = {
           ...baseConversation,
@@ -798,10 +829,30 @@ describe('CommandHandler', () => {
           repository_url: 'https://github.com/user/my-repo',
           default_cwd: '/workspace/my-repo',
           ai_assistant_type: 'claude',
+          kind: 'repo',
           commands: {},
           created_at: new Date(),
           updated_at: new Date(),
         });
+      });
+
+      test('rejects /worktree on a folder project as not applicable', async () => {
+        mockGetCodebase.mockResolvedValueOnce({
+          id: 'codebase-123',
+          name: 'platform',
+          repository_url: null,
+          default_cwd: '/tmp/platform',
+          ai_assistant_type: 'claude',
+          kind: 'folder',
+          commands: {},
+          created_at: new Date(),
+          updated_at: new Date(),
+        });
+
+        const result = await handleCommand(conversationWithCodebase, '/worktree create feat-x');
+
+        expect(result.success).toBe(false);
+        expect(result.message).toContain('not applicable to folder projects');
       });
 
       describe('create', () => {

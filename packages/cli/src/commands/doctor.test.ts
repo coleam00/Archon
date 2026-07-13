@@ -23,8 +23,10 @@ import {
   checkSlack,
   checkTelegram,
   checkTelemetry,
+  checkFolderProject,
   doctorCommand,
   type DatabaseDeps,
+  type FolderProjectDeps,
 } from './doctor';
 import * as doctorModule from './doctor';
 
@@ -216,6 +218,81 @@ describe('checkDatabase', () => {
     expect(result.status).toBe('fail');
     expect(result.message).toContain('failed to load database module');
     expect(result.message).toContain('Cannot find module');
+  });
+});
+
+describe('checkFolderProject', () => {
+  function makeDeps(over: Partial<FolderProjectDeps> = {}): FolderProjectDeps {
+    return {
+      findCodebaseByDefaultCwd: async () => null,
+      findCodebaseByPathPrefix: async () => null,
+      listChildRepos: async () => [],
+      ...over,
+    };
+  }
+
+  it('reports a folder project and its contained repos', async () => {
+    const deps = makeDeps({
+      findCodebaseByDefaultCwd: async () => ({
+        name: 'platform',
+        default_cwd: '/tmp/platform',
+        kind: 'folder',
+      }),
+      listChildRepos: async () => ['auth-service', 'billing-service'],
+    });
+
+    const result = await checkFolderProject('/tmp/platform', async () => deps);
+    expect(result.status).toBe('pass');
+    expect(result.message).toContain('platform');
+    expect(result.message).toContain('2 contained repo(s)');
+    expect(result.message).toContain('auth-service');
+  });
+
+  it('truncates the contained-repo list at 10 with a "+N more" suffix', async () => {
+    const many = Array.from({ length: 14 }, (_, i) => `svc-${String(i).padStart(2, '0')}`);
+    const deps = makeDeps({
+      findCodebaseByPathPrefix: async () => ({
+        name: 'big',
+        default_cwd: '/tmp/big',
+        kind: 'folder',
+      }),
+      listChildRepos: async () => many,
+    });
+
+    const result = await checkFolderProject('/tmp/big/subdir', async () => deps);
+    expect(result.status).toBe('pass');
+    expect(result.message).toContain('14 contained repo(s)');
+    expect(result.message).toContain('(+4 more)');
+  });
+
+  it('skips quietly when cwd is a repo-kind project', async () => {
+    const deps = makeDeps({
+      findCodebaseByDefaultCwd: async () => ({
+        name: 'owner/repo',
+        default_cwd: '/repos/repo',
+        kind: 'repo',
+      }),
+    });
+
+    const result = await checkFolderProject('/repos/repo', async () => deps);
+    expect(result.status).toBe('skip');
+    expect(result.message).toContain('not a registered folder project');
+  });
+
+  it('skips quietly when cwd is unregistered', async () => {
+    const result = await checkFolderProject('/tmp/random', async () => makeDeps());
+    expect(result.status).toBe('skip');
+  });
+
+  it('skips (not fail) when the database lookup throws', async () => {
+    const deps = makeDeps({
+      findCodebaseByDefaultCwd: async () => {
+        throw new Error('connection refused');
+      },
+    });
+    const result = await checkFolderProject('/tmp/x', async () => deps);
+    expect(result.status).toBe('skip');
+    expect(result.message).toContain('database unavailable');
   });
 });
 

@@ -187,6 +187,11 @@ export class SqliteAdapter implements IDatabase {
       if (!codebaseColNames.has('default_branch')) {
         this.db.run('ALTER TABLE remote_agent_codebases ADD COLUMN default_branch TEXT');
       }
+      if (!codebaseColNames.has('kind')) {
+        this.db.run(
+          "ALTER TABLE remote_agent_codebases ADD COLUMN kind TEXT NOT NULL DEFAULT 'repo'"
+        );
+      }
     } catch (e: unknown) {
       getLog().warn({ err: e as Error }, 'db.sqlite_migration_codebases_columns_failed');
     }
@@ -431,6 +436,7 @@ export class SqliteAdapter implements IDatabase {
         default_cwd TEXT NOT NULL,
         default_branch TEXT,
         ai_assistant_type TEXT DEFAULT 'claude',
+        kind TEXT NOT NULL DEFAULT 'repo' CHECK (kind IN ('repo', 'folder')),
         commands TEXT DEFAULT '{}',
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now'))
