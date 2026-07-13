@@ -34,6 +34,8 @@ import {
   getProjectLogsPath,
   getRunArtifactsPath,
   getRunLogPath,
+  sanitizeScopeSegment,
+  getScopeArtifactsPath,
   slugifyFolderName,
   getFolderProjectRoot,
   getFolderProjectArtifactsPath,
@@ -518,6 +520,49 @@ describe('archon-paths', () => {
       delete process.env.ARCHON_DOCKER;
       expect(getRunLogPath('acme', 'widget', 'run-123')).toBe(
         join(homedir(), '.archon', 'workspaces', 'acme', 'widget', 'logs', 'run-123.jsonl')
+      );
+    });
+  });
+
+  describe('sanitizeScopeSegment', () => {
+    test('keeps safe characters unchanged', () => {
+      expect(sanitizeScopeSegment('my-workflow_v2')).toBe('my-workflow_v2');
+      expect(sanitizeScopeSegment('550e8400-e29b-41d4-a716-446655440000')).toBe(
+        '550e8400-e29b-41d4-a716-446655440000'
+      );
+    });
+
+    test('replaces path separators and dots so a segment cannot escape', () => {
+      expect(sanitizeScopeSegment('../../etc')).toBe('______etc');
+      expect(sanitizeScopeSegment('a/b\\c')).toBe('a_b_c');
+      expect(sanitizeScopeSegment('owner/repo#123')).toBe('owner_repo_123');
+    });
+
+    test('falls back to underscore for an empty input', () => {
+      expect(sanitizeScopeSegment('')).toBe('_');
+    });
+  });
+
+  describe('getScopeArtifactsPath', () => {
+    test('returns scopes/<workflow>/<scope>/ under the given artifacts root', () => {
+      expect(getScopeArtifactsPath('/root/artifacts', 'feature-dev', 'conv-uuid-1')).toBe(
+        join('/root/artifacts', 'scopes', 'feature-dev', 'conv-uuid-1')
+      );
+    });
+
+    test('sanitizes workflow name and scope key segments', () => {
+      expect(getScopeArtifactsPath('/root/artifacts', 'wf/../evil', 'a b#c')).toBe(
+        join('/root/artifacts', 'scopes', 'wf____evil', 'a_b_c')
+      );
+    });
+
+    test('composes with run-artifact roots (sibling of runs/)', () => {
+      delete process.env.WORKSPACE_PATH;
+      delete process.env.ARCHON_HOME;
+      delete process.env.ARCHON_DOCKER;
+      const root = getProjectArtifactsPath('acme', 'widget');
+      expect(getScopeArtifactsPath(root, 'wf', 'scope')).toBe(
+        join(homedir(), '.archon', 'workspaces', 'acme', 'widget', 'artifacts', 'scopes', 'wf', 'scope')
       );
     });
   });
