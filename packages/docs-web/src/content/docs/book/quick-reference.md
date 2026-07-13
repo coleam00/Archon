@@ -125,6 +125,7 @@ All nodes share these base fields:
 | `bash` | One of | string | Shell script (runs without AI; stdout captured as `$nodeId.output`) |
 | `script` | One of | string | TypeScript/JavaScript (bun) or Python (uv) — inline or named ref to `.archon/scripts/`. Requires `runtime`. See [Script Nodes](/guides/script-nodes/) |
 | `loop` | One of | object | Loop configuration (see Loop Options below) |
+| `loop_group` | One of | object | Multi-node sub-DAG repeated per iteration (see Loop Group Options below) |
 | `approval` | One of | object | Pause for human review; see [Approval Nodes](/guides/approval-nodes/) |
 | `cancel` | One of | string | Reason string; terminates the run with `cancelled` status (not `failed`). Usually gated with `when:` |
 | `depends_on` | No | string[] | Node IDs that must complete before this node runs |
@@ -191,6 +192,41 @@ Defined under `loop:` inside a node:
     prompt: "Review the current draft and improve it. Output COMPLETE when done."
     until: "COMPLETE"
     max_iterations: 5
+```
+
+### Loop Group Options
+
+Defined under `loop_group:` inside a node — repeats a sealed multi-node sub-DAG
+per iteration (see [Cross-Node Loops](/guides/loop-nodes/#cross-node-loops-with-loop_group)):
+
+| Field | Required | Type | Description |
+|-------|----------|------|-------------|
+| `nodes` | Yes | node[] | Sub-DAG body re-run in full each iteration. Any node type, including nested `loop_group`. `depends_on` is body-scoped; body ids must not shadow outer ids |
+| `until` | Yes | string | Completion signal — checked in the body's terminal-node output |
+| `max_iterations` | Yes | number | Maximum iterations before the node fails |
+| `fresh_context` | No | boolean | `true` starts fresh body AI sessions each iteration (default: false — sessions continue) |
+| `until_bash` | No | string | Shell script run after each iteration; exit 0 signals completion |
+| `interactive` | No | boolean | Pause at a human gate after each non-completing iteration |
+| `gate_message` | No | string | Message shown at the interactive gate |
+
+Body nodes can reference the previous iteration via
+`$LOOP_PREV.<nodeId>.output`, and outer-DAG outputs via plain `$nodeId.output`.
+`retry` is rejected on `loop_group` nodes; `model`/`provider` set on the group
+become defaults for body AI nodes.
+
+**Example:**
+
+```yaml
+- id: fix-loop
+  loop_group:
+    until: TESTS_PASS
+    max_iterations: 5
+    nodes:
+      - id: implement
+        prompt: "Fix the failing tests. Previous run: $LOOP_PREV.test.output"
+      - id: test
+        bash: bun test
+        depends_on: [implement]
 ```
 
 ### Retry Options

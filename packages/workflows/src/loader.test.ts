@@ -2616,6 +2616,206 @@ nodes:
         'interactive_loop_in_non_interactive_workflow'
       );
     });
+
+    it('should reject loop_group with a cyclic body', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'loop-group-cycle.yaml'),
+        `
+name: loop-group-cycle
+description: Cyclic loop_group body
+nodes:
+  - id: grp
+    loop_group:
+      until: DONE
+      max_iterations: 5
+      nodes:
+        - id: a
+          prompt: "a"
+          depends_on: [b]
+        - id: b
+          prompt: "b"
+          depends_on: [a]
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors.length).toBeGreaterThan(0);
+      expect(result.errors[0].error).toContain('loop_group');
+      expect(result.errors[0].error).toContain('Cycle');
+    });
+
+    it('should reject loop_group body depends_on referencing an unknown node', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'loop-group-bad-dep.yaml'),
+        `
+name: loop-group-bad-dep
+description: Body depends_on to unknown node
+nodes:
+  - id: grp
+    loop_group:
+      until: DONE
+      max_iterations: 5
+      nodes:
+        - id: a
+          prompt: "a"
+        - id: b
+          prompt: "b"
+          depends_on: [missing]
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors.length).toBeGreaterThan(0);
+      expect(result.errors[0].error).toContain('loop_group');
+      expect(result.errors[0].error).toContain('unknown node');
+    });
+
+    it('should accept a well-formed loop_group', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'loop-group-ok.yaml'),
+        `
+name: loop-group-ok
+description: Valid loop_group
+nodes:
+  - id: grp
+    loop_group:
+      until: DONE
+      max_iterations: 3
+      nodes:
+        - id: work
+          prompt: "do work"
+          depends_on: []
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
+    });
+
+    it('should accept a body prompt referencing an outer-DAG node via $nodeId.output', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'loop-group-outer-ref.yaml'),
+        `
+name: loop-group-outer-ref
+description: Body prompt reads an outer node output
+nodes:
+  - id: setup
+    bash: "echo hi"
+  - id: grp
+    depends_on: [setup]
+    loop_group:
+      until: DONE
+      max_iterations: 3
+      nodes:
+        - id: work
+          prompt: "Use this context: $setup.output"
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
+    });
+
+    it('should still reject a body prompt referencing a truly unknown node', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'loop-group-unknown-ref.yaml'),
+        `
+name: loop-group-unknown-ref
+description: Body prompt references a node that exists nowhere
+nodes:
+  - id: setup
+    bash: "echo hi"
+  - id: grp
+    depends_on: [setup]
+    loop_group:
+      until: DONE
+      max_iterations: 3
+      nodes:
+        - id: work
+          prompt: "Use this context: $nowhere.output"
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors.length).toBeGreaterThan(0);
+      expect(result.errors[0].error).toContain("unknown node '$nowhere.output'");
+    });
+
+    it('should reject a body node id that shadows an outer-DAG node id', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'loop-group-shadow.yaml'),
+        `
+name: loop-group-shadow
+description: Body node id collides with outer node id
+nodes:
+  - id: setup
+    bash: "echo hi"
+  - id: grp
+    depends_on: [setup]
+    loop_group:
+      until: DONE
+      max_iterations: 3
+      nodes:
+        - id: setup
+          prompt: "shadows the outer setup node"
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors.length).toBeGreaterThan(0);
+      expect(result.errors[0].error).toContain('shadows a node id in the enclosing DAG');
+    });
+
+    it('should warn when an interactive loop_group is in a non-interactive workflow', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'loop-group-gate-warn.yaml'),
+        `
+name: loop-group-gate-warn
+description: Interactive loop_group without workflow-level interactive
+nodes:
+  - id: grp
+    loop_group:
+      until: DONE
+      max_iterations: 3
+      interactive: true
+      gate_message: "Review this iteration"
+      nodes:
+        - id: work
+          prompt: "do work"
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ filename: expect.stringContaining('loop-group-gate-warn') }),
+        'interactive_loop_in_non_interactive_workflow'
+      );
+    });
   });
 
   // -------------------------------------------------------------------------

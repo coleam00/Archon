@@ -3,10 +3,12 @@ import {
   isBashNode,
   isCancelNode,
   isScriptNode,
+  isLoopGroupNode,
   isTriggerRule,
   TRIGGER_RULES,
   SCRIPT_NODE_AI_FIELDS,
   LOOP_NODE_AI_FIELDS,
+  LOOP_GROUP_NODE_AI_FIELDS,
   approvalOnRejectSchema,
   dagNodeSchema,
 } from './schemas';
@@ -693,5 +695,121 @@ describe('LOOP_NODE_AI_FIELDS', () => {
     for (const field of expectedFields) {
       expect(LOOP_NODE_AI_FIELDS).toContain(field);
     }
+  });
+});
+
+describe('dagNodeSchema — loop_group', () => {
+  test('parses a valid loop_group node with a recursive body', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'grp',
+      loop_group: {
+        until: 'DONE',
+        max_iterations: 5,
+        fresh_context: false,
+        nodes: [
+          { id: 'a', prompt: 'do a', depends_on: [] },
+          { id: 'b', bash: 'echo hi', depends_on: ['a'] },
+        ],
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(isLoopGroupNode(result.data)).toBe(true);
+      const grp = result.data as { loop_group?: { nodes: unknown[] } };
+      expect(grp.loop_group?.nodes).toHaveLength(2);
+    }
+  });
+
+  test('loop_group + prompt are mutually exclusive', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'grp',
+      prompt: 'inline',
+      loop_group: { until: 'DONE', max_iterations: 3, nodes: [{ id: 'x', prompt: 'x' }] },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].message).toContain('mutually exclusive');
+      expect(result.error.issues[0].message).toContain('loop_group');
+    }
+  });
+
+  test('loop_group + loop are mutually exclusive', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'grp',
+      loop: { prompt: 'p', until: 'DONE', max_iterations: 3 },
+      loop_group: { until: 'DONE', max_iterations: 3, nodes: [{ id: 'x', prompt: 'x' }] },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  test('loop_group rejects retry (loop manages its own iteration)', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'grp',
+      retry: { max_attempts: 2, delay_ms: 1000 },
+      loop_group: { until: 'DONE', max_iterations: 3, nodes: [{ id: 'x', prompt: 'x' }] },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const retryIssue = result.error.issues.find(i => i.message.includes('retry'));
+      expect(retryIssue).toBeDefined();
+      expect(retryIssue?.message).toContain('loop_group');
+    }
+  });
+
+  test('loop_group requires at least one body node', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'grp',
+      loop_group: { until: 'DONE', max_iterations: 3, nodes: [] },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some(i => i.message.includes('at least one node'))).toBe(true);
+    }
+  });
+
+  test('loop_group requires until (completion signal)', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'grp',
+      loop_group: { max_iterations: 3, nodes: [{ id: 'x', prompt: 'x' }] },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  test('nested loop_group body parses (loop_group inside loop_group)', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'outer',
+      loop_group: {
+        until: 'OUTER_DONE',
+        max_iterations: 3,
+        nodes: [
+          {
+            id: 'inner',
+            loop_group: {
+              until: 'INNER_DONE',
+              max_iterations: 2,
+              nodes: [{ id: 'inner-work', prompt: 'work', depends_on: [] }],
+            },
+            depends_on: [],
+          },
+        ],
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const outer = result.data as {
+        loop_group?: { nodes: Array<{ loop_group?: { nodes: unknown[] } }> };
+      };
+      const inner = outer.loop_group?.nodes[0];
+      expect(isLoopGroupNode(inner as never)).toBe(true);
+      expect(inner?.loop_group?.nodes).toHaveLength(1);
+    }
+  });
+});
+
+describe('LOOP_GROUP_NODE_AI_FIELDS', () => {
+  test('mirrors LOOP_NODE_AI_FIELDS (model/provider forwarded to body AI nodes)', () => {
+    expect(LOOP_GROUP_NODE_AI_FIELDS).not.toContain('model');
+    expect(LOOP_GROUP_NODE_AI_FIELDS).not.toContain('provider');
+    expect(LOOP_GROUP_NODE_AI_FIELDS).toEqual(LOOP_NODE_AI_FIELDS);
   });
 });

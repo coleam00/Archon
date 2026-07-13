@@ -12,7 +12,7 @@
  */
 import { z } from '@hono/zod-openapi';
 import { stepRetryConfigSchema } from './retry';
-import { loopNodeConfigSchema } from './loop';
+import { loopNodeConfigSchema, loopControlSchema, type LoopControl } from './loop';
 import { workflowNodeHooksSchema } from './hooks';
 import { isValidCommandName } from '../command-validation';
 
@@ -218,6 +218,7 @@ export type CommandNode = z.infer<typeof commandNodeSchema> & {
   prompt?: never;
   bash?: never;
   loop?: never;
+  loop_group?: never;
   approval?: never;
   cancel?: never;
   script?: never;
@@ -232,6 +233,7 @@ export type PromptNode = z.infer<typeof promptNodeSchema> & {
   command?: never;
   bash?: never;
   loop?: never;
+  loop_group?: never;
   approval?: never;
   cancel?: never;
   script?: never;
@@ -251,6 +253,7 @@ export type BashNode = z.infer<typeof bashNodeSchema> & {
   command?: never;
   prompt?: never;
   loop?: never;
+  loop_group?: never;
   approval?: never;
   cancel?: never;
   script?: never;
@@ -274,6 +277,7 @@ export type ScriptNode = z.infer<typeof scriptNodeSchema> & {
   prompt?: never;
   bash?: never;
   loop?: never;
+  loop_group?: never;
   approval?: never;
   cancel?: never;
 };
@@ -292,6 +296,53 @@ export type LoopNode = z.infer<typeof loopNodeSchema> & {
   command?: never;
   prompt?: never;
   bash?: never;
+  loop_group?: never;
+  approval?: never;
+  cancel?: never;
+  script?: never;
+};
+
+/**
+ * Loop-group node config — iteration control (`loopControlSchema`) plus a `nodes:` sub-DAG
+ * body that is re-executed in full each iteration. The body nodes are themselves
+ * `dagNodeSchema` instances, so a `loop_group` body may contain any node type — including
+ * another `loop_group` (nested loops).
+ *
+ * The body is recursive (`loopGroupNodeConfigSchema` ← `dagNodeSchema` ←
+ * `loopGroupNodeConfigSchema`). zod v4 infers recursive types cleanly via getter
+ * properties plus an explicit `z.ZodType<T>` annotation on the recursive schema
+ * (https://zod.dev/v4?id=refinements-live-inside-schemas) — the annotation breaks the
+ * type-inference cycle (TS7022) that a plain `z.lazy(() => dagNodeSchema)` trips over.
+ * At runtime the getter returns a full `z.array(dagNodeSchema)`, so the body is validated
+ * as real DagNodes — including nested loop_groups.
+ */
+export type LoopGroupNodeConfig = LoopControl & {
+  /** Sub-DAG body re-executed in full each iteration. At least one node required. */
+  nodes: DagNode[];
+};
+export const loopGroupNodeConfigSchema: z.ZodType<LoopGroupNodeConfig> = loopControlSchema.extend({
+  /** Sub-DAG body re-executed in full each iteration. At least one node required. */
+  get nodes(): z.ZodArray<typeof dagNodeSchema> {
+    return z.array(dagNodeSchema).min(1, "'loop_group.nodes' must have at least one node");
+  },
+});
+
+/**
+ * Loop-group node schema — extends base with `loop_group` config (iteration control + body).
+ * Like `loop:`, AI-specific base fields are ignored at runtime with a warning, and `retry`
+ * is not supported (the loop manages its own iteration). `model`/`provider` are forwarded
+ * to body AI nodes unless overridden per-node (same forwarding `loop:` uses).
+ */
+export const loopGroupNodeSchema = dagNodeBaseSchema.extend({
+  loop_group: loopGroupNodeConfigSchema,
+});
+
+/** DAG node that runs a multi-node sub-DAG in a loop until a completion condition is met */
+export type LoopGroupNode = z.infer<typeof loopGroupNodeSchema> & {
+  command?: never;
+  prompt?: never;
+  bash?: never;
+  loop?: never;
   approval?: never;
   cancel?: never;
   script?: never;
@@ -323,6 +374,7 @@ export type ApprovalNode = z.infer<typeof approvalNodeSchema> & {
   prompt?: never;
   bash?: never;
   loop?: never;
+  loop_group?: never;
   cancel?: never;
   script?: never;
 };
@@ -341,16 +393,18 @@ export type CancelNode = z.infer<typeof cancelNodeSchema> & {
   prompt?: never;
   bash?: never;
   loop?: never;
+  loop_group?: never;
   approval?: never;
   script?: never;
 };
 
-/** A single node in a DAG workflow. command, prompt, bash, loop, approval, cancel, and script are mutually exclusive. */
+/** A single node in a DAG workflow. command, prompt, bash, loop, loop_group, approval, cancel, and script are mutually exclusive. */
 export type DagNode =
   | CommandNode
   | PromptNode
   | BashNode
   | LoopNode
+  | LoopGroupNode
   | ApprovalNode
   | CancelNode
   | ScriptNode;
@@ -393,6 +447,13 @@ export const LOOP_NODE_AI_FIELDS: readonly string[] = BASH_NODE_AI_FIELDS.filter
   f => f !== 'model' && f !== 'provider'
 );
 
+/**
+ * AI-specific fields that are unsupported on loop_group nodes. Same set as
+ * `loop:` — `model`/`provider` are forwarded to each body AI node (overridable
+ * per-node), so they remain meaningful at the group level.
+ */
+export const LOOP_GROUP_NODE_AI_FIELDS: readonly string[] = LOOP_NODE_AI_FIELDS;
+
 // ---------------------------------------------------------------------------
 // dagNodeSchema — flat validation schema with transform to DagNode
 // ---------------------------------------------------------------------------
@@ -402,10 +463,10 @@ export const LOOP_NODE_AI_FIELDS: readonly string[] = BASH_NODE_AI_FIELDS.filter
  *
  * Enforces:
  * - Non-empty id
- * - Exactly one of command/prompt/bash/loop (mutual exclusivity)
+ * - Exactly one of command/prompt/bash/loop/loop_group/approval/cancel/script (mutual exclusivity)
  * - command name validity (via isValidCommandName)
  * - idle_timeout must be a finite positive number
- * - retry not allowed on loop nodes
+ * - retry not allowed on loop or loop_group nodes
  * - timeout on bash must be positive
  *
  * Note: provider identity is validated in loader.ts (workflow-level) and
@@ -419,6 +480,7 @@ export const dagNodeSchema = dagNodeBaseSchema
     prompt: z.string().optional(),
     bash: z.string().optional(),
     loop: loopNodeConfigSchema.optional(),
+    loop_group: loopGroupNodeConfigSchema.optional(),
     approval: z
       .object({
         message: z.string().min(1, "'approval.message' must not be empty"),
@@ -451,6 +513,7 @@ export const dagNodeSchema = dagNodeBaseSchema
     const hasPrompt = typeof data.prompt === 'string' && data.prompt.trim().length > 0;
     const hasBash = typeof data.bash === 'string' && data.bash.trim().length > 0;
     const hasLoop = data.loop !== undefined;
+    const hasLoopGroup = data.loop_group !== undefined;
     const hasApproval = data.approval !== undefined;
     const hasCancel = typeof data.cancel === 'string' && data.cancel.trim().length > 0;
     const hasScript = typeof data.script === 'string' && data.script.trim().length > 0;
@@ -460,6 +523,7 @@ export const dagNodeSchema = dagNodeBaseSchema
       hasPrompt,
       hasBash,
       hasLoop,
+      hasLoopGroup,
       hasApproval,
       hasCancel,
       hasScript,
@@ -469,7 +533,7 @@ export const dagNodeSchema = dagNodeBaseSchema
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
-          "'command', 'prompt', 'bash', 'loop', 'approval', 'cancel', and 'script' are mutually exclusive",
+          "'command', 'prompt', 'bash', 'loop', 'loop_group', 'approval', 'cancel', and 'script' are mutually exclusive",
       });
       return z.NEVER;
     }
@@ -501,7 +565,7 @@ export const dagNodeSchema = dagNodeBaseSchema
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
-          "must have either 'command', 'prompt', 'bash', 'loop', 'approval', 'cancel', or 'script'",
+          "must have either 'command', 'prompt', 'bash', 'loop', 'loop_group', 'approval', 'cancel', or 'script'",
       });
       return z.NEVER;
     }
@@ -549,6 +613,16 @@ export const dagNodeSchema = dagNodeBaseSchema
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: "'retry' is not supported on loop nodes (loop manages its own iteration)",
+        path: ['retry'],
+      });
+    }
+
+    // Loop-group node: retry not supported (the loop_group manages its own iteration)
+    if (hasLoopGroup && data.retry !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "'retry' is not supported on loop_group nodes (loop_group manages its own iteration)",
         path: ['retry'],
       });
     }
@@ -640,6 +714,15 @@ export const dagNodeSchema = dagNodeBaseSchema
     if (data.cancel !== undefined && data.cancel.trim().length > 0) {
       return { ...base, ...shared, cancel: data.cancel.trim() } as CancelNode;
     }
+    // loop_group — guaranteed by superRefine to be defined at this point.
+    // Spread aiOnly so group-level model/provider survive parsing — the executor forwards
+    // them to body AI nodes unless overridden per-node ('loop:' historically drops them at
+    // parse; loop_group keeps them to support group-level overrides). The REMAINING aiOnly
+    // fields are the ones LOOP_GROUP_NODE_AI_FIELDS declares unsupported: they ride along
+    // here but the loader warns about and ignores them at runtime.
+    if (data.loop_group !== undefined) {
+      return { ...base, ...aiOnly, loop_group: data.loop_group } as LoopGroupNode;
+    }
     // loop — guaranteed by superRefine to be defined at this point
     if (!data.loop) throw new Error('unreachable: loop must be defined after superRefine');
     return { ...base, loop: data.loop } as LoopNode;
@@ -658,6 +741,11 @@ export function isBashNode(node: DagNode): node is BashNode {
 /** Type guard: check if a DAG node is a loop (iterative) node */
 export function isLoopNode(node: DagNode): node is LoopNode {
   return 'loop' in node && typeof node.loop === 'object' && node.loop !== null;
+}
+
+/** Type guard: check if a DAG node is a loop_group (cross-node iterative subgraph) node */
+export function isLoopGroupNode(node: DagNode): node is LoopGroupNode {
+  return 'loop_group' in node && typeof node.loop_group === 'object' && node.loop_group !== null;
 }
 
 /** Type guard: check if a DAG node is an approval (human-in-the-loop) node */
@@ -682,15 +770,16 @@ export function isTriggerRule(value: unknown): value is TriggerRule {
 
 /**
  * True for node types that invoke a provider and therefore participate in cross-run
- * session persistence (`persist_session`). bash, script, approval, cancel, and loop
- * nodes are excluded — they either make no provider call or manage their own per-
- * iteration sessions. Shared by the loader's load-time capability gate and any other
- * caller that needs to reason about persistence eligibility, so the exclusion list
- * lives in one place.
+ * session persistence (`persist_session`). bash, script, approval, cancel, loop, and
+ * loop_group nodes are excluded — they either make no provider call or manage their
+ * own per-iteration sessions. Shared by the loader's load-time capability gate and
+ * any other caller that needs to reason about persistence eligibility, so the
+ * exclusion list lives in one place.
  */
 export function isPersistableNode(node: DagNode): boolean {
   return (
     !isLoopNode(node) &&
+    !isLoopGroupNode(node) &&
     !isApprovalNode(node) &&
     !isCancelNode(node) &&
     !isScriptNode(node) &&

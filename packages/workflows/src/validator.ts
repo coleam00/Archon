@@ -30,7 +30,7 @@ function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('workflow.validator');
   return cachedLog;
 }
-import { isBashNode, isLoopNode, isScriptNode } from './schemas';
+import { isBashNode, isLoopNode, isLoopGroupNode, isScriptNode } from './schemas';
 import type { WorkflowDefinition, DagNode, WorkflowSource } from './schemas';
 import type { ScriptRuntime } from './script-discovery';
 import { discoverScriptsForCwd } from './script-discovery';
@@ -367,7 +367,20 @@ export async function validateWorkflowResources(
   }
   if (workflow.model) validateModelRef(workflow.model);
 
-  for (const node of workflow.nodes) {
+  // Flatten top-level nodes plus every loop_group body (recursing into nested
+  // loop_groups) so resource checks (commands, mcp, skills, scripts) validate
+  // body nodes too. ID-uniqueness/cycle checks are the loader's job; the validator
+  // only checks referenced resources exist, so flattening is safe here.
+  const allNodes: DagNode[] = [];
+  const collectNodes = (nodes: readonly DagNode[]): void => {
+    for (const n of nodes) {
+      allNodes.push(n);
+      if (isLoopGroupNode(n)) collectNodes(n.loop_group.nodes);
+    }
+  };
+  collectNodes(workflow.nodes);
+
+  for (const node of allNodes) {
     const provider = resolveProvider(node, workflow.provider, defaultProvider);
 
     if (requiresPortableModelRefs && 'model' in node && node.model?.startsWith('@')) {

@@ -335,6 +335,126 @@ If you need to accumulate results across iterations, write them to files in
 | Idle timeout per iteration | Iteration completes with whatever output was collected; loop continues to next iteration |
 | `retry` configured on node | Rejected at parse time — workflow fails to load |
 
+## Cross-Node Loops with `loop_group`
+
+A `loop` node iterates a **single prompt**. A `loop_group` node iterates a
+**multi-node sub-DAG** — a sealed body of nodes that re-runs in full each
+iteration until a completion condition is met. Use it when "iterate until done"
+needs a *pipeline* of steps (e.g. `implement → test → review`), not just one
+repeated step.
+
+```yaml
+name: fix-until-green
+description: Implement, test, and review until tests pass
+nodes:
+  - id: fix-loop
+    loop_group:
+      until: TESTS_PASS        # completion signal in the body's terminal output
+      max_iterations: 5
+      fresh_context: false      # false (default) = body AI sessions continue across iterations
+      nodes:                    # sealed sub-DAG body — repeats as a unit
+        - id: implement
+          prompt: Fix the failing tests. Emit TESTS_PASS only when all pass.
+          depends_on: []
+        - id: test
+          bash: bun test
+          depends_on: [implement]
+        - id: review
+          prompt: Summarize the result; echo TESTS_PASS if tests are green.
+          depends_on: [test]
+```
+
+### How it works
+
+- From the **outer DAG's** perspective, `fix-loop` is one node. The cycle is
+  *encapsulated* inside it — the outer DAG stays acyclic.
+- Each iteration runs the body's topological layers in full (concurrent nodes
+  within a layer run in parallel, same as a normal DAG).
+- The body is **sealed**: a body node's `depends_on` may only reference sibling
+  body nodes, not outer-DAG nodes. Outer context is still reachable via `$nodeId.output`
+  refs in body prompts.
+- Loop-control events (skip, trigger-rule, `when:` evaluations) are namespaced
+  `{groupId}.{nodeId}` in the event log. Body node **lifecycle** events
+  (`node_started`/`node_completed`/`node_failed`, tool events) currently use the
+  raw body-node id — a known v1 limitation, so expect repeated step names across
+  iterations in the event log.
+- A body node that **fails** fails the whole group immediately with that node's
+  error (no further iterations run) — same semantics as a failed node in a
+  top-level DAG.
+- `$fix-loop.output` (visible to the outer DAG) is the **final iteration's
+  terminal-node output**.
+
+### Cross-iteration references: `$LOOP_PREV`
+
+A body node can reference a sibling's output from the **previous iteration**
+with `$LOOP_PREV.<nodeId>.output` (and `$LOOP_PREV.<nodeId>.output.<field>`
+for structured output):
+
+```yaml
+nodes:
+  - id: fix-loop
+    loop_group:
+      until: TESTS_PASS
+      max_iterations: 5
+      nodes:
+        - id: implement
+          prompt: |
+            Previous attempt's test output:
+            $LOOP_PREV.test.output
+            Fix what failed.
+          depends_on: []
+        - id: test
+          bash: bun test
+          depends_on: [implement]
+```
+
+On iteration 1 (no prior iteration), `$LOOP_PREV.*` resolves to an empty
+string. Field access uses the same strict semantics as `$nodeId.output.field`
+(a field not in the producer's declared schema fails the consuming node rather
+than silently degrading).
+
+### Configuration fields
+
+`loop_group` shares the same iteration-control fields as `loop`:
+[`until`](#until), [`max_iterations`](#max_iterations),
+[`fresh_context`](#fresh_context), [`until_bash`](#until_bash),
+[`interactive`](#interactive-and-gate_message), and `gate_message`. The
+difference is the body: `loop` takes a single `prompt`; `loop_group` takes a
+`nodes` array.
+
+Unlike `loop:` (where node-level `model`/`provider` are ignored at runtime),
+`model` and `provider` set on a `loop_group` node **are honored**: they become
+the default for every body AI node, overridable per body node.
+
+### Resume
+
+Two distinct cases:
+
+- **Interactive-gate resume** (`/workflow approve <id>`): the loop continues
+  with the **next** iteration's whole body. With `fresh_context: false`, the
+  body's AI session continues from where it paused (the session cursor is
+  persisted across the gate). `$LOOP_PREV.*` refs, however, resolve to an empty
+  string on the first resumed iteration — the prior iteration's body-output
+  snapshot is **not** carried across the gate (same caveat as
+  [`$LOOP_PREV_OUTPUT`](#retry-on-failure-with-loop_prev_output)).
+- **Failure resume** (`/workflow resume <id>` after a crash/failure): there is
+  no persisted iteration cursor — the loop_group node restarts from
+  **iteration 1**. Per-body-node resume granularity is not supported in v1.
+
+### What is NOT supported on loop_group nodes (v1)
+
+- `retry` (the loop manages its own iteration) — rejected at parse time.
+- `persist_session` for body AI nodes across iterations — body sessions reset
+  per iteration (governed by `fresh_context`).
+- Per-body-node resume (skip-to-failed-body-node) — the whole iteration re-runs.
+- `$LOOP_PREV.<id>.output[N]` history indexing — only the immediately prior
+  iteration is reachable.
+- `$LOOP_PREV.*` across an interactive pause/resume boundary — resolves to an
+  empty string on the resumed iteration.
+
+Nested `loop_group` inside a `loop_group` body is supported by construction
+(the body is a normal `nodes` array), but is not hardened in v1.
+
 ## See Also
 
 - [Authoring Workflows](/guides/authoring-workflows/) — full workflow reference

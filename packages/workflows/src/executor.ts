@@ -14,7 +14,7 @@ import type {
   WorkflowExecutionResult,
   WorkflowSource,
 } from './schemas';
-import { isLoopNode, isApprovalNode, isScriptNode, isBashNode } from './schemas';
+import { isLoopNode, isLoopGroupNode, isApprovalNode, isScriptNode, isBashNode } from './schemas';
 import { executeDagWorkflow } from './dag-executor';
 import { logWorkflowStart, logWorkflowError } from './logger';
 import { formatDuration, parseDbTimestamp } from './utils/duration';
@@ -767,6 +767,7 @@ export async function executeWorkflow(
       model: resolvedModel,
       nodeCount: workflow.nodes.length,
       usesLoop: workflow.nodes.some(isLoopNode),
+      usesLoopGroup: workflow.nodes.some(isLoopGroupNode),
       usesApproval: workflow.nodes.some(isApprovalNode),
       usesScript: workflow.nodes.some(isScriptNode),
       usesBash: workflow.nodes.some(isBashNode),

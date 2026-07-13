@@ -13,8 +13,8 @@ export { stepRetryConfigSchema } from './retry';
 export type { StepRetryConfig } from './retry';
 
 // Loop node configuration
-export { loopNodeConfigSchema } from './loop';
-export type { LoopNodeConfig } from './loop';
+export { loopNodeConfigSchema, loopControlSchema } from './loop';
+export type { LoopNodeConfig, LoopControl } from './loop';
 
 // Hooks
 export {
@@ -34,6 +34,8 @@ export {
   promptNodeSchema,
   bashNodeSchema,
   loopNodeSchema,
+  loopGroupNodeSchema,
+  loopGroupNodeConfigSchema,
   approvalNodeSchema,
   approvalOnRejectSchema,
   cancelNodeSchema,
@@ -41,6 +43,7 @@ export {
   dagNodeSchema,
   isBashNode,
   isLoopNode,
+  isLoopGroupNode,
   isApprovalNode,
   isCancelNode,
   isScriptNode,
@@ -49,6 +52,7 @@ export {
   BASH_NODE_AI_FIELDS,
   SCRIPT_NODE_AI_FIELDS,
   LOOP_NODE_AI_FIELDS,
+  LOOP_GROUP_NODE_AI_FIELDS,
   effortLevelSchema,
   thinkingConfigSchema,
   sandboxSettingsSchema,
@@ -61,6 +65,8 @@ export type {
   PromptNode,
   BashNode,
   LoopNode,
+  LoopGroupNode,
+  LoopGroupNodeConfig,
   ApprovalNode,
   ApprovalOnReject,
   CancelNode,

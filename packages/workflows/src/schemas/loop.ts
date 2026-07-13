@@ -1,12 +1,22 @@
 /**
- * Zod schema for loop node configuration.
+ * Zod schemas for loop node configuration.
+ *
+ * Two loop variants share the same iteration-control surface (`loopControlSchema`):
+ *  - `loop:`           — intra-node iteration: repeats a single inline `prompt` per iteration.
+ *  - `loop_group:`     — cross-node iteration: repeats a `nodes:` sub-DAG body per iteration.
+ *
+ * `loopControlSchema` carries the fields both need (completion gate, iteration cap,
+ * session reset, interactive gate). Each variant extends it with its body shape.
  */
 import { z } from '@hono/zod-openapi';
 
-export const loopNodeConfigSchema = z
+/**
+ * Shared iteration-control fields for `loop:` and `loop_group:`.
+ * Error messages keep the `loop.` qualifier (matching the pre-refactor `loop:`
+ * wording, which existing tests assert) — both variants surface the same text.
+ */
+export const loopControlSchema = z
   .object({
-    /** Inline prompt text executed each iteration. */
-    prompt: z.string().min(1, "loop node requires 'loop.prompt' (non-empty string)"),
     /** Completion signal string detected in AI output (e.g., "COMPLETE"). */
     until: z.string().min(1, "loop node requires 'loop.until' (completion signal string)"),
     /** Maximum iterations allowed; exceeding this fails the node. */
@@ -29,5 +39,13 @@ export const loopNodeConfigSchema = z
       });
     }
   });
+
+export type LoopControl = z.infer<typeof loopControlSchema>;
+
+/** `loop:` node config — iteration control plus a single inline prompt. */
+export const loopNodeConfigSchema = loopControlSchema.extend({
+  /** Inline prompt text executed each iteration. */
+  prompt: z.string().min(1, "loop node requires 'loop.prompt' (non-empty string)"),
+});
 
 export type LoopNodeConfig = z.infer<typeof loopNodeConfigSchema>;

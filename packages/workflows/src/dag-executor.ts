@@ -35,6 +35,7 @@ import type {
   CommandNode,
   PromptNode,
   LoopNode,
+  LoopGroupNode,
   ScriptNode,
   NodeOutput,
   TriggerRule,
@@ -47,6 +48,7 @@ import type {
 import {
   isBashNode,
   isLoopNode,
+  isLoopGroupNode,
   isApprovalNode,
   isCancelNode,
   isScriptNode,
@@ -104,6 +106,7 @@ function dagNodeTelemetryType(node: DagNode): WorkflowNodeType {
   if (isBashNode(node)) return 'bash';
   if (isScriptNode(node)) return 'script';
   if (isLoopNode(node)) return 'loop';
+  if (isLoopGroupNode(node)) return 'loop_group';
   if (isApprovalNode(node)) return 'approval';
   if (isCancelNode(node)) return 'cancel';
   if ('command' in node) return 'command';
@@ -443,6 +446,63 @@ export function substituteNodeOutputRefs(
       if (typeof value === 'number' || typeof value === 'boolean') return String(value);
       // arrays and objects: JSON-stringify so downstream tools (jq, etc.) get a
       // single JSON literal argument.
+      const json = JSON.stringify(value);
+      return escapedForBash ? shellQuoteOrFile(json, nodeId, field, outputFileDir) : json;
+    }
+  );
+}
+
+/**
+ * Resolve `$LOOP_PREV.<nodeId>.output` and `$LOOP_PREV.<nodeId>.output.<field>` references
+ * against a loop_group body's *prior-iteration* node outputs.
+ *
+ * Cross-iteration analog of {@link substituteNodeOutputRefs}: where `$nodeId.output` reads
+ * a node's output from the *current* iteration's scope, `$LOOP_PREV.<nodeId>.output` reads
+ * the same node's output from the *previous* iteration — letting a body node reference what
+ * a sibling (or itself) produced one iteration ago. On iteration 1 (no prior iteration)
+ * `loopPrevOutputs` is empty/undefined and every `$LOOP_PREV.*` ref resolves to '' (matching
+ * the empty-on-first semantics of the single-node `$LOOP_PREV_OUTPUT`).
+ *
+ * Field access reuses {@link resolveNodeOutputField} for the same strict no-silent-drop
+ * semantics (declared-schema typo / schemaless non-JSON / missing key → throws
+ * `OutputRefError`, propagating to the consuming node's failure). The only value that
+ * resolves to empty is an author-declared-optional field — or any ref on iteration 1.
+ */
+export function substituteLoopPrevRefs(
+  prompt: string,
+  loopPrevOutputs: Map<string, NodeOutput> | undefined,
+  escapedForBash = false,
+  outputFileDir?: string
+): string {
+  // Fast path: no refs to resolve. When refs ARE present but the map is empty/undefined
+  // (iteration 1 — no prior iteration), we still run the replace so each ref resolves to
+  // '' via the `!nodeOutput` branch below, rather than leaving a literal `$LOOP_PREV.…`.
+  if (!prompt.includes('$LOOP_PREV.')) {
+    return prompt;
+  }
+  return prompt.replace(
+    /\$LOOP_PREV\.([a-zA-Z_][a-zA-Z0-9_-]*)\.output(?:\.([a-zA-Z_][a-zA-Z0-9_]*))?/g,
+    (match, nodeId: string, field: string | undefined) => {
+      const nodeOutput = loopPrevOutputs?.get(nodeId);
+      if (!nodeOutput || nodeOutput.state === 'skipped' || nodeOutput.state === 'pending') {
+        // No prior-iteration output for this body node (iteration 1, or the node was
+        // skipped / hasn't settled last iteration). Resolve to empty rather than
+        // throwing — the author opted into a cross-iteration ref, and absence on the
+        // first pass (or after a skipped node) is expected.
+        getLog().debug({ nodeId, match }, 'loop_group_prev_ref_no_prior_output');
+        return escapedForBash ? "''" : '';
+      }
+      if (!field) {
+        return escapedForBash
+          ? shellQuoteOrFile(nodeOutput.output, nodeId, undefined, outputFileDir)
+          : nodeOutput.output;
+      }
+      const resolution = resolveNodeOutputField(nodeOutput, nodeId, field);
+      if (resolution.kind === 'empty') return escapedForBash ? "''" : '';
+      const value = resolution.value;
+      if (typeof value === 'string')
+        return escapedForBash ? shellQuoteOrFile(value, nodeId, field, outputFileDir) : value;
+      if (typeof value === 'number' || typeof value === 'boolean') return String(value);
       const json = JSON.stringify(value);
       return escapedForBash ? shellQuoteOrFile(json, nodeId, field, outputFileDir) : json;
     }
@@ -2200,6 +2260,544 @@ async function executeScriptNode(
 }
 
 /**
+ * Execute a loop-group node — runs a multi-node sub-DAG body repeatedly until a
+ * completion condition (`until` signal in the body's terminal-node output, and/or
+ * `until_bash` exit code) or `max_iterations`.
+ *
+ * Mirrors {@link executeLoopNode} at subgraph granularity: each iteration runs the body's
+ * topological layers via {@link runLayers} against a fresh scoped `nodeOutputs` map. The
+ * body is a sealed sub-DAG. runLayers' own control events (skip/trigger_rule/when) are
+ * namespaced `{groupId}.{nodeId}` via `stepNamePrefix`; the body nodes' lifecycle events
+ * (node_started/node_completed/node_failed, tool events) still use the raw node id — a
+ * known v1 limitation (executeNodeInternal does not take a step-name override yet).
+ * `$LOOP_PREV.<id>.output` refs in body prompts resolve against a snapshot of the
+ * *previous* iteration's body outputs (empty on iteration 1).
+ *
+ * `$groupId.output` (visible to the outer DAG) = the final iteration's terminal-node output
+ * (mirrors the top-level run's terminal-output selection).
+ *
+ * Key behaviors:
+ * - Returns NodeExecutionResult (not void) — the outer DAG executor owns run lifecycle
+ * - Loop is encapsulated inside this one node; the outer DAG stays acyclic
+ * - Usage (cost/tokens) is summed across iterations and returned on the final result,
+ *   so the outer `runLayers` aggregates the group as one node's worth of usage
+ */
+async function executeLoopGroupNode(
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  cwd: string,
+  workflowRun: WorkflowRun,
+  node: LoopGroupNode,
+  workflowProvider: string,
+  workflowModel: string | undefined,
+  workflowLevelOptions: WorkflowLevelOptions,
+  aiProfile: ResolvedAiProfile | undefined,
+  workflowPreset: ModelAliasPreset | undefined,
+  artifactsDir: string,
+  logDir: string,
+  baseBranch: string,
+  docsDir: string,
+  outerNodeOutputs: Map<string, NodeOutput>,
+  config: WorkflowConfig,
+  issueContext?: string
+): Promise<NodeExecutionResult> {
+  const group = node.loop_group;
+  const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
+
+  // Body layering is recomputed per iteration from the (possibly $LOOP_PREV-substituted)
+  // body nodes — runLayers walks ctx.layers, so the layers must reference the substituted
+  // nodes for $LOOP_PREV resolution to take effect. depends_on shape is static, so the
+  // layering is stable; only the prompt text changes per iteration.
+  const stepNamePrefix = `${node.id}.`;
+
+  // Detect interactive loop resume (mirrors executeLoopNode).
+  const rawApproval = workflowRun.metadata?.approval;
+  const loopGateMeta = isApprovalContext(rawApproval) ? rawApproval : undefined;
+  const isLoopResume = loopGateMeta?.type === 'interactive_loop' && loopGateMeta.nodeId === node.id;
+  const startIteration = isLoopResume ? (loopGateMeta.iteration ?? 0) + 1 : 1;
+  const loopUserInput = isLoopResume
+    ? ((workflowRun.metadata?.loop_user_input as string | undefined) ?? '')
+    : '';
+
+  let loopPrevOutputs: Map<string, NodeOutput> | undefined; // undefined on iteration 1
+  let lastIterationOutput = '';
+  let loopTotalCostUsd: number | undefined;
+  let loopTotalTokens: TokenUsage | undefined;
+  // Loop-level session cursor: threaded across iterations when fresh_context is false
+  // (so a body AI node resumes the prior iteration's session), reset to undefined when
+  // fresh_context is true or on iteration 1. runLayers mutates this in place each call.
+  // On interactive resume, restore the cursor persisted at pause time so
+  // fresh_context: false continues the pre-pause conversation (mirrors executeLoopNode).
+  let loopLastSequentialSessionId: string | undefined = isLoopResume
+    ? loopGateMeta.sessionId
+    : undefined;
+
+  const logEventStoreError = (err: Error, iteration: number): void => {
+    getLog().error({ err, nodeId: node.id, iteration }, 'loop_group_node.iteration_event_failed');
+  };
+
+  for (let i = startIteration; i <= group.max_iterations; i++) {
+    const iterationStart = Date.now();
+
+    // Between-iteration status check (paused tolerated — mirrors executeLoopNode).
+    const runStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
+    if (!shouldContinueStreamingForStatus(runStatus)) {
+      const effectiveStatus = runStatus ?? 'deleted';
+      getLog().info(
+        { workflowRunId: workflowRun.id, nodeId: node.id, iteration: i, status: effectiveStatus },
+        'loop_group_node.stop_detected'
+      );
+      await safeSendMessage(
+        platform,
+        conversationId,
+        `Loop-group node '${node.id}' stopped at iteration ${String(i)} (${effectiveStatus})`,
+        msgContext
+      );
+      return { state: 'failed', output: '', error: `Workflow ${effectiveStatus}` };
+    }
+
+    // Emit iteration started.
+    getWorkflowEventEmitter().emit({
+      type: 'loop_iteration_started',
+      runId: workflowRun.id,
+      nodeId: node.id,
+      iteration: i,
+      maxIterations: group.max_iterations,
+    });
+    deps.store
+      .createWorkflowEvent({
+        workflow_run_id: workflowRun.id,
+        event_type: 'loop_iteration_started',
+        step_name: node.id,
+        data: { iteration: i, maxIterations: group.max_iterations, nodeId: node.id },
+      })
+      .catch((err: Error) => {
+        logEventStoreError(err, i);
+      });
+
+    // Pre-substitute $LOOP_PREV.* refs and $LOOP_USER_INPUT into the body node prompt
+    // fields. The body is a sealed sub-DAG whose executors build prompts from node
+    // definitions; resolving these here (before runLayers) keeps the body executors
+    // unaware of the enclosing loop iteration. On iteration 1 loopPrevOutputs is undefined
+    // → $LOOP_PREV refs resolve to ''; $LOOP_USER_INPUT is '' except on the first resumed
+    // iteration of an interactive loop.
+    const prevSnapshot = loopPrevOutputs;
+    const userInputForIter = isLoopResume && i === startIteration ? loopUserInput : '';
+    const iterBodyNodes = group.nodes.map(n =>
+      applyLoopPrevToBodyNode(n, prevSnapshot, userInputForIter, logDir)
+    );
+    // Re-layer from the (possibly substituted) body nodes — runLayers walks ctx.layers,
+    // not ctx.nodes, so the layers must reference the substituted nodes to take effect.
+    const iterBodyLayers = buildTopologicalLayers(iterBodyNodes);
+
+    // Fresh scoped output map per iteration. Seed it read-only with the outer DAG's
+    // upstream outputs so body nodes can reference outer context via $nodeId.output if
+    // needed (the body is sealed against depends_on, but prompt refs remain valid).
+    const scopedNodeOutputs = new Map<string, NodeOutput>(outerNodeOutputs);
+
+    const iterCtx: RunLayersContext = {
+      deps,
+      platform,
+      conversationId,
+      cwd,
+      workflowRun,
+      workflowName: node.id,
+      config,
+      workflowProvider,
+      // Forward inherited workflow-level model/tier/options/profile so body AI nodes
+      // resolve model aliases and workflow defaults the same way top-level nodes do.
+      workflowModel,
+      workflowLevelOptions,
+      aiProfile,
+      workflowPreset,
+      artifactsDir,
+      logDir,
+      baseBranch,
+      docsDir,
+      configuredCommandFolder: undefined,
+      issueContext,
+      // persist_session across iterations is out of v1 scope (body sessions reset per
+      // iteration, governed by fresh_context). Pass undefined/false so body nodes don't
+      // participate in cross-run session persistence inside the loop.
+      persistScopeKey: undefined,
+      workflowPersistSessions: false,
+      layers: iterBodyLayers,
+      nodeOutputs: scopedNodeOutputs,
+      priorCompletedNodes: undefined, // body re-runs in full each iteration (v1)
+      // Thread the loop-level session cursor: fresh_context (or the loop's true first
+      // iteration) starts fresh; otherwise carry the prior iteration's last sequential
+      // session forward so a body AI node resumes the prior iteration's conversation.
+      // Gate on the literal i === 1 (not startIteration): on interactive resume the
+      // first processed iteration must continue the restored pre-pause session.
+      lastSequentialSessionId:
+        group.fresh_context || i === 1 ? undefined : loopLastSequentialSessionId,
+      totalCostUsd: 0,
+      totalTokensIn: 0,
+      totalTokensOut: 0,
+      totalLoopIterations: 0,
+      stepNamePrefix,
+    };
+    await runLayers(iterCtx);
+    // A body approval/cancel node may have paused or cancelled the run mid-iteration.
+    // `paused` is tolerated (a sibling gate in the same iteration layer) — mirror
+    // executeLoopNode's between-iteration tolerance — but a terminal/cancelled state
+    // means the loop must stop now, skipping snapshot/completion handling for this
+    // iteration. Re-check before proceeding.
+    const postBodyStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
+    // null (run row gone / deleted) is a stop condition too — treat it as 'deleted'.
+    if (!shouldContinueStreamingForStatus(postBodyStatus)) {
+      const effectiveStatus = postBodyStatus ?? 'deleted';
+      getLog().info(
+        { workflowRunId: workflowRun.id, nodeId: node.id, iteration: i, status: effectiveStatus },
+        'loop_group_node.post_body_stop'
+      );
+      return { state: 'failed', output: lastIterationOutput, error: `Workflow ${effectiveStatus}` };
+    }
+    // Accumulate usage across iterations (charged on the failure path below too).
+    loopTotalCostUsd = (loopTotalCostUsd ?? 0) + iterCtx.totalCostUsd;
+    if (iterCtx.totalTokensIn > 0 || iterCtx.totalTokensOut > 0) {
+      loopTotalTokens = {
+        input: (loopTotalTokens?.input ?? 0) + iterCtx.totalTokensIn,
+        output: (loopTotalTokens?.output ?? 0) + iterCtx.totalTokensOut,
+      };
+    }
+
+    // A failed body node fails the group immediately — mirrors the top-level DAG
+    // (any failed node fails the run) and executeLoopNode (an iteration failure stops
+    // the loop). Silently re-running the body would burn AI cost every remaining
+    // iteration and bury the root cause under a generic max-iterations error.
+    const failedBodyNodes = iterBodyNodes.flatMap(n => {
+      const o = scopedNodeOutputs.get(n.id);
+      return o?.state === 'failed' ? [`'${n.id}': ${o.error}`] : [];
+    });
+    if (failedBodyNodes.length > 0) {
+      const errorMsg = `Loop-group node '${node.id}' failed at iteration ${String(i)}: ${failedBodyNodes.join('; ')}`;
+      getLog().warn(
+        { nodeId: node.id, iteration: i, failedCount: failedBodyNodes.length },
+        'loop_group_node.body_node_failed'
+      );
+      await safeSendMessage(platform, conversationId, errorMsg, msgContext);
+      return {
+        state: 'failed',
+        output: lastIterationOutput,
+        error: errorMsg,
+        costUsd: loopTotalCostUsd,
+        ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+        loopIterations: i,
+      };
+    }
+
+    // Carry the body's final sequential session into the next iteration (unless
+    // fresh_context forces a reset, handled above by seeding undefined).
+    loopLastSequentialSessionId = iterCtx.lastSequentialSessionId;
+
+    // Carry prior-iteration snapshot forward for $LOOP_PREV.* on the next iteration.
+    loopPrevOutputs = new Map(scopedNodeOutputs);
+
+    // Determine this iteration's terminal output (first completed terminal node in
+    // definition order — mirrors the top-level run's terminal-output selection).
+    const allDeps = new Set(iterBodyNodes.flatMap(n => n.depends_on ?? []));
+    const terminalOutput = iterBodyNodes
+      .filter(n => !allDeps.has(n.id))
+      .map(n => scopedNodeOutputs.get(n.id))
+      .find(o => o?.state === 'completed' && o.output.trim().length > 0)?.output;
+    const iterationOutput = terminalOutput ?? '';
+    // Capture the PREVIOUS iteration's (cleaned) output before overwriting — the
+    // until_bash env below exposes it as LOOP_PREV_OUTPUT (previous iteration, same
+    // semantics as executeLoopNode; empty on the first iteration).
+    const prevIterationOutput = lastIterationOutput;
+    // Signal detection uses the raw output; the stored/returned output is stripped of
+    // completion-signal tags so the marker never leaks into $groupId.output (mirrors
+    // executeLoopNode's cleanOutput handling).
+    lastIterationOutput = stripCompletionTags(iterationOutput, group.until);
+
+    // Completion gate: until-signal in the terminal output, and/or until_bash exit 0.
+    // Short-circuit: if the until-signal already detected completion, skip the
+    // until_bash subprocess (avoids unnecessary side effects and shell cost) — OR
+    // semantics mean the group is already complete.
+    const signalDetected = detectCompletionSignal(iterationOutput, group.until);
+
+    let bashComplete = false;
+    if (group.until_bash && !signalDetected) {
+      try {
+        const { prompt: bashPrompt } = substituteWorkflowVariables(
+          group.until_bash,
+          workflowRun.id,
+          workflowRun.user_message,
+          artifactsDir,
+          baseBranch,
+          docsDir,
+          issueContext,
+          i === startIteration ? loopUserInput : undefined,
+          undefined,
+          undefined,
+          { shellSafe: true }
+        );
+        const substitutedBash = substituteNodeOutputRefs(
+          bashPrompt,
+          scopedNodeOutputs,
+          true, // escapedForBash
+          logDir
+        );
+        await execFileAsync('bash', ['-c', substitutedBash], {
+          cwd,
+          timeout: SUBPROCESS_DEFAULT_TIMEOUT,
+          env: {
+            ...process.env,
+            USER_MESSAGE: workflowRun.user_message,
+            ARGUMENTS: workflowRun.user_message,
+            LOOP_USER_INPUT: i === startIteration ? (loopUserInput ?? '') : '',
+            LOOP_PREV_OUTPUT: prevIterationOutput,
+            REJECTION_REASON: '',
+            CONTEXT: issueContext ?? '',
+            EXTERNAL_CONTEXT: issueContext ?? '',
+            ISSUE_CONTEXT: issueContext ?? '',
+            ...(config.envVars ?? {}),
+          },
+        });
+        bashComplete = true;
+      } catch (e) {
+        const bashErr = e as NodeJS.ErrnoException;
+        // Two distinct events, mirroring executeLoopNode's until_bash handling.
+        if (bashErr.code === 'ENOENT') {
+          getLog().warn(
+            { err: bashErr, nodeId: node.id, iteration: i },
+            'loop_group_node.until_bash_exec_error'
+          );
+        } else if (bashErr.code !== undefined) {
+          // Log non-ENOENT system errors (syntax errors, permission issues, etc.)
+          getLog().warn(
+            { err: bashErr, nodeId: node.id, iteration: i },
+            'loop_group_node.until_bash_unexpected_error'
+          );
+        }
+        bashComplete = false; // non-zero exit = not complete
+      }
+    }
+
+    const duration = Date.now() - iterationStart;
+    const completionDetected = signalDetected || bashComplete;
+
+    getWorkflowEventEmitter().emit({
+      type: 'loop_iteration_completed',
+      runId: workflowRun.id,
+      nodeId: node.id,
+      iteration: i,
+      duration,
+      completionDetected,
+    });
+    deps.store
+      .createWorkflowEvent({
+        workflow_run_id: workflowRun.id,
+        event_type: 'loop_iteration_completed',
+        step_name: node.id,
+        data: { iteration: i, duration, completionDetected, nodeId: node.id },
+      })
+      .catch((err: Error) => {
+        logEventStoreError(err, i);
+      });
+
+    // Completion: honor the signal only when the AI had input to evaluate (interactive
+    // first run always gates first — mirrors executeLoopNode's interactiveFirstRun).
+    const interactiveFirstRun = group.interactive && !isLoopResume;
+    if (completionDetected && !interactiveFirstRun) {
+      await safeSendMessage(
+        platform,
+        conversationId,
+        `Loop-group node '${node.id}' completed after ${String(i)} iteration${i > 1 ? 's' : ''}`,
+        msgContext
+      );
+      deps.store
+        .createWorkflowEvent({
+          workflow_run_id: workflowRun.id,
+          event_type: 'node_completed',
+          step_name: node.id,
+          data: {
+            duration_ms: duration,
+            node_output: lastIterationOutput,
+            ...(loopTotalCostUsd !== undefined ? { cost_usd: loopTotalCostUsd } : {}),
+          },
+        })
+        .catch((err: Error) => {
+          getLog().error(
+            { err, workflowRunId: workflowRun.id, eventType: 'node_completed' },
+            'workflow_event_persist_failed'
+          );
+        });
+      getWorkflowEventEmitter().emit({
+        type: 'node_completed',
+        runId: workflowRun.id,
+        nodeId: node.id,
+        nodeName: node.id,
+        duration,
+        ...(loopTotalCostUsd !== undefined ? { costUsd: loopTotalCostUsd } : {}),
+      });
+      return {
+        state: 'completed',
+        output: lastIterationOutput,
+        costUsd: loopTotalCostUsd,
+        ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+        loopIterations: i,
+      };
+    }
+
+    // Interactive gate — pause after an iteration that did not complete.
+    if (group.interactive && group.gate_message) {
+      const gateMsg =
+        `⏸ **Input required** (loop_group \`${node.id}\`, iteration ${String(i)}): ${group.gate_message}\n\n` +
+        `Run ID: \`${workflowRun.id}\`\n` +
+        `Respond: \`/workflow approve ${workflowRun.id} <your feedback>\` | Cancel: \`/workflow reject ${workflowRun.id}\``;
+      const gateSent = await safeSendMessage(platform, conversationId, gateMsg, {
+        workflowId: workflowRun.id,
+        nodeName: node.id,
+      });
+      if (!gateSent) {
+        getLog().error(
+          { nodeId: node.id, workflowRunId: workflowRun.id, iteration: i },
+          'loop_group_node.gate_message_send_failed'
+        );
+        return {
+          state: 'failed',
+          output: lastIterationOutput,
+          error: `Loop-group gate message failed to deliver for node '${node.id}' — cannot pause safely`,
+        };
+      }
+      deps.store
+        .createWorkflowEvent({
+          workflow_run_id: workflowRun.id,
+          event_type: 'approval_requested',
+          step_name: node.id,
+          data: { message: group.gate_message, iteration: i },
+        })
+        .catch((err: Error) => {
+          logEventStoreError(err, i);
+        });
+      await deps.store.pauseWorkflowRun(workflowRun.id, {
+        nodeId: node.id,
+        message: group.gate_message,
+        type: 'interactive_loop',
+        iteration: i,
+        // Persist the body's session cursor so a resumed fresh_context: false loop
+        // continues the pre-pause conversation (restored into the cursor on resume).
+        sessionId: loopLastSequentialSessionId,
+      });
+      getWorkflowEventEmitter().emit({
+        type: 'approval_pending',
+        runId: workflowRun.id,
+        nodeId: node.id,
+        message: group.gate_message,
+      });
+      return {
+        state: 'completed',
+        output: lastIterationOutput,
+        costUsd: loopTotalCostUsd,
+        ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+        loopIterations: i,
+      };
+    }
+  }
+
+  // Max iterations exceeded.
+  const errorMsg = `Loop-group node '${node.id}' exceeded max iterations (${String(group.max_iterations)}) without completion signal '${group.until}'`;
+  getLog().warn(
+    { nodeId: node.id, maxIterations: group.max_iterations, signal: group.until },
+    'loop_group_node.max_iterations_reached'
+  );
+  await safeSendMessage(platform, conversationId, errorMsg, msgContext);
+  return {
+    state: 'failed',
+    output: lastIterationOutput,
+    error: errorMsg,
+    costUsd: loopTotalCostUsd,
+    ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+    loopIterations: group.max_iterations,
+  };
+}
+
+/**
+ * Clone a body node with `$LOOP_PREV.<id>.output[.field]` refs and `$LOOP_USER_INPUT`
+ * pre-substituted into every text field a body executor reads prompts from. Used by
+ * {@link executeLoopGroupNode} so the sealed body sub-DAG's executors stay unaware of the
+ * enclosing loop iteration (the body's own executors call substituteWorkflowVariables, but
+ * that uses the run's user_message — not the loop's per-iteration user input — so
+ * $LOOP_USER_INPUT must be resolved here, at the loop-group level).
+ *
+ * Only prompt-bearing fields are substituted in v1; `when:` conditions are NOT (they use
+ * evaluateCondition, which does not call substituteLoopPrevRefs). Body authors who need
+ * cross-iteration gating should branch on prompt content, not `when:`.
+ */
+export function applyLoopPrevToBodyNode(
+  node: DagNode,
+  loopPrevOutputs: Map<string, NodeOutput> | undefined,
+  loopUserInput: string,
+  outputFileDir?: string
+): DagNode {
+  // Substitute $LOOP_USER_INPUT (user free-text) and $LOOP_PREV.* refs.
+  // Resolve $LOOP_PREV FIRST, then splice $LOOP_USER_INPUT — so user input containing a
+  // literal "$LOOP_PREV." is not itself reprocessed as a workflow-ref. `escapedForBash`
+  // is true for shell-bound fields (bash/until_bash): $LOOP_PREV values are shell-quoted
+  // (spilling to a file over the size threshold, same as substituteNodeOutputRefs), and
+  // $LOOP_USER_INPUT is shell-quoted before splicing (user input is free-text; unquoted
+  // it could break or inject into the bash command). Non-shell fields (prompt/
+  // approval.message/command, and script/cancel — scripts run via execFile argv and
+  // cancel reasons are display text, mirroring their normal-path substitution) use the
+  // raw values.
+  const sub = (s: string, escapedForBash = false): string => {
+    const prevResolved = substituteLoopPrevRefs(s, loopPrevOutputs, escapedForBash, outputFileDir);
+    const userInputForField = escapedForBash ? shellQuote(loopUserInput) : loopUserInput;
+    return prevResolved.replace(/\$LOOP_USER_INPUT/g, userInputForField);
+  };
+  if (isLoopNode(node)) {
+    // until_bash is shell-bound: an unresolved $LOOP_PREV would silently degrade to an
+    // (empty) shell variable expansion inside bash -c.
+    return {
+      ...node,
+      loop: {
+        ...node.loop,
+        prompt: sub(node.loop.prompt),
+        ...(node.loop.until_bash !== undefined
+          ? { until_bash: sub(node.loop.until_bash, true) }
+          : {}),
+      },
+    };
+  }
+  if (isLoopGroupNode(node)) {
+    // Nested loop_group: recurse into the body (each body node gets $LOOP_PREV resolved
+    // against the OUTER loop's prior-iteration snapshot; inner-loop refs resolve at the
+    // inner loop's own iteration granularity). The inner group's until_bash is likewise
+    // shell-bound and only ever substituted here for OUTER-loop refs.
+    return {
+      ...node,
+      loop_group: {
+        ...node.loop_group,
+        ...(node.loop_group.until_bash !== undefined
+          ? { until_bash: sub(node.loop_group.until_bash, true) }
+          : {}),
+        nodes: node.loop_group.nodes.map(n =>
+          applyLoopPrevToBodyNode(n, loopPrevOutputs, loopUserInput, outputFileDir)
+        ),
+      },
+    };
+  }
+  if (isApprovalNode(node)) {
+    return { ...node, approval: { ...node.approval, message: sub(node.approval.message) } };
+  }
+  if (isBashNode(node)) return { ...node, bash: sub(node.bash, true) };
+  // Scripts never pass through a shell (execFile argv) — bash-quoting would inject
+  // literal quote artifacts into TS/Python source. Mirrors executeScriptNode's own
+  // substituteNodeOutputRefs(..., false).
+  if (isScriptNode(node)) return { ...node, script: sub(node.script) };
+  // Cancel reason is display text, never executed — mirrors the normal-path default.
+  if (isCancelNode(node)) return { ...node, cancel: sub(node.cancel) };
+  if ('command' in node && typeof node.command === 'string')
+    return { ...node, command: sub(node.command) };
+  if ('prompt' in node && typeof node.prompt === 'string')
+    return { ...node, prompt: sub(node.prompt) };
+  return node;
+}
+
+/**
  * Execute a loop node — runs prompt repeatedly until completion signal or max iterations.
  *
  * Key behaviors:
@@ -3039,110 +3637,106 @@ async function executeApprovalNode(
 }
 
 /**
- * Execute a complete DAG workflow.
- * Called from executeWorkflow() in executor.ts.
+ * Shared context for {@link runLayers}. Bundles the run-level invariants (deps, platform,
+ * run record, resolved provider/model/options, paths, config) together with the per-subgraph
+ * mutable state (the node set + its pre-computed topological layers, the shared output map,
+ * session threading, usage accumulators, and resume cache).
+ *
+ * The top-level DAG and each `loop_group` body iteration construct their own context: the
+ * top-level call uses `workflow.nodes` / a fresh `nodeOutputs`; a loop-group body uses the
+ * group's `nodes` / a per-iteration scoped `nodeOutputs` (reset each iteration) and a
+ * `stepNamePrefix` of `'{groupId}.'` that namespaces runLayers' OWN control events
+ * (skip/trigger_rule/when). Body lifecycle events emitted inside executeNodeInternal /
+ * executeBashNode / executeScriptNode still use the raw node id (known v1 limitation).
  */
-export async function executeDagWorkflow(
-  deps: WorkflowDeps,
-  platform: IWorkflowPlatform,
-  conversationId: string,
-  cwd: string,
-  workflow: {
-    name: string;
-    nodes: readonly DagNode[];
-    /** Workflow-level default for per-node `persist_session` (read directly here). */
-    persist_sessions?: boolean;
-    /** Raw workflow-level `model` ref — used only to derive the workflow tier
-     *  keyword for node_started attribution (resolution uses `workflowModel`). */
-    model?: string;
-  } & WorkflowLevelOptions,
-  workflowRun: WorkflowRun,
-  workflowProvider: string,
-  workflowModel: string | undefined,
-  artifactsDir: string,
-  logDir: string,
-  baseBranch: string,
-  docsDir: string,
-  config: WorkflowConfig,
-  configuredCommandFolder?: string,
-  issueContext?: string,
-  priorCompletedNodes?: Map<string, string>,
-  /** Discovery source — telemetry only (custom-vs-default + name redaction). */
-  source?: WorkflowSource,
-  aiProfile?: ResolvedAiProfile,
-  workflowPreset?: ModelAliasPreset
-): Promise<string | undefined> {
-  const dagStartTime = Date.now();
-  const workflowTier = workflow.model && isTierName(workflow.model) ? workflow.model : undefined;
-  const workflowLevelOptions = {
-    effort: workflow.effort,
-    thinking: workflow.thinking,
-    fallbackModel: workflow.fallbackModel,
-    betas: workflow.betas,
-    sandbox: workflow.sandbox,
-    workflowTier,
-  };
-  const layers = buildTopologicalLayers(workflow.nodes);
-  const nodeOutputs = new Map<string, NodeOutput>();
+interface RunLayersContext {
+  // --- run-level invariants (shared by top-level DAG and loop_group body) ---
+  deps: WorkflowDeps;
+  platform: IWorkflowPlatform;
+  conversationId: string;
+  cwd: string;
+  workflowRun: WorkflowRun;
+  /** Workflow name — used for persist_session keying + telemetry. */
+  workflowName: string;
+  config: WorkflowConfig;
+  workflowProvider: string;
+  workflowModel: string | undefined;
+  workflowLevelOptions: WorkflowLevelOptions;
+  aiProfile?: ResolvedAiProfile;
+  workflowPreset?: ModelAliasPreset;
+  artifactsDir: string;
+  logDir: string;
+  baseBranch: string;
+  docsDir: string;
+  configuredCommandFolder?: string;
+  issueContext?: string;
+  /** Cross-run session-persistence scope key (DB conversation UUID), or undefined to skip. */
+  persistScopeKey: string | undefined;
+  /** Workflow-level default for per-node `persist_session` (opt-in). */
+  workflowPersistSessions: boolean;
 
-  // Pre-populate nodeOutputs from prior run so already-completed nodes are
-  // treated as done for trigger-rule and $nodeId.output substitution purposes.
-  // Nodes flagged `always_run: true` are excluded — they re-execute on resume
-  // and downstream consumers must see the fresh output, not the cached one.
-  if (priorCompletedNodes && priorCompletedNodes.size > 0) {
-    const alwaysRunIds = new Set(workflow.nodes.filter(n => n.always_run).map(n => n.id));
-    let prepopulatedCount = 0;
-    for (const [nodeId, output] of priorCompletedNodes) {
-      if (alwaysRunIds.has(nodeId)) continue;
-      nodeOutputs.set(nodeId, { state: 'completed', output });
-      prepopulatedCount++;
-    }
-    getLog().info(
-      {
-        workflowRunId: workflowRun.id,
-        priorCompletedCount: priorCompletedNodes.size,
-        prepopulatedCount,
-        alwaysRunResumedCount: priorCompletedNodes.size - prepopulatedCount,
-      },
-      'dag.workflow_resume_prepopulated'
-    );
-  }
+  // --- per-subgraph mutable state (varies between top-level DAG and loop_group body) ---
+  /** Pre-computed topological layers (caller builds once — body shape is static). runLayers walks ONLY these; there is deliberately no flat node list here. */
+  layers: DagNode[][];
+  /** Shared node-output map (caller owns; runLayers writes node results here). */
+  nodeOutputs: Map<string, NodeOutput>;
+  /** Resume cache: node ids that completed in a prior run (top-level only; undefined for body). */
+  priorCompletedNodes?: Map<string, string>;
+  /** Sequential-session threading cursor (mutated by runLayers). */
+  lastSequentialSessionId: string | undefined;
+  /** Run-level usage accumulators (mutated by runLayers; caller reads after). */
+  totalCostUsd: number;
+  totalTokensIn: number;
+  totalTokensOut: number;
+  totalLoopIterations: number;
+  /** Prefix prepended to every `step_name` in emitted events ('' for top-level, '{groupId}.' for body). */
+  stepNamePrefix: string;
+}
 
-  getLog().info(
-    {
-      workflowName: workflow.name,
-      nodeCount: workflow.nodes.length,
-      layerCount: layers.length,
-      hasIssueContext: !!issueContext,
-      issueContextLength: issueContext?.length ?? 0,
-    },
-    'dag_workflow_starting'
-  );
-
-  // Session threading: for sequential single-node layers, thread the session forward.
-  // For parallel layers (>1 node), always fresh (can't share a session).
-  let lastSequentialSessionId: string | undefined;
-  // Note: all four usage accumulators cover this invocation only. If this is a
-  // resume, nodes skipped from the prior run are not included — cost, tokens,
-  // and loop iterations all reflect the resumed portion only.
-  let totalCostUsd = 0;
-  let totalTokensIn = 0;
-  let totalTokensOut = 0;
-  let totalLoopIterations = 0;
-
-  // Per-node session persistence across workflow re-runs. Scope = the DB conversation
-  // UUID. The `?? undefined` guard keeps an empty/missing conversation_id from keying
-  // every invocation to the same blank scope — persistence is simply skipped in that case.
-  // Distinct from AgentRequestOptions.persistSession (Claude SDK on-disk transcript flag).
-  const persistScopeKey: string | undefined = workflowRun.conversation_id ?? undefined;
-  const workflowPersistSessions = workflow.persist_sessions === true;
+/**
+ * Walk the topological `layers` of a DAG (or subgraph), executing each layer's nodes
+ * concurrently, aggregating results into `ctx.nodeOutputs`, and accumulating usage into
+ * `ctx`. Stops early (returns) when a between-layer status check sees a non-running run
+ * state (paused/cancelled/deleted) — the caller always proceeds to its own terminal tally.
+ *
+ * Extracted verbatim from the former `executeDagWorkflow` layer loop; the only behavioral
+ * addition is `ctx.stepNamePrefix` (empty for the top-level DAG → identical `step_name`s).
+ * Shared by the top-level DAG and `executeLoopGroupNode`'s per-iteration body execution.
+ */
+async function runLayers(ctx: RunLayersContext): Promise<void> {
+  const {
+    deps,
+    platform,
+    conversationId,
+    cwd,
+    workflowRun,
+    workflowName,
+    config,
+    workflowProvider,
+    workflowModel,
+    workflowLevelOptions,
+    aiProfile,
+    workflowPreset,
+    artifactsDir,
+    logDir,
+    baseBranch,
+    docsDir,
+    configuredCommandFolder,
+    issueContext,
+    persistScopeKey,
+    workflowPersistSessions,
+    layers,
+    priorCompletedNodes,
+    stepNamePrefix,
+  } = ctx;
+  // nodeOutputs + accumulators + lastSequentialSessionId are mutated in place on `ctx`.
 
   for (let layerIdx = 0; layerIdx < layers.length; layerIdx++) {
     const layer = layers[layerIdx];
     const isParallelLayer = layer.length > 1;
 
     if (isParallelLayer) {
-      lastSequentialSessionId = undefined; // reset — parallel nodes can't share sessions
+      ctx.lastSequentialSessionId = undefined; // reset — parallel nodes can't share sessions
     }
 
     // Execute all nodes in the layer concurrently
@@ -3159,7 +3753,7 @@ export async function executeDagWorkflow(
                 .createWorkflowEvent({
                   workflow_run_id: workflowRun.id,
                   event_type: 'node_always_run_reset',
-                  step_name: node.id,
+                  step_name: stepNamePrefix + node.id,
                   data: { prior_output: priorCompletedNodes.get(node.id) ?? '' },
                 })
                 .catch((err: Error) => {
@@ -3180,7 +3774,7 @@ export async function executeDagWorkflow(
                 .createWorkflowEvent({
                   workflow_run_id: workflowRun.id,
                   event_type: 'node_skipped_prior_success',
-                  step_name: node.id,
+                  step_name: stepNamePrefix + node.id,
                   data: {
                     reason: 'prior_success',
                     node_output: priorCompletedNodes.get(node.id) ?? '',
@@ -3207,13 +3801,13 @@ export async function executeDagWorkflow(
               // Return the pre-populated output (already in nodeOutputs)
               return {
                 nodeId: node.id,
-                output: nodeOutputs.get(node.id) ?? { state: 'skipped' as const, output: '' },
+                output: ctx.nodeOutputs.get(node.id) ?? { state: 'skipped' as const, output: '' },
               };
             }
           }
 
           // 1. Evaluate trigger rule
-          const triggerDecision = checkTriggerRule(node, nodeOutputs);
+          const triggerDecision = checkTriggerRule(node, ctx.nodeOutputs);
           if (triggerDecision === 'skip') {
             getLog().info({ nodeId: node.id, reason: 'trigger_rule' }, 'dag_node_skipped');
             await logNodeSkip(logDir, workflowRun.id, node.id, 'trigger_rule').catch(
@@ -3225,7 +3819,7 @@ export async function executeDagWorkflow(
               .createWorkflowEvent({
                 workflow_run_id: workflowRun.id,
                 event_type: 'node_skipped',
-                step_name: node.id,
+                step_name: stepNamePrefix + node.id,
                 data: { reason: 'trigger_rule' },
               })
               .catch((err: Error) => {
@@ -3249,10 +3843,10 @@ export async function executeDagWorkflow(
           if (node.when !== undefined) {
             const { result: conditionPasses, parsed: conditionParsed } = evaluateCondition(
               node.when,
-              nodeOutputs
+              ctx.nodeOutputs
             );
             if (!conditionParsed) {
-              const parseErrMsg = `\u26a0\ufe0f Node '${node.id}': unparseable \`when:\` expression "${node.when}" \u2014 node skipped (fail-closed). Check syntax: \`$nodeId.output == 'VALUE'\`, \`$nodeId.output > '5'\`, or compound \`$a.output == 'X' && $b.output != 'Y'\`.`;
+              const parseErrMsg = `⚠️ Node '${node.id}': unparseable \`when:\` expression "${node.when}" — node skipped (fail-closed). Check syntax: \`$nodeId.output == 'VALUE'\`, \`$nodeId.output > '5'\`, or compound \`$a.output == 'X' && $b.output != 'Y'\`.`;
               await safeSendMessage(platform, conversationId, parseErrMsg, {
                 workflowId: workflowRun.id,
                 nodeName: node.id,
@@ -3273,7 +3867,7 @@ export async function executeDagWorkflow(
                 .createWorkflowEvent({
                   workflow_run_id: workflowRun.id,
                   event_type: 'node_skipped',
-                  step_name: node.id,
+                  step_name: stepNamePrefix + node.id,
                   data: { reason: 'when_condition_parse_error', expr: node.when },
                 })
                 .catch((err: Error) => {
@@ -3303,7 +3897,7 @@ export async function executeDagWorkflow(
                 .createWorkflowEvent({
                   workflow_run_id: workflowRun.id,
                   event_type: 'node_skipped',
-                  step_name: node.id,
+                  step_name: stepNamePrefix + node.id,
                   data: { reason: 'when_condition', expr: node.when },
                 })
                 .catch((err: Error) => {
@@ -3340,7 +3934,7 @@ export async function executeDagWorkflow(
               logDir,
               baseBranch,
               docsDir,
-              nodeOutputs,
+              ctx.nodeOutputs,
               issueContext,
               config.envVars
             );
@@ -3377,7 +3971,51 @@ export async function executeDagWorkflow(
               logDir,
               baseBranch,
               docsDir,
-              nodeOutputs,
+              ctx.nodeOutputs,
+              config,
+              issueContext
+            );
+            return { nodeId: node.id, output };
+          }
+
+          // 3b'. Loop-group node dispatch — manages its own subgraph iteration
+          // (body is a sealed sub-DAG re-executed per iteration; the loop is
+          // encapsulated inside this one node, keeping the outer DAG acyclic).
+          if (isLoopGroupNode(node)) {
+            // Resolve provider for the group (group-level provider/model overrides are
+            // forwarded to body AI nodes; the group itself never calls sendQuery, so
+            // the resolved SendQueryOptions are not needed here).
+            const { provider: loopGroupProvider } = await resolveNodeProviderAndModel(
+              node,
+              workflowProvider,
+              workflowModel,
+              config,
+              platform,
+              conversationId,
+              workflowRun.id,
+              cwd,
+              workflowLevelOptions,
+              aiProfile,
+              workflowPreset
+            );
+
+            const output = await executeLoopGroupNode(
+              deps,
+              platform,
+              conversationId,
+              cwd,
+              workflowRun,
+              node,
+              loopGroupProvider,
+              workflowModel,
+              workflowLevelOptions,
+              aiProfile,
+              workflowPreset,
+              artifactsDir,
+              logDir,
+              baseBranch,
+              docsDir,
+              ctx.nodeOutputs,
               config,
               issueContext
             );
@@ -3399,7 +4037,7 @@ export async function executeDagWorkflow(
               logDir,
               baseBranch,
               docsDir,
-              nodeOutputs,
+              ctx.nodeOutputs,
               config,
               workflowLevelOptions,
               configuredCommandFolder,
@@ -3412,8 +4050,8 @@ export async function executeDagWorkflow(
 
           // 3d. Cancel node dispatch — terminates the workflow run
           if (isCancelNode(node)) {
-            const reason = substituteNodeOutputRefs(node.cancel, nodeOutputs);
-            const cancelMsg = `\u274c **Workflow cancelled** (node \`${node.id}\`): ${reason}`;
+            const reason = substituteNodeOutputRefs(node.cancel, ctx.nodeOutputs);
+            const cancelMsg = `❌ **Workflow cancelled** (node \`${node.id}\`): ${reason}`;
             await safeSendMessage(platform, conversationId, cancelMsg, {
               workflowId: workflowRun.id,
               nodeName: node.id,
@@ -3422,7 +4060,7 @@ export async function executeDagWorkflow(
               .createWorkflowEvent({
                 workflow_run_id: workflowRun.id,
                 event_type: 'workflow_cancelled',
-                step_name: node.id,
+                step_name: stepNamePrefix + node.id,
                 data: { reason },
               })
               .catch((err: Error) => {
@@ -3455,7 +4093,7 @@ export async function executeDagWorkflow(
               logDir,
               baseBranch,
               docsDir,
-              nodeOutputs,
+              ctx.nodeOutputs,
               issueContext,
               config.envVars
             );
@@ -3492,7 +4130,7 @@ export async function executeDagWorkflow(
           const bypassesPersistence = node.context === 'fresh';
           let resumeSessionId: string | undefined = isFreshSequential
             ? undefined
-            : lastSequentialSessionId;
+            : ctx.lastSequentialSessionId;
 
           const nodePersistFlag = 'persist_session' in node ? node.persist_session : undefined;
           // Strictly opt-in: off unless the node sets persist_session, or the workflow
@@ -3513,7 +4151,7 @@ export async function executeDagWorkflow(
             if (persistScopeKey) {
               try {
                 const persisted = await deps.store.getWorkflowNodeSession({
-                  workflow_name: workflow.name,
+                  workflow_name: workflowName,
                   node_id: node.id,
                   scope_key: persistScopeKey,
                   provider,
@@ -3529,7 +4167,7 @@ export async function executeDagWorkflow(
                     .createWorkflowEvent({
                       workflow_run_id: workflowRun.id,
                       event_type: 'node_session_resumed',
-                      step_name: node.id,
+                      step_name: stepNamePrefix + node.id,
                       data: {
                         provider,
                         scope_key: persistScopeKey,
@@ -3552,7 +4190,7 @@ export async function executeDagWorkflow(
                   {
                     err: err as Error,
                     nodeId: node.id,
-                    workflow: workflow.name,
+                    workflow: workflowName,
                     scopeKey: persistScopeKey,
                     provider,
                   },
@@ -3561,7 +4199,7 @@ export async function executeDagWorkflow(
                 await safeSendMessage(
                   platform,
                   conversationId,
-                  `⚠️ Could not load the persisted session for node \`${node.id}\` — it will run without prior context. Session continuity may be broken; if this recurs, check server logs or run \`/workflow reset-sessions ${workflow.name}\`.`,
+                  `⚠️ Could not load the persisted session for node \`${node.id}\` — it will run without prior context. Session continuity may be broken; if this recurs, check server logs or run \`/workflow reset-sessions ${workflowName}\`.`,
                   { workflowId: workflowRun.id, nodeName: node.id }
                 );
               }
@@ -3590,7 +4228,7 @@ export async function executeDagWorkflow(
               logDir,
               baseBranch,
               docsDir,
-              nodeOutputs,
+              ctx.nodeOutputs,
               // Always pass the prior session ID — forkSession:true in executeNodeInternal
               // ensures the source is never mutated, so retries can safely resume from it.
               resumeSessionId,
@@ -3681,7 +4319,7 @@ export async function executeDagWorkflow(
             try {
               if (output.sessionId !== undefined) {
                 await deps.store.upsertWorkflowNodeSession({
-                  workflow_name: workflow.name,
+                  workflow_name: workflowName,
                   node_id: node.id,
                   scope_key: persistScopeKey,
                   provider,
@@ -3694,7 +4332,7 @@ export async function executeDagWorkflow(
                 // rows intact so switching providers between runs doesn't clobber
                 // the other side's continuity.
                 await deps.store.deleteWorkflowNodeSessions({
-                  workflow_name: workflow.name,
+                  workflow_name: workflowName,
                   scope_key: persistScopeKey,
                   node_id: node.id,
                   provider,
@@ -3708,7 +4346,7 @@ export async function executeDagWorkflow(
                 {
                   err: err as Error,
                   nodeId: node.id,
-                  workflow: workflow.name,
+                  workflow: workflowName,
                   scopeKey: persistScopeKey,
                   provider,
                 },
@@ -3731,7 +4369,7 @@ export async function executeDagWorkflow(
             .createWorkflowEvent({
               workflow_run_id: workflowRun.id,
               event_type: 'node_failed',
-              step_name: node.id,
+              step_name: stepNamePrefix + node.id,
               data: { error: err.message },
             })
             .catch((dbErr: Error) => {
@@ -3768,20 +4406,20 @@ export async function executeDagWorkflow(
         // cost/tokens must be summed here and ONLY here — adding a per-node
         // telemetry capture elsewhere would double-count against the totals
         // sent on workflow_completed/workflow_failed.
-        if (output.costUsd !== undefined) totalCostUsd += output.costUsd;
+        if (output.costUsd !== undefined) ctx.totalCostUsd += output.costUsd;
         if (output.tokens !== undefined) {
           // Token values come from providers (incl. community ones) — guard so
           // a NaN can't silently poison the totals (NaN > 0 is false, which
           // would silently drop the fields from telemetry with no trace).
           if (Number.isFinite(output.tokens.input) && Number.isFinite(output.tokens.output)) {
-            totalTokensIn += output.tokens.input;
-            totalTokensOut += output.tokens.output;
+            ctx.totalTokensIn += output.tokens.input;
+            ctx.totalTokensOut += output.tokens.output;
           } else {
             getLog().warn({ nodeId, tokens: output.tokens }, 'dag.usage_tokens_non_finite_ignored');
           }
         }
-        if (output.loopIterations !== undefined) totalLoopIterations += output.loopIterations;
-        nodeOutputs.set(nodeId, output);
+        if (output.loopIterations !== undefined) ctx.totalLoopIterations += output.loopIterations;
+        ctx.nodeOutputs.set(nodeId, output);
         // Typed artifact: when a node declares `output_type`, persist its output
         // as a typed sidecar (nodes/<id>.md + .meta.json) so other nodes and
         // later runs can locate it by type. Best-effort — a metadata write must
@@ -3810,7 +4448,7 @@ export async function executeDagWorkflow(
           }
         }
         if (output.state === 'completed' && !isParallelLayer && output.sessionId !== undefined) {
-          lastSequentialSessionId = output.sessionId;
+          ctx.lastSequentialSessionId = output.sessionId;
         }
         if (output.state === 'failed') layerHadFailure = true;
       } else {
@@ -3864,6 +4502,137 @@ export async function executeDagWorkflow(
       );
     }
   }
+}
+
+/**
+ * Execute a complete DAG workflow.
+ * Called from executeWorkflow() in executor.ts.
+ */
+export async function executeDagWorkflow(
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  cwd: string,
+  workflow: {
+    name: string;
+    nodes: readonly DagNode[];
+    /** Workflow-level default for per-node `persist_session` (read directly here). */
+    persist_sessions?: boolean;
+    /** Raw workflow-level `model` ref — used only to derive the workflow tier
+     *  keyword for node_started attribution (resolution uses `workflowModel`). */
+    model?: string;
+  } & WorkflowLevelOptions,
+  workflowRun: WorkflowRun,
+  workflowProvider: string,
+  workflowModel: string | undefined,
+  artifactsDir: string,
+  logDir: string,
+  baseBranch: string,
+  docsDir: string,
+  config: WorkflowConfig,
+  configuredCommandFolder?: string,
+  issueContext?: string,
+  priorCompletedNodes?: Map<string, string>,
+  /** Discovery source — telemetry only (custom-vs-default + name redaction). */
+  source?: WorkflowSource,
+  aiProfile?: ResolvedAiProfile,
+  workflowPreset?: ModelAliasPreset
+): Promise<string | undefined> {
+  const dagStartTime = Date.now();
+  const workflowTier = workflow.model && isTierName(workflow.model) ? workflow.model : undefined;
+  const workflowLevelOptions = {
+    effort: workflow.effort,
+    thinking: workflow.thinking,
+    fallbackModel: workflow.fallbackModel,
+    betas: workflow.betas,
+    sandbox: workflow.sandbox,
+    workflowTier,
+  };
+  const layers = buildTopologicalLayers(workflow.nodes);
+  const nodeOutputs = new Map<string, NodeOutput>();
+
+  // Pre-populate nodeOutputs from prior run so already-completed nodes are
+  // treated as done for trigger-rule and $nodeId.output substitution purposes.
+  // Nodes flagged `always_run: true` are excluded — they re-execute on resume
+  // and downstream consumers must see the fresh output, not the cached one.
+  if (priorCompletedNodes && priorCompletedNodes.size > 0) {
+    const alwaysRunIds = new Set(workflow.nodes.filter(n => n.always_run).map(n => n.id));
+    let prepopulatedCount = 0;
+    for (const [nodeId, output] of priorCompletedNodes) {
+      if (alwaysRunIds.has(nodeId)) continue;
+      nodeOutputs.set(nodeId, { state: 'completed', output });
+      prepopulatedCount++;
+    }
+    getLog().info(
+      {
+        workflowRunId: workflowRun.id,
+        priorCompletedCount: priorCompletedNodes.size,
+        prepopulatedCount,
+        alwaysRunResumedCount: priorCompletedNodes.size - prepopulatedCount,
+      },
+      'dag.workflow_resume_prepopulated'
+    );
+  }
+
+  getLog().info(
+    {
+      workflowName: workflow.name,
+      nodeCount: workflow.nodes.length,
+      layerCount: layers.length,
+      hasIssueContext: !!issueContext,
+      issueContextLength: issueContext?.length ?? 0,
+    },
+    'dag_workflow_starting'
+  );
+
+  // Per-node session persistence across workflow re-runs. Scope = the DB conversation
+  // UUID. The `?? undefined` guard keeps an empty/missing conversation_id from keying
+  // every invocation to the same blank scope — persistence is simply skipped in that case.
+  // Distinct from AgentRequestOptions.persistSession (Claude SDK on-disk transcript flag).
+  const persistScopeKey: string | undefined = workflowRun.conversation_id ?? undefined;
+  const workflowPersistSessions = workflow.persist_sessions === true;
+
+  // Run the topological layers. runLayers mutates the context's mutable fields in place
+  // (nodeOutputs, lastSequentialSessionId, usage accumulators); we read them back below
+  // for the terminal tally. stepNamePrefix is '' for the top-level DAG so node event
+  // step_names are the raw node ids (identical to pre-refactor behavior).
+  const runCtx: RunLayersContext = {
+    deps,
+    platform,
+    conversationId,
+    cwd,
+    workflowRun,
+    workflowName: workflow.name,
+    config,
+    workflowProvider,
+    workflowModel,
+    workflowLevelOptions,
+    aiProfile,
+    workflowPreset,
+    artifactsDir,
+    logDir,
+    baseBranch,
+    docsDir,
+    configuredCommandFolder,
+    issueContext,
+    persistScopeKey,
+    workflowPersistSessions,
+    layers,
+    nodeOutputs,
+    priorCompletedNodes,
+    lastSequentialSessionId: undefined,
+    totalCostUsd: 0,
+    totalTokensIn: 0,
+    totalTokensOut: 0,
+    totalLoopIterations: 0,
+    stepNamePrefix: '',
+  };
+  await runLayers(runCtx);
+  // Pull the mutated accumulators back into local scope for the terminal tally below.
+  const totalCostUsd = runCtx.totalCostUsd;
+  const totalTokensIn = runCtx.totalTokensIn;
+  const totalTokensOut = runCtx.totalTokensOut;
+  const totalLoopIterations = runCtx.totalLoopIterations;
 
   /**
    * Bail out of the final completion/failure write if the run was transitioned

@@ -4,6 +4,7 @@
 import type { WorkflowDefinition, WorkflowLoadError, DagNode, WorkflowNodeHooks } from './schemas';
 import {
   isLoopNode,
+  isLoopGroupNode,
   isApprovalNode,
   isCancelNode,
   isScriptNode,
@@ -20,6 +21,7 @@ import {
   BASH_NODE_AI_FIELDS,
   SCRIPT_NODE_AI_FIELDS,
   LOOP_NODE_AI_FIELDS,
+  LOOP_GROUP_NODE_AI_FIELDS,
   effortLevelSchema,
   thinkingConfigSchema,
   sandboxSettingsSchema,
@@ -111,6 +113,8 @@ function parseDagNode(raw: unknown, index: number, errors: string[]): DagNode | 
     nonAiNode = { type: 'approval', fields: BASH_NODE_AI_FIELDS };
   } else if (isLoopNode(node)) {
     nonAiNode = { type: 'loop', fields: LOOP_NODE_AI_FIELDS };
+  } else if (isLoopGroupNode(node)) {
+    nonAiNode = { type: 'loop_group', fields: LOOP_GROUP_NODE_AI_FIELDS };
   } else if (isScriptNode(node)) {
     nonAiNode = { type: 'script', fields: SCRIPT_NODE_AI_FIELDS };
   } else if ('bash' in node && typeof node.bash === 'string') {
@@ -136,12 +140,18 @@ function parseDagNode(raw: unknown, index: number, errors: string[]): DagNode | 
  * and $nodeId.output refs in when:/prompt: fields point to known nodes.
  * Returns error message or null if valid.
  */
-function validateDagStructure(nodes: DagNode[]): string | null {
+function validateDagStructure(nodes: DagNode[], enclosingIds?: ReadonlySet<string>): string | null {
   // Check ID uniqueness
   const ids = new Set<string>();
   for (const node of nodes) {
     if (ids.has(node.id)) {
       return `Duplicate node id: '${node.id}'`;
+    }
+    // A loop_group body node must not reuse an enclosing DAG's node id: the executor
+    // seeds each iteration's scoped output map with the outer outputs, so a colliding
+    // body node would silently shadow the outer node for $id.output refs.
+    if (enclosingIds?.has(node.id)) {
+      return `Node id '${node.id}' shadows a node id in the enclosing DAG`;
     }
     ids.add(node.id);
   }
@@ -211,9 +221,30 @@ function validateDagStructure(nodes: DagNode[]): string | null {
       outputRefPattern.lastIndex = 0; // reset stateful g-flag regex before each new source string
       while ((m = outputRefPattern.exec(source)) !== null) {
         const refNodeId = m[1];
-        if (refNodeId !== undefined && !ids.has(refNodeId)) {
+        // Output refs (unlike depends_on) may also reach ENCLOSING-scope nodes: the
+        // executor seeds a loop_group iteration's scoped output map with the outer
+        // DAG's outputs, so `$outerNode.output` inside a body prompt is valid.
+        if (refNodeId !== undefined && !ids.has(refNodeId) && !enclosingIds?.has(refNodeId)) {
           return `Node '${node.id}' references unknown node '$${refNodeId}.output'`;
         }
+      }
+    }
+  }
+
+  // Recursively validate loop_group bodies as scoped sub-DAGs. A loop_group body is
+  // sealed for GRAPH edges: its depends_on edges resolve within the body (not the
+  // outer DAG), and the body is itself a DAG (unique ids, no cycles). $nodeId.output
+  // refs are wider — the accumulated enclosing-scope ids are passed down so body
+  // prompts may reference outer nodes (mirrors the executor seeding the scoped output
+  // map with outer outputs). Nested loop_groups recurse naturally, accumulating scope.
+  // Outer-DAG cycle/depends_on checks above operate on the flattened top-level node
+  // list and treat each loop_group as one outer node.
+  for (const node of nodes) {
+    if (isLoopGroupNode(node)) {
+      const scopeIds = new Set([...(enclosingIds ?? []), ...ids]);
+      const bodyError = validateDagStructure(node.loop_group.nodes, scopeIds);
+      if (bodyError) {
+        return `loop_group '${node.id}' body: ${bodyError}`;
       }
     }
   }
@@ -426,8 +457,15 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
     // Warn if any interactive loop node exists in a non-interactive workflow
     // (approval messages won't reach the user in web background runs)
     if (!interactive) {
-      const hasInteractiveLoop = dagNodes.some(n => isLoopNode(n) && n.loop.interactive === true);
-      if (hasInteractiveLoop) {
+      // Covers loop: and loop_group: gates, including loops nested inside loop_group bodies.
+      const hasInteractiveLoop = (ns: DagNode[]): boolean =>
+        ns.some(
+          n =>
+            (isLoopNode(n) && n.loop.interactive === true) ||
+            (isLoopGroupNode(n) &&
+              (n.loop_group.interactive === true || hasInteractiveLoop(n.loop_group.nodes)))
+        );
+      if (hasInteractiveLoop(dagNodes)) {
         getLog().warn({ filename }, 'interactive_loop_in_non_interactive_workflow');
       }
     }
