@@ -10810,6 +10810,278 @@ describe('executeDagWorkflow -- loop_group node', () => {
     expect(completeCalls[0][1]).toMatchObject({ total_cost_usd: 0.03 });
   });
 
+  it('COST: accumulates token usage across loop_group iterations', async () => {
+    mockCaptureWorkflowCompleted.mockClear();
+    let calls = 0;
+    mockSendQueryDag.mockImplementation(function* () {
+      calls++;
+      const content = calls === 1 ? 'work in progress' : 'done\nDONE';
+      yield { type: 'assistant', content };
+      yield {
+        type: 'result',
+        sessionId: `s-${calls}`,
+        tokens: calls === 1 ? { input: 100, output: 10 } : { input: 200, output: 20 },
+      };
+    });
+
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('lg-tokens');
+
+    const nodes: DagNode[] = [
+      {
+        id: 'paid',
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 3,
+          fresh_context: false,
+          nodes: [{ id: 'work', prompt: 'do work', depends_on: [] }],
+        },
+        depends_on: [],
+      },
+    ];
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-lg',
+      testDir,
+      { name: 'lg-tokens', nodes },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(calls).toBe(2);
+    // The group sums tokens across iterations into its result; the outer runLayers
+    // rolls them into the run totals reported via telemetry.
+    expect(mockCaptureWorkflowCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: 'completed', tokensIn: 300, tokensOut: 30 })
+    );
+  });
+
+  it('SESSION: fresh_context=false threads the body session between iterations', async () => {
+    let calls = 0;
+    mockSendQueryDag.mockImplementation(function* () {
+      calls++;
+      yield { type: 'assistant', content: calls >= 2 ? 'done\nDONE' : 'progress' };
+      yield { type: 'result', sessionId: `lg-sess-${calls}` };
+    });
+
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('lg-session-thread');
+
+    const nodes: DagNode[] = [
+      {
+        id: 'stateful',
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 5,
+          fresh_context: false,
+          nodes: [{ id: 'work', prompt: 'do work', depends_on: [] }],
+        },
+        depends_on: [],
+      },
+    ];
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-lg',
+      testDir,
+      { name: 'lg-session-thread', nodes },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(mockSendQueryDag.mock.calls.length).toBe(2);
+    // Iteration 1: always fresh.
+    expect(mockSendQueryDag.mock.calls[0][2]).toBeUndefined();
+    // Iteration 2: resumes iteration 1's session (fresh_context: false).
+    expect(mockSendQueryDag.mock.calls[1][2]).toBe('lg-sess-1');
+  });
+
+  it('SESSION: fresh_context=true starts a fresh body session every iteration', async () => {
+    let calls = 0;
+    mockSendQueryDag.mockImplementation(function* () {
+      calls++;
+      yield { type: 'assistant', content: calls >= 2 ? 'done\nDONE' : 'progress' };
+      yield { type: 'result', sessionId: `lg-fresh-${calls}` };
+    });
+
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('lg-session-fresh');
+
+    const nodes: DagNode[] = [
+      {
+        id: 'stateless',
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 5,
+          fresh_context: true,
+          nodes: [{ id: 'work', prompt: 'do work', depends_on: [] }],
+        },
+        depends_on: [],
+      },
+    ];
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-lg',
+      testDir,
+      { name: 'lg-session-fresh', nodes },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(mockSendQueryDag.mock.calls.length).toBe(2);
+    expect(mockSendQueryDag.mock.calls[0][2]).toBeUndefined();
+    expect(mockSendQueryDag.mock.calls[1][2]).toBeUndefined();
+  });
+
+  it('WHEN: a body node when: gates on a sibling output per iteration without leaking skip state', async () => {
+    // Iteration 1: gate node outputs 'stop' → work is skipped (when false) → no
+    // completed terminal output → no signal → iteration 2. Iteration 2: gate outputs
+    // 'go' → work runs and emits DONE. Proves (1) when: evaluates against the SAME
+    // iteration's scoped outputs and (2) skip state doesn't leak into iteration 2.
+    let gateCalls = 0;
+    mockSendQueryDag.mockImplementation(function* (prompt: string) {
+      if (prompt.includes('GATE')) {
+        gateCalls++;
+        yield { type: 'assistant', content: gateCalls === 1 ? 'stop' : 'go' };
+        yield { type: 'result', sessionId: `gate-${gateCalls}` };
+      } else {
+        yield { type: 'assistant', content: 'work ran\nDONE' };
+        yield { type: 'result', sessionId: 'work-1' };
+      }
+    });
+
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('lg-when');
+
+    const nodes: DagNode[] = [
+      {
+        id: 'gated',
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 3,
+          fresh_context: true,
+          nodes: [
+            { id: 'gate', prompt: 'GATE: decide', depends_on: [] },
+            {
+              id: 'work',
+              prompt: 'do the work',
+              depends_on: ['gate'],
+              when: "$gate.output == 'go'",
+            },
+          ],
+        },
+        depends_on: [],
+      },
+    ];
+
+    const result = await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-lg',
+      testDir,
+      { name: 'lg-when', nodes },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    // gate ran twice (both iterations); work ran once (iteration 2 only).
+    expect(gateCalls).toBe(2);
+    expect(mockSendQueryDag.mock.calls.length).toBe(3);
+    expect(result).toContain('work ran');
+  });
+
+  it('EDGE A2: a failed upstream body node skips its dependent and fails the group with the real error', async () => {
+    // Multi-node body: implement fails → verify (depends_on implement) is skipped by
+    // trigger-rule semantics → group fails fast with implement's error, one iteration.
+    let calls = 0;
+    mockSendQueryDag.mockImplementation(function* (prompt: string) {
+      calls++;
+      if (prompt.includes('IMPLEMENT')) {
+        throw new Error('implement blew up');
+      }
+      yield { type: 'assistant', content: 'verified\nDONE' };
+      yield { type: 'result', sessionId: 'v-1' };
+    });
+
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('lg-multi-fail');
+
+    const nodes: DagNode[] = [
+      {
+        id: 'pipeline',
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 3,
+          fresh_context: false,
+          nodes: [
+            { id: 'implement', prompt: 'IMPLEMENT: fix it', depends_on: [] },
+            { id: 'verify', prompt: 'verify the fix', depends_on: ['implement'] },
+          ],
+        },
+        depends_on: [],
+      },
+    ];
+
+    const result = await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-lg',
+      testDir,
+      { name: 'lg-multi-fail', nodes },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    // Only implement's single (failing) call ran — verify was skipped, no iteration 2.
+    expect(calls).toBe(1);
+    expect(result).toBeUndefined();
+    const sent = (platform.sendMessage as Mock<(...args: unknown[]) => Promise<void>>).mock.calls
+      .map(c => String(c[1]))
+      .join('\n');
+    expect(sent).toContain('implement blew up');
+    expect(sent).not.toContain('exceeded max iterations');
+  });
+
   // --- Dimension 2: output_type typed artifact from final iteration ---
 
   it('OUTPUT_TYPE: loop_group with output_type writes a sidecar from the final terminal output', async () => {
