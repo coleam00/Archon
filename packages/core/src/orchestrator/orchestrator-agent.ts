@@ -182,15 +182,16 @@ export function resolveChatModelRequest(
     }
   }
   const request = resolveModelRequest(aiProfile, 'large', configuredProviderKey);
-  const matchedTierConfigured =
-    request.matchedTier !== undefined &&
-    (config.tiers?.[request.matchedTier] !== undefined ||
-      userAiPrefs.tiers?.[request.matchedTier] !== undefined);
-  if (request.matchedTier !== undefined && !matchedTierConfigured) {
-    const installModel = config.assistants[request.provider]?.model;
-    if (typeof installModel === 'string' && installModel !== '' && installModel !== 'inherit') {
-      return { ...request, model: installModel };
-    }
+  if (request.matchedTier === undefined) return request;
+
+  const tierConfigured =
+    config.tiers?.[request.matchedTier] !== undefined ||
+    userAiPrefs.tiers?.[request.matchedTier] !== undefined;
+  if (tierConfigured) return request;
+
+  const installModel = config.assistants[request.provider]?.model;
+  if (typeof installModel === 'string' && installModel !== '' && installModel !== 'inherit') {
+    return { ...request, model: installModel };
   }
   return request;
 }

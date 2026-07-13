@@ -715,7 +715,7 @@ export interface paths {
     delete?: never;
     options?: never;
     head?: never;
-    /** Set (or clear with null) the current web user’s default assistant */
+    /** Set (or clear with null) the current web user’s default assistant + default chat model (written atomically; omitted model clears any pin) */
     patch: {
       parameters: {
         query?: never;
@@ -725,7 +725,7 @@ export interface paths {
       };
       requestBody: {
         content: {
-          'application/json': components['schemas']['UpdateUserDefaultProviderBody'];
+          'application/json': components['schemas']['UpdateUserDefaultBody'];
         };
       };
       responses: {
@@ -3154,6 +3154,7 @@ export interface components {
         [key: string]: components['schemas']['TierEntry'];
       };
       defaultProvider?: string;
+      defaultModel?: string;
     };
     UserTiersConfig: {
       small?: components['schemas']['TierEntry'];
@@ -3178,8 +3179,9 @@ export interface components {
         [key: string]: components['schemas']['TierEntry'] & unknown;
       };
     };
-    UpdateUserDefaultProviderBody: {
+    UpdateUserDefaultBody: {
       provider: string | null;
+      model?: string | null;
     };
     ConversationListResponse: components['schemas']['Conversation'][];
     Conversation: {
@@ -3590,7 +3592,6 @@ export interface components {
       prompt?: string;
       bash?: string;
       loop?: {
-        prompt: string;
         until: string;
         max_iterations: number;
         /** @default false */
@@ -3598,6 +3599,17 @@ export interface components {
         until_bash?: string;
         interactive?: boolean;
         gate_message?: string;
+        prompt: string;
+      };
+      loop_group?: {
+        until: string;
+        max_iterations: number;
+        /** @default false */
+        fresh_context: boolean;
+        until_bash?: string;
+        interactive?: boolean;
+        gate_message?: string;
+        nodes: components['schemas']['DagNode'][];
       };
       approval?: {
         message: string;
