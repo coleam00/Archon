@@ -520,6 +520,7 @@ export interface WorkflowInvokedProperties {
   model?: string;
   nodeCount?: number;
   usesLoop?: boolean;
+  usesLoopGroup?: boolean;
   usesApproval?: boolean;
   usesScript?: boolean;
   usesBash?: boolean;
@@ -677,6 +678,7 @@ export function captureWorkflowInvoked(props: WorkflowInvokedProperties): void {
         ...(model ? { model } : {}),
         ...(props.nodeCount !== undefined ? { node_count: props.nodeCount } : {}),
         uses_loop: Boolean(props.usesLoop),
+        uses_loop_group: Boolean(props.usesLoopGroup),
         uses_approval: Boolean(props.usesApproval),
         uses_script: Boolean(props.usesScript),
         uses_bash: Boolean(props.usesBash),
