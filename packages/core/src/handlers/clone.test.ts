@@ -8,6 +8,7 @@
  * - Lazy logger pattern means @archon/paths mock must be set up before the module import
  */
 import { describe, test, expect, mock, beforeEach, afterAll, afterEach, spyOn } from 'bun:test';
+import { resolve } from 'path';
 import * as fsPromises from 'fs/promises';
 import * as gitUtils from '@archon/git';
 import { createMockLogger } from '../test/mocks/logger';
@@ -1067,28 +1068,33 @@ describe('registerFolder', () => {
 
   // ── Happy path ─────────────────────────────────────────────────────────
   test('registers a non-git directory as a folder project (kind: folder)', async () => {
+    // resolve() the input so the expectation is portable: on Windows,
+    // resolve('/tmp/platform') is 'D:\tmp\platform' (drive-qualified), and
+    // registerFolder stores that resolved form (realpath spy is identity here).
+    const inputPath = '/tmp/platform';
+    const resolvedPath = resolve(inputPath);
     mockFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
     mockCreateCodebase.mockResolvedValueOnce(
       makeCodebase({
         id: 'folder-uuid-1',
         name: 'platform',
         repository_url: null,
-        default_cwd: '/tmp/platform',
+        default_cwd: resolvedPath,
       }) as ReturnType<typeof makeCodebase>
     );
 
-    const result = await registerFolder('/tmp/platform');
+    const result = await registerFolder(inputPath);
 
     expect(result.alreadyExisted).toBe(false);
     expect(result.name).toBe('platform');
     expect(result.repositoryUrl).toBeNull();
     expect(result.defaultBranch).toBeNull();
-    expect(result.defaultCwd).toBe('/tmp/platform');
+    expect(result.defaultCwd).toBe(resolvedPath);
     // No git commands were ever run
     expect(spyExecFileAsync.mock.calls.length).toBe(0);
     // createCodebase received kind: 'folder' and no repository_url
     expect(mockCreateCodebase).toHaveBeenCalledWith(
-      expect.objectContaining({ name: 'platform', default_cwd: '/tmp/platform', kind: 'folder' })
+      expect.objectContaining({ name: 'platform', default_cwd: resolvedPath, kind: 'folder' })
     );
     const createArg = mockCreateCodebase.mock.calls[0]?.[0] as { repository_url?: unknown };
     expect(createArg.repository_url).toBeUndefined();
@@ -1125,16 +1131,20 @@ describe('registerFolder', () => {
 
   // ── Symlink canonicalization (regression) ──────────────────────────────
   test('stores the realpath-canonicalized path so symlinked roots match on lookup', async () => {
-    // Simulate macOS /tmp → /private/tmp: realpath maps the symlink to its real target.
+    // Simulate macOS /tmp → /private/tmp: realpath maps the symlink to its real
+    // target. Both sides are resolve()d so the comparison inside the mock and
+    // the expectations hold on Windows too (resolve drive-qualifies the paths).
+    const symlinkPath = resolve('/tmp/platform');
+    const realPath = resolve('/private/tmp/platform');
     spyFsRealpath.mockImplementationOnce(((p: string) =>
-      Promise.resolve(p === '/tmp/platform' ? '/private/tmp/platform' : p)) as unknown as never);
+      Promise.resolve(p === symlinkPath ? realPath : p)) as unknown as never);
     mockFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
     mockCreateCodebase.mockResolvedValueOnce(
       makeCodebase({
         id: 'folder-uuid-1',
         name: 'platform',
         repository_url: null,
-        default_cwd: '/private/tmp/platform',
+        default_cwd: realPath,
       }) as ReturnType<typeof makeCodebase>
     );
 
@@ -1142,11 +1152,11 @@ describe('registerFolder', () => {
 
     // The already-registered check and the stored default_cwd both use the REAL
     // path, matching what process.cwd() (and thus the gate/doctor) resolves to.
-    expect(mockFindCodebaseByDefaultCwd).toHaveBeenCalledWith('/private/tmp/platform');
+    expect(mockFindCodebaseByDefaultCwd).toHaveBeenCalledWith(realPath);
     expect(mockCreateCodebase).toHaveBeenCalledWith(
-      expect.objectContaining({ default_cwd: '/private/tmp/platform', kind: 'folder' })
+      expect.objectContaining({ default_cwd: realPath, kind: 'folder' })
     );
-    expect(result.defaultCwd).toBe('/private/tmp/platform');
+    expect(result.defaultCwd).toBe(realPath);
   });
 
   test('throws when the path is a file, not a directory', async () => {

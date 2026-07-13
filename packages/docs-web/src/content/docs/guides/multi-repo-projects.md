@@ -30,7 +30,7 @@ You can also register from chat (`/register-project platform ~/platform` — a n
 - **Per-service git is the agent's job.** Archon does not create a worktree or manage branches/PRs for a folder project — the agent runs `git`/`gh` itself inside each service repo (branch, commit, push, open PR). Your workflow prompts should instruct it to do so per service.
 - The chat `/status` command and `archon doctor` list the contained repos so you can confirm what's in scope:
 
-  ```
+  ```text
   Contains 20 git repos: auth-service, billing-service, … (+10 more)
   ```
 
