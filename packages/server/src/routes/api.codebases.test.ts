@@ -483,9 +483,9 @@ describe('POST /api/codebases', () => {
     expect(mockRegisterRepository).not.toHaveBeenCalled();
   });
 
-  test('when findRepoRoot throws (inconclusive), falls back to registerFolder', async () => {
-    // A genuine git error (not "not a git repository") must not crash the route —
-    // it falls through to registerFolder (which does authoritative validation).
+  test('when findRepoRoot throws for a NONEXISTENT path, falls through to registerFolder for its clean error', async () => {
+    // findRepoRoot throws for nonexistent paths. That case is benign: fall
+    // through so registerFolder's own existence check produces the clean error.
     mockFindRepoRoot.mockRejectedValueOnce(new Error('git: command timed out'));
     mockRegisterFolder.mockImplementationOnce(async () => ({
       codebaseId: 'folder-uuid-2',
@@ -499,14 +499,38 @@ describe('POST /api/codebases', () => {
     }));
 
     const app = makeApp();
+    // Path must NOT exist on the test host (real existsSync decides the branch).
+    const missingPath = '/nonexistent-archon-test/ambiguous';
     const response = await app.request('/api/codebases', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: '/tmp/ambiguous' }),
+      body: JSON.stringify({ path: missingPath }),
     });
 
     expect(response.status).toBe(201);
-    expect(mockRegisterFolder).toHaveBeenCalledWith('/tmp/ambiguous');
+    expect(mockRegisterFolder).toHaveBeenCalledWith(missingPath);
+    expect(mockRegisterRepository).not.toHaveBeenCalled();
+  });
+
+  test('when findRepoRoot throws for an EXISTING path, returns 500 and registers NOTHING', async () => {
+    // A genuine git failure (git missing, timeout, permission) on a path that
+    // exists is ambiguous — registering would permanently misclassify a real
+    // repo as kind:'folder'. Fail fast instead.
+    mockFindRepoRoot.mockRejectedValueOnce(new Error('git: command timed out'));
+
+    const app = makeApp();
+    // process.cwd() exists on every platform (real existsSync decides the branch).
+    const response = await app.request('/api/codebases', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: process.cwd() }),
+    });
+
+    expect(response.status).toBe(500);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain('git');
+    expect(body.error).toContain('Nothing was registered');
+    expect(mockRegisterFolder).not.toHaveBeenCalled();
     expect(mockRegisterRepository).not.toHaveBeenCalled();
   });
 

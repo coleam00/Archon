@@ -7,7 +7,7 @@ import { streamSSE } from 'hono/streaming';
 import { cors } from 'hono/cors';
 import type { WebAdapter } from '../adapters/web';
 import { rm, readFile, writeFile, unlink, mkdir, readdir, stat } from 'fs/promises';
-import { readFileSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { normalize, join, sep, basename } from 'path';
 import { randomUUID } from 'crypto';
 import type { Context } from 'hono';
@@ -2712,17 +2712,24 @@ export function registerApiRoutes(
       } else {
         const localPath = body.path ?? '';
         // Detect git-ness. A resolvable repo root → register as a repo project;
-        // anything else → folder project. findRepoRoot returns null ONLY for a
-        // definitive "not a git repository"; it throws for other cases (a
-        // nonexistent path — handled cleanly by registerFolder's own existence
-        // check below — or a genuine git error like git-missing/timeout). A
-        // genuine git error on an existing repo would misclassify it as folder,
-        // so log the throw at WARN (visible), not debug, rather than swallowing.
+        // a definitive null ("not a git repository") → folder project. A THROW
+        // is ambiguous: findRepoRoot throws both for a nonexistent path (benign
+        // — fall through so registerFolder's own existence check produces the
+        // clean error) and for a genuine git failure (git missing, timeout,
+        // permission) on a path that DOES exist. The latter must NOT register:
+        // it would permanently misclassify a real repo as kind:'folder'.
         let repoRoot: string | null = null;
         try {
           repoRoot = await findRepoRoot(localPath);
         } catch (err) {
           getLog().warn({ err, path: localPath }, 'api.add_codebase_repo_detect_failed');
+          if (existsSync(localPath)) {
+            return apiError(
+              c,
+              500,
+              'Could not determine whether the path is a git repository (git failed — is git installed and the path readable?). Nothing was registered; retry once the underlying issue is resolved.'
+            );
+          }
         }
         result = repoRoot ? await registerRepository(localPath) : await registerFolder(localPath);
       }
