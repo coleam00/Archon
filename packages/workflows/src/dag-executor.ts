@@ -2266,9 +2266,12 @@ async function executeScriptNode(
  *
  * Mirrors {@link executeLoopNode} at subgraph granularity: each iteration runs the body's
  * topological layers via {@link runLayers} against a fresh scoped `nodeOutputs` map. The
- * body is a sealed sub-DAG — body node events are namespaced `{groupId}.{nodeId}` via the
- * `stepNamePrefix`. `$LOOP_PREV.<id>.output` refs in body prompts resolve against a
- * snapshot of the *previous* iteration's body outputs (empty on iteration 1).
+ * body is a sealed sub-DAG. runLayers' own control events (skip/trigger_rule/when) are
+ * namespaced `{groupId}.{nodeId}` via `stepNamePrefix`; the body nodes' lifecycle events
+ * (node_started/node_completed/node_failed, tool events) still use the raw node id — a
+ * known v1 limitation (executeNodeInternal does not take a step-name override yet).
+ * `$LOOP_PREV.<id>.output` refs in body prompts resolve against a snapshot of the
+ * *previous* iteration's body outputs (empty on iteration 1).
  *
  * `$groupId.output` (visible to the outer DAG) = the final iteration's terminal-node output
  * (mirrors the top-level run's terminal-output selection).
@@ -2291,7 +2294,6 @@ async function executeLoopGroupNode(
   workflowLevelOptions: WorkflowLevelOptions,
   aiProfile: ResolvedAiProfile | undefined,
   workflowPreset: ModelAliasPreset | undefined,
-  _resolvedOptions: SendQueryOptions | undefined,
   artifactsDir: string,
   logDir: string,
   baseBranch: string,
@@ -2420,7 +2422,6 @@ async function executeLoopGroupNode(
       // participate in cross-run session persistence inside the loop.
       persistScopeKey: undefined,
       workflowPersistSessions: false,
-      nodes: iterBodyNodes,
       layers: iterBodyLayers,
       nodeOutputs: scopedNodeOutputs,
       priorCompletedNodes: undefined, // body re-runs in full each iteration (v1)
@@ -2445,7 +2446,7 @@ async function executeLoopGroupNode(
     // iteration. Re-check before proceeding.
     const postBodyStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
     // null (run row gone / deleted) is a stop condition too — treat it as 'deleted'.
-    if (postBodyStatus !== 'running' && postBodyStatus !== 'paused') {
+    if (!shouldContinueStreamingForStatus(postBodyStatus)) {
       const effectiveStatus = postBodyStatus ?? 'deleted';
       getLog().info(
         { workflowRunId: workflowRun.id, nodeId: node.id, iteration: i, status: effectiveStatus },
@@ -3644,7 +3645,9 @@ async function executeApprovalNode(
  * The top-level DAG and each `loop_group` body iteration construct their own context: the
  * top-level call uses `workflow.nodes` / a fresh `nodeOutputs`; a loop-group body uses the
  * group's `nodes` / a per-iteration scoped `nodeOutputs` (reset each iteration) and a
- * `stepNamePrefix` of `'{groupId}.'` so body node events are namespaced in the event log.
+ * `stepNamePrefix` of `'{groupId}.'` that namespaces runLayers' OWN control events
+ * (skip/trigger_rule/when). Body lifecycle events emitted inside executeNodeInternal /
+ * executeBashNode / executeScriptNode still use the raw node id (known v1 limitation).
  */
 interface RunLayersContext {
   // --- run-level invariants (shared by top-level DAG and loop_group body) ---
@@ -3673,9 +3676,7 @@ interface RunLayersContext {
   workflowPersistSessions: boolean;
 
   // --- per-subgraph mutable state (varies between top-level DAG and loop_group body) ---
-  /** The nodes these layers span (top-level: workflow.nodes; body: loop_group.nodes). */
-  nodes: readonly DagNode[];
-  /** Pre-computed topological layers over `nodes` (caller builds once — body shape is static). */
+  /** Pre-computed topological layers (caller builds once — body shape is static). runLayers walks ONLY these; there is deliberately no flat node list here. */
   layers: DagNode[][];
   /** Shared node-output map (caller owns; runLayers writes node results here). */
   nodeOutputs: Map<string, NodeOutput>;
@@ -3700,7 +3701,7 @@ interface RunLayersContext {
  *
  * Extracted verbatim from the former `executeDagWorkflow` layer loop; the only behavioral
  * addition is `ctx.stepNamePrefix` (empty for the top-level DAG → identical `step_name`s).
- * Shared by the top-level DAG and (planned) `loop_group` body iteration.
+ * Shared by the top-level DAG and `executeLoopGroupNode`'s per-iteration body execution.
  */
 async function runLayers(ctx: RunLayersContext): Promise<void> {
   const {
@@ -3981,20 +3982,22 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
           // (body is a sealed sub-DAG re-executed per iteration; the loop is
           // encapsulated inside this one node, keeping the outer DAG acyclic).
           if (isLoopGroupNode(node)) {
-            const { provider: loopGroupProvider, options: loopGroupOptions } =
-              await resolveNodeProviderAndModel(
-                node,
-                workflowProvider,
-                workflowModel,
-                config,
-                platform,
-                conversationId,
-                workflowRun.id,
-                cwd,
-                workflowLevelOptions,
-                aiProfile,
-                workflowPreset
-              );
+            // Resolve provider for the group (group-level provider/model overrides are
+            // forwarded to body AI nodes; the group itself never calls sendQuery, so
+            // the resolved SendQueryOptions are not needed here).
+            const { provider: loopGroupProvider } = await resolveNodeProviderAndModel(
+              node,
+              workflowProvider,
+              workflowModel,
+              config,
+              platform,
+              conversationId,
+              workflowRun.id,
+              cwd,
+              workflowLevelOptions,
+              aiProfile,
+              workflowPreset
+            );
 
             const output = await executeLoopGroupNode(
               deps,
@@ -4008,7 +4011,6 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               workflowLevelOptions,
               aiProfile,
               workflowPreset,
-              loopGroupOptions,
               artifactsDir,
               logDir,
               baseBranch,
@@ -4615,7 +4617,6 @@ export async function executeDagWorkflow(
     issueContext,
     persistScopeKey,
     workflowPersistSessions,
-    nodes: workflow.nodes,
     layers,
     nodeOutputs,
     priorCompletedNodes,

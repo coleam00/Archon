@@ -218,6 +218,7 @@ export type CommandNode = z.infer<typeof commandNodeSchema> & {
   prompt?: never;
   bash?: never;
   loop?: never;
+  loop_group?: never;
   approval?: never;
   cancel?: never;
   script?: never;
@@ -232,6 +233,7 @@ export type PromptNode = z.infer<typeof promptNodeSchema> & {
   command?: never;
   bash?: never;
   loop?: never;
+  loop_group?: never;
   approval?: never;
   cancel?: never;
   script?: never;
@@ -251,6 +253,7 @@ export type BashNode = z.infer<typeof bashNodeSchema> & {
   command?: never;
   prompt?: never;
   loop?: never;
+  loop_group?: never;
   approval?: never;
   cancel?: never;
   script?: never;
@@ -274,6 +277,7 @@ export type ScriptNode = z.infer<typeof scriptNodeSchema> & {
   prompt?: never;
   bash?: never;
   loop?: never;
+  loop_group?: never;
   approval?: never;
   cancel?: never;
 };
@@ -292,6 +296,7 @@ export type LoopNode = z.infer<typeof loopNodeSchema> & {
   command?: never;
   prompt?: never;
   bash?: never;
+  loop_group?: never;
   approval?: never;
   cancel?: never;
   script?: never;
@@ -369,6 +374,7 @@ export type ApprovalNode = z.infer<typeof approvalNodeSchema> & {
   prompt?: never;
   bash?: never;
   loop?: never;
+  loop_group?: never;
   cancel?: never;
   script?: never;
 };
@@ -387,6 +393,7 @@ export type CancelNode = z.infer<typeof cancelNodeSchema> & {
   prompt?: never;
   bash?: never;
   loop?: never;
+  loop_group?: never;
   approval?: never;
   script?: never;
 };
@@ -456,10 +463,10 @@ export const LOOP_GROUP_NODE_AI_FIELDS: readonly string[] = LOOP_NODE_AI_FIELDS;
  *
  * Enforces:
  * - Non-empty id
- * - Exactly one of command/prompt/bash/loop (mutual exclusivity)
+ * - Exactly one of command/prompt/bash/loop/loop_group/approval/cancel/script (mutual exclusivity)
  * - command name validity (via isValidCommandName)
  * - idle_timeout must be a finite positive number
- * - retry not allowed on loop nodes
+ * - retry not allowed on loop or loop_group nodes
  * - timeout on bash must be positive
  *
  * Note: provider identity is validated in loader.ts (workflow-level) and
@@ -708,11 +715,11 @@ export const dagNodeSchema = dagNodeBaseSchema
       return { ...base, ...shared, cancel: data.cancel.trim() } as CancelNode;
     }
     // loop_group — guaranteed by superRefine to be defined at this point.
-    // Spread aiOnly so per-node model/provider (and other AI overrides allowed by
-    // LOOP_GROUP_NODE_AI_FIELDS) are preserved on the parsed node — the executor forwards
-    // them to body AI nodes unless overridden per-node (same forwarding `loop:` uses, but
-    // `loop:` historically drops them at parse; loop_group keeps them to support group-level
-    // model/provider overrides that apply to every body AI node).
+    // Spread aiOnly so group-level model/provider survive parsing — the executor forwards
+    // them to body AI nodes unless overridden per-node ('loop:' historically drops them at
+    // parse; loop_group keeps them to support group-level overrides). The REMAINING aiOnly
+    // fields are the ones LOOP_GROUP_NODE_AI_FIELDS declares unsupported: they ride along
+    // here but the loader warns about and ignores them at runtime.
     if (data.loop_group !== undefined) {
       return { ...base, ...aiOnly, loop_group: data.loop_group } as LoopGroupNode;
     }
