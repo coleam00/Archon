@@ -2453,6 +2453,40 @@ async function executeLoopGroupNode(
       );
       return { state: 'failed', output: lastIterationOutput, error: `Workflow ${effectiveStatus}` };
     }
+    // Accumulate usage across iterations (charged on the failure path below too).
+    loopTotalCostUsd = (loopTotalCostUsd ?? 0) + iterCtx.totalCostUsd;
+    if (iterCtx.totalTokensIn > 0 || iterCtx.totalTokensOut > 0) {
+      loopTotalTokens = {
+        input: (loopTotalTokens?.input ?? 0) + iterCtx.totalTokensIn,
+        output: (loopTotalTokens?.output ?? 0) + iterCtx.totalTokensOut,
+      };
+    }
+
+    // A failed body node fails the group immediately — mirrors the top-level DAG
+    // (any failed node fails the run) and executeLoopNode (an iteration failure stops
+    // the loop). Silently re-running the body would burn AI cost every remaining
+    // iteration and bury the root cause under a generic max-iterations error.
+    const failedBodyNodes = iterBodyNodes.flatMap(n => {
+      const o = scopedNodeOutputs.get(n.id);
+      return o?.state === 'failed' ? [`'${n.id}': ${o.error}`] : [];
+    });
+    if (failedBodyNodes.length > 0) {
+      const errorMsg = `Loop-group node '${node.id}' failed at iteration ${String(i)}: ${failedBodyNodes.join('; ')}`;
+      getLog().warn(
+        { nodeId: node.id, iteration: i, failedCount: failedBodyNodes.length },
+        'loop_group_node.body_node_failed'
+      );
+      await safeSendMessage(platform, conversationId, errorMsg, msgContext);
+      return {
+        state: 'failed',
+        output: lastIterationOutput,
+        error: errorMsg,
+        costUsd: loopTotalCostUsd,
+        ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+        loopIterations: i,
+      };
+    }
+
     // Carry the body's final sequential session into the next iteration (unless
     // fresh_context forces a reset, handled above by seeding undefined).
     loopLastSequentialSessionId = iterCtx.lastSequentialSessionId;
@@ -2469,15 +2503,6 @@ async function executeLoopGroupNode(
       .find(o => o?.state === 'completed' && o.output.trim().length > 0)?.output;
     const iterationOutput = terminalOutput ?? '';
     lastIterationOutput = iterationOutput;
-
-    // Accumulate usage across iterations.
-    loopTotalCostUsd = (loopTotalCostUsd ?? 0) + iterCtx.totalCostUsd;
-    if (iterCtx.totalTokensIn > 0 || iterCtx.totalTokensOut > 0) {
-      loopTotalTokens = {
-        input: (loopTotalTokens?.input ?? 0) + iterCtx.totalTokensIn,
-        output: (loopTotalTokens?.output ?? 0) + iterCtx.totalTokensOut,
-      };
-    }
 
     // Completion gate: until-signal in the terminal output, and/or until_bash exit 0.
     // Short-circuit: if the until-signal already detected completion, skip the

@@ -9927,11 +9927,11 @@ describe('executeDagWorkflow -- loop_group node', () => {
 
   // --- Edge cases ---
 
-  it('EDGE A: a body node that fails every iteration drives the group to max_iterations failure', async () => {
-    // The body's only node is AI and always succeeds at the AI level, but we simulate a
-    // node-level failure by having the mock throw. runLayers records state:'failed' in the
-    // scoped map; the terminal-output selection filters for 'completed', so a failed body
-    // yields no terminal output → no completion signal → loop runs to max_iterations → fails.
+  it('EDGE A: a failed body node fails the group immediately with the real error', async () => {
+    // A body node failure must NOT silently re-run the body until max_iterations —
+    // that burns AI cost per iteration and buries the root cause under a generic
+    // max-iterations message (the exact anti-pattern executeLoopNode already fixed).
+    // The group fails fast, surfacing the failed body node's own error.
     let calls = 0;
     mockSendQueryDag.mockImplementation(function* () {
       calls++;
@@ -9971,10 +9971,17 @@ describe('executeDagWorkflow -- loop_group node', () => {
       minimalConfig
     );
 
-    // All 3 iterations ran (each failed, none completed → no signal → exhausted).
-    expect(calls).toBe(3);
+    // Fail-fast: exactly ONE iteration ran — no burn-to-max_iterations.
+    expect(calls).toBe(1);
     // Run failed → no terminal output returned to the outer DAG.
     expect(result).toBeUndefined();
+    // The user-facing failure surfaced the body node's real error, not a
+    // generic max-iterations message.
+    const sent = (platform.sendMessage as Mock<(...args: unknown[]) => Promise<void>>).mock.calls
+      .map(c => String(c[1]))
+      .join('\n');
+    expect(sent).toContain('body node exploded');
+    expect(sent).not.toContain('exceeded max iterations');
   });
 
   it('EDGE B: body prompt can reference an outer-DAG upstream node via $nodeId.output', async () => {
