@@ -2722,7 +2722,7 @@ export function registerApiRoutes(
         try {
           repoRoot = await findRepoRoot(localPath);
         } catch (err) {
-          getLog().warn({ err, path: localPath }, 'add_codebase_repo_detect_failed');
+          getLog().warn({ err, path: localPath }, 'api.add_codebase_repo_detect_failed');
         }
         result = repoRoot ? await registerRepository(localPath) : await registerFolder(localPath);
       }

@@ -66,7 +66,7 @@ export async function listChildRepos(rootPath: string): Promise<string[]> {
     // An unreadable/missing root is an anomaly for a registered folder project —
     // log at warn (not debug) so it's visible, then return [] (callers treat
     // "no child repos" and "unreadable root" the same, but the log distinguishes).
-    getLog().warn({ rootPath, err: error as Error }, 'list_child_repos_read_failed');
+    getLog().warn({ rootPath, err: error as Error }, 'git.child_repos_read_failed');
     return [];
   }
   // existsSync follows symlinks and matches both a `.git` directory (normal
