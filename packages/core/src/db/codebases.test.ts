@@ -1,4 +1,5 @@
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
+import { join } from 'path';
 import { createQueryResult, mockPostgresDialect } from '../test/mocks/database';
 import { Codebase } from '../types';
 
@@ -20,6 +21,7 @@ import {
   registerCommand,
   findCodebaseByRepoUrl,
   findCodebaseByDefaultCwd,
+  findCodebaseByPathPrefix,
   findCodebaseByName,
   updateCodebase,
   deleteCodebase,
@@ -37,6 +39,7 @@ describe('codebases', () => {
     default_cwd: '/workspace/test-project',
     default_branch: 'main',
     ai_assistant_type: 'claude',
+    kind: 'repo',
     commands: { plan: { path: '.claude/commands/plan.md', description: 'Plan feature' } },
     created_at: new Date(),
     updated_at: new Date(),
@@ -56,13 +59,14 @@ describe('codebases', () => {
 
       expect(result).toEqual(mockCodebase);
       expect(mockQuery).toHaveBeenCalledWith(
-        'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, default_branch, ai_assistant_type) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+        'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, default_branch, ai_assistant_type, kind) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
         [
           'test-project',
           'https://github.com/user/repo',
           '/workspace/test-project',
           'main',
           'claude',
+          'repo',
         ]
       );
     });
@@ -81,8 +85,8 @@ describe('codebases', () => {
 
       expect(result).toEqual(codebaseWithoutOptional);
       expect(mockQuery).toHaveBeenCalledWith(
-        'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, default_branch, ai_assistant_type) VALUES ($1, $2, $3, $4, $5) RETURNING *',
-        ['test-project', null, '/workspace/test-project', null, 'claude']
+        'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, default_branch, ai_assistant_type, kind) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+        ['test-project', null, '/workspace/test-project', null, 'claude', 'repo']
       );
     });
 
@@ -151,6 +155,60 @@ describe('codebases', () => {
       const result = await getCodebase('non-existent');
 
       expect(result).toBeNull();
+    });
+  });
+
+  describe('findCodebaseByPathPrefix', () => {
+    // Build fixture paths with join() so they use the platform separator —
+    // stored default_cwd values come from resolve()/realpath() and are always
+    // platform-native, and the implementation compares against path.sep.
+    // Hardcoded POSIX literals fail the boundary check on Windows.
+    const P = (...segments: string[]): string => join('/x', ...segments);
+    const rows = [
+      { ...mockCodebase, id: 'plat', default_cwd: P('platform') },
+      { ...mockCodebase, id: 'stag', default_cwd: P('platform-staging') },
+      { ...mockCodebase, id: 'under', default_cwd: P('my_app') },
+      { ...mockCodebase, id: 'svc', default_cwd: P('platform', 'svc-a') },
+    ];
+
+    test('matches an exact default_cwd', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult(rows));
+      const result = await findCodebaseByPathPrefix(P('platform'));
+      expect(result?.id).toBe('plat');
+    });
+
+    test('matches an ancestor directory on a separator boundary', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult(rows));
+      // …/platform/svc-a/deep → most-specific ancestor is the svc-a row
+      const result = await findCodebaseByPathPrefix(P('platform', 'svc-a', 'deep'));
+      expect(result?.id).toBe('svc');
+    });
+
+    test('does NOT match a sibling that merely shares a name prefix', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult(rows));
+      // …/platform-staging must NOT resolve to …/platform (the old LIKE bug)
+      const result = await findCodebaseByPathPrefix(P('platform-staging'));
+      expect(result?.id).toBe('stag');
+    });
+
+    test('does NOT treat an underscore in default_cwd as a wildcard', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult(rows));
+      // …/myXapp would match …/my_app under SQL LIKE (_ = any char); it must not.
+      const result = await findCodebaseByPathPrefix(P('myXapp'));
+      expect(result).toBeNull();
+    });
+
+    test('returns null when no codebase is an ancestor', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult(rows));
+      const result = await findCodebaseByPathPrefix(join('/y', 'unrelated'));
+      expect(result).toBeNull();
+    });
+
+    test('queries all rows without an unescaped LIKE', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+      await findCodebaseByPathPrefix('/x/platform');
+      const sql = (mockQuery.mock.calls[0]?.[0] ?? '') as string;
+      expect(sql).not.toContain('LIKE');
     });
   });
 

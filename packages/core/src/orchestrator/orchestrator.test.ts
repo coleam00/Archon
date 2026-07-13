@@ -1,5 +1,6 @@
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
 import { mkdtemp, rm } from 'fs/promises';
+import { realpathSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { MockPlatformAdapter } from '../test/mocks/platform';
@@ -1481,31 +1482,49 @@ describe('orchestrator-agent handleMessage', () => {
   // ─── Project Registration ──────────────────────────────────────────────
 
   describe('project registration', () => {
-    test('/register-project command creates codebase', async () => {
-      mockExistsSync.mockReturnValue(true);
-      mockListCodebases.mockResolvedValue([]);
-      mockCreateCodebase.mockResolvedValue({
-        id: 'new-id',
-        name: 'my-app',
-        default_cwd: '/home/user/my-app',
-      });
+    test('/register-project on a real non-git dir creates a folder project (clean null path)', async () => {
+      // Use a REAL non-git temp dir so findRepoRoot returns null via the
+      // definitive "not a git repository" path (deterministic) — not the
+      // exception-fallback branch a fake/nonexistent path would take.
+      const projectPath = await mkdtemp(join(tmpdir(), 'archon-register-folder-'));
+      // Build the expectation with the SAME canonicalization the product uses
+      // (realpathSync from 'fs'). fs/promises.realpath differs on Windows 8.3
+      // short names (RUNNER~1 vs runneradmin), so mixing the two flakes there.
+      const canonicalPath = realpathSync(projectPath);
+      try {
+        mockExistsSync.mockReturnValue(true);
+        mockListCodebases.mockResolvedValue([]);
+        mockCreateCodebase.mockResolvedValue({
+          id: 'new-id',
+          name: 'my-app',
+          default_cwd: canonicalPath,
+        });
 
-      await handleMessage(platform, 'chat-456', '/register-project my-app /home/user/my-app');
+        await handleMessage(platform, 'chat-456', `/register-project my-app ${projectPath}`);
 
-      expect(mockCreateCodebase).toHaveBeenCalledWith({
-        name: 'my-app',
-        default_cwd: '/home/user/my-app',
-        default_branch: null,
-        ai_assistant_type: 'claude',
-      });
-      expect(platform.sendMessage).toHaveBeenCalledWith(
-        'chat-456',
-        expect.stringContaining('registered successfully')
-      );
+        expect(mockCreateCodebase).toHaveBeenCalledWith({
+          name: 'my-app',
+          default_cwd: canonicalPath,
+          default_branch: null,
+          ai_assistant_type: 'claude',
+          kind: 'folder',
+        });
+        expect(platform.sendMessage).toHaveBeenCalledWith(
+          'chat-456',
+          expect.stringContaining('registered successfully')
+        );
+      } finally {
+        await rm(projectPath, { recursive: true, force: true });
+      }
     });
 
     test('/register-project stores detected current branch', async () => {
       const projectPath = await mkdtemp(join(tmpdir(), 'archon-register-project-'));
+      // handleRegisterProject canonicalizes via realpathSync (macOS tmpdir lives
+      // under /var → /private/var), so the stored default_cwd is the realpath'd
+      // path. Use the SAME function as the product — fs/promises.realpath differs
+      // on Windows 8.3 short names.
+      const canonicalPath = realpathSync(projectPath);
       try {
         await Bun.spawn(['git', 'init', '-b', 'develop'], { cwd: projectPath }).exited;
         await Bun.spawn(['git', 'commit', '--allow-empty', '-m', 'init'], {
@@ -1530,9 +1549,10 @@ describe('orchestrator-agent handleMessage', () => {
 
         expect(mockCreateCodebase).toHaveBeenCalledWith({
           name: 'my-app',
-          default_cwd: projectPath,
+          default_cwd: canonicalPath,
           default_branch: 'develop',
           ai_assistant_type: 'claude',
+          kind: 'repo',
         });
       } finally {
         await rm(projectPath, { recursive: true, force: true });

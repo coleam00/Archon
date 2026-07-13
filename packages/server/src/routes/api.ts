@@ -7,7 +7,7 @@ import { streamSSE } from 'hono/streaming';
 import { cors } from 'hono/cors';
 import type { WebAdapter } from '../adapters/web';
 import { rm, readFile, writeFile, unlink, mkdir, readdir, stat } from 'fs/promises';
-import { readFileSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { normalize, join, sep, basename } from 'path';
 import { randomUUID } from 'crypto';
 import type { Context } from 'hono';
@@ -28,6 +28,7 @@ import {
   updateGlobalConfig,
   cloneRepository,
   registerRepository,
+  registerFolder,
   ConversationNotFoundError,
   generateAndSetTitle,
   isPerUserGitHubEnabled,
@@ -57,7 +58,7 @@ import {
   setUserDefaultProvider,
 } from '@archon/core';
 import type { UserTiersPatch, UserAliasesPatch, AliasesPatch } from '@archon/core';
-import { removeWorktree, toRepoPath, toWorktreePath } from '@archon/git';
+import { findRepoRoot, removeWorktree, toRepoPath, toWorktreePath } from '@archon/git';
 import {
   createLogger,
   getWorkflowFolderSearchPaths,
@@ -2700,10 +2701,38 @@ export function registerApiRoutes(
     const body = getValidatedBody(c, addCodebaseBodySchema);
 
     try {
-      // .refine() guarantees exactly one of url/path is present
-      const result = body.url
-        ? await cloneRepository(body.url)
-        : await registerRepository(body.path ?? '');
+      // .refine() guarantees exactly one of url/path is present.
+      // For a local path, detect git-ness: a non-git directory registers as a
+      // folder project (kind: 'folder') instead of being rejected. Folder-ness
+      // is detected here, not declared in the request body, so the web form
+      // needs no new field.
+      let result;
+      if (body.url) {
+        result = await cloneRepository(body.url);
+      } else {
+        const localPath = body.path ?? '';
+        // Detect git-ness. A resolvable repo root → register as a repo project;
+        // a definitive null ("not a git repository") → folder project. A THROW
+        // is ambiguous: findRepoRoot throws both for a nonexistent path (benign
+        // — fall through so registerFolder's own existence check produces the
+        // clean error) and for a genuine git failure (git missing, timeout,
+        // permission) on a path that DOES exist. The latter must NOT register:
+        // it would permanently misclassify a real repo as kind:'folder'.
+        let repoRoot: string | null = null;
+        try {
+          repoRoot = await findRepoRoot(localPath);
+        } catch (err) {
+          getLog().warn({ err, path: localPath }, 'api.add_codebase_repo_detect_failed');
+          if (existsSync(localPath)) {
+            return apiError(
+              c,
+              500,
+              'Could not determine whether the path is a git repository (git failed — is git installed and the path readable?). Nothing was registered; retry once the underlying issue is resolved.'
+            );
+          }
+        }
+        result = repoRoot ? await registerRepository(localPath) : await registerFolder(localPath);
+      }
 
       // Fetch the full codebase record for a consistent response
       const codebase = await codebaseDb.getCodebase(result.codebaseId);

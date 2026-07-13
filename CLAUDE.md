@@ -209,6 +209,9 @@ bun run cli workflow run implement --branch feature-auth "Add auth"
 # Opt out of isolation (run in live checkout)
 bun run cli workflow run quick-fix --no-worktree "Fix typo"
 
+# Register the current non-git directory as a folder project and run in place (no worktree)
+bun run cli workflow run assist --folder "List every repo under this multi-repo root"
+
 # Run in a detached background child (returns immediately; find it via `workflow runs`)
 bun run cli workflow run implement "Add auth" --detach
 
@@ -458,7 +461,7 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 ### Database Schema
 
 **18 Tables (all prefixed with `remote_agent_`):**
-1. **`codebases`** - Repository metadata and commands (JSONB)
+1. **`codebases`** - Repository/project metadata and commands (JSONB); `kind` (`'repo'`/`'folder'`, default `'repo'`) discriminates git repos from **folder projects** (non-git workspaces — multi-repo roots or plain ops folders — that run in place with named `_folder/<slug>/` storage; `repository_url`/`default_branch` are null)
 2. **`conversations`** - Track platform conversations with titles and soft-delete support; nullable `user_id` records first creator (provenance + execution-identity **fallback** only — chat turns execute as the message sender, #1982)
 3. **`sessions`** - Track AI SDK sessions with resume capability
 4. **`isolation_environments`** - Git worktree isolation tracking; nullable `created_by_user_id` preserves first creator
@@ -649,6 +652,9 @@ curl http://localhost:3637/api/conversations/<conversationId>/messages
 │   │   ├── runs/{id}/            # Per-run artifacts ($ARTIFACTS_DIR)
 │   │   │   └── nodes/            # Typed node-output sidecars (<id>.md + <id>.meta.json) for nodes with output_type
 │   │   └── uploads/{convId}/     # Web UI file uploads (ephemeral)
+│   └── logs/                     # Workflow execution logs
+├── workspaces/_folder/<slug>/    # Folder project (non-git; runs in place — no source/ or worktrees/)
+│   ├── artifacts/                # Workflow artifacts (NEVER in git)
 │   └── logs/                     # Workflow execution logs
 ├── vendor/codex/                  # Codex native binary (binary builds, user-placed)
 ├── web-dist/<version>/            # Cached web UI dist (archon serve, binary only)
@@ -895,7 +901,7 @@ Pattern: Use `classifyIsolationError()` (from `@archon/isolation`) to map git er
 
 **Codebases:**
 - `GET /api/codebases` / `GET /api/codebases/:id` - List / fetch codebases
-- `POST /api/codebases` - Register a codebase (clone or local path)
+- `POST /api/codebases` - Register a codebase (clone or local path). A non-git local `path` now auto-registers as a folder project (`kind: 'folder'`, runs in place) instead of erroring
 - `DELETE /api/codebases/:id` - Delete a codebase and clean up resources
 - `GET /api/codebases/:id/env` - List env var keys for a codebase (never returns values)
 - `PUT /api/codebases/:id/env` / `DELETE /api/codebases/:id/env/:key` - Upsert / delete a single codebase env var

@@ -231,6 +231,9 @@ mock.module('@archon/git', () => ({
   syncWorkspace: mockSyncWorkspace,
   toRepoPath: mockToRepoPath,
   toBranchName: mock((b: string) => b),
+  // /register-project probes git-ness via findRepoRoot; a non-null root marks
+  // the registered path as a repo project (kind: 'repo').
+  findRepoRoot: mock((p: string) => Promise.resolve(p)),
   // Stubs for post-message-reminder (loaded transitively by orchestrator-agent).
   // Return null/0/false so the reminder short-circuits without emitting an event.
   getCurrentBranch: mock(() => Promise.resolve(null)),
@@ -1115,6 +1118,19 @@ describe('discoverAllWorkflows — remote sync', () => {
 
     const platform = makePlatform();
     await handleMessage(platform, 'conv-2', 'Hello');
+
+    expect(mockSyncWorkspace).not.toHaveBeenCalled();
+  });
+
+  test('does not call syncWorkspace for a folder project (no git to sync)', async () => {
+    const conversation = makeConversation({ codebase_id: 'codebase-1' });
+    const codebase = { ...makeCodebaseForSync(), kind: 'folder' as const, repository_url: null };
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'Summarize the folder structure.');
 
     expect(mockSyncWorkspace).not.toHaveBeenCalled();
   });
@@ -2530,6 +2546,7 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
       default_cwd: '/.archon/workspaces/owner/repo/source',
       default_branch: null,
       ai_assistant_type: 'claude',
+      kind: 'repo',
     });
     const allCalls = (platform.sendMessage as ReturnType<typeof mock>).mock.calls as [
       string,
@@ -2562,6 +2579,7 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
       default_cwd: '/.archon/workspaces/owner/repo/source',
       default_branch: null,
       ai_assistant_type: 'claude',
+      kind: 'repo',
     });
     const allCalls = (platform.sendMessage as ReturnType<typeof mock>).mock.calls as [
       string,
@@ -2682,6 +2700,7 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
       default_cwd: '/path/to/app',
       default_branch: null,
       ai_assistant_type: 'claude',
+      kind: 'repo',
     });
   });
 

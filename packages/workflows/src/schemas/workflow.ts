@@ -70,7 +70,6 @@ export const workflowBaseSchema = z.object({
   model: z.string().optional(),
   modelReasoningEffort: modelReasoningEffortSchema.optional(),
   webSearchMode: webSearchModeSchema.optional(),
-  additionalDirectories: z.array(z.string()).optional(),
   interactive: z.boolean().optional(),
   effort: effortLevelSchema.optional(),
   thinking: thinkingConfigSchema.optional(),

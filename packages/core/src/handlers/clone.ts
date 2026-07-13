@@ -2,7 +2,7 @@
  * Standalone repository clone/register logic.
  * Extracted from command-handler.ts for reuse by REST endpoints.
  */
-import { access, rm } from 'fs/promises';
+import { access, rm, stat, realpath } from 'fs/promises';
 import { join, basename, resolve } from 'path';
 import * as codebaseDb from '../db/codebases';
 import { sanitizeError } from '../utils/credential-sanitizer';
@@ -11,9 +11,12 @@ import {
   expandTilde,
   getCommandFolderSearchPaths,
   ensureProjectStructure,
+  ensureFolderProjectStructure,
+  getFolderProjectRoot,
   getProjectSourcePath,
   createProjectSourceSymlink,
   parseOwnerRepo,
+  slugifyFolderName,
 } from '@archon/paths';
 import { findMarkdownFilesRecursive } from '../utils/commands';
 import { createLogger } from '@archon/paths';
@@ -465,4 +468,109 @@ export async function registerRepository(localPath: string): Promise<RegisterRes
 
   // default_cwd is the real local path (not the symlink)
   return registerRepoAtPath(localPath, name, remoteUrl);
+}
+
+/**
+ * Build an accurate path-validation error from a `realpath`/`stat` failure —
+ * `ENOENT` really is "does not exist", but `EACCES`/`ENOTDIR`/`ELOOP` are not,
+ * and mislabeling them "Path does not exist" sends the user chasing a typo
+ * instead of a permissions/symlink problem. The raw errno message is preserved.
+ */
+function pathValidationError(path: string, error: Error): Error {
+  const reasonByCode: Record<string, string> = {
+    EACCES: 'Permission denied',
+    ENOTDIR: 'A path segment is not a directory',
+    ELOOP: 'Too many symbolic links',
+  };
+  const code = (error as NodeJS.ErrnoException).code ?? '';
+  const reason = reasonByCode[code] ?? 'Path does not exist';
+  return new Error(`${reason}: ${path} (${error.message})`);
+}
+
+/**
+ * Register a folder project (`kind: 'folder'`) — any directory that is NOT
+ * required to be a git repository. Used for multi-repo roots (N service repos
+ * under one root) and plain business-ops folders with no git at all.
+ *
+ * Unlike {@link registerRepository}, this performs NO git validation and creates
+ * NO `source/` symlink: a folder project runs in place at its real path. Named
+ * artifact/log storage lives under `~/.archon/workspaces/_folder/<slug>/`.
+ */
+export async function registerFolder(localPath: string, name?: string): Promise<RegisterResult> {
+  const expandedPath = resolve(expandTilde(localPath));
+
+  // Canonicalize symlinks (realpath) so the stored `default_cwd` matches what the
+  // lookups resolve to: `archon doctor` uses `process.cwd()` (which resolves
+  // symlinks — e.g. macOS `/tmp` → `/private/tmp`) and the CLI gate realpaths its
+  // cwd too. Without this a symlinked root registers under one path but is looked
+  // up under another, causing a lookup miss and a duplicate row on re-register.
+  // Repo projects are immune because git canonicalizes the repo root on both
+  // sides. realpath also validates existence (throws ENOENT for a missing path).
+  let resolvedPath: string;
+  try {
+    resolvedPath = await realpath(expandedPath);
+  } catch (error) {
+    throw pathValidationError(expandedPath, error as Error);
+  }
+
+  // realpath succeeds for a symlink-to-file too — require a directory (no git check).
+  let isDirectory = false;
+  try {
+    isDirectory = (await stat(resolvedPath)).isDirectory();
+  } catch (error) {
+    throw pathValidationError(resolvedPath, error as Error);
+  }
+  if (!isDirectory) {
+    throw new Error(`Path is not a directory: ${resolvedPath}`);
+  }
+
+  // Already registered by path — return the existing record unchanged.
+  const existing = await codebaseDb.findCodebaseByDefaultCwd(resolvedPath);
+  if (existing) {
+    return {
+      codebaseId: existing.id,
+      name: existing.name,
+      repositoryUrl: existing.repository_url,
+      defaultCwd: existing.default_cwd,
+      defaultBranch: existing.default_branch ?? null,
+      commandCount: 0,
+      alreadyExisted: true,
+    };
+  }
+
+  const projectName = name?.trim() || basename(resolvedPath);
+  const slug = slugifyFolderName(projectName);
+
+  // Create the _folder/<slug>/{artifacts,logs} storage structure (no source/,
+  // no worktrees/ — folder projects are never git-isolated).
+  await ensureFolderProjectStructure(slug);
+
+  const suggestedAssistant = await resolveDefaultAssistant(resolvedPath);
+  const codebase = await codebaseDb.createCodebase({
+    name: projectName,
+    default_cwd: resolvedPath,
+    ai_assistant_type: suggestedAssistant,
+    kind: 'folder',
+  });
+
+  getLog().info(
+    {
+      name: projectName,
+      path: resolvedPath,
+      id: codebase.id,
+      slug,
+      storage: getFolderProjectRoot(slug),
+    },
+    'project.register_folder_completed'
+  );
+
+  return {
+    codebaseId: codebase.id,
+    name: codebase.name,
+    repositoryUrl: null,
+    defaultCwd: resolvedPath,
+    defaultBranch: null,
+    commandCount: 0,
+    alreadyExisted: false,
+  };
 }

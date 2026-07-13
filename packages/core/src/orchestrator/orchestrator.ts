@@ -129,7 +129,12 @@ export async function validateAndResolveIsolation(
   const result = await getResolver().resolve({
     existingEnvId: conversation.isolation_env_id,
     codebase: codebase
-      ? { id: codebase.id, defaultCwd: codebase.default_cwd, name: codebase.name }
+      ? {
+          id: codebase.id,
+          defaultCwd: codebase.default_cwd,
+          name: codebase.name,
+          kind: codebase.kind,
+        }
       : null,
     hints,
     platformType: platform.getPlatformType(),
