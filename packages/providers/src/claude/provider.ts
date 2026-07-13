@@ -977,6 +977,19 @@ export class ClaudeProvider implements IAgentProvider {
     // Build subprocess env once (avoids re-logging auth mode per retry)
     const subprocessEnv = buildSubprocessEnv();
     const env = requestOptions?.env ? { ...subprocessEnv, ...requestOptions.env } : subprocessEnv;
+    // CLAUDE_API_KEY is Archon's variable name; the Claude Code CLI only reads
+    // ANTHROPIC_API_KEY, so mirror it or solo .env installs never authenticate
+    // (delivery.ts sets both vars on the per-user api_key path). Guarded on the
+    // MERGED env, not process.env: a per-request CLAUDE_CODE_OAUTH_TOKEN (per-user
+    // subscription delivered via requestOptions.env) must stay authoritative —
+    // the CLI prefers ANTHROPIC_API_KEY over the OAuth token, so injecting the
+    // install key alongside it would silently rebill the run. Truthiness is
+    // intentional: empty string = missing credential. Never clobbers an
+    // explicit ANTHROPIC_API_KEY.
+    if (env.CLAUDE_API_KEY && !env.ANTHROPIC_API_KEY && !env.CLAUDE_CODE_OAUTH_TOKEN) {
+      env.ANTHROPIC_API_KEY = env.CLAUDE_API_KEY;
+      getLog().debug('using_mirrored_api_key');
+    }
 
     // Apply nodeConfig translation once (deterministic, not retry-dependent)
     // We need a throwaway Options to extract warnings from applyNodeConfig,

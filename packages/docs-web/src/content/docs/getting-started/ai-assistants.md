@@ -96,6 +96,8 @@ Claude Code supports three authentication modes via `CLAUDE_USE_GLOBAL_AUTH`:
 2. **Explicit Tokens** (set to `false`): Uses tokens from env vars below
 3. **Auto-Detect** (not set): Uses tokens if present in env, otherwise global auth
 
+If both `CLAUDE_CODE_OAUTH_TOKEN` and `CLAUDE_API_KEY` are set, the OAuth token wins and no API key is passed to Claude. A per-user credential connected in Settings → Agents always takes precedence over these install-wide variables for that user's runs.
+
 ### Option 1: Global Auth (Recommended)
 
 ```ini
