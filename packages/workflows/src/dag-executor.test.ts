@@ -52,6 +52,7 @@ import {
   checkTriggerRule,
   substituteNodeOutputRefs,
   substituteLoopPrevRefs,
+  applyLoopPrevToBodyNode,
   executeDagWorkflow,
 } from './dag-executor';
 import { loadMcpConfig } from '@archon/providers/mcp/config';
@@ -10050,6 +10051,84 @@ describe('executeDagWorkflow -- loop_group node', () => {
     // The referenced node wasn't in the prior iteration (skipped/absent) → '' not a throw.
     const prev = new Map<string, NodeOutput>([['work', makeOutput('completed', 'ran', undefined)]]);
     expect(substituteLoopPrevRefs('other=[$LOOP_PREV.absent.output.field]', prev)).toBe('other=[]');
+  });
+
+  it('EDGE H: applyLoopPrevToBodyNode uses shell escaping only for shell-bound fields (unit)', () => {
+    // Prior output contains a single quote — the acid test for escaping-mode mixups.
+    const prev = new Map<string, NodeOutput>([
+      ['work', makeOutput('completed', "it's done", undefined)],
+    ]);
+
+    // bash: shell-bound → value arrives shell-quoted.
+    const bashNode = applyLoopPrevToBodyNode(
+      { id: 'b', bash: 'echo $LOOP_PREV.work.output', depends_on: [] } as DagNode,
+      prev,
+      ''
+    );
+    expect('bash' in bashNode && bashNode.bash).toBe("echo 'it'\\''s done'");
+
+    // script: runs via execFile argv (no shell) → raw value, no quote artifacts in source.
+    const scriptNode = applyLoopPrevToBodyNode(
+      {
+        id: 's',
+        script: 'console.log(`$LOOP_PREV.work.output`)',
+        runtime: 'bun',
+        depends_on: [],
+      } as DagNode,
+      prev,
+      ''
+    );
+    expect('script' in scriptNode && scriptNode.script).toBe("console.log(`it's done`)");
+
+    // cancel: display text → raw value.
+    const cancelNode = applyLoopPrevToBodyNode(
+      { id: 'c', cancel: 'stopping: $LOOP_PREV.work.output', depends_on: [] } as DagNode,
+      prev,
+      ''
+    );
+    expect('cancel' in cancelNode && cancelNode.cancel).toBe("stopping: it's done");
+  });
+
+  it('EDGE H: nested loop until_bash gets $LOOP_PREV substituted shell-safely (unit)', () => {
+    const prev = new Map<string, NodeOutput>([
+      ['work', makeOutput('completed', 'PASS', undefined)],
+    ]);
+    const nestedLoop = applyLoopPrevToBodyNode(
+      {
+        id: 'inner',
+        loop: {
+          prompt: 'iterate on $LOOP_PREV.work.output',
+          until: 'DONE',
+          max_iterations: 2,
+          until_bash: 'test $LOOP_PREV.work.output = PASS',
+        },
+        depends_on: [],
+      } as DagNode,
+      prev,
+      ''
+    );
+    if (!('loop' in nestedLoop) || nestedLoop.loop === undefined)
+      throw new Error('expected loop node');
+    expect(nestedLoop.loop.prompt).toBe('iterate on PASS');
+    expect(nestedLoop.loop.until_bash).toBe("test 'PASS' = PASS");
+
+    const nestedGroup = applyLoopPrevToBodyNode(
+      {
+        id: 'inner-grp',
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 2,
+          until_bash: 'test $LOOP_PREV.work.output = PASS',
+          nodes: [{ id: 'w', prompt: 'p', depends_on: [] }],
+        },
+        depends_on: [],
+      } as DagNode,
+      prev,
+      ''
+    );
+    if (!('loop_group' in nestedGroup) || nestedGroup.loop_group === undefined)
+      throw new Error('expected loop_group node');
+    expect(nestedGroup.loop_group.until_bash).toBe("test 'PASS' = PASS");
   });
 
   it('EDGE D: multi-terminal body runs parallel terminals; signal on the selected terminal completes', async () => {

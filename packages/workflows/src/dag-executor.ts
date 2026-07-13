@@ -471,7 +471,8 @@ export function substituteNodeOutputRefs(
 export function substituteLoopPrevRefs(
   prompt: string,
   loopPrevOutputs: Map<string, NodeOutput> | undefined,
-  escapedForBash = false
+  escapedForBash = false,
+  outputFileDir?: string
 ): string {
   // Fast path: no refs to resolve. When refs ARE present but the map is empty/undefined
   // (iteration 1 — no prior iteration), we still run the replace so each ref resolves to
@@ -493,17 +494,17 @@ export function substituteLoopPrevRefs(
       }
       if (!field) {
         return escapedForBash
-          ? shellQuoteOrFile(nodeOutput.output, nodeId, undefined, undefined)
+          ? shellQuoteOrFile(nodeOutput.output, nodeId, undefined, outputFileDir)
           : nodeOutput.output;
       }
       const resolution = resolveNodeOutputField(nodeOutput, nodeId, field);
       if (resolution.kind === 'empty') return escapedForBash ? "''" : '';
       const value = resolution.value;
       if (typeof value === 'string')
-        return escapedForBash ? shellQuoteOrFile(value, nodeId, field, undefined) : value;
+        return escapedForBash ? shellQuoteOrFile(value, nodeId, field, outputFileDir) : value;
       if (typeof value === 'number' || typeof value === 'boolean') return String(value);
       const json = JSON.stringify(value);
-      return escapedForBash ? shellQuoteOrFile(json, nodeId, field, undefined) : json;
+      return escapedForBash ? shellQuoteOrFile(json, nodeId, field, outputFileDir) : json;
     }
   );
 }
@@ -2382,7 +2383,7 @@ async function executeLoopGroupNode(
     const prevSnapshot = loopPrevOutputs;
     const userInputForIter = isLoopResume && i === startIteration ? loopUserInput : '';
     const iterBodyNodes = group.nodes.map(n =>
-      applyLoopPrevToBodyNode(n, prevSnapshot, userInputForIter)
+      applyLoopPrevToBodyNode(n, prevSnapshot, userInputForIter, logDir)
     );
     // Re-layer from the (possibly substituted) body nodes — runLayers walks ctx.layers,
     // not ctx.nodes, so the layers must reference the substituted nodes to take effect.
@@ -2686,35 +2687,55 @@ async function executeLoopGroupNode(
  * evaluateCondition, which does not call substituteLoopPrevRefs). Body authors who need
  * cross-iteration gating should branch on prompt content, not `when:`.
  */
-function applyLoopPrevToBodyNode(
+export function applyLoopPrevToBodyNode(
   node: DagNode,
   loopPrevOutputs: Map<string, NodeOutput> | undefined,
-  loopUserInput: string
+  loopUserInput: string,
+  outputFileDir?: string
 ): DagNode {
   // Substitute $LOOP_USER_INPUT (user free-text) and $LOOP_PREV.* refs.
   // Resolve $LOOP_PREV FIRST, then splice $LOOP_USER_INPUT — so user input containing a
   // literal "$LOOP_PREV." is not itself reprocessed as a workflow-ref. `escapedForBash`
-  // is true for shell-bound fields (bash/script/cancel-reason): $LOOP_PREV values are
-  // shell-quoted per substituteNodeOutputRefs' contract, and $LOOP_USER_INPUT is
-  // shell-quoted before splicing (user input is free-text; unquoted it could break or
-  // inject into the bash/script command). AI-bound fields (prompt/approval.message/
-  // command) use the raw user input.
+  // is true for shell-bound fields (bash/until_bash): $LOOP_PREV values are shell-quoted
+  // (spilling to a file over the size threshold, same as substituteNodeOutputRefs), and
+  // $LOOP_USER_INPUT is shell-quoted before splicing (user input is free-text; unquoted
+  // it could break or inject into the bash command). Non-shell fields (prompt/
+  // approval.message/command, and script/cancel — scripts run via execFile argv and
+  // cancel reasons are display text, mirroring their normal-path substitution) use the
+  // raw values.
   const sub = (s: string, escapedForBash = false): string => {
-    const prevResolved = substituteLoopPrevRefs(s, loopPrevOutputs, escapedForBash);
+    const prevResolved = substituteLoopPrevRefs(s, loopPrevOutputs, escapedForBash, outputFileDir);
     const userInputForField = escapedForBash ? shellQuote(loopUserInput) : loopUserInput;
     return prevResolved.replace(/\$LOOP_USER_INPUT/g, userInputForField);
   };
-  if (isLoopNode(node)) return { ...node, loop: { ...node.loop, prompt: sub(node.loop.prompt) } };
+  if (isLoopNode(node)) {
+    // until_bash is shell-bound: an unresolved $LOOP_PREV would silently degrade to an
+    // (empty) shell variable expansion inside bash -c.
+    return {
+      ...node,
+      loop: {
+        ...node.loop,
+        prompt: sub(node.loop.prompt),
+        ...(node.loop.until_bash !== undefined
+          ? { until_bash: sub(node.loop.until_bash, true) }
+          : {}),
+      },
+    };
+  }
   if (isLoopGroupNode(node)) {
     // Nested loop_group: recurse into the body (each body node gets $LOOP_PREV resolved
     // against the OUTER loop's prior-iteration snapshot; inner-loop refs resolve at the
-    // inner loop's own iteration granularity).
+    // inner loop's own iteration granularity). The inner group's until_bash is likewise
+    // shell-bound and only ever substituted here for OUTER-loop refs.
     return {
       ...node,
       loop_group: {
         ...node.loop_group,
+        ...(node.loop_group.until_bash !== undefined
+          ? { until_bash: sub(node.loop_group.until_bash, true) }
+          : {}),
         nodes: node.loop_group.nodes.map(n =>
-          applyLoopPrevToBodyNode(n, loopPrevOutputs, loopUserInput)
+          applyLoopPrevToBodyNode(n, loopPrevOutputs, loopUserInput, outputFileDir)
         ),
       },
     };
@@ -2723,8 +2744,12 @@ function applyLoopPrevToBodyNode(
     return { ...node, approval: { ...node.approval, message: sub(node.approval.message) } };
   }
   if (isBashNode(node)) return { ...node, bash: sub(node.bash, true) };
-  if (isScriptNode(node)) return { ...node, script: sub(node.script, true) };
-  if (isCancelNode(node)) return { ...node, cancel: sub(node.cancel, true) };
+  // Scripts never pass through a shell (execFile argv) — bash-quoting would inject
+  // literal quote artifacts into TS/Python source. Mirrors executeScriptNode's own
+  // substituteNodeOutputRefs(..., false).
+  if (isScriptNode(node)) return { ...node, script: sub(node.script) };
+  // Cancel reason is display text, never executed — mirrors the normal-path default.
+  if (isCancelNode(node)) return { ...node, cancel: sub(node.cancel) };
   if ('command' in node && typeof node.command === 'string')
     return { ...node, command: sub(node.command) };
   if ('prompt' in node && typeof node.prompt === 'string')
