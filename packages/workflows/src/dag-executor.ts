@@ -2502,7 +2502,14 @@ async function executeLoopGroupNode(
       .map(n => scopedNodeOutputs.get(n.id))
       .find(o => o?.state === 'completed' && o.output.trim().length > 0)?.output;
     const iterationOutput = terminalOutput ?? '';
-    lastIterationOutput = iterationOutput;
+    // Capture the PREVIOUS iteration's (cleaned) output before overwriting — the
+    // until_bash env below exposes it as LOOP_PREV_OUTPUT (previous iteration, same
+    // semantics as executeLoopNode; empty on the first iteration).
+    const prevIterationOutput = lastIterationOutput;
+    // Signal detection uses the raw output; the stored/returned output is stripped of
+    // completion-signal tags so the marker never leaks into $groupId.output (mirrors
+    // executeLoopNode's cleanOutput handling).
+    lastIterationOutput = stripCompletionTags(iterationOutput, group.until);
 
     // Completion gate: until-signal in the terminal output, and/or until_bash exit 0.
     // Short-circuit: if the until-signal already detected completion, skip the
@@ -2540,7 +2547,7 @@ async function executeLoopGroupNode(
             USER_MESSAGE: workflowRun.user_message,
             ARGUMENTS: workflowRun.user_message,
             LOOP_USER_INPUT: i === startIteration ? (loopUserInput ?? '') : '',
-            LOOP_PREV_OUTPUT: iterationOutput,
+            LOOP_PREV_OUTPUT: prevIterationOutput,
             REJECTION_REASON: '',
             CONTEXT: issueContext ?? '',
             EXTERNAL_CONTEXT: issueContext ?? '',
@@ -2551,13 +2558,20 @@ async function executeLoopGroupNode(
         bashComplete = true;
       } catch (e) {
         const bashErr = e as NodeJS.ErrnoException;
-        if (bashErr.code === 'ENOENT' || bashErr.code !== undefined) {
+        // Two distinct events, mirroring executeLoopNode's until_bash handling.
+        if (bashErr.code === 'ENOENT') {
           getLog().warn(
             { err: bashErr, nodeId: node.id, iteration: i },
-            'loop_group_node.until_bash_error'
+            'loop_group_node.until_bash_exec_error'
+          );
+        } else if (bashErr.code !== undefined) {
+          // Log non-ENOENT system errors (syntax errors, permission issues, etc.)
+          getLog().warn(
+            { err: bashErr, nodeId: node.id, iteration: i },
+            'loop_group_node.until_bash_unexpected_error'
           );
         }
-        bashComplete = false;
+        bashComplete = false; // non-zero exit = not complete
       }
     }
 
