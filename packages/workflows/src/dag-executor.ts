@@ -2324,7 +2324,11 @@ async function executeLoopGroupNode(
   // Loop-level session cursor: threaded across iterations when fresh_context is false
   // (so a body AI node resumes the prior iteration's session), reset to undefined when
   // fresh_context is true or on iteration 1. runLayers mutates this in place each call.
-  let loopLastSequentialSessionId: string | undefined;
+  // On interactive resume, restore the cursor persisted at pause time so
+  // fresh_context: false continues the pre-pause conversation (mirrors executeLoopNode).
+  let loopLastSequentialSessionId: string | undefined = isLoopResume
+    ? loopGateMeta.sessionId
+    : undefined;
 
   const logEventStoreError = (err: Error, iteration: number): void => {
     getLog().error({ err, nodeId: node.id, iteration }, 'loop_group_node.iteration_event_failed');
@@ -2419,11 +2423,13 @@ async function executeLoopGroupNode(
       layers: iterBodyLayers,
       nodeOutputs: scopedNodeOutputs,
       priorCompletedNodes: undefined, // body re-runs in full each iteration (v1)
-      // Thread the loop-level session cursor: fresh_context (or iteration 1) starts fresh;
-      // otherwise carry the prior iteration's last sequential session forward so a body AI
-      // node resumes the prior iteration's conversation.
+      // Thread the loop-level session cursor: fresh_context (or the loop's true first
+      // iteration) starts fresh; otherwise carry the prior iteration's last sequential
+      // session forward so a body AI node resumes the prior iteration's conversation.
+      // Gate on the literal i === 1 (not startIteration): on interactive resume the
+      // first processed iteration must continue the restored pre-pause session.
       lastSequentialSessionId:
-        group.fresh_context || i === startIteration ? undefined : loopLastSequentialSessionId,
+        group.fresh_context || i === 1 ? undefined : loopLastSequentialSessionId,
       totalCostUsd: 0,
       totalTokensIn: 0,
       totalTokensOut: 0,
@@ -2631,7 +2637,9 @@ async function executeLoopGroupNode(
         message: group.gate_message,
         type: 'interactive_loop',
         iteration: i,
-        sessionId: undefined,
+        // Persist the body's session cursor so a resumed fresh_context: false loop
+        // continues the pre-pause conversation (restored into the cursor on resume).
+        sessionId: loopLastSequentialSessionId,
       });
       getWorkflowEventEmitter().emit({
         type: 'approval_pending',

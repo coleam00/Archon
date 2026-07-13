@@ -10505,8 +10505,16 @@ describe('executeDagWorkflow -- loop_group node', () => {
       'docs/',
       minimalConfig
     );
-    // Call 1 paused at iteration 1.
+    // Call 1 paused at iteration 1, persisting the body's session cursor so a
+    // fresh_context: false resume can continue the same conversation.
     expect(mockSendQueryDag.mock.calls.length).toBe(1);
+    const pauseCalls1 = (
+      mockDeps1.store.pauseWorkflowRun as Mock<
+        (id: string, ctx: Record<string, unknown>) => Promise<void>
+      >
+    ).mock.calls;
+    expect(pauseCalls1.length).toBe(1);
+    expect(pauseCalls1[0]?.[1]?.sessionId).toBe('lg-resume-sess-1');
 
     // ---- Call 2: resume with metadata.approval carrying iter 1 + user input.
     mockSendQueryDag.mockImplementationOnce(function* () {
@@ -10549,6 +10557,9 @@ describe('executeDagWorkflow -- loop_group node', () => {
     // The resumed iteration's prompt carried the user input via $LOOP_USER_INPUT.
     const resumePrompt = mockSendQueryDag.mock.calls[1][0] as string;
     expect(resumePrompt).toContain('looks great');
+    // fresh_context: false — the resumed iteration continues the PRE-PAUSE session
+    // (restored from ApprovalContext.sessionId), not a fresh one.
+    expect(mockSendQueryDag.mock.calls[1][2]).toBe('lg-resume-sess-1');
     // Resume completed (no second pause at the gate).
     const pauseCalls2 = (
       mockDeps2.store.pauseWorkflowRun as Mock<
