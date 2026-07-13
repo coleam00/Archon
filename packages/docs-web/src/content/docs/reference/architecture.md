@@ -457,7 +457,7 @@ YOUR_ASSISTANT_MODEL=<model-name>
 **Transition triggers** (`packages/core/src/state/session-transitions.ts`):
 - `first-message` - No existing session
 - `plan-to-execute` - Plan phase completed, starting execution (creates new session immediately)
-- `isolation-changed`, `codebase-changed`, `reset-requested`, etc. - Deactivate current session
+- `isolation-changed`, `project-changed`, `reset-requested`, etc. - Deactivate current session
 
 **Orchestrator logic** (`packages/core/src/orchestrator/orchestrator.ts`):
 
@@ -1061,7 +1061,7 @@ remote_agent_conversations
 ├── platform_type (VARCHAR) -- 'web' | 'telegram' | 'github' | 'slack' | 'discord' | 'gitea' | 'gitlab' | 'cli'
 ├── platform_conversation_id (VARCHAR) -- Platform-specific ID
 ├── codebase_id (UUID -> remote_agent_codebases.id)
-├── cwd (VARCHAR) -- Current working directory
+├── cwd (VARCHAR) -- Explicit working-directory override (usually null; worktree path or /setcwd. The effective cwd falls back to codebase.default_cwd)
 ├── ai_assistant_type (VARCHAR) -- LOCKED at creation
 ├── title (VARCHAR) -- User-friendly conversation title (Web UI)
 ├── deleted_at (TIMESTAMP) -- Soft-delete support

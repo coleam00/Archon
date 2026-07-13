@@ -24,6 +24,7 @@ import * as commandHandler from '../handlers/command-handler';
 import { formatToolCall } from '@archon/workflows/utils/tool-formatter';
 import { classifyAndFormatError } from '../utils/error-formatter';
 import { toError } from '../utils/error';
+import { safeDeactivateSession } from '../state/session-transitions';
 import { getAgentProvider, getProviderCapabilities } from '@archon/providers';
 import { buildManageRunTool } from './manage-run-tool';
 import { getArchonWorkspacesPath, ensureArchonWorkspacesPath } from '@archon/paths';
@@ -141,6 +142,59 @@ function resolveModelRequest(
     return { provider: fallbackProvider, model: spec.literal };
   }
   return { provider: spec.provider, model: spec.model, preset: spec };
+}
+
+/**
+ * Resolve the model request for the MAIN chat turn (#1998).
+ *
+ * Model precedence (chat call-site only — workflows keep resolving `large`):
+ *   1. per-user `default_model` — applied only when the user's
+ *      `default_provider` matches the effective provider (a stale pin must
+ *      never ride a different provider). Routed through resolveModelRequest so
+ *      `@alias` and tier refs keep working; an unresolvable ref (e.g. deleted
+ *      alias) degrades to the tier path with a warning instead of failing chat.
+ *   2. tier `large` from CONFIGURED tiers (user > repo > global).
+ *   3. install `assistants.<p>.model` — outranks the BUILT-IN tier default
+ *      only, never a configured tier ('inherit' means "SDK default", skip).
+ *   4. built-in tier default.
+ *
+ * Title generation is NOT routed through this — it keeps the `small` tier.
+ * With no user prefs and no `assistants.<p>.model`, this reduces byte-for-byte
+ * to the previous `resolveModelRequest(aiProfile, 'large', provider)` call.
+ * Exported for tests.
+ */
+export function resolveChatModelRequest(
+  aiProfile: ReturnType<typeof buildAiProfile>,
+  configuredProviderKey: string,
+  userAiPrefs: UserAiPrefs,
+  config: Pick<MergedConfig, 'assistants' | 'tiers'>
+): ResolvedModelRequest {
+  if (
+    userAiPrefs.defaultModel !== undefined &&
+    userAiPrefs.defaultProvider === configuredProviderKey
+  ) {
+    try {
+      return resolveModelRequest(aiProfile, userAiPrefs.defaultModel, configuredProviderKey);
+    } catch (err) {
+      getLog().warn(
+        { err: err as Error, defaultModel: userAiPrefs.defaultModel },
+        'orchestrator.user_default_model_invalid'
+      );
+    }
+  }
+  const request = resolveModelRequest(aiProfile, 'large', configuredProviderKey);
+  if (request.matchedTier === undefined) return request;
+
+  const tierConfigured =
+    config.tiers?.[request.matchedTier] !== undefined ||
+    userAiPrefs.tiers?.[request.matchedTier] !== undefined;
+  if (tierConfigured) return request;
+
+  const installModel = config.assistants[request.provider]?.model;
+  if (typeof installModel === 'string' && installModel !== '' && installModel !== 'inherit') {
+    return { ...request, model: installModel };
+  }
+  return request;
 }
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -1178,6 +1232,9 @@ export async function handleMessage(
 
         if (command === 'setproject') {
           getLog().debug({ command, conversationId }, 'deterministic_command');
+          // Pass the full Conversation — handleSetProject updates by the DB
+          // primary key (conversation.id, not the platform conversation id)
+          // and needs the prior cwd/isolation state for the detach note.
           const result = await handleSetProject(message, conversation);
           await platform.sendMessage(conversationId, result);
           return;
@@ -1384,7 +1441,12 @@ export async function handleMessage(
         repoAliases: config.aliases,
       });
     }
-    const chatRequest = resolveModelRequest(aiProfile, 'large', configuredProviderKey);
+    // Main chat model: per-user default_model > configured `large` tier >
+    // install assistants.<p>.model > built-in tier default (#1998).
+    const chatRequest = resolveChatModelRequest(aiProfile, configuredProviderKey, userAiPrefs, {
+      assistants: config.assistants,
+      tiers: config.tiers,
+    });
     // Tier-fallback nudge (mirrors dag.model_provider_conflict): chat asks for
     // 'large'; when that tier is unset and a sibling preset answered, tell the
     // user ONCE PER CONVERSATION, non-blocking — the dedup Set below is what
@@ -2417,10 +2479,16 @@ async function handleRemoveProject(message: string): Promise<string> {
 }
 
 /**
- * Handle /setproject command.
- * Binds the current conversation to a registered codebase. The project root
- * remains codebase.default_cwd; conversation.cwd is only an explicit runtime
- * override, so switching projects clears it.
+ * Handle /setproject command. Four effects:
+ * 1. Binds the conversation to the resolved codebase (writes `codebase_id`).
+ * 2. Clears `cwd` — the project root remains codebase.default_cwd;
+ *    conversation.cwd is only an explicit runtime override.
+ * 3. Clears `isolation_env_id` — the old project's worktree no longer applies.
+ * 4. Deactivates the active AI session ('project-changed'), so the next
+ *    message starts fresh in the new project's context.
+ * Uses 4-tier fuzzy name resolution (exact → case-insensitive → prefix →
+ * substring) via resolveCodebaseName. Updates by the DB primary key
+ * (conversation.id), never the platform conversation id.
  */
 async function handleSetProject(message: string, conversation: Conversation): Promise<string> {
   const { args } = commandHandler.parseCommand(message);
@@ -2445,28 +2513,40 @@ async function handleSetProject(message: string, conversation: Conversation): Pr
       : `Project "${projectName}" not found. No projects registered — use /register-project.`;
   }
 
+  // Intentionally non-destructive: clearing isolation_env_id detaches the
+  // conversation from its worktree WITHOUT destroying it — the worktree may
+  // hold uncommitted work and the user may switch back (project-switch is not
+  // terminal, unlike conversation-closed). The env row stays active until
+  // /worktree remove or the periodic isolation cleanup reaps it; we surface
+  // that to the user below instead of tearing it down.
+  const detachedWorktree = conversation.isolation_env_id !== null;
   await db.updateConversation(conversation.id, {
     codebase_id: codebase.id,
     cwd: null,
     isolation_env_id: null,
   });
+  if (detachedWorktree) {
+    getLog().info(
+      { conversationId: conversation.id, isolationEnvId: conversation.isolation_env_id },
+      'project.set_worktree_detached'
+    );
+  }
 
   const session = await sessionDb.getActiveSession(conversation.id);
   if (session) {
-    try {
-      await sessionDb.deactivateSession(session.id, 'project-changed');
-    } catch (error) {
-      const err = toError(error);
-      if (err.name !== 'SessionNotFoundError') throw error;
-      getLog().debug({ sessionId: session.id }, 'project.set_session_already_deactivated');
-    }
+    await safeDeactivateSession(session.id, 'setproject');
   }
 
   getLog().info(
     { conversationId: conversation.id, projectName: codebase.name, codebaseId: codebase.id },
     'project.set_completed'
   );
-  return `Project set to **${codebase.name}**\nWorking directory: ${codebase.default_cwd}`;
+  let reply = `Project set to **${codebase.name}**\nWorking directory: ${codebase.default_cwd}`;
+  if (detachedWorktree) {
+    reply +=
+      '\n\nNote: the previous worktree was detached but left in place — remove it with `/worktree remove` or `archon isolation cleanup`.';
+  }
+  return reply;
 }
 
 /**

@@ -558,6 +558,33 @@ describe('CommandHandler', () => {
         const result = await handleCommand(conversation, '/status');
         expect(result.success).toBe(true);
         expect(result.message).toContain('my-repo');
+        // cwd is null → the working directory falls back to the project root
+        // (issue #1993: web-created project conversations have null cwd).
+        expect(result.message).toContain('Working Directory: /workspace/my-repo');
+      });
+
+      test('explicit conversation.cwd wins over the codebase default in the working-directory line', async () => {
+        const conversation = {
+          ...baseConversation,
+          codebase_id: 'cb-123',
+          cwd: '/explicit/worktree',
+        };
+        mockGetCodebase.mockResolvedValue({
+          id: 'cb-123',
+          name: 'my-repo',
+          repository_url: 'https://github.com/user/my-repo',
+          default_cwd: '/workspace/my-repo',
+          ai_assistant_type: 'claude',
+          commands: {},
+          created_at: new Date(),
+          updated_at: new Date(),
+        });
+        mockGetActiveSession.mockResolvedValue(null);
+
+        const result = await handleCommand(conversation, '/status');
+        expect(result.success).toBe(true);
+        expect(result.message).toContain('Working Directory: /explicit/worktree');
+        expect(result.message).not.toContain('Working Directory: /workspace/my-repo');
       });
 
       test('folder project: shows "(folder — no git)", lists child repos, skips worktrees', async () => {
@@ -757,7 +784,34 @@ describe('CommandHandler', () => {
         const result = await handleCommand(baseConversation, '/init');
 
         expect(result.success).toBe(false);
-        expect(result.message).toContain('No working directory set');
+        expect(result.message).toContain('No project selected');
+        expect(result.message).toContain('/setproject');
+      });
+
+      test('explicit conversation.cwd wins over the codebase default', async () => {
+        const conversation = {
+          ...baseConversation,
+          codebase_id: 'cb-123',
+          cwd: '/explicit/worktree',
+        };
+        mockGetCodebase.mockResolvedValue({
+          id: 'cb-123',
+          name: 'my-repo',
+          repository_url: 'https://github.com/user/my-repo',
+          default_cwd: '/workspace/my-repo',
+          default_branch: 'main',
+          ai_assistant_type: 'claude',
+          commands: {},
+          created_at: new Date(),
+          updated_at: new Date(),
+        });
+
+        const result = await handleCommand(conversation, '/init');
+
+        expect(result.success).toBe(true);
+        expect(spyFsMkdir).toHaveBeenCalledWith('/explicit/worktree/.archon/commands', {
+          recursive: true,
+        });
       });
     });
 

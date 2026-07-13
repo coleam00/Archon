@@ -90,11 +90,18 @@ const mockUpdateSession = mock(() => Promise.resolve());
 const mockTransitionSession = mock(() =>
   Promise.resolve({ id: 'session-1', assistant_session_id: null })
 );
+class MockSessionNotFoundError extends Error {
+  constructor(sessionId: string) {
+    super(`Session not found: ${sessionId}`);
+    this.name = 'SessionNotFoundError';
+  }
+}
 mock.module('../db/sessions', () => ({
   getActiveSession: mockGetActiveSession,
   deactivateSession: mockDeactivateSession,
   updateSession: mockUpdateSession,
   transitionSession: mockTransitionSession,
+  SessionNotFoundError: MockSessionNotFoundError,
 }));
 
 const mockParseCommand = mock(
@@ -2962,13 +2969,23 @@ describe('handleMessage — /setproject dispatch', () => {
 
   test('resolves by case-insensitive match', async () => {
     const cb = makeCodebase('My-App');
+    // Distinct DB id vs platform id: proves the update targets conversation.id.
+    mockGetOrCreateConversation.mockImplementation(() =>
+      Promise.resolve(
+        makeConversation({
+          id: 'db-conv-ci',
+          platform_conversation_id: 'conv-1',
+          codebase_id: null,
+        })
+      )
+    );
     mockListCodebases.mockImplementation(() => Promise.resolve([cb]));
     mockParseCommand.mockReturnValue({ command: 'setproject', args: ['my-app'] });
 
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', '/setproject my-app');
 
-    expect(mockUpdateConversation).toHaveBeenCalledWith('conv-1-db', {
+    expect(mockUpdateConversation).toHaveBeenCalledWith('db-conv-ci', {
       codebase_id: 'id-My-App',
       cwd: null,
       isolation_env_id: null,
@@ -2977,13 +2994,22 @@ describe('handleMessage — /setproject dispatch', () => {
 
   test('resolves by prefix match', async () => {
     const cb = makeCodebase('my-website');
+    mockGetOrCreateConversation.mockImplementation(() =>
+      Promise.resolve(
+        makeConversation({
+          id: 'db-conv-px',
+          platform_conversation_id: 'conv-1',
+          codebase_id: null,
+        })
+      )
+    );
     mockListCodebases.mockImplementation(() => Promise.resolve([cb]));
     mockParseCommand.mockReturnValue({ command: 'setproject', args: ['my-web'] });
 
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', '/setproject my-web');
 
-    expect(mockUpdateConversation).toHaveBeenCalledWith('conv-1-db', {
+    expect(mockUpdateConversation).toHaveBeenCalledWith('db-conv-px', {
       codebase_id: 'id-my-website',
       cwd: null,
       isolation_env_id: null,
@@ -2992,13 +3018,22 @@ describe('handleMessage — /setproject dispatch', () => {
 
   test('resolves by substring match', async () => {
     const cb = makeCodebase('archon-my-api');
+    mockGetOrCreateConversation.mockImplementation(() =>
+      Promise.resolve(
+        makeConversation({
+          id: 'db-conv-ss',
+          platform_conversation_id: 'conv-1',
+          codebase_id: null,
+        })
+      )
+    );
     mockListCodebases.mockImplementation(() => Promise.resolve([cb]));
     mockParseCommand.mockReturnValue({ command: 'setproject', args: ['my-api'] });
 
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', '/setproject my-api');
 
-    expect(mockUpdateConversation).toHaveBeenCalledWith('conv-1-db', {
+    expect(mockUpdateConversation).toHaveBeenCalledWith('db-conv-ss', {
       codebase_id: 'id-archon-my-api',
       cwd: null,
       isolation_env_id: null,
@@ -3051,6 +3086,87 @@ describe('handleMessage — /setproject dispatch', () => {
     await handleMessage(platform, 'conv-1', '/setproject my-app');
 
     expect(mockDeactivateSession).toHaveBeenCalledWith('session-123', 'project-changed');
+  });
+
+  test('treats SessionNotFoundError during deactivation as benign (TOCTOU race)', async () => {
+    const cb = makeCodebase('my-app');
+    mockListCodebases.mockImplementation(() => Promise.resolve([cb]));
+    mockParseCommand.mockReturnValue({ command: 'setproject', args: ['my-app'] });
+    mockGetActiveSession.mockImplementation(() =>
+      Promise.resolve({ id: 'session-gone', conversation_id: 'conv-1', active: true })
+    );
+    mockDeactivateSession.mockImplementation(() =>
+      Promise.reject(new MockSessionNotFoundError('session-gone'))
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/setproject my-app');
+
+    // The race is benign: the command still completes and reports success.
+    const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
+      .map(c => String(c[1]))
+      .join('\n');
+    expect(sent).toContain('Project set to');
+  });
+
+  test('rethrows non-SessionNotFoundError deactivation failures', async () => {
+    const cb = makeCodebase('my-app');
+    mockListCodebases.mockImplementation(() => Promise.resolve([cb]));
+    mockParseCommand.mockReturnValue({ command: 'setproject', args: ['my-app'] });
+    mockGetActiveSession.mockImplementation(() =>
+      Promise.resolve({ id: 'session-123', conversation_id: 'conv-1', active: true })
+    );
+    mockDeactivateSession.mockImplementation(() => Promise.reject(new Error('db exploded')));
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/setproject my-app');
+
+    // The failure propagates: no success message is sent.
+    const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
+      .map(c => String(c[1]))
+      .join('\n');
+    expect(sent).not.toContain('Project set to');
+  });
+
+  test('notes the detached worktree in the reply when an isolation env was cleared', async () => {
+    const cb = makeCodebase('my-app');
+    mockGetOrCreateConversation.mockImplementation(() =>
+      Promise.resolve(
+        makeConversation({
+          id: 'db-conv-wt',
+          platform_conversation_id: 'conv-1',
+          codebase_id: 'old-cb',
+          cwd: '/old/worktree',
+          isolation_env_id: 'env-old',
+        })
+      )
+    );
+    mockListCodebases.mockImplementation(() => Promise.resolve([cb]));
+    mockParseCommand.mockReturnValue({ command: 'setproject', args: ['my-app'] });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/setproject my-app');
+
+    const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
+      .map(c => String(c[1]))
+      .join('\n');
+    expect(sent).toContain('Project set to');
+    expect(sent).toContain('previous worktree was detached');
+  });
+
+  test('omits the worktree note when no isolation env was attached', async () => {
+    const cb = makeCodebase('my-app');
+    mockListCodebases.mockImplementation(() => Promise.resolve([cb]));
+    mockParseCommand.mockReturnValue({ command: 'setproject', args: ['my-app'] });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/setproject my-app');
+
+    const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
+      .map(c => String(c[1]))
+      .join('\n');
+    expect(sent).toContain('Project set to');
+    expect(sent).not.toContain('previous worktree');
   });
 
   test('returns not-found message listing available projects', async () => {

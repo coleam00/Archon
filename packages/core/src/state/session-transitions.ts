@@ -1,3 +1,14 @@
+import * as sessionDb from '../db/sessions';
+import { SessionNotFoundError } from '../db/sessions';
+import { createLogger } from '@archon/paths';
+
+/** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
+let cachedLog: ReturnType<typeof createLogger> | undefined;
+function getLog(): ReturnType<typeof createLogger> {
+  if (!cachedLog) cachedLog = createLogger('session-transitions');
+  return cachedLog;
+}
+
 /**
  * Session transition triggers - the single source of truth for what causes session changes.
  *
@@ -89,4 +100,32 @@ export function getTriggerForCommand(commandName: DeactivatingCommand): Transiti
 export function getTriggerForCommand(commandName: string): TransitionTrigger | null;
 export function getTriggerForCommand(commandName: string): TransitionTrigger | null {
   return (COMMAND_TRIGGER_MAP as Record<string, TransitionTrigger>)[commandName] ?? null;
+}
+
+/**
+ * Safely deactivate a session for a deactivating command, with TOCTOU race
+ * handling: between getActiveSession() and deactivateSession(), another
+ * process (cleanup service, concurrent command) may have deleted the row —
+ * deactivateSession throws SessionNotFoundError only when the row no longer
+ * exists (an already-deactivated row still matches). Treat that as benign.
+ *
+ * Single shared implementation for every deactivating command (/reset,
+ * /setproject, /worktree remove) — the trigger is resolved through
+ * COMMAND_TRIGGER_MAP, never hardcoded at call sites.
+ */
+export async function safeDeactivateSession(
+  sessionId: string,
+  commandName: DeactivatingCommand
+): Promise<void> {
+  const trigger = getTriggerForCommand(commandName);
+  try {
+    await sessionDb.deactivateSession(sessionId, trigger);
+    getLog().debug({ sessionId, trigger }, 'session_deactivated');
+  } catch (error) {
+    if (error instanceof SessionNotFoundError) {
+      getLog().debug({ sessionId, trigger }, 'session_deactivate_row_missing');
+    } else {
+      throw error;
+    }
+  }
 }
