@@ -20,6 +20,7 @@ That's what **DAG workflows** (Directed Acyclic Graphs) are for. Instead of a st
 |---------------|--------------|
 | Simple sequence, one after another | Sequential `nodes:` with `depends_on` |
 | Repeat until done | `loop:` node |
+| Repeat a multi-step pipeline until done | `loop_group:` node |
 | Skip a node based on previous output | `when:` condition |
 | Fan out to different handlers based on classified input | `output_format` + `when:` routing |
 | Express exactly which nodes depend on which | `depends_on` edges |

@@ -351,7 +351,7 @@ nodes:
     loop_group:
       until: TESTS_PASS        # completion signal in the body's terminal output
       max_iterations: 5
-      fresh_context: false      # reset body sessions each iteration (default false)
+      fresh_context: false      # false (default) = body AI sessions continue across iterations
       nodes:                    # sealed sub-DAG body — repeats as a unit
         - id: implement
           prompt: Fix the failing tests. Emit TESTS_PASS only when all pass.
@@ -373,7 +373,14 @@ nodes:
 - The body is **sealed**: a body node's `depends_on` may only reference sibling
   body nodes, not outer-DAG nodes. Outer context is still reachable via `$nodeId.output`
   refs in body prompts.
-- Body node events are namespaced `{groupId}.{nodeId}` in the event log.
+- Loop-control events (skip, trigger-rule, `when:` evaluations) are namespaced
+  `{groupId}.{nodeId}` in the event log. Body node **lifecycle** events
+  (`node_started`/`node_completed`/`node_failed`, tool events) currently use the
+  raw body-node id — a known v1 limitation, so expect repeated step names across
+  iterations in the event log.
+- A body node that **fails** fails the whole group immediately with that node's
+  error (no further iterations run) — same semantics as a failed node in a
+  top-level DAG.
 - `$fix-loop.output` (visible to the outer DAG) is the **final iteration's
   terminal-node output**.
 
@@ -415,12 +422,24 @@ than silently degrading).
 difference is the body: `loop` takes a single `prompt`; `loop_group` takes a
 `nodes` array.
 
+Unlike `loop:` (where node-level `model`/`provider` are ignored at runtime),
+`model` and `provider` set on a `loop_group` node **are honored**: they become
+the default for every body AI node, overridable per body node.
+
 ### Resume
 
-Resuming a paused `loop_group` (interactive gate, or a cancelled/restarted run)
-**re-runs the current iteration's whole body** in full — the same model as a
-`loop` node re-running its current iteration. Per-body-node resume granularity
-is not supported in v1.
+Two distinct cases:
+
+- **Interactive-gate resume** (`/workflow approve <id>`): the loop continues
+  with the **next** iteration's whole body. With `fresh_context: false`, the
+  body's AI session continues from where it paused (the session cursor is
+  persisted across the gate). `$LOOP_PREV.*` refs, however, resolve to an empty
+  string on the first resumed iteration — the prior iteration's body-output
+  snapshot is **not** carried across the gate (same caveat as
+  [`$LOOP_PREV_OUTPUT`](#retry-on-failure-with-loop_prev_output)).
+- **Failure resume** (`/workflow resume <id>` after a crash/failure): there is
+  no persisted iteration cursor — the loop_group node restarts from
+  **iteration 1**. Per-body-node resume granularity is not supported in v1.
 
 ### What is NOT supported on loop_group nodes (v1)
 
@@ -430,6 +449,8 @@ is not supported in v1.
 - Per-body-node resume (skip-to-failed-body-node) — the whole iteration re-runs.
 - `$LOOP_PREV.<id>.output[N]` history indexing — only the immediately prior
   iteration is reachable.
+- `$LOOP_PREV.*` across an interactive pause/resume boundary — resolves to an
+  empty string on the resumed iteration.
 
 Nested `loop_group` inside a `loop_group` body is supported by construction
 (the body is a normal `nodes` array), but is not hardened in v1.
