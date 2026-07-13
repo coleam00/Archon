@@ -686,6 +686,48 @@ describe('executeWorkflow', () => {
   });
 
   // -------------------------------------------------------------------------
+  // Scope artifacts dir threading (#1846)
+  // -------------------------------------------------------------------------
+
+  describe('scope artifacts dir threading', () => {
+    it('threads scopeArtifactsDir into executeDagWorkflow for persist_session workflows', async () => {
+      const store = makeStore();
+      const deps = makeDeps(store);
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow({ nodes: [{ id: 'node1', prompt: 'Do something', persist_session: true }] }),
+        'test message',
+        'db-conv-1'
+      );
+      // Positional arg 19 = scopeArtifactsDir (after workflowPreset). Root is the
+      // cwd fallback (.archon/artifacts); scope = workflow name + conversation UUID
+      // ('conv-1' from the createWorkflowRun mock; getScopeArtifactsPath is mocked
+      // to `${root}/scopes/${wf}/${scope}`).
+      const scopeArg = mockExecuteDagWorkflow.mock.calls[0]?.[19] as string | undefined;
+      expect(scopeArg).toBe(`${join('/tmp', '.archon', 'artifacts')}/scopes/test-workflow/conv-1`);
+    });
+
+    it('passes undefined scopeArtifactsDir when the workflow uses no session persistence', async () => {
+      const store = makeStore();
+      const deps = makeDeps(store);
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1'
+      );
+      const scopeArg = mockExecuteDagWorkflow.mock.calls[0]?.[19] as string | undefined;
+      expect(scopeArg).toBeUndefined();
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // Pre-created run (uses existing row but still runs guards)
   // -------------------------------------------------------------------------
 

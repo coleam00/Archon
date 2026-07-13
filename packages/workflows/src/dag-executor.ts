@@ -3643,9 +3643,8 @@ async function executeApprovalNode(
  * True when a node participates in cross-run session persistence: a command/prompt
  * node (see {@link isPersistableNode}) that hasn't opted out via `context: 'fresh'`,
  * with `persist_session: true` set directly or inherited from the workflow-level
- * `persist_sessions` default. Mirrors the executor's `effectivePersist` +
- * `bypassesPersistence` gates so the scope-artifact mirror targets exactly the
- * nodes whose sessions are persisted.
+ * `persist_sessions` default. Single source of truth for both the session
+ * lookup/persist gates and the #1846 scope-artifact mirror.
  */
 function nodeUsesPersistedScope(node: DagNode, workflowPersistSessions: boolean): boolean {
   if (!isPersistableNode(node)) return false;
@@ -3671,7 +3670,7 @@ async function buildColdResumeRecoveryPointer(
   try {
     const priorArtifacts = (await readNodeArtifacts(scopeArtifactsDir))
       .filter(entry => entry.runId !== currentRunId)
-      .sort((a, b) => (a.producedAt < b.producedAt ? 1 : -1));
+      .sort((a, b) => b.producedAt.localeCompare(a.producedAt));
     if (priorArtifacts.length === 0) return '';
     const lines = priorArtifacts.map(
       entry =>
@@ -4185,20 +4184,18 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
           // Parallel layers always get fresh sessions; explicit 'fresh' context also forces it.
           // 'shared' forces continuation. Default: fresh for parallel, inherited for sequential.
           // isFreshSequential controls in-run threading (lastSequentialSessionId).
-          // bypassesPersistence (context:'fresh' only) also disables cross-run persist_session;
-          // a parallel-layer node CAN still use persist_session — it just doesn't share with siblings.
           const isFreshSequential = isParallelLayer || node.context === 'fresh';
-          const bypassesPersistence = node.context === 'fresh';
           let resumeSessionId: string | undefined = isFreshSequential
             ? undefined
             : ctx.lastSequentialSessionId;
 
-          const nodePersistFlag = 'persist_session' in node ? node.persist_session : undefined;
-          // Strictly opt-in: off unless the node sets persist_session, or the workflow
-          // sets persist_sessions and the node doesn't override it to false.
-          const effectivePersist: boolean = nodePersistFlag ?? workflowPersistSessions;
+          // Strictly opt-in: on only when the node sets persist_session (or inherits the
+          // workflow-level persist_sessions default) and doesn't opt out via context:'fresh'.
+          // A parallel-layer node CAN still use persist_session — it just doesn't share
+          // with siblings. Same predicate gates the scope-artifact mirror below.
+          const usesPersistedScope = nodeUsesPersistedScope(node, workflowPersistSessions);
 
-          if (effectivePersist && !bypassesPersistence) {
+          if (usesPersistedScope) {
             // Runtime capability guard via the resolved provider instance (catches the
             // case where provider was resolved from .archon/config.yaml defaults).
             // Uses the instance's getCapabilities() rather than the static registry so
@@ -4382,12 +4379,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
 
           // Persist (or drop) the node's provider session ID for the next run in this scope.
           // context:'fresh' nodes are excluded (the author opted out of any cross-run memory).
-          if (
-            effectivePersist &&
-            !bypassesPersistence &&
-            persistScopeKey &&
-            output.state === 'completed'
-          ) {
+          if (usesPersistedScope && persistScopeKey && output.state === 'completed') {
             try {
               if (output.sessionId !== undefined) {
                 await deps.store.upsertWorkflowNodeSession({
