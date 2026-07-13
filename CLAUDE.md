@@ -522,7 +522,7 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 
 **2. Command Handler** (`packages/core/src/handlers/`)
 - Process slash commands (deterministic, no AI)
-- The orchestrator treats only these top-level commands as deterministic: `/help`, `/status`, `/reset`, `/workflow`, `/register-project`, `/update-project`, `/remove-project`, `/commands`, `/init`, `/worktree`
+- The orchestrator treats only these top-level commands as deterministic: `/help`, `/status`, `/reset`, `/workflow`, `/register-project`, `/update-project`, `/remove-project`, `/setproject`, `/commands`, `/init`, `/worktree`
 - `/workflow` handles subcommands like `list`, `run`, `status`, `cancel`, `resume`, `abandon`, `approve`, `reject`, `reset-sessions`
 - Update database, perform operations, return responses
 
