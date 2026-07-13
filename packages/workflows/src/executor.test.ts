@@ -4,6 +4,7 @@
  * that the inner dag-executor.test.ts cannot reach.
  */
 import { describe, it, expect, mock, beforeEach } from 'bun:test';
+import { join } from 'path';
 
 // --- Mock logger ---
 const mockLogFn = mock(() => {});
@@ -1418,8 +1419,10 @@ describe('resolveProjectPaths', () => {
 
     const result = await resolveProjectPaths(deps, '/some/cwd', RUN_ID, 'missing-id');
 
-    expect(result.artifactsDir).toBe('/some/cwd/.archon/artifacts/runs/run-xyz');
-    expect(result.logDir).toBe('/some/cwd/.archon/logs');
+    // The fallback uses the real join(), so build expectations with join() too
+    // (on Windows the separators differ from the POSIX literals).
+    expect(result.artifactsDir).toBe(join('/some/cwd', '.archon', 'artifacts', 'runs', RUN_ID));
+    expect(result.logDir).toBe(join('/some/cwd', '.archon', 'logs'));
   });
 
   it('falls back to cwd-based paths when no codebaseId is provided', async () => {
@@ -1427,7 +1430,7 @@ describe('resolveProjectPaths', () => {
 
     const result = await resolveProjectPaths(deps, '/some/cwd', RUN_ID);
 
-    expect(result.artifactsDir).toBe('/some/cwd/.archon/artifacts/runs/run-xyz');
-    expect(result.logDir).toBe('/some/cwd/.archon/logs');
+    expect(result.artifactsDir).toBe(join('/some/cwd', '.archon', 'artifacts', 'runs', RUN_ID));
+    expect(result.logDir).toBe(join('/some/cwd', '.archon', 'logs'));
   });
 });

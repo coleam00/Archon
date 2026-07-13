@@ -1,4 +1,5 @@
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
+import { join } from 'path';
 import { createQueryResult, mockPostgresDialect } from '../test/mocks/database';
 import { Codebase } from '../types';
 
@@ -158,43 +159,48 @@ describe('codebases', () => {
   });
 
   describe('findCodebaseByPathPrefix', () => {
+    // Build fixture paths with join() so they use the platform separator —
+    // stored default_cwd values come from resolve()/realpath() and are always
+    // platform-native, and the implementation compares against path.sep.
+    // Hardcoded POSIX literals fail the boundary check on Windows.
+    const P = (...segments: string[]): string => join('/x', ...segments);
     const rows = [
-      { ...mockCodebase, id: 'plat', default_cwd: '/x/platform' },
-      { ...mockCodebase, id: 'stag', default_cwd: '/x/platform-staging' },
-      { ...mockCodebase, id: 'under', default_cwd: '/x/my_app' },
-      { ...mockCodebase, id: 'svc', default_cwd: '/x/platform/svc-a' },
+      { ...mockCodebase, id: 'plat', default_cwd: P('platform') },
+      { ...mockCodebase, id: 'stag', default_cwd: P('platform-staging') },
+      { ...mockCodebase, id: 'under', default_cwd: P('my_app') },
+      { ...mockCodebase, id: 'svc', default_cwd: P('platform', 'svc-a') },
     ];
 
     test('matches an exact default_cwd', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult(rows));
-      const result = await findCodebaseByPathPrefix('/x/platform');
+      const result = await findCodebaseByPathPrefix(P('platform'));
       expect(result?.id).toBe('plat');
     });
 
     test('matches an ancestor directory on a separator boundary', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult(rows));
-      // '/x/platform/svc-a/deep' → most-specific ancestor is the svc-a row
-      const result = await findCodebaseByPathPrefix('/x/platform/svc-a/deep');
+      // …/platform/svc-a/deep → most-specific ancestor is the svc-a row
+      const result = await findCodebaseByPathPrefix(P('platform', 'svc-a', 'deep'));
       expect(result?.id).toBe('svc');
     });
 
     test('does NOT match a sibling that merely shares a name prefix', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult(rows));
-      // '/x/platform-staging' must NOT resolve to '/x/platform' (the old LIKE bug)
-      const result = await findCodebaseByPathPrefix('/x/platform-staging');
+      // …/platform-staging must NOT resolve to …/platform (the old LIKE bug)
+      const result = await findCodebaseByPathPrefix(P('platform-staging'));
       expect(result?.id).toBe('stag');
     });
 
     test('does NOT treat an underscore in default_cwd as a wildcard', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult(rows));
-      // '/x/myXapp' would match '/x/my_app' under SQL LIKE (_ = any char); it must not.
-      const result = await findCodebaseByPathPrefix('/x/myXapp');
+      // …/myXapp would match …/my_app under SQL LIKE (_ = any char); it must not.
+      const result = await findCodebaseByPathPrefix(P('myXapp'));
       expect(result).toBeNull();
     });
 
     test('returns null when no codebase is an ancestor', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult(rows));
-      const result = await findCodebaseByPathPrefix('/y/unrelated');
+      const result = await findCodebaseByPathPrefix(join('/y', 'unrelated'));
       expect(result).toBeNull();
     });
 
