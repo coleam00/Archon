@@ -9828,6 +9828,10 @@ describe('executeDagWorkflow -- loop_group node', () => {
     // The body is a pure bash node that increments a counter file each iteration;
     // until_bash exits 0 once the counter reaches 2. No AI node → sendQuery unused.
     const counterFile = join(testDir, 'iter-counter');
+    // The path is interpolated into REAL bash scripts: on Windows, join() yields
+    // backslashes that bash strips as escapes. Use forward slashes + quoting so
+    // the script is valid on every platform (git-bash accepts D:/-style paths).
+    const counterRef = `"${counterFile.replace(/\\/g, '/')}"`;
 
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();
@@ -9840,11 +9844,11 @@ describe('executeDagWorkflow -- loop_group node', () => {
           until: 'NEVER_EMITTED', // rely on until_bash, not the signal
           max_iterations: 5,
           fresh_context: false,
-          until_bash: `test "$(cat ${counterFile} 2>/dev/null || echo 0)" -ge 2`,
+          until_bash: `test "$(cat ${counterRef} 2>/dev/null || echo 0)" -ge 2`,
           nodes: [
             {
               id: 'bump',
-              bash: `n=$(cat ${counterFile} 2>/dev/null || echo 0); echo $((n+1)) > ${counterFile}; echo "iter $((n+1))"`,
+              bash: `n=$(cat ${counterRef} 2>/dev/null || echo 0); echo $((n+1)) > ${counterRef}; echo "iter $((n+1))"`,
               depends_on: [],
             },
           ],
