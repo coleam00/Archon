@@ -1,5 +1,6 @@
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
-import { mkdtemp, rm, realpath } from 'fs/promises';
+import { mkdtemp, rm } from 'fs/promises';
+import { realpathSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { MockPlatformAdapter } from '../test/mocks/platform';
@@ -1486,7 +1487,10 @@ describe('orchestrator-agent handleMessage', () => {
       // definitive "not a git repository" path (deterministic) — not the
       // exception-fallback branch a fake/nonexistent path would take.
       const projectPath = await mkdtemp(join(tmpdir(), 'archon-register-folder-'));
-      const canonicalPath = await realpath(projectPath);
+      // Build the expectation with the SAME canonicalization the product uses
+      // (realpathSync from 'fs'). fs/promises.realpath differs on Windows 8.3
+      // short names (RUNNER~1 vs runneradmin), so mixing the two flakes there.
+      const canonicalPath = realpathSync(projectPath);
       try {
         mockExistsSync.mockReturnValue(true);
         mockListCodebases.mockResolvedValue([]);
@@ -1516,9 +1520,11 @@ describe('orchestrator-agent handleMessage', () => {
 
     test('/register-project stores detected current branch', async () => {
       const projectPath = await mkdtemp(join(tmpdir(), 'archon-register-project-'));
-      // handleRegisterProject canonicalizes via realpath (macOS tmpdir lives under
-      // /var → /private/var), so the stored default_cwd is the realpath'd path.
-      const canonicalPath = await realpath(projectPath);
+      // handleRegisterProject canonicalizes via realpathSync (macOS tmpdir lives
+      // under /var → /private/var), so the stored default_cwd is the realpath'd
+      // path. Use the SAME function as the product — fs/promises.realpath differs
+      // on Windows 8.3 short names.
+      const canonicalPath = realpathSync(projectPath);
       try {
         await Bun.spawn(['git', 'init', '-b', 'develop'], { cwd: projectPath }).exited;
         await Bun.spawn(['git', 'commit', '--allow-empty', '-m', 'init'], {
