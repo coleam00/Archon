@@ -686,6 +686,31 @@ If the stored session is gone (Codex thread expired, Pi JSONL missing or moved, 
 
 The node still completes on that fresh session, and its new session id is persisted so the *next* run continues from it. The node is **not** re-run — the fresh session is already a clean start, so re-running would only repeat it. Expect this only for `persist_session` nodes whose prior session became unavailable; warm resumes and first-time runs are unaffected.
 
+#### By-reference recovery via scope artifacts
+
+A lost session doesn't have to mean lost context. Workflows that use `persist_session` also get a **stable cross-invocation artifact scope** at `scopes/<workflow>/<scope>/` (a sibling of the per-run `runs/<id>/` directory, under the same artifacts root; the scope is the conversation UUID — the same key sessions use). Whenever a persistence-participating node also declares an `output_type`, the engine mirrors its typed output sidecar (`nodes/<id>.md` + `nodes/<id>.meta.json`) into that scope directory in addition to the run directory.
+
+On a cold resume, the warning then goes further: if the scope directory holds typed artifacts from an *earlier* invocation, the message lists them **by reference** (file paths — never pasted content), so the recovered context can be read on demand:
+
+> Artifacts from the previous invocation are available for recovery (read on demand):
+> - plan: `~/.archon/workspaces/acme/widget/artifacts/scopes/feature-dev/<conversation>/nodes/planner.md`
+
+To opt in to recovery, give your `persist_session` nodes an `output_type`:
+
+```yaml
+nodes:
+  - id: planner
+    prompt: "Plan the implementation for: $ARGUMENTS"
+    persist_session: true
+    output_type: plan   # mirrored to the durable scope → recoverable after a cold resume
+```
+
+Notes:
+
+- **Opt-in only.** Workflows without `persist_session` get no scope directory, no mirroring, and no pointer — default behavior is unchanged. Persist nodes without `output_type` keep session continuity but leave nothing behind for recovery.
+- **Last writer wins.** Concurrent runs of the same workflow in the same scope write per-node files into the shared scope directory; the most recent run's output for a given node is what a later cold resume sees.
+- **CLI caveat.** Each `archon workflow run` mints a fresh conversation UUID (a fresh scope) unless you pass `--conversation-id <id>` — the same caveat as session persistence itself.
+
 ### Distinct from `AgentRequestOptions.persistSession`
 
 The Claude Agent SDK also has a `persistSession` flag controlling whether the SDK writes its session transcript to disk. That is a *different* concept — local file persistence inside the SDK. This `persist_session:` field is about Archon's database-stored cross-run session ID for workflow nodes. The two operate at different layers and don't conflict.
