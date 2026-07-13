@@ -102,19 +102,7 @@ function buildSubprocessEnv(): NodeJS.ProcessEnv {
     { authMode },
     authMode === 'global' ? 'using_global_auth' : 'using_explicit_tokens'
   );
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  // CLAUDE_API_KEY is Archon's variable name; the Claude Code CLI only reads
-  // ANTHROPIC_API_KEY. Mirror it so solo .env installs work (delivery.ts sets
-  // both for the per-user path). OAuth token takes precedence — do not inject
-  // an API key alongside it, and never clobber an explicit ANTHROPIC_API_KEY.
-  if (
-    process.env.CLAUDE_API_KEY &&
-    !process.env.ANTHROPIC_API_KEY &&
-    !process.env.CLAUDE_CODE_OAUTH_TOKEN
-  ) {
-    env.ANTHROPIC_API_KEY = process.env.CLAUDE_API_KEY;
-  }
-  return env;
+  return { ...process.env };
 }
 
 /** Max retries for transient subprocess failures */
@@ -989,6 +977,19 @@ export class ClaudeProvider implements IAgentProvider {
     // Build subprocess env once (avoids re-logging auth mode per retry)
     const subprocessEnv = buildSubprocessEnv();
     const env = requestOptions?.env ? { ...subprocessEnv, ...requestOptions.env } : subprocessEnv;
+    // CLAUDE_API_KEY is Archon's variable name; the Claude Code CLI only reads
+    // ANTHROPIC_API_KEY, so mirror it or solo .env installs never authenticate
+    // (delivery.ts sets both vars on the per-user api_key path). Guarded on the
+    // MERGED env, not process.env: a per-request CLAUDE_CODE_OAUTH_TOKEN (per-user
+    // subscription delivered via requestOptions.env) must stay authoritative —
+    // the CLI prefers ANTHROPIC_API_KEY over the OAuth token, so injecting the
+    // install key alongside it would silently rebill the run. Truthiness is
+    // intentional: empty string = missing credential. Never clobbers an
+    // explicit ANTHROPIC_API_KEY.
+    if (env.CLAUDE_API_KEY && !env.ANTHROPIC_API_KEY && !env.CLAUDE_CODE_OAUTH_TOKEN) {
+      env.ANTHROPIC_API_KEY = env.CLAUDE_API_KEY;
+      getLog().debug('using_mirrored_api_key');
+    }
 
     // Apply nodeConfig translation once (deterministic, not retry-dependent)
     // We need a throwaway Options to extract warnings from applyNodeConfig,
