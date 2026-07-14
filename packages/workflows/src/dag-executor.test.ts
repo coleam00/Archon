@@ -56,6 +56,7 @@ import {
   executeDagWorkflow,
 } from './dag-executor';
 import { writeNodeArtifact } from './artifacts-index';
+import { getWorkflowEventEmitter, type WorkflowEmitterEvent } from './event-emitter';
 import { loadMcpConfig } from '@archon/providers/mcp/config';
 import type { DagNode, BashNode, ScriptNode, NodeOutput, WorkflowRun } from './schemas';
 import { discoverWorkflows } from './workflow-discovery';
@@ -11428,5 +11429,326 @@ describe('executeDagWorkflow -- loop_group node', () => {
     const written = await readFile(join(artifactsDir, 'nodes', 'producer.md'), 'utf8');
     expect(written).toContain('final result v2');
     expect(written).not.toContain('draft v1');
+  });
+});
+
+// #2090: loop_group body lifecycle events must carry a namespaced persisted `step_name`
+// (`<groupId>.<nodeId>`, composing across nested groups) plus the current `iteration`, while
+// the in-process emitter payloads stay raw. Top-level DAG events are unchanged (bare id).
+describe('executeDagWorkflow -- loop_group body step_name namespacing (#2090)', () => {
+  let testDir: string;
+
+  /** All persisted createWorkflowEvent payloads for a store mock. */
+  type PersistedEvent = { event_type: string; step_name?: string; data?: Record<string, unknown> };
+  const persistedEvents = (store: IWorkflowStore): PersistedEvent[] =>
+    (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls.map(
+      c => c[0] as PersistedEvent
+    );
+  const eventsWith = (
+    store: IWorkflowStore,
+    eventType: string,
+    stepName: string
+  ): PersistedEvent[] =>
+    persistedEvents(store).filter(e => e.event_type === eventType && e.step_name === stepName);
+
+  beforeEach(async () => {
+    testDir = join(tmpdir(), `dag-lg-ns-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await mkdir(join(testDir, '.archon', 'commands'), { recursive: true });
+    mockSendQueryDag.mockClear();
+    mockGetAgentProviderDag.mockClear();
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+  });
+
+  afterEach(async () => {
+    try {
+      await rm(testDir, { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
+  });
+
+  it('namespaces body node lifecycle step_name and tags iteration; top-level node stays bare', async () => {
+    // `work` (AI) does not emit DONE on iteration 1, emits it on iteration 2 → 2 iterations.
+    let calls = 0;
+    mockSendQueryDag.mockImplementation(function* () {
+      calls++;
+      yield {
+        type: 'assistant',
+        content: calls === 1 ? 'still working' : 'finished\nDONE',
+      };
+      yield { type: 'result', sessionId: `s-${calls}` };
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('lg-ns-run');
+
+    const nodes: DagNode[] = [
+      // Top-level bash node — its events must NOT be namespaced and must NOT carry iteration.
+      { id: 'setup', bash: 'echo ready', depends_on: [] },
+      {
+        id: 'fixer',
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 5,
+          fresh_context: false,
+          nodes: [{ id: 'work', prompt: 'do work, emit DONE when done', depends_on: [] }],
+        },
+        depends_on: ['setup'],
+      },
+    ];
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-lg',
+      testDir,
+      { name: 'lg-ns', nodes },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(calls).toBe(2);
+
+    // Body node events are namespaced `<groupId>.<nodeId>`.
+    const bodyStarted = eventsWith(store, 'node_started', 'fixer.work');
+    const bodyCompleted = eventsWith(store, 'node_completed', 'fixer.work');
+    expect(bodyStarted.length).toBe(2); // one per iteration
+    expect(bodyCompleted.length).toBe(2);
+    // Each body lifecycle event carries the iteration it ran in.
+    expect(bodyStarted.map(e => e.data?.iteration).sort()).toEqual([1, 2]);
+    expect(bodyCompleted.map(e => e.data?.iteration).sort()).toEqual([1, 2]);
+
+    // The raw (un-namespaced) body id must NEVER appear as a persisted step_name.
+    expect(persistedEvents(store).some(e => e.step_name === 'work')).toBe(false);
+
+    // The group node's OWN events keep the bare group id (they are not body events).
+    expect(eventsWith(store, 'node_completed', 'fixer').length).toBeGreaterThanOrEqual(1);
+    expect(eventsWith(store, 'loop_iteration_started', 'fixer').length).toBe(2);
+
+    // Top-level node keeps its bare id and carries no `iteration` tag.
+    const setupStarted = eventsWith(store, 'node_started', 'setup');
+    expect(setupStarted.length).toBe(1);
+    expect(setupStarted[0].data?.iteration).toBeUndefined();
+    expect(eventsWith(store, 'node_completed', 'setup').length).toBe(1);
+  });
+
+  it('composes the prefix across nested loop_groups (<outer>.<inner>.<leaf>)', async () => {
+    // Inner group completes in 1 iteration (INNER_DONE); outer completes when review emits
+    // OUTER_DONE. Mirrors the EDGE H harness above.
+    let calls = 0;
+    mockSendQueryDag.mockImplementation(function* () {
+      calls++;
+      yield {
+        type: 'assistant',
+        content: calls === 1 ? 'inner work\nINNER_DONE' : 'outer review\nOUTER_DONE',
+      };
+      yield { type: 'result', sessionId: `s-${calls}` };
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('lg-nested-ns');
+
+    const nodes: DagNode[] = [
+      {
+        id: 'outer',
+        loop_group: {
+          until: 'OUTER_DONE',
+          max_iterations: 3,
+          fresh_context: false,
+          nodes: [
+            {
+              id: 'inner',
+              loop_group: {
+                until: 'INNER_DONE',
+                max_iterations: 2,
+                fresh_context: false,
+                nodes: [{ id: 'leaf', prompt: 'inner work, emit INNER_DONE', depends_on: [] }],
+              },
+              depends_on: [],
+            },
+            { id: 'review', prompt: 'review, emit OUTER_DONE', depends_on: ['inner'] },
+          ],
+        },
+        depends_on: [],
+      },
+    ];
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-lg',
+      testDir,
+      { name: 'lg-nested-ns', nodes },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(calls).toBe(2);
+
+    // Deepest body node composes both enclosing group ids.
+    expect(eventsWith(store, 'node_completed', 'outer.inner.leaf').length).toBeGreaterThanOrEqual(
+      1
+    );
+    // The inner group's OWN events are namespaced by the outer group only.
+    expect(
+      eventsWith(store, 'loop_iteration_started', 'outer.inner').length
+    ).toBeGreaterThanOrEqual(1);
+    // The outer body's sibling AI node is namespaced by the outer group.
+    expect(eventsWith(store, 'node_completed', 'outer.review').length).toBeGreaterThanOrEqual(1);
+    // No un-namespaced leaf/review rows leak.
+    expect(persistedEvents(store).some(e => e.step_name === 'leaf')).toBe(false);
+    expect(persistedEvents(store).some(e => e.step_name === 'review')).toBe(false);
+  });
+
+  it('keeps the in-process emitter payload raw (unprefixed nodeId) for body events', async () => {
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'done\nDONE' };
+      yield { type: 'result', sessionId: 's-1' };
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('lg-emit-raw');
+
+    const captured: WorkflowEmitterEvent[] = [];
+    const unsubscribe = getWorkflowEventEmitter().subscribe(e => {
+      if (e.runId === workflowRun.id) captured.push(e);
+    });
+
+    try {
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-lg',
+        testDir,
+        {
+          name: 'lg-emit-raw',
+          nodes: [
+            {
+              id: 'fixer',
+              loop_group: {
+                until: 'DONE',
+                max_iterations: 3,
+                fresh_context: false,
+                nodes: [{ id: 'work', prompt: 'do work, emit DONE', depends_on: [] }],
+              },
+              depends_on: [],
+            },
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+    } finally {
+      unsubscribe();
+    }
+
+    // The live emitter carries the RAW body node id (consumers key off this) — never `fixer.work`.
+    const bodyCompleted = captured.filter(
+      e => e.type === 'node_completed' && 'nodeId' in e && e.nodeId === 'work'
+    );
+    expect(bodyCompleted.length).toBeGreaterThanOrEqual(1);
+    expect(
+      captured.some(e => 'nodeId' in e && (e as { nodeId?: string }).nodeId === 'fixer.work')
+    ).toBe(false);
+  });
+
+  it('resume: a namespaced body key in priorCompletedNodes cannot skip a top-level node', async () => {
+    // Simulate a resume where a prior run's loop_group completed: the map holds the group id
+    // AND a namespaced body key. The group must be skipped as a unit (body does NOT re-run),
+    // and the un-namespaced body key must NOT be mistaken for the still-pending top-level node.
+    let calls = 0;
+    mockSendQueryDag.mockImplementation(function* () {
+      calls++;
+      yield { type: 'assistant', content: 'finalize output' };
+      yield { type: 'result', sessionId: `s-${calls}` };
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('lg-resume');
+
+    const priorCompletedNodes = new Map<string, string>([
+      ['fixer', 'group output from prior run'],
+      ['fixer.work', 'body output from prior run'],
+    ]);
+
+    const nodes: DagNode[] = [
+      {
+        id: 'fixer',
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 5,
+          fresh_context: false,
+          nodes: [{ id: 'work', prompt: 'do work, emit DONE', depends_on: [] }],
+        },
+        depends_on: [],
+      },
+      { id: 'finalize', prompt: 'finalize using $fixer.output', depends_on: ['fixer'] },
+    ];
+
+    let finalizePrompt = '';
+    mockSendQueryDag.mockImplementation(function* (prompt: string) {
+      calls++;
+      finalizePrompt = prompt;
+      yield { type: 'assistant', content: 'finalize output' };
+      yield { type: 'result', sessionId: `s-${calls}` };
+    });
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-lg',
+      testDir,
+      { name: 'lg-resume', nodes },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      priorCompletedNodes
+    );
+
+    // Only `finalize` executes: the loop_group `fixer` was skipped as a unit (body never
+    // re-ran), and the namespaced `fixer.work` key skipped nothing at the top level.
+    expect(calls).toBe(1);
+    // The skipped group's pre-populated output flows into the still-running downstream node.
+    expect(finalizePrompt).toContain('group output from prior run');
+    // The group was skipped via its own id, and finalize genuinely ran.
+    expect(eventsWith(store, 'node_skipped_prior_success', 'fixer').length).toBe(1);
+    expect(eventsWith(store, 'node_completed', 'finalize').length).toBe(1);
   });
 });
