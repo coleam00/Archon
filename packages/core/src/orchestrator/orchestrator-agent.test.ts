@@ -1402,16 +1402,18 @@ describe('workflow dispatch routing — interactive flag', () => {
     return makeConversation({ codebase_id: 'codebase-1' });
   }
 
-  function makeDispatchCodebase() {
+  function makeDispatchCodebase(overrides: { default_branch?: string | null } = {}) {
     return {
       id: 'codebase-1',
       name: 'test-repo',
       repository_url: null,
       default_cwd: '/repos/test-repo',
+      default_branch: null,
       ai_assistant_type: 'claude' as const,
       commands: {},
       created_at: new Date(),
       updated_at: new Date(),
+      ...overrides,
     };
   }
 
@@ -1470,7 +1472,9 @@ describe('workflow dispatch routing — interactive flag', () => {
 
   test('calls executeWorkflow (not dispatchBackground) for interactive workflow on web', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
-    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockGetCodebase.mockReturnValueOnce(
+      Promise.resolve(makeDispatchCodebase({ default_branch: 'develop' }))
+    );
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
 
     const platform = makePlatform(); // getPlatformType returns 'web'
@@ -1482,8 +1486,13 @@ describe('workflow dispatch routing — interactive flag', () => {
     // as opts.parentConversationId so the approve/reject API handlers can
     // dispatch resume back through the orchestrator.
     const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
-    const opts = callArgs[callArgs.length - 1] as { parentConversationId?: string };
+    const opts = callArgs[callArgs.length - 1] as {
+      parentConversationId?: string;
+      baseBranch?: string;
+    };
     expect(opts.parentConversationId).toBe('conv-1-db');
+    // The codebase's stored default branch rides along as the $BASE_BRANCH fallback.
+    expect(opts.baseBranch).toBe('develop');
   });
 
   test('failed_resume_user_prompted: failed runs are not auto-resumed', async () => {

@@ -324,6 +324,12 @@ export type ExecuteWorkflowOptions = ResumePayload & {
   /** Codebase ID for env vars + isolation context. */
   codebaseId?: string;
   /**
+   * Caller-provided base branch fallback for `$BASE_BRANCH`, normally the
+   * codebase's stored `default_branch`. Repo config still wins when
+   * `worktree.baseBranch` is set; git auto-detection remains the last resort.
+   */
+  baseBranch?: string;
+  /**
    * GitHub issue/PR context. When provided:
    * - Stored in `WorkflowRun.metadata` as `{ github_context }`
    * - Substituted into `$CONTEXT` / `$EXTERNAL_CONTEXT` / `$ISSUE_CONTEXT` variables
@@ -420,6 +426,7 @@ export async function executeWorkflow(
     priorCompletedNodes,
     userId,
     source,
+    baseBranch: callerBaseBranch,
   } = opts;
   // Load config once for the entire workflow execution
   const fileConfig = await deps.loadConfig(cwd);
@@ -445,11 +452,15 @@ export async function executeWorkflow(
   };
   const configuredCommandFolder = config.commands.folder;
 
-  // Auto-detect base branch when not configured. Config takes priority.
+  // Resolve base branch: config takes priority, then the caller-provided
+  // codebase default, then git auto-detection.
   // If detection fails, leave empty — substituteWorkflowVariables throws only if $BASE_BRANCH is referenced.
+  const fallbackBaseBranch = callerBaseBranch?.trim();
   let baseBranch: string;
   if (config.baseBranch) {
     baseBranch = config.baseBranch;
+  } else if (fallbackBaseBranch) {
+    baseBranch = fallbackBaseBranch;
   } else {
     try {
       baseBranch = await getDefaultBranch(toRepoPath(cwd));

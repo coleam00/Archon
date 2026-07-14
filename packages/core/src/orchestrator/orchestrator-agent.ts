@@ -789,6 +789,7 @@ async function dispatchOrchestratorWorkflow(
           parentConversationId: conversation.id,
           userId,
           source,
+          baseBranch: codebase.default_branch?.trim() || undefined,
           ...prepared,
         }
       );
@@ -810,6 +811,7 @@ async function dispatchOrchestratorWorkflow(
           parentConversationId: conversation.id,
           userId,
           source,
+          baseBranch: codebase.default_branch?.trim() || undefined,
         }
       );
     }
@@ -845,6 +847,7 @@ async function dispatchOrchestratorWorkflow(
         parentConversationId: conversation.id,
         userId,
         source,
+        baseBranch: codebase.default_branch?.trim() || undefined,
       }
     );
   }

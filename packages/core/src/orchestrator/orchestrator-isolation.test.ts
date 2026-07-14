@@ -14,6 +14,10 @@ mock.module('@archon/paths', () => ({
   ensureArchonWorkspacesPath: mock(() => Promise.resolve('/home/test/.archon/workspaces')),
   getArchonHome: mock(() => '/home/test/.archon'),
   getCredentialKeyPath: mock(() => '/home/test/.archon/credential-key'),
+  // Required by @archon/git (loaded via orchestrator.ts's toBranchName import).
+  getProjectWorktreesPath: mock(
+    (owner: string, repo: string) => `/home/test/.archon/workspaces/${owner}/${repo}/worktrees`
+  ),
 }));
 
 // DB mocks
@@ -250,5 +254,43 @@ describe('validateAndResolveIsolation', () => {
       'Cleaned up 3 merged worktree(s) to make room.'
     );
     expect(result.status).toBe('new');
+  });
+
+  test('passes codebase default_branch to the resolver as defaultBranch', async () => {
+    const conversation = makeConversation();
+    const codebase = makeCodebase({ default_branch: 'develop' });
+
+    mockResolve.mockResolvedValueOnce({
+      status: 'resolved',
+      env: makeEnvRow(),
+      cwd: '/worktrees/issue-42',
+      method: { type: 'created' },
+    });
+
+    await validateAndResolveIsolation(conversation, codebase, platform, 'conv-1');
+
+    const request = mockResolve.mock.calls.at(-1)?.[0] as unknown as {
+      codebase: { defaultBranch?: string | null };
+    };
+    expect(request.codebase.defaultBranch).toBe('develop');
+  });
+
+  test('passes null defaultBranch to the resolver when the codebase has none stored', async () => {
+    const conversation = makeConversation();
+    const codebase = makeCodebase({ default_branch: null });
+
+    mockResolve.mockResolvedValueOnce({
+      status: 'resolved',
+      env: makeEnvRow(),
+      cwd: '/worktrees/issue-42',
+      method: { type: 'created' },
+    });
+
+    await validateAndResolveIsolation(conversation, codebase, platform, 'conv-1');
+
+    const request = mockResolve.mock.calls.at(-1)?.[0] as unknown as {
+      codebase: { defaultBranch?: string | null };
+    };
+    expect(request.codebase.defaultBranch).toBeNull();
   });
 });

@@ -59,6 +59,7 @@ import {
 import { loadRepoConfig } from '../config/config-loader';
 import { isPerUserGitHubEnabled } from '../github-auth/config';
 import { getUserGithubNoreplyEmail } from '../db/user-github-token-store';
+import { toBranchName } from '@archon/git';
 
 type IsolationResolution =
   | { status: 'existing'; cwd: string; env: IsolationEnvironmentRow }
@@ -133,6 +134,7 @@ export async function validateAndResolveIsolation(
           id: codebase.id,
           defaultCwd: codebase.default_cwd,
           name: codebase.name,
+          defaultBranch: codebase.default_branch ? toBranchName(codebase.default_branch) : null,
           kind: codebase.kind,
         }
       : null,
@@ -317,6 +319,7 @@ export async function dispatchBackgroundWorkflow(
   // 3. Resolve isolation for this worker (each background workflow gets its own worktree).
   // Isolation failure is fatal — never run a workflow in a shared/parent worktree.
   let workerCwd: string;
+  let codebaseBaseBranch: string | undefined;
   if (ctx.codebaseId) {
     const codebase = await getCodebase(ctx.codebaseId);
     if (!codebase) {
@@ -324,6 +327,7 @@ export async function dispatchBackgroundWorkflow(
         `Cannot dispatch workflow "${workflow.name}": codebase ${ctx.codebaseId} not found`
       );
     }
+    codebaseBaseBranch = codebase.default_branch?.trim() || undefined;
     const result = await validateAndResolveIsolation(
       workerConv,
       codebase,
@@ -421,6 +425,7 @@ export async function dispatchBackgroundWorkflow(
             preCreatedRun,
             userId: ctx.userId,
             source: ctx.source,
+            baseBranch: codebaseBaseBranch,
           }
         );
         // Surface workflow output to parent conversation as a result card

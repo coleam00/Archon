@@ -1035,10 +1035,12 @@ export async function workflowRunCommand(
       // Validate base branch before reuse (warning-only — non-blocking)
       try {
         const repoConfig = await loadRepoConfig(codebase.default_cwd);
-        const rawBase = repoConfig?.worktree?.baseBranch;
+        const rawBase = repoConfig?.worktree?.baseBranch?.trim();
         const configuredBase = rawBase
           ? git.toBranchName(rawBase)
-          : await git.getDefaultBranch(git.toRepoPath(codebase.default_cwd));
+          : codebase.default_branch?.trim()
+            ? git.toBranchName(codebase.default_branch.trim())
+            : await git.getDefaultBranch(git.toRepoPath(codebase.default_cwd));
         const isValidBase = await git.isAncestorOf(
           git.toWorktreePath(existingEnv.working_path),
           `origin/${configuredBase}`
@@ -1072,6 +1074,9 @@ export async function workflowRunCommand(
         identifier: branchIdentifier,
         fromBranch: options.fromBranch?.trim()
           ? git.toBranchName(options.fromBranch.trim())
+          : undefined,
+        baseBranch: codebase.default_branch?.trim()
+          ? git.toBranchName(codebase.default_branch.trim())
           : undefined,
         codebaseId: codebase.id,
         canonicalRepoPath: git.toRepoPath(codebase.default_cwd),
@@ -1279,9 +1284,16 @@ export async function workflowRunCommand(
   // Execute workflow with workingCwd (may be worktree path)
   let result: Awaited<ReturnType<typeof executeWorkflow>>;
   try {
+    const baseBranch = codebase?.default_branch?.trim() || undefined;
     const opts = prepared
-      ? { codebaseId: codebase?.id, source: workflowSource, userId: cliUserId, ...prepared }
-      : { codebaseId: codebase?.id, source: workflowSource, userId: cliUserId };
+      ? {
+          codebaseId: codebase?.id,
+          source: workflowSource,
+          userId: cliUserId,
+          baseBranch,
+          ...prepared,
+        }
+      : { codebaseId: codebase?.id, source: workflowSource, userId: cliUserId, baseBranch };
     result = await executeWorkflow(
       deps,
       adapter,

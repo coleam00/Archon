@@ -20,7 +20,7 @@ These variables are substituted by the workflow executor in all node types (`com
 | `$USER_MESSAGE` | Same as `$ARGUMENTS` | Alias |
 | `$WORKFLOW_ID` | Unique ID for the current workflow run | Useful for artifact naming and log correlation |
 | `$ARTIFACTS_DIR` | Pre-created external artifacts directory (`~/.archon/workspaces/<owner>/<repo>/artifacts/runs/<id>/`) | Always exists before node execution; stored outside the repo to avoid polluting the working tree |
-| `$BASE_BRANCH` | Base branch for git operations | Auto-detected from the repository's default branch, or set via `worktree.baseBranch` in `.archon/config.yaml`. Throws an error if referenced in a prompt but cannot be resolved |
+| `$BASE_BRANCH` | Base branch for git operations | Resolved in order: `worktree.baseBranch` in `.archon/config.yaml`, then the registered codebase's stored default branch, then git auto-detection. Throws an error if referenced in a prompt but cannot be resolved |
 | `$DOCS_DIR` | Documentation directory path | Configured via `docs.path` in `.archon/config.yaml`. Defaults to `docs/` when not set. Never throws |
 | `$CONTEXT` | GitHub issue or PR context, if available | Populated when the workflow is triggered from a GitHub issue/PR. Replaced with empty string when unavailable |
 | `$EXTERNAL_CONTEXT` | Same as `$CONTEXT` | Alias |
@@ -40,8 +40,9 @@ If issue context is present but no context variable appears in the prompt, the c
 
 Unlike other variables, `$BASE_BRANCH` will cause the workflow to **fail immediately** if:
 - The variable is referenced in a prompt, AND
-- Auto-detection from git fails, AND
-- `worktree.baseBranch` is not set in `.archon/config.yaml`
+- `worktree.baseBranch` is not set in `.archon/config.yaml`, AND
+- The registered codebase has no stored default branch, AND
+- Auto-detection from git fails
 
 If the variable is not referenced, no error occurs even if the base branch cannot be determined.
 
