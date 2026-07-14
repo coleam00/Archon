@@ -833,10 +833,19 @@ async function executeNodeInternal(
   configuredCommandFolder?: string,
   issueContext?: string,
   resolvedModel?: string,
-  resolvedTier?: TierName
+  resolvedTier?: TierName,
+  stepNamePrefix = '',
+  iteration?: number
 ): Promise<NodeExecutionResult> {
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
+  // Persisted step_name is namespaced ('<groupId>.' prefix) for loop_group bodies;
+  // '' for the top-level DAG → identical to node.id. The in-process emitter payloads
+  // below stay raw (node.id) — live SSE/CLI consumers key off those. See #2090.
+  const stepName = stepNamePrefix + node.id;
+  // Only present inside a loop_group body — tags lifecycle rows with the iteration so
+  // multi-iteration runs are disaggregatable in the event log.
+  const iterationData = iteration !== undefined ? { iteration } : {};
 
   const configuredMcpNames = await loadConfiguredMcpServerNames(node.mcp, cwd);
 
@@ -847,8 +856,14 @@ async function executeNodeInternal(
     .createWorkflowEvent({
       workflow_run_id: workflowRun.id,
       event_type: 'node_started',
-      step_name: node.id,
-      data: { command: node.command ?? null, provider, model: resolvedModel, tier: resolvedTier },
+      step_name: stepName,
+      data: {
+        command: node.command ?? null,
+        provider,
+        model: resolvedModel,
+        tier: resolvedTier,
+        ...iterationData,
+      },
     })
     .catch((err: Error) => {
       getLog().error(
@@ -880,7 +895,7 @@ async function executeNodeInternal(
         .createWorkflowEvent({
           workflow_run_id: workflowRun.id,
           event_type: 'node_failed',
-          step_name: node.id,
+          step_name: stepName,
           data: { error: errMsg },
         })
         .catch((err: Error) => {
@@ -1076,7 +1091,7 @@ async function executeNodeInternal(
             .createWorkflowEvent({
               workflow_run_id: workflowRun.id,
               event_type: 'tool_completed',
-              step_name: node.id,
+              step_name: stepName,
               data: {
                 tool_name: prevTool.toolName,
                 duration_ms: now - prevTool.startedAt,
@@ -1117,7 +1132,7 @@ async function executeNodeInternal(
           .createWorkflowEvent({
             workflow_run_id: workflowRun.id,
             event_type: 'tool_called',
-            step_name: node.id,
+            step_name: stepName,
             data: {
               tool_name: msg.toolName,
               tool_input: msg.toolInput ?? {},
@@ -1148,7 +1163,7 @@ async function executeNodeInternal(
             .createWorkflowEvent({
               workflow_run_id: workflowRun.id,
               event_type: 'tool_completed',
-              step_name: node.id,
+              step_name: stepName,
               data: {
                 tool_name: prevTool.toolName,
                 duration_ms: Date.now() - prevTool.startedAt,
@@ -1284,7 +1299,7 @@ async function executeNodeInternal(
           .createWorkflowEvent({
             workflow_run_id: workflowRun.id,
             event_type: 'task_activity',
-            step_name: node.id,
+            step_name: stepName,
             data: {
               task_id: msg.taskId,
               activity: 'started',
@@ -1316,7 +1331,7 @@ async function executeNodeInternal(
           .createWorkflowEvent({
             workflow_run_id: workflowRun.id,
             event_type: 'task_activity',
-            step_name: node.id,
+            step_name: stepName,
             data: {
               task_id: msg.taskId,
               activity: 'progress',
@@ -1346,7 +1361,7 @@ async function executeNodeInternal(
           .createWorkflowEvent({
             workflow_run_id: workflowRun.id,
             event_type: 'task_activity',
-            step_name: node.id,
+            step_name: stepName,
             data: {
               task_id: msg.taskId,
               activity: msg.status,
@@ -1374,7 +1389,7 @@ async function executeNodeInternal(
           .createWorkflowEvent({
             workflow_run_id: workflowRun.id,
             event_type: 'hook_activity',
-            step_name: node.id,
+            step_name: stepName,
             data: {
               hook_id: msg.hookId,
               hook_name: msg.hookName,
@@ -1404,7 +1419,7 @@ async function executeNodeInternal(
           .createWorkflowEvent({
             workflow_run_id: workflowRun.id,
             event_type: 'hook_activity',
-            step_name: node.id,
+            step_name: stepName,
             data: {
               hook_id: msg.hookId,
               hook_name: msg.hookName,
@@ -1587,7 +1602,7 @@ async function executeNodeInternal(
         .createWorkflowEvent({
           workflow_run_id: workflowRun.id,
           event_type: 'node_failed',
-          step_name: node.id,
+          step_name: stepName,
           data: { error: 'Cancelled by user', duration_ms: duration },
         })
         .catch((err: Error) => {
@@ -1632,7 +1647,7 @@ async function executeNodeInternal(
         .createWorkflowEvent({
           workflow_run_id: workflowRun.id,
           event_type: 'node_failed',
-          step_name: node.id,
+          step_name: stepName,
           data: { error: creditError },
         })
         .catch((err: Error) => {
@@ -1669,7 +1684,7 @@ async function executeNodeInternal(
         .createWorkflowEvent({
           workflow_run_id: workflowRun.id,
           event_type: 'node_failed',
-          step_name: node.id,
+          step_name: stepName,
           data: { error: emptyError, duration_ms: duration },
         })
         .catch((err: Error) => {
@@ -1704,7 +1719,7 @@ async function executeNodeInternal(
       .createWorkflowEvent({
         workflow_run_id: workflowRun.id,
         event_type: 'node_completed',
-        step_name: node.id,
+        step_name: stepName,
         data: {
           duration_ms: duration,
           node_output: nodeOutputText,
@@ -1712,6 +1727,7 @@ async function executeNodeInternal(
           ...(nodeStopReason ? { stop_reason: nodeStopReason } : {}),
           ...(nodeNumTurns !== undefined ? { num_turns: nodeNumTurns } : {}),
           ...(nodeModelUsage ? { model_usage: nodeModelUsage } : {}),
+          ...iterationData,
         },
       })
       .catch((err: Error) => {
@@ -1777,7 +1793,7 @@ async function executeNodeInternal(
       .createWorkflowEvent({
         workflow_run_id: workflowRun.id,
         event_type: 'node_failed',
-        step_name: node.id,
+        step_name: stepName,
         data: { error: err.message },
       })
       .catch((err: Error) => {
@@ -1830,10 +1846,15 @@ async function executeBashNode(
   docsDir: string,
   nodeOutputs: Map<string, NodeOutput>,
   issueContext?: string,
-  envVars?: Record<string, string>
+  envVars?: Record<string, string>,
+  stepNamePrefix = '',
+  iteration?: number
 ): Promise<NodeOutput> {
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
+  // Namespaced persisted step_name for loop_group bodies ('' → node.id at top level, #2090).
+  const stepName = stepNamePrefix + node.id;
+  const iterationData = iteration !== undefined ? { iteration } : {};
 
   getLog().info({ nodeId: node.id, type: 'bash' }, 'dag_node_started');
   await logNodeStart(logDir, workflowRun.id, node.id, '<bash>');
@@ -1842,8 +1863,8 @@ async function executeBashNode(
     .createWorkflowEvent({
       workflow_run_id: workflowRun.id,
       event_type: 'node_started',
-      step_name: node.id,
-      data: { type: 'bash' },
+      step_name: stepName,
+      data: { type: 'bash', ...iterationData },
     })
     .catch((err: Error) => {
       getLog().error(
@@ -1921,8 +1942,8 @@ async function executeBashNode(
       .createWorkflowEvent({
         workflow_run_id: workflowRun.id,
         event_type: 'node_completed',
-        step_name: node.id,
-        data: { duration_ms: duration, type: 'bash', node_output: output },
+        step_name: stepName,
+        data: { duration_ms: duration, type: 'bash', node_output: output, ...iterationData },
       })
       .catch((err: Error) => {
         getLog().error(
@@ -1969,7 +1990,7 @@ async function executeBashNode(
       .createWorkflowEvent({
         workflow_run_id: workflowRun.id,
         event_type: 'node_failed',
-        step_name: node.id,
+        step_name: stepName,
         data: { error: errorMsg, type: 'bash' },
       })
       .catch((dbErr: Error) => {
@@ -2009,10 +2030,15 @@ async function executeScriptNode(
   docsDir: string,
   nodeOutputs: Map<string, NodeOutput>,
   issueContext?: string,
-  envVars?: Record<string, string>
+  envVars?: Record<string, string>,
+  stepNamePrefix = '',
+  iteration?: number
 ): Promise<NodeOutput> {
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
+  // Namespaced persisted step_name for loop_group bodies ('' → node.id at top level, #2090).
+  const stepName = stepNamePrefix + node.id;
+  const iterationData = iteration !== undefined ? { iteration } : {};
 
   getLog().info({ nodeId: node.id, type: 'script', runtime: node.runtime }, 'dag_node_started');
   await logNodeStart(logDir, workflowRun.id, node.id, '<script>');
@@ -2021,8 +2047,8 @@ async function executeScriptNode(
     .createWorkflowEvent({
       workflow_run_id: workflowRun.id,
       event_type: 'node_started',
-      step_name: node.id,
-      data: { type: 'script', runtime: node.runtime },
+      step_name: stepName,
+      data: { type: 'script', runtime: node.runtime, ...iterationData },
     })
     .catch((err: Error) => {
       getLog().error(
@@ -2108,7 +2134,7 @@ async function executeScriptNode(
           .createWorkflowEvent({
             workflow_run_id: workflowRun.id,
             event_type: 'node_failed',
-            step_name: node.id,
+            step_name: stepName,
             data: { error: errorMsg, type: 'script' },
           })
           .catch((dbErr: Error) => {
@@ -2139,7 +2165,7 @@ async function executeScriptNode(
           .createWorkflowEvent({
             workflow_run_id: workflowRun.id,
             event_type: 'node_failed',
-            step_name: node.id,
+            step_name: stepName,
             data: { error: errorMsg, type: 'script' },
           })
           .catch((dbErr: Error) => {
@@ -2190,8 +2216,8 @@ async function executeScriptNode(
       .createWorkflowEvent({
         workflow_run_id: workflowRun.id,
         event_type: 'node_completed',
-        step_name: node.id,
-        data: { duration_ms: duration, type: 'script', node_output: output },
+        step_name: stepName,
+        data: { duration_ms: duration, type: 'script', node_output: output, ...iterationData },
       })
       .catch((err: Error) => {
         getLog().error(
@@ -2238,7 +2264,7 @@ async function executeScriptNode(
       .createWorkflowEvent({
         workflow_run_id: workflowRun.id,
         event_type: 'node_failed',
-        step_name: node.id,
+        step_name: stepName,
         data: { error: errorMsg, type: 'script' },
       })
       .catch((dbErr: Error) => {
@@ -2267,10 +2293,12 @@ async function executeScriptNode(
  *
  * Mirrors {@link executeLoopNode} at subgraph granularity: each iteration runs the body's
  * topological layers via {@link runLayers} against a fresh scoped `nodeOutputs` map. The
- * body is a sealed sub-DAG. runLayers' own control events (skip/trigger_rule/when) are
- * namespaced `{groupId}.{nodeId}` via `stepNamePrefix`; the body nodes' lifecycle events
- * (node_started/node_completed/node_failed, tool events) still use the raw node id — a
- * known v1 limitation (executeNodeInternal does not take a step-name override yet).
+ * body is a sealed sub-DAG. Every persisted body event — both runLayers' own control
+ * events (skip/trigger_rule/when) AND the node executors' lifecycle events
+ * (node_started/node_completed/node_failed, and tool/task/hook activity) — is namespaced
+ * `{groupId}.{nodeId}` via `stepNamePrefix`, composing across nested groups; body node
+ * lifecycle rows also carry the current `iteration` in their `data` (#2090). The in-process
+ * emitter payloads stay raw (unprefixed nodeId) so live SSE/CLI consumers are unaffected.
  * `$LOOP_PREV.<id>.output` refs in body prompts resolve against a snapshot of the
  * *previous* iteration's body outputs (empty on iteration 1).
  *
@@ -2301,16 +2329,22 @@ async function executeLoopGroupNode(
   docsDir: string,
   outerNodeOutputs: Map<string, NodeOutput>,
   config: WorkflowConfig,
-  issueContext?: string
+  issueContext?: string,
+  stepNamePrefix = ''
 ): Promise<NodeExecutionResult> {
   const group = node.loop_group;
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
+  // This group's OWN persisted step_name — namespaced by any enclosing group so nested
+  // loop_groups compose (e.g. `outer.inner`); '' → node.id at the top level (#2090).
+  const stepName = stepNamePrefix + node.id;
 
   // Body layering is recomputed per iteration from the (possibly $LOOP_PREV-substituted)
   // body nodes — runLayers walks ctx.layers, so the layers must reference the substituted
   // nodes for $LOOP_PREV resolution to take effect. depends_on shape is static, so the
   // layering is stable; only the prompt text changes per iteration.
-  const stepNamePrefix = `${node.id}.`;
+  // Body nodes are namespaced under THIS group's (already-namespaced) step name so the
+  // prefix composes across nested loop_groups: `<enclosing>.<groupId>.<bodyNodeId>`.
+  const bodyStepNamePrefix = `${stepName}.`;
 
   // Detect interactive loop resume (mirrors executeLoopNode).
   const rawApproval = workflowRun.metadata?.approval;
@@ -2370,7 +2404,7 @@ async function executeLoopGroupNode(
       .createWorkflowEvent({
         workflow_run_id: workflowRun.id,
         event_type: 'loop_iteration_started',
-        step_name: node.id,
+        step_name: stepName,
         data: { iteration: i, maxIterations: group.max_iterations, nodeId: node.id },
       })
       .catch((err: Error) => {
@@ -2439,7 +2473,8 @@ async function executeLoopGroupNode(
       totalTokensIn: 0,
       totalTokensOut: 0,
       totalLoopIterations: 0,
-      stepNamePrefix,
+      stepNamePrefix: bodyStepNamePrefix,
+      iteration: i,
     };
     await runLayers(iterCtx);
     // A body approval/cancel node may have paused or cancelled the run mid-iteration.
@@ -2594,7 +2629,7 @@ async function executeLoopGroupNode(
       .createWorkflowEvent({
         workflow_run_id: workflowRun.id,
         event_type: 'loop_iteration_completed',
-        step_name: node.id,
+        step_name: stepName,
         data: { iteration: i, duration, completionDetected, nodeId: node.id },
       })
       .catch((err: Error) => {
@@ -2615,7 +2650,7 @@ async function executeLoopGroupNode(
         .createWorkflowEvent({
           workflow_run_id: workflowRun.id,
           event_type: 'node_completed',
-          step_name: node.id,
+          step_name: stepName,
           data: {
             duration_ms: duration,
             node_output: lastIterationOutput,
@@ -2670,7 +2705,7 @@ async function executeLoopGroupNode(
         .createWorkflowEvent({
           workflow_run_id: workflowRun.id,
           event_type: 'approval_requested',
-          step_name: node.id,
+          step_name: stepName,
           data: { message: group.gate_message, iteration: i },
         })
         .catch((err: Error) => {
@@ -2823,10 +2858,15 @@ async function executeLoopNode(
   docsDir: string,
   nodeOutputs: Map<string, NodeOutput>,
   config: WorkflowConfig,
-  issueContext?: string
+  issueContext?: string,
+  stepNamePrefix = ''
 ): Promise<NodeExecutionResult> {
   const loop = node.loop;
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
+  // Namespaced persisted step_name when this loop node runs inside a loop_group body
+  // ('' → node.id at top level, #2090). The loop's own per-iteration number lives in
+  // each event's data (`iteration`), so no separate iteration param is threaded here.
+  const stepName = stepNamePrefix + node.id;
 
   // Resolve AI client — fail fast with descriptive error
   let aiClient: ReturnType<typeof deps.getAgentProvider>;
@@ -2899,7 +2939,7 @@ async function executeLoopNode(
       .createWorkflowEvent({
         workflow_run_id: workflowRun.id,
         event_type: 'loop_iteration_started',
-        step_name: node.id,
+        step_name: stepName,
         data: { iteration: i, maxIterations: loop.max_iterations, nodeId: node.id },
       })
       .catch((err: Error) => {
@@ -2979,7 +3019,7 @@ async function executeLoopNode(
               .createWorkflowEvent({
                 workflow_run_id: workflowRun.id,
                 event_type: 'tool_completed',
-                step_name: node.id,
+                step_name: stepName,
                 data: {
                   tool_name: prevTool.toolName,
                   duration_ms: Date.now() - prevTool.startedAt,
@@ -3061,7 +3101,7 @@ async function executeLoopNode(
               .createWorkflowEvent({
                 workflow_run_id: workflowRun.id,
                 event_type: 'tool_completed',
-                step_name: node.id,
+                step_name: stepName,
                 data: { tool_name: prevTool.toolName, duration_ms: now - prevTool.startedAt },
               })
               .catch((err: Error) => {
@@ -3104,7 +3144,7 @@ async function executeLoopNode(
             .createWorkflowEvent({
               workflow_run_id: workflowRun.id,
               event_type: 'tool_called',
-              step_name: node.id,
+              step_name: stepName,
               data: { tool_name: msg.toolName, tool_input: toolInput },
             })
             .catch((err: Error) => {
@@ -3130,7 +3170,7 @@ async function executeLoopNode(
         .createWorkflowEvent({
           workflow_run_id: workflowRun.id,
           event_type: 'loop_iteration_failed',
-          step_name: node.id,
+          step_name: stepName,
           data: { iteration: i, error: err.message, duration, nodeId: node.id },
         })
         .catch((evtErr: Error) => {
@@ -3183,7 +3223,7 @@ async function executeLoopNode(
         .createWorkflowEvent({
           workflow_run_id: workflowRun.id,
           event_type: 'loop_iteration_failed',
-          step_name: node.id,
+          step_name: stepName,
           data: {
             iteration: i,
             error: emptyError,
@@ -3296,7 +3336,7 @@ async function executeLoopNode(
       .createWorkflowEvent({
         workflow_run_id: workflowRun.id,
         event_type: 'loop_iteration_completed',
-        step_name: node.id,
+        step_name: stepName,
         data: { iteration: i, duration, completionDetected, nodeId: node.id },
       })
       .catch((err: Error) => {
@@ -3326,7 +3366,7 @@ async function executeLoopNode(
         .createWorkflowEvent({
           workflow_run_id: workflowRun.id,
           event_type: 'node_completed',
-          step_name: node.id,
+          step_name: stepName,
           data: {
             duration_ms: Date.now() - iterationStart,
             node_output: lastIterationOutput,
@@ -3393,7 +3433,7 @@ async function executeLoopNode(
         .createWorkflowEvent({
           workflow_run_id: workflowRun.id,
           event_type: 'approval_requested',
-          step_name: node.id,
+          step_name: stepName,
           data: { message: loop.gate_message, iteration: i },
         })
         .catch((err: Error) => {
@@ -3467,9 +3507,13 @@ async function executeApprovalNode(
   configuredCommandFolder?: string,
   issueContext?: string,
   aiProfile?: ResolvedAiProfile,
-  workflowPreset?: ModelAliasPreset
+  workflowPreset?: ModelAliasPreset,
+  stepNamePrefix = '',
+  iteration?: number
 ): Promise<NodeOutput> {
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
+  // Namespaced persisted step_name for loop_group bodies ('' → node.id at top level, #2090).
+  const stepName = stepNamePrefix + node.id;
 
   // Detect rejection resume — check metadata for rejection_reason set by reject handlers
   const rawApproval = workflowRun.metadata?.approval;
@@ -3495,7 +3539,7 @@ async function executeApprovalNode(
         .createWorkflowEvent({
           workflow_run_id: workflowRun.id,
           event_type: 'workflow_cancelled',
-          step_name: node.id,
+          step_name: stepName,
           data: { reason: `max_attempts (${String(maxAttempts)}) exhausted` },
         })
         .catch((err: Error) => {
@@ -3585,7 +3629,9 @@ async function executeApprovalNode(
       configuredCommandFolder,
       issueContext,
       resolvedNodeModel,
-      resolvedTier
+      resolvedTier,
+      stepNamePrefix,
+      iteration
     );
 
     if (output.state === 'failed') {
@@ -3608,7 +3654,7 @@ async function executeApprovalNode(
     .createWorkflowEvent({
       workflow_run_id: workflowRun.id,
       event_type: 'approval_requested',
-      step_name: node.id,
+      step_name: stepName,
       data: { message: renderedMessage },
     })
     .catch((err: Error) => {
@@ -3695,9 +3741,11 @@ async function buildColdResumeRecoveryPointer(
  * The top-level DAG and each `loop_group` body iteration construct their own context: the
  * top-level call uses `workflow.nodes` / a fresh `nodeOutputs`; a loop-group body uses the
  * group's `nodes` / a per-iteration scoped `nodeOutputs` (reset each iteration) and a
- * `stepNamePrefix` of `'{groupId}.'` that namespaces runLayers' OWN control events
- * (skip/trigger_rule/when). Body lifecycle events emitted inside executeNodeInternal /
- * executeBashNode / executeScriptNode still use the raw node id (known v1 limitation).
+ * `stepNamePrefix` of `'{groupId}.'` that namespaces the persisted `step_name` of EVERY
+ * body event — runLayers' own control events (skip/trigger_rule/when) AND the lifecycle
+ * events emitted inside executeNodeInternal / executeBashNode / executeScriptNode /
+ * executeLoopNode / executeApprovalNode. Body lifecycle rows additionally carry `iteration`
+ * in `data`. The in-process emitter payloads stay raw (unprefixed) — see #2090.
  */
 interface RunLayersContext {
   // --- run-level invariants (shared by top-level DAG and loop_group body) ---
@@ -3748,8 +3796,14 @@ interface RunLayersContext {
   totalTokensIn: number;
   totalTokensOut: number;
   totalLoopIterations: number;
-  /** Prefix prepended to every `step_name` in emitted events ('' for top-level, '{groupId}.' for body). */
+  /** Prefix prepended to every persisted `step_name` ('' for top-level, '{groupId}.' for a loop_group body). */
   stepNamePrefix: string;
+  /**
+   * The enclosing loop_group iteration (1-based) when these layers are a group body,
+   * else undefined for the top-level DAG. Tagged into body node lifecycle event `data`
+   * so multi-iteration runs are disaggregatable in the persisted event log (#2090).
+   */
+  iteration?: number;
 }
 
 /**
@@ -3788,6 +3842,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
     layers,
     priorCompletedNodes,
     stepNamePrefix,
+    iteration,
   } = ctx;
   // nodeOutputs + accumulators + lastSequentialSessionId are mutated in place on `ctx`.
 
@@ -3996,7 +4051,9 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               docsDir,
               ctx.nodeOutputs,
               issueContext,
-              config.envVars
+              config.envVars,
+              stepNamePrefix,
+              iteration
             );
             return { nodeId: node.id, output };
           }
@@ -4033,7 +4090,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               docsDir,
               ctx.nodeOutputs,
               config,
-              issueContext
+              issueContext,
+              stepNamePrefix
             );
             return { nodeId: node.id, output };
           }
@@ -4077,7 +4135,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               docsDir,
               ctx.nodeOutputs,
               config,
-              issueContext
+              issueContext,
+              stepNamePrefix
             );
             return { nodeId: node.id, output };
           }
@@ -4103,7 +4162,9 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               configuredCommandFolder,
               issueContext,
               aiProfile,
-              workflowPreset
+              workflowPreset,
+              stepNamePrefix,
+              iteration
             );
             return { nodeId: node.id, output };
           }
@@ -4155,7 +4216,9 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               docsDir,
               ctx.nodeOutputs,
               issueContext,
-              config.envVars
+              config.envVars,
+              stepNamePrefix,
+              iteration
             );
             return { nodeId: node.id, output };
           }
@@ -4293,7 +4356,9 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               configuredCommandFolder,
               issueContext,
               resolvedNodeModel,
-              resolvedTier
+              resolvedTier,
+              stepNamePrefix,
+              iteration
             );
 
             if (output.state !== 'failed') break;
