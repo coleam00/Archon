@@ -2599,10 +2599,10 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
   // Deterministic nodes run real subprocesses, so a side-effect counter file is
   // the most direct way to observe how many attempts actually happened.
   async function runNodes(
-    nodes: DagNode[],
-    mockDeps = createMockDeps(),
-    platform = createMockPlatform()
+    nodes: DagNode[]
   ): Promise<{ mockDeps: WorkflowDeps; platform: IWorkflowPlatform }> {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
     const workflowRun = makeWorkflowRun('det-retry-run', {
       workflow_name: 'det-retry',
       conversation_id: 'conv-det-retry',
