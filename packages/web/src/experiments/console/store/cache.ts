@@ -111,12 +111,18 @@ export function patch(key: string, updater: (prev: unknown) => unknown): void {
 function revalidate(key: string): void {
   const loader = loaders.get(key);
   if (loader === undefined) {
+    const activeLoad = inflight.get(key);
+    if (activeLoad !== undefined) {
+      activeLoad.abandoned = true;
+      inflight.delete(key);
+    }
     cache.delete(key);
     errors.delete(key);
     versions.delete(key); // fully release the key — nothing subscribes, so nothing snapshots it
     return;
   }
-  if (inflight.has(key)) return; // a revalidation is already in flight
+  const activeLoad = inflight.get(key);
+  if (activeLoad !== undefined && !activeLoad.abandoned) return;
   const load: InflightLoad = { abandoned: false };
   const promise = loader();
   inflight.set(key, load);
