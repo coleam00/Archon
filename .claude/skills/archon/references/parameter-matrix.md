@@ -189,9 +189,11 @@ Use this matrix to find the right parameter. Use these references for the full e
 | `sandbox` / `maxBudgetUsd` / `fallbackModel` | yes | no                                | no                                   | no                   | no                  |
 | Model naming                    | `haiku`, `sonnet`, `opus`, `opus[1m]`   | Codex model ID (e.g. `gpt-5.3-codex`)   | `<vendor>/<model>` (e.g. `anthropic/claude-opus-4-5`, `openrouter/qwen/qwen3-coder`) | OpenCode catalog ref | Copilot model id |
 | `effort` / `thinking`           | yes           | use `modelReasoningEffort` for reasoning models | via `effort:` (maps to thinking level) | no (opencode.json agent config) | yes (maps like Pi) |
-| Session resume / `--resume` / `persist_session` | yes | yes                             | yes                                  | yes                  | yes                 |
+| Provider session resume (`persist_session`, `context: shared` threading) | yes | yes            | yes                                  | yes                  | yes                 |
 
 Whatever the enforcement tier, a node with `output_format` either produces schema-valid output or **fails** — validation runs for every provider, and best-effort providers re-ask up to 3 times first. Prefer tier keywords (`model: small|medium|large`) over hardcoded model ids — they resolve per-install from config.
+
+Note: workflow `--resume` (re-run skipping completed nodes) is engine-level and provider-independent — it never restores AI session context. Cross-RUN context restoration is exclusively `persist_session` (row above).
 
 Mixing providers in one workflow: set workflow-level `provider: claude`, then override per-node with `provider: codex` or `provider: pi`. Cross-provider `$nodeId.output` substitution works as expected.
 

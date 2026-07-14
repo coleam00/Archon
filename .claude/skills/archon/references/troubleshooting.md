@@ -126,7 +126,7 @@ Skips carry a **reason** in the persisted `node_skipped` event (`archon workflow
 |--------|---------|-----|
 | `trigger_rule` | Upstream states didn't satisfy the join rule (default `all_success` — a skipped upstream counts as not-success and cascades) | Use `one_success` / `none_failed_min_one_success` / `all_done` on merge nodes after `when:`-gated branches |
 | `when_condition` | The `when:` expression evaluated false | Expected behavior — check the upstream output it compared against |
-| `when_condition_parse_error` | The `when:` expression has invalid SYNTAX — fail-closed skip | Fix the expression (six operators, `&&`/`||`, no parentheses) |
+| `when_condition_parse_error` | The `when:` expression has invalid SYNTAX — fail-closed skip | Fix the expression (six operators, `&&`/`\|\|`, no parentheses) |
 | `prior_success` | Resume: the node completed in a prior run | Expected; use `always_run: true` to force re-execution |
 
 ### Node FAILED with an `OutputRefError`-style message about `$node.output.field`

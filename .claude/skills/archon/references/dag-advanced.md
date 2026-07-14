@@ -307,7 +307,7 @@ Available on command and prompt nodes (default-on for transient errors), and on 
     on_error: all                      # 'transient' (default) or 'all'
 ```
 
-For deterministic bash/script failures (a script that exits 1 reproducibly), retrying is pointless — `retry:` there is for flaky externals (network fetches, rate-limited APIs). Use `on_error: all` for those, since a plain non-zero exit usually doesn't match a TRANSIENT pattern.
+For deterministic bash/script failures (a script that exits 1 reproducibly), retrying is pointless — `retry:` there is for flaky externals (network fetches, rate-limited APIs). Classification detail: a bash/script failure message is formatted `<node> failed [exit N]: <stderr>`, so the classifier runs on your script's **stderr text** — the `exited with code` TRANSIENT pattern in the table below targets AI-CLI crash messages and does NOT match a bash/script non-zero exit. A subprocess `timeout` DOES classify TRANSIENT. Practical rule: rely on the default `on_error: transient` when failures surface as timeouts/rate-limit text on stderr; use `on_error: all` when the flaky failure mode produces generic stderr.
 
 ### Error Classification
 
@@ -369,7 +369,7 @@ Mechanics:
 
 Any node can declare `output_type: <label>` (e.g. `plan`, `report`, `diff-summary`). After the node completes, the engine writes sidecars (best-effort — a write failure never fails the node):
 
-```
+```text
 $ARTIFACTS_DIR/nodes/<node-id>.md          # the node's output text
 $ARTIFACTS_DIR/nodes/<node-id>.meta.json   # { nodeId, outputType, path, runId, producedAt, size }
 ```
