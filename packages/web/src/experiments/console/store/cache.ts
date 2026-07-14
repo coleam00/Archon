@@ -5,8 +5,10 @@
  * - UI never writes directly — it calls skill verbs; server pushes truth
  *   back via SSE (lib/sse.ts) or refetch on miss.
  * - `useEntity(key, loader)` subscribes to a key. First subscriber triggers
- *   the loader; subsequent subscribers read from cache. After `invalidate()`
- *   or `refetch()`, any key with an active subscriber reloads automatically.
+ *   the loader; subsequent subscribers share that active load. If every
+ *   subscriber leaves before it settles, a later subscriber starts its own
+ *   load and supersedes the abandoned result. After `invalidate()` or
+ *   `refetch()`, any key with an active subscriber reloads automatically.
  * - `patch` and `set` are for the SSE dispatcher and skill-layer optimistic
  *   updates only.
  * - After the last unsubscribe, `cache`/`errors` are deliberately retained so
@@ -23,7 +25,10 @@ type Listener = () => void;
 const cache = new Map<string, unknown>();
 const listeners = new Map<string, Set<Listener>>();
 const errors = new Map<string, Error>();
-const inflight = new Map<string, Promise<unknown>>();
+interface InflightLoad {
+  abandoned: boolean;
+}
+const inflight = new Map<string, InflightLoad>();
 const loaders = new Map<string, () => Promise<unknown>>();
 // Per-key change counter. `useEntity` snapshots THIS (not the cached value), so a
 // subscriber re-renders on every mutation — including the error transition, where
@@ -43,25 +48,38 @@ function notify(key: string): void {
   for (const l of subs) l();
 }
 
+function canCommitLoad(key: string, load: InflightLoad): boolean {
+  if (inflight.get(key) !== load) return false;
+  // An abandoned load may still warm the cache if nobody replaced its
+  // subscriber. Once a new subscriber exists, its current cache/loader owns
+  // the key and the abandoned result must not overwrite either one.
+  return !load.abandoned || !listeners.has(key);
+}
+
 function ensureLoad(key: string): void {
-  if (cache.has(key) || inflight.has(key)) return;
+  const activeLoad = inflight.get(key);
+  if (cache.has(key) || (activeLoad !== undefined && !activeLoad.abandoned)) return;
   const loader = loaders.get(key);
   if (loader === undefined) return;
-  const p = loader()
+  const load: InflightLoad = { abandoned: false };
+  const promise = loader();
+  inflight.set(key, load);
+  void promise
     .then(v => {
+      if (!canCommitLoad(key, load)) return;
       cache.set(key, v);
       errors.delete(key);
       notify(key);
     })
     .catch((e: unknown) => {
+      if (!canCommitLoad(key, load)) return;
       const err = e instanceof Error ? e : new Error(String(e));
       errors.set(key, err);
       notify(key);
     })
     .finally(() => {
-      inflight.delete(key);
+      if (inflight.get(key) === load) inflight.delete(key);
     });
-  inflight.set(key, p);
 }
 
 export function get(key: string): unknown {
@@ -99,21 +117,25 @@ function revalidate(key: string): void {
     return;
   }
   if (inflight.has(key)) return; // a revalidation is already in flight
-  const p = loader()
+  const load: InflightLoad = { abandoned: false };
+  const promise = loader();
+  inflight.set(key, load);
+  void promise
     .then(v => {
+      if (!canCommitLoad(key, load)) return;
       cache.set(key, v);
       errors.delete(key);
       notify(key);
     })
     .catch((e: unknown) => {
+      if (!canCommitLoad(key, load)) return;
       const err = e instanceof Error ? e : new Error(String(e));
       errors.set(key, err);
       notify(key); // surface the error; any stale value stays in cache
     })
     .finally(() => {
-      inflight.delete(key);
+      if (inflight.get(key) === load) inflight.delete(key);
     });
-  inflight.set(key, p);
 }
 
 export function invalidate(keyPrefix: string): void {
@@ -175,6 +197,13 @@ export function subscribeKey(
     if (remainingSubs.size === 0) {
       listeners.delete(key);
       loaders.delete(key);
+      const activeLoad = inflight.get(key);
+      if (activeLoad !== undefined) {
+        // Promises cannot be cancelled, but a future subscriber must not inherit
+        // this loader. Keep it authoritative only while nobody supersedes it so
+        // an otherwise-unused late result can still warm the cache.
+        activeLoad.abandoned = true;
+      }
       // Drop the change counter too — with no subscribers nothing snapshots it,
       // and `useSyncExternalStore` only compares snapshots for change, so a
       // remount starting back at 0 behaves identically. Without this the
