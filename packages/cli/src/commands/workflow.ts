@@ -1607,7 +1607,8 @@ export async function workflowGetCommand(
 ): Promise<number> {
   let run: WorkflowRun | null;
   try {
-    run = await workflowDb.getWorkflowRun(await resolveRunIdArg(runId, cwd));
+    const resolvedId = await resolveRunIdArg(runId, cwd);
+    run = await workflowDb.getWorkflowRun(resolvedId);
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, runId }, 'cli.workflow_get_failed');

@@ -2556,6 +2556,68 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
     expect(parsed.runId).toBe(FULL_ID);
   });
 
+  it('approves by short prefix and reports the resolved full id', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(
+      CODEBASE
+    );
+    (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValueOnce([
+      { id: FULL_ID },
+    ]);
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: FULL_ID,
+      workflow_name: 'implement',
+      status: 'paused',
+      working_path: '/tmp/wt',
+      codebase_id: 'cb',
+      conversation_id: 'conv',
+      user_message: 'go',
+      metadata: { approval: { nodeId: 'gate', message: 'ok?' } },
+    });
+
+    await workflowApproveCommand('0b1ee8da', 'lgtm', true, '/repo');
+
+    expect(workflowDb.getWorkflowRun).toHaveBeenCalledWith(FULL_ID);
+    const parsed = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(parsed).toMatchObject({ ok: true, runId: FULL_ID, action: 'approve' });
+  });
+
+  it('rejects by short prefix and reports the resolved full id', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(
+      CODEBASE
+    );
+    (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValueOnce([
+      { id: FULL_ID },
+    ]);
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: FULL_ID,
+      workflow_name: 'implement',
+      status: 'paused',
+      working_path: '/tmp/wt',
+      codebase_id: 'cb',
+      conversation_id: 'conv',
+      user_message: 'go',
+      metadata: { approval: { nodeId: 'gate', message: 'ok?' } },
+    });
+    (workflowDb.cancelWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      cancelled: true,
+    });
+
+    await workflowRejectCommand('0b1ee8da', 'nope', true, '/repo');
+
+    expect(workflowDb.getWorkflowRun).toHaveBeenCalledWith(FULL_ID);
+    const parsed = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(parsed).toMatchObject({
+      ok: true,
+      runId: FULL_ID,
+      action: 'reject',
+      cancelled: true,
+    });
+  });
+
   it('skips resolution when no cwd is provided (exact lookup only)', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const codebaseDb = await import('@archon/core/db/codebases');
