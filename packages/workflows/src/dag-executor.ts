@@ -367,6 +367,125 @@ function isTransientNodeError(errorMessage: string): boolean {
 }
 
 /**
+ * Retry config for a deterministic (bash/script) node.
+ *
+ * Same field mapping as {@link getEffectiveNodeRetryConfig}, but deterministic
+ * nodes get NO default: an absent `retry:` block returns `undefined` (single
+ * attempt) rather than the AI-node default of {@link DEFAULT_NODE_MAX_RETRIES}
+ * transient retries. Retry is strictly opt-in so side-effectful scripts (deploys,
+ * `gh` mutations, external CLIs) are never silently re-run on a transient-looking
+ * failure. Delegates so the two configs can't derive the retry block differently.
+ */
+function getExplicitNodeRetryConfig(
+  node: DagNode
+): ReturnType<typeof getEffectiveNodeRetryConfig> | undefined {
+  return 'retry' in node && node.retry ? getEffectiveNodeRetryConfig(node) : undefined;
+}
+
+/**
+ * Decide whether a failed node output warrants another retry attempt.
+ *
+ * Shared by {@link runNodeRetryLoop} for every node type so the retry decision
+ * cannot drift. FATAL errors (auth, permissions, credit balance) are never
+ * retried, even when `on_error: all` — matching {@link classifyError}'s
+ * FATAL-over-TRANSIENT precedence. Also returns `isTransient` so callers can
+ * label the notification.
+ */
+function shouldRetryNodeFailure(
+  output: NodeOutput,
+  onError: 'transient' | 'all'
+): { shouldRetry: boolean; isTransient: boolean } {
+  // Only failed outputs carry `error` (discriminated union); a non-failed output
+  // is never retried. Callers already guard on `state === 'failed'`, but narrow
+  // here too so `output.error` type-checks and the helper is safe standalone.
+  if (output.state !== 'failed') {
+    return { shouldRetry: false, isTransient: false };
+  }
+  const isFatal = output.error ? classifyError(new Error(output.error)) === 'FATAL' : false;
+  const isTransient = output.error ? isTransientNodeError(output.error) : false;
+  const shouldRetry = !isFatal && (onError === 'all' || (onError === 'transient' && isTransient));
+  return { shouldRetry, isTransient };
+}
+
+/**
+ * Run a node executor with the shared retry loop: exponential backoff, FATAL
+ * never retried, and a platform notification before each retry. Used by both the
+ * AI-node path in {@link runLayers} and {@link runDeterministicNodeWithRetry} so
+ * the backoff math and user-facing wording are defined once and can't drift.
+ * `initialOutput` seeds `output` for the (unreachable) zero-iteration case and is
+ * generic in `T` so callers keep their richer result type (e.g. NodeExecutionResult).
+ */
+async function runNodeRetryLoop<T extends NodeOutput>(
+  node: DagNode,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  workflowRun: WorkflowRun,
+  retryConfig: { maxRetries: number; delayMs: number; onError: 'transient' | 'all' },
+  run: () => Promise<T>,
+  initialOutput: T
+): Promise<T> {
+  let output = initialOutput;
+  for (let attempt = 0; attempt <= retryConfig.maxRetries; attempt++) {
+    output = await run();
+    if (output.state !== 'failed') break;
+
+    const { shouldRetry, isTransient } = shouldRetryNodeFailure(output, retryConfig.onError);
+    if (!shouldRetry || attempt >= retryConfig.maxRetries) break;
+
+    const delayMs = retryConfig.delayMs * Math.pow(2, attempt);
+    getLog().warn(
+      {
+        nodeId: node.id,
+        attempt: attempt + 1,
+        maxRetries: retryConfig.maxRetries,
+        delayMs,
+        error: output.error,
+      },
+      'dag_node_transient_retry'
+    );
+
+    const errorKind = isTransient ? 'transient error' : 'error';
+    await safeSendMessage(
+      platform,
+      conversationId,
+      `⚠️ Node \`${node.id}\` failed with ${errorKind} (attempt ${String(attempt + 1)}/${String(retryConfig.maxRetries + 1)}). Retrying in ${String(Math.round(delayMs / 1000))}s...`,
+      { workflowId: workflowRun.id, nodeName: node.id }
+    );
+
+    await new Promise(resolve => setTimeout(resolve, delayMs));
+  }
+  return output;
+}
+
+/**
+ * Run a deterministic (bash/script) node with opt-in retry.
+ *
+ * Deterministic nodes get exactly one attempt unless they declare an explicit
+ * `retry:` block. When they do, transient/all failures are retried via the shared
+ * {@link runNodeRetryLoop} (same exponential-backoff + FATAL-never-retried
+ * semantics as AI nodes). The single-attempt default is preserved so scripts with
+ * side effects aren't silently re-executed (#2088).
+ */
+async function runDeterministicNodeWithRetry(
+  node: DagNode,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  workflowRun: WorkflowRun,
+  run: () => Promise<NodeOutput>
+): Promise<NodeOutput> {
+  const retryConfig = getExplicitNodeRetryConfig(node);
+  // No explicit retry: preserve the single-attempt deterministic-node default.
+  if (!retryConfig) {
+    return run();
+  }
+  return runNodeRetryLoop(node, platform, conversationId, workflowRun, retryConfig, run, {
+    state: 'failed',
+    output: '',
+    error: 'Node did not execute',
+  });
+}
+
+/**
  * Single-quote a string for safe inline shell use.
  * Replaces each ' with '\'' (end quote, literal single-quote, re-open quote).
  */
@@ -4036,24 +4155,34 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
             }
           }
 
-          // 3. Bash node dispatch — no AI, no session
+          // 3. Bash node dispatch — no AI, no session. Opt-in retry only: a
+          // deterministic node retries solely when it declares an explicit
+          // `retry:` block (single attempt otherwise), so side-effectful scripts
+          // aren't silently re-run (#2088).
           if (isBashNode(node)) {
-            const output = await executeBashNode(
-              deps,
+            const output = await runDeterministicNodeWithRetry(
+              node,
               platform,
               conversationId,
-              cwd,
               workflowRun,
-              node,
-              artifactsDir,
-              logDir,
-              baseBranch,
-              docsDir,
-              ctx.nodeOutputs,
-              issueContext,
-              config.envVars,
-              stepNamePrefix,
-              iteration
+              () =>
+                executeBashNode(
+                  deps,
+                  platform,
+                  conversationId,
+                  cwd,
+                  workflowRun,
+                  node,
+                  artifactsDir,
+                  logDir,
+                  baseBranch,
+                  docsDir,
+                  ctx.nodeOutputs,
+                  issueContext,
+                  config.envVars,
+                  stepNamePrefix,
+                  iteration
+                )
             );
             return { nodeId: node.id, output };
           }
@@ -4201,24 +4330,33 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
             return { nodeId: node.id, output: { state: 'completed' as const, output: reason } };
           }
 
-          // 3e. Script node dispatch — runs via bun or uv
+          // 3e. Script node dispatch — runs via bun or uv. Opt-in retry only,
+          // same as bash (#2088): retries solely when an explicit `retry:` block
+          // is declared, single attempt otherwise.
           if (isScriptNode(node)) {
-            const output = await executeScriptNode(
-              deps,
+            const output = await runDeterministicNodeWithRetry(
+              node,
               platform,
               conversationId,
-              cwd,
               workflowRun,
-              node,
-              artifactsDir,
-              logDir,
-              baseBranch,
-              docsDir,
-              ctx.nodeOutputs,
-              issueContext,
-              config.envVars,
-              stepNamePrefix,
-              iteration
+              () =>
+                executeScriptNode(
+                  deps,
+                  platform,
+                  conversationId,
+                  cwd,
+                  workflowRun,
+                  node,
+                  artifactsDir,
+                  logDir,
+                  baseBranch,
+                  docsDir,
+                  ctx.nodeOutputs,
+                  issueContext,
+                  config.envVars,
+                  stepNamePrefix,
+                  iteration
+                )
             );
             return { nodeId: node.id, output };
           }
@@ -4327,77 +4465,43 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
             }
           }
 
-          // 6. Execute with retry for transient failures
-          const retryConfig = getEffectiveNodeRetryConfig(node);
-          let output: NodeExecutionResult = {
-            state: 'failed',
-            output: '',
-            error: 'Node did not execute',
-          };
-
-          for (let attempt = 0; attempt <= retryConfig.maxRetries; attempt++) {
-            output = await executeNodeInternal(
-              deps,
-              platform,
-              conversationId,
-              cwd,
-              workflowRun,
-              node,
-              provider,
-              nodeOptions,
-              artifactsDir,
-              logDir,
-              baseBranch,
-              docsDir,
-              ctx.nodeOutputs,
-              // Always pass the prior session ID — forkSession:true in executeNodeInternal
-              // ensures the source is never mutated, so retries can safely resume from it.
-              resumeSessionId,
-              configuredCommandFolder,
-              issueContext,
-              resolvedNodeModel,
-              resolvedTier,
-              stepNamePrefix,
-              iteration
-            );
-
-            if (output.state !== 'failed') break;
-
-            // Check if retryable.
-            // FATAL errors (auth, permissions, credit balance) are never retried even when on_error:all.
-            const isFatal = output.error
-              ? classifyError(new Error(output.error)) === 'FATAL'
-              : false;
-            const isTransient = output.error ? isTransientNodeError(output.error) : false;
-            const shouldRetry =
-              !isFatal &&
-              (retryConfig.onError === 'all' ||
-                (retryConfig.onError === 'transient' && isTransient));
-
-            if (!shouldRetry || attempt >= retryConfig.maxRetries) break;
-
-            const delayMs = retryConfig.delayMs * Math.pow(2, attempt);
-            getLog().warn(
-              {
-                nodeId: node.id,
-                attempt: attempt + 1,
-                maxRetries: retryConfig.maxRetries,
-                delayMs,
-                error: output.error,
-              },
-              'dag_node_transient_retry'
-            );
-
-            const errorKind = isTransient ? 'transient error' : 'error';
-            await safeSendMessage(
-              platform,
-              conversationId,
-              `⚠️ Node \`${node.id}\` failed with ${errorKind} (attempt ${String(attempt + 1)}/${String(retryConfig.maxRetries + 1)}). Retrying in ${String(Math.round(delayMs / 1000))}s...`,
-              { workflowId: workflowRun.id, nodeName: node.id }
-            );
-
-            await new Promise(resolve => setTimeout(resolve, delayMs));
-          }
+          // 6. Execute with retry for transient failures. AI nodes get the
+          // default 2 transient retries; the shared loop applies the same
+          // backoff + FATAL-never-retried semantics as deterministic nodes.
+          const output = await runNodeRetryLoop(
+            node,
+            platform,
+            conversationId,
+            workflowRun,
+            getEffectiveNodeRetryConfig(node),
+            () =>
+              executeNodeInternal(
+                deps,
+                platform,
+                conversationId,
+                cwd,
+                workflowRun,
+                node,
+                provider,
+                nodeOptions,
+                artifactsDir,
+                logDir,
+                baseBranch,
+                docsDir,
+                ctx.nodeOutputs,
+                // Always pass the prior session ID — forkSession:true in
+                // executeNodeInternal ensures the source is never mutated, so
+                // retries can safely resume from it.
+                resumeSessionId,
+                configuredCommandFolder,
+                issueContext,
+                resolvedNodeModel,
+                resolvedTier,
+                stepNamePrefix,
+                iteration
+              ),
+            { state: 'failed', output: '', error: 'Node did not execute' } as NodeExecutionResult
+          );
 
           // Cold-resume surfacing: this node requested a session resume but the
           // provider reported it came back cold (resumed === false) — the prior

@@ -2572,6 +2572,180 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
   }, 5_000);
 });
 
+describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#2088)', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(tmpdir(), `dag-det-retry-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await mkdir(testDir, { recursive: true });
+
+    mockSendQueryDag.mockClear();
+    mockGetAgentProviderDag.mockClear();
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+  });
+
+  afterEach(async () => {
+    try {
+      await rm(testDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  });
+
+  // Deterministic nodes run real subprocesses, so a side-effect counter file is
+  // the most direct way to observe how many attempts actually happened.
+  async function runNodes(
+    nodes: DagNode[]
+  ): Promise<{ mockDeps: WorkflowDeps; platform: IWorkflowPlatform }> {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('det-retry-run', {
+      workflow_name: 'det-retry',
+      conversation_id: 'conv-det-retry',
+      user_message: 'det retry message',
+    });
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-det-retry',
+      testDir,
+      { name: 'det-retry', nodes },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+    return { mockDeps, platform };
+  }
+
+  it('bash node with retry re-runs until it succeeds', async () => {
+    // Forward-slashed for safe embedding in inline bash AND JS string literals
+    // (Windows join() yields backslashes; '\a' is an escape in JS strings).
+    const attempts = join(testDir, 'attempts.log').replace(/\\/g, '/');
+    const marker = join(testDir, 'marker');
+    const nodes: DagNode[] = [
+      {
+        id: 'flaky',
+        // Attempt 1: no marker → create it, fail. Attempt 2: marker present → succeed.
+        bash: `printf 'a' >> '${attempts}'; if [ -e '${marker}' ]; then echo ok; else printf x > '${marker}'; echo 'boom' >&2; exit 1; fi`,
+        retry: { max_attempts: 3, delay_ms: 1, on_error: 'all' },
+      },
+    ];
+    const { mockDeps } = await runNodes(nodes);
+
+    const content = await readFile(attempts, 'utf8');
+    // One failing attempt then one succeeding attempt → exactly 2 runs.
+    expect(content.length).toBe(2);
+    expect(mockDeps.store.failWorkflowRun as ReturnType<typeof mock>).not.toHaveBeenCalled();
+  }, 5_000);
+
+  it('bash node with retry exhausts all attempts on persistent failure', async () => {
+    // Forward-slashed for safe embedding in inline bash AND JS string literals
+    // (Windows join() yields backslashes; '\a' is an escape in JS strings).
+    const attempts = join(testDir, 'attempts.log').replace(/\\/g, '/');
+    const nodes: DagNode[] = [
+      {
+        id: 'always-fails',
+        bash: `printf 'a' >> '${attempts}'; echo 'boom' >&2; exit 1`,
+        retry: { max_attempts: 2, delay_ms: 1, on_error: 'all' },
+      },
+    ];
+    const { mockDeps } = await runNodes(nodes);
+
+    const content = await readFile(attempts, 'utf8');
+    // max_attempts: 2 = 2 retries → 3 total attempts. Without the fix this is 1.
+    expect(content.length).toBe(3);
+    expect(mockDeps.store.failWorkflowRun as ReturnType<typeof mock>).toHaveBeenCalled();
+  }, 5_000);
+
+  it('bash node WITHOUT a retry block runs exactly once (single-attempt default preserved)', async () => {
+    // Forward-slashed for safe embedding in inline bash AND JS string literals
+    // (Windows join() yields backslashes; '\a' is an escape in JS strings).
+    const attempts = join(testDir, 'attempts.log').replace(/\\/g, '/');
+    const nodes: DagNode[] = [
+      {
+        id: 'no-retry',
+        bash: `printf 'a' >> '${attempts}'; echo 'boom' >&2; exit 1`,
+      },
+    ];
+    const { mockDeps } = await runNodes(nodes);
+
+    const content = await readFile(attempts, 'utf8');
+    // Deterministic nodes never auto-retry — retry is opt-in via an explicit block.
+    expect(content.length).toBe(1);
+    expect(mockDeps.store.failWorkflowRun as ReturnType<typeof mock>).toHaveBeenCalled();
+  }, 5_000);
+
+  it('bash node with a FATAL error is never retried even with on_error: all', async () => {
+    // Forward-slashed for safe embedding in inline bash AND JS string literals
+    // (Windows join() yields backslashes; '\a' is an escape in JS strings).
+    const attempts = join(testDir, 'attempts.log').replace(/\\/g, '/');
+    const nodes: DagNode[] = [
+      {
+        id: 'fatal',
+        bash: `printf 'a' >> '${attempts}'; echo 'unauthorized' >&2; exit 1`,
+        retry: { max_attempts: 3, delay_ms: 1, on_error: 'all' },
+      },
+    ];
+    const { mockDeps } = await runNodes(nodes);
+
+    const content = await readFile(attempts, 'utf8');
+    // FATAL classification wins over on_error: all → exactly 1 attempt.
+    expect(content.length).toBe(1);
+    expect(mockDeps.store.failWorkflowRun as ReturnType<typeof mock>).toHaveBeenCalled();
+  }, 5_000);
+
+  it('script node with retry re-runs on persistent failure', async () => {
+    // Forward-slashed for safe embedding in inline bash AND JS string literals
+    // (Windows join() yields backslashes; '\a' is an escape in JS strings).
+    const attempts = join(testDir, 'attempts.log').replace(/\\/g, '/');
+    const nodes: DagNode[] = [
+      {
+        id: 'flaky-script',
+        script: `require('fs').appendFileSync('${attempts}', 'a'); process.exit(1)`,
+        runtime: 'bun',
+        retry: { max_attempts: 2, delay_ms: 1, on_error: 'all' },
+      },
+    ];
+    const { mockDeps } = await runNodes(nodes);
+
+    const content = await readFile(attempts, 'utf8');
+    // 1 initial + 2 retries = 3. Without the fix this is 1.
+    expect(content.length).toBe(3);
+    expect(mockDeps.store.failWorkflowRun as ReturnType<typeof mock>).toHaveBeenCalled();
+  }, 10_000);
+
+  it('bash retry sends a platform notification before each retry', async () => {
+    // Forward-slashed for safe embedding in inline bash AND JS string literals
+    // (Windows join() yields backslashes; '\a' is an escape in JS strings).
+    const attempts = join(testDir, 'attempts.log').replace(/\\/g, '/');
+    const nodes: DagNode[] = [
+      {
+        id: 'notify',
+        bash: `printf 'a' >> '${attempts}'; echo 'boom' >&2; exit 1`,
+        retry: { max_attempts: 2, delay_ms: 1, on_error: 'all' },
+      },
+    ];
+    const { platform } = await runNodes(nodes);
+
+    const sendCalls = (platform.sendMessage as ReturnType<typeof mock>).mock.calls;
+    const retryMessages = sendCalls.filter(
+      (call: unknown[]) =>
+        typeof call[1] === 'string' && (call[1] as string).includes('Retrying in')
+    );
+    // 2 retries → 2 retry notifications.
+    expect(retryMessages.length).toBe(2);
+  }, 5_000);
+});
+
 describe('executeDagWorkflow -- tool_called event persistence', () => {
   let testDir: string;
 
