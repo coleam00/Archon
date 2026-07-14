@@ -1710,7 +1710,9 @@ describe('workflow dispatch routing — interactive flag', () => {
     // executeWorkflow via opts. parentConversationId still flows so the API
     // helpers keep dispatching resume on subsequent approvals.
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
-    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockGetCodebase.mockReturnValueOnce(
+      Promise.resolve(makeDispatchCodebase({ default_branch: 'develop' }))
+    );
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
     mockFindResumableRunByParentConversation.mockReturnValueOnce(
       Promise.resolve(
@@ -1731,10 +1733,13 @@ describe('workflow dispatch routing — interactive flag', () => {
     // Resume payload lives on the opts bag (the trailing arg).
     const opts = callArgs[callArgs.length - 1] as {
       parentConversationId?: string;
+      baseBranch?: string;
       preCreatedRun?: { id: string };
       priorCompletedNodes?: Map<string, string>;
     };
     expect(opts.parentConversationId).toBe('conv-1-db');
+    // Resume dispatch carries the codebase default as the $BASE_BRANCH fallback too.
+    expect(opts.baseBranch).toBe('develop');
     expect(opts.preCreatedRun?.id).toBe('resumable-run-1');
     expect(opts.priorCompletedNodes?.size).toBeGreaterThan(0);
   });
@@ -1745,7 +1750,9 @@ describe('workflow dispatch routing — interactive flag', () => {
     // no interactive-loop state), the orchestrator must NOT throw — it sends
     // a user-visible notice and starts a fresh run on the same worktree.
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
-    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockGetCodebase.mockReturnValueOnce(
+      Promise.resolve(makeDispatchCodebase({ default_branch: 'develop' }))
+    );
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
     mockFindResumableRunByParentConversation.mockReturnValueOnce(
       Promise.resolve(
@@ -1768,10 +1775,13 @@ describe('workflow dispatch routing — interactive flag', () => {
     // Opts bag carries no resume payload — fresh run.
     const opts = callArgs[callArgs.length - 1] as {
       parentConversationId?: string;
+      baseBranch?: string;
       preCreatedRun?: unknown;
       priorCompletedNodes?: unknown;
     };
     expect(opts.parentConversationId).toBe('conv-1-db');
+    // The fresh-run-in-same-worktree branch still threads the codebase default.
+    expect(opts.baseBranch).toBe('develop');
     expect(opts.preCreatedRun).toBeUndefined();
     expect(opts.priorCompletedNodes).toBeUndefined();
   });
