@@ -777,7 +777,7 @@ describe('CommandHandler', () => {
           recursive: true,
         });
         expect(spyFsWriteFile).toHaveBeenCalledWith(
-          '/workspace/my-repo/.archon/config.yaml',
+          join('/workspace/my-repo', '.archon', 'config.yaml'),
           expect.any(String)
         );
       });
