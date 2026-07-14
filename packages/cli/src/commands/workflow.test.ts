@@ -165,6 +165,7 @@ mock.module('@archon/core/db/workflows', () => ({
   findResumableRun: mock(() => Promise.resolve(null)),
   resumeWorkflowRun: mock(() => Promise.resolve(null)),
   getWorkflowRun: mock(() => Promise.resolve(null)),
+  findWorkflowRunsByIdPrefix: mock(() => Promise.resolve([])),
   updateWorkflowRun: mock(() => Promise.resolve()),
   listWorkflowRuns: mock(() => Promise.resolve([])),
   listDashboardRuns: mock(() =>
@@ -2372,6 +2373,199 @@ describe('workflowGetCommand', () => {
     const parsed = JSON.parse(consoleSpy.mock.calls[0][0] as string) as { events: unknown[] };
     expect(Array.isArray(parsed.events)).toBe(true);
     expect(parsed.events).toHaveLength(1);
+  });
+});
+
+describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
+  const FULL_ID = '0b1ee8da-1111-2222-3333-444455556666';
+  const CODEBASE = { id: 'cb-1', name: 'proj', default_cwd: '/repo' };
+  let consoleSpy: ReturnType<typeof spyOn>;
+
+  beforeEach(async () => {
+    consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    const workflowDb = await import('@archon/core/db/workflows');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockClear();
+    (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockClear();
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockClear();
+  });
+
+  afterEach(() => {
+    consoleSpy.mockRestore();
+  });
+
+  it('resolves a unique short prefix to the full run id (get)', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(
+      CODEBASE
+    );
+    (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValueOnce([
+      { id: FULL_ID },
+    ]);
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: FULL_ID,
+      workflow_name: 'implement',
+      status: 'completed',
+      working_path: '/tmp/wt',
+      started_at: new Date(),
+      metadata: {},
+    });
+
+    const code = await workflowGetCommand('0b1ee8da', true, undefined, '/repo');
+
+    expect(workflowDb.findWorkflowRunsByIdPrefix).toHaveBeenCalledWith('0b1ee8da', 'cb-1');
+    expect(workflowDb.getWorkflowRun).toHaveBeenCalledWith(FULL_ID);
+    expect(code).toBe(0);
+  });
+
+  it('skips codebase and prefix lookups entirely for a full UUID', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: FULL_ID,
+      workflow_name: 'implement',
+      status: 'completed',
+      working_path: '/tmp/wt',
+      started_at: new Date(),
+      metadata: {},
+    });
+
+    const code = await workflowGetCommand(FULL_ID, true, undefined, '/repo');
+
+    expect(codebaseDb.findCodebaseByDefaultCwd).not.toHaveBeenCalled();
+    expect(workflowDb.findWorkflowRunsByIdPrefix).not.toHaveBeenCalled();
+    expect(workflowDb.getWorkflowRun).toHaveBeenCalledWith(FULL_ID);
+    expect(code).toBe(0);
+  });
+
+  it('skips lookups for a 32-char undashed full id (SQLite id shape)', async () => {
+    const undashedId = 'e1f890f05e5bab0d906921593bf500c4';
+    const workflowDb = await import('@archon/core/db/workflows');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: undashedId,
+      workflow_name: 'implement',
+      status: 'completed',
+      working_path: '/tmp/wt',
+      started_at: new Date(),
+      metadata: {},
+    });
+
+    const code = await workflowGetCommand(undashedId, true, undefined, '/repo');
+
+    expect(codebaseDb.findCodebaseByDefaultCwd).not.toHaveBeenCalled();
+    expect(workflowDb.findWorkflowRunsByIdPrefix).not.toHaveBeenCalled();
+    expect(workflowDb.getWorkflowRun).toHaveBeenCalledWith(undashedId);
+    expect(code).toBe(0);
+  });
+
+  it('throws on an ambiguous prefix (human mode)', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(
+      CODEBASE
+    );
+    (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValueOnce([
+      { id: '0b1ee8da-1111-2222-3333-444455556666' },
+      { id: '0b1ee8da-9999-8888-7777-666655554444' },
+    ]);
+
+    await expect(workflowResumeCommand('0b1ee8da', undefined, '/repo')).rejects.toThrow(
+      'matches more than one run'
+    );
+  });
+
+  it('emits {ok:false} JSON on an ambiguous prefix (never throws in --json)', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(
+      CODEBASE
+    );
+    (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValueOnce([
+      { id: '0b1ee8da-1111-2222-3333-444455556666' },
+      { id: '0b1ee8da-9999-8888-7777-666655554444' },
+    ]);
+
+    await workflowAbandonCommand('0b1ee8da', true, '/repo');
+
+    const parsed = JSON.parse(consoleSpy.mock.calls[0][0] as string) as {
+      ok: boolean;
+      runId: string;
+      action: string;
+      error: string;
+    };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.runId).toBe('0b1ee8da');
+    expect(parsed.action).toBe('abandon');
+    expect(parsed.error).toContain('matches more than one run');
+  });
+
+  it('passes the id through unchanged when cwd is not a registered project', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+
+    const code = await workflowGetCommand('deadbeef', true, undefined, '/somewhere');
+
+    expect(workflowDb.findWorkflowRunsByIdPrefix).not.toHaveBeenCalled();
+    expect(workflowDb.getWorkflowRun).toHaveBeenCalledWith('deadbeef');
+    expect(code).toBe(1);
+  });
+
+  it('passes the id through when the prefix matches nothing in this project', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(
+      CODEBASE
+    );
+    (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValueOnce([]);
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+
+    const code = await workflowGetCommand('deadbeef', true, undefined, '/repo');
+
+    expect(workflowDb.getWorkflowRun).toHaveBeenCalledWith('deadbeef');
+    expect(code).toBe(1);
+  });
+
+  it('abandons by short prefix and reports the resolved full id', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(
+      CODEBASE
+    );
+    (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValueOnce([
+      { id: FULL_ID },
+    ]);
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: FULL_ID,
+      workflow_name: 'implement',
+      status: 'running',
+    });
+    (workflowDb.cancelWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
+
+    await workflowAbandonCommand('0b1ee8da', true, '/repo');
+
+    expect(workflowDb.cancelWorkflowRun).toHaveBeenCalledWith(FULL_ID);
+    const parsed = JSON.parse(consoleSpy.mock.calls[0][0] as string) as {
+      ok: boolean;
+      runId: string;
+    };
+    expect(parsed.ok).toBe(true);
+    expect(parsed.runId).toBe(FULL_ID);
+  });
+
+  it('skips resolution when no cwd is provided (exact lookup only)', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+
+    const code = await workflowGetCommand('deadbeef', true);
+
+    expect(codebaseDb.findCodebaseByDefaultCwd).not.toHaveBeenCalled();
+    expect(workflowDb.findWorkflowRunsByIdPrefix).not.toHaveBeenCalled();
+    expect(code).toBe(1);
   });
 });
 
