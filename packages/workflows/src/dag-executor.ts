@@ -4638,11 +4638,24 @@ export async function executeDagWorkflow(
   // Nodes flagged `always_run: true` are excluded — they re-execute on resume
   // and downstream consumers must see the fresh output, not the cached one.
   if (priorCompletedNodes && priorCompletedNodes.size > 0) {
-    const alwaysRunIds = new Set(workflow.nodes.filter(n => n.always_run).map(n => n.id));
+    const nodesById = new Map(workflow.nodes.map(n => [n.id, n]));
     let prepopulatedCount = 0;
     for (const [nodeId, output] of priorCompletedNodes) {
-      if (alwaysRunIds.has(nodeId)) continue;
-      nodeOutputs.set(nodeId, { state: 'completed', output });
+      const node = nodesById.get(nodeId);
+      // Nodes flagged always_run re-execute on resume — leave them for fresh output.
+      if (node?.always_run) continue;
+      // Re-derive the producer's declared field set from the loaded definition so the
+      // strict `$node.output.field` contract (output-ref.ts) is invariant across fresh
+      // vs resumed runs. getCompletedDagNodeOutputs rehydrates text only, so without
+      // this a declared-optional-absent field would throw instead of resolving to ''
+      // and an undeclared key would resolve instead of throwing (#2091). Mirrors the
+      // fresh-completion capture above.
+      const declaredFields = declaredFieldsFromSchema(node?.output_format);
+      nodeOutputs.set(nodeId, {
+        state: 'completed',
+        output,
+        ...(declaredFields !== undefined ? { declaredFields } : {}),
+      });
       prepopulatedCount++;
     }
     getLog().info(

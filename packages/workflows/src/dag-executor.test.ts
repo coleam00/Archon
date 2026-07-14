@@ -3792,6 +3792,121 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
     expect(mockSendQueryDag.mock.calls.length).toBe(2);
   });
 
+  // #2091: on resume, prior completed nodes are rehydrated from text only, so the
+  // producer's output_format field set must be re-derived from the loaded definition —
+  // otherwise the strict `$node.output.field` contract downgrades to the schemaless
+  // path and a resumed run gets different semantics than a fresh one.
+  it("re-derives declaredFields on resume so a declared-optional-absent field resolves to ''", async () => {
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('resume-declared-optional');
+
+    let capturedPrompt = '';
+    mockSendQueryDag.mockImplementation(function* (prompt: string) {
+      capturedPrompt = prompt;
+      yield { type: 'assistant', content: 'step2 result' };
+      yield { type: 'result', sessionId: 'session-id' };
+    });
+
+    // Prior JSON output omits the declared-optional `note` field.
+    const priorCompletedNodes = new Map([['step1', '{"type":"BUG"}']]);
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-resume',
+      testDir,
+      {
+        name: 'declared-optional',
+        nodes: [
+          {
+            id: 'step1',
+            prompt: 'produce json',
+            output_format: {
+              type: 'object',
+              properties: { type: { type: 'string' }, note: { type: 'string' } },
+              required: ['type'],
+            },
+          },
+          { id: 'step2', prompt: 'note=[$step1.output.note]', depends_on: ['step1'] },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      priorCompletedNodes
+    );
+
+    // The consumer must run (step1 was skipped, so exactly one AI call = step2),
+    // and the declared-but-absent `note` resolves to '' — not a missing-key throw.
+    expect(mockSendQueryDag.mock.calls.length).toBe(1);
+    expect(capturedPrompt).toBe('note=[]');
+  });
+
+  it('re-derives declaredFields on resume so an undeclared key fails the consumer (not-in-schema)', async () => {
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('resume-undeclared-key');
+
+    // Prior JSON output carries an `extra` key that the schema does NOT declare.
+    const priorCompletedNodes = new Map([['step1', '{"type":"BUG","extra":"x"}']]);
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-resume',
+      testDir,
+      {
+        name: 'undeclared-key',
+        nodes: [
+          {
+            id: 'step1',
+            prompt: 'produce json',
+            output_format: {
+              type: 'object',
+              properties: { type: { type: 'string' } },
+              required: ['type'],
+            },
+          },
+          { id: 'step2', prompt: 'extra=[$step1.output.extra]', depends_on: ['step1'] },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      priorCompletedNodes
+    );
+
+    // The undeclared `extra` must fail the consumer before the AI runs (0 calls),
+    // matching fresh-run behavior instead of silently resolving via the schemaless path.
+    expect(mockSendQueryDag.mock.calls.length).toBe(0);
+
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const failedEvent = eventCalls.find(
+      (call: unknown[]) =>
+        (call[0] as { event_type: string }).event_type === 'node_failed' &&
+        (call[0] as { step_name: string }).step_name === 'step2'
+    );
+    expect(failedEvent).toBeDefined();
+    expect((failedEvent[0].data as { error: string }).error).toContain('is not declared in node');
+  });
+
   it('stores node_output in node_completed event data for bash nodes', async () => {
     const store = createMockStore();
     const mockDeps = createMockDeps(store);
