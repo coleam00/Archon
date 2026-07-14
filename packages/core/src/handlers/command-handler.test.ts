@@ -771,7 +771,7 @@ describe('CommandHandler', () => {
         const result = await handleCommand(conversation, '/init');
 
         expect(result.success).toBe(true);
-        expect(spyFsMkdir).toHaveBeenCalledWith('/workspace/my-repo/.archon/commands', {
+        expect(spyFsMkdir).toHaveBeenCalledWith(join('/workspace/my-repo', '.archon', 'commands'), {
           recursive: true,
         });
         expect(spyFsWriteFile).toHaveBeenCalledWith(
@@ -809,7 +809,7 @@ describe('CommandHandler', () => {
         const result = await handleCommand(conversation, '/init');
 
         expect(result.success).toBe(true);
-        expect(spyFsMkdir).toHaveBeenCalledWith('/explicit/worktree/.archon/commands', {
+        expect(spyFsMkdir).toHaveBeenCalledWith(join('/explicit/worktree', '.archon', 'commands'), {
           recursive: true,
         });
       });
