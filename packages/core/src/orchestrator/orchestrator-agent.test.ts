@@ -78,10 +78,19 @@ mock.module('../db/conversations', () => ({
 
 const mockListCodebases = mock(() => Promise.resolve([] as unknown[]));
 const mockCreateCodebase = mock(() => Promise.resolve({ id: 'new-codebase-id' }));
+const mockUpdateCodebase = mock(() => Promise.resolve());
+class MockCodebaseNotFoundError extends Error {
+  constructor(public codebaseId: string) {
+    super(`Codebase ${codebaseId} not found`);
+    this.name = 'CodebaseNotFoundError';
+  }
+}
 mock.module('../db/codebases', () => ({
   getCodebase: mockGetCodebase,
   listCodebases: mockListCodebases,
   createCodebase: mockCreateCodebase,
+  updateCodebase: mockUpdateCodebase,
+  CodebaseNotFoundError: MockCodebaseNotFoundError,
 }));
 
 const mockGetActiveSession = mock(() => Promise.resolve(null));
@@ -3263,6 +3272,59 @@ describe('handleMessage — /setproject dispatch', () => {
 
     expect(mockUpdateConversation).not.toHaveBeenCalled();
     expect(platform.sendMessage).toHaveBeenCalledWith('conv-1', expect.stringContaining('Usage'));
+  });
+});
+
+// ─── handleMessage — /update-project dispatch (issue #2085) ───────────────────
+
+describe('handleMessage — /update-project dispatch', () => {
+  beforeEach(() => {
+    mockGetOrCreateConversation.mockReset();
+    mockListCodebases.mockReset();
+    mockUpdateCodebase.mockReset();
+    mockParseCommand.mockReset();
+
+    mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(makeConversation()));
+    mockListCodebases.mockImplementation(() => Promise.resolve([makeCodebase('my-app')]));
+    mockUpdateCodebase.mockImplementation(() => Promise.resolve());
+    // '/' always exists — the handler's un-mocked existsSync check passes.
+    mockParseCommand.mockReturnValue({ command: 'update-project', args: ['my-app', '/'] });
+  });
+
+  test('reports success with old and new path', async () => {
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/update-project my-app /');
+
+    expect(mockUpdateCodebase).toHaveBeenCalledWith('id-my-app', { default_cwd: '/' });
+    const msg = (platform.sendMessage as ReturnType<typeof mock>).mock.calls[0]?.[1] as string;
+    expect(msg).toContain('updated');
+    expect(msg).toContain('/repos/my-app');
+  });
+
+  test('row-gone failure (CodebaseNotFoundError) reports removal, not a DB error', async () => {
+    mockUpdateCodebase.mockImplementation(() =>
+      Promise.reject(new MockCodebaseNotFoundError('id-my-app'))
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/update-project my-app /');
+
+    const msg = (platform.sendMessage as ReturnType<typeof mock>).mock.calls[0]?.[1] as string;
+    expect(msg).toContain('removed');
+    expect(msg).toContain('/register-project');
+    expect(msg).not.toContain('database error');
+  });
+
+  test('transient DB failure reports a database error, not removal', async () => {
+    mockUpdateCodebase.mockImplementation(() => Promise.reject(new Error('connection refused')));
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/update-project my-app /');
+
+    const msg = (platform.sendMessage as ReturnType<typeof mock>).mock.calls[0]?.[1] as string;
+    expect(msg).toContain('database error');
+    expect(msg).toContain('try again');
+    expect(msg).not.toContain('removed');
   });
 });
 

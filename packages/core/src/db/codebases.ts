@@ -146,6 +146,18 @@ export async function findCodebaseByName(name: string): Promise<Codebase | null>
   return result.rows[0] || null;
 }
 
+/**
+ * Error thrown when an UPDATE matched no codebase row (row deleted between
+ * fetch and update). Lets callers distinguish "row gone" from operational
+ * DB failures (connection refused, timeout, constraint violation).
+ */
+export class CodebaseNotFoundError extends Error {
+  constructor(public codebaseId: string) {
+    super(`Codebase ${codebaseId} not found`);
+    this.name = 'CodebaseNotFoundError';
+  }
+}
+
 export async function updateCodebase(
   id: string,
   data: { default_cwd?: string; repository_url?: string | null; default_branch?: string | null }
@@ -180,7 +192,7 @@ export async function updateCodebase(
     values
   );
   if ((result.rowCount ?? 0) === 0) {
-    throw new Error(`Codebase ${id} not found`);
+    throw new CodebaseNotFoundError(id);
   }
 }
 
