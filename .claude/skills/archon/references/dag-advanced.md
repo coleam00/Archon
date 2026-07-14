@@ -16,6 +16,8 @@ Hooks, MCP, skills, tool restrictions, `output_format`, `agents`, and Claude SDK
 | `effort` / `thinking` | Supported | Use `modelReasoningEffort` | Supported (maps to thinking level) | — |
 | `agents` / `sandbox` / `maxBudgetUsd` / `fallbackModel` | Supported | No | No | — |
 
+Community providers beyond Pi: **OpenCode** supports per-node `mcp`, `hooks`, `skills`, `agents`, and tool restrictions (effort/thinking via `opencode.json`, not per-node); **Copilot** supports per-node `mcp`, `skills`, `agents`, tool restrictions, and effort/thinking (no hooks). See the five-provider matrix in `parameter-matrix.md` §Providers at a Glance. `sandbox`/`maxBudgetUsd`/`fallbackModel` remain Claude-only.
+
 ### Claude vs Codex: How Each Gets MCP and Skills
 
 **Claude**: MCP servers and skills are configured **per-node** in the workflow YAML via `mcp:` and `skills:` fields. Each node can have different MCP servers and skills.
@@ -151,7 +153,7 @@ Use `allowed_tools`/`denied_tools` for hard restrictions. Use hooks when you wan
 
 ## MCP (Model Context Protocol) Servers
 
-> Claude + Codex. Pi/OpenCode/Copilot nodes log a warning and ignore MCP configuration.
+> Claude, Codex, OpenCode, and Copilot all accept per-node `mcp:` (translated to each SDK's server config). Only Pi lacks MCP — Pi nodes log a warning and ignore it.
 
 Connect external tool servers to individual nodes.
 
@@ -239,7 +241,7 @@ Combine `mcp:` with `allowed_tools: []` for nodes that should ONLY use MCP tools
 
 ## Skills
 
-> Claude (per-node injection) and Pi. Codex discovers skills from the filesystem (`.agents/skills/`) — a node's `skills:` list is informational there.
+> Claude, Pi, OpenCode, and Copilot support per-node `skills:` injection. Codex discovers skills from the filesystem (`.agents/skills/`) — a node's `skills:` list is informational there.
 
 Preload domain knowledge into a node via Claude Code skills.
 

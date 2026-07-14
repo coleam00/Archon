@@ -255,13 +255,13 @@ All node types share these fields:
 | `provider` | string | inherited | Per-node provider override (`claude`, `codex`, `pi`, ...). Also forwarded on `loop`/`loop_group` |
 | `context` | `fresh` / `shared` | — | `fresh` = new session; `shared` = inherit from prior node. Defaults to `fresh` for parallel layers, inherited for sequential |
 | `output_format` | object | — | JSON Schema for structured output — see §Structured Output for the per-provider enforcement + failure contract |
-| `allowed_tools` | string[] | all | Tool whitelist. `[]` = disable all. Claude + Pi |
-| `denied_tools` | string[] | none | Tool blacklist. Claude + Pi |
+| `allowed_tools` | string[] | all | Tool whitelist. `[]` = disable all. All providers except Codex |
+| `denied_tools` | string[] | none | Tool blacklist. All providers except Codex |
 | `retry` | object | 2 retries, 3s (AI nodes) | Retry config. AI nodes retry transient errors by default even without `retry:`. Bash/script nodes retry **only with an explicit `retry:` block** (#2088 — on builds before that fix, `retry:` on bash/script is silently ignored). **Hard parse error on loop/loop_group** |
 | `persist_session` | boolean | workflow `persist_sessions` | `command`/`prompt` only. Persist the provider session across RUNS (keyed by workflow + node + conversation). See `dag-advanced.md` §Session Persistence |
-| `hooks` | object | — | SDK hooks. Claude only. See `dag-advanced.md` |
-| `mcp` | string | — | MCP config path. Claude + Codex. See `dag-advanced.md` |
-| `skills` | string[] | — | Skill names. Claude (per-node injection), Codex (informational — discovers from `.agents/skills/`), Pi. See `dag-advanced.md` |
+| `hooks` | object | — | SDK hooks. Claude + OpenCode. See `dag-advanced.md` |
+| `mcp` | string | — | MCP config path. All providers except Pi. See `dag-advanced.md` |
+| `skills` | string[] | — | Skill names. Per-node injection on Claude/Pi/OpenCode/Copilot; Codex informational (discovers from `.agents/skills/`). See `dag-advanced.md` |
 
 ## Dependencies and Parallel Execution
 

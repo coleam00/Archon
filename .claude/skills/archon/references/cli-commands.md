@@ -257,7 +257,7 @@ archon version
 
 ### `archon doctor`
 
-Verify the Archon setup: Claude/Codex binary resolution, `gh` auth, database connectivity, adapter configuration. Run this first when workflows fail with environment-shaped errors (binary not found, auth failures).
+Verify the Archon setup: Claude binary resolution, Pi auth, `gh` auth, database connectivity, connected providers, workspace writability, bundled defaults, and adapter configuration (Slack/Telegram). Run this first when workflows fail with environment-shaped errors (binary not found, auth failures). Note: there is no Codex binary check — Codex resolution issues surface at run time.
 
 ```bash
 archon doctor

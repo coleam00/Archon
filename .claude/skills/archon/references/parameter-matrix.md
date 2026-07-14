@@ -181,13 +181,14 @@ Use this matrix to find the right parameter. Use these references for the full e
 | `command` / `prompt` / `loop` / `loop_group` | yes | yes                               | yes                                  | yes                  | yes                 |
 | `bash` / `script`               | yes (no AI — provider-independent) | yes                | yes                                  | yes                  | yes                 |
 | `output_format`                 | **enforced** (SDK grammar) | **enforced** (SDK grammar) | best-effort (prompt + parse/repair + up to 3 re-asks) | **enforced** | best-effort (same re-ask loop as Pi) |
-| `allowed_tools` / `denied_tools` | yes          | ignored (use Codex CLI config)          | **yes**                              | ignored              | ignored             |
-| `hooks`                         | yes           | **ignored + warn**                      | not available                        | not available        | not available       |
-| `mcp` (per-node)                | yes           | **yes**                                 | not available                        | not available        | not available       |
-| `skills` (per-node)             | yes           | informational (auto-discovers `.agents/skills/`) | yes                          | —                    | —                   |
-| `agents` / `sandbox` / `maxBudgetUsd` / `fallbackModel` | yes | no                    | no                                   | no                   | no                  |
+| `allowed_tools` / `denied_tools` | yes          | ignored (use Codex CLI config)          | **yes**                              | **yes**              | **yes**             |
+| `hooks`                         | yes           | **ignored + warn**                      | not available                        | **yes**              | not available       |
+| `mcp` (per-node)                | yes           | **yes**                                 | not available                        | **yes**              | **yes**             |
+| `skills` (per-node)             | yes           | informational (auto-discovers `.agents/skills/`) | yes                          | yes                  | yes                 |
+| `agents`                        | yes           | no                                      | no                                   | **yes**              | **yes**             |
+| `sandbox` / `maxBudgetUsd` / `fallbackModel` | yes | no                                | no                                   | no                   | no                  |
 | Model naming                    | `haiku`, `sonnet`, `opus`, `opus[1m]`   | Codex model ID (e.g. `gpt-5.3-codex`)   | `<vendor>/<model>` (e.g. `anthropic/claude-opus-4-5`, `openrouter/qwen/qwen3-coder`) | OpenCode catalog ref | Copilot model id |
-| `effort` / `thinking`           | yes           | use `modelReasoningEffort` for reasoning models | via `effort:` (maps to thinking level) | —                  | —                   |
+| `effort` / `thinking`           | yes           | use `modelReasoningEffort` for reasoning models | via `effort:` (maps to thinking level) | no (opencode.json agent config) | yes (maps like Pi) |
 | Session resume / `--resume` / `persist_session` | yes | yes                             | yes                                  | yes                  | yes                 |
 
 Whatever the enforcement tier, a node with `output_format` either produces schema-valid output or **fails** — validation runs for every provider, and best-effort providers re-ask up to 3 times first. Prefer tier keywords (`model: small|medium|large`) over hardcoded model ids — they resolve per-install from config.

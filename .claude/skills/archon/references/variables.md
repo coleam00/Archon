@@ -8,7 +8,6 @@ Variables are placeholders in command files and workflow prompts that get replac
 |----------|-------|-------------|
 | `$ARGUMENTS` | All modes | The user's original message passed to the workflow |
 | `$USER_MESSAGE` | All modes | Same as `$ARGUMENTS` — both resolve to the user's message |
-| `$1` … `$9` | Command files | Positional arguments (whitespace-split from the message). Command-file substitution only |
 | `$WORKFLOW_ID` | All modes | Unique workflow run ID (for tracking and logging) |
 | `$ARTIFACTS_DIR` | All modes | Pre-created directory for this workflow run's artifacts. Write outputs here |
 | `$BASE_BRANCH` | All modes | Base branch name. Auto-detected from git, or set via `worktree.baseBranch` in config. Throws if referenced but unresolvable |
@@ -28,7 +27,7 @@ Variables are placeholders in command files and workflow prompts that get replac
 - **Command files** (`.archon/commands/*.md`) — all variables except `$nodeId.output`
 - **Inline `prompt:` fields** — in DAG prompt nodes, loop prompts, and loop_group body prompts
 - **`bash:` scripts** — SPECIAL: user-controlled variables (`$ARGUMENTS`, `$USER_MESSAGE`, `$LOOP_USER_INPUT`, `$LOOP_PREV_OUTPUT`, `$REJECTION_REASON`, `$CONTEXT`) are **NOT text-substituted** into the script (shell-injection guard). They arrive as **environment variables** instead: `ARGUMENTS`, `USER_MESSAGE`, `LOOP_USER_INPUT`, `LOOP_PREV_OUTPUT`, `REJECTION_REASON`, `CONTEXT`, plus `ARTIFACTS_DIR`, `LOG_DIR`, `BASE_BRANCH` — use `"$ARGUMENTS"` as normal shell env access. `$nodeId.output` refs ARE substituted, auto shell-quoted; values >32KB spill to a file and substitute as `$(cat <path>)`
-- **`script:` bodies** — `$nodeId.output` values are substituted **raw** (not shell-quoted). Assign directly (`const data = $nodeId.output;`) — JSON is valid JS expression syntax. **Avoid `String.raw\`$nodeId.output\``** — it silently breaks when the output contains a backtick (common in AI-generated markdown and `output_format` payloads). NOTE: script subprocesses get FEWER env vars than bash — only `ARTIFACTS_DIR`, `LOG_DIR`, `BASE_BRANCH` (+ managed per-project env). `process.env.ARGUMENTS` is NOT available in a script node; pass values via `$nodeId.output` substitution instead
+- **`script:` bodies** — `$nodeId.output` values are substituted **raw** (not shell-quoted). Assign directly (`const data = $nodeId.output;`) — JSON is valid JS expression syntax. **Avoid `String.raw\`$nodeId.output\``** — it silently breaks when the output contains a backtick (common in AI-generated markdown and `output_format` payloads). Env: script subprocesses get FEWER env vars than bash — only `ARTIFACTS_DIR`, `LOG_DIR`, `BASE_BRANCH` (+ managed per-project env); `process.env.ARGUMENTS` is NOT available. **Footgun**: unlike bash, script bodies do NOT use the shell-safe path — a literal `$ARGUMENTS` / `$USER_MESSAGE` / `$CONTEXT` in the script source IS text-substituted **raw and unescaped** into the code (user text spliced into TS/Python source — a quoting/injection hazard). Prefer `$nodeId.output` refs (or a `bash:` node reading env vars) for user-controlled values
 
 ## Substitution Order
 
@@ -42,6 +41,10 @@ If `$CONTEXT` / `$EXTERNAL_CONTEXT` / `$ISSUE_CONTEXT` is NOT present anywhere i
 ## Escaped Dollar Signs
 
 Use `\$` to produce a literal `$` in command files (prevents variable substitution).
+
+## NOT Supported: `$1` … `$9` Positional Arguments
+
+Despite older docs suggesting otherwise, positional `$1`…`$9` are **not substituted** by the workflow engine — command files and prompts receive the whole message only, via `$ARGUMENTS`/`$USER_MESSAGE`. (A legacy positional-substitution helper exists in the codebase but is not wired into the execution path.) Parse arguments inside the prompt or with a `bash:`/`script:` node instead.
 
 ## Node Output Details (DAG Only)
 
