@@ -115,7 +115,11 @@ export function levenshtein(a: string, b: string): number {
 }
 
 /** Find the closest matches from a list of candidates */
-export function findSimilar(name: string, candidates: string[], maxDistance?: number): string[] {
+export function findSimilar(
+  name: string,
+  candidates: readonly string[],
+  maxDistance?: number
+): string[] {
   const threshold = maxDistance ?? Math.max(2, Math.floor(name.length * 0.3));
   const scored = candidates
     .map(c => ({ name: c, distance: levenshtein(name.toLowerCase(), c.toLowerCase()) }))
@@ -549,6 +553,55 @@ export async function validateWorkflowResources(
             message: `Tool restrictions are not supported by provider '${provider}' — this will be ignored`,
             hint: 'Remove tool restriction fields or switch to a provider that supports them',
           });
+        }
+      } else if (caps.knownToolNames !== undefined && caps.knownToolNames.length > 0) {
+        // Warn on tool names outside the provider's audited built-in vocabulary
+        // (#2084): the SDK matches names as opaque strings, so a misspelled or
+        // stale name (e.g. `Task` after the Claude SDK renamed it to `Agent`)
+        // is a silent no-op at runtime. Warning-level only — MCP tool names and
+        // tools added by a newer SDK can't be proven invalid, so this must
+        // never hard-fail validation. Providers without a declared vocabulary
+        // skip the check entirely.
+        const known = caps.knownToolNames;
+        const toolLists = [
+          ['allowed_tools', 'allowed_tools' in node ? node.allowed_tools : undefined],
+          ['denied_tools', 'denied_tools' in node ? node.denied_tools : undefined],
+        ] as const;
+        for (const [field, entries] of toolLists) {
+          for (const entry of entries ?? []) {
+            // Permission-rule specifiers wrap a base name: `Bash(git:*)` → `Bash`.
+            const base = entry.split('(')[0].trim();
+            // MCP tool names (mcp__server, mcp__server__tool, mcp__server__*)
+            // are dynamic per-install — never flag them.
+            if (base === '' || base.startsWith('mcp__') || known.includes(base)) continue;
+
+            const renamed = caps.renamedTools?.[base];
+            if (renamed !== undefined) {
+              issues.push({
+                level: 'warning',
+                nodeId: node.id,
+                field,
+                message: `Tool '${base}' was renamed to '${renamed}' in the ${provider} SDK — the old name is silently ignored at runtime`,
+                hint: `Replace '${base}' with '${renamed}' in ${field}`,
+                suggestions: [renamed],
+              });
+              continue;
+            }
+
+            const similar = findSimilar(base, known);
+            const issue: ValidationIssue = {
+              level: 'warning',
+              nodeId: node.id,
+              field,
+              message: `Unknown tool '${base}' for provider '${provider}' — unrecognized names are silently ignored at runtime`,
+              hint: 'Use a built-in tool name, or the mcp__<server>__<tool> form for MCP tools',
+            };
+            if (similar.length > 0) {
+              issue.hint = `Did you mean: ${similar.map(s => `'${s}'`).join(', ')}? (MCP tools use the mcp__<server>__<tool> form)`;
+              issue.suggestions = similar;
+            }
+            issues.push(issue);
+          }
         }
       }
     }

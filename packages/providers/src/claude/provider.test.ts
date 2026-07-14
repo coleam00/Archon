@@ -118,7 +118,7 @@ describe('ClaudeProvider', () => {
   describe('getCapabilities', () => {
     test('returns full capability set for Claude provider', () => {
       const caps = client.getCapabilities();
-      expect(caps).toEqual({
+      expect(caps).toMatchObject({
         sessionResume: true,
         mcp: true,
         hooks: true,
@@ -134,6 +134,16 @@ describe('ClaudeProvider', () => {
         sandbox: true,
         nativeTools: true,
       });
+    });
+
+    test('declares a tool-name vocabulary for allowed/denied_tools validation (#2084)', () => {
+      const caps = client.getCapabilities();
+      // Current names present; renamed legacy names deliberately absent so
+      // validation can flag them with a targeted rename hint.
+      expect(caps.knownToolNames).toContain('Agent');
+      expect(caps.knownToolNames).toContain('Bash');
+      expect(caps.knownToolNames).not.toContain('Task');
+      expect(caps.renamedTools).toMatchObject({ Task: 'Agent' });
     });
   });
 
