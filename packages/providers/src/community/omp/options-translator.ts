@@ -43,6 +43,7 @@ export const DEFAULT_OMP_TOOL_NAMES = [
   'browser',
   'task',
   'job',
+  'launch',
   'todo',
   'web_search',
   'write',

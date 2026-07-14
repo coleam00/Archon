@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Bumped the Oh My Pi SDK packages to 16.5.0 and exposed OMP's new `launch` tool
+- Bumped the Oh My Pi SDK packages to 16.5.0 and exposed OMP's new `launch` tool through Archon's default OMP tool allowlist
 ## [0.5.0] - 2026-06-26
 
 Per-user AI credentials (API keys + subscription OAuth) with a zero-config

@@ -646,7 +646,7 @@ Archon still chooses the initial model from the node/workflow model first, then 
 
 `allowed_tools`, `denied_tools`, and `assistants.omp.toolNames` use OMP tool names. Common safe read/analysis tools are `read`, `grep`, `glob`, `lsp`, `web_search`, `ast_grep`, `ast_edit`, `task`, `todo`, and `ask`.
 
-Tools that can modify files, run code, access the network, or change session state should be enabled intentionally: `bash`, `eval`, `write`, `edit`, `browser`, `ssh`, `github`, `checkpoint`, `rewind`, `job`, `irc`, `render_mermaid`, `generate_image`, `memory_edit`, `learn`, `manage_skill`, and `search_tool_bm25`. Legacy aliases are accepted for existing workflows: `search` → `grep`, `find` → `glob`, `python` → `eval`, `fetch` → `read`, `poll` → `job`, and `todo_write` → `todo`. Hidden SDK tools such as `yield`, `resolve`, `goal`, `report_finding`, and `report_tool_issue` are only useful for OMP-internal workflows.
+Tools that can modify files, run code, access the network, manage long-running processes, or change session state should be enabled intentionally: `bash`, `eval`, `write`, `edit`, `browser`, `ssh`, `github`, `checkpoint`, `rewind`, `job`, `launch`, `irc`, `render_mermaid`, `generate_image`, `memory_edit`, `learn`, `manage_skill`, and `search_tool_bm25`. Legacy aliases are accepted for existing workflows: `search` → `grep`, `find` → `glob`, `python` → `eval`, `fetch` → `read`, `poll` → `job`, and `todo_write` → `todo`. Hidden SDK tools such as `yield`, `resolve`, `goal`, `report_finding`, and `report_tool_issue` are only useful for OMP-internal workflows.
 
 ### Oh My Pi capabilities
 

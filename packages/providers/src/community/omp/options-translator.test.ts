@@ -42,6 +42,7 @@ describe('resolveOmpToolNames', () => {
       unknownDeniedTools: [],
     });
     expect(DEFAULT_OMP_TOOL_NAMES).toContain('todo');
+    expect(DEFAULT_OMP_TOOL_NAMES).toContain('launch');
     expect(DEFAULT_OMP_TOOL_NAMES).toContain('inspect_image');
     expect(DEFAULT_OMP_TOOL_NAMES).not.toContain('todo_write');
     expect(DEFAULT_OMP_TOOL_NAMES).not.toContain('render_mermaid');
