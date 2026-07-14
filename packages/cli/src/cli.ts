@@ -142,7 +142,7 @@ Commands:
   ai alias set <@n> <p> <m>  Set a @custom model alias [--effort <e>] [--scope user|install]
   ai alias list [--json]     Show configured @custom aliases (install + yours)
   ai alias unset <@name>     Remove a @custom alias [--scope user|install]
-  ai default <provider>      Set the default assistant [--scope user|install]
+  ai default <p> [<model>]   Set the default assistant (+ chat model) [--scope user|install]
   telemetry status           Show anonymous telemetry state (enabled, reason, ID, host)
   telemetry reset            Rotate the anonymous install UUID
   validate workflows [name]  Validate workflow definitions and their references
@@ -934,7 +934,11 @@ async function main(): Promise<number> {
             }
           }
           case 'default':
-            return await aiDefaultCommand(positionals[2], values.scope as string | undefined);
+            return await aiDefaultCommand(
+              positionals[2],
+              positionals[3],
+              values.scope as string | undefined
+            );
           default:
             if (subcommand === undefined) {
               console.error('Missing ai subcommand');
@@ -942,7 +946,7 @@ async function main(): Promise<number> {
               console.error(`Unknown ai subcommand: ${subcommand}`);
             }
             console.error(
-              'Available: key set <provider>, login <provider>, list, logout <provider>, tier set|list|unset, alias set|list|unset, default <provider>'
+              'Available: key set <provider>, login <provider>, list, logout <provider>, tier set|list|unset, alias set|list|unset, default <provider> [<model>]'
             );
             return 1;
         }

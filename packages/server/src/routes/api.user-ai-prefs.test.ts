@@ -52,6 +52,7 @@ type Prefs = {
   tiers?: Record<string, Entry>;
   aliases?: Record<string, Entry>;
   defaultProvider?: string;
+  defaultModel?: string;
 };
 let prefsByUser: Record<string, Prefs> = {};
 
@@ -86,10 +87,16 @@ const mockSetAliases = mock(async (userId: string, patch: Record<string, Entry |
     ...(Object.keys(aliases).length ? { aliases } : { aliases: undefined }),
   };
 });
-const mockSetDefault = mock(async (userId: string, provider: string | null) => {
-  const cur = prefsByUser[userId] ?? {};
-  prefsByUser[userId] = { ...cur, defaultProvider: provider ?? undefined };
-});
+const mockSetDefault = mock(
+  async (userId: string, provider: string | null, model: string | null) => {
+    const cur = prefsByUser[userId] ?? {};
+    prefsByUser[userId] = {
+      ...cur,
+      defaultProvider: provider ?? undefined,
+      defaultModel: model ?? undefined,
+    };
+  }
+);
 
 mock.module('@archon/core', () => ({
   handleMessage: mock(async () => {}),
@@ -117,7 +124,7 @@ mock.module('@archon/core', () => ({
   getUserAiPrefs: mockGetPrefs,
   setUserTiers: mockSetTiers,
   setUserAliases: mockSetAliases,
-  setUserDefaultProvider: mockSetDefault,
+  setUserDefault: mockSetDefault,
 }));
 
 mock.module('@archon/paths', () => ({
@@ -362,26 +369,47 @@ describe('PATCH /api/auth/me/ai-prefs/aliases', () => {
 });
 
 describe('PATCH /api/auth/me/ai-prefs/default', () => {
-  test('sets the default provider', async () => {
+  test('sets the default provider (model pin cleared when omitted)', async () => {
     const res = await makeApp().request('/api/auth/me/ai-prefs/default', {
       method: 'PATCH',
       headers: JSON_HEADERS,
       body: JSON.stringify({ provider: 'claude' }),
     });
     expect(res.status).toBe(200);
-    expect(mockSetDefault).toHaveBeenCalledWith('user-from-alice', 'claude');
+    expect(mockSetDefault).toHaveBeenCalledWith('user-from-alice', 'claude', null);
     expect(await res.json()).toEqual({ defaultProvider: 'claude' });
   });
 
-  test('null clears the default', async () => {
-    prefsByUser['user-from-alice'] = { defaultProvider: 'codex' };
+  test('sets provider + model atomically and echoes both', async () => {
+    const res = await makeApp().request('/api/auth/me/ai-prefs/default', {
+      method: 'PATCH',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ provider: 'codex', model: 'gpt-5.5' }),
+    });
+    expect(res.status).toBe(200);
+    expect(mockSetDefault).toHaveBeenCalledWith('user-from-alice', 'codex', 'gpt-5.5');
+    expect(await res.json()).toEqual({ defaultProvider: 'codex', defaultModel: 'gpt-5.5' });
+  });
+
+  test('null clears the default (provider + model)', async () => {
+    prefsByUser['user-from-alice'] = { defaultProvider: 'codex', defaultModel: 'gpt-5.5' };
     const res = await makeApp().request('/api/auth/me/ai-prefs/default', {
       method: 'PATCH',
       headers: JSON_HEADERS,
       body: JSON.stringify({ provider: null }),
     });
     expect(res.status).toBe(200);
-    expect(mockSetDefault).toHaveBeenCalledWith('user-from-alice', null);
+    expect(mockSetDefault).toHaveBeenCalledWith('user-from-alice', null, null);
+  });
+
+  test('model without provider → 400', async () => {
+    const res = await makeApp().request('/api/auth/me/ai-prefs/default', {
+      method: 'PATCH',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ provider: null, model: 'opus' }),
+    });
+    expect(res.status).toBe(400);
+    expect(mockSetDefault).not.toHaveBeenCalled();
   });
 
   test('unknown provider → 400', async () => {

@@ -484,10 +484,18 @@ CREATE TABLE IF NOT EXISTS remote_agent_user_ai_prefs (
   tiers TEXT,
   aliases TEXT,
   default_provider VARCHAR(64),
+  default_model VARCHAR(255),
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   UNIQUE(user_id)
 );
+
+-- #1998: per-user default CHAT model, written atomically with
+-- default_provider (a model pin is only meaningful for the provider it was
+-- set with). Idempotent upgrade for installs that created the table before
+-- this column existed.
+ALTER TABLE remote_agent_user_ai_prefs
+  ADD COLUMN IF NOT EXISTS default_model VARCHAR(255);
 
 -- ============================================================================
 -- Web auth (opt-in): role on the canonical user + Better Auth tables

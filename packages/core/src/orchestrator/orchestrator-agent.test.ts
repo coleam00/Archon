@@ -277,13 +277,18 @@ mock.module('../db/user-ai-prefs-store', () => ({
   getUserAiPrefs: mockGetUserAiPrefsDb,
   setUserTiers: mock(() => Promise.resolve()),
   setUserAliases: mock(() => Promise.resolve()),
-  setUserDefaultProvider: mock(() => Promise.resolve()),
+  setUserDefault: mock(() => Promise.resolve()),
   clearUserAiPrefs: mock(() => Promise.resolve()),
 }));
 
 // ─── Import module under test (AFTER all mocks) ───────────────────────────────
 
-import { parseOrchestratorCommands, handleMessage } from './orchestrator-agent';
+import {
+  parseOrchestratorCommands,
+  handleMessage,
+  resolveChatModelRequest,
+} from './orchestrator-agent';
+import { buildAiProfile } from '@archon/workflows/model-validation';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -3519,5 +3524,151 @@ describe('message persistence for non-web platforms', () => {
     // Deterministic slash commands return before the AI dispatch, so persisting a
     // user row here would orphan it (no paired assistant row in the Web UI history).
     expect(mockAddMessage).not.toHaveBeenCalled();
+  });
+});
+
+// ─── resolveChatModelRequest (#1998): per-user default chat model ─────────────
+
+describe('resolveChatModelRequest', () => {
+  // Minimal MergedConfig slice: both built-in providers present (AssistantDefaults).
+  const emptyConfig = { assistants: { claude: {}, codex: {} }, tiers: undefined };
+
+  test('no user prefs and no install model → plain built-in large tier (solo path unchanged)', () => {
+    const profile = buildAiProfile('claude');
+    const req = resolveChatModelRequest(profile, 'claude', {}, emptyConfig);
+    expect(req.provider).toBe('claude');
+    expect(req.model).toBe('opus');
+    expect(req.matchedTier).toBe('large');
+  });
+
+  test('user default_model replaces the large-tier lookup when the provider matches', () => {
+    const profile = buildAiProfile('claude');
+    const req = resolveChatModelRequest(
+      profile,
+      'claude',
+      { defaultProvider: 'claude', defaultModel: 'sonnet' },
+      emptyConfig
+    );
+    expect(req.provider).toBe('claude');
+    expect(req.model).toBe('sonnet');
+    expect(req.matchedTier).toBeUndefined(); // literal path — no tier nudge
+  });
+
+  test('user default_model is IGNORED when the effective provider differs (stale pin guard)', () => {
+    // e.g. degraded profile reset the provider to the conversation's assistant.
+    const profile = buildAiProfile('codex');
+    const req = resolveChatModelRequest(
+      profile,
+      'codex',
+      { defaultProvider: 'claude', defaultModel: 'sonnet' },
+      emptyConfig
+    );
+    expect(req.provider).toBe('codex');
+    expect(req.model).toBe('gpt-5.5'); // built-in codex large tier
+    expect(req.matchedTier).toBe('large');
+  });
+
+  test('user default_model set without default_provider is ignored', () => {
+    const profile = buildAiProfile('claude');
+    const req = resolveChatModelRequest(profile, 'claude', { defaultModel: 'sonnet' }, emptyConfig);
+    expect(req.model).toBe('opus');
+  });
+
+  test('user default_model can be an @alias (resolved through the profile)', () => {
+    const profile = buildAiProfile('claude', {
+      userAliases: { '@fast': { provider: 'codex', model: 'gpt-5.5', effort: 'low' } },
+    });
+    const req = resolveChatModelRequest(
+      profile,
+      'claude',
+      { defaultProvider: 'claude', defaultModel: '@fast' },
+      emptyConfig
+    );
+    expect(req.provider).toBe('codex');
+    expect(req.model).toBe('gpt-5.5');
+  });
+
+  test('an unresolvable default_model ref degrades to the large tier (never breaks chat)', () => {
+    const profile = buildAiProfile('claude');
+    const req = resolveChatModelRequest(
+      profile,
+      'claude',
+      { defaultProvider: 'claude', defaultModel: '@deleted-alias' },
+      emptyConfig
+    );
+    expect(req.provider).toBe('claude');
+    expect(req.model).toBe('opus');
+    expect(req.matchedTier).toBe('large');
+  });
+
+  test('install assistants.<p>.model outranks the BUILT-IN large tier default', () => {
+    const profile = buildAiProfile('claude');
+    const req = resolveChatModelRequest(
+      profile,
+      'claude',
+      {},
+      {
+        assistants: { claude: { model: 'sonnet' }, codex: {} },
+        tiers: undefined,
+      }
+    );
+    expect(req.provider).toBe('claude');
+    expect(req.model).toBe('sonnet');
+  });
+
+  test('a CONFIGURED large tier beats install assistants.<p>.model', () => {
+    const tiers = { large: { provider: 'claude', model: 'claude-opus-4-7' } };
+    const profile = buildAiProfile('claude', { repoTiers: tiers });
+    const req = resolveChatModelRequest(
+      profile,
+      'claude',
+      {},
+      {
+        assistants: { claude: { model: 'sonnet' }, codex: {} },
+        tiers,
+      }
+    );
+    expect(req.model).toBe('claude-opus-4-7');
+  });
+
+  test('a per-user large tier beats install assistants.<p>.model', () => {
+    const userTiers = { large: { provider: 'claude', model: 'haiku' } };
+    const profile = buildAiProfile('claude', { userTiers });
+    const req = resolveChatModelRequest(
+      profile,
+      'claude',
+      { tiers: userTiers },
+      {
+        assistants: { claude: { model: 'sonnet' }, codex: {} },
+        tiers: undefined,
+      }
+    );
+    expect(req.model).toBe('haiku');
+  });
+
+  test("assistants.<p>.model of 'inherit' is skipped (means SDK default, not a model)", () => {
+    const profile = buildAiProfile('claude');
+    const req = resolveChatModelRequest(
+      profile,
+      'claude',
+      {},
+      {
+        assistants: { claude: { model: 'inherit' }, codex: {} },
+        tiers: undefined,
+      }
+    );
+    expect(req.model).toBe('opus');
+  });
+
+  test('user default_model outranks a configured large tier (highest layer)', () => {
+    const tiers = { large: { provider: 'claude', model: 'claude-opus-4-7' } };
+    const profile = buildAiProfile('claude', { repoTiers: tiers });
+    const req = resolveChatModelRequest(
+      profile,
+      'claude',
+      { defaultProvider: 'claude', defaultModel: 'sonnet' },
+      { assistants: { claude: {}, codex: {} }, tiers }
+    );
+    expect(req.model).toBe('sonnet');
   });
 });
