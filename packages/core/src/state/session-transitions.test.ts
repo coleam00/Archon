@@ -1,11 +1,16 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, test, expect, spyOn } from 'bun:test';
 import {
   type TransitionTrigger,
   shouldCreateNewSession,
   shouldDeactivateSession,
   detectPlanToExecuteTransition,
   getTriggerForCommand,
+  safeDeactivateSession,
 } from './session-transitions';
+// Spied (NOT mock.module'd — db/sessions.test.ts tests the real module in this
+// same bun test batch, and mock.module pollution is process-global/irreversible).
+import * as sessionDb from '../db/sessions';
+import { SessionNotFoundError } from '../db/sessions';
 
 describe('session-transitions', () => {
   describe('shouldCreateNewSession', () => {
@@ -107,6 +112,46 @@ describe('session-transitions', () => {
       expect(getTriggerForCommand('status')).toBeNull();
       expect(getTriggerForCommand('commands')).toBeNull();
       expect(getTriggerForCommand('getcwd')).toBeNull();
+    });
+  });
+
+  describe('safeDeactivateSession', () => {
+    test('resolves the trigger via the command map for every deactivating command', async () => {
+      const spy = spyOn(sessionDb, 'deactivateSession').mockResolvedValue(undefined as never);
+      try {
+        await safeDeactivateSession('s-1', 'reset');
+        await safeDeactivateSession('s-2', 'setproject');
+        await safeDeactivateSession('s-3', 'worktree-remove');
+        expect(spy.mock.calls).toEqual([
+          ['s-1', 'reset-requested'],
+          ['s-2', 'project-changed'],
+          ['s-3', 'worktree-removed'],
+        ]);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    test('treats SessionNotFoundError as benign (row deleted mid-race)', async () => {
+      const spy = spyOn(sessionDb, 'deactivateSession').mockRejectedValue(
+        new SessionNotFoundError('s-gone')
+      );
+      try {
+        await expect(safeDeactivateSession('s-gone', 'setproject')).resolves.toBeUndefined();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    test('rethrows any other deactivation failure', async () => {
+      const spy = spyOn(sessionDb, 'deactivateSession').mockRejectedValue(
+        new Error('connection lost')
+      );
+      try {
+        await expect(safeDeactivateSession('s-1', 'reset')).rejects.toThrow('connection lost');
+      } finally {
+        spy.mockRestore();
+      }
     });
   });
 });

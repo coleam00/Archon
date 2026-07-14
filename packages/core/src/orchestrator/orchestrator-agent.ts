@@ -2513,6 +2513,16 @@ async function handleSetProject(message: string, conversation: Conversation): Pr
       : `Project "${projectName}" not found. No projects registered — use /register-project.`;
   }
 
+  // Deactivate the old session BEFORE rebinding the conversation: if either
+  // session step throws, the switch aborts with the conversation untouched
+  // (next message just starts a fresh session in the OLD project). The reverse
+  // order would leave a rebound conversation with the old project's session
+  // still active — resuming old-project context under the new project's cwd.
+  const session = await sessionDb.getActiveSession(conversation.id);
+  if (session) {
+    await safeDeactivateSession(session.id, 'setproject');
+  }
+
   // Intentionally non-destructive: clearing isolation_env_id detaches the
   // conversation from its worktree WITHOUT destroying it — the worktree may
   // hold uncommitted work and the user may switch back (project-switch is not
@@ -2532,19 +2542,18 @@ async function handleSetProject(message: string, conversation: Conversation): Pr
     );
   }
 
-  const session = await sessionDb.getActiveSession(conversation.id);
-  if (session) {
-    await safeDeactivateSession(session.id, 'setproject');
-  }
-
   getLog().info(
     { conversationId: conversation.id, projectName: codebase.name, codebaseId: codebase.id },
     'project.set_completed'
   );
   let reply = `Project set to **${codebase.name}**\nWorking directory: ${codebase.default_cwd}`;
   if (detachedWorktree) {
+    // Don't suggest `/worktree remove` here: it reads isolation_env_id from
+    // THIS conversation, which we just cleared — it would short-circuit with
+    // "not using a worktree". Cleanup tools that operate on the environments
+    // table directly are the working remedies.
     reply +=
-      '\n\nNote: the previous worktree was detached but left in place — remove it with `/worktree remove` or `archon isolation cleanup`.';
+      '\n\nNote: the previous worktree was detached but left in place — clean it up with `archon isolation cleanup` or from the project’s Environments list in the web UI.';
   }
   return reply;
 }

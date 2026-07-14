@@ -610,6 +610,8 @@ describe('CommandHandler', () => {
           const result = await handleCommand(conversation, '/status');
           expect(result.success).toBe(true);
           expect(result.message).toContain('platform (folder — no git)');
+          // Folder projects get the same cwd fallback as repos.
+          expect(result.message).toContain('Working Directory: /tmp/platform');
           expect(result.message).toContain('Contains 2 git repos: auth-service, billing-service');
           // Worktree breakdown is skipped for folder projects.
           expect(result.message).not.toContain('Worktrees:');

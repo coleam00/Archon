@@ -1077,9 +1077,9 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
 
       if (codebase?.name) {
         const repoContext = await formatRepoContext(codebase, conversation.isolation_env_id);
-        // conversation.cwd is an explicit runtime override (worktree path or /setcwd);
-        // when unset, the registered project root is the effective working directory.
-        // Same fallback pattern as handleWorkflowCommand above.
+        // conversation.cwd is an explicit runtime override (set by worktree
+        // create/remove); when unset, the registered project root is the
+        // effective working directory. Same fallback as handleWorkflowCommand.
         const effectiveCwd = conversation.cwd ?? codebase.default_cwd;
         msg += `\n\n## Conversation Context\n- Project: ${repoContext}`;
         msg += `\n- Working Directory: ${effectiveCwd}`;

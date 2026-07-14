@@ -1,3 +1,7 @@
+// NOTE: this module is no longer side-effect-free — safeDeactivateSession below
+// imports the real ../db/sessions (lazy connection; nothing runs at import time).
+// Any test that CALLS safeDeactivateSession must mock '../db/sessions' itself,
+// or it will silently reach the real database via the lazy singleton.
 import * as sessionDb from '../db/sessions';
 import { SessionNotFoundError } from '../db/sessions';
 import { createLogger } from '@archon/paths';
@@ -103,11 +107,12 @@ export function getTriggerForCommand(commandName: string): TransitionTrigger | n
 }
 
 /**
- * Safely deactivate a session for a deactivating command, with TOCTOU race
- * handling: between getActiveSession() and deactivateSession(), another
- * process (cleanup service, concurrent command) may have deleted the row —
- * deactivateSession throws SessionNotFoundError only when the row no longer
- * exists (an already-deactivated row still matches). Treat that as benign.
+ * Safely deactivate a session for a deactivating command. deactivateSession
+ * throws SessionNotFoundError only when the session ROW no longer exists (its
+ * UPDATE matches by id with no active filter, so an already-deactivated row
+ * still matches). A row deleted between getActiveSession() and this call is
+ * defensively treated as benign — with default 30-day retention that window is
+ * practically unreachable, but the catch keeps the command from failing on it.
  *
  * Single shared implementation for every deactivating command (/reset,
  * /setproject, /worktree remove) — the trigger is resolved through

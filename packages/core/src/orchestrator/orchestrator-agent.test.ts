@@ -3109,7 +3109,26 @@ describe('handleMessage — /setproject dispatch', () => {
     expect(sent).toContain('Project set to');
   });
 
-  test('rethrows non-SessionNotFoundError deactivation failures', async () => {
+  test('aborts BEFORE rebinding the conversation when the session lookup fails', async () => {
+    // Ordering regression guard: session deactivation runs before
+    // db.updateConversation, so a failure here must leave the conversation
+    // untouched (no rebound project with the old session still active).
+    const cb = makeCodebase('my-app');
+    mockListCodebases.mockImplementation(() => Promise.resolve([cb]));
+    mockParseCommand.mockReturnValue({ command: 'setproject', args: ['my-app'] });
+    mockGetActiveSession.mockImplementation(() => Promise.reject(new Error('db hiccup')));
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/setproject my-app');
+
+    expect(mockUpdateConversation).not.toHaveBeenCalled();
+    const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
+      .map(c => String(c[1]))
+      .join('\n');
+    expect(sent).not.toContain('Project set to');
+  });
+
+  test('rethrows non-SessionNotFoundError deactivation failures without rebinding', async () => {
     const cb = makeCodebase('my-app');
     mockListCodebases.mockImplementation(() => Promise.resolve([cb]));
     mockParseCommand.mockReturnValue({ command: 'setproject', args: ['my-app'] });
@@ -3121,11 +3140,15 @@ describe('handleMessage — /setproject dispatch', () => {
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', '/setproject my-app');
 
-    // The failure propagates: no success message is sent.
-    const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
-      .map(c => String(c[1]))
-      .join('\n');
-    expect(sent).not.toContain('Project set to');
+    // Deactivation runs before the rebind, so the conversation stays untouched.
+    expect(mockUpdateConversation).not.toHaveBeenCalled();
+    // The failure surfaces: no success message, but SOME error reply went out
+    // (a silently-swallowed error would send nothing at all).
+    const sentMsgs = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(c =>
+      String(c[1])
+    );
+    expect(sentMsgs.join('\n')).not.toContain('Project set to');
+    expect(sentMsgs.length).toBeGreaterThan(0);
   });
 
   test('notes the detached worktree in the reply when an isolation env was cleared', async () => {
