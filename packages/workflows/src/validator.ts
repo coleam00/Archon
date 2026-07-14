@@ -115,7 +115,11 @@ export function levenshtein(a: string, b: string): number {
 }
 
 /** Find the closest matches from a list of candidates */
-export function findSimilar(name: string, candidates: string[], maxDistance?: number): string[] {
+export function findSimilar(
+  name: string,
+  candidates: readonly string[],
+  maxDistance?: number
+): string[] {
   const threshold = maxDistance ?? Math.max(2, Math.floor(name.length * 0.3));
   const scored = candidates
     .map(c => ({ name: c, distance: levenshtein(name.toLowerCase(), c.toLowerCase()) }))
@@ -584,7 +588,7 @@ export async function validateWorkflowResources(
               continue;
             }
 
-            const similar = findSimilar(base, [...known]);
+            const similar = findSimilar(base, known);
             const issue: ValidationIssue = {
               level: 'warning',
               nodeId: node.id,
