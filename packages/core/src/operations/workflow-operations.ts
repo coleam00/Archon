@@ -8,6 +8,7 @@ import { createLogger, captureApprovalResolved } from '@archon/paths';
 import {
   RESUMABLE_WORKFLOW_STATUSES,
   isApprovalContext,
+  isGateResolved,
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun, ApprovalContext } from '@archon/workflows/schemas/workflow-run';
 import * as workflowDb from '../db/workflows';
@@ -132,7 +133,9 @@ export async function abandonWorkflow(runId: string): Promise<WorkflowRun> {
  * Approve a paused workflow run.
  *
  * Handles both interactive_loop and standard approval gate paths.
- * Transitions run to 'failed' so findResumableRun picks it up on next invocation.
+ * The run STAYS 'paused' — the resolution is recorded on the approval context
+ * (`metadata.approval.resolved`, #2075) and the resume machinery already picks
+ * up paused runs (resumableStatusClause / findResumableRunByParentConversation).
  * Does NOT auto-resume — callers decide whether to execute.
  */
 export async function approveWorkflow(
@@ -152,6 +155,14 @@ export async function approveWorkflow(
   if (!approval?.nodeId) {
     throw new Error('Workflow run is paused but missing approval context.');
   }
+  if (isGateResolved(approval)) {
+    // The run stays 'paused' after a resolution, so the status check alone no
+    // longer blocks a second approve — this guard does (double events, double
+    // telemetry). The resume CAS independently guards double-resume.
+    throw new Error(
+      `Workflow run ${runId} was already ${String(approval.resolved)} and is awaiting resume.`
+    );
+  }
 
   const approvalComment = comment ?? 'Approved';
 
@@ -169,12 +180,15 @@ export async function approveWorkflow(
       });
       // Anonymous telemetry: binary resolution only — no ids/comments/names.
       captureApprovalResolved({ resolution: 'approved' });
-      // Transition to 'failed' so findResumableRun picks it up.
-      // IMPORTANT: metadata is MERGED (not replaced) — the approval context must survive
-      // intact so the resumed executor can detect the correct startIteration.
+      // Record the resolution; status stays 'paused' for an honest state machine.
+      // IMPORTANT: metadata is MERGED (not replaced) and the approval context is
+      // rewritten whole (spread + resolved) — it must survive intact so the
+      // resumed executor can detect the correct startIteration.
       await workflowDb.updateWorkflowRun(runId, {
-        status: 'failed',
-        metadata: { loop_user_input: approvalComment },
+        metadata: {
+          approval: { ...approval, resolved: 'approved' },
+          loop_user_input: approvalComment,
+        },
       });
       return {
         workflowName: run.workflow_name,
@@ -202,10 +216,14 @@ export async function approveWorkflow(
     });
     // Anonymous telemetry: binary resolution only — no ids/comments/names.
     captureApprovalResolved({ resolution: 'approved' });
-    // Transition to 'failed' so findResumableRun picks it up. Clear any rejection state.
+    // Record the resolution; status stays 'paused'. Clear any rejection state.
     await workflowDb.updateWorkflowRun(runId, {
-      status: 'failed',
-      metadata: { approval_response: 'approved', rejection_reason: '', rejection_count: 0 },
+      metadata: {
+        approval: { ...approval, resolved: 'approved' },
+        approval_response: 'approved',
+        rejection_reason: '',
+        rejection_count: 0,
+      },
     });
   } catch (error) {
     const err = error as Error;
@@ -228,7 +246,9 @@ export async function approveWorkflow(
 /**
  * Reject a paused workflow run.
  *
- * If `onRejectPrompt` is set and under max attempts, transitions to 'failed' for retry.
+ * If `onRejectPrompt` is set and under max attempts, the run stays 'paused'
+ * with the rejection staged on the approval context (`resolved: 'rejected'`,
+ * #2075) — the resume machinery picks it up and runs the on_reject rework.
  * Otherwise, cancels the run.
  */
 export async function rejectWorkflow(
@@ -245,6 +265,13 @@ export async function rejectWorkflow(
   const approval: ApprovalContext | undefined = isApprovalContext(rawApproval)
     ? rawApproval
     : undefined;
+  if (approval && isGateResolved(approval)) {
+    // Same double-resolution guard as approveWorkflow — the run stays 'paused'
+    // after a resolution, so status alone no longer blocks a second reject.
+    throw new Error(
+      `Workflow run ${runId} was already ${String(approval.resolved)} and is awaiting resume.`
+    );
+  }
   const rejectReason = reason ?? 'Rejected';
   const currentCount = (run.metadata.rejection_count as number | undefined) ?? 0;
   const maxAttempts = approval?.onRejectMaxAttempts ?? 3;
@@ -272,9 +299,15 @@ export async function rejectWorkflow(
           maxAttemptsReached: true,
         };
       }
+      // Record the staged rework; status stays 'paused' (#2075). The approval
+      // context is rewritten whole (spread + resolved) so the resumed executor
+      // still sees nodeId/onRejectPrompt for the on_reject cycle.
       await workflowDb.updateWorkflowRun(runId, {
-        status: 'failed',
-        metadata: { rejection_reason: rejectReason, rejection_count: currentCount + 1 },
+        metadata: {
+          approval: { ...approval, resolved: 'rejected' },
+          rejection_reason: rejectReason,
+          rejection_count: currentCount + 1,
+        },
       });
       return {
         workflowName: run.workflow_name,

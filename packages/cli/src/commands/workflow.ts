@@ -1964,10 +1964,12 @@ export async function workflowAbandonCommand(
 /**
  * Approve a paused workflow run by ID.
  *
- * Human mode writes the approval events (transitioning to 'failed') and then
- * auto-resumes the run inline. `--json` mode records the approval and returns a
- * structured ack WITHOUT resuming — the run is left resumable for a backgrounded
- * `resume`/`run --resume` (inline resume would stream output and break the JSON).
+ * Human mode records the approval on the still-'paused' run (the resolution
+ * lives in metadata.approval.resolved, #2075) and then auto-resumes the run
+ * inline. `--json` mode records the approval and returns a structured ack
+ * WITHOUT resuming — the run stays paused-and-staged, resumable by a
+ * backgrounded `resume`/`run --resume` (inline resume would stream output and
+ * break the JSON).
  *
  * `runId` may be the short id printed by `workflow runs` (see resolveRunIdArg).
  */

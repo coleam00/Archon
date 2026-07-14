@@ -566,17 +566,14 @@ export async function updateWorkflowRun(
   if (updates.status !== undefined) {
     values.push(updates.status);
     setClauses.push(`status = $${values.length}`);
-    // Auto-set completed_at for terminal-like statuses, but skip when
-    // transitioning to 'failed' for approval resume (not a real completion)
-    const isApprovalTransition =
-      updates.status === 'failed' &&
-      (updates.metadata?.approval_response !== undefined ||
-        updates.metadata?.loop_user_input !== undefined);
+    // Auto-set completed_at for terminal statuses. (Gate approve/reject no
+    // longer stages runs as 'failed' — they stay 'paused' with
+    // metadata.approval.resolved set (#2075) — so a 'failed' write here is
+    // always a real completion.)
     if (
-      !isApprovalTransition &&
-      (updates.status === 'completed' ||
-        updates.status === 'failed' ||
-        updates.status === 'cancelled')
+      updates.status === 'completed' ||
+      updates.status === 'failed' ||
+      updates.status === 'cancelled'
     ) {
       setClauses.push(`completed_at = ${dialect.now()}`);
     }
@@ -671,9 +668,10 @@ export async function cancelWorkflowRun(id: string): Promise<{ cancelled: boolea
     // Guard against re-stamping an already-finished run. Cancelling a run that
     // is 'completed' or 'cancelled' must be a no-op, not a re-write of
     // completed_at / a resurrection of terminal state. 'failed' is intentionally
-    // still cancellable (it is overloaded as a resumable/approval state), and a
-    // 'running' run stays cancellable — that is cooperative cancellation, which
-    // the executor honors via its between-layer status check (dag-executor).
+    // still cancellable (it remains a resumable state, so the user must be able
+    // to discard it), and a 'running' run stays cancellable — that is
+    // cooperative cancellation, which the executor honors via its between-layer
+    // status check (dag-executor).
     result = await pool.query(
       `UPDATE remote_agent_workflow_runs
        SET status = 'cancelled', completed_at = ${dialect.now()}
@@ -699,6 +697,12 @@ export async function cancelWorkflowRun(id: string): Promise<{ cancelled: boolea
  * Pause a running workflow run for human approval.
  * Sets status to 'paused' and stores approval context in metadata.
  * Does NOT set completed_at — the run is not finished.
+ *
+ * `resolved` is reset to an explicit null on every fresh pause so a prior
+ * gate's resolution can never leak into this one: SQLite's json_patch
+ * deep-merges the new context into the stored one (an omitted key would keep
+ * the old 'approved'), and RFC 7396 null removes the key; Postgres `||`
+ * replaces the approval object wholesale. See ApprovalContext.resolved.
  */
 export async function pauseWorkflowRun(
   id: string,
@@ -710,7 +714,7 @@ export async function pauseWorkflowRun(
       `UPDATE remote_agent_workflow_runs
        SET status = 'paused', metadata = ${dialect.jsonMerge('metadata', 2)}
        WHERE id = $1 AND status = 'running'`,
-      [id, JSON.stringify({ approval: approvalContext })]
+      [id, JSON.stringify({ approval: { ...approvalContext, resolved: null } })]
     );
     if (result.rowCount === 0) {
       getLog().warn({ workflowRunId: id }, 'db.workflow_run_pause_no_match');

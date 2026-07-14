@@ -29,7 +29,15 @@ export interface Run {
   /** Derived from metadata/events at runtime; initially undefined. */
   currentNode?: string | null;
   lastTool?: string | null;
+  /** Pending human gate. Null once the gate is resolved (see gateResolved). */
   approval?: { nodeId: string; message: string } | null;
+  /**
+   * Set when a paused run's gate was already approved/rejected and the run is
+   * only awaiting auto-resume (server: metadata.approval.resolved). The
+   * approval surfaces hide (approval is null) and the card shows a
+   * "resuming" hint instead of stale approve/reject buttons.
+   */
+  gateResolved?: 'approved' | 'rejected' | null;
 }
 
 // Server shapes we read from. These track the real server schema loosely —
@@ -93,12 +101,21 @@ function readCost(meta: Record<string, unknown> | undefined): number | null {
 
 export function toRun(raw: RawWorkflowRun): Run {
   const approval = raw.metadata?.approval;
-  const parsedApproval =
+  const isApprovalShape =
     approval !== null &&
     typeof approval === 'object' &&
     approval !== undefined &&
     'nodeId' in approval &&
-    typeof (approval as { nodeId: unknown }).nodeId === 'string'
+    typeof (approval as { nodeId: unknown }).nodeId === 'string';
+  // A resolved gate (approved/rejected, run paused only while awaiting
+  // auto-resume — see ApprovalContext.resolved on the server) is NOT a
+  // pending approval: surface it via gateResolved instead so approve/reject
+  // buttons never render for an already-resolved gate.
+  const resolvedRaw = isApprovalShape ? (approval as { resolved?: unknown }).resolved : undefined;
+  const gateResolved =
+    resolvedRaw === 'approved' || resolvedRaw === 'rejected' ? resolvedRaw : null;
+  const parsedApproval =
+    isApprovalShape && gateResolved === null
       ? {
           nodeId: (approval as { nodeId: string }).nodeId,
           message:
@@ -125,5 +142,6 @@ export function toRun(raw: RawWorkflowRun): Run {
     currentNode: raw.current_step_name ?? null,
     lastTool: null,
     approval: parsedApproval,
+    gateResolved,
   };
 }

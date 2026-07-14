@@ -235,8 +235,11 @@ can approve or reject again.
 
 ## Design Notes
 
-Approval nodes reuse the existing resume infrastructure. When approved, the run
-transitions through `failed` status briefly so the orchestrator's explicit
-resume path (via `hydrateResumableRun`) picks it up — this avoids duplicating
-resume logic. The `metadata.approval_response` field distinguishes
-approved-then-resumed from genuinely-failed runs.
+Approval nodes reuse the existing resume infrastructure. When approved (or
+rejected with an `on_reject` rework), the run **stays `paused`** — the
+resolution is recorded on the pause context as `metadata.approval.resolved`
+(`'approved'` or `'rejected'`), and the resume machinery (which accepts paused
+runs) picks it up via `hydrateResumableRun`. The status you see between
+clicking Approve and the executor resuming is an honest `paused`, never a
+transient `failed`. A `failed` run always means a real failure (it carries
+`metadata.error` or `metadata.failure_reason`).
