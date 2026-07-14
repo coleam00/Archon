@@ -74,7 +74,6 @@ import {
   checkForUpdate,
   BUNDLED_IS_BINARY,
   BUNDLED_VERSION,
-  captureApprovalResolved,
 } from '@archon/paths';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { parseWorkflow } from '@archon/workflows/loader';
@@ -83,8 +82,10 @@ import { BUNDLED_WORKFLOWS, BUNDLED_COMMANDS, isBinaryBuild } from '@archon/work
 import {
   RESUMABLE_WORKFLOW_STATUSES,
   TERMINAL_WORKFLOW_STATUSES,
+  isApprovalContext,
+  isGateResolved,
 } from '@archon/workflows/schemas/workflow-run';
-import type { ApprovalContext, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { MessageRow } from '@archon/core/schemas/message';
 import type { DashboardWorkflowRun } from '@archon/core/schemas/workflow-run';
 import { findMarkdownFilesRecursive } from '@archon/core/utils/commands';
@@ -103,7 +104,11 @@ import * as workflowDb from '@archon/core/db/workflows';
 import * as workflowEventDb from '@archon/core/db/workflow-events';
 import * as messageDb from '@archon/core/db/messages';
 import * as userDb from '@archon/core/db/users';
-import { resetWorkflowNodeSessions } from '@archon/core/operations/workflow-operations';
+import {
+  approveWorkflow,
+  rejectWorkflow,
+  resetWorkflowNodeSessions,
+} from '@archon/core/operations/workflow-operations';
 import { getAuth, isWebAuthEnabled, getSignupMode, isApiGateEnabled } from '../auth';
 import { errorSchema } from './schemas/common.schemas';
 import { updateCheckResponseSchema } from './schemas/system.schemas';
@@ -2182,7 +2187,12 @@ export function registerApiRoutes(
         );
         return false;
       }
-      const resumeMessage = `/workflow run ${run.workflow_name} ${run.user_message ?? ''}`.trim();
+      // Explicit resume targeting: `/workflow resume <id>` routes through the
+      // command handler's resume path, which validates the run and hands the
+      // orchestrator an explicit resumeRun. A bare `/workflow run <name>` would
+      // instead rely on implicit resume detection and collide with the
+      // ambiguity guard for any non-paused resumable state (#2075).
+      const resumeMessage = `/workflow resume ${run.id}`;
       await dispatchToOrchestrator(platformConvId, resumeMessage, { userId: gateActorUserId });
       getLog().info(
         { runId: run.id, workflowName: run.workflow_name, platformConvId },
@@ -3148,10 +3158,12 @@ export function registerApiRoutes(
       if (!RESUMABLE_WORKFLOW_STATUSES.includes(run.status)) {
         return apiError(c, 400, `Cannot resume workflow in '${run.status}' status`);
       }
-      // Dispatch resume by sending `/workflow run <name>` to the parent web
-      // conversation; the orchestrator's foreground-resume detection (via
-      // findResumableRunByParentConversation) picks up the failed run and
-      // hydrates it. Mirrors the approve/reject auto-resume path.
+      // Dispatch resume by sending `/workflow resume <id>` to the parent web
+      // conversation; the command handler validates the run and hands the
+      // orchestrator an explicit resumeRun to hydrate. Explicit targeting (not
+      // a bare `/workflow run <name>`) so a genuinely-failed run resumes
+      // directly instead of hitting the disambiguation prompt (#2075).
+      // Mirrors the approve/reject auto-resume path.
       if (!run.parent_conversation_id) {
         return apiError(
           c,
@@ -3167,7 +3179,7 @@ export function registerApiRoutes(
           `Cannot resume from web UI: the run's parent conversation is not a web conversation. Use \`archon workflow resume ${runId}\` from the CLI.`
         );
       }
-      const resumeMessage = `/workflow run ${run.workflow_name} ${run.user_message ?? ''}`.trim();
+      const resumeMessage = `/workflow resume ${run.id}`;
       // Resume executes as the user who clicked resume (sender-first, #1982),
       // not the conversation creator. Undefined on solo installs → fallback.
       await dispatchToOrchestrator(parentConv.platform_conversation_id, resumeMessage, {
@@ -3221,43 +3233,27 @@ export function registerApiRoutes(
       if (run.status !== 'paused') {
         return apiError(c, 400, `Cannot approve workflow in '${run.status}' status`);
       }
-      const body = (await c.req.json().catch(() => ({}))) as { comment?: string };
-      const comment = body.comment ?? 'Approved';
-      const approval = run.metadata.approval as ApprovalContext | undefined;
+      const approvalRaw = run.metadata.approval;
+      const approval = isApprovalContext(approvalRaw) ? approvalRaw : undefined;
       if (!approval?.nodeId) {
         return apiError(c, 400, 'Workflow run is paused but missing approval context');
       }
-      // For interactive loops, do NOT write node_completed — the executor writes it when
-      // the AI emits the completion signal (actual loop exit). Writing it here would cause
-      // the resume to skip the loop node entirely via priorCompletedNodes.
-      if (approval.type !== 'interactive_loop') {
-        const nodeOutput = approval.captureResponse === true ? comment : '';
-        await workflowEventDb.createWorkflowEvent({
-          workflow_run_id: runId,
-          event_type: 'node_completed',
-          step_name: approval.nodeId,
-          data: { node_output: nodeOutput, approval_decision: 'approved' },
-        });
+      if (isGateResolved(approval)) {
+        // Post-#2075 the run stays 'paused' after approval, so status alone no
+        // longer distinguishes "awaiting the human" from "awaiting resume".
+        return apiError(
+          c,
+          400,
+          `Workflow run was already ${String(approval.resolved)} — resume in progress`
+        );
       }
-      await workflowEventDb.createWorkflowEvent({
-        workflow_run_id: runId,
-        event_type: 'approval_received',
-        step_name: approval.nodeId,
-        data: { decision: 'approved', comment },
-      });
-      // Anonymous telemetry: binary resolution only (web API inlines the
-      // approve logic rather than calling approveWorkflow).
-      captureApprovalResolved({ resolution: 'approved' });
-      // For interactive loops, store user input; for standard approvals, mark as approved
-      // and clear any rejection state.
-      const metadataUpdate =
-        approval.type === 'interactive_loop'
-          ? { loop_user_input: comment }
-          : { approval_response: 'approved', rejection_reason: '', rejection_count: 0 };
-      await workflowDb.updateWorkflowRun(runId, {
-        status: 'failed',
-        metadata: metadataUpdate,
-      });
+      const body = (await c.req.json().catch(() => ({}))) as { comment?: string };
+      const comment = body.comment ?? 'Approved';
+      // Shared gate logic (events, telemetry, metadata staging) — the run stays
+      // 'paused' with metadata.approval.resolved = 'approved' (#2075). The
+      // pre-checks above map the common error cases to 400s; approveWorkflow
+      // re-validates and anything it throws past them is a 500.
+      await approveWorkflow(runId, comment);
 
       // Auto-resume: dispatch to the orchestrator so the workflow continues
       // without requiring the user to re-run the workflow command. Mirrors
@@ -3290,52 +3286,42 @@ export function registerApiRoutes(
       if (run.status !== 'paused') {
         return apiError(c, 400, `Cannot reject workflow in '${run.status}' status`);
       }
+      const approvalRaw = run.metadata.approval;
+      const approval = isApprovalContext(approvalRaw) ? approvalRaw : undefined;
+      if (approval && isGateResolved(approval)) {
+        return apiError(
+          c,
+          400,
+          `Workflow run was already ${String(approval.resolved)} — resume in progress`
+        );
+      }
       const body = (await c.req.json().catch(() => ({}))) as { reason?: string };
       const reason = body.reason ?? 'Rejected';
-      const approval = run.metadata.approval as ApprovalContext | undefined;
-      await workflowEventDb.createWorkflowEvent({
-        workflow_run_id: runId,
-        event_type: 'approval_received',
-        step_name: approval?.nodeId ?? 'unknown',
-        data: { decision: 'rejected', reason },
-      });
-      // Anonymous telemetry: binary resolution only — no ids/reasons/names.
-      captureApprovalResolved({ resolution: 'rejected' });
+      // Shared gate logic (events, telemetry, staging/cancel decision). When an
+      // on_reject rework is staged the run stays 'paused' with
+      // metadata.approval.resolved = 'rejected' (#2075).
+      const result = await rejectWorkflow(runId, reason);
 
-      const hasOnReject = approval?.onRejectPrompt !== undefined;
-      if (hasOnReject) {
-        const currentCount = (run.metadata.rejection_count as number | undefined) ?? 0;
-        const maxAttempts = approval?.onRejectMaxAttempts ?? 3;
-        if (currentCount + 1 >= maxAttempts) {
-          await workflowDb.cancelWorkflowRun(runId);
-          return c.json({
-            success: true,
-            message: `Workflow rejected and cancelled (max attempts reached): ${run.workflow_name}`,
-          });
-        }
-        await workflowDb.updateWorkflowRun(runId, {
-          status: 'failed',
-          metadata: { rejection_reason: reason, rejection_count: currentCount + 1 },
-        });
-
-        // Auto-resume: dispatch to the orchestrator so the on_reject prompt runs
-        // without requiring the user to re-run the workflow command. Mirrors
-        // what `workflowRejectCommand` does in the CLI. Same cross-adapter
-        // guard as approve — only web parents auto-resume.
-        const autoResumed = await tryAutoResumeAfterGate(run, 'reject', await resolveWebUserId(c));
-
+      if (result.cancelled) {
         return c.json({
           success: true,
-          message: autoResumed
-            ? `Workflow rejected: ${run.workflow_name}. Running on-reject prompt.`
-            : `Workflow rejected: ${run.workflow_name}. On-reject prompt will run when the run resumes — run \`archon workflow resume ${runId}\` from the CLI to trigger it.`,
+          message: result.maxAttemptsReached
+            ? `Workflow rejected and cancelled (max attempts reached): ${run.workflow_name}`
+            : `Workflow rejected: ${run.workflow_name}`,
         });
       }
 
-      await workflowDb.cancelWorkflowRun(runId);
+      // Auto-resume: dispatch to the orchestrator so the on_reject prompt runs
+      // without requiring the user to re-run the workflow command. Mirrors
+      // what `workflowRejectCommand` does in the CLI. Same cross-adapter
+      // guard as approve — only web parents auto-resume.
+      const autoResumed = await tryAutoResumeAfterGate(run, 'reject', await resolveWebUserId(c));
+
       return c.json({
         success: true,
-        message: `Workflow rejected: ${run.workflow_name}`,
+        message: autoResumed
+          ? `Workflow rejected: ${run.workflow_name}. Running on-reject prompt.`
+          : `Workflow rejected: ${run.workflow_name}. On-reject prompt will run when the run resumes — run \`archon workflow resume ${runId}\` from the CLI to trigger it.`,
       });
     } catch (error) {
       getLog().error({ err: error, runId }, 'api.workflow_run_reject_failed');

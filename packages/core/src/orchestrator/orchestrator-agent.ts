@@ -7,7 +7,7 @@
  * - Does NOT require a project to be selected before starting a conversation
  */
 import { existsSync, realpathSync } from 'fs';
-import { createLogger, captureChatTurn, captureApprovalResolved } from '@archon/paths';
+import { createLogger, captureChatTurn } from '@archon/paths';
 import type {
   IPlatformAdapter,
   HandleMessageContext,
@@ -66,8 +66,9 @@ import type { WorkflowResultContext } from './prompt-builder';
 import { reportUnpushedWorkInSource } from './post-message-reminder';
 import * as messageDb from '../db/messages';
 import * as workflowDb from '../db/workflows';
-import * as workflowEventDb from '../db/workflow-events';
 import { getCodebaseEnvVars } from '../db/env-vars';
+import { approveWorkflow } from '../operations/workflow-operations';
+import { isApprovalContext, isGateResolved } from '@archon/workflows/schemas/workflow-run';
 import type { ApprovalContext } from '@archon/workflows/schemas/workflow-run';
 import {
   buildAiProfile,
@@ -699,7 +700,8 @@ async function dispatchOrchestratorWorkflow(
 
   // Dispatch workflow.
   // Resume detection runs for ALL platforms: check if a prior run for this workflow
-  // is in a resumable state (paused/failed-by-approval) in this conversation+codebase
+  // is in a resumable state (paused — including approved-awaiting-resume — or failed)
+  // in this conversation+codebase
   // before dispatching fresh. This ensures chat platforms (slack, telegram, discord,
   // github) resume after approval gates just like web does.
   const resumableRun = options?.force
@@ -1075,10 +1077,20 @@ export async function handleMessage(
     );
 
     // Natural-language approval routing — if a workflow is paused in this
-    // conversation, treat any non-slash message as the approval response.
+    // conversation awaiting a human gate, treat any non-slash message as the
+    // approval response. A paused run whose gate is already resolved
+    // (metadata.approval.resolved set — approved/rejected and awaiting
+    // auto-resume, #2075) is skipped so the message falls through to normal
+    // routing, matching the pre-#2075 behavior where a staged run no longer
+    // matched the 'paused' query.
     if (!message.startsWith('/')) {
       const pausedRun = await workflowDb.getPausedWorkflowRun(conversation.id);
-      if (pausedRun) {
+      const pausedApprovalRaw = pausedRun?.metadata.approval;
+      const gateAlreadyResolved =
+        pausedApprovalRaw !== undefined &&
+        isApprovalContext(pausedApprovalRaw) &&
+        isGateResolved(pausedApprovalRaw);
+      if (pausedRun && !gateAlreadyResolved) {
         const approvalRaw = pausedRun.metadata.approval;
         const hasValidApproval =
           approvalRaw != null &&
@@ -1109,36 +1121,9 @@ export async function handleMessage(
         );
 
         try {
-          // Write approval events — for interactive loops, do NOT write node_completed
-          // (the executor writes it when the AI emits the completion signal on actual exit).
-          if (approval.type !== 'interactive_loop') {
-            const nodeOutput = approval.captureResponse === true ? message : '';
-            await workflowEventDb.createWorkflowEvent({
-              workflow_run_id: pausedRun.id,
-              event_type: 'node_completed',
-              step_name: approval.nodeId,
-              data: { node_output: nodeOutput, approval_decision: 'approved' },
-            });
-          }
-          await workflowEventDb.createWorkflowEvent({
-            workflow_run_id: pausedRun.id,
-            event_type: 'approval_received',
-            step_name: approval.nodeId,
-            data: { decision: 'approved', comment: message },
-          });
-          // Anonymous telemetry: NL approval path inlines the approve logic
-          // (does not go through approveWorkflow), so capture here too.
-          captureApprovalResolved({ resolution: 'approved' });
-          // For interactive loops, store user input; for standard approvals, mark as approved
-          // and clear any rejection state.
-          const metadataUpdate: Record<string, unknown> =
-            approval.type === 'interactive_loop'
-              ? { loop_user_input: message }
-              : { approval_response: 'approved', rejection_reason: '', rejection_count: 0 };
-          await workflowDb.updateWorkflowRun(pausedRun.id, {
-            status: 'failed',
-            metadata: metadataUpdate,
-          });
+          // Shared gate logic (events, telemetry, metadata staging) — the run
+          // stays 'paused' with metadata.approval.resolved = 'approved'.
+          await approveWorkflow(pausedRun.id, message);
 
           // Discover workflow and resume
           const { workflows: discoveredWorkflows } = await discoverAllWorkflows(conversation);

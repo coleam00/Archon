@@ -187,8 +187,12 @@ mock.module('../workflows/store-adapter', () => ({
 const mockGetPausedWorkflowRun = mock(() => Promise.resolve(null as unknown));
 const mockFindResumableRunByParentConversation = mock(() => Promise.resolve(null as unknown));
 const mockUpdateWorkflowRun = mock(() => Promise.resolve());
+// approveWorkflow (operations/workflow-operations, called by the NL approval
+// path) re-reads the run via getWorkflowRun before recording the resolution.
+const mockGetWorkflowRunDb = mock(() => Promise.resolve(null as unknown));
 mock.module('../db/workflows', () => ({
   getPausedWorkflowRun: mockGetPausedWorkflowRun,
+  getWorkflowRun: mockGetWorkflowRunDb,
   findResumableRunByParentConversation: mockFindResumableRunByParentConversation,
   updateWorkflowRun: mockUpdateWorkflowRun,
 }));
@@ -1978,6 +1982,10 @@ describe('natural-language approval routing', () => {
   beforeEach(() => {
     mockGetPausedWorkflowRun.mockReset();
     mockGetPausedWorkflowRun.mockImplementation(() => Promise.resolve(null));
+    // approveWorkflow re-reads the run; default to the paused fixture so NL
+    // approval tests exercise the shared operation end-to-end.
+    mockGetWorkflowRunDb.mockReset();
+    mockGetWorkflowRunDb.mockImplementation(() => Promise.resolve(makePausedRun()));
     mockCreateWorkflowEvent.mockReset();
     mockCreateWorkflowEvent.mockImplementation(() => Promise.resolve());
     mockGetOrCreateConversation.mockReset();
@@ -2027,10 +2035,14 @@ describe('natural-language approval routing', () => {
       'conv-1',
       expect.stringContaining('Resuming')
     );
-    // Workflow should be executed
+    // Run stays 'paused' — resolution recorded on the approval context (#2075)
     expect(mockUpdateWorkflowRun).toHaveBeenCalledWith('run-1', {
-      status: 'failed',
-      metadata: { approval_response: 'approved', rejection_reason: '', rejection_count: 0 },
+      metadata: {
+        approval: { nodeId: 'gate-1', message: 'Please review', resolved: 'approved' },
+        approval_response: 'approved',
+        rejection_reason: '',
+        rejection_count: 0,
+      },
     });
     expect(mockHydrateResumableRun).toHaveBeenCalled();
     expect(mockExecuteWorkflow).toHaveBeenCalled();
@@ -2066,6 +2078,33 @@ describe('natural-language approval routing', () => {
 
     expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
     // Normal routing proceeds (no early return)
+  });
+
+  test('paused run with an already-resolved gate is skipped — message routes normally', async () => {
+    const conversation = makeConversation({ codebase_id: null });
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+    // Gate already approved and awaiting auto-resume (#2075): the run is still
+    // 'paused' but the message must NOT be treated as another approval.
+    mockGetPausedWorkflowRun.mockReturnValueOnce(
+      Promise.resolve(
+        makePausedRun({
+          metadata: {
+            approval: { nodeId: 'gate-1', message: 'Please review', resolved: 'approved' },
+          },
+        })
+      )
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'sounds good');
+
+    // No approval events / no resume dispatch — normal routing proceeds
+    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(platform.sendMessage).not.toHaveBeenCalledWith(
+      'conv-1',
+      expect.stringContaining('Resuming')
+    );
   });
 
   test('paused run with missing approval context sends explicit guidance', async () => {

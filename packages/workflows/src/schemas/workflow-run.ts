@@ -141,6 +141,32 @@ export interface ApprovalContext {
   onRejectPrompt?: string;
   /** Max rejection attempts before cancellation (default 3). */
   onRejectMaxAttempts?: number;
+  /**
+   * Gate resolution marker. Set by approve/reject handlers while the run STAYS
+   * 'paused' awaiting auto-resume (#2075): 'approved' = approval recorded,
+   * 'rejected' = rejection recorded with an on_reject rework staged.
+   * null/undefined = gate unresolved (awaiting the human).
+   *
+   * Lifecycle: pauseWorkflowRun writes `resolved: null` on every fresh pause —
+   * an EXPLICIT null rather than key omission because SQLite's json_patch
+   * deep-merges the fresh context into the stored one (an omitted key would let
+   * a stale 'approved' from the previous gate survive and falsely block the
+   * next gate), while RFC 7386 null removes the key; Postgres `||` replaces the
+   * approval object wholesale. Never cleared on resume — matches the
+   * never-clear convention for approval_response/rejection_reason/
+   * loop_user_input (consumed in place; the next pause resets it).
+   */
+  resolved?: 'approved' | 'rejected' | null;
+}
+
+/**
+ * True when the run's current approval gate has already been resolved
+ * (approved, or rejected with a staged on_reject rework) and the run is
+ * paused only while awaiting resume. Guards double-approve/reject and the
+ * natural-language approval routing.
+ */
+export function isGateResolved(approval: ApprovalContext): boolean {
+  return approval.resolved === 'approved' || approval.resolved === 'rejected';
 }
 
 /**

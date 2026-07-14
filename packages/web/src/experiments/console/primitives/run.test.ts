@@ -150,3 +150,58 @@ describe('toRun — approval parsing', () => {
     ).toBeNull();
   });
 });
+
+describe('toRun — resolved gate (approved/rejected awaiting resume)', () => {
+  test('resolved approval hides the pending gate and sets gateResolved', () => {
+    const r = toRun(
+      raw({
+        id: 'r1',
+        workflow_name: 'review',
+        status: 'paused',
+        metadata: { approval: { nodeId: 'gate', message: 'Approve?', resolved: 'approved' } },
+      })
+    );
+    // No stale approve/reject buttons for an already-resolved gate.
+    expect(r.approval).toBeNull();
+    expect(r.gateResolved).toBe('approved');
+  });
+
+  test('resolved rejection maps to gateResolved: rejected', () => {
+    const r = toRun(
+      raw({
+        id: 'r1',
+        workflow_name: 'review',
+        status: 'paused',
+        metadata: { approval: { nodeId: 'gate', message: 'Approve?', resolved: 'rejected' } },
+      })
+    );
+    expect(r.approval).toBeNull();
+    expect(r.gateResolved).toBe('rejected');
+  });
+
+  test('explicit null resolved (fresh pause) keeps the gate pending', () => {
+    const r = toRun(
+      raw({
+        id: 'r1',
+        workflow_name: 'review',
+        status: 'paused',
+        metadata: { approval: { nodeId: 'gate', message: 'Approve?', resolved: null } },
+      })
+    );
+    expect(r.approval).toEqual({ nodeId: 'gate', message: 'Approve?' });
+    expect(r.gateResolved).toBeNull();
+  });
+
+  test('unknown resolved values are treated as unresolved', () => {
+    const r = toRun(
+      raw({
+        id: 'r1',
+        workflow_name: 'review',
+        status: 'paused',
+        metadata: { approval: { nodeId: 'gate', message: 'Approve?', resolved: 'weird' } },
+      })
+    );
+    expect(r.approval).toEqual({ nodeId: 'gate', message: 'Approve?' });
+    expect(r.gateResolved).toBeNull();
+  });
+});
