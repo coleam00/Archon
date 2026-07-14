@@ -448,6 +448,44 @@ export function getRunLogPath(owner: string, repo: string, workflowRunId: string
   return join(getProjectLogsPath(owner, repo), `${workflowRunId}.jsonl`);
 }
 
+/**
+ * Restrict a workflow name or scope key to a single filesystem-safe path
+ * segment. Any character outside `[a-zA-Z0-9_-]` becomes `_`, so a stray
+ * separator or `..` can never escape the scopes directory. Distinct inputs can
+ * collide (e.g. `a.b` and `a_b`) — scope dirs hold per-node files keyed by node
+ * id, so a collision co-mingles two scopes' artifacts rather than corrupting
+ * either. Falls back to `'_'` for an empty input.
+ */
+export function sanitizeScopeSegment(value: string): string {
+  const safe = value.replace(/[^a-zA-Z0-9_-]/g, '_');
+  return safe.length > 0 ? safe : '_';
+}
+
+/**
+ * Get the stable cross-invocation artifact scope directory for a workflow +
+ * scope key (the conversation UUID — the same key `persist_session` uses).
+ * Lives alongside the per-run `runs/` layout under the same artifacts root, so
+ * it works for repo projects, folder projects, and unregistered-cwd fallbacks:
+ *
+ *   <artifactsRoot>/scopes/<workflow>/<scope>/
+ *
+ * Unlike `runs/<id>/`, this path is identical across invocations of the same
+ * workflow in the same scope — it is the durable location a later invocation
+ * (e.g. a cold session resume) can read prior typed artifacts from.
+ */
+export function getScopeArtifactsPath(
+  artifactsRoot: string,
+  workflowName: string,
+  scopeKey: string
+): string {
+  return join(
+    artifactsRoot,
+    'scopes',
+    sanitizeScopeSegment(workflowName),
+    sanitizeScopeSegment(scopeKey)
+  );
+}
+
 // =============================================================================
 // Folder-project ("_folder") path functions
 // =============================================================================

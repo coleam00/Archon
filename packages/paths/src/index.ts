@@ -29,6 +29,8 @@ export {
   getProjectLogsPath,
   getRunArtifactsPath,
   getRunLogPath,
+  sanitizeScopeSegment,
+  getScopeArtifactsPath,
   slugifyFolderName,
   getFolderProjectRoot,
   getFolderProjectArtifactsPath,

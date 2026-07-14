@@ -29,11 +29,16 @@ mock.module('@archon/paths', () => ({
   parseOwnerRepo: mock(() => null),
   getRunArtifactsPath: mock(() => '/tmp/artifacts'),
   getProjectLogsPath: mock(() => '/tmp/logs'),
+  getProjectArtifactsPath: mock(() => '/tmp/artifacts-root'),
   slugifyFolderName: mock((name: string) => name),
   getFolderRunArtifactsPath: mock(
     (slug: string, runId: string) => `/tmp/_folder/${slug}/artifacts/runs/${runId}`
   ),
   getFolderProjectLogsPath: mock((slug: string) => `/tmp/_folder/${slug}/logs`),
+  getFolderProjectArtifactsPath: mock((slug: string) => `/tmp/_folder/${slug}/artifacts`),
+  getScopeArtifactsPath: mock(
+    (root: string, wf: string, scope: string) => `${root}/scopes/${wf}/${scope}`
+  ),
   captureWorkflowInvoked: mockCaptureWorkflowInvoked,
   captureWorkflowCompleted: mockCaptureWorkflowCompleted,
 }));
@@ -72,7 +77,12 @@ clearRegistry();
 registerBuiltinProviders();
 
 // --- Import after mocks ---
-import { executeWorkflow, hydrateResumableRun, resolveProjectPaths } from './executor';
+import {
+  executeWorkflow,
+  hydrateResumableRun,
+  resolveProjectPaths,
+  resolveScopeArtifactsDir,
+} from './executor';
 import { keepAwake } from './utils/keep-awake';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
@@ -672,6 +682,48 @@ describe('executeWorkflow', () => {
       if (result.success) {
         expect(result.summary).toBeUndefined();
       }
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Scope artifacts dir threading (#1846)
+  // -------------------------------------------------------------------------
+
+  describe('scope artifacts dir threading', () => {
+    it('threads scopeArtifactsDir into executeDagWorkflow for persist_session workflows', async () => {
+      const store = makeStore();
+      const deps = makeDeps(store);
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow({ nodes: [{ id: 'node1', prompt: 'Do something', persist_session: true }] }),
+        'test message',
+        'db-conv-1'
+      );
+      // Positional arg 19 = scopeArtifactsDir (after workflowPreset). Root is the
+      // cwd fallback (.archon/artifacts); scope = workflow name + conversation UUID
+      // ('conv-1' from the createWorkflowRun mock; getScopeArtifactsPath is mocked
+      // to `${root}/scopes/${wf}/${scope}`).
+      const scopeArg = mockExecuteDagWorkflow.mock.calls[0]?.[19] as string | undefined;
+      expect(scopeArg).toBe(`${join('/tmp', '.archon', 'artifacts')}/scopes/test-workflow/conv-1`);
+    });
+
+    it('passes undefined scopeArtifactsDir when the workflow uses no session persistence', async () => {
+      const store = makeStore();
+      const deps = makeDeps(store);
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1'
+      );
+      const scopeArg = mockExecuteDagWorkflow.mock.calls[0]?.[19] as string | undefined;
+      expect(scopeArg).toBeUndefined();
     });
   });
 
@@ -1445,6 +1497,7 @@ describe('resolveProjectPaths', () => {
     // slugifyFolderName is mocked to identity, so slug === name here
     expect(paths.artifactsDir).toBe('/tmp/_folder/My Platform/artifacts/runs/run-xyz');
     expect(paths.logDir).toBe('/tmp/_folder/My Platform/logs');
+    expect(paths.artifactsRoot).toBe('/tmp/_folder/My Platform/artifacts');
   });
 
   it('routes repo projects to owner/repo/ storage (unchanged)', async () => {
@@ -1466,9 +1519,10 @@ describe('resolveProjectPaths', () => {
 
     const result = await resolveProjectPaths(deps, '/repos/widget', RUN_ID, 'cb-repo');
 
-    // getRunArtifactsPath/getProjectLogsPath are mocked to constants
+    // getRunArtifactsPath/getProjectLogsPath/getProjectArtifactsPath are mocked to constants
     expect(result.artifactsDir).toBe('/tmp/artifacts');
     expect(result.logDir).toBe('/tmp/logs');
+    expect(result.artifactsRoot).toBe('/tmp/artifacts-root');
   });
 
   it('falls back to cwd-based paths when no codebase is registered', async () => {
@@ -1490,5 +1544,51 @@ describe('resolveProjectPaths', () => {
 
     expect(result.artifactsDir).toBe(join('/some/cwd', '.archon', 'artifacts', 'runs', RUN_ID));
     expect(result.logDir).toBe(join('/some/cwd', '.archon', 'logs'));
+    expect(result.artifactsRoot).toBe(join('/some/cwd', '.archon', 'artifacts'));
+  });
+});
+
+describe('resolveScopeArtifactsDir', () => {
+  const ROOT = '/tmp/artifacts-root';
+
+  it('returns the scope dir for a workflow with a persist_session node', () => {
+    const workflow = {
+      name: 'feature-dev',
+      nodes: [
+        { id: 'planner', prompt: 'plan', persist_session: true },
+      ] as WorkflowDefinition['nodes'],
+    };
+    expect(resolveScopeArtifactsDir(workflow, 'conv-1', ROOT)).toBe(
+      `${ROOT}/scopes/feature-dev/conv-1`
+    );
+  });
+
+  it('returns the scope dir for workflow-level persist_sessions', () => {
+    const workflow = {
+      name: 'feature-dev',
+      persist_sessions: true,
+      nodes: [{ id: 'planner', prompt: 'plan' }] as WorkflowDefinition['nodes'],
+    };
+    expect(resolveScopeArtifactsDir(workflow, 'conv-1', ROOT)).toBe(
+      `${ROOT}/scopes/feature-dev/conv-1`
+    );
+  });
+
+  it('returns undefined when the workflow uses no session persistence (opt-in)', () => {
+    const workflow = {
+      name: 'plain',
+      nodes: [{ id: 'a', prompt: 'x' }] as WorkflowDefinition['nodes'],
+    };
+    expect(resolveScopeArtifactsDir(workflow, 'conv-1', ROOT)).toBeUndefined();
+  });
+
+  it('returns undefined without a conversation scope (same guard as persistScopeKey)', () => {
+    const workflow = {
+      name: 'feature-dev',
+      persist_sessions: true,
+      nodes: [] as WorkflowDefinition['nodes'],
+    };
+    expect(resolveScopeArtifactsDir(workflow, null, ROOT)).toBeUndefined();
+    expect(resolveScopeArtifactsDir(workflow, undefined, ROOT)).toBeUndefined();
   });
 });
