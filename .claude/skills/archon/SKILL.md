@@ -185,8 +185,8 @@ Archon uses a single workflow format: **nodes** (DAG). Workflows are YAML files 
 ```yaml
 name: my-workflow
 description: What this workflow does
-provider: claude          # Optional: 'claude' or 'codex'
-model: sonnet             # Optional: model override
+provider: claude          # Optional: 'claude', 'codex', 'pi', ... (default: from config)
+model: medium             # Optional: tier keyword (small|medium|large), @alias, or literal model
 nodes:
   - id: first-node
     command: my-command    # Loads .archon/commands/my-command.md
@@ -197,7 +197,7 @@ nodes:
 
 ### Node Types
 
-Each node has exactly ONE of: `command`, `prompt`, `bash`, `script`, `loop`, `approval`, or `cancel`.
+Each node has exactly ONE of: `command`, `prompt`, `bash`, `script`, `loop`, `loop_group`, `approval`, or `cancel`.
 
 **Command node** — runs a `.archon/commands/*.md` file:
 ```yaml
@@ -245,6 +245,23 @@ Each node has exactly ONE of: `command`, `prompt`, `bash`, `script`, `loop`, `ap
     max_iterations: 10
     fresh_context: true
     until_bash: "bun run test"    # Optional: exit 0 = done
+```
+
+**Loop group node** — repeats a multi-node sub-DAG body per iteration (implement → test → review as one repeated cycle):
+```yaml
+- id: fix-cycle
+  loop_group:
+    nodes:
+      - id: implement
+        prompt: "Implement the next fix. Last review: $LOOP_PREV.review.output"
+      - id: test
+        bash: "bun run test 2>&1 || true"
+        depends_on: [implement]
+      - id: review
+        prompt: "Review diff + tests: $test.output. All good? <promise>SHIP</promise>"
+        depends_on: [test]
+    until: SHIP
+    max_iterations: 6
 ```
 
 **Approval node** — pauses the workflow for human review. Requires `interactive: true` at the workflow level for Web UI delivery:
@@ -300,13 +317,15 @@ For the full command authoring guide: Read `references/authoring-commands.md`
 | `$ARTIFACTS_DIR` | Pre-created directory for workflow artifacts |
 | `$BASE_BRANCH` | Base branch (auto-detected from git) |
 | `$WORKFLOW_ID` | Unique workflow run ID |
-| `$nodeId.output` | Output from upstream node |
+| `$nodeId.output` | Output from upstream node (`.field` access is strict — see variables ref) |
+| `$LOOP_PREV_OUTPUT` / `$LOOP_PREV.<id>.output` | Previous loop / loop_group iteration output |
+| `$LOOP_USER_INPUT` / `$REJECTION_REASON` | Human feedback at loop gates / approval rejections |
 
 Full variable reference: Read `references/variables.md`
 
-### Advanced Features (Command/Prompt Nodes, Claude Only)
+### Advanced Features (Command/Prompt Nodes)
 
-`hooks` (tool interception), `mcp` (external tool servers), `skills` (domain knowledge injection), `output_format` (structured JSON output), `allowed_tools`/`denied_tools` (tool restrictions).
+`output_format` (structured JSON output — all providers, schema-validated, node fails on miss), `hooks` (tool interception — Claude + OpenCode), `mcp` (external tool servers — all providers except Pi), `skills` (per-node injection on Claude/Pi/OpenCode/Copilot; Codex via filesystem), `allowed_tools`/`denied_tools` (tool restrictions — all except Codex), `agents` (inline sub-agents — Claude/OpenCode/Copilot), `persist_session` (cross-run AI memory), `output_type` (typed artifact sidecars).
 
 For details: Read `references/dag-advanced.md`
 

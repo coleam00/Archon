@@ -45,6 +45,8 @@ Adapter logs (Slack / Telegram / Web / GitHub) are emitted to stderr when `LOG_L
 
 Inspect artifacts when a multi-node workflow produces wrong output. The failing node's upstream artifact is usually where the problem originated.
 
+Nodes with `output_type:` also get engine-written sidecars under `runs/<run-id>/nodes/` (`<node-id>.md` + `<node-id>.meta.json`), and — for session-persisted workflows — mirrored copies under `artifacts/scopes/<workflow>/<scope>/nodes/` that survive across runs.
+
 ```bash
 ls ~/.archon/workspaces/<owner>/<repo>/artifacts/runs/<run-id>/
 cat ~/.archon/workspaces/<owner>/<repo>/artifacts/runs/<run-id>/issues/issue-42.md
@@ -89,7 +91,7 @@ Three possibilities:
    - Web UI: Dashboard → Abandon or Cancel button on the run card
    - CLI: `archon workflow abandon <run-id>` — marks the DB row cancelled without killing any subprocess. Right tool for orphans since the subprocess is already gone
    - Chat (Slack / Telegram / Web): `/workflow cancel <run-id>` — actively terminates the subprocess. Use for a still-live run that needs to be interrupted (there is no `archon workflow cancel` CLI subcommand)
-3. **A node is past its `idle_timeout`.** The default is 5 minutes. Override with per-node `idle_timeout: 600000` (10 min) for long-running nodes.
+3. **A node is past its `idle_timeout`.** The default is 30 minutes of complete silence (the timer resets on every streamed message — it's a deadlock detector, not a work limiter). Override with per-node `idle_timeout` (ms) if a node legitimately goes quiet for longer.
 
 ### Workflow fails mid-way; how do I resume?
 
@@ -116,18 +118,50 @@ User-level Claude plugin MCPs (e.g. `telegram`, `notion`) inherited from `~/.cla
 
 If you see a failure for an MCP you DID configure via `mcp:` in the workflow: check the config JSON path, the MCP server's `command`/`args`, and any referenced env vars.
 
-### Node output is empty / `$nodeId.output.field` resolves to empty string
+### A node was skipped and I don't know why
+
+Skips carry a **reason** in the persisted `node_skipped` event (`archon workflow get <run-id> --verbose --json`, or the `workflow_events` table):
+
+| Reason | Meaning | Fix |
+|--------|---------|-----|
+| `trigger_rule` | Upstream states didn't satisfy the join rule (default `all_success` — a skipped upstream counts as not-success and cascades) | Use `one_success` / `none_failed_min_one_success` / `all_done` on merge nodes after `when:`-gated branches |
+| `when_condition` | The `when:` expression evaluated false | Expected behavior — check the upstream output it compared against |
+| `when_condition_parse_error` | The `when:` expression has invalid SYNTAX — fail-closed skip | Fix the expression (six operators, `&&`/`\|\|`, no parentheses) |
+| `prior_success` | Resume: the node completed in a prior run | Expected; use `always_run: true` to force re-execution |
+
+### Node FAILED with an `OutputRefError`-style message about `$node.output.field`
+
+Not a skip — strict field access failed loudly: the field isn't in the producer's `output_format` schema (typo), the schemaless producer's output isn't JSON / lacks the key, or the producer never ran. Fix the reference, add the field to the schema, or guard with `when:`/`trigger_rule`. (Only whole-text `$node.output` degrades silently to `''`.)
+
+### Node output is empty / a declared-optional field resolves to empty string
 
 Common causes:
 
-1. Upstream node is an AI node without `output_format` — the output is free-form text, JSON parsing fails, field access returns empty.
-2. Upstream node was **skipped** (its `when:` evaluated false). Downstream `when:` with `==` comparisons against a specific value will fail-closed.
+1. Upstream node was **skipped** — whole-text `$node.output` is `''` for skipped producers.
+2. The field is declared in the producer's `output_format` but was absent/null in the actual output (declared-optional → `''` by design).
 3. Bash/script node printed to stderr, not stdout. Only stdout is captured.
-4. For script nodes, non-zero exit on a non-existent file / missing import silently drops the output. Check the run log for `node_error` entries.
+4. For script nodes, non-zero exit on a non-existent file / missing import fails the node. Check the run log for `node_error` entries.
+
+### A workflow-level field seems to have no effect
+
+Invalid values for optional workflow-level fields (`interactive`, `effort`, `thinking`, `sandbox`, `fallbackModel`, `betas`, `tags`, `worktree.enabled`, `mutates_checkout`) are **warn-and-drop**: the workflow still loads and runs, the field is discarded, and a loader warning is logged. Same for AI-only fields on bash/script nodes (`*_node_ai_fields_ignored`). Grep the server/CLI logs for `_ignored` / warn entries before assuming the field is broken.
+
+### Persisted session didn't restore (cold resume)
+
+A `persist_session` node whose provider couldn't restore the prior session runs FRESH with a warning (it does not fail). The warning includes pointers to prior typed artifacts (`output_type` sidecars in the cross-run scope dir) so the prompt/agent can re-read lost context. If sessions are repeatedly cold, check server logs; clear broken state with `archon workflow reset-sessions <workflow>`.
 
 ## Useful Diagnostic Commands
 
 ```bash
+# Environment sanity first: binaries, gh auth, DB, adapters
+archon doctor
+
+# One run, any status, with per-node event summary — the fastest "why did node X skip/fail"
+archon workflow get <run-id> --verbose --json | jq '.events[]'
+
+# Recent runs for this project, all statuses ("did the review pass?")
+archon workflow runs --json | jq '.runs[]'
+
 # All active runs as JSON (running / paused / recently finished, depending on retention)
 archon workflow status --json | jq '.runs[]'
 

@@ -35,12 +35,15 @@ archon workflow run archon-assist "Investigate the flaky test" --detach
 | `--no-worktree` | Skip isolation — run in the live checkout |
 | `--resume` | Resume the last failed run of this workflow at this cwd (skips completed nodes) |
 | `--detach` | Run in a detached background child and return immediately (find the run via `workflow runs`). Pair with `--json` for a structured ack. Child output goes to `~/.archon/logs/`. In the web console the run appears in the Workflow dock (listed by project) but may not update **live** until a refetch — it runs out-of-process and doesn't stream to the console's live event feed. |
+| `--folder` | Register the current NON-git directory as a **folder project** and run in place (no worktree). For multi-repo roots and plain ops folders. Incompatible with `--branch`/`--from`; workflows pinned `worktree.enabled: true` are rejected on folder projects |
 | `--cwd <path>` | Working directory override |
+| `--verbose` / `-v` | Debug logs + tool-level workflow progress events on stderr |
 
 **Flag conflicts** (errors):
 - `--branch` + `--no-worktree`
 - `--from` + `--no-worktree`
 - `--resume` + `--branch`
+- `--branch`/`--from` on a folder project
 
 **Default behavior** (no flags): Auto-creates a worktree with branch name `{workflow-name}-{timestamp}`.
 
@@ -139,12 +142,23 @@ archon workflow cleanup             # Default: 7 days
 archon workflow cleanup 30          # Custom: 30 days
 ```
 
-### `archon workflow event emit --run-id <uuid> --type <event-type> [--data <json>]`
+### `archon workflow reset-sessions <workflow-name> [--scope <key>] [--node <id>] [--yes] [--json]`
 
-Emit a workflow event to a running workflow. Used inside loop prompts to signal state (e.g. "checkpoint written") for observability. Rarely invoked from the shell directly.
+Clear persisted per-node AI sessions (`persist_session` cross-run memory) for a workflow. Without `--scope`, wipes EVERY scope and requires `--yes`. `--node` narrows to one node's session.
 
 ```bash
-archon workflow event emit --run-id abc123 --type checkpoint --data '{"step":"plan"}'
+archon workflow reset-sessions standup-report --scope <conversation-id>
+archon workflow reset-sessions standup-report --node report --yes    # all scopes, one node
+```
+
+Chat equivalent: `/workflow reset-sessions <name> [<node-id>]` (auto-scoped to the current conversation).
+
+### `archon workflow event emit --run-id <uuid> --type <event-type> [--data <json>]`
+
+Emit a workflow event into the run's audit log (`workflow_events`). **Write-only observability** — it does NOT steer the run: loop completion is decided solely by the `until` signal and `until_bash`, never by emitted events. Used inside loop prompts to record progress markers (e.g. "checkpoint written").
+
+```bash
+archon workflow event emit --run-id abc123 --type task_activity --data '{"step":"plan"}'
 ```
 
 ### `archon continue <branch> [flags] [message]`
@@ -239,6 +253,14 @@ archon version
 #   Platform: darwin-arm64
 #   Build: source (bun)
 #   Database: sqlite
+```
+
+### `archon doctor`
+
+Verify the Archon setup: Claude binary resolution, Pi auth, `gh` auth, database connectivity, connected providers, workspace writability, bundled defaults, and adapter configuration (Slack/Telegram). Run this first when workflows fail with environment-shaped errors (binary not found, auth failures). Note: there is no Codex binary check — Codex resolution issues surface at run time.
+
+```bash
+archon doctor
 ```
 
 ### `archon setup [--spawn]`
