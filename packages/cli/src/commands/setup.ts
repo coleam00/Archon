@@ -38,6 +38,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, chmod
 import { parse as parseDotenv } from 'dotenv';
 import { join, dirname } from 'path';
 import { copyArchonSkill } from './skill';
+import { setInstallDefault } from './ai';
 import { homedir } from 'os';
 import { randomBytes } from 'crypto';
 import { spawn, execSync, spawnSync, type ChildProcess } from 'child_process';
@@ -158,6 +159,12 @@ interface SetupConfig {
     /** Canonical env var name for the chosen Pi backend, e.g. 'ANTHROPIC_API_KEY' */
     piApiKeyEnvVar?: string;
     defaultAssistant: string;
+    /** True when defaultAssistant came from an actual user selection — gates
+     *  the config.yaml write in writeInstallDefaults. Left unset on the
+     *  no-assistant early return and in 'add' mode, where defaultAssistant is
+     *  a registry fallback that must never clobber an existing config.yaml
+     *  defaultAssistant. */
+    defaultAssistantSelected?: boolean;
     /** Default CHAT model for the default assistant — written to
      *  ~/.archon/config.yaml as `assistants.<defaultAssistant>.model` (#1999).
      *  Unset when the user keeps the SDK default (or the default is Pi, whose
@@ -631,12 +638,52 @@ async function collectDefaultChatModel(provider: string): Promise<string | undef
       cancel('Setup cancelled.');
       process.exit(0);
     }
-    const trimmed = typed.trim();
-    // Empty input = same as keeping the default (guide, never gate).
+    // clack's text() is typed as string but resolves undefined on an empty
+    // submit — guard like the docs-path prompt does. Empty input = same as
+    // keeping the default (guide, never gate).
+    const trimmed = typeof typed === 'string' ? typed.trim() : '';
     return trimmed.length > 0 ? trimmed : undefined;
   }
 
   return choice;
+}
+
+/**
+ * Write the wizard's default assistant (+ optional chat model) to
+ * ~/.archon/config.yaml via the SAME install-scope path as
+ * `archon ai default <provider> [<model>]` — setInstallDefault writes
+ * `defaultAssistant` unconditionally and `assistants.<p>.model` only when a
+ * model was chosen, so the pair stays atomic (#1998/#1999). Writing the
+ * assistant even when the model is skipped matters: the .env
+ * DEFAULT_AI_ASSISTANT is fallback-only (applyEnvOverrides in @archon/core),
+ * so a stale config.yaml defaultAssistant from an earlier `archon ai default`
+ * would otherwise silently override the wizard's fresh selection.
+ *
+ * Gated on `defaultAssistantSelected`: the 'add'-mode / no-assistant registry
+ * fallback must never clobber an existing config.yaml value. Non-fatal on
+ * failure — the env write has already succeeded, so warn + log instead of
+ * aborting setup. Returns true when the config was written.
+ *
+ * The `write` parameter is injected in tests (same convention as
+ * checkPiModule's loader) so this path is testable without `mock.module()`.
+ */
+export async function writeInstallDefaults(
+  ai: SetupConfig['ai'],
+  write: (provider: string, model?: string) => Promise<void> = setInstallDefault
+): Promise<boolean> {
+  if (!ai.defaultAssistantSelected) return false;
+  try {
+    await write(ai.defaultAssistant, ai.defaultModel);
+    return true;
+  } catch (err) {
+    // Non-fatal: the user can run `archon ai default <provider> [<model>]`
+    // later. Surface, don't swallow.
+    const e = err as NodeJS.ErrnoException;
+    const code = e.code ? ` (${e.code})` : '';
+    log.warning(`Could not write default assistant config: ${e.message}${code}`);
+    getLog().warn({ err: e }, 'setup.default_assistant_config_write_failed');
+    return false;
+  }
 }
 
 /**
@@ -1175,6 +1222,7 @@ After upgrading, run 'archon setup' again.`,
     piApiKey,
     piApiKeyEnvVar,
     defaultAssistant,
+    ...(selectedProviders.length > 0 ? { defaultAssistantSelected: true } : {}),
     ...(defaultModel !== undefined ? { defaultModel } : {}),
   };
 }
@@ -2197,30 +2245,13 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
     }
   }
 
-  // Default chat model → ~/.archon/config.yaml through the SAME install-scope
-  // write path as `archon ai default <provider> <model>` (#1998/#1999):
-  // defaultAssistant + assistants.<p>.model are written together so the pair
-  // stays atomic — the .env DEFAULT_AI_ASSISTANT is fallback-only
-  // (applyEnvOverrides in @archon/core), and a stale config.yaml
-  // defaultAssistant from an earlier `archon ai default` must never leave the
-  // model pin riding a different provider. Lazy import keeps @archon/core out
-  // of setup's module graph (same pattern as the doctor import below).
-  if (config.ai.defaultModel) {
-    try {
-      const { updateGlobalConfig } = await import('@archon/core');
-      await updateGlobalConfig({
-        defaultAssistant: config.ai.defaultAssistant,
-        assistants: { [config.ai.defaultAssistant]: { model: config.ai.defaultModel } },
-      });
-    } catch (err) {
-      // Non-fatal: the env write already succeeded, so the user can run
-      // `archon ai default <provider> <model>` later. Surface, don't swallow.
-      const e = err as NodeJS.ErrnoException;
-      const code = e.code ? ` (${e.code})` : '';
-      log.warning(`Could not write default chat model: ${e.message}${code}`);
-      getLog().warn({ err: e }, 'setup.default_model_config_write_failed');
-    }
-  }
+  // Default assistant (+ optional chat model) → ~/.archon/config.yaml through
+  // the SAME install-scope write path as `archon ai default <provider>
+  // [<model>]` (#1998/#1999). Must run AFTER the Pi block above:
+  // writeHomePiModelConfig refuses to append once an `assistants:` block
+  // exists, and updateGlobalConfig can materialize one — the merge-write here
+  // preserves whatever the Pi writer produced.
+  await writeInstallDefaults(config.ai);
 
   // Tell the operator exactly what happened — especially that <repo>/.env was
   // NOT touched, because prior versions wrote there and this is the biggest

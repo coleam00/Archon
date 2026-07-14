@@ -19,6 +19,7 @@ import {
   writeHomePiModelConfig,
   buildDefaultModelChoices,
   readInstallDefaultModel,
+  writeInstallDefaults,
 } from './setup';
 import * as setupModule from './setup';
 import { copyArchonSkill } from './skill';
@@ -932,6 +933,63 @@ describe('buildDefaultModelChoices (#1999)', () => {
   it('falls back to keep + custom only for providers without a curated list', () => {
     const values = buildDefaultModelChoices('some-future-provider', undefined).map(c => c.value);
     expect(values).toEqual(['__keep__', '__custom__']);
+  });
+});
+
+describe('writeInstallDefaults (#1999)', () => {
+  const baseAi = {
+    claude: true,
+    codex: false,
+    pi: false,
+    defaultAssistant: 'claude',
+  };
+
+  it('writes provider + model together when a chat model was chosen', async () => {
+    const calls: [string, string | undefined][] = [];
+    const written = await writeInstallDefaults(
+      { ...baseAi, defaultAssistantSelected: true, defaultModel: 'opus' },
+      async (provider, model) => {
+        calls.push([provider, model]);
+      }
+    );
+    expect(written).toBe(true);
+    expect(calls).toEqual([['claude', 'opus']]);
+  });
+
+  it('writes defaultAssistant alone when the model was skipped (stale-config guard)', async () => {
+    // The .env DEFAULT_AI_ASSISTANT is fallback-only, so skipping the model
+    // must still record the wizard's fresh selection in config.yaml.
+    const calls: [string, string | undefined][] = [];
+    const written = await writeInstallDefaults(
+      { ...baseAi, defaultAssistantSelected: true },
+      async (provider, model) => {
+        calls.push([provider, model]);
+      }
+    );
+    expect(written).toBe(true);
+    expect(calls).toEqual([['claude', undefined]]);
+  });
+
+  it('does not write when the default was a registry fallback, not a selection', async () => {
+    // 'add' mode and the no-assistant early return leave
+    // defaultAssistantSelected unset — the fallback value must never clobber
+    // an existing config.yaml defaultAssistant.
+    const calls: unknown[] = [];
+    const written = await writeInstallDefaults({ ...baseAi }, async (...args) => {
+      calls.push(args);
+    });
+    expect(written).toBe(false);
+    expect(calls).toEqual([]);
+  });
+
+  it('is non-fatal when the write fails (env write already succeeded)', async () => {
+    const written = await writeInstallDefaults(
+      { ...baseAi, defaultAssistantSelected: true, defaultModel: 'opus' },
+      async () => {
+        throw Object.assign(new Error('read-only fs'), { code: 'EROFS' });
+      }
+    );
+    expect(written).toBe(false);
   });
 });
 
