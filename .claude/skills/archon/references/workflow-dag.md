@@ -226,7 +226,7 @@ All node types share these fields:
 | `output_format` | object | — | JSON Schema for structured output |
 | `allowed_tools` | string[] | all | Tool whitelist. `[]` = disable all. Claude only |
 | `denied_tools` | string[] | none | Tool blacklist. Claude only |
-| `retry` | object | 2 retries, 3s | Retry config. **Hard error on loop nodes** |
+| `retry` | object | AI nodes: 2 retries, 3s. bash/script: single attempt (opt-in) | Retry config. `bash`/`script` retry only when `retry:` is set. **Hard error on loop nodes** |
 | `hooks` | object | — | SDK hooks. Claude only. See `dag-advanced.md` |
 | `mcp` | string | — | MCP config path. Claude only. See `dag-advanced.md` |
 | `skills` | string[] | — | Skill names. Claude only. See `dag-advanced.md` |

@@ -292,12 +292,15 @@ Skills provide **knowledge** (how to do something). MCP provides **capability** 
 
 ## Retry Configuration
 
-Available on command, prompt, and bash nodes. **Not supported on loop nodes** (hard error at load time).
+Available on `command`, `prompt`, `bash`, and `script` nodes. **Not supported on `loop`/`loop_group` nodes** (hard error at load time).
+
+- **AI nodes** (`command`, `prompt`) auto-retry transient errors by default (2 retries) even without a `retry:` block.
+- **Deterministic nodes** (`bash`, `script`) run **once** unless an explicit `retry:` block is present — retry is opt-in so side-effectful scripts (deploys, `gh` mutations) aren't silently re-run.
 
 ```yaml
 - id: deploy
   bash: "deploy.sh"
-  retry:
+  retry:                               # required — bash/script don't retry without it
     max_attempts: 3                    # 1-5 (required when retry is set)
     delay_ms: 5000                     # 1000-60000, default 3000. Doubles each attempt
     on_error: all                      # 'transient' (default) or 'all'
@@ -315,8 +318,8 @@ FATAL patterns take priority over TRANSIENT patterns in the same error message.
 
 ### Two-Layer Retry Stack
 
-1. **SDK-level** (automatic): Built-in retry for API errors (behavior managed by the Claude/Codex SDK)
-2. **Node-level** (configurable via `retry:`): Wraps the entire SDK call. Default when `retry:` is omitted: 2 retries, 3000ms base delay, transient errors only
+1. **SDK-level** (automatic, AI nodes only): Built-in retry for API errors (behavior managed by the Claude/Codex SDK)
+2. **Node-level** (configurable via `retry:`): Wraps the entire node run. Default when `retry:` is omitted: AI nodes get 2 retries, 3000ms base delay, transient errors only; `bash`/`script` nodes get a single attempt (retry is opt-in)
 
 ### Idle Timeout
 

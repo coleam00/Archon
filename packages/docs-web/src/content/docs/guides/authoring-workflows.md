@@ -487,9 +487,11 @@ Both sources coexist — inline agents and on-disk agents are both available to 
 
 ## Retry Configuration
 
-Every node automatically retries on **transient** errors (SDK subprocess crashes, rate limits, network timeouts) using a default configuration: **2 retries** (3 total attempts), **3 s base delay** with exponential backoff. You will see a platform notification before each retry attempt.
+**AI nodes** (`command:`, `prompt:`) automatically retry on **transient** errors (SDK subprocess crashes, rate limits, network timeouts) using a default configuration: **2 retries** (3 total attempts), **3 s base delay** with exponential backoff. You will see a platform notification before each retry attempt.
 
-To customise, add a `retry:` block:
+**Deterministic nodes** (`bash:`, `script:`) do **not** auto-retry — they run exactly once unless you add an explicit `retry:` block. This keeps side-effectful scripts (deploys, `gh` mutations, external CLIs) from being silently re-run on a transient-looking failure; opt in per node when re-running is safe. `loop:` and `loop_group:` manage their own iteration and don't accept `retry:`.
+
+To enable or customise retry, add a `retry:` block:
 
 ```yaml
 nodes:
@@ -505,13 +507,22 @@ nodes:
     retry:
       max_attempts: 4       # 4 retries = 5 total attempts
       on_error: all         # Retry even non-transient errors (use with caution)
+
+  - id: deploy               # bash/script only retry when retry: is set
+    bash: "./deploy.sh"
+    retry:
+      max_attempts: 3
+      delay_ms: 5000
+      on_error: all
 ```
 
 ### Retry Fields
 
-| Field | Type | Default | Constraints | Description |
-|-------|------|---------|-------------|-------------|
-| `max_attempts` | number | `2` | 1–5 | Number of retry attempts (not including the initial attempt). `1` = one retry (2 total attempts) |
+`retry:` is required to enable retry on `bash:`/`script:` nodes; on `command:`/`prompt:` nodes it customises the defaults below.
+
+| Field | Type | Default (AI nodes) | Constraints | Description |
+|-------|------|--------------------|-------------|-------------|
+| `max_attempts` | number | `2` | 1–5 | Number of retry attempts (not including the initial attempt). `1` = one retry (2 total attempts). No default on `bash:`/`script:` — omitting `retry:` means a single attempt |
 | `delay_ms` | number | `3000` | 1000–60000 | Base delay in ms before the first retry. Doubles each attempt (exponential backoff) |
 | `on_error` | `'transient'` \| `'all'` | `'transient'` | — | Which errors trigger a retry. `'transient'` = SDK crashes, rate limits, network timeouts only. `'all'` = any error including unknown errors (FATAL errors such as auth failures are never retried regardless) |
 
@@ -540,12 +551,13 @@ Archon uses two independent retry layers:
 ```
 SDK subprocess retry (claude.ts)  — 3 total attempts, 2 s base backoff
     ↓ only if all SDK retries exhausted
-Node retry (dag-executor)  — default 2 retries, 3 s base backoff
+Node retry (dag-executor)  — AI nodes: default 2 retries, 3 s base backoff;
+                             bash/script: only when retry: is set
     ↓ only if all node retries exhausted
 Workflow fails → user opts in to resume on next invocation
 ```
 
-This means a single transient crash may trigger up to **3 SDK retries** before a single node retry attempt is consumed.
+This means a single transient crash may trigger up to **3 SDK retries** before a single node retry attempt is consumed. The SDK layer only applies to AI nodes; `bash:`/`script:` nodes have no SDK layer, so their `retry:` block wraps the raw subprocess directly.
 
 > **DAG resume**: For `nodes:` (DAG) workflows, resume is opt-in — pass `--resume` to `archon workflow run`, run `archon workflow resume <id>`, or use the web UI resume button. Plain `archon workflow run <name>` always starts a fresh run. See [DAG Resume on Failure](#dag-resume-on-failure) below.
 
