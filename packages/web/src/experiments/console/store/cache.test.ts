@@ -95,15 +95,79 @@ describe('subscribeKey — per-key Map lifecycle (#1933)', () => {
     await flush();
     unsubscribe();
 
-    // An SSE push for an unsubscribed key re-creates cache + versions entries.
+    // An SSE push for an unsubscribed key updates the still-warm cache; the
+    // version counter stays released because notify skips subscriber-less keys.
     set(key, 'pushed');
     expect(get(key)).toBe('pushed');
-    expect(versionOf(key)).toBe(1);
+    expect(versionOf(key)).toBe(0);
 
-    // With no loader registered, revalidate's prune branch drops everything.
+    // With no loader registered, revalidate's prune branch drops the cache too.
     invalidate(key);
     expect(get(key)).toBeUndefined();
     expect(versionOf(key)).toBe(0);
+  });
+
+  test('a load resolving after the last unsubscribe does not resurrect the counter', async () => {
+    const key = 'test:inflight-resolve';
+    let resolveLoad: (v: string) => void = () => {};
+    const unsubscribe = subscribeKey(
+      key,
+      () => {},
+      () =>
+        new Promise<string>(resolve => {
+          resolveLoad = resolve;
+        })
+    );
+
+    unsubscribe(); // last subscriber leaves while the load is still in flight
+    expect(versionOf(key)).toBe(0);
+
+    resolveLoad('late');
+    await flush();
+    expect(versionOf(key)).toBe(0); // notify skipped — nothing subscribes
+    expect(get(key)).toBe('late'); // cache still warms for a future remount
+  });
+
+  test('a load rejecting after the last unsubscribe does not resurrect the counter', async () => {
+    const key = 'test:inflight-reject';
+    let rejectLoad: (e: Error) => void = () => {};
+    const unsubscribe = subscribeKey(
+      key,
+      () => {},
+      () =>
+        new Promise<string>((_resolve, reject) => {
+          rejectLoad = reject;
+        })
+    );
+
+    unsubscribe();
+    expect(versionOf(key)).toBe(0);
+
+    rejectLoad(new Error('late boom'));
+    await flush();
+    expect(versionOf(key)).toBe(0);
+  });
+
+  test('invalidate by prefix releases every matching subscriber-less key', async () => {
+    const unsubA = subscribeKey(
+      'test-prefix:a',
+      () => {},
+      () => Promise.resolve('a')
+    );
+    const unsubB = subscribeKey(
+      'test-prefix:b',
+      () => {},
+      () => Promise.resolve('b')
+    );
+    await flush();
+    unsubA();
+    unsubB();
+
+    invalidate('test-prefix');
+    expect(get('test-prefix:a')).toBeUndefined();
+    expect(get('test-prefix:b')).toBeUndefined();
+    expect(versionOf('test-prefix:a')).toBe(0);
+    expect(versionOf('test-prefix:b')).toBe(0);
   });
 
   test('errored key still releases its counter on last unsubscribe', async () => {

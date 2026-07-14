@@ -9,6 +9,9 @@
  *   or `refetch()`, any key with an active subscriber reloads automatically.
  * - `patch` and `set` are for the SSE dispatcher and skill-layer optimistic
  *   updates only.
+ * - After the last unsubscribe, `cache`/`errors` are deliberately retained so
+ *   a remount reads warm; only the per-key version counter is released.
+ *   `invalidate()` fully releases subscriber-less keys.
  *
  * Deliberately minimal. No React Query, no Zustand.
  */
@@ -29,9 +32,14 @@ const loaders = new Map<string, () => Promise<unknown>>();
 const versions = new Map<string, number>();
 
 function notify(key: string): void {
-  versions.set(key, (versions.get(key) ?? 0) + 1);
+  // No subscribers ⇒ nothing snapshots the counter, so don't bump it — a late
+  // write (an in-flight load settling after the last unsubscribe, or an SSE
+  // push for an unwatched key) would otherwise resurrect the `versions` entry
+  // that unsubscribe just released (#1933). Cache/error writes still happen at
+  // the call sites so a future remount reads warm.
   const subs = listeners.get(key);
   if (subs === undefined) return;
+  versions.set(key, versionOf(key) + 1);
   for (const l of subs) l();
 }
 
@@ -141,6 +149,9 @@ export function keysStartingWith(prefix: string): string[] {
  * Module-level subscription primitive backing `useEntity`. A plain function
  * (not a hook) so the subscribe/unsubscribe lifecycle is unit-testable — the
  * same extraction shape as `handleBuilderKeydown` in `useBuilderKeyboard`.
+ *
+ * Exported for tests; production code subscribes via `useEntity`, whose
+ * `useSyncExternalStore` wiring guarantees the returned cleanup runs.
  */
 export function subscribeKey(
   key: string,
@@ -158,19 +169,21 @@ export function subscribeKey(
   ensureLoad(key);
 
   return (): void => {
-    const s = listeners.get(key);
-    if (s === undefined) return;
-    s.delete(onStoreChange);
-    if (s.size === 0) {
+    const remainingSubs = listeners.get(key);
+    if (remainingSubs === undefined) return;
+    remainingSubs.delete(onStoreChange);
+    if (remainingSubs.size === 0) {
       listeners.delete(key);
       loaders.delete(key);
       // Drop the change counter too — with no subscribers nothing snapshots it,
       // and `useSyncExternalStore` only compares snapshots for change, so a
       // remount starting back at 0 behaves identically. Without this the
       // `versions` Map grows unbounded across every key a session ever touches
-      // (#1933). `cache` and `errors` are deliberately retained so a remount
-      // reads warm (see the module contract above); `invalidate()` releases
-      // them for subscriber-less keys via `revalidate`'s no-loader branch.
+      // (#1933); `notify` refuses to bump subscriber-less keys, so a load still
+      // in flight here cannot resurrect the entry. `cache` and `errors` are
+      // deliberately retained so a remount reads warm (see the module contract
+      // above); `invalidate()` releases them for subscriber-less keys via
+      // `revalidate`'s no-loader branch.
       versions.delete(key);
     }
   };
