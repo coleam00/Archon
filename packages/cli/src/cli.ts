@@ -584,7 +584,8 @@ async function main(): Promise<number> {
             return await workflowGetCommand(
               getRunId,
               jsonFlag,
-              values.verbose as boolean | undefined
+              values.verbose as boolean | undefined,
+              effectiveCwd
             );
           }
 
@@ -613,7 +614,7 @@ async function main(): Promise<number> {
               console.error('Usage: archon workflow resume <run-id>');
               return 1;
             }
-            await workflowResumeCommand(resumeRunId, jsonFlag);
+            await workflowResumeCommand(resumeRunId, jsonFlag, effectiveCwd);
             break;
           }
 
@@ -623,7 +624,7 @@ async function main(): Promise<number> {
               console.error('Usage: archon workflow abandon <run-id>');
               return 1;
             }
-            await workflowAbandonCommand(abandonRunId, jsonFlag);
+            await workflowAbandonCommand(abandonRunId, jsonFlag, effectiveCwd);
             break;
           }
 
@@ -636,7 +637,7 @@ async function main(): Promise<number> {
             // Accept comment as positional args (everything after run ID) or --comment flag
             const approveComment =
               (values.comment as string | undefined) || positionals.slice(3).join(' ') || undefined;
-            await workflowApproveCommand(approveRunId, approveComment, jsonFlag);
+            await workflowApproveCommand(approveRunId, approveComment, jsonFlag, effectiveCwd);
             break;
           }
 
@@ -648,7 +649,7 @@ async function main(): Promise<number> {
             }
             const rejectReason =
               (values.reason as string | undefined) || positionals.slice(3).join(' ') || undefined;
-            await workflowRejectCommand(rejectRunId, rejectReason, jsonFlag);
+            await workflowRejectCommand(rejectRunId, rejectReason, jsonFlag, effectiveCwd);
             break;
           }
 
