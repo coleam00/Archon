@@ -627,6 +627,10 @@ async function dispatchOrchestratorWorkflow(
   source?: WorkflowSource,
   options?: WorkflowDispatchOptions
 ): Promise<void> {
+  // The codebase's stored default branch — the $BASE_BRANCH fallback for every
+  // executeWorkflow dispatch below (repo config worktree.baseBranch still wins).
+  const codebaseBaseBranch = codebase.default_branch?.trim() || undefined;
+
   // Capability gate: hard-fail before any worktree/clone/AI cost if the
   // workflow declares `requires: [github]` and the originating user hasn't
   // connected. No-op when per-user GitHub is disabled (solo PAT installs).
@@ -789,7 +793,7 @@ async function dispatchOrchestratorWorkflow(
           parentConversationId: conversation.id,
           userId,
           source,
-          baseBranch: codebase.default_branch?.trim() || undefined,
+          baseBranch: codebaseBaseBranch,
           ...prepared,
         }
       );
@@ -811,7 +815,7 @@ async function dispatchOrchestratorWorkflow(
           parentConversationId: conversation.id,
           userId,
           source,
-          baseBranch: codebase.default_branch?.trim() || undefined,
+          baseBranch: codebaseBaseBranch,
         }
       );
     }
@@ -847,7 +851,7 @@ async function dispatchOrchestratorWorkflow(
         parentConversationId: conversation.id,
         userId,
         source,
-        baseBranch: codebase.default_branch?.trim() || undefined,
+        baseBranch: codebaseBaseBranch,
       }
     );
   }

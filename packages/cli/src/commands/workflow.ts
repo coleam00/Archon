@@ -991,6 +991,11 @@ export async function workflowRunCommand(
 
   const isFolderCodebase = codebase?.kind === 'folder';
 
+  // The codebase's stored default branch, used as the base-branch fallback when
+  // repo config sets no worktree.baseBranch (reuse validation, worktree
+  // creation, and $BASE_BRANCH resolution all derive from this one value).
+  const codebaseDefaultBranch = codebase?.default_branch?.trim() || undefined;
+
   // Authoritative folder guards for an already-registered folder project run
   // WITHOUT the --folder flag (the flag-based guards above only fire when the
   // caller declared intent). Fail fast before any worktree work.
@@ -1036,11 +1041,15 @@ export async function workflowRunCommand(
       try {
         const repoConfig = await loadRepoConfig(codebase.default_cwd);
         const rawBase = repoConfig?.worktree?.baseBranch?.trim();
-        const configuredBase = rawBase
-          ? git.toBranchName(rawBase)
-          : codebase.default_branch?.trim()
-            ? git.toBranchName(codebase.default_branch.trim())
-            : await git.getDefaultBranch(git.toRepoPath(codebase.default_cwd));
+        // Three-level fallback: repo config → codebase default → git auto-detect.
+        let configuredBase: git.BranchName;
+        if (rawBase) {
+          configuredBase = git.toBranchName(rawBase);
+        } else if (codebaseDefaultBranch) {
+          configuredBase = git.toBranchName(codebaseDefaultBranch);
+        } else {
+          configuredBase = await git.getDefaultBranch(git.toRepoPath(codebase.default_cwd));
+        }
         const isValidBase = await git.isAncestorOf(
           git.toWorktreePath(existingEnv.working_path),
           `origin/${configuredBase}`
@@ -1075,9 +1084,7 @@ export async function workflowRunCommand(
         fromBranch: options.fromBranch?.trim()
           ? git.toBranchName(options.fromBranch.trim())
           : undefined,
-        baseBranch: codebase.default_branch?.trim()
-          ? git.toBranchName(codebase.default_branch.trim())
-          : undefined,
+        baseBranch: codebaseDefaultBranch ? git.toBranchName(codebaseDefaultBranch) : undefined,
         codebaseId: codebase.id,
         canonicalRepoPath: git.toRepoPath(codebase.default_cwd),
         description: `CLI workflow: ${workflowName}`,
@@ -1284,16 +1291,20 @@ export async function workflowRunCommand(
   // Execute workflow with workingCwd (may be worktree path)
   let result: Awaited<ReturnType<typeof executeWorkflow>>;
   try {
-    const baseBranch = codebase?.default_branch?.trim() || undefined;
     const opts = prepared
       ? {
           codebaseId: codebase?.id,
           source: workflowSource,
           userId: cliUserId,
-          baseBranch,
+          baseBranch: codebaseDefaultBranch,
           ...prepared,
         }
-      : { codebaseId: codebase?.id, source: workflowSource, userId: cliUserId, baseBranch };
+      : {
+          codebaseId: codebase?.id,
+          source: workflowSource,
+          userId: cliUserId,
+          baseBranch: codebaseDefaultBranch,
+        };
     result = await executeWorkflow(
       deps,
       adapter,
