@@ -5,6 +5,11 @@ import { tmpdir } from 'node:os';
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { AgentSessionEvent } from '@earendil-works/pi-coding-agent';
 
+// Typed against the real registration shape (config: ProviderConfig) so the
+// mock runtime drifts loudly, not silently, if the SDK/type changes — same
+// precedent as `AgentSessionEvent` above.
+import type { ExtensionProviderRegistration } from './resource-loader';
+
 import { createMockLogger } from '../../test/mocks/logger';
 
 // ─── Mock @archon/paths logger so provider instantiation is quiet ───────
@@ -121,13 +126,9 @@ const mockResourceLoaderReload = mock(async () => undefined);
 // calling pi.registerProvider() during the single cached reload()
 // (issue #2064); the real SDK's bindCore() drains this queue into the FIRST
 // session's registry and reassigns it to [].
-const mockLoaderRuntime: {
-  pendingProviderRegistrations: Array<{
-    name: string;
-    config: Record<string, unknown>;
-    extensionPath: string;
-  }>;
-} = { pendingProviderRegistrations: [] };
+const mockLoaderRuntime: { pendingProviderRegistrations: ExtensionProviderRegistration[] } = {
+  pendingProviderRegistrations: [],
+};
 const mockGetExtensions = mock(() => ({
   extensions: [],
   errors: [],
