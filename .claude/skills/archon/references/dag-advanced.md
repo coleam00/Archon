@@ -1,25 +1,27 @@
-# Advanced Features: Hooks, MCP, Skills, Retry
+# Advanced Features: Hooks, MCP, Skills, Retry, Sessions, Typed Artifacts
 
-These features are available on **command and prompt nodes** (hooks, MCP, skills, tool restrictions, `output_format`, `agents`, Claude SDK options) and **command, prompt, bash, and script nodes** (retry). Loop nodes do not support these features (`retry` on loop nodes is a hard error; others are silently ignored). Bash and script nodes silently ignore AI-specific fields (a loader warning lists the ignored fields).
+Hooks, MCP, skills, tool restrictions, `output_format`, `agents`, and Claude SDK options apply to **command and prompt nodes** (including loop_group *body* nodes of those types). `retry` applies to command/prompt by default and to bash/script with an explicit block (see §Retry). Loop/loop_group nodes support none of these directly (`retry` there is a hard error; the rest are silently ignored) — except `model`/`provider`, which they forward to iterations. Bash and script nodes ignore AI-specific fields with a loader warning.
 
 ## Provider Compatibility
 
-| Feature | Claude (per-node) | Codex (per-node) | Codex (global) |
-|---------|-------------------|------------------|----------------|
-| `hooks` | Supported | Ignored | Not available |
-| `mcp` | Supported | Ignored | `~/.codex/config.toml` `[mcp_servers.*]` |
-| `skills` | Supported | Ignored | `~/.agents/skills/` or `.agents/skills/` |
-| `allowed_tools` / `denied_tools` | Supported | Ignored | `enabled_tools` / `disabled_tools` per MCP server in config.toml |
-| `output_format` | Supported | Supported | — |
-| `retry` | Supported | Supported | — |
-| `model` / `provider` per-node | Supported | Supported | — |
+| Feature | Claude (per-node) | Codex (per-node) | Pi (per-node) | Codex (global) |
+|---------|-------------------|------------------|---------------|----------------|
+| `hooks` | Supported | Ignored + warn | Not available | Not available |
+| `mcp` | Supported | **Supported** (translated to `mcp_servers` config overrides) | Not available | `~/.codex/config.toml` `[mcp_servers.*]` |
+| `skills` | Supported | Informational (auto-discovers from `.agents/skills/`) | Supported | `~/.agents/skills/` or `.agents/skills/` |
+| `allowed_tools` / `denied_tools` | Supported | Ignored | **Supported** | `enabled_tools` / `disabled_tools` per MCP server in config.toml |
+| `output_format` | Enforced | Enforced | Best-effort (validated + up to 3 re-asks) | — |
+| `retry` | Supported | Supported | Supported | — |
+| `model` / `provider` per-node | Supported | Supported | Supported | — |
+| `effort` / `thinking` | Supported | Use `modelReasoningEffort` | Supported (maps to thinking level) | — |
+| `agents` / `sandbox` / `maxBudgetUsd` / `fallbackModel` | Supported | No | No | — |
 
 ### Claude vs Codex: How Each Gets MCP and Skills
 
 **Claude**: MCP servers and skills are configured **per-node** in the workflow YAML via `mcp:` and `skills:` fields. Each node can have different MCP servers and skills.
 
-**Codex**: MCP servers and skills are configured **globally** — they apply to all Codex nodes in the workflow:
-- **MCP servers**: Add to `~/.codex/config.toml` (or `.codex/config.toml` in the repo):
+**Codex**: per-node `mcp:` works (Archon translates the JSON config into Codex `mcp_servers` overrides). Skills and instructions are filesystem-global:
+- **MCP servers (global alternative)**: Add to `~/.codex/config.toml` (or `.codex/config.toml` in the repo):
   ```toml
   [mcp_servers.github]
   command = "npx"
@@ -27,12 +29,10 @@ These features are available on **command and prompt nodes** (hooks, MCP, skills
   env = { GITHUB_TOKEN = "your-token" }
   ```
   Manage with: `codex mcp add <name>`, `codex mcp list`
-- **Skills**: Place in `~/.agents/skills/<name>/SKILL.md` (user-level) or `.agents/skills/<name>/SKILL.md` (repo-level). Codex discovers them automatically.
+- **Skills**: Place in `~/.agents/skills/<name>/SKILL.md` (user-level) or `.agents/skills/<name>/SKILL.md` (repo-level). Codex discovers them automatically; a node's `skills:` list is informational for Codex.
 - **Custom instructions**: Place in `~/.codex/AGENTS.md` (global) or `AGENTS.md` in the repo root.
 
-The Codex CLI picks up all of these automatically because Archon inherits the full process environment when spawning the CLI. No Archon configuration needed — just set up the Codex CLI config once.
-
-**Hooks** have no Codex equivalent — they are a Claude-only SDK feature for intercepting tool calls.
+**Hooks** have no Codex/Pi equivalent — they are a Claude-only SDK feature for intercepting tool calls.
 
 ---
 
@@ -151,7 +151,7 @@ Use `allowed_tools`/`denied_tools` for hard restrictions. Use hooks when you wan
 
 ## MCP (Model Context Protocol) Servers
 
-> Claude only. Codex nodes log a warning and ignore MCP configuration.
+> Claude + Codex. Pi/OpenCode/Copilot nodes log a warning and ignore MCP configuration.
 
 Connect external tool servers to individual nodes.
 
@@ -239,7 +239,7 @@ Combine `mcp:` with `allowed_tools: []` for nodes that should ONLY use MCP tools
 
 ## Skills
 
-> Claude only. Codex nodes log a warning and ignore skills.
+> Claude (per-node injection) and Pi. Codex discovers skills from the filesystem (`.agents/skills/`) — a node's `skills:` list is informational there.
 
 Preload domain knowledge into a node via Claude Code skills.
 
@@ -292,7 +292,9 @@ Skills provide **knowledge** (how to do something). MCP provides **capability** 
 
 ## Retry Configuration
 
-Available on command, prompt, and bash nodes. **Not supported on loop nodes** (hard error at load time).
+Available on command and prompt nodes (default-on for transient errors), and on bash/script nodes **only with an explicit `retry:` block**. **Not supported on loop/loop_group nodes** (hard error at load time — the loop manages its own iteration).
+
+> **Version note (#2088):** on builds before the #2088 fix, `retry:` on bash/script nodes was accepted by the schema but never executed at runtime — only command/prompt nodes actually retried. Check `archon version` / CHANGELOG if a bash retry appears to be ignored.
 
 ```yaml
 - id: deploy
@@ -302,6 +304,8 @@ Available on command, prompt, and bash nodes. **Not supported on loop nodes** (h
     delay_ms: 5000                     # 1000-60000, default 3000. Doubles each attempt
     on_error: all                      # 'transient' (default) or 'all'
 ```
+
+For deterministic bash/script failures (a script that exits 1 reproducibly), retrying is pointless — `retry:` there is for flaky externals (network fetches, rate-limited APIs). Use `on_error: all` for those, since a plain non-zero exit usually doesn't match a TRANSIENT pattern.
 
 ### Error Classification
 
@@ -316,16 +320,58 @@ FATAL patterns take priority over TRANSIENT patterns in the same error message.
 ### Two-Layer Retry Stack
 
 1. **SDK-level** (automatic): Built-in retry for API errors (behavior managed by the Claude/Codex SDK)
-2. **Node-level** (configurable via `retry:`): Wraps the entire SDK call. Default when `retry:` is omitted: 2 retries, 3000ms base delay, transient errors only
+2. **Node-level** (configurable via `retry:`): Wraps the entire SDK call. Default when `retry:` is omitted: AI nodes get 2 retries, 3000ms base delay, transient errors only; bash/script nodes get a single attempt (no default retries)
+
+Retried AI attempts fork the session — a retry never corrupts the original session, and structured-output re-asks (a separate mechanism, up to 3 for best-effort providers) run in fresh sessions.
 
 ### Idle Timeout
 
-Separate from retry — controls how long a node can be idle (no output) before being aborted:
+Separate from retry — controls how long a node can be **silent** (no streamed output) before being aborted. It's a deadlock detector, not a work limiter: the timer resets on every message, so it only fires when the subprocess goes completely quiet.
 
 ```yaml
 - id: long-running
   command: full-analysis
-  idle_timeout: 600000                 # 10 minutes (default: 5 minutes / 300000ms)
+  idle_timeout: 3600000                # 60 minutes (default: 30 minutes / 1800000ms)
 ```
 
-For bash nodes, use `timeout:` instead (controls total script execution time, default: 120000ms).
+For bash/script nodes, use `timeout:` instead (controls total script execution time, default: 120000ms).
+
+---
+
+## Session Persistence (`persist_session`)
+
+Persist a node's AI session **across runs** of the same workflow, so a later run's node resumes with the earlier conversation's context. This is cross-RUN memory — distinct from `context: shared` (within-run session threading between sequential nodes).
+
+```yaml
+name: standup-report
+persist_sessions: true        # workflow-level default for all eligible nodes
+
+nodes:
+  - id: gather
+    bash: "git log --since=yesterday --oneline"
+  - id: report
+    prompt: "Yesterday's commits: $gather.output. Write the standup update, consistent with prior days."
+    depends_on: [gather]
+    persist_session: true     # node-level (redundant here — workflow default covers it)
+```
+
+Mechanics:
+- Only `command`/`prompt` nodes are eligible. Not bash/script/approval/cancel/loop/loop_group (and not loop_group *body* nodes — body sessions reset per iteration).
+- Sessions are keyed by `(workflow name, node id, scope, provider)`. The scope is the **conversation** — chat threads each get their own memory; CLI runs share a per-invocation-context scope.
+- Requires a provider with the `sessionResume` capability (Claude/Codex/Pi/OpenCode all have it). A `persist_session: true` node on a non-resumable provider fails at load or run time — never silently downgrades.
+- `context: 'fresh'` on the node opts it back out.
+- **Cold resume**: if the provider can't restore the session (transcript gone, server restart), the node still runs — fresh — with a warning, plus pointers to prior typed artifacts (see below) so the agent can re-read what it lost. It does not fail and does not re-run.
+- Clear persisted memory with `archon workflow reset-sessions <workflow> [--node <id>] [--scope <key>]` (chat: `/workflow reset-sessions <name> [<node-id>]`, auto-scoped to the conversation).
+
+## Typed Output Artifacts (`output_type`)
+
+Any node can declare `output_type: <label>` (e.g. `plan`, `report`, `diff-summary`). After the node completes, the engine writes sidecars (best-effort — a write failure never fails the node):
+
+```
+$ARTIFACTS_DIR/nodes/<node-id>.md          # the node's output text
+$ARTIFACTS_DIR/nodes/<node-id>.meta.json   # { nodeId, outputType, path, runId, producedAt, size }
+```
+
+Why: downstream nodes and **later runs** can locate output by type instead of hardcoding filenames. When a workflow uses session persistence, typed artifacts are additionally mirrored to a cross-run scope directory (`artifacts/scopes/<workflow>/<conversation>/`), which is what cold-resume recovery points at.
+
+Prefer `output_type` over ad-hoc "write to $ARTIFACTS_DIR/plan.md" conventions when a later run (not just the next node) needs to find the output.

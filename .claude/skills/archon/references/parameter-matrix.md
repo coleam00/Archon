@@ -6,37 +6,41 @@ This is a **lookup reference**. For the full explanation of any field, follow th
 
 ## Master Matrix: Parameters × Node Types
 
-There are seven node types. Exactly one of `command`, `prompt`, `bash`, `script`, `loop`, `approval`, or `cancel` must appear per node.
+There are **eight** node types. Exactly one of `command`, `prompt`, `bash`, `script`, `loop`, `loop_group`, `approval`, or `cancel` must appear per node.
 
-| Parameter                                    | command | prompt  | bash    | script  | loop                         | approval       | cancel  |
-| -------------------------------------------- | :-----: | :-----: | :-----: | :-----: | :--------------------------: | :------------: | :-----: |
-| `id`                                         | yes     | yes     | yes     | yes     | yes                          | yes            | yes     |
-| `depends_on`                                 | yes     | yes     | yes     | yes     | yes                          | yes            | yes     |
-| `when`                                       | yes     | yes     | yes     | yes     | yes                          | yes            | yes     |
-| `trigger_rule`                               | yes     | yes     | yes     | yes     | yes                          | yes            | yes     |
-| `idle_timeout`                               | yes     | yes     | ignored (use `timeout`) | ignored (use `timeout`) | yes (per-iter) | yes | yes |
-| `timeout` (total, not idle)                  | —       | —       | yes     | yes     | —                            | —              | —       |
-| `model` / `provider`                         | yes     | yes     | ignored | ignored | **ignored at runtime**       | ignored        | ignored |
-| `context: fresh` \| `shared`                 | yes     | yes     | ignored | ignored | ignored (use `loop.fresh_context`) | ignored  | ignored |
-| `output_format`                              | yes     | yes     | ignored | ignored | ignored                      | ignored        | ignored |
-| `allowed_tools` / `denied_tools`             | yes     | yes     | ignored | ignored | ignored                      | ignored        | ignored |
-| `hooks`                                      | yes     | yes     | ignored | ignored | ignored                      | ignored        | ignored |
-| `mcp`                                        | yes     | yes     | ignored | ignored | ignored                      | ignored        | ignored |
-| `skills`                                     | yes     | yes     | ignored | ignored | ignored                      | ignored        | ignored |
-| `agents`                                     | yes     | yes     | ignored | ignored | ignored                      | ignored        | ignored |
-| `retry`                                      | yes     | yes     | yes     | yes     | **hard error**               | yes (`on_reject`) | yes  |
-| `effort` / `thinking` / `fallbackModel` / `betas` / `sandbox` / `maxBudgetUsd` / `systemPrompt` | yes | yes | ignored | ignored | ignored | ignored | ignored |
-| `bash` / `script` / `runtime` / `deps`       | —       | —       | `bash` required | `script` + `runtime` required | —            | —              | —       |
-| `loop` (nested config)                       | —       | —       | —       | —       | **required**                 | —              | —       |
-| `approval` (nested config)                   | —       | —       | —       | —       | —                            | **required**   | —       |
-| `cancel` (reason string)                     | —       | —       | —       | —       | —                            | —              | **required** |
+| Parameter                                    | command | prompt  | bash    | script  | loop                         | loop_group                   | approval       | cancel  |
+| -------------------------------------------- | :-----: | :-----: | :-----: | :-----: | :--------------------------: | :--------------------------: | :------------: | :-----: |
+| `id`                                         | yes     | yes     | yes     | yes     | yes                          | yes                          | yes            | yes     |
+| `depends_on`                                 | yes     | yes     | yes     | yes     | yes                          | yes                          | yes            | yes     |
+| `when`                                       | yes     | yes     | yes     | yes     | yes                          | yes                          | yes            | yes     |
+| `trigger_rule`                               | yes     | yes     | yes     | yes     | yes                          | yes                          | yes            | yes     |
+| `always_run` (re-run on resume)              | yes     | yes     | yes     | yes     | yes                          | yes                          | yes            | yes     |
+| `output_type` (typed artifact sidecar)       | yes     | yes     | yes     | yes     | yes                          | yes                          | yes            | yes     |
+| `idle_timeout`                               | yes     | yes     | ignored (use `timeout`) | ignored (use `timeout`) | yes (per-iter) | yes (per body AI node) | yes | yes |
+| `timeout` (total, not idle)                  | —       | —       | yes     | yes     | —                            | — (on body bash/script nodes) | —             | —       |
+| `model` / `provider`                         | yes     | yes     | ignored | ignored | **yes — forwarded to every iteration** | **yes — default for body AI nodes** | ignored | ignored |
+| `context: fresh` \| `shared`                 | yes     | yes     | ignored | ignored | ignored (use `loop.fresh_context`) | ignored (use `fresh_context`) | ignored  | ignored |
+| `output_format`                              | yes     | yes     | ignored | ignored | ignored                      | ignored (works on body nodes) | ignored       | ignored |
+| `allowed_tools` / `denied_tools`             | yes     | yes     | ignored | ignored | ignored                      | ignored (works on body nodes) | ignored       | ignored |
+| `hooks` / `mcp` / `skills` / `agents`        | yes     | yes     | ignored | ignored | ignored                      | ignored (work on body nodes) | ignored        | ignored |
+| `retry`                                      | yes (default: 2× transient) | yes (default: 2× transient) | explicit block only (#2088)¹ | explicit block only (#2088)¹ | **hard error** | **hard error**  | ignored² | ignored |
+| `persist_session`                            | yes     | yes     | ignored | ignored | ignored                      | ignored (and not on body nodes) | ignored     | ignored |
+| `effort` / `thinking` / `fallbackModel` / `betas` / `sandbox` / `maxBudgetUsd` / `systemPrompt` | yes | yes | ignored | ignored | ignored | ignored (work on body nodes) | ignored | ignored |
+| `bash` / `script` / `runtime` / `deps`       | —       | —       | `bash` required | `script` + `runtime` required | —            | — (on body nodes) | —          | —       |
+| `loop` (nested config)                       | —       | —       | —       | —       | **required**                 | —                            | —              | —       |
+| `loop_group` (nested config with `nodes:`)   | —       | —       | —       | —       | —                            | **required**                 | —              | —       |
+| `approval` (nested config)                   | —       | —       | —       | —       | —                            | —                            | **required**   | —       |
+| `cancel` (reason string)                     | —       | —       | —       | —       | —                            | —                            | —              | **required** |
+
+¹ Bash/script nodes retry only with an explicit `retry:` block (no silent default retries for deterministic work). On builds before the #2088 fix, `retry:` on bash/script was accepted but never executed.
+² `approval` has no retry — its rework mechanism is `on_reject: {prompt, max_attempts}`, a different thing.
 
 **Reading the matrix:**
 - **yes** — field works as expected on this node type.
 - **ignored** — field is accepted by the parser but has no effect at runtime. Loader emits a warning (`<node-type>_node_ai_fields_ignored`).
-- **hard error** — workflow fails to load. Only `retry` on a loop node does this.
+- **hard error** — workflow fails to load. Only `retry` on a loop/loop_group node does this.
 
-Most AI features work on `command` and `prompt` nodes. Loop nodes are thin controllers — the AI fields inside `loop.prompt` are what actually run. `bash` and `script` nodes silently ignore AI fields. `approval` and `cancel` nodes don't invoke AI at all.
+Most AI features work on `command` and `prompt` nodes. Loop and loop_group nodes are iteration controllers — but their `model`/`provider` ARE honored (forwarded to iterations / body defaults). A loop_group **body node** is a full node of its own type, so per-node AI fields work normally inside the body. `bash` and `script` nodes ignore AI fields with a warning. `approval` and `cancel` nodes don't invoke AI (except `approval.on_reject.prompt`).
 
 ## Parameter Selection by Intent
 
@@ -51,8 +55,16 @@ Organized by what you're trying to do, not by field name. Useful when you know t
 | Join after mutually-exclusive routes             | `trigger_rule: none_failed_min_one_success` or `one_success` |
 | Run two independent branches in parallel         | Two nodes with no shared `depends_on`                        |
 | Iterate until tests pass                         | `loop: {until_bash: "bun run test", max_iterations: N}`      |
+| Iterate a multi-node unit (implement → test → review per cycle) | `loop_group: {nodes: [...], until: ..., max_iterations: N}` |
+| Read the previous iteration's per-node output    | `$LOOP_PREV.<nodeId>.output` (loop_group body) or `$LOOP_PREV_OUTPUT` (loop) |
 | Iterate through a backlog without memory bleed   | `loop: {fresh_context: true}`, state written to `$ARTIFACTS_DIR` |
 | Iterate with human feedback between iterations   | `loop: {interactive: true, gate_message: "..."}` + workflow `interactive: true` |
+| Keep AI context across RUNS of the same workflow | `persist_session: true` (node) or `persist_sessions: true` (workflow); clear with `archon workflow reset-sessions` |
+| Let later runs find a node's output by type      | `output_type: plan` → engine writes `$ARTIFACTS_DIR/nodes/<id>.md` + meta |
+| Re-fetch fresh state on resume                   | `always_run: true` on the fetch node                         |
+| Portable model choice (no hardcoded model ids)   | `model: small` \| `medium` \| `large` (tier keywords, resolved from config) |
+| Run several read-only runs on one checkout       | Workflow-level `mutates_checkout: false`                     |
+| Block users without GitHub connected (multi-user)| Workflow-level `requires: [github]`                          |
 | Single human approval gate                       | `approval:` node with `on_reject: {prompt, max_attempts}`    |
 | Fail fast if upstream output is wrong            | `cancel:` node with `when:`                                  |
 | Enforce a rule on every file edit                | `hooks.PostToolUse` with `matcher: "Write\|Edit"`            |
@@ -77,12 +89,12 @@ Organized by what you're trying to do, not by field name. Useful when you know t
 
 Things that don't fail parsing but don't do what you'd expect:
 
-1. **`model` / `provider` on a loop node** → silently ignored. Logged as `loop_node_ai_fields_ignored`. The loop is a controller; set model at workflow level or inside the loop prompt body.
-2. **`hooks` / `mcp` / `skills` / `output_format` / `allowed_tools` / `denied_tools` on a loop, bash, script, approval, or cancel node** → silently ignored.
-3. **`context: fresh` on a loop** → ignored. Use `loop.fresh_context: true` instead.
-4. **`output_format` on a bash or script node** → schema is accepted but bash/script output is whatever stdout says; no JSON coercion.
-5. **Unknown `$nodeId.output` reference** → resolves to empty string + warning; does not fail the workflow.
-6. **Invalid `when:` expression** → node silently skipped (fail-closed).
+1. **`hooks` / `mcp` / `skills` / `output_format` / `allowed_tools` / `denied_tools` on a loop, loop_group, bash, script, approval, or cancel node** → silently ignored. (NOT `model`/`provider` on loop/loop_group — those work: forwarded per iteration / as body defaults.)
+2. **`context: fresh` on a loop / loop_group** → ignored. Use the loop config's `fresh_context: true` instead.
+3. **`output_format` on a bash or script node** → schema is accepted but bash/script output is whatever stdout says; no JSON coercion.
+4. **Unknown `$nodeId.output` (whole-text) reference at runtime** → resolves to empty string + warning. But `$nodeId.output.field` is STRICT — an unresolvable field (not in the producer's schema, non-JSON schemaless output, missing key, or producer skipped) **fails the consuming node loudly**, it does not resolve empty. And load-time validation rejects refs to node ids that don't exist at all.
+5. **Invalid `when:` expression syntax** → node silently skipped (fail-closed). Distinct from the strict field-ref failure above.
+6. **`$LOOP_PREV.*` in a body node's `when:`** → NOT substituted (prompt fields only); the condition sees the literal text and fails to parse → node skipped.
 7. **`allowed_tools` / `denied_tools` on Codex nodes** → ignored. Use Codex CLI config (`~/.codex/config.toml`).
 8. **`hooks` on Codex nodes** → ignored + warning logged.
 9. **`mcp` or `skills` per-node on Codex** → ignored. Configure globally in `~/.codex/config.toml` or `~/.agents/skills/`.
@@ -164,18 +176,21 @@ Use this matrix to find the right parameter. Use these references for the full e
 
 ## Providers at a Glance
 
-| Feature                         | Claude        | Codex                                   | Pi (community)                       |
-| ------------------------------- | :-----------: | :-------------------------------------: | :----------------------------------: |
-| `command` / `prompt` / `loop`   | yes           | yes                                     | yes                                  |
-| `bash` / `script`               | yes           | yes                                     | yes                                  |
-| `output_format`                 | reliable      | reliable                                | best-effort                          |
-| `allowed_tools` / `denied_tools` | yes          | ignored (use Codex CLI config)          | ignored                              |
-| `hooks`                         | yes           | **ignored + warn**                      | not available                        |
-| `mcp` (per-node)                | yes           | global `~/.codex/config.toml` only      | not available                        |
-| `skills` (per-node)             | yes           | global `~/.agents/skills/` only         | not available                        |
-| Model naming                    | `haiku`, `sonnet`, `opus`, `opus[1m]`   | Codex model ID (e.g. `gpt-5.2`)         | `<vendor>/<model>` (e.g. `anthropic/claude-opus-4-5`, `openai/gpt-4o`, `groq/llama-3-70b`) |
-| `effort` / `thinking`           | yes           | use `modelReasoningEffort` for reasoning models | via `effort:` (maps to thinking level) |
-| Session resume / `--resume`     | yes           | yes                                     | yes                                  |
+| Feature                         | Claude        | Codex                                   | Pi (community)                       | OpenCode (community) | Copilot (community) |
+| ------------------------------- | :-----------: | :-------------------------------------: | :----------------------------------: | :------------------: | :-----------------: |
+| `command` / `prompt` / `loop` / `loop_group` | yes | yes                               | yes                                  | yes                  | yes                 |
+| `bash` / `script`               | yes (no AI — provider-independent) | yes                | yes                                  | yes                  | yes                 |
+| `output_format`                 | **enforced** (SDK grammar) | **enforced** (SDK grammar) | best-effort (prompt + parse/repair + up to 3 re-asks) | **enforced** | best-effort (same re-ask loop as Pi) |
+| `allowed_tools` / `denied_tools` | yes          | ignored (use Codex CLI config)          | **yes**                              | ignored              | ignored             |
+| `hooks`                         | yes           | **ignored + warn**                      | not available                        | not available        | not available       |
+| `mcp` (per-node)                | yes           | **yes**                                 | not available                        | not available        | not available       |
+| `skills` (per-node)             | yes           | informational (auto-discovers `.agents/skills/`) | yes                          | —                    | —                   |
+| `agents` / `sandbox` / `maxBudgetUsd` / `fallbackModel` | yes | no                    | no                                   | no                   | no                  |
+| Model naming                    | `haiku`, `sonnet`, `opus`, `opus[1m]`   | Codex model ID (e.g. `gpt-5.3-codex`)   | `<vendor>/<model>` (e.g. `anthropic/claude-opus-4-5`, `openrouter/qwen/qwen3-coder`) | OpenCode catalog ref | Copilot model id |
+| `effort` / `thinking`           | yes           | use `modelReasoningEffort` for reasoning models | via `effort:` (maps to thinking level) | —                  | —                   |
+| Session resume / `--resume` / `persist_session` | yes | yes                             | yes                                  | yes                  | yes                 |
+
+Whatever the enforcement tier, a node with `output_format` either produces schema-valid output or **fails** — validation runs for every provider, and best-effort providers re-ask up to 3 times first. Prefer tier keywords (`model: small|medium|large`) over hardcoded model ids — they resolve per-install from config.
 
 Mixing providers in one workflow: set workflow-level `provider: claude`, then override per-node with `provider: codex` or `provider: pi`. Cross-provider `$nodeId.output` substitution works as expected.
 
@@ -183,7 +198,7 @@ Mixing providers in one workflow: set workflow-level `provider: claude`, then ov
 
 1. Always use `--branch <name>` (or `worktree: {enabled: true}`) for workflows that modify the codebase.
 2. Validate before running: `archon validate workflows <name>`.
-3. Tier your models. Haiku for routing and glue; Sonnet for reasoning and review; Opus only where the context is deep.
+3. Tier your models — prefer tier keywords: `model: small` for routing and glue, `medium` for reasoning and review, `large` only where the context is deep. Tiers resolve from install config, so the workflow stays portable.
 4. Use `output_format` for every node whose output downstream `when:` reads. Never pattern-match free-form AI text.
 5. On Ralph-style loops, use `loop.fresh_context: true` and treat `$ARTIFACTS_DIR` as the source of truth. Command bodies should re-read state at the top of every iteration.
 6. Use interactive loops for iterative refinement with the human. Use `approval:` nodes for single-point checkpoints.
