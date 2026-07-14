@@ -942,7 +942,11 @@ function makePlatform(): IPlatformAdapter {
 
 function makeConversation(overrides: Partial<Conversation> = {}): Conversation {
   return {
-    id: 'conv-1',
+    // DB primary key deliberately differs from platform_conversation_id — the
+    // real schemas always generate `id` independently, and identical defaults
+    // masked the /setproject platform-id bug (id-conflating tests passed
+    // against the broken code).
+    id: 'conv-1-db',
     platform_type: 'web',
     platform_conversation_id: 'conv-1',
     codebase_id: null,
@@ -1469,7 +1473,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     // dispatch resume back through the orchestrator.
     const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
     const opts = callArgs[callArgs.length - 1] as { parentConversationId?: string };
-    expect(opts.parentConversationId).toBe('conv-1');
+    expect(opts.parentConversationId).toBe('conv-1-db');
   });
 
   test('failed_resume_user_prompted: failed runs are not auto-resumed', async () => {
@@ -1711,7 +1715,7 @@ describe('workflow dispatch routing — interactive flag', () => {
       preCreatedRun?: { id: string };
       priorCompletedNodes?: Map<string, string>;
     };
-    expect(opts.parentConversationId).toBe('conv-1');
+    expect(opts.parentConversationId).toBe('conv-1-db');
     expect(opts.preCreatedRun?.id).toBe('resumable-run-1');
     expect(opts.priorCompletedNodes?.size).toBeGreaterThan(0);
   });
@@ -1748,7 +1752,7 @@ describe('workflow dispatch routing — interactive flag', () => {
       preCreatedRun?: unknown;
       priorCompletedNodes?: unknown;
     };
-    expect(opts.parentConversationId).toBe('conv-1');
+    expect(opts.parentConversationId).toBe('conv-1-db');
     expect(opts.preCreatedRun).toBeUndefined();
     expect(opts.priorCompletedNodes).toBeUndefined();
   });
@@ -1866,7 +1870,7 @@ describe('workflow dispatch routing — interactive flag', () => {
 
     expect(mockFindResumableRunByParentConversation).toHaveBeenCalledWith(
       'test-workflow',
-      'conv-1',
+      'conv-1-db',
       'codebase-1'
     );
   });
@@ -2150,7 +2154,7 @@ describe('handleWorkflowRunCommand — E2 single codebase auto-select', () => {
     await handleMessage(platform, 'conv-1', '/workflow run assist test prompt');
 
     // Should auto-select the codebase and update conversation
-    expect(mockUpdateConversation).toHaveBeenCalledWith('conv-1', { codebase_id: codebase.id });
+    expect(mockUpdateConversation).toHaveBeenCalledWith('conv-1-db', { codebase_id: codebase.id });
     expect(mockDispatchBackgroundWorkflow).toHaveBeenCalled();
   });
 
@@ -2179,7 +2183,7 @@ describe('handleWorkflowRunCommand — E2 single codebase auto-select', () => {
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', '/workflow run Assist test');
 
-    expect(mockUpdateConversation).toHaveBeenCalledWith('conv-1', { codebase_id: codebase.id });
+    expect(mockUpdateConversation).toHaveBeenCalledWith('conv-1-db', { codebase_id: codebase.id });
     expect(mockDispatchBackgroundWorkflow).toHaveBeenCalled();
   });
 
@@ -2310,7 +2314,7 @@ describe('handleMessage — workflow context injection', () => {
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', 'What happened?');
 
-    expect(mockGetRecentWorkflowResultMessages).toHaveBeenCalledWith('conv-1', 3);
+    expect(mockGetRecentWorkflowResultMessages).toHaveBeenCalledWith('conv-1-db', 3);
   });
 
   test('does not throw when getRecentWorkflowResultMessages returns empty array', async () => {
@@ -2930,7 +2934,7 @@ describe('handleMessage — /setproject dispatch', () => {
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', '/setproject my-app');
 
-    expect(mockUpdateConversation).toHaveBeenCalledWith('conv-1', {
+    expect(mockUpdateConversation).toHaveBeenCalledWith('conv-1-db', {
       codebase_id: 'id-my-app',
       cwd: '/repos/my-app',
     });
@@ -2945,7 +2949,7 @@ describe('handleMessage — /setproject dispatch', () => {
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', '/setproject my-app');
 
-    expect(mockUpdateConversation).toHaveBeenCalledWith('conv-1', {
+    expect(mockUpdateConversation).toHaveBeenCalledWith('conv-1-db', {
       codebase_id: 'id-My-App',
       cwd: '/repos/My-App',
     });
@@ -2959,7 +2963,7 @@ describe('handleMessage — /setproject dispatch', () => {
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', '/setproject my-web');
 
-    expect(mockUpdateConversation).toHaveBeenCalledWith('conv-1', {
+    expect(mockUpdateConversation).toHaveBeenCalledWith('conv-1-db', {
       codebase_id: 'id-my-website',
       cwd: '/repos/my-website',
     });
@@ -2973,10 +2977,43 @@ describe('handleMessage — /setproject dispatch', () => {
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', '/setproject my-api');
 
-    expect(mockUpdateConversation).toHaveBeenCalledWith('conv-1', {
+    expect(mockUpdateConversation).toHaveBeenCalledWith('conv-1-db', {
       codebase_id: 'id-archon-my-api',
       cwd: '/repos/archon-my-api',
     });
+  });
+
+  test('writes to the DB conversation id, not the platform conversation id', async () => {
+    // Regression: on Telegram/GitHub the platform conversation id (chat id,
+    // owner/repo#n) differs from the conversations-table primary key. /setproject
+    // must update by the DB id, otherwise the UPDATE matches 0 rows and throws
+    // "Conversation not found: <platform-id>".
+    const cb = makeCodebase('my-app');
+    mockListCodebases.mockImplementation(() => Promise.resolve([cb]));
+    mockParseCommand.mockReturnValue({ command: 'setproject', args: ['my-app'] });
+    mockGetOrCreateConversation.mockImplementation(() =>
+      Promise.resolve(
+        makeConversation({
+          id: 'db-hex-id',
+          platform_type: 'telegram',
+          platform_conversation_id: '40865006',
+          codebase_id: null,
+        })
+      )
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, '40865006', '/setproject my-app');
+
+    expect(mockUpdateConversation).toHaveBeenCalledWith('db-hex-id', {
+      codebase_id: 'id-my-app',
+      cwd: '/repos/my-app',
+    });
+    // The reply still goes to the platform conversation id.
+    expect(platform.sendMessage).toHaveBeenCalledWith(
+      '40865006',
+      expect.stringContaining('my-app')
+    );
   });
 
   test('returns not-found message listing available projects', async () => {
@@ -3103,7 +3140,7 @@ describe('chat turn telemetry', () => {
 
     // Positive control: the routing path actually ran — dispatch auto-attaches
     // the project to the conversation before isolation/execution.
-    expect(mockUpdateConversation).toHaveBeenCalledWith('conv-1', {
+    expect(mockUpdateConversation).toHaveBeenCalledWith('conv-1-db', {
       codebase_id: 'id-my-project',
     });
     // …and the routing turn was NOT counted as a chat turn.
