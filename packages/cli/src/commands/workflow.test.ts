@@ -90,6 +90,15 @@ mock.module('@archon/core', () => ({
   createWorkflowStore: mock(() => ({
     createWorkflowEvent: mock(() => Promise.resolve()),
   })),
+  // requires: [github] gate. Default to a solo-install posture (disabled) so the
+  // gate is a no-op for every existing test; the gate-specific tests below flip
+  // isPerUserGitHubEnabled on per-invocation.
+  isPerUserGitHubEnabled: mock(() => false),
+  getDecryptedAccessToken: mock(() => Promise.resolve(null)),
+}));
+
+mock.module('@archon/core/db/users', () => ({
+  findOrCreateUserByPlatformIdentity: mock(() => Promise.resolve({ id: 'user-cli-1' })),
 }));
 
 mock.module('@archon/workflows/workflow-discovery', () => ({
@@ -374,6 +383,167 @@ describe('workflowListCommand', () => {
     await expect(workflowListCommand('/test/path')).rejects.toThrow(
       'Error loading workflows: Permission denied'
     );
+  });
+});
+
+describe('workflowRunCommand — requires: [github] gate', () => {
+  let consoleSpy: ReturnType<typeof spyOn>;
+  let priorArchonUserId: string | undefined;
+
+  beforeEach(async () => {
+    consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    // Deterministic CLI identity (resolveCliUserId reads ARCHON_USER_ID).
+    priorArchonUserId = process.env.ARCHON_USER_ID;
+    process.env.ARCHON_USER_ID = 'cli-tester';
+
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const { isPerUserGitHubEnabled, getDecryptedAccessToken } = await import('@archon/core');
+    const usersDb = await import('@archon/core/db/users');
+    (executeWorkflow as ReturnType<typeof mock>).mockClear();
+    (isPerUserGitHubEnabled as ReturnType<typeof mock>).mockClear();
+    (getDecryptedAccessToken as ReturnType<typeof mock>).mockClear();
+    (usersDb.findOrCreateUserByPlatformIdentity as ReturnType<typeof mock>).mockClear();
+  });
+
+  afterEach(() => {
+    consoleSpy.mockRestore();
+    if (priorArchonUserId === undefined) delete process.env.ARCHON_USER_ID;
+    else process.env.ARCHON_USER_ID = priorArchonUserId;
+  });
+
+  it('blocks a requires:[github] workflow before any cost when enabled and not connected', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { isPerUserGitHubEnabled, getDecryptedAccessToken } = await import('@archon/core');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'ship', requires: ['github'] }, 'project')],
+      errors: [],
+    });
+    (isPerUserGitHubEnabled as ReturnType<typeof mock>).mockReturnValueOnce(true);
+    (getDecryptedAccessToken as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+
+    await expect(
+      workflowRunCommand('/repo/root', 'ship', 'go', { noWorktree: true })
+    ).rejects.toThrow(/connected github identity/i);
+
+    // Hard-blocked before any worktree/AI cost — executeWorkflow never ran.
+    expect(executeWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('allows the run when the acting CLI user has a connected GitHub identity', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { isPerUserGitHubEnabled, getDecryptedAccessToken } = await import('@archon/core');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'ship', requires: ['github'] }, 'project')],
+      errors: [],
+    });
+    (isPerUserGitHubEnabled as ReturnType<typeof mock>).mockReturnValueOnce(true);
+    (getDecryptedAccessToken as ReturnType<typeof mock>).mockResolvedValueOnce('gho_token');
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-ok',
+    });
+
+    await workflowRunCommand('/repo/root', 'ship', 'go', { noWorktree: true });
+
+    expect(executeWorkflow).toHaveBeenCalledTimes(1);
+  });
+
+  it('is a no-op on solo installs (per-user GitHub disabled) even when github is required', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { isPerUserGitHubEnabled, getDecryptedAccessToken } = await import('@archon/core');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'ship', requires: ['github'] }, 'project')],
+      errors: [],
+    });
+    // Default mock returns false; be explicit for readability.
+    (isPerUserGitHubEnabled as ReturnType<typeof mock>).mockReturnValueOnce(false);
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-ok',
+    });
+
+    await workflowRunCommand('/repo/root', 'ship', 'go', { noWorktree: true });
+
+    expect(executeWorkflow).toHaveBeenCalledTimes(1);
+    // Gate short-circuited on the env check — no token lookup happened.
+    expect(getDecryptedAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('does not resolve GitHub connection for a workflow without requires', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { isPerUserGitHubEnabled, getDecryptedAccessToken } = await import('@archon/core');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist' }, 'project')],
+      errors: [],
+    });
+    // Even with per-user GitHub enabled, a workflow with no `requires` skips the lookup.
+    (isPerUserGitHubEnabled as ReturnType<typeof mock>).mockReturnValueOnce(true);
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-ok',
+    });
+
+    await workflowRunCommand('/repo/root', 'assist', 'go', { noWorktree: true });
+
+    expect(executeWorkflow).toHaveBeenCalledTimes(1);
+    expect(getDecryptedAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the acting CLI user identity cannot be resolved', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { isPerUserGitHubEnabled, getDecryptedAccessToken } = await import('@archon/core');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'ship', requires: ['github'] }, 'project')],
+      errors: [],
+    });
+    (isPerUserGitHubEnabled as ReturnType<typeof mock>).mockReturnValueOnce(true);
+
+    // No resolvable CLI identity → resolveCliUserId() returns null → treated as
+    // "not connected" (fail closed). Clear every identity source for this test.
+    const savedUser = process.env.USER;
+    const savedUsername = process.env.USERNAME;
+    delete process.env.ARCHON_USER_ID;
+    delete process.env.USER;
+    delete process.env.USERNAME;
+    try {
+      await expect(
+        workflowRunCommand('/repo/root', 'ship', 'go', { noWorktree: true })
+      ).rejects.toThrow(/connected github identity/i);
+    } finally {
+      if (savedUser !== undefined) process.env.USER = savedUser;
+      if (savedUsername !== undefined) process.env.USERNAME = savedUsername;
+    }
+
+    // Never resolved a token, and never reached execution.
+    expect(getDecryptedAccessToken).not.toHaveBeenCalled();
+    expect(executeWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the identity/token lookup throws', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { isPerUserGitHubEnabled } = await import('@archon/core');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const usersDb = await import('@archon/core/db/users');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'ship', requires: ['github'] }, 'project')],
+      errors: [],
+    });
+    (isPerUserGitHubEnabled as ReturnType<typeof mock>).mockReturnValueOnce(true);
+    (usersDb.findOrCreateUserByPlatformIdentity as ReturnType<typeof mock>).mockRejectedValueOnce(
+      new Error('db unavailable')
+    );
+
+    // Lookup failure is swallowed inside the gate and defaults to "not connected".
+    await expect(
+      workflowRunCommand('/repo/root', 'ship', 'go', { noWorktree: true })
+    ).rejects.toThrow(/connected github identity/i);
+
+    expect(executeWorkflow).not.toHaveBeenCalled();
   });
 });
 

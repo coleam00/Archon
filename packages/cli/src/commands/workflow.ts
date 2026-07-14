@@ -9,6 +9,8 @@ import {
   generateAndSetTitle,
   createWorkflowStore,
   getUserAiPrefs,
+  isPerUserGitHubEnabled,
+  getDecryptedAccessToken,
 } from '@archon/core';
 import { WORKFLOW_EVENT_TYPES, type WorkflowEventType } from '@archon/workflows/store';
 import {
@@ -34,6 +36,7 @@ import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { resolveWorkflowName } from '@archon/workflows/router';
 import { executeWorkflow, hydrateResumableRun } from '@archon/workflows/executor';
+import { assertWorkflowRequirementsMet } from '@archon/workflows/utils/workflow-requirements';
 import {
   getWorkflowEventEmitter,
   type WorkflowEmitterEvent,
@@ -350,6 +353,40 @@ function assertWorkflowNotWorktreePinnedForFolder(
   if (isFolderProject && pinnedEnabled === true) {
     throw folderWorktreePolicyError(workflowName);
   }
+}
+
+/**
+ * Capability gate for the CLI run path.
+ *
+ * Mirrors the orchestrator's `requires: [github]` enforcement
+ * (orchestrator-agent.ts `dispatchOrchestratorWorkflow`) so a workflow that
+ * declares `requires: [github]` is hard-blocked BEFORE any worktree/clone/AI
+ * cost — and before the `--detach` fork — when the acting CLI user hasn't
+ * connected their GitHub identity. Throws WorkflowRequirementError, surfaced by
+ * the CLI top-level handler (cli.ts) as a clean, actionable `Error: ...` line.
+ *
+ * No-op on solo PAT installs: `isPerUserGitHubEnabled()` is false unless the
+ * GitHub App + TOKEN_ENCRYPTION_KEY are both configured — identical semantics
+ * to the orchestrator gate.
+ */
+async function assertCliWorkflowRequirementsMet(workflow: WorkflowDefinition): Promise<void> {
+  if (!isPerUserGitHubEnabled() || !workflow.requires?.length) return;
+
+  // Resolve the acting CLI user (ARCHON_USER_ID, else $USER/$USERNAME) → Archon
+  // user id, then check for a stored GitHub connection. An unresolvable user or
+  // a lookup failure means "not connected" — fail closed, never silently allow.
+  const cliId = resolveCliUserId();
+  let githubConnected = false;
+  if (cliId) {
+    try {
+      const cliUser = await userDb.findOrCreateUserByPlatformIdentity('cli', cliId, cliId);
+      githubConnected = Boolean(await getDecryptedAccessToken(cliUser.id));
+    } catch (error) {
+      getLog().warn({ err: error as Error, cliId }, 'cli.requirement_gate_user_resolve_failed');
+    }
+  }
+
+  assertWorkflowRequirementsMet(workflow, { githubConnected });
 }
 
 /**
@@ -737,6 +774,13 @@ export async function workflowRunCommand(
   // codebase lookup below. Fail fast — never silently ignore the flags.
   assertNoWorktreeOptionsForFolder(options.folder === true, options);
   assertWorkflowNotWorktreePinnedForFolder(options.folder === true, pinnedEnabled, workflow.name);
+
+  // Capability gate: hard-fail before the --detach fork and any worktree/clone/
+  // AI cost if the workflow declares `requires: [github]` and the acting CLI
+  // user hasn't connected. No-op on solo PAT installs. Mirrors the orchestrator
+  // gate (dispatchOrchestratorWorkflow) so CLI, REST (via orchestrator), and
+  // chat dispatch enforce `requires: [github]` identically.
+  await assertCliWorkflowRequirementsMet(workflow);
 
   // --detach: hand the whole run to a detached background child and return now.
   // Done AFTER workflow resolution + flag validation above (so unknown-workflow /
