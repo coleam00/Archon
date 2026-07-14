@@ -117,6 +117,28 @@ const PI_DEFAULT_MODELS: Record<string, string> = {
   huggingface: 'huggingface/Qwen/Qwen2.5-72B-Instruct',
 };
 
+/**
+ * Curated default-chat-model suggestions for the built-in SDK providers
+ * (#1999). CONVENIENCE only, not authority — mirrors CLAUDE_MODEL_OPTIONS /
+ * CODEX_MODEL_OPTIONS in packages/web/src/experiments/console/lib/
+ * model-options.ts (the web package can't be imported from the CLI, same
+ * mirroring convention as that file's effort vocabularies). The prompt always
+ * keeps a free-text escape; nothing blocks an unlisted model string.
+ */
+const DEFAULT_CHAT_MODEL_OPTIONS: Record<string, { value: string; hint?: string }[]> = {
+  claude: [
+    { value: 'sonnet', hint: 'balanced (SDK default)' },
+    { value: 'opus', hint: 'most capable' },
+    { value: 'haiku', hint: 'fastest' },
+  ],
+  codex: [{ value: 'gpt-5.3-codex' }, { value: 'gpt-5.5' }, { value: 'gpt-5.2' }],
+};
+
+/** Sentinel select values for the default-chat-model prompt. Prefixed with
+ *  `__` so they can never collide with a real model id. */
+const KEEP_MODEL = '__keep__';
+const CUSTOM_MODEL = '__custom__';
+
 interface SetupConfig {
   ai: {
     claude: boolean;
@@ -136,6 +158,11 @@ interface SetupConfig {
     /** Canonical env var name for the chosen Pi backend, e.g. 'ANTHROPIC_API_KEY' */
     piApiKeyEnvVar?: string;
     defaultAssistant: string;
+    /** Default CHAT model for the default assistant — written to
+     *  ~/.archon/config.yaml as `assistants.<defaultAssistant>.model` (#1999).
+     *  Unset when the user keeps the SDK default (or the default is Pi, whose
+     *  model is collected in collectPiConfig). */
+    defaultModel?: string;
   };
   platforms: {
     github: boolean;
@@ -520,6 +547,96 @@ async function collectPiConfig(): Promise<{
     model,
     ...(key.length > 0 ? { apiKey: key, apiKeyEnvVar: backend.envVar } : {}),
   };
+}
+
+/**
+ * Best-effort read of the install-scope default chat model
+ * (`assistants.<provider>.model` in ~/.archon/config.yaml) so a setup re-run
+ * surfaces the current value (#1999). Hint-only: any read/parse failure
+ * returns undefined rather than blocking the wizard — the authoritative parse
+ * happens in @archon/core's config loader at runtime.
+ */
+export function readInstallDefaultModel(
+  provider: string,
+  configPath: string = join(pathsGetArchonHome(), 'config.yaml')
+): string | undefined {
+  try {
+    if (!existsSync(configPath)) return undefined;
+    const parsed: unknown = Bun.YAML.parse(readFileSync(configPath, 'utf-8'));
+    if (typeof parsed !== 'object' || parsed === null) return undefined;
+    const assistants = (parsed as Record<string, unknown>).assistants;
+    if (typeof assistants !== 'object' || assistants === null) return undefined;
+    const entry = (assistants as Record<string, unknown>)[provider];
+    if (typeof entry !== 'object' || entry === null) return undefined;
+    const model = (entry as Record<string, unknown>).model;
+    if (typeof model !== 'string') return undefined;
+    const trimmed = model.trim();
+    // 'inherit' means "no explicit model" in assistant config — treat as unset.
+    return trimmed.length > 0 && trimmed !== 'inherit' ? trimmed : undefined;
+  } catch {
+    // Intentional best-effort fallback: an unreadable/malformed config.yaml
+    // must not break setup; the prompt just won't show a current value.
+    return undefined;
+  }
+}
+
+/**
+ * Build the select options for the default-chat-model step: keep-current/skip
+ * first (so plain Enter is the happy path), curated suggestions next, and a
+ * free-text escape last.
+ */
+export function buildDefaultModelChoices(
+  provider: string,
+  currentModel: string | undefined
+): { value: string; label: string; hint?: string }[] {
+  const curated = DEFAULT_CHAT_MODEL_OPTIONS[provider] ?? [];
+  return [
+    {
+      value: KEEP_MODEL,
+      label: currentModel ? `Keep current (${currentModel})` : 'Keep SDK default',
+      ...(currentModel ? {} : { hint: 'set one later with `archon ai default`' }),
+    },
+    ...curated.map(o => ({ value: o.value, label: o.value, ...(o.hint ? { hint: o.hint } : {}) })),
+    { value: CUSTOM_MODEL, label: 'Other…', hint: 'type a model id' },
+  ];
+}
+
+/**
+ * Optional, skippable default-chat-model prompt for the chosen default
+ * assistant (#1999). Returns the chosen model string, or undefined when the
+ * user keeps the current/SDK default. Free-text escape for anything the
+ * curated shortlist misses.
+ */
+async function collectDefaultChatModel(provider: string): Promise<string | undefined> {
+  const currentModel = readInstallDefaultModel(provider);
+
+  const choice = await select({
+    message: `Default chat model for ${provider}? (Enter to keep ${currentModel ?? 'the SDK default'})`,
+    options: buildDefaultModelChoices(provider, currentModel),
+  });
+
+  if (isCancel(choice)) {
+    cancel('Setup cancelled.');
+    process.exit(0);
+  }
+
+  if (choice === KEEP_MODEL) return undefined;
+
+  if (choice === CUSTOM_MODEL) {
+    const typed = await text({
+      message: `Model id for ${provider}:`,
+      placeholder: provider === 'codex' ? 'gpt-5.3-codex' : 'claude-sonnet-4-6',
+    });
+    if (isCancel(typed)) {
+      cancel('Setup cancelled.');
+      process.exit(0);
+    }
+    const trimmed = typed.trim();
+    // Empty input = same as keeping the default (guide, never gate).
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+
+  return choice;
 }
 
 /**
@@ -1037,6 +1154,14 @@ After upgrading, run 'archon setup' again.`,
     defaultAssistant = selectedProviders[0];
   }
 
+  // Optional, skippable default-chat-model step for the default assistant
+  // (#1999). Pi is excluded: its model was already chosen in collectPiConfig
+  // and is written by writeHomePiModelConfig.
+  let defaultModel: string | undefined;
+  if (selectedProviders.length > 0 && defaultAssistant !== 'pi') {
+    defaultModel = await collectDefaultChatModel(defaultAssistant);
+  }
+
   return {
     claude: hasClaude,
     claudeAuthType,
@@ -1050,6 +1175,7 @@ After upgrading, run 'archon setup' again.`,
     piApiKey,
     piApiKeyEnvVar,
     defaultAssistant,
+    ...(defaultModel !== undefined ? { defaultModel } : {}),
   };
 }
 
@@ -2071,6 +2197,31 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
     }
   }
 
+  // Default chat model → ~/.archon/config.yaml through the SAME install-scope
+  // write path as `archon ai default <provider> <model>` (#1998/#1999):
+  // defaultAssistant + assistants.<p>.model are written together so the pair
+  // stays atomic — the .env DEFAULT_AI_ASSISTANT is fallback-only
+  // (applyEnvOverrides in @archon/core), and a stale config.yaml
+  // defaultAssistant from an earlier `archon ai default` must never leave the
+  // model pin riding a different provider. Lazy import keeps @archon/core out
+  // of setup's module graph (same pattern as the doctor import below).
+  if (config.ai.defaultModel) {
+    try {
+      const { updateGlobalConfig } = await import('@archon/core');
+      await updateGlobalConfig({
+        defaultAssistant: config.ai.defaultAssistant,
+        assistants: { [config.ai.defaultAssistant]: { model: config.ai.defaultModel } },
+      });
+    } catch (err) {
+      // Non-fatal: the env write already succeeded, so the user can run
+      // `archon ai default <provider> <model>` later. Surface, don't swallow.
+      const e = err as NodeJS.ErrnoException;
+      const code = e.code ? ` (${e.code})` : '';
+      log.warning(`Could not write default chat model: ${e.message}${code}`);
+      getLog().warn({ err: e }, 'setup.default_model_config_write_failed');
+    }
+  }
+
   // Tell the operator exactly what happened — especially that <repo>/.env was
   // NOT touched, because prior versions wrote there and this is the biggest
   // behavior change for returning users.
@@ -2192,7 +2343,7 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
 
   const summaryLines = [
     `AI: ${aiConfigured.length > 0 ? aiConfigured.join(', ') : 'None configured'}`,
-    `Default: ${config.ai.defaultAssistant}`,
+    `Default: ${config.ai.defaultAssistant}${config.ai.defaultModel ? ` (chat model: ${config.ai.defaultModel})` : ''}`,
     `Platforms: ${configuredPlatforms.length > 0 ? configuredPlatforms.join(', ') : 'None (CLI + skill only)'}`,
     '',
     `File written (${scope} scope):`,

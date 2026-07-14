@@ -17,6 +17,8 @@ import {
   serializeEnv,
   resolveScopedEnvPath,
   writeHomePiModelConfig,
+  buildDefaultModelChoices,
+  readInstallDefaultModel,
 } from './setup';
 import * as setupModule from './setup';
 import { copyArchonSkill } from './skill';
@@ -901,5 +903,87 @@ describe('checkPiModule', () => {
     });
     expect(result.ok).toBe(false);
     expect(result.error).toContain('pi-coding-agent');
+  });
+});
+
+describe('buildDefaultModelChoices (#1999)', () => {
+  it('leads with "Keep SDK default" when no current model and ends with the free-text escape', () => {
+    const choices = buildDefaultModelChoices('claude', undefined);
+    expect(choices[0].value).toBe('__keep__');
+    expect(choices[0].label).toBe('Keep SDK default');
+    expect(choices[choices.length - 1].value).toBe('__custom__');
+  });
+
+  it('surfaces the current model in the keep option label on re-run', () => {
+    const choices = buildDefaultModelChoices('claude', 'opus');
+    expect(choices[0].label).toBe('Keep current (opus)');
+  });
+
+  it('includes the curated claude shortlist between keep and custom', () => {
+    const values = buildDefaultModelChoices('claude', undefined).map(c => c.value);
+    expect(values).toEqual(['__keep__', 'sonnet', 'opus', 'haiku', '__custom__']);
+  });
+
+  it('includes the curated codex shortlist', () => {
+    const values = buildDefaultModelChoices('codex', undefined).map(c => c.value);
+    expect(values).toEqual(['__keep__', 'gpt-5.3-codex', 'gpt-5.5', 'gpt-5.2', '__custom__']);
+  });
+
+  it('falls back to keep + custom only for providers without a curated list', () => {
+    const values = buildDefaultModelChoices('some-future-provider', undefined).map(c => c.value);
+    expect(values).toEqual(['__keep__', '__custom__']);
+  });
+});
+
+describe('readInstallDefaultModel (#1999)', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'archon-default-model-'));
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  const configAt = (content: string): string => {
+    const path = join(tmpDir, 'config.yaml');
+    writeFileSync(path, content);
+    return path;
+  };
+
+  it('returns the configured model from assistants.<provider>.model', () => {
+    const path = configAt(
+      'assistants:\n  claude:\n    model: opus\n  codex:\n    model: gpt-5.5\n'
+    );
+    expect(readInstallDefaultModel('claude', path)).toBe('opus');
+    expect(readInstallDefaultModel('codex', path)).toBe('gpt-5.5');
+  });
+
+  it('returns undefined when the config file does not exist', () => {
+    expect(readInstallDefaultModel('claude', join(tmpDir, 'missing.yaml'))).toBeUndefined();
+  });
+
+  it('returns undefined when the provider has no model entry', () => {
+    const path = configAt('assistants:\n  claude:\n    settingSources:\n      - project\n');
+    expect(readInstallDefaultModel('claude', path)).toBeUndefined();
+    expect(readInstallDefaultModel('codex', path)).toBeUndefined();
+  });
+
+  it('treats inherit / empty / non-string models as unset', () => {
+    expect(
+      readInstallDefaultModel('claude', configAt('assistants:\n  claude:\n    model: inherit\n'))
+    ).toBeUndefined();
+    expect(
+      readInstallDefaultModel('claude', configAt('assistants:\n  claude:\n    model: ""\n'))
+    ).toBeUndefined();
+    expect(
+      readInstallDefaultModel('claude', configAt('assistants:\n  claude:\n    model: 42\n'))
+    ).toBeUndefined();
+  });
+
+  it('returns undefined (not a throw) on malformed YAML', () => {
+    // Best-effort hint read: a hand-edited broken config must not break setup.
+    expect(readInstallDefaultModel('claude', configAt(':: not yaml ::\n\t{ nope'))).toBeUndefined();
   });
 });
