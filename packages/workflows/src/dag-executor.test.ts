@@ -2627,7 +2627,9 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
   }
 
   it('bash node with retry re-runs until it succeeds', async () => {
-    const attempts = join(testDir, 'attempts.log');
+    // Forward-slashed for safe embedding in inline bash AND JS string literals
+    // (Windows join() yields backslashes; '\a' is an escape in JS strings).
+    const attempts = join(testDir, 'attempts.log').replace(/\\/g, '/');
     const marker = join(testDir, 'marker');
     const nodes: DagNode[] = [
       {
@@ -2646,7 +2648,9 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
   }, 5_000);
 
   it('bash node with retry exhausts all attempts on persistent failure', async () => {
-    const attempts = join(testDir, 'attempts.log');
+    // Forward-slashed for safe embedding in inline bash AND JS string literals
+    // (Windows join() yields backslashes; '\a' is an escape in JS strings).
+    const attempts = join(testDir, 'attempts.log').replace(/\\/g, '/');
     const nodes: DagNode[] = [
       {
         id: 'always-fails',
@@ -2663,7 +2667,9 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
   }, 5_000);
 
   it('bash node WITHOUT a retry block runs exactly once (single-attempt default preserved)', async () => {
-    const attempts = join(testDir, 'attempts.log');
+    // Forward-slashed for safe embedding in inline bash AND JS string literals
+    // (Windows join() yields backslashes; '\a' is an escape in JS strings).
+    const attempts = join(testDir, 'attempts.log').replace(/\\/g, '/');
     const nodes: DagNode[] = [
       {
         id: 'no-retry',
@@ -2679,7 +2685,9 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
   }, 5_000);
 
   it('bash node with a FATAL error is never retried even with on_error: all', async () => {
-    const attempts = join(testDir, 'attempts.log');
+    // Forward-slashed for safe embedding in inline bash AND JS string literals
+    // (Windows join() yields backslashes; '\a' is an escape in JS strings).
+    const attempts = join(testDir, 'attempts.log').replace(/\\/g, '/');
     const nodes: DagNode[] = [
       {
         id: 'fatal',
@@ -2696,7 +2704,9 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
   }, 5_000);
 
   it('script node with retry re-runs on persistent failure', async () => {
-    const attempts = join(testDir, 'attempts.log');
+    // Forward-slashed for safe embedding in inline bash AND JS string literals
+    // (Windows join() yields backslashes; '\a' is an escape in JS strings).
+    const attempts = join(testDir, 'attempts.log').replace(/\\/g, '/');
     const nodes: DagNode[] = [
       {
         id: 'flaky-script',
@@ -2714,7 +2724,9 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
   }, 10_000);
 
   it('bash retry sends a platform notification before each retry', async () => {
-    const attempts = join(testDir, 'attempts.log');
+    // Forward-slashed for safe embedding in inline bash AND JS string literals
+    // (Windows join() yields backslashes; '\a' is an escape in JS strings).
+    const attempts = join(testDir, 'attempts.log').replace(/\\/g, '/');
     const nodes: DagNode[] = [
       {
         id: 'notify',
