@@ -162,6 +162,24 @@ describe('manage_run — reads', () => {
     expect(out).toContain('status: completed');
     expect(out).toContain('finished:');
   });
+
+  test('get does not crash on SQLite rows where timestamps are strings (#2078)', async () => {
+    // SQLite hydrates started_at/completed_at as 'YYYY-MM-DD HH:MM:SS' TEXT
+    // even though the schema type says Date. formatRunDetail must not call
+    // Date methods unguarded — this used to throw and fail interactive resume.
+    mockFindByPrefix.mockResolvedValue([
+      makeRun({
+        status: 'completed',
+        started_at: '2026-07-10 18:26:36' as unknown as Date,
+        completed_at: '2026-07-10 18:30:00' as unknown as Date,
+      }),
+    ]);
+    const tool = buildManageRunTool({ codebaseId: CODEBASE_ID });
+    const out = await tool.handler({ action: 'get', runId: 'r1abcdef' });
+    expect(out).not.toContain('manage_run error');
+    expect(out).toContain('started: 2026-07-10 18:26:36');
+    expect(out).toContain('finished: 2026-07-10 18:30:00');
+  });
 });
 
 describe('manage_run — start', () => {
