@@ -473,9 +473,42 @@ export class PiProvider implements IAgentProvider {
       ...(systemPrompt !== undefined ? { systemPrompt } : {}),
       ...(skillPaths.length > 0 ? { additionalSkillPaths: skillPaths } : {}),
     };
-    const resourceLoader: DefaultResourceLoader = enableExtensions
-      ? await getOrCreateReloadedExtensionLoader(cwd, loaderOptions)
-      : createNoopResourceLoader(cwd, loaderOptions);
+    let resourceLoader: DefaultResourceLoader;
+    if (enableExtensions) {
+      const { loader, providerRegistrations } = await getOrCreateReloadedExtensionLoader(
+        cwd,
+        loaderOptions
+      );
+      resourceLoader = loader;
+      // Re-apply the load-time extension provider registrations to THIS call's
+      // fresh ModelRegistry (issue #2064). Extension factories run only during
+      // the single cached reload(), and the SDK drains their queued
+      // registerProvider() calls into the FIRST session's registry only — so
+      // without this, the 2nd+ sendQuery in a process (e.g. DAG node 2) never
+      // sees extension models (pi-cursor's `cursor/*`) and LOOKUP-2 fails.
+      // registerProvider() is a documented upsert, so the first call receiving
+      // the same configs again via its own bindCore() flush is harmless.
+      for (const { name, config, extensionPath } of providerRegistrations) {
+        try {
+          modelRegistry.registerProvider(name, config);
+        } catch (err) {
+          // Intentional non-fatal fallback mirroring the SDK's own bindCore()
+          // flush (per-entry try/catch + emitted extension error): one broken
+          // extension config must not fail nodes that use other providers.
+          // If the model this node actually needs is missing, LOOKUP-2 below
+          // still throws the loud, actionable "Pi model not found" error.
+          getLog().warn(
+            { err, piExtensionProvider: name, extensionPath },
+            'pi.extension_provider_reapply_failed'
+          );
+        }
+      }
+      if (providerRegistrations.length > 0) {
+        getLog().debug({ count: providerRegistrations.length }, 'pi.extension_providers_reapplied');
+      }
+    } else {
+      resourceLoader = createNoopResourceLoader(cwd, loaderOptions);
+    }
 
     getLog().info(
       {
