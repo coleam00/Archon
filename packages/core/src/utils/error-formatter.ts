@@ -14,6 +14,16 @@
 export function classifyAndFormatError(error: Error): string {
   const message = error.message || '';
 
+  // Missing working directory (#1170) — an Archon-generated message that already
+  // carries its own recovery steps, so pass it through verbatim. Checked first:
+  // it embeds an arbitrary filesystem path, and a path segment like "session" or
+  // "token" would otherwise divert it to an unrelated branch or the sensitive-data
+  // fallback, hiding the actionable guidance (the message also exceeds the
+  // generic fallback's 100-char limit).
+  if (message.startsWith('Working directory no longer exists:')) {
+    return `⚠️ ${message}`;
+  }
+
   // AI/SDK errors - rate limits
   if (message.includes('rate limit') || message.includes('Rate limit')) {
     return '⚠️ AI rate limit reached. Please wait a moment and try again.';

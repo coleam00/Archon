@@ -260,8 +260,12 @@ mock.module('@archon/git', () => ({
   hasUncommittedChanges: mock(() => Promise.resolve(false)),
 }));
 
+// Default: every path exists. Hoisted to a named mock so the missing-cwd guard
+// (#1170) can be exercised by overriding it per-test — restore `() => true` after.
+const mockExistsSync = mock((_path: string) => true);
+
 mock.module('fs', () => ({
-  existsSync: mock(() => true),
+  existsSync: mockExistsSync,
   // token-crypto.ts imports these from node:fs for the auto-provisioned credential
   // key. readFileSync returns a valid 64-hex key so getEncryptionKey() resolves
   // without any real disk write when the per-user credential path is exercised.
@@ -1401,6 +1405,83 @@ describe('provider cwd resolution', () => {
       expect.objectContaining({ codebaseId: 'deleted-id' }),
       'orchestrator.scoped_codebase_not_found'
     );
+  });
+
+  // ─── missing cwd guard (issue #1170) ────────────────────────────────────────
+
+  describe('missing cwd guard (#1170)', () => {
+    test('sends an actionable error and never reaches the provider when default_cwd is gone', async () => {
+      const codebase = makeCodebaseForSync();
+      const conversation = makeConversation({ codebase_id: 'codebase-1' });
+      mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+      mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
+      mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
+      // Simulate the registered repo dir being removed after registration.
+      mockExistsSync.mockImplementation((p: string) => p !== '/repos/test-repo');
+
+      try {
+        const platform = makePlatform();
+        await handleMessage(platform, 'conv-1', 'hello');
+
+        // The provider must never be handed a nonexistent cwd — that is the
+        // whole point of the guard (Codex would die with "os error 2").
+        expect(mockSendQuery).not.toHaveBeenCalled();
+        expect(platform.sendMessage).toHaveBeenCalledWith(
+          'conv-1',
+          expect.stringContaining('Working directory no longer exists: /repos/test-repo')
+        );
+        expect(mockLogger.error).toHaveBeenCalledWith(
+          expect.objectContaining({ codebaseId: 'codebase-1', cwd: '/repos/test-repo' }),
+          'orchestrator.cwd_missing'
+        );
+      } finally {
+        mockExistsSync.mockImplementation(() => true);
+      }
+    });
+
+    test('guards conversation.cwd (worktree override), not just default_cwd', async () => {
+      const codebase = makeCodebaseForSync();
+      const conversation = makeConversation({
+        codebase_id: 'codebase-1',
+        cwd: '/worktrees/cleaned-up',
+      });
+      mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+      mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
+      mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
+      // The worktree is gone even though the codebase's own dir still exists.
+      mockExistsSync.mockImplementation((p: string) => p !== '/worktrees/cleaned-up');
+
+      try {
+        const platform = makePlatform();
+        await handleMessage(platform, 'conv-1', 'hello');
+
+        expect(mockSendQuery).not.toHaveBeenCalled();
+        expect(platform.sendMessage).toHaveBeenCalledWith(
+          'conv-1',
+          expect.stringContaining('Working directory no longer exists: /worktrees/cleaned-up')
+        );
+      } finally {
+        mockExistsSync.mockImplementation(() => true);
+      }
+    });
+
+    test('does not guard the unscoped path (workspaces root is created on demand)', async () => {
+      const conversation = makeConversation({ codebase_id: null });
+      mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+      mockListCodebases.mockReturnValueOnce(Promise.resolve([]));
+      // Even with nothing on disk, ensureArchonWorkspacesPath() mkdir -p's it,
+      // so the unscoped branch must stay reachable.
+      mockExistsSync.mockImplementation(() => false);
+
+      try {
+        const platform = makePlatform();
+        await handleMessage(platform, 'conv-1', 'hello');
+
+        expect(getSendQueryCwd()).toBe('/home/test/.archon/workspaces');
+      } finally {
+        mockExistsSync.mockImplementation(() => true);
+      }
+    });
   });
 });
 

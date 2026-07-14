@@ -177,6 +177,57 @@ describe('classifyAndFormatError', () => {
     });
   });
 
+  describe('missing working directory errors (#1170)', () => {
+    test('passes the message through with its recovery guidance intact', () => {
+      const result = classifyAndFormatError(
+        new Error(
+          'Working directory no longer exists: /.archon/workspaces/owner/repo/source\n\n' +
+            'The project folder or worktree may have been deleted or cleaned up ' +
+            '(e.g. `archon isolation cleanup`, `archon complete`, or a manual removal). ' +
+            'Re-register the project (`/register-project`) or select a different one (`/setproject`).'
+        )
+      );
+      expect(result).toContain('Working directory no longer exists');
+      expect(result).toContain('/.archon/workspaces/owner/repo/source');
+      expect(result).toContain('/register-project');
+      expect(result).toContain('/setproject');
+    });
+
+    test('survives the >100-char generic fallback that would otherwise hide the guidance', () => {
+      // The real thrown message is well over 100 chars, so without a dedicated
+      // branch it would degrade to "An unexpected error occurred".
+      const long = `Working directory no longer exists: /${'d'.repeat(150)}`;
+      expect(long.length).toBeGreaterThan(100);
+      const result = classifyAndFormatError(new Error(long));
+      expect(result).not.toContain('An unexpected error occurred');
+      expect(result).toContain('Working directory no longer exists');
+    });
+
+    test('takes precedence over the session branch when the path contains "session"', () => {
+      // Regression guard for branch ordering: a path segment must not divert
+      // this to the unrelated session classifier.
+      const result = classifyAndFormatError(
+        new Error('Working directory no longer exists: /repos/session-manager')
+      );
+      expect(result).toContain('Working directory no longer exists');
+      expect(result).not.toContain('Session error');
+    });
+
+    test('takes precedence over the security filter when the path contains "token"', () => {
+      const result = classifyAndFormatError(
+        new Error('Working directory no longer exists: /repos/token-service')
+      );
+      expect(result).toContain('Working directory no longer exists');
+      expect(result).not.toContain('An unexpected error occurred');
+    });
+
+    test('does not match when the prefix is wrong', () => {
+      const msg = 'Some working directory no longer exists: /repos/app';
+      const result = classifyAndFormatError(new Error(msg));
+      expect(result).toBe(`⚠️ Error: ${msg}. Try /reset if issue persists.`);
+    });
+  });
+
   describe('model not available errors', () => {
     test('returns message as-is when it matches the model unavailable pattern', () => {
       const msg = '❌ Model "claude-opus-4" not available for your account';
