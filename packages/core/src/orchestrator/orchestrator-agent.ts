@@ -24,6 +24,7 @@ import * as commandHandler from '../handlers/command-handler';
 import { formatToolCall } from '@archon/workflows/utils/tool-formatter';
 import { classifyAndFormatError } from '../utils/error-formatter';
 import { toError } from '../utils/error';
+import { safeDeactivateSession } from '../state/session-transitions';
 import { getAgentProvider, getProviderCapabilities } from '@archon/providers';
 import { buildManageRunTool } from './manage-run-tool';
 import { getArchonWorkspacesPath, ensureArchonWorkspacesPath } from '@archon/paths';
@@ -1231,9 +1232,10 @@ export async function handleMessage(
 
         if (command === 'setproject') {
           getLog().debug({ command, conversationId }, 'deterministic_command');
-          // Pass the DB primary key (conversation.id), not the platform
-          // conversation id — updateConversation keys on `id`.
-          const result = await handleSetProject(message, conversation.id);
+          // Pass the full Conversation — handleSetProject updates by the DB
+          // primary key (conversation.id, not the platform conversation id)
+          // and needs the prior cwd/isolation state for the detach note.
+          const result = await handleSetProject(message, conversation);
           await platform.sendMessage(conversationId, result);
           return;
         }
@@ -2477,12 +2479,18 @@ async function handleRemoveProject(message: string): Promise<string> {
 }
 
 /**
- * Handle /setproject command.
- * Binds the current conversation to a registered codebase by writing
- * `codebase_id` and `cwd` to the conversations table. Uses 4-tier fuzzy
- * name resolution (exact → case-insensitive → prefix → substring).
+ * Handle /setproject command. Four effects:
+ * 1. Binds the conversation to the resolved codebase (writes `codebase_id`).
+ * 2. Clears `cwd` — the project root remains codebase.default_cwd;
+ *    conversation.cwd is only an explicit runtime override.
+ * 3. Clears `isolation_env_id` — the old project's worktree no longer applies.
+ * 4. Deactivates the active AI session ('project-changed'), so the next
+ *    message starts fresh in the new project's context.
+ * Uses 4-tier fuzzy name resolution (exact → case-insensitive → prefix →
+ * substring) via resolveCodebaseName. Updates by the DB primary key
+ * (conversation.id), never the platform conversation id.
  */
-async function handleSetProject(message: string, conversationDbId: string): Promise<string> {
+async function handleSetProject(message: string, conversation: Conversation): Promise<string> {
   const { args } = commandHandler.parseCommand(message);
   if (args.length < 1) {
     return 'Usage: /setproject <project-name>';
@@ -2505,16 +2513,49 @@ async function handleSetProject(message: string, conversationDbId: string): Prom
       : `Project "${projectName}" not found. No projects registered — use /register-project.`;
   }
 
-  await db.updateConversation(conversationDbId, {
+  // Deactivate the old session BEFORE rebinding the conversation: if either
+  // session step throws, the switch aborts with the conversation untouched
+  // (next message just starts a fresh session in the OLD project). The reverse
+  // order would leave a rebound conversation with the old project's session
+  // still active — resuming old-project context under the new project's cwd.
+  const session = await sessionDb.getActiveSession(conversation.id);
+  if (session) {
+    await safeDeactivateSession(session.id, 'setproject');
+  }
+
+  // Intentionally non-destructive: clearing isolation_env_id detaches the
+  // conversation from its worktree WITHOUT destroying it — the worktree may
+  // hold uncommitted work and the user may switch back (project-switch is not
+  // terminal, unlike conversation-closed). The env row stays active until
+  // /worktree remove or the periodic isolation cleanup reaps it; we surface
+  // that to the user below instead of tearing it down.
+  const detachedWorktree = conversation.isolation_env_id !== null;
+  await db.updateConversation(conversation.id, {
     codebase_id: codebase.id,
-    cwd: codebase.default_cwd,
+    cwd: null,
+    isolation_env_id: null,
   });
+  if (detachedWorktree) {
+    getLog().info(
+      { conversationId: conversation.id, isolationEnvId: conversation.isolation_env_id },
+      'project.set_worktree_detached'
+    );
+  }
 
   getLog().info(
-    { conversationDbId, projectName: codebase.name, codebaseId: codebase.id },
+    { conversationId: conversation.id, projectName: codebase.name, codebaseId: codebase.id },
     'project.set_completed'
   );
-  return `Project set to **${codebase.name}**\nWorking directory: ${codebase.default_cwd}`;
+  let reply = `Project set to **${codebase.name}**\nWorking directory: ${codebase.default_cwd}`;
+  if (detachedWorktree) {
+    // Don't suggest `/worktree remove` here: it reads isolation_env_id from
+    // THIS conversation, which we just cleared — it would short-circuit with
+    // "not using a worktree". Cleanup tools that operate on the environments
+    // table directly are the working remedies.
+    reply +=
+      '\n\nNote: the previous worktree was detached but left in place — clean it up with `archon isolation cleanup` or from the project’s Environments list in the web UI.';
+  }
+  return reply;
 }
 
 /**

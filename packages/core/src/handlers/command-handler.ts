@@ -34,8 +34,7 @@ import {
   abandonWorkflow,
   resetWorkflowNodeSessions,
 } from '../operations/workflow-operations';
-import { getTriggerForCommand, type DeactivatingCommand } from '../state/session-transitions';
-import { SessionNotFoundError } from '../db/sessions';
+import { safeDeactivateSession } from '../state/session-transitions';
 import { createLogger } from '@archon/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -263,29 +262,6 @@ function findWorkflowLoadError(
 ): WorkflowLoadError | undefined {
   // Stripping the .yaml/.yml extension already covers the exact-filename cases.
   return loadErrors.find(error => error.filename.replace(/\.ya?ml$/, '') === workflowName);
-}
-
-/**
- * Safely deactivate a session with TOCTOU race handling.
- * Between getActiveSession() and deactivateSession(), another process
- * (cleanup service, concurrent command) may have already deactivated it.
- * Treats SessionNotFoundError as benign in that case.
- */
-async function safeDeactivateSession(
-  sessionId: string,
-  commandName: DeactivatingCommand
-): Promise<void> {
-  const trigger = getTriggerForCommand(commandName);
-  try {
-    await sessionDb.deactivateSession(sessionId, trigger);
-    getLog().debug({ sessionId, trigger }, 'session_deactivated');
-  } catch (error) {
-    if (error instanceof SessionNotFoundError) {
-      getLog().debug({ sessionId, trigger }, 'session_already_deactivated');
-    } else {
-      throw error;
-    }
-  }
 }
 
 async function handleWorktreeCommand(
@@ -1101,10 +1077,12 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
 
       if (codebase?.name) {
         const repoContext = await formatRepoContext(codebase, conversation.isolation_env_id);
+        // conversation.cwd is an explicit runtime override (set by worktree
+        // create/remove); when unset, the registered project root is the
+        // effective working directory. Same fallback as handleWorkflowCommand.
+        const effectiveCwd = conversation.cwd ?? codebase.default_cwd;
         msg += `\n\n## Conversation Context\n- Project: ${repoContext}`;
-        if (conversation.cwd) {
-          msg += `\n- Working Directory: ${conversation.cwd}`;
-        }
+        msg += `\n- Working Directory: ${effectiveCwd}`;
         // For a folder project, surface the git repos contained under its root.
         if (isFolderProject) {
           const childRepos = await listChildRepos(codebase.default_cwd);
@@ -1217,15 +1195,24 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
       return handleWorkflowCommand(conversation, args);
 
     case 'init': {
-      // Create .archon structure in current repo
-      if (!conversation.cwd) {
+      // Create .archon structure in the effective working directory:
+      // the explicit runtime override (conversation.cwd) when set, else the
+      // selected project's root. Web-created project conversations have
+      // codebase_id but null cwd (issue #1993), so the fallback is what
+      // makes /init work there.
+      const initCodebase = conversation.codebase_id
+        ? await codebaseDb.getCodebase(conversation.codebase_id)
+        : null;
+      const initCwd = conversation.cwd ?? initCodebase?.default_cwd;
+      if (!initCwd) {
         return {
           success: false,
-          message: 'No working directory set. Register a project first with /register-project.',
+          message:
+            'No project selected. Pick one with /setproject <name> (register it first with /register-project if needed).',
         };
       }
 
-      const archonDir = join(conversation.cwd, '.archon');
+      const archonDir = join(initCwd, '.archon');
       const commandsDir = join(archonDir, 'commands');
       const configPath = join(archonDir, 'config.yaml');
 
