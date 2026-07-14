@@ -701,7 +701,7 @@ export async function cancelWorkflowRun(id: string): Promise<{ cancelled: boolea
  * `resolved` is reset to an explicit null on every fresh pause so a prior
  * gate's resolution can never leak into this one: SQLite's json_patch
  * deep-merges the new context into the stored one (an omitted key would keep
- * the old 'approved'), and RFC 7386 null removes the key; Postgres `||`
+ * the old 'approved'), and RFC 7396 null removes the key; Postgres `||`
  * replaces the approval object wholesale. See ApprovalContext.resolved.
  */
 export async function pauseWorkflowRun(

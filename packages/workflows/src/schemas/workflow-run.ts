@@ -151,7 +151,7 @@ export interface ApprovalContext {
    * an EXPLICIT null rather than key omission because SQLite's json_patch
    * deep-merges the fresh context into the stored one (an omitted key would let
    * a stale 'approved' from the previous gate survive and falsely block the
-   * next gate), while RFC 7386 null removes the key; Postgres `||` replaces the
+   * next gate), while RFC 7396 null removes the key; Postgres `||` replaces the
    * approval object wholesale. Never cleared on resume — matches the
    * never-clear convention for approval_response/rejection_reason/
    * loop_user_input (consumed in place; the next pause resets it).
