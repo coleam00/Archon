@@ -80,6 +80,13 @@ const ERROR_PATTERNS: { pattern: string; message: string; known: boolean }[] = [
     known: true,
   },
   {
+    pattern: 'cannot detect default branch',
+    message:
+      '**Error:** No base branch could be detected. Set `worktree.baseBranch` in ' +
+      '`.archon/config.yaml` or update the registered codebase default branch.',
+    known: true,
+  },
+  {
     pattern: 'belongs to a different clone',
     message:
       '**Error:** A worktree at the target path was created by a different local clone. ' +

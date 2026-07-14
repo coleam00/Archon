@@ -42,6 +42,16 @@ interface IsolationRequestBase {
    */
   canonicalRepoPath: RepoPath;
 
+  /**
+   * Preferred base branch for new worktrees when repo config does not override
+   * it (`worktree.baseBranch` still wins).
+   *
+   * Populated from the registered codebase's stored `default_branch` so
+   * locally-registered repos with non-main defaults do not depend on
+   * `origin/HEAD` being set for auto-detection.
+   */
+  baseBranch?: BranchName;
+
   description?: string;
 
   /**
@@ -315,6 +325,12 @@ export interface ResolveRequest {
     id: string;
     defaultCwd: string;
     name: string;
+    /**
+     * The codebase's stored default branch (from registration). Threaded into
+     * the provider's `IsolationRequest.baseBranch` as the fallback base for new
+     * worktrees when repo config sets no `worktree.baseBranch`.
+     */
+    defaultBranch?: BranchName | null;
     /**
      * Project kind. `'folder'` projects run in place at `defaultCwd` with no
      * worktree isolation; the resolver short-circuits to `{ status: 'none' }`.

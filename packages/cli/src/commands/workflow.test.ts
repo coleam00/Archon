@@ -1493,6 +1493,145 @@ describe('workflowRunCommand', () => {
     }
   });
 
+  it('uses codebase default_branch for reuse validation instead of git auto-detection', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const conversationDb = await import('@archon/core/db/conversations');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const isolationDb = await import('@archon/core/db/isolation-environments');
+    const gitModule = await import('@archon/git');
+
+    const getDefaultBranchCallsBefore = (gitModule.getDefaultBranch as ReturnType<typeof mock>).mock
+      .calls.length;
+
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+      errors: [],
+    });
+    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'conv-123',
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-123',
+      default_cwd: '/test/path',
+      default_branch: 'develop',
+    });
+    (isolationDb.findActiveByWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'env-1',
+      working_path: '/worktrees/feat',
+      branch_name: 'feature-old',
+      workflow_type: 'task',
+      workflow_id: 'my-feature',
+    });
+    (gitModule.isAncestorOf as ReturnType<typeof mock>).mockResolvedValueOnce(false);
+    (conversationDb.updateConversation as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-123',
+    });
+
+    const consoleWarnSpy = spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await workflowRunCommand('/test/path', 'assist', 'hello', { branchName: 'my-feature' });
+      // Warning names the codebase default branch, not the auto-detected 'dev'
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("not based on 'develop'")
+      );
+      // The stored default branch short-circuits git auto-detection entirely
+      const getDefaultBranchCallsAfter = (gitModule.getDefaultBranch as ReturnType<typeof mock>)
+        .mock.calls.length;
+      expect(getDefaultBranchCallsAfter).toBe(getDefaultBranchCallsBefore);
+    } finally {
+      consoleWarnSpy.mockRestore();
+    }
+  });
+
+  it('threads codebase default_branch into provider.create and executeWorkflow opts', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const conversationDb = await import('@archon/core/db/conversations');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const isolation = await import('@archon/isolation');
+
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+      errors: [],
+    });
+    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'conv-123',
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-123',
+      default_cwd: '/test/path',
+      default_branch: 'develop',
+    });
+    (conversationDb.updateConversation as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-123',
+    });
+
+    // No branchName, no noWorktree — auto-isolates via provider.create
+    await workflowRunCommand('/test/path', 'assist', 'hello', {});
+
+    const getIsolationProviderMock = isolation.getIsolationProvider as ReturnType<typeof mock>;
+    const provider = getIsolationProviderMock.mock.results.at(-1)?.value as
+      | { create: ReturnType<typeof mock> }
+      | undefined;
+    const lastCreateCall = provider?.create.mock.calls.at(-1)?.[0] as {
+      baseBranch?: string;
+    };
+    expect(lastCreateCall.baseBranch).toBe('develop');
+
+    // executeWorkflow opts (trailing arg) carry the same fallback for $BASE_BRANCH
+    const executeSpy = executeWorkflow as ReturnType<typeof mock>;
+    const lastExecuteArgs = executeSpy.mock.calls.at(-1) as unknown[];
+    const opts = lastExecuteArgs[lastExecuteArgs.length - 1] as { baseBranch?: string };
+    expect(opts.baseBranch).toBe('develop');
+  });
+
+  it('omits baseBranch when the codebase has no stored default_branch', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const conversationDb = await import('@archon/core/db/conversations');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const isolation = await import('@archon/isolation');
+
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+      errors: [],
+    });
+    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'conv-123',
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-123',
+      default_cwd: '/test/path',
+      default_branch: null,
+    });
+    (conversationDb.updateConversation as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-123',
+    });
+
+    await workflowRunCommand('/test/path', 'assist', 'hello', {});
+
+    const getIsolationProviderMock = isolation.getIsolationProvider as ReturnType<typeof mock>;
+    const provider = getIsolationProviderMock.mock.results.at(-1)?.value as
+      | { create: ReturnType<typeof mock> }
+      | undefined;
+    const lastCreateCall = provider?.create.mock.calls.at(-1)?.[0] as {
+      baseBranch?: string;
+    };
+    expect(lastCreateCall.baseBranch).toBeUndefined();
+
+    const executeSpy = executeWorkflow as ReturnType<typeof mock>;
+    const lastExecuteArgs = executeSpy.mock.calls.at(-1) as unknown[];
+    const opts = lastExecuteArgs[lastExecuteArgs.length - 1] as { baseBranch?: string };
+    expect(opts.baseBranch).toBeUndefined();
+  });
+
   it('sends dispatch message before executeWorkflow with correct metadata', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     const { executeWorkflow } = await import('@archon/workflows/executor');

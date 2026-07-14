@@ -707,6 +707,113 @@ describe('IsolationResolver', () => {
     expect(capturedRequests[0]).toMatchObject({ codebaseName: 'owner/repo' });
   });
 
+  // --- defaultBranch → baseBranch threading tests ---
+
+  test('passes defaultBranch from codebase as baseBranch on the isolation request', async () => {
+    const capturedRequests: unknown[] = [];
+    const resolver = createResolver({
+      provider: {
+        ...makeMockProvider(),
+        create: async (request: unknown) => {
+          capturedRequests.push(request);
+          return {
+            id: '/worktrees/new-branch',
+            provider: 'worktree' as const,
+            workingPath: '/worktrees/new-branch',
+            branchName: 'new-branch',
+            status: 'active' as const,
+            createdAt: new Date(),
+            metadata: { adopted: false },
+          };
+        },
+      },
+    });
+
+    worktreeExistsSpy.mockResolvedValue(false);
+
+    await resolver.resolve({
+      existingEnvId: null,
+      codebase: {
+        id: 'cb-1',
+        name: 'owner/repo',
+        defaultCwd: '/local/repo',
+        defaultBranch: git.toBranchName('develop'),
+      },
+      hints: { workflowType: 'task', workflowId: 'wf-1' },
+      platformType: 'web',
+    });
+
+    expect(capturedRequests).toHaveLength(1);
+    expect(capturedRequests[0]).toMatchObject({ baseBranch: 'develop' });
+  });
+
+  test('omits baseBranch on the isolation request when defaultBranch is null', async () => {
+    const capturedRequests: unknown[] = [];
+    const resolver = createResolver({
+      provider: {
+        ...makeMockProvider(),
+        create: async (request: unknown) => {
+          capturedRequests.push(request);
+          return {
+            id: '/worktrees/new-branch',
+            provider: 'worktree' as const,
+            workingPath: '/worktrees/new-branch',
+            branchName: 'new-branch',
+            status: 'active' as const,
+            createdAt: new Date(),
+            metadata: { adopted: false },
+          };
+        },
+      },
+    });
+
+    worktreeExistsSpy.mockResolvedValue(false);
+
+    await resolver.resolve({
+      existingEnvId: null,
+      codebase: {
+        id: 'cb-1',
+        name: 'owner/repo',
+        defaultCwd: '/local/repo',
+        defaultBranch: null,
+      },
+      hints: { workflowType: 'task', workflowId: 'wf-1' },
+      platformType: 'web',
+    });
+
+    expect(capturedRequests).toHaveLength(1);
+    expect((capturedRequests[0] as { baseBranch?: string }).baseBranch).toBeUndefined();
+  });
+
+  test('folder project with defaultBranch still short-circuits to none (no provider call)', async () => {
+    const capturedRequests: unknown[] = [];
+    const resolver = createResolver({
+      provider: {
+        ...makeMockProvider(),
+        create: async (request: unknown): Promise<IsolatedEnvironment> => {
+          capturedRequests.push(request);
+          throw new Error('provider.create must not be called for folder projects');
+        },
+      },
+    });
+
+    const result = await resolver.resolve({
+      existingEnvId: null,
+      codebase: {
+        id: 'cb-folder',
+        defaultCwd: '/tmp/platform',
+        name: 'platform',
+        defaultBranch: git.toBranchName('develop'),
+        kind: 'folder',
+      },
+      hints: { workflowType: 'task', workflowId: 'wf-1' },
+      platformType: 'web',
+    });
+
+    expect(result.status).toBe('none');
+    expect(capturedRequests).toHaveLength(0);
+  });
+
   // --- Constructor validation tests ---
 
   test('throws on zero staleThresholdDays', () => {
