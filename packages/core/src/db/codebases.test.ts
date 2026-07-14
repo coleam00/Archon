@@ -25,6 +25,7 @@ import {
   findCodebaseByName,
   updateCodebase,
   deleteCodebase,
+  CodebaseNotFoundError,
 } from './codebases';
 
 describe('codebases', () => {
@@ -506,12 +507,24 @@ describe('codebases', () => {
       );
     });
 
-    test('throws when codebase not found', async () => {
+    test('throws CodebaseNotFoundError when codebase not found', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
 
-      await expect(updateCodebase('nonexistent', { default_cwd: '/path' })).rejects.toThrow(
-        'Codebase nonexistent not found'
-      );
+      const error = await updateCodebase('nonexistent', { default_cwd: '/path' }).catch(e => e);
+
+      expect(error).toBeInstanceOf(CodebaseNotFoundError);
+      expect(error.message).toBe('Codebase nonexistent not found');
+      expect(error.codebaseId).toBe('nonexistent');
+    });
+
+    test('does not wrap operational DB errors in CodebaseNotFoundError', async () => {
+      mockQuery.mockRejectedValueOnce(new Error('connection refused'));
+
+      const error = await updateCodebase('codebase-123', { default_cwd: '/path' }).catch(e => e);
+
+      expect(error).toBeInstanceOf(Error);
+      expect(error).not.toBeInstanceOf(CodebaseNotFoundError);
+      expect(error.message).toBe('connection refused');
     });
 
     test('no-ops when no fields provided', async () => {

@@ -2451,7 +2451,13 @@ async function handleUpdateProject(message: string): Promise<string> {
     await codebaseDb.updateCodebase(codebase.id, { default_cwd: newPath });
   } catch (err) {
     getLog().warn({ err: err as Error, codebaseId: codebase.id, newPath }, 'project.update_failed');
-    return `Project "${projectName}" could not be updated — it may have been removed.`;
+    // Row gone (deleted between the fetch above and the UPDATE) is the only
+    // case where "removed" is the honest answer; anything else is an
+    // operational DB failure and should say so instead of blaming data state.
+    if (err instanceof codebaseDb.CodebaseNotFoundError) {
+      return `Project "${projectName}" could not be updated — it appears to have been removed. Use /register-project to re-create it.`;
+    }
+    return `Project "${projectName}" could not be updated — database error. Please try again.`;
   }
   getLog().info(
     { name: projectName, oldPath: codebase.default_cwd, newPath, id: codebase.id },
