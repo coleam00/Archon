@@ -213,13 +213,25 @@ async function handleList(ctx: ManageRunContext): Promise<string> {
   return `${runs.length.toString()} run(s) (most recent first):\n${lines.join('\n')}`;
 }
 
+/**
+ * Runtime-safe timestamp formatter. The run schema declares these fields as
+ * Date, but rows are cast, never Zod-parsed: Postgres hydrates TIMESTAMPTZ
+ * into Date objects while SQLite returns TEXT ('YYYY-MM-DD HH:MM:SS', UTC)
+ * as-is (#2078). Mirrors the API serializer pattern (routes/api.ts
+ * toISOString): pass strings through verbatim — re-parsing with new Date()
+ * would misread the UTC wall-clock string as local time — and format Dates.
+ */
+function formatTimestamp(val: Date | string): string {
+  return typeof val === 'string' ? val : val.toISOString();
+}
+
 function formatRunDetail(run: WorkflowRun): string {
   const parts = [
     `Run ${run.id.slice(0, 8)} · ${run.workflow_name}`,
     `status: ${run.status}`,
-    `started: ${run.started_at.toISOString()}`,
+    `started: ${formatTimestamp(run.started_at)}`,
   ];
-  if (run.completed_at !== null) parts.push(`finished: ${run.completed_at.toISOString()}`);
+  if (run.completed_at !== null) parts.push(`finished: ${formatTimestamp(run.completed_at)}`);
   const error = run.metadata.error;
   if (typeof error === 'string' && error.length > 0) parts.push(`error: ${error.slice(0, 300)}`);
   log.info({ runId: run.id, status: run.status }, 'manage_run.get_completed');
