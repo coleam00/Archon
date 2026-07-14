@@ -424,6 +424,23 @@ export interface ProviderCapabilities {
   agents: boolean;
   toolRestrictions: boolean;
   /**
+   * Built-in tool-name vocabulary for advisory validation of
+   * `allowed_tools`/`denied_tools` entries. When present, workflow validation
+   * warns (never errors) on entries not in this list — after stripping a
+   * `Tool(specifier)` suffix and skipping `mcp__*` names, which are dynamic
+   * per-install. When absent, the check is skipped entirely: providers without
+   * a stable audited vocabulary opt out simply by not declaring one, keeping
+   * their tool names out of the shared schema.
+   */
+  knownToolNames?: readonly string[];
+  /**
+   * Old tool name → current tool name, for tools the provider's SDK has
+   * renamed (e.g. Claude's `Task` → `Agent`). Lets validation give a precise
+   * "renamed" hint instead of a generic unknown-name warning, since a stale
+   * name is a silent no-op at runtime.
+   */
+  renamedTools?: Readonly<Record<string, string>>;
+  /**
    * Structured-output guarantee tier for `output_format`:
    *  - `'enforced'`    — SDK/backend grammar-constrains decoding (Claude, Codex,
    *    OpenCode). The request path is native; Archon still validates post-parse

@@ -11,6 +11,7 @@ registerBuiltinProviders();
 import {
   levenshtein,
   findSimilar,
+  makeWorkflowResult,
   validateWorkflowResources,
   validateCommand,
   discoverAvailableCommands,
@@ -545,6 +546,101 @@ describe('validateWorkflowResources — agents capability', () => {
     const issues = await validateWorkflowResources(workflow, tmpDir);
     const warning = issues.find(i => i.level === 'warning' && i.field === 'agents');
     expect(warning).toBeUndefined();
+  });
+});
+
+// =============================================================================
+// validateWorkflowResources — tool-name validation (#2084)
+// =============================================================================
+
+describe('validateWorkflowResources — tool-name validation', () => {
+  function nodeWithTools(tools: { allowed_tools?: string[]; denied_tools?: string[] }): DagNode {
+    return { id: 'step1', prompt: 'p', ...tools } as unknown as DagNode;
+  }
+
+  const isToolNameWarning = (field: string) => (i: { level: string; field: string }) =>
+    i.level === 'warning' && i.field === field;
+
+  test('warns on unknown tool name with did-you-mean suggestion', async () => {
+    const workflow = makeWorkflow('test', [nodeWithTools({ allowed_tools: ['Bsh'] })], 'claude');
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    const warning = issues.find(isToolNameWarning('allowed_tools'));
+    expect(warning).toBeDefined();
+    expect(warning!.message).toContain("Unknown tool 'Bsh'");
+    expect(warning!.message).toContain('silently ignored');
+    expect(warning!.suggestions).toContain('Bash');
+  });
+
+  test('warns on renamed tool (Task → Agent) in denied_tools with targeted hint', async () => {
+    const workflow = makeWorkflow('test', [nodeWithTools({ denied_tools: ['Task'] })], 'claude');
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    const warning = issues.find(isToolNameWarning('denied_tools'));
+    expect(warning).toBeDefined();
+    expect(warning!.message).toContain("renamed to 'Agent'");
+    expect(warning!.suggestions).toEqual(['Agent']);
+  });
+
+  test('no warning for valid built-in tool names', async () => {
+    const workflow = makeWorkflow(
+      'test',
+      [
+        nodeWithTools({
+          allowed_tools: ['Read', 'Glob', 'Grep', 'WebSearch'],
+          denied_tools: ['Write', 'Edit', 'Bash', 'Agent'],
+        }),
+      ],
+      'claude'
+    );
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    expect(issues.find(isToolNameWarning('allowed_tools'))).toBeUndefined();
+    expect(issues.find(isToolNameWarning('denied_tools'))).toBeUndefined();
+  });
+
+  test('no warning for MCP tool names and wildcards', async () => {
+    const workflow = makeWorkflow(
+      'test',
+      [
+        nodeWithTools({
+          allowed_tools: ['mcp__github__create_issue', 'mcp__server__*', 'mcp__server'],
+        }),
+      ],
+      'claude'
+    );
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    expect(issues.find(isToolNameWarning('allowed_tools'))).toBeUndefined();
+  });
+
+  test('validates the base name of permission-rule specifiers', async () => {
+    const workflow = makeWorkflow(
+      'test',
+      [nodeWithTools({ allowed_tools: ['Bash(git:*)', 'Bsh(git:*)'] })],
+      'claude'
+    );
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    const warnings = issues.filter(isToolNameWarning('allowed_tools'));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].message).toContain("Unknown tool 'Bsh'");
+  });
+
+  test('no warning when provider declares no tool vocabulary (pi)', async () => {
+    const workflow = makeWorkflow('test', [nodeWithTools({ denied_tools: ['Task'] })], 'pi');
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    expect(issues.find(isToolNameWarning('denied_tools'))).toBeUndefined();
+    // pi supports tool restrictions, so the capability warning must not fire either
+    expect(issues.find(isToolNameWarning('allowed_tools/denied_tools'))).toBeUndefined();
+  });
+
+  test('unknown-tool warning is advisory — workflow still validates', async () => {
+    const workflow = makeWorkflow('test', [nodeWithTools({ denied_tools: ['Task'] })], 'claude');
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    expect(issues.some(isToolNameWarning('denied_tools'))).toBe(true);
+    expect(makeWorkflowResult('test', issues).valid).toBe(true);
+  });
+
+  test('empty allowed_tools produces no warning', async () => {
+    const workflow = makeWorkflow('test', [nodeWithTools({ allowed_tools: [] })], 'claude');
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    expect(issues.find(isToolNameWarning('allowed_tools'))).toBeUndefined();
   });
 });
 
