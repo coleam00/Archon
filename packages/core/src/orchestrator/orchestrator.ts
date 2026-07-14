@@ -134,7 +134,9 @@ export async function validateAndResolveIsolation(
           id: codebase.id,
           defaultCwd: codebase.default_cwd,
           name: codebase.name,
-          defaultBranch: codebase.default_branch ? toBranchName(codebase.default_branch) : null,
+          defaultBranch: codebase.default_branch?.trim()
+            ? toBranchName(codebase.default_branch.trim())
+            : null,
           kind: codebase.kind,
         }
       : null,
