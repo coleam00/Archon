@@ -492,6 +492,59 @@ describe('workflowRunCommand — requires: [github] gate', () => {
     expect(executeWorkflow).toHaveBeenCalledTimes(1);
     expect(getDecryptedAccessToken).not.toHaveBeenCalled();
   });
+
+  it('fails closed when the acting CLI user identity cannot be resolved', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { isPerUserGitHubEnabled, getDecryptedAccessToken } = await import('@archon/core');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'ship', requires: ['github'] }, 'project')],
+      errors: [],
+    });
+    (isPerUserGitHubEnabled as ReturnType<typeof mock>).mockReturnValueOnce(true);
+
+    // No resolvable CLI identity → resolveCliUserId() returns null → treated as
+    // "not connected" (fail closed). Clear every identity source for this test.
+    const savedUser = process.env.USER;
+    const savedUsername = process.env.USERNAME;
+    delete process.env.ARCHON_USER_ID;
+    delete process.env.USER;
+    delete process.env.USERNAME;
+    try {
+      await expect(
+        workflowRunCommand('/repo/root', 'ship', 'go', { noWorktree: true })
+      ).rejects.toThrow(/connected github identity/i);
+    } finally {
+      if (savedUser !== undefined) process.env.USER = savedUser;
+      if (savedUsername !== undefined) process.env.USERNAME = savedUsername;
+    }
+
+    // Never resolved a token, and never reached execution.
+    expect(getDecryptedAccessToken).not.toHaveBeenCalled();
+    expect(executeWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the identity/token lookup throws', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { isPerUserGitHubEnabled } = await import('@archon/core');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const usersDb = await import('@archon/core/db/users');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'ship', requires: ['github'] }, 'project')],
+      errors: [],
+    });
+    (isPerUserGitHubEnabled as ReturnType<typeof mock>).mockReturnValueOnce(true);
+    (usersDb.findOrCreateUserByPlatformIdentity as ReturnType<typeof mock>).mockRejectedValueOnce(
+      new Error('db unavailable')
+    );
+
+    // Lookup failure is swallowed inside the gate and defaults to "not connected".
+    await expect(
+      workflowRunCommand('/repo/root', 'ship', 'go', { noWorktree: true })
+    ).rejects.toThrow(/connected github identity/i);
+
+    expect(executeWorkflow).not.toHaveBeenCalled();
+  });
 });
 
 describe('workflowRunCommand', () => {
