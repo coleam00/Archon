@@ -55,14 +55,18 @@ export function resolvePiExtensionSettings(
   return { enableExtensions, interactive, extensionFlags };
 }
 
-/** Parse one `nodes.<id>` entry; returns undefined when nothing valid is set. */
-function parsePiNodeOverride(raw: Record<string, unknown>): PiNodeOverride | undefined {
-  const override: PiNodeOverride = {};
+/**
+ * Parse the extension-posture fields shared by assistant-level config and
+ * per-node overrides (`PiNodeOverride` deliberately mirrors these three
+ * `PiProviderDefaults` fields — one validation rule, two config levels).
+ */
+function parseExtensionPostureFields(raw: Record<string, unknown>): PiNodeOverride {
+  const parsed: PiNodeOverride = {};
   if (typeof raw.enableExtensions === 'boolean') {
-    override.enableExtensions = raw.enableExtensions;
+    parsed.enableExtensions = raw.enableExtensions;
   }
   if (typeof raw.interactive === 'boolean') {
-    override.interactive = raw.interactive;
+    parsed.interactive = raw.interactive;
   }
   if (
     raw.extensionFlags &&
@@ -76,9 +80,15 @@ function parsePiNodeOverride(raw: Record<string, unknown>): PiNodeOverride | und
       }
     }
     if (Object.keys(flags).length > 0) {
-      override.extensionFlags = flags;
+      parsed.extensionFlags = flags;
     }
   }
+  return parsed;
+}
+
+/** Parse one `nodes.<id>` entry; returns undefined when nothing valid is set. */
+function parsePiNodeOverride(raw: Record<string, unknown>): PiNodeOverride | undefined {
+  const override = parseExtensionPostureFields(raw);
   return Object.keys(override).length > 0 ? override : undefined;
 }
 
@@ -95,29 +105,7 @@ export function parsePiConfig(raw: Record<string, unknown>): ParsedPiConfig {
     result.model = raw.model;
   }
 
-  if (typeof raw.enableExtensions === 'boolean') {
-    result.enableExtensions = raw.enableExtensions;
-  }
-
-  if (typeof raw.interactive === 'boolean') {
-    result.interactive = raw.interactive;
-  }
-
-  if (
-    raw.extensionFlags &&
-    typeof raw.extensionFlags === 'object' &&
-    !Array.isArray(raw.extensionFlags)
-  ) {
-    const flags: Record<string, boolean | string> = {};
-    for (const [key, value] of Object.entries(raw.extensionFlags as Record<string, unknown>)) {
-      if (typeof value === 'boolean' || typeof value === 'string') {
-        flags[key] = value;
-      }
-    }
-    if (Object.keys(flags).length > 0) {
-      result.extensionFlags = flags;
-    }
-  }
+  Object.assign(result, parseExtensionPostureFields(raw));
 
   if (raw.env && typeof raw.env === 'object' && !Array.isArray(raw.env)) {
     const env: Record<string, string> = {};
