@@ -345,8 +345,12 @@ function buildEffectivePrompt(prompt: string, requestOptions?: SendQueryOptions)
   if (raw === undefined) {
     return prompt;
   }
-  const systemText =
-    typeof raw === 'string' ? raw : Array.isArray(raw) ? raw.join('\n\n') : undefined;
+  let systemText: string | undefined;
+  if (typeof raw === 'string') {
+    systemText = raw;
+  } else if (Array.isArray(raw)) {
+    systemText = raw.join('\n\n');
+  }
   if (systemText === undefined) {
     getLog().warn({ systemPromptType: typeof raw }, 'codex.system_prompt_dropped_preset');
     return prompt;
