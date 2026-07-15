@@ -2681,6 +2681,9 @@ async function executeLoopGroupNode(
 
     let bashComplete = false;
     if (group.until_bash && !signalDetected) {
+      // Resolve outside the try so ARCHON_BASH_PATH validation errors bubble up
+      // to the caller instead of being swallowed by the per-iteration catch.
+      const groupBashPath = resolveBashPath();
       try {
         const { prompt: bashPrompt } = substituteWorkflowVariables(
           group.until_bash,
@@ -2701,7 +2704,7 @@ async function executeLoopGroupNode(
           true, // escapedForBash
           logDir
         );
-        await execFileAsync('bash', ['-c', substitutedBash], {
+        await execFileAsync(groupBashPath, ['-c', substitutedBash], {
           cwd,
           timeout: SUBPROCESS_DEFAULT_TIMEOUT,
           env: {
@@ -2720,20 +2723,32 @@ async function executeLoopGroupNode(
         bashComplete = true;
       } catch (e) {
         const bashErr = e as NodeJS.ErrnoException;
-        // Two distinct events, mirroring executeLoopNode's until_bash handling.
-        if (bashErr.code === 'ENOENT') {
-          getLog().warn(
+        // System-level errors (ENOENT/EACCES/ENOTDIR) mean the bash binary itself
+        // is unreachable — looping forever on bashComplete=false is wrong. Throw
+        // out of the group with a clear actionable error instead (mirrors
+        // executeLoopNode's until_bash handling).
+        if (bashErr.code === 'ENOENT' || bashErr.code === 'EACCES' || bashErr.code === 'ENOTDIR') {
+          getLog().error(
             { err: bashErr, nodeId: node.id, iteration: i },
-            'loop_group_node.until_bash_exec_error'
+            'loop_group.until_bash_failed'
           );
-        } else if (bashErr.code !== undefined) {
-          // Log non-ENOENT system errors (syntax errors, permission issues, etc.)
-          getLog().warn(
-            { err: bashErr, nodeId: node.id, iteration: i },
-            'loop_group_node.until_bash_unexpected_error'
+          throw new Error(
+            `Loop group '${node.id}' until_bash failed: cannot execute bash at ` +
+              `'${groupBashPath}' (${bashErr.code}). Set ARCHON_BASH_PATH if Git Bash ` +
+              'is installed elsewhere.'
           );
         }
-        bashComplete = false; // non-zero exit = not complete
+        // Non-exec errors (template substitution, etc.) have no err.code — they
+        // should halt the group, not silently re-iterate.
+        if (typeof bashErr.code !== 'number') {
+          getLog().error(
+            { err: bashErr, nodeId: node.id, iteration: i },
+            'loop_group.until_bash_unexpected_error'
+          );
+          throw bashErr;
+        }
+        // Numeric exit code from the bash script = condition not met yet, keep looping.
+        bashComplete = false;
       }
     }
 
