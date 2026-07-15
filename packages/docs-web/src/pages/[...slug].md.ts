@@ -6,7 +6,7 @@
  * Uses the same markdown generation pipeline as starlight-llms-txt for consistency.
  */
 import type { APIRoute, GetStaticPaths } from 'astro';
-import { getCollection, render } from 'astro:content';
+import { getCollection } from 'astro:content';
 
 export const prerender = true;
 

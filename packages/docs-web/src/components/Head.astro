@@ -12,8 +12,10 @@ const { head, entry } = starlightRoute;
 // Build the markdown alternate URL
 // HTML pages are at /path/to/page/ -> .md files are at /path/to/page.md
 const pathname = Astro.url.pathname;
-// Remove trailing slash and add .md extension
-const mdPath = pathname.endsWith('/') ? pathname.slice(0, -1) + '.md' : pathname + '.md';
+// Build .md path: root "/" -> "index.md", others strip trailing slash then append .md
+const mdPath = pathname === '/'
+  ? 'index.md'
+  : (pathname.endsWith('/') ? pathname.slice(0, -1) : pathname) + '.md';
 const siteUrl = Astro.site?.href ?? 'https://archon.diy';
 const mdUrl = new URL(mdPath, siteUrl).href;
 ---
