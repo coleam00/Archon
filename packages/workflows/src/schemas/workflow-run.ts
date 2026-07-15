@@ -171,6 +171,20 @@ export interface ApprovalContext {
    * loop_user_input (consumed in place; the next pause resets it).
    */
   resolved?: 'approved' | 'rejected' | null;
+  /**
+   * Interactive-loop only. True when the iteration this gate paused on emitted the
+   * completion signal (detectCompletionSignal / until_bash exit 0). Read at resume by
+   * executeLoopNode/executeLoopGroupNode: a signal-bearing gate approved WITHOUT feedback
+   * finalizes the node from `signaledOutput` instead of re-running. Reset to null on every
+   * fresh pause (see pauseWorkflowRun) for the same SQLite json_patch reason as `resolved`.
+   */
+  completionSignaled?: boolean | null;
+  /**
+   * Interactive-loop only. The (stripped) output of the signal-bearing paused iteration,
+   * persisted so the finalize path can write node_completed with the real output for
+   * downstream `$nodeId.output` refs. Only set when completionSignaled is true; null otherwise.
+   */
+  signaledOutput?: string | null;
 }
 
 /**

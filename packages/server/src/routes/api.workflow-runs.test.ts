@@ -1409,6 +1409,69 @@ describe('POST /api/workflows/runs/:runId/approve', () => {
     });
     expect(mockCaptureApprovalResolved).toHaveBeenCalledWith({ resolution: 'approved' });
   });
+
+  test('passes an absent comment through as no-feedback on an interactive_loop gate (#2074)', async () => {
+    // The route must NOT default the comment to 'Approved' — approveWorkflow derives
+    // loop_feedback_given from the RAW comment, and a masked no-feedback would make
+    // every web approve iterate instead of finalize.
+    mockGetWorkflowRun.mockResolvedValue({
+      ...MOCK_PAUSED_RUN,
+      id: 'run-loop-bare',
+      metadata: {
+        approval: {
+          type: 'interactive_loop',
+          nodeId: 'refine',
+          message: 'gate',
+          iteration: 1,
+          completionSignaled: true,
+          signaledOutput: 'REPORT',
+        },
+      },
+    });
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-loop-bare/approve', {
+      method: 'POST',
+      body: JSON.stringify({}),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    expect(response.status).toBe(200);
+    const updateCall = mockUpdateWorkflowRun.mock.calls[0] as unknown[];
+    expect(updateCall[1]).toMatchObject({
+      metadata: {
+        loop_feedback_given: false,
+        loop_user_input: 'Approved',
+      },
+    });
+  });
+
+  test('passes a provided comment through as feedback on an interactive_loop gate (#2074)', async () => {
+    mockGetWorkflowRun.mockResolvedValue({
+      ...MOCK_PAUSED_RUN,
+      id: 'run-loop-feedback',
+      metadata: {
+        approval: {
+          type: 'interactive_loop',
+          nodeId: 'refine',
+          message: 'gate',
+          iteration: 1,
+        },
+      },
+    });
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-loop-feedback/approve', {
+      method: 'POST',
+      body: JSON.stringify({ comment: 'actually re-check X' }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    expect(response.status).toBe(200);
+    const updateCall = mockUpdateWorkflowRun.mock.calls[0] as unknown[];
+    expect(updateCall[1]).toMatchObject({
+      metadata: {
+        loop_feedback_given: true,
+        loop_user_input: 'actually re-check X',
+      },
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

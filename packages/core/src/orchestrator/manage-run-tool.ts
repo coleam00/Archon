@@ -1,5 +1,6 @@
 import type { NativeTool } from '@archon/providers/types';
 import { createLogger } from '@archon/paths';
+import { isApprovalContext } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { listDashboardRuns, findWorkflowRunsByIdPrefix } from '../db/workflows';
 import {
@@ -84,6 +85,11 @@ const INPUT_SCHEMA: Record<string, unknown> = {
       description:
         'Required (true) to actually perform a destructive action (cancel/abandon/approve/reject). Omit first to get a preview.',
     },
+    accept: {
+      type: 'boolean',
+      description:
+        'For action=approve on an interactive-loop gate with completionSignaled=true: accept=true finalizes the node from the already-computed output WITHOUT re-running, regardless of any message. Omit and pass message=<feedback> to run another iteration instead.',
+    },
   },
   required: ['action'],
 };
@@ -100,7 +106,7 @@ const HELP_OVERVIEW = [
   '  resume   — check a failed/paused run can resume from completed nodes. Params: runId.',
   '  cancel   — mark a running run cancelled. Params: runId, confirm=true.',
   '  abandon  — discard a paused/failed run. Params: runId, confirm=true.',
-  '  approve  — approve a paused human gate. Params: runId, message=comment, confirm=true.',
+  '  approve  — approve a paused human gate. Params: runId, confirm=true, optional accept/message.',
   '  reject   — reject a paused human gate. Params: runId, message=reason, confirm=true.',
   '',
   'Destructive actions (cancel/abandon/approve/reject) need confirm=true; call once',
@@ -119,7 +125,7 @@ const HELP_BY_ACTION: Record<Exclude<Action, 'help'>, string> = {
   abandon:
     'abandon — discard a paused/failed (non-terminal) run. Required: runId, confirm=true. Irreversible: the run becomes cancelled.',
   approve:
-    'approve — approve a paused human gate so the run can continue. Required: runId, confirm=true. Optional: message (comment recorded with the approval). Only paused runs with an approval gate.',
+    'approve — approve a paused human gate so the run can continue. Required: runId, confirm=true. Optional: accept, message. On an interactive loop whose gate shows completionSignaled=true: NO message (or accept=true) FINALIZES the node from the already-computed output without re-running; message=<feedback> runs another iteration with it. On other gates, message is just a comment recorded with the approval. Only paused runs with an approval gate.',
   reject:
     'reject — reject a paused human gate. Required: runId, confirm=true. Recommended: message (the reason). If the gate has an on-reject prompt the run reworks; otherwise it is cancelled.',
 };
@@ -234,6 +240,26 @@ function formatRunDetail(run: WorkflowRun): string {
   if (run.completed_at !== null) parts.push(`finished: ${formatTimestamp(run.completed_at)}`);
   const error = run.metadata.error;
   if (typeof error === 'string' && error.length > 0) parts.push(`error: ${error.slice(0, 300)}`);
+  // Paused interactive-loop gate: surface the structured gate state (#2074) so an
+  // AI approver can decide finalize-vs-iterate without parsing prose.
+  const rawApproval = run.metadata.approval;
+  if (
+    run.status === 'paused' &&
+    isApprovalContext(rawApproval) &&
+    rawApproval.type === 'interactive_loop'
+  ) {
+    parts.push(
+      `gate: awaiting approval (node ${rawApproval.nodeId}, iteration ${String(rawApproval.iteration ?? '?')})`
+    );
+    parts.push(`completionSignaled: ${rawApproval.completionSignaled === true ? 'true' : 'false'}`);
+    if (rawApproval.completionSignaled === true) {
+      parts.push(
+        '-> approve with NO message (or accept:true) to FINALIZE without re-running; approve with a message to run another iteration.'
+      );
+    }
+    const excerpt = (rawApproval.signaledOutput ?? '').trim().slice(0, 300);
+    if (excerpt) parts.push(`output: ${excerpt}`);
+  }
   log.info({ runId: run.id, status: run.status }, 'manage_run.get_completed');
   return parts.join('\n');
 }
@@ -269,8 +295,25 @@ async function handleWrite(
     const subject = GATE_ACTIONS.has(action)
       ? `the paused human gate on run ${run.id.slice(0, 8)} (${run.workflow_name})`
       : `run ${run.id.slice(0, 8)} (${run.workflow_name}), currently '${run.status}' — irreversible`;
+    // For approve on a signal-bearing interactive-loop gate, tell the agent which
+    // effect its current args would have (finalize vs iterate) so the confirmed
+    // second call is deliberate (#2074).
+    let effect = '';
+    const approvalMeta = run.metadata.approval;
+    if (
+      action === 'approve' &&
+      isApprovalContext(approvalMeta) &&
+      approvalMeta.type === 'interactive_loop' &&
+      approvalMeta.completionSignaled === true
+    ) {
+      const message = typeof input.message === 'string' ? input.message.trim() : '';
+      effect =
+        input.accept === true || message === ''
+          ? ' This gate has completionSignaled=true and your args would FINALIZE the node from the already-computed output (no re-run).'
+          : ' This gate has completionSignaled=true and your message would run ANOTHER iteration (pass accept:true or drop the message to finalize instead).';
+    }
     return (
-      `⚠️ This will ${action} ${subject}. ` +
+      `⚠️ This will ${action} ${subject}.${effect} ` +
       'Confirm with the user, then call manage_run again with confirm: true to proceed.'
     );
   }
@@ -296,10 +339,16 @@ async function handleWrite(
       return `Cancelled run ${cancelled.id.slice(0, 8)} (${cancelled.workflow_name}).`;
     }
     case 'approve': {
-      const result = await approveWorkflow(id, message.length > 0 ? message : undefined);
-      return result.type === 'interactive_loop'
-        ? `Loop input recorded for ${result.workflowName} (${id.slice(0, 8)}). The run is now set to resume.`
-        : `Approved ${result.workflowName} (${id.slice(0, 8)}). The run is now set to resume.`;
+      // accept=true forces the finalize path (#2074): no feedback reaches the gate,
+      // so a signal-bearing loop completes from its persisted output on resume.
+      const feedback = input.accept === true || message.length === 0 ? undefined : message;
+      const result = await approveWorkflow(id, feedback);
+      if (result.type !== 'interactive_loop') {
+        return `Approved ${result.workflowName} (${id.slice(0, 8)}). The run is now set to resume.`;
+      }
+      return feedback === undefined
+        ? `Approved ${result.workflowName} (${id.slice(0, 8)}) with no feedback. If the gate paused on a completion signal, the node finalizes from its computed output on resume (no re-run); otherwise the loop runs another iteration.`
+        : `Feedback recorded for ${result.workflowName} (${id.slice(0, 8)}); the loop will run another iteration with it on resume.`;
     }
     case 'reject': {
       const result = await rejectWorkflow(id, message.length > 0 ? message : undefined);

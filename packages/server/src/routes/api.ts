@@ -3248,12 +3248,15 @@ export function registerApiRoutes(
         );
       }
       const body = (await c.req.json().catch(() => ({}))) as { comment?: string };
-      const comment = body.comment ?? 'Approved';
       // Shared gate logic (events, telemetry, metadata staging) — the run stays
       // 'paused' with metadata.approval.resolved = 'approved' (#2075). The
       // pre-checks above map the common error cases to 400s; approveWorkflow
       // re-validates and anything it throws past them is a 500.
-      await approveWorkflow(runId, comment);
+      // The raw (possibly undefined) comment is passed through — approveWorkflow
+      // defaults the recorded comment internally, but "no feedback" must survive
+      // so a signal-bearing interactive-loop gate finalizes instead of re-running
+      // (#2074, loop_feedback_given).
+      await approveWorkflow(runId, body.comment);
 
       // Auto-resume: dispatch to the orchestrator so the workflow continues
       // without requiring the user to re-run the workflow command. Mirrors

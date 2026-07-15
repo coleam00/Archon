@@ -163,8 +163,67 @@ describe('approveWorkflow', () => {
           resolved: 'approved',
         },
         loop_user_input: 'fix the tests',
+        // Real feedback ⇒ the resumed loop iterates (#2074)
+        loop_feedback_given: true,
       },
     });
+  });
+
+  test('interactive_loop bare approve — loop_feedback_given false, loop_user_input defaults (#2074)', async () => {
+    const run = makePausedRun({
+      metadata: {
+        approval: {
+          nodeId: 'iterate',
+          message: 'Provide feedback',
+          type: 'interactive_loop',
+          iteration: 1,
+          completionSignaled: true,
+          signaledOutput: 'REPORT',
+        },
+      },
+    });
+    mockGetWorkflowRun.mockResolvedValueOnce(run);
+
+    await approveWorkflow('run-1');
+
+    expect(mockUpdateWorkflowRun).toHaveBeenCalledWith('run-1', {
+      metadata: {
+        approval: {
+          nodeId: 'iterate',
+          message: 'Provide feedback',
+          type: 'interactive_loop',
+          iteration: 1,
+          completionSignaled: true,
+          signaledOutput: 'REPORT',
+          resolved: 'approved',
+        },
+        // The recorded comment still defaults to 'Approved' (events/$LOOP_USER_INPUT
+        // for non-signaled iterate paths) — only the boolean sees the raw undefined.
+        loop_user_input: 'Approved',
+        loop_feedback_given: false,
+      },
+    });
+  });
+
+  test('interactive_loop whitespace-only comment counts as no feedback (#2074)', async () => {
+    const run = makePausedRun({
+      metadata: {
+        approval: {
+          nodeId: 'iterate',
+          message: 'Provide feedback',
+          type: 'interactive_loop',
+          iteration: 1,
+        },
+      },
+    });
+    mockGetWorkflowRun.mockResolvedValueOnce(run);
+
+    await approveWorkflow('run-1', '   ');
+
+    const updateArg = mockUpdateWorkflowRun.mock.calls[0][1] as {
+      metadata: Record<string, unknown>;
+    };
+    expect(updateArg.metadata.loop_feedback_given).toBe(false);
   });
 
   test('throws on already-resolved gate (double-approve guard)', async () => {

@@ -2429,6 +2429,35 @@ async function executeScriptNode(
   }
 }
 
+/** Cap for the iteration-output excerpt embedded in gate messages — keeps the
+ *  persisted `metadata.approval.message` and SSE payloads bounded (mirrors the
+ *  tool-input truncation used for progress events). */
+const GATE_EXCERPT_MAX = 500;
+
+/**
+ * Build the honest interactive-gate message (#2074, change D): an engine-generated
+ * status line (was the completion signal detected?) plus a bounded excerpt of the
+ * final iteration output, prepended to the author's static `gate_message`. Shared
+ * by executeLoopNode and executeLoopGroupNode so both gates tell the truth about
+ * the iteration they paused on.
+ */
+function buildHonestGateMessage(
+  completionDetected: boolean,
+  untilSignal: string,
+  lastIterationOutput: string,
+  gateMessage: string
+): string {
+  const trimmed = lastIterationOutput.trim();
+  const excerpt = trimmed.slice(0, GATE_EXCERPT_MAX);
+  const statusLine = completionDetected
+    ? `✅ Completion signal detected (\`${untilSignal}\`).`
+    : `⚠️ No completion signal (\`${untilSignal}\`) in this iteration.`;
+  const excerptBlock = excerpt
+    ? `\n\n> ${excerpt}${trimmed.length > GATE_EXCERPT_MAX ? '…' : ''}`
+    : '';
+  return `${statusLine}${excerptBlock}\n\n${gateMessage}`;
+}
+
 /**
  * Execute a loop-group node — runs a multi-node sub-DAG body repeatedly until a
  * completion condition (`until` signal in the body's terminal-node output, and/or
@@ -2497,6 +2526,41 @@ async function executeLoopGroupNode(
   const loopUserInput = isLoopResume
     ? ((workflowRun.metadata?.loop_user_input as string | undefined) ?? '')
     : '';
+
+  // Finalize-on-approve (#2074): mirrors executeLoopNode — a signal-bearing gate
+  // resumed WITHOUT feedback completes the group from the persisted output instead
+  // of re-running the body.
+  const feedbackGiven = workflowRun.metadata?.loop_feedback_given === true;
+  if (isLoopResume && loopGateMeta?.completionSignaled === true && !feedbackGiven) {
+    const finalizeOutput = loopGateMeta.signaledOutput ?? '';
+    await safeSendMessage(
+      platform,
+      conversationId,
+      `Loop-group node '${node.id}' accepted at the completion signal (no re-run)`,
+      msgContext
+    );
+    await deps.store
+      .createWorkflowEvent({
+        workflow_run_id: workflowRun.id,
+        event_type: 'node_completed',
+        step_name: stepName,
+        data: { duration_ms: 0, node_output: finalizeOutput },
+      })
+      .catch((err: Error) => {
+        getLog().error(
+          { err, workflowRunId: workflowRun.id, eventType: 'node_completed' },
+          'workflow_event_persist_failed'
+        );
+      });
+    getWorkflowEventEmitter().emit({
+      type: 'node_completed',
+      runId: workflowRun.id,
+      nodeId: node.id,
+      nodeName: node.id,
+      duration: 0,
+    });
+    return { state: 'completed', output: finalizeOutput };
+  }
 
   let loopPrevOutputs: Map<string, NodeOutput> | undefined; // undefined on iteration 1
   let lastIterationOutput = '';
@@ -2800,9 +2864,11 @@ async function executeLoopGroupNode(
       });
 
     // Completion: honor the signal only when the AI had input to evaluate (interactive
-    // first run always gates first — mirrors executeLoopNode's interactiveFirstRun).
+    // first run always gates first — mirrors executeLoopNode's interactiveFirstRun),
+    // UNLESS the author opted into autonomous completion via signal_completes (#2074).
     const interactiveFirstRun = group.interactive && !isLoopResume;
-    if (completionDetected && !interactiveFirstRun) {
+    const signalCompletes = group.signal_completes === true;
+    if (completionDetected && (!interactiveFirstRun || signalCompletes)) {
       await safeSendMessage(
         platform,
         conversationId,
@@ -2843,10 +2909,18 @@ async function executeLoopGroupNode(
       };
     }
 
-    // Interactive gate — pause after an iteration that did not complete.
+    // Interactive gate — pause after an iteration that did not complete (or, when
+    // interactiveFirstRun && !signalCompletes, an iteration that DID signal — the honest
+    // status line + persisted signal state (#2074) let a bare approve finalize it).
     if (group.interactive && group.gate_message) {
+      const honestMessage = buildHonestGateMessage(
+        completionDetected,
+        group.until,
+        lastIterationOutput,
+        group.gate_message
+      );
       const gateMsg =
-        `⏸ **Input required** (loop_group \`${node.id}\`, iteration ${String(i)}): ${group.gate_message}\n\n` +
+        `⏸ **Input required** (loop_group \`${node.id}\`, iteration ${String(i)}): ${honestMessage}\n\n` +
         `Run ID: \`${workflowRun.id}\`\n` +
         `Respond: \`/workflow approve ${workflowRun.id} <your feedback>\` | Cancel: \`/workflow reject ${workflowRun.id}\``;
       const gateSent = await safeSendMessage(platform, conversationId, gateMsg, {
@@ -2869,14 +2943,14 @@ async function executeLoopGroupNode(
           workflow_run_id: workflowRun.id,
           event_type: 'approval_requested',
           step_name: stepName,
-          data: { message: group.gate_message, iteration: i },
+          data: { message: honestMessage, iteration: i, completionSignaled: completionDetected },
         })
         .catch((err: Error) => {
           logEventStoreError(err, i);
         });
       await deps.store.pauseWorkflowRun(workflowRun.id, {
         nodeId: node.id,
-        message: group.gate_message,
+        message: honestMessage,
         type: 'interactive_loop',
         iteration: i,
         // Persist the body's session cursor so a resumed fresh_context: false loop
@@ -2888,12 +2962,16 @@ async function executeLoopGroupNode(
         // convention as `resolved`; RFC 7396 null removes the key).
         sessionId: loopLastSequentialSession?.sessionId ?? null,
         sessionProvider: loopLastSequentialSession?.provider ?? null,
+        // Signal state for finalize-on-bare-approve (#2074): written unconditionally
+        // for honesty; pauseWorkflowRun nulls both on every fresh pause.
+        completionSignaled: completionDetected,
+        signaledOutput: completionDetected ? lastIterationOutput : null,
       });
       getWorkflowEventEmitter().emit({
         type: 'approval_pending',
         runId: workflowRun.id,
         nodeId: node.id,
-        message: group.gate_message,
+        message: honestMessage,
       });
       return {
         state: 'completed',
@@ -3062,6 +3140,42 @@ async function executeLoopNode(
   const loopUserInput = isLoopResume
     ? ((workflowRun.metadata?.loop_user_input as string | undefined) ?? '')
     : '';
+
+  // Finalize-on-approve (#2074): a gate that paused on a signal-bearing iteration,
+  // resumed WITHOUT feedback, completes the node from the persisted output instead of
+  // re-running the (expensive) iteration. Feedback (loop_feedback_given) OR a
+  // non-signaled gate falls through to a normal resumed iteration below.
+  const feedbackGiven = workflowRun.metadata?.loop_feedback_given === true;
+  if (isLoopResume && loopGateMeta?.completionSignaled === true && !feedbackGiven) {
+    const finalizeOutput = loopGateMeta.signaledOutput ?? '';
+    await safeSendMessage(
+      platform,
+      conversationId,
+      `Loop node '${node.id}' accepted at the completion signal (no re-run)`,
+      msgContext
+    );
+    await deps.store
+      .createWorkflowEvent({
+        workflow_run_id: workflowRun.id,
+        event_type: 'node_completed',
+        step_name: stepName,
+        data: { duration_ms: 0, node_output: finalizeOutput },
+      })
+      .catch((err: Error) => {
+        getLog().error(
+          { err, workflowRunId: workflowRun.id, eventType: 'node_completed' },
+          'workflow_event_persist_failed'
+        );
+      });
+    getWorkflowEventEmitter().emit({
+      type: 'node_completed',
+      runId: workflowRun.id,
+      nodeId: node.id,
+      nodeName: node.id,
+      duration: 0,
+    });
+    return { state: 'completed', output: finalizeOutput, sessionId: currentSessionId };
+  }
 
   let lastIterationOutput = '';
   let lastIterationStructuredOutput: unknown;
@@ -3532,10 +3646,12 @@ async function executeLoopNode(
     // Completion signal detected — exit the loop.
     // For interactive loops: only honor the signal when the AI had user input to evaluate
     // (i.e., this is a resume iteration with loopUserInput). On the first iteration of a
-    // fresh interactive loop, the user hasn't seen anything yet — always gate first.
+    // fresh interactive loop, the user hasn't seen anything yet — always gate first,
+    // UNLESS the author opted into autonomous completion via signal_completes (#2074).
     // For non-interactive loops: the AI signals task completion at any point.
     const interactiveFirstRun = loop.interactive && !isLoopResume;
-    if (completionDetected && !interactiveFirstRun) {
+    const signalCompletes = loop.signal_completes === true;
+    if (completionDetected && (!interactiveFirstRun || signalCompletes)) {
       await safeSendMessage(
         platform,
         conversationId,
@@ -3589,9 +3705,18 @@ async function executeLoopNode(
     // Interactive loop gate — pause after every iteration where the AI did NOT emit the
     // completion signal. The user reviews the AI's output and provides feedback or approval.
     // On approval, the AI will emit the signal in the next iteration, exiting above.
+    // A signal-bearing iteration reaches this gate ONLY when interactiveFirstRun &&
+    // !signalCompletes — the honest status line + persisted signal state (#2074) let
+    // the approver finalize with a bare approve instead of re-running.
     if (loop.interactive && loop.gate_message) {
+      const honestMessage = buildHonestGateMessage(
+        completionDetected,
+        loop.until,
+        lastIterationOutput,
+        loop.gate_message
+      );
       const gateMsg =
-        `\u23f8 **Input required** (loop \`${node.id}\`, iteration ${String(i)}): ${loop.gate_message}\n\n` +
+        `\u23f8 **Input required** (loop \`${node.id}\`, iteration ${String(i)}): ${honestMessage}\n\n` +
         `Run ID: \`${workflowRun.id}\`\n` +
         `Respond: \`/workflow approve ${workflowRun.id} <your feedback>\` | Cancel: \`/workflow reject ${workflowRun.id}\``;
       const gateSent = await safeSendMessage(platform, conversationId, gateMsg, {
@@ -3616,26 +3741,30 @@ async function executeLoopNode(
           workflow_run_id: workflowRun.id,
           event_type: 'approval_requested',
           step_name: stepName,
-          data: { message: loop.gate_message, iteration: i },
+          data: { message: honestMessage, iteration: i, completionSignaled: completionDetected },
         })
         .catch((err: Error) => {
           logEventStoreError(err, i);
         });
       await deps.store.pauseWorkflowRun(workflowRun.id, {
         nodeId: node.id,
-        message: loop.gate_message,
+        message: honestMessage,
         type: 'interactive_loop',
         iteration: i,
         // Explicit null (never key omission) when there is no session — SQLite's
         // json_patch deep-merge would otherwise let a stale sessionId from a previous
         // pause of this run survive (same convention as `resolved`).
         sessionId: currentSessionId ?? null,
+        // Signal state for finalize-on-bare-approve (#2074): written unconditionally
+        // for honesty; pauseWorkflowRun nulls both on every fresh pause.
+        completionSignaled: completionDetected,
+        signaledOutput: completionDetected ? lastIterationOutput : null,
       });
       getWorkflowEventEmitter().emit({
         type: 'approval_pending',
         runId: workflowRun.id,
         nodeId: node.id,
-        message: loop.gate_message,
+        message: honestMessage,
       });
       // Return completed — the between-layer status check sees 'paused' and halts cleanly.
       // This mirrors the approval-node pattern, preventing false "DAG nodes failed" warnings

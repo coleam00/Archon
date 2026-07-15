@@ -2643,6 +2643,62 @@ nodes:
       );
     });
 
+    it('should accept a loop with signal_completes (loads without errors)', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'signal-completes.yaml'),
+        `
+name: signal-completes
+description: Interactive loop that completes autonomously on the signal
+interactive: true
+nodes:
+  - id: validate
+    loop:
+      prompt: Validate.
+      until: VALIDATED
+      max_iterations: 5
+      interactive: true
+      gate_message: Review.
+      signal_completes: true
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
+    });
+
+    it('should warn (non-blocking) when signal_completes is set without interactive', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'sc-no-interactive.yaml'),
+        `
+name: sc-no-interactive
+description: signal_completes without interactive is a no-op
+nodes:
+  - id: validate
+    loop:
+      prompt: Validate.
+      until: VALIDATED
+      max_iterations: 5
+      signal_completes: true
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      // Workflow loads successfully — this is a warning, not an error
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ filename: expect.stringContaining('sc-no-interactive') }),
+        'signal_completes_without_interactive_ignored'
+      );
+    });
+
     it('should reject loop_group with a cyclic body', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(workflowDir, { recursive: true });

@@ -29,8 +29,13 @@ export interface Run {
   /** Derived from metadata/events at runtime; initially undefined. */
   currentNode?: string | null;
   lastTool?: string | null;
-  /** Pending human gate. Null once the gate is resolved (see gateResolved). */
-  approval?: { nodeId: string; message: string } | null;
+  /**
+   * Pending human gate. Null once the gate is resolved (see gateResolved).
+   * `completionSignaled` is true when an interactive-loop gate paused on an
+   * iteration that emitted its completion signal (#2074) — a bare approve
+   * finalizes the node (no re-run); a comment runs another iteration.
+   */
+  approval?: { nodeId: string; message: string; completionSignaled?: boolean } | null;
   /**
    * Set when a paused run's gate was already approved/rejected and the run is
    * only awaiting auto-resume (server: metadata.approval.resolved). The
@@ -122,6 +127,8 @@ export function toRun(raw: RawWorkflowRun): Run {
             'message' in approval && typeof (approval as { message: unknown }).message === 'string'
               ? (approval as { message: string }).message
               : '',
+          completionSignaled:
+            (approval as { completionSignaled?: unknown }).completionSignaled === true,
         }
       : null;
 

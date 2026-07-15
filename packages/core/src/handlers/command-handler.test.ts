@@ -2177,6 +2177,8 @@ describe('CommandHandler', () => {
               resolved: 'approved',
             },
             loop_user_input: 'Add error handling',
+            // A real comment counts as feedback ⇒ the resumed loop iterates (#2074)
+            loop_feedback_given: true,
           },
         });
       });

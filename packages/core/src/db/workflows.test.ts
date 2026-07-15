@@ -281,6 +281,33 @@ describe('workflows database', () => {
       };
       expect(payload.approval.resolved).toBeNull();
       expect(payload.approval.nodeId).toBe('review');
+      // completionSignaled/signaledOutput follow the same explicit-null rule
+      // (#2074): standard approval pauses never set them, so they must be
+      // written as null (never omitted — JSON.stringify drops undefined and
+      // SQLite would keep a stale value from a previous interactive-loop gate).
+      expect(payload.approval.completionSignaled).toBeNull();
+      expect(payload.approval.signaledOutput).toBeNull();
+    });
+
+    test('preserves completionSignaled/signaledOutput when the gate provides them (#2074)', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+
+      await pauseWorkflowRun('workflow-run-123', {
+        nodeId: 'refine',
+        message: 'gate',
+        type: 'interactive_loop',
+        iteration: 1,
+        completionSignaled: true,
+        signaledOutput: 'REPORT',
+      });
+
+      const [, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      const payload = JSON.parse(params[1] as string) as {
+        approval: Record<string, unknown>;
+      };
+      expect(payload.approval.completionSignaled).toBe(true);
+      expect(payload.approval.signaledOutput).toBe('REPORT');
+      expect(payload.approval.resolved).toBeNull();
     });
 
     test('throws when the run is not running', async () => {
