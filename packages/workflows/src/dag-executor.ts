@@ -2512,8 +2512,8 @@ async function executeLoopGroupNode(
   // into a different provider on resume, so those legacy pauses restore fresh instead.
   let loopLastSequentialSession: SequentialSessionCursor | undefined =
     isLoopResume &&
-    loopGateMeta.sessionId !== undefined &&
-    loopGateMeta.sessionProvider !== undefined
+    typeof loopGateMeta.sessionId === 'string' &&
+    typeof loopGateMeta.sessionProvider === 'string'
       ? { sessionId: loopGateMeta.sessionId, provider: loopGateMeta.sessionProvider }
       : undefined;
 
@@ -2882,9 +2882,12 @@ async function executeLoopGroupNode(
         // Persist the body's session cursor so a resumed fresh_context: false loop
         // continues the pre-pause conversation (restored into the cursor on resume).
         // The provider tag rides along so the restore never threads the session into
-        // a different provider (#1992).
-        sessionId: loopLastSequentialSession?.sessionId,
-        sessionProvider: loopLastSequentialSession?.provider,
+        // a different provider (#1992). EXPLICIT null (not key omission) when there
+        // is no cursor — SQLite's json_patch deep-merge would otherwise let a stale
+        // sessionId/sessionProvider from a previous pause of this run survive (same
+        // convention as `resolved`; RFC 7396 null removes the key).
+        sessionId: loopLastSequentialSession?.sessionId ?? null,
+        sessionProvider: loopLastSequentialSession?.provider ?? null,
       });
       getWorkflowEventEmitter().emit({
         type: 'approval_pending',
@@ -3053,7 +3056,9 @@ async function executeLoopNode(
   const loopGateMeta = isApprovalContext(rawApproval) ? rawApproval : undefined;
   const isLoopResume = loopGateMeta?.type === 'interactive_loop' && loopGateMeta.nodeId === node.id;
   const startIteration = isLoopResume ? (loopGateMeta.iteration ?? 0) + 1 : 1;
-  let currentSessionId: string | undefined = isLoopResume ? loopGateMeta.sessionId : undefined;
+  let currentSessionId: string | undefined = isLoopResume
+    ? (loopGateMeta.sessionId ?? undefined)
+    : undefined;
   const loopUserInput = isLoopResume
     ? ((workflowRun.metadata?.loop_user_input as string | undefined) ?? '')
     : '';
@@ -3621,7 +3626,10 @@ async function executeLoopNode(
         message: loop.gate_message,
         type: 'interactive_loop',
         iteration: i,
-        sessionId: currentSessionId,
+        // Explicit null (never key omission) when there is no session — SQLite's
+        // json_patch deep-merge would otherwise let a stale sessionId from a previous
+        // pause of this run survive (same convention as `resolved`).
+        sessionId: currentSessionId ?? null,
       });
       getWorkflowEventEmitter().emit({
         type: 'approval_pending',
@@ -4456,11 +4464,13 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
           // (Claude) or silently cold-falling-back (Codex) on a foreign session id.
           const isFreshSequential = isParallelLayer || node.context === 'fresh';
           const cursor = ctx.lastSequentialSession;
-          const sameProviderCursor = cursor?.provider === provider ? cursor : undefined;
-          let resumeSessionId: string | undefined = isFreshSequential
-            ? undefined
-            : sameProviderCursor?.sessionId;
-          if (!isFreshSequential && cursor !== undefined && sameProviderCursor === undefined) {
+          let resumeSessionId: string | undefined;
+          if (isFreshSequential || cursor === undefined) {
+            resumeSessionId = undefined;
+          } else if (cursor.provider === provider) {
+            resumeSessionId = cursor.sessionId;
+          } else {
+            resumeSessionId = undefined;
             getLog().info(
               { nodeId: node.id, provider, cursorProvider: cursor.provider },
               'dag.session_provider_boundary_fresh'

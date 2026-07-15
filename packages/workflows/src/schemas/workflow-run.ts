@@ -133,16 +133,22 @@ export interface ApprovalContext {
   type?: 'approval' | 'interactive_loop';
   /** Current loop iteration when paused (interactive loops only). */
   iteration?: number;
-  /** Session ID to restore on resume (interactive loops only). */
-  sessionId?: string;
+  /**
+   * Session ID to restore on resume (interactive loops only). Gate pauses write an
+   * EXPLICIT null (never omit the key) when there is no session to restore — same
+   * json_patch rationale as `resolved` below: on SQLite an omitted key would let a
+   * stale session id from a previous pause of the same run survive the deep-merge.
+   */
+  sessionId?: string | null;
   /**
    * Provider that created `sessionId` (#1992). Persisted by loop_group gates and
    * restored together with the session id so a resumed loop never threads the
    * session into a node that resolves to a different provider (cross-provider
-   * resume is impossible). Absent on single-node loop gates — those restore the
-   * session into the same node, so the provider is the same by construction.
+   * resume is impossible). Same explicit-null-on-pause convention as `sessionId`.
+   * Absent on single-node loop gates — those restore the session into the same
+   * node, so the provider is the same by construction.
    */
-  sessionProvider?: string;
+  sessionProvider?: string | null;
   /** When true, the user's approval comment is stored as `$nodeId.output`. */
   captureResponse?: boolean;
   /** The on_reject prompt template (stored at pause time so reject handlers don't need the workflow def). */

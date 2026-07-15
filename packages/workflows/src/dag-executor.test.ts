@@ -12118,20 +12118,19 @@ describe('executeDagWorkflow -- provider-boundary session threading (#1992)', ()
     }
   });
 
-  async function runTwoNodeWorkflow(secondNode: DagNode): Promise<void> {
+  async function runWorkflow(
+    conversationId: string,
+    workflow: { name: string; nodes: DagNode[] },
+    workflowRun: WorkflowRun
+  ): Promise<WorkflowDeps> {
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun('provider-boundary-run');
-
     await executeDagWorkflow(
       mockDeps,
       platform,
-      'conv-prov-bound',
+      conversationId,
       testDir,
-      {
-        name: 'dag-provider-boundary',
-        nodes: [{ id: 'a', prompt: 'First step' }, secondNode],
-      },
+      workflow,
       workflowRun,
       'claude',
       undefined,
@@ -12140,6 +12139,18 @@ describe('executeDagWorkflow -- provider-boundary session threading (#1992)', ()
       'main',
       'docs/',
       minimalConfig
+    );
+    return mockDeps;
+  }
+
+  async function runTwoNodeWorkflow(secondNode: DagNode): Promise<void> {
+    await runWorkflow(
+      'conv-prov-bound',
+      {
+        name: 'dag-provider-boundary',
+        nodes: [{ id: 'a', prompt: 'First step' }, secondNode],
+      },
+      makeWorkflowRun('provider-boundary-run')
     );
   }
 
@@ -12186,15 +12197,8 @@ describe('executeDagWorkflow -- provider-boundary session threading (#1992)', ()
       }
     });
 
-    const mockDeps = createMockDeps();
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun('provider-boundary-loop-run');
-
-    await executeDagWorkflow(
-      mockDeps,
-      platform,
+    await runWorkflow(
       'conv-prov-bound-loop',
-      testDir,
       {
         name: 'dag-provider-boundary-loop',
         nodes: [
@@ -12205,14 +12209,7 @@ describe('executeDagWorkflow -- provider-boundary session threading (#1992)', ()
           { id: 'after', prompt: 'Summarize', depends_on: ['work'], provider: 'codex' },
         ],
       },
-      workflowRun,
-      'claude',
-      undefined,
-      join(testDir, 'artifacts'),
-      join(testDir, 'logs'),
-      'main',
-      'docs/',
-      minimalConfig
+      makeWorkflowRun('provider-boundary-loop-run')
     );
 
     // 1 loop iteration + 1 downstream call.
@@ -12232,15 +12229,8 @@ describe('executeDagWorkflow -- provider-boundary session threading (#1992)', ()
       }
     });
 
-    const mockDeps = createMockDeps();
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun('same-provider-loop-run');
-
-    await executeDagWorkflow(
-      mockDeps,
-      platform,
+    await runWorkflow(
       'conv-same-prov-loop',
-      testDir,
       {
         name: 'dag-same-provider-loop',
         nodes: [
@@ -12251,14 +12241,7 @@ describe('executeDagWorkflow -- provider-boundary session threading (#1992)', ()
           { id: 'after', prompt: 'Summarize', depends_on: ['work'] },
         ],
       },
-      workflowRun,
-      'claude',
-      undefined,
-      join(testDir, 'artifacts'),
-      join(testDir, 'logs'),
-      'main',
-      'docs/',
-      minimalConfig
+      makeWorkflowRun('same-provider-loop-run')
     );
 
     expect(mockSendQueryDag.mock.calls.length).toBe(2);
@@ -12283,15 +12266,8 @@ describe('executeDagWorkflow -- provider-boundary session threading (#1992)', ()
       }
     });
 
-    const mockDeps = createMockDeps();
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun('lg-provider-boundary');
-
-    await executeDagWorkflow(
-      mockDeps,
-      platform,
+    await runWorkflow(
       'conv-lg-prov',
-      testDir,
       {
         name: 'lg-provider-boundary',
         nodes: [
@@ -12315,14 +12291,7 @@ describe('executeDagWorkflow -- provider-boundary session threading (#1992)', ()
           },
         ],
       },
-      workflowRun,
-      'claude',
-      undefined,
-      join(testDir, 'artifacts'),
-      join(testDir, 'logs'),
-      'main',
-      'docs/',
-      minimalConfig
+      makeWorkflowRun('lg-provider-boundary')
     );
 
     // 2 iterations x 2 body nodes = 4 calls, every one fresh.
@@ -12349,15 +12318,8 @@ describe('executeDagWorkflow -- provider-boundary session threading (#1992)', ()
       }
     });
 
-    const mockDeps = createMockDeps();
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun('lg-same-provider');
-
-    await executeDagWorkflow(
-      mockDeps,
-      platform,
+    await runWorkflow(
       'conv-lg-same',
-      testDir,
       {
         name: 'lg-same-provider',
         nodes: [
@@ -12376,14 +12338,7 @@ describe('executeDagWorkflow -- provider-boundary session threading (#1992)', ()
           },
         ],
       },
-      workflowRun,
-      'claude',
-      undefined,
-      join(testDir, 'artifacts'),
-      join(testDir, 'logs'),
-      'main',
-      'docs/',
-      minimalConfig
+      makeWorkflowRun('lg-same-provider')
     );
 
     expect(mockSendQueryDag.mock.calls.length).toBe(4);
@@ -12404,26 +12359,8 @@ describe('executeDagWorkflow -- provider-boundary session threading (#1992)', ()
       yield { type: 'result', sessionId: 'legacy-resume-sess' };
     });
 
-    const mockDeps = createMockDeps();
-    const platform = createMockPlatform();
-    const resumedRun = makeWorkflowRun('lg-legacy-resume', {
-      metadata: {
-        approval: {
-          type: 'interactive_loop',
-          nodeId: 'refine',
-          iteration: 1,
-          sessionId: 'pre-tag-sess-1', // no sessionProvider — legacy pause
-          message: 'Review.',
-        },
-        loop_user_input: 'continue',
-      },
-    });
-
-    await executeDagWorkflow(
-      mockDeps,
-      platform,
+    await runWorkflow(
       'conv-lg-legacy',
-      testDir,
       {
         name: 'lg-legacy-resume',
         nodes: [
@@ -12441,18 +12378,72 @@ describe('executeDagWorkflow -- provider-boundary session threading (#1992)', ()
           },
         ],
       },
-      resumedRun,
-      'claude',
-      undefined,
-      join(testDir, 'artifacts'),
-      join(testDir, 'logs'),
-      'main',
-      'docs/',
-      minimalConfig
+      makeWorkflowRun('lg-legacy-resume', {
+        metadata: {
+          approval: {
+            type: 'interactive_loop',
+            nodeId: 'refine',
+            iteration: 1,
+            sessionId: 'pre-tag-sess-1', // no sessionProvider — legacy pause
+            message: 'Review.',
+          },
+          loop_user_input: 'continue',
+        },
+      })
     );
 
     expect(mockSendQueryDag.mock.calls.length).toBe(1);
     // The untagged pre-pause session is NOT restored.
     expect(mockSendQueryDag.mock.calls[0][2]).toBeUndefined();
+  });
+
+  it('interactive loop_group gate with no live cursor pauses with EXPLICIT null session fields', async () => {
+    // Body tail is a PARALLEL layer (two sibling nodes, nothing downstream), which
+    // resets the sequential cursor before the gate. The pause payload must write
+    // sessionId/sessionProvider as explicit nulls — key omission would let SQLite's
+    // json_patch deep-merge keep a stale pair from a previous pause of this run
+    // (same convention as ApprovalContext.resolved).
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'checked, not done yet' };
+      yield { type: 'result', sessionId: 'parallel-tail-sess' };
+    });
+
+    const mockDeps = await runWorkflow(
+      'conv-lg-nullpause',
+      {
+        name: 'lg-null-pause',
+        nodes: [
+          {
+            id: 'refine',
+            loop_group: {
+              until: 'DONE',
+              max_iterations: 5,
+              fresh_context: false,
+              interactive: true,
+              gate_message: 'Review.',
+              nodes: [
+                { id: 'lint', prompt: 'run lint checks', depends_on: [] },
+                { id: 'test', prompt: 'run test checks', depends_on: [] },
+              ],
+            },
+            depends_on: [],
+          },
+        ],
+      },
+      makeWorkflowRun('lg-null-pause')
+    );
+
+    const pauseCalls = (
+      mockDeps.store.pauseWorkflowRun as Mock<
+        (id: string, ctx: Record<string, unknown>) => Promise<void>
+      >
+    ).mock.calls;
+    expect(pauseCalls.length).toBe(1);
+    const pauseCtx = pauseCalls[0][1];
+    // Keys present with explicit null — NOT omitted, NOT a live session pair.
+    expect('sessionId' in pauseCtx).toBe(true);
+    expect('sessionProvider' in pauseCtx).toBe(true);
+    expect(pauseCtx.sessionId).toBeNull();
+    expect(pauseCtx.sessionProvider).toBeNull();
   });
 });
