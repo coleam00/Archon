@@ -289,6 +289,8 @@ async function handleWrite(
   const run = await getScopedRun(runId, ctx);
   if (typeof run === 'string') return run; // not found / wrong project
 
+  const message = typeof input.message === 'string' ? input.message.trim() : '';
+
   // Destructive actions need explicit confirmation. Without it, preview only.
   if (DESTRUCTIVE_ACTIONS.has(action) && input.confirm !== true) {
     log.info({ runId: run.id, action }, 'manage_run.confirm_preview');
@@ -306,7 +308,6 @@ async function handleWrite(
       approvalMeta.type === 'interactive_loop' &&
       approvalMeta.completionSignaled === true
     ) {
-      const message = typeof input.message === 'string' ? input.message.trim() : '';
       effect =
         input.accept === true || message === ''
           ? ' This gate has completionSignaled=true and your args would FINALIZE the node from the already-computed output (no re-run).'
@@ -318,7 +319,6 @@ async function handleWrite(
     );
   }
 
-  const message = typeof input.message === 'string' ? input.message.trim() : '';
   log.info({ runId: run.id, action }, 'manage_run.write_requested');
 
   // Use the verified full id from `getScopedRun`, not the (possibly short) input

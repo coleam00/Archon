@@ -2459,6 +2459,52 @@ function buildHonestGateMessage(
 }
 
 /**
+ * Finalize-on-approve (#2074), shared by executeLoopNode and executeLoopGroupNode:
+ * a gate that paused on a signal-bearing iteration, resumed WITHOUT feedback,
+ * completes the node from the persisted `signaledOutput` instead of re-running
+ * the (expensive) iteration. Sends the user notice and writes/emits the
+ * node_completed pair; the caller builds its own return value (the single-node
+ * loop also threads the restored sessionId).
+ */
+async function finalizeLoopFromSignal(
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  workflowRun: WorkflowRun,
+  nodeId: string,
+  stepName: string,
+  nodeLabel: string,
+  finalizeOutput: string
+): Promise<void> {
+  await safeSendMessage(
+    platform,
+    conversationId,
+    `${nodeLabel} '${nodeId}' accepted at the completion signal (no re-run)`,
+    { workflowId: workflowRun.id, nodeName: nodeId }
+  );
+  await deps.store
+    .createWorkflowEvent({
+      workflow_run_id: workflowRun.id,
+      event_type: 'node_completed',
+      step_name: stepName,
+      data: { duration_ms: 0, node_output: finalizeOutput },
+    })
+    .catch((err: Error) => {
+      getLog().error(
+        { err, workflowRunId: workflowRun.id, eventType: 'node_completed' },
+        'workflow_event_persist_failed'
+      );
+    });
+  getWorkflowEventEmitter().emit({
+    type: 'node_completed',
+    runId: workflowRun.id,
+    nodeId,
+    nodeName: nodeId,
+    duration: 0,
+  });
+}
+
+/**
  * Execute a loop-group node — runs a multi-node sub-DAG body repeatedly until a
  * completion condition (`until` signal in the body's terminal-node output, and/or
  * `until_bash` exit code) or `max_iterations`.
@@ -2533,32 +2579,16 @@ async function executeLoopGroupNode(
   const feedbackGiven = workflowRun.metadata?.loop_feedback_given === true;
   if (isLoopResume && loopGateMeta?.completionSignaled === true && !feedbackGiven) {
     const finalizeOutput = loopGateMeta.signaledOutput ?? '';
-    await safeSendMessage(
+    await finalizeLoopFromSignal(
+      deps,
       platform,
       conversationId,
-      `Loop-group node '${node.id}' accepted at the completion signal (no re-run)`,
-      msgContext
+      workflowRun,
+      node.id,
+      stepName,
+      'Loop-group node',
+      finalizeOutput
     );
-    await deps.store
-      .createWorkflowEvent({
-        workflow_run_id: workflowRun.id,
-        event_type: 'node_completed',
-        step_name: stepName,
-        data: { duration_ms: 0, node_output: finalizeOutput },
-      })
-      .catch((err: Error) => {
-        getLog().error(
-          { err, workflowRunId: workflowRun.id, eventType: 'node_completed' },
-          'workflow_event_persist_failed'
-        );
-      });
-    getWorkflowEventEmitter().emit({
-      type: 'node_completed',
-      runId: workflowRun.id,
-      nodeId: node.id,
-      nodeName: node.id,
-      duration: 0,
-    });
     return { state: 'completed', output: finalizeOutput };
   }
 
@@ -3148,32 +3178,16 @@ async function executeLoopNode(
   const feedbackGiven = workflowRun.metadata?.loop_feedback_given === true;
   if (isLoopResume && loopGateMeta?.completionSignaled === true && !feedbackGiven) {
     const finalizeOutput = loopGateMeta.signaledOutput ?? '';
-    await safeSendMessage(
+    await finalizeLoopFromSignal(
+      deps,
       platform,
       conversationId,
-      `Loop node '${node.id}' accepted at the completion signal (no re-run)`,
-      msgContext
+      workflowRun,
+      node.id,
+      stepName,
+      'Loop node',
+      finalizeOutput
     );
-    await deps.store
-      .createWorkflowEvent({
-        workflow_run_id: workflowRun.id,
-        event_type: 'node_completed',
-        step_name: stepName,
-        data: { duration_ms: 0, node_output: finalizeOutput },
-      })
-      .catch((err: Error) => {
-        getLog().error(
-          { err, workflowRunId: workflowRun.id, eventType: 'node_completed' },
-          'workflow_event_persist_failed'
-        );
-      });
-    getWorkflowEventEmitter().emit({
-      type: 'node_completed',
-      runId: workflowRun.id,
-      nodeId: node.id,
-      nodeName: node.id,
-      duration: 0,
-    });
     return { state: 'completed', output: finalizeOutput, sessionId: currentSessionId };
   }
 

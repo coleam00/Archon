@@ -853,7 +853,13 @@ async function handleWorkflowCommand(
           message: 'Usage: /workflow approve <id> [comment]\n\nApproves a paused workflow run.',
         };
       }
-      const comment = args.slice(2).join(' ') || 'Approved';
+      // Pass the RAW comment through (undefined when the user typed none) —
+      // approveWorkflow defaults the recorded comment internally, but "no
+      // feedback" must survive so a signal-bearing interactive-loop gate
+      // finalizes instead of re-running (#2074, loop_feedback_given). Mirrors
+      // the HTTP route and CLI.
+      const rawComment = args.slice(2).join(' ');
+      const comment = rawComment.length > 0 ? rawComment : undefined;
       try {
         const result = await approveWorkflow(runId, comment);
         const pathInfo = result.workingPath ? `\nPath: \`${result.workingPath}\`` : '';
