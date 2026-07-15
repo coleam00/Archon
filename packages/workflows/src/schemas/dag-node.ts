@@ -139,6 +139,10 @@ const AGENT_ID_REGEX = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
 export const dagNodeBaseSchema = z.object({
   id: z.string(),
+  // Optional human-readable documentation for the node. Purely informational —
+  // the executor never reads it. Declared so workflow authors can self-document
+  // nodes inline in the YAML instead of Zod silently stripping the field (#2012).
+  description: z.string().optional(),
   depends_on: z.array(z.string()).optional(),
   when: z.string().optional(),
   trigger_rule: triggerRuleSchema.optional(),
@@ -645,6 +649,7 @@ export const dagNodeSchema = dagNodeBaseSchema
     // Common base fields (sparse — only include defined values)
     const base = {
       id,
+      ...(data.description !== undefined ? { description: data.description } : {}),
       ...(data.depends_on !== undefined && data.depends_on.length > 0
         ? { depends_on: data.depends_on }
         : {}),
