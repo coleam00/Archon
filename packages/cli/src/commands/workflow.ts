@@ -1130,6 +1130,9 @@ export async function workflowRunCommand(
           : undefined,
         baseBranch: codebaseDefaultBranch ? git.toBranchName(codebaseDefaultBranch) : undefined,
         codebaseId: codebase.id,
+        // owner/repo name lets resolveOwnerRepo skip the path heuristic, which
+        // throws for single-segment checkout paths like /workspace (#2022)
+        codebaseName: codebase.name,
         canonicalRepoPath: git.toRepoPath(codebase.default_cwd),
         description: `CLI workflow: ${workflowName}`,
       });
