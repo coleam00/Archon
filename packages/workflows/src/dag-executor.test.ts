@@ -12057,7 +12057,9 @@ describe('resolveBashPath -- platform-aware bash binary resolution (#1326)', () 
     delete process.env.ARCHON_BASH_PATH;
     const result = git.resolveBashPath();
     if (process.platform === 'win32') {
-      expect(result).toBe('C:\\Program Files\\Git\\bin\\bash.exe');
+      // Multi-candidate scan: first existing Git-Bash location, or the
+      // canonical Program Files default when none exist.
+      expect(result.endsWith('\\bash.exe')).toBe(true);
     } else {
       expect(result).toBe('bash');
     }
