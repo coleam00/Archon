@@ -293,6 +293,26 @@ type NodeExecutionResult = NodeOutput & {
   loopIterations?: number;
 };
 
+/**
+ * Sequential-session threading cursor. Tagged with the resolved provider that produced
+ * the session so a downstream sequential node on a DIFFERENT provider starts fresh
+ * instead of attempting an impossible cross-provider resume (#1992) — a foreign session
+ * id hard-fails Claude ("No conversation found with session ID") and cold-falls-back
+ * on Codex.
+ */
+interface SequentialSessionCursor {
+  sessionId: string;
+  provider: string;
+}
+
+/** Per-node result surfaced by a runLayers layer closure. `sessionProvider` tags which
+ *  resolved provider created `output.sessionId` (session-producing paths only). */
+interface LayerNodeResult {
+  nodeId: string;
+  output: NodeExecutionResult;
+  sessionProvider?: string;
+}
+
 /** Throttle state for cancel checks (reads — no write contention in WAL mode) */
 const lastNodeCancelCheck = new Map<string, number>();
 const CANCEL_CHECK_INTERVAL_MS = 10_000;
@@ -2487,9 +2507,15 @@ async function executeLoopGroupNode(
   // fresh_context is true or on iteration 1. runLayers mutates this in place each call.
   // On interactive resume, restore the cursor persisted at pause time so
   // fresh_context: false continues the pre-pause conversation (mirrors executeLoopNode).
-  let loopLastSequentialSessionId: string | undefined = isLoopResume
-    ? loopGateMeta.sessionId
-    : undefined;
+  // The provider tag must be restored WITH the session id (#1992) — metadata from a
+  // pre-tag pause lacks it, and restoring an untagged cursor could thread the session
+  // into a different provider on resume, so those legacy pauses restore fresh instead.
+  let loopLastSequentialSession: SequentialSessionCursor | undefined =
+    isLoopResume &&
+    loopGateMeta.sessionId !== undefined &&
+    loopGateMeta.sessionProvider !== undefined
+      ? { sessionId: loopGateMeta.sessionId, provider: loopGateMeta.sessionProvider }
+      : undefined;
 
   const logEventStoreError = (err: Error, iteration: number): void => {
     getLog().error({ err, nodeId: node.id, iteration }, 'loop_group_node.iteration_event_failed');
@@ -2590,8 +2616,7 @@ async function executeLoopGroupNode(
       // session forward so a body AI node resumes the prior iteration's conversation.
       // Gate on the literal i === 1 (not startIteration): on interactive resume the
       // first processed iteration must continue the restored pre-pause session.
-      lastSequentialSessionId:
-        group.fresh_context || i === 1 ? undefined : loopLastSequentialSessionId,
+      lastSequentialSession: group.fresh_context || i === 1 ? undefined : loopLastSequentialSession,
       totalCostUsd: 0,
       totalTokensIn: 0,
       totalTokensOut: 0,
@@ -2651,7 +2676,7 @@ async function executeLoopGroupNode(
 
     // Carry the body's final sequential session into the next iteration (unless
     // fresh_context forces a reset, handled above by seeding undefined).
-    loopLastSequentialSessionId = iterCtx.lastSequentialSessionId;
+    loopLastSequentialSession = iterCtx.lastSequentialSession;
 
     // Carry prior-iteration snapshot forward for $LOOP_PREV.* on the next iteration.
     loopPrevOutputs = new Map(scopedNodeOutputs);
@@ -2856,7 +2881,10 @@ async function executeLoopGroupNode(
         iteration: i,
         // Persist the body's session cursor so a resumed fresh_context: false loop
         // continues the pre-pause conversation (restored into the cursor on resume).
-        sessionId: loopLastSequentialSessionId,
+        // The provider tag rides along so the restore never threads the session into
+        // a different provider (#1992).
+        sessionId: loopLastSequentialSession?.sessionId,
+        sessionProvider: loopLastSequentialSession?.provider,
       });
       getWorkflowEventEmitter().emit({
         type: 'approval_pending',
@@ -3938,8 +3966,9 @@ interface RunLayersContext {
   nodeOutputs: Map<string, NodeOutput>;
   /** Resume cache: node ids that completed in a prior run (top-level only; undefined for body). */
   priorCompletedNodes?: Map<string, string>;
-  /** Sequential-session threading cursor (mutated by runLayers). */
-  lastSequentialSessionId: string | undefined;
+  /** Sequential-session threading cursor (mutated by runLayers). Provider-tagged so the
+   *  session is only threaded into nodes that resolve to the SAME provider (#1992). */
+  lastSequentialSession: SequentialSessionCursor | undefined;
   /** Run-level usage accumulators (mutated by runLayers; caller reads after). */
   totalCostUsd: number;
   totalTokensIn: number;
@@ -3993,19 +4022,22 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
     stepNamePrefix,
     iteration,
   } = ctx;
-  // nodeOutputs + accumulators + lastSequentialSessionId are mutated in place on `ctx`.
+  // nodeOutputs + accumulators + lastSequentialSession are mutated in place on `ctx`.
 
   for (let layerIdx = 0; layerIdx < layers.length; layerIdx++) {
     const layer = layers[layerIdx];
     const isParallelLayer = layer.length > 1;
 
     if (isParallelLayer) {
-      ctx.lastSequentialSessionId = undefined; // reset — parallel nodes can't share sessions
+      ctx.lastSequentialSession = undefined; // reset — parallel nodes can't share sessions
     }
 
-    // Execute all nodes in the layer concurrently
+    // Execute all nodes in the layer concurrently. `sessionProvider` is the resolved
+    // provider that produced `output.sessionId` — set only by the session-producing
+    // dispatch paths (AI command/prompt nodes and loop nodes) so the cursor write
+    // below can tag the session with its owner (#1992).
     const layerResults = await Promise.allSettled(
-      layer.map(async (node): Promise<{ nodeId: string; output: NodeExecutionResult }> => {
+      layer.map(async (node): Promise<LayerNodeResult> => {
         try {
           // 0. Skip if this node completed successfully in a prior run (resume path).
           // `always_run: true` opts the node out of resume caching — re-execute even
@@ -4252,7 +4284,10 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               issueContext,
               stepNamePrefix
             );
-            return { nodeId: node.id, output };
+            // Loop nodes run every iteration on the same resolved provider, so the
+            // result session (if any) is attributable to loopProvider — tag it so a
+            // downstream sequential node on a different provider starts fresh (#1992).
+            return { nodeId: node.id, output, sessionProvider: loopProvider };
           }
 
           // 3b'. Loop-group node dispatch — manages its own subgraph iteration
@@ -4414,11 +4449,23 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
           // 5. Determine session — parallel or context:fresh → always fresh
           // Parallel layers always get fresh sessions; explicit 'fresh' context also forces it.
           // 'shared' forces continuation. Default: fresh for parallel, inherited for sequential.
-          // isFreshSequential controls in-run threading (lastSequentialSessionId).
+          // isFreshSequential controls in-run threading (lastSequentialSession).
+          // Cross-provider guard (#1992): a session id can only be resumed by the provider
+          // that created it, so the cursor is threaded only into nodes that resolve to the
+          // SAME provider — on a provider change the node starts fresh instead of failing
+          // (Claude) or silently cold-falling-back (Codex) on a foreign session id.
           const isFreshSequential = isParallelLayer || node.context === 'fresh';
+          const cursor = ctx.lastSequentialSession;
+          const sameProviderCursor = cursor?.provider === provider ? cursor : undefined;
           let resumeSessionId: string | undefined = isFreshSequential
             ? undefined
-            : ctx.lastSequentialSessionId;
+            : sameProviderCursor?.sessionId;
+          if (!isFreshSequential && cursor !== undefined && sameProviderCursor === undefined) {
+            getLog().info(
+              { nodeId: node.id, provider, cursorProvider: cursor.provider },
+              'dag.session_provider_boundary_fresh'
+            );
+          }
 
           // Strictly opt-in: on only when the node sets persist_session (or inherits the
           // workflow-level persist_sessions default) and doesn't opt out via context:'fresh'.
@@ -4624,7 +4671,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
             }
           }
 
-          return { nodeId: node.id, output };
+          return { nodeId: node.id, output, sessionProvider: provider };
         } catch (error) {
           const err = error as Error;
           getLog().error({ err, nodeId: node.id }, 'dag_node_pre_execution_failed');
@@ -4664,7 +4711,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
     let layerHadFailure = false;
     for (const result of layerResults) {
       if (result.status === 'fulfilled') {
-        const { nodeId, output } = result.value;
+        const { nodeId, output, sessionProvider } = result.value;
         // SINGLE aggregation point for run-level usage telemetry. Per-node
         // cost/tokens must be summed here and ONLY here — adding a per-node
         // telemetry capture elsewhere would double-count against the totals
@@ -4723,7 +4770,13 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
           }
         }
         if (output.state === 'completed' && !isParallelLayer && output.sessionId !== undefined) {
-          ctx.lastSequentialSessionId = output.sessionId;
+          // Tag the cursor with the provider that created the session (#1992). A session
+          // id from a path that can't attest its provider is never threaded — fail-safe:
+          // a fresh downstream session beats a guaranteed-broken cross-provider resume.
+          ctx.lastSequentialSession =
+            sessionProvider !== undefined
+              ? { sessionId: output.sessionId, provider: sessionProvider }
+              : undefined;
         }
         if (output.state === 'failed') layerHadFailure = true;
       } else {
@@ -4887,7 +4940,7 @@ export async function executeDagWorkflow(
   const workflowPersistSessions = workflow.persist_sessions === true;
 
   // Run the topological layers. runLayers mutates the context's mutable fields in place
-  // (nodeOutputs, lastSequentialSessionId, usage accumulators); we read them back below
+  // (nodeOutputs, lastSequentialSession, usage accumulators); we read them back below
   // for the terminal tally. stepNamePrefix is '' for the top-level DAG so node event
   // step_names are the raw node ids (identical to pre-refactor behavior).
   const runCtx: RunLayersContext = {
@@ -4917,7 +4970,7 @@ export async function executeDagWorkflow(
     layers,
     nodeOutputs,
     priorCompletedNodes,
-    lastSequentialSessionId: undefined,
+    lastSequentialSession: undefined,
     totalCostUsd: 0,
     totalTokensIn: 0,
     totalTokensOut: 0,
