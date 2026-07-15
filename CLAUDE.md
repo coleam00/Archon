@@ -94,6 +94,15 @@ These are implementation constraints, not slogans. Apply them by default.
 - Heuristics for *recoverable* operations (retry backoff, subprocess timeouts, hygiene cleanup of terminal-status data) remain appropriate; the rule is about destructive mutation of *non-terminal* state owned by an unknowable other party.
 - Reference: #1216 and the CLI orphan-cleanup precedent at `packages/cli/src/cli.ts:256-258`.
 
+**Workflow Language Constitution — YAML coordinates, code computes, agents judge**
+- The workflow YAML expresses only what the ENGINE must see to govern a run: ordering, gates, joins, retries, sessions, artifacts, reusable structure. Computation belongs in `bash:`/`script:` nodes; judgment belongs in prompts. This boundary is what keeps load-time validation, the visual builder, resume, and audit trails possible.
+- Admissibility test for every new YAML surface feature (field, node type, expression capability): (1) does the engine need to see it to govern? (2) is it declarative data, not evaluation? (3) could a script node + existing wiring express it today? A feature that computes rather than coordinates is rejected — point to the escape hatch instead.
+- `when:` never grows incrementally (no parens, no functions, no arithmetic). The answer to "when: can't express X" is a script node that computes the decision + `when:` on its structured output. If expression demand ever genuinely accumulates, adopt CEL wholesale in one versioned change — never home-grow operators.
+- Composition features must resolve fully at LOAD time (the executor runs a flat static DAG); include parameterization, if ever added, is data-only. Runtime-resolved structure = a sub-run (its own governance object), not a language feature.
+- New per-provider capabilities default to provider config / tier-alias presets, not new node fields; capability mismatches warn loudly (capabilities.ts is the source of truth).
+- Implicit behaviors need the same scrutiny as new fields: documented, individually defeatable, fail-safe — or not added.
+- Full rationale, case law, and the five failure smells: `packages/docs-web/src/content/docs/reference/workflow-language-constitution.md` (archon.diy/reference/workflow-language-constitution/). Cite it in `feat(workflows)` PRs touching the YAML surface.
+
 **Determinism + Reproducibility**
 - Prefer reproducible commands and locked dependency behavior in CI-sensitive paths
 - Keep tests deterministic — no flaky timing or network dependence without guardrails
