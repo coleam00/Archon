@@ -164,7 +164,10 @@ export async function approveWorkflow(
     );
   }
 
-  const approvalComment = comment ?? 'Approved';
+  // Whitespace-only comments count as absent (mirrors feedbackProvided below):
+  // HTTP/CLI/chat pass the raw comment through since #2074, so '   ' would
+  // otherwise be recorded verbatim where the documented default is 'Approved'.
+  const approvalComment = comment !== undefined && comment.trim().length > 0 ? comment : 'Approved';
 
   try {
     // Interactive loop gate — store user input in metadata for the next iteration.

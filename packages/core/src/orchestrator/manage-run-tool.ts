@@ -85,10 +85,14 @@ const INPUT_SCHEMA: Record<string, unknown> = {
       description:
         'Required (true) to actually perform a destructive action (cancel/abandon/approve/reject). Omit first to get a preview.',
     },
+    // accept deliberately WINS over a simultaneous message (the message is
+    // discarded, not recorded): an agent that reflexively attaches a comment to
+    // every approve must still be able to force finalize — that footgun is the
+    // reason this arg exists (#2074).
     accept: {
       type: 'boolean',
       description:
-        'For action=approve on an interactive-loop gate with completionSignaled=true: accept=true finalizes the node from the already-computed output WITHOUT re-running, regardless of any message. Omit and pass message=<feedback> to run another iteration instead.',
+        'For action=approve on an interactive-loop gate with completionSignaled=true: accept=true finalizes the node from the already-computed output WITHOUT re-running, regardless of any message (a simultaneous message is discarded, not recorded). Omit and pass message=<feedback> to run another iteration instead.',
     },
   },
   required: ['action'],
@@ -290,6 +294,10 @@ async function handleWrite(
   if (typeof run === 'string') return run; // not found / wrong project
 
   const message = typeof input.message === 'string' ? input.message.trim() : '';
+  // Single finalize-vs-iterate predicate for approve (#2074): accept=true or an
+  // empty message means no feedback reaches the gate — used by both the confirm
+  // preview and the write path so they can never disagree.
+  const willFinalize = input.accept === true || message === '';
 
   // Destructive actions need explicit confirmation. Without it, preview only.
   if (DESTRUCTIVE_ACTIONS.has(action) && input.confirm !== true) {
@@ -308,10 +316,9 @@ async function handleWrite(
       approvalMeta.type === 'interactive_loop' &&
       approvalMeta.completionSignaled === true
     ) {
-      effect =
-        input.accept === true || message === ''
-          ? ' This gate has completionSignaled=true and your args would FINALIZE the node from the already-computed output (no re-run).'
-          : ' This gate has completionSignaled=true and your message would run ANOTHER iteration (pass accept:true or drop the message to finalize instead).';
+      effect = willFinalize
+        ? ' This gate has completionSignaled=true and your args would FINALIZE the node from the already-computed output (no re-run).'
+        : ' This gate has completionSignaled=true and your message would run ANOTHER iteration (pass accept:true or drop the message to finalize instead).';
     }
     return (
       `⚠️ This will ${action} ${subject}.${effect} ` +
@@ -341,7 +348,7 @@ async function handleWrite(
     case 'approve': {
       // accept=true forces the finalize path (#2074): no feedback reaches the gate,
       // so a signal-bearing loop completes from its persisted output on resume.
-      const feedback = input.accept === true || message.length === 0 ? undefined : message;
+      const feedback = willFinalize ? undefined : message;
       const result = await approveWorkflow(id, feedback);
       if (result.type !== 'interactive_loop') {
         return `Approved ${result.workflowName} (${id.slice(0, 8)}). The run is now set to resume.`;

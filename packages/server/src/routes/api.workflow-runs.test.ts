@@ -1444,6 +1444,33 @@ describe('POST /api/workflows/runs/:runId/approve', () => {
     });
   });
 
+  test('returns 400 (not a silent bare approve) when the body is sent but malformed (#2074)', async () => {
+    mockGetWorkflowRun.mockResolvedValue({
+      ...MOCK_PAUSED_RUN,
+      id: 'run-bad-body',
+      metadata: {
+        approval: {
+          type: 'interactive_loop',
+          nodeId: 'refine',
+          message: 'gate',
+          iteration: 1,
+          completionSignaled: true,
+          signaledOutput: 'REPORT',
+        },
+      },
+    });
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-bad-body/approve', {
+      method: 'POST',
+      body: '{"comment": "intended feedback', // truncated JSON — client bug
+      headers: { 'Content-Type': 'application/json' },
+    });
+    // A malformed body must never be coerced into a bare approve — that would
+    // FINALIZE a signal-bearing gate while silently discarding the feedback.
+    expect(response.status).toBe(400);
+    expect(mockUpdateWorkflowRun).not.toHaveBeenCalled();
+  });
+
   test('passes a provided comment through as feedback on an interactive_loop gate (#2074)', async () => {
     mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_PAUSED_RUN,

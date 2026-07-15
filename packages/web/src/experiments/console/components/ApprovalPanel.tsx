@@ -153,7 +153,11 @@ export function ApprovalPanel({ run }: ApprovalPanelProps): ReactElement {
             onClick={() => void approve()}
             disabled={busy}
             className="flex shrink-0 items-center gap-1 rounded border border-success/40 bg-success/15 px-3 text-[12px] font-medium text-success transition-colors hover:bg-success/25 disabled:opacity-50"
-            title={signalBearing ? 'Accept & complete · Enter' : 'Continue · Enter'}
+            title={
+              signalBearing && comment.trim().length === 0
+                ? 'Accept & complete · Enter'
+                : 'Continue · Enter'
+            }
           >
             {signalBearing && comment.trim().length === 0 ? 'Accept & complete' : 'Continue'}
             <span aria-hidden className="font-mono text-[10px] opacity-70">

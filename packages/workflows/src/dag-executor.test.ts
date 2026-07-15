@@ -5559,6 +5559,66 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(mockSendQueryDag.mock.calls.length).toBe(1);
     });
 
+    it('LEGACY: resume with pre-#2074 approval metadata (no completionSignaled/signaledOutput keys) iterates', async () => {
+      // Rows paused before #2074 have neither key in metadata.approval and no
+      // loop_feedback_given — the finalize path must NOT trigger; the loop runs
+      // a normal resumed iteration exactly as before.
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: 'Legacy pass. <promise>APPROVED</promise>' };
+        yield { type: 'result', sessionId: 'legacy-session-2' };
+      });
+
+      const mockDeps = createMockDeps();
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun('legacy-resume-run', {
+        metadata: {
+          approval: {
+            type: 'interactive_loop',
+            nodeId: 'refine',
+            iteration: 1,
+            sessionId: 'legacy-session-1',
+            message: 'Review and provide feedback.',
+          },
+          loop_user_input: 'approved',
+        },
+      });
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        {
+          name: 'legacy-loop-resume',
+          nodes: [
+            {
+              id: 'refine',
+              loop: {
+                prompt: 'User said: $LOOP_USER_INPUT. Refine.',
+                until: 'APPROVED',
+                max_iterations: 10,
+                interactive: true,
+                gate_message: 'Review and provide feedback.',
+              },
+            },
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      // A real iteration ran (no zero-duration finalize short-circuit).
+      expect(mockSendQueryDag.mock.calls.length).toBe(1);
+      const promptArg = mockSendQueryDag.mock.calls[0][0] as string;
+      expect(promptArg).toContain('approved');
+    });
+
     it('loop iteration fails loudly when SDK returns error_during_execution', async () => {
       // Regression test for #1208: previously the loop silently broke on isError
       // results and kept iterating with empty output, producing "5-second crashes"

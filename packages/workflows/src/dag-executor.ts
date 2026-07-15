@@ -2476,6 +2476,15 @@ async function finalizeLoopFromSignal(
   nodeLabel: string,
   finalizeOutput: string
 ): Promise<void> {
+  // Impossible by construction today (the gate writes signaledOutput whenever
+  // completionSignaled is true) — this warn guards a future decoupling so a
+  // finalize that silently loses the iteration output is diagnosable.
+  if (finalizeOutput === '') {
+    getLog().warn(
+      { workflowRunId: workflowRun.id, nodeId },
+      'loop_node.finalize_missing_signaled_output'
+    );
+  }
   await safeSendMessage(
     platform,
     conversationId,
@@ -3716,12 +3725,11 @@ async function executeLoopNode(
       };
     }
 
-    // Interactive loop gate — pause after every iteration where the AI did NOT emit the
-    // completion signal. The user reviews the AI's output and provides feedback or approval.
-    // On approval, the AI will emit the signal in the next iteration, exiting above.
-    // A signal-bearing iteration reaches this gate ONLY when interactiveFirstRun &&
-    // !signalCompletes — the honest status line + persisted signal state (#2074) let
-    // the approver finalize with a bare approve instead of re-running.
+    // Interactive loop gate — pause after an iteration that did not complete (or, when
+    // interactiveFirstRun && !signalCompletes, an iteration that DID signal — the honest
+    // status line + persisted signal state (#2074) let a bare approve finalize it).
+    // On a non-signaled gate, the user's feedback feeds the next iteration, which exits
+    // above once the AI emits the signal.
     if (loop.interactive && loop.gate_message) {
       const honestMessage = buildHonestGateMessage(
         completionDetected,

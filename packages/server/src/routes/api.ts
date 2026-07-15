@@ -3247,7 +3247,24 @@ export function registerApiRoutes(
           `Workflow run was already ${String(approval.resolved)} — resume in progress`
         );
       }
-      const body = (await c.req.json().catch(() => ({}))) as { comment?: string };
+      // Distinguish "no body sent" (legitimate bare approve) from "body sent but
+      // unparseable" (client bug). Since #2074 a bare approve FINALIZES a
+      // signal-bearing loop gate, so silently coercing a malformed body to {}
+      // would discard intended feedback and finalize undiagnosed — reject it.
+      const rawBody = await c.req.text();
+      let body: { comment?: string } = {};
+      if (rawBody.trim().length > 0) {
+        try {
+          body = JSON.parse(rawBody) as { comment?: string };
+        } catch (parseError) {
+          getLog().warn({ err: parseError, runId }, 'api.approve_body_parse_failed');
+          return apiError(
+            c,
+            400,
+            'Request body is not valid JSON — send {"comment": "..."} or no body'
+          );
+        }
+      }
       // Shared gate logic (events, telemetry, metadata staging) — the run stays
       // 'paused' with metadata.approval.resolved = 'approved' (#2075). The
       // pre-checks above map the common error cases to 400s; approveWorkflow
@@ -3298,7 +3315,22 @@ export function registerApiRoutes(
           `Workflow run was already ${String(approval.resolved)} — resume in progress`
         );
       }
-      const body = (await c.req.json().catch(() => ({}))) as { reason?: string };
+      // Mirror of the approve route's malformed-body guard: a swallowed parse
+      // failure would silently drop the reviewer's reason.
+      const rawBody = await c.req.text();
+      let body: { reason?: string } = {};
+      if (rawBody.trim().length > 0) {
+        try {
+          body = JSON.parse(rawBody) as { reason?: string };
+        } catch (parseError) {
+          getLog().warn({ err: parseError, runId }, 'api.reject_body_parse_failed');
+          return apiError(
+            c,
+            400,
+            'Request body is not valid JSON — send {"reason": "..."} or no body'
+          );
+        }
+      }
       const reason = body.reason ?? 'Rejected';
       // Shared gate logic (events, telemetry, staging/cancel decision). When an
       // on_reject rework is staged the run stays 'paused' with

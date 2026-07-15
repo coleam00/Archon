@@ -224,6 +224,9 @@ describe('approveWorkflow', () => {
       metadata: Record<string, unknown>;
     };
     expect(updateArg.metadata.loop_feedback_given).toBe(false);
+    // Whitespace-only also gets the documented recorded-comment default —
+    // '   ' must never be stored verbatim as $LOOP_USER_INPUT.
+    expect(updateArg.metadata.loop_user_input).toBe('Approved');
   });
 
   test('throws on already-resolved gate (double-approve guard)', async () => {
