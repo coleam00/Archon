@@ -402,7 +402,32 @@ export type CancelNode = z.infer<typeof cancelNodeSchema> & {
   script?: never;
 };
 
-/** A single node in a DAG workflow. command, prompt, bash, loop, loop_group, approval, cancel, and script are mutually exclusive. */
+/**
+ * Include node schema — a load-time directive that inlines another workflow's
+ * nodes into this DAG at discovery time (see include-expander.ts). It carries no
+ * execution surface of its own: `include` is the target workflow name, and only
+ * the structural graph fields (id / depends_on / when / trigger_rule) are read by
+ * the expander. By the time a WorkflowDefinition reaches the executor, every
+ * include node has been replaced by its flattened, namespaced sub-DAG — the
+ * executor never sees one.
+ */
+export const includeNodeSchema = dagNodeBaseSchema.extend({
+  include: z.string().min(1, "'include' must be a non-empty workflow name"),
+});
+
+/** DAG node that inlines another workflow's nodes at discovery time (load-time expansion) */
+export type IncludeNode = z.infer<typeof includeNodeSchema> & {
+  command?: never;
+  prompt?: never;
+  bash?: never;
+  loop?: never;
+  loop_group?: never;
+  approval?: never;
+  cancel?: never;
+  script?: never;
+};
+
+/** A single node in a DAG workflow. command, prompt, bash, loop, loop_group, approval, cancel, script, and include are mutually exclusive. */
 export type DagNode =
   | CommandNode
   | PromptNode
@@ -411,7 +436,8 @@ export type DagNode =
   | LoopGroupNode
   | ApprovalNode
   | CancelNode
-  | ScriptNode;
+  | ScriptNode
+  | IncludeNode;
 
 // ---------------------------------------------------------------------------
 // AI-specific fields that are meaningless on non-AI nodes
@@ -458,6 +484,23 @@ export const LOOP_NODE_AI_FIELDS: readonly string[] = BASH_NODE_AI_FIELDS.filter
  */
 export const LOOP_GROUP_NODE_AI_FIELDS: readonly string[] = LOOP_NODE_AI_FIELDS;
 
+/**
+ * Fields that are meaningless on an include node — it inlines another workflow's
+ * nodes at load time and executes nothing itself, so every AI/exec field is
+ * ignored (the inlined child nodes carry their own). A superset of
+ * `BASH_NODE_AI_FIELDS` plus the remaining execution-only fields. The structural
+ * graph fields the include node DOES use (id / depends_on / when / trigger_rule /
+ * description) are deliberately absent.
+ */
+export const INCLUDE_NODE_IGNORED_FIELDS: readonly string[] = [
+  ...BASH_NODE_AI_FIELDS,
+  'retry',
+  'output_type',
+  'always_run',
+  'idle_timeout',
+  'timeout',
+];
+
 // ---------------------------------------------------------------------------
 // dagNodeSchema — flat validation schema with transform to DagNode
 // ---------------------------------------------------------------------------
@@ -493,6 +536,11 @@ export const dagNodeSchema = dagNodeBaseSchema
       })
       .optional(),
     cancel: z.string().optional(),
+    // Load-time inlining directive — the target workflow name.
+    include: z.string().min(1, "'include' must be a non-empty workflow name").optional(),
+    // Reserved for Phase 1b input mapping. Present only so the superRefine below can
+    // fail fast when it appears on an include node ("not yet supported").
+    with: z.unknown().optional(),
     // Script-only
     script: z.string().optional(),
     runtime: z.enum(['bun', 'uv']).optional(),
@@ -521,6 +569,7 @@ export const dagNodeSchema = dagNodeBaseSchema
     const hasApproval = data.approval !== undefined;
     const hasCancel = typeof data.cancel === 'string' && data.cancel.trim().length > 0;
     const hasScript = typeof data.script === 'string' && data.script.trim().length > 0;
+    const hasInclude = typeof data.include === 'string' && data.include.trim().length > 0;
 
     const modeCount = [
       hasCommand,
@@ -531,16 +580,30 @@ export const dagNodeSchema = dagNodeBaseSchema
       hasApproval,
       hasCancel,
       hasScript,
+      hasInclude,
     ].filter(Boolean).length;
 
     if (modeCount > 1) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
-          "'command', 'prompt', 'bash', 'loop', 'loop_group', 'approval', 'cancel', and 'script' are mutually exclusive",
+          "'command', 'prompt', 'bash', 'loop', 'loop_group', 'approval', 'cancel', 'script', and 'include' are mutually exclusive",
       });
       return z.NEVER;
     }
+
+    // 'with:' input mapping is deferred to Phase 1b — reject it now with a clear
+    // message rather than silently dropping it (fail-fast). Only meaningful on an
+    // include node; on other node types 'with' is an unknown field and is stripped.
+    if (hasInclude && data.with !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "'with:' input mapping is not yet supported on include nodes (Phase 1). Remove it.",
+        path: ['with'],
+      });
+    }
+
     if (modeCount === 0) {
       if (typeof data.bash === 'string') {
         ctx.addIssue({
@@ -569,7 +632,7 @@ export const dagNodeSchema = dagNodeBaseSchema
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
-          "must have either 'command', 'prompt', 'bash', 'loop', 'loop_group', 'approval', 'cancel', or 'script'",
+          "must have either 'command', 'prompt', 'bash', 'loop', 'loop_group', 'approval', 'cancel', 'script', or 'include'",
       });
       return z.NEVER;
     }
@@ -719,6 +782,23 @@ export const dagNodeSchema = dagNodeBaseSchema
     if (data.cancel !== undefined && data.cancel.trim().length > 0) {
       return { ...base, ...shared, cancel: data.cancel.trim() } as CancelNode;
     }
+    if (data.include !== undefined && data.include.trim().length > 0) {
+      // An include node is a load-time directive, not an executable node. It carries
+      // ONLY structural graph fields (id / depends_on / when / trigger_rule / description)
+      // — the expander reads those to attach the sub-DAG. aiOnly / shared (retry) and the
+      // exec-only base fields (always_run / output_type / idle_timeout) are intentionally
+      // dropped; the loader warns about them via INCLUDE_NODE_IGNORED_FIELDS.
+      return {
+        id,
+        ...(data.description !== undefined ? { description: data.description } : {}),
+        ...(data.depends_on !== undefined && data.depends_on.length > 0
+          ? { depends_on: data.depends_on }
+          : {}),
+        ...(data.when !== undefined ? { when: data.when } : {}),
+        ...(data.trigger_rule !== undefined ? { trigger_rule: data.trigger_rule } : {}),
+        include: data.include.trim(),
+      } as IncludeNode;
+    }
     // loop_group — guaranteed by superRefine to be defined at this point.
     // Spread aiOnly so group-level model/provider survive parsing — the executor forwards
     // them to body AI nodes unless overridden per-node ('loop:' historically drops them at
@@ -768,6 +848,11 @@ export function isScriptNode(node: DagNode): node is ScriptNode {
   return 'script' in node && typeof node.script === 'string';
 }
 
+/** Type guard: check if a DAG node is an include (load-time inlining) node */
+export function isIncludeNode(node: DagNode): node is IncludeNode {
+  return 'include' in node && typeof node.include === 'string';
+}
+
 /** Type guard: validates a value is a known TriggerRule */
 export function isTriggerRule(value: unknown): value is TriggerRule {
   return typeof value === 'string' && (TRIGGER_RULES as readonly string[]).includes(value);
@@ -788,6 +873,7 @@ export function isPersistableNode(node: DagNode): boolean {
     !isApprovalNode(node) &&
     !isCancelNode(node) &&
     !isScriptNode(node) &&
-    !isBashNode(node)
+    !isBashNode(node) &&
+    !isIncludeNode(node)
   );
 }

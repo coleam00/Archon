@@ -8,6 +8,7 @@ import {
   isApprovalNode,
   isCancelNode,
   isScriptNode,
+  isIncludeNode,
   isPersistableNode,
 } from './schemas';
 import { createLogger } from '@archon/paths';
@@ -22,6 +23,7 @@ import {
   SCRIPT_NODE_AI_FIELDS,
   LOOP_NODE_AI_FIELDS,
   LOOP_GROUP_NODE_AI_FIELDS,
+  INCLUDE_NODE_IGNORED_FIELDS,
   effortLevelSchema,
   thinkingConfigSchema,
   sandboxSettingsSchema,
@@ -109,6 +111,8 @@ function parseDagNode(raw: unknown, index: number, errors: string[]): DagNode | 
   let nonAiNode: { type: string; fields: readonly string[] } | undefined;
   if (isCancelNode(node)) {
     nonAiNode = { type: 'cancel', fields: BASH_NODE_AI_FIELDS };
+  } else if (isIncludeNode(node)) {
+    nonAiNode = { type: 'include', fields: INCLUDE_NODE_IGNORED_FIELDS };
   } else if (isApprovalNode(node)) {
     nonAiNode = { type: 'approval', fields: BASH_NODE_AI_FIELDS };
   } else if (isLoopNode(node)) {
@@ -139,8 +143,15 @@ function parseDagNode(raw: unknown, index: number, errors: string[]): DagNode | 
  * Validate DAG structure: unique IDs, depends_on references exist, no cycles,
  * and $nodeId.output refs in when:/prompt: fields point to known nodes.
  * Returns error message or null if valid.
+ *
+ * Exported so the include-expander can re-run the same structural checks on the
+ * fully-flattened, namespaced node list after inlining (duplicate-id collisions,
+ * cycles introduced by rewired edges, unknown deps).
  */
-function validateDagStructure(nodes: DagNode[], enclosingIds?: ReadonlySet<string>): string | null {
+export function validateDagStructure(
+  nodes: DagNode[],
+  enclosingIds?: ReadonlySet<string>
+): string | null {
   // Check ID uniqueness
   const ids = new Set<string>();
   for (const node of nodes) {
@@ -241,6 +252,13 @@ function validateDagStructure(nodes: DagNode[], enclosingIds?: ReadonlySet<strin
   // list and treat each loop_group as one outer node.
   for (const node of nodes) {
     if (isLoopGroupNode(node)) {
+      // `include` inside a loop_group body is rejected in v1 (bounds the interaction
+      // surface — see the plan's NOT Building). An include is a load-time inlining
+      // directive; nesting it inside a per-iteration sub-DAG body is not yet supported.
+      const includeInBody = node.loop_group.nodes.find(isIncludeNode);
+      if (includeInBody) {
+        return `loop_group '${node.id}' body: 'include' is not supported inside a loop_group body`;
+      }
       const scopeIds = new Set([...(enclosingIds ?? []), ...ids]);
       const bodyError = validateDagStructure(node.loop_group.nodes, scopeIds);
       if (bodyError) {

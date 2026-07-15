@@ -28,6 +28,7 @@ import * as archonPaths from '@archon/paths';
 import { BUNDLED_WORKFLOWS, isBinaryBuild } from './defaults/bundled-defaults';
 import { createLogger } from '@archon/paths';
 import { parseWorkflow } from './loader';
+import { expandWorkflowIncludes } from './include-expander';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -210,6 +211,31 @@ export async function discoverWorkflows(
   const workflowsByFile = new Map<string, WorkflowWithSource>();
   const allErrors: WorkflowLoadError[] = [];
 
+  /**
+   * Final discovery step: inline every `include:` node (see include-expander.ts).
+   * Resolves include targets against the full name map (bundled < global < project
+   * precedence already applied to `workflowsByFile`), then swaps each workflow for
+   * its flattened, namespaced form. A workflow that fails to expand is dropped and
+   * its error surfaced via `allErrors`. Only `.workflow` changes — `source` is kept.
+   */
+  const expandIncludes = (): WorkflowWithSource[] => {
+    const rawByName = new Map<string, WorkflowDefinition>();
+    for (const { workflow } of workflowsByFile.values()) {
+      rawByName.set(workflow.name, workflow);
+    }
+    const { workflows: expandedByName, errors: expansionErrors } =
+      expandWorkflowIncludes(rawByName);
+    allErrors.push(...expansionErrors);
+
+    const result: WorkflowWithSource[] = [];
+    for (const { workflow, source } of workflowsByFile.values()) {
+      const expanded = expandedByName.get(workflow.name);
+      if (!expanded) continue; // expansion failed for this workflow — drop it
+      result.push({ workflow: expanded, source });
+    }
+    return result;
+  };
+
   // 1. Load from app's bundled defaults (unless opted out)
   const loadDefaultWorkflows = options?.loadDefaults !== false;
   if (loadDefaultWorkflows) {
@@ -280,7 +306,7 @@ export async function discoverWorkflows(
   // Skipped when cwd is null — surfaces bundled + home scopes only, which is the right answer
   // for callers without a project context (e.g. UI listing workflows before any codebase is registered).
   if (cwd === null) {
-    const workflows = Array.from(workflowsByFile.values());
+    const workflows = expandIncludes();
     getLog().info(
       { count: workflows.length, errorCount: allErrors.length, scope: 'no_project_context' },
       'workflows_discovery_completed'
@@ -352,7 +378,7 @@ export async function discoverWorkflows(
     getLog().debug({ workflowPath }, 'workflow_folder_not_found');
   }
 
-  const workflows = Array.from(workflowsByFile.values());
+  const workflows = expandIncludes();
   getLog().info(
     { count: workflows.length, errorCount: allErrors.length },
     'workflows_discovery_completed'

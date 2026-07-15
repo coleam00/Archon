@@ -52,6 +52,7 @@ import {
   isApprovalNode,
   isCancelNode,
   isScriptNode,
+  isIncludeNode,
   isPersistableNode,
   isApprovalContext,
 } from './schemas';
@@ -4432,6 +4433,16 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                 )
             );
             return { nodeId: node.id, output };
+          }
+
+          if (isIncludeNode(node)) {
+            // Include nodes are expanded away at discovery time (include-expander.ts):
+            // one must never reach the executor. If it does, discovery was bypassed —
+            // fail loud rather than silently mis-running it as a prompt node.
+            throw new Error(
+              `Internal error: include node '${node.id}' reached the executor unexpanded. ` +
+                'Include nodes must be resolved by expandWorkflowIncludes() during discovery.'
+            );
           }
 
           // 4. Resolve per-node provider/model/options

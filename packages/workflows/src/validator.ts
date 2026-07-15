@@ -30,7 +30,7 @@ function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('workflow.validator');
   return cachedLog;
 }
-import { isBashNode, isLoopNode, isLoopGroupNode, isScriptNode } from './schemas';
+import { isBashNode, isLoopNode, isLoopGroupNode, isScriptNode, isIncludeNode } from './schemas';
 import type { WorkflowDefinition, DagNode, WorkflowSource } from './schemas';
 import type { ScriptRuntime } from './script-discovery';
 import { discoverScriptsForCwd } from './script-discovery';
@@ -385,6 +385,13 @@ export async function validateWorkflowResources(
   collectNodes(workflow.nodes);
 
   for (const node of allNodes) {
+    // Include nodes carry no resources to check — the target workflow is resolved and
+    // inlined at DISCOVERY time (see include-expander.ts). Discovery-fed validation
+    // (CLI `validate workflows`) therefore sees the already-expanded nodes and checks
+    // their commands/mcp/skills normally; only the raw `POST /api/workflows/validate`
+    // path reaches an unexpanded include node, and it cannot resolve the target here.
+    if (isIncludeNode(node)) continue;
+
     const provider = resolveProvider(node, workflow.provider, defaultProvider);
 
     if (requiresPortableModelRefs && 'model' in node && node.model?.startsWith('@')) {
