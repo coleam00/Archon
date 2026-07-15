@@ -39,10 +39,11 @@ nodes:
 
   - id: fetch-issue
     bash: |
-      # Strip quotes, whitespace, markdown backticks from AI output
-      ISSUE_NUM=$(echo "$extract-issue-number.output" | tr -d "'\"\`\n " | grep -oE '[0-9]+' | head -1)
+      # $extract-issue-number.output is injected pre-quoted by Archon — do NOT
+      # wrap it in double quotes (that corrupts the value; see issue #1884).
+      ISSUE_NUM=$(echo $extract-issue-number.output | grep -oE '[0-9]+' | head -1)
       if [ -z "$ISSUE_NUM" ]; then
-        echo "Failed to extract issue number from: $extract-issue-number.output" >&2
+        echo "Failed to extract issue number from:" $extract-issue-number.output >&2
         exit 1
       fi
       gh issue view "$ISSUE_NUM" --json title,body,labels,comments,state,url,author

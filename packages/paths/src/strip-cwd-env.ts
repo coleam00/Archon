@@ -97,4 +97,15 @@ export function stripCwdEnv(cwd: string = process.cwd()): void {
   // See: https://github.com/anthropics/claude-code/issues/4619
   Reflect.deleteProperty(process.env, 'NODE_OPTIONS');
   Reflect.deleteProperty(process.env, 'VSCODE_INSPECTOR_OPTIONS');
+  // Bun inspector vars (BUN_INSPECT, BUN_INSPECT_NOTIFY, ...) injected by IDE
+  // debuggers (e.g. PyCharm's Bun plugin) make every spawned bun subprocess try
+  // to bind the parent's debug socket → EADDRINUSE crash loop (see #2030).
+  // Bun read these before user code ran, so deleting them here never detaches
+  // the CURRENT process from its debugger — it only stops the leak into children.
+  // Pattern-matched so future BUN_INSPECT_* additions are covered too.
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith('BUN_INSPECT')) {
+      Reflect.deleteProperty(process.env, key);
+    }
+  }
 }

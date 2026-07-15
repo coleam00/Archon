@@ -857,6 +857,32 @@ nodes:
       expect(workflows[0].nodes[0].always_run).toBe(true);
       expect(workflows[0].nodes[1].always_run).toBeUndefined();
     });
+
+    it('preserves an optional description on a node', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      const yaml = `name: node-description-test
+description: Node-level description is kept, not stripped
+nodes:
+  - id: documented
+    bash: 'echo hi'
+    description: Runs the full security gate against the target repo
+  - id: undocumented
+    bash: 'echo bye'
+    depends_on: [documented]
+`;
+      await writeFile(join(workflowDir, 'node-description.yaml'), yaml);
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      const workflows = result.workflows.map(ws => ws.workflow);
+
+      expect(workflows).toHaveLength(1);
+      expect(workflows[0].nodes[0].description).toBe(
+        'Runs the full security gate against the target repo'
+      );
+      expect(workflows[0].nodes[1].description).toBeUndefined();
+    });
   });
 
   describe('multi-source loading', () => {
