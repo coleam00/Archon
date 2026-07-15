@@ -2845,6 +2845,127 @@ nodes:
   });
 
   // -------------------------------------------------------------------------
+  // Include nodes (load-time inlining)
+  // -------------------------------------------------------------------------
+  describe('include nodes', () => {
+    it('should load and expand a workflow with an include node', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'block.yaml'),
+        `
+name: block
+description: Reusable building block
+nodes:
+  - id: first
+    prompt: "first"
+  - id: second
+    prompt: "second"
+    depends_on: [first]
+`
+      );
+      await writeFile(
+        join(workflowDir, 'parent.yaml'),
+        `
+name: parent
+description: Includes the block
+nodes:
+  - id: setup
+    bash: "echo setup"
+  - id: sub
+    include: block
+    depends_on: [setup]
+  - id: finish
+    prompt: "finish"
+    depends_on: [sub]
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      const parentErrors = result.errors.filter(e => e.filename === 'parent.yaml');
+      expect(parentErrors).toHaveLength(0);
+
+      const parent = result.workflows.find(w => w.workflow.name === 'parent');
+      expect(parent).toBeDefined();
+      const ids = parent!.workflow.nodes.map(n => n.id);
+      // include node is gone; block nodes are namespaced under the include id.
+      expect(ids).toContain('sub__first');
+      expect(ids).toContain('sub__second');
+      expect(ids).not.toContain('sub');
+      expect(parent!.workflow.nodes.some(n => 'include' in n)).toBe(false);
+
+      // Entry node (block's `first`) inherits the include node's upstream dep.
+      const entry = parent!.workflow.nodes.find(n => n.id === 'sub__first');
+      expect(entry?.depends_on).toEqual(['setup']);
+      // Downstream node's depends_on: [sub] rewired to the block's sink.
+      const finish = parent!.workflow.nodes.find(n => n.id === 'finish');
+      expect(finish?.depends_on).toEqual(['sub__second']);
+    });
+
+    it('should reject an include node inside a loop_group body', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'include-in-loop-group.yaml'),
+        `
+name: include-in-loop-group
+description: Include nested in a loop_group body (rejected in v1)
+nodes:
+  - id: grp
+    loop_group:
+      until: DONE
+      max_iterations: 3
+      nodes:
+        - id: bad
+          include: block
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      const err = result.errors.find(e => e.filename === 'include-in-loop-group.yaml');
+      expect(err).toBeDefined();
+      expect(err?.error).toContain('loop_group');
+      expect(err?.error).toContain("'include' is not supported");
+    });
+
+    it('should drop a workflow whose include target is missing but keep others', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'broken-include.yaml'),
+        `
+name: broken-include
+description: Includes a target that does not exist
+nodes:
+  - id: sub
+    include: does-not-exist
+`
+      );
+      await writeFile(
+        join(workflowDir, 'healthy.yaml'),
+        `
+name: healthy
+description: No includes here
+nodes:
+  - id: only
+    prompt: "hi"
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      // Broken workflow is dropped with an error; the healthy one still loads.
+      expect(result.workflows.some(w => w.workflow.name === 'broken-include')).toBe(false);
+      expect(result.workflows.some(w => w.workflow.name === 'healthy')).toBe(true);
+      const err = result.errors.find(e => e.filename === 'broken-include');
+      expect(err).toBeDefined();
+      expect(err?.error).toContain('not found');
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // Cancel nodes
   // -------------------------------------------------------------------------
   describe('cancel nodes', () => {
