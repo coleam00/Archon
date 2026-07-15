@@ -1778,6 +1778,99 @@ describe('PiProvider', () => {
     expect(mockBindExtensions).not.toHaveBeenCalled();
   });
 
+  // ─── Per-node extension posture (assistants.pi.nodes.<nodeId>, #2073) ──
+
+  test('node override drops UIContext and negates the plan flag for that node', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        assistantConfig: {
+          enableExtensions: true,
+          interactive: true,
+          extensionFlags: { plan: true },
+          nodes: { implement: { interactive: false, extensionFlags: { plan: false } } },
+        },
+        nodeConfig: { nodeId: 'implement' },
+      })
+    );
+
+    // Extensions still load (session_start must fire) but with no UIContext —
+    // hasUI stays false so plannotator won't open its blocking review server.
+    expect(mockBindExtensions).toHaveBeenCalledTimes(1);
+    const [bindings] = mockBindExtensions.mock.calls[0] as [{ uiContext?: unknown }];
+    expect(bindings.uiContext).toBeUndefined();
+    // Merged flags: node-level plan: false wins over assistant-level plan: true.
+    expect(mockSetFlagValue).toHaveBeenCalledTimes(1);
+    expect(mockSetFlagValue).toHaveBeenCalledWith('plan', false);
+  });
+
+  test('node without an override keeps assistant-level UIContext and flags', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        assistantConfig: {
+          enableExtensions: true,
+          interactive: true,
+          extensionFlags: { plan: true },
+          nodes: { implement: { interactive: false, extensionFlags: { plan: false } } },
+        },
+        nodeConfig: { nodeId: 'plan' },
+      })
+    );
+
+    expect(mockBindExtensions).toHaveBeenCalledTimes(1);
+    const [bindings] = mockBindExtensions.mock.calls[0] as [{ uiContext?: unknown }];
+    expect(bindings.uiContext).toBeDefined();
+    expect(mockSetFlagValue).toHaveBeenCalledTimes(1);
+    expect(mockSetFlagValue).toHaveBeenCalledWith('plan', true);
+  });
+
+  test('direct chat (no nodeConfig) ignores nodes overrides', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        assistantConfig: {
+          interactive: true,
+          nodes: { implement: { interactive: false } },
+        },
+      })
+    );
+
+    expect(mockBindExtensions).toHaveBeenCalledTimes(1);
+    const [bindings] = mockBindExtensions.mock.calls[0] as [{ uiContext?: unknown }];
+    expect(bindings.uiContext).toBeDefined();
+  });
+
+  test('node enableExtensions: false skips binding entirely for that node', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        assistantConfig: {
+          enableExtensions: true,
+          interactive: true,
+          extensionFlags: { plan: true },
+          nodes: { implement: { enableExtensions: false } },
+        },
+        nodeConfig: { nodeId: 'implement' },
+      })
+    );
+
+    expect(mockBindExtensions).not.toHaveBeenCalled();
+    expect(mockSetFlagValue).not.toHaveBeenCalled();
+  });
+
   test('assistantConfig.env applies to process.env when not already set', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     delete process.env.PI_TEST_ONE;
