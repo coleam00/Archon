@@ -34,6 +34,7 @@ import {
   type HookCallback,
   type HookCallbackMatcher,
   type SDKAssistantMessageError,
+  type TerminalReason,
 } from '@anthropic-ai/claude-agent-sdk';
 import type {
   IAgentProvider,
@@ -145,10 +146,12 @@ function classifySubprocessError(
  * This error carries the SDK's typed error code so retry classification is
  * structural — never matched against the message text.
  */
-export class ClaudeApiResultError extends Error {
-  readonly sdkErrorCode: SDKAssistantMessageError | 'unknown';
+type SdkErrorCode = SDKAssistantMessageError | 'unknown';
 
-  constructor(sdkErrorCode: SDKAssistantMessageError | 'unknown', resultText: string) {
+export class ClaudeApiResultError extends Error {
+  readonly sdkErrorCode: SdkErrorCode;
+
+  constructor(sdkErrorCode: SdkErrorCode, resultText: string) {
     super(`Claude API error (${sdkErrorCode}): ${resultText}`);
     this.name = 'ClaudeApiResultError';
     this.sdkErrorCode = sdkErrorCode;
@@ -162,9 +165,7 @@ export class ClaudeApiResultError extends Error {
  * rate_limit/crash backoff. Everything else is 'unknown' — fail fast rather
  * than retry blindly.
  */
-function classifySdkErrorCode(
-  code: SDKAssistantMessageError | 'unknown'
-): 'rate_limit' | 'auth' | 'crash' | 'unknown' {
+function classifySdkErrorCode(code: SdkErrorCode): 'rate_limit' | 'auth' | 'crash' | 'unknown' {
   switch (code) {
     case 'authentication_failed':
     case 'oauth_org_not_allowed':
@@ -885,7 +886,7 @@ async function* streamClaudeMessages(
         num_turns?: number;
         errors?: string[];
         result?: string;
-        terminal_reason?: string;
+        terminal_reason?: TerminalReason;
         api_error_status?: number | null;
         model_usage?: Record<
           string,
@@ -906,15 +907,16 @@ async function* streamClaudeMessages(
       // `is_error: true` + `subtype: 'success'` is ambiguous: it is BOTH the
       // SDK's stop-sequence termination encoding (#1425, a legitimate success)
       // AND its API-failure-as-text encoding (#1797 — auth/billing/rate-limit
-      // errors that even set stop_reason: 'stop_sequence'). Disambiguate
-      // structurally: a preceding synthetic error message (primary, typed
-      // signal), or terminal_reason 'api_error' (secondary — observed at
-      // runtime on API failures but not yet in the SDK's TerminalReason d.ts
-      // union), marks a real failure. Throw so callers fail the node/turn
+      // errors that even set stop_reason: 'stop_sequence').
+      const isSuccessWithErrorFlag = resultMsg.is_error === true && resultMsg.subtype === 'success';
+
+      // Disambiguate structurally: a preceding synthetic error message
+      // (primary, typed signal), or the typed terminal_reason 'api_error'
+      // (secondary — catches an error result with no preceding synthetic
+      // message), marks a real failure. Throw so callers fail the node/turn
       // instead of consuming error prose as successful output.
       if (
-        resultMsg.is_error === true &&
-        resultMsg.subtype === 'success' &&
+        isSuccessWithErrorFlag &&
         (syntheticError !== undefined || resultMsg.terminal_reason === 'api_error')
       ) {
         const code = syntheticError?.code ?? 'unknown';
@@ -953,7 +955,7 @@ async function* streamClaudeMessages(
       // subtype: 'success' — its encoding of "non-default termination, not a
       // failure". Treat that pair as a clean success so downstream consumers
       // (which gate failure on isError) don't misclassify it.
-      const isRealError = resultMsg.is_error === true && resultMsg.subtype !== 'success';
+      const isRealError = resultMsg.is_error === true && !isSuccessWithErrorFlag;
       if (isRealError) {
         getLog().error(
           {
@@ -964,7 +966,7 @@ async function* streamClaudeMessages(
           },
           'claude.result_is_error'
         );
-      } else if (resultMsg.is_error === true && resultMsg.subtype === 'success') {
+      } else if (isSuccessWithErrorFlag) {
         getLog().debug(
           {
             sessionId: resultMsg.session_id,
