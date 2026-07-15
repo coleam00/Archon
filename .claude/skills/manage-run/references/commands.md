@@ -88,6 +88,13 @@ Approve a paused gate (approval node or interactive loop).
 ```
 Non-`--json`: records the approval **and auto-resumes** (blocking — run as a background task).
 
+**Interactive-loop gates:** the comment decides finalize-vs-iterate. If the gate paused on
+an iteration that emitted the completion signal (`get <run-id> --json` →
+`.metadata.approval.completionSignaled` is `true`), approving with **no comment** accepts
+the completion — the node finalizes from its computed output on resume (no re-run).
+A comment runs another iteration with it as `$LOOP_USER_INPUT`. On a non-signaled gate,
+both forms iterate.
+
 ### `archon workflow reject <run-id> [reason] [--json]`
 Reject a paused gate. `cancelled: false` means an `on_reject` rework pass is queued
 (run is resumable); `cancelled: true` ends the run.

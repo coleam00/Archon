@@ -121,7 +121,27 @@ describe('toRun — approval parsing', () => {
         metadata: { approval: { nodeId: 'gate', message: 'Approve?' } },
       })
     );
-    expect(r.approval).toEqual({ nodeId: 'gate', message: 'Approve?' });
+    expect(r.approval).toEqual({ nodeId: 'gate', message: 'Approve?', completionSignaled: false });
+  });
+
+  test('surfaces completionSignaled on a signal-bearing interactive-loop gate (#2074)', () => {
+    const r = toRun(
+      raw({
+        id: 'r1',
+        workflow_name: 'validate',
+        status: 'paused',
+        metadata: {
+          approval: {
+            nodeId: 'refine',
+            message: 'gate',
+            type: 'interactive_loop',
+            completionSignaled: true,
+            signaledOutput: 'REPORT',
+          },
+        },
+      })
+    );
+    expect(r.approval?.completionSignaled).toBe(true);
   });
 
   test('defaults message to empty string when only nodeId is present', () => {
@@ -133,7 +153,7 @@ describe('toRun — approval parsing', () => {
         metadata: { approval: { nodeId: 'gate' } },
       })
     );
-    expect(r.approval).toEqual({ nodeId: 'gate', message: '' });
+    expect(r.approval).toEqual({ nodeId: 'gate', message: '', completionSignaled: false });
   });
 
   test('approval is null when absent or malformed (no string nodeId)', () => {
@@ -188,7 +208,7 @@ describe('toRun — resolved gate (approved/rejected awaiting resume)', () => {
         metadata: { approval: { nodeId: 'gate', message: 'Approve?', resolved: null } },
       })
     );
-    expect(r.approval).toEqual({ nodeId: 'gate', message: 'Approve?' });
+    expect(r.approval).toEqual({ nodeId: 'gate', message: 'Approve?', completionSignaled: false });
     expect(r.gateResolved).toBeNull();
   });
 
@@ -201,7 +221,7 @@ describe('toRun — resolved gate (approved/rejected awaiting resume)', () => {
         metadata: { approval: { nodeId: 'gate', message: 'Approve?', resolved: 'weird' } },
       })
     );
-    expect(r.approval).toEqual({ nodeId: 'gate', message: 'Approve?' });
+    expect(r.approval).toEqual({ nodeId: 'gate', message: 'Approve?', completionSignaled: false });
     expect(r.gateResolved).toBeNull();
   });
 });

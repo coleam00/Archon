@@ -10,7 +10,11 @@ import {
   isApprovalContext,
   isGateResolved,
 } from '@archon/workflows/schemas/workflow-run';
-import type { WorkflowRun, ApprovalContext } from '@archon/workflows/schemas/workflow-run';
+import type {
+  WorkflowRun,
+  ApprovalContext,
+  LoopGateRunMetadata,
+} from '@archon/workflows/schemas/workflow-run';
 import * as workflowDb from '../db/workflows';
 import * as workflowEventDb from '../db/workflow-events';
 import * as workflowNodeSessionDb from '../db/workflow-node-sessions';
@@ -164,14 +168,23 @@ export async function approveWorkflow(
     );
   }
 
-  const approvalComment = comment ?? 'Approved';
+  // Whitespace-only comments count as absent (mirrors feedbackProvided below):
+  // HTTP/CLI/chat pass the raw comment through since #2074, so '   ' would
+  // otherwise be recorded verbatim where the documented default is 'Approved'.
+  const approvalComment = comment !== undefined && comment.trim().length > 0 ? comment : 'Approved';
 
   try {
     // Interactive loop gate — store user input in metadata for the next iteration.
     // Note: node_completed is NOT written here. The executor writes it when the AI
-    // emits the completion signal (meaning the user actually approved). Writing it
-    // here would cause the resume to skip the loop node entirely.
+    // emits the completion signal (meaning the user actually approved) — or, for a
+    // signal-bearing gate approved without feedback, at resume time from the
+    // persisted signaledOutput (#2074). Writing it here would cause the resume to
+    // skip the loop node entirely.
     if (approval.type === 'interactive_loop') {
+      // Finalize-vs-iterate discriminator (#2074): derived from the RAW comment,
+      // not approvalComment (which defaults to 'Approved') — a bare approve on a
+      // signal-bearing gate finalizes at resume; real feedback runs another iteration.
+      const feedbackProvided = comment !== undefined && comment.trim().length > 0;
       await workflowEventDb.createWorkflowEvent({
         workflow_run_id: runId,
         event_type: 'approval_received',
@@ -184,10 +197,18 @@ export async function approveWorkflow(
       // IMPORTANT: metadata is MERGED (not replaced) and the approval context is
       // rewritten whole (spread + resolved) — it must survive intact so the
       // resumed executor can detect the correct startIteration.
+      // loop_user_input keeps the 'Approved' default so the iterate path (non-signaled
+      // gates) still feeds the AI an approval token via $LOOP_USER_INPUT.
+      // Typed via LoopGateRunMetadata so the key spellings match the executor's
+      // resume-time read sites (a typo here is a compile error).
+      const gateRunMetadata: LoopGateRunMetadata = {
+        loop_user_input: approvalComment,
+        loop_feedback_given: feedbackProvided,
+      };
       await workflowDb.updateWorkflowRun(runId, {
         metadata: {
           approval: { ...approval, resolved: 'approved' },
-          loop_user_input: approvalComment,
+          ...gateRunMetadata,
         },
       });
       return {

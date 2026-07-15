@@ -138,6 +138,20 @@ bun run cli workflow reject <run-id> --reason "Plan needs more test coverage"
 /workflow reject <run-id> needs changes
 ```
 
+### Interactive-loop gates: bare approve finalizes
+
+Interactive **loop** gates (`loop:`/`loop_group:` with `interactive: true`) share these
+approve surfaces but add one rule: when the gate paused on an iteration that emitted the
+loop's completion signal (the persisted gate message — `metadata.approval.message`, shown
+by `workflow get --json` and `manage_run` — leads with "✅ Completion signal detected";
+in chat the same line follows the `⏸ Input required` prefix),
+approving **without a comment** finalizes the loop node from the already-computed output —
+no extra iteration runs. Approving **with** a comment runs another iteration with your
+comment as `$LOOP_USER_INPUT`. Natural-language approval always counts as a comment
+(iterates); use the slash command, CLI, web button, or `manage_run` to finalize. See
+[Loop Nodes → `interactive` and `gate_message`](/guides/loop-nodes/#interactive-and-gate_message)
+for the full semantics, `signal_completes`, and the AI-approver steering pattern.
+
 ### Web UI
 
 Paused workflows show an amber pulsing badge on the dashboard. Click **Approve**

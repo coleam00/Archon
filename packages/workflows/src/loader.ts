@@ -470,6 +470,22 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       }
     }
 
+    // Warn (non-blocking) when signal_completes is set without interactive: the flag
+    // only changes interactive-gate behavior — a non-interactive loop already
+    // completes on the signal, so the author's intent is likely a missing
+    // `interactive: true`. The workflow still loads.
+    const hasSignalCompletesWithoutInteractive = (ns: DagNode[]): boolean =>
+      ns.some(
+        n =>
+          (isLoopNode(n) && n.loop.signal_completes === true && n.loop.interactive !== true) ||
+          (isLoopGroupNode(n) &&
+            ((n.loop_group.signal_completes === true && n.loop_group.interactive !== true) ||
+              hasSignalCompletesWithoutInteractive(n.loop_group.nodes)))
+      );
+    if (hasSignalCompletesWithoutInteractive(dagNodes)) {
+      getLog().warn({ filename }, 'signal_completes_without_interactive_ignored');
+    }
+
     // Parse workflow-level worktree policy. Same warn-and-ignore pattern used
     // for `interactive` / `modelReasoningEffort` — invalid values are dropped
     // rather than rejected, so a typo in one workflow doesn't nuke the whole

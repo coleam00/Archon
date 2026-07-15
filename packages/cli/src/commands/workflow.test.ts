@@ -2388,6 +2388,64 @@ describe('workflowGetCommand', () => {
     expect(code).toBe(0);
   });
 
+  it('emits the full metadata.approval (incl. completionSignaled) in --json for a paused interactive_loop run (#2074 E)', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-gate-json',
+      workflow_name: 'validate',
+      status: 'paused',
+      working_path: '/tmp/wt',
+      started_at: new Date(),
+      metadata: {
+        approval: {
+          type: 'interactive_loop',
+          nodeId: 'refine',
+          message: 'gate',
+          iteration: 2,
+          completionSignaled: true,
+          signaledOutput: 'REPORT',
+        },
+      },
+    });
+
+    const code = await workflowGetCommand('run-gate-json', true);
+
+    const parsed = JSON.parse(consoleSpy.mock.calls[0][0] as string) as {
+      metadata: { approval: { completionSignaled: boolean; signaledOutput: string } };
+    };
+    // The agent read surface: the C fields flow through the CLI --json dump unchanged.
+    expect(parsed.metadata.approval.completionSignaled).toBe(true);
+    expect(parsed.metadata.approval.signaledOutput).toBe('REPORT');
+    expect(code).toBe(0);
+  });
+
+  it('prints a Gate line (human) for a paused interactive_loop run (#2074 E)', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-gate-human',
+      workflow_name: 'validate',
+      status: 'paused',
+      working_path: '/tmp/wt',
+      started_at: new Date(),
+      metadata: {
+        approval: {
+          type: 'interactive_loop',
+          nodeId: 'refine',
+          message: 'gate',
+          iteration: 2,
+          completionSignaled: true,
+          signaledOutput: 'REPORT',
+        },
+      },
+    });
+
+    await workflowGetCommand('run-gate-human');
+
+    expect(consoleSpy).toHaveBeenCalledWith(
+      '  Gate:   awaiting approval — signal detected: yes (iteration 2)'
+    );
+  });
+
   it('attaches events in verbose JSON mode', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const eventsDb = await import('@archon/core/db/workflow-events');

@@ -171,6 +171,37 @@ export interface ApprovalContext {
    * loop_user_input (consumed in place; the next pause resets it).
    */
   resolved?: 'approved' | 'rejected' | null;
+  /**
+   * Interactive-loop only. True when the iteration this gate paused on emitted the
+   * completion signal (detectCompletionSignal / until_bash exit 0). Read at resume by
+   * executeLoopNode/executeLoopGroupNode: a signal-bearing gate approved WITHOUT feedback
+   * finalizes the node from `signaledOutput` instead of re-running. Reset to null on every
+   * fresh pause (see pauseWorkflowRun) for the same SQLite json_patch reason as `resolved`.
+   */
+  completionSignaled?: boolean | null;
+  /**
+   * Interactive-loop only. The (stripped) output of the signal-bearing paused iteration,
+   * persisted so the finalize path can write node_completed with the real output for
+   * downstream `$nodeId.output` refs. Only set when completionSignaled is true; null otherwise.
+   */
+  signaledOutput?: string | null;
+}
+
+/**
+ * Top-level (non-`approval`) run-metadata keys of the interactive-loop gate
+ * protocol, written by approveWorkflow and read at resume by
+ * executeLoopNode/executeLoopGroupNode (#2074). Deliberately NOT a Zod schema —
+ * run metadata stays schemaless JSON; this alias exists solely so the write and
+ * read sites share one key spelling (a typo is a compile error), nothing broader.
+ */
+export interface LoopGateRunMetadata {
+  /** $LOOP_USER_INPUT for the resumed iteration (approve comment; defaults to 'Approved'). */
+  loop_user_input?: string;
+  /**
+   * True iff the approve carried real (non-whitespace) feedback. False/absent =
+   * bare approve — finalize-eligible when the gate's completionSignaled is true.
+   */
+  loop_feedback_given?: boolean;
 }
 
 /**

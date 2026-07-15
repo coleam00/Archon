@@ -1274,7 +1274,7 @@ Two primitives handle human-in-the-loop iteration. Use the right one for your pa
 | User input variable | `$LOOP_USER_INPUT` | `$REJECTION_REASON` |
 | How it works | Same prompt runs each iteration, user input injected as variable | Specific on_reject prompt runs only on rejection |
 | Best for | **Conversational iteration** — explore, refine, review cycles where the AI and human go back and forth | **Gate-then-fix** — approve to proceed, or reject to trigger a specific corrective action |
-| Approval signal | AI detects user intent in its output (`<promise>DONE</promise>`) | User explicitly approves or rejects via button/command |
+| Approval signal | AI emits the completion signal (`<promise>DONE</promise>`); a gate that paused on a signaled iteration finalizes on a bare approve | User explicitly approves or rejects via button/command |
 | Example | PIV loop: explore → user feedback → explore again | Report generation: generate → user rejects → AI revises specific section |
 
 **Interactive loop** (`loop.interactive: true`):
@@ -1291,7 +1291,20 @@ Two primitives handle human-in-the-loop iteration. Use the right one for your pa
     gate_message: "Review the plan. Provide feedback or say 'approved'."
 ```
 
-The AI runs each iteration, pauses for user input, user's text feeds into the next iteration via `$LOOP_USER_INPUT`. The AI decides when to emit the completion signal based on the user's response.
+The AI runs each iteration, pauses for user input, and the user's text feeds into the next
+iteration via `$LOOP_USER_INPUT`. What an approve does depends on the paused iteration:
+
+- If the iteration **emitted the completion signal** (the gate says "Completion signal
+  detected"), approving with **no feedback** accepts the result — the node finalizes from
+  the already-computed output with no extra iteration. Approving **with** feedback runs
+  another iteration instead.
+- If it did **not** signal, any approve runs another iteration with your feedback.
+
+For a loop that should complete autonomously on the signal (no gate at all on success —
+e.g. a validation that only needs a human on failure), add `signal_completes: true`. See
+[Loop Nodes → `interactive` and `gate_message`](/guides/loop-nodes/#interactive-and-gate_message)
+and [`signal_completes`](/guides/loop-nodes/#signal_completes--autonomous-completion) for
+the full semantics.
 
 **Approval with on_reject** (`approval.on_reject`):
 

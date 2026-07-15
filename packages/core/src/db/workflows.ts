@@ -698,11 +698,13 @@ export async function cancelWorkflowRun(id: string): Promise<{ cancelled: boolea
  * Sets status to 'paused' and stores approval context in metadata.
  * Does NOT set completed_at — the run is not finished.
  *
- * `resolved` is reset to an explicit null on every fresh pause so a prior
- * gate's resolution can never leak into this one: SQLite's json_patch
- * deep-merges the new context into the stored one (an omitted key would keep
- * the old 'approved'), and RFC 7396 null removes the key; Postgres `||`
- * replaces the approval object wholesale. See ApprovalContext.resolved.
+ * `resolved`, `completionSignaled`, and `signaledOutput` are reset to an
+ * explicit null on every fresh pause so a prior gate's resolution or signal
+ * state can never leak into this one: SQLite's json_patch deep-merges the new
+ * context into the stored one (an omitted key would keep the old value —
+ * JSON.stringify drops undefined, so the values are computed explicitly), and
+ * RFC 7396 null removes the key; Postgres `||` replaces the approval object
+ * wholesale. See ApprovalContext.resolved / .completionSignaled.
  */
 export async function pauseWorkflowRun(
   id: string,
@@ -714,7 +716,17 @@ export async function pauseWorkflowRun(
       `UPDATE remote_agent_workflow_runs
        SET status = 'paused', metadata = ${dialect.jsonMerge('metadata', 2)}
        WHERE id = $1 AND status = 'running'`,
-      [id, JSON.stringify({ approval: { ...approvalContext, resolved: null } })]
+      [
+        id,
+        JSON.stringify({
+          approval: {
+            ...approvalContext,
+            resolved: null,
+            completionSignaled: approvalContext.completionSignaled ?? null,
+            signaledOutput: approvalContext.signaledOutput ?? null,
+          },
+        }),
+      ]
     );
     if (result.rowCount === 0) {
       getLog().warn({ workflowRunId: id }, 'db.workflow_run_pause_no_match');

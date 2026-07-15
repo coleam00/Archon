@@ -86,6 +86,7 @@ function buildDemoRuns(scope: Scope, projectName: string | null): Run[] {
         nodeId: 'foundation-gate',
         message:
           'Answer the foundation questions above. Your answers will guide the research phase.',
+        completionSignaled: false,
       },
     },
     {
@@ -100,6 +101,7 @@ function buildDemoRuns(scope: Scope, projectName: string | null): Run[] {
       approval: {
         nodeId: 'review/approve',
         message: 'Approve changes before opening PR?',
+        completionSignaled: false,
       },
     },
     {
