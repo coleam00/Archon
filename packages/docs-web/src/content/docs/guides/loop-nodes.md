@@ -275,9 +275,13 @@ Set `interactive: true` to pause the loop between iterations and wait for human 
 After each iteration the executor:
 
 1. Sends the gate message to the user along with the run ID and a `/workflow approve` command.
-   The delivered message starts with an engine-generated status line — whether the iteration
-   emitted the completion signal (plus a bounded excerpt of the iteration output) — followed
-   by your `gate_message` text, so the gate always reports the real iteration outcome.
+   The gate text is engine-generated: a status line — whether the iteration emitted the
+   completion signal, plus a bounded excerpt of the iteration output — followed by your
+   `gate_message`, so the gate always reports the real iteration outcome. The status line
+   **leads the persisted gate message** (`metadata.approval.message`, also the
+   `approval_requested` event data — what `workflow get --json` and `manage_run` read);
+   the chat-delivered message wraps the same text in a `⏸ Input required (loop ..., iteration N):`
+   prefix, so in chat the status line appears right after that prefix.
 2. Pauses the workflow run
 3. Waits — the workflow resumes when the user runs `/workflow approve <id> [feedback]`
 

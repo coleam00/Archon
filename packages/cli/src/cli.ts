@@ -634,9 +634,13 @@ async function main(): Promise<number> {
               console.error('Usage: archon workflow approve <run-id> [comment]');
               return 1;
             }
-            // Accept comment as positional args (everything after run ID) or --comment flag
-            const approveComment =
-              (values.comment as string | undefined) || positionals.slice(3).join(' ') || undefined;
+            // Accept comment as positional args (everything after run ID) or --comment flag.
+            // Explicit empty→undefined conversion (not `|| undefined`): "no comment" must
+            // reach approveWorkflow as undefined so a signal-bearing interactive-loop gate
+            // finalizes instead of re-running (#2074, loop_feedback_given).
+            const rawApproveComment =
+              (values.comment as string | undefined) || positionals.slice(3).join(' ');
+            const approveComment = rawApproveComment.length > 0 ? rawApproveComment : undefined;
             await workflowApproveCommand(approveRunId, approveComment, jsonFlag, effectiveCwd);
             break;
           }
@@ -647,8 +651,9 @@ async function main(): Promise<number> {
               console.error('Usage: archon workflow reject <run-id> [reason]');
               return 1;
             }
-            const rejectReason =
-              (values.reason as string | undefined) || positionals.slice(3).join(' ') || undefined;
+            const rawRejectReason =
+              (values.reason as string | undefined) || positionals.slice(3).join(' ');
+            const rejectReason = rawRejectReason.length > 0 ? rawRejectReason : undefined;
             await workflowRejectCommand(rejectRunId, rejectReason, jsonFlag, effectiveCwd);
             break;
           }

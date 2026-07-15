@@ -45,6 +45,7 @@ const SAMPLE_RUNS: Run[] = [
     approval: {
       nodeId: 'implement/verify',
       message: 'Approve running bun validate?',
+      completionSignaled: false,
     },
   },
   {

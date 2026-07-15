@@ -44,6 +44,7 @@ import type {
   ThinkingConfig,
   SandboxSettings,
   WorkflowSource,
+  LoopGateRunMetadata,
 } from './schemas';
 import {
   isBashNode,
@@ -2578,14 +2579,13 @@ async function executeLoopGroupNode(
   const loopGateMeta = isApprovalContext(rawApproval) ? rawApproval : undefined;
   const isLoopResume = loopGateMeta?.type === 'interactive_loop' && loopGateMeta.nodeId === node.id;
   const startIteration = isLoopResume ? (loopGateMeta.iteration ?? 0) + 1 : 1;
-  const loopUserInput = isLoopResume
-    ? ((workflowRun.metadata?.loop_user_input as string | undefined) ?? '')
-    : '';
+  const loopGateRunMeta = (workflowRun.metadata ?? {}) as LoopGateRunMetadata;
+  const loopUserInput = isLoopResume ? (loopGateRunMeta.loop_user_input ?? '') : '';
 
   // Finalize-on-approve (#2074): mirrors executeLoopNode — a signal-bearing gate
   // resumed WITHOUT feedback completes the group from the persisted output instead
   // of re-running the body.
-  const feedbackGiven = workflowRun.metadata?.loop_feedback_given === true;
+  const feedbackGiven = loopGateRunMeta.loop_feedback_given === true;
   if (isLoopResume && loopGateMeta?.completionSignaled === true && !feedbackGiven) {
     const finalizeOutput = loopGateMeta.signaledOutput ?? '';
     await finalizeLoopFromSignal(
@@ -3176,15 +3176,14 @@ async function executeLoopNode(
   let currentSessionId: string | undefined = isLoopResume
     ? (loopGateMeta.sessionId ?? undefined)
     : undefined;
-  const loopUserInput = isLoopResume
-    ? ((workflowRun.metadata?.loop_user_input as string | undefined) ?? '')
-    : '';
+  const loopGateRunMeta = (workflowRun.metadata ?? {}) as LoopGateRunMetadata;
+  const loopUserInput = isLoopResume ? (loopGateRunMeta.loop_user_input ?? '') : '';
 
   // Finalize-on-approve (#2074): a gate that paused on a signal-bearing iteration,
   // resumed WITHOUT feedback, completes the node from the persisted output instead of
   // re-running the (expensive) iteration. Feedback (loop_feedback_given) OR a
   // non-signaled gate falls through to a normal resumed iteration below.
-  const feedbackGiven = workflowRun.metadata?.loop_feedback_given === true;
+  const feedbackGiven = loopGateRunMeta.loop_feedback_given === true;
   if (isLoopResume && loopGateMeta?.completionSignaled === true && !feedbackGiven) {
     const finalizeOutput = loopGateMeta.signaledOutput ?? '';
     await finalizeLoopFromSignal(

@@ -10,7 +10,11 @@ import {
   isApprovalContext,
   isGateResolved,
 } from '@archon/workflows/schemas/workflow-run';
-import type { WorkflowRun, ApprovalContext } from '@archon/workflows/schemas/workflow-run';
+import type {
+  WorkflowRun,
+  ApprovalContext,
+  LoopGateRunMetadata,
+} from '@archon/workflows/schemas/workflow-run';
 import * as workflowDb from '../db/workflows';
 import * as workflowEventDb from '../db/workflow-events';
 import * as workflowNodeSessionDb from '../db/workflow-node-sessions';
@@ -195,11 +199,16 @@ export async function approveWorkflow(
       // resumed executor can detect the correct startIteration.
       // loop_user_input keeps the 'Approved' default so the iterate path (non-signaled
       // gates) still feeds the AI an approval token via $LOOP_USER_INPUT.
+      // Typed via LoopGateRunMetadata so the key spellings match the executor's
+      // resume-time read sites (a typo here is a compile error).
+      const gateRunMetadata: LoopGateRunMetadata = {
+        loop_user_input: approvalComment,
+        loop_feedback_given: feedbackProvided,
+      };
       await workflowDb.updateWorkflowRun(runId, {
         metadata: {
           approval: { ...approval, resolved: 'approved' },
-          loop_user_input: approvalComment,
-          loop_feedback_given: feedbackProvided,
+          ...gateRunMetadata,
         },
       });
       return {

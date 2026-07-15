@@ -188,6 +188,23 @@ export interface ApprovalContext {
 }
 
 /**
+ * Top-level (non-`approval`) run-metadata keys of the interactive-loop gate
+ * protocol, written by approveWorkflow and read at resume by
+ * executeLoopNode/executeLoopGroupNode (#2074). Deliberately NOT a Zod schema —
+ * run metadata stays schemaless JSON; this alias exists solely so the write and
+ * read sites share one key spelling (a typo is a compile error), nothing broader.
+ */
+export interface LoopGateRunMetadata {
+  /** $LOOP_USER_INPUT for the resumed iteration (approve comment; defaults to 'Approved'). */
+  loop_user_input?: string;
+  /**
+   * True iff the approve carried real (non-whitespace) feedback. False/absent =
+   * bare approve — finalize-eligible when the gate's completionSignaled is true.
+   */
+  loop_feedback_given?: boolean;
+}
+
+/**
  * True when the run's current approval gate has already been resolved
  * (approved, or rejected with a staged on_reject rework) and the run is
  * paused only while awaiting resume. Guards double-approve/reject and the

@@ -183,6 +183,9 @@ Defined under `loop:` inside a node:
 | `max_iterations` | Yes | number | Maximum iterations before the node fails |
 | `fresh_context` | No | boolean | Start a new session each iteration (default: false) |
 | `until_bash` | No | string | Shell script run after each iteration; exit 0 signals completion |
+| `interactive` | No | boolean | Pause at a human gate after each iteration for input via `/workflow approve` |
+| `gate_message` | No | string | Message shown at the interactive gate (required when `interactive: true`) |
+| `signal_completes` | No | boolean | Interactive loops only: a detected completion signal completes the node immediately (even on iteration 1) instead of gating (default: false) |
 
 **Example:**
 
@@ -208,6 +211,7 @@ per iteration (see [Cross-Node Loops](/guides/loop-nodes/#cross-node-loops-with-
 | `until_bash` | No | string | Shell script run after each iteration; exit 0 signals completion |
 | `interactive` | No | boolean | Pause at a human gate after each non-completing iteration |
 | `gate_message` | No | string | Message shown at the interactive gate |
+| `signal_completes` | No | boolean | Interactive loops only: a detected completion signal completes the group immediately (even on iteration 1) instead of gating (default: false) |
 
 Body nodes can reference the previous iteration via
 `$LOOP_PREV.<nodeId>.output`, and outer-DAG outputs via plain `$nodeId.output`.

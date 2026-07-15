@@ -312,7 +312,7 @@ archon workflow run <name> --cwd /path/to/repo "<message>"
 | `archon workflow get <id>` | Show detail for a single run (any status) |
 | `archon workflow resume <id>` | Resume a failed workflow |
 | `archon workflow abandon <id>` | Abandon a run (running, paused, or failed) |
-| `archon workflow approve <id> [comment]` | Approve an interactive loop gate |
+| `archon workflow approve <id> [comment]` | Approve an interactive loop gate (no comment on a signal-bearing gate = accept & complete; a comment runs another iteration) |
 | `archon workflow reject <id> [--reason "..."]` | Reject an approval gate |
 | `archon workflow cleanup [days]` | Delete old run records (default: 7 days) |
 | `archon workflow event emit` | Emit a workflow event |

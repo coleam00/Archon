@@ -114,6 +114,7 @@ export type {
   WorkflowRun,
   ArtifactType,
   ApprovalContext,
+  LoopGateRunMetadata,
 } from './workflow-run';
 
 // Per-node persisted provider sessions

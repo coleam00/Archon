@@ -35,7 +35,7 @@ export interface Run {
    * iteration that emitted its completion signal (#2074) — a bare approve
    * finalizes the node (no re-run); a comment runs another iteration.
    */
-  approval?: { nodeId: string; message: string; completionSignaled?: boolean } | null;
+  approval?: { nodeId: string; message: string; completionSignaled: boolean } | null;
   /**
    * Set when a paused run's gate was already approved/rejected and the run is
    * only awaiting auto-resume (server: metadata.approval.resolved). The
