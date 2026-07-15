@@ -72,6 +72,10 @@ RUN apt-get update && apt-get install -y \
     gnupg \
     gosu \
     postgresql-client \
+    # ripgrep + jq: expected by Claude Code / Codex agents (rg is their default
+    # code-search tool; jq powers JSON handling in bash workflow nodes) — see #1836
+    ripgrep \
+    jq \
     # Chromium for agent-browser E2E testing (drives browser via CDP)
     chromium \
     && rm -rf /var/lib/apt/lists/*
