@@ -1955,3 +1955,259 @@ describe('sendQuery decomposition behaviors', () => {
     });
   });
 });
+
+// ─── API errors surfaced as text (#1797) ─────────────────────────────────
+// The SDK does not throw on API-level failures (auth, billing, rate limit).
+// It synthesizes an assistant message (model: '<synthetic>', wrapper
+// `error` code) with the error prose, then emits a result with
+// subtype: 'success' AND is_error: true — the same field pair as the
+// legitimate stop-sequence carve-out (#1425). Shapes below are verbatim
+// captures from claude CLI 2.1.210 (isolated config dir).
+
+describe('API error surfaced as text (#1797)', () => {
+  let client: ClaudeProvider;
+
+  beforeEach(() => {
+    client = new ClaudeProvider({ retryBaseDelayMs: 1 });
+    mockQuery.mockClear();
+    mockLogger.info.mockClear();
+    mockLogger.warn.mockClear();
+    mockLogger.error.mockClear();
+    mockLogger.debug.mockClear();
+  });
+
+  interface CollectedStream {
+    chunks: Array<Record<string, unknown>>;
+    error?: Error;
+  }
+
+  async function collect(gen: AsyncIterable<Record<string, unknown>>): Promise<CollectedStream> {
+    const chunks: Array<Record<string, unknown>> = [];
+    try {
+      for await (const chunk of gen) {
+        chunks.push(chunk);
+      }
+    } catch (e) {
+      return { chunks, error: e as Error };
+    }
+    return { chunks };
+  }
+
+  function syntheticAssistantMessage(errorCode: string, text: string): Record<string, unknown> {
+    return {
+      type: 'assistant',
+      message: {
+        model: '<synthetic>',
+        stop_reason: 'stop_sequence',
+        content: [{ type: 'text', text }],
+        usage: { input_tokens: 0, output_tokens: 0 },
+      },
+      error: errorCode,
+      session_id: 'sid-api-err',
+    };
+  }
+
+  function apiErrorResult(text: string): Record<string, unknown> {
+    return {
+      type: 'result',
+      subtype: 'success',
+      is_error: true,
+      api_error_status: null,
+      result: text,
+      stop_reason: 'stop_sequence',
+      terminal_reason: 'api_error',
+      total_cost_usd: 0,
+      session_id: 'sid-api-err',
+    };
+  }
+
+  test('auth error (Not logged in) throws instead of completing with poisoned output', async () => {
+    mockQuery.mockImplementation(async function* () {
+      yield syntheticAssistantMessage('authentication_failed', 'Not logged in · Please run /login');
+      yield apiErrorResult('Not logged in · Please run /login');
+    });
+
+    const { chunks, error } = await collect(client.sendQuery('test', '/workspace'));
+
+    expect(error).toBeDefined();
+    expect(error?.message).toContain('Claude API error (authentication_failed)');
+    expect(error?.message).toContain('Not logged in');
+    // The poison: no assistant chunk carrying the error prose, no result chunk
+    expect(chunks.filter(c => c.type === 'assistant')).toHaveLength(0);
+    expect(chunks.filter(c => c.type === 'result')).toHaveLength(0);
+    // Auth errors are non-retryable — a single attempt only
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+    expect(mockLogger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ errorCode: 'authentication_failed' }),
+      'claude.result_api_error'
+    );
+  });
+
+  test('invalid API key (401) shape throws a non-retryable auth error', async () => {
+    mockQuery.mockImplementation(async function* () {
+      yield syntheticAssistantMessage(
+        'authentication_failed',
+        'Invalid API key · Fix external API key'
+      );
+      yield {
+        ...apiErrorResult('Invalid API key · Fix external API key'),
+        api_error_status: 401,
+      };
+    });
+
+    const { error } = await collect(client.sendQuery('test', '/workspace'));
+    expect(error?.message).toContain('Claude API error (authentication_failed)');
+    expect(error?.message).toContain('Invalid API key');
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+  });
+
+  test('api_error result without a preceding synthetic message still throws (belt-and-suspenders)', async () => {
+    mockQuery.mockImplementation(async function* () {
+      yield apiErrorResult('Something went wrong upstream');
+    });
+
+    const { chunks, error } = await collect(client.sendQuery('test', '/workspace'));
+    expect(error?.message).toContain('Claude API error (unknown)');
+    expect(error?.message).toContain('Something went wrong upstream');
+    expect(chunks.filter(c => c.type === 'result')).toHaveLength(0);
+  });
+
+  test('synthetic rate_limit error retries per existing subprocess policy, then throws', async () => {
+    mockQuery.mockImplementation(async function* () {
+      yield syntheticAssistantMessage('rate_limit', 'Rate limited · Try again later');
+      yield apiErrorResult('Rate limited · Try again later');
+    });
+
+    const { error } = await collect(client.sendQuery('test', '/workspace'));
+    expect(error?.message).toContain('Claude API error (rate_limit)');
+    // MAX_SUBPROCESS_RETRIES = 3 → 4 attempts total
+    expect(mockQuery).toHaveBeenCalledTimes(4);
+  }, 5_000);
+
+  test('legitimate output that merely mentions the error phrases is untouched', async () => {
+    // A real model turn (real model id, no wrapper error field, clean result)
+    // whose TEXT happens to discuss login errors — e.g. a node writing docs
+    // about auth failures. Must flow through as a normal success.
+    mockQuery.mockImplementation(async function* () {
+      yield {
+        type: 'assistant',
+        message: {
+          model: 'claude-sonnet-4-5',
+          content: [
+            {
+              type: 'text',
+              text: 'If auth fails you may see "Not logged in · Please run /login".',
+            },
+          ],
+        },
+        session_id: 'sid-legit',
+      };
+      yield {
+        type: 'result',
+        subtype: 'success',
+        is_error: false,
+        result: 'done',
+        session_id: 'sid-legit',
+      };
+    });
+
+    const { chunks, error } = await collect(client.sendQuery('test', '/workspace'));
+    expect(error).toBeUndefined();
+    expect(
+      chunks.some(c => typeof c.content === 'string' && c.content.includes('Not logged in'))
+    ).toBe(true);
+    const result = chunks.find(c => c.type === 'result');
+    expect(result).toBeDefined();
+    expect(result).not.toHaveProperty('isError');
+  });
+
+  test('#1425 stop-sequence carve-out is preserved (is_error + subtype success without API-error signals)', async () => {
+    mockQuery.mockImplementation(async function* () {
+      yield {
+        type: 'assistant',
+        message: {
+          model: 'claude-sonnet-4-5',
+          content: [{ type: 'text', text: 'Rate limit guidance: back off exponentially.' }],
+        },
+        session_id: 'sid-stop-seq',
+      };
+      yield {
+        type: 'result',
+        subtype: 'success',
+        is_error: true,
+        stop_reason: 'stop_sequence',
+        session_id: 'sid-stop-seq',
+      };
+    });
+
+    const { chunks, error } = await collect(client.sendQuery('test', '/workspace'));
+    expect(error).toBeUndefined();
+    const result = chunks.find(c => c.type === 'result');
+    expect(result).toBeDefined();
+    expect(result).not.toHaveProperty('isError');
+    expect(mockLogger.debug).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'sid-stop-seq' }),
+      'claude.result_success_validated'
+    );
+  });
+
+  test('real-model message carrying an error code (e.g. max_output_tokens) is not suppressed', async () => {
+    // A REAL (non-synthetic) message can carry a wrapper error code alongside
+    // genuine truncated output. Only '<synthetic>' content is SDK error prose.
+    mockQuery.mockImplementation(async function* () {
+      yield {
+        type: 'assistant',
+        message: {
+          model: 'claude-sonnet-4-5',
+          content: [{ type: 'text', text: 'partial output before truncation' }],
+        },
+        error: 'max_output_tokens',
+        session_id: 'sid-trunc',
+      };
+      yield {
+        type: 'result',
+        subtype: 'success',
+        is_error: false,
+        session_id: 'sid-trunc',
+      };
+    });
+
+    const { chunks, error } = await collect(client.sendQuery('test', '/workspace'));
+    expect(error).toBeUndefined();
+    expect(chunks.some(c => c.content === 'partial output before truncation')).toBe(true);
+  });
+
+  test('fail-safe: synthetic error contradicted by a clean result yields the withheld text late', async () => {
+    mockQuery.mockImplementation(async function* () {
+      yield syntheticAssistantMessage('server_error', 'Upstream hiccup');
+      yield {
+        type: 'result',
+        subtype: 'success',
+        is_error: false,
+        session_id: 'sid-recovered',
+      };
+    });
+
+    const { chunks, error } = await collect(client.sendQuery('test', '/workspace'));
+    expect(error).toBeUndefined();
+    expect(chunks.some(c => c.type === 'assistant' && c.content === 'Upstream hiccup')).toBe(true);
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ errorCode: 'server_error' }),
+      'claude.synthetic_error_not_confirmed'
+    );
+  });
+
+  test('stream ending after a synthetic error without a result throws', async () => {
+    mockQuery.mockImplementation(async function* () {
+      yield syntheticAssistantMessage('billing_error', 'Credit balance is too low');
+      // stream ends abnormally — no result event
+    });
+
+    const { chunks, error } = await collect(client.sendQuery('test', '/workspace'));
+    expect(error?.message).toContain('Claude API error (billing_error)');
+    expect(error?.message).toContain('Credit balance is too low');
+    expect(chunks.filter(c => c.type === 'assistant')).toHaveLength(0);
+    // billing_error classifies as auth → non-retryable
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+  });
+});
