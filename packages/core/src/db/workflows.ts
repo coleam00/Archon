@@ -73,6 +73,93 @@ function resumableStatusClause(dialect: SqlDialect, dayParamIndex: number): stri
 }
 
 /**
+ * SQL predicate matching a run whose approval gate is still OPEN: the row is
+ * 'paused' AND metadata.approval.resolved is JSON null or absent. Dialect-aware
+ * (Postgres `->>`, SQLite `json_extract`) and kept in ONE place so the two forms
+ * cannot drift — mirrors resumableStatusClause and the local jsonIntExtract
+ * helper. `->>'resolved'` / `json_extract(...)` both return SQL NULL for a JSON
+ * null AND for an absent key, so `IS NULL` matches exactly "not yet resolved".
+ * This is the compare-and-swap guard resolveApprovalGate uses to serialize
+ * concurrent approve/reject.
+ */
+function unresolvedGateClause(): string {
+  const resolvedExpr =
+    getDatabaseType() === 'postgresql'
+      ? "metadata->'approval'->>'resolved'"
+      : "json_extract(metadata, '$.approval.resolved')";
+  return `status = 'paused' AND ${resolvedExpr} IS NULL`;
+}
+
+/**
+ * Atomically resolve a paused approval gate (compare-and-swap).
+ *
+ * Merges `metadata` (which carries `approval.resolved = 'approved' | 'rejected'`
+ * plus any gate-specific keys) into the row ONLY while the gate is still open
+ * (unresolvedGateClause). Returns `{ resolved }`: `true` = this caller won the
+ * race and MAY write gate events; `false` = a concurrent approve/reject already
+ * resolved the gate, so the caller must NOT write events (they would duplicate).
+ *
+ * This closes the read-then-write TOCTOU window in approveWorkflow /
+ * rejectWorkflow: the atomic conditional UPDATE — not a prior in-memory
+ * isGateResolved read — is the single arbiter of the resolution. The run STAYS
+ * 'paused' (only metadata changes); the resume CAS (resumeWorkflowRun)
+ * independently guards double-resume. Idempotent in content, so a lost race
+ * corrupts nothing — it only prevents the duplicate events/telemetry (#2113).
+ */
+export async function resolveApprovalGate(
+  id: string,
+  metadata: Record<string, unknown>
+): Promise<{ resolved: boolean }> {
+  const dialect = getDialect();
+  try {
+    const result = await pool.query(
+      `UPDATE remote_agent_workflow_runs
+       SET metadata = ${dialect.jsonMerge('metadata', 2)}
+       WHERE id = $1 AND ${unresolvedGateClause()}`,
+      [id, JSON.stringify(metadata)]
+    );
+    return { resolved: (result.rowCount ?? 0) > 0 };
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, workflowRunId: id }, 'db.workflow_run_resolve_gate_failed');
+    throw new Error(`Failed to resolve approval gate: ${err.message}`);
+  }
+}
+
+/**
+ * Atomically cancel a paused approval gate (compare-and-swap).
+ *
+ * The reject sibling of resolveApprovalGate for the outcomes that TERMINATE the
+ * run (no on_reject prompt, or the attempt cap reached): it flips the run
+ * paused→'cancelled' in a SINGLE conditional UPDATE, guarded on the SAME
+ * open-gate predicate. Doing it in one statement (instead of stamp-resolution +
+ * separate cancelWorkflowRun) means there is never an intermediate
+ * resolved-but-not-cancelled state that a failed second write could strand — a
+ * reject retry could not self-heal past the fast-path gate guard. No `resolved`
+ * marker is written: that marker only matters for the stay-paused rework path,
+ * and the rejection reason is preserved in the approval_received event. Returns
+ * `{ resolved }`; `false` means a concurrent resolver already won (the gate is no
+ * longer open), so the caller writes no events.
+ */
+export async function resolveAndCancelApprovalGate(id: string): Promise<{ resolved: boolean }> {
+  const dialect = getDialect();
+  try {
+    const result = await pool.query(
+      `UPDATE remote_agent_workflow_runs
+       SET status = 'cancelled',
+           completed_at = ${dialect.now()}
+       WHERE id = $1 AND ${unresolvedGateClause()}`,
+      [id]
+    );
+    return { resolved: (result.rowCount ?? 0) > 0 };
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, workflowRunId: id }, 'db.workflow_run_resolve_cancel_gate_failed');
+    throw new Error(`Failed to resolve and cancel approval gate: ${err.message}`);
+  }
+}
+
+/**
  * Thrown by resumeWorkflowRun when the target run is no longer in a resumable
  * state (already running/terminal, or concurrently resumed). Callers translate
  * this into a user-facing "already being resumed" message instead of leaking

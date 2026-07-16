@@ -38,6 +38,11 @@ const mockGetWorkflowRun = mock(() => Promise.resolve(null));
 const mockResumeWorkflowRun = mock(() => Promise.resolve({ id: 'run-id', status: 'running' }));
 const mockFailWorkflowRun = mock(() => Promise.resolve());
 const mockUpdateWorkflowRun = mock(() => Promise.resolve());
+// CAS gate resolvers (#2113) — approve/reject stamp the resolution atomically here
+// instead of via updateWorkflowRun. resolveAndCancelApprovalGate is the atomic
+// resolve+cancel for terminal reject outcomes. Default to "won the race".
+const mockResolveApprovalGate = mock(() => Promise.resolve({ resolved: true }));
+const mockResolveAndCancelApprovalGate = mock(() => Promise.resolve({ resolved: true }));
 
 // Workflow events database mocks
 const mockCreateWorkflowEvent = mock(() => Promise.resolve());
@@ -92,6 +97,8 @@ mock.module('../db/workflows', () => ({
   resumeWorkflowRun: mockResumeWorkflowRun,
   failWorkflowRun: mockFailWorkflowRun,
   updateWorkflowRun: mockUpdateWorkflowRun,
+  resolveApprovalGate: mockResolveApprovalGate,
+  resolveAndCancelApprovalGate: mockResolveAndCancelApprovalGate,
 }));
 
 mock.module('../db/workflow-events', () => ({
@@ -245,6 +252,8 @@ function clearAllMocks(): void {
   mockResumeWorkflowRun.mockClear();
   mockFailWorkflowRun.mockClear();
   mockUpdateWorkflowRun.mockClear();
+  mockResolveApprovalGate.mockClear();
+  mockResolveAndCancelApprovalGate.mockClear();
   mockCreateWorkflowEvent.mockClear();
   mockDeleteWorkflowNodeSessions.mockClear();
   // Isolation mocks
@@ -2166,20 +2175,19 @@ describe('CommandHandler', () => {
         expect(result.success).toBe(true);
         expect(result.message).toContain('loop input received');
         expect(result.message).toContain('my-loop-wf');
-        // Stays 'paused' (no status write) — resolution rides the approval context (#2075)
-        expect(mockUpdateWorkflowRun).toHaveBeenCalledWith('run-123', {
-          metadata: {
-            approval: {
-              type: 'interactive_loop',
-              nodeId: 'refine',
-              iteration: 2,
-              message: 'Review the output',
-              resolved: 'approved',
-            },
-            loop_user_input: 'Add error handling',
-            // A real comment counts as feedback ⇒ the resumed loop iterates (#2074)
-            loop_feedback_given: true,
+        // Stays 'paused' (no status write) — resolution rides the approval context,
+        // stamped atomically via the CAS (#2075/#2113)
+        expect(mockResolveApprovalGate).toHaveBeenCalledWith('run-123', {
+          approval: {
+            type: 'interactive_loop',
+            nodeId: 'refine',
+            iteration: 2,
+            message: 'Review the output',
+            resolved: 'approved',
           },
+          loop_user_input: 'Add error handling',
+          // A real comment counts as feedback ⇒ the resumed loop iterates (#2074)
+          loop_feedback_given: true,
         });
       });
 
@@ -2250,12 +2258,13 @@ describe('CommandHandler', () => {
         // The chat handler must NOT pre-default the comment to 'Approved' —
         // loop_feedback_given derives from the raw comment, and a masked
         // no-feedback would make every chat approve iterate instead of finalize.
-        expect(mockUpdateWorkflowRun).toHaveBeenCalledWith('run-bare', {
-          metadata: expect.objectContaining({
+        expect(mockResolveApprovalGate).toHaveBeenCalledWith(
+          'run-bare',
+          expect.objectContaining({
             loop_feedback_given: false,
             loop_user_input: 'Approved',
-          }),
-        });
+          })
+        );
       });
 
       test('returns error when run is not paused', async () => {
@@ -2419,20 +2428,19 @@ describe('CommandHandler', () => {
 
         expect(result.success).toBe(true);
         expect(result.message).toContain('Reworking');
-        // Stays 'paused' (no status write) — rework staged on the approval context (#2075)
-        expect(mockUpdateWorkflowRun).toHaveBeenCalledWith('run-reject-1', {
-          metadata: {
-            approval: {
-              type: 'approval',
-              nodeId: 'review',
-              message: 'Approve the plan?',
-              onRejectPrompt: 'Fix: $REJECTION_REASON',
-              onRejectMaxAttempts: 3,
-              resolved: 'rejected',
-            },
-            rejection_reason: 'needs work',
-            rejection_count: 1,
+        // Stays 'paused' (no status write) — rework staged on the approval context,
+        // stamped atomically via the CAS (#2075/#2113)
+        expect(mockResolveApprovalGate).toHaveBeenCalledWith('run-reject-1', {
+          approval: {
+            type: 'approval',
+            nodeId: 'review',
+            message: 'Approve the plan?',
+            onRejectPrompt: 'Fix: $REJECTION_REASON',
+            onRejectMaxAttempts: 3,
+            resolved: 'rejected',
           },
+          rejection_reason: 'needs work',
+          rejection_count: 1,
         });
       });
 
@@ -2465,7 +2473,9 @@ describe('CommandHandler', () => {
 
         expect(result.success).toBe(true);
         expect(result.message).toContain('max attempts reached');
-        expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-reject-max');
+        // Terminal reject resolves + cancels atomically (#2113)
+        expect(mockResolveAndCancelApprovalGate).toHaveBeenCalledWith('run-reject-max');
+        expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
       });
 
       test('cancels immediately without on_reject', async () => {
@@ -2496,7 +2506,9 @@ describe('CommandHandler', () => {
         );
 
         expect(result.success).toBe(true);
-        expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-reject-plain');
+        // Terminal reject resolves + cancels atomically (#2113)
+        expect(mockResolveAndCancelApprovalGate).toHaveBeenCalledWith('run-reject-plain');
+        expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
       });
     });
   });

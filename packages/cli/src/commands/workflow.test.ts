@@ -167,6 +167,10 @@ mock.module('@archon/core/db/workflows', () => ({
   getWorkflowRun: mock(() => Promise.resolve(null)),
   findWorkflowRunsByIdPrefix: mock(() => Promise.resolve([])),
   updateWorkflowRun: mock(() => Promise.resolve()),
+  // CAS gate resolvers (#2113) — approve/reject stamp the resolution here;
+  // resolveAndCancelApprovalGate atomically resolves+cancels terminal rejects.
+  resolveApprovalGate: mock(() => Promise.resolve({ resolved: true })),
+  resolveAndCancelApprovalGate: mock(() => Promise.resolve({ resolved: true })),
   listWorkflowRuns: mock(() => Promise.resolve([])),
   listDashboardRuns: mock(() =>
     Promise.resolve({
@@ -3848,7 +3852,8 @@ describe('workflowRejectCommand', () => {
 
     await workflowRejectCommand('run-plain', 'not good');
 
-    expect(workflowDb.cancelWorkflowRun).toHaveBeenCalledWith('run-plain');
+    // Terminal reject resolves + cancels atomically (#2113)
+    expect(workflowDb.resolveAndCancelApprovalGate).toHaveBeenCalledWith('run-plain');
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Rejected and cancelled'));
   });
 
@@ -3881,20 +3886,19 @@ describe('workflowRejectCommand', () => {
       // downstream workflowRunCommand failure is acceptable in this unit test
     }
 
-    // Stays 'paused' (no status write) — rework staged on the approval context (#2075)
-    expect(workflowDb.updateWorkflowRun).toHaveBeenCalledWith('run-on-reject', {
-      metadata: {
-        approval: {
-          type: 'approval',
-          nodeId: 'gate',
-          message: 'Approve?',
-          onRejectPrompt: 'Fix: $REJECTION_REASON',
-          onRejectMaxAttempts: 3,
-          resolved: 'rejected',
-        },
-        rejection_reason: 'needs work',
-        rejection_count: 1,
+    // Stays 'paused' (no status write) — rework staged atomically via the CAS on
+    // the approval context (#2075/#2113)
+    expect(workflowDb.resolveApprovalGate).toHaveBeenCalledWith('run-on-reject', {
+      approval: {
+        type: 'approval',
+        nodeId: 'gate',
+        message: 'Approve?',
+        onRejectPrompt: 'Fix: $REJECTION_REASON',
+        onRejectMaxAttempts: 3,
+        resolved: 'rejected',
       },
+      rejection_reason: 'needs work',
+      rejection_count: 1,
     });
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Rejected workflow'));
   });
@@ -3982,7 +3986,8 @@ describe('workflowRejectCommand', () => {
 
     await workflowRejectCommand('run-max', 'still bad');
 
-    expect(workflowDb.cancelWorkflowRun).toHaveBeenCalledWith('run-max');
+    // Terminal reject resolves + cancels atomically (#2113)
+    expect(workflowDb.resolveAndCancelApprovalGate).toHaveBeenCalledWith('run-max');
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('max attempts reached'));
   });
 
