@@ -2,6 +2,14 @@
 /**
  * Validates all .yaml files in $ARTIFACTS_DIR/source/ against the Archon workflow schema.
  * Output: JSON to stdout: { valid: boolean, files: FileResult[] }
+ *
+ * Empty-list contract: `files: []` (emitted with `valid: true`) means NO workflow
+ * YAML was found at the pinned SHA — no source dir, no YAML, or no workflow-shaped
+ * YAML (top-level `nodes:`). `valid: true` here reflects only "nothing failed
+ * schema validation", NOT "this is a mergeable submission". The decide node in
+ * marketplace-pr-review-and-merge.yaml treats an empty `files` list as
+ * request_changes (a marketplace entry must contain >=1 workflow), so an empty
+ * list must never be read as a merge signal.
  */
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { resolve, relative } from 'node:path';
@@ -50,6 +58,7 @@ if (!artifactsDir) {
 
 const sourceDir = resolve(artifactsDir, 'source');
 if (!existsSync(sourceDir)) {
+  // Empty files list => no workflow found; decide treats this as request_changes.
   console.log(JSON.stringify({ valid: true, files: [], note: 'no source directory' }));
   process.exit(0);
 }
@@ -70,6 +79,7 @@ function findYamlFiles(dir: string): string[] {
 const yamlFiles = findYamlFiles(sourceDir);
 
 if (yamlFiles.length === 0) {
+  // Empty files list => no workflow found; decide treats this as request_changes.
   console.log(JSON.stringify({ valid: true, files: [], note: 'no yaml files found' }));
   process.exit(0);
 }
@@ -81,6 +91,7 @@ if (yamlFiles.length === 0) {
 const workflowFiles = yamlFiles.filter((p) => looksLikeWorkflow(readFileSync(p, 'utf8')));
 
 if (workflowFiles.length === 0) {
+  // Empty files list => no workflow found; decide treats this as request_changes.
   console.log(JSON.stringify({ valid: true, files: [], note: 'no workflow yaml files (no top-level nodes:)' }));
   process.exit(0);
 }
