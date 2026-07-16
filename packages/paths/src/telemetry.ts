@@ -180,7 +180,7 @@ export function classifyWorkflowForTelemetry(
  * Model ids are user-supplied (forwarded verbatim from workflow/`config.yaml`
  * YAML), so unlike `provider` they're not structurally categorical. Forward a
  * value only when it looks like a real model ref (alphanumerics plus `/._:-`,
- * bounded length — covers `sonnet`, `gpt-5.3-codex`, `anthropic/claude-haiku-4-5`,
+ * bounded length — covers `sonnet`, `gpt-5.6-sol`, `anthropic/claude-haiku-4-5`,
  * `openrouter/qwen/qwen3-coder`). Anything else is dropped so a stray free-text
  * value can't slip through the "categorical only" telemetry contract.
  *

@@ -578,7 +578,7 @@ assistants:
                                                 # Required in compiled binaries if
                                                 # CLAUDE_BIN_PATH env var is not set.
   codex:
-    model: gpt-5.3-codex
+    model: gpt-5.6-sol
     modelReasoningEffort: medium  # 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
     webSearchMode: live  # 'disabled' | 'cached' | 'live'
     additionalDirectories:

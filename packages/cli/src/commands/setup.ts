@@ -71,7 +71,7 @@ const PI_BACKENDS = [
     label: 'Anthropic',
     hint: 'claude-haiku-4-5, claude-opus-4-7, etc.',
   },
-  { id: 'openai', envVar: 'OPENAI_API_KEY', label: 'OpenAI', hint: 'gpt-4o, gpt-5.3, etc.' },
+  { id: 'openai', envVar: 'OPENAI_API_KEY', label: 'OpenAI', hint: 'gpt-4o, gpt-5.6-sol, etc.' },
   {
     id: 'google',
     envVar: 'GEMINI_API_KEY',
@@ -132,7 +132,7 @@ const DEFAULT_CHAT_MODEL_OPTIONS: Record<string, { value: string; hint?: string 
     { value: 'opus', hint: 'most capable' },
     { value: 'haiku', hint: 'fastest' },
   ],
-  codex: [{ value: 'gpt-5.3-codex' }, { value: 'gpt-5.5' }, { value: 'gpt-5.2' }],
+  codex: [{ value: 'gpt-5.6-sol' }, { value: 'gpt-5.6-terra' }, { value: 'gpt-5.6-luna' }],
 };
 
 /** Sentinel select values for the default-chat-model prompt. Prefixed with
@@ -632,7 +632,7 @@ async function collectDefaultChatModel(provider: string): Promise<string | undef
   if (choice === CUSTOM_MODEL) {
     const typed = await text({
       message: `Model id for ${provider}:`,
-      placeholder: provider === 'codex' ? 'gpt-5.3-codex' : 'claude-sonnet-4-6',
+      placeholder: provider === 'codex' ? 'gpt-5.6-sol' : 'claude-sonnet-4-6',
     });
     if (isCancel(typed)) {
       cancel('Setup cancelled.');

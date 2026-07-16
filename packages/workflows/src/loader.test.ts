@@ -399,7 +399,7 @@ nodes:
       const yaml = `name: codex-options
 description: Codex options are parsed
 provider: codex
-model: gpt-5.2-codex
+model: gpt-5.6-sol
 modelReasoningEffort: medium
 webSearchMode: live
 additionalDirectories:

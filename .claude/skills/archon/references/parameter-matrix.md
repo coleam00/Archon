@@ -187,7 +187,7 @@ Use this matrix to find the right parameter. Use these references for the full e
 | `skills` (per-node)             | yes           | informational (auto-discovers `.agents/skills/`) | yes                          | yes                  | yes                 |
 | `agents`                        | yes           | no                                      | no                                   | **yes**              | **yes**             |
 | `sandbox` / `maxBudgetUsd` / `fallbackModel` | yes | no                                | no                                   | no                   | no                  |
-| Model naming                    | `haiku`, `sonnet`, `opus`, `opus[1m]`   | Codex model ID (e.g. `gpt-5.3-codex`)   | `<vendor>/<model>` (e.g. `anthropic/claude-opus-4-5`, `openrouter/qwen/qwen3-coder`) | OpenCode catalog ref | Copilot model id |
+| Model naming                    | `haiku`, `sonnet`, `opus`, `opus[1m]`   | Codex model ID (e.g. `gpt-5.6-sol`)   | `<vendor>/<model>` (e.g. `anthropic/claude-opus-4-5`, `openrouter/qwen/qwen3-coder`) | OpenCode catalog ref | Copilot model id |
 | `effort` / `thinking`           | yes           | use `modelReasoningEffort` for reasoning models | via `effort:` (maps to thinking level) | no (opencode.json agent config) | yes (maps like Pi) |
 | Provider session resume (`persist_session`, `context: shared` threading) | yes | yes            | yes                                  | yes                  | yes                 |
 
