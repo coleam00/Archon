@@ -2930,6 +2930,43 @@ nodes:
       expect(err?.error).toContain("'include' is not supported");
     });
 
+    it('should error two files that declare the same workflow name', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'first.yaml'),
+        `
+name: dup-name
+description: First file with this name
+nodes:
+  - id: a
+    prompt: "a"
+`
+      );
+      await writeFile(
+        join(workflowDir, 'second.yaml'),
+        `
+name: dup-name
+description: Second file with the same name
+nodes:
+  - id: b
+    prompt: "b"
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      // Overrides are by filename, not name — same-name files are ambiguous, so both are
+      // dropped and errored rather than silently last-wins (which would make include
+      // resolution order-dependent).
+      expect(result.workflows.some(w => w.workflow.name === 'dup-name')).toBe(false);
+      const dupErrors = result.errors.filter(e =>
+        e.error.includes("Duplicate workflow name 'dup-name'")
+      );
+      expect(dupErrors.length).toBe(2);
+      expect(dupErrors.map(e => e.filename).sort()).toEqual(['first.yaml', 'second.yaml']);
+    });
+
     it('should drop a workflow whose include target is missing but keep others', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(workflowDir, { recursive: true });

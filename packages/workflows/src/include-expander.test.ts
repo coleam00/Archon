@@ -136,6 +136,74 @@ describe('expandWorkflowIncludes — namespacing', () => {
 });
 
 // ---------------------------------------------------------------------------
+// when-gate combination on entry nodes (include gate must not be discarded)
+// ---------------------------------------------------------------------------
+
+describe('expandWorkflowIncludes — when gate combination', () => {
+  // Parent with a `gate` node; the include references it via when. The block's entry
+  // node carries its OWN when (referencing the same parent node, left intact because
+  // `gate` is not a block-internal id).
+  function parentWith(includeWhen: string, entryWhen: string): Map<string, WorkflowDefinition> {
+    const block = wf('gated-blk', [{ id: 'e', prompt: 'e', when: entryWhen }]);
+    const parent = wf('parent', [
+      { id: 'gate', bash: 'echo gate' },
+      { id: 'review', include: 'gated-blk', depends_on: ['gate'], when: includeWhen },
+    ]);
+    return mapOf(block, parent);
+  }
+
+  test('combines the include gate with the entry node own when (both plain, no ||)', () => {
+    const { workflows, errors } = expandWorkflowIncludes(
+      parentWith("$gate.output == 'go'", "$gate.output == 'yes'")
+    );
+    expect(errors).toHaveLength(0);
+    expect(nodeById(workflows.get('parent')!, 'review__e')?.when).toBe(
+      "$gate.output == 'go' && $gate.output == 'yes'"
+    );
+  });
+
+  test('fails the expansion when the ENTRY own when uses || (precedence would change)', () => {
+    const { workflows, errors } = expandWorkflowIncludes(
+      parentWith("$gate.output == 'go'", "$gate.output == 'a' || $gate.output == 'b'")
+    );
+    expect(workflows.has('parent')).toBe(false);
+    const err = errors.find(e => e.filename === 'parent');
+    expect(err?.error).toContain('cannot combine');
+    expect(err?.error).toContain('||');
+  });
+
+  test('fails the expansion when the INCLUDE gate uses || (precedence would change)', () => {
+    const { workflows, errors } = expandWorkflowIncludes(
+      parentWith("$gate.output == 'go' || $gate.output == 'stop'", "$gate.output == 'yes'")
+    );
+    expect(workflows.has('parent')).toBe(false);
+    expect(errors.find(e => e.filename === 'parent')?.error).toContain('cannot combine');
+  });
+
+  test('entry-only when is preserved unchanged when the include has no gate', () => {
+    const block = wf('gated-blk', [{ id: 'e', prompt: 'e', when: "$gate.output == 'yes'" }]);
+    const parent = wf('parent', [
+      { id: 'gate', bash: 'echo gate' },
+      { id: 'review', include: 'gated-blk', depends_on: ['gate'] },
+    ]);
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+    expect(errors).toHaveLength(0);
+    expect(nodeById(workflows.get('parent')!, 'review__e')?.when).toBe("$gate.output == 'yes'");
+  });
+
+  test('include-only gate is applied to an entry that has no when of its own', () => {
+    const block = wf('gated-blk', [{ id: 'e', prompt: 'e' }]);
+    const parent = wf('parent', [
+      { id: 'gate', bash: 'echo gate' },
+      { id: 'review', include: 'gated-blk', depends_on: ['gate'], when: "$gate.output == 'go'" },
+    ]);
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+    expect(errors).toHaveLength(0);
+    expect(nodeById(workflows.get('parent')!, 'review__e')?.when).toBe("$gate.output == 'go'");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Nested includes
 // ---------------------------------------------------------------------------
 

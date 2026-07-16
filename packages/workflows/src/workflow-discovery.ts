@@ -219,8 +219,41 @@ export async function discoverWorkflows(
    * its error surfaced via `allErrors`. Only `.workflow` changes — `source` is kept.
    */
   const expandIncludes = (): WorkflowWithSource[] => {
+    // Overrides are by FILENAME, but include targets resolve by workflow NAME. Two
+    // surviving files (after filename-precedence) declaring the same `name:` would
+    // silently collapse in the name map — last-writer-wins, emitting the same expanded
+    // workflow under both filenames with the wrong source label and making include
+    // resolution order-dependent. Detect the collision and error the offending files
+    // instead (resilient: drop only the colliding entries, keep discovering the rest).
+    // Same-name shadowing was already ambiguous before `include:`; the name map just made
+    // it load-bearing, so this hardens a pre-existing gap.
+    const filenamesByName = new Map<string, string[]>();
+    for (const [filename, { workflow }] of workflowsByFile) {
+      const existing = filenamesByName.get(workflow.name);
+      if (existing) existing.push(filename);
+      else filenamesByName.set(workflow.name, [filename]);
+    }
+    const duplicateNames = new Set<string>();
+    for (const [name, filenames] of filenamesByName) {
+      if (filenames.length > 1) {
+        duplicateNames.add(name);
+        for (const filename of filenames) {
+          allErrors.push({
+            filename,
+            error: `Duplicate workflow name '${name}' — also declared in ${filenames
+              .filter(f => f !== filename)
+              .join(
+                ', '
+              )}. Workflow names must be unique; same-name files do not override each other (overrides are by filename).`,
+            errorType: 'validation_error',
+          });
+        }
+      }
+    }
+
     const rawByName = new Map<string, WorkflowDefinition>();
     for (const { workflow } of workflowsByFile.values()) {
+      if (duplicateNames.has(workflow.name)) continue; // ambiguous — errored above, excluded
       rawByName.set(workflow.name, workflow);
     }
     const { workflows: expandedByName, errors: expansionErrors } =
@@ -229,6 +262,7 @@ export async function discoverWorkflows(
 
     const result: WorkflowWithSource[] = [];
     for (const { workflow, source } of workflowsByFile.values()) {
+      if (duplicateNames.has(workflow.name)) continue; // dropped as a duplicate-name collision
       const expanded = expandedByName.get(workflow.name);
       if (!expanded) continue; // expansion failed for this workflow — drop it
       result.push({ workflow: expanded, source });

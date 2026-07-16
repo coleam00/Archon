@@ -4048,6 +4048,19 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
     const layerResults = await Promise.allSettled(
       layer.map(async (node): Promise<LayerNodeResult> => {
         try {
+          // Include nodes are expanded away at discovery time (include-expander.ts): one
+          // must never reach the executor. This guard is FIRST in the per-node body — before
+          // resume-skip, `when:`, and trigger-rule handling — so an unexpanded include node
+          // cannot slip through by matching a prior-completed entry, a false `when:`, or a
+          // failing trigger rule. If one gets here, discovery was bypassed; fail loud rather
+          // than silently accepting an invalid runtime DAG.
+          if (isIncludeNode(node)) {
+            throw new Error(
+              `Internal error: include node '${node.id}' reached the executor unexpanded. ` +
+                'Include nodes must be resolved by expandWorkflowIncludes() during discovery.'
+            );
+          }
+
           // 0. Skip if this node completed successfully in a prior run (resume path).
           // `always_run: true` opts the node out of resume caching — re-execute even
           // when the prior run completed it.
@@ -4433,16 +4446,6 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                 )
             );
             return { nodeId: node.id, output };
-          }
-
-          if (isIncludeNode(node)) {
-            // Include nodes are expanded away at discovery time (include-expander.ts):
-            // one must never reach the executor. If it does, discovery was bypassed —
-            // fail loud rather than silently mis-running it as a prompt node.
-            throw new Error(
-              `Internal error: include node '${node.id}' reached the executor unexpanded. ` +
-                'Include nodes must be resolved by expandWorkflowIncludes() during discovery.'
-            );
           }
 
           // 4. Resolve per-node provider/model/options

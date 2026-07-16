@@ -126,12 +126,30 @@ function inlineInclude(includeNode: IncludeNode, childNodes: DagNode[]): Expande
     clone.id = prefix + cn.id;
 
     if (wasEntry) {
-      // Entry node: the include node's upstream deps + gate attach here. The gate
-      // (when/trigger_rule) copies onto each entry unless the entry declares its own.
+      // Entry node: the include node's upstream deps + gate attach here.
       if (parentDeps.length > 0) clone.depends_on = [...parentDeps];
-      if (includeNode.when !== undefined && clone.when === undefined) {
-        clone.when = includeNode.when;
+
+      // The include node's `when:` gates the WHOLE block, so it must apply to every entry
+      // node. When the entry already declares its own `when:`, combine them with `&&` so the
+      // include gate is NOT silently discarded (which would let the parent gate be bypassed).
+      // The `when:` grammar has no parentheses and `&&` binds tighter than `||`
+      // (condition-evaluator.ts), so `A && B` only preserves `(A) && (B)` when NEITHER side
+      // uses `||`. If either does, fail the expansion — a silently wrong precedence is worse
+      // than a clear load error telling the author to restructure.
+      if (includeNode.when !== undefined) {
+        if (clone.when === undefined) {
+          clone.when = includeNode.when;
+        } else if (includeNode.when.includes('||') || clone.when.includes('||')) {
+          throw new IncludeExpansionError(
+            `Node '${includeNode.id}': cannot combine the include's when ('${includeNode.when}') with entry node '${cn.id}' own when ('${clone.when}') because one side uses '||'. The when: grammar has no parentheses and '&&' binds tighter than '||', so combining would change precedence — put the gate only on the include node, or gate inside the block.`
+          );
+        } else {
+          clone.when = `${includeNode.when} && ${clone.when}`;
+        }
       }
+
+      // trigger_rule is a join enum, not a boolean expression — it cannot be combined; the
+      // entry node's own value wins when present, otherwise the include node's applies.
       if (includeNode.trigger_rule !== undefined && clone.trigger_rule === undefined) {
         clone.trigger_rule = includeNode.trigger_rule;
       }

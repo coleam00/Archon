@@ -12634,3 +12634,111 @@ describe('executeDagWorkflow -- include expansion (zero runtime machinery)', () 
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// An unexpanded include node must FAIL LOUDLY, never silently skip — the
+// fail-fast guard runs before resume-skip / when / trigger-rule handling.
+// ---------------------------------------------------------------------------
+
+describe('executeDagWorkflow -- unexpanded include node fail-fast guard', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(tmpdir(), `dag-inc-guard-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await mkdir(testDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    try {
+      await rm(testDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  });
+
+  function events(
+    deps: WorkflowDeps
+  ): Array<{ event_type: string; step_name: string; data: unknown }> {
+    return (deps.store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls.map(
+      (call: unknown[]) => call[0] as { event_type: string; step_name: string; data: unknown }
+    );
+  }
+
+  it('fails (not skips) an unexpanded include node that matches a prior-completed entry', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('inc-guard-resume', { workflow_name: 'inc-guard' });
+
+    // A raw include node reaching the executor with a resume entry for its own id: the
+    // guard must fire BEFORE the resume-skip check, so it fails instead of being skipped.
+    const includeNode = dagNodeSchema.parse({ id: 'inc', include: 'some-block' });
+    const prior = new Map<string, string>([['inc', 'stale prior output']]);
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-inc-guard',
+      testDir,
+      { name: 'inc-guard', nodes: [includeNode] },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      prior
+    );
+
+    const evs = events(mockDeps);
+    const failed = evs.find(e => e.event_type === 'node_failed' && e.step_name === 'inc');
+    expect(failed).toBeDefined();
+    expect((failed!.data as { error: string }).error).toContain('reached the executor unexpanded');
+    // Crucially, it was NOT silently skipped as a prior success.
+    expect(evs.some(e => e.event_type === 'node_skipped_prior_success')).toBe(false);
+  });
+
+  it('fails (not skips) an unexpanded include node whose when: would evaluate false', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('inc-guard-when', { workflow_name: 'inc-guard' });
+
+    // `flag` emits NO; the include's when checks == YES (false → would normally skip). The
+    // guard must fire first and fail the node instead.
+    const nodes = [
+      dagNodeSchema.parse({ id: 'flag', bash: 'echo NO' }),
+      dagNodeSchema.parse({
+        id: 'inc',
+        include: 'some-block',
+        depends_on: ['flag'],
+        when: "$flag.output == 'YES'",
+      }),
+    ];
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-inc-guard',
+      testDir,
+      { name: 'inc-guard', nodes },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const evs = events(mockDeps);
+    const failed = evs.find(e => e.event_type === 'node_failed' && e.step_name === 'inc');
+    expect(failed).toBeDefined();
+    expect((failed!.data as { error: string }).error).toContain('reached the executor unexpanded');
+    // It was NOT skipped via the when: gate.
+    expect(evs.some(e => e.event_type === 'node_skipped' && e.step_name === 'inc')).toBe(false);
+  });
+});
