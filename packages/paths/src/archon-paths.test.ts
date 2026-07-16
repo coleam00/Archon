@@ -27,6 +27,7 @@ import {
   logArchonPaths,
   validateAppDefaultsPaths,
   parseOwnerRepo,
+  resolveRepoProjectIdentity,
   getProjectRoot,
   getProjectSourcePath,
   getProjectWorktreesPath,
@@ -429,6 +430,47 @@ describe('archon-paths', () => {
     test('rejects names with special characters', () => {
       expect(parseOwnerRepo('acme/repo;rm -rf')).toBeNull();
       expect(parseOwnerRepo('acme/$HOME')).toBeNull();
+    });
+  });
+
+  describe('resolveRepoProjectIdentity', () => {
+    test('returns parsed owner/repo for an owner/repo name', () => {
+      expect(resolveRepoProjectIdentity('acme/widget', '/repos/widget')).toEqual({
+        owner: 'acme',
+        repo: 'widget',
+      });
+    });
+
+    test('scopes a no-remote bare name under _local/<basename(cwd)>', () => {
+      expect(resolveRepoProjectIdentity('workspace', '/home/username/workspace')).toEqual({
+        owner: '_local',
+        repo: 'workspace',
+      });
+    });
+
+    test('derives the repo segment from cwd, not the name', () => {
+      // Name and directory basename can differ; the on-disk tree registration
+      // creates is keyed off the directory basename.
+      expect(resolveRepoProjectIdentity('some-name', '/srv/projects/checkout')).toEqual({
+        owner: '_local',
+        repo: 'checkout',
+      });
+    });
+
+    test('preserves a basename registration would have used verbatim (spaces allowed)', () => {
+      expect(resolveRepoProjectIdentity('my app', '/home/u/my app')).toEqual({
+        owner: '_local',
+        repo: 'my app',
+      });
+    });
+
+    test('returns null for a dotdot basename (no path escape)', () => {
+      expect(resolveRepoProjectIdentity('workspace', '/home/u/..')).toBeNull();
+    });
+
+    test('returns null for a dot or empty basename', () => {
+      expect(resolveRepoProjectIdentity('workspace', '/home/u/.')).toBeNull();
+      expect(resolveRepoProjectIdentity('workspace', '/')).toBeNull();
     });
   });
 

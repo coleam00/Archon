@@ -393,6 +393,33 @@ export function parseOwnerRepo(name: string): { owner: string; repo: string } | 
 }
 
 /**
+ * Resolve the `{ owner, repo }` storage identity for a registered *repo*-kind
+ * codebase. This is the single source of truth that keeps `registerRepository()`
+ * (which creates the on-disk `owner/repo` tree) and the log/artifact path
+ * resolvers in agreement — a mismatch between the two dropped no-remote repos'
+ * logs/artifacts into `<cwd>/.archon` instead of `ARCHON_HOME` (#2132).
+ *
+ * - A `name` in exact `owner/repo` form (clones, web-registered repos) → that
+ *   owner/repo.
+ * - Otherwise — most commonly a no-remote local repo registered under its bare
+ *   directory basename — the working directory's basename scoped under the
+ *   `_local` pseudo-owner, mirroring what registration writes to disk.
+ *   `basename()` never contains a path separator, so the only traversal risk is
+ *   `..`; that, `.`, and an empty segment return null so the caller can fall
+ *   back to cwd-local storage.
+ */
+export function resolveRepoProjectIdentity(
+  name: string,
+  cwd: string
+): { owner: string; repo: string } | null {
+  const parsed = parseOwnerRepo(name);
+  if (parsed) return parsed;
+  const repo = basename(cwd);
+  if (repo === '' || repo === '.' || repo === '..') return null;
+  return { owner: '_local', repo };
+}
+
+/**
  * Get the project root directory for a given owner/repo.
  * Returns: ~/.archon/workspaces/owner/repo/
  */
