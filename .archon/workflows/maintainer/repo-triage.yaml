@@ -20,7 +20,7 @@ nodes:
   # ---------------------------------------------------------------------------
   - id: triage-issues
     model: sonnet
-    allowed_tools: [Bash, Read, Write, Task]
+    allowed_tools: [Bash, Read, Write, Agent]
     agents:
       brief-gen:
         description: >-
@@ -86,8 +86,8 @@ nodes:
           full body you would have posted.
         - Do NOT run `gh issue (comment|close|edit)`. Do NOT use the Write
           tool on `.archon/state/*.json`.
-        - When delegating via Task to triage-agent/brief-gen, PREPEND this
-          exact sentence to every Task prompt:
+        - When delegating via Agent to triage-agent/brief-gen, PREPEND this
+          exact sentence to every Agent prompt:
               "DRY_RUN=1 is active. Do NOT apply labels or mutate the
                issue in any way. Instead print `[DRY] would ...` lines
                describing what you would have done."
@@ -170,18 +170,18 @@ nodes:
       ## 4. LABEL PASS — parallel fan-out to triage-agent
 
       PREFLIGHT: verify the on-disk sub-agent definition exists before
-      attempting any Task call:
+      attempting any Agent call:
 
           test -f .claude/agents/triage-agent.md
 
-      If missing, SKIP the whole label pass (do not attempt Task calls
+      If missing, SKIP the whole label pass (do not attempt Agent calls
       that would fail obscurely at runtime). Log:
           "[triage-issues] label pass skipped: .claude/agents/triage-agent.md
            missing — install the skill-adjacent agent file to enable labeling."
       Continue to the brief pass — labeling is a nice-to-have, not a blocker.
 
       Spawn the existing on-disk `triage-agent` sub-agent in PARALLEL (a
-      single assistant turn with multiple Task tool calls — this matters
+      single assistant turn with multiple Agent tool calls — this matters
       for speed). Per-task prompt:
 
           "Triage open issue #<N> in this repository. Fetch it via
@@ -193,7 +193,7 @@ nodes:
 
       ## 5. BRIEF PASS — parallel fan-out to brief-gen
       For every issue that needs a brief, spawn the inline `brief-gen`
-      sub-agent in PARALLEL (single turn, multiple Task calls).
+      sub-agent in PARALLEL (single turn, multiple Agent calls).
 
       Per-task prompt template:
           "Brief issue #<N>.
@@ -249,7 +249,7 @@ nodes:
                 postedAt: "<now-iso>"
               }
 
-      Post sequentially (not via Task) so you can reliably capture each
+      Post sequentially (not via Agent) so you can reliably capture each
       comment ID.
 
       ## 8. RECONCILE PASS — 3-day auto-close
@@ -309,8 +309,8 @@ nodes:
       - State writes are ATOMIC per run — only write the final merged
         state once at step 9. If a pass fails midway, the previous state
         remains.
-      - Parallel Task fan-out is strict: ONE assistant turn with MANY
-        Task tool calls, not sequential Task calls.
+      - Parallel Agent fan-out is strict: ONE assistant turn with MANY
+        Agent tool calls, not sequential Agent calls.
 
   # ---------------------------------------------------------------------------
   # Closed-dedup check — follow-up to triage-issues. Checks whether any
@@ -322,7 +322,7 @@ nodes:
   - id: closed-dedup-check
     depends_on: [triage-issues]
     model: sonnet
-    allowed_tools: [Bash, Read, Write, Task]
+    allowed_tools: [Bash, Read, Write, Agent]
     agents:
       closed-brief-gen:
         description: >-
@@ -372,14 +372,14 @@ nodes:
 
       If SKIP_CLOSED_DEDUP=1 — print
           "Skipping closed-dedup-check per SKIP_CLOSED_DEDUP=1"
-      and exit immediately. No gh calls, no state read, no Task fan-out.
+      and exit immediately. No gh calls, no state read, no Agent fan-out.
 
       If DRY_RUN=1 — READ-ONLY:
         - Do read-only work (gh list/view, state reads, clustering).
         - For every mutation (comment, close, state write), print `[DRY] would ...`.
         - Do NOT run gh issue comment/close.
         - Do NOT use Write on `.archon/state/*.json`.
-        - When spawning closed-brief-gen via Task, prepend to its prompt:
+        - When spawning closed-brief-gen via Agent, prepend to its prompt:
               "DRY_RUN=1 is active. Run only read-only gh commands."
         - End with a summary prefixed `## (DRY RUN) Closed-dedup check — <now>`.
 
@@ -461,9 +461,9 @@ nodes:
         - If `state.closedBriefs[N]` exists AND sha matches → reuse.
         - Else → needs BRIEF.
 
-      ## 4. BRIEF PASS — parallel Task fan-out to closed-brief-gen
+      ## 4. BRIEF PASS — parallel Agent fan-out to closed-brief-gen
       Spawn `closed-brief-gen` in PARALLEL (single assistant turn, multiple
-      Task calls) for every closed issue needing a brief. Per-task prompt:
+      Agent calls) for every closed issue needing a brief. Per-task prompt:
 
           "Brief closed issue #<N>."
 
@@ -509,7 +509,7 @@ nodes:
                 postedAt: "<now-iso>"
               }
 
-      Post sequentially (not via Task) so you can capture comment IDs.
+      Post sequentially (not via Agent) so you can capture comment IDs.
 
       ## 7. RECONCILE PASS — 3-day auto-close
       Cache bot login once at top-of-run: `gh api user --jq .login`.
@@ -556,7 +556,7 @@ nodes:
         erodes trust. When in doubt, skip.
       - If `gh` errors (auth, rate limit), abort cleanly and summarise.
       - State writes are ATOMIC — one Write at step 8.
-      - Parallel Task fan-out required for step 4 only. Step 6 is sequential
+      - Parallel Agent fan-out required for step 4 only. Step 6 is sequential
         to capture comment IDs reliably.
 
   # ---------------------------------------------------------------------------
@@ -568,7 +568,7 @@ nodes:
   # ---------------------------------------------------------------------------
   - id: closed-pr-dedup-check
     model: sonnet
-    allowed_tools: [Bash, Read, Write, Task]
+    allowed_tools: [Bash, Read, Write, Agent]
     agents:
       pr-brief-gen:
         description: >-
@@ -628,7 +628,7 @@ nodes:
         - All read-only gh calls OK.
         - Do NOT run `gh pr comment`. Do NOT use Write on state files.
         - Print `[DRY] would ...` for every mutation.
-        - When spawning pr-brief-gen via Task, prepend:
+        - When spawning pr-brief-gen via Agent, prepend:
               "DRY_RUN=1 is active. Run only read-only gh commands."
         - End with a summary prefixed `## (DRY RUN) Closed-PR dedup — <now>`.
 
@@ -686,7 +686,7 @@ nodes:
           and the sha matches → reuse the cached brief.
         - Else → needs BRIEF.
 
-      ## 4. BRIEF PASS — parallel Task fan-out to pr-brief-gen
+      ## 4. BRIEF PASS — parallel Agent fan-out to pr-brief-gen
       Spawn `pr-brief-gen` in PARALLEL for every PR needing a brief
       (open AND closed, all in a single assistant turn if possible — the
       sub-agent handles both via the `state` hint).
@@ -745,7 +745,7 @@ nodes:
                 postedAt: "<now-iso>"
               }
 
-      Post sequentially (not via Task) for reliable comment-ID capture.
+      Post sequentially (not via Agent) for reliable comment-ID capture.
 
       NO auto-close. PRs are author work product; closing them without
       consent discards effort. A reminder comment is the right ceiling.
@@ -770,7 +770,7 @@ nodes:
       - Idempotent comments — always check existing PR comments before
         posting to avoid noise.
       - State writes are ATOMIC — one Write at step 7.
-      - Parallel Task fan-out for step 4 only. Step 6 sequential.
+      - Parallel Agent fan-out for step 4 only. Step 6 sequential.
       - Strict matching — false positives on PR dedup are a maintainer
         trust hit. When ambiguous, skip.
 
@@ -779,7 +779,7 @@ nodes:
   # ---------------------------------------------------------------------------
   - id: link-prs
     model: sonnet
-    allowed_tools: [Bash, Read, Write, Task]
+    allowed_tools: [Bash, Read, Write, Agent]
     agents:
       pr-issue-matcher:
         description: >-
@@ -862,7 +862,7 @@ nodes:
           "Skipping link-prs per SKIP_PR_LINK=1 — no state read, no gh
            calls, no comments."
       and exit immediately. Do not read state, do not call gh, do not
-      use Task. This is the "staged rollout" escape hatch for the first
+      use Agent. This is the "staged rollout" escape hatch for the first
       live run of the full workflow.
 
       If DRY_RUN=1 — READ-ONLY mode:
@@ -872,8 +872,8 @@ nodes:
           body you would have posted on which target.
         - Do NOT run `gh issue comment` or `gh pr comment`. Do NOT use
           the Write tool on `.archon/state/*.json`.
-        - When delegating via Task to pr-issue-matcher, PREPEND this exact
-          sentence to every Task prompt:
+        - When delegating via Agent to pr-issue-matcher, PREPEND this exact
+          sentence to every Agent prompt:
               "DRY_RUN=1 is active. Run only read-only gh commands."
           (pr-issue-matcher is already read-only, so this is belt-and-braces.)
         - End with the standard summary table, but prefix the title
@@ -960,9 +960,9 @@ nodes:
         - If `state.linkedPrs[N]` exists AND its sha matches → SKIP.
         - Else → needs MATCHING.
 
-      ## 4. MATCH PASS — parallel Task fan-out to pr-issue-matcher
+      ## 4. MATCH PASS — parallel Agent fan-out to pr-issue-matcher
       Spawn `pr-issue-matcher` in PARALLEL for every PR needing matching
-      (single turn, multiple Task calls).
+      (single turn, multiple Agent calls).
 
       Per-task prompt template:
           "Match PR #<N> against the open issues below.
@@ -1034,7 +1034,7 @@ nodes:
       On idempotent SKIP (existing comment found), do NOT attempt to
       extract an ID — leave the slot absent.
 
-      Post sequentially — don't Task-fan-out this step.
+      Post sequentially — don't Agent-fan-out this step.
 
       ## 6b. TEMPLATE NUDGE PASS — auto-comment on low-quality PR fills
 
@@ -1141,7 +1141,7 @@ nodes:
         evidence is overwhelming.
       - If `gh` errors out (auth, rate limit), abort cleanly and summarise.
       - State writes are ATOMIC per run — a single Write at step 7.
-      - Parallel Task fan-out is required for the match pass only. Act
+      - Parallel Agent fan-out is required for the match pass only. Act
         pass is sequential for idempotent comment-ID capture.
       - Template nudge comments happen AT MOST ONCE per PR (tracked via
         `templateNudgedAt`). Never re-nudge — contributors will ignore us.
@@ -1157,7 +1157,7 @@ nodes:
     allowed_tools: [Bash, Read, Write]
     prompt: |
       You post gentle reminders on GitHub issues and PRs that have gone
-      quiet. No auto-close. No Task fan-out needed — this is direct work.
+      quiet. No auto-close. No Agent fan-out needed — this is direct work.
 
       # Mode check — READ FIRST
 
@@ -1282,7 +1282,7 @@ nodes:
   # Digest — runs LAST, after every other node. Reads each prior node's
   # final assistant output via $<nodeId>.output and synthesises one
   # maintainer-facing report to $ARTIFACTS_DIR/digest.md. Pure synthesis —
-  # no gh calls, no mutations, no Task fan-out.
+  # no gh calls, no mutations, no Agent fan-out.
   # ---------------------------------------------------------------------------
   - id: digest
     depends_on:
