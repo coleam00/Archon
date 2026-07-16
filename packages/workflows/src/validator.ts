@@ -22,6 +22,7 @@ import {
 import { execFileAsync } from '@archon/git';
 import { BUNDLED_COMMANDS, isBinaryBuild } from './defaults/bundled-defaults';
 import { isValidCommandName } from './command-validation';
+import { levenshtein, findSimilar } from './utils/fuzzy-match';
 import { getProviderCapabilities, isRegisteredProvider } from '@archon/providers';
 
 /** Lazy-initialized logger */
@@ -91,42 +92,11 @@ export interface ValidationConfig {
   tiers?: RawTiersConfig;
 }
 
-// =============================================================================
-// Levenshtein distance and fuzzy matching
-// =============================================================================
-
-/** Classic Levenshtein distance between two strings */
-export function levenshtein(a: string, b: string): number {
-  const m = a.length;
-  const n = b.length;
-  const dp: number[][] = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0) as number[]);
-
-  for (let i = 0; i <= m; i++) dp[i][0] = i;
-  for (let j = 0; j <= n; j++) dp[0][j] = j;
-
-  for (let i = 1; i <= m; i++) {
-    for (let j = 1; j <= n; j++) {
-      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost);
-    }
-  }
-
-  return dp[m][n];
-}
-
-/** Find the closest matches from a list of candidates */
-export function findSimilar(
-  name: string,
-  candidates: readonly string[],
-  maxDistance?: number
-): string[] {
-  const threshold = maxDistance ?? Math.max(2, Math.floor(name.length * 0.3));
-  const scored = candidates
-    .map(c => ({ name: c, distance: levenshtein(name.toLowerCase(), c.toLowerCase()) }))
-    .filter(s => s.distance <= threshold && s.distance > 0)
-    .sort((a, b) => a.distance - b.distance);
-  return scored.slice(0, 3).map(s => s.name);
-}
+// Levenshtein distance and fuzzy matching now live in ./utils/fuzzy-match so lean
+// modules can reuse them without validator.ts's heavy deps (imported above for the
+// internal command/tool did-you-mean hints). Re-exported to preserve validator.ts's
+// public surface for existing importers (e.g. validator.test.ts).
+export { levenshtein, findSimilar };
 
 // =============================================================================
 // Command discovery

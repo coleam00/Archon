@@ -61,7 +61,12 @@ import { createLogger, captureWorkflowCompleted } from '@archon/paths';
 import type { WorkflowErrorClass, WorkflowNodeType } from '@archon/paths';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { evaluateCondition } from './condition-evaluator';
-import { declaredFieldsFromSchema, resolveNodeOutputField } from './output-ref';
+import {
+  declaredFieldsFromSchema,
+  resolveNodeOutputField,
+  OutputRefError,
+  similarNodeIds,
+} from './output-ref';
 import { writeNodeArtifact, readNodeArtifacts } from './artifacts-index';
 import {
   logNodeStart,
@@ -617,6 +622,21 @@ export function substituteNodeOutputRefs(
     (match, nodeId: string, field: string | undefined) => {
       const nodeOutput = nodeOutputs.get(nodeId);
       if (!nodeOutput) {
+        // A `.field` ref that resolves to no output (a typo the load-time validator
+        // can't always see — refs in bash/script/approval/cancel fields and inside
+        // command-file content aren't scanned — or a real node that hasn't run before
+        // this reference) fails the consuming node loudly, matching the strict
+        // no-silent-drop posture for known-producer field access below. The whole-text
+        // `$id.output` form stays lenient ('') as a long-documented surface (changing
+        // it is a bigger compatibility break).
+        if (field) {
+          throw new OutputRefError(
+            nodeId,
+            field,
+            'unknown-node',
+            similarNodeIds(nodeId, nodeOutputs.keys())
+          );
+        }
         getLog().warn({ nodeId, match }, 'dag_node_output_ref_unknown_node');
         return escapedForBash ? "''" : '';
       }
@@ -686,6 +706,13 @@ export function substituteLoopPrevRefs(
         // skipped / hasn't settled last iteration). Resolve to empty rather than
         // throwing — the author opted into a cross-iteration ref, and absence on the
         // first pass (or after a skipped node) is expected.
+        //
+        // NOTE: unlike substituteNodeOutputRefs / resolveOutputRef, this seam does NOT
+        // yet fail loudly on a `.field` ref to a genuinely-unknown body node id (a typo
+        // that matches no body node on ANY iteration). Distinguishing that from the
+        // legitimate iteration-1 absence needs the static body-node-id set threaded in
+        // (complicated by nested loop_groups reusing the outer snapshot), which is out
+        // of scope for #2135's `$node.output.field` fix — tracked as #2142.
         getLog().debug({ nodeId, match }, 'loop_group_prev_ref_no_prior_output');
         return escapedForBash ? "''" : '';
       }
