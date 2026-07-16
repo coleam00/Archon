@@ -8,7 +8,7 @@
 import { writeFileSync } from 'fs';
 import { readFile } from 'fs/promises';
 import { isAbsolute, join as joinPath, resolve as resolvePath } from 'path';
-import { execFileAsync } from '@archon/git';
+import { execFileAsync, resolveBashPath } from '@archon/git';
 import { discoverScriptsForCwd } from './script-discovery';
 import type {
   IWorkflowPlatform,
@@ -21,6 +21,7 @@ import type {
   NodeConfig,
   ProviderCapabilities,
   TokenUsage,
+  ExecutionContext,
 } from '@archon/providers/types';
 import {
   getProviderCapabilities,
@@ -44,6 +45,7 @@ import type {
   ThinkingConfig,
   SandboxSettings,
   WorkflowSource,
+  LoopGateRunMetadata,
 } from './schemas';
 import {
   isBashNode,
@@ -52,6 +54,7 @@ import {
   isApprovalNode,
   isCancelNode,
   isScriptNode,
+  isIncludeNode,
   isPersistableNode,
   isApprovalContext,
 } from './schemas';
@@ -60,7 +63,12 @@ import { createLogger, captureWorkflowCompleted } from '@archon/paths';
 import type { WorkflowErrorClass, WorkflowNodeType } from '@archon/paths';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { evaluateCondition } from './condition-evaluator';
-import { declaredFieldsFromSchema, resolveNodeOutputField } from './output-ref';
+import {
+  declaredFieldsFromSchema,
+  resolveNodeOutputField,
+  OutputRefError,
+  similarNodeIds,
+} from './output-ref';
 import { writeNodeArtifact, readNodeArtifacts } from './artifacts-index';
 import {
   logNodeStart,
@@ -293,6 +301,26 @@ type NodeExecutionResult = NodeOutput & {
   loopIterations?: number;
 };
 
+/**
+ * Sequential-session threading cursor. Tagged with the resolved provider that produced
+ * the session so a downstream sequential node on a DIFFERENT provider starts fresh
+ * instead of attempting an impossible cross-provider resume (#1992) — a foreign session
+ * id hard-fails Claude ("No conversation found with session ID") and cold-falls-back
+ * on Codex.
+ */
+interface SequentialSessionCursor {
+  sessionId: string;
+  provider: string;
+}
+
+/** Per-node result surfaced by a runLayers layer closure. `sessionProvider` tags which
+ *  resolved provider created `output.sessionId` (session-producing paths only). */
+interface LayerNodeResult {
+  nodeId: string;
+  output: NodeExecutionResult;
+  sessionProvider?: string;
+}
+
 /** Throttle state for cancel checks (reads — no write contention in WAL mode) */
 const lastNodeCancelCheck = new Map<string, number>();
 const CANCEL_CHECK_INTERVAL_MS = 10_000;
@@ -332,6 +360,62 @@ const DEFAULT_NODE_RETRY_DELAY_MS = 3000;
  * (refusal / max_tokens truncation) and fails fast.
  */
 const STRUCTURED_OUTPUT_MAX_REASKS = 3;
+
+/**
+ * Tracks live background Agent tasks within one provider stream pass (#2083).
+ *
+ * Since Claude SDK 0.3.193 the model can delegate work to asynchronous
+ * background agents, so a `result` chunk only means "top-level turn done" —
+ * NOT "all work done". Breaking out of the stream loop at a result while
+ * background tasks are live calls `.return()` on the generator chain, which
+ * tears down the SDK subprocess (SIGTERM) and kills the tasks — the artifacts
+ * they were producing silently never appear.
+ *
+ * Fed by the provider's `background_tasks` chunk (SDK `background_tasks_changed`,
+ * v0.3.209+): a level signal carrying the FULL live set, REPLACE semantics.
+ * Both dag-executor stream loops (AI node + loop iteration) instantiate one
+ * tracker per stream pass and gate their break-on-result on it: when the set
+ * is non-empty, keep consuming — the SDK keeps the subprocess alive until the
+ * tasks drain, gives the agent a follow-up turn to integrate their output, and
+ * emits a final `result` (verified empirically against SDK 0.3.209). The wait
+ * is bounded by the existing idle-timeout machinery: `task_progress` chunks
+ * (~30s cadence while subagents run) reset the idle timer, and a genuinely
+ * hung task hits the normal idle-timeout path.
+ *
+ * Providers that never emit the chunk (Codex/Pi/OpenCode/Copilot, older Claude
+ * CLIs) leave the set empty → break-on-first-result behavior is unchanged.
+ */
+function createBackgroundTaskTracker(): {
+  update(tasks: { taskId: string; description: string }[]): void;
+  shouldBreakOnResult(): boolean;
+  count(): number;
+  ids(): string[];
+  /** True exactly once — lets the caller announce the wait a single time per pass. */
+  shouldAnnounceWait(): boolean;
+} {
+  const live = new Map<string, string>(); // taskId → description
+  let announced = false;
+  return {
+    update(tasks): void {
+      live.clear();
+      for (const t of tasks) live.set(t.taskId, t.description);
+    },
+    shouldBreakOnResult(): boolean {
+      return live.size === 0;
+    },
+    count(): number {
+      return live.size;
+    },
+    ids(): string[] {
+      return [...live.keys()];
+    },
+    shouldAnnounceWait(): boolean {
+      if (announced) return false;
+      announced = true;
+      return true;
+    },
+  };
+}
 
 /**
  * Get effective retry config for a DAG node.
@@ -525,6 +609,11 @@ function shellQuoteOrFile(
  * Substitute $node_id.output and $node_id.output.field references in a prompt.
  * Called AFTER the standard substituteWorkflowVariables pass.
  *
+ * KEEP IN SYNC (three ref-surface enumerations must agree): the fields this is called on
+ * (search call sites below), the loader's validateDagStructure scan (which validates the
+ * same refs), and rewriteNodeOutputRefs in include-expander.ts (which renames them on
+ * inline). Adding a substituted field to one means updating all three.
+ *
  * @param escapedForBash - When true, wraps substituted values in single quotes so
  *   they are safe to embed in bash scripts passed to `bash -c`. Set true only for
  *   bash node script substitution; AI/command prompt substitution should use false.
@@ -540,6 +629,21 @@ export function substituteNodeOutputRefs(
     (match, nodeId: string, field: string | undefined) => {
       const nodeOutput = nodeOutputs.get(nodeId);
       if (!nodeOutput) {
+        // A `.field` ref that resolves to no output (a typo the load-time validator
+        // can't always see — refs in bash/script/approval/cancel fields and inside
+        // command-file content aren't scanned — or a real node that hasn't run before
+        // this reference) fails the consuming node loudly, matching the strict
+        // no-silent-drop posture for known-producer field access below. The whole-text
+        // `$id.output` form stays lenient ('') as a long-documented surface (changing
+        // it is a bigger compatibility break).
+        if (field) {
+          throw new OutputRefError(
+            nodeId,
+            field,
+            'unknown-node',
+            similarNodeIds(nodeId, nodeOutputs.keys())
+          );
+        }
         getLog().warn({ nodeId, match }, 'dag_node_output_ref_unknown_node');
         return escapedForBash ? "''" : '';
       }
@@ -609,6 +713,13 @@ export function substituteLoopPrevRefs(
         // skipped / hasn't settled last iteration). Resolve to empty rather than
         // throwing — the author opted into a cross-iteration ref, and absence on the
         // first pass (or after a skipped node) is expected.
+        //
+        // NOTE: unlike substituteNodeOutputRefs / resolveOutputRef, this seam does NOT
+        // yet fail loudly on a `.field` ref to a genuinely-unknown body node id (a typo
+        // that matches no body node on ANY iteration). Distinguishing that from the
+        // legitimate iteration-1 absence needs the static body-node-id set threaded in
+        // (complicated by nested loop_groups reusing the outer snapshot), which is out
+        // of scope for #2135's `$node.output.field` fix — tracked as #2142.
         getLog().debug({ nodeId, match }, 'loop_group_prev_ref_no_prior_output');
         return escapedForBash ? "''" : '';
       }
@@ -651,7 +762,8 @@ async function resolveNodeProviderAndModel(
   _cwd: string,
   workflowLevelOptions: WorkflowLevelOptions,
   aiProfile?: ResolvedAiProfile,
-  workflowPreset?: ModelAliasPreset
+  workflowPreset?: ModelAliasPreset,
+  execContext: ExecutionContext = { kind: 'host' }
 ): Promise<{
   provider: string;
   model: string | undefined;
@@ -784,6 +896,12 @@ async function resolveNodeProviderAndModel(
   // Build universal base options
   const baseOptions: SendQueryOptions = {};
   if (model) baseOptions.model = model;
+  // Only annotate options with the execution context when running in a container
+  // (Phase B). Host is the default/absent case, so host runs produce byte-identical
+  // options — the provider infers host behavior from the missing field.
+  if (execContext.kind === 'container') {
+    baseOptions.execContext = execContext;
+  }
   if (config.envVars && Object.keys(config.envVars).length > 0) {
     baseOptions.env = config.envVars;
   }
@@ -802,6 +920,9 @@ async function resolveNodeProviderAndModel(
     hooks: node.hooks,
     skills: node.skills,
     agents: node.agents,
+    // Portable per-node Pi extension posture (#2133) — Pi provider reads it as
+    // the highest-precedence override; ignored by other providers.
+    pi: node.pi,
     allowed_tools: node.allowed_tools,
     denied_tools: node.denied_tools,
     effort: node.effort ?? workflowLevelOptions.effort,
@@ -1092,6 +1213,10 @@ async function executeNodeInternal(
   let nodeIdleTimedOut = false;
   const effectiveIdleTimeout = node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS;
   let lastToolStartedAt: { toolName: string; startedAt: number } | null = null;
+  // Task ids still live when the stream ended abnormally (idle timeout /
+  // subprocess death) — recorded on the node_completed event so an incomplete
+  // node never masquerades as a clean success (#2083).
+  let backgroundTasksIncomplete: string[] = [];
 
   // Best-effort providers (Pi/Copilot) get a bounded validate-and-reask loop: on a
   // structured-output validation miss, re-run the stream with the schema errors
@@ -1117,6 +1242,8 @@ async function executeNodeInternal(
     batchMessages.length = 0; // else a failed attempt's prose flushes during reask
     nodeCostUsd = undefined;
     nodeIdleTimedOut = false;
+    backgroundTasksIncomplete = [];
+    const backgroundTasks = createBackgroundTaskTracker();
     for await (const msg of withIdleTimeout(
       aiClient.sendQuery(attemptPrompt, cwd, attemptResumeId, nodeOptionsWithAbort),
       effectiveIdleTimeout,
@@ -1339,7 +1466,36 @@ async function executeNodeInternal(
           );
           throw new Error(`Node '${node.id}' failed: SDK returned ${subtype}${errorsDetail}`);
         }
-        break; // Result is the "I'm done" signal — don't wait for subprocess to exit
+        if (backgroundTasks.shouldBreakOnResult()) {
+          break; // Result is the "I'm done" signal — don't wait for subprocess to exit
+        }
+        // Result arrived with background Agent tasks still live (#2083).
+        // Breaking here would .return() the generator chain → SDK cleanup →
+        // SIGTERM the CLI → kill the tasks and lose their pending artifacts.
+        // Keep consuming: the SDK holds the subprocess open until the tasks
+        // drain, runs a follow-up turn to integrate their output, and emits a
+        // final result (whose fields overwrite the captures above — correct,
+        // since SDK cost/usage are session-cumulative). Bounded by the
+        // existing idle timeout; task_progress chunks reset it.
+        getLog().warn(
+          {
+            nodeId: node.id,
+            taskCount: backgroundTasks.count(),
+            taskIds: backgroundTasks.ids(),
+          },
+          'dag.node_result_with_live_background_tasks'
+        );
+        if (backgroundTasks.shouldAnnounceWait()) {
+          await safeSendMessage(
+            platform,
+            conversationId,
+            `⏳ Node \`${node.id}\`: turn ended with ${String(backgroundTasks.count())} background agent task(s) still running — waiting for them to finish before completing the node.`,
+            nodeContext
+          );
+        }
+      } else if (msg.type === 'background_tasks') {
+        // Level signal (REPLACE semantics): swap the live set for the payload.
+        backgroundTasks.update(msg.tasks);
       } else if (msg.type === 'system' && msg.content) {
         // Providers yield system chunks for user-actionable issues (missing env
         // vars, Haiku+MCP, structured output failures, etc.). MCP-failure
@@ -1475,6 +1631,7 @@ async function executeNodeInternal(
           activity: msg.status,
           ...(msg.summary !== undefined ? { summary: msg.summary } : {}),
           ...(msg.usage !== undefined ? { usage: msg.usage } : {}),
+          ...(msg.outputFile ? { outputFile: msg.outputFile } : {}),
         });
         deps.store
           .createWorkflowEvent({
@@ -1486,6 +1643,9 @@ async function executeNodeInternal(
               activity: msg.status,
               ...(msg.summary !== undefined ? { summary: msg.summary } : {}),
               ...(msg.usage !== undefined ? { usage: msg.usage } : {}),
+              // Where the settled task wrote its output — the artifact trail
+              // for delegated work (#2083).
+              ...(msg.outputFile ? { output_file: msg.outputFile } : {}),
             },
           })
           .catch((err: Error) => {
@@ -1556,6 +1716,33 @@ async function executeNodeInternal(
           });
       }
       // rate_limit chunks: already log.warn'd in claude.ts; not surfaced to SSE per design
+    }
+
+    // Stream ended with background tasks still live: the SDK subprocess died or
+    // the idle timeout fired mid-wait. The tasks' artifacts may be missing —
+    // record the incompleteness (surfaced on the node_completed event) and warn
+    // loudly instead of silently completing (#2083). Cancellation is exempt:
+    // the node returns 'failed — Cancelled by user' and the warning would be noise.
+    if (!backgroundTasks.shouldBreakOnResult()) {
+      backgroundTasksIncomplete = backgroundTasks.ids();
+      const cancelled = nodeAbortController.signal.aborted && !nodeIdleTimedOut;
+      getLog().warn(
+        {
+          nodeId: node.id,
+          taskIds: backgroundTasksIncomplete,
+          idleTimedOut: nodeIdleTimedOut,
+          cancelled,
+        },
+        'dag.node_stream_ended_with_live_background_tasks'
+      );
+      if (!cancelled) {
+        await safeSendMessage(
+          platform,
+          conversationId,
+          `⚠️ Node \`${node.id}\`: the provider stream ended with ${String(backgroundTasksIncomplete.length)} background agent task(s) still running (${backgroundTasksIncomplete.join(', ')}). Their output may be missing — treat this node's artifacts as potentially incomplete.`,
+          nodeContext
+        );
+      }
     }
   };
 
@@ -1846,6 +2033,11 @@ async function executeNodeInternal(
           ...(nodeStopReason ? { stop_reason: nodeStopReason } : {}),
           ...(nodeNumTurns !== undefined ? { num_turns: nodeNumTurns } : {}),
           ...(nodeModelUsage ? { model_usage: nodeModelUsage } : {}),
+          // Background Agent tasks still live when the stream ended (#2083) —
+          // this node's artifacts may be incomplete.
+          ...(backgroundTasksIncomplete.length > 0
+            ? { background_tasks_incomplete: backgroundTasksIncomplete }
+            : {}),
           ...iterationData,
         },
       })
@@ -1943,6 +2135,28 @@ async function executeNodeInternal(
 /** Default timeout for subprocess nodes (bash, script): 2 minutes */
 const SUBPROCESS_DEFAULT_TIMEOUT = 120_000;
 
+/**
+ * Run a deterministic subprocess (bash/script node body, loop `until_bash`) under
+ * the given execution context. This is the seam the container backend (Phase B)
+ * fills in: a `host` context delegates verbatim to `execFileAsync`, so the host
+ * path is byte-identical to a direct call; a `container` context will route the
+ * command through `docker exec` so isolation has no host-escape hole. Until that
+ * lands, a container context fails fast rather than silently running on the host.
+ */
+async function runSubprocess(
+  execContext: ExecutionContext,
+  cmd: string,
+  args: string[],
+  options: { cwd: string; timeout: number; env: NodeJS.ProcessEnv }
+): Promise<{ stdout: string; stderr: string }> {
+  if (execContext.kind === 'container') {
+    throw new Error(
+      'Container subprocess execution is not yet implemented (container isolation Phase B).'
+    );
+  }
+  return execFileAsync(cmd, args, options);
+}
+
 /** Threshold (bytes) above which $nodeId.output values are written to a temp file
  *  instead of inlined as bash -c arguments, to avoid silent data corruption. */
 const NODE_OUTPUT_FILE_THRESHOLD = 32_768;
@@ -1967,7 +2181,8 @@ async function executeBashNode(
   issueContext?: string,
   envVars?: Record<string, string>,
   stepNamePrefix = '',
-  iteration?: number
+  iteration?: number,
+  execContext: ExecutionContext = { kind: 'host' }
 ): Promise<NodeOutput> {
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -2033,8 +2248,9 @@ async function executeBashNode(
     ...(envVars ?? {}),
   };
 
+  const bashPath = resolveBashPath();
   try {
-    const { stdout, stderr } = await execFileAsync('bash', ['-c', finalScript], {
+    const { stdout, stderr } = await runSubprocess(execContext, bashPath, ['-c', finalScript], {
       cwd,
       timeout,
       env: subprocessEnv,
@@ -2091,9 +2307,12 @@ async function executeBashNode(
     let errorMsg: string;
     if (isTimeout) {
       errorMsg = `${label} timed out after ${String(timeout)}ms`;
-    } else if (err.message?.includes('ENOENT')) {
-      errorMsg = `${label} failed: bash executable not found in PATH`;
-    } else if (err.message?.includes('EACCES')) {
+    } else if (err.code === 'ENOENT' || err.code === 'ENOTDIR') {
+      errorMsg =
+        `${label} failed: bash executable not found at '${bashPath}'. ` +
+        'Set ARCHON_BASH_PATH if Git Bash is installed elsewhere ' +
+        '(e.g. user-scope installer at %LOCALAPPDATA%\\Programs\\Git\\bin\\bash.exe).';
+    } else if (err.code === 'EACCES') {
       errorMsg = `${label} failed: permission denied (check cwd permissions)`;
     } else {
       errorMsg = formatted.userMessage;
@@ -2151,7 +2370,8 @@ async function executeScriptNode(
   issueContext?: string,
   envVars?: Record<string, string>,
   stepNamePrefix = '',
-  iteration?: number
+  iteration?: number,
+  execContext: ExecutionContext = { kind: 'host' }
 ): Promise<NodeOutput> {
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -2308,7 +2528,7 @@ async function executeScriptNode(
       }
     }
 
-    const { stdout, stderr } = await execFileAsync(cmd, args, {
+    const { stdout, stderr } = await runSubprocess(execContext, cmd, args, {
       cwd,
       timeout,
       env: subprocessEnv,
@@ -2405,6 +2625,90 @@ async function executeScriptNode(
   }
 }
 
+/** Cap for the iteration-output excerpt embedded in gate messages — keeps the
+ *  persisted `metadata.approval.message` and SSE payloads bounded (mirrors the
+ *  tool-input truncation used for progress events). */
+const GATE_EXCERPT_MAX = 500;
+
+/**
+ * Build the honest interactive-gate message (#2074, change D): an engine-generated
+ * status line (was the completion signal detected?) plus a bounded excerpt of the
+ * final iteration output, prepended to the author's static `gate_message`. Shared
+ * by executeLoopNode and executeLoopGroupNode so both gates tell the truth about
+ * the iteration they paused on.
+ */
+function buildHonestGateMessage(
+  completionDetected: boolean,
+  untilSignal: string,
+  lastIterationOutput: string,
+  gateMessage: string
+): string {
+  const trimmed = lastIterationOutput.trim();
+  const excerpt = trimmed.slice(0, GATE_EXCERPT_MAX);
+  const statusLine = completionDetected
+    ? `✅ Completion signal detected (\`${untilSignal}\`).`
+    : `⚠️ No completion signal (\`${untilSignal}\`) in this iteration.`;
+  const excerptBlock = excerpt
+    ? `\n\n> ${excerpt}${trimmed.length > GATE_EXCERPT_MAX ? '…' : ''}`
+    : '';
+  return `${statusLine}${excerptBlock}\n\n${gateMessage}`;
+}
+
+/**
+ * Finalize-on-approve (#2074), shared by executeLoopNode and executeLoopGroupNode:
+ * a gate that paused on a signal-bearing iteration, resumed WITHOUT feedback,
+ * completes the node from the persisted `signaledOutput` instead of re-running
+ * the (expensive) iteration. Sends the user notice and writes/emits the
+ * node_completed pair; the caller builds its own return value (the single-node
+ * loop also threads the restored sessionId).
+ */
+async function finalizeLoopFromSignal(
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  workflowRun: WorkflowRun,
+  nodeId: string,
+  stepName: string,
+  nodeLabel: string,
+  finalizeOutput: string
+): Promise<void> {
+  // Impossible by construction today (the gate writes signaledOutput whenever
+  // completionSignaled is true) — this warn guards a future decoupling so a
+  // finalize that silently loses the iteration output is diagnosable.
+  if (finalizeOutput === '') {
+    getLog().warn(
+      { workflowRunId: workflowRun.id, nodeId },
+      'loop_node.finalize_missing_signaled_output'
+    );
+  }
+  await safeSendMessage(
+    platform,
+    conversationId,
+    `${nodeLabel} '${nodeId}' accepted at the completion signal (no re-run)`,
+    { workflowId: workflowRun.id, nodeName: nodeId }
+  );
+  await deps.store
+    .createWorkflowEvent({
+      workflow_run_id: workflowRun.id,
+      event_type: 'node_completed',
+      step_name: stepName,
+      data: { duration_ms: 0, node_output: finalizeOutput },
+    })
+    .catch((err: Error) => {
+      getLog().error(
+        { err, workflowRunId: workflowRun.id, eventType: 'node_completed' },
+        'workflow_event_persist_failed'
+      );
+    });
+  getWorkflowEventEmitter().emit({
+    type: 'node_completed',
+    runId: workflowRun.id,
+    nodeId,
+    nodeName: nodeId,
+    duration: 0,
+  });
+}
+
 /**
  * Execute a loop-group node — runs a multi-node sub-DAG body repeatedly until a
  * completion condition (`until` signal in the body's terminal-node output, and/or
@@ -2449,7 +2753,8 @@ async function executeLoopGroupNode(
   outerNodeOutputs: Map<string, NodeOutput>,
   config: WorkflowConfig,
   issueContext?: string,
-  stepNamePrefix = ''
+  stepNamePrefix = '',
+  execContext: ExecutionContext = { kind: 'host' }
 ): Promise<NodeExecutionResult> {
   const group = node.loop_group;
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -2470,9 +2775,27 @@ async function executeLoopGroupNode(
   const loopGateMeta = isApprovalContext(rawApproval) ? rawApproval : undefined;
   const isLoopResume = loopGateMeta?.type === 'interactive_loop' && loopGateMeta.nodeId === node.id;
   const startIteration = isLoopResume ? (loopGateMeta.iteration ?? 0) + 1 : 1;
-  const loopUserInput = isLoopResume
-    ? ((workflowRun.metadata?.loop_user_input as string | undefined) ?? '')
-    : '';
+  const loopGateRunMeta = (workflowRun.metadata ?? {}) as LoopGateRunMetadata;
+  const loopUserInput = isLoopResume ? (loopGateRunMeta.loop_user_input ?? '') : '';
+
+  // Finalize-on-approve (#2074): mirrors executeLoopNode — a signal-bearing gate
+  // resumed WITHOUT feedback completes the group from the persisted output instead
+  // of re-running the body.
+  const feedbackGiven = loopGateRunMeta.loop_feedback_given === true;
+  if (isLoopResume && loopGateMeta?.completionSignaled === true && !feedbackGiven) {
+    const finalizeOutput = loopGateMeta.signaledOutput ?? '';
+    await finalizeLoopFromSignal(
+      deps,
+      platform,
+      conversationId,
+      workflowRun,
+      node.id,
+      stepName,
+      'Loop-group node',
+      finalizeOutput
+    );
+    return { state: 'completed', output: finalizeOutput };
+  }
 
   let loopPrevOutputs: Map<string, NodeOutput> | undefined; // undefined on iteration 1
   let lastIterationOutput = '';
@@ -2483,9 +2806,15 @@ async function executeLoopGroupNode(
   // fresh_context is true or on iteration 1. runLayers mutates this in place each call.
   // On interactive resume, restore the cursor persisted at pause time so
   // fresh_context: false continues the pre-pause conversation (mirrors executeLoopNode).
-  let loopLastSequentialSessionId: string | undefined = isLoopResume
-    ? loopGateMeta.sessionId
-    : undefined;
+  // The provider tag must be restored WITH the session id (#1992) — metadata from a
+  // pre-tag pause lacks it, and restoring an untagged cursor could thread the session
+  // into a different provider on resume, so those legacy pauses restore fresh instead.
+  let loopLastSequentialSession: SequentialSessionCursor | undefined =
+    isLoopResume &&
+    typeof loopGateMeta.sessionId === 'string' &&
+    typeof loopGateMeta.sessionProvider === 'string'
+      ? { sessionId: loopGateMeta.sessionId, provider: loopGateMeta.sessionProvider }
+      : undefined;
 
   const logEventStoreError = (err: Error, iteration: number): void => {
     getLog().error({ err, nodeId: node.id, iteration }, 'loop_group_node.iteration_event_failed');
@@ -2571,6 +2900,10 @@ async function executeLoopGroupNode(
       docsDir,
       configuredCommandFolder: undefined,
       issueContext,
+      // Body nodes inherit the group's execution context so bash/script/AI inside
+      // a loop_group body exec in the same place (host, or the container in Phase B)
+      // — without this a loop_group body would be a host-escape hole.
+      execContext,
       // persist_session across iterations is out of v1 scope (body sessions reset per
       // iteration, governed by fresh_context). Pass undefined/false so body nodes don't
       // participate in cross-run session persistence inside the loop — and therefore
@@ -2586,8 +2919,7 @@ async function executeLoopGroupNode(
       // session forward so a body AI node resumes the prior iteration's conversation.
       // Gate on the literal i === 1 (not startIteration): on interactive resume the
       // first processed iteration must continue the restored pre-pause session.
-      lastSequentialSessionId:
-        group.fresh_context || i === 1 ? undefined : loopLastSequentialSessionId,
+      lastSequentialSession: group.fresh_context || i === 1 ? undefined : loopLastSequentialSession,
       totalCostUsd: 0,
       totalTokensIn: 0,
       totalTokensOut: 0,
@@ -2647,7 +2979,7 @@ async function executeLoopGroupNode(
 
     // Carry the body's final sequential session into the next iteration (unless
     // fresh_context forces a reset, handled above by seeding undefined).
-    loopLastSequentialSessionId = iterCtx.lastSequentialSessionId;
+    loopLastSequentialSession = iterCtx.lastSequentialSession;
 
     // Carry prior-iteration snapshot forward for $LOOP_PREV.* on the next iteration.
     loopPrevOutputs = new Map(scopedNodeOutputs);
@@ -2677,6 +3009,9 @@ async function executeLoopGroupNode(
 
     let bashComplete = false;
     if (group.until_bash && !signalDetected) {
+      // Resolve outside the try so ARCHON_BASH_PATH validation errors bubble up
+      // to the caller instead of being swallowed by the per-iteration catch.
+      const groupBashPath = resolveBashPath();
       try {
         const { prompt: bashPrompt } = substituteWorkflowVariables(
           group.until_bash,
@@ -2697,7 +3032,7 @@ async function executeLoopGroupNode(
           true, // escapedForBash
           logDir
         );
-        await execFileAsync('bash', ['-c', substitutedBash], {
+        await runSubprocess(execContext, groupBashPath, ['-c', substitutedBash], {
           cwd,
           timeout: SUBPROCESS_DEFAULT_TIMEOUT,
           env: {
@@ -2716,20 +3051,32 @@ async function executeLoopGroupNode(
         bashComplete = true;
       } catch (e) {
         const bashErr = e as NodeJS.ErrnoException;
-        // Two distinct events, mirroring executeLoopNode's until_bash handling.
-        if (bashErr.code === 'ENOENT') {
-          getLog().warn(
+        // System-level errors (ENOENT/EACCES/ENOTDIR) mean the bash binary itself
+        // is unreachable — looping forever on bashComplete=false is wrong. Throw
+        // out of the group with a clear actionable error instead (mirrors
+        // executeLoopNode's until_bash handling).
+        if (bashErr.code === 'ENOENT' || bashErr.code === 'EACCES' || bashErr.code === 'ENOTDIR') {
+          getLog().error(
             { err: bashErr, nodeId: node.id, iteration: i },
-            'loop_group_node.until_bash_exec_error'
+            'loop_group.until_bash_failed'
           );
-        } else if (bashErr.code !== undefined) {
-          // Log non-ENOENT system errors (syntax errors, permission issues, etc.)
-          getLog().warn(
-            { err: bashErr, nodeId: node.id, iteration: i },
-            'loop_group_node.until_bash_unexpected_error'
+          throw new Error(
+            `Loop group '${node.id}' until_bash failed: cannot execute bash at ` +
+              `'${groupBashPath}' (${bashErr.code}). Set ARCHON_BASH_PATH if Git Bash ` +
+              'is installed elsewhere.'
           );
         }
-        bashComplete = false; // non-zero exit = not complete
+        // Non-exec errors (template substitution, etc.) have no err.code — they
+        // should halt the group, not silently re-iterate.
+        if (typeof bashErr.code !== 'number') {
+          getLog().error(
+            { err: bashErr, nodeId: node.id, iteration: i },
+            'loop_group.until_bash_unexpected_error'
+          );
+          throw bashErr;
+        }
+        // Numeric exit code from the bash script = condition not met yet, keep looping.
+        bashComplete = false;
       }
     }
 
@@ -2756,9 +3103,11 @@ async function executeLoopGroupNode(
       });
 
     // Completion: honor the signal only when the AI had input to evaluate (interactive
-    // first run always gates first — mirrors executeLoopNode's interactiveFirstRun).
+    // first run always gates first — mirrors executeLoopNode's interactiveFirstRun),
+    // UNLESS the author opted into autonomous completion via signal_completes (#2074).
     const interactiveFirstRun = group.interactive && !isLoopResume;
-    if (completionDetected && !interactiveFirstRun) {
+    const signalCompletes = group.signal_completes === true;
+    if (completionDetected && (!interactiveFirstRun || signalCompletes)) {
       await safeSendMessage(
         platform,
         conversationId,
@@ -2799,10 +3148,18 @@ async function executeLoopGroupNode(
       };
     }
 
-    // Interactive gate — pause after an iteration that did not complete.
+    // Interactive gate — pause after an iteration that did not complete (or, when
+    // interactiveFirstRun && !signalCompletes, an iteration that DID signal — the honest
+    // status line + persisted signal state (#2074) let a bare approve finalize it).
     if (group.interactive && group.gate_message) {
+      const honestMessage = buildHonestGateMessage(
+        completionDetected,
+        group.until,
+        lastIterationOutput,
+        group.gate_message
+      );
       const gateMsg =
-        `⏸ **Input required** (loop_group \`${node.id}\`, iteration ${String(i)}): ${group.gate_message}\n\n` +
+        `⏸ **Input required** (loop_group \`${node.id}\`, iteration ${String(i)}): ${honestMessage}\n\n` +
         `Run ID: \`${workflowRun.id}\`\n` +
         `Respond: \`/workflow approve ${workflowRun.id} <your feedback>\` | Cancel: \`/workflow reject ${workflowRun.id}\``;
       const gateSent = await safeSendMessage(platform, conversationId, gateMsg, {
@@ -2825,25 +3182,35 @@ async function executeLoopGroupNode(
           workflow_run_id: workflowRun.id,
           event_type: 'approval_requested',
           step_name: stepName,
-          data: { message: group.gate_message, iteration: i },
+          data: { message: honestMessage, iteration: i, completionSignaled: completionDetected },
         })
         .catch((err: Error) => {
           logEventStoreError(err, i);
         });
       await deps.store.pauseWorkflowRun(workflowRun.id, {
         nodeId: node.id,
-        message: group.gate_message,
+        message: honestMessage,
         type: 'interactive_loop',
         iteration: i,
         // Persist the body's session cursor so a resumed fresh_context: false loop
         // continues the pre-pause conversation (restored into the cursor on resume).
-        sessionId: loopLastSequentialSessionId,
+        // The provider tag rides along so the restore never threads the session into
+        // a different provider (#1992). EXPLICIT null (not key omission) when there
+        // is no cursor — SQLite's json_patch deep-merge would otherwise let a stale
+        // sessionId/sessionProvider from a previous pause of this run survive (same
+        // convention as `resolved`; RFC 7396 null removes the key).
+        sessionId: loopLastSequentialSession?.sessionId ?? null,
+        sessionProvider: loopLastSequentialSession?.provider ?? null,
+        // Signal state for finalize-on-bare-approve (#2074): written unconditionally
+        // for honesty; pauseWorkflowRun nulls both on every fresh pause.
+        completionSignaled: completionDetected,
+        signaledOutput: completionDetected ? lastIterationOutput : null,
       });
       getWorkflowEventEmitter().emit({
         type: 'approval_pending',
         runId: workflowRun.id,
         nodeId: node.id,
-        message: group.gate_message,
+        message: honestMessage,
       });
       return {
         state: 'completed',
@@ -2978,7 +3345,8 @@ async function executeLoopNode(
   nodeOutputs: Map<string, NodeOutput>,
   config: WorkflowConfig,
   issueContext?: string,
-  stepNamePrefix = ''
+  stepNamePrefix = '',
+  execContext: ExecutionContext = { kind: 'host' }
 ): Promise<NodeExecutionResult> {
   const loop = node.loop;
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -3006,10 +3374,31 @@ async function executeLoopNode(
   const loopGateMeta = isApprovalContext(rawApproval) ? rawApproval : undefined;
   const isLoopResume = loopGateMeta?.type === 'interactive_loop' && loopGateMeta.nodeId === node.id;
   const startIteration = isLoopResume ? (loopGateMeta.iteration ?? 0) + 1 : 1;
-  let currentSessionId: string | undefined = isLoopResume ? loopGateMeta.sessionId : undefined;
-  const loopUserInput = isLoopResume
-    ? ((workflowRun.metadata?.loop_user_input as string | undefined) ?? '')
-    : '';
+  let currentSessionId: string | undefined = isLoopResume
+    ? (loopGateMeta.sessionId ?? undefined)
+    : undefined;
+  const loopGateRunMeta = (workflowRun.metadata ?? {}) as LoopGateRunMetadata;
+  const loopUserInput = isLoopResume ? (loopGateRunMeta.loop_user_input ?? '') : '';
+
+  // Finalize-on-approve (#2074): a gate that paused on a signal-bearing iteration,
+  // resumed WITHOUT feedback, completes the node from the persisted output instead of
+  // re-running the (expensive) iteration. Feedback (loop_feedback_given) OR a
+  // non-signaled gate falls through to a normal resumed iteration below.
+  const feedbackGiven = loopGateRunMeta.loop_feedback_given === true;
+  if (isLoopResume && loopGateMeta?.completionSignaled === true && !feedbackGiven) {
+    const finalizeOutput = loopGateMeta.signaledOutput ?? '';
+    await finalizeLoopFromSignal(
+      deps,
+      platform,
+      conversationId,
+      workflowRun,
+      node.id,
+      stepName,
+      'Loop node',
+      finalizeOutput
+    );
+    return { state: 'completed', output: finalizeOutput, sessionId: currentSessionId };
+  }
 
   let lastIterationOutput = '';
   let lastIterationStructuredOutput: unknown;
@@ -3017,6 +3406,15 @@ async function executeLoopNode(
   let loopFinalStopReason: string | undefined;
   let loopTotalNumTurns: number | undefined;
   let loopTotalTokens: TokenUsage | undefined;
+  // Union of task ids still live when ANY iteration's stream ended abnormally
+  // (idle timeout / subprocess death) — #2083. Union rather than last-iteration:
+  // a mid-loop iteration that lost its background tasks may have produced
+  // incomplete artifacts even when a later iteration finishes cleanly and
+  // signals completion — last-iteration-only reporting would hide that.
+  // Recorded on the node_completed event so an incomplete node never
+  // masquerades as a clean success (mirrors the AI-node path in
+  // executeNodeInternal).
+  const loopBackgroundTasksIncomplete = new Set<string>();
   // Helper to log event store errors consistently
   const logEventStoreError = (err: Error, iteration: number): void => {
     getLog().error({ err, nodeId: node.id, iteration }, 'loop_node.iteration_event_failed');
@@ -3074,6 +3472,48 @@ async function executeLoopNode(
     let cleanOutput = ''; // stripped, for platform display
     let iterationIdleTimedOut = false;
     const iterationAbortController = new AbortController();
+    // Mid-stream cancel-check throttle (see the check inside the stream loop).
+    // The between-iteration status check just ran, so start the clock at the
+    // iteration start. A local timestamp rather than the module-level
+    // lastNodeCancelCheck map the AI node uses: the loop owns its whole
+    // lifecycle in this stack frame, so a local needs no per-return-path map
+    // cleanup.
+    let lastStreamStatusCheckAt = iterationStart;
+    // Status observed by the mid-stream check when it aborts (for the failure
+    // message); undefined when the stream ends for any other reason.
+    let streamStopStatus: string | undefined;
+
+    // Background-task gate (#2083) — see createBackgroundTaskTracker. When the
+    // set is non-empty at result time this iteration keeps consuming, so a
+    // single iteration can now observe MULTIPLE result chunks. SDK cost/usage
+    // are session-cumulative, so the per-result `+=` accumulation used before
+    // would double-count: capture last-seen values (overwrite semantics) and
+    // fold them into the loop totals once, after the stream ends.
+    const backgroundTasks = createBackgroundTaskTracker();
+    let iterationCost: number | undefined;
+    let iterationTokens: TokenUsage | undefined;
+    let iterationNumTurns: number | undefined;
+    // Fold the last-seen per-iteration values into the loop totals exactly
+    // once — called on both the normal exit and the catch path (an SDK-error
+    // result still carries the iteration's cost, which the totals reported
+    // on the failure return must include, matching the old += behavior).
+    let iterationUsageFolded = false;
+    const foldIterationUsage = (): void => {
+      if (iterationUsageFolded) return;
+      iterationUsageFolded = true;
+      if (iterationCost !== undefined) {
+        loopTotalCostUsd = (loopTotalCostUsd ?? 0) + iterationCost;
+      }
+      if (iterationTokens !== undefined) {
+        loopTotalTokens = {
+          input: (loopTotalTokens?.input ?? 0) + iterationTokens.input,
+          output: (loopTotalTokens?.output ?? 0) + iterationTokens.output,
+        };
+      }
+      if (iterationNumTurns !== undefined) {
+        loopTotalNumTurns = (loopTotalNumTurns ?? 0) + iterationNumTurns;
+      }
+    };
 
     try {
       // Build prompt — substituteWorkflowVariables throws if $BASE_BRANCH referenced but empty
@@ -3115,6 +3555,40 @@ async function executeLoopNode(
         );
         iterationAbortController.abort();
       })) {
+        // Mid-stream cancel/pause check (every CANCEL_CHECK_INTERVAL_MS) —
+        // lifted from the AI-node stream loop in executeNodeInternal. Same
+        // posture: `paused` is tolerated (a sibling approval node may pause
+        // the run while this loop streams); only terminal/unknown states
+        // abort the in-flight iteration. Without this, a cancelled run kept
+        // streaming until the iteration finished on its own — and the
+        // post-stream `cancelled` exemption below was unreachable.
+        const tickNow = Date.now();
+        if (tickNow - lastStreamStatusCheckAt > CANCEL_CHECK_INTERVAL_MS) {
+          lastStreamStatusCheckAt = tickNow;
+          try {
+            const streamStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
+            if (!shouldContinueStreamingForStatus(streamStatus)) {
+              streamStopStatus = streamStatus ?? 'deleted';
+              getLog().info(
+                {
+                  workflowRunId: workflowRun.id,
+                  nodeId: node.id,
+                  iteration: i,
+                  status: streamStopStatus,
+                },
+                'loop_node.stop_detected_during_streaming'
+              );
+              iterationAbortController.abort();
+              break;
+            }
+          } catch (statusErr) {
+            getLog().warn(
+              { err: statusErr as Error, workflowRunId: workflowRun.id, nodeId: node.id },
+              'loop_node.status_check_failed'
+            );
+          }
+        }
+
         if (msg.type === 'assistant') {
           fullOutput += msg.content;
           const cleaned = stripCompletionTags(msg.content, loop.until);
@@ -3150,17 +3624,16 @@ async function executeLoopNode(
             lastToolStartedAt = null;
           }
           if (msg.sessionId) currentSessionId = msg.sessionId;
+          // Overwrite, don't accumulate — a later result in the same iteration
+          // (background-task wait, #2083) carries session-cumulative values.
           if (msg.cost !== undefined) {
-            loopTotalCostUsd = (loopTotalCostUsd ?? 0) + msg.cost;
+            iterationCost = msg.cost;
           }
           if (msg.tokens !== undefined) {
             // Provider-supplied numbers — see the NaN guard rationale at the
             // DAG-level accumulator.
             if (Number.isFinite(msg.tokens.input) && Number.isFinite(msg.tokens.output)) {
-              loopTotalTokens = {
-                input: (loopTotalTokens?.input ?? 0) + msg.tokens.input,
-                output: (loopTotalTokens?.output ?? 0) + msg.tokens.output,
-              };
+              iterationTokens = { input: msg.tokens.input, output: msg.tokens.output };
             } else {
               getLog().warn(
                 { nodeId: node.id, tokens: msg.tokens },
@@ -3170,7 +3643,7 @@ async function executeLoopNode(
           }
           if (msg.stopReason !== undefined) loopFinalStopReason = msg.stopReason;
           if (msg.numTurns !== undefined) {
-            loopTotalNumTurns = (loopTotalNumTurns ?? 0) + msg.numTurns;
+            iterationNumTurns = msg.numTurns;
           }
           if (msg.structuredOutput !== undefined) {
             lastIterationStructuredOutput = msg.structuredOutput;
@@ -3202,7 +3675,32 @@ async function executeLoopNode(
               `Loop '${node.id}' iteration ${String(i)} failed: SDK returned ${subtype}${errorsDetail}`
             );
           }
-          break; // Result is the "I'm done" signal — don't wait for subprocess to exit
+          if (backgroundTasks.shouldBreakOnResult()) {
+            break; // Result is the "I'm done" signal — don't wait for subprocess to exit
+          }
+          // Result with live background Agent tasks (#2083): breaking would
+          // SIGTERM the SDK subprocess and kill them. Keep consuming until the
+          // final result — see the AI-node stream loop for the full rationale.
+          getLog().warn(
+            {
+              nodeId: node.id,
+              iteration: i,
+              taskCount: backgroundTasks.count(),
+              taskIds: backgroundTasks.ids(),
+            },
+            'loop_node.iteration_result_with_live_background_tasks'
+          );
+          if (backgroundTasks.shouldAnnounceWait()) {
+            await safeSendMessage(
+              platform,
+              conversationId,
+              `⏳ Loop \`${node.id}\` iteration ${String(i)}: turn ended with ${String(backgroundTasks.count())} background agent task(s) still running — waiting for them to finish.`,
+              msgContext
+            );
+          }
+        } else if (msg.type === 'background_tasks') {
+          // Level signal (REPLACE semantics): swap the live set for the payload.
+          backgroundTasks.update(msg.tasks);
         } else if (msg.type === 'tool' && msg.toolName) {
           const now = Date.now();
 
@@ -3274,7 +3772,62 @@ async function executeLoopNode(
         }
         // rate_limit chunks: already log.warn'd in claude.ts; not surfaced to SSE per design
       }
+      foldIterationUsage();
+
+      // Stream ended with background tasks still live (idle timeout mid-wait or
+      // subprocess death): their artifacts may be missing — record the
+      // incompleteness (surfaced on the node_completed event) and warn loudly
+      // instead of silently continuing (#2083). Cancellation is exempt from the
+      // user-facing warning (the mid-stream check above returns the node as
+      // failed with its own message just below), but still recorded in the
+      // union — the audit trail should not depend on why the stream ended.
+      if (!backgroundTasks.shouldBreakOnResult()) {
+        const danglingTaskIds = backgroundTasks.ids();
+        for (const id of danglingTaskIds) loopBackgroundTasksIncomplete.add(id);
+        const cancelled = iterationAbortController.signal.aborted && !iterationIdleTimedOut;
+        getLog().warn(
+          {
+            nodeId: node.id,
+            iteration: i,
+            taskIds: danglingTaskIds,
+            idleTimedOut: iterationIdleTimedOut,
+            cancelled,
+          },
+          'loop_node.iteration_stream_ended_with_live_background_tasks'
+        );
+        if (!cancelled) {
+          await safeSendMessage(
+            platform,
+            conversationId,
+            `⚠️ Loop \`${node.id}\` iteration ${String(i)}: the provider stream ended with ${String(backgroundTasks.count())} background agent task(s) still running (${danglingTaskIds.join(', ')}). Their output may be missing.`,
+            msgContext
+          );
+        }
+      }
+
+      // Cancelled mid-stream (not idle timeout): stop the node before signal
+      // detection / until_bash / the interactive gate run against a truncated
+      // iteration — mirrors both the AI-node 'Cancelled by user' return and
+      // this loop's own between-iteration stop path.
+      if (iterationAbortController.signal.aborted && !iterationIdleTimedOut) {
+        const effectiveStatus = streamStopStatus ?? 'cancelled';
+        await safeSendMessage(
+          platform,
+          conversationId,
+          `Loop node '${node.id}' stopped during iteration ${String(i)} (${effectiveStatus})`,
+          msgContext
+        );
+        return {
+          state: 'failed',
+          output: '',
+          error: `Workflow ${effectiveStatus}`,
+          costUsd: loopTotalCostUsd,
+          ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+          loopIterations: i,
+        };
+      }
     } catch (error) {
+      foldIterationUsage();
       const err = error as Error;
       const duration = Date.now() - iterationStart;
       getLog().error({ err, nodeId: node.id, iteration: i }, 'loop_node.iteration_failed');
@@ -3379,6 +3932,9 @@ async function executeLoopNode(
     // Check deterministic bash condition (if configured)
     let bashComplete = false;
     if (loop.until_bash) {
+      // Resolve outside the try so ARCHON_BASH_PATH validation errors bubble up
+      // to the caller instead of being swallowed by the per-iteration catch.
+      const loopBashPath = resolveBashPath();
       try {
         const { prompt: bashPrompt } = substituteWorkflowVariables(
           loop.until_bash,
@@ -3399,7 +3955,7 @@ async function executeLoopNode(
           true, // escapedForBash
           logDir
         );
-        await execFileAsync('bash', ['-c', substitutedBash], {
+        await runSubprocess(execContext, loopBashPath, ['-c', substitutedBash], {
           cwd,
           timeout: SUBPROCESS_DEFAULT_TIMEOUT,
           env: {
@@ -3422,20 +3978,28 @@ async function executeLoopNode(
         bashComplete = true; // exit 0 = complete
       } catch (e) {
         const bashErr = e as NodeJS.ErrnoException;
-        // ENOENT or other system errors are unexpected — log them
-        if (bashErr.code === 'ENOENT') {
-          getLog().warn(
-            { err: bashErr, nodeId: node.id, iteration: i },
-            'loop_node.until_bash_exec_error'
-          );
-        } else if (bashErr.code !== undefined) {
-          // Log non-ENOENT system errors (syntax errors, permission issues, etc.)
-          getLog().warn(
-            { err: bashErr, nodeId: node.id, iteration: i },
-            'loop_node.until_bash_unexpected_error'
+        // System-level errors (ENOENT/EACCES/ENOTDIR) mean the bash binary itself
+        // is unreachable — looping forever on bashComplete=false is wrong. Throw
+        // out of the loop with a clear actionable error instead.
+        if (bashErr.code === 'ENOENT' || bashErr.code === 'EACCES' || bashErr.code === 'ENOTDIR') {
+          getLog().error({ err: bashErr, nodeId: node.id, iteration: i }, 'loop.until_bash_failed');
+          throw new Error(
+            `Loop node '${node.id}' until_bash failed: cannot execute bash at ` +
+              `'${loopBashPath}' (${bashErr.code}). Set ARCHON_BASH_PATH if Git Bash ` +
+              'is installed elsewhere.'
           );
         }
-        bashComplete = false; // non-zero exit = not complete
+        // Non-exec errors (resolveBashPath validation, template substitution, etc.)
+        // have no err.code — they should halt the loop, not silently re-iterate.
+        if (typeof bashErr.code !== 'number') {
+          getLog().error(
+            { err: bashErr, nodeId: node.id, iteration: i },
+            'loop.until_bash_unexpected_error'
+          );
+          throw bashErr;
+        }
+        // Numeric exit code from the bash script = condition not met yet, keep looping.
+        bashComplete = false;
       }
     }
 
@@ -3469,10 +4033,12 @@ async function executeLoopNode(
     // Completion signal detected — exit the loop.
     // For interactive loops: only honor the signal when the AI had user input to evaluate
     // (i.e., this is a resume iteration with loopUserInput). On the first iteration of a
-    // fresh interactive loop, the user hasn't seen anything yet — always gate first.
+    // fresh interactive loop, the user hasn't seen anything yet — always gate first,
+    // UNLESS the author opted into autonomous completion via signal_completes (#2074).
     // For non-interactive loops: the AI signals task completion at any point.
     const interactiveFirstRun = loop.interactive && !isLoopResume;
-    if (completionDetected && !interactiveFirstRun) {
+    const signalCompletes = loop.signal_completes === true;
+    if (completionDetected && (!interactiveFirstRun || signalCompletes)) {
       await safeSendMessage(
         platform,
         conversationId,
@@ -3492,6 +4058,12 @@ async function executeLoopNode(
             ...(loopTotalCostUsd !== undefined ? { cost_usd: loopTotalCostUsd } : {}),
             ...(loopFinalStopReason ? { stop_reason: loopFinalStopReason } : {}),
             ...(loopTotalNumTurns !== undefined ? { num_turns: loopTotalNumTurns } : {}),
+            // Background Agent tasks still live when any iteration's stream
+            // ended (#2083) — this node's artifacts may be incomplete, even
+            // though a later iteration signaled completion.
+            ...(loopBackgroundTasksIncomplete.size > 0
+              ? { background_tasks_incomplete: [...loopBackgroundTasksIncomplete] }
+              : {}),
           },
         })
         .catch((err: Error) => {
@@ -3523,12 +4095,20 @@ async function executeLoopNode(
       };
     }
 
-    // Interactive loop gate — pause after every iteration where the AI did NOT emit the
-    // completion signal. The user reviews the AI's output and provides feedback or approval.
-    // On approval, the AI will emit the signal in the next iteration, exiting above.
+    // Interactive loop gate — pause after an iteration that did not complete (or, when
+    // interactiveFirstRun && !signalCompletes, an iteration that DID signal — the honest
+    // status line + persisted signal state (#2074) let a bare approve finalize it).
+    // On a non-signaled gate, the user's feedback feeds the next iteration, which exits
+    // above once the AI emits the signal.
     if (loop.interactive && loop.gate_message) {
+      const honestMessage = buildHonestGateMessage(
+        completionDetected,
+        loop.until,
+        lastIterationOutput,
+        loop.gate_message
+      );
       const gateMsg =
-        `\u23f8 **Input required** (loop \`${node.id}\`, iteration ${String(i)}): ${loop.gate_message}\n\n` +
+        `\u23f8 **Input required** (loop \`${node.id}\`, iteration ${String(i)}): ${honestMessage}\n\n` +
         `Run ID: \`${workflowRun.id}\`\n` +
         `Respond: \`/workflow approve ${workflowRun.id} <your feedback>\` | Cancel: \`/workflow reject ${workflowRun.id}\``;
       const gateSent = await safeSendMessage(platform, conversationId, gateMsg, {
@@ -3553,23 +4133,30 @@ async function executeLoopNode(
           workflow_run_id: workflowRun.id,
           event_type: 'approval_requested',
           step_name: stepName,
-          data: { message: loop.gate_message, iteration: i },
+          data: { message: honestMessage, iteration: i, completionSignaled: completionDetected },
         })
         .catch((err: Error) => {
           logEventStoreError(err, i);
         });
       await deps.store.pauseWorkflowRun(workflowRun.id, {
         nodeId: node.id,
-        message: loop.gate_message,
+        message: honestMessage,
         type: 'interactive_loop',
         iteration: i,
-        sessionId: currentSessionId,
+        // Explicit null (never key omission) when there is no session — SQLite's
+        // json_patch deep-merge would otherwise let a stale sessionId from a previous
+        // pause of this run survive (same convention as `resolved`).
+        sessionId: currentSessionId ?? null,
+        // Signal state for finalize-on-bare-approve (#2074): written unconditionally
+        // for honesty; pauseWorkflowRun nulls both on every fresh pause.
+        completionSignaled: completionDetected,
+        signaledOutput: completionDetected ? lastIterationOutput : null,
       });
       getWorkflowEventEmitter().emit({
         type: 'approval_pending',
         runId: workflowRun.id,
         nodeId: node.id,
-        message: loop.gate_message,
+        message: honestMessage,
       });
       // Return completed — the between-layer status check sees 'paused' and halts cleanly.
       // This mirrors the approval-node pattern, preventing false "DAG nodes failed" warnings
@@ -3628,7 +4215,8 @@ async function executeApprovalNode(
   aiProfile?: ResolvedAiProfile,
   workflowPreset?: ModelAliasPreset,
   stepNamePrefix = '',
-  iteration?: number
+  iteration?: number,
+  execContext: ExecutionContext = { kind: 'host' }
 ): Promise<NodeOutput> {
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
   // Namespaced persisted step_name for loop_group bodies ('' → node.id at top level, #2090).
@@ -3727,7 +4315,8 @@ async function executeApprovalNode(
       cwd,
       workflowLevelOptions,
       aiProfile,
-      workflowPreset
+      workflowPreset,
+      execContext
     );
 
     const output = await executeNodeInternal(
@@ -3872,6 +4461,9 @@ interface RunLayersContext {
   platform: IWorkflowPlatform;
   conversationId: string;
   cwd: string;
+  /** Where nodes in these layers execute (host, or the container in Phase B). Threaded
+   *  into every AI turn's SendQueryOptions and every deterministic subprocess. */
+  execContext: ExecutionContext;
   workflowRun: WorkflowRun;
   /** Workflow name — used for persist_session keying + telemetry. */
   workflowName: string;
@@ -3908,8 +4500,9 @@ interface RunLayersContext {
   nodeOutputs: Map<string, NodeOutput>;
   /** Resume cache: node ids that completed in a prior run (top-level only; undefined for body). */
   priorCompletedNodes?: Map<string, string>;
-  /** Sequential-session threading cursor (mutated by runLayers). */
-  lastSequentialSessionId: string | undefined;
+  /** Sequential-session threading cursor (mutated by runLayers). Provider-tagged so the
+   *  session is only threaded into nodes that resolve to the SAME provider (#1992). */
+  lastSequentialSession: SequentialSessionCursor | undefined;
   /** Run-level usage accumulators (mutated by runLayers; caller reads after). */
   totalCostUsd: number;
   totalTokensIn: number;
@@ -3941,6 +4534,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
     platform,
     conversationId,
     cwd,
+    execContext,
     workflowRun,
     workflowName,
     config,
@@ -3963,20 +4557,36 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
     stepNamePrefix,
     iteration,
   } = ctx;
-  // nodeOutputs + accumulators + lastSequentialSessionId are mutated in place on `ctx`.
+  // nodeOutputs + accumulators + lastSequentialSession are mutated in place on `ctx`.
 
   for (let layerIdx = 0; layerIdx < layers.length; layerIdx++) {
     const layer = layers[layerIdx];
     const isParallelLayer = layer.length > 1;
 
     if (isParallelLayer) {
-      ctx.lastSequentialSessionId = undefined; // reset — parallel nodes can't share sessions
+      ctx.lastSequentialSession = undefined; // reset — parallel nodes can't share sessions
     }
 
-    // Execute all nodes in the layer concurrently
+    // Execute all nodes in the layer concurrently. `sessionProvider` is the resolved
+    // provider that produced `output.sessionId` — set only by the session-producing
+    // dispatch paths (AI command/prompt nodes and loop nodes) so the cursor write
+    // below can tag the session with its owner (#1992).
     const layerResults = await Promise.allSettled(
-      layer.map(async (node): Promise<{ nodeId: string; output: NodeExecutionResult }> => {
+      layer.map(async (node): Promise<LayerNodeResult> => {
         try {
+          // Include nodes are expanded away at discovery time (include-expander.ts): one
+          // must never reach the executor. This guard is FIRST in the per-node body — before
+          // resume-skip, `when:`, and trigger-rule handling — so an unexpanded include node
+          // cannot slip through by matching a prior-completed entry, a false `when:`, or a
+          // failing trigger rule. If one gets here, discovery was bypassed; fail loud rather
+          // than silently accepting an invalid runtime DAG.
+          if (isIncludeNode(node)) {
+            throw new Error(
+              `Internal error: include node '${node.id}' reached the executor unexpanded. ` +
+                'Include nodes must be resolved by expandWorkflowIncludes() during discovery.'
+            );
+          }
+
           // 0. Skip if this node completed successfully in a prior run (resume path).
           // `always_run: true` opts the node out of resume caching — re-execute even
           // when the prior run completed it.
@@ -4181,7 +4791,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   issueContext,
                   config.envVars,
                   stepNamePrefix,
-                  iteration
+                  iteration,
+                  execContext
                 )
             );
             return { nodeId: node.id, output };
@@ -4201,7 +4812,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                 cwd,
                 workflowLevelOptions,
                 aiProfile,
-                workflowPreset
+                workflowPreset,
+                execContext
               );
 
             const output = await executeLoopNode(
@@ -4220,9 +4832,13 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               ctx.nodeOutputs,
               config,
               issueContext,
-              stepNamePrefix
+              stepNamePrefix,
+              execContext
             );
-            return { nodeId: node.id, output };
+            // Loop nodes run every iteration on the same resolved provider, so the
+            // result session (if any) is attributable to loopProvider — tag it so a
+            // downstream sequential node on a different provider starts fresh (#1992).
+            return { nodeId: node.id, output, sessionProvider: loopProvider };
           }
 
           // 3b'. Loop-group node dispatch — manages its own subgraph iteration
@@ -4243,7 +4859,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               cwd,
               workflowLevelOptions,
               aiProfile,
-              workflowPreset
+              workflowPreset,
+              execContext
             );
 
             const output = await executeLoopGroupNode(
@@ -4265,7 +4882,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               ctx.nodeOutputs,
               config,
               issueContext,
-              stepNamePrefix
+              stepNamePrefix,
+              execContext
             );
             return { nodeId: node.id, output };
           }
@@ -4293,7 +4911,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               aiProfile,
               workflowPreset,
               stepNamePrefix,
-              iteration
+              iteration,
+              execContext
             );
             return { nodeId: node.id, output };
           }
@@ -4355,7 +4974,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   issueContext,
                   config.envVars,
                   stepNamePrefix,
-                  iteration
+                  iteration,
+                  execContext
                 )
             );
             return { nodeId: node.id, output };
@@ -4378,17 +4998,32 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
             cwd,
             workflowLevelOptions,
             aiProfile,
-            workflowPreset
+            workflowPreset,
+            execContext
           );
 
           // 5. Determine session — parallel or context:fresh → always fresh
           // Parallel layers always get fresh sessions; explicit 'fresh' context also forces it.
           // 'shared' forces continuation. Default: fresh for parallel, inherited for sequential.
-          // isFreshSequential controls in-run threading (lastSequentialSessionId).
+          // isFreshSequential controls in-run threading (lastSequentialSession).
+          // Cross-provider guard (#1992): a session id can only be resumed by the provider
+          // that created it, so the cursor is threaded only into nodes that resolve to the
+          // SAME provider — on a provider change the node starts fresh instead of failing
+          // (Claude) or silently cold-falling-back (Codex) on a foreign session id.
           const isFreshSequential = isParallelLayer || node.context === 'fresh';
-          let resumeSessionId: string | undefined = isFreshSequential
-            ? undefined
-            : ctx.lastSequentialSessionId;
+          const cursor = ctx.lastSequentialSession;
+          let resumeSessionId: string | undefined;
+          if (isFreshSequential || cursor === undefined) {
+            resumeSessionId = undefined;
+          } else if (cursor.provider === provider) {
+            resumeSessionId = cursor.sessionId;
+          } else {
+            resumeSessionId = undefined;
+            getLog().info(
+              { nodeId: node.id, provider, cursorProvider: cursor.provider },
+              'dag.session_provider_boundary_fresh'
+            );
+          }
 
           // Strictly opt-in: on only when the node sets persist_session (or inherits the
           // workflow-level persist_sessions default) and doesn't opt out via context:'fresh'.
@@ -4594,7 +5229,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
             }
           }
 
-          return { nodeId: node.id, output };
+          return { nodeId: node.id, output, sessionProvider: provider };
         } catch (error) {
           const err = error as Error;
           getLog().error({ err, nodeId: node.id }, 'dag_node_pre_execution_failed');
@@ -4634,7 +5269,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
     let layerHadFailure = false;
     for (const result of layerResults) {
       if (result.status === 'fulfilled') {
-        const { nodeId, output } = result.value;
+        const { nodeId, output, sessionProvider } = result.value;
         // SINGLE aggregation point for run-level usage telemetry. Per-node
         // cost/tokens must be summed here and ONLY here — adding a per-node
         // telemetry capture elsewhere would double-count against the totals
@@ -4693,7 +5328,13 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
           }
         }
         if (output.state === 'completed' && !isParallelLayer && output.sessionId !== undefined) {
-          ctx.lastSequentialSessionId = output.sessionId;
+          // Tag the cursor with the provider that created the session (#1992). A session
+          // id from a path that can't attest its provider is never threaded — fail-safe:
+          // a fresh downstream session beats a guaranteed-broken cross-provider resume.
+          ctx.lastSequentialSession =
+            sessionProvider !== undefined
+              ? { sessionId: output.sessionId, provider: sessionProvider }
+              : undefined;
         }
         if (output.state === 'failed') layerHadFailure = true;
       } else {
@@ -4787,7 +5428,13 @@ export async function executeDagWorkflow(
    * resolved by executor.ts when the workflow uses session persistence (#1846).
    * Undefined otherwise — no mirroring, no cold-resume pointer.
    */
-  scopeArtifactsDir?: string
+  scopeArtifactsDir?: string,
+  /**
+   * Execution context for this run (host by default; the container backend
+   * threads a container context in Phase B). Threaded onto every node's
+   * `RunLayersContext` so provider turns and subprocesses exec in the right place.
+   */
+  execContext: ExecutionContext = { kind: 'host' }
 ): Promise<string | undefined> {
   const dagStartTime = Date.now();
   const workflowTier = workflow.model && isTierName(workflow.model) ? workflow.model : undefined;
@@ -4857,7 +5504,7 @@ export async function executeDagWorkflow(
   const workflowPersistSessions = workflow.persist_sessions === true;
 
   // Run the topological layers. runLayers mutates the context's mutable fields in place
-  // (nodeOutputs, lastSequentialSessionId, usage accumulators); we read them back below
+  // (nodeOutputs, lastSequentialSession, usage accumulators); we read them back below
   // for the terminal tally. stepNamePrefix is '' for the top-level DAG so node event
   // step_names are the raw node ids (identical to pre-refactor behavior).
   const runCtx: RunLayersContext = {
@@ -4865,6 +5512,7 @@ export async function executeDagWorkflow(
     platform,
     conversationId,
     cwd,
+    execContext,
     workflowRun,
     workflowName: workflow.name,
     config,
@@ -4887,7 +5535,7 @@ export async function executeDagWorkflow(
     layers,
     nodeOutputs,
     priorCompletedNodes,
-    lastSequentialSessionId: undefined,
+    lastSequentialSession: undefined,
     totalCostUsd: 0,
     totalTokensIn: 0,
     totalTokensOut: 0,

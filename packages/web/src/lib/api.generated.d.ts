@@ -1755,7 +1755,7 @@ export interface paths {
     };
     get?: never;
     put?: never;
-    /** Abandon a workflow run (mark as failed) */
+    /** Abandon a workflow run (mark as cancelled) */
     post: {
       parameters: {
         query?: never;
@@ -3352,6 +3352,7 @@ export interface components {
     };
     DagNode: {
       id: string;
+      description?: string;
       depends_on?: string[];
       when?: string;
       /** @enum {string} */

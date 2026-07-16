@@ -232,7 +232,7 @@ CREATE TABLE IF NOT EXISTS remote_agent_workflow_runs (
   conversation_id UUID REFERENCES remote_agent_conversations(id) ON DELETE CASCADE,
   codebase_id UUID REFERENCES remote_agent_codebases(id) ON DELETE SET NULL,
   current_step_index INTEGER,
-  status VARCHAR(20) NOT NULL DEFAULT 'pending',  -- pending, running, completed, failed
+  status VARCHAR(20) NOT NULL DEFAULT 'pending',  -- pending, running, completed, failed, cancelled, paused
   user_message TEXT NOT NULL,
   metadata JSONB DEFAULT '{}',
   parent_conversation_id UUID REFERENCES remote_agent_conversations(id) ON DELETE SET NULL,

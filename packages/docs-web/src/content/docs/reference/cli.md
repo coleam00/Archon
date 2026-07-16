@@ -262,6 +262,8 @@ archon workflow runs --all             # list across all projects (ignore cwd sc
 
 If `cwd` is not a registered project, the command falls back to a global list and says so — `--json` carries this as a `scopeFallback: true` field so a consuming agent never mistakes a global result for a project-scoped one.
 
+The listing shows short 8-character run ids. Every `<run-id>` command below (`get`, `resume`, `abandon`, `approve`, `reject`) accepts these short ids when run from the project directory: a unique prefix resolves to the full id, an ambiguous prefix errors, and full ids keep working from any directory. Short ids from `--all` rows belonging to *other* projects can't be resolved — use the full id from `--json` for those.
+
 ### `workflow get`
 
 Show detail for a single run by ID, regardless of status (unlike `status`, which is active-only). Use it to answer "did that run pass?" for a completed/failed run. Exits non-zero when the run is not found.
@@ -295,6 +297,8 @@ archon workflow abandon <run-id> --json
 ### `workflow approve`
 
 Approve a paused workflow run at an interactive approval gate. Optionally provide a comment that is available to the workflow via `$LOOP_USER_INPUT`.
+
+**Interactive-loop gates — finalize vs iterate:** when the gate paused on an iteration that emitted the loop's completion signal (`workflow get <run-id> --json` → `.metadata.approval.completionSignaled` is `true`), approving with **no comment** accepts the completion — the node finalizes from the already-computed output on resume, with no re-run. Approving **with** a comment runs another iteration using it as `$LOOP_USER_INPUT`. On a non-signaled gate, both forms run another iteration.
 
 ```bash
 archon workflow approve <run-id>

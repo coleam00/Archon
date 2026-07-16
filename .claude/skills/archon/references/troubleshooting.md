@@ -22,7 +22,7 @@ Each line is a structured event. The discriminator is the `type` field. Values (
 
 > **Loop iterations and per-attempt retry events are NOT in the JSONL file.** They go through the workflow event emitter (WebSocket / `workflow_events` DB table) under `loop_iteration_started` / `loop_iteration_completed` etc. To see them, query the DB or the Web UI dashboard — not the JSONL log.
 
-Find the run ID from `archon workflow status` (most recent run). Then:
+Find the run ID from `archon workflow runs --status failed` (or `archon workflow runs` for the most recent run of any status; `workflow status` only shows active runs). Then:
 
 ```bash
 # Last assistant message (what the AI said before failure)
@@ -162,7 +162,10 @@ archon workflow get <run-id> --verbose --json | jq '.events[]'
 # Recent runs for this project, all statuses ("did the review pass?")
 archon workflow runs --json | jq '.runs[]'
 
-# All active runs as JSON (running / paused / recently finished, depending on retention)
+# Recent runs of any status (find a failed run's ID)
+archon workflow runs --status failed --limit 10
+
+# All active runs as JSON (running / paused only — finished runs never appear here)
 archon workflow status --json | jq '.runs[]'
 
 # Human-readable status of any active runs

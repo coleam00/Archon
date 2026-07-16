@@ -40,6 +40,7 @@ export {
   approvalOnRejectSchema,
   cancelNodeSchema,
   scriptNodeSchema,
+  includeNodeSchema,
   dagNodeSchema,
   isBashNode,
   isLoopNode,
@@ -47,16 +48,19 @@ export {
   isApprovalNode,
   isCancelNode,
   isScriptNode,
+  isIncludeNode,
   isPersistableNode,
   isTriggerRule,
   BASH_NODE_AI_FIELDS,
   SCRIPT_NODE_AI_FIELDS,
   LOOP_NODE_AI_FIELDS,
   LOOP_GROUP_NODE_AI_FIELDS,
+  INCLUDE_NODE_IGNORED_FIELDS,
   effortLevelSchema,
   thinkingConfigSchema,
   sandboxSettingsSchema,
   agentDefinitionSchema,
+  piNodeConfigSchema,
 } from './dag-node';
 export type {
   TriggerRule,
@@ -71,11 +75,13 @@ export type {
   ApprovalOnReject,
   CancelNode,
   ScriptNode,
+  IncludeNode,
   DagNode,
   EffortLevel,
   ThinkingConfig,
   SandboxSettings,
   AgentDefinition,
+  PiNodeConfig,
 } from './dag-node';
 
 // Workflow definition
@@ -114,6 +120,7 @@ export type {
   WorkflowRun,
   ArtifactType,
   ApprovalContext,
+  LoopGateRunMetadata,
 } from './workflow-run';
 
 // Per-node persisted provider sessions

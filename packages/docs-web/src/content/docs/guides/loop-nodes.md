@@ -74,6 +74,9 @@ the executor checks for workflow cancellation.
                             # iteration for user input via /workflow approve.
     gate_message: "..."     # Required when interactive: true. Message shown to the
                             # user at each pause with the run ID and approve command.
+    signal_completes: true  # Optional. Default: false. Interactive loops only: a detected
+                            # completion signal completes the node immediately (even on
+                            # iteration 1) instead of gating for confirmation.
 ```
 
 ### `prompt`
@@ -269,13 +272,73 @@ completion when tests still fail.
 ### `interactive` and `gate_message`
 
 Set `interactive: true` to pause the loop between iterations and wait for human input.
-After each non-completing iteration the executor:
+After each iteration the executor:
 
-1. Sends the `gate_message` to the user along with the run ID and a `/workflow approve` command
+1. Sends the gate message to the user along with the run ID and a `/workflow approve` command.
+   The gate text is engine-generated: a status line — whether the iteration emitted the
+   completion signal, plus a bounded excerpt of the iteration output — followed by your
+   `gate_message`, so the gate always reports the real iteration outcome. The status line
+   **leads the persisted gate message** (`metadata.approval.message`, also the
+   `approval_requested` event data — what `workflow get --json` and `manage_run` read);
+   the chat-delivered message wraps the same text in a `⏸ Input required (loop ..., iteration N):`
+   prefix, so in chat the status line appears right after that prefix.
 2. Pauses the workflow run
-3. Waits — the workflow resumes when the user runs `/workflow approve <id> <feedback>`
+3. Waits — the workflow resumes when the user runs `/workflow approve <id> [feedback]`
 
 The user's feedback is injected into the next iteration's prompt via `$LOOP_USER_INPUT`.
+
+**Approve semantics (finalize vs iterate).** What an approve does depends on whether the
+paused iteration emitted the completion signal:
+
+- **Gate paused on a signal-bearing iteration** (the status line says "Completion signal
+  detected"): `/workflow approve <id>` with **no feedback** *accepts the completion* — the
+  node finalizes from the already-computed output and the workflow proceeds, with **no
+  re-run**. Approving **with feedback** discards the signal and runs another iteration with
+  your feedback as `$LOOP_USER_INPUT`.
+- **Gate paused without the signal:** both forms run another iteration (there is nothing
+  to finalize).
+
+The same rule applies on every approve surface: chat `/workflow approve`, the CLI
+(`archon workflow approve <id> [--json]` — omit the comment to finalize), the HTTP
+endpoint (omit `comment`), the web console ("Accept & complete" with an empty comment
+field), and the `manage_run` chat tool (no `message`, or `accept: true`).
+
+> **Known limitation:** approving via a plain natural-language chat message (not the
+> slash command) always counts as feedback and iterates. To finalize, use
+> `/workflow approve <id>` with no comment, the CLI/web/`manage_run` surfaces above,
+> or `signal_completes`.
+
+### `signal_completes` — autonomous completion
+
+By default an interactive loop **always gates first**, even when the very first iteration
+emits the completion signal — the human confirms before the node completes. If you want
+the signal itself to complete the node (no gate, no approve), set `signal_completes: true`:
+
+```yaml
+  - id: validate
+    loop:
+      prompt: |
+        Run the validation suite. On PASS output <promise>VALIDATED</promise>.
+        On failure, describe what failed and wait for instructions.
+      until: VALIDATED
+      max_iterations: 5
+      interactive: true
+      gate_message: Validation did not pass — review the failures above.
+      signal_completes: true   # signal ⇒ node completes immediately, no gate
+```
+
+With `signal_completes: true` the gate only appears on iterations that did **not** signal —
+the pattern for "pass through on success, pause for a human on failure". The flag has no
+effect on non-interactive loops (the signal already completes them); setting it without
+`interactive: true` emits a loader warning.
+
+**AI approvers / relay steering.** An orchestrating agent can steer another run's gate:
+read the structured gate state first (`archon workflow get <id> --json` →
+`.metadata.approval.completionSignaled`, or the `manage_run` `get` action, which prints
+`completionSignaled`, the iteration, and an output excerpt), then finalize with
+`archon workflow approve <id> --json` (no comment) or `manage_run` approve with
+`accept: true` — or iterate by passing feedback. The `--json` approve records the decision
+without resuming; a later `resume` executes the finalize or the next iteration.
 
 > **Note**: Interactive loop nodes require `interactive: true` at the **workflow level** as
 > well. If only the loop node has `interactive: true`, a loader warning is emitted and the

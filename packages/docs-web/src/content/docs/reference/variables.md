@@ -25,7 +25,7 @@ These variables are substituted by the workflow executor in all node types (`com
 | `$CONTEXT` | GitHub issue or PR context, if available | Populated when the workflow is triggered from a GitHub issue/PR. Replaced with empty string when unavailable |
 | `$EXTERNAL_CONTEXT` | Same as `$CONTEXT` | Alias |
 | `$ISSUE_CONTEXT` | Same as `$CONTEXT` | Alias |
-| `$LOOP_USER_INPUT` | User feedback from an interactive loop approval gate | Only populated on the first iteration of a resumed interactive loop. Empty string on all other iterations |
+| `$LOOP_USER_INPUT` | User feedback from an interactive loop approval gate | Only populated on the first iteration of a resumed interactive loop. Empty string on all other iterations. On a signal-bearing gate, a bare approve (no feedback) finalizes the node without a new iteration, so the variable is never read |
 | `$REJECTION_REASON` | Reviewer feedback from an approval node rejection | Only available in `on_reject` prompts. Empty string elsewhere |
 | `$LOOP_PREV_OUTPUT` | Cleaned output of the previous loop iteration (loop nodes only) | Empty string on the first iteration. Useful for `fresh_context: true` loops that need to reference the prior pass without carrying the full session history |
 | `$LOOP_PREV.<nodeId>.output` | A body node's output from the previous iteration (loop_group body nodes only) | Empty string on iteration 1. `$LOOP_PREV.<nodeId>.output.<field>` accesses structured-output fields with the same strict semantics as `$nodeId.output.field`. See [Cross-Node Loops](/guides/loop-nodes/#cross-node-loops-with-loop_group) |

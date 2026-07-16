@@ -29,6 +29,12 @@ export const loopControlSchema = z
     interactive: z.boolean().optional(),
     /** Message shown to user when paused (required when interactive is true). */
     gate_message: z.string().optional(),
+    /**
+     * When true, a detected completion signal completes the node immediately —
+     * even on the first iteration of a fresh interactive loop — instead of gating.
+     * No effect on non-interactive loops (the signal already completes them). Default false.
+     */
+    signal_completes: z.boolean().optional(),
   })
   .superRefine((data, ctx) => {
     if (data.interactive === true && !data.gate_message) {

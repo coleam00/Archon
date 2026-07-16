@@ -33,6 +33,8 @@ import {
   type Options,
   type HookCallback,
   type HookCallbackMatcher,
+  type SDKAssistantMessageError,
+  type TerminalReason,
 } from '@anthropic-ai/claude-agent-sdk';
 import type {
   IAgentProvider,
@@ -129,6 +131,54 @@ function classifySubprocessError(
   if (AUTH_PATTERNS.some(p => combined.includes(p))) return 'auth';
   if (SUBPROCESS_CRASH_PATTERNS.some(p => combined.includes(p))) return 'crash';
   return 'unknown';
+}
+
+/**
+ * The Claude Code SDK surfaces API-level failures (auth not configured,
+ * invalid key, billing, rate limit, model errors) as TEXT rather than
+ * throwing: it synthesizes an assistant message (`message.model:
+ * '<synthetic>'`, wrapper `error: SDKAssistantMessageError`) whose content is
+ * the error prose, then emits a result with `subtype: 'success'` and
+ * `is_error: true` — the same field pair as the legitimate stop-sequence
+ * termination carve-out (#1425). Without structural detection the error prose
+ * flows downstream as successful node output (#1797).
+ *
+ * This error carries the SDK's typed error code so retry classification is
+ * structural — never matched against the message text.
+ */
+type SdkErrorCode = SDKAssistantMessageError | 'unknown';
+
+export class ClaudeApiResultError extends Error {
+  readonly sdkErrorCode: SdkErrorCode;
+
+  constructor(sdkErrorCode: SdkErrorCode, resultText: string) {
+    super(`Claude API error (${sdkErrorCode}): ${resultText}`);
+    this.name = 'ClaudeApiResultError';
+    this.sdkErrorCode = sdkErrorCode;
+  }
+}
+
+/**
+ * Map the SDK's typed assistant-message error code onto the existing
+ * subprocess retry classes. Auth-shaped codes are non-retryable (operator
+ * must fix credentials); transient API states reuse the existing
+ * rate_limit/crash backoff. Everything else is 'unknown' — fail fast rather
+ * than retry blindly.
+ */
+function classifySdkErrorCode(code: SdkErrorCode): 'rate_limit' | 'auth' | 'crash' | 'unknown' {
+  switch (code) {
+    case 'authentication_failed':
+    case 'oauth_org_not_allowed':
+    case 'billing_error':
+      return 'auth';
+    case 'rate_limit':
+    case 'overloaded':
+      return 'rate_limit';
+    case 'server_error':
+      return 'crash';
+    default:
+      return 'unknown';
+  }
 }
 
 function getFirstEventTimeoutMs(): number {
@@ -656,6 +706,12 @@ async function* streamClaudeMessages(
   events: AsyncGenerator,
   toolResultQueue: ToolResultEntry[]
 ): AsyncGenerator<MessageChunk> {
+  // Synthetic error message recorded while waiting for the terminal result to
+  // confirm it (#1797). Detection is two-signal: the typed wrapper `error`
+  // field on a '<synthetic>' assistant message, then `is_error: true` on the
+  // result. See ClaudeApiResultError.
+  let pendingSdkError: { code: SDKAssistantMessageError; text: string } | undefined;
+
   for await (const msg of events) {
     // Drain tool results captured by hooks before processing the next event
     while (toolResultQueue.length > 0) {
@@ -673,8 +729,30 @@ async function* streamClaudeMessages(
     const event = msg as { type: string };
 
     if (event.type === 'assistant') {
-      const message = msg as { message: { content: ContentBlock[] } };
+      const message = msg as {
+        message: { content: ContentBlock[]; model?: string };
+        error?: SDKAssistantMessageError;
+      };
       const content = message.message.content;
+
+      // API-level failure surfaced as text (#1797): the SDK writes the error
+      // prose into a synthesized assistant message instead of throwing. Both
+      // signals are required — a REAL model message can carry an error code
+      // too (e.g. 'max_output_tokens' on truncated output) and its content
+      // must flow through untouched; only '<synthetic>' content is
+      // SDK-generated error prose, never model output.
+      if (message.error !== undefined && message.message.model === '<synthetic>') {
+        const text = content
+          .filter(b => b.type === 'text' && b.text)
+          .map(b => b.text)
+          .join('\n');
+        pendingSdkError = { code: message.error, text };
+        getLog().warn({ errorCode: message.error, text }, 'claude.synthetic_error_message');
+        // Withhold the error prose from the output stream — yielding it is
+        // what poisons downstream $node.output. If the terminal result
+        // contradicts (no is_error), the text is yielded late as a fail-safe.
+        continue;
+      }
 
       for (const block of content) {
         if (block.type === 'text' && block.text) {
@@ -704,6 +782,8 @@ async function* streamClaudeMessages(
         status?: string;
         output_file?: string;
         skip_transcript?: boolean;
+        // Background-task set (Claude SDK v0.3.209+ `background_tasks_changed`)
+        tasks?: { task_id: string; task_type: string; description: string }[];
         // Hook lifecycle (Claude SDK v0.2.89+)
         hook_id?: string;
         hook_name?: string;
@@ -769,6 +849,20 @@ async function* streamClaudeMessages(
           ...(sysMsg.usage !== undefined ? { usage: sysMsg.usage } : {}),
           ...(sysMsg.tool_use_id !== undefined ? { toolUseId: sysMsg.tool_use_id } : {}),
         };
+      } else if (subtype === 'background_tasks_changed') {
+        // Level signal: the FULL set of live background tasks after a membership
+        // change (REPLACE semantics — see the MessageChunk variant docs). An
+        // empty `tasks` array is meaningful ("all drained") and MUST be
+        // forwarded, so no `&& sysMsg.tasks` guard here.
+        const tasks = Array.isArray(sysMsg.tasks) ? sysMsg.tasks : [];
+        yield {
+          type: 'background_tasks',
+          tasks: tasks.map(t => ({
+            taskId: t.task_id,
+            taskType: t.task_type,
+            description: t.description,
+          })),
+        };
       } else if (subtype === 'hook_started' && sysMsg.hook_id) {
         yield {
           type: 'hook_started',
@@ -807,6 +901,9 @@ async function* streamClaudeMessages(
         stop_reason?: string | null;
         num_turns?: number;
         errors?: string[];
+        result?: string;
+        terminal_reason?: TerminalReason;
+        api_error_status?: number | null;
         model_usage?: Record<
           string,
           {
@@ -817,15 +914,64 @@ async function* streamClaudeMessages(
           }
         >;
       };
+      // The terminal result resolves any recorded synthetic error message.
+      const syntheticError = pendingSdkError;
+      pendingSdkError = undefined;
       const tokens = normalizeClaudeUsage(resultMsg.usage);
       const sdkErrors = Array.isArray(resultMsg.errors) ? resultMsg.errors : undefined;
+
+      // `is_error: true` + `subtype: 'success'` is ambiguous: it is BOTH the
+      // SDK's stop-sequence termination encoding (#1425, a legitimate success)
+      // AND its API-failure-as-text encoding (#1797 — auth/billing/rate-limit
+      // errors that even set stop_reason: 'stop_sequence').
+      const isSuccessWithErrorFlag = resultMsg.is_error === true && resultMsg.subtype === 'success';
+
+      // Disambiguate structurally: a preceding synthetic error message
+      // (primary, typed signal), or the typed terminal_reason 'api_error'
+      // (secondary — catches an error result with no preceding synthetic
+      // message), marks a real failure. Throw so callers fail the node/turn
+      // instead of consuming error prose as successful output.
+      if (
+        isSuccessWithErrorFlag &&
+        (syntheticError !== undefined || resultMsg.terminal_reason === 'api_error')
+      ) {
+        const code = syntheticError?.code ?? 'unknown';
+        const text =
+          syntheticError?.text ||
+          resultMsg.result ||
+          sdkErrors?.join('; ') ||
+          'API error result with no error text';
+        getLog().error(
+          {
+            sessionId: resultMsg.session_id,
+            errorCode: code,
+            terminalReason: resultMsg.terminal_reason,
+            apiErrorStatus: resultMsg.api_error_status,
+            text,
+          },
+          'claude.result_api_error'
+        );
+        throw new ClaudeApiResultError(code, text);
+      }
+
+      // Fail-safe (never observed in practice): a synthetic error message
+      // followed by a non-error result. Yield the withheld text late rather
+      // than silently swallowing content.
+      if (syntheticError !== undefined && resultMsg.is_error !== true) {
+        getLog().warn(
+          { sessionId: resultMsg.session_id, errorCode: syntheticError.code },
+          'claude.synthetic_error_not_confirmed'
+        );
+        yield { type: 'assistant', content: syntheticError.text };
+      }
+
       // SDKResultSuccess declares `is_error: boolean` (not literal false). When a
       // model terminates via a configured stop sequence (stop_reason ===
       // 'stop_sequence') the SDK can set is_error: true while keeping
       // subtype: 'success' — its encoding of "non-default termination, not a
       // failure". Treat that pair as a clean success so downstream consumers
       // (which gate failure on isError) don't misclassify it.
-      const isRealError = resultMsg.is_error === true && resultMsg.subtype !== 'success';
+      const isRealError = resultMsg.is_error === true && !isSuccessWithErrorFlag;
       if (isRealError) {
         getLog().error(
           {
@@ -836,7 +982,7 @@ async function* streamClaudeMessages(
           },
           'claude.result_is_error'
         );
-      } else if (resultMsg.is_error === true && resultMsg.subtype === 'success') {
+      } else if (isSuccessWithErrorFlag) {
         getLog().debug(
           {
             sessionId: resultMsg.session_id,
@@ -862,6 +1008,17 @@ async function* streamClaudeMessages(
           : {}),
       };
     }
+  }
+
+  // Stream ended after a synthetic error message with no terminal result to
+  // confirm or contradict it. A dangling synthetic error is a failure — the
+  // SDK ends every turn with a result, so this is an abnormal end (#1797).
+  if (pendingSdkError !== undefined) {
+    getLog().error(
+      { errorCode: pendingSdkError.code, text: pendingSdkError.text },
+      'claude.synthetic_error_stream_ended'
+    );
+    throw new ClaudeApiResultError(pendingSdkError.code, pendingSdkError.text);
   }
 
   // Drain any remaining tool results after the stream ends
@@ -900,6 +1057,17 @@ function classifyAndEnrichError(
       enrichedError: new Error('Query aborted'),
       errorClass: 'aborted',
       shouldRetry: false,
+    };
+  }
+
+  // API failures the SDK surfaced as text (#1797) carry a typed error code —
+  // classify by that code, never by matching the (arbitrary) message text.
+  if (error instanceof ClaudeApiResultError) {
+    const errorClass = classifySdkErrorCode(error.sdkErrorCode);
+    return {
+      enrichedError: error,
+      errorClass,
+      shouldRetry: errorClass === 'rate_limit' || errorClass === 'crash',
     };
   }
 

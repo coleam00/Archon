@@ -108,10 +108,20 @@ describe('approveWorkflow', () => {
     const secondCall = mockCreateWorkflowEvent.mock.calls[1][0] as Record<string, unknown>;
     expect(secondCall.event_type).toBe('approval_received');
 
-    // Transitions to failed + clears rejection state
+    // Stays 'paused' (no status write) — resolution recorded on the approval
+    // context + rejection state cleared (#2075)
     expect(mockUpdateWorkflowRun).toHaveBeenCalledWith('run-1', {
-      status: 'failed',
-      metadata: { approval_response: 'approved', rejection_reason: '', rejection_count: 0 },
+      metadata: {
+        approval: {
+          nodeId: 'review',
+          message: 'Please review',
+          type: 'approval',
+          resolved: 'approved',
+        },
+        approval_response: 'approved',
+        rejection_reason: '',
+        rejection_count: 0,
+      },
     });
 
     // Anonymous telemetry: binary resolution captured exactly once
@@ -141,11 +151,104 @@ describe('approveWorkflow', () => {
     const call = mockCreateWorkflowEvent.mock.calls[0][0] as Record<string, unknown>;
     expect(call.event_type).toBe('approval_received');
 
-    // Stores loop_user_input in metadata
+    // Stays 'paused' (no status write) — stores loop_user_input and marks the
+    // approval context resolved, preserving iteration for startIteration detection
     expect(mockUpdateWorkflowRun).toHaveBeenCalledWith('run-1', {
-      status: 'failed',
-      metadata: { loop_user_input: 'fix the tests' },
+      metadata: {
+        approval: {
+          nodeId: 'iterate',
+          message: 'Provide feedback',
+          type: 'interactive_loop',
+          iteration: 2,
+          resolved: 'approved',
+        },
+        loop_user_input: 'fix the tests',
+        // Real feedback ⇒ the resumed loop iterates (#2074)
+        loop_feedback_given: true,
+      },
     });
+  });
+
+  test('interactive_loop bare approve — loop_feedback_given false, loop_user_input defaults (#2074)', async () => {
+    const run = makePausedRun({
+      metadata: {
+        approval: {
+          nodeId: 'iterate',
+          message: 'Provide feedback',
+          type: 'interactive_loop',
+          iteration: 1,
+          completionSignaled: true,
+          signaledOutput: 'REPORT',
+        },
+      },
+    });
+    mockGetWorkflowRun.mockResolvedValueOnce(run);
+
+    await approveWorkflow('run-1');
+
+    expect(mockUpdateWorkflowRun).toHaveBeenCalledWith('run-1', {
+      metadata: {
+        approval: {
+          nodeId: 'iterate',
+          message: 'Provide feedback',
+          type: 'interactive_loop',
+          iteration: 1,
+          completionSignaled: true,
+          signaledOutput: 'REPORT',
+          resolved: 'approved',
+        },
+        // The recorded comment still defaults to 'Approved' (events/$LOOP_USER_INPUT
+        // for non-signaled iterate paths) — only the boolean sees the raw undefined.
+        loop_user_input: 'Approved',
+        loop_feedback_given: false,
+      },
+    });
+  });
+
+  test('interactive_loop whitespace-only comment counts as no feedback (#2074)', async () => {
+    const run = makePausedRun({
+      metadata: {
+        approval: {
+          nodeId: 'iterate',
+          message: 'Provide feedback',
+          type: 'interactive_loop',
+          iteration: 1,
+        },
+      },
+    });
+    mockGetWorkflowRun.mockResolvedValueOnce(run);
+
+    await approveWorkflow('run-1', '   ');
+
+    const updateArg = mockUpdateWorkflowRun.mock.calls[0][1] as {
+      metadata: Record<string, unknown>;
+    };
+    expect(updateArg.metadata.loop_feedback_given).toBe(false);
+    // Whitespace-only also gets the documented recorded-comment default —
+    // '   ' must never be stored verbatim as $LOOP_USER_INPUT.
+    expect(updateArg.metadata.loop_user_input).toBe('Approved');
+  });
+
+  test('throws on already-resolved gate (double-approve guard)', async () => {
+    const run = makePausedRun({
+      metadata: {
+        approval: {
+          nodeId: 'review',
+          message: 'Please review',
+          type: 'approval',
+          resolved: 'approved',
+        },
+      },
+    });
+    mockGetWorkflowRun.mockResolvedValueOnce(run);
+
+    await expect(approveWorkflow('run-1')).rejects.toThrow(
+      'already approved and is awaiting resume'
+    );
+    // No duplicate events / telemetry / metadata writes
+    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
+    expect(mockCaptureApprovalResolved).not.toHaveBeenCalled();
+    expect(mockUpdateWorkflowRun).not.toHaveBeenCalled();
   });
 
   test('approves with captureResponse — stores comment as node output', async () => {
@@ -197,7 +300,7 @@ describe('rejectWorkflow', () => {
     mockCancelWorkflowRun.mockClear();
   });
 
-  test('rejects with onRejectPrompt under max attempts — transitions to failed', async () => {
+  test('rejects with onRejectPrompt under max attempts — stays paused with staged rework', async () => {
     const run = makePausedRun({
       metadata: {
         approval: {
@@ -216,13 +319,46 @@ describe('rejectWorkflow', () => {
     expect(result.cancelled).toBe(false);
     expect(result.workflowName).toBe('test-workflow');
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+    // Stays 'paused' (no status write) — rejection staged on the approval context (#2075)
     expect(mockUpdateWorkflowRun).toHaveBeenCalledWith('run-1', {
-      status: 'failed',
-      metadata: { rejection_reason: 'needs more tests', rejection_count: 1 },
+      metadata: {
+        approval: {
+          nodeId: 'review',
+          message: 'Review',
+          onRejectPrompt: 'Fix: $REJECTION_REASON',
+          onRejectMaxAttempts: 3,
+          resolved: 'rejected',
+        },
+        rejection_reason: 'needs more tests',
+        rejection_count: 1,
+      },
     });
 
     expect(mockCaptureApprovalResolved).toHaveBeenCalledTimes(1);
     expect(mockCaptureApprovalResolved).toHaveBeenCalledWith({ resolution: 'rejected' });
+  });
+
+  test('throws on already-resolved gate (double-reject guard)', async () => {
+    const run = makePausedRun({
+      metadata: {
+        approval: {
+          nodeId: 'review',
+          message: 'Review',
+          onRejectPrompt: 'Fix: $REJECTION_REASON',
+          resolved: 'rejected',
+        },
+        rejection_count: 1,
+      },
+    });
+    mockGetWorkflowRun.mockResolvedValueOnce(run);
+
+    await expect(rejectWorkflow('run-1', 'again')).rejects.toThrow(
+      'already rejected and is awaiting resume'
+    );
+    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
+    expect(mockCaptureApprovalResolved).not.toHaveBeenCalled();
+    expect(mockUpdateWorkflowRun).not.toHaveBeenCalled();
+    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
   });
 
   test('rejects at max attempts — cancels run', async () => {

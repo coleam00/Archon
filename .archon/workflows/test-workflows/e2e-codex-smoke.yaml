@@ -3,7 +3,7 @@
 name: e2e-codex-smoke
 description: "E2E smoke test for Codex provider. Runs a simple prompt + structured output node."
 provider: codex
-model: gpt-5.2
+model: gpt-5.6-luna
 
 nodes:
   - id: simple

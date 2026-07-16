@@ -20,7 +20,8 @@ import {
   type TierName,
   type RawTiersConfig,
 } from '@archon/workflows/model-validation';
-import { configureIsolation, getIsolationProvider } from '@archon/isolation';
+import { configureIsolation, getIsolationProvider, resolveFolderBackend } from '@archon/isolation';
+import type { ExecutionContext } from '@archon/isolation';
 import {
   createLogger,
   getArchonHome,
@@ -47,7 +48,7 @@ import type {
   WorkflowSource,
   WorkflowWithSource,
 } from '@archon/workflows/schemas/workflow';
-import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
+import { workflowRunStatusSchema, isApprovalContext } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import {
   approveWorkflow,
@@ -878,12 +879,20 @@ export async function workflowRunCommand(
     );
   }
 
-  // Try to find a codebase for this directory
+  // Try to find a codebase for this directory. Mirror the `run` dispatch gate
+  // (cli.ts) and the --detach folder probe above: exact `default_cwd` match
+  // first, then a path-prefix lookup so a subdirectory or worktree UNDER a
+  // registered root resolves to its covering codebase. Without the prefix
+  // fallback, resume/approve re-enter here with cwd = the run's worktree
+  // working_path, miss the exact match, and fall through to auto-registration —
+  // which trips the source-symlink guard for an already-covered path (#2127).
   let codebase = null;
   let codebaseLookupError: Error | null = null;
   let codebaseRegistrationError: Error | null = null;
   try {
-    codebase = await codebaseDb.findCodebaseByDefaultCwd(cwd);
+    codebase =
+      (await codebaseDb.findCodebaseByDefaultCwd(cwd)) ??
+      (await codebaseDb.findCodebaseByPathPrefix(cwd));
   } catch (error) {
     const err = error as Error;
     codebaseLookupError = err;
@@ -967,6 +976,10 @@ export async function workflowRunCommand(
   // Handle isolation (worktree creation)
   let workingCwd = cwd;
   let isolationEnvId: string | undefined;
+  // Execution context for the run. Repo/worktree and folder-in-place both run on
+  // the host; the folder-backend seam sets this and is where Phase B's `--container`
+  // will flip it to a container context.
+  let execContext: ExecutionContext = { kind: 'host' };
 
   // Handle --resume: locate the prior failed run, reuse its worktree, and hand
   // the resumed-run handle to executeWorkflow below via opts. The executor no
@@ -1046,13 +1059,26 @@ export async function workflowRunCommand(
   assertNoWorktreeOptionsForFolder(isFolderCodebase, options);
   assertWorkflowNotWorktreePinnedForFolder(isFolderCodebase, pinnedEnabled, workflow.name);
 
-  if (isFolderCodebase) {
-    // Folder projects run in place at their root — no worktree isolation. The
-    // agent's cwd is the folder root, so it sees every child folder/repo, and
-    // per-service git (branch/commit/PR) is the agent's job via bash/gh. Stated
-    // explicitly at run start (fail-fast-honest, not a silent skip).
+  if (isFolderCodebase && codebase) {
+    // Folder projects run through the folder-backend seam — no worktree isolation.
+    // The in-place backend (Phase A default) keeps the agent's cwd at the folder
+    // root, so it sees every child folder/repo, and per-service git (branch/commit/PR)
+    // is the agent's job via bash/gh. Stated explicitly at run start (fail-fast-honest,
+    // not a silent skip). Phase B adds `--container` here to select the container
+    // backend instead of in-place.
     console.log('Folder project — running in place (no worktree isolation).');
     getLog().info({ cwd: workingCwd }, 'workflow.running_without_isolation');
+    const folderCodebase = {
+      id: codebase.id,
+      defaultCwd: codebase.default_cwd,
+      name: codebase.name,
+      kind: 'folder' as const,
+    };
+    const backend = resolveFolderBackend(folderCodebase, { container: false });
+    const prepared = await backend.prepare({ codebase: folderCodebase });
+    // In-place prepare returns the folder root + host context — workingCwd is
+    // already that path (same-absolute-path invariant), so this is byte-identical.
+    execContext = prepared.execContext;
   } else if (wantsIsolation && codebase) {
     // Auto-generate branch identifier from workflow name + timestamp when --branch not provided
     const branchIdentifier = options.branchName ?? `${workflowName}-${Date.now()}`;
@@ -1130,6 +1156,9 @@ export async function workflowRunCommand(
           : undefined,
         baseBranch: codebaseDefaultBranch ? git.toBranchName(codebaseDefaultBranch) : undefined,
         codebaseId: codebase.id,
+        // owner/repo name lets resolveOwnerRepo skip the path heuristic, which
+        // throws for single-segment checkout paths like /workspace (#2022)
+        codebaseName: codebase.name,
         canonicalRepoPath: git.toRepoPath(codebase.default_cwd),
         description: `CLI workflow: ${workflowName}`,
       });
@@ -1341,6 +1370,7 @@ export async function workflowRunCommand(
           source: workflowSource,
           userId: cliUserId,
           baseBranch: codebaseDefaultBranch,
+          execContext,
           ...prepared,
         }
       : {
@@ -1348,6 +1378,7 @@ export async function workflowRunCommand(
           source: workflowSource,
           userId: cliUserId,
           baseBranch: codebaseDefaultBranch,
+          execContext,
         };
     result = await executeWorkflow(
       deps,
@@ -1596,15 +1627,19 @@ export async function workflowStatusCommand(json?: boolean, verbose?: boolean): 
  * status — so an agent can answer "did the review pass?" for a completed/failed
  * run. `--verbose` adds the per-node event summary; `--json` emits the raw run
  * (plus an `events` array when verbose).
+ *
+ * `runId` may be the short id printed by `workflow runs` (see resolveRunIdArg).
  */
 export async function workflowGetCommand(
   runId: string,
   json?: boolean,
-  verbose?: boolean
+  verbose?: boolean,
+  cwd?: string
 ): Promise<number> {
   let run: WorkflowRun | null;
   try {
-    run = await workflowDb.getWorkflowRun(runId);
+    const resolvedId = await resolveRunIdArg(runId, cwd);
+    run = await workflowDb.getWorkflowRun(resolvedId);
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, runId }, 'cli.workflow_get_failed');
@@ -1649,6 +1684,20 @@ export async function workflowGetCommand(
   console.log(`  Path:   ${run.working_path ?? '(none)'}`);
   console.log(`  Status: ${run.status}`);
   console.log(`  Age:    ${formatAge(run.started_at)}`);
+  // Paused interactive-loop gate: one honest line so a human (or an agent parsing
+  // the plain output) sees whether the paused iteration emitted its completion
+  // signal (#2074). --json already carries the full metadata.approval.
+  const gateMeta = run.metadata.approval;
+  if (
+    run.status === 'paused' &&
+    isApprovalContext(gateMeta) &&
+    gateMeta.type === 'interactive_loop'
+  ) {
+    const signal = gateMeta.completionSignaled === true ? 'yes' : 'no';
+    console.log(
+      `  Gate:   awaiting approval — signal detected: ${signal} (iteration ${String(gateMeta.iteration ?? '?')})`
+    );
+  }
   const runError = typeof run.metadata.error === 'string' ? run.metadata.error : undefined;
   if (runError) {
     console.log(`  Error:  ${runError}`);
@@ -1766,6 +1815,40 @@ function printJsonWriteError(runId: string, action: string, error: unknown): voi
   );
 }
 
+/**
+ * Matches a full run id: a dashed UUID (Postgres `gen_random_uuid()`) or 32
+ * undashed hex chars (SQLite `hex(randomblob(16))`). Anything shorter is
+ * treated as a prefix.
+ */
+const FULL_RUN_ID_RE =
+  /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32})$/i;
+
+/**
+ * Resolve a run-id argument that may be the 8-char short id printed by
+ * `workflow runs` into the full run id. Mirrors the chat `manage_run` tool's
+ * prefix resolution (getScopedRun): the lookup is scoped to the cwd's
+ * codebase, a unique match resolves, and an ambiguous prefix errors.
+ *
+ * Full UUIDs skip resolution entirely — exact lookup is global, so full ids
+ * keep working from any directory. When `cwd` is omitted, the cwd is not a
+ * registered project, or the prefix matches nothing in this project, the
+ * argument passes through unchanged so the downstream exact lookup keeps its
+ * existing error surface (intentional fallback: it preserves behavior for
+ * runs of other projects and non-UUID ids rather than guessing).
+ */
+async function resolveRunIdArg(runId: string, cwd?: string): Promise<string> {
+  if (cwd === undefined || FULL_RUN_ID_RE.test(runId)) return runId;
+  const codebase = await codebaseDb.findCodebaseByDefaultCwd(cwd);
+  if (!codebase) return runId;
+  const matches = await workflowDb.findWorkflowRunsByIdPrefix(runId, codebase.id);
+  if (matches.length > 1) {
+    throw new Error(
+      `Run id '${runId}' matches more than one run in this project — use more characters or the full id (from 'archon workflow runs --json').`
+    );
+  }
+  return matches[0]?.id ?? runId;
+}
+
 async function resolveDiscoveryCwdForCodebase(
   runId: string,
   codebaseId: string,
@@ -1804,8 +1887,14 @@ async function resolveDiscoveryCwdForCodebase(
  * Re-executes the workflow with --resume semantics: `workflowRunCommand` locates
  * the prior failed run via findResumableRun and hands it to the executor, which
  * skips already-completed nodes (the executor no longer auto-detects on its own).
+ *
+ * `runId` may be the short id printed by `workflow runs` (see resolveRunIdArg).
  */
-export async function workflowResumeCommand(runId: string, json?: boolean): Promise<void> {
+export async function workflowResumeCommand(
+  runId: string,
+  json?: boolean,
+  cwd?: string
+): Promise<void> {
   // JSON mode is a non-blocking control-plane ack: validate the run is resumable
   // and report its state, but do NOT re-execute the workflow inline (execution
   // streams workflow output to stdout, which would corrupt the JSON contract).
@@ -1813,12 +1902,13 @@ export async function workflowResumeCommand(runId: string, json?: boolean): Prom
   // run as a background task) or `run <name> --resume --detach`.
   if (json) {
     try {
-      const run = await resumeWorkflowOp(runId);
+      const resolvedId = await resolveRunIdArg(runId, cwd);
+      const run = await resumeWorkflowOp(resolvedId);
       console.log(
         JSON.stringify(
           {
             ok: true,
-            runId,
+            runId: resolvedId,
             action: 'resume',
             executed: false,
             status: run.status,
@@ -1835,10 +1925,11 @@ export async function workflowResumeCommand(runId: string, json?: boolean): Prom
     return;
   }
 
-  const run = await resumeWorkflowOp(runId);
+  const resolvedId = await resolveRunIdArg(runId, cwd);
+  const run = await resumeWorkflowOp(resolvedId);
   if (!run.working_path) {
     throw new Error(
-      `Workflow run '${runId}' has no working path recorded.\n` +
+      `Workflow run '${resolvedId}' has no working path recorded.\n` +
         'Cannot determine where to resume. The run may be too old.'
     );
   }
@@ -1850,7 +1941,7 @@ export async function workflowResumeCommand(runId: string, json?: boolean): Prom
   // found even when working_path is a worktree or workspace clone that does
   // not contain the user's local (often untracked) workflow YAML.
   const discoveryCwd = run.codebase_id
-    ? await resolveDiscoveryCwdForCodebase(runId, run.codebase_id, 'resume')
+    ? await resolveDiscoveryCwdForCodebase(resolvedId, run.codebase_id, 'resume')
     : undefined;
 
   // Re-execute via workflowRunCommand with --resume: it locates the prior failed
@@ -1865,7 +1956,7 @@ export async function workflowResumeCommand(runId: string, json?: boolean): Prom
   } catch (error) {
     const err = error as Error;
     getLog().error(
-      { err, runId, workflowName: run.workflow_name },
+      { err, runId: resolvedId, workflowName: run.workflow_name },
       'cli.workflow_resume_run_failed'
     );
     throw new Error(`Failed to resume workflow '${run.workflow_name}': ${err.message}`);
@@ -1878,16 +1969,23 @@ export async function workflowResumeCommand(runId: string, json?: boolean): Prom
  * `--json` emits a structured result instead of human text. In JSON mode the
  * command never throws — lookup/state errors are reported as `{ ok: false }` so
  * a parsing agent always gets one clean JSON line.
+ *
+ * `runId` may be the short id printed by `workflow runs` (see resolveRunIdArg).
  */
-export async function workflowAbandonCommand(runId: string, json?: boolean): Promise<void> {
+export async function workflowAbandonCommand(
+  runId: string,
+  json?: boolean,
+  cwd?: string
+): Promise<void> {
   if (json) {
     try {
-      const run = await abandonWorkflow(runId);
+      const resolvedId = await resolveRunIdArg(runId, cwd);
+      const run = await abandonWorkflow(resolvedId);
       console.log(
         JSON.stringify(
           {
             ok: true,
-            runId,
+            runId: resolvedId,
             action: 'abandon',
             status: 'cancelled',
             workflowName: run.workflow_name,
@@ -1902,23 +2000,29 @@ export async function workflowAbandonCommand(runId: string, json?: boolean): Pro
     return;
   }
 
-  const run = await abandonWorkflow(runId);
-  console.log(`Abandoned workflow run: ${runId}`);
+  const resolvedId = await resolveRunIdArg(runId, cwd);
+  const run = await abandonWorkflow(resolvedId);
+  console.log(`Abandoned workflow run: ${resolvedId}`);
   console.log(`Workflow: ${run.workflow_name}`);
 }
 
 /**
  * Approve a paused workflow run by ID.
  *
- * Human mode writes the approval events (transitioning to 'failed') and then
- * auto-resumes the run inline. `--json` mode records the approval and returns a
- * structured ack WITHOUT resuming — the run is left resumable for a backgrounded
- * `resume`/`run --resume` (inline resume would stream output and break the JSON).
+ * Human mode records the approval on the still-'paused' run (the resolution
+ * lives in metadata.approval.resolved, #2075) and then auto-resumes the run
+ * inline. `--json` mode records the approval and returns a structured ack
+ * WITHOUT resuming — the run stays paused-and-staged, resumable by a
+ * backgrounded `resume`/`run --resume` (inline resume would stream output and
+ * break the JSON).
+ *
+ * `runId` may be the short id printed by `workflow runs` (see resolveRunIdArg).
  */
 export async function workflowApproveCommand(
   runId: string,
   comment?: string,
-  json?: boolean
+  json?: boolean,
+  cwd?: string
 ): Promise<void> {
   // JSON mode records the approval and returns a structured ack WITHOUT the
   // inline auto-resume (resuming executes the workflow and streams output to
@@ -1926,12 +2030,13 @@ export async function workflowApproveCommand(
   // — drive it to completion with a backgrounded `resume`/`run --resume`.
   if (json) {
     try {
-      const result = await approveWorkflow(runId, comment);
+      const resolvedId = await resolveRunIdArg(runId, cwd);
+      const result = await approveWorkflow(resolvedId, comment);
       console.log(
         JSON.stringify(
           {
             ok: true,
-            runId,
+            runId: resolvedId,
             action: 'approve',
             type: result.type,
             workflowName: result.workflowName,
@@ -1947,12 +2052,13 @@ export async function workflowApproveCommand(
     return;
   }
 
-  const result = await approveWorkflow(runId, comment);
+  const resolvedId = await resolveRunIdArg(runId, cwd);
+  const result = await approveWorkflow(resolvedId, comment);
 
   // CLI auto-resumes after approval (unlike chat, which defers to next user message)
   if (!result.workingPath) {
     throw new Error(
-      `Workflow run '${runId}' has no working path recorded.\n` +
+      `Workflow run '${resolvedId}' has no working path recorded.\n` +
         'Cannot determine where to resume.'
     );
   }
@@ -1968,14 +2074,14 @@ export async function workflowApproveCommand(
     platformConversationId = originalConversation?.platform_conversation_id ?? undefined;
     if (!originalConversation) {
       getLog().info(
-        { runId, conversationId: result.conversationId },
+        { runId: resolvedId, conversationId: result.conversationId },
         'cli.workflow_approve_conversation_not_found'
       );
     }
   } catch (error) {
     const err = error as Error;
     getLog().warn(
-      { err, runId, conversationId: result.conversationId },
+      { err, runId: resolvedId, conversationId: result.conversationId },
       'cli.workflow_approve_conversation_lookup_failed'
     );
   }
@@ -1985,7 +2091,7 @@ export async function workflowApproveCommand(
     // found even when working_path is a worktree or workspace clone that does
     // not contain the user's local (often untracked) workflow YAML.
     const discoveryCwd = result.codebaseId
-      ? await resolveDiscoveryCwdForCodebase(runId, result.codebaseId, 'approve')
+      ? await resolveDiscoveryCwdForCodebase(resolvedId, result.codebaseId, 'approve')
       : undefined;
 
     await workflowRunCommand(result.workingPath, result.workflowName, result.userMessage ?? '', {
@@ -1997,12 +2103,12 @@ export async function workflowApproveCommand(
   } catch (error) {
     const err = error as Error;
     getLog().error(
-      { err, runId, workflowName: result.workflowName },
+      { err, runId: resolvedId, workflowName: result.workflowName },
       'cli.workflow_approve_resume_failed'
     );
     throw new Error(
       `Approved but failed to resume workflow '${result.workflowName}': ${err.message}\n` +
-        `The approval was recorded. Run 'bun run cli workflow resume ${runId}' to retry.`
+        `The approval was recorded. Run 'bun run cli workflow resume ${resolvedId}' to retry.`
     );
   }
 }
@@ -2011,11 +2117,14 @@ export async function workflowApproveCommand(
  * Reject a paused workflow run by ID.
  * If the workflow has an on_reject prompt, auto-resumes with the rejection feedback;
  * otherwise marks the run as cancelled.
+ *
+ * `runId` may be the short id printed by `workflow runs` (see resolveRunIdArg).
  */
 export async function workflowRejectCommand(
   runId: string,
   reason?: string,
-  json?: boolean
+  json?: boolean,
+  cwd?: string
 ): Promise<void> {
   // JSON mode records the rejection and returns a structured ack WITHOUT the
   // inline auto-resume (an on_reject rework executes the workflow and streams
@@ -2023,12 +2132,13 @@ export async function workflowRejectCommand(
   // is resumable for the rework pass — drive it with a backgrounded `resume`.
   if (json) {
     try {
-      const result = await rejectWorkflow(runId, reason);
+      const resolvedId = await resolveRunIdArg(runId, cwd);
+      const result = await rejectWorkflow(resolvedId, reason);
       console.log(
         JSON.stringify(
           {
             ok: true,
-            runId,
+            runId: resolvedId,
             action: 'reject',
             cancelled: result.cancelled,
             maxAttemptsReached: result.maxAttemptsReached,
@@ -2045,7 +2155,8 @@ export async function workflowRejectCommand(
     return;
   }
 
-  const result = await rejectWorkflow(runId, reason);
+  const resolvedId = await resolveRunIdArg(runId, cwd);
+  const result = await rejectWorkflow(resolvedId, reason);
 
   if (result.cancelled) {
     const suffix = result.maxAttemptsReached ? ' (max attempts reached)' : '';
@@ -2056,7 +2167,7 @@ export async function workflowRejectCommand(
   // Not cancelled = has onRejectPrompt, CLI auto-resumes with rejection feedback
   if (!result.workingPath) {
     throw new Error(
-      `Workflow run '${runId}' has no working path recorded.\n` +
+      `Workflow run '${resolvedId}' has no working path recorded.\n` +
         'Cannot determine where to resume.'
     );
   }
@@ -2070,14 +2181,14 @@ export async function workflowRejectCommand(
     platformConversationId = originalConversation?.platform_conversation_id ?? undefined;
     if (!originalConversation) {
       getLog().info(
-        { runId, conversationId: result.conversationId },
+        { runId: resolvedId, conversationId: result.conversationId },
         'cli.workflow_reject_conversation_not_found'
       );
     }
   } catch (error) {
     const err = error as Error;
     getLog().warn(
-      { err, runId, conversationId: result.conversationId },
+      { err, runId: resolvedId, conversationId: result.conversationId },
       'cli.workflow_reject_conversation_lookup_failed'
     );
   }
@@ -2087,7 +2198,7 @@ export async function workflowRejectCommand(
     // found even when working_path is a worktree or workspace clone that does
     // not contain the user's local (often untracked) workflow YAML.
     const discoveryCwd = result.codebaseId
-      ? await resolveDiscoveryCwdForCodebase(runId, result.codebaseId, 'reject')
+      ? await resolveDiscoveryCwdForCodebase(resolvedId, result.codebaseId, 'reject')
       : undefined;
 
     await workflowRunCommand(result.workingPath, result.workflowName, result.userMessage ?? '', {
@@ -2099,12 +2210,12 @@ export async function workflowRejectCommand(
   } catch (error) {
     const err = error as Error;
     getLog().error(
-      { err, runId, workflowName: result.workflowName },
+      { err, runId: resolvedId, workflowName: result.workflowName },
       'cli.workflow_reject_resume_failed'
     );
     throw new Error(
       `Rejected but failed to resume workflow '${result.workflowName}': ${err.message}\n` +
-        `The rejection was recorded. Run 'bun run cli workflow resume ${runId}' to retry.`
+        `The rejection was recorded. Run 'bun run cli workflow resume ${resolvedId}' to retry.`
     );
   }
 }

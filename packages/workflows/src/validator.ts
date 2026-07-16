@@ -22,6 +22,7 @@ import {
 import { execFileAsync } from '@archon/git';
 import { BUNDLED_COMMANDS, isBinaryBuild } from './defaults/bundled-defaults';
 import { isValidCommandName } from './command-validation';
+import { levenshtein, findSimilar } from './utils/fuzzy-match';
 import { getProviderCapabilities, isRegisteredProvider } from '@archon/providers';
 
 /** Lazy-initialized logger */
@@ -30,7 +31,7 @@ function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('workflow.validator');
   return cachedLog;
 }
-import { isBashNode, isLoopNode, isLoopGroupNode, isScriptNode } from './schemas';
+import { isBashNode, isLoopNode, isLoopGroupNode, isScriptNode, isIncludeNode } from './schemas';
 import type { WorkflowDefinition, DagNode, WorkflowSource } from './schemas';
 import type { ScriptRuntime } from './script-discovery';
 import { discoverScriptsForCwd } from './script-discovery';
@@ -91,38 +92,11 @@ export interface ValidationConfig {
   tiers?: RawTiersConfig;
 }
 
-// =============================================================================
-// Levenshtein distance and fuzzy matching
-// =============================================================================
-
-/** Classic Levenshtein distance between two strings */
-export function levenshtein(a: string, b: string): number {
-  const m = a.length;
-  const n = b.length;
-  const dp: number[][] = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0) as number[]);
-
-  for (let i = 0; i <= m; i++) dp[i][0] = i;
-  for (let j = 0; j <= n; j++) dp[0][j] = j;
-
-  for (let i = 1; i <= m; i++) {
-    for (let j = 1; j <= n; j++) {
-      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost);
-    }
-  }
-
-  return dp[m][n];
-}
-
-/** Find the closest matches from a list of candidates */
-export function findSimilar(name: string, candidates: string[], maxDistance?: number): string[] {
-  const threshold = maxDistance ?? Math.max(2, Math.floor(name.length * 0.3));
-  const scored = candidates
-    .map(c => ({ name: c, distance: levenshtein(name.toLowerCase(), c.toLowerCase()) }))
-    .filter(s => s.distance <= threshold && s.distance > 0)
-    .sort((a, b) => a.distance - b.distance);
-  return scored.slice(0, 3).map(s => s.name);
-}
+// Levenshtein distance and fuzzy matching now live in ./utils/fuzzy-match so lean
+// modules can reuse them without validator.ts's heavy deps (imported above for the
+// internal command/tool did-you-mean hints). Re-exported to preserve validator.ts's
+// public surface for existing importers (e.g. validator.test.ts).
+export { levenshtein, findSimilar };
 
 // =============================================================================
 // Command discovery
@@ -381,6 +355,14 @@ export async function validateWorkflowResources(
   collectNodes(workflow.nodes);
 
   for (const node of allNodes) {
+    // Include nodes carry no resources to check — the target workflow is resolved and
+    // inlined at DISCOVERY time (see include-expander.ts), so discovery-fed validation
+    // (CLI `validate workflows`) sees the already-expanded nodes and checks their
+    // commands/mcp/skills normally. This skip is DEFENSIVE-ONLY: no current caller reaches
+    // it with an unexpanded include node (POST /api/workflows/validate only runs
+    // parseWorkflow, not this resource pass). Kept so a future raw caller can't crash here.
+    if (isIncludeNode(node)) continue;
+
     const provider = resolveProvider(node, workflow.provider, defaultProvider);
 
     if (requiresPortableModelRefs && 'model' in node && node.model?.startsWith('@')) {
@@ -549,6 +531,55 @@ export async function validateWorkflowResources(
             message: `Tool restrictions are not supported by provider '${provider}' — this will be ignored`,
             hint: 'Remove tool restriction fields or switch to a provider that supports them',
           });
+        }
+      } else if (caps.knownToolNames !== undefined && caps.knownToolNames.length > 0) {
+        // Warn on tool names outside the provider's audited built-in vocabulary
+        // (#2084): the SDK matches names as opaque strings, so a misspelled or
+        // stale name (e.g. `Task` after the Claude SDK renamed it to `Agent`)
+        // is a silent no-op at runtime. Warning-level only — MCP tool names and
+        // tools added by a newer SDK can't be proven invalid, so this must
+        // never hard-fail validation. Providers without a declared vocabulary
+        // skip the check entirely.
+        const known = caps.knownToolNames;
+        const toolLists = [
+          ['allowed_tools', 'allowed_tools' in node ? node.allowed_tools : undefined],
+          ['denied_tools', 'denied_tools' in node ? node.denied_tools : undefined],
+        ] as const;
+        for (const [field, entries] of toolLists) {
+          for (const entry of entries ?? []) {
+            // Permission-rule specifiers wrap a base name: `Bash(git:*)` → `Bash`.
+            const base = entry.split('(')[0].trim();
+            // MCP tool names (mcp__server, mcp__server__tool, mcp__server__*)
+            // are dynamic per-install — never flag them.
+            if (base === '' || base.startsWith('mcp__') || known.includes(base)) continue;
+
+            const renamed = caps.renamedTools?.[base];
+            if (renamed !== undefined) {
+              issues.push({
+                level: 'warning',
+                nodeId: node.id,
+                field,
+                message: `Tool '${base}' was renamed to '${renamed}' in the ${provider} SDK — the old name is silently ignored at runtime`,
+                hint: `Replace '${base}' with '${renamed}' in ${field}`,
+                suggestions: [renamed],
+              });
+              continue;
+            }
+
+            const similar = findSimilar(base, known);
+            const issue: ValidationIssue = {
+              level: 'warning',
+              nodeId: node.id,
+              field,
+              message: `Unknown tool '${base}' for provider '${provider}' — unrecognized names are silently ignored at runtime`,
+              hint: 'Use a built-in tool name, or the mcp__<server>__<tool> form for MCP tools',
+            };
+            if (similar.length > 0) {
+              issue.hint = `Did you mean: ${similar.map(s => `'${s}'`).join(', ')}? (MCP tools use the mcp__<server>__<tool> form)`;
+              issue.suggestions = similar;
+            }
+            issues.push(issue);
+          }
         }
       }
     }

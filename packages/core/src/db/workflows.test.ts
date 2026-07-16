@@ -25,6 +25,7 @@ import {
   updateWorkflowActivity,
   findResumableRun,
   resumeWorkflowRun,
+  pauseWorkflowRun,
   cancelWorkflowRun,
   failOrphanedRuns,
   listWorkflowRuns,
@@ -255,6 +256,66 @@ describe('workflows database', () => {
       await updateWorkflowRun('workflow-run-123', {});
 
       expect(mockQuery).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('pauseWorkflowRun', () => {
+    test('pauses a running run and resets the gate resolution marker', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+
+      await pauseWorkflowRun('workflow-run-123', {
+        nodeId: 'review',
+        message: 'Please review',
+        type: 'approval',
+      });
+
+      const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(query).toContain("status = 'paused'");
+      expect(query).toContain("AND status = 'running'");
+      // resolved must be an EXPLICIT null on every fresh pause: SQLite's
+      // json_patch deep-merges the new approval context into the stored one, so
+      // an omitted key would let a stale 'approved' from the previous gate
+      // survive and falsely block this gate (#2075).
+      const payload = JSON.parse(params[1] as string) as {
+        approval: Record<string, unknown>;
+      };
+      expect(payload.approval.resolved).toBeNull();
+      expect(payload.approval.nodeId).toBe('review');
+      // completionSignaled/signaledOutput follow the same explicit-null rule
+      // (#2074): standard approval pauses never set them, so they must be
+      // written as null (never omitted — JSON.stringify drops undefined and
+      // SQLite would keep a stale value from a previous interactive-loop gate).
+      expect(payload.approval.completionSignaled).toBeNull();
+      expect(payload.approval.signaledOutput).toBeNull();
+    });
+
+    test('preserves completionSignaled/signaledOutput when the gate provides them (#2074)', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+
+      await pauseWorkflowRun('workflow-run-123', {
+        nodeId: 'refine',
+        message: 'gate',
+        type: 'interactive_loop',
+        iteration: 1,
+        completionSignaled: true,
+        signaledOutput: 'REPORT',
+      });
+
+      const [, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      const payload = JSON.parse(params[1] as string) as {
+        approval: Record<string, unknown>;
+      };
+      expect(payload.approval.completionSignaled).toBe(true);
+      expect(payload.approval.signaledOutput).toBe('REPORT');
+      expect(payload.approval.resolved).toBeNull();
+    });
+
+    test('throws when the run is not running', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
+
+      await expect(
+        pauseWorkflowRun('workflow-run-123', { nodeId: 'review', message: 'Please review' })
+      ).rejects.toThrow('not found or not in running state');
     });
   });
 

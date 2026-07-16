@@ -7,6 +7,12 @@
  */
 
 import type { RepoPath, BranchName } from '@archon/git';
+import type { ExecutionContext } from '@archon/providers/types';
+
+// Re-exported so isolation consumers can source the execution-context contract
+// from `@archon/isolation` alongside the backend types that produce it, without
+// reaching into `@archon/providers/types` directly.
+export type { ExecutionContext };
 
 // --- Provider Types ---
 
@@ -368,3 +374,53 @@ export type IsolationResolution =
   | { status: 'stale_cleaned'; previousEnvId: string }
   | { status: 'none'; cwd: string }
   | { status: 'blocked'; reason: IsolationBlockReason; userMessage: string };
+
+// --- Isolation Backend Seam (folder projects only) ---
+//
+// Repo-kind projects keep the worktree path (IIsolationProvider above) untouched.
+// Folder-kind projects route through a pluggable backend selected by
+// `resolveFolderBackend()`. v1 backends: `in-place` (default, today's behavior)
+// and `container` (Phase B). Worktrees are deliberately NOT a backend — the two
+// lifecycles don't share an interface (user decision 2026-07-13).
+
+/**
+ * Minimal identity of a codebase a backend needs to prepare an environment.
+ * Container-specific inputs (image, network, run id) are added by Phase B — kept
+ * out of the Phase A contract to avoid speculative surface (YAGNI).
+ */
+export interface BackendPrepareRequest {
+  codebase: {
+    id: string;
+    /** Absolute path to the folder-project root. */
+    defaultCwd: string;
+    name: string;
+    kind: 'repo' | 'folder';
+  };
+}
+
+/**
+ * Result of a backend `prepare()`: the working directory the run should use and
+ * the execution context (host vs container) threaded through the engine to every
+ * provider turn and deterministic subprocess. `envId` references the tracked
+ * `isolation_environments` row when the backend created one (container backend,
+ * Phase B); in-place runs create no row and leave it undefined.
+ */
+export interface PreparedEnv {
+  cwd: string;
+  execContext: ExecutionContext;
+  envId?: string;
+}
+
+/**
+ * Isolation backend for FOLDER-kind projects. Phase A ships only the required
+ * lifecycle (`prepare`/`destroy`) implemented by the in-place backend; the
+ * container backend (Phase B) extends this interface with the pause/resume and
+ * write-back methods it alone needs. Adding those later is backward-compatible —
+ * they are intentionally absent here rather than declared unimplemented.
+ */
+export interface IIsolationBackend {
+  readonly id: 'in-place' | 'container';
+  prepare(req: BackendPrepareRequest): Promise<PreparedEnv>;
+  /** Tear down a prepared environment. No-op for in-place (nothing was created). */
+  destroy(envId: string): Promise<void>;
+}

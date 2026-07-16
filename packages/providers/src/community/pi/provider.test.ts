@@ -5,6 +5,11 @@ import { tmpdir } from 'node:os';
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { AgentSessionEvent } from '@earendil-works/pi-coding-agent';
 
+// Typed against the real registration shape (config: ProviderConfig) so the
+// mock runtime drifts loudly, not silently, if the SDK/type changes — same
+// precedent as `AgentSessionEvent` above.
+import type { ExtensionProviderRegistration } from './resource-loader';
+
 import { createMockLogger } from '../../test/mocks/logger';
 
 // ─── Mock @archon/paths logger so provider instantiation is quiet ───────
@@ -60,7 +65,7 @@ const mockSession = {
   sessionId: 'mock-session-uuid',
 };
 
-const mockCreateAgentSession = mock(async () => ({
+const mockCreateAgentSession = mock(async (_options?: unknown) => ({
   session: mockSession,
   extensionsResult: { extensions: [], errors: [], runtime: {} },
   modelFallbackMessage: undefined,
@@ -115,12 +120,27 @@ const mockSettingsManagerCreate = mock(() => ({
 }));
 const mockSettingsManagerInMemory = mock((_settings?: unknown) => ({}));
 const mockResourceLoaderReload = mock(async () => undefined);
+// Shared extension runtime exposed by the mock loader's getExtensions() —
+// one object shared across sessions, exactly like Pi's real runtime. Tests
+// seed `pendingProviderRegistrations` to simulate an extension factory
+// calling pi.registerProvider() during the single cached reload()
+// (issue #2064); the real SDK's bindCore() drains this queue into the FIRST
+// session's registry and reassigns it to [].
+const mockLoaderRuntime: { pendingProviderRegistrations: ExtensionProviderRegistration[] } = {
+  pendingProviderRegistrations: [],
+};
+const mockGetExtensions = mock(() => ({
+  extensions: [],
+  errors: [],
+  runtime: mockLoaderRuntime,
+}));
 // Return-style constructor: bun's mock() wraps the function such that the
 // `this`-binding doesn't reliably propagate to `new` call sites. Returning a
 // plain object from the constructor sidesteps this — ES semantics use the
 // returned object when a constructor explicitly returns one.
 const MockDefaultResourceLoader = mock((_opts: unknown) => ({
   reload: mockResourceLoaderReload,
+  getExtensions: mockGetExtensions,
 }));
 
 // Tool factory mocks — each returns an opaque object tagged with the tool
@@ -211,6 +231,8 @@ describe('PiProvider', () => {
     mockSetModel.mockClear();
     mockSetFlagValue.mockClear();
     mockResourceLoaderReload.mockClear();
+    mockGetExtensions.mockClear();
+    mockLoaderRuntime.pendingProviderRegistrations = [];
     mockCreateAgentSession.mockClear();
     mockAuthCreate.mockClear();
     mockModelRegistryCreate.mockClear();
@@ -1756,6 +1778,170 @@ describe('PiProvider', () => {
     expect(mockBindExtensions).not.toHaveBeenCalled();
   });
 
+  // ─── Per-node extension posture (assistants.pi.nodes.<nodeId>, #2073) ──
+
+  test('node override drops UIContext and negates the plan flag for that node', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        assistantConfig: {
+          enableExtensions: true,
+          interactive: true,
+          extensionFlags: { plan: true },
+          nodes: { implement: { interactive: false, extensionFlags: { plan: false } } },
+        },
+        nodeConfig: { nodeId: 'implement' },
+      })
+    );
+
+    // Extensions still load (session_start must fire) but with no UIContext —
+    // hasUI stays false so plannotator won't open its blocking review server.
+    expect(mockBindExtensions).toHaveBeenCalledTimes(1);
+    const [bindings] = mockBindExtensions.mock.calls[0] as [{ uiContext?: unknown }];
+    expect(bindings.uiContext).toBeUndefined();
+    // Merged flags: node-level plan: false wins over assistant-level plan: true.
+    expect(mockSetFlagValue).toHaveBeenCalledTimes(1);
+    expect(mockSetFlagValue).toHaveBeenCalledWith('plan', false);
+  });
+
+  test('node without an override keeps assistant-level UIContext and flags', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        assistantConfig: {
+          enableExtensions: true,
+          interactive: true,
+          extensionFlags: { plan: true },
+          nodes: { implement: { interactive: false, extensionFlags: { plan: false } } },
+        },
+        nodeConfig: { nodeId: 'plan' },
+      })
+    );
+
+    expect(mockBindExtensions).toHaveBeenCalledTimes(1);
+    const [bindings] = mockBindExtensions.mock.calls[0] as [{ uiContext?: unknown }];
+    expect(bindings.uiContext).toBeDefined();
+    expect(mockSetFlagValue).toHaveBeenCalledTimes(1);
+    expect(mockSetFlagValue).toHaveBeenCalledWith('plan', true);
+  });
+
+  test('direct chat (no nodeConfig) ignores nodes overrides', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        assistantConfig: {
+          interactive: true,
+          nodes: { implement: { interactive: false } },
+        },
+      })
+    );
+
+    expect(mockBindExtensions).toHaveBeenCalledTimes(1);
+    const [bindings] = mockBindExtensions.mock.calls[0] as [{ uiContext?: unknown }];
+    expect(bindings.uiContext).toBeDefined();
+  });
+
+  test('node enableExtensions: false skips binding entirely for that node', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        assistantConfig: {
+          enableExtensions: true,
+          interactive: true,
+          extensionFlags: { plan: true },
+          nodes: { implement: { enableExtensions: false } },
+        },
+        nodeConfig: { nodeId: 'implement' },
+      })
+    );
+
+    expect(mockBindExtensions).not.toHaveBeenCalled();
+    expect(mockSetFlagValue).not.toHaveBeenCalled();
+  });
+
+  // ─── Portable node-YAML posture (nodeConfig.pi, #2133) ─────────────────
+
+  test('node-YAML pi overrides the config nodes.<id> map (drops UI, negates plan)', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        assistantConfig: {
+          enableExtensions: true,
+          interactive: true,
+          extensionFlags: { plan: true },
+          // config map says implement is UI-on with plan: true …
+          nodes: { implement: { interactive: true, extensionFlags: { plan: true } } },
+        },
+        // … but the portable node-YAML block wins and turns it headless.
+        nodeConfig: {
+          nodeId: 'implement',
+          pi: { interactive: false, extensionFlags: { plan: false } },
+        },
+      })
+    );
+
+    expect(mockBindExtensions).toHaveBeenCalledTimes(1);
+    const [bindings] = mockBindExtensions.mock.calls[0] as [{ uiContext?: unknown }];
+    expect(bindings.uiContext).toBeUndefined();
+    expect(mockSetFlagValue).toHaveBeenCalledTimes(1);
+    expect(mockSetFlagValue).toHaveBeenCalledWith('plan', false);
+  });
+
+  test('node-YAML pi grants posture with no config nodes map present', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        assistantConfig: { enableExtensions: true, interactive: false },
+        // No nodes map; the node's own pi: block re-enables the UI bridge and grants plan.
+        nodeConfig: { nodeId: 'plan', pi: { interactive: true, extensionFlags: { plan: true } } },
+      })
+    );
+
+    expect(mockBindExtensions).toHaveBeenCalledTimes(1);
+    const [bindings] = mockBindExtensions.mock.calls[0] as [{ uiContext?: unknown }];
+    expect(bindings.uiContext).toBeDefined();
+    expect(mockSetFlagValue).toHaveBeenCalledTimes(1);
+    expect(mockSetFlagValue).toHaveBeenCalledWith('plan', true);
+  });
+
+  test('node-YAML pi enableExtensions: false skips binding even when the config map re-enables', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        assistantConfig: {
+          enableExtensions: true,
+          interactive: true,
+          nodes: { implement: { enableExtensions: true, interactive: true } },
+        },
+        nodeConfig: { nodeId: 'implement', pi: { enableExtensions: false } },
+      })
+    );
+
+    expect(mockBindExtensions).not.toHaveBeenCalled();
+    expect(mockSetFlagValue).not.toHaveBeenCalled();
+  });
+
   test('assistantConfig.env applies to process.env when not already set', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     delete process.env.PI_TEST_ONE;
@@ -2047,6 +2233,162 @@ describe('PiProvider', () => {
       expect(loader).toBeDefined();
       expect(MockDefaultResourceLoader).toHaveBeenCalledTimes(2);
       expect(mockResourceLoaderReload).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  // ─── extension provider registrations across sessions (issue #2064) ────
+  //
+  // Extension factories (e.g. pi-cursor's) run only during the single cached
+  // reload() and queue their pi.registerProvider() calls on the loader's
+  // shared runtime. The real SDK drains that queue into the FIRST session's
+  // ModelRegistry and clears it — so before the fix, the 2nd+ sendQuery in a
+  // process (DAG node 2) built a fresh registry that never saw extension
+  // models and failed LOOKUP-2 with "Pi model not found".
+  describe('extension provider registrations across sessions (issue #2064)', () => {
+    /** Registration matching what pi-cursor queues at factory/load time. */
+    const cursorRegistration = {
+      name: 'cursor',
+      config: {
+        name: 'Cursor',
+        baseUrl: 'http://localhost:33417/v1',
+        apiKey: 'cursor-proxy',
+        api: 'openai-completions',
+        models: [],
+      },
+      extensionPath: '/mock/ext/pi-cursor',
+    };
+
+    /**
+     * A per-call fake registry that resolves ONLY providers explicitly
+     * registered into it — like the real one, whose static catalog does not
+     * contain extension providers such as 'cursor'.
+     */
+    function fakeExtensionAwareRegistry(): {
+      registered: Map<string, unknown>;
+      find: (
+        provider: string,
+        modelId: string
+      ) => { id: string; provider: string; name: string } | undefined;
+      registerProvider: (name: string, config: unknown) => void;
+    } {
+      const registered = new Map<string, unknown>();
+      return {
+        registered,
+        find: (provider: string, modelId: string) =>
+          registered.has(provider)
+            ? { id: modelId, provider, name: `${provider}/${modelId}` }
+            : undefined,
+        registerProvider: (name: string, config: unknown) => {
+          registered.set(name, config);
+        },
+      };
+    }
+
+    /**
+     * Simulate the real SDK's bindCore() drain for one createAgentSession
+     * call: flush the shared runtime's pending queue into THIS session's
+     * registry, then clear it (the SDK reassigns to []).
+     */
+    function drainQueueOnceIntoSessionRegistry(): void {
+      mockCreateAgentSession.mockImplementationOnce(async (options?: unknown) => {
+        const { modelRegistry } = options as {
+          modelRegistry: { registerProvider: (name: string, config: unknown) => void };
+        };
+        for (const { name, config } of mockLoaderRuntime.pendingProviderRegistrations) {
+          modelRegistry.registerProvider(name, config);
+        }
+        mockLoaderRuntime.pendingProviderRegistrations = [];
+        return {
+          session: mockSession,
+          extensionsResult: { extensions: [], errors: [], runtime: {} },
+          modelFallbackMessage: undefined,
+        };
+      });
+    }
+
+    test('extension-registered model resolves on the 2nd+ sendQuery (the issue #2064 scenario)', async () => {
+      // The extension factory queued its registration during the single reload().
+      mockLoaderRuntime.pendingProviderRegistrations = [cursorRegistration];
+
+      const registries: ReturnType<typeof fakeExtensionAwareRegistry>[] = [];
+      const nextRegistry = (): ReturnType<typeof fakeExtensionAwareRegistry> => {
+        const registry = fakeExtensionAwareRegistry();
+        registries.push(registry);
+        return registry;
+      };
+      mockModelRegistryCreate.mockImplementationOnce(nextRegistry);
+      mockModelRegistryCreate.mockImplementationOnce(nextRegistry);
+      drainQueueOnceIntoSessionRegistry();
+      drainQueueOnceIntoSessionRegistry();
+
+      // Node 1: works with or without the fix (bindCore's drain registers cursor).
+      resetScript(scriptedAgentEnd());
+      const first = await consume(
+        new PiProvider().sendQuery('a', '/tmp', undefined, { model: 'cursor/gpt-5.4-nano' })
+      );
+      expect(first.error).toBeUndefined();
+
+      // Node 2: the queue is drained; only the loader-level snapshot re-apply
+      // can register cursor into this call's fresh registry. Before the fix
+      // this failed with "Pi model not found: provider='cursor'".
+      resetScript(scriptedAgentEnd());
+      const second = await consume(
+        new PiProvider().sendQuery('b', '/tmp', undefined, { model: 'cursor/gpt-5.4-nano' })
+      );
+      expect(second.error).toBeUndefined();
+
+      expect(registries).toHaveLength(2);
+      expect(registries[1]?.registered.has('cursor')).toBe(true);
+      // The extension model was resolved and set on both sessions.
+      expect(mockSetModel).toHaveBeenCalledTimes(2);
+      // Single-reload constraint (issue #1877) intact: no re-reload happened.
+      expect(mockResourceLoaderReload).toHaveBeenCalledTimes(1);
+    });
+
+    test('snapshot is captured before any session drains the shared queue and is served from cache', async () => {
+      mockLoaderRuntime.pendingProviderRegistrations = [cursorRegistration];
+
+      const entry = await getOrCreateReloadedExtensionLoader('/tmp', {});
+      // Simulate the SDK's bindCore() drain (reassigns the runtime array).
+      mockLoaderRuntime.pendingProviderRegistrations = [];
+
+      expect(entry.providerRegistrations).toEqual([
+        expect.objectContaining({ name: 'cursor', extensionPath: '/mock/ext/pi-cursor' }),
+      ]);
+
+      // Later nodes hit the cache and still see the captured registrations.
+      const again = await getOrCreateReloadedExtensionLoader('/tmp', {});
+      expect(again.providerRegistrations).toEqual(entry.providerRegistrations);
+      expect(mockResourceLoaderReload).toHaveBeenCalledTimes(1);
+    });
+
+    test('a failing re-apply warns and does not fail nodes using other providers', async () => {
+      process.env.GEMINI_API_KEY = 'sk-test';
+      mockLoaderRuntime.pendingProviderRegistrations = [
+        { name: 'broken', config: { baseUrl: 'http://x' }, extensionPath: '/mock/ext/broken' },
+      ];
+      // Static-catalog model resolves via the default find(); registerProvider
+      // rejects the broken extension config — mirroring a validation throw.
+      mockModelRegistryCreate.mockImplementationOnce(() => ({
+        find: mockModelRegistryFind,
+        registerProvider: (): void => {
+          throw new Error('Provider broken: "apiKey" or "oauth" is required when defining models.');
+        },
+      }));
+
+      resetScript(scriptedAgentEnd());
+      const { error } = await consume(
+        new PiProvider().sendQuery('hi', '/tmp', undefined, { model: 'google/gemini-2.5-pro' })
+      );
+
+      expect(error).toBeUndefined();
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          piExtensionProvider: 'broken',
+          extensionPath: '/mock/ext/broken',
+        }),
+        'pi.extension_provider_reapply_failed'
+      );
     });
   });
 });

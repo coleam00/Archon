@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
-import { parsePiConfig } from './config';
+import { parsePiConfig, resolvePiExtensionSettings } from './config';
 
 describe('parsePiConfig', () => {
   test('parses valid model string', () => {
@@ -185,6 +185,263 @@ describe('parsePiConfig', () => {
       model: 'google/gemini-2.5-pro',
       maxConcurrent: 4,
       enableExtensions: true,
+    });
+  });
+
+  test('parses nodes with per-node overrides', () => {
+    expect(
+      parsePiConfig({
+        extensionFlags: { plan: true },
+        nodes: {
+          implement: { interactive: false, extensionFlags: { plan: false } },
+          plan: { enableExtensions: true },
+        },
+      })
+    ).toEqual({
+      extensionFlags: { plan: true },
+      nodes: {
+        implement: { interactive: false, extensionFlags: { plan: false } },
+        plan: { enableExtensions: true },
+      },
+    });
+  });
+
+  test('drops invalid fields inside a node override silently', () => {
+    expect(
+      parsePiConfig({
+        nodes: {
+          implement: {
+            interactive: 'no',
+            enableExtensions: 1,
+            extensionFlags: { plan: false, bogus: 42 },
+          },
+        },
+      })
+    ).toEqual({ nodes: { implement: { extensionFlags: { plan: false } } } });
+  });
+
+  test('drops node entries with nothing valid and non-object entries', () => {
+    expect(
+      parsePiConfig({
+        nodes: {
+          empty: {},
+          allInvalid: { interactive: 'yes' },
+          notAnObject: 'implement',
+          arr: [1],
+          nullish: null,
+        },
+      })
+    ).toEqual({});
+  });
+
+  test('drops non-object nodes silently', () => {
+    expect(parsePiConfig({ nodes: 'implement' })).toEqual({});
+    expect(parsePiConfig({ nodes: ['implement'] })).toEqual({});
+    expect(parsePiConfig({ nodes: null })).toEqual({});
+  });
+});
+
+describe('resolvePiExtensionSettings', () => {
+  test('defaults: extensions + interactive on, no flags', () => {
+    expect(resolvePiExtensionSettings({}, undefined)).toEqual({
+      enableExtensions: true,
+      interactive: true,
+      extensionFlags: undefined,
+    });
+  });
+
+  test('no nodeId (direct chat) uses assistant-level settings and ignores nodes', () => {
+    expect(
+      resolvePiExtensionSettings(
+        {
+          interactive: true,
+          extensionFlags: { plan: true },
+          nodes: { implement: { interactive: false, extensionFlags: { plan: false } } },
+        },
+        undefined
+      )
+    ).toEqual({
+      enableExtensions: true,
+      interactive: true,
+      extensionFlags: { plan: true },
+    });
+  });
+
+  test('nodeId without a matching override uses assistant-level settings', () => {
+    expect(
+      resolvePiExtensionSettings(
+        {
+          extensionFlags: { plan: true },
+          nodes: { implement: { interactive: false } },
+        },
+        'review'
+      )
+    ).toEqual({
+      enableExtensions: true,
+      interactive: true,
+      extensionFlags: { plan: true },
+    });
+  });
+
+  test('node override turns interactive off for that node only', () => {
+    const config = {
+      interactive: true,
+      nodes: { implement: { interactive: false } },
+    };
+    expect(resolvePiExtensionSettings(config, 'implement').interactive).toBe(false);
+    expect(resolvePiExtensionSettings(config, 'plan').interactive).toBe(true);
+  });
+
+  test('node extensionFlags shallow-merge over base — plan: false negates base plan: true', () => {
+    expect(
+      resolvePiExtensionSettings(
+        {
+          extensionFlags: { plan: true, 'plan-file': 'PLAN.md' },
+          nodes: { implement: { extensionFlags: { plan: false } } },
+        },
+        'implement'
+      ).extensionFlags
+    ).toEqual({ plan: false, 'plan-file': 'PLAN.md' });
+  });
+
+  test('node extensionFlags can grant a flag only to the planner node', () => {
+    const config = { nodes: { plan: { extensionFlags: { plan: true } } } };
+    expect(resolvePiExtensionSettings(config, 'plan').extensionFlags).toEqual({ plan: true });
+    expect(resolvePiExtensionSettings(config, 'implement').extensionFlags).toBeUndefined();
+  });
+
+  test('node enableExtensions: false clamps interactive even when base interactive is true', () => {
+    expect(
+      resolvePiExtensionSettings(
+        { interactive: true, nodes: { implement: { enableExtensions: false } } },
+        'implement'
+      )
+    ).toEqual({
+      enableExtensions: false,
+      interactive: false,
+      extensionFlags: undefined,
+    });
+  });
+
+  test('node interactive: true re-enables UI when base interactive is false', () => {
+    const config = { interactive: false, nodes: { plan: { interactive: true } } };
+    expect(resolvePiExtensionSettings(config, 'plan').interactive).toBe(true);
+    expect(resolvePiExtensionSettings(config, 'implement').interactive).toBe(false);
+  });
+
+  test('base enableExtensions: false clamps interactive unless the node re-enables extensions', () => {
+    const config = {
+      enableExtensions: false,
+      nodes: { plan: { enableExtensions: true, interactive: true } },
+    };
+    expect(resolvePiExtensionSettings(config, 'implement')).toEqual({
+      enableExtensions: false,
+      interactive: false,
+      extensionFlags: undefined,
+    });
+    expect(resolvePiExtensionSettings(config, 'plan')).toEqual({
+      enableExtensions: true,
+      interactive: true,
+      extensionFlags: undefined,
+    });
+  });
+
+  // ─── Node-YAML override layer (portable pi: block, #2133) ───────────────
+
+  test('node-YAML pi wins over the config nodes.<id> map', () => {
+    // config map says implement is UI-on with plan: true; the portable pi:
+    // block (3rd arg) overrides it to headless with plan: false.
+    expect(
+      resolvePiExtensionSettings(
+        {
+          extensionFlags: { plan: true },
+          nodes: { implement: { interactive: true, extensionFlags: { plan: true } } },
+        },
+        'implement',
+        { interactive: false, extensionFlags: { plan: false } }
+      )
+    ).toEqual({
+      enableExtensions: true,
+      interactive: false,
+      extensionFlags: { plan: false },
+    });
+  });
+
+  test('node-YAML pi applies even with no config nodes.<id> entry', () => {
+    expect(
+      resolvePiExtensionSettings({ extensionFlags: { plan: true } }, 'implement', {
+        interactive: false,
+        extensionFlags: { plan: false },
+      })
+    ).toEqual({
+      enableExtensions: true,
+      interactive: false,
+      extensionFlags: { plan: false },
+    });
+  });
+
+  test('extensionFlags shallow-merge across all three layers, node-YAML winning per key', () => {
+    expect(
+      resolvePiExtensionSettings(
+        {
+          extensionFlags: { plan: true, 'plan-file': 'BASE.md', shared: 'base' },
+          nodes: { implement: { extensionFlags: { 'plan-file': 'CFG.md', shared: 'cfg' } } },
+        },
+        'implement',
+        { extensionFlags: { shared: 'yaml' } }
+      ).extensionFlags
+    ).toEqual({ plan: true, 'plan-file': 'CFG.md', shared: 'yaml' });
+  });
+
+  test('node-YAML enableExtensions: false clamps interactive and beats a config nodes re-enable', () => {
+    expect(
+      resolvePiExtensionSettings(
+        {
+          interactive: true,
+          nodes: { implement: { enableExtensions: true, interactive: true } },
+        },
+        'implement',
+        { enableExtensions: false }
+      )
+    ).toEqual({
+      enableExtensions: false,
+      interactive: false,
+      extensionFlags: undefined,
+    });
+  });
+
+  test('a partial node-YAML override falls through to the config map for unset fields', () => {
+    // pi: sets only interactive; enableExtensions/flags still come from the config map + base.
+    expect(
+      resolvePiExtensionSettings(
+        {
+          extensionFlags: { plan: true },
+          nodes: { implement: { extensionFlags: { plan: false } } },
+        },
+        'implement',
+        { interactive: false }
+      )
+    ).toEqual({
+      enableExtensions: true,
+      interactive: false,
+      extensionFlags: { plan: false },
+    });
+  });
+
+  test('direct chat (no nodeId) still ignores overrides even if a node-YAML block is passed', () => {
+    // Defensive: the provider never passes nodeConfig.pi without a nodeId, but the
+    // resolver should stay predictable — no nodeId means assistant-level only for
+    // the config-map layer; the node-YAML layer, when present, still applies.
+    expect(
+      resolvePiExtensionSettings(
+        { interactive: true, extensionFlags: { plan: true }, nodes: { implement: {} } },
+        undefined,
+        undefined
+      )
+    ).toEqual({
+      enableExtensions: true,
+      interactive: true,
+      extensionFlags: { plan: true },
     });
   });
 });

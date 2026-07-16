@@ -2166,9 +2166,20 @@ describe('CommandHandler', () => {
         expect(result.success).toBe(true);
         expect(result.message).toContain('loop input received');
         expect(result.message).toContain('my-loop-wf');
+        // Stays 'paused' (no status write) — resolution rides the approval context (#2075)
         expect(mockUpdateWorkflowRun).toHaveBeenCalledWith('run-123', {
-          status: 'failed',
-          metadata: { loop_user_input: 'Add error handling' },
+          metadata: {
+            approval: {
+              type: 'interactive_loop',
+              nodeId: 'refine',
+              iteration: 2,
+              message: 'Review the output',
+              resolved: 'approved',
+            },
+            loop_user_input: 'Add error handling',
+            // A real comment counts as feedback ⇒ the resumed loop iterates (#2074)
+            loop_feedback_given: true,
+          },
         });
       });
 
@@ -2206,6 +2217,45 @@ describe('CommandHandler', () => {
         expect(mockCreateWorkflowEvent).toHaveBeenCalledWith(
           expect.objectContaining({ event_type: 'approval_received' })
         );
+      });
+
+      test('bare approve (no comment) passes undefined through — finalize-eligible (#2074)', async () => {
+        mockGetWorkflowRun.mockResolvedValueOnce({
+          id: 'run-bare',
+          workflow_name: 'loop-wf',
+          conversation_id: 'conv-approve',
+          parent_conversation_id: null,
+          codebase_id: null,
+          status: 'paused',
+          user_message: 'start',
+          metadata: {
+            approval: {
+              type: 'interactive_loop',
+              nodeId: 'validate',
+              iteration: 1,
+              message: 'gate',
+              completionSignaled: true,
+              signaledOutput: 'REPORT',
+            },
+          },
+          started_at: new Date(),
+          completed_at: null,
+          last_activity_at: new Date(),
+          working_path: null,
+        });
+
+        const result = await handleCommand(baseConversation, '/workflow approve run-bare');
+
+        expect(result.success).toBe(true);
+        // The chat handler must NOT pre-default the comment to 'Approved' —
+        // loop_feedback_given derives from the raw comment, and a masked
+        // no-feedback would make every chat approve iterate instead of finalize.
+        expect(mockUpdateWorkflowRun).toHaveBeenCalledWith('run-bare', {
+          metadata: expect.objectContaining({
+            loop_feedback_given: false,
+            loop_user_input: 'Approved',
+          }),
+        });
       });
 
       test('returns error when run is not paused', async () => {
@@ -2369,9 +2419,20 @@ describe('CommandHandler', () => {
 
         expect(result.success).toBe(true);
         expect(result.message).toContain('Reworking');
+        // Stays 'paused' (no status write) — rework staged on the approval context (#2075)
         expect(mockUpdateWorkflowRun).toHaveBeenCalledWith('run-reject-1', {
-          status: 'failed',
-          metadata: { rejection_reason: 'needs work', rejection_count: 1 },
+          metadata: {
+            approval: {
+              type: 'approval',
+              nodeId: 'review',
+              message: 'Approve the plan?',
+              onRejectPrompt: 'Fix: $REJECTION_REASON',
+              onRejectMaxAttempts: 3,
+              resolved: 'rejected',
+            },
+            rejection_reason: 'needs work',
+            rejection_count: 1,
+          },
         });
       });
 

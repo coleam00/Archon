@@ -1189,7 +1189,7 @@ describe('POST /api/workflows/runs/:runId/resume', () => {
       string,
     ];
     expect(platformConvId).toBe('web-plat-abc');
-    expect(dispatchedMessage).toBe('/workflow run deploy Run the deploy');
+    expect(dispatchedMessage).toBe('/workflow resume run-uuid-4');
   });
 });
 
@@ -1212,7 +1212,7 @@ describe('POST /api/workflows/runs/:runId/abandon', () => {
     expect(response.status).toBe(404);
   });
 
-  test('returns 400 when run is already terminal', async () => {
+  test('returns 400 when run is completed (non-resumable terminal)', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(MOCK_COMPLETED_RUN);
     const { app } = makeApp();
     const response = await app.request('/api/workflows/runs/run-uuid-2/abandon', {
@@ -1221,6 +1221,23 @@ describe('POST /api/workflows/runs/:runId/abandon', () => {
     expect(response.status).toBe(400);
     const body = (await response.json()) as { error: string };
     expect(body.error).toContain('Cannot abandon');
+    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  test('returns 400 when run is cancelled (non-resumable terminal)', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce({
+      ...MOCK_RUNNING_RUN,
+      status: 'cancelled' as const,
+      completed_at: NOW,
+    });
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-1/abandon', {
+      method: 'POST',
+    });
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain('Cannot abandon');
+    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
   });
 
   test('returns 200 and calls cancelWorkflowRun for running run', async () => {
@@ -1234,6 +1251,21 @@ describe('POST /api/workflows/runs/:runId/abandon', () => {
     expect(body.success).toBe(true);
     expect(body.message).toContain('Abandoned');
     expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-uuid-1');
+  });
+
+  // #1887: a failed run is terminal but resumable, so it must remain
+  // abandonable — the HTTP route previously rejected it, contradicting CLI/chat.
+  test('returns 200 and calls cancelWorkflowRun for failed run', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(MOCK_FAILED_RUN);
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-4/abandon', {
+      method: 'POST',
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { success: boolean; message: string };
+    expect(body.success).toBe(true);
+    expect(body.message).toContain('Abandoned');
+    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-uuid-4');
   });
 });
 
@@ -1337,8 +1369,35 @@ describe('POST /api/workflows/runs/:runId/approve', () => {
     expect(response.status).toBe(400);
   });
 
+  test('returns 400 when the gate is already resolved (double-approve guard)', async () => {
+    // Post-#2075 an approved run stays 'paused' with approval.resolved set —
+    // the status check alone no longer blocks a second approve.
+    mockGetWorkflowRun.mockResolvedValue({
+      ...MOCK_PAUSED_RUN,
+      metadata: {
+        approval: {
+          type: 'approval',
+          nodeId: 'review-gate',
+          message: 'Review the plan',
+          resolved: 'approved',
+        },
+      },
+    });
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-paused-1/approve', {
+      method: 'POST',
+      body: JSON.stringify({ comment: 'again' }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain('already approved');
+    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
+    expect(mockUpdateWorkflowRun).not.toHaveBeenCalled();
+  });
+
   test('stores user comment as node_output when captureResponse is true', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce({
+    mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_PAUSED_RUN,
       id: 'run-capture',
       metadata: {
@@ -1366,7 +1425,7 @@ describe('POST /api/workflows/runs/:runId/approve', () => {
   });
 
   test('stores empty node_output when captureResponse is not set', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce(MOCK_PAUSED_RUN);
+    mockGetWorkflowRun.mockResolvedValue(MOCK_PAUSED_RUN);
     const { app } = makeApp();
     const response = await app.request('/api/workflows/runs/run-paused-1/approve', {
       method: 'POST',
@@ -1381,6 +1440,96 @@ describe('POST /api/workflows/runs/:runId/approve', () => {
       data: { node_output: '', approval_decision: 'approved' },
     });
     expect(mockCaptureApprovalResolved).toHaveBeenCalledWith({ resolution: 'approved' });
+  });
+
+  test('passes an absent comment through as no-feedback on an interactive_loop gate (#2074)', async () => {
+    // The route must NOT default the comment to 'Approved' — approveWorkflow derives
+    // loop_feedback_given from the RAW comment, and a masked no-feedback would make
+    // every web approve iterate instead of finalize.
+    mockGetWorkflowRun.mockResolvedValue({
+      ...MOCK_PAUSED_RUN,
+      id: 'run-loop-bare',
+      metadata: {
+        approval: {
+          type: 'interactive_loop',
+          nodeId: 'refine',
+          message: 'gate',
+          iteration: 1,
+          completionSignaled: true,
+          signaledOutput: 'REPORT',
+        },
+      },
+    });
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-loop-bare/approve', {
+      method: 'POST',
+      body: JSON.stringify({}),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    expect(response.status).toBe(200);
+    const updateCall = mockUpdateWorkflowRun.mock.calls[0] as unknown[];
+    expect(updateCall[1]).toMatchObject({
+      metadata: {
+        loop_feedback_given: false,
+        loop_user_input: 'Approved',
+      },
+    });
+  });
+
+  test('returns 400 (not a silent bare approve) when the body is sent but malformed (#2074)', async () => {
+    mockGetWorkflowRun.mockResolvedValue({
+      ...MOCK_PAUSED_RUN,
+      id: 'run-bad-body',
+      metadata: {
+        approval: {
+          type: 'interactive_loop',
+          nodeId: 'refine',
+          message: 'gate',
+          iteration: 1,
+          completionSignaled: true,
+          signaledOutput: 'REPORT',
+        },
+      },
+    });
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-bad-body/approve', {
+      method: 'POST',
+      body: '{"comment": "intended feedback', // truncated JSON — client bug
+      headers: { 'Content-Type': 'application/json' },
+    });
+    // A malformed body must never be coerced into a bare approve — that would
+    // FINALIZE a signal-bearing gate while silently discarding the feedback.
+    expect(response.status).toBe(400);
+    expect(mockUpdateWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  test('passes a provided comment through as feedback on an interactive_loop gate (#2074)', async () => {
+    mockGetWorkflowRun.mockResolvedValue({
+      ...MOCK_PAUSED_RUN,
+      id: 'run-loop-feedback',
+      metadata: {
+        approval: {
+          type: 'interactive_loop',
+          nodeId: 'refine',
+          message: 'gate',
+          iteration: 1,
+        },
+      },
+    });
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-loop-feedback/approve', {
+      method: 'POST',
+      body: JSON.stringify({ comment: 'actually re-check X' }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    expect(response.status).toBe(200);
+    const updateCall = mockUpdateWorkflowRun.mock.calls[0] as unknown[];
+    expect(updateCall[1]).toMatchObject({
+      metadata: {
+        loop_feedback_given: true,
+        loop_user_input: 'actually re-check X',
+      },
+    });
   });
 });
 
@@ -1419,7 +1568,7 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
   });
 
   test('cancels immediately when no on_reject configured', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce(MOCK_PAUSED_RUN);
+    mockGetWorkflowRun.mockResolvedValue(MOCK_PAUSED_RUN);
     const { app } = makeApp();
     const response = await app.request('/api/workflows/runs/run-paused-1/reject', {
       method: 'POST',
@@ -1434,7 +1583,7 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
   });
 
   test('records rejection and increments count when on_reject configured and under limit', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce({
+    mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_PAUSED_RUN,
       id: 'run-on-reject',
       metadata: {
@@ -1459,14 +1608,24 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
     expect(body.success).toBe(true);
     expect(body.message).toContain('On-reject prompt');
     expect(mockUpdateWorkflowRun).toHaveBeenCalledWith('run-on-reject', {
-      status: 'failed',
-      metadata: { rejection_reason: 'needs more tests', rejection_count: 1 },
+      metadata: {
+        approval: {
+          type: 'approval',
+          nodeId: 'review-gate',
+          message: 'Approve?',
+          onRejectPrompt: 'Fix: $REJECTION_REASON',
+          onRejectMaxAttempts: 3,
+          resolved: 'rejected',
+        },
+        rejection_reason: 'needs more tests',
+        rejection_count: 1,
+      },
     });
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
   });
 
   test('cancels when max attempts reached', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce({
+    mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_PAUSED_RUN,
       id: 'run-max-attempts',
       metadata: {
@@ -1512,7 +1671,7 @@ describe('approve/reject auto-resume', () => {
   });
 
   test('approve: dispatches resume when parent_conversation_id is set', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce({
+    mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_PAUSED_RUN,
       id: 'run-auto-resume-approve',
       parent_conversation_id: 'parent-conv-uuid',
@@ -1543,11 +1702,11 @@ describe('approve/reject auto-resume', () => {
       string,
     ];
     expect(platformConvId).toBe('web-plat-abc');
-    expect(dispatchedMessage).toBe('/workflow run deploy Deploy feature X');
+    expect(dispatchedMessage).toBe('/workflow resume run-auto-resume-approve');
   });
 
   test('approve: skips dispatch when parent_conversation_id is null (CLI-dispatched run)', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce({
+    mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_PAUSED_RUN,
       parent_conversation_id: null,
     });
@@ -1567,7 +1726,7 @@ describe('approve/reject auto-resume', () => {
   });
 
   test('approve: skips dispatch when parent conversation no longer exists', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce({
+    mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_PAUSED_RUN,
       parent_conversation_id: 'deleted-conv-uuid',
     });
@@ -1591,7 +1750,7 @@ describe('approve/reject auto-resume', () => {
     // must not route through dispatchToOrchestrator — that helper is wired
     // to the web adapter + lock manager, so dispatching a Slack thread_ts
     // or Telegram chat_id would misroute through the wrong adapter.
-    mockGetWorkflowRun.mockResolvedValueOnce({
+    mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_PAUSED_RUN,
       parent_conversation_id: 'slack-parent-conv-uuid',
     });
@@ -1616,7 +1775,7 @@ describe('approve/reject auto-resume', () => {
   });
 
   test('reject: dispatches resume for on_reject flows when parent is set', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce({
+    mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_PAUSED_RUN,
       id: 'run-auto-resume-reject',
       parent_conversation_id: 'parent-conv-uuid',
@@ -1655,11 +1814,11 @@ describe('approve/reject auto-resume', () => {
       string,
     ];
     expect(platformConvId).toBe('web-plat-xyz');
-    expect(dispatchedMessage).toBe('/workflow run deploy Review PR');
+    expect(dispatchedMessage).toBe('/workflow resume run-auto-resume-reject');
   });
 
   test('reject: surfaces CLI resume hint when on_reject configured but parent is non-web', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce({
+    mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_PAUSED_RUN,
       id: 'run-reject-non-web',
       parent_conversation_id: 'slack-parent-conv-uuid',
@@ -1694,7 +1853,7 @@ describe('approve/reject auto-resume', () => {
   });
 
   test('reject: does NOT dispatch when the run is being cancelled (no on_reject configured)', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce({
+    mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_PAUSED_RUN,
       parent_conversation_id: 'parent-conv-uuid', // set, but doesn't matter — reject cancels
     });

@@ -113,6 +113,7 @@
       "dependencies": {
         "@archon/git": "workspace:*",
         "@archon/paths": "workspace:*",
+        "@archon/providers": "workspace:*",
       },
       "peerDependencies": {
         "typescript": "^5.0.0",

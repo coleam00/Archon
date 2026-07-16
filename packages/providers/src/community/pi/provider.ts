@@ -16,7 +16,7 @@ import type {
 } from '../../types';
 
 import { PI_CAPABILITIES } from './capabilities';
-import { parsePiConfig } from './config';
+import { parsePiConfig, resolvePiExtensionSettings } from './config';
 import { parsePiModelRef } from './model-ref';
 import { withResumedOutcome, resumedOutcome } from '../../shared/resumed';
 
@@ -458,9 +458,21 @@ export class PiProvider implements IAgentProvider {
     // `assistants.pi.enableExtensions: false` (or `interactive: false`) in
     // `.archon/config.yaml`. Previously default-off, which silently broke
     // users who installed or built an extension and expected it to fire.
-    const enableExtensions = piConfig.enableExtensions !== false;
-    // Clamp to false without extensions: nothing consumes hasUI without a runner.
-    const interactive = enableExtensions && piConfig.interactive !== false;
+    //
+    // Extension posture is resolved PER NODE (issue #2073): assistant-level
+    // defaults can be overridden via `assistants.pi.nodes.<nodeId>` so that
+    // e.g. only the planner node gets plannotator's `plan` flag and a
+    // UI-capable context (hasUI), while an implement node runs without the
+    // planning-mode edit guard. Direct chat (no nodeId) uses the defaults.
+    //
+    // The portable node-YAML `pi:` block (#2133) rides on `nodeConfig.pi` and is
+    // the highest-precedence layer — it travels with the workflow, so a node
+    // rename can't orphan it the way the node-id-keyed config map can.
+    const { enableExtensions, interactive, extensionFlags } = resolvePiExtensionSettings(
+      piConfig,
+      nodeConfig?.nodeId,
+      nodeConfig?.pi
+    );
 
     // Build the ResourceLoader. When extensions are ON we MUST reuse a
     // process-cached, already-reloaded loader: Pi's `reload()` re-invokes every
@@ -473,9 +485,42 @@ export class PiProvider implements IAgentProvider {
       ...(systemPrompt !== undefined ? { systemPrompt } : {}),
       ...(skillPaths.length > 0 ? { additionalSkillPaths: skillPaths } : {}),
     };
-    const resourceLoader: DefaultResourceLoader = enableExtensions
-      ? await getOrCreateReloadedExtensionLoader(cwd, loaderOptions)
-      : createNoopResourceLoader(cwd, loaderOptions);
+    let resourceLoader: DefaultResourceLoader;
+    if (enableExtensions) {
+      const { loader, providerRegistrations } = await getOrCreateReloadedExtensionLoader(
+        cwd,
+        loaderOptions
+      );
+      resourceLoader = loader;
+      // Re-apply the load-time extension provider registrations to THIS call's
+      // fresh ModelRegistry (issue #2064). Extension factories run only during
+      // the single cached reload(), and the SDK drains their queued
+      // registerProvider() calls into the FIRST session's registry only — so
+      // without this, the 2nd+ sendQuery in a process (e.g. DAG node 2) never
+      // sees extension models (pi-cursor's `cursor/*`) and LOOKUP-2 fails.
+      // registerProvider() is a documented upsert, so the first call receiving
+      // the same configs again via its own bindCore() flush is harmless.
+      for (const { name, config, extensionPath } of providerRegistrations) {
+        try {
+          modelRegistry.registerProvider(name, config);
+        } catch (err) {
+          // Intentional non-fatal fallback mirroring the SDK's own bindCore()
+          // flush (per-entry try/catch + emitted extension error): one broken
+          // extension config must not fail nodes that use other providers.
+          // If the model this node actually needs is missing, LOOKUP-2 below
+          // still throws the loud, actionable "Pi model not found" error.
+          getLog().warn(
+            { err, piExtensionProvider: name, extensionPath },
+            'pi.extension_provider_reapply_failed'
+          );
+        }
+      }
+      if (providerRegistrations.length > 0) {
+        getLog().debug({ count: providerRegistrations.length }, 'pi.extension_providers_reapplied');
+      }
+    } else {
+      resourceLoader = createNoopResourceLoader(cwd, loaderOptions);
+    }
 
     getLog().info(
       {
@@ -489,6 +534,7 @@ export class PiProvider implements IAgentProvider {
         missingSkillCount: missingSkills.length,
         extensionsEnabled: enableExtensions,
         interactive,
+        nodeId: nodeConfig?.nodeId,
         resumed: resumeSessionId !== undefined && !resumeFailed,
       },
       'pi.session_started'
@@ -543,10 +589,12 @@ export class PiProvider implements IAgentProvider {
 
     // 4e. Extension flag pass-through. Must happen before bindExtensions
     //     below — extensions read flags inside their session_start handler.
-    if (enableExtensions && piConfig.extensionFlags) {
+    //     `extensionFlags` is the per-node resolved map (assistant-level flags
+    //     shallow-merged with `nodes.<nodeId>.extensionFlags`, node wins).
+    if (enableExtensions && extensionFlags) {
       const runner = session.extensionRunner;
       if (runner) {
-        for (const [name, value] of Object.entries(piConfig.extensionFlags)) {
+        for (const [name, value] of Object.entries(extensionFlags)) {
           runner.setFlagValue(name, value);
         }
       }

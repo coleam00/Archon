@@ -27,7 +27,7 @@
  */
 import type { NodeOutput } from './schemas';
 import { createLogger } from '@archon/paths';
-import { resolveNodeOutputField } from './output-ref';
+import { resolveNodeOutputField, OutputRefError, similarNodeIds } from './output-ref';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -39,8 +39,10 @@ function getLog(): ReturnType<typeof createLogger> {
 /**
  * Resolve a `$nodeId.output` or `$nodeId.output.field` reference to a string value.
  *
- * Unknown node → '' (warn). Whole-text `$node.output` → output text ('' for failed
- * nodes). For `$node.output.field`, the no-silent-drop contract (`resolveNodeOutputField`)
+ * Unknown node: whole-text `$node.output` → '' (warn); `.field` form → THROWS
+ * `OutputRefError('unknown-node')` (a typo must fail, not silently resolve to '').
+ * Whole-text `$node.output` on a known node → output text ('' for failed nodes).
+ * For `$node.output.field`, the no-silent-drop contract (`resolveNodeOutputField`)
  * applies: a declared-optional-absent field resolves to ''; a field not in the
  * producer's schema, or a schemaless node whose output isn't JSON / lacks the key,
  * THROWS an `OutputRefError` that propagates to fail the consuming node (no silent skip).
@@ -52,6 +54,19 @@ function resolveOutputRef(
 ): string {
   const nodeOutput = nodeOutputs.get(nodeId);
   if (!nodeOutput) {
+    // A `.field` ref that resolves to no output (a typo, or a real node that hasn't
+    // run before this reference) fails the consuming node loudly, matching
+    // `resolveNodeOutputField`'s strict no-silent-drop posture (and
+    // `substituteNodeOutputRefs` in dag-executor). A whole-text `$id.output` stays
+    // lenient ('').
+    if (field) {
+      throw new OutputRefError(
+        nodeId,
+        field,
+        'unknown-node',
+        similarNodeIds(nodeId, nodeOutputs.keys())
+      );
+    }
     getLog().warn({ nodeId }, 'condition_output_ref_unknown_node');
     return '';
   }
