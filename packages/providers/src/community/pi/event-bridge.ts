@@ -271,9 +271,7 @@ export function mapPiEvent(event: AgentSessionEvent): MessageChunk[] {
  * independently without reaching into the generator's closure.
  */
 export type BridgeQueueItem =
-  | { kind: 'chunk'; chunk: MessageChunk }
-  | { kind: 'done' }
-  | { kind: 'error'; error: Error };
+  { kind: 'chunk'; chunk: MessageChunk } | { kind: 'done' } | { kind: 'error'; error: Error };
 
 /** Lets the UI stub push notifications into the session's chunk queue. */
 export interface BridgeNotifier {

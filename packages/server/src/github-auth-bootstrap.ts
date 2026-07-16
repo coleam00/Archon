@@ -10,10 +10,7 @@
  * Discriminated on `kind` so callers narrow exhaustively at compile time.
  */
 export type GitHubAuthModeDecision =
-  | { kind: 'app' }
-  | { kind: 'pat' }
-  | { kind: 'none' }
-  | { kind: 'conflict'; message: string };
+  { kind: 'app' } | { kind: 'pat' } | { kind: 'none' } | { kind: 'conflict'; message: string };
 
 /**
  * Decide GitHub auth mode from env, refusing both modes set simultaneously.

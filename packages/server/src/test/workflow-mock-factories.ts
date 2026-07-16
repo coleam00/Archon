@@ -18,9 +18,10 @@ export function makeDiscoverWorkflowsMock(): {
   discoverWorkflowsWithConfig: Mock<() => Promise<WorkflowLoadResult>>;
 } {
   return {
-    discoverWorkflowsWithConfig: mock(
-      async (): Promise<WorkflowLoadResult> => ({ workflows: [], errors: [] })
-    ),
+    discoverWorkflowsWithConfig: mock(async (): Promise<WorkflowLoadResult> => ({
+      workflows: [],
+      errors: [],
+    })),
   };
 }
 
@@ -28,12 +29,10 @@ export function makeLoaderMock(): {
   parseWorkflow: Mock<() => ParseResult>;
 } {
   return {
-    parseWorkflow: mock(
-      (): ParseResult => ({
-        workflow: null,
-        error: { filename: '', error: 'stub', errorType: 'parse_error' },
-      })
-    ),
+    parseWorkflow: mock((): ParseResult => ({
+      workflow: null,
+      error: { filename: '', error: 'stub', errorType: 'parse_error' },
+    })),
   };
 }
 

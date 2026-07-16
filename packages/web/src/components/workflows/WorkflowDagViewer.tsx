@@ -102,7 +102,7 @@ export function WorkflowDagViewer({
           ...(activeTaskCount !== undefined ? { activeTaskCount } : {}),
           ...(hookCount !== undefined ? { hookCount } : {}),
         },
-      } as ExecutionFlowNode;
+      };
     });
   }, [baseNodes, statusMap, dagNodes, selectedNodeId]);
 

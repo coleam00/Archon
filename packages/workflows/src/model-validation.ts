@@ -238,8 +238,7 @@ export const CODEX_REASONING_EFFORTS: ReadonlySet<string> = new Set([
 
 /** Where a preset's `effort` should land for the resolved provider. */
 export type EffortRouting =
-  | { field: 'effort'; value: string }
-  | { field: 'modelReasoningEffort'; value: string };
+  { field: 'effort'; value: string } | { field: 'modelReasoningEffort'; value: string };
 
 /**
  * Route a preset's `effort` to the field the resolved provider understands —

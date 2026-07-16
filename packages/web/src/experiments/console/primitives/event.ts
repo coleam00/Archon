@@ -8,13 +8,7 @@
  */
 
 export type RunEventKind =
-  | 'text'
-  | 'tool_call'
-  | 'artifact'
-  | 'node_transition'
-  | 'approval'
-  | 'error'
-  | 'system';
+  'text' | 'tool_call' | 'artifact' | 'node_transition' | 'approval' | 'error' | 'system';
 
 interface RunEventBase {
   id: string;

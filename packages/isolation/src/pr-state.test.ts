@@ -18,9 +18,8 @@ interface ExecResult {
   stderr: string;
 }
 
-const mockExecFileAsync = mock(
-  (_cmd: string, _args: string[]): Promise<ExecResult> =>
-    Promise.resolve({ stdout: '', stderr: '' })
+const mockExecFileAsync = mock((_cmd: string, _args: string[]): Promise<ExecResult> =>
+  Promise.resolve({ stdout: '', stderr: '' })
 );
 mock.module('@archon/git', () => ({
   execFileAsync: mockExecFileAsync,

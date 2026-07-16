@@ -1060,8 +1060,7 @@ describe('workflowRunCommand', () => {
 
     const getIsolationProviderMock = isolation.getIsolationProvider as ReturnType<typeof mock>;
     const provider = getIsolationProviderMock.mock.results.at(-1)?.value as
-      | { create: ReturnType<typeof mock> }
-      | undefined;
+      { create: ReturnType<typeof mock> } | undefined;
 
     expect(provider?.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1248,8 +1247,7 @@ describe('workflowRunCommand', () => {
 
     const getIsolationProviderMock = isolation.getIsolationProvider as ReturnType<typeof mock>;
     const provider = getIsolationProviderMock.mock.results.at(-1)?.value as
-      | { create: ReturnType<typeof mock> }
-      | undefined;
+      { create: ReturnType<typeof mock> } | undefined;
 
     // provider.create should have been called with an auto-generated identifier
     expect(provider?.create).toHaveBeenCalled();
@@ -1276,8 +1274,7 @@ describe('workflowRunCommand', () => {
     // Snapshot provider.create call count before this test
     const getIsolationProviderMock = isolation.getIsolationProvider as ReturnType<typeof mock>;
     const providerBefore = getIsolationProviderMock.mock.results.at(-1)?.value as
-      | { create: ReturnType<typeof mock> }
-      | undefined;
+      { create: ReturnType<typeof mock> } | undefined;
     const createCallsBefore = providerBefore?.create.mock.calls.length ?? 0;
 
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -1301,8 +1298,7 @@ describe('workflowRunCommand', () => {
 
     // provider.create should NOT have been called during this test
     const providerAfter = getIsolationProviderMock.mock.results.at(-1)?.value as
-      | { create: ReturnType<typeof mock> }
-      | undefined;
+      { create: ReturnType<typeof mock> } | undefined;
     const createCallsAfter = providerAfter?.create.mock.calls.length ?? 0;
     expect(createCallsAfter).toBe(createCallsBefore);
   });
@@ -1428,8 +1424,7 @@ describe('workflowRunCommand', () => {
 
     const getIsolationProviderMock = isolation.getIsolationProvider as ReturnType<typeof mock>;
     const providerBefore = getIsolationProviderMock.mock.results.at(-1)?.value as
-      | { create: ReturnType<typeof mock> }
-      | undefined;
+      { create: ReturnType<typeof mock> } | undefined;
     const createCallsBefore = providerBefore?.create.mock.calls.length ?? 0;
 
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -1459,8 +1454,7 @@ describe('workflowRunCommand', () => {
     await workflowRunCommand('/test/path', 'triage', 'go', {});
 
     const providerAfter = getIsolationProviderMock.mock.results.at(-1)?.value as
-      | { create: ReturnType<typeof mock> }
-      | undefined;
+      { create: ReturnType<typeof mock> } | undefined;
     const createCallsAfter = providerAfter?.create.mock.calls.length ?? 0;
     expect(createCallsAfter).toBe(createCallsBefore);
   });
@@ -1747,8 +1741,7 @@ describe('workflowRunCommand', () => {
 
     const getIsolationProviderMock = isolation.getIsolationProvider as ReturnType<typeof mock>;
     const provider = getIsolationProviderMock.mock.results.at(-1)?.value as
-      | { create: ReturnType<typeof mock> }
-      | undefined;
+      { create: ReturnType<typeof mock> } | undefined;
     const lastCreateCall = provider?.create.mock.calls.at(-1)?.[0] as {
       baseBranch?: string;
     };
@@ -1793,8 +1786,7 @@ describe('workflowRunCommand', () => {
 
     const getIsolationProviderMock = isolation.getIsolationProvider as ReturnType<typeof mock>;
     const provider = getIsolationProviderMock.mock.results.at(-1)?.value as
-      | { create: ReturnType<typeof mock> }
-      | undefined;
+      { create: ReturnType<typeof mock> } | undefined;
     const lastCreateCall = provider?.create.mock.calls.at(-1)?.[0] as {
       codebaseName?: string;
     };
@@ -1830,8 +1822,7 @@ describe('workflowRunCommand', () => {
 
     const getIsolationProviderMock = isolation.getIsolationProvider as ReturnType<typeof mock>;
     const provider = getIsolationProviderMock.mock.results.at(-1)?.value as
-      | { create: ReturnType<typeof mock> }
-      | undefined;
+      { create: ReturnType<typeof mock> } | undefined;
     const lastCreateCall = provider?.create.mock.calls.at(-1)?.[0] as {
       baseBranch?: string;
     };
@@ -3037,14 +3028,12 @@ describe('workflowRunCommand — detach', () => {
     let spawnCallCount = 0;
     let spawnCmd: string[] = [];
     let spawnOptions:
-      | { cwd: string; cmd: string[]; detached?: boolean; windowsHide?: boolean }
-      | undefined;
+      { cwd: string; cmd: string[]; detached?: boolean; windowsHide?: boolean } | undefined;
     try {
       await workflowRunCommand('/test/path', 'assist', 'hello', { detach: true });
       spawnCallCount = spawnSpy.mock.calls.length;
       spawnOptions = spawnSpy.mock.calls[0]?.[0] as
-        | { cwd: string; cmd: string[]; detached?: boolean; windowsHide?: boolean }
-        | undefined;
+        { cwd: string; cmd: string[]; detached?: boolean; windowsHide?: boolean } | undefined;
       spawnCmd = (spawnOptions?.cmd ?? []).slice();
     } finally {
       process.argv = savedArgv;

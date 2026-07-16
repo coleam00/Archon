@@ -44,7 +44,7 @@ export function copySelection(
     return {
       ...node,
       base: { ...node.base, depends_on: deps.length > 0 ? deps : undefined },
-    } as BuilderNode;
+    };
   });
 
   const copiedPositions: Record<string, XYPosition> = {};
@@ -92,7 +92,7 @@ export function pasteEnvelope(
       ...node,
       id: remap.get(node.id) ?? node.id,
       base: { ...node.base, depends_on: deps.length > 0 ? deps : undefined },
-    } as BuilderNode;
+    };
   });
 
   const positions = new Map<string, XYPosition>();

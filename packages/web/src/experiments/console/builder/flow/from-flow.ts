@@ -45,7 +45,7 @@ export function flowToBuilder(
     return {
       ...node,
       base: { ...node.base, depends_on: depends.length > 0 ? depends : undefined },
-    } as BuilderNode;
+    };
   });
 
   return {

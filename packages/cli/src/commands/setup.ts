@@ -2130,7 +2130,7 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
       process.exit(0);
     }
 
-    mode = modeChoice as SetupMode;
+    mode = modeChoice;
   }
 
   // Collect configuration based on mode

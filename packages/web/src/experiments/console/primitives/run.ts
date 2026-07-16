@@ -111,7 +111,7 @@ export function toRun(raw: RawWorkflowRun): Run {
     typeof approval === 'object' &&
     approval !== undefined &&
     'nodeId' in approval &&
-    typeof (approval as { nodeId: unknown }).nodeId === 'string';
+    typeof approval.nodeId === 'string';
   // A resolved gate (approved/rejected, run paused only while awaiting
   // auto-resume — see ApprovalContext.resolved on the server) is NOT a
   // pending approval: surface it via gateResolved instead so approve/reject

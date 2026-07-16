@@ -20,7 +20,6 @@ import type {
   ArtifactType,
   WorkflowRunStatus,
   DagNodeState,
-  WorkflowStepStatus,
   LoopIterationInfo,
 } from '@/lib/types';
 
@@ -127,7 +126,7 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
                 nodeMap.set(nodeId, {
                   nodeId,
                   name: nodeId,
-                  status: status as WorkflowStepStatus,
+                  status: status,
                   duration: e.data.duration_ms as number | undefined,
                   error: e.data.error as string | undefined,
                   reason: e.data.reason as 'when_condition' | 'trigger_rule' | undefined,

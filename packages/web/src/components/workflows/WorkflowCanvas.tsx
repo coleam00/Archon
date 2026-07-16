@@ -45,7 +45,7 @@ export function reactFlowToDagNodes(rfNodes: DagFlowNode[], rfEdges: Edge[]): Da
         ...dagBase,
         bash: node.data.bashScript ?? '',
         ...(node.data.bashTimeout ? { timeout: node.data.bashTimeout } : {}),
-      } as DagNode;
+      };
     }
 
     // AI node fields (not applicable to bash)
@@ -64,13 +64,13 @@ export function reactFlowToDagNodes(rfNodes: DagFlowNode[], rfEdges: Edge[]): Da
 
     // DagNode uses `never` discriminant fields that can't be set on object literals
     if (node.data.nodeType === 'command') {
-      return { ...aiBase, command: node.data.label } as DagNode;
+      return { ...aiBase, command: node.data.label };
     }
     const promptText = node.data.promptText;
     return {
       ...aiBase,
       prompt: typeof promptText === 'string' ? promptText : '',
-    } as DagNode;
+    };
   });
 }
 

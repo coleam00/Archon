@@ -7,8 +7,8 @@ import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 // ../db/workflows with a different shape than operations/workflow-operations.test.ts.
 // ---------------------------------------------------------------------------
 
-const mockFindByPrefix = mock(
-  (_idPrefix: string, _codebaseId: string): Promise<WorkflowRun[]> => Promise.resolve([])
+const mockFindByPrefix = mock((_idPrefix: string, _codebaseId: string): Promise<WorkflowRun[]> =>
+  Promise.resolve([])
 );
 const mockListDashboardRuns = mock(() => Promise.resolve({ runs: [] as unknown[] }));
 

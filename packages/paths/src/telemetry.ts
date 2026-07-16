@@ -193,10 +193,7 @@ export function sanitizeModelForTelemetry(model: string | undefined): string | u
 
 /** Why telemetry is currently disabled. `null` means it's enabled. */
 export type TelemetryDisabledReason =
-  | 'ARCHON_TELEMETRY_DISABLED'
-  | 'DO_NOT_TRACK'
-  | 'CI'
-  | 'POSTHOG_API_KEY';
+  'ARCHON_TELEMETRY_DISABLED' | 'DO_NOT_TRACK' | 'CI' | 'POSTHOG_API_KEY';
 
 interface TelemetryStatusBase {
   /** Stable anonymous install UUID (always populated, even when disabled). */
@@ -465,7 +462,7 @@ async function silentFetch(
   options: PostHogFetchOptions
 ): Promise<PostHogFetchResponse> {
   try {
-    const res = await fetch(url, options as RequestInit);
+    const res = await fetch(url, options);
     if (res.status < 200 || res.status >= 400) {
       logFetchFailure({ status: res.status }, 'telemetry.http_non_2xx_suppressed');
       return FAKE_OK_RESPONSE;
@@ -598,14 +595,7 @@ export type WorkflowErrorClass = 'fatal' | 'transient' | 'unknown';
 
 /** Closed set of DAG node types, mirrored from `@archon/workflows` schemas. */
 export type WorkflowNodeType =
-  | 'command'
-  | 'prompt'
-  | 'bash'
-  | 'script'
-  | 'loop'
-  | 'loop_group'
-  | 'approval'
-  | 'cancel';
+  'command' | 'prompt' | 'bash' | 'script' | 'loop' | 'loop_group' | 'approval' | 'cancel';
 
 /**
  * Terminal workflow-run event (`workflow_completed` / `workflow_failed`).

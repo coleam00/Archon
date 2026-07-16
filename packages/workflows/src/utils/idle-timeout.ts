@@ -94,7 +94,7 @@ export async function* withIdleTimeout<T>(
     if (!timedOut) {
       // Normal exit (generator exhausted or consumer broke out) — safe to clean up
       try {
-        await generator.return(undefined as never);
+        await generator.return(undefined);
       } catch (e) {
         // Generator cleanup errors are non-fatal but worth logging for diagnostics
         // Dynamic import to avoid circular deps — this module has zero @archon/* imports

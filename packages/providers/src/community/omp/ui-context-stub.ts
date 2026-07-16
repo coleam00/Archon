@@ -77,22 +77,25 @@ function passthroughWrap(_level: unknown): (s: string) => string {
 }
 
 export function createArchonOmpUIContext(bridge: ArchonOmpUIBridge): OmpExtensionUIContext {
-  const theme = new Proxy({} as OmpTheme, {
-    get(_target, prop: string | symbol): unknown {
-      if (prop === 'getColorMode') return () => 'truecolor';
-      if (prop === 'getFgAnsi' || prop === 'getBgAnsi') return () => '';
-      if (
-        typeof prop === 'string' &&
-        (prop === 'getThinkingBorderColor' ||
-          prop === 'getBashModeBorderColor' ||
-          /^get.*Color$/.test(prop))
-      ) {
-        return passthroughWrap;
-      }
-      if (prop === 'name' || prop === 'sourcePath' || prop === 'sourceInfo') return undefined;
-      return (...args: unknown[]) => lastStringArg(args);
-    },
-  });
+  const theme = new Proxy(
+    {},
+    {
+      get(_target, prop: string | symbol): unknown {
+        if (prop === 'getColorMode') return () => 'truecolor';
+        if (prop === 'getFgAnsi' || prop === 'getBgAnsi') return () => '';
+        if (
+          typeof prop === 'string' &&
+          (prop === 'getThinkingBorderColor' ||
+            prop === 'getBashModeBorderColor' ||
+            /^get.*Color$/.test(prop))
+        ) {
+          return passthroughWrap;
+        }
+        if (prop === 'name' || prop === 'sourcePath' || prop === 'sourceInfo') return undefined;
+        return (...args: unknown[]) => lastStringArg(args);
+      },
+    }
+  );
 
   return {
     select: async () => undefined,

@@ -46,9 +46,8 @@ mock.module('@openai/codex-sdk', () => ({
 }));
 
 // Mock resolver -- controls binary resolution behavior per test
-const mockResolveCodexBinaryPath = mock(
-  (_configPath?: string): Promise<string | undefined> =>
-    Promise.resolve('/tmp/test-archon/vendor/codex/codex')
+const mockResolveCodexBinaryPath = mock((_configPath?: string): Promise<string | undefined> =>
+  Promise.resolve('/tmp/test-archon/vendor/codex/codex')
 );
 mock.module('./binary-resolver', () => ({
   resolveCodexBinaryPath: mockResolveCodexBinaryPath,
