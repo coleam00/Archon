@@ -1,0 +1,18 @@
+{
+  "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/0.12.0/.schema/devbox.schema.json",
+  "packages": [
+    "bun"
+  ],
+  "shell": {
+    "init_hook": [
+      "echo 'Welcome to the Archon Devbox environment!'"
+    ],
+    "scripts": {
+      "install": "bun install",
+      "build": "bun run build",
+      "test": "bun run test",
+      "dev": "bun run dev",
+      "validate": "bun run validate"
+    }
+  }
+}
