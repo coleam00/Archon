@@ -185,3 +185,73 @@ describe('subscribeKey — per-key Map lifecycle (#1933)', () => {
     expect(versionOf(key)).toBe(0);
   });
 });
+
+describe('subscribeKey — resubscribe during an abandoned in-flight load (#2101)', () => {
+  test('a resubscribe before the old load settles runs its own loader and wins', async () => {
+    const key = 'test:resub-inflight';
+    let resolveA: (v: string) => void = () => {};
+    let bLoads = 0;
+
+    const unsubA = subscribeKey(
+      key,
+      () => {},
+      () =>
+        new Promise<string>(resolve => {
+          resolveA = resolve;
+        })
+    );
+    unsubA(); // last subscriber leaves while loaderA is still pending
+
+    const unsubB = subscribeKey(
+      key,
+      () => {},
+      () => {
+        bLoads += 1;
+        return Promise.resolve('B');
+      }
+    );
+    await flush();
+
+    expect(bLoads).toBe(1); // B's own loader ran (the bug: it was never invoked)
+    expect(get(key)).toBe('B'); // B's result landed
+    expect(versionOf(key)).toBe(1); // one notify, from B's load
+
+    resolveA('A'); // the abandoned load settles late
+    await flush();
+    expect(get(key)).toBe('B'); // A does not clobber B
+    expect(versionOf(key)).toBe(1); // A's stale settle did not notify
+
+    unsubB();
+  });
+
+  test('a rejecting abandoned load does not surface an error to the resubscriber', async () => {
+    const key = 'test:resub-reject';
+    let rejectA: (e: Error) => void = () => {};
+
+    const unsubA = subscribeKey(
+      key,
+      () => {},
+      () =>
+        new Promise<string>((_resolve, reject) => {
+          rejectA = reject;
+        })
+    );
+    unsubA();
+
+    const unsubB = subscribeKey(
+      key,
+      () => {},
+      () => Promise.resolve('B')
+    );
+    await flush();
+    expect(get(key)).toBe('B');
+    expect(versionOf(key)).toBe(1);
+
+    rejectA(new Error('stale boom')); // loaderA rejects after B already resolved
+    await flush();
+    expect(get(key)).toBe('B'); // B's value untouched
+    expect(versionOf(key)).toBe(1); // no extra notify — A's error was not surfaced
+
+    unsubB();
+  });
+});

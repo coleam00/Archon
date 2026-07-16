@@ -12,6 +12,9 @@
  * - After the last unsubscribe, `cache`/`errors` are deliberately retained so
  *   a remount reads warm; only the per-key version counter is released.
  *   `invalidate()` fully releases subscriber-less keys.
+ * - A resubscribe that arrives while a previous, abandoned load for the key is
+ *   still in flight starts its OWN loader; the orphaned load can no longer
+ *   clobber the fresh result (per-key `loadSeq` guard, #2101).
  *
  * Deliberately minimal. No React Query, no Zustand.
  */
@@ -30,6 +33,15 @@ const loaders = new Map<string, () => Promise<unknown>>();
 // the value stays `undefined` and a value-identity snapshot would bail out and
 // never surface `error` (e.g. a 401 panel would hang on "Loading…").
 const versions = new Map<string, number>();
+// Per-key load sequence, bumped each time a load is initiated (via `ensureLoad`
+// or `revalidate`). A load captures the value at start and commits its result
+// only while the sequence still matches. This neutralizes a load orphaned by
+// the last unsubscribe — its promise keeps running (promises aren't
+// cancellable) — so it can't overwrite a value produced by a NEWER load that a
+// resubscriber started for the same key (#2101). Retained across unsubscribe
+// like `cache`/`errors` (so a load that settles with no resubscriber still
+// warms the cache) and released together with them by `invalidate()`.
+const loadSeq = new Map<string, number>();
 
 function notify(key: string): void {
   // No subscribers ⇒ nothing snapshots the counter, so don't bump it — a late
@@ -43,25 +55,42 @@ function notify(key: string): void {
   for (const l of subs) l();
 }
 
-function ensureLoad(key: string): void {
-  if (cache.has(key) || inflight.has(key)) return;
-  const loader = loaders.get(key);
-  if (loader === undefined) return;
+/**
+ * Shared load runner for both load-initiation paths (`ensureLoad` on first
+ * subscribe and `revalidate` on refetch/invalidate). Captures a per-key
+ * sequence number so a stale settle — from a load whose key was torn down and
+ * re-subscribed with a different loader — no-ops instead of clobbering the
+ * current load's result (#2101).
+ */
+function runLoad(key: string, loader: () => Promise<unknown>): void {
+  const seq = (loadSeq.get(key) ?? 0) + 1;
+  loadSeq.set(key, seq);
   const p = loader()
     .then(v => {
+      if ((loadSeq.get(key) ?? 0) !== seq) return; // superseded by a newer load for this key
       cache.set(key, v);
       errors.delete(key);
       notify(key);
     })
     .catch((e: unknown) => {
+      if ((loadSeq.get(key) ?? 0) !== seq) return; // superseded — don't surface a stale error
       const err = e instanceof Error ? e : new Error(String(e));
       errors.set(key, err);
-      notify(key);
+      notify(key); // surface the error; any stale value stays in cache
     })
     .finally(() => {
-      inflight.delete(key);
+      // Only clear the entry if it's still THIS load's promise — a newer load
+      // for the key may already own `inflight[key]`.
+      if (inflight.get(key) === p) inflight.delete(key);
     });
   inflight.set(key, p);
+}
+
+function ensureLoad(key: string): void {
+  if (cache.has(key) || inflight.has(key)) return;
+  const loader = loaders.get(key);
+  if (loader === undefined) return;
+  runLoad(key, loader);
 }
 
 export function get(key: string): unknown {
@@ -96,24 +125,11 @@ function revalidate(key: string): void {
     cache.delete(key);
     errors.delete(key);
     versions.delete(key); // fully release the key — nothing subscribes, so nothing snapshots it
+    loadSeq.delete(key); // release the sequence alongside cache/errors (they move together)
     return;
   }
   if (inflight.has(key)) return; // a revalidation is already in flight
-  const p = loader()
-    .then(v => {
-      cache.set(key, v);
-      errors.delete(key);
-      notify(key);
-    })
-    .catch((e: unknown) => {
-      const err = e instanceof Error ? e : new Error(String(e));
-      errors.set(key, err);
-      notify(key); // surface the error; any stale value stays in cache
-    })
-    .finally(() => {
-      inflight.delete(key);
-    });
-  inflight.set(key, p);
+  runLoad(key, loader);
 }
 
 export function invalidate(keyPrefix: string): void {
@@ -185,6 +201,12 @@ export function subscribeKey(
       // above); `invalidate()` releases them for subscriber-less keys via
       // `revalidate`'s no-loader branch.
       versions.delete(key);
+      // Detach any in-flight load. Promises aren't cancellable, so it keeps
+      // running and may still warm the cache for a future remount (guarded by
+      // its `loadSeq`), but dropping it from `inflight` here means a resubscribe
+      // arriving before it settles runs its OWN loader via `ensureLoad` instead
+      // of inheriting this abandoned request's eventual result (#2101).
+      inflight.delete(key);
     }
   };
 }
