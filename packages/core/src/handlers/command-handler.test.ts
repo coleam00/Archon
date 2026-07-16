@@ -2176,19 +2176,30 @@ describe('CommandHandler', () => {
         expect(result.message).toContain('loop input received');
         expect(result.message).toContain('my-loop-wf');
         // Stays 'paused' (no status write) — resolution rides the approval context,
-        // stamped atomically via the CAS (#2075/#2113)
-        expect(mockResolveApprovalGate).toHaveBeenCalledWith('run-123', {
-          approval: {
-            type: 'interactive_loop',
-            nodeId: 'refine',
-            iteration: 2,
-            message: 'Review the output',
-            resolved: 'approved',
+        // stamped atomically via the CAS (#2075/#2113), with the audit event in the
+        // same transaction (#2146)
+        expect(mockResolveApprovalGate).toHaveBeenCalledWith(
+          'run-123',
+          {
+            approval: {
+              type: 'interactive_loop',
+              nodeId: 'refine',
+              iteration: 2,
+              message: 'Review the output',
+              resolved: 'approved',
+            },
+            loop_user_input: 'Add error handling',
+            // A real comment counts as feedback ⇒ the resumed loop iterates (#2074)
+            loop_feedback_given: true,
           },
-          loop_user_input: 'Add error handling',
-          // A real comment counts as feedback ⇒ the resumed loop iterates (#2074)
-          loop_feedback_given: true,
-        });
+          [
+            {
+              event_type: 'approval_received',
+              step_name: 'refine',
+              data: { decision: 'approved', comment: 'Add error handling', iteration: 2 },
+            },
+          ]
+        );
       });
 
       test('creates approval_received event (not node_completed) for interactive_loop', async () => {
@@ -2216,13 +2227,16 @@ describe('CommandHandler', () => {
 
         await handleCommand(baseConversation, '/workflow approve run-456 LGTM');
 
-        // node_completed should NOT be written by the approve command — only the executor
-        // writes it when the AI emits the completion signal (actual loop exit).
-        const nodeCompletedCalls = mockCreateWorkflowEvent.mock.calls.filter(
-          (call: unknown[]) => (call[0] as Record<string, unknown>).event_type === 'node_completed'
-        );
-        expect(nodeCompletedCalls.length).toBe(0);
-        expect(mockCreateWorkflowEvent).toHaveBeenCalledWith(
+        // The audit events ride the CAS transaction now (#2146), not a separate
+        // createWorkflowEvent write. node_completed should NOT be written by the
+        // approve command — only the executor writes it when the AI emits the
+        // completion signal (actual loop exit).
+        expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
+        const casEvents = mockResolveApprovalGate.mock.calls[0][2] as Array<
+          Record<string, unknown>
+        >;
+        expect(casEvents.filter(e => e.event_type === 'node_completed')).toHaveLength(0);
+        expect(casEvents).toContainEqual(
           expect.objectContaining({ event_type: 'approval_received' })
         );
       });
@@ -2263,7 +2277,9 @@ describe('CommandHandler', () => {
           expect.objectContaining({
             loop_feedback_given: false,
             loop_user_input: 'Approved',
-          })
+          }),
+          // Audit events ride the CAS transaction (#2146); metadata is the focus here.
+          expect.any(Array)
         );
       });
 
@@ -2341,10 +2357,12 @@ describe('CommandHandler', () => {
 
         await handleCommand(baseConversation, '/workflow approve run-cap LGTM looks good');
 
-        const nodeCompletedCall = mockCreateWorkflowEvent.mock.calls.find(
-          (c: unknown[]) => (c[0] as Record<string, unknown>).event_type === 'node_completed'
-        );
-        expect(nodeCompletedCall?.[0]).toMatchObject({
+        // node_completed rides the CAS transaction now (#2146), not a direct write.
+        const casEvents = mockResolveApprovalGate.mock.calls[0][2] as Array<
+          Record<string, unknown>
+        >;
+        const nodeCompleted = casEvents.find(e => e.event_type === 'node_completed');
+        expect(nodeCompleted).toMatchObject({
           data: { node_output: 'LGTM looks good', approval_decision: 'approved' },
         });
       });
@@ -2373,10 +2391,12 @@ describe('CommandHandler', () => {
 
         await handleCommand(baseConversation, '/workflow approve run-nocap a comment');
 
-        const nodeCompletedCall = mockCreateWorkflowEvent.mock.calls.find(
-          (c: unknown[]) => (c[0] as Record<string, unknown>).event_type === 'node_completed'
-        );
-        expect(nodeCompletedCall?.[0]).toMatchObject({
+        // node_completed rides the CAS transaction now (#2146), not a direct write.
+        const casEvents = mockResolveApprovalGate.mock.calls[0][2] as Array<
+          Record<string, unknown>
+        >;
+        const nodeCompleted = casEvents.find(e => e.event_type === 'node_completed');
+        expect(nodeCompleted).toMatchObject({
           data: { node_output: '', approval_decision: 'approved' },
         });
       });
@@ -2429,19 +2449,30 @@ describe('CommandHandler', () => {
         expect(result.success).toBe(true);
         expect(result.message).toContain('Reworking');
         // Stays 'paused' (no status write) — rework staged on the approval context,
-        // stamped atomically via the CAS (#2075/#2113)
-        expect(mockResolveApprovalGate).toHaveBeenCalledWith('run-reject-1', {
-          approval: {
-            type: 'approval',
-            nodeId: 'review',
-            message: 'Approve the plan?',
-            onRejectPrompt: 'Fix: $REJECTION_REASON',
-            onRejectMaxAttempts: 3,
-            resolved: 'rejected',
+        // stamped atomically via the CAS (#2075/#2113), with the audit event in the
+        // same transaction (#2146)
+        expect(mockResolveApprovalGate).toHaveBeenCalledWith(
+          'run-reject-1',
+          {
+            approval: {
+              type: 'approval',
+              nodeId: 'review',
+              message: 'Approve the plan?',
+              onRejectPrompt: 'Fix: $REJECTION_REASON',
+              onRejectMaxAttempts: 3,
+              resolved: 'rejected',
+            },
+            rejection_reason: 'needs work',
+            rejection_count: 1,
           },
-          rejection_reason: 'needs work',
-          rejection_count: 1,
-        });
+          [
+            {
+              event_type: 'approval_received',
+              step_name: 'review',
+              data: { decision: 'rejected', reason: 'needs work' },
+            },
+          ]
+        );
       });
 
       test('cancels when max attempts reached', async () => {
@@ -2473,8 +2504,15 @@ describe('CommandHandler', () => {
 
         expect(result.success).toBe(true);
         expect(result.message).toContain('max attempts reached');
-        // Terminal reject resolves + cancels atomically (#2113)
-        expect(mockResolveAndCancelApprovalGate).toHaveBeenCalledWith('run-reject-max');
+        // Terminal reject resolves + cancels atomically (#2113); the audit event
+        // rides the same transaction (#2146).
+        expect(mockResolveAndCancelApprovalGate).toHaveBeenCalledWith('run-reject-max', [
+          {
+            event_type: 'approval_received',
+            step_name: 'review',
+            data: { decision: 'rejected', reason: 'bad' },
+          },
+        ]);
         expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
       });
 
@@ -2506,8 +2544,15 @@ describe('CommandHandler', () => {
         );
 
         expect(result.success).toBe(true);
-        // Terminal reject resolves + cancels atomically (#2113)
-        expect(mockResolveAndCancelApprovalGate).toHaveBeenCalledWith('run-reject-plain');
+        // Terminal reject resolves + cancels atomically (#2113); the audit event
+        // rides the same transaction (#2146).
+        expect(mockResolveAndCancelApprovalGate).toHaveBeenCalledWith('run-reject-plain', [
+          {
+            event_type: 'approval_received',
+            step_name: 'gate',
+            data: { decision: 'rejected', reason: 'reason' },
+          },
+        ]);
         expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
       });
     });

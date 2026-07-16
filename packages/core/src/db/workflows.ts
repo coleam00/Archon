@@ -1,7 +1,8 @@
 /**
  * Database operations for workflow runs
  */
-import { pool, getDialect, getDatabaseType } from './connection';
+import { pool, getDialect, getDatabaseType, getDatabase } from './connection';
+import { insertWorkflowEvent } from './workflow-events';
 import type { IDatabase, SqlDialect } from './adapters/types';
 import type {
   WorkflowRun,
@@ -91,13 +92,28 @@ function unresolvedGateClause(): string {
 }
 
 /**
- * Atomically resolve a paused approval gate (compare-and-swap).
+ * An audit event written atomically with a gate resolution (#2146). The winning
+ * resolver inserts these in the SAME transaction as the resolution UPDATE, so a
+ * failed event write rolls the resolution back — a resolved gate can never be
+ * left with no audit trail, which the fast-path guard would then wrongly block
+ * from retrying. `workflow_run_id` is supplied by the CAS function.
+ */
+export interface GateResolutionEvent {
+  event_type: string;
+  step_name: string;
+  data: Record<string, unknown>;
+}
+
+/**
+ * Atomically resolve a paused approval gate (compare-and-swap) and record its
+ * audit events in one transaction.
  *
  * Merges `metadata` (which carries `approval.resolved = 'approved' | 'rejected'`
  * plus any gate-specific keys) into the row ONLY while the gate is still open
- * (unresolvedGateClause). Returns `{ resolved }`: `true` = this caller won the
- * race and MAY write gate events; `false` = a concurrent approve/reject already
- * resolved the gate, so the caller must NOT write events (they would duplicate).
+ * (unresolvedGateClause). When the CAS matches, the same transaction inserts
+ * `events`; when it loses (rowCount 0) nothing is written. Returns
+ * `{ resolved }`: `true` = this caller won the race and its events are committed;
+ * `false` = a concurrent approve/reject already resolved the gate.
  *
  * This closes the read-then-write TOCTOU window in approveWorkflow /
  * rejectWorkflow: the atomic conditional UPDATE — not a prior in-memory
@@ -105,20 +121,32 @@ function unresolvedGateClause(): string {
  * 'paused' (only metadata changes); the resume CAS (resumeWorkflowRun)
  * independently guards double-resume. Idempotent in content, so a lost race
  * corrupts nothing — it only prevents the duplicate events/telemetry (#2113).
+ * Wrapping the resolution and its audit rows in one transaction closes the
+ * separate gap where a post-commit event-write failure stranded a resolved gate
+ * with no audit event and no way to retry (#2146).
  */
 export async function resolveApprovalGate(
   id: string,
-  metadata: Record<string, unknown>
+  metadata: Record<string, unknown>,
+  events: GateResolutionEvent[]
 ): Promise<{ resolved: boolean }> {
   const dialect = getDialect();
   try {
-    const result = await pool.query(
-      `UPDATE remote_agent_workflow_runs
-       SET metadata = ${dialect.jsonMerge('metadata', 2)}
-       WHERE id = $1 AND ${unresolvedGateClause()}`,
-      [id, JSON.stringify(metadata)]
-    );
-    return { resolved: (result.rowCount ?? 0) > 0 };
+    return await getDatabase().withTransaction(async query => {
+      const result = await query(
+        `UPDATE remote_agent_workflow_runs
+         SET metadata = ${dialect.jsonMerge('metadata', 2)}
+         WHERE id = $1 AND ${unresolvedGateClause()}`,
+        [id, JSON.stringify(metadata)]
+      );
+      const resolved = (result.rowCount ?? 0) > 0;
+      if (resolved) {
+        for (const event of events) {
+          await insertWorkflowEvent(query, { workflow_run_id: id, ...event });
+        }
+      }
+      return { resolved };
+    });
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, workflowRunId: id }, 'db.workflow_run_resolve_gate_failed');
@@ -137,21 +165,34 @@ export async function resolveApprovalGate(
  * resolved-but-not-cancelled state that a failed second write could strand — a
  * reject retry could not self-heal past the fast-path gate guard. No `resolved`
  * marker is written: that marker only matters for the stay-paused rework path,
- * and the rejection reason is preserved in the approval_received event. Returns
- * `{ resolved }`; `false` means a concurrent resolver already won (the gate is no
- * longer open), so the caller writes no events.
+ * and the rejection reason is preserved in the approval_received event. The
+ * status flip and that audit event commit in ONE transaction (#2146), so a
+ * failed event write rolls the cancellation back rather than terminating the run
+ * with no audit trail. Returns `{ resolved }`; `false` means a concurrent
+ * resolver already won (the gate is no longer open), so nothing is written.
  */
-export async function resolveAndCancelApprovalGate(id: string): Promise<{ resolved: boolean }> {
+export async function resolveAndCancelApprovalGate(
+  id: string,
+  events: GateResolutionEvent[]
+): Promise<{ resolved: boolean }> {
   const dialect = getDialect();
   try {
-    const result = await pool.query(
-      `UPDATE remote_agent_workflow_runs
-       SET status = 'cancelled',
-           completed_at = ${dialect.now()}
-       WHERE id = $1 AND ${unresolvedGateClause()}`,
-      [id]
-    );
-    return { resolved: (result.rowCount ?? 0) > 0 };
+    return await getDatabase().withTransaction(async query => {
+      const result = await query(
+        `UPDATE remote_agent_workflow_runs
+         SET status = 'cancelled',
+             completed_at = ${dialect.now()}
+         WHERE id = $1 AND ${unresolvedGateClause()}`,
+        [id]
+      );
+      const resolved = (result.rowCount ?? 0) > 0;
+      if (resolved) {
+        for (const event of events) {
+          await insertWorkflowEvent(query, { workflow_run_id: id, ...event });
+        }
+      }
+      return { resolved };
+    });
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, workflowRunId: id }, 'db.workflow_run_resolve_cancel_gate_failed');

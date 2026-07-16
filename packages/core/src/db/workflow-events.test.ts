@@ -61,7 +61,7 @@ describe('workflow-events', () => {
 
       expect(mockQuery).toHaveBeenCalledWith(
         `INSERT INTO remote_agent_workflow_events (id, workflow_run_id, event_type, step_index, step_name, data)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
+     VALUES ($1, $2, $3, $4, $5, $6)`,
         [
           expect.any(String), // generated UUID
           'run-456',

@@ -9,6 +9,7 @@
  * Read operations also throw on error — callers own the degradation policy.
  */
 import { pool, getDialect, getDatabaseType } from './connection';
+import type { QueryResult } from './adapters/types';
 import type { WorkflowEventRow } from '../schemas/workflow-event';
 import { createLogger } from '@archon/paths';
 
@@ -53,31 +54,58 @@ function parseEventRow(row: WorkflowEventRow): WorkflowEventRow {
   }
 }
 
-/**
- * Create a workflow event. Fire-and-forget - never throws.
- */
-export async function createWorkflowEvent(data: {
+/** The column payload for a single workflow-event row. */
+export interface WorkflowEventInput {
   workflow_run_id: string;
   event_type: string;
   step_index?: number;
   step_name?: string;
   data?: Record<string, unknown>;
-}): Promise<void> {
+}
+
+/**
+ * A query function scoped to a specific connection — either the module-level
+ * `pool` or a transaction-scoped query from `IDatabase.withTransaction`. The row
+ * type is unused (INSERT returns none), so it is fixed to `unknown` rather than
+ * generic, which lets a generic transaction query be passed directly.
+ */
+type EventInsertQuery = (sql: string, params?: unknown[]) => Promise<QueryResult<unknown>>;
+
+/**
+ * Insert one workflow-event row via `query` and THROW on failure. This is the
+ * single source of truth for the event columns and dialect UUID; the
+ * fire-and-forget createWorkflowEvent wraps it in try/catch, while callers that
+ * need the write to be atomic with another mutation (the approval-gate CAS in
+ * db/workflows.ts, #2146) pass a transaction-scoped query so a failed event
+ * write rolls back the enclosing UPDATE instead of stranding a resolved gate
+ * with no audit trail.
+ */
+export async function insertWorkflowEvent(
+  query: EventInsertQuery,
+  data: WorkflowEventInput
+): Promise<void> {
+  const dialect = getDialect();
+  const id = dialect.generateUuid();
+  await query(
+    `INSERT INTO remote_agent_workflow_events (id, workflow_run_id, event_type, step_index, step_name, data)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [
+      id,
+      data.workflow_run_id,
+      data.event_type,
+      data.step_index ?? null,
+      data.step_name ?? null,
+      JSON.stringify(data.data ?? {}),
+    ]
+  );
+}
+
+/**
+ * Create a workflow event. Fire-and-forget - never throws.
+ */
+export async function createWorkflowEvent(data: WorkflowEventInput): Promise<void> {
   try {
-    const dialect = getDialect();
-    const id = dialect.generateUuid();
-    await pool.query(
-      `INSERT INTO remote_agent_workflow_events (id, workflow_run_id, event_type, step_index, step_name, data)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [
-        id,
-        data.workflow_run_id,
-        data.event_type,
-        data.step_index ?? null,
-        data.step_name ?? null,
-        JSON.stringify(data.data ?? {}),
-      ]
-    );
+    await insertWorkflowEvent((sql, params) => pool.query(sql, params), data);
   } catch (error) {
     getLog().error(
       { err: error as Error, eventType: data.event_type, runId: data.workflow_run_id },
