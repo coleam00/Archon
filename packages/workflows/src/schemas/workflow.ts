@@ -59,6 +59,25 @@ export const workflowWorktreePolicySchema = z.object({
 
 export type WorkflowWorktreePolicy = z.infer<typeof workflowWorktreePolicySchema>;
 
+/**
+ * Per-workflow container-backend policy (FOLDER projects only). Mirrors the
+ * worktree policy: a narrow per-workflow toggle; the runner image / caps live in
+ * repo/global `.archon/config.yaml > container` because they are install-wide.
+ *
+ * Selection precedence: CLI `--container` flag > this `container.enabled` >
+ * config `container.enabled` default (false). The write-back mode
+ * (`container.write_back`) lands in Phase C.
+ */
+export const workflowContainerPolicySchema = z.object({
+  /**
+   * Pin the container backend on for this folder-project workflow without the
+   * `--container` flag. `false`/omitted defers to the flag / config default.
+   */
+  enabled: z.boolean().optional(),
+});
+
+export type WorkflowContainerPolicy = z.infer<typeof workflowContainerPolicySchema>;
+
 // ---------------------------------------------------------------------------
 // WorkflowBase — common fields shared by all workflow types
 // ---------------------------------------------------------------------------
@@ -77,6 +96,7 @@ export const workflowBaseSchema = z.object({
   betas: betasSchema.optional(),
   sandbox: sandboxSettingsSchema.optional(),
   worktree: workflowWorktreePolicySchema.optional(),
+  container: workflowContainerPolicySchema.optional(),
   /**
    * When `false`, the engine skips the path-exclusive lock for this workflow,
    * allowing N concurrent runs on the same live checkout. The author asserts

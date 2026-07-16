@@ -25,6 +25,38 @@ export class IsolationBlockedError extends Error {
  * user-input bug that should crash rather than be absorbed as blocked state.
  */
 const ERROR_PATTERNS: { pattern: string; message: string; known: boolean }[] = [
+  // ─── Container backend (Docker) ──────────────────────────────────────────
+  // Checked FIRST: the docker-permission message is more specific than the
+  // generic 'permission denied' worktree message below and must win.
+  {
+    pattern: 'cannot connect to the docker daemon',
+    message:
+      '**Error:** Cannot connect to the Docker daemon. Start Docker (Docker Desktop or ' +
+      '`systemctl start docker`) and retry, or run without `--container`.',
+    known: true,
+  },
+  {
+    pattern: 'is the docker daemon running',
+    message:
+      '**Error:** The Docker daemon is not reachable. Start Docker and retry, or run ' +
+      'without `--container`.',
+    known: true,
+  },
+  {
+    pattern: 'no such image',
+    message:
+      '**Error:** The Archon runner image is missing. Build it with ' +
+      '`docker build -t archon-runner -f packages/isolation/docker/runner.Dockerfile ' +
+      'packages/isolation/docker` (or set `container.image` in `.archon/config.yaml`).',
+    known: true,
+  },
+  {
+    pattern: 'permission denied while trying to connect to the docker',
+    message:
+      '**Error:** Permission denied connecting to the Docker daemon. Add your user to the ' +
+      '`docker` group (`sudo usermod -aG docker $USER`, then re-login) or run Docker rootless.',
+    known: true,
+  },
   {
     pattern: 'permission denied',
     message:

@@ -424,3 +424,33 @@ export interface IIsolationBackend {
   /** Tear down a prepared environment. No-op for in-place (nothing was created). */
   destroy(envId: string): Promise<void>;
 }
+
+/**
+ * Resolved container-backend configuration. Sourced from the merged
+ * `.archon/config.yaml > container` section (repo over global) by the caller
+ * and handed to the container backend at construction. Kept in the isolation
+ * contract so both the CLI (which builds it from config) and the backend (which
+ * consumes it) share one shape.
+ */
+export interface ContainerBackendConfig {
+  /** Runner image tag, e.g. `archon-runner:0.5.0`. */
+  image: string;
+  /** Container network mode. `none` for no egress; `bridge` for default NAT. */
+  network: 'bridge' | 'none';
+  /** Hard memory cap in MiB (`docker run --memory <n>m`). */
+  memoryMb: number;
+  /** Process cap (`docker run --pids-limit <n>`), a fork-bomb guard. */
+  pidsLimit: number;
+}
+
+/**
+ * Docker label keys stamped on every Archon-managed container and volume, so
+ * `isolation list/cleanup` and Phase C resume can find them without guessing
+ * names. `managed` scopes ALL pruning (never a bare `docker prune`); `env-id`
+ * is the stable per-run handle used for name construction and rediscovery.
+ */
+export const CONTAINER_LABELS = {
+  managed: 'diy.archon.managed',
+  codebaseId: 'diy.archon.codebase-id',
+  envId: 'diy.archon.env-id',
+} as const;

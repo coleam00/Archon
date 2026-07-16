@@ -282,6 +282,32 @@ export function toRunEvent(raw: RawWorkflowEvent): RunEvent {
     };
   }
 
+  // Container isolation lifecycle (folder-project container runs). Persisted with
+  // DB-side names (container_created/…), NOT the emitter's `container_lifecycle`
+  // type — this normalizer reads DB rows. Surfaced behind the System toggle.
+  if (
+    et === 'container_created' ||
+    et === 'container_destroyed' ||
+    et === 'container_stopped' ||
+    et === 'container_resumed'
+  ) {
+    const label =
+      et === 'container_created'
+        ? 'Container created'
+        : et === 'container_destroyed'
+          ? 'Container removed'
+          : et === 'container_stopped'
+            ? 'Container stopped'
+            : 'Container resumed';
+    const containerId = readString(data, 'containerId');
+    return {
+      ...base,
+      kind: 'system',
+      label,
+      detail: containerId ? containerId.slice(0, 12) : '',
+    };
+  }
+
   // Fallback: render anything else as a text event with the payload summary.
   return {
     ...base,

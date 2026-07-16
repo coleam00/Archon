@@ -13,6 +13,7 @@
     "start": "bun --filter @archon/server start",
     "build": "bun --filter '*' build",
     "build:binaries": "bash scripts/build-binaries.sh",
+    "build:runner-image": "bash scripts/build-runner-image.sh",
     "build:checksums": "bash scripts/checksums.sh",
     "generate:bundled": "bun run scripts/generate-bundled-defaults.ts",
     "check:bundled": "bun run scripts/generate-bundled-defaults.ts --check",

@@ -50,6 +50,13 @@ export const WORKFLOW_EVENT_TYPES = [
   // fans out task_activity / hook_activity to live Web UI subscribers.
   'task_activity',
   'hook_activity',
+  // Container isolation backend lifecycle (folder-project container runs).
+  // Phase B persists container_created / container_destroyed; container_stopped
+  // / container_resumed are reserved for Phase C's suspend/resume.
+  'container_created',
+  'container_stopped',
+  'container_resumed',
+  'container_destroyed',
 ] as const;
 
 export type WorkflowEventType = (typeof WORKFLOW_EVENT_TYPES)[number];

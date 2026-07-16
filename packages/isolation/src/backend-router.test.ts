@@ -1,6 +1,9 @@
 import { describe, test, expect } from 'bun:test';
 import { resolveFolderBackend } from './backend-router';
 import { InPlaceBackend } from './backends/in-place';
+import { ContainerBackend } from './backends/container';
+import type { ContainerBackendConfig } from './types';
+import type { IIsolationStore } from './store';
 
 const folderCodebase = {
   id: 'cb-folder',
@@ -8,6 +11,17 @@ const folderCodebase = {
   name: 'platform',
   kind: 'folder' as const,
 };
+
+const containerConfig: ContainerBackendConfig = {
+  image: 'archon-runner:test',
+  network: 'bridge',
+  memoryMb: 4096,
+  pidsLimit: 512,
+};
+
+// Minimal store stub — resolveFolderBackend only stores the reference; it never
+// calls the store (that happens in ContainerBackend.prepare).
+const stubStore = {} as IIsolationStore;
 
 const repoCodebase = {
   id: 'cb-repo',
@@ -32,9 +46,26 @@ describe('resolveFolderBackend', () => {
     expect(() => resolveFolderBackend(repoCodebase)).toThrow(/folder-only/);
   });
 
-  test('container requested → throws (not available until Phase B, no silent downgrade)', () => {
-    expect(() => resolveFolderBackend(folderCodebase, { container: true })).toThrow(
-      /not available/
-    );
+  test('container requested with store + config → container backend', () => {
+    const backend = resolveFolderBackend(folderCodebase, {
+      container: true,
+      store: stubStore,
+      containerConfig,
+    });
+    expect(backend).toBeInstanceOf(ContainerBackend);
+    expect(backend.id).toBe('container');
+  });
+
+  test('container requested WITHOUT store/config → throws (no silent host downgrade)', () => {
+    expect(() => resolveFolderBackend(folderCodebase, { container: true })).toThrow(/not wired up/);
+    expect(() =>
+      resolveFolderBackend(folderCodebase, { container: true, store: stubStore })
+    ).toThrow(/not wired up/);
+  });
+
+  test('repo codebase + container → throws (seam is folder-only, checked first)', () => {
+    expect(() =>
+      resolveFolderBackend(repoCodebase, { container: true, store: stubStore, containerConfig })
+    ).toThrow(/folder-only/);
   });
 });

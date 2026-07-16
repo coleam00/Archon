@@ -2136,12 +2136,27 @@ async function executeNodeInternal(
 const SUBPROCESS_DEFAULT_TIMEOUT = 120_000;
 
 /**
+ * Reduce a host-resolved command to the name the container image exposes on
+ * PATH: strip any directory (a host absolute path like the Windows Git-Bash
+ * `bash.exe` doesn't exist in the Linux runner) and a trailing `.exe`. `bash`,
+ * `bun`, and `uv` all live on the runner image's PATH.
+ */
+export function containerCommandName(cmd: string): string {
+  const base = cmd.replace(/\\/g, '/').split('/').pop() ?? cmd;
+  return base.replace(/\.exe$/i, '');
+}
+
+/**
  * Run a deterministic subprocess (bash/script node body, loop `until_bash`) under
- * the given execution context. This is the seam the container backend (Phase B)
- * fills in: a `host` context delegates verbatim to `execFileAsync`, so the host
- * path is byte-identical to a direct call; a `container` context will route the
- * command through `docker exec` so isolation has no host-escape hole. Until that
- * lands, a container context fails fast rather than silently running on the host.
+ * the given execution context.
+ *
+ * `options.env` is the ARCHON-MANAGED env only (node vars + codebase env + creds)
+ * — NEVER pre-merged with `process.env`. The host path layers it over the
+ * (already-cleaned) host `process.env`, byte-identical to before. The container
+ * path delivers ONLY that managed env via `docker exec -e` (host `process.env`
+ * never crosses the boundary — the isolation invariant) and runs the command
+ * in-container at the same absolute cwd, so `bash:`/`script:` nodes have no
+ * host-escape hole.
  */
 async function runSubprocess(
   execContext: ExecutionContext,
@@ -2150,11 +2165,19 @@ async function runSubprocess(
   options: { cwd: string; timeout: number; env: NodeJS.ProcessEnv }
 ): Promise<{ stdout: string; stderr: string }> {
   if (execContext.kind === 'container') {
-    throw new Error(
-      'Container subprocess execution is not yet implemented (container isolation Phase B).'
-    );
+    const dockerArgs = ['exec', '-w', options.cwd];
+    if (execContext.execUser) dockerArgs.push('-u', execContext.execUser);
+    for (const [key, value] of Object.entries(options.env)) {
+      if (value !== undefined) dockerArgs.push('-e', `${key}=${value}`);
+    }
+    dockerArgs.push(execContext.containerId, containerCommandName(cmd), ...args);
+    return execFileAsync('docker', dockerArgs, { timeout: options.timeout });
   }
-  return execFileAsync(cmd, args, options);
+  return execFileAsync(cmd, args, {
+    cwd: options.cwd,
+    timeout: options.timeout,
+    env: { ...process.env, ...options.env },
+  });
 }
 
 /** Threshold (bytes) above which $nodeId.output values are written to a temp file
@@ -2232,8 +2255,9 @@ async function executeBashNode(
   const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, true, logDir);
 
   const timeout = node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT;
+  // Archon-managed env only — runSubprocess adds the host env for host runs and
+  // delivers ONLY this bag into the container (host process.env never crosses).
   const subprocessEnv: NodeJS.ProcessEnv = {
-    ...process.env,
     ARTIFACTS_DIR: artifactsDir,
     LOG_DIR: logDir,
     BASE_BRANCH: baseBranch,
@@ -2417,8 +2441,9 @@ async function executeScriptNode(
   const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, false);
 
   const timeout = node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT;
+  // Archon-managed env only — runSubprocess adds the host env for host runs and
+  // delivers ONLY this bag into the container (host process.env never crosses).
   const subprocessEnv: NodeJS.ProcessEnv = {
-    ...process.env,
     ARTIFACTS_DIR: artifactsDir,
     LOG_DIR: logDir,
     BASE_BRANCH: baseBranch,
@@ -3035,8 +3060,10 @@ async function executeLoopGroupNode(
         await runSubprocess(execContext, groupBashPath, ['-c', substitutedBash], {
           cwd,
           timeout: SUBPROCESS_DEFAULT_TIMEOUT,
+          // Archon-managed env only (no process.env spread) — runSubprocess
+          // layers the host env for host runs, or delivers ONLY this bag into
+          // the container.
           env: {
-            ...process.env,
             USER_MESSAGE: workflowRun.user_message,
             ARGUMENTS: workflowRun.user_message,
             LOOP_USER_INPUT: i === startIteration ? (loopUserInput ?? '') : '',
@@ -3958,8 +3985,10 @@ async function executeLoopNode(
         await runSubprocess(execContext, loopBashPath, ['-c', substitutedBash], {
           cwd,
           timeout: SUBPROCESS_DEFAULT_TIMEOUT,
+          // Archon-managed env only (no process.env spread) — runSubprocess
+          // layers the host env for host runs, or delivers ONLY this bag into
+          // the container.
           env: {
-            ...process.env,
             USER_MESSAGE: workflowRun.user_message,
             ARGUMENTS: workflowRun.user_message,
             LOOP_USER_INPUT: i === startIteration ? (loopUserInput ?? '') : '',
@@ -5391,6 +5420,65 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
 }
 
 /**
+ * Resolve the AI provider a node would use, WITHOUT the messaging/side effects
+ * of `resolveNodeProviderAndModel` — just enough for the container capability
+ * pre-flight. Mirrors the provider half of that resolver: `node.provider ??
+ * workflowProvider`, then a model tier/alias ref may override the provider.
+ */
+function resolveNodeProviderForPreflight(
+  node: DagNode,
+  workflowProvider: string,
+  aiProfile?: ResolvedAiProfile
+): string {
+  let provider: string = node.provider ?? workflowProvider;
+  if (node.model && aiProfile) {
+    const spec = resolveModelSpec(aiProfile, node.model);
+    if (!isLiteralSpec(spec)) provider = spec.provider;
+  }
+  return provider;
+}
+
+/**
+ * Collect providers used by AI nodes that CANNOT run inside a container
+ * (`capabilities.containerExec === false`), recursing loop_group bodies. bash/
+ * script/cancel nodes are deterministic (they exec via `docker exec` directly,
+ * no provider) and are skipped; an approval node counts only when it has an
+ * `on_reject` reprompt (the one AI turn it can spawn). Unknown providers are
+ * skipped here — they fail later with a clearer "unknown provider" error.
+ */
+export function collectContainerIncompatibleProviders(
+  nodes: readonly DagNode[],
+  workflowProvider: string,
+  aiProfile?: ResolvedAiProfile
+): Set<string> {
+  const incompatible = new Set<string>();
+  const check = (provider: string): void => {
+    if (!isRegisteredProvider(provider)) return;
+    if (!getProviderCapabilities(provider).containerExec) incompatible.add(provider);
+  };
+  const visit = (ns: readonly DagNode[]): void => {
+    for (const node of ns) {
+      if (isBashNode(node) || isScriptNode(node) || isCancelNode(node)) continue;
+      if (isLoopGroupNode(node)) {
+        check(resolveNodeProviderForPreflight(node, workflowProvider, aiProfile));
+        visit(node.loop_group.nodes);
+        continue;
+      }
+      if (isApprovalNode(node)) {
+        if (node.approval.on_reject) {
+          check(resolveNodeProviderForPreflight(node, workflowProvider, aiProfile));
+        }
+        continue;
+      }
+      // command / prompt / loop → AI node
+      check(resolveNodeProviderForPreflight(node, workflowProvider, aiProfile));
+    }
+  };
+  visit(nodes);
+  return incompatible;
+}
+
+/**
  * Execute a complete DAG workflow.
  * Called from executeWorkflow() in executor.ts.
  */
@@ -5437,6 +5525,48 @@ export async function executeDagWorkflow(
   execContext: ExecutionContext = { kind: 'host' }
 ): Promise<string | undefined> {
   const dagStartTime = Date.now();
+
+  // Container capability fail-fast: before ANY node runs (and before any
+  // container work), reject a container run whose AI nodes resolve to a provider
+  // that can't spawn in-container. No silent downgrade to the host — the user
+  // asked for isolation and must get it or a clear error.
+  if (execContext.kind === 'container') {
+    const incompatible = collectContainerIncompatibleProviders(
+      workflow.nodes,
+      workflowProvider,
+      aiProfile
+    );
+    if (incompatible.size > 0) {
+      const list = [...incompatible].sort().join(', ');
+      throw new Error(
+        `Provider${incompatible.size === 1 ? '' : 's'} '${list}' cannot run inside a ` +
+          'container yet (containerExec capability). Use provider claude, or run without ' +
+          '--container.'
+      );
+    }
+
+    // Container is live for this run — surface it in all three logging layers.
+    getWorkflowEventEmitter().emit({
+      type: 'container_lifecycle',
+      runId: workflowRun.id,
+      phase: 'created',
+      containerId: execContext.containerId,
+    });
+    deps.store
+      .createWorkflowEvent({
+        workflow_run_id: workflowRun.id,
+        event_type: 'container_created',
+        step_name: 'container',
+        data: { containerId: execContext.containerId },
+      })
+      .catch((err: Error) => {
+        getLog().error(
+          { err, workflowRunId: workflowRun.id, eventType: 'container_created' },
+          'workflow_event_persist_failed'
+        );
+      });
+  }
+
   const workflowTier = workflow.model && isTierName(workflow.model) ? workflow.model : undefined;
   const workflowLevelOptions = {
     effort: workflow.effort,

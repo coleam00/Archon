@@ -30,4 +30,5 @@ export const OPENCODE_CAPABILITIES: ProviderCapabilities = {
   fallbackModel: false,
   sandbox: false,
   nativeTools: false,
+  containerExec: false, // no in-container spawn path yet (fail-fast source of truth)
 };

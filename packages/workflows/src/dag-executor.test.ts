@@ -64,6 +64,8 @@ import {
   substituteLoopPrevRefs,
   applyLoopPrevToBodyNode,
   executeDagWorkflow,
+  collectContainerIncompatibleProviders,
+  containerCommandName,
 } from './dag-executor';
 import { writeNodeArtifact } from './artifacts-index';
 import { getWorkflowEventEmitter, type WorkflowEmitterEvent } from './event-emitter';
@@ -13871,5 +13873,59 @@ describe('executeDagWorkflow -- approval node inside an included block', () => {
     expect(ids).toContain('a__approve');
     expect(ids).toContain('b__approve');
     expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
+describe('containerCommandName', () => {
+  it('returns a bare command unchanged', () => {
+    expect(containerCommandName('bash')).toBe('bash');
+    expect(containerCommandName('bun')).toBe('bun');
+  });
+
+  it('strips a unix directory to the basename', () => {
+    expect(containerCommandName('/usr/local/bin/bash')).toBe('bash');
+  });
+
+  it('strips a Windows path + .exe (container is always Linux)', () => {
+    expect(containerCommandName('C:\\Program Files\\Git\\bin\\bash.exe')).toBe('bash');
+  });
+});
+
+describe('collectContainerIncompatibleProviders', () => {
+  const promptNode = (id: string, provider?: string): DagNode =>
+    ({ id, prompt: `do ${id}`, ...(provider ? { provider } : {}) }) as unknown as DagNode;
+  const bashNode = (id: string): DagNode => ({ id, bash: 'echo hi' }) as unknown as DagNode;
+
+  it('is empty when all AI nodes resolve to claude (containerExec: true)', () => {
+    const nodes = [promptNode('a'), promptNode('b', 'claude'), bashNode('c')];
+    const bad = collectContainerIncompatibleProviders(nodes, 'claude');
+    expect([...bad]).toEqual([]);
+  });
+
+  it('flags a node whose provider lacks containerExec (codex)', () => {
+    const nodes = [promptNode('a'), promptNode('b', 'codex')];
+    const bad = collectContainerIncompatibleProviders(nodes, 'claude');
+    expect([...bad]).toEqual(['codex']);
+  });
+
+  it('flags the workflow-level provider when a node does not override it', () => {
+    const nodes = [promptNode('a')];
+    const bad = collectContainerIncompatibleProviders(nodes, 'codex');
+    expect([...bad]).toEqual(['codex']);
+  });
+
+  it('ignores bash/script nodes (deterministic, no provider)', () => {
+    const nodes = [bashNode('a'), bashNode('b')];
+    const bad = collectContainerIncompatibleProviders(nodes, 'codex');
+    expect([...bad]).toEqual([]);
+  });
+
+  it('recurses loop_group bodies', () => {
+    const group = {
+      id: 'g',
+      loop_group: { max_iterations: 2, nodes: [promptNode('inner', 'codex')] },
+    } as unknown as DagNode;
+    const bad = collectContainerIncompatibleProviders([group], 'claude');
+    expect([...bad]).toEqual(['codex']);
   });
 });

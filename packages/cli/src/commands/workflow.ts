@@ -21,7 +21,11 @@ import {
   type RawTiersConfig,
 } from '@archon/workflows/model-validation';
 import { configureIsolation, getIsolationProvider, resolveFolderBackend } from '@archon/isolation';
-import type { ExecutionContext } from '@archon/isolation';
+import type {
+  ExecutionContext,
+  IIsolationBackend,
+  ContainerBackendConfig,
+} from '@archon/isolation';
 import {
   createLogger,
   getArchonHome,
@@ -98,6 +102,13 @@ export interface WorkflowRunOptions {
    * project or a git repository.
    */
   folder?: boolean;
+  /**
+   * Run a FOLDER project inside the container isolation backend instead of
+   * in-place. Flag beats workflow `container.enabled`, which beats config
+   * `container.enabled` (default off). A repo-kind project + `--container` is a
+   * hard error (container isolation is folder-only in v1).
+   */
+  container?: boolean;
   resume?: boolean;
   codebaseId?: string; // Skips path-based codebase lookup when resume/approve/reject already resolved it
   /**
@@ -123,6 +134,32 @@ export interface WorkflowRunOptions {
    * `--json` alone still suppresses CLI logs but does not change the output).
    */
   json?: boolean;
+}
+
+/**
+ * Default runner image when `.archon/config.yaml > container.image` is unset.
+ * The build script (`bun run build:runner-image`) tags both
+ * `archon-runner:<version>` and `archon-runner:latest`; defaulting to `latest`
+ * always matches the most recently built image without coupling to the
+ * dev-vs-binary version string. Operators pin `container.image` for reproducibility.
+ */
+const DEFAULT_RUNNER_IMAGE = 'archon-runner:latest';
+
+/**
+ * Resolve the container backend config from the merged `container` config,
+ * applying Phase B defaults (bridge network, 4 GiB memory, 512 pids).
+ */
+function resolveContainerBackendConfig(
+  cfg:
+    | { image?: string; network?: 'bridge' | 'none'; memoryMb?: number; pidsLimit?: number }
+    | undefined
+): ContainerBackendConfig {
+  return {
+    image: cfg?.image?.trim() || DEFAULT_RUNNER_IMAGE,
+    network: cfg?.network ?? 'bridge',
+    memoryMb: cfg?.memoryMb ?? 4096,
+    pidsLimit: cfg?.pidsLimit ?? 512,
+  };
 }
 
 /**
@@ -534,6 +571,11 @@ function renderWorkflowEvent(event: WorkflowEmitterEvent, verbose: boolean): voi
     case 'approval_pending':
       process.stderr.write(`[${event.nodeId}] Waiting for approval: ${event.message}\n`);
       break;
+    case 'container_lifecycle': {
+      const idPart = event.containerId ? ` ${event.containerId.slice(0, 12)}` : '';
+      process.stderr.write(`[container] ${event.phase}${idPart}\n`);
+      break;
+    }
     case 'tool_started':
       if (verbose) {
         process.stderr.write(`[${event.stepName}] tool: ${event.toolName} (started)\n`);
@@ -977,9 +1019,15 @@ export async function workflowRunCommand(
   let workingCwd = cwd;
   let isolationEnvId: string | undefined;
   // Execution context for the run. Repo/worktree and folder-in-place both run on
-  // the host; the folder-backend seam sets this and is where Phase B's `--container`
-  // will flip it to a container context.
+  // the host; the folder-backend seam sets this and is where `--container` flips
+  // it to a container context.
   let execContext: ExecutionContext = { kind: 'host' };
+  // Container backend handle for a folder-project container run — held so the CLI
+  // tears it down after a TERMINAL run. Phase B has no write-back gate, so overlay
+  // changes are discarded on destroy; the approval-gated apply/discard + suspend-
+  // on-pause land in Phase C.
+  let containerBackend: IIsolationBackend | undefined;
+  let containerEnvId: string | undefined;
 
   // Handle --resume: locate the prior failed run, reuse its worktree, and hand
   // the resumed-run handle to executeWorkflow below via opts. The executor no
@@ -1048,6 +1096,17 @@ export async function workflowRunCommand(
 
   const isFolderCodebase = codebase?.kind === 'folder';
 
+  // Container isolation is folder-project-only in v1. A repo-kind project (or a
+  // bare git repo / unregistered non-git cwd) with --container fails fast rather
+  // than silently running a worktree/in-place — no surprising isolation downgrade.
+  if (options.container && !isFolderCodebase) {
+    throw new Error(
+      'Container isolation is folder-project-only for now. Run --container against a ' +
+        'registered folder project (or add --folder to register this directory as one). ' +
+        'Repo projects use worktree isolation.'
+    );
+  }
+
   // The codebase's stored default branch, used as the base-branch fallback when
   // repo config sets no worktree.baseBranch (reuse validation, worktree
   // creation, and $BASE_BRANCH resolution all derive from this one value).
@@ -1061,24 +1120,54 @@ export async function workflowRunCommand(
 
   if (isFolderCodebase && codebase) {
     // Folder projects run through the folder-backend seam — no worktree isolation.
-    // The in-place backend (Phase A default) keeps the agent's cwd at the folder
-    // root, so it sees every child folder/repo, and per-service git (branch/commit/PR)
-    // is the agent's job via bash/gh. Stated explicitly at run start (fail-fast-honest,
-    // not a silent skip). Phase B adds `--container` here to select the container
-    // backend instead of in-place.
-    console.log('Folder project — running in place (no worktree isolation).');
-    getLog().info({ cwd: workingCwd }, 'workflow.running_without_isolation');
+    // The in-place backend (default) keeps the agent's cwd at the folder root, so
+    // it sees every child folder/repo, and per-service git (branch/commit/PR) is
+    // the agent's job via bash/gh. The container backend (--container / config)
+    // instead runs everything inside an overlay-isolated container.
     const folderCodebase = {
       id: codebase.id,
       defaultCwd: codebase.default_cwd,
       name: codebase.name,
       kind: 'folder' as const,
     };
-    const backend = resolveFolderBackend(folderCodebase, { container: false });
-    const prepared = await backend.prepare({ codebase: folderCodebase });
-    // In-place prepare returns the folder root + host context — workingCwd is
-    // already that path (same-absolute-path invariant), so this is byte-identical.
-    execContext = prepared.execContext;
+
+    // Selection precedence: --container flag > workflow container.enabled >
+    // config container.enabled (default off).
+    const folderConfig = await loadConfig(codebase.default_cwd).catch(() => undefined);
+    const wantsContainer =
+      options.container ?? workflow.container?.enabled ?? folderConfig?.container?.enabled ?? false;
+
+    if (wantsContainer) {
+      const containerConfig = resolveContainerBackendConfig(folderConfig?.container);
+      const backend = resolveFolderBackend(folderCodebase, {
+        container: true,
+        store: isolationDb.createIsolationStore(),
+        containerConfig,
+      });
+      console.log(`Folder project — running in container (image ${containerConfig.image}).`);
+      getLog().info(
+        { cwd: codebase.default_cwd, image: containerConfig.image },
+        'workflow.running_in_container'
+      );
+      const prepared = await backend.prepare({ codebase: folderCodebase });
+      // The container mounts the overlay at the SAME absolute path (same-absolute-
+      // path invariant), so prepared.cwd is the folder root. Consume it explicitly
+      // rather than assuming workingCwd — the container backend returns a
+      // container-side cwd, unlike in-place.
+      workingCwd = prepared.cwd;
+      execContext = prepared.execContext;
+      containerBackend = backend;
+      containerEnvId = prepared.envId;
+      isolationEnvId = prepared.envId;
+    } else {
+      // In-place (default) — byte-identical to pre-container behavior: keep
+      // workingCwd, only annotate the host execContext.
+      console.log('Folder project — running in place (no worktree isolation).');
+      getLog().info({ cwd: workingCwd }, 'workflow.running_without_isolation');
+      const backend = resolveFolderBackend(folderCodebase, { container: false });
+      const prepared = await backend.prepare({ codebase: folderCodebase });
+      execContext = prepared.execContext;
+    }
   } else if (wantsIsolation && codebase) {
     // Auto-generate branch identifier from workflow name + timestamp when --branch not provided
     const branchIdentifier = options.branchName ?? `${workflowName}-${Date.now()}`;
@@ -1392,6 +1481,57 @@ export async function workflowRunCommand(
     );
   } finally {
     unsubscribe?.();
+  }
+
+  // Container teardown (Phase B): destroy the container + overlay after a
+  // TERMINAL run (completed or failed). A PAUSED run keeps its container so a
+  // future resume can reattach (No-Autonomous-Lifecycle-Mutation) — container
+  // resume + the approval-gated write-back of the overlay diff land in Phase C,
+  // so for now a container run's changes are NOT applied to the live root.
+  if (containerBackend && containerEnvId) {
+    const isPaused = result.success && 'paused' in result && result.paused;
+    if (isPaused) {
+      console.log(
+        '\nRun paused — container left running for resume (container resume lands in Phase C).'
+      );
+    } else {
+      try {
+        await containerBackend.destroy(containerEnvId);
+        // Persist a container_destroyed event (console + `workflow get --verbose`)
+        // and emit for any live subscriber. The emitter fire is after unsubscribe,
+        // so the DB row is the durable channel for CLI runs.
+        const runId = result.workflowRunId;
+        if (runId) {
+          getWorkflowEventEmitter().emit({
+            type: 'container_lifecycle',
+            runId,
+            phase: 'destroyed',
+          });
+          await deps.store
+            .createWorkflowEvent({
+              workflow_run_id: runId,
+              event_type: 'container_destroyed',
+              step_name: 'container',
+              data: {},
+            })
+            .catch((eventErr: Error) => {
+              getLog().warn(
+                { err: eventErr, runId },
+                'workflow.container_destroyed_event_persist_failed'
+              );
+            });
+        }
+        console.log(
+          'Container and overlay volume removed. (Phase B: overlay changes were NOT applied ' +
+            'to the live root — approval-gated write-back lands in Phase C.)'
+        );
+      } catch (destroyErr) {
+        getLog().warn(
+          { err: destroyErr as Error, envId: containerEnvId },
+          'workflow.container_destroy_failed'
+        );
+      }
+    }
   }
 
   // Check result and exit appropriately

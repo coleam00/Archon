@@ -186,6 +186,19 @@ interface HookActivityEvent {
   exitCode?: number;
 }
 
+/**
+ * Container isolation backend lifecycle (folder-project container runs). Phase B
+ * emits `created` (at run start) and `destroyed` (at teardown); `stopped`/
+ * `resumed` are reserved for Phase C's suspend/resume.
+ */
+export interface ContainerLifecycleEvent {
+  type: 'container_lifecycle';
+  runId: string;
+  phase: 'creating' | 'created' | 'stopped' | 'resumed' | 'destroyed';
+  containerId?: string;
+  image?: string;
+}
+
 export type WorkflowEmitterEvent =
   | WorkflowStartedEvent
   | WorkflowCompletedEvent
@@ -203,7 +216,8 @@ export type WorkflowEmitterEvent =
   | ApprovalPendingEvent
   | WorkflowCancelledEvent
   | TaskActivityEvent
-  | HookActivityEvent;
+  | HookActivityEvent
+  | ContainerLifecycleEvent;
 
 // ---------------------------------------------------------------------------
 // Emitter class
