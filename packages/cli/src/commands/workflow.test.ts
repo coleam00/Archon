@@ -3466,6 +3466,62 @@ describe('workflowResumeCommand', () => {
     // No codebase → falls back to working_path (preserves existing behavior)
     expect(discoverSpy).toHaveBeenCalledWith('/tmp/old-worktree', expect.any(Function));
   });
+
+  it('resolves the covering codebase by path prefix instead of re-registering the worktree working_path (#2127)', async () => {
+    // Regression for #2127: resuming from a worktree working_path whose run has
+    // no codebase_id must resolve the covering registered codebase via prefix
+    // lookup (like `workflow run` does) — NOT fall through to auto-registration,
+    // which trips the source-symlink guard for an already-covered path.
+    const workflowDb = await import('@archon/core/db/workflows');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
+    const { registerRepository } = await import('@archon/core');
+
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-2127',
+      workflow_name: 'implement',
+      status: 'failed',
+      user_message: 'go',
+      working_path: '/registered/root/worktrees/feat',
+      codebase_id: null,
+    });
+
+    (
+      workflowDiscovery.discoverWorkflowsWithConfig as ReturnType<typeof mock>
+    ).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'implement' })],
+      errors: [],
+    });
+
+    // Exact default_cwd match misses (worktree path != registered root); the
+    // path-prefix lookup resolves the covering repo codebase.
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+    (codebaseDb.findCodebaseByPathPrefix as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-registered',
+      name: 'coleam00/Archon',
+      default_cwd: '/registered/root',
+      kind: 'repo',
+    });
+
+    // If resolution regressed to auto-registration, this is what would run — and
+    // fail with the source-symlink-mismatch guard the issue reported. Clear the
+    // module-level mock's history first so the not-called assertion is scoped to
+    // this test (other tests in the file exercise auto-registration).
+    (registerRepository as ReturnType<typeof mock>).mockClear();
+    (registerRepository as ReturnType<typeof mock>).mockRejectedValueOnce(
+      new Error('Source symlink at ~/.archon/workspaces/coleam00/Archon/source already points to')
+    );
+
+    // With the codebase resolved, resume proceeds past the registration step and
+    // fails later on the absent resumable run (default findResumableRun → null).
+    // The point is it does NOT surface the registration-failure error.
+    await expect(workflowResumeCommand('run-2127')).rejects.toThrow('No resumable run found');
+
+    expect(codebaseDb.findCodebaseByPathPrefix).toHaveBeenCalledWith(
+      '/registered/root/worktrees/feat'
+    );
+    expect(registerRepository).not.toHaveBeenCalled();
+  });
 });
 
 describe('workflowApproveCommand', () => {
