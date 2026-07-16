@@ -204,6 +204,27 @@ describe('IsolationResolver', () => {
     }
   });
 
+  test('folder project routes through the in-place backend — result byte-identical to the pre-seam early-return', async () => {
+    const resolver = createResolver();
+
+    const result = await resolver.resolve({
+      existingEnvId: null,
+      codebase: {
+        id: 'cb-folder',
+        defaultCwd: '/srv/ops-client',
+        name: 'ops-client',
+        kind: 'folder',
+      },
+      platformType: 'web',
+    });
+
+    // The seam (resolveFolderBackend → InPlaceBackend.prepare) must reproduce
+    // EXACTLY the { status: 'none', cwd: <folder root> } shape the resolver
+    // returned before the backend seam existed. Full-object equality guards the
+    // zero-behavior-change contract against future drift.
+    expect(result).toEqual({ status: 'none', cwd: '/srv/ops-client' });
+  });
+
   test('repo kind (explicit) — proceeds to normal worktree resolution', async () => {
     const env = makeEnvRow();
     const resolver = createResolver({

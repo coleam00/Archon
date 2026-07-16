@@ -309,6 +309,26 @@ export interface SystemPromptPreset {
 export type SystemPromptInput = string | string[] | SystemPromptPreset;
 
 /**
+ * Where a provider turn (or a deterministic bash/script subprocess) runs.
+ *  - `host`      — directly on the Archon host process, inheriting its environment.
+ *    This is today's behavior and the default everywhere.
+ *  - `container` — inside a prepared isolation container (the folder-project
+ *    container backend). The provider spawns its CLI via `docker exec` and
+ *    receives only the Archon-managed env bag; `containerId` identifies the
+ *    running container and `execUser` optionally pins the in-container uid/user.
+ *
+ * Plain data with zero SDK / `@archon/*` dependencies, so this contract layer
+ * (which forbids cross-package imports) can own it while `@archon/isolation`
+ * (which produces it) and `@archon/workflows` (which threads it) both import it.
+ * Consumed by providers only after the engine's per-node capability fail-fast
+ * (Phase B) — a `container` value reaching a provider that can't honor it is a
+ * bug the executor prevents, not something the provider silently downgrades.
+ */
+export type ExecutionContext =
+  | { kind: 'host' }
+  | { kind: 'container'; containerId: string; execUser?: string };
+
+/**
  * Universal request options accepted by all providers.
  * Provider-specific fields go through `nodeConfig` and `assistantConfig` in SendQueryOptions.
  */
@@ -420,6 +440,15 @@ export interface SendQueryOptions extends AgentRequestOptions {
   nodeConfig?: NodeConfig;
   /** Per-provider defaults from .archon/config.yaml assistants section. */
   assistantConfig?: Record<string, unknown>;
+  /**
+   * Execution target for this turn. Absent / `{ kind: 'host' }` runs the provider
+   * on the Archon host (default). `{ kind: 'container', … }` (Phase B) tells a
+   * capable provider (Claude v1) to spawn its CLI inside the prepared container.
+   * The engine only ever populates this for the container backend and fails fast
+   * before dispatch for providers lacking the capability, so a provider that
+   * doesn't understand it can safely ignore it.
+   */
+  execContext?: ExecutionContext;
 }
 
 /**

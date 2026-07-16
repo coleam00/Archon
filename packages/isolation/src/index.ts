@@ -28,9 +28,18 @@ export type {
   ResolveRequest,
   ResolutionMethod,
   IsolationResolution,
+  ExecutionContext,
+  BackendPrepareRequest,
+  PreparedEnv,
+  IIsolationBackend,
 } from './types';
 
 export { isPRIsolationRequest } from './types';
+
+// --- Backend seam (folder projects) ---
+export { resolveFolderBackend } from './backend-router';
+export type { ResolveFolderBackendOptions } from './backend-router';
+export { InPlaceBackend } from './backends/in-place';
 
 // --- Store ---
 export type { IIsolationStore } from './store';

@@ -21,6 +21,7 @@ import type {
   NodeConfig,
   ProviderCapabilities,
   TokenUsage,
+  ExecutionContext,
 } from '@archon/providers/types';
 import {
   getProviderCapabilities,
@@ -728,7 +729,8 @@ async function resolveNodeProviderAndModel(
   _cwd: string,
   workflowLevelOptions: WorkflowLevelOptions,
   aiProfile?: ResolvedAiProfile,
-  workflowPreset?: ModelAliasPreset
+  workflowPreset?: ModelAliasPreset,
+  execContext: ExecutionContext = { kind: 'host' }
 ): Promise<{
   provider: string;
   model: string | undefined;
@@ -861,6 +863,12 @@ async function resolveNodeProviderAndModel(
   // Build universal base options
   const baseOptions: SendQueryOptions = {};
   if (model) baseOptions.model = model;
+  // Only annotate options with the execution context when running in a container
+  // (Phase B). Host is the default/absent case, so host runs produce byte-identical
+  // options — the provider infers host behavior from the missing field.
+  if (execContext.kind === 'container') {
+    baseOptions.execContext = execContext;
+  }
   if (config.envVars && Object.keys(config.envVars).length > 0) {
     baseOptions.env = config.envVars;
   }
@@ -2091,6 +2099,28 @@ async function executeNodeInternal(
 /** Default timeout for subprocess nodes (bash, script): 2 minutes */
 const SUBPROCESS_DEFAULT_TIMEOUT = 120_000;
 
+/**
+ * Run a deterministic subprocess (bash/script node body, loop `until_bash`) under
+ * the given execution context. This is the seam the container backend (Phase B)
+ * fills in: a `host` context delegates verbatim to `execFileAsync`, so the host
+ * path is byte-identical to a direct call; a `container` context will route the
+ * command through `docker exec` so isolation has no host-escape hole. Until that
+ * lands, a container context fails fast rather than silently running on the host.
+ */
+async function runSubprocess(
+  execContext: ExecutionContext,
+  cmd: string,
+  args: string[],
+  options: { cwd: string; timeout: number; env: NodeJS.ProcessEnv }
+): Promise<{ stdout: string; stderr: string }> {
+  if (execContext.kind === 'container') {
+    throw new Error(
+      'Container subprocess execution is not yet implemented (container isolation Phase B).'
+    );
+  }
+  return execFileAsync(cmd, args, options);
+}
+
 /** Threshold (bytes) above which $nodeId.output values are written to a temp file
  *  instead of inlined as bash -c arguments, to avoid silent data corruption. */
 const NODE_OUTPUT_FILE_THRESHOLD = 32_768;
@@ -2115,7 +2145,8 @@ async function executeBashNode(
   issueContext?: string,
   envVars?: Record<string, string>,
   stepNamePrefix = '',
-  iteration?: number
+  iteration?: number,
+  execContext: ExecutionContext = { kind: 'host' }
 ): Promise<NodeOutput> {
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -2183,7 +2214,7 @@ async function executeBashNode(
 
   const bashPath = resolveBashPath();
   try {
-    const { stdout, stderr } = await execFileAsync(bashPath, ['-c', finalScript], {
+    const { stdout, stderr } = await runSubprocess(execContext, bashPath, ['-c', finalScript], {
       cwd,
       timeout,
       env: subprocessEnv,
@@ -2303,7 +2334,8 @@ async function executeScriptNode(
   issueContext?: string,
   envVars?: Record<string, string>,
   stepNamePrefix = '',
-  iteration?: number
+  iteration?: number,
+  execContext: ExecutionContext = { kind: 'host' }
 ): Promise<NodeOutput> {
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -2460,7 +2492,7 @@ async function executeScriptNode(
       }
     }
 
-    const { stdout, stderr } = await execFileAsync(cmd, args, {
+    const { stdout, stderr } = await runSubprocess(execContext, cmd, args, {
       cwd,
       timeout,
       env: subprocessEnv,
@@ -2685,7 +2717,8 @@ async function executeLoopGroupNode(
   outerNodeOutputs: Map<string, NodeOutput>,
   config: WorkflowConfig,
   issueContext?: string,
-  stepNamePrefix = ''
+  stepNamePrefix = '',
+  execContext: ExecutionContext = { kind: 'host' }
 ): Promise<NodeExecutionResult> {
   const group = node.loop_group;
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -2831,6 +2864,10 @@ async function executeLoopGroupNode(
       docsDir,
       configuredCommandFolder: undefined,
       issueContext,
+      // Body nodes inherit the group's execution context so bash/script/AI inside
+      // a loop_group body exec in the same place (host, or the container in Phase B)
+      // — without this a loop_group body would be a host-escape hole.
+      execContext,
       // persist_session across iterations is out of v1 scope (body sessions reset per
       // iteration, governed by fresh_context). Pass undefined/false so body nodes don't
       // participate in cross-run session persistence inside the loop — and therefore
@@ -2959,7 +2996,7 @@ async function executeLoopGroupNode(
           true, // escapedForBash
           logDir
         );
-        await execFileAsync(groupBashPath, ['-c', substitutedBash], {
+        await runSubprocess(execContext, groupBashPath, ['-c', substitutedBash], {
           cwd,
           timeout: SUBPROCESS_DEFAULT_TIMEOUT,
           env: {
@@ -3272,7 +3309,8 @@ async function executeLoopNode(
   nodeOutputs: Map<string, NodeOutput>,
   config: WorkflowConfig,
   issueContext?: string,
-  stepNamePrefix = ''
+  stepNamePrefix = '',
+  execContext: ExecutionContext = { kind: 'host' }
 ): Promise<NodeExecutionResult> {
   const loop = node.loop;
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -3881,7 +3919,7 @@ async function executeLoopNode(
           true, // escapedForBash
           logDir
         );
-        await execFileAsync(loopBashPath, ['-c', substitutedBash], {
+        await runSubprocess(execContext, loopBashPath, ['-c', substitutedBash], {
           cwd,
           timeout: SUBPROCESS_DEFAULT_TIMEOUT,
           env: {
@@ -4385,6 +4423,9 @@ interface RunLayersContext {
   platform: IWorkflowPlatform;
   conversationId: string;
   cwd: string;
+  /** Where nodes in these layers execute (host, or the container in Phase B). Threaded
+   *  into every AI turn's SendQueryOptions and every deterministic subprocess. */
+  execContext: ExecutionContext;
   workflowRun: WorkflowRun;
   /** Workflow name — used for persist_session keying + telemetry. */
   workflowName: string;
@@ -4455,6 +4496,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
     platform,
     conversationId,
     cwd,
+    execContext,
     workflowRun,
     workflowName,
     config,
@@ -4698,7 +4740,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   issueContext,
                   config.envVars,
                   stepNamePrefix,
-                  iteration
+                  iteration,
+                  execContext
                 )
             );
             return { nodeId: node.id, output };
@@ -4718,7 +4761,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                 cwd,
                 workflowLevelOptions,
                 aiProfile,
-                workflowPreset
+                workflowPreset,
+                execContext
               );
 
             const output = await executeLoopNode(
@@ -4737,7 +4781,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               ctx.nodeOutputs,
               config,
               issueContext,
-              stepNamePrefix
+              stepNamePrefix,
+              execContext
             );
             // Loop nodes run every iteration on the same resolved provider, so the
             // result session (if any) is attributable to loopProvider — tag it so a
@@ -4763,7 +4808,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               cwd,
               workflowLevelOptions,
               aiProfile,
-              workflowPreset
+              workflowPreset,
+              execContext
             );
 
             const output = await executeLoopGroupNode(
@@ -4785,7 +4831,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               ctx.nodeOutputs,
               config,
               issueContext,
-              stepNamePrefix
+              stepNamePrefix,
+              execContext
             );
             return { nodeId: node.id, output };
           }
@@ -4875,7 +4922,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   issueContext,
                   config.envVars,
                   stepNamePrefix,
-                  iteration
+                  iteration,
+                  execContext
                 )
             );
             return { nodeId: node.id, output };
@@ -4898,7 +4946,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
             cwd,
             workflowLevelOptions,
             aiProfile,
-            workflowPreset
+            workflowPreset,
+            execContext
           );
 
           // 5. Determine session — parallel or context:fresh → always fresh
@@ -5327,7 +5376,13 @@ export async function executeDagWorkflow(
    * resolved by executor.ts when the workflow uses session persistence (#1846).
    * Undefined otherwise — no mirroring, no cold-resume pointer.
    */
-  scopeArtifactsDir?: string
+  scopeArtifactsDir?: string,
+  /**
+   * Execution context for this run (host by default; the container backend
+   * threads a container context in Phase B). Threaded onto every node's
+   * `RunLayersContext` so provider turns and subprocesses exec in the right place.
+   */
+  execContext: ExecutionContext = { kind: 'host' }
 ): Promise<string | undefined> {
   const dagStartTime = Date.now();
   const workflowTier = workflow.model && isTierName(workflow.model) ? workflow.model : undefined;
@@ -5405,6 +5460,7 @@ export async function executeDagWorkflow(
     platform,
     conversationId,
     cwd,
+    execContext,
     workflowRun,
     workflowName: workflow.name,
     config,

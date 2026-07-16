@@ -20,7 +20,8 @@ import {
   type TierName,
   type RawTiersConfig,
 } from '@archon/workflows/model-validation';
-import { configureIsolation, getIsolationProvider } from '@archon/isolation';
+import { configureIsolation, getIsolationProvider, resolveFolderBackend } from '@archon/isolation';
+import type { ExecutionContext } from '@archon/isolation';
 import {
   createLogger,
   getArchonHome,
@@ -967,6 +968,10 @@ export async function workflowRunCommand(
   // Handle isolation (worktree creation)
   let workingCwd = cwd;
   let isolationEnvId: string | undefined;
+  // Execution context for the run. Repo/worktree and folder-in-place both run on
+  // the host; the folder-backend seam sets this and is where Phase B's `--container`
+  // will flip it to a container context.
+  let execContext: ExecutionContext = { kind: 'host' };
 
   // Handle --resume: locate the prior failed run, reuse its worktree, and hand
   // the resumed-run handle to executeWorkflow below via opts. The executor no
@@ -1046,13 +1051,26 @@ export async function workflowRunCommand(
   assertNoWorktreeOptionsForFolder(isFolderCodebase, options);
   assertWorkflowNotWorktreePinnedForFolder(isFolderCodebase, pinnedEnabled, workflow.name);
 
-  if (isFolderCodebase) {
-    // Folder projects run in place at their root — no worktree isolation. The
-    // agent's cwd is the folder root, so it sees every child folder/repo, and
-    // per-service git (branch/commit/PR) is the agent's job via bash/gh. Stated
-    // explicitly at run start (fail-fast-honest, not a silent skip).
+  if (isFolderCodebase && codebase) {
+    // Folder projects run through the folder-backend seam — no worktree isolation.
+    // The in-place backend (Phase A default) keeps the agent's cwd at the folder
+    // root, so it sees every child folder/repo, and per-service git (branch/commit/PR)
+    // is the agent's job via bash/gh. Stated explicitly at run start (fail-fast-honest,
+    // not a silent skip). Phase B adds `--container` here to select the container
+    // backend instead of in-place.
     console.log('Folder project — running in place (no worktree isolation).');
     getLog().info({ cwd: workingCwd }, 'workflow.running_without_isolation');
+    const folderCodebase = {
+      id: codebase.id,
+      defaultCwd: codebase.default_cwd,
+      name: codebase.name,
+      kind: 'folder' as const,
+    };
+    const backend = resolveFolderBackend(folderCodebase, { container: false });
+    const prepared = await backend.prepare({ codebase: folderCodebase });
+    // In-place prepare returns the folder root + host context — workingCwd is
+    // already that path (same-absolute-path invariant), so this is byte-identical.
+    execContext = prepared.execContext;
   } else if (wantsIsolation && codebase) {
     // Auto-generate branch identifier from workflow name + timestamp when --branch not provided
     const branchIdentifier = options.branchName ?? `${workflowName}-${Date.now()}`;
@@ -1344,6 +1362,7 @@ export async function workflowRunCommand(
           source: workflowSource,
           userId: cliUserId,
           baseBranch: codebaseDefaultBranch,
+          execContext,
           ...prepared,
         }
       : {
@@ -1351,6 +1370,7 @@ export async function workflowRunCommand(
           source: workflowSource,
           userId: cliUserId,
           baseBranch: codebaseDefaultBranch,
+          execContext,
         };
     result = await executeWorkflow(
       deps,

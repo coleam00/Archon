@@ -30,6 +30,7 @@ import type {
 } from './types';
 import type { IIsolationStore } from './store';
 import { classifyIsolationError, isKnownIsolationError } from './errors';
+import { resolveFolderBackend } from './backend-router';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -101,11 +102,21 @@ export class IsolationResolver {
       return { status: 'none', cwd: '/workspace' };
     }
 
-    // 2b. Folder projects run in place — no worktree. Return the REAL folder
-    // path (not the '/workspace' docker sentinel) so chat/workflows land in the
-    // actual project directory.
+    // 2b. Folder projects run through the folder-backend seam — no worktree.
+    // The in-place backend (Phase A default) returns the REAL folder path (not
+    // the '/workspace' docker sentinel), so chat/workflows land in the actual
+    // project directory — byte-identical to the pre-seam early-return. Container
+    // selection is a Phase B config concern; the chat path stays in-place for now.
     if (request.codebase.kind === 'folder') {
-      return { status: 'none', cwd: request.codebase.defaultCwd };
+      const folderCodebase = {
+        id: request.codebase.id,
+        defaultCwd: request.codebase.defaultCwd,
+        name: request.codebase.name,
+        kind: 'folder' as const,
+      };
+      const backend = resolveFolderBackend(folderCodebase, { container: false });
+      const prepared = await backend.prepare({ codebase: folderCodebase });
+      return { status: 'none', cwd: prepared.cwd };
     }
 
     const codebase = request.codebase;
