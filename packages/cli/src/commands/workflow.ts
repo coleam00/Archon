@@ -878,12 +878,20 @@ export async function workflowRunCommand(
     );
   }
 
-  // Try to find a codebase for this directory
+  // Try to find a codebase for this directory. Mirror the `run` dispatch gate
+  // (cli.ts) and the --detach folder probe above: exact `default_cwd` match
+  // first, then a path-prefix lookup so a subdirectory or worktree UNDER a
+  // registered root resolves to its covering codebase. Without the prefix
+  // fallback, resume/approve re-enter here with cwd = the run's worktree
+  // working_path, miss the exact match, and fall through to auto-registration —
+  // which trips the source-symlink guard for an already-covered path (#2127).
   let codebase = null;
   let codebaseLookupError: Error | null = null;
   let codebaseRegistrationError: Error | null = null;
   try {
-    codebase = await codebaseDb.findCodebaseByDefaultCwd(cwd);
+    codebase =
+      (await codebaseDb.findCodebaseByDefaultCwd(cwd)) ??
+      (await codebaseDb.findCodebaseByPathPrefix(cwd));
   } catch (error) {
     const err = error as Error;
     codebaseLookupError = err;
