@@ -30,20 +30,28 @@ nodes:
   # ═══════════════════════════════════════════════════════════════
 
   - id: extract-pr-number
-    prompt: |
-      Find the GitHub PR number for this request.
-
-      Request: $ARGUMENTS
-
-      Rules:
-      - If the message contains an explicit PR number (e.g., "#1428", "PR 1428", "1428"), extract that number.
-      - If the message contains a PR URL (https://github.com/.../pull/N), extract N.
-      - If you cannot determine a single PR number, output ERROR.
-
-      CRITICAL: Output ONLY the bare number with no quotes, markdown, or explanation.
-      Example correct output: 1428
-    allowed_tools: []
-    idle_timeout: 30000
+    bash: |
+      # Bash-first PR-number extraction — digit-picking needs no AI. $ARGUMENTS
+      # arrives as a subprocess env var (never textually interpolated), so
+      # quoting it is safe against shell injection.
+      #
+      # Anchor on a keyword/URL segment BEFORE grabbing digits: a bare
+      # `grep -oE '[0-9]+' | head -1` picks the first number anywhere in the
+      # string, which is wrong for a PR URL whose org/repo slug contains digits
+      # (github.com/coleam00/Archon/pull/1428 would yield "00"). Prefer the
+      # number following `pull/`, `issues/`, `#`, or `PR`; fall back to a bare
+      # number scan only when no anchored form is present.
+      PR_NUM=$(echo "$ARGUMENTS" | grep -oiE '(pull/|issues/|#|pr[[:space:]#]*)[0-9]+' | grep -oE '[0-9]+' | head -1)
+      if [ -z "$PR_NUM" ]; then
+        PR_NUM=$(echo "$ARGUMENTS" | tr -d "'\"\`\n " | grep -oE '[0-9]+' | head -1)
+      fi
+      if [ -z "$PR_NUM" ]; then
+        echo "ERROR: Could not extract a PR number from arguments: $ARGUMENTS" >&2
+        exit 1
+      fi
+      echo "$PR_NUM" > "$ARTIFACTS_DIR/.pr-number"
+      echo "$PR_NUM"
+    timeout: 10000
 
   # ═══════════════════════════════════════════════════════════════
   # PHASE 2: GATHER PR DATA (parallel)
@@ -51,12 +59,8 @@ nodes:
 
   - id: fetch-pr
     bash: |
-      PR_NUM=$(echo "$extract-pr-number.output" | tr -d "'\"\`\n " | grep -oE '[0-9]+' | head -1)
-      if [ -z "$PR_NUM" ]; then
-        echo "Failed to extract PR number from: $extract-pr-number.output" >&2
-        exit 1
-      fi
-      echo "$PR_NUM" > "$ARTIFACTS_DIR/.pr-number"
+      # extract-pr-number already validated + wrote the number to .pr-number.
+      PR_NUM=$(cat "$ARTIFACTS_DIR/.pr-number")
       gh pr view "$PR_NUM" --json number,title,body,labels,comments,reviews,state,mergeable,mergeStateStatus,additions,deletions,changedFiles,files,author,createdAt,updatedAt,baseRefName,headRefName,reviewDecision,reviewRequests,isDraft
     depends_on: [extract-pr-number]
     timeout: 30000
