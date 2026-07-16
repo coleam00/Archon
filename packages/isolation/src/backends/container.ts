@@ -421,9 +421,12 @@ export class ContainerBackend implements IIsolationBackend {
         await this.docker(['exec', containerId, 'test', '-f', READY_SENTINEL], { timeout: 5_000 });
         return;
       } catch {
-        // Not ready yet — but if the container has EXITED, the mount failed;
-        // stop polling immediately instead of burning the whole timeout.
-        if (!(await this.isRunning(containerId))) break;
+        // Not ready yet. ONLY fast-fail when the container has DEFINITELY exited
+        // (`Running=false`) — a transient inspect error/timeout must NOT be read
+        // as "stopped", or an infra blip would silently trigger the native +
+        // CAP_SYS_ADMIN fallback (privilege broadening). On 'unknown' keep polling
+        // until the deadline (a real exit still surfaces via the timeout).
+        if ((await this.containerState(containerId)) === 'stopped') break;
         await new Promise(resolve => setTimeout(resolve, READY_POLL_INTERVAL_MS));
       }
     }
@@ -439,15 +442,23 @@ export class ContainerBackend implements IIsolationBackend {
     );
   }
 
-  /** True if the container is still running. Any inspect failure → treated as not running. */
-  private async isRunning(containerId: string): Promise<boolean> {
+  /**
+   * Container running state as three distinct outcomes. Crucially, an inspect
+   * ERROR (daemon timeout, transient failure) is `unknown`, NOT `stopped` — the
+   * caller must not treat "couldn't tell" as "exited" (see waitForReady: only an
+   * explicit `stopped` may fast-fail into the privileged native fallback).
+   */
+  private async containerState(containerId: string): Promise<'running' | 'stopped' | 'unknown'> {
     try {
       const { stdout } = await this.docker(['inspect', '-f', '{{.State.Running}}', containerId], {
         timeout: 5_000,
       });
-      return stdout.trim() === 'true';
+      const value = stdout.trim();
+      if (value === 'true') return 'running';
+      if (value === 'false') return 'stopped';
+      return 'unknown';
     } catch {
-      return false;
+      return 'unknown';
     }
   }
 

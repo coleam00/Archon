@@ -222,6 +222,34 @@ describe('ContainerBackend.prepare', () => {
     expect(docker.calls.find(c => c[0] === 'volume' && c[1] === 'rm')).toBeDefined();
   });
 
+  test('a transient inspect ERROR does NOT trigger the native fallback (keeps polling)', async () => {
+    const store = fakeStore();
+    let runCount = 0;
+    let readyChecks = 0;
+    const docker = fakeDocker(args => {
+      if (args[0] === 'run') {
+        runCount += 1;
+        return { stdout: `cid-${runCount}\n`, stderr: '' };
+      }
+      if (args[0] === 'exec' && args.includes('test')) {
+        readyChecks += 1;
+        // Not ready on the first poll, ready on the second.
+        if (readyChecks < 2) throw new Error('sentinel not present yet');
+        return { stdout: '', stderr: '' };
+      }
+      // Inspect ERRORS (transient) → must be treated as 'unknown', NOT 'stopped',
+      // so the poll continues on the SAME (fuse) container instead of falling back.
+      if (args[0] === 'inspect') throw new Error('Cannot connect to the Docker daemon');
+      return { stdout: '', stderr: '' };
+    });
+    const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+    const prepared = await backend.prepare({ codebase: FOLDER });
+    // Only ONE run — fuse succeeded; the inspect blip did NOT escalate to native.
+    expect(runCount).toBe(1);
+    expect(prepared.execContext).toEqual({ kind: 'container', containerId: 'cid-1' });
+    expect((store.created?.metadata as { overlayMode: string }).overlayMode).toBe('fuse');
+  });
+
   test('falls back to native when the fuse run itself fails (host has no /dev/fuse)', async () => {
     const store = fakeStore();
     let runAttempts = 0;

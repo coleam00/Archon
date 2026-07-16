@@ -159,7 +159,7 @@ const DEFAULT_RUNNER_IMAGE = 'archon-runner:latest';
  * particular `network` must be `bridge`/`none`: a stray `host` would otherwise
  * flow straight to `docker run --network host` and drop the network isolation.
  */
-function resolveContainerBackendConfig(
+export function resolveContainerBackendConfig(
   cfg: { image?: string; network?: string; memoryMb?: number; pidsLimit?: number } | undefined
 ): ContainerBackendConfig {
   const network = cfg?.network;
@@ -169,14 +169,16 @@ function resolveContainerBackendConfig(
         "'bridge' or 'none'. Host networking is not allowed for container isolation."
     );
   }
+  // Positive INTEGERS — `docker run --memory`/`--pids-limit` reject fractions,
+  // and Number.isFinite alone would let `512.5` through to a runtime docker error.
   const memoryMb = cfg?.memoryMb;
-  if (memoryMb !== undefined && (!Number.isFinite(memoryMb) || memoryMb <= 0)) {
+  if (memoryMb !== undefined && (!Number.isInteger(memoryMb) || memoryMb <= 0)) {
     throw new Error(
-      `Invalid container.memoryMb '${String(memoryMb)}' — must be a positive number of MiB.`
+      `Invalid container.memoryMb '${String(memoryMb)}' — must be a positive integer (MiB).`
     );
   }
   const pidsLimit = cfg?.pidsLimit;
-  if (pidsLimit !== undefined && (!Number.isFinite(pidsLimit) || pidsLimit <= 0)) {
+  if (pidsLimit !== undefined && (!Number.isInteger(pidsLimit) || pidsLimit <= 0)) {
     throw new Error(
       `Invalid container.pidsLimit '${String(pidsLimit)}' — must be a positive integer.`
     );
@@ -196,7 +198,7 @@ function resolveContainerBackendConfig(
  * container is created, rather than stranding it with no resume path. Recurses
  * loop_group bodies.
  */
-function describeWorkflowPause(wf: WorkflowDefinition): string | undefined {
+export function describeWorkflowPause(wf: WorkflowDefinition): string | undefined {
   if (wf.interactive) return 'interactive: true';
   const scan = (nodes: WorkflowDefinition['nodes']): string | undefined => {
     for (const n of nodes) {
@@ -1191,9 +1193,19 @@ export async function workflowRunCommand(
       options.container ?? workflow.container?.enabled ?? folderConfig?.container?.enabled ?? false;
 
     if (wantsContainer) {
-      // Phase B container isolation has NO suspend/resume (Phase C). A workflow
-      // that can pause would strand a privileged container with no resume path —
-      // reject up front rather than create-then-orphan on pause.
+      // Phase B container isolation has NO suspend/resume (Phase C). --resume
+      // would run downstream nodes against a FRESH overlay (the prior run's
+      // overlay was destroyed on teardown), silently missing the completed
+      // nodes' filesystem changes — reject before creating a container.
+      if (options.resume) {
+        throw new Error(
+          'Container runs cannot be resumed until Phase C: the prior overlay was ' +
+            'discarded on teardown, so a resume would run against a fresh, empty ' +
+            'overlay. Start a fresh --container run instead.'
+        );
+      }
+      // A workflow that can pause would strand a privileged container with no
+      // resume path — reject up front rather than create-then-orphan on pause.
       const pauseReason = describeWorkflowPause(workflow);
       if (pauseReason) {
         throw new Error(
@@ -1455,6 +1467,23 @@ export async function workflowRunCommand(
           'workflow.termination_cleanup_failed'
         );
       })
+      // Destroy the isolation container so Ctrl-C / SIGTERM doesn't orphan a
+      // PRIVILEGED container — `process.exit(1)` below bypasses the teardown
+      // `finally`, so we must tear it down explicitly here first.
+      .then(async () => {
+        if (containerBackend && containerEnvId) {
+          try {
+            await containerBackend.destroy(containerEnvId);
+          } catch (destroyErr) {
+            console.error(
+              `\nWARNING: could not remove the isolation container on ${signal}: ` +
+                `${(destroyErr as Error).message}. Remove it manually: ` +
+                'docker ps -a --filter label=diy.archon.managed=true'
+            );
+          }
+        }
+      })
+      .catch(() => undefined)
       .finally(() => {
         process.exit(1);
       });
@@ -1527,6 +1556,10 @@ export async function workflowRunCommand(
   // assigned so the finally-block teardown can tell "threw before a result" from
   // a real terminal/paused result.
   let result: Awaited<ReturnType<typeof executeWorkflow>> | undefined;
+  // A genuine container-teardown failure captured in the finally, rethrown AFTER
+  // the finally when the run itself succeeded — so a leaked privileged container
+  // fails the CLI instead of reporting success + exit 0.
+  let containerTeardownError: Error | undefined;
   try {
     const opts = prepared
       ? {
@@ -1600,7 +1633,8 @@ export async function workflowRunCommand(
       } catch (destroyErr) {
         // destroy() throws only on a GENUINE docker failure (not idempotent
         // not-found). Surface it LOUD (console.error, not a --quiet log) so the
-        // operator cleans up the privileged container manually.
+        // operator cleans up the privileged container manually, and CAPTURE it so
+        // a successful run does not report success with a leaked container.
         console.error(
           `\nWARNING: failed to remove the isolation container/volume: ${
             (destroyErr as Error).message
@@ -1612,8 +1646,17 @@ export async function workflowRunCommand(
           { err: destroyErr as Error, envId: containerEnvId },
           'workflow.container_destroy_failed'
         );
+        containerTeardownError = destroyErr as Error;
       }
     }
+  }
+
+  // A container teardown failure on an otherwise-SUCCESSFUL run must fail the CLI
+  // (non-zero exit) — a leaked privileged container is not a success. On a failed
+  // run the workflow-failed error below already exits non-zero (the leak was
+  // logged loudly above), so don't mask it.
+  if (containerTeardownError && result?.success) {
+    throw containerTeardownError;
   }
 
   if (!result) {

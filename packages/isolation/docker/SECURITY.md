@@ -8,8 +8,10 @@ does **not** protect against, so operators can decide when it is appropriate.
 > **One-line summary:** the container backend is an **isolation-hardening** feature
 > for a **single-tenant, operator-trusted** deployment — it keeps a _well-behaved_
 > agent's writes off the live root until an (approval-gated, Phase C) write-back.
-> In its default `native` overlay mode it is **NOT** a sandbox against a
-> **malicious or prompt-injected** agent.
+> When it runs in the `native` overlay mode — the **fallback** used on a standard
+> rootful daemon (the `fuse` mode is attempted first and is what runs on
+> rootless/userns daemons) — it is **NOT** a sandbox against a **malicious or
+> prompt-injected** agent.
 
 ## Threat model
 

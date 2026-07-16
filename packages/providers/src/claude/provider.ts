@@ -146,7 +146,7 @@ export function buildRequestSubprocessEnv(
   // empty string = missing credential. Never clobbers an explicit ANTHROPIC_API_KEY.
   if (env.CLAUDE_API_KEY && !env.ANTHROPIC_API_KEY && !env.CLAUDE_CODE_OAUTH_TOKEN) {
     env.ANTHROPIC_API_KEY = env.CLAUDE_API_KEY;
-    getLog().debug('using_mirrored_api_key');
+    getLog().debug('claude.api_key_mirrored');
   }
   return env;
 }
