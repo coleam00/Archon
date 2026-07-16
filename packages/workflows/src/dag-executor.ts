@@ -906,6 +906,9 @@ async function resolveNodeProviderAndModel(
     hooks: node.hooks,
     skills: node.skills,
     agents: node.agents,
+    // Portable per-node Pi extension posture (#2133) — Pi provider reads it as
+    // the highest-precedence override; ignored by other providers.
+    pi: node.pi,
     allowed_tools: node.allowed_tools,
     denied_tools: node.denied_tools,
     effort: node.effort ?? workflowLevelOptions.effort,

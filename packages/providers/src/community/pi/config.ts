@@ -8,19 +8,17 @@ export type { PiProviderDefaults };
  * node that actually plays that role — e.g. only the planner node gets
  * plannotator's `plan` flag and a UI-capable context, while an `implement`
  * node runs headless without the planning-mode edit guard (issue #2073).
+ *
+ * The three fields are exactly the extension-posture subset of
+ * `PiProviderDefaults`, so we derive rather than re-declare them.
+ * `extensionFlags` is shallow-merged over the assistant-level flags (node
+ * wins); set a flag to `false` to negate an inherited `true`. Merge and
+ * precedence semantics live in {@link resolvePiExtensionSettings}.
  */
-export interface PiNodeOverride {
-  /** Override extension discovery for this node. */
-  enableExtensions?: boolean;
-  /** Override the UIContext binding (`ctx.hasUI`) for this node. */
-  interactive?: boolean;
-  /**
-   * Per-node extension flags, shallow-merged over the assistant-level
-   * `extensionFlags` (node wins). Set a flag to `false` to negate a base
-   * `true` (extensions check `getFlag(name) === true`).
-   */
-  extensionFlags?: Record<string, boolean | string>;
-}
+export type PiNodeOverride = Pick<
+  PiProviderDefaults,
+  'enableExtensions' | 'interactive' | 'extensionFlags'
+>;
 
 /** parsePiConfig output: assistant-level defaults plus optional per-node overrides. */
 export interface ParsedPiConfig extends PiProviderDefaults {
@@ -35,23 +33,42 @@ export interface PiExtensionSettings {
 }
 
 /**
- * Resolve the effective extension posture for a node. Node overrides
- * (`assistants.pi.nodes.<nodeId>`) win over assistant-level defaults; calls
- * without a node id (direct chat) always get the assistant-level defaults.
- * Node ids are matched verbatim across all workflows — treat them as role
- * names (`plan`, `implement`) when scoping extension behavior.
+ * Resolve the effective extension posture for a node across three layers, in
+ * ascending precedence:
+ *   1. assistant-level defaults (`assistants.pi.*`)
+ *   2. install-level config override (`assistants.pi.nodes.<nodeId>`, #2124)
+ *   3. portable node-YAML override (the workflow node's `pi:` block, #2133)
+ *
+ * The node-YAML layer wins because it travels with the workflow and is what the
+ * author actually sees; the config map stays as the per-install escape hatch.
+ * Calls without a node id (direct chat) get only the assistant-level defaults
+ * and ignore both override layers — `nodeYaml` is undefined there too.
+ *
+ * Node ids are matched verbatim across all workflows for the config-map layer —
+ * treat them as role names (`plan`, `implement`) when scoping extension behavior.
  */
 export function resolvePiExtensionSettings(
   config: ParsedPiConfig,
-  nodeId: string | undefined
+  nodeId: string | undefined,
+  nodeYaml?: PiNodeOverride
 ): PiExtensionSettings {
-  const override = nodeId !== undefined ? config.nodes?.[nodeId] : undefined;
-  const enableExtensions = override?.enableExtensions ?? config.enableExtensions !== false;
+  const configOverride = nodeId !== undefined ? config.nodes?.[nodeId] : undefined;
+  const enableExtensions =
+    nodeYaml?.enableExtensions ??
+    configOverride?.enableExtensions ??
+    config.enableExtensions !== false;
   // Clamp to false without extensions: nothing consumes hasUI without a runner.
-  const interactive = enableExtensions && (override?.interactive ?? config.interactive !== false);
-  const extensionFlags = override?.extensionFlags
-    ? { ...config.extensionFlags, ...override.extensionFlags }
-    : config.extensionFlags;
+  const interactive =
+    enableExtensions &&
+    (nodeYaml?.interactive ?? configOverride?.interactive ?? config.interactive !== false);
+  // Shallow-merge flags across all three layers, later layers winning per key —
+  // so a node-YAML `plan: false` negates an assistant-level `plan: true`.
+  const merged = {
+    ...config.extensionFlags,
+    ...configOverride?.extensionFlags,
+    ...nodeYaml?.extensionFlags,
+  };
+  const extensionFlags = Object.keys(merged).length > 0 ? merged : undefined;
   return { enableExtensions, interactive, extensionFlags };
 }
 

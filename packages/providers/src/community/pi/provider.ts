@@ -464,9 +464,14 @@ export class PiProvider implements IAgentProvider {
     // e.g. only the planner node gets plannotator's `plan` flag and a
     // UI-capable context (hasUI), while an implement node runs without the
     // planning-mode edit guard. Direct chat (no nodeId) uses the defaults.
+    //
+    // The portable node-YAML `pi:` block (#2133) rides on `nodeConfig.pi` and is
+    // the highest-precedence layer — it travels with the workflow, so a node
+    // rename can't orphan it the way the node-id-keyed config map can.
     const { enableExtensions, interactive, extensionFlags } = resolvePiExtensionSettings(
       piConfig,
-      nodeConfig?.nodeId
+      nodeConfig?.nodeId,
+      nodeConfig?.pi
     );
 
     // Build the ResourceLoader. When extensions are ON we MUST reuse a

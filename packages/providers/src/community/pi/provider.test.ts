@@ -1871,6 +1871,77 @@ describe('PiProvider', () => {
     expect(mockSetFlagValue).not.toHaveBeenCalled();
   });
 
+  // ─── Portable node-YAML posture (nodeConfig.pi, #2133) ─────────────────
+
+  test('node-YAML pi overrides the config nodes.<id> map (drops UI, negates plan)', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        assistantConfig: {
+          enableExtensions: true,
+          interactive: true,
+          extensionFlags: { plan: true },
+          // config map says implement is UI-on with plan: true …
+          nodes: { implement: { interactive: true, extensionFlags: { plan: true } } },
+        },
+        // … but the portable node-YAML block wins and turns it headless.
+        nodeConfig: {
+          nodeId: 'implement',
+          pi: { interactive: false, extensionFlags: { plan: false } },
+        },
+      })
+    );
+
+    expect(mockBindExtensions).toHaveBeenCalledTimes(1);
+    const [bindings] = mockBindExtensions.mock.calls[0] as [{ uiContext?: unknown }];
+    expect(bindings.uiContext).toBeUndefined();
+    expect(mockSetFlagValue).toHaveBeenCalledTimes(1);
+    expect(mockSetFlagValue).toHaveBeenCalledWith('plan', false);
+  });
+
+  test('node-YAML pi grants posture with no config nodes map present', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        assistantConfig: { enableExtensions: true, interactive: false },
+        // No nodes map; the node's own pi: block re-enables the UI bridge and grants plan.
+        nodeConfig: { nodeId: 'plan', pi: { interactive: true, extensionFlags: { plan: true } } },
+      })
+    );
+
+    expect(mockBindExtensions).toHaveBeenCalledTimes(1);
+    const [bindings] = mockBindExtensions.mock.calls[0] as [{ uiContext?: unknown }];
+    expect(bindings.uiContext).toBeDefined();
+    expect(mockSetFlagValue).toHaveBeenCalledTimes(1);
+    expect(mockSetFlagValue).toHaveBeenCalledWith('plan', true);
+  });
+
+  test('node-YAML pi enableExtensions: false skips binding even when the config map re-enables', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        assistantConfig: {
+          enableExtensions: true,
+          interactive: true,
+          nodes: { implement: { enableExtensions: true, interactive: true } },
+        },
+        nodeConfig: { nodeId: 'implement', pi: { enableExtensions: false } },
+      })
+    );
+
+    expect(mockBindExtensions).not.toHaveBeenCalled();
+    expect(mockSetFlagValue).not.toHaveBeenCalled();
+  });
+
   test('assistantConfig.env applies to process.env when not already set', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     delete process.env.PI_TEST_ONE;
