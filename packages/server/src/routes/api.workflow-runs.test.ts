@@ -175,6 +175,17 @@ mock.module('@archon/core/db/isolation-environments', () => ({
 
 const mockDeleteWorkflowRun = mock(async (_id: string) => {});
 const mockUpdateWorkflowRun = mock(async (_id: string, _update: unknown) => {});
+// CAS gate resolvers (#2113) — the real approve/reject operations stamp the
+// resolution here. resolveAndCancelApprovalGate is the atomic resolve+cancel for
+// terminal reject outcomes. Default to "won the race".
+// The 3rd arg (approve) / 2nd arg (cancel) is the audit-event batch written in the
+// same transaction as the resolution (#2146).
+const mockResolveApprovalGate = mock(async (_id: string, _md: unknown, _events?: unknown) => ({
+  resolved: true,
+}));
+const mockResolveAndCancelApprovalGate = mock(async (_id: string, _events?: unknown) => ({
+  resolved: true,
+}));
 
 mock.module('@archon/core/db/workflows', () => ({
   listWorkflowRuns: mockListWorkflowRuns,
@@ -183,6 +194,8 @@ mock.module('@archon/core/db/workflows', () => ({
   cancelWorkflowRun: mockCancelWorkflowRun,
   deleteWorkflowRun: mockDeleteWorkflowRun,
   updateWorkflowRun: mockUpdateWorkflowRun,
+  resolveApprovalGate: mockResolveApprovalGate,
+  resolveAndCancelApprovalGate: mockResolveAndCancelApprovalGate,
   getWorkflowRunByWorkerPlatformId: mockGetWorkflowRunByWorkerPlatformId,
 }));
 
@@ -1344,6 +1357,8 @@ describe('POST /api/workflows/runs/:runId/approve', () => {
   beforeEach(() => {
     mockGetWorkflowRun.mockReset();
     mockUpdateWorkflowRun.mockReset();
+    mockResolveApprovalGate.mockClear();
+    mockResolveAndCancelApprovalGate.mockClear();
     mockCreateWorkflowEvent.mockReset();
   });
 
@@ -1416,10 +1431,12 @@ describe('POST /api/workflows/runs/:runId/approve', () => {
       headers: { 'Content-Type': 'application/json' },
     });
     expect(response.status).toBe(200);
-    const nodeCompletedCall = mockCreateWorkflowEvent.mock.calls.find(
-      (c: unknown[]) => (c[0] as Record<string, unknown>).event_type === 'node_completed'
-    );
-    expect(nodeCompletedCall?.[0]).toMatchObject({
+    // Audit events ride the CAS transaction now (#2146), not a separate write.
+    const casEvents = (mockResolveApprovalGate.mock.calls[0] as unknown[])[2] as Array<
+      Record<string, unknown>
+    >;
+    const nodeCompleted = casEvents.find(e => e.event_type === 'node_completed');
+    expect(nodeCompleted).toMatchObject({
       data: { node_output: 'Looks great, proceed', approval_decision: 'approved' },
     });
   });
@@ -1433,10 +1450,12 @@ describe('POST /api/workflows/runs/:runId/approve', () => {
       headers: { 'Content-Type': 'application/json' },
     });
     expect(response.status).toBe(200);
-    const nodeCompletedCall = mockCreateWorkflowEvent.mock.calls.find(
-      (c: unknown[]) => (c[0] as Record<string, unknown>).event_type === 'node_completed'
-    );
-    expect(nodeCompletedCall?.[0]).toMatchObject({
+    // Audit events ride the CAS transaction now (#2146), not a separate write.
+    const casEvents = (mockResolveApprovalGate.mock.calls[0] as unknown[])[2] as Array<
+      Record<string, unknown>
+    >;
+    const nodeCompleted = casEvents.find(e => e.event_type === 'node_completed');
+    expect(nodeCompleted).toMatchObject({
       data: { node_output: '', approval_decision: 'approved' },
     });
     expect(mockCaptureApprovalResolved).toHaveBeenCalledWith({ resolution: 'approved' });
@@ -1467,12 +1486,10 @@ describe('POST /api/workflows/runs/:runId/approve', () => {
       headers: { 'Content-Type': 'application/json' },
     });
     expect(response.status).toBe(200);
-    const updateCall = mockUpdateWorkflowRun.mock.calls[0] as unknown[];
-    expect(updateCall[1]).toMatchObject({
-      metadata: {
-        loop_feedback_given: false,
-        loop_user_input: 'Approved',
-      },
+    const casCall = mockResolveApprovalGate.mock.calls[0] as unknown[];
+    expect(casCall[1]).toMatchObject({
+      loop_feedback_given: false,
+      loop_user_input: 'Approved',
     });
   });
 
@@ -1500,7 +1517,7 @@ describe('POST /api/workflows/runs/:runId/approve', () => {
     // A malformed body must never be coerced into a bare approve — that would
     // FINALIZE a signal-bearing gate while silently discarding the feedback.
     expect(response.status).toBe(400);
-    expect(mockUpdateWorkflowRun).not.toHaveBeenCalled();
+    expect(mockResolveApprovalGate).not.toHaveBeenCalled();
   });
 
   test('passes a provided comment through as feedback on an interactive_loop gate (#2074)', async () => {
@@ -1523,12 +1540,10 @@ describe('POST /api/workflows/runs/:runId/approve', () => {
       headers: { 'Content-Type': 'application/json' },
     });
     expect(response.status).toBe(200);
-    const updateCall = mockUpdateWorkflowRun.mock.calls[0] as unknown[];
-    expect(updateCall[1]).toMatchObject({
-      metadata: {
-        loop_feedback_given: true,
-        loop_user_input: 'actually re-check X',
-      },
+    const casCall = mockResolveApprovalGate.mock.calls[0] as unknown[];
+    expect(casCall[1]).toMatchObject({
+      loop_feedback_given: true,
+      loop_user_input: 'actually re-check X',
     });
   });
 });
@@ -1541,6 +1556,8 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
   beforeEach(() => {
     mockGetWorkflowRun.mockReset();
     mockUpdateWorkflowRun.mockReset();
+    mockResolveApprovalGate.mockClear();
+    mockResolveAndCancelApprovalGate.mockClear();
     mockCancelWorkflowRun.mockReset();
     mockCreateWorkflowEvent.mockReset();
   });
@@ -1578,7 +1595,16 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
     expect(response.status).toBe(200);
     const body = (await response.json()) as { success: boolean; message: string };
     expect(body.success).toBe(true);
-    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-paused-1');
+    // Terminal reject resolves + cancels atomically (#2113); the audit event rides
+    // the same transaction (#2146).
+    expect(mockResolveAndCancelApprovalGate).toHaveBeenCalledWith('run-paused-1', [
+      {
+        event_type: 'approval_received',
+        step_name: 'review-gate',
+        data: { decision: 'rejected', reason: 'needs work' },
+      },
+    ]);
+    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
     expect(mockCaptureApprovalResolved).toHaveBeenCalledWith({ resolution: 'rejected' });
   });
 
@@ -1607,8 +1633,9 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
     const body = (await response.json()) as { success: boolean; message: string };
     expect(body.success).toBe(true);
     expect(body.message).toContain('On-reject prompt');
-    expect(mockUpdateWorkflowRun).toHaveBeenCalledWith('run-on-reject', {
-      metadata: {
+    expect(mockResolveApprovalGate).toHaveBeenCalledWith(
+      'run-on-reject',
+      {
         approval: {
           type: 'approval',
           nodeId: 'review-gate',
@@ -1620,7 +1647,14 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
         rejection_reason: 'needs more tests',
         rejection_count: 1,
       },
-    });
+      [
+        {
+          event_type: 'approval_received',
+          step_name: 'review-gate',
+          data: { decision: 'rejected', reason: 'needs more tests' },
+        },
+      ]
+    );
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
   });
 
@@ -1649,7 +1683,16 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
     const body = (await response.json()) as { success: boolean; message: string };
     expect(body.success).toBe(true);
     expect(body.message).toContain('max attempts reached');
-    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-max-attempts');
+    // Terminal reject resolves + cancels atomically (#2113); the audit event rides
+    // the same transaction (#2146).
+    expect(mockResolveAndCancelApprovalGate).toHaveBeenCalledWith('run-max-attempts', [
+      {
+        event_type: 'approval_received',
+        step_name: 'review-gate',
+        data: { decision: 'rejected', reason: 'still bad' },
+      },
+    ]);
+    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
     expect(mockUpdateWorkflowRun).not.toHaveBeenCalled();
   });
 });
@@ -1664,6 +1707,8 @@ describe('approve/reject auto-resume', () => {
   beforeEach(() => {
     mockGetWorkflowRun.mockReset();
     mockUpdateWorkflowRun.mockReset();
+    mockResolveApprovalGate.mockClear();
+    mockResolveAndCancelApprovalGate.mockClear();
     mockCreateWorkflowEvent.mockReset();
     mockGetConversationById.mockReset();
     mockHandleMessage.mockReset();
@@ -1868,7 +1913,15 @@ describe('approve/reject auto-resume', () => {
     expect(response.status).toBe(200);
     // Cancellation path doesn't auto-resume — nothing to resume to.
     expect(mockHandleMessage).not.toHaveBeenCalled();
-    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-paused-1');
+    // Terminal reject resolves + cancels atomically (#2113); the audit event rides
+    // the same transaction (#2146).
+    expect(mockResolveAndCancelApprovalGate).toHaveBeenCalledWith('run-paused-1', [
+      {
+        event_type: 'approval_received',
+        step_name: 'review-gate',
+        data: { decision: 'rejected', reason: 'no' },
+      },
+    ]);
   });
 });
 

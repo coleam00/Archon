@@ -18,6 +18,15 @@ export class SqliteAdapter implements IDatabase {
   private db: Database;
   readonly dialect = 'sqlite' as const;
   readonly sql: SqlDialect = sqliteDialect;
+  /**
+   * Tail of the transaction queue. bun:sqlite is a single connection, so two
+   * overlapping `withTransaction` blocks would interleave their BEGINs and throw
+   * "cannot start a transaction within a transaction." Chaining each transaction
+   * onto this tail serializes them: the second waits for the first to COMMIT,
+   * then sees its committed state — exactly what the approval-gate CAS needs so a
+   * concurrent second resolver cleanly loses (rowCount 0) instead of erroring.
+   */
+  private txTail: Promise<unknown> = Promise.resolve();
 
   constructor(dbPath: string) {
     // Ensure directory exists
@@ -97,19 +106,29 @@ export class SqliteAdapter implements IDatabase {
   async withTransaction<T>(
     fn: (query: <U>(sql: string, params?: unknown[]) => Promise<QueryResult<U>>) => Promise<T>
   ): Promise<T> {
-    await this.query('BEGIN');
-    try {
-      const result = await fn(this.query.bind(this));
-      await this.query('COMMIT');
-      return result;
-    } catch (e) {
+    const run = async (): Promise<T> => {
+      await this.query('BEGIN');
       try {
-        await this.query('ROLLBACK');
-      } catch (rollbackError) {
-        getLog().error({ err: rollbackError as Error }, 'db.sqlite_transaction_rollback_failed');
+        const result = await fn(this.query.bind(this));
+        await this.query('COMMIT');
+        return result;
+      } catch (e) {
+        try {
+          await this.query('ROLLBACK');
+        } catch (rollbackError) {
+          getLog().error({ err: rollbackError as Error }, 'db.sqlite_transaction_rollback_failed');
+        }
+        throw e;
       }
-      throw e;
-    }
+    };
+    // Serialize against any in-flight transaction (see `txTail`). The stored tail
+    // is made non-rejecting so one transaction's failure never blocks the next.
+    const result = this.txTail.then(run, run);
+    this.txTail = result.then(
+      () => undefined,
+      () => undefined
+    );
+    return result;
   }
 
   async close(): Promise<void> {

@@ -1,7 +1,8 @@
 /**
  * Database operations for workflow runs
  */
-import { pool, getDialect, getDatabaseType } from './connection';
+import { pool, getDialect, getDatabaseType, getDatabase } from './connection';
+import { insertWorkflowEvent } from './workflow-events';
 import type { IDatabase, SqlDialect } from './adapters/types';
 import type {
   WorkflowRun,
@@ -70,6 +71,133 @@ const ORPHAN_RESUME_STALE_DAYS = 1;
 function resumableStatusClause(dialect: SqlDialect, dayParamIndex: number): string {
   const staleOrphan = `last_activity_at IS NULL OR last_activity_at < ${dialect.nowMinusDays(dayParamIndex)}`;
   return `(status IN ('failed', 'paused') OR (status = 'running' AND (${staleOrphan})))`;
+}
+
+/**
+ * SQL predicate matching a run whose approval gate is still OPEN: the row is
+ * 'paused' AND metadata.approval.resolved is JSON null or absent. Dialect-aware
+ * (Postgres `->>`, SQLite `json_extract`) and kept in ONE place so the two forms
+ * cannot drift — mirrors resumableStatusClause and the local jsonIntExtract
+ * helper. `->>'resolved'` / `json_extract(...)` both return SQL NULL for a JSON
+ * null AND for an absent key, so `IS NULL` matches exactly "not yet resolved".
+ * This is the compare-and-swap guard resolveApprovalGate uses to serialize
+ * concurrent approve/reject.
+ */
+function unresolvedGateClause(): string {
+  const resolvedExpr =
+    getDatabaseType() === 'postgresql'
+      ? "metadata->'approval'->>'resolved'"
+      : "json_extract(metadata, '$.approval.resolved')";
+  return `status = 'paused' AND ${resolvedExpr} IS NULL`;
+}
+
+/**
+ * An audit event written atomically with a gate resolution (#2146). The winning
+ * resolver inserts these in the SAME transaction as the resolution UPDATE, so a
+ * failed event write rolls the resolution back — a resolved gate can never be
+ * left with no audit trail, which the fast-path guard would then wrongly block
+ * from retrying. `workflow_run_id` is supplied by the CAS function.
+ */
+export interface GateResolutionEvent {
+  event_type: string;
+  step_name: string;
+  data: Record<string, unknown>;
+}
+
+/**
+ * Atomically resolve a paused approval gate (compare-and-swap) and record its
+ * audit events in one transaction.
+ *
+ * Merges `metadata` (which carries `approval.resolved = 'approved' | 'rejected'`
+ * plus any gate-specific keys) into the row ONLY while the gate is still open
+ * (unresolvedGateClause). When the CAS matches, the same transaction inserts
+ * `events`; when it loses (rowCount 0) nothing is written. Returns
+ * `{ resolved }`: `true` = this caller won the race and its events are committed;
+ * `false` = a concurrent approve/reject already resolved the gate.
+ *
+ * This closes the read-then-write TOCTOU window in approveWorkflow /
+ * rejectWorkflow: the atomic conditional UPDATE — not a prior in-memory
+ * isGateResolved read — is the single arbiter of the resolution. The run STAYS
+ * 'paused' (only metadata changes); the resume CAS (resumeWorkflowRun)
+ * independently guards double-resume. Idempotent in content, so a lost race
+ * corrupts nothing — it only prevents the duplicate events/telemetry (#2113).
+ * Wrapping the resolution and its audit rows in one transaction closes the
+ * separate gap where a post-commit event-write failure stranded a resolved gate
+ * with no audit event and no way to retry (#2146).
+ */
+export async function resolveApprovalGate(
+  id: string,
+  metadata: Record<string, unknown>,
+  events: GateResolutionEvent[]
+): Promise<{ resolved: boolean }> {
+  const dialect = getDialect();
+  try {
+    return await getDatabase().withTransaction(async query => {
+      const result = await query(
+        `UPDATE remote_agent_workflow_runs
+         SET metadata = ${dialect.jsonMerge('metadata', 2)}
+         WHERE id = $1 AND ${unresolvedGateClause()}`,
+        [id, JSON.stringify(metadata)]
+      );
+      const resolved = (result.rowCount ?? 0) > 0;
+      if (resolved) {
+        for (const event of events) {
+          await insertWorkflowEvent(query, { workflow_run_id: id, ...event });
+        }
+      }
+      return { resolved };
+    });
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, workflowRunId: id }, 'db.workflow_run_resolve_gate_failed');
+    throw new Error(`Failed to resolve approval gate: ${err.message}`);
+  }
+}
+
+/**
+ * Atomically cancel a paused approval gate (compare-and-swap).
+ *
+ * The reject sibling of resolveApprovalGate for the outcomes that TERMINATE the
+ * run (no on_reject prompt, or the attempt cap reached): it flips the run
+ * paused→'cancelled' in a SINGLE conditional UPDATE, guarded on the SAME
+ * open-gate predicate. Doing it in one statement (instead of stamp-resolution +
+ * separate cancelWorkflowRun) means there is never an intermediate
+ * resolved-but-not-cancelled state that a failed second write could strand — a
+ * reject retry could not self-heal past the fast-path gate guard. No `resolved`
+ * marker is written: that marker only matters for the stay-paused rework path,
+ * and the rejection reason is preserved in the approval_received event. The
+ * status flip and that audit event commit in ONE transaction (#2146), so a
+ * failed event write rolls the cancellation back rather than terminating the run
+ * with no audit trail. Returns `{ resolved }`; `false` means a concurrent
+ * resolver already won (the gate is no longer open), so nothing is written.
+ */
+export async function resolveAndCancelApprovalGate(
+  id: string,
+  events: GateResolutionEvent[]
+): Promise<{ resolved: boolean }> {
+  const dialect = getDialect();
+  try {
+    return await getDatabase().withTransaction(async query => {
+      const result = await query(
+        `UPDATE remote_agent_workflow_runs
+         SET status = 'cancelled',
+             completed_at = ${dialect.now()}
+         WHERE id = $1 AND ${unresolvedGateClause()}`,
+        [id]
+      );
+      const resolved = (result.rowCount ?? 0) > 0;
+      if (resolved) {
+        for (const event of events) {
+          await insertWorkflowEvent(query, { workflow_run_id: id, ...event });
+        }
+      }
+      return { resolved };
+    });
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, workflowRunId: id }, 'db.workflow_run_resolve_cancel_gate_failed');
+    throw new Error(`Failed to resolve and cancel approval gate: ${err.message}`);
+  }
 }
 
 /**

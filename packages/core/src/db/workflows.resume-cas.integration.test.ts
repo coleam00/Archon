@@ -30,6 +30,10 @@ const db = new SqliteAdapter(':memory:');
 
 mock.module('./connection', () => ({
   pool: db,
+  // The gate CAS functions run their UPDATE + audit-event INSERT inside one
+  // withTransaction (#2146) — hand them the real adapter so the transaction is
+  // exercised end-to-end.
+  getDatabase: () => db,
   getDialect: () => sqliteDialect,
   getDatabaseType: () => 'sqlite',
 }));
@@ -40,6 +44,8 @@ const {
   getWorkflowRun,
   findResumableRun,
   findResumableRunByParentConversation,
+  resolveApprovalGate,
+  resolveAndCancelApprovalGate,
   WorkflowNotResumableError,
 } = await import('./workflows');
 const { approveWorkflow, rejectWorkflow } = await import('../operations/workflow-operations');
@@ -246,5 +252,283 @@ describe('gate reject staging — real SQLite end-to-end (#2075)', () => {
     const result = await rejectWorkflow('gate-cancel', 'no');
     expect(result.cancelled).toBe(true);
     expect((await getWorkflowRun('gate-cancel'))?.status).toBe('cancelled');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveApprovalGate — the compare-and-swap that closes the approve/reject
+// read-then-write TOCTOU window (#2113). Exercises the REAL SQLite JSON
+// predicate (unresolvedGateClause: json_extract(...,'$.approval.resolved') IS
+// NULL) end-to-end: it must match an open gate (resolved: null), merge the
+// resolution atomically, and then MISS for any already-resolved or non-paused
+// row so a concurrent second resolver loses cleanly.
+// ---------------------------------------------------------------------------
+
+/** A minimal audit event for the gate CAS calls (content is not asserted here). */
+function approvalEvent(decision: 'approved' | 'rejected'): {
+  event_type: string;
+  step_name: string;
+  data: Record<string, unknown>;
+} {
+  return { event_type: 'approval_received', step_name: 'review', data: { decision } };
+}
+
+/** Count workflow_events rows of a given type for a run (atomicity assertions). */
+async function countEvents(runId: string, eventType: string): Promise<number> {
+  const result = await db.query<{ cnt: number }>(
+    `SELECT COUNT(*) AS cnt FROM remote_agent_workflow_events
+     WHERE workflow_run_id = $1 AND event_type = $2`,
+    [runId, eventType]
+  );
+  return Number(result.rows[0]?.cnt ?? 0);
+}
+
+describe('resolveApprovalGate — CAS at the DB layer (#2113)', () => {
+  test('wins once on an open gate and merges the resolution metadata', async () => {
+    await seedPausedRun(
+      'cas-open',
+      'wf-cas-open',
+      { nodeId: 'review', message: 'Approve?', type: 'approval', resolved: null },
+      { rejection_count: 0 }
+    );
+
+    const outcome = await resolveApprovalGate(
+      'cas-open',
+      {
+        approval: { nodeId: 'review', message: 'Approve?', type: 'approval', resolved: 'approved' },
+        approval_response: 'approved',
+        rejection_reason: '',
+      },
+      [approvalEvent('approved')]
+    );
+    expect(outcome.resolved).toBe(true);
+
+    const staged = await getWorkflowRun('cas-open');
+    // Merged, not replaced: the new keys land and the run stays 'paused'.
+    expect(staged?.status).toBe('paused');
+    expect((staged?.metadata.approval as Record<string, unknown>).resolved).toBe('approved');
+    expect(staged?.metadata.approval_response).toBe('approved');
+    // Pre-existing top-level key survives the json_patch/`||` merge.
+    expect(staged?.metadata.rejection_count).toBe(0);
+    // The winner's audit event committed in the same transaction (#2146).
+    expect(await countEvents('cas-open', 'approval_received')).toBe(1);
+  });
+
+  test('a second CAS on an already-resolved gate loses (no double-resolution)', async () => {
+    // Self-contained: seed an open gate, win it once, then assert the second CAS
+    // loses — resolved is no longer NULL, so the predicate excludes it.
+    await seedPausedRun('cas-resolved', 'wf-cas-resolved', {
+      nodeId: 'review',
+      message: 'Approve?',
+      type: 'approval',
+      resolved: null,
+    });
+    const first = await resolveApprovalGate(
+      'cas-resolved',
+      {
+        approval: { nodeId: 'review', message: 'Approve?', type: 'approval', resolved: 'approved' },
+      },
+      [approvalEvent('approved')]
+    );
+    expect(first.resolved).toBe(true);
+
+    const outcome = await resolveApprovalGate(
+      'cas-resolved',
+      {
+        approval: { nodeId: 'review', message: 'Approve?', type: 'approval', resolved: 'rejected' },
+      },
+      [approvalEvent('rejected')]
+    );
+    expect(outcome.resolved).toBe(false);
+
+    // The losing payload never lands: resolution stays 'approved' and the loser
+    // wrote no audit event.
+    const staged = await getWorkflowRun('cas-resolved');
+    expect((staged?.metadata.approval as Record<string, unknown>).resolved).toBe('approved');
+    expect(await countEvents('cas-resolved', 'approval_received')).toBe(1);
+  });
+
+  test('two concurrent CAS calls on one open gate: exactly one wins', async () => {
+    await seedPausedRun('cas-race', 'wf-cas-race', {
+      nodeId: 'review',
+      message: 'Approve?',
+      type: 'approval',
+      resolved: null,
+    });
+
+    const [a, b] = await Promise.all([
+      resolveApprovalGate(
+        'cas-race',
+        {
+          approval: {
+            nodeId: 'review',
+            message: 'Approve?',
+            type: 'approval',
+            resolved: 'approved',
+          },
+        },
+        [approvalEvent('approved')]
+      ),
+      resolveApprovalGate(
+        'cas-race',
+        {
+          approval: {
+            nodeId: 'review',
+            message: 'Approve?',
+            type: 'approval',
+            resolved: 'rejected',
+          },
+        },
+        [approvalEvent('rejected')]
+      ),
+    ]);
+
+    // Exactly one of the two racers wins the atomic UPDATE.
+    expect([a.resolved, b.resolved].filter(Boolean)).toHaveLength(1);
+    // ...and exactly one audit event landed — the loser wrote nothing.
+    expect(await countEvents('cas-race', 'approval_received')).toBe(1);
+  });
+
+  test('misses a non-paused run even when the gate looks unresolved', async () => {
+    // status='running' with resolved:null — the status arm of the clause excludes it.
+    await db.query(
+      `INSERT INTO remote_agent_workflow_runs
+         (id, workflow_name, conversation_id, user_message, status, metadata, started_at, last_activity_at)
+       VALUES ('cas-running', 'wf-cas-running', 'conv-1', 'msg', 'running', $1,
+               datetime('now'), datetime('now'))`,
+      [JSON.stringify({ approval: { nodeId: 'review', message: 'Approve?', resolved: null } })]
+    );
+
+    const outcome = await resolveApprovalGate(
+      'cas-running',
+      {
+        approval: { nodeId: 'review', message: 'Approve?', resolved: 'approved' },
+      },
+      [approvalEvent('approved')]
+    );
+    expect(outcome.resolved).toBe(false);
+    // Untouched — still running, gate still open.
+    const row = await getWorkflowRun('cas-running');
+    expect(row?.status).toBe('running');
+    expect((row?.metadata.approval as Record<string, unknown>).resolved ?? null).toBeNull();
+  });
+
+  test('rolls back the resolution when the audit event write fails (atomic, #2146)', async () => {
+    // Seed an open gate, then attempt a CAS whose event INSERT violates the
+    // NOT NULL on event_type — the whole transaction (UPDATE + INSERT) must roll
+    // back, leaving the gate open so a well-formed retry can still win it.
+    await seedPausedRun('cas-atomic', 'wf-cas-atomic', {
+      nodeId: 'review',
+      message: 'Approve?',
+      type: 'approval',
+      resolved: null,
+    });
+
+    const badEvent = {
+      // Simulates an event-write failure inside the transaction.
+      event_type: null as unknown as string,
+      step_name: 'review',
+      data: { decision: 'approved' },
+    };
+    await expect(
+      resolveApprovalGate(
+        'cas-atomic',
+        {
+          approval: {
+            nodeId: 'review',
+            message: 'Approve?',
+            type: 'approval',
+            resolved: 'approved',
+          },
+        },
+        [badEvent]
+      )
+    ).rejects.toThrow(/Failed to resolve approval gate/);
+
+    // The resolution rolled back — gate still open, no partial event written.
+    const afterFailure = await getWorkflowRun('cas-atomic');
+    expect(afterFailure?.status).toBe('paused');
+    expect(
+      (afterFailure?.metadata.approval as Record<string, unknown>).resolved ?? null
+    ).toBeNull();
+    expect(await countEvents('cas-atomic', 'approval_received')).toBe(0);
+
+    // The retry with a well-formed event now wins the still-open gate.
+    const retry = await resolveApprovalGate(
+      'cas-atomic',
+      {
+        approval: { nodeId: 'review', message: 'Approve?', type: 'approval', resolved: 'approved' },
+      },
+      [approvalEvent('approved')]
+    );
+    expect(retry.resolved).toBe(true);
+    const resolvedRow = await getWorkflowRun('cas-atomic');
+    expect((resolvedRow?.metadata.approval as Record<string, unknown>).resolved).toBe('approved');
+    expect(await countEvents('cas-atomic', 'approval_received')).toBe(1);
+  });
+});
+
+describe('resolveAndCancelApprovalGate — atomic reject+cancel CAS (#2113)', () => {
+  test('wins once on an open gate and flips it terminal in one UPDATE', async () => {
+    await seedPausedRun('rc-open', 'wf-rc-open', {
+      nodeId: 'review',
+      message: 'Approve?',
+      type: 'approval',
+      resolved: null,
+    });
+
+    const outcome = await resolveAndCancelApprovalGate('rc-open', [approvalEvent('rejected')]);
+    expect(outcome.resolved).toBe(true);
+
+    // Single atomic transition: paused → cancelled with a completion stamp, plus
+    // the audit event committed in the same transaction (#2146).
+    const row = await getWorkflowRun('rc-open');
+    expect(row?.status).toBe('cancelled');
+    expect(row?.completed_at).not.toBeNull();
+    expect(await countEvents('rc-open', 'approval_received')).toBe(1);
+  });
+
+  test('a second call on an already-cancelled gate loses (guard excludes non-paused)', async () => {
+    // Self-contained: seed an open gate, cancel it once, then assert the second
+    // call loses because the run is no longer paused.
+    await seedPausedRun('rc-cancelled', 'wf-rc-cancelled', {
+      nodeId: 'review',
+      message: 'Approve?',
+      type: 'approval',
+      resolved: null,
+    });
+    expect(
+      (await resolveAndCancelApprovalGate('rc-cancelled', [approvalEvent('rejected')])).resolved
+    ).toBe(true);
+
+    const outcome = await resolveAndCancelApprovalGate('rc-cancelled', [approvalEvent('rejected')]);
+    expect(outcome.resolved).toBe(false);
+    expect((await getWorkflowRun('rc-cancelled'))?.status).toBe('cancelled');
+    // The loser wrote no second audit event.
+    expect(await countEvents('rc-cancelled', 'approval_received')).toBe(1);
+  });
+
+  test('an approve CAS loses against a concurrent reject-cancel on the same gate', async () => {
+    await seedPausedRun('rc-vs-approve', 'wf-rc-vs-approve', {
+      nodeId: 'review',
+      message: 'Approve?',
+      type: 'approval',
+      resolved: null,
+    });
+
+    // reject-cancel wins the open gate first...
+    expect(
+      (await resolveAndCancelApprovalGate('rc-vs-approve', [approvalEvent('rejected')])).resolved
+    ).toBe(true);
+    // ...so a racing approve (guarded on status='paused') can no longer resolve it.
+    const approveOutcome = await resolveApprovalGate(
+      'rc-vs-approve',
+      {
+        approval: { nodeId: 'review', message: 'Approve?', resolved: 'approved' },
+      },
+      [approvalEvent('approved')]
+    );
+    expect(approveOutcome.resolved).toBe(false);
+    expect((await getWorkflowRun('rc-vs-approve'))?.status).toBe('cancelled');
   });
 });

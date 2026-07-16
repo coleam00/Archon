@@ -8,12 +8,20 @@ const mockGetWorkflowRun = mock(() => Promise.resolve(null));
 const mockListWorkflowRuns = mock(() => Promise.resolve([]));
 const mockUpdateWorkflowRun = mock(() => Promise.resolve());
 const mockCancelWorkflowRun = mock(() => Promise.resolve());
+// CAS gate resolvers (#2113): default to "won the race". Tests that simulate a
+// concurrent loser override with mockResolvedValueOnce({ resolved: false }).
+// resolveApprovalGate = stay-paused resolution (approve, reject stage-rework);
+// resolveAndCancelApprovalGate = atomic resolve + cancel (reject terminal paths).
+const mockResolveApprovalGate = mock(() => Promise.resolve({ resolved: true }));
+const mockResolveAndCancelApprovalGate = mock(() => Promise.resolve({ resolved: true }));
 
 mock.module('../db/workflows', () => ({
   getWorkflowRun: mockGetWorkflowRun,
   listWorkflowRuns: mockListWorkflowRuns,
   updateWorkflowRun: mockUpdateWorkflowRun,
   cancelWorkflowRun: mockCancelWorkflowRun,
+  resolveApprovalGate: mockResolveApprovalGate,
+  resolveAndCancelApprovalGate: mockResolveAndCancelApprovalGate,
 }));
 
 const mockCreateWorkflowEvent = mock(() => Promise.resolve());
@@ -90,6 +98,7 @@ describe('approveWorkflow', () => {
     mockGetWorkflowRun.mockClear();
     mockCreateWorkflowEvent.mockClear();
     mockUpdateWorkflowRun.mockClear();
+    mockResolveApprovalGate.mockClear();
   });
 
   test('approves standard approval gate — writes node_completed + approval_received', async () => {
@@ -101,17 +110,16 @@ describe('approveWorkflow', () => {
     expect(result.workflowName).toBe('test-workflow');
     expect(result.workingPath).toBe('/workspace/worktree');
 
-    // node_completed + approval_received = 2 events
-    expect(mockCreateWorkflowEvent).toHaveBeenCalledTimes(2);
-    const firstCall = mockCreateWorkflowEvent.mock.calls[0][0] as Record<string, unknown>;
-    expect(firstCall.event_type).toBe('node_completed');
-    const secondCall = mockCreateWorkflowEvent.mock.calls[1][0] as Record<string, unknown>;
-    expect(secondCall.event_type).toBe('approval_received');
+    // Operations no longer writes events directly — node_completed + approval_received
+    // ride the CAS transaction as its 3rd argument (#2146).
+    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
 
-    // Stays 'paused' (no status write) — resolution recorded on the approval
-    // context + rejection state cleared (#2075)
-    expect(mockUpdateWorkflowRun).toHaveBeenCalledWith('run-1', {
-      metadata: {
+    // Stays 'paused' (no status write) — resolution recorded atomically via the
+    // CAS on the approval context + rejection state cleared (#2075/#2113), with the
+    // audit events written in the same transaction (#2146).
+    expect(mockResolveApprovalGate).toHaveBeenCalledWith(
+      'run-1',
+      {
         approval: {
           nodeId: 'review',
           message: 'Please review',
@@ -122,7 +130,19 @@ describe('approveWorkflow', () => {
         rejection_reason: '',
         rejection_count: 0,
       },
-    });
+      [
+        {
+          event_type: 'node_completed',
+          step_name: 'review',
+          data: { node_output: '', approval_decision: 'approved' },
+        },
+        {
+          event_type: 'approval_received',
+          step_name: 'review',
+          data: { decision: 'approved', comment: 'Looks good' },
+        },
+      ]
+    );
 
     // Anonymous telemetry: binary resolution captured exactly once
     expect(mockCaptureApprovalResolved).toHaveBeenCalledTimes(1);
@@ -146,15 +166,19 @@ describe('approveWorkflow', () => {
 
     expect(result.type).toBe('interactive_loop');
 
-    // Only approval_received — NOT node_completed
-    expect(mockCreateWorkflowEvent).toHaveBeenCalledTimes(1);
-    const call = mockCreateWorkflowEvent.mock.calls[0][0] as Record<string, unknown>;
-    expect(call.event_type).toBe('approval_received');
+    // Operations no longer writes events directly.
+    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
+    // Only approval_received rides the CAS — NOT node_completed (the executor
+    // writes that on the real completion signal / at resume).
+    const casEvents = mockResolveApprovalGate.mock.calls[0][2] as Array<Record<string, unknown>>;
+    expect(casEvents).toHaveLength(1);
+    expect(casEvents[0].event_type).toBe('approval_received');
 
     // Stays 'paused' (no status write) — stores loop_user_input and marks the
     // approval context resolved, preserving iteration for startIteration detection
-    expect(mockUpdateWorkflowRun).toHaveBeenCalledWith('run-1', {
-      metadata: {
+    expect(mockResolveApprovalGate).toHaveBeenCalledWith(
+      'run-1',
+      {
         approval: {
           nodeId: 'iterate',
           message: 'Provide feedback',
@@ -166,7 +190,14 @@ describe('approveWorkflow', () => {
         // Real feedback ⇒ the resumed loop iterates (#2074)
         loop_feedback_given: true,
       },
-    });
+      [
+        {
+          event_type: 'approval_received',
+          step_name: 'iterate',
+          data: { decision: 'approved', comment: 'fix the tests', iteration: 2 },
+        },
+      ]
+    );
   });
 
   test('interactive_loop bare approve — loop_feedback_given false, loop_user_input defaults (#2074)', async () => {
@@ -186,8 +217,9 @@ describe('approveWorkflow', () => {
 
     await approveWorkflow('run-1');
 
-    expect(mockUpdateWorkflowRun).toHaveBeenCalledWith('run-1', {
-      metadata: {
+    expect(mockResolveApprovalGate).toHaveBeenCalledWith(
+      'run-1',
+      {
         approval: {
           nodeId: 'iterate',
           message: 'Provide feedback',
@@ -202,7 +234,14 @@ describe('approveWorkflow', () => {
         loop_user_input: 'Approved',
         loop_feedback_given: false,
       },
-    });
+      [
+        {
+          event_type: 'approval_received',
+          step_name: 'iterate',
+          data: { decision: 'approved', comment: 'Approved', iteration: 1 },
+        },
+      ]
+    );
   });
 
   test('interactive_loop whitespace-only comment counts as no feedback (#2074)', async () => {
@@ -220,13 +259,11 @@ describe('approveWorkflow', () => {
 
     await approveWorkflow('run-1', '   ');
 
-    const updateArg = mockUpdateWorkflowRun.mock.calls[0][1] as {
-      metadata: Record<string, unknown>;
-    };
-    expect(updateArg.metadata.loop_feedback_given).toBe(false);
+    const casMetadata = mockResolveApprovalGate.mock.calls[0][1] as Record<string, unknown>;
+    expect(casMetadata.loop_feedback_given).toBe(false);
     // Whitespace-only also gets the documented recorded-comment default —
     // '   ' must never be stored verbatim as $LOOP_USER_INPUT.
-    expect(updateArg.metadata.loop_user_input).toBe('Approved');
+    expect(casMetadata.loop_user_input).toBe('Approved');
   });
 
   test('throws on already-resolved gate (double-approve guard)', async () => {
@@ -245,10 +282,27 @@ describe('approveWorkflow', () => {
     await expect(approveWorkflow('run-1')).rejects.toThrow(
       'already approved and is awaiting resume'
     );
-    // No duplicate events / telemetry / metadata writes
+    // Fast-path: the in-memory read blocks before any CAS / events / telemetry
+    expect(mockResolveApprovalGate).not.toHaveBeenCalled();
     expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
     expect(mockCaptureApprovalResolved).not.toHaveBeenCalled();
     expect(mockUpdateWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  test('concurrent loser (CAS miss) writes NO events or telemetry (#2113)', async () => {
+    // Both callers read an UNRESOLVED gate (fast-path passes), but only one wins
+    // the atomic CAS. The loser must not duplicate events/telemetry.
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun());
+    mockResolveApprovalGate.mockResolvedValueOnce({ resolved: false });
+
+    await expect(approveWorkflow('run-1', 'ship it')).rejects.toThrow(
+      'already resolved and is awaiting resume'
+    );
+
+    // The CAS was attempted (unlike the fast-path guard) but lost — no side effects.
+    expect(mockResolveApprovalGate).toHaveBeenCalledTimes(1);
+    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
+    expect(mockCaptureApprovalResolved).not.toHaveBeenCalled();
   });
 
   test('approves with captureResponse — stores comment as node output', async () => {
@@ -266,8 +320,10 @@ describe('approveWorkflow', () => {
 
     await approveWorkflow('run-1', 'My review notes');
 
-    const nodeCompletedCall = mockCreateWorkflowEvent.mock.calls[0][0] as Record<string, unknown>;
-    expect((nodeCompletedCall.data as Record<string, unknown>).node_output).toBe('My review notes');
+    // The node_output rides the CAS events (#2146), not a separate event write.
+    const casEvents = mockResolveApprovalGate.mock.calls[0][2] as Array<Record<string, unknown>>;
+    const nodeCompleted = casEvents.find(e => e.event_type === 'node_completed');
+    expect((nodeCompleted?.data as Record<string, unknown>).node_output).toBe('My review notes');
   });
 
   test('throws on non-paused run', async () => {
@@ -298,6 +354,8 @@ describe('rejectWorkflow', () => {
     mockCreateWorkflowEvent.mockClear();
     mockUpdateWorkflowRun.mockClear();
     mockCancelWorkflowRun.mockClear();
+    mockResolveApprovalGate.mockClear();
+    mockResolveAndCancelApprovalGate.mockClear();
   });
 
   test('rejects with onRejectPrompt under max attempts — stays paused with staged rework', async () => {
@@ -319,9 +377,12 @@ describe('rejectWorkflow', () => {
     expect(result.cancelled).toBe(false);
     expect(result.workflowName).toBe('test-workflow');
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
-    // Stays 'paused' (no status write) — rejection staged on the approval context (#2075)
-    expect(mockUpdateWorkflowRun).toHaveBeenCalledWith('run-1', {
-      metadata: {
+    // Stays 'paused' (no status write) — rejection staged atomically via the CAS
+    // on the approval context (#2075/#2113), with the audit event in the same
+    // transaction (#2146)
+    expect(mockResolveApprovalGate).toHaveBeenCalledWith(
+      'run-1',
+      {
         approval: {
           nodeId: 'review',
           message: 'Review',
@@ -332,7 +393,14 @@ describe('rejectWorkflow', () => {
         rejection_reason: 'needs more tests',
         rejection_count: 1,
       },
-    });
+      [
+        {
+          event_type: 'approval_received',
+          step_name: 'review',
+          data: { decision: 'rejected', reason: 'needs more tests' },
+        },
+      ]
+    );
 
     expect(mockCaptureApprovalResolved).toHaveBeenCalledTimes(1);
     expect(mockCaptureApprovalResolved).toHaveBeenCalledWith({ resolution: 'rejected' });
@@ -355,9 +423,36 @@ describe('rejectWorkflow', () => {
     await expect(rejectWorkflow('run-1', 'again')).rejects.toThrow(
       'already rejected and is awaiting resume'
     );
+    // Fast-path: the in-memory read blocks before any CAS / events / cancel
+    expect(mockResolveApprovalGate).not.toHaveBeenCalled();
     expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
     expect(mockCaptureApprovalResolved).not.toHaveBeenCalled();
     expect(mockUpdateWorkflowRun).not.toHaveBeenCalled();
+    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  test('concurrent loser (CAS miss) writes NO events, telemetry, or cancel (#2113)', async () => {
+    const run = makePausedRun({
+      metadata: {
+        approval: {
+          nodeId: 'review',
+          message: 'Review',
+          onRejectPrompt: 'Fix: $REJECTION_REASON',
+        },
+        rejection_count: 0,
+      },
+    });
+    mockGetWorkflowRun.mockResolvedValueOnce(run);
+    // Fast-path passes (gate reads unresolved) but the atomic CAS is lost.
+    mockResolveApprovalGate.mockResolvedValueOnce({ resolved: false });
+
+    await expect(rejectWorkflow('run-1', 'needs work')).rejects.toThrow(
+      'already resolved and is awaiting resume'
+    );
+
+    expect(mockResolveApprovalGate).toHaveBeenCalledTimes(1);
+    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
+    expect(mockCaptureApprovalResolved).not.toHaveBeenCalled();
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
   });
 
@@ -378,7 +473,18 @@ describe('rejectWorkflow', () => {
     const result = await rejectWorkflow('run-1', 'still broken');
 
     expect(result.cancelled).toBe(true);
-    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1');
+    expect(result.maxAttemptsReached).toBe(true);
+    // Terminal reject resolves + cancels in ONE atomic CAS (#2113) — never a
+    // separate cancelWorkflowRun that could fail and strand the run. The audit
+    // event rides the same transaction (#2146).
+    expect(mockResolveAndCancelApprovalGate).toHaveBeenCalledWith('run-1', [
+      {
+        event_type: 'approval_received',
+        step_name: 'review',
+        data: { decision: 'rejected', reason: 'still broken' },
+      },
+    ]);
+    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
   });
 
   test('rejects without onRejectPrompt — cancels immediately', async () => {
@@ -387,7 +493,29 @@ describe('rejectWorkflow', () => {
     const result = await rejectWorkflow('run-1', 'no good');
 
     expect(result.cancelled).toBe(true);
-    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1');
+    expect(result.maxAttemptsReached).toBe(false);
+    expect(mockResolveAndCancelApprovalGate).toHaveBeenCalledWith('run-1', [
+      {
+        event_type: 'approval_received',
+        step_name: 'review',
+        data: { decision: 'rejected', reason: 'no good' },
+      },
+    ]);
+    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  test('terminal reject concurrent loser (CAS miss) writes NO event or telemetry (#2113)', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun());
+    // No onRejectPrompt ⇒ the atomic resolve-and-cancel CAS is the guard.
+    mockResolveAndCancelApprovalGate.mockResolvedValueOnce({ resolved: false });
+
+    await expect(rejectWorkflow('run-1', 'no good')).rejects.toThrow(
+      'already resolved and is awaiting resume'
+    );
+
+    expect(mockResolveAndCancelApprovalGate).toHaveBeenCalledTimes(1);
+    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
+    expect(mockCaptureApprovalResolved).not.toHaveBeenCalled();
   });
 
   test('throws on non-paused run', async () => {

@@ -16,7 +16,6 @@ import type {
   LoopGateRunMetadata,
 } from '@archon/workflows/schemas/workflow-run';
 import * as workflowDb from '../db/workflows';
-import * as workflowEventDb from '../db/workflow-events';
 import * as workflowNodeSessionDb from '../db/workflow-node-sessions';
 
 // Lazy logger — NEVER at module scope
@@ -160,9 +159,11 @@ export async function approveWorkflow(
     throw new Error('Workflow run is paused but missing approval context.');
   }
   if (isGateResolved(approval)) {
-    // The run stays 'paused' after a resolution, so the status check alone no
-    // longer blocks a second approve — this guard does (double events, double
-    // telemetry). The resume CAS independently guards double-resume.
+    // Fast-path friendly error for the common (sequential) case. The run stays
+    // 'paused' after a resolution, so the status check alone no longer blocks a
+    // second approve. This in-memory read can still race a concurrent approve —
+    // the resolveApprovalGate CAS below is the real arbiter; a second approve
+    // that slips past this read loses the atomic UPDATE and throws the same way.
     throw new Error(
       `Workflow run ${runId} was already ${String(approval.resolved)} and is awaiting resume.`
     );
@@ -172,95 +173,88 @@ export async function approveWorkflow(
   // HTTP/CLI/chat pass the raw comment through since #2074, so '   ' would
   // otherwise be recorded verbatim where the documented default is 'Approved'.
   const approvalComment = comment !== undefined && comment.trim().length > 0 ? comment : 'Approved';
+  const isInteractiveLoop = approval.type === 'interactive_loop';
 
-  try {
-    // Interactive loop gate — store user input in metadata for the next iteration.
-    // Note: node_completed is NOT written here. The executor writes it when the AI
-    // emits the completion signal (meaning the user actually approved) — or, for a
-    // signal-bearing gate approved without feedback, at resume time from the
-    // persisted signaledOutput (#2074). Writing it here would cause the resume to
-    // skip the loop node entirely.
-    if (approval.type === 'interactive_loop') {
-      // Finalize-vs-iterate discriminator (#2074): derived from the RAW comment,
-      // not approvalComment (which defaults to 'Approved') — a bare approve on a
-      // signal-bearing gate finalizes at resume; real feedback runs another iteration.
-      const feedbackProvided = comment !== undefined && comment.trim().length > 0;
-      await workflowEventDb.createWorkflowEvent({
-        workflow_run_id: runId,
+  // Build the resolution metadata AND the audit events for this gate type.
+  // IMPORTANT: metadata is MERGED (not replaced) and the approval context is
+  // rewritten whole (spread + resolved) so it survives intact for the resumed
+  // executor's startIteration detection. Both are handed to the CAS below, which
+  // stamps the metadata and writes the events in ONE transaction — the atomic
+  // double-resolution guard (#2113) and the atomic audit trail (#2146).
+  let metadataPayload: Record<string, unknown>;
+  let events: workflowDb.GateResolutionEvent[];
+  if (isInteractiveLoop) {
+    // Finalize-vs-iterate discriminator (#2074): derived from the RAW comment,
+    // not approvalComment (which defaults to 'Approved') — a bare approve on a
+    // signal-bearing gate finalizes at resume; real feedback runs another iteration.
+    const feedbackProvided = comment !== undefined && comment.trim().length > 0;
+    // loop_user_input keeps the 'Approved' default so the iterate path (non-signaled
+    // gates) still feeds the AI an approval token via $LOOP_USER_INPUT. Typed via
+    // LoopGateRunMetadata so the key spellings match the executor's resume-time
+    // read sites (a typo here is a compile error).
+    const gateRunMetadata: LoopGateRunMetadata = {
+      loop_user_input: approvalComment,
+      loop_feedback_given: feedbackProvided,
+    };
+    metadataPayload = { approval: { ...approval, resolved: 'approved' }, ...gateRunMetadata };
+    // Interactive loop gate — user input already stored in metadata for the next
+    // iteration. Note: node_completed is NOT written here. The executor writes it
+    // when the AI emits the completion signal (meaning the user actually approved)
+    // — or, for a signal-bearing gate approved without feedback, at resume time
+    // from the persisted signaledOutput (#2074). Writing it here would cause the
+    // resume to skip the loop node entirely.
+    events = [
+      {
         event_type: 'approval_received',
         step_name: approval.nodeId,
         data: { decision: 'approved', comment: approvalComment, iteration: approval.iteration },
-      });
-      // Anonymous telemetry: binary resolution only — no ids/comments/names.
-      captureApprovalResolved({ resolution: 'approved' });
-      // Record the resolution; status stays 'paused' for an honest state machine.
-      // IMPORTANT: metadata is MERGED (not replaced) and the approval context is
-      // rewritten whole (spread + resolved) — it must survive intact so the
-      // resumed executor can detect the correct startIteration.
-      // loop_user_input keeps the 'Approved' default so the iterate path (non-signaled
-      // gates) still feeds the AI an approval token via $LOOP_USER_INPUT.
-      // Typed via LoopGateRunMetadata so the key spellings match the executor's
-      // resume-time read sites (a typo here is a compile error).
-      const gateRunMetadata: LoopGateRunMetadata = {
-        loop_user_input: approvalComment,
-        loop_feedback_given: feedbackProvided,
-      };
-      await workflowDb.updateWorkflowRun(runId, {
-        metadata: {
-          approval: { ...approval, resolved: 'approved' },
-          ...gateRunMetadata,
-        },
-      });
-      return {
-        workflowName: run.workflow_name,
-        workingPath: run.working_path,
-        userMessage: run.user_message,
-        codebaseId: run.codebase_id,
-        conversationId: run.conversation_id,
-        type: 'interactive_loop',
-      };
-    }
-
-    // Standard approval node path
-    const nodeOutput = approval.captureResponse === true ? approvalComment : '';
-    await workflowEventDb.createWorkflowEvent({
-      workflow_run_id: runId,
-      event_type: 'node_completed',
-      step_name: approval.nodeId,
-      data: { node_output: nodeOutput, approval_decision: 'approved' },
-    });
-    await workflowEventDb.createWorkflowEvent({
-      workflow_run_id: runId,
-      event_type: 'approval_received',
-      step_name: approval.nodeId,
-      data: { decision: 'approved', comment: approvalComment },
-    });
-    // Anonymous telemetry: binary resolution only — no ids/comments/names.
-    captureApprovalResolved({ resolution: 'approved' });
-    // Record the resolution; status stays 'paused'. Clear any rejection state.
-    await workflowDb.updateWorkflowRun(runId, {
-      metadata: {
-        approval: { ...approval, resolved: 'approved' },
-        approval_response: 'approved',
-        rejection_reason: '',
-        rejection_count: 0,
       },
-    });
-  } catch (error) {
-    const err = error as Error;
-    getLog().error(
-      { err, errorType: err.constructor.name, runId },
-      'operations.workflow_approve_failed'
-    );
-    throw new Error(`Failed to approve workflow run ${runId}: ${err.message}`);
+    ];
+  } else {
+    metadataPayload = {
+      approval: { ...approval, resolved: 'approved' },
+      approval_response: 'approved',
+      rejection_reason: '',
+      rejection_count: 0,
+    };
+    const nodeOutput = approval.captureResponse === true ? approvalComment : '';
+    events = [
+      {
+        event_type: 'node_completed',
+        step_name: approval.nodeId,
+        data: { node_output: nodeOutput, approval_decision: 'approved' },
+      },
+      {
+        event_type: 'approval_received',
+        step_name: approval.nodeId,
+        data: { decision: 'approved', comment: approvalComment },
+      },
+    ];
   }
+
+  // Compare-and-swap: stamp the resolution AND write the audit events ONLY while
+  // the gate is still open, all in one transaction. This atomic UPDATE — not the
+  // isGateResolved read above — is the real arbiter, so a concurrent second
+  // approve loses here (resolved=false) and throws BEFORE any events/telemetry
+  // land, eliminating the duplicates (#2113); folding the events into the same
+  // transaction means a failed event write rolls the resolution back so a retry
+  // can win the still-open gate (#2146). The run stays 'paused'; resume is
+  // guarded independently by resumeWorkflowRun's CAS.
+  const { resolved: won } = await workflowDb.resolveApprovalGate(runId, metadataPayload, events);
+  if (!won) {
+    throw new Error(`Workflow run ${runId} was already resolved and is awaiting resume.`);
+  }
+
+  // Won the CAS — resolution + audit events already committed atomically.
+  // Anonymous telemetry: binary resolution only — no ids/comments/names.
+  captureApprovalResolved({ resolution: 'approved' });
   return {
     workflowName: run.workflow_name,
     workingPath: run.working_path,
     userMessage: run.user_message,
     codebaseId: run.codebase_id,
     conversationId: run.conversation_id,
-    type: 'approval_gate',
+    type: isInteractiveLoop ? 'interactive_loop' : 'approval_gate',
   };
 }
 
@@ -287,8 +281,9 @@ export async function rejectWorkflow(
     ? rawApproval
     : undefined;
   if (approval && isGateResolved(approval)) {
-    // Same double-resolution guard as approveWorkflow — the run stays 'paused'
-    // after a resolution, so status alone no longer blocks a second reject.
+    // Fast-path friendly error, same as approveWorkflow — the run stays 'paused'
+    // after a resolution, so status alone no longer blocks a second reject. The
+    // CAS below is the real arbiter for the concurrent case.
     throw new Error(
       `Workflow run ${runId} was already ${String(approval.resolved)} and is awaiting resume.`
     );
@@ -296,68 +291,58 @@ export async function rejectWorkflow(
   const rejectReason = reason ?? 'Rejected';
   const currentCount = (run.metadata.rejection_count as number | undefined) ?? 0;
   const maxAttempts = approval?.onRejectMaxAttempts ?? 3;
+  const onRejectConfigured = approval?.onRejectPrompt !== undefined;
+  const maxAttemptsReached = onRejectConfigured && currentCount + 1 >= maxAttempts;
+  // The on_reject rework is staged (run stays 'paused') only when a prompt is
+  // set AND we're under the attempt cap; every other case cancels the run.
+  const willStageRework = onRejectConfigured && !maxAttemptsReached;
 
-  try {
-    await workflowEventDb.createWorkflowEvent({
-      workflow_run_id: runId,
-      event_type: 'approval_received',
-      step_name: approval?.nodeId ?? 'unknown',
-      data: { decision: 'rejected', reason: rejectReason },
-    });
-    // Anonymous telemetry: binary resolution only — no ids/reasons/names.
-    captureApprovalResolved({ resolution: 'rejected' });
+  // The audit event is identical for all three reject outcomes; the CAS writes it
+  // in the SAME transaction as the resolution (#2146).
+  const rejectionEvent: workflowDb.GateResolutionEvent = {
+    event_type: 'approval_received',
+    step_name: approval?.nodeId ?? 'unknown',
+    data: { decision: 'rejected', reason: rejectReason },
+  };
 
-    if (approval?.onRejectPrompt !== undefined) {
-      if (currentCount + 1 >= maxAttempts) {
-        await workflowDb.cancelWorkflowRun(runId);
-        return {
-          workflowName: run.workflow_name,
-          workingPath: run.working_path,
-          userMessage: run.user_message,
-          codebaseId: run.codebase_id,
-          conversationId: run.conversation_id,
-          cancelled: true,
-          maxAttemptsReached: true,
-        };
-      }
-      // Record the staged rework; status stays 'paused' (#2075). The approval
-      // context is rewritten whole (spread + resolved) so the resumed executor
-      // still sees nodeId/onRejectPrompt for the on_reject cycle.
-      await workflowDb.updateWorkflowRun(runId, {
-        metadata: {
+  // Compare-and-swap resolution guard — a concurrent second reject loses here
+  // (resolved=false) and throws BEFORE any events, so the gate events can't
+  // duplicate (#2113). Stage-rework stamps the resolution + rework metadata and
+  // keeps the run 'paused' (the approval context is rewritten whole so the resumed
+  // executor still sees nodeId/onRejectPrompt; `...approval` tolerates a malformed
+  // context exactly as the 'unknown' nodeId fallback below). The terminal outcomes
+  // flip paused→'cancelled' in a SINGLE atomic UPDATE, so there is never a
+  // resolved-but-not-cancelled state that a failed second write could strand
+  // (which a reject retry could not self-heal past the guard above). Either way
+  // the audit event rides the same transaction, so a failed event write rolls the
+  // resolution/cancellation back rather than losing the audit trail (#2146).
+  const { resolved: won } = willStageRework
+    ? await workflowDb.resolveApprovalGate(
+        runId,
+        {
           approval: { ...approval, resolved: 'rejected' },
           rejection_reason: rejectReason,
           rejection_count: currentCount + 1,
         },
-      });
-      return {
-        workflowName: run.workflow_name,
-        workingPath: run.working_path,
-        userMessage: run.user_message,
-        codebaseId: run.codebase_id,
-        conversationId: run.conversation_id,
-        cancelled: false,
-        maxAttemptsReached: false,
-      };
-    }
-
-    await workflowDb.cancelWorkflowRun(runId);
-  } catch (error) {
-    const err = error as Error;
-    getLog().error(
-      { err, errorType: err.constructor.name, runId },
-      'operations.workflow_reject_failed'
-    );
-    throw new Error(`Failed to reject workflow run ${runId}: ${err.message}`);
+        [rejectionEvent]
+      )
+    : await workflowDb.resolveAndCancelApprovalGate(runId, [rejectionEvent]);
+  if (!won) {
+    throw new Error(`Workflow run ${runId} was already resolved and is awaiting resume.`);
   }
+
+  // Won the CAS — resolution/status + audit event already committed atomically.
+  // Anonymous telemetry: binary resolution only — no ids/reasons/names.
+  captureApprovalResolved({ resolution: 'rejected' });
+
   return {
     workflowName: run.workflow_name,
     workingPath: run.working_path,
     userMessage: run.user_message,
     codebaseId: run.codebase_id,
     conversationId: run.conversation_id,
-    cancelled: true,
-    maxAttemptsReached: false,
+    cancelled: !willStageRework,
+    maxAttemptsReached,
   };
 }
 

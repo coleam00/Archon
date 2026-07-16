@@ -187,6 +187,9 @@ mock.module('../workflows/store-adapter', () => ({
 const mockGetPausedWorkflowRun = mock(() => Promise.resolve(null as unknown));
 const mockFindResumableRunByParentConversation = mock(() => Promise.resolve(null as unknown));
 const mockUpdateWorkflowRun = mock(() => Promise.resolve());
+// approveWorkflow stamps the resolution atomically via this CAS (#2113), not
+// updateWorkflowRun. Defaults to "won the race".
+const mockResolveApprovalGate = mock(() => Promise.resolve({ resolved: true }));
 // approveWorkflow (operations/workflow-operations, called by the NL approval
 // path) re-reads the run via getWorkflowRun before recording the resolution.
 const mockGetWorkflowRunDb = mock(() => Promise.resolve(null as unknown));
@@ -195,6 +198,7 @@ mock.module('../db/workflows', () => ({
   getWorkflowRun: mockGetWorkflowRunDb,
   findResumableRunByParentConversation: mockFindResumableRunByParentConversation,
   updateWorkflowRun: mockUpdateWorkflowRun,
+  resolveApprovalGate: mockResolveApprovalGate,
 }));
 
 const mockCreateWorkflowEvent = mock(() => Promise.resolve());
@@ -1473,6 +1477,8 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockHydrateResumableRun.mockClear();
     mockUpdateWorkflowRun.mockClear();
     mockUpdateWorkflowRun.mockImplementation(() => Promise.resolve());
+    mockResolveApprovalGate.mockClear();
+    mockResolveApprovalGate.mockImplementation(() => Promise.resolve({ resolved: true }));
     mockHandleCommand.mockReset();
     mockHandleCommand.mockImplementation(() =>
       Promise.resolve({ success: true, message: 'ok', workflow: undefined })
@@ -1998,6 +2004,8 @@ describe('natural-language approval routing', () => {
     mockHydrateResumableRun.mockClear();
     mockUpdateWorkflowRun.mockClear();
     mockUpdateWorkflowRun.mockImplementation(() => Promise.resolve());
+    mockResolveApprovalGate.mockClear();
+    mockResolveApprovalGate.mockImplementation(() => Promise.resolve({ resolved: true }));
     mockDiscoverWorkflowsWithConfig.mockReset();
     mockDiscoverWorkflowsWithConfig.mockImplementation(() =>
       Promise.resolve({ workflows: [], errors: [] })
@@ -2028,22 +2036,33 @@ describe('natural-language approval routing', () => {
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', 'looks good, proceed with implementation');
 
-    // Approval events should be written
-    expect(mockCreateWorkflowEvent).toHaveBeenCalledTimes(2);
+    // Approval events ride the CAS transaction now (#2146), not a direct write:
+    // node_completed + approval_received.
+    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
+    const casEvents = (mockResolveApprovalGate.mock.calls[0] as unknown[])[2] as Array<
+      Record<string, unknown>
+    >;
+    expect(casEvents).toHaveLength(2);
+    expect(casEvents[0].event_type).toBe('node_completed');
+    expect(casEvents[1].event_type).toBe('approval_received');
     // Resuming message sent
     expect(platform.sendMessage).toHaveBeenCalledWith(
       'conv-1',
       expect.stringContaining('Resuming')
     );
-    // Run stays 'paused' — resolution recorded on the approval context (#2075)
-    expect(mockUpdateWorkflowRun).toHaveBeenCalledWith('run-1', {
-      metadata: {
+    // Run stays 'paused' — resolution recorded atomically via the CAS on the
+    // approval context (#2075/#2113), with the audit events in the same
+    // transaction (#2146)
+    expect(mockResolveApprovalGate).toHaveBeenCalledWith(
+      'run-1',
+      {
         approval: { nodeId: 'gate-1', message: 'Please review', resolved: 'approved' },
         approval_response: 'approved',
         rejection_reason: '',
         rejection_count: 0,
       },
-    });
+      expect.any(Array)
+    );
     expect(mockHydrateResumableRun).toHaveBeenCalled();
     expect(mockExecuteWorkflow).toHaveBeenCalled();
     // NL approval path captures the binary resolution
@@ -2163,8 +2182,9 @@ describe('natural-language approval routing', () => {
     const conversation = makeConversation({ codebase_id: 'codebase-1', cwd: '/repos/test-repo' });
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
     mockGetPausedWorkflowRun.mockReturnValueOnce(Promise.resolve(makePausedRun()));
-    // Simulate DB error when writing approval events
-    mockCreateWorkflowEvent.mockRejectedValueOnce(new Error('connection lost'));
+    // Simulate a DB error resolving the gate — the resolution + audit events now
+    // commit atomically inside this CAS (#2146), so a failure here is the write path.
+    mockResolveApprovalGate.mockRejectedValueOnce(new Error('connection lost'));
 
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', 'go ahead');
