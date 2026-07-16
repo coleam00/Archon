@@ -1,4 +1,14 @@
-import { describe, it, expect, beforeEach, afterEach, mock, spyOn, type Mock } from 'bun:test';
+import {
+  describe,
+  it,
+  expect,
+  beforeEach,
+  afterEach,
+  mock,
+  spyOn,
+  setSystemTime,
+  type Mock,
+} from 'bun:test';
 import { mkdir, writeFile, rm, readFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -4254,6 +4264,56 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(sent.some(m => m.includes('output may be missing'))).toBe(true);
     });
 
+    it('suppresses the incompleteness warning when the node is genuinely cancelled with live tasks', async () => {
+      // The run is cancelled mid-stream (caught by the throttled status check)
+      // while a background task is still live. The stream ends with the task
+      // dangling, but the node already returns 'failed — Cancelled by user',
+      // so the incompleteness warning must be suppressed as noise.
+      // setSystemTime jumps past CANCEL_CHECK_INTERVAL_MS between chunks so the
+      // second status check fires deterministically (no real waiting).
+      let tasksDelivered = false;
+      mockSendQueryDag.mockImplementation(function* () {
+        yield {
+          type: 'background_tasks',
+          tasks: [{ taskId: 't-live', taskType: 'local_agent', description: 'still running' }],
+        };
+        tasksDelivered = true;
+        setSystemTime(new Date(Date.now() + 11_000));
+        yield { type: 'assistant', content: 'partial work' };
+        yield { type: 'assistant', content: 'MUST NOT BE REACHED' };
+      });
+
+      const store = createMockStore();
+      // 'running' until the task set has been delivered, 'cancelled' after —
+      // guarantees the abort happens with the task registered as live.
+      (store.getWorkflowRunStatus as Mock<() => Promise<string | null>>).mockImplementation(() =>
+        Promise.resolve(tasksDelivered ? 'cancelled' : 'running')
+      );
+      const platform = createMockPlatform();
+      try {
+        await runSingleNode(store, platform, 'bg-cancelled-run');
+      } finally {
+        setSystemTime(); // restore the real clock
+      }
+
+      // The node failed as cancelled — it never completed
+      expect(findCompletedEvent(store)).toBeUndefined();
+      const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+      const failedEvent = eventCalls.find(
+        (c: unknown[]) =>
+          (c[0] as { event_type: string }).event_type === 'node_failed' &&
+          (c[0] as { step_name: string }).step_name === 'step1'
+      );
+      expect(failedEvent).toBeDefined();
+      expect((failedEvent![0] as { data: { error: string } }).data.error).toBe('Cancelled by user');
+      // Cancellation exemption: no user-facing incompleteness warning
+      const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(c =>
+        String(c[1])
+      );
+      expect(sent.some(m => m.includes('output may be missing'))).toBe(false);
+      expect(sent.some(m => m.includes('background agent'))).toBe(false);
+    });
+
     it('breaks at the first result when no background_tasks chunk was seen (unchanged behavior)', async () => {
       mockSendQueryDag.mockImplementation(function* () {
         yield { type: 'assistant', content: 'normal output' };
@@ -4412,6 +4472,222 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(completedEvent).toBeDefined();
       // 0.3 (last session-cumulative value), NOT 0.4 (0.1 + 0.3 double-count)
       expect((completedEvent![0] as { data: { cost_usd?: number } }).data.cost_usd).toBe(0.3);
+    });
+
+    it('records the cross-iteration union of dangling background tasks on node_completed (#2083)', async () => {
+      // Iterations 1 and 2 each end with a different task still live (subprocess
+      // death analog); iteration 3 finishes cleanly and signals completion. The
+      // node_completed event must carry the UNION of dangling ids — last-iteration
+      // reporting would hide t-a and t-b behind the clean final iteration.
+      let callCount = 0;
+      mockSendQueryDag.mockImplementation(function* () {
+        callCount++;
+        if (callCount === 1) {
+          yield {
+            type: 'background_tasks',
+            tasks: [{ taskId: 't-a', taskType: 'local_agent', description: 'never drains' }],
+          };
+          yield { type: 'assistant', content: 'first pass' };
+          yield { type: 'result', sessionId: 'sid-1' };
+          // Generator ends with t-a live
+        } else if (callCount === 2) {
+          yield {
+            type: 'background_tasks',
+            tasks: [{ taskId: 't-b', taskType: 'local_agent', description: 'never drains' }],
+          };
+          yield { type: 'assistant', content: 'second pass' };
+          yield { type: 'result', sessionId: 'sid-2' };
+          // Generator ends with t-b live
+        } else {
+          yield { type: 'assistant', content: 'All done! <promise>COMPLETE</promise>' };
+          yield { type: 'result', sessionId: 'sid-3' };
+        }
+      });
+
+      const store = createMockStore();
+      const mockDeps = createMockDeps(store);
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun('loop-bg-union-run');
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        {
+          name: 'dag-loop-bg-union',
+          nodes: [
+            {
+              id: 'my-loop',
+              loop: {
+                prompt: 'Do a task. When done, output <promise>COMPLETE</promise>.',
+                until: 'COMPLETE',
+                max_iterations: 5,
+              },
+            },
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      expect(mockSendQueryDag.mock.calls.length).toBe(3);
+      const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+      const completedEvent = eventCalls.find(
+        (c: unknown[]) =>
+          (c[0] as { event_type: string }).event_type === 'node_completed' &&
+          (c[0] as { step_name: string }).step_name === 'my-loop'
+      );
+      expect(completedEvent).toBeDefined();
+      const data = (completedEvent![0] as { data: Record<string, unknown> }).data;
+      expect(data.background_tasks_incomplete).toEqual(['t-a', 't-b']);
+      // Each incomplete iteration also warned the user
+      const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(c =>
+        String(c[1])
+      );
+      expect(sent.filter(m => m.includes('output may be missing')).length).toBe(2);
+    });
+
+    it('omits background_tasks_incomplete from node_completed when every iteration drains cleanly', async () => {
+      mockSendQueryDag.mockImplementation(function* () {
+        yield {
+          type: 'background_tasks',
+          tasks: [{ taskId: 't-1', taskType: 'local_agent', description: 'bg work' }],
+        };
+        yield { type: 'assistant', content: 'Done. <promise>COMPLETE</promise>' };
+        yield { type: 'result', sessionId: 'sid-clean' };
+        yield { type: 'background_tasks', tasks: [] };
+        yield { type: 'result', sessionId: 'sid-clean' };
+      });
+
+      const store = createMockStore();
+      const mockDeps = createMockDeps(store);
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun('loop-bg-clean-run');
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        {
+          name: 'dag-loop-bg-clean',
+          nodes: [
+            {
+              id: 'my-loop',
+              loop: {
+                prompt: 'Do a task. When done, output <promise>COMPLETE</promise>.',
+                until: 'COMPLETE',
+                max_iterations: 5,
+              },
+            },
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+      const completedEvent = eventCalls.find(
+        (c: unknown[]) =>
+          (c[0] as { event_type: string }).event_type === 'node_completed' &&
+          (c[0] as { step_name: string }).step_name === 'my-loop'
+      );
+      expect(completedEvent).toBeDefined();
+      expect(
+        (completedEvent![0] as { data: Record<string, unknown> }).data.background_tasks_incomplete
+      ).toBeUndefined();
+    });
+
+    it('cancellation mid-stream aborts the iteration and suppresses the incompleteness warning', async () => {
+      // Mirrors the AI-node cancellation-exemption test: the run is cancelled
+      // while an iteration is streaming with a live background task. The new
+      // mid-stream status check must abort the iteration (previously the loop
+      // only noticed cancellation BETWEEN iterations), fail the node with the
+      // observed status, and suppress the incompleteness warning.
+      let tasksDelivered = false;
+      mockSendQueryDag.mockImplementation(function* () {
+        yield {
+          type: 'background_tasks',
+          tasks: [{ taskId: 't-loop', taskType: 'local_agent', description: 'still running' }],
+        };
+        tasksDelivered = true;
+        setSystemTime(new Date(Date.now() + 11_000));
+        yield { type: 'assistant', content: 'working' };
+        yield { type: 'assistant', content: 'MUST NOT BE REACHED' };
+      });
+
+      const store = createMockStore();
+      // 'running' for the between-iteration check, 'cancelled' once the task
+      // set has been delivered mid-stream.
+      (store.getWorkflowRunStatus as Mock<() => Promise<string | null>>).mockImplementation(() =>
+        Promise.resolve(tasksDelivered ? 'cancelled' : 'running')
+      );
+      const mockDeps = createMockDeps(store);
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun('loop-bg-cancel-run');
+
+      try {
+        await executeDagWorkflow(
+          mockDeps,
+          platform,
+          'conv-dag',
+          testDir,
+          {
+            name: 'dag-loop-bg-cancel',
+            nodes: [
+              {
+                id: 'my-loop',
+                loop: {
+                  prompt: 'Do tasks.',
+                  until: 'COMPLETE',
+                  max_iterations: 5,
+                },
+              },
+            ],
+          },
+          workflowRun,
+          'claude',
+          undefined,
+          join(testDir, 'artifacts'),
+          join(testDir, 'logs'),
+          'main',
+          'docs/',
+          minimalConfig
+        );
+      } finally {
+        setSystemTime(); // restore the real clock
+      }
+
+      // Aborted during iteration 1 — no second iteration
+      expect(mockSendQueryDag.mock.calls.length).toBe(1);
+      // The loop never completed
+      const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+      const completedEvent = eventCalls.find(
+        (c: unknown[]) =>
+          (c[0] as { event_type: string }).event_type === 'node_completed' &&
+          (c[0] as { step_name: string }).step_name === 'my-loop'
+      );
+      expect(completedEvent).toBeUndefined();
+      const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(c =>
+        String(c[1])
+      );
+      // The stop is surfaced with the observed status…
+      expect(sent.some(m => m.includes('stopped during iteration 1 (cancelled)'))).toBe(true);
+      // …and the incompleteness warning is suppressed as noise
+      expect(sent.some(m => m.includes('output may be missing'))).toBe(false);
     });
 
     it('completes after multiple iterations', async () => {
