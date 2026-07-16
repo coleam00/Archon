@@ -18,6 +18,7 @@
     "./community/pi": "./src/community/pi/index.ts",
     "./community/copilot": "./src/community/copilot/index.ts",
     "./community/copilot/binary-resolver": "./src/community/copilot/binary-resolver.ts",
+    "./community/opencode/runtime": "./src/community/opencode/runtime.ts",
     "./errors": "./src/errors.ts",
     "./registry": "./src/registry.ts"
   },

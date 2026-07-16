@@ -130,7 +130,7 @@ Commands:
   complete <branch> [...]    Complete branch lifecycle (remove worktree + branches)
   serve                      Start the web UI server (downloads web UI on first run)
   skill install [path]       Install the bundled Archon skill into .claude/skills/archon
-  doctor                     Verify your Archon setup (Claude binary, gh auth, DB, adapters)
+  doctor [--full]            Verify your Archon setup (Claude/Codex binaries, gh auth, DB, adapters; --full also probes the OpenCode runtime SDK)
   auth github                Connect your GitHub identity via device flow (multi-user installs)
   ai key set <provider>      Connect an AI provider API key (multi-user installs; key read from prompt/stdin)
   ai login <provider>        Connect a subscription (claude/copilot) via OAuth — codex is API-key only
@@ -302,6 +302,7 @@ async function main(): Promise<number> {
         status: { type: 'string' },
         limit: { type: 'string' },
         effort: { type: 'string' },
+        full: { type: 'boolean' },
       },
       allowPositionals: true,
       strict: false, // Allow unknown flags to pass through
@@ -859,7 +860,7 @@ async function main(): Promise<number> {
       }
 
       case 'doctor': {
-        return await doctorCommand();
+        return await doctorCommand(undefined, Boolean(values.full));
       }
 
       case 'auth': {
