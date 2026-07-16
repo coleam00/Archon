@@ -3,6 +3,7 @@ import {
   isBashNode,
   isCancelNode,
   isScriptNode,
+  isLoopNode,
   isLoopGroupNode,
   isTriggerRule,
   TRIGGER_RULES,
@@ -415,6 +416,74 @@ describe('dagNodeSchema — new Claude SDK options', () => {
 });
 
 // ---------------------------------------------------------------------------
+// dagNodeSchema — per-node Pi extension posture (`pi:`, #2133)
+// ---------------------------------------------------------------------------
+
+describe('dagNodeSchema — per-node Pi posture (pi:)', () => {
+  test('accepts and preserves a pi: block on a prompt node', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'plan',
+      prompt: 'plan it',
+      pi: { interactive: true, extensionFlags: { plan: true, 'plan-file': 'PLAN.md' } },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect((result.data as PromptNode).pi).toEqual({
+        interactive: true,
+        extensionFlags: { plan: true, 'plan-file': 'PLAN.md' },
+      });
+    }
+  });
+
+  test('preserves a pi: block on a loop node (the plannotator leak seam, #2073)', () => {
+    // Loops drop model/provider in the transform, but pi MUST survive — the loop
+    // is exactly where the implement node needs its posture scoped down.
+    const result = dagNodeSchema.safeParse({
+      id: 'implement',
+      loop: { prompt: 'do work', until: 'DONE', max_iterations: 5 },
+      pi: { interactive: false, extensionFlags: { plan: false } },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(isLoopNode(result.data)).toBe(true);
+      expect((result.data as DagNode & { pi?: unknown }).pi).toEqual({
+        interactive: false,
+        extensionFlags: { plan: false },
+      });
+    }
+  });
+
+  test('drops pi: from a bash node in the transform', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'sh',
+      bash: 'echo hi',
+      pi: { interactive: false },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect('pi' in result.data).toBe(false);
+    }
+  });
+
+  test('rejects a non-boolean/string extensionFlags value', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'plan',
+      prompt: 'plan it',
+      pi: { extensionFlags: { plan: 42 } },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  test('pi is warned-ignored on non-AI + loop_group nodes but supported on loop', () => {
+    // loop uses its per-iteration sendQuery, so pi must NOT be in its ignore list;
+    // loop_group never sendQuerys (body nodes carry their own pi), so it warns.
+    expect(LOOP_NODE_AI_FIELDS).not.toContain('pi');
+    expect(LOOP_GROUP_NODE_AI_FIELDS).toContain('pi');
+    expect(SCRIPT_NODE_AI_FIELDS).toContain('pi');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // isScriptNode
 // ---------------------------------------------------------------------------
 
@@ -807,9 +876,17 @@ describe('dagNodeSchema — loop_group', () => {
 });
 
 describe('LOOP_GROUP_NODE_AI_FIELDS', () => {
-  test('mirrors LOOP_NODE_AI_FIELDS (model/provider forwarded to body AI nodes)', () => {
+  test('excludes model/provider (forwarded to body AI nodes)', () => {
     expect(LOOP_GROUP_NODE_AI_FIELDS).not.toContain('model');
     expect(LOOP_GROUP_NODE_AI_FIELDS).not.toContain('provider');
-    expect(LOOP_GROUP_NODE_AI_FIELDS).toEqual(LOOP_NODE_AI_FIELDS);
+  });
+
+  test('differs from LOOP_NODE_AI_FIELDS only on pi (#2133)', () => {
+    // A plain loop: node calls sendQuery itself, so pi IS honored there (not warned).
+    // A loop_group node never calls sendQuery — body nodes carry their own pi — so
+    // pi is warned-ignored on the group. That single-key difference is intentional.
+    expect(LOOP_NODE_AI_FIELDS).not.toContain('pi');
+    expect(LOOP_GROUP_NODE_AI_FIELDS).toContain('pi');
+    expect(LOOP_GROUP_NODE_AI_FIELDS.filter(f => f !== 'pi')).toEqual([...LOOP_NODE_AI_FIELDS]);
   });
 });

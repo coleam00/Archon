@@ -391,6 +391,18 @@ export interface NodeConfig {
   >;
   allowed_tools?: string[];
   denied_tools?: string[];
+  /**
+   * Portable per-node Pi extension-posture override (issue #2133). Carries the
+   * workflow-YAML `pi:` block — the highest-precedence layer over the
+   * install-level `assistants.pi.nodes.<nodeId>` map (#2124) and assistant-level
+   * defaults. Consumed only by the Pi provider (`resolvePiExtensionSettings`);
+   * other providers ignore it. It is exactly the extension-posture subset of
+   * `PiProviderDefaults`, so we derive it rather than re-declare the fields. The
+   * workflows-side authoring schema (`PiNodeConfig` in @archon/workflows) is a
+   * separate hand-mirror only because that package can't import runtime values
+   * across the @archon/providers/types contract boundary.
+   */
+  pi?: Pick<PiProviderDefaults, 'enableExtensions' | 'interactive' | 'extensionFlags'>;
   effort?: string;
   thinking?: unknown;
   sandbox?: unknown;

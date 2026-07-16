@@ -1877,6 +1877,51 @@ nodes:
       expect(warnedFields).not.toContain('model');
       expect(warnedFields).not.toContain('provider');
     });
+
+    it('should NOT warn about pi: on loop nodes and should preserve it (#2133)', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      // The portable pi: posture is threaded into each loop iteration's sendQuery,
+      // so it must survive the transform AND not be flagged as an ignored AI field.
+      await writeFile(
+        join(workflowDir, 'loop-pi.yaml'),
+        // No workflow-level provider: (unregistered in this unit context) — the
+        // pi: block is plain node data the loader preserves regardless of provider.
+        `
+name: loop-pi
+description: Loop with per-node Pi posture
+nodes:
+  - id: implement
+    loop:
+      prompt: "Do something"
+      until: "COMPLETE"
+      max_iterations: 3
+    pi:
+      interactive: false
+      extensionFlags:
+        plan: false
+`
+      );
+
+      (mockLogger.warn as Mock<() => undefined>).mockClear();
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
+
+      const node = result.workflows[0].workflow.nodes[0];
+      expect(isLoopNode(node)).toBe(true);
+      expect((node as typeof node & { pi?: unknown }).pi).toEqual({
+        interactive: false,
+        extensionFlags: { plan: false },
+      });
+
+      const warnCalls = (mockLogger.warn as Mock<() => undefined>).mock.calls;
+      const aiFieldWarnings = warnCalls.filter(
+        call => typeof call[1] === 'string' && call[1].includes('ai_fields_ignored')
+      );
+      expect(aiFieldWarnings).toHaveLength(0);
+    });
   });
 
   describe('DAG output ref validation', () => {
