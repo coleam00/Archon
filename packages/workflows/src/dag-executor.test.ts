@@ -68,9 +68,18 @@ import {
 import { writeNodeArtifact } from './artifacts-index';
 import { getWorkflowEventEmitter, type WorkflowEmitterEvent } from './event-emitter';
 import { loadMcpConfig } from '@archon/providers/mcp/config';
-import type { DagNode, BashNode, ScriptNode, NodeOutput, WorkflowRun } from './schemas';
+import type {
+  DagNode,
+  BashNode,
+  ScriptNode,
+  NodeOutput,
+  WorkflowRun,
+  WorkflowDefinition,
+} from './schemas';
+import { dagNodeSchema } from './schemas';
 import { discoverWorkflows } from './workflow-discovery';
 import { parseWorkflow } from './loader';
+import { expandWorkflowIncludes } from './include-expander';
 import { OutputRefError } from './output-ref';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
@@ -13469,5 +13478,398 @@ describe('executeDagWorkflow -- provider-boundary session threading (#1992)', ()
     expect('sessionProvider' in pauseCtx).toBe(true);
     expect(pauseCtx.sessionId).toBeNull();
     expect(pauseCtx.sessionProvider).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Include expansion — the "zero new runtime machinery" proof.
+//
+// Expand a parent that `include:`s a child (via expandWorkflowIncludes, exactly
+// as discovery does), then run the flattened definition through executeDagWorkflow.
+// The executor never sees an include node; the namespaced nodes behave as ordinary
+// top-level nodes for events, terminal-output selection, resume-skip, and always_run.
+// ---------------------------------------------------------------------------
+
+describe('executeDagWorkflow -- include expansion (zero runtime machinery)', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(
+      tmpdir(),
+      `dag-include-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    await mkdir(testDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    try {
+      await rm(testDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  });
+
+  function buildWf(name: string, nodes: unknown[]): WorkflowDefinition {
+    return { name, description: name, nodes: nodes.map(n => dagNodeSchema.parse(n)) };
+  }
+
+  /**
+   * Parent that includes a 2-node bash child (a -> b) and reads `$inc.output`.
+   * Expands to: inc__a -> inc__b -> consumer(reads $inc__b.output). `alwaysRunA`
+   * flags the child's entry node so resume re-executes it.
+   */
+  function expandedParentNodes(alwaysRunA = false): DagNode[] {
+    const child = buildWf('inc-child', [
+      { id: 'a', bash: 'echo AAA', ...(alwaysRunA ? { always_run: true } : {}) },
+      { id: 'b', bash: 'echo BBB', depends_on: ['a'] },
+    ]);
+    const parent = buildWf('inc-parent', [
+      { id: 'inc', include: 'inc-child' },
+      { id: 'consumer', bash: 'echo $inc.output', depends_on: ['inc'] },
+    ]);
+    const { workflows, errors } = expandWorkflowIncludes(
+      new Map([
+        ['inc-child', child],
+        ['inc-parent', parent],
+      ])
+    );
+    expect(errors).toHaveLength(0);
+    return [...workflows.get('inc-parent')!.nodes];
+  }
+
+  function eventList(deps: WorkflowDeps): Array<{ event_type: string; step_name: string }> {
+    return (deps.store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls.map(
+      (call: unknown[]) => call[0] as { event_type: string; step_name: string }
+    );
+  }
+
+  it('emits namespaced step_names and resolves $inc.output to the child terminal node', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('inc-run-id', { workflow_name: 'inc-parent' });
+
+    const terminalOutput = await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-inc',
+      testDir,
+      { name: 'inc-parent', nodes: expandedParentNodes() },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const events = eventList(mockDeps);
+    const completedStepNames = events
+      .filter(e => e.event_type === 'node_completed')
+      .map(e => e.step_name);
+    // Included nodes surface as ordinary namespaced top-level nodes in the event log.
+    expect(completedStepNames).toContain('inc__a');
+    expect(completedStepNames).toContain('inc__b');
+    expect(completedStepNames).toContain('consumer');
+    // No include node ever reached the executor.
+    expect(events.every(e => e.step_name !== 'inc')).toBe(true);
+
+    // $inc.output was rewritten to the child terminal ($inc__b.output = "BBB"), so the
+    // run's terminal output (consumer, the sole sink) carries it.
+    expect(terminalOutput).toContain('BBB');
+  });
+
+  it('resume skips a completed namespaced node and re-runs the rest', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('inc-resume-id', { workflow_name: 'inc-parent' });
+
+    // Prior run completed the namespaced entry node inc__a.
+    const prior = new Map<string, string>([['inc__a', 'AAA']]);
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-inc',
+      testDir,
+      { name: 'inc-parent', nodes: expandedParentNodes() },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      prior
+    );
+
+    const events = eventList(mockDeps);
+    // inc__a skipped as prior-success (its namespaced id matched the persisted map).
+    expect(
+      events.some(e => e.event_type === 'node_skipped_prior_success' && e.step_name === 'inc__a')
+    ).toBe(true);
+    // Downstream namespaced node + consumer still executed.
+    const completed = events.filter(e => e.event_type === 'node_completed').map(e => e.step_name);
+    expect(completed).toContain('inc__b');
+    expect(completed).toContain('consumer');
+    expect(completed).not.toContain('inc__a');
+  });
+
+  it('always_run on an included node re-executes it on resume', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('inc-always-id', { workflow_name: 'inc-parent' });
+
+    const prior = new Map<string, string>([['inc__a', 'AAA']]);
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-inc',
+      testDir,
+      { name: 'inc-parent', nodes: expandedParentNodes(true) },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      prior
+    );
+
+    const events = eventList(mockDeps);
+    // always_run survived inlining: inc__a is force-reset (re-executed), not skipped.
+    expect(
+      events.some(e => e.event_type === 'node_always_run_reset' && e.step_name === 'inc__a')
+    ).toBe(true);
+    expect(
+      events.some(e => e.event_type === 'node_skipped_prior_success' && e.step_name === 'inc__a')
+    ).toBe(false);
+    expect(events.some(e => e.event_type === 'node_completed' && e.step_name === 'inc__a')).toBe(
+      true
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// An unexpanded include node must FAIL LOUDLY, never silently skip — the
+// fail-fast guard runs before resume-skip / when / trigger-rule handling.
+// ---------------------------------------------------------------------------
+
+describe('executeDagWorkflow -- unexpanded include node fail-fast guard', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(tmpdir(), `dag-inc-guard-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await mkdir(testDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    try {
+      await rm(testDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  });
+
+  function events(
+    deps: WorkflowDeps
+  ): Array<{ event_type: string; step_name: string; data: unknown }> {
+    return (deps.store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls.map(
+      (call: unknown[]) => call[0] as { event_type: string; step_name: string; data: unknown }
+    );
+  }
+
+  it('fails (not skips) an unexpanded include node that matches a prior-completed entry', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('inc-guard-resume', { workflow_name: 'inc-guard' });
+
+    // A raw include node reaching the executor with a resume entry for its own id: the
+    // guard must fire BEFORE the resume-skip check, so it fails instead of being skipped.
+    const includeNode = dagNodeSchema.parse({ id: 'inc', include: 'some-block' });
+    const prior = new Map<string, string>([['inc', 'stale prior output']]);
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-inc-guard',
+      testDir,
+      { name: 'inc-guard', nodes: [includeNode] },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      prior
+    );
+
+    const evs = events(mockDeps);
+    const failed = evs.find(e => e.event_type === 'node_failed' && e.step_name === 'inc');
+    expect(failed).toBeDefined();
+    expect((failed!.data as { error: string }).error).toContain('reached the executor unexpanded');
+    // Crucially, it was NOT silently skipped as a prior success.
+    expect(evs.some(e => e.event_type === 'node_skipped_prior_success')).toBe(false);
+  });
+
+  it('fails (not skips) an unexpanded include node whose when: would evaluate false', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('inc-guard-when', { workflow_name: 'inc-guard' });
+
+    // `flag` emits NO; the include's when checks == YES (false → would normally skip). The
+    // guard must fire first and fail the node instead.
+    const nodes = [
+      dagNodeSchema.parse({ id: 'flag', bash: 'echo NO' }),
+      dagNodeSchema.parse({
+        id: 'inc',
+        include: 'some-block',
+        depends_on: ['flag'],
+        when: "$flag.output == 'YES'",
+      }),
+    ];
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-inc-guard',
+      testDir,
+      { name: 'inc-guard', nodes },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const evs = events(mockDeps);
+    const failed = evs.find(e => e.event_type === 'node_failed' && e.step_name === 'inc');
+    expect(failed).toBeDefined();
+    expect((failed!.data as { error: string }).error).toContain('reached the executor unexpanded');
+    // It was NOT skipped via the when: gate.
+    expect(evs.some(e => e.event_type === 'node_skipped' && e.step_name === 'inc')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// An approval node inside an included block: pause + capture_response + no
+// cross-talk when the same block is included twice.
+// ---------------------------------------------------------------------------
+
+describe('executeDagWorkflow -- approval node inside an included block', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(
+      tmpdir(),
+      `dag-inc-approval-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    await mkdir(testDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    try {
+      await rm(testDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  });
+
+  function buildWf(name: string, nodes: unknown[]): WorkflowDefinition {
+    return { name, description: name, nodes: nodes.map(n => dagNodeSchema.parse(n)) };
+  }
+
+  it('pauses at the namespaced approval id and exposes capture_response via it', async () => {
+    const block = buildWf('apblk', [
+      { id: 'approve', approval: { message: 'Approve this?', capture_response: true } },
+    ]);
+    const parent = buildWf('apparent', [
+      { id: 'setup', bash: 'echo setup' },
+      { id: 'rev', include: 'apblk', depends_on: ['setup'] },
+      // Reads the include's output; the block's sole sink is the approval node, so
+      // $rev.output resolves to the captured response via the namespaced id.
+      { id: 'after', bash: 'echo $rev.output', depends_on: ['rev'] },
+    ]);
+    const { workflows, errors } = expandWorkflowIncludes(
+      new Map([
+        ['apblk', block],
+        ['apparent', parent],
+      ])
+    );
+    expect(errors).toHaveLength(0);
+    const expanded = workflows.get('apparent')!;
+
+    // capture_response (stored as $<approvalId>.output) is reachable via the namespaced id.
+    const after = expanded.nodes.find(n => n.id === 'after');
+    expect(after && 'bash' in after ? after.bash : '').toBe('echo $rev__approve.output');
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('inc-approval-run', { workflow_name: 'apparent' });
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-inc-approval',
+      testDir,
+      { name: 'apparent', nodes: expanded.nodes },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const pauseCalls = (
+      store.pauseWorkflowRun as Mock<(id: string, ctx: Record<string, unknown>) => Promise<void>>
+    ).mock.calls;
+    expect(pauseCalls.length).toBe(1);
+    // The gate pauses under the namespaced approval id, not the bare block id.
+    expect(pauseCalls[0][1]).toMatchObject({
+      type: 'approval',
+      nodeId: 'rev__approve',
+      message: 'Approve this?',
+      captureResponse: true,
+    });
+  });
+
+  it('the same approval block included twice yields distinct namespaced approval ids', () => {
+    const block = buildWf('apblk', [{ id: 'approve', approval: { message: 'Approve?' } }]);
+    const parent = buildWf('apparent', [
+      { id: 'a', include: 'apblk' },
+      { id: 'b', include: 'apblk', depends_on: ['a'] },
+    ]);
+    const { workflows, errors } = expandWorkflowIncludes(
+      new Map([
+        ['apblk', block],
+        ['apparent', parent],
+      ])
+    );
+    expect(errors).toHaveLength(0);
+    const ids = workflows.get('apparent')!.nodes.map(n => n.id);
+    // Distinct ApprovalContext.nodeId per inclusion → no cross-talk between the two gates.
+    expect(ids).toContain('a__approve');
+    expect(ids).toContain('b__approve');
+    expect(new Set(ids).size).toBe(ids.length);
   });
 });

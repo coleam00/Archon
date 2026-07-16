@@ -31,7 +31,7 @@ function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('workflow.validator');
   return cachedLog;
 }
-import { isBashNode, isLoopNode, isLoopGroupNode, isScriptNode } from './schemas';
+import { isBashNode, isLoopNode, isLoopGroupNode, isScriptNode, isIncludeNode } from './schemas';
 import type { WorkflowDefinition, DagNode, WorkflowSource } from './schemas';
 import type { ScriptRuntime } from './script-discovery';
 import { discoverScriptsForCwd } from './script-discovery';
@@ -355,6 +355,14 @@ export async function validateWorkflowResources(
   collectNodes(workflow.nodes);
 
   for (const node of allNodes) {
+    // Include nodes carry no resources to check — the target workflow is resolved and
+    // inlined at DISCOVERY time (see include-expander.ts), so discovery-fed validation
+    // (CLI `validate workflows`) sees the already-expanded nodes and checks their
+    // commands/mcp/skills normally. This skip is DEFENSIVE-ONLY: no current caller reaches
+    // it with an unexpanded include node (POST /api/workflows/validate only runs
+    // parseWorkflow, not this resource pass). Kept so a future raw caller can't crash here.
+    if (isIncludeNode(node)) continue;
+
     const provider = resolveProvider(node, workflow.provider, defaultProvider);
 
     if (requiresPortableModelRefs && 'model' in node && node.model?.startsWith('@')) {

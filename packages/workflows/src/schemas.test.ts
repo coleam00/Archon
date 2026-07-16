@@ -5,11 +5,14 @@ import {
   isScriptNode,
   isLoopNode,
   isLoopGroupNode,
+  isIncludeNode,
   isTriggerRule,
   TRIGGER_RULES,
   SCRIPT_NODE_AI_FIELDS,
   LOOP_NODE_AI_FIELDS,
   LOOP_GROUP_NODE_AI_FIELDS,
+  INCLUDE_NODE_IGNORED_FIELDS,
+  BASH_NODE_AI_FIELDS,
   approvalOnRejectSchema,
   dagNodeSchema,
 } from './schemas';
@@ -21,6 +24,7 @@ import type {
   BashNode,
   CancelNode,
   ScriptNode,
+  IncludeNode,
   TriggerRule,
 } from './schemas';
 
@@ -888,5 +892,99 @@ describe('LOOP_GROUP_NODE_AI_FIELDS', () => {
     expect(LOOP_NODE_AI_FIELDS).not.toContain('pi');
     expect(LOOP_GROUP_NODE_AI_FIELDS).toContain('pi');
     expect(LOOP_GROUP_NODE_AI_FIELDS.filter(f => f !== 'pi')).toEqual([...LOOP_NODE_AI_FIELDS]);
+  });
+});
+
+describe('dagNodeSchema — include', () => {
+  test('parses a valid include node (only structural fields survive)', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'review',
+      include: 'archon-review-block',
+      depends_on: ['finalize-pr'],
+      when: 'always',
+      trigger_rule: 'all_success',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(isIncludeNode(result.data)).toBe(true);
+      const node = result.data as IncludeNode;
+      expect(node.include).toBe('archon-review-block');
+      expect(node.depends_on).toEqual(['finalize-pr']);
+      expect(node.when).toBe('always');
+      expect(node.trigger_rule).toBe('all_success');
+    }
+  });
+
+  test('trims surrounding whitespace on the target name', () => {
+    const result = dagNodeSchema.safeParse({ id: 'r', include: '  archon-review-block  ' });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect((result.data as IncludeNode).include).toBe('archon-review-block');
+    }
+  });
+
+  test('include + command are mutually exclusive', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'r',
+      command: 'build',
+      include: 'archon-review-block',
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].message).toContain('mutually exclusive');
+      expect(result.error.issues[0].message).toContain('include');
+    }
+  });
+
+  test('empty include is rejected', () => {
+    const result = dagNodeSchema.safeParse({ id: 'r', include: '' });
+    expect(result.success).toBe(false);
+  });
+
+  test("include with 'with:' is rejected (not yet supported)", () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'r',
+      include: 'archon-review-block',
+      with: { pr: '$create.output' },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const withIssue = result.error.issues.find(i => i.message.includes('with:'));
+      expect(withIssue).toBeDefined();
+      expect(withIssue?.message).toContain('not yet supported');
+      expect(withIssue?.path).toEqual(['with']);
+    }
+  });
+
+  test('include node drops AI/exec fields (they are ignored)', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'r',
+      include: 'archon-review-block',
+      model: 'opus',
+      always_run: true,
+      output_type: 'code',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const node = result.data as Record<string, unknown>;
+      expect(node.model).toBeUndefined();
+      expect(node.always_run).toBeUndefined();
+      expect(node.output_type).toBeUndefined();
+    }
+  });
+});
+
+describe('INCLUDE_NODE_IGNORED_FIELDS', () => {
+  test('is a superset of BASH_NODE_AI_FIELDS plus exec-only fields', () => {
+    for (const f of BASH_NODE_AI_FIELDS) {
+      expect(INCLUDE_NODE_IGNORED_FIELDS).toContain(f);
+    }
+    for (const f of ['retry', 'output_type', 'always_run', 'idle_timeout', 'timeout']) {
+      expect(INCLUDE_NODE_IGNORED_FIELDS).toContain(f);
+    }
+    // Structural fields the include node legitimately carries are NOT ignored.
+    for (const f of ['id', 'depends_on', 'when', 'trigger_rule', 'include', 'description']) {
+      expect(INCLUDE_NODE_IGNORED_FIELDS).not.toContain(f);
+    }
   });
 });

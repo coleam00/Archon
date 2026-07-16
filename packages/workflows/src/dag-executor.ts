@@ -53,6 +53,7 @@ import {
   isApprovalNode,
   isCancelNode,
   isScriptNode,
+  isIncludeNode,
   isPersistableNode,
   isApprovalContext,
 } from './schemas';
@@ -606,6 +607,11 @@ function shellQuoteOrFile(
 /**
  * Substitute $node_id.output and $node_id.output.field references in a prompt.
  * Called AFTER the standard substituteWorkflowVariables pass.
+ *
+ * KEEP IN SYNC (three ref-surface enumerations must agree): the fields this is called on
+ * (search call sites below), the loader's validateDagStructure scan (which validates the
+ * same refs), and rewriteNodeOutputRefs in include-expander.ts (which renames them on
+ * inline). Adding a substituted field to one means updating all three.
  *
  * @param escapedForBash - When true, wraps substituted values in single quotes so
  *   they are safe to embed in bash scripts passed to `bash -c`. Set true only for
@@ -4524,6 +4530,19 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
     const layerResults = await Promise.allSettled(
       layer.map(async (node): Promise<LayerNodeResult> => {
         try {
+          // Include nodes are expanded away at discovery time (include-expander.ts): one
+          // must never reach the executor. This guard is FIRST in the per-node body — before
+          // resume-skip, `when:`, and trigger-rule handling — so an unexpanded include node
+          // cannot slip through by matching a prior-completed entry, a false `when:`, or a
+          // failing trigger rule. If one gets here, discovery was bypassed; fail loud rather
+          // than silently accepting an invalid runtime DAG.
+          if (isIncludeNode(node)) {
+            throw new Error(
+              `Internal error: include node '${node.id}' reached the executor unexpanded. ` +
+                'Include nodes must be resolved by expandWorkflowIncludes() during discovery.'
+            );
+          }
+
           // 0. Skip if this node completed successfully in a prior run (resume path).
           // `always_run: true` opts the node out of resume caching — re-execute even
           // when the prior run completed it.
