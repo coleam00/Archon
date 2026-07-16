@@ -790,6 +790,31 @@ describe('substituteNodeOutputRefs', () => {
     const outputs = new Map([['a', makeOutput('completed', '{"type":"BUG"}')]]);
     expect(() => substituteNodeOutputRefs('$a.output.missing', outputs)).toThrow(OutputRefError);
   });
+
+  it('unknown node ref WITH a field throws (no-silent-drop, unknown-node)', () => {
+    // The whole-text `$missing.output` form stays lenient ('' — see test above), but a
+    // `.field` ref to an unknown id is a typo the load-time validator can't always see
+    // (bash/script/approval/cancel + command-file refs aren't scanned). It must fail the
+    // consuming node loudly, matching known-producer strict-field posture.
+    const outputs = new Map([['analyze', makeOutput('completed', '{"type":"BUG"}')]]);
+    let caught: unknown;
+    try {
+      substituteNodeOutputRefs('Fix $analze.output.type', outputs);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(OutputRefError);
+    expect((caught as OutputRefError).reason).toBe('unknown-node');
+    // did-you-mean names the near miss.
+    expect((caught as OutputRefError).message).toContain("'analyze'");
+  });
+
+  it('unknown node ref WITH a field throws even in bash-escaped mode', () => {
+    const outputs = new Map<string, NodeOutput>();
+    expect(() => substituteNodeOutputRefs('echo $missing.output.field', outputs, true)).toThrow(
+      OutputRefError
+    );
+  });
 });
 
 describe('substituteNodeOutputRefs -- shell escaping', () => {

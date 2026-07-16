@@ -117,6 +117,22 @@ describe('evaluateCondition', () => {
     expect(warnCalls[0][0]).toEqual(expect.objectContaining({ nodeId: 'missing' }));
   });
 
+  it('unknown node WITH a field: throws (no-silent-drop, unknown-node)', () => {
+    // Whole-text `$missing.output` stays lenient (test above), but a `.field` ref to
+    // an unknown id is a typo — it must fail the node, matching the strict field
+    // posture and `substituteNodeOutputRefs`. did-you-mean names the near miss.
+    const outputs = new Map([['classify', makeOutput('BUG')]]);
+    let caught: unknown;
+    try {
+      evaluateCondition("$classfy.output.type == 'BUG'", outputs);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(OutputRefError);
+    expect((caught as OutputRefError).reason).toBe('unknown-node');
+    expect((caught as OutputRefError).message).toContain("'classify'");
+  });
+
   it('failed node: output is empty string, conditions evaluate accordingly', () => {
     const outputs = new Map([['classify', makeOutput('', 'failed')]]);
     expect(evaluateCondition("$classify.output == ''", outputs).result).toBe(true);

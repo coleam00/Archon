@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'bun:test';
 
-import { declaredFieldsFromSchema, OutputRefError, resolveNodeOutputField } from './output-ref';
+import {
+  declaredFieldsFromSchema,
+  OutputRefError,
+  resolveNodeOutputField,
+  similarNodeIds,
+} from './output-ref';
 import type { NodeOutput } from './schemas';
 
 function completed(
@@ -163,5 +168,44 @@ describe('resolveNodeOutputField — schemaless producer (bash/script/prose)', (
 
   it('top-level JSON array → throws unparseable (no named fields)', () => {
     expect(() => resolveNodeOutputField(completed('[1,2,3]'), 'n', 'x')).toThrow(OutputRefError);
+  });
+});
+
+describe('OutputRefError — unknown-node', () => {
+  it('names the unknown id and the whole ref', () => {
+    const e = new OutputRefError('typo', 'field', 'unknown-node');
+    expect(e.reason).toBe('unknown-node');
+    expect(e.message).toContain("'typo'");
+    expect(e.message).toContain('$typo.output.field');
+    // Accurate for both a typo AND a real node that has not run before the ref.
+    expect(e.message).toContain('has not run before this reference');
+  });
+
+  it('appends a did-you-mean hint when candidates are supplied', () => {
+    const e = new OutputRefError('analze', 'type', 'unknown-node', ['analyze', 'classify']);
+    expect(e.message).toContain('Did you mean');
+    expect(e.message).toContain("'analyze'");
+    expect(e.message).toContain("'classify'");
+  });
+
+  it('omits the did-you-mean hint when no candidates are close', () => {
+    const e = new OutputRefError('zzz', 'field', 'unknown-node', []);
+    expect(e.message).not.toContain('Did you mean');
+  });
+});
+
+describe('similarNodeIds', () => {
+  it('ranks the nearest known id first', () => {
+    const result = similarNodeIds('analze', ['analyze', 'build', 'classify']);
+    expect(result[0]).toBe('analyze');
+  });
+
+  it('returns [] when nothing is close', () => {
+    expect(similarNodeIds('xyzzy', ['analyze', 'build'])).toEqual([]);
+  });
+
+  it('accepts a Map keys iterable', () => {
+    const map = new Map<string, NodeOutput>([['analyze', completed('x')]]);
+    expect(similarNodeIds('analze', map.keys())).toContain('analyze');
   });
 });
