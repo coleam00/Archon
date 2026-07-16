@@ -44,6 +44,9 @@ const CODEX_VENDOR_DIR = 'vendor/codex';
 
 const SUPPORTED_PLATFORMS = ['darwin', 'linux', 'win32'];
 
+/** Which resolution tier produced the Codex binary path. */
+export type CodexBinarySource = 'env' | 'config' | 'vendor' | 'autodetect';
+
 /** Returns the vendor binary filename for the current platform, or undefined if unsupported. */
 function getVendorBinaryName(): string | undefined {
   if (!SUPPORTED_PLATFORMS.includes(process.platform)) return undefined;
@@ -60,6 +63,19 @@ function getVendorBinaryName(): string | undefined {
 export async function resolveCodexBinaryPath(
   configCodexBinaryPath?: string
 ): Promise<string | undefined> {
+  const resolved = await resolveCodexBinaryWithSource(configCodexBinaryPath);
+  return resolved?.path;
+}
+
+/**
+ * Same resolution as {@link resolveCodexBinaryPath}, but also reports which
+ * tier produced the path. Used by `archon doctor` to tell the user how the
+ * binary was found (env / config / vendor / autodetect). Returns undefined in
+ * dev mode; throws with install instructions in binary mode when unresolved.
+ */
+export async function resolveCodexBinaryWithSource(
+  configCodexBinaryPath?: string
+): Promise<{ path: string; source: CodexBinarySource } | undefined> {
   if (!BUNDLED_IS_BINARY) return undefined;
 
   // 1. Environment variable override
@@ -72,7 +88,7 @@ export async function resolveCodexBinaryPath(
       );
     }
     getLog().info({ binaryPath: envPath, source: 'env' }, 'codex.binary_resolved');
-    return envPath;
+    return { path: envPath, source: 'env' };
   }
 
   // 2. Config file override
@@ -84,7 +100,7 @@ export async function resolveCodexBinaryPath(
       );
     }
     getLog().info({ binaryPath: configCodexBinaryPath, source: 'config' }, 'codex.binary_resolved');
-    return configCodexBinaryPath;
+    return { path: configCodexBinaryPath, source: 'config' };
   }
 
   // 3. Check vendor directory (user-placed binary)
@@ -95,7 +111,7 @@ export async function resolveCodexBinaryPath(
 
     if (fileExists(vendorBinaryPath)) {
       getLog().info({ binaryPath: vendorBinaryPath, source: 'vendor' }, 'codex.binary_resolved');
-      return vendorBinaryPath;
+      return { path: vendorBinaryPath, source: 'vendor' };
     }
   }
 
@@ -107,7 +123,7 @@ export async function resolveCodexBinaryPath(
   for (const probePath of autodetectPaths) {
     if (fileExists(probePath)) {
       getLog().info({ binaryPath: probePath, source: 'autodetect' }, 'codex.binary_resolved');
-      return probePath;
+      return { path: probePath, source: 'autodetect' };
     }
   }
 
