@@ -115,14 +115,12 @@ function makePlatform(): IWorkflowPlatform & { sendMessage: ReturnType<typeof mo
 function makeDeps(store?: IWorkflowStore): WorkflowDeps {
   return {
     store: store ?? makeStore(),
-    loadConfig: mock(
-      async (): Promise<WorkflowConfig> => ({
-        assistant: 'claude' as const,
-        assistants: { claude: {}, codex: {} },
-        baseBranch: '',
-        commands: { folder: '' },
-      })
-    ),
+    loadConfig: mock(async (): Promise<WorkflowConfig> => ({
+      assistant: 'claude' as const,
+      assistants: { claude: {}, codex: {} },
+      baseBranch: '',
+      commands: { folder: '' },
+    })),
     getAgentProvider: mock(() => ({
       run: mock(async () => {}),
     })),

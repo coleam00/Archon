@@ -67,7 +67,7 @@ export function BuilderPage({ initialWorkflow, onChange }: BuilderPageProps): Re
 
   /** Stamp mutating actions with the wall clock for history coalescing. */
   const stamped = useCallback((action: UnstampedAction): void => {
-    dispatch({ ...action, at: Date.now() } as EditorAction);
+    dispatch({ ...action, at: Date.now() });
   }, []);
 
   // Re-validate on a debounce after edits (PR-1 client tiers only).

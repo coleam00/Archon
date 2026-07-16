@@ -325,8 +325,7 @@ export type SystemPromptInput = string | string[] | SystemPromptPreset;
  * bug the executor prevents, not something the provider silently downgrades.
  */
 export type ExecutionContext =
-  | { kind: 'host' }
-  | { kind: 'container'; containerId: string; execUser?: string };
+  { kind: 'host' } | { kind: 'container'; containerId: string; execUser?: string };
 
 /**
  * Universal request options accepted by all providers.
@@ -551,8 +550,7 @@ export interface CredentialSpec {
  * introspection API and exposes it through a dedicated endpoint).
  */
 export type ProviderCredentialCatalog =
-  | { kind: 'static'; specs: CredentialSpec[] }
-  | { kind: 'dynamic' };
+  { kind: 'static'; specs: CredentialSpec[] } | { kind: 'dynamic' };
 
 /**
  * Registration entry for a provider in the provider registry.

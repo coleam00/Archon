@@ -156,7 +156,7 @@ function stripDeps(nodes: readonly BuilderNode[], removed: ReadonlySet<string>):
     return {
       ...node,
       base: { ...node.base, depends_on: filtered.length > 0 ? filtered : undefined },
-    } as BuilderNode;
+    };
   });
 }
 
@@ -205,13 +205,13 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       if (!NODE_ID_PATTERN.test(nextId)) return state;
       if (ids.has(nextId)) return state;
       const nodes = state.workflow.nodes.map(node => {
-        if (node.id === action.id) return { ...node, id: nextId } as BuilderNode;
+        if (node.id === action.id) return { ...node, id: nextId };
         const deps = node.base.depends_on;
         if (!deps?.includes(action.id)) return node;
         return {
           ...node,
           base: { ...node.base, depends_on: deps.map(d => (d === action.id ? nextId : d)) },
-        } as BuilderNode;
+        };
       });
       const positions = new Map(state.positions);
       const pos = positions.get(action.id);
@@ -271,7 +271,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
             ...node.base,
             depends_on: [...(node.base.depends_on ?? []), action.source],
           },
-        } as BuilderNode;
+        };
       });
       return {
         ...state,
@@ -300,7 +300,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         return {
           ...node,
           base: { ...node.base, depends_on: filtered.length > 0 ? filtered : undefined },
-        } as BuilderNode;
+        };
       });
 
       const anyNodeRemoved = kept.length !== state.workflow.nodes.length;

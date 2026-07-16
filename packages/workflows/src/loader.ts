@@ -295,8 +295,7 @@ export function validateDagStructure(
 }
 
 export type ParseResult =
-  | { workflow: WorkflowDefinition; error: null }
-  | { workflow: null; error: WorkflowLoadError };
+  { workflow: WorkflowDefinition; error: null } | { workflow: null; error: WorkflowLoadError };
 
 /**
  * Parse and validate a workflow YAML file

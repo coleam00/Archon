@@ -70,7 +70,7 @@ export function partitionNode(node: WireDagNode): {
 
   return {
     id: node.id,
-    base: base as BaseFields,
-    variantSpecific: variantSpecific as Partial<WireDagNode>,
+    base: base,
+    variantSpecific: variantSpecific,
   };
 }

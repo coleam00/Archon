@@ -136,7 +136,7 @@ function applyPatch(
  */
 export async function setUserTiers(userId: string, patch: UserTiersPatch): Promise<void> {
   const current = (await getUserAiPrefs(userId)).tiers ?? {};
-  const merged = applyPatch(current as Record<string, RawAliasEntry>, patch);
+  const merged = applyPatch(current, patch);
   await upsertPrefsColumn(userId, 'tiers', toJsonOrNull(merged));
 }
 

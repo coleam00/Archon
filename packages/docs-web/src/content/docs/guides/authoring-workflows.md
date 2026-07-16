@@ -172,8 +172,8 @@ nodes:
     provider: claude             # Per-node provider override
     model: haiku                 # Per-node model override
     # hooks:                     # Optional: per-node SDK hook callbacks (Claude only) — see hooks guide
-    # mcp: .archon/mcp/servers.json  # Optional: per-node MCP servers (Codex and Claude)
-    # skills: [remotion-best-practices]  # Optional: per-node skills (Claude only) — see skills guide
+    # mcp: .archon/mcp/servers.json  # Optional: per-node MCP servers (Claude, Codex, and Oh My Pi)
+    # skills: [remotion-best-practices]  # Optional: per-node skills (Claude, Pi, and Oh My Pi) — see skills guide
 ```
 
 ### Node Fields
@@ -210,17 +210,17 @@ nodes:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `provider` | string | inherited | Per-node provider override (any registered provider, e.g. `'claude'`, `'codex'`) |
-| `model` | string | inherited | Per-node model override |
-| `output_format` | object | — | JSON Schema for structured output. SDK-enforced on Claude/Codex/OpenCode; best-effort on Pi/Copilot (schema appended to prompt, JSON extracted + repaired). The parsed output is validated against the schema (every provider); a node that declares `output_format` but returns no schema-valid output **fails** rather than degrading silently. |
-| `allowed_tools` | string[] | — | Whitelist of built-in tools. `[]` = no tools. Claude only |
-| `denied_tools` | string[] | — | Tools to remove. Applied after `allowed_tools`. Claude only |
+| `provider` | string | inherited | Per-node provider override (any registered provider, e.g. `'claude'`, `'codex'`, `'pi'`, `'omp'`) |
+| `model` | string | inherited | Per-node model override. Oh My Pi uses `<omp-provider-id>/<model-id>` (for example `anthropic/claude-sonnet-4-5` or `openrouter/qwen/qwen3-coder`) |
+| `output_format` | object | — | JSON Schema for structured output. SDK-enforced on Claude/Codex/OpenCode; best-effort on Pi/Copilot/Oh My Pi (schema appended to prompt, JSON extracted + repaired). The parsed output is validated against the schema (every provider); a node that declares `output_format` but returns no schema-valid output **fails** rather than degrading silently. |
+| `allowed_tools` | string[] | — | Whitelist of built-in tools. `[]` = no tools. Supported by Claude, Pi, and Oh My Pi (use each provider's tool names; current OMP uses `grep` and `glob`) |
+| `denied_tools` | string[] | — | Tools to remove. Applied after `allowed_tools`. Supported by Claude, Pi, and Oh My Pi |
 | `hooks` | object | — | Per-node SDK hook callbacks. Claude only. See [Hooks](/guides/hooks/) |
-| `mcp` | string | — | Path to MCP server config JSON file. Codex and Claude. See [MCP Servers](/guides/mcp-servers/) |
-| `skills` | string[] | — | Skills to preload. Claude only. See [Skills](/guides/skills/) |
+| `mcp` | string | — | Path to MCP server config JSON file. Supported by Claude, Codex, and Oh My Pi. See [MCP Servers](/guides/mcp-servers/) |
+| `skills` | string[] | — | Skills to preload. Supported by Claude, Pi, and Oh My Pi. See [Skills](/guides/skills/) |
 | `agents` | object | — | Inline sub-agent definitions keyed by kebab-case ID. Claude only. See [Inline sub-agents](#inline-sub-agents) |
-| `effort` | `'low'`\|`'medium'`\|`'high'`\|`'max'` | — | Reasoning depth. Claude only. Also settable at workflow level |
-| `thinking` | string \| object | — | Thinking mode: `'adaptive'`, `'disabled'`, or `{type:'enabled', budgetTokens:N}`. Claude only. Also settable at workflow level |
+| `effort` | `'low'`\|`'medium'`\|`'high'`\|`'max'` | — | Reasoning depth. Supported by Claude, Pi, and Oh My Pi (`max` maps to provider-specific strongest setting). Also settable at workflow level |
+| `thinking` | string \| object | — | Claude extended thinking mode (`'adaptive'`, `'enabled'`, `'disabled'`, or object form). Use `effort` for Pi and Oh My Pi reasoning depth. Also settable at workflow level |
 | `maxBudgetUsd` | number | — | USD cost cap; node fails if exceeded. Claude only. Per-node only |
 | `systemPrompt` | string | — | Override the default `claude_code` system prompt for this node. Claude only. Per-node only |
 | `fallbackModel` | string | — | Model to use if primary model fails. Claude only. Also settable at workflow level |
@@ -247,6 +247,8 @@ These fields map directly to Claude Agent SDK options. All are Claude-only — C
   thinking: adaptive              # 'adaptive' | 'disabled'
   # thinking: { type: enabled, budgetTokens: 8000 }  # object form
 ```
+
+For Pi and Oh My Pi, set `effort: low|medium|high|max` instead of `thinking`. The workflow schema accepts Claude thinking strings/object forms only.
 
 **maxBudgetUsd** — per-node USD cost cap (node fails with error if exceeded):
 
@@ -420,32 +422,34 @@ nodes:
 
 - The output is captured as a JSON string and available via `$classify.output` (full JSON) or `$classify.output.type` (field access)
 - Use `output_format` when downstream nodes need to branch on specific values via `when:`
-- **Validated + reask + fail-fast.** The parsed output is validated against your schema for *every* provider (a net for refusals / `max_tokens` truncation that bypass even SDK enforcement). On a miss, best-effort providers (Pi/Copilot) re-ask up to 3× with the schema errors appended; enforced providers fail immediately. A node that declares `output_format` but still has no schema-valid output **fails** — it no longer completes-with-prose and silently feeds `''` downstream.
+- **Validated + reask + fail-fast.** The parsed output is validated against your schema for *every* provider (a net for refusals / `max_tokens` truncation that bypass even SDK enforcement). On a miss, best-effort providers (Pi/Copilot/Oh My Pi) re-ask up to 3× with the schema errors appended; enforced providers fail immediately. A node that declares `output_format` but still has no schema-valid output **fails** — it no longer completes-with-prose and silently feeds `''` downstream.
 - **Field access is strict.** `$classify.output.type` resolves only when `type` is in the schema. A reference to a field **not declared** in the schema fails the consuming node (a typo no longer silently becomes `''`); a field you declared **optional** but the model omitted resolves to `''`. For schemaless `bash`/`script` nodes, a `.field` ref requires the output to be JSON containing that key — otherwise the consuming node fails, so always emit every key you reference (or use whole-text `$node.output`).
 
 ### `allowed_tools` and `denied_tools` for Tool Restrictions
 
-Restrict which built-in tools a node can use without relying on prompt instructions. Restrictions are enforced at the Claude SDK level.
+Restrict which built-in tools a node can use without relying on prompt instructions. Restrictions are enforced for Claude, OpenCode, Pi, Copilot, and Oh My Pi. Tool names are provider-specific; current Pi and Oh My Pi releases both use `grep` and `glob`.
 
 ```yaml
 nodes:
   - id: review
     command: code-review
-    allowed_tools: [Read, Grep, Glob]   # whitelist — only these tools available
+    allowed_tools: [Read, Grep, Glob]   # Claude-style names
 
-  - id: implement
-    command: implement-feature
-    denied_tools: [WebSearch, WebFetch] # blacklist — remove these tools
+  - id: omp-review
+    provider: omp
+    model: anthropic/claude-sonnet-4-5
+    command: code-review
+    allowed_tools: [read, grep, glob]   # OMP-style names
 
-  - id: mcp-only
-    command: mcp-command
+  - id: no-tools
+    command: summarize
     allowed_tools: []                   # empty list = disable all built-in tools
 ```
 
-- `allowed_tools: []` disables all built-in tools (useful for MCP-only nodes). Use the `mcp` field on a node to attach per-node MCP servers — see [Node Fields](#node-fields)
-- If both are set, `denied_tools` is applied after `allowed_tools`
-- `undefined` (field absent) and `[]` have different semantics — absent means use default tool set, `[]` means no tools
-- Claude only — Codex nodes/steps emit a warning and continue (Codex doesn't support per-call tool restrictions)
+- `allowed_tools: []` disables all built-in tools.
+- If both are set, `denied_tools` is applied after `allowed_tools`.
+- `undefined` (field absent) and `[]` have different semantics — absent means use the provider default tool set, `[]` means no tools.
+- Providers that do not support tool restrictions emit a warning and continue.
 
 ### Inline sub-agents
 
@@ -962,12 +966,12 @@ GitHub always run workflows in foreground mode regardless of this setting.
 ### Provider Validation
 
 Workflows are validated at load time for **provider identity only**:
-- Both the workflow-level `provider:` and any per-node `provider:` overrides must name a registered provider (`claude`, `codex`, `pi`, `copilot`).
+- Both the workflow-level `provider:` and any per-node `provider:` overrides must name a registered provider (`claude`, `codex`, `opencode`, `pi`, `copilot`, `omp`).
 - Validation errors are shown in `/workflow list`.
 
 Example validation error:
-```
-Unknown provider 'claud'. Registered: claude, codex, pi, copilot
+```text
+Unknown provider 'claud'. Registered: claude, codex, opencode, pi, copilot, omp
 ```
 
 Tier and alias model refs are resolved during workflow validation so malformed `tiers:` / `aliases:` config, unknown aliases, and missing tier presets fail before execution. Literal model strings are not API-validated by Archon; they are forwarded to the SDK and validated by the upstream API at request time.
@@ -1467,13 +1471,13 @@ Before deploying a workflow:
 5. **Parallel by default** — nodes in the same topological layer run concurrently
 6. **Conditional branching** — `when:` conditions and `trigger_rule` control which nodes run
 7. **`output_format`** — enforce structured JSON output from AI nodes for reliable branching
-8. **`allowed_tools` / `denied_tools`** — restrict tools per node (Claude only, SDK-enforced)
+8. **`allowed_tools` / `denied_tools`** — restrict tools per node (Claude, OpenCode, Pi, Copilot, and Oh My Pi; use provider-specific tool names)
 9. **`retry:`** — auto-retries transient errors (default: 2 retries / 3 total attempts, 3 s backoff); customize per node
 10. **`hooks`** — attach SDK hook callbacks to Claude nodes for tool control and context injection
-11. **`mcp:`** — attach per-node MCP servers via JSON config (Codex and Claude)
-12. **`skills:`** — preload skills into Claude nodes for domain expertise
+11. **`mcp:`** — attach per-node MCP servers via JSON config (Claude, Codex, and Oh My Pi)
+12. **`skills:`** — preload skills into node agents (Claude, Pi, and Oh My Pi)
 13. **`agents:`** — inline Claude sub-agent definitions invokable via the `Task` tool
-14. **`effort` / `thinking`** — control reasoning depth and thinking mode per node or workflow (Claude only)
+14. **`effort` / `thinking`** — control reasoning depth per node or workflow (`effort` for Claude, Pi, and Oh My Pi; `thinking` for Claude extended thinking)
 15. **`maxBudgetUsd`** — set a USD cost cap per node; fails with error if exceeded (Claude only)
 16. **`systemPrompt`** — override the default system prompt per node (Claude only)
 17. **`sandbox`** — OS-level filesystem/network restrictions per node or workflow (Claude only)

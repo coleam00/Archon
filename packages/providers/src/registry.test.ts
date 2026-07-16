@@ -14,8 +14,10 @@ import {
 import { registerPiProvider } from './community/pi/registration';
 import { registerCopilotProvider } from './community/copilot/registration';
 import { registerOpencodeProvider } from './community/opencode/registration';
+import { registerOmpProvider } from './community/omp/registration';
 import { UnknownProviderError } from './errors';
 import type { ProviderRegistration, IAgentProvider, ProviderCapabilities } from './types';
+import type { NativeTool } from '@archon/providers';
 
 /** Minimal mock provider for testing registration. */
 function makeMockProvider(id: string): IAgentProvider {
@@ -259,6 +261,7 @@ describe('registry', () => {
       expect(isRegisteredProvider('opencode')).toBe(true);
       expect(isRegisteredProvider('pi')).toBe(true);
       expect(isRegisteredProvider('copilot')).toBe(true);
+      expect(isRegisteredProvider('omp')).toBe(true);
     });
 
     test('is idempotent', () => {
@@ -267,9 +270,11 @@ describe('registry', () => {
       const opencodeCount = getRegisteredProviders().filter(p => p.id === 'opencode').length;
       const piCount = getRegisteredProviders().filter(p => p.id === 'pi').length;
       const copilotCount = getRegisteredProviders().filter(p => p.id === 'copilot').length;
+      const ompCount = getRegisteredProviders().filter(p => p.id === 'omp').length;
       expect(opencodeCount).toBe(1);
       expect(piCount).toBe(1);
       expect(copilotCount).toBe(1);
+      expect(ompCount).toBe(1);
     });
   });
 
@@ -378,6 +383,60 @@ describe('registry', () => {
     });
   });
 
+  describe('registerOmpProvider (community provider)', () => {
+    test('registers omp with builtIn: false', () => {
+      registerOmpProvider();
+      const reg = getRegistration('omp');
+      expect(reg.id).toBe('omp');
+      expect(reg.displayName).toBe('Oh My Pi (community)');
+      expect(reg.builtIn).toBe(false);
+    });
+
+    test('is idempotent', () => {
+      registerOmpProvider();
+      expect(() => registerOmpProvider()).not.toThrow();
+      const entries = getRegisteredProviders().filter(p => p.id === 'omp');
+      expect(entries).toHaveLength(1);
+    });
+
+    test('declares v2 capabilities', () => {
+      registerOmpProvider();
+      const caps = getProviderCapabilities('omp');
+      expect(caps.sessionResume).toBe(true);
+      expect(caps.skills).toBe(true);
+      expect(caps.toolRestrictions).toBe(true);
+      expect(caps.structuredOutput).toBe('best-effort');
+      expect(caps.effortControl).toBe(true);
+      expect(caps.thinkingControl).toBe(true);
+      expect(caps.envInjection).toBe(true);
+      expect(caps.mcp).toBe(true);
+      expect(caps.hooks).toBe(false);
+      expect(caps.agents).toBe(false);
+      expect(caps.costControl).toBe(false);
+      expect(caps.fallbackModel).toBe(true);
+      expect(caps.sandbox).toBe(false);
+      expect(caps.nativeTools).toBe(true);
+    });
+
+    test('appears in getProviderInfoList with builtIn: false', () => {
+      registerOmpProvider();
+      const info = getProviderInfoList().find(p => p.id === 'omp');
+      expect(info).toBeDefined();
+      expect(info?.builtIn).toBe(false);
+    });
+
+    test('does not collide with built-ins or other community providers', () => {
+      registerOpencodeProvider();
+      registerPiProvider();
+      registerCopilotProvider();
+      registerOmpProvider();
+      const ids = getRegisteredProviders()
+        .map(p => p.id)
+        .sort();
+      expect(ids).toEqual(['claude', 'codex', 'copilot', 'omp', 'opencode', 'pi']);
+    });
+  });
+
   describe('registerCopilotProvider (community provider)', () => {
     test('registers copilot with builtIn: false', () => {
       registerCopilotProvider();
@@ -424,6 +483,26 @@ describe('registry', () => {
         .map(p => p.id)
         .sort();
       expect(ids).toEqual(['claude', 'codex', 'copilot']);
+    });
+  });
+
+  describe('package exports', () => {
+    test('exports OMP provider symbols from root and community subpath', async () => {
+      const root = await import('@archon/providers');
+      const omp = await import('@archon/providers/community/omp');
+      const nativeTool: NativeTool = {
+        name: 'manage_run',
+        description: 'test tool',
+        inputSchema: { type: 'object' },
+        async handler() {
+          return 'ok';
+        },
+      };
+
+      expect(root.OmpProvider).toBe(omp.OmpProvider);
+      expect(root.registerOmpProvider).toBe(omp.registerOmpProvider);
+      expect(root.OMP_CAPABILITIES).toBe(omp.OMP_CAPABILITIES);
+      expect(nativeTool.name).toBe('manage_run');
     });
   });
 });

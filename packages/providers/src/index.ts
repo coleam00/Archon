@@ -14,6 +14,7 @@ export type {
   CredentialKind,
   CredentialSpec,
   ProviderCredentialCatalog,
+  NativeTool,
 } from './types';
 export { CREDENTIAL_KINDS } from './types';
 
@@ -88,7 +89,6 @@ export {
 // PI_CREDENTIAL_SPECS is intentionally NOT re-exported: its only consumer is
 // the Pi registration, which imports the generated file directly.
 export { PI_PROVIDER_ENV_VARS, PI_AMBIENT_VENDORS } from './community/pi/pi-vendor-map.generated';
-
 export {
   CopilotProvider,
   parseCopilotConfig,
@@ -96,6 +96,13 @@ export {
   resetCopilotSingleton,
   type CopilotProviderDefaults,
 } from './community/copilot';
+export {
+  OMP_CAPABILITIES,
+  OmpProvider,
+  parseOmpConfig,
+  registerOmpProvider,
+  type OmpProviderDefaults,
+} from './community/omp';
 export {
   resolveCopilotBinaryPath,
   fileExists as copilotFileExists,

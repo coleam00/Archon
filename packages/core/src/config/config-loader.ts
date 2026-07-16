@@ -144,6 +144,7 @@ const SAFE_ASSISTANT_FIELDS: Record<string, readonly string[]> = {
   opencode: ['model', 'agent'],
   pi: ['model'],
   copilot: ['model'],
+  omp: ['model'],
 };
 
 function toSafeAssistantDefaults(assistants: AssistantDefaults): SafeConfig['assistants'] {

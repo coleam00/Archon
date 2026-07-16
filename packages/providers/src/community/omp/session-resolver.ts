@@ -1,0 +1,80 @@
+import type { OmpCodingAgentSdk, OmpSessionManager } from './sdk-loader';
+
+export interface ResolvedOmpSession {
+  sessionManager: OmpSessionManager;
+  resumeFailed: boolean;
+}
+
+function sessionsDir(
+  sdk: Pick<OmpCodingAgentSdk, 'SessionManager'>,
+  agentDir: string | undefined,
+  cwd: string
+): string | undefined {
+  return agentDir ? sdk.SessionManager.getDefaultSessionDir(cwd, agentDir) : undefined;
+}
+
+function isMissingSessionError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const code = (error as { code?: unknown }).code;
+  return code === 'ENOENT' || code === 'ENOTDIR';
+}
+
+/**
+ * Resolve an OMP SessionManager for a sendQuery call.
+ * Missing resume ids fall back to a fresh session with an explicit warning flag.
+ * When forkSession is requested, copy the source transcript into a new session
+ * file before prompting so retries never mutate the session they are retrying
+ * from.
+ */
+export async function resolveOmpSession(
+  sdk: Pick<OmpCodingAgentSdk, 'SessionManager'>,
+  cwd: string,
+  resumeSessionId: string | undefined,
+  agentDir?: string,
+  forkSession = false,
+  persistSession = true
+): Promise<ResolvedOmpSession> {
+  const dir = persistSession ? sessionsDir(sdk, agentDir, cwd) : undefined;
+
+  if (!persistSession) {
+    const inMemorySession = sdk.SessionManager.inMemory?.(cwd);
+    if (!inMemorySession) {
+      throw new Error('Oh My Pi SDK does not support in-memory sessions for persistSession=false.');
+    }
+    return { sessionManager: inMemorySession, resumeFailed: resumeSessionId !== undefined };
+  }
+
+  if (!resumeSessionId) {
+    return { sessionManager: sdk.SessionManager.create(cwd, dir), resumeFailed: false };
+  }
+
+  try {
+    const sessions = await sdk.SessionManager.list(cwd, dir);
+    const match = sessions.find(s => s.id === resumeSessionId);
+    if (match) {
+      if (forkSession) {
+        if (!sdk.SessionManager.forkFrom) {
+          return { sessionManager: sdk.SessionManager.create(cwd, dir), resumeFailed: true };
+        }
+        return {
+          sessionManager: await sdk.SessionManager.forkFrom(match.path, cwd, dir),
+          resumeFailed: false,
+        };
+      }
+      return {
+        sessionManager: await sdk.SessionManager.open(match.path, dir),
+        resumeFailed: false,
+      };
+    }
+  } catch (error) {
+    if (!isMissingSessionError(error)) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Oh My Pi session ${forkSession ? 'fork' : 'resume'} failed for '${resumeSessionId}': ${message}`
+      );
+    }
+    return { sessionManager: sdk.SessionManager.create(cwd, dir), resumeFailed: true };
+  }
+
+  return { sessionManager: sdk.SessionManager.create(cwd, dir), resumeFailed: true };
+}

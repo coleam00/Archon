@@ -558,7 +558,7 @@ async function* streamCodexEvents(
             typeof rawError === 'string'
               ? rawError
               : typeof rawError === 'object' && rawError !== null && 'message' in rawError
-                ? String((rawError as { message: unknown }).message)
+                ? String(rawError.message)
                 : undefined;
 
           const changes = item.changes as { kind: string; path?: string }[] | undefined;

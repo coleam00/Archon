@@ -515,8 +515,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     // Initialize Discord adapter (conditional)
     if (process.env.DISCORD_BOT_TOKEN) {
       const discordStreamingMode = (process.env.DISCORD_STREAMING_MODE ?? 'batch') as
-        | 'stream'
-        | 'batch';
+        'stream' | 'batch';
       discord = new DiscordAdapter(process.env.DISCORD_BOT_TOKEN, discordStreamingMode);
       const discordAdapter = discord; // Capture for use in callback
 
@@ -599,8 +598,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     // Initialize Slack adapter (conditional)
     if (process.env.SLACK_BOT_TOKEN && process.env.SLACK_APP_TOKEN) {
       const slackStreamingMode = (process.env.SLACK_STREAMING_MODE ?? 'batch') as
-        | 'stream'
-        | 'batch';
+        'stream' | 'batch';
       slack = new SlackAdapter(
         process.env.SLACK_BOT_TOKEN,
         process.env.SLACK_APP_TOKEN,

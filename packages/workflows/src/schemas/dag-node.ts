@@ -800,10 +800,10 @@ export const dagNodeSchema = dagNodeBaseSchema
     };
 
     if (data.command !== undefined && data.command.trim().length > 0) {
-      return { ...base, ...shared, ...aiOnly, command: data.command.trim() } as CommandNode;
+      return { ...base, ...shared, ...aiOnly, command: data.command.trim() };
     }
     if (data.prompt !== undefined && data.prompt.trim().length > 0) {
-      return { ...base, ...shared, ...aiOnly, prompt: data.prompt.trim() } as PromptNode;
+      return { ...base, ...shared, ...aiOnly, prompt: data.prompt.trim() };
     }
     if (data.bash !== undefined && data.bash.trim().length > 0) {
       return {
@@ -811,7 +811,7 @@ export const dagNodeSchema = dagNodeBaseSchema
         ...shared,
         bash: data.bash.trim(),
         ...(data.timeout !== undefined ? { timeout: data.timeout } : {}),
-      } as BashNode;
+      };
     }
     if (data.script !== undefined && data.script.trim().length > 0) {
       // runtime is guaranteed by superRefine to be defined at this point
@@ -823,13 +823,13 @@ export const dagNodeSchema = dagNodeBaseSchema
         runtime: data.runtime,
         ...(data.deps !== undefined ? { deps: data.deps } : {}),
         ...(data.timeout !== undefined ? { timeout: data.timeout } : {}),
-      } as ScriptNode;
+      };
     }
     if (data.approval !== undefined) {
-      return { ...base, ...shared, approval: data.approval } as ApprovalNode;
+      return { ...base, ...shared, approval: data.approval };
     }
     if (data.cancel !== undefined && data.cancel.trim().length > 0) {
-      return { ...base, ...shared, cancel: data.cancel.trim() } as CancelNode;
+      return { ...base, ...shared, cancel: data.cancel.trim() };
     }
     if (data.include !== undefined && data.include.trim().length > 0) {
       // An include node is a load-time directive, not an executable node. It carries ONLY
@@ -838,7 +838,7 @@ export const dagNodeSchema = dagNodeBaseSchema
       // the sub-DAG (description just rides along). aiOnly / shared (retry) and the exec-only
       // base fields (always_run / output_type / idle_timeout) are intentionally dropped;
       // the loader warns about them via INCLUDE_NODE_IGNORED_FIELDS.
-      return { ...structuralBase, include: data.include.trim() } as IncludeNode;
+      return { ...structuralBase, include: data.include.trim() };
     }
     // loop_group — guaranteed by superRefine to be defined at this point.
     // Spread aiOnly so group-level model/provider survive parsing — the executor forwards
@@ -847,7 +847,7 @@ export const dagNodeSchema = dagNodeBaseSchema
     // fields are the ones LOOP_GROUP_NODE_AI_FIELDS declares unsupported: they ride along
     // here but the loader warns about and ignores them at runtime.
     if (data.loop_group !== undefined) {
-      return { ...base, ...aiOnly, loop_group: data.loop_group } as LoopGroupNode;
+      return { ...base, ...aiOnly, loop_group: data.loop_group };
     }
     // loop — guaranteed by superRefine to be defined at this point.
     // Unlike the rest of aiOnly (dropped for loops — model/provider inherit from
@@ -860,7 +860,7 @@ export const dagNodeSchema = dagNodeBaseSchema
       ...base,
       ...(data.pi !== undefined ? { pi: data.pi } : {}),
       loop: data.loop,
-    } as LoopNode;
+    };
   })
   .openapi('DagNode');
 

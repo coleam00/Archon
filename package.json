@@ -50,7 +50,7 @@
     "typescript-eslint": "^8.48.0"
   },
   "engines": {
-    "bun": "^1.3.0"
+    "bun": "^1.3.14"
   },
   "overrides": {
     "test-exclude": "^7.0.1",

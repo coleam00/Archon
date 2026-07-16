@@ -16,12 +16,7 @@ const AGENT_NOT_FOUND_PATTERNS = [
 ];
 
 export type RetryableErrorClass =
-  | 'rate_limit'
-  | 'auth'
-  | 'crash'
-  | 'agent_not_found'
-  | 'unknown'
-  | 'aborted';
+  'rate_limit' | 'auth' | 'crash' | 'agent_not_found' | 'unknown' | 'aborted';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;

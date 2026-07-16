@@ -243,9 +243,7 @@ export function mapCopilotEvent(event: SessionEvent, ctx: EventMapperContext): M
 const SEND_AND_WAIT_TIMEOUT_MS = 60 * 60 * 1000;
 
 export type BridgeQueueItem =
-  | { kind: 'chunk'; chunk: MessageChunk }
-  | { kind: 'done' }
-  | { kind: 'error'; error: Error };
+  { kind: 'chunk'; chunk: MessageChunk } | { kind: 'done' } | { kind: 'error'; error: Error };
 
 /**
  * Bridge a CopilotSession into an async generator of MessageChunks.

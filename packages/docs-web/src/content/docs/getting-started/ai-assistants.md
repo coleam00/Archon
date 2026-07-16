@@ -1,6 +1,6 @@
 ---
 title: AI Assistants
-description: Configure Claude Code, Codex, OpenCode, GitHub Copilot, and Pi as AI assistants for Archon.
+description: Configure Claude Code, Codex, OpenCode, GitHub Copilot, Pi, and Oh My Pi as AI assistants for Archon.
 category: getting-started
 area: clients
 audience: [user]
@@ -9,7 +9,7 @@ sidebar:
   order: 4
 ---
 
-You must configure **at least one** AI assistant. All four can be configured and mixed within workflows.
+You must configure **at least one** AI assistant. Multiple assistants can be configured and mixed within workflows.
 
 ## Structured output guarantees
 
@@ -18,7 +18,7 @@ When a workflow node sets `output_format`, the guarantee level depends on the pr
 | Provider | Tier | How it works | On a validation miss |
 |----------|------|--------------|----------------------|
 | Claude, Codex, OpenCode | **enforced** | The SDK/backend grammar-constrains decoding (`output_config.format` / `outputSchema` / `format:{json_schema}`). | The node **fails** — a refusal or `max_tokens` truncation can still bypass grammar enforcement, so the parsed output is validated post-parse for these too. No reask (a failure here is a genuine edge). |
-| Pi, Copilot | **best-effort** | The schema is appended to the prompt; JSON is extracted from the response and structurally repaired (trailing commas, single quotes, truncated tails). | The executor re-asks (prompt + the schema errors) up to **3×**; if still invalid, the node **fails loudly**. |
+| Pi, Copilot, Oh My Pi | **best-effort** | The schema is appended to the prompt; JSON is extracted from the response and structurally repaired (trailing commas, single quotes, truncated tails). | The executor re-asks (prompt + the schema errors) up to **3×**; if still invalid, the node **fails loudly**. |
 
 In all cases the parsed output is **validated against your `output_format` schema** before downstream nodes see it, and a node that declares `output_format` but produces no schema-valid output **fails** rather than silently degrading. See [Authoring Workflows → `output_format`](/guides/authoring-workflows/#output_format-for-structured-json) for field-access (`$node.output.field`) semantics.
 
@@ -555,11 +555,234 @@ nodes:
 
 Unsupported YAML fields trigger a visible warning from the dag-executor when the workflow runs, so you always know what was ignored.
 
+## Oh My Pi (Community Provider)
+
+Oh My Pi is registered as `provider: omp` with display name **Oh My Pi (community)**. It is separate from the existing `provider: pi` integration; Pi and Oh My Pi share a base lineage, but Archon treats them as distinct agents with different package families, runtime surfaces, and provider behavior. The OMP provider maps explicitly to the Oh My Pi SDK packages (`@oh-my-pi/*`).
+
+### Install and authenticate
+
+Archon bundles the OMP SDK packages through `@archon/providers`; no separate npm package install is required when running Archon from the repository or release binaries. You still need Oh My Pi credentials/configuration for the model provider you select.
+
+`archon setup` currently configures Claude, Codex, and Pi, but not Oh My Pi. Configure OMP by editing `.archon/config.yaml` and, when needed, the Archon env file (`~/.archon/.env` for user scope or `.archon/.env` for project scope).
+
+Authentication follows the OMP provider's native options:
+
+- API-key providers: set the provider env var in the shell, Archon env file, workflow/codebase `envVars`, or `assistants.omp.env`. Examples: `ANTHROPIC_API_KEY`, `ANTHROPIC_OAUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `AZURE_OPENAI_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `XAI_API_KEY`.
+- Anthropic subscriptions in direct chat: OMP reads `ANTHROPIC_OAUTH_TOKEN` or `CLAUDE_CODE_OAUTH_TOKEN` before `ANTHROPIC_API_KEY`, so a connected Claude Pro/Max subscription wins over a fallback API key for anthropic models.
+- OAuth providers: complete the upstream OMP login flow so credentials are stored in the OMP agent directory (`agentDir` below, or OMP's default).
+- Local inference: configure the upstream OMP model/provider registry for local backends such as Ollama, LM Studio, llama.cpp, or custom OpenAI-compatible endpoints, and provide the env var OMP expects for that provider when it requires one (for example `OLLAMA_API_KEY`, `LM_STUDIO_API_KEY`, `LLAMA_CPP_API_KEY`, or the custom provider's configured credential).
+
+### Configure Oh My Pi
+
+```yaml
+# .archon/config.yaml
+assistants:
+  omp:
+    model: anthropic/claude-sonnet-4-5
+    agentDir: /absolute/optional/omp-agent-dir
+
+    # OMP session controls
+    interactive: true
+    enableMCP: false
+    enableLsp: true
+    # Optional hard-disable; omit this key to keep OMP's discovery default.
+    disableExtensionDiscovery: true
+    additionalExtensionPaths:
+      - /opt/omp/extensions/acme
+    # OMP SDK spawn allowlist expression; syntax is passed through unchanged.
+    spawns: "*"
+    extensionFlags:
+      plan: true
+      mode: strict
+
+    # Session-scoped env for in-process OMP extensions; shell env wins.
+    env:
+      PLANNOTATOR_REMOTE: "1"
+
+    # Restrict the OMP tool set Archon exposes to the session.
+    toolNames:
+      - read
+      - grep
+      - glob
+      - bash
+      - edit
+      - write
+      - lsp
+      - task
+      - web_search
+
+    # In-memory OMP Settings.isolated(...) overrides.
+    settings:
+      retry:
+        enabled: true
+        maxRetries: 3
+        fallbackChains:
+          default:
+            - anthropic/claude-haiku-4-5
+        fallbackRevertPolicy: cooldown-expiry
+      compaction:
+        enabled: true
+        thresholdPercent: 80
+        thresholdTokens: 100000
+      contextPromotion:
+        enabled: true
+      model:
+        loopGuard:
+          enabled: true
+          checkAssistantContent: true
+      tools:
+        approvalMode: write       # 'always-ask' | 'write' | 'yolo'
+        maxTimeout: 60            # seconds; 0 disables the cap
+        # OMP v17 defaults this to true. Set false to restore discoverable
+        # custom tools as top-level tools instead of xd:// devices.
+        xdev: true
+      edit:
+        # Reject hashline edits against lines the agent has not read.
+        enforceSeenLines: true
+      providers:
+        webSearch: gemini         # 'auto' or a supported web-search provider
+        webSearchExclude:
+          - brave
+        image: openrouter         # 'auto' | 'openai' | 'antigravity' | 'xai' | 'gemini' | 'openrouter'
+      task:
+        maxConcurrency: 8         # 0 means unlimited
+        maxRuntimeMs: 600000      # 0 disables the cap
+        # Let the bundled task agent start on its resolved model, then hand
+        # off to the default prewalk target at its first edit/write.
+        prewalk: true
+        # Agent-specific prewalk targets. Values are OMP model patterns.
+        agentPrewalk:
+          reviewer: "@smol"
+      generate_image:
+        enabled: true
+      astGrep:
+        # OMP v17 defaults this to false. Archon preserves its curated
+        # ast_grep default by emitting true unless explicitly disabled here.
+        enabled: true
+      memory:
+        backend: mnemopi          # 'off' | 'local' | 'hindsight' | 'mnemopi'
+      mnemopi:
+        autoRecall: true
+        autoRetain: true
+        polyphonicRecall: false
+        enhancedRecall: false
+        noEmbeddings: false
+        debug: false
+      hindsight:
+        autoRecall: true
+        autoRetain: true
+        mentalModelsEnabled: true
+        mentalModelAutoSeed: false
+        debug: false
+      modelRoles:
+        default: anthropic/claude-sonnet-4-5
+        task: anthropic/claude-haiku-4-5
+      enabledModels:
+        - anthropic/*
+      modelProviderOrder:
+        - anthropic
+      disabledProviders:
+        - experimental-provider
+      disabledExtensions:
+        - risky-extension
+```
+
+Only `model` is exposed to web clients by default; filesystem paths, environment variables, extension settings, OMP settings, and OMP spawn controls remain server-side configuration.
+
+`settings.edit.enforceSeenLines` makes OMP's hashline editor reject edits against lines the agent has not read. `settings.task.prewalk` enables the bundled task agent's model handoff; `settings.task.agentPrewalk` supplies per-agent targets. Archon deliberately overrides OMP v17's upstream `astGrep.enabled: false` default to `true` so the curated `ast_grep` tool remains available; set it to `false` explicitly to opt out.
+
+OMP v17 defaults `settings.tools.xdev` to `true`. Discoverable custom tools—including Archon's `manage_run` native tool and eligible tools such as `generate_image`—are then presented through `xd://` and invoked via `read` or `write`. Set `settings.tools.xdev: false` to present discoverable tools as top-level tools instead. Node-scoped MCP tools keep the load mode supplied by OMP's MCP manager.
+
+### Model reference format
+
+Oh My Pi models use `<omp-provider-id>/<model-id>`:
+
+```yaml
+provider: omp
+model: anthropic/claude-sonnet-4-5
+
+nodes:
+  - id: summarize
+    provider: omp
+    model: openrouter/qwen/qwen3-coder
+    prompt: "Summarize this repository."
+    allowed_tools: [read, grep, glob]
+```
+
+Archon still chooses the initial model from the node/workflow model first, then `assistants.omp.model`. The OMP `settings.modelRoles`, `enabledModels`, and `modelProviderOrder` fields influence OMP's internal role and fallback behavior after that initial Archon choice.
+
+### OMP tool names
+
+`allowed_tools`, `denied_tools`, and `assistants.omp.toolNames` use OMP v17 tool names. Archon's curated defaults are `ask`, `bash`, `eval`, `edit`, `glob`, `grep`, `ast_grep`, `ast_edit`, `lsp`, `read`, `browser`, `task`, `hub`, `todo`, `web_search`, `write`, and `inspect_image`. `hub` replaces the former `job` and `launch` process-management tools.
+
+Known registry or conditional tools that are not enabled by default are `debug`, `github`, `checkpoint`, `rewind`, `yield`, `goal`, `generate_image`, `memory_edit`, `retain`, `recall`, `reflect`, `learn`, and `manage_skill`. Enable write, execution, network, image, memory, or session-state tools intentionally. With `tools.xdev: true`, discoverable tools mount under `xd://`; the allowlist still uses the registry name, such as `generate_image`.
+
+The retained compatibility aliases are `python` → `eval`, `find` → `glob`, `search` → `grep`, `fetch` → `read`, `poll` → `hub`, and `todo_write` → `todo`. OMP v17 removed the direct names `job`, `launch`, `ssh`, `irc`, `resolve`, `render_mermaid`, `search_tool_bm25`, `report_finding`, and `report_tool_issue`; Archon reports them as unknown instead of adding compatibility shims.
+
+### Generate workflow image artifacts
+
+Enable OMP's image tool in server-side assistant configuration:
+
+```yaml
+# .archon/config.yaml
+assistants:
+  omp:
+    settings:
+      generate_image:
+        enabled: true
+```
+
+Then allow the registry name in a workflow node and tell the agent to copy OMP's temporary output into the run artifact directory:
+
+```yaml
+# .archon/workflows/generate-image.yaml
+name: generate-image
+provider: omp
+
+nodes:
+  - id: render
+    allowed_tools: [generate_image, bash]
+    prompt: |
+      Generate an image from: $ARGUMENTS
+      After generate_image returns its temporary file path, copy that file to
+      $ARTIFACTS_DIR/generated-image.png with bash. Confirm the artifact path.
+```
+
+The copied file appears in Archon's workflow artifact listing. Generated images are not streamed as platform image chunks; the provider emits the image tool's text summary and path only.
+
+### Oh My Pi capabilities
+
+| Feature | Support | YAML field |
+|---|---|---|
+| Session resume | ✅ | automatic (Archon persists `sessionId`) |
+| Tool restrictions | ✅ | `allowed_tools` / `denied_tools` in OMP tool names |
+| Thinking / effort | ✅ | `effort: low\|medium\|high\|max` (`max` uses OMP's native maximum thinking tier) |
+| Skills | ✅ | `skills: [name]` through OMP skill discovery |
+| Structured output | ✅ (best-effort) | `output_format:` — schema is appended to the prompt and JSON is parsed from final assistant text |
+| Auth env override | ✅ | provider API-key env vars such as `ANTHROPIC_API_KEY` are passed to OMP auth storage as runtime overrides; Hugging Face uses `HUGGINGFACE_HUB_TOKEN` then `HF_TOKEN` |
+| OMP config env | ✅ | `assistants.omp.env` applies session-scoped process env for in-process OMP extensions, does not override shell env, and removes keys Archon created after the prompt |
+| OMP interactivity | ✅ | `assistants.omp.interactive: false` passes `hasUI: false` and skips Archon's OMP UI bridge |
+| Node idle timeout | ✅ | Archon's workflow idle watchdog owns `idle_timeout` and aborts the OMP session through the provider abort signal; it is not forwarded as an OMP SDK option |
+| OMP spawn controls | ✅ | `assistants.omp.spawns` is passed through to the OMP SDK as its spawn allowlist expression; omit it to keep the SDK default |
+| OMP extension flags | ✅ when an extension runner loads | `assistants.omp.extensionFlags` calls OMP `extensionRunner.setFlagValue()` before the first prompt; Archon emits a warning if no runner is present |
+| OMP settings overrides | ✅ | `assistants.omp.settings.retry`, `compaction`, `snapcompact`, `contextPromotion`, `model.loopGuard`, `tools` (including `xdev`), `edit.enforceSeenLines`, `providers`, `task` (including `prewalk` and `agentPrewalk`), `generate_image.enabled`, `astGrep.enabled`, `memory`, `mnemopi`, `hindsight`, `modelRoles`, `enabledModels`, `modelProviderOrder`, `disabledProviders`, and `disabledExtensions` are passed to `Settings.isolated(...)`; secret-bearing Mnemopi/Hindsight fields and raw arbitrary settings are not exposed |
+| OMP MCP discovery | ✅ (OMP-native) | `assistants.omp.enableMCP` toggles OMP's own MCP discovery from `.omp/mcp.json`, `~/.omp/agent/mcp.json`, root `mcp.json`, and supported third-party config files; MCP tools retain their SDK-supplied load modes |
+| Archon `mcp:` field | ✅ (node-scoped) | Workflow node `mcp: .archon/mcp/server.json` loads that Archon MCP JSON only for the node, preserves OMP's MCP tool presentation, and applies node allow/deny filtering. It does not require `assistants.omp.enableMCP: true` and does not write OMP-native config files |
+| Bash subprocess env injection | ✅ | Workflow/codebase `envVars` are injected into OMP `bash` tool calls. If a model supplies an explicit bash `env` argument for the same key, the tool-call value wins. |
+| In-process native tools | ✅ | Archon's native `manage_run` tool is injected into OMP through SDK `customTools` for project-scoped chat/workflow control. It is discoverable under `xd://` by default; `assistants.omp.settings.tools.xdev: false` restores it as a top-level tool. |
+| Fallback model | ✅ (retry/rate-limit fallback) | `fallbackModel:` maps to OMP `retry.fallbackChains` for the node/workflow primary model. OMP applies it during retryable errors such as rate limits or transient provider failures, not as an arbitrary-error fallback. |
+| Custom tools / commands / hooks paths | OMP-native only | Use OMP discovery directories such as `.omp/tools`, `.omp/commands`, `.omp/hooks`, or extensions; Archon does not write hidden config files or expose path-array shims |
+| Claude hooks / inline agents / sandbox / cost limits | ❌ | no Archon-compatible OMP session-level equivalent wired in v1 |
+
+
+Node-level Archon `mcp:` and `assistants.omp.enableMCP` are intentionally separate. Use `mcp:` when a workflow node needs a least-privilege server list from an Archon JSON file; use `assistants.omp.enableMCP` when you want OMP's broader native discovery behavior for sessions without node-scoped MCP.
+
 ### See also
 
 - [Adding a Community Provider](../contributing/adding-a-community-provider/) — the contributor-facing guide for extending Archon with your own provider.
 - [Pi documentation](https://pi.dev) — official Pi docs (extensions, model registry, settings).
-- [Pi on GitHub](https://github.com/earendil-works/pi) — upstream project.
+- [Pi on GitHub](https://github.com/earendil-works/pi) — upstream Pi project.
+- [Oh My Pi on GitHub](https://github.com/can1357/oh-my-pi) — upstream Oh My Pi project.
 
 ## GitHub Copilot (Community Provider)
 
@@ -685,7 +908,7 @@ The console **AI Settings** page (Settings in the web UI) has four sections:
 
 - **Model Tiers** — map the `small` / `medium` / `large` tiers to a provider + model (and optional effort). This writes the install's `tiers:` config and works on **any** install, even without `TOKEN_ENCRYPTION_KEY` (it's non-secret config). Pi tier models show a cost/reasoning/context hint from Pi's model catalog.
 - **Model Aliases** — define `@custom` refs (e.g. `@fast`) usable in workflow `model:` fields, with the same scope toggle.
-- **Agents** — one card per agent (Claude Code, Codex, Pi, OpenCode, Copilot) with the credentials it can spend nested inside, each card showing a readiness state (ready / needs credential). Connect a credential for *your* user inside the agent that uses it. Credentials are keyed by **vendor** (`anthropic`, `openai`, `github-copilot`, `openrouter`, …), and one credential serves every agent that consumes it (an `anthropic` key powers Claude Code and Pi's anthropic backend — both cards reflect it). Every vendor accepts an **API key**; **`anthropic`**, **`openai`**, and **`github-copilot`** additionally offer **subscription login** (an OAuth flow — for `openai`/ChatGPT it is an Archon-owned PKCE flow where you paste the redirect URL or code back, [#1924](https://github.com/coleam00/Archon/issues/1924)). Legacy ids (`claude`/`codex`/`copilot`) are accepted and normalized. The **Pi** card keeps its 30+ backends behind a searchable "Add backend…" picker (with model counts from Pi's catalog) and shows ambient chains (Amazon Bedrock, Google Vertex) as status-only rows; the **OpenCode** card loads its backend catalog on demand from the embedded runtime — its connections are install-wide, not per-user.
+- **Agents** — one card per agent (Claude Code, Codex, Pi, Oh My Pi, OpenCode, Copilot) with the credentials it can spend nested inside, each card showing a readiness state (ready / needs credential). Connect a credential for *your* user inside the agent that uses it. Credentials are keyed by **vendor** (`anthropic`, `openai`, `github-copilot`, `openrouter`, …), and one credential serves every static agent that consumes it (an `anthropic` key powers Claude Code and Pi's anthropic backend — both cards reflect it). Every static vendor accepts an **API key**; **`anthropic`**, **`openai`**, and **`github-copilot`** additionally offer **subscription login** (an OAuth flow — for `openai`/ChatGPT it is an Archon-owned PKCE flow where you paste the redirect URL or code back, [#1924](https://github.com/coleam00/Archon/issues/1924)). Legacy ids (`claude`/`codex`/`copilot`) are accepted and normalized. The **Pi** card keeps its 30+ backends behind a searchable "Add backend…" picker (with model counts from Pi's catalog) and shows ambient chains (Amazon Bedrock, Google Vertex) as status-only rows; the **OpenCode** card loads its backend catalog on demand from the embedded runtime — its connections are install-wide, not per-user. **Oh My Pi** is dynamic: its provider/model universe and credential checks come from the OMP runtime, so its Archon card does not mirror per-vendor credential readiness.
 - **Defaults** — leads with a "Chat runs on [provider][model]" combo line in both scopes (the install line edits the default assistant + `assistants.<provider>.model`; the just-me line edits your personal default assistant + chat-model pin), with the per-provider model grid below as the advanced view.
 
 ### Per-user model preferences ("Just me")

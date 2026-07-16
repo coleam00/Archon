@@ -5,13 +5,7 @@
  */
 
 export type WorkflowNodeKind =
-  | 'prompt'
-  | 'command'
-  | 'bash'
-  | 'script'
-  | 'approval'
-  | 'loop'
-  | 'cancel';
+  'prompt' | 'command' | 'bash' | 'script' | 'approval' | 'loop' | 'cancel';
 
 export type WorkflowNodeStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
 

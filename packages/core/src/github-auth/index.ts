@@ -35,5 +35,4 @@ import type { IGitHubAppAuthProvider } from './types';
  * compiler enforces every callsite handles both modes.
  */
 export type GitHubAuth =
-  | { kind: 'pat'; token: string }
-  | { kind: 'app'; provider: IGitHubAppAuthProvider };
+  { kind: 'pat'; token: string } | { kind: 'app'; provider: IGitHubAppAuthProvider };
