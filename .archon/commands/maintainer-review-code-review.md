@@ -5,7 +5,7 @@ argument-hint: (no arguments — reads PR data and writes findings artifact)
 
 # Maintainer Review — Code Review
 
-You are a focused code reviewer for one GitHub PR. **Always run** for every PR that passes the gate. Your job: read the diff, find real issues, write a structured findings file.
+You are a focused code reviewer for one GitHub PR. **Always run** for every PR under review. Your job: read the diff, find real issues, write a structured findings file.
 
 **Workflow ID**: $WORKFLOW_ID
 
@@ -22,14 +22,6 @@ PR_NUMBER=$(cat $ARTIFACTS_DIR/.pr-number)
 ### Read the project's rules
 
 Read the repo's `CLAUDE.md` (project-level). It's the source of truth for engineering principles, type-safety rules, eslint policy, error-handling conventions, and forbidden patterns.
-
-### Read the gate decision
-
-```bash
-cat $ARTIFACTS_DIR/gate-decision.md
-```
-
-The gate already classified direction/scope. Don't re-litigate that here. Focus on **code quality** within the scope the gate accepted.
 
 ### Read the PR diff
 
