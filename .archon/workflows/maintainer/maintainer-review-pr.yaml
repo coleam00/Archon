@@ -212,7 +212,7 @@ nodes:
     timeout: 10000
     depends_on: [post-review]
     script: |
-      import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+      import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
       import { resolve } from 'node:path';
 
       const baseDir = resolve(process.cwd(), '.archon/maintainer-standup');
@@ -237,7 +237,16 @@ nodes:
         run_id: '$WORKFLOW_ID',
       };
 
-      writeFileSync(reviewedPath, JSON.stringify(reviewed, null, 2) + '\n');
+      // Atomic write. This workflow sets mutates_checkout: false, so two
+      // reviews can run concurrently and both read-modify-write this shared
+      // file. Write a temp file in the same directory, then rename over the
+      // target — rename is atomic on POSIX, so a concurrent reader never sees a
+      // half-written file. Last writer wins: an interleaved pair may still drop
+      // one record, which is acceptable here (the standup only needs a
+      // recent-enough "reviewed" marker, and the next review re-adds it).
+      const tmpPath = resolve(baseDir, `.reviewed-prs.${process.pid}.tmp`);
+      writeFileSync(tmpPath, JSON.stringify(reviewed, null, 2) + '\n');
+      renameSync(tmpPath, reviewedPath);
       console.log(`Recorded review of PR #${prNumber}`);
 
   # ═══════════════════════════════════════════════════════════════
