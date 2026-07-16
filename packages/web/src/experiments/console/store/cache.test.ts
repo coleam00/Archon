@@ -8,7 +8,7 @@ function flush(): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, 0));
 }
 
-describe('subscribeKey — per-key Map lifecycle (#1933)', () => {
+describe('subscribeKey — per-key lifecycle', () => {
   test('last unsubscribe prunes versions; cache is retained for warm remount', async () => {
     const key = 'test:prune-versions';
     let loads = 0;
@@ -126,6 +126,162 @@ describe('subscribeKey — per-key Map lifecycle (#1933)', () => {
     await flush();
     expect(versionOf(key)).toBe(0); // notify skipped — nothing subscribes
     expect(get(key)).toBe('late'); // cache still warms for a future remount
+  });
+
+  test('resubscribing supersedes an abandoned in-flight loader', async () => {
+    const key = 'test:resubscribe-inflight';
+    let resolveA: (v: string) => void = () => {};
+    let resolveB: (v: string) => void = () => {};
+    let loadsA = 0;
+    let loadsB = 0;
+
+    const unsubscribeA = subscribeKey(
+      key,
+      () => {},
+      () => {
+        loadsA += 1;
+        return new Promise<string>(resolve => {
+          resolveA = resolve;
+        });
+      }
+    );
+    expect(loadsA).toBe(1);
+
+    unsubscribeA();
+
+    let notificationsB = 0;
+    const unsubscribeB = subscribeKey(
+      key,
+      () => {
+        notificationsB += 1;
+      },
+      () => {
+        loadsB += 1;
+        return new Promise<string>(resolve => {
+          resolveB = resolve;
+        });
+      }
+    );
+
+    expect(loadsB).toBe(1);
+
+    resolveB('fresh');
+    await flush();
+    expect(get(key)).toBe('fresh');
+    expect(notificationsB).toBe(1);
+
+    resolveA('stale');
+    await flush();
+    expect(get(key)).toBe('fresh');
+    expect(notificationsB).toBe(1);
+
+    unsubscribeB();
+  });
+
+  test('an abandoned revalidation cannot overwrite a warm remount', async () => {
+    const key = 'test:resubscribe-revalidation';
+    set(key, 'warm');
+
+    let resolveA: (v: string) => void = () => {};
+    const unsubscribeA = subscribeKey(
+      key,
+      () => {},
+      () =>
+        new Promise<string>(resolve => {
+          resolveA = resolve;
+        })
+    );
+    invalidate(key); // Starts a revalidation while retaining the warm value.
+    unsubscribeA();
+
+    let loadsB = 0;
+    let notificationsB = 0;
+    const unsubscribeB = subscribeKey(
+      key,
+      () => {
+        notificationsB += 1;
+      },
+      () => {
+        loadsB += 1;
+        return Promise.resolve('fresh');
+      }
+    );
+
+    expect(loadsB).toBe(0); // The retained cache still satisfies a warm remount.
+
+    resolveA('stale');
+    await flush();
+    expect(get(key)).toBe('warm');
+    expect(notificationsB).toBe(0);
+
+    unsubscribeB();
+  });
+
+  test('invalidating an abandoned revalidation cannot resurrect a purged key', async () => {
+    const key = 'test:invalidate-abandoned-revalidation';
+    set(key, 'warm');
+
+    let resolveLoad: (v: string) => void = () => {};
+    const unsubscribe = subscribeKey(
+      key,
+      () => {},
+      () =>
+        new Promise<string>(resolve => {
+          resolveLoad = resolve;
+        })
+    );
+
+    invalidate(key);
+    unsubscribe();
+    invalidate(key);
+    expect(get(key)).toBeUndefined();
+
+    resolveLoad('stale');
+    await flush();
+    expect(get(key)).toBeUndefined();
+  });
+
+  test('manual revalidation supersedes an abandoned load', async () => {
+    const key = 'test:supersede-abandoned-revalidation';
+    set(key, 'warm');
+
+    let resolveA: (v: string) => void = () => {};
+    const unsubscribeA = subscribeKey(
+      key,
+      () => {},
+      () =>
+        new Promise<string>(resolve => {
+          resolveA = resolve;
+        })
+    );
+    invalidate(key);
+    unsubscribeA();
+
+    let loadsB = 0;
+    let resolveB: (v: string) => void = () => {};
+    const unsubscribeB = subscribeKey(
+      key,
+      () => {},
+      () => {
+        loadsB += 1;
+        return new Promise<string>(resolve => {
+          resolveB = resolve;
+        });
+      }
+    );
+
+    invalidate(key);
+    expect(loadsB).toBe(1);
+
+    resolveB('fresh');
+    await flush();
+    expect(get(key)).toBe('fresh');
+
+    resolveA('stale');
+    await flush();
+    expect(get(key)).toBe('fresh');
+
+    unsubscribeB();
   });
 
   test('a load rejecting after the last unsubscribe does not resurrect the counter', async () => {
