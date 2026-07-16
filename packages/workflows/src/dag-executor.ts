@@ -3332,6 +3332,15 @@ async function executeLoopNode(
   let loopFinalStopReason: string | undefined;
   let loopTotalNumTurns: number | undefined;
   let loopTotalTokens: TokenUsage | undefined;
+  // Union of task ids still live when ANY iteration's stream ended abnormally
+  // (idle timeout / subprocess death) — #2083. Union rather than last-iteration:
+  // a mid-loop iteration that lost its background tasks may have produced
+  // incomplete artifacts even when a later iteration finishes cleanly and
+  // signals completion — last-iteration-only reporting would hide that.
+  // Recorded on the node_completed event so an incomplete node never
+  // masquerades as a clean success (mirrors the AI-node path in
+  // executeNodeInternal).
+  const loopBackgroundTasksIncomplete = new Set<string>();
   // Helper to log event store errors consistently
   const logEventStoreError = (err: Error, iteration: number): void => {
     getLog().error({ err, nodeId: node.id, iteration }, 'loop_node.iteration_event_failed');
@@ -3389,6 +3398,16 @@ async function executeLoopNode(
     let cleanOutput = ''; // stripped, for platform display
     let iterationIdleTimedOut = false;
     const iterationAbortController = new AbortController();
+    // Mid-stream cancel-check throttle (see the check inside the stream loop).
+    // The between-iteration status check just ran, so start the clock at the
+    // iteration start. A local timestamp rather than the module-level
+    // lastNodeCancelCheck map the AI node uses: the loop owns its whole
+    // lifecycle in this stack frame, so a local needs no per-return-path map
+    // cleanup.
+    let lastStreamStatusCheckAt = iterationStart;
+    // Status observed by the mid-stream check when it aborts (for the failure
+    // message); undefined when the stream ends for any other reason.
+    let streamStopStatus: string | undefined;
 
     // Background-task gate (#2083) — see createBackgroundTaskTracker. When the
     // set is non-empty at result time this iteration keeps consuming, so a
@@ -3462,6 +3481,40 @@ async function executeLoopNode(
         );
         iterationAbortController.abort();
       })) {
+        // Mid-stream cancel/pause check (every CANCEL_CHECK_INTERVAL_MS) —
+        // lifted from the AI-node stream loop in executeNodeInternal. Same
+        // posture: `paused` is tolerated (a sibling approval node may pause
+        // the run while this loop streams); only terminal/unknown states
+        // abort the in-flight iteration. Without this, a cancelled run kept
+        // streaming until the iteration finished on its own — and the
+        // post-stream `cancelled` exemption below was unreachable.
+        const tickNow = Date.now();
+        if (tickNow - lastStreamStatusCheckAt > CANCEL_CHECK_INTERVAL_MS) {
+          lastStreamStatusCheckAt = tickNow;
+          try {
+            const streamStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
+            if (!shouldContinueStreamingForStatus(streamStatus)) {
+              streamStopStatus = streamStatus ?? 'deleted';
+              getLog().info(
+                {
+                  workflowRunId: workflowRun.id,
+                  nodeId: node.id,
+                  iteration: i,
+                  status: streamStopStatus,
+                },
+                'loop_node.stop_detected_during_streaming'
+              );
+              iterationAbortController.abort();
+              break;
+            }
+          } catch (statusErr) {
+            getLog().warn(
+              { err: statusErr as Error, workflowRunId: workflowRun.id, nodeId: node.id },
+              'loop_node.status_check_failed'
+            );
+          }
+        }
+
         if (msg.type === 'assistant') {
           fullOutput += msg.content;
           const cleaned = stripCompletionTags(msg.content, loop.until);
@@ -3648,16 +3701,21 @@ async function executeLoopNode(
       foldIterationUsage();
 
       // Stream ended with background tasks still live (idle timeout mid-wait or
-      // subprocess death): their artifacts may be missing — warn loudly instead
-      // of silently continuing (#2083). Cancellation is exempt (iteration fails
-      // with its own message).
+      // subprocess death): their artifacts may be missing — record the
+      // incompleteness (surfaced on the node_completed event) and warn loudly
+      // instead of silently continuing (#2083). Cancellation is exempt from the
+      // user-facing warning (the mid-stream check above returns the node as
+      // failed with its own message just below), but still recorded in the
+      // union — the audit trail should not depend on why the stream ended.
       if (!backgroundTasks.shouldBreakOnResult()) {
+        const danglingTaskIds = backgroundTasks.ids();
+        for (const id of danglingTaskIds) loopBackgroundTasksIncomplete.add(id);
         const cancelled = iterationAbortController.signal.aborted && !iterationIdleTimedOut;
         getLog().warn(
           {
             nodeId: node.id,
             iteration: i,
-            taskIds: backgroundTasks.ids(),
+            taskIds: danglingTaskIds,
             idleTimedOut: iterationIdleTimedOut,
             cancelled,
           },
@@ -3667,10 +3725,32 @@ async function executeLoopNode(
           await safeSendMessage(
             platform,
             conversationId,
-            `⚠️ Loop \`${node.id}\` iteration ${String(i)}: the provider stream ended with ${String(backgroundTasks.count())} background agent task(s) still running (${backgroundTasks.ids().join(', ')}). Their output may be missing.`,
+            `⚠️ Loop \`${node.id}\` iteration ${String(i)}: the provider stream ended with ${String(backgroundTasks.count())} background agent task(s) still running (${danglingTaskIds.join(', ')}). Their output may be missing.`,
             msgContext
           );
         }
+      }
+
+      // Cancelled mid-stream (not idle timeout): stop the node before signal
+      // detection / until_bash / the interactive gate run against a truncated
+      // iteration — mirrors both the AI-node 'Cancelled by user' return and
+      // this loop's own between-iteration stop path.
+      if (iterationAbortController.signal.aborted && !iterationIdleTimedOut) {
+        const effectiveStatus = streamStopStatus ?? 'cancelled';
+        await safeSendMessage(
+          platform,
+          conversationId,
+          `Loop node '${node.id}' stopped during iteration ${String(i)} (${effectiveStatus})`,
+          msgContext
+        );
+        return {
+          state: 'failed',
+          output: '',
+          error: `Workflow ${effectiveStatus}`,
+          costUsd: loopTotalCostUsd,
+          ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+          loopIterations: i,
+        };
       }
     } catch (error) {
       foldIterationUsage();
@@ -3904,6 +3984,12 @@ async function executeLoopNode(
             ...(loopTotalCostUsd !== undefined ? { cost_usd: loopTotalCostUsd } : {}),
             ...(loopFinalStopReason ? { stop_reason: loopFinalStopReason } : {}),
             ...(loopTotalNumTurns !== undefined ? { num_turns: loopTotalNumTurns } : {}),
+            // Background Agent tasks still live when any iteration's stream
+            // ended (#2083) — this node's artifacts may be incomplete, even
+            // though a later iteration signaled completion.
+            ...(loopBackgroundTasksIncomplete.size > 0
+              ? { background_tasks_incomplete: [...loopBackgroundTasksIncomplete] }
+              : {}),
           },
         })
         .catch((err: Error) => {
