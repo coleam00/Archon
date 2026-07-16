@@ -16,7 +16,7 @@ import type {
 } from '../../types';
 
 import { PI_CAPABILITIES } from './capabilities';
-import { parsePiConfig } from './config';
+import { parsePiConfig, resolvePiExtensionSettings } from './config';
 import { parsePiModelRef } from './model-ref';
 import { withResumedOutcome, resumedOutcome } from '../../shared/resumed';
 
@@ -458,9 +458,16 @@ export class PiProvider implements IAgentProvider {
     // `assistants.pi.enableExtensions: false` (or `interactive: false`) in
     // `.archon/config.yaml`. Previously default-off, which silently broke
     // users who installed or built an extension and expected it to fire.
-    const enableExtensions = piConfig.enableExtensions !== false;
-    // Clamp to false without extensions: nothing consumes hasUI without a runner.
-    const interactive = enableExtensions && piConfig.interactive !== false;
+    //
+    // Extension posture is resolved PER NODE (issue #2073): assistant-level
+    // defaults can be overridden via `assistants.pi.nodes.<nodeId>` so that
+    // e.g. only the planner node gets plannotator's `plan` flag and a
+    // UI-capable context (hasUI), while an implement node runs without the
+    // planning-mode edit guard. Direct chat (no nodeId) uses the defaults.
+    const { enableExtensions, interactive, extensionFlags } = resolvePiExtensionSettings(
+      piConfig,
+      nodeConfig?.nodeId
+    );
 
     // Build the ResourceLoader. When extensions are ON we MUST reuse a
     // process-cached, already-reloaded loader: Pi's `reload()` re-invokes every
@@ -522,6 +529,7 @@ export class PiProvider implements IAgentProvider {
         missingSkillCount: missingSkills.length,
         extensionsEnabled: enableExtensions,
         interactive,
+        nodeId: nodeConfig?.nodeId,
         resumed: resumeSessionId !== undefined && !resumeFailed,
       },
       'pi.session_started'
@@ -576,10 +584,12 @@ export class PiProvider implements IAgentProvider {
 
     // 4e. Extension flag pass-through. Must happen before bindExtensions
     //     below — extensions read flags inside their session_start handler.
-    if (enableExtensions && piConfig.extensionFlags) {
+    //     `extensionFlags` is the per-node resolved map (assistant-level flags
+    //     shallow-merged with `nodes.<nodeId>.extensionFlags`, node wins).
+    if (enableExtensions && extensionFlags) {
       const runner = session.extensionRunner;
       if (runner) {
-        for (const [name, value] of Object.entries(piConfig.extensionFlags)) {
+        for (const [name, value] of Object.entries(extensionFlags)) {
           runner.setFlagValue(name, value);
         }
       }
