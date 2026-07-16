@@ -927,7 +927,13 @@ describe('buildDefaultModelChoices (#1999)', () => {
 
   it('includes the curated codex shortlist', () => {
     const values = buildDefaultModelChoices('codex', undefined).map(c => c.value);
-    expect(values).toEqual(['__keep__', 'gpt-5.3-codex', 'gpt-5.5', 'gpt-5.2', '__custom__']);
+    expect(values).toEqual([
+      '__keep__',
+      'gpt-5.6-sol',
+      'gpt-5.6-terra',
+      'gpt-5.6-luna',
+      '__custom__',
+    ]);
   });
 
   it('falls back to keep + custom only for providers without a curated list', () => {

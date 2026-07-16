@@ -210,8 +210,12 @@ function buildCodexMcpConfigOverrides(
   return { mcp_servers: mcpServers };
 }
 
+// Maps slugs that ChatGPT-plan accounts now reject (previously shipped as Archon
+// suggestions/defaults) to a current, plan-accepted slug to suggest instead.
 const CODEX_MODEL_FALLBACKS: Record<string, string> = {
-  'gpt-5.3-codex': 'gpt-5.2-codex',
+  'gpt-5.3-codex': 'gpt-5.6-sol',
+  'gpt-5.2-codex': 'gpt-5.6-sol',
+  'gpt-5.2': 'gpt-5.6-sol',
 };
 
 function isModelAccessError(errorMessage: string): boolean {

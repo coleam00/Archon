@@ -60,7 +60,7 @@ describe('user-ai-prefs-store', () => {
         createQueryResult([
           prefsRow({
             tiers: JSON.stringify({ large: { provider: 'claude', model: 'opus' } }),
-            aliases: JSON.stringify({ '@fast': { provider: 'codex', model: 'gpt-5.3-codex' } }),
+            aliases: JSON.stringify({ '@fast': { provider: 'codex', model: 'gpt-5.6-sol' } }),
             default_provider: 'codex',
             default_model: 'gpt-5.5',
           }),
@@ -69,7 +69,7 @@ describe('user-ai-prefs-store', () => {
       const result = await getUserAiPrefs(USER);
       expect(result).toEqual({
         tiers: { large: { provider: 'claude', model: 'opus' } },
-        aliases: { '@fast': { provider: 'codex', model: 'gpt-5.3-codex' } },
+        aliases: { '@fast': { provider: 'codex', model: 'gpt-5.6-sol' } },
         defaultProvider: 'codex',
         defaultModel: 'gpt-5.5',
       });
@@ -130,7 +130,7 @@ describe('user-ai-prefs-store', () => {
         createQueryResult([
           prefsRow({
             aliases: JSON.stringify({
-              '@fast': { provider: 'codex', model: 'gpt-5.3-codex' },
+              '@fast': { provider: 'codex', model: 'gpt-5.6-sol' },
               '@deep': { provider: 'claude', model: 'opus' },
             }),
           }),
