@@ -53,6 +53,16 @@ const READY_TIMEOUT_MS = 20_000;
 /** Poll interval while waiting for the ready sentinel. */
 const READY_POLL_INTERVAL_MS = 250;
 
+/**
+ * Overlay mount modes, in PREFERENCE order (least-privileged first). `fuse` runs
+ * with only `--device /dev/fuse` (no CAP_SYS_ADMIN — closes the remount escape,
+ * but only mounts on rootless/userns daemons); `native` grants CAP_SYS_ADMIN
+ * (works everywhere, grants the escape — see SECURITY.md). The backend tries them
+ * in this order and keeps the first that mounts.
+ */
+const OVERLAY_MODES = ['fuse', 'native'] as const;
+type OverlayMode = (typeof OVERLAY_MODES)[number];
+
 export interface ContainerBackendDeps {
   store: IIsolationStore;
   config: ContainerBackendConfig;
@@ -72,6 +82,8 @@ interface ContainerEnvMetadata {
   image: string;
   resourceId: string;
   workspacePath: string;
+  /** Overlay mode that actually mounted (`fuse` = unprivileged; `native` = CAP_SYS_ADMIN). */
+  overlayMode: OverlayMode;
   [key: string]: unknown;
 }
 
@@ -139,27 +151,31 @@ export class ContainerBackend implements IIsolationBackend {
     //    on a host bind mount, orbstack#1376 EACCES on macOS).
     await this.docker(['volume', 'create', volume]);
 
-    // 2. Create + start the container. Native overlay needs CAP_SYS_ADMIN +
-    //    apparmor=unconfined; the fuse-overlayfs fallback needs /dev/fuse, which
-    //    we attach best-effort (retried without it when the host has no fuse).
+    // 2. Create + start the container, mounting the overlay with the
+    //    least-privileged mode that works (fuse without CAP_SYS_ADMIN first,
+    //    native + CAP_SYS_ADMIN fallback). Fails only after both modes fail.
     let containerId: string;
+    let overlayMode: OverlayMode;
     try {
-      containerId = await this.runContainer(containerName, volume, hostRoot, req.codebase.id);
-    } catch (runErr) {
-      // Volume would leak if the container never started — best-effort remove.
-      await this.docker(['volume', 'rm', '-f', volume]).catch(() => undefined);
-      throw runErr;
+      ({ containerId, mode: overlayMode } = await this.startContainerWithOverlay(
+        containerName,
+        volume,
+        hostRoot,
+        req.codebase.id
+      ));
+    } catch (startErr) {
+      // The container(s) are already removed inside startContainerWithOverlay;
+      // only the volume can leak here — remove it (with a breadcrumb on failure).
+      await this.docker(['volume', 'rm', '-f', volume]).catch(rmErr => {
+        log.warn(
+          { volume, detail: extractDockerError(rmErr) },
+          'isolation.container_prepare_volume_cleanup_failed'
+        );
+      });
+      throw startErr;
     }
 
-    // 3. Wait for the entrypoint to signal the overlay is mounted.
-    try {
-      await this.waitForReady(containerId);
-    } catch (readyErr) {
-      await this.forceRemove(containerName, volume);
-      throw readyErr;
-    }
-
-    // 4. Track the environment. `branch_name` is NOT NULL in both dialects and
+    // 3. Track the environment. `branch_name` is NOT NULL in both dialects and
     //    is worktree-only — a sentinel '' avoids a schema migration (per plan).
     const metadata: ContainerEnvMetadata = {
       containerId,
@@ -167,6 +183,7 @@ export class ContainerBackend implements IIsolationBackend {
       volume,
       image,
       resourceId,
+      overlayMode,
       workspacePath: hostRoot,
     };
     const row = await this.store.create({
@@ -190,9 +207,11 @@ export class ContainerBackend implements IIsolationBackend {
 
   /**
    * Remove the container + upper volume for a prepared environment and mark the
-   * tracking row destroyed. Best-effort per resource — a missing container or
-   * volume is not an error (idempotent teardown), but genuine docker failures
-   * are logged. Never throws for the not-found case.
+   * tracking row destroyed. A missing container/volume is idempotent-OK (already
+   * gone), but a GENUINE docker failure (daemon down, volume in use, permission)
+   * does NOT mark the row destroyed and THROWS — so the caller surfaces a loud
+   * "clean up manually" message and a later cleanup/resume can retry. A missing
+   * DB row is a no-op; unusable metadata throws (would otherwise leak silently).
    */
   async destroy(envId: string): Promise<void> {
     const row = await this.store.getById(envId);
@@ -218,21 +237,23 @@ export class ContainerBackend implements IIsolationBackend {
       );
     }
 
+    const failures: string[] = [];
     if (containerName) {
-      await this.docker(['rm', '-f', containerName]).catch(err => {
-        log.warn(
-          { envId, containerName, detail: extractDockerError(err) },
-          'isolation.container_destroy_rm_failed'
-        );
-      });
+      const err = await this.removeIgnoringNotFound(['rm', '-f', containerName]);
+      if (err) failures.push(`container ${containerName}: ${err}`);
     }
     if (volume) {
-      await this.docker(['volume', 'rm', '-f', volume]).catch(err => {
-        log.warn(
-          { envId, volume, detail: extractDockerError(err) },
-          'isolation.container_destroy_volume_failed'
-        );
-      });
+      const err = await this.removeIgnoringNotFound(['volume', 'rm', '-f', volume]);
+      if (err) failures.push(`volume ${volume}: ${err}`);
+    }
+
+    if (failures.length > 0) {
+      // Real docker failure — the resources may still exist, so leave the row
+      // `active` (a cleanup/resume can retry) and throw so the caller is loud.
+      log.error({ envId, failures }, 'isolation.container_destroy_failed');
+      throw new Error(
+        `Failed to remove the isolation container/volume for env '${envId}': ` + failures.join('; ')
+      );
     }
 
     await this.store.updateStatus(envId, 'destroyed').catch(err => {
@@ -243,20 +264,107 @@ export class ContainerBackend implements IIsolationBackend {
   }
 
   /**
-   * `docker run -d` the runner image with the overlay mounts, resource caps, and
-   * Archon labels. Attempts to attach `/dev/fuse` for the fuse-overlayfs
-   * fallback; on hosts without fuse the device attach fails, so we retry once
-   * without it (native overlay via CAP_SYS_ADMIN is the primary path anyway).
-   *
-   * @returns the full container id from `docker run`'s stdout.
+   * Run a `docker rm`/`volume rm` and swallow ONLY the idempotent not-found case
+   * (the resource is already gone). Returns `undefined` on success or not-found,
+   * or the error detail string on a genuine failure the caller must surface.
    */
-  private async runContainer(
+  private async removeIgnoringNotFound(args: string[]): Promise<string | undefined> {
+    try {
+      await this.docker(args);
+      return undefined;
+    } catch (err) {
+      const detail = extractDockerError(err);
+      if (/no such (container|volume)/i.test(detail)) {
+        log.debug({ args, detail }, 'isolation.container_destroy_already_gone');
+        return undefined;
+      }
+      return detail;
+    }
+  }
+
+  /**
+   * Start the container with the least-privileged overlay mount that works, and
+   * wait for it to become ready. Tries `fuse` FIRST — fuse-overlayfs runs with
+   * only `--device /dev/fuse` and NO `CAP_SYS_ADMIN`, closing the
+   * `mount -o remount,rw /mnt/lower` escape (see SECURITY.md). That path only
+   * succeeds where the daemon grants unprivileged FUSE mounts (rootless /
+   * userns-remap); on a standard rootful daemon it fails fast and we fall back to
+   * `native` (kernel overlay + `CAP_SYS_ADMIN`), which works everywhere but grants
+   * that escape. The failed attempt's container is removed before the next try so
+   * the name is free.
+   *
+   * @returns the ready container id + the mode that succeeded.
+   */
+  private async startContainerWithOverlay(
     containerName: string,
     volume: string,
     hostRoot: string,
     codebaseId: string
+  ): Promise<{ containerId: string; mode: OverlayMode }> {
+    const failures: string[] = [];
+    for (const mode of OVERLAY_MODES) {
+      let containerId: string;
+      try {
+        containerId = await this.runContainerInMode(
+          containerName,
+          volume,
+          hostRoot,
+          codebaseId,
+          mode
+        );
+      } catch (runErr) {
+        // `docker run` itself refused (e.g. `--device /dev/fuse` on a host with no
+        // fuse device) — record and try the next mode. Nothing to remove.
+        failures.push(`${mode}: ${extractDockerError(runErr)}`);
+        continue;
+      }
+      try {
+        await this.waitForReady(containerId);
+        if (mode !== OVERLAY_MODES[0]) {
+          log.warn({ containerName, mode }, 'isolation.container_overlay_fallback');
+        }
+        return { containerId, mode };
+      } catch (readyErr) {
+        // Container started but the mount failed (entrypoint exits fast) — remove
+        // it so the name is free for the next mode, then continue.
+        failures.push(`${mode}: ${(readyErr as Error).message}`);
+        await this.docker(['rm', '-f', containerName]).catch(rmErr => {
+          log.warn(
+            { containerName, mode, detail: extractDockerError(rmErr) },
+            'isolation.container_fallback_cleanup_failed'
+          );
+        });
+      }
+    }
+    throw new Error(
+      'Could not mount the overlay in any mode. Native overlay needs CAP_SYS_ADMIN; ' +
+        'fuse-overlayfs needs /dev/fuse AND an unprivileged-mount daemon ' +
+        `(rootless / userns-remap). Attempts:\n${failures.join('\n')}`
+    );
+  }
+
+  /**
+   * `docker run -d` the runner image in the given overlay mode. `fuse` grants
+   * only `--device /dev/fuse` (no CAP_SYS_ADMIN); `native` grants
+   * `--cap-add SYS_ADMIN --security-opt apparmor=unconfined` (no device). The
+   * entrypoint mounts per `ARCHON_OVERLAY_MODE`.
+   *
+   * @returns the full container id from `docker run`'s stdout.
+   */
+  private async runContainerInMode(
+    containerName: string,
+    volume: string,
+    hostRoot: string,
+    codebaseId: string,
+    mode: OverlayMode
   ): Promise<string> {
-    const buildArgs = (withFuse: boolean): string[] => [
+    // Least-privilege per mode: fuse gets ONLY the device; native gets the caps.
+    const privilegeArgs =
+      mode === 'fuse'
+        ? ['--device', '/dev/fuse']
+        : ['--cap-add', 'SYS_ADMIN', '--security-opt', 'apparmor=unconfined'];
+
+    const args = [
       'run',
       '-d',
       '--name',
@@ -271,11 +379,7 @@ export class ContainerBackend implements IIsolationBackend {
       // (paused, Phase C) container and re-run work — never what we want.
       '--restart',
       'no',
-      '--cap-add',
-      'SYS_ADMIN',
-      '--security-opt',
-      'apparmor=unconfined',
-      ...(withFuse ? ['--device', '/dev/fuse'] : []),
+      ...privilegeArgs,
       '--memory',
       `${this.config.memoryMb}m`,
       '--pids-limit',
@@ -288,32 +392,19 @@ export class ContainerBackend implements IIsolationBackend {
       `${volume}:/mnt/upper`,
       '-e',
       `ARCHON_WORKSPACE_PATH=${hostRoot}`,
+      '-e',
+      `ARCHON_OVERLAY_MODE=${mode}`,
       this.config.image,
     ];
-
-    try {
-      const { stdout } = await this.docker(buildArgs(true));
-      return stdout.trim();
-    } catch (err) {
-      const detail = extractDockerError(err).toLowerCase();
-      const isFuseDeviceMiss =
-        detail.includes('/dev/fuse') ||
-        detail.includes('error gathering device information') ||
-        detail.includes('no such file or directory');
-      if (!isFuseDeviceMiss) throw err;
-      // Retry without the fuse device — the host has no /dev/fuse, so the
-      // container relies solely on native overlay (CAP_SYS_ADMIN). If native
-      // also fails, the entrypoint reports it and the ready-poll times out.
-      log.warn({ containerName }, 'isolation.container_fuse_device_unavailable');
-      const { stdout } = await this.docker(buildArgs(false));
-      return stdout.trim();
-    }
+    const { stdout } = await this.docker(args);
+    return stdout.trim();
   }
 
   /**
-   * Poll for the entrypoint's ready sentinel. Throws with the container's tail
-   * logs if the overlay never mounts within the timeout, so a mount failure
-   * surfaces the entrypoint's own error rather than an opaque timeout.
+   * Poll for the entrypoint's ready sentinel. Fails FAST if the container has
+   * exited (the entrypoint exits 1 on a mount failure) rather than waiting out the
+   * full timeout, so the mode fallback is quick. Throws with the container's tail
+   * logs so a mount failure surfaces the entrypoint's own error.
    */
   private async waitForReady(containerId: string): Promise<void> {
     const deadline = Date.now() + READY_TIMEOUT_MS;
@@ -322,7 +413,9 @@ export class ContainerBackend implements IIsolationBackend {
         await this.docker(['exec', containerId, 'test', '-f', READY_SENTINEL], { timeout: 5_000 });
         return;
       } catch {
-        // Sentinel not present yet (or exec transiently failed) — back off.
+        // Not ready yet — but if the container has EXITED, the mount failed;
+        // stop polling immediately instead of burning the whole timeout.
+        if (!(await this.isRunning(containerId))) break;
         await new Promise(resolve => setTimeout(resolve, READY_POLL_INTERVAL_MS));
       }
     }
@@ -331,18 +424,22 @@ export class ContainerBackend implements IIsolationBackend {
       const { stdout, stderr } = await this.docker(['logs', '--tail', '20', containerId]);
       logs = `${stdout}\n${stderr}`.trim();
     } catch {
-      // Best-effort — the timeout is the real error.
+      // Best-effort — the timeout / exit is the real error.
     }
     throw new Error(
-      `Container overlay did not become ready within ${READY_TIMEOUT_MS}ms. ` +
-        'The overlay mount likely failed (native overlay needs CAP_SYS_ADMIN; ' +
-        `fuse-overlayfs needs /dev/fuse).${logs ? ` Container logs:\n${logs}` : ''}`
+      `Container overlay did not become ready.${logs ? ` Container logs:\n${logs}` : ''}`
     );
   }
 
-  /** Best-effort teardown used on prepare failure (before a row exists). */
-  private async forceRemove(containerName: string, volume: string): Promise<void> {
-    await this.docker(['rm', '-f', containerName]).catch(() => undefined);
-    await this.docker(['volume', 'rm', '-f', volume]).catch(() => undefined);
+  /** True if the container is still running. Any inspect failure → treated as not running. */
+  private async isRunning(containerId: string): Promise<boolean> {
+    try {
+      const { stdout } = await this.docker(['inspect', '-f', '{{.State.Running}}', containerId], {
+        timeout: 5_000,
+      });
+      return stdout.trim() === 'true';
+    } catch {
+      return false;
+    }
   }
 }

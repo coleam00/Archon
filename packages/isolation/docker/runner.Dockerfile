@@ -53,12 +53,19 @@ ENV PATH="/root/.local/bin:/root/.bun/bin:${PATH}"
 RUN git config --system --add safe.directory '*'
 
 # Claude Code refuses --dangerously-skip-permissions as root UNLESS IS_SANDBOX=1.
-# We run in-container work as root under this flag deliberately: overlay mount and
-# writing across the host-owned read-only lower layer both need root, and the
-# container itself is the isolation boundary (read-only lower bind + overlay
-# upper on a VM-local volume + Archon-managed env only + approval-gated
-# write-back, Phase C). Non-root exec over overlay-on-bind is fragile across
-# storage drivers/hosts; hardening to a uid-matched non-root user is follow-up.
+# We run in-container work as root under this flag deliberately: writing across
+# the host-owned read-only lower layer needs root, and the container is the
+# isolation-hardening boundary (read-only lower bind + overlay upper on a VM-local
+# volume + Archon-managed env only + approval-gated write-back, Phase C).
+#
+# SECURITY (read packages/isolation/docker/SECURITY.md): this is NOT a sandbox
+# against a hostile / prompt-injected agent when the container runs in `native`
+# overlay mode. Native mode grants CAP_SYS_ADMIN, so in-container root can
+# `mount -o remount,rw /mnt/lower` and write straight through the :ro bind to the
+# live host root — defeating the advertised isolation. The `fuse` mode (preferred,
+# no CAP_SYS_ADMIN) closes that escape but only mounts on rootless/userns daemons.
+# Non-root exec over overlay-on-bind is also fragile across storage drivers;
+# hardening to a uid-matched non-root user is follow-up.
 ENV IS_SANDBOX=1
 
 # Claude session/config live on the upper VOLUME but OUTSIDE the overlay diff

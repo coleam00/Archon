@@ -66,6 +66,7 @@ import {
   executeDagWorkflow,
   collectContainerIncompatibleProviders,
   containerCommandName,
+  buildSubprocessDockerArgs,
 } from './dag-executor';
 import { writeNodeArtifact } from './artifacts-index';
 import { getWorkflowEventEmitter, type WorkflowEmitterEvent } from './event-emitter';
@@ -13927,5 +13928,53 @@ describe('collectContainerIncompatibleProviders', () => {
     } as unknown as DagNode;
     const bad = collectContainerIncompatibleProviders([group], 'claude');
     expect([...bad]).toEqual(['codex']);
+  });
+});
+
+describe('buildSubprocessDockerArgs — bash/script env isolation', () => {
+  const CTX = { kind: 'container' as const, containerId: 'cid-9' };
+
+  it('delivers the Archon-managed env via -e flags only and runs at the same cwd', () => {
+    const args = buildSubprocessDockerArgs(CTX, 'bash', ['-c', 'echo hi'], {
+      cwd: '/tmp/ops-client',
+      env: { ARTIFACTS_DIR: '/a', ANTHROPIC_API_KEY: 'sk', BASE_BRANCH: 'main' },
+    });
+    expect(args.slice(0, 2)).toEqual(['exec', '-w']);
+    expect(args[2]).toBe('/tmp/ops-client');
+    // Every managed var is delivered as an explicit -e flag.
+    expect(args).toContain('-e');
+    expect(args).toContain('ARTIFACTS_DIR=/a');
+    expect(args).toContain('ANTHROPIC_API_KEY=sk');
+    expect(args).toContain('BASE_BRANCH=main');
+    // Container id, then the normalized command, then the node args.
+    const cidIdx = args.indexOf('cid-9');
+    expect(cidIdx).toBeGreaterThan(-1);
+    expect(args[cidIdx + 1]).toBe('bash');
+    expect(args.slice(cidIdx + 2)).toEqual(['-c', 'echo hi']);
+  });
+
+  it('does NOT leak host process.env (only the passed env bag is forwarded)', () => {
+    const canary = 'ARCHON_DAGEXEC_CANARY';
+    process.env[canary] = 'leaked';
+    try {
+      const args = buildSubprocessDockerArgs(CTX, 'bash', ['-c', 'true'], {
+        cwd: '/w',
+        env: { ONLY_THIS: '1' },
+      });
+      const joined = args.join(' ');
+      expect(joined).toContain('ONLY_THIS=1');
+      expect(joined).not.toContain(canary);
+    } finally {
+      delete process.env[canary];
+    }
+  });
+
+  it('normalizes a host bash path to the in-container binary name', () => {
+    const args = buildSubprocessDockerArgs(CTX, '/usr/local/bin/bash', ['-c', 'x'], {
+      cwd: '/w',
+      env: {},
+    });
+    const cidIdx = args.indexOf('cid-9');
+    expect(args[cidIdx + 1]).toBe('bash');
   });
 });

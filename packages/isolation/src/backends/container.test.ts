@@ -81,14 +81,14 @@ function fakeDocker(
 }
 
 describe('ContainerBackend.prepare', () => {
-  test('constructs docker run with labels, mounts, caps, and resource limits', async () => {
+  test('prefers fuse mode (no CAP_SYS_ADMIN) with labels, mounts, and resource limits', async () => {
     const store = fakeStore();
     const docker = fakeDocker(args => {
       if (args[0] === 'version') return { stdout: '28', stderr: '' };
       if (args[0] === 'image') return { stdout: '[]', stderr: '' };
       if (args[0] === 'volume') return { stdout: '', stderr: '' };
       if (args[0] === 'run') return { stdout: 'abc123containerid\n', stderr: '' };
-      if (args[0] === 'exec') return { stdout: '', stderr: '' }; // ready poll succeeds
+      if (args[0] === 'exec') return { stdout: '', stderr: '' }; // ready poll succeeds → fuse wins
       return { stdout: '', stderr: '' };
     });
 
@@ -104,8 +104,10 @@ describe('ContainerBackend.prepare', () => {
     const joined = (runArgs ?? []).join(' ');
     expect(joined).toContain('--label diy.archon.managed=true');
     expect(joined).toContain('--label diy.archon.codebase-id=cb-1');
-    expect(joined).toContain('--cap-add SYS_ADMIN');
-    expect(joined).toContain('--security-opt apparmor=unconfined');
+    // Fuse mode: the device, and CRUCIALLY no CAP_SYS_ADMIN (closes the remount escape).
+    expect(joined).toContain('--device /dev/fuse');
+    expect(joined).toContain('ARCHON_OVERLAY_MODE=fuse');
+    expect(joined).not.toContain('--cap-add SYS_ADMIN');
     expect(joined).toContain('--restart no');
     expect(joined).toContain('--memory 4096m');
     expect(joined).toContain('--pids-limit 512');
@@ -113,6 +115,43 @@ describe('ContainerBackend.prepare', () => {
     expect(joined).toContain('/tmp/ops-client:/mnt/lower:ro');
     expect(joined).toContain('ARCHON_WORKSPACE_PATH=/tmp/ops-client');
     expect(joined).toContain('archon-runner:test');
+    // The winning mode is recorded on the row metadata.
+    expect((store.created?.metadata as { overlayMode: string }).overlayMode).toBe('fuse');
+  });
+
+  test('falls back to native mode (CAP_SYS_ADMIN) when fuse never becomes ready', async () => {
+    const store = fakeStore();
+    let runCount = 0;
+    const docker = fakeDocker(args => {
+      if (args[0] === 'run') {
+        runCount += 1;
+        return { stdout: `cid-${runCount}\n`, stderr: '' };
+      }
+      // Fuse container: ready check fails AND inspect says not running → fast fail.
+      // Native container (2nd run): ready check passes.
+      if (args[0] === 'exec' && args.includes('test')) {
+        if (runCount === 1) throw new Error('not ready');
+        return { stdout: '', stderr: '' };
+      }
+      if (args[0] === 'inspect') return { stdout: 'false\n', stderr: '' }; // fuse exited
+      if (args[0] === 'rm') return { stdout: '', stderr: '' };
+      return { stdout: '', stderr: '' };
+    });
+
+    const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+    const prepared = await backend.prepare({ codebase: FOLDER });
+
+    expect(prepared.execContext).toEqual({ kind: 'container', containerId: 'cid-2' });
+    expect(runCount).toBe(2);
+    // The failed fuse container is removed before the native attempt.
+    expect(docker.calls.find(c => c[0] === 'rm')).toBeDefined();
+    // The 2nd run (native) carries CAP_SYS_ADMIN, not the fuse device.
+    const nativeRun = docker.calls.filter(c => c[0] === 'run')[1];
+    const joined = (nativeRun ?? []).join(' ');
+    expect(joined).toContain('--cap-add SYS_ADMIN');
+    expect(joined).toContain('ARCHON_OVERLAY_MODE=native');
+    expect(joined).not.toContain('/dev/fuse');
+    expect((store.created?.metadata as { overlayMode: string }).overlayMode).toBe('native');
   });
 
   test('stores a container row with the empty-branch sentinel and container metadata', async () => {
@@ -133,7 +172,7 @@ describe('ContainerBackend.prepare', () => {
     expect(meta.volume).toMatch(/^archon-.*-upper$/);
   });
 
-  test('polls until the overlay-ready sentinel appears', async () => {
+  test('polls until the overlay-ready sentinel appears (container still running)', async () => {
     const store = fakeStore();
     let readyChecks = 0;
     const docker = fakeDocker(args => {
@@ -143,6 +182,9 @@ describe('ContainerBackend.prepare', () => {
         if (readyChecks < 2) throw new Error('sentinel not present yet');
         return { stdout: '', stderr: '' };
       }
+      // Container is still running while we poll → waitForReady keeps polling
+      // (does not fast-fail out to the next mode).
+      if (args[0] === 'inspect') return { stdout: 'true\n', stderr: '' };
       return { stdout: '', stderr: '' };
     });
     const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
@@ -163,12 +205,13 @@ describe('ContainerBackend.prepare', () => {
     expect(volumeRm).toBeDefined();
   });
 
-  test('retries docker run without --device /dev/fuse when the host has no fuse', async () => {
+  test('falls back to native when the fuse run itself fails (host has no /dev/fuse)', async () => {
     const store = fakeStore();
     let runAttempts = 0;
     const docker = fakeDocker(args => {
       if (args[0] === 'run') {
         runAttempts += 1;
+        // Fuse attempt carries --device /dev/fuse and the daemon refuses it.
         if (args.includes('/dev/fuse')) {
           const err = new Error('run failed') as Error & { stderr?: string };
           err.stderr =
@@ -183,6 +226,7 @@ describe('ContainerBackend.prepare', () => {
     const prepared = await backend.prepare({ codebase: FOLDER });
     expect(runAttempts).toBe(2);
     expect(prepared.execContext).toEqual({ kind: 'container', containerId: 'cid-nofuse' });
+    expect((store.created?.metadata as { overlayMode: string }).overlayMode).toBe('native');
   });
 });
 
@@ -214,17 +258,38 @@ describe('ContainerBackend.destroy', () => {
     expect(docker.calls.length).toBe(0);
   });
 
-  test('does not throw when docker rm fails (best-effort teardown)', async () => {
+  test('treats "no such container" as idempotent-OK (marks destroyed, no throw)', async () => {
     const store = fakeStore();
     const docker = fakeDocker(args => {
       if (args[0] === 'run') return { stdout: 'cid\n', stderr: '' };
-      if (args[0] === 'rm') throw new Error('No such container');
+      if (args[0] === 'rm') throw new Error('Error: No such container: archon-x');
       return { stdout: '', stderr: '' };
     });
     const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
     const prepared = await backend.prepare({ codebase: FOLDER });
-    await backend.destroy(prepared.envId as string); // must not throw
+    await backend.destroy(prepared.envId as string); // already gone → must not throw
     expect(store.rows.get(prepared.envId as string)?.status).toBe('destroyed');
+  });
+
+  test('THROWS and leaves the row active on a GENUINE docker rm failure', async () => {
+    const store = fakeStore();
+    const docker = fakeDocker(args => {
+      if (args[0] === 'run') return { stdout: 'cid\n', stderr: '' };
+      if (args[0] === 'rm') {
+        const err = new Error('rm failed') as Error & { stderr?: string };
+        err.stderr = 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock';
+        throw err;
+      }
+      return { stdout: '', stderr: '' };
+    });
+    const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+    const prepared = await backend.prepare({ codebase: FOLDER });
+    // Real failure → surfaced (not swallowed), and the row is NOT marked destroyed
+    // so a later cleanup/resume can retry.
+    await expect(backend.destroy(prepared.envId as string)).rejects.toThrow(
+      /Failed to remove the isolation container/
+    );
+    expect(store.rows.get(prepared.envId as string)?.status).toBe('active');
   });
 
   // Regression: SQLite returns the metadata column as a JSON STRING (Postgres

@@ -833,6 +833,18 @@ async function resolveNodeProviderAndModel(
   // Get provider capabilities for capability warnings (static lookup, no instantiation)
   const caps = getProviderCapabilities(provider);
 
+  // Runtime backstop for container dispatch: the run-start pre-scan
+  // (collectContainerIncompatibleProviders) hand-mirrors this same provider
+  // resolution, so it could drift. Re-check the RESOLVED provider here, at the
+  // actual dispatch point, so a container turn can never reach a provider that
+  // can't honor it — no silent host downgrade (defense in depth).
+  if (execContext.kind === 'container' && !caps.containerExec) {
+    throw new Error(
+      `Provider '${provider}' cannot run inside a container yet (containerExec ` +
+        'capability). Use provider claude, or run without --container.'
+    );
+  }
+
   // Capability warnings — inform users when features are unsupported
   const capChecks: [string, keyof ProviderCapabilities, boolean][] = [
     [
@@ -2158,6 +2170,28 @@ export function containerCommandName(cmd: string): string {
  * in-container at the same absolute cwd, so `bash:`/`script:` nodes have no
  * host-escape hole.
  */
+/**
+ * Build the `docker exec` argv for a deterministic subprocess (bash/script) in a
+ * container. Env is delivered ONLY via `-e` flags (never merged with the docker
+ * CLI's own env / host process.env — the isolation invariant); the command name
+ * is normalized to the in-container binary. Exported for the env-isolation
+ * enforcement test.
+ */
+export function buildSubprocessDockerArgs(
+  execContext: Extract<ExecutionContext, { kind: 'container' }>,
+  cmd: string,
+  args: string[],
+  options: { cwd: string; env: NodeJS.ProcessEnv }
+): string[] {
+  const dockerArgs = ['exec', '-w', options.cwd];
+  if (execContext.execUser) dockerArgs.push('-u', execContext.execUser);
+  for (const [key, value] of Object.entries(options.env)) {
+    if (value !== undefined) dockerArgs.push('-e', `${key}=${value}`);
+  }
+  dockerArgs.push(execContext.containerId, containerCommandName(cmd), ...args);
+  return dockerArgs;
+}
+
 async function runSubprocess(
   execContext: ExecutionContext,
   cmd: string,
@@ -2165,12 +2199,10 @@ async function runSubprocess(
   options: { cwd: string; timeout: number; env: NodeJS.ProcessEnv }
 ): Promise<{ stdout: string; stderr: string }> {
   if (execContext.kind === 'container') {
-    const dockerArgs = ['exec', '-w', options.cwd];
-    if (execContext.execUser) dockerArgs.push('-u', execContext.execUser);
-    for (const [key, value] of Object.entries(options.env)) {
-      if (value !== undefined) dockerArgs.push('-e', `${key}=${value}`);
-    }
-    dockerArgs.push(execContext.containerId, containerCommandName(cmd), ...args);
+    const dockerArgs = buildSubprocessDockerArgs(execContext, cmd, args, {
+      cwd: options.cwd,
+      env: options.env,
+    });
     return execFileAsync('docker', dockerArgs, { timeout: options.timeout });
   }
   return execFileAsync(cmd, args, {

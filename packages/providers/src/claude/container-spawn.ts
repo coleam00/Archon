@@ -21,6 +21,7 @@
  */
 
 import { spawn, type ChildProcess } from 'child_process';
+import { randomUUID } from 'crypto';
 import type { SpawnOptions, SpawnedProcess } from '@anthropic-ai/claude-agent-sdk';
 import type { ExecutionContext } from '../types';
 import { createLogger } from '@archon/paths';
@@ -55,13 +56,26 @@ const CONTAINER_CLAUDE_BIN = process.env.ARCHON_CONTAINER_CLAUDE_BIN ?? 'claude'
  */
 const CONTAINER_ENV_DENYLIST = new Set(['PATH', 'HOME', 'PWD', 'OLDPWD', 'SHLVL']);
 
+/** Build the per-invocation in-container pidfile path. Uuid-only → shell-safe. */
+function pidFilePath(): string {
+  return `/tmp/archon-claude-${randomUUID()}.pid`;
+}
+
 /**
  * Build `docker exec` argv for running Claude inside the container. Exported for
  * unit testing the argument construction without spawning a process.
+ *
+ * Claude is wrapped in a pid-capturing shell: `$$` is the sh PID, and
+ * `exec claude "$@"` replaces sh IN PLACE, so Claude inherits that same PID —
+ * which the wrapper writes to `pidFile`. That lets `kill()` target THIS
+ * invocation's Claude, NOT sibling Claude nodes sharing the run container
+ * (concurrent DAG layers). The SDK args ride `"$@"`, so they are passed as argv
+ * (no shell interpolation / injection).
  */
 export function buildDockerExecArgs(
   execContext: Extract<ExecutionContext, { kind: 'container' }>,
-  options: SpawnOptions
+  options: SpawnOptions,
+  pidFile: string
 ): string[] {
   const args = ['exec', '-i'];
   if (execContext.execUser) args.push('-u', execContext.execUser);
@@ -70,28 +84,41 @@ export function buildDockerExecArgs(
     if (value === undefined || CONTAINER_ENV_DENYLIST.has(key)) continue;
     args.push('-e', `${key}=${value}`);
   }
-  args.push(execContext.containerId, CONTAINER_CLAUDE_BIN, ...options.args);
+  args.push(
+    execContext.containerId,
+    'sh',
+    '-c',
+    `echo $$ > ${pidFile}; exec ${CONTAINER_CLAUDE_BIN} "$@"`,
+    CONTAINER_CLAUDE_BIN, // $0 (cosmetic — "$@" starts at the real SDK args below)
+    ...options.args
+  );
   return args;
 }
 
-/** Strip Node's `SIG` prefix for `pkill`/`kill` (which take `TERM`/`KILL`). */
+/** Strip Node's `SIG` prefix for `kill` (which takes `TERM`/`KILL`). */
 function toPosixSignal(signal: NodeJS.Signals): string {
   return signal.replace(/^SIG/, '');
 }
 
 /**
- * Kill the in-container Claude process tree. `docker exec ... pkill -<sig> -f`
- * matches the claude command line; pkill never signals itself, and one run maps
- * to one container, so this is unambiguous. Fire-and-forget: teardown failures
- * are logged but never thrown (the caller is a `kill()` returning boolean).
+ * Kill exactly THIS invocation's in-container Claude via its pidfile (not sibling
+ * Claude nodes — the old `pkill -f claude` killed every Claude in the container).
+ * Signals the process group first (children: bash tool subprocesses) then the pid
+ * itself; both best-effort (pidfile may not be written yet, or the pid gone).
+ * Fire-and-forget: teardown failures are logged, never thrown.
  */
-function killInContainer(containerId: string, signal: NodeJS.Signals, spawnFn: Spawner): void {
+function killInContainer(
+  containerId: string,
+  signal: NodeJS.Signals,
+  spawnFn: Spawner,
+  pidFile: string
+): void {
   const posix = toPosixSignal(signal);
-  const killer = spawnFn(
-    'docker',
-    ['exec', containerId, 'pkill', `-${posix}`, '-f', CONTAINER_CLAUDE_BIN],
-    { stdio: 'ignore' }
-  );
+  const script =
+    `pid=$(cat ${pidFile} 2>/dev/null); ` +
+    `[ -n "$pid" ] && { kill -${posix} -"$pid" 2>/dev/null; kill -${posix} "$pid" 2>/dev/null; }; ` +
+    'true';
+  const killer = spawnFn('docker', ['exec', containerId, 'sh', '-c', script], { stdio: 'ignore' });
   killer.on('error', err => {
     getLog().warn({ containerId, signal: posix, err }, 'claude.container_kill_failed');
   });
@@ -112,7 +139,9 @@ export function buildContainerSpawn(
   spawnFn: Spawner = spawn as unknown as Spawner
 ): (options: SpawnOptions) => SpawnedProcess {
   return (options: SpawnOptions): SpawnedProcess => {
-    const dockerArgs = buildDockerExecArgs(execContext, options);
+    // Per-invocation pidfile so kill() targets only this Claude, not siblings.
+    const pidFile = pidFilePath();
+    const dockerArgs = buildDockerExecArgs(execContext, options, pidFile);
     getLog().debug(
       { containerId: execContext.containerId, argc: options.args.length },
       'claude.container_spawn_started'
@@ -134,7 +163,7 @@ export function buildContainerSpawn(
 
     // Force-kill in-container when the SDK's forwarded abort fires (post-grace).
     const onAbort = (): void => {
-      killInContainer(execContext.containerId, 'SIGKILL', spawnFn);
+      killInContainer(execContext.containerId, 'SIGKILL', spawnFn, pidFile);
     };
     if (options.signal) {
       if (options.signal.aborted) onAbort();
@@ -153,7 +182,7 @@ export function buildContainerSpawn(
       kill(signal: NodeJS.Signals): boolean {
         // Signal the in-container process (the local docker-exec kill would not
         // cross the boundary), then tear down the local exec client too.
-        killInContainer(execContext.containerId, signal, spawnFn);
+        killInContainer(execContext.containerId, signal, spawnFn, pidFile);
         return child.kill(signal);
       },
       on(event: 'exit' | 'error', listener: (...eventArgs: never[]) => void): void {

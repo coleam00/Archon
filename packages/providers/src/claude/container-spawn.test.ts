@@ -51,9 +51,11 @@ function recordingSpawner(): Spawner & {
   return fn;
 }
 
+const PIDFILE = '/tmp/archon-claude-test.pid';
+
 describe('buildDockerExecArgs', () => {
-  test('builds docker exec -i with cwd, env flags, container id, claude, and args', () => {
-    const args = buildDockerExecArgs(CTX, makeSpawnOptions());
+  test('builds docker exec -i with cwd, env flags, container id, pid-wrapped claude, and args', () => {
+    const args = buildDockerExecArgs(CTX, makeSpawnOptions(), PIDFILE);
     expect(args.slice(0, 2)).toEqual(['exec', '-i']);
     expect(args).toContain('-w');
     const wIdx = args.indexOf('-w');
@@ -61,22 +63,26 @@ describe('buildDockerExecArgs', () => {
     expect(args).toContain('-e');
     expect(args).toContain('ANTHROPIC_API_KEY=sk-test');
     expect(args).toContain('ARTIFACTS_DIR=/a');
-    // container id, then the in-container binary, then the SDK args
+    // container id, then the pid-capturing shell wrapper, then $0 + the SDK args.
     const cidIdx = args.indexOf('cid-123');
     expect(cidIdx).toBeGreaterThan(-1);
-    expect(args[cidIdx + 1]).toBe('claude');
-    expect(args.slice(cidIdx + 2)).toEqual(['--output-format', 'stream-json', '--verbose']);
+    expect(args[cidIdx + 1]).toBe('sh');
+    expect(args[cidIdx + 2]).toBe('-c');
+    // The wrapper writes claude's own pid (via exec) to the pidfile.
+    expect(args[cidIdx + 3]).toBe(`echo $$ > ${PIDFILE}; exec claude "$@"`);
+    expect(args[cidIdx + 4]).toBe('claude'); // $0
+    expect(args.slice(cidIdx + 5)).toEqual(['--output-format', 'stream-json', '--verbose']);
   });
 
   test('never forwards host PATH/HOME (container image provides them)', () => {
-    const args = buildDockerExecArgs(CTX, makeSpawnOptions());
+    const args = buildDockerExecArgs(CTX, makeSpawnOptions(), PIDFILE);
     const joined = args.join(' ');
     expect(joined).not.toContain('PATH=/host/bin');
     expect(joined).not.toContain('HOME=/Users/x');
   });
 
   test('adds -u when execUser is set', () => {
-    const args = buildDockerExecArgs({ ...CTX, execUser: '1001' }, makeSpawnOptions());
+    const args = buildDockerExecArgs({ ...CTX, execUser: '1001' }, makeSpawnOptions(), PIDFILE);
     const uIdx = args.indexOf('-u');
     expect(uIdx).toBeGreaterThan(-1);
     expect(args[uIdx + 1]).toBe('1001');
@@ -93,14 +99,21 @@ describe('buildContainerSpawn — SpawnedProcess contract', () => {
     expect(proc.stdout).toBe(spawner.children[0]?.stdout as never);
   });
 
-  test('kill() signals the in-container process AND the local exec child', () => {
+  test('kill() targets THIS invocation pid in-container (not siblings) AND the local child', () => {
     const spawner = recordingSpawner();
     const proc = buildContainerSpawn(CTX, spawner)(makeSpawnOptions());
     proc.kill('SIGTERM');
-    // Second spawn is the in-container pkill.
-    const pkillCall = spawner.calls.find(c => c.args.includes('pkill'));
-    expect(pkillCall).toBeDefined();
-    expect(pkillCall?.args).toEqual(['exec', 'cid-123', 'pkill', '-TERM', '-f', 'claude']);
+    // The kill is a `docker exec <cid> sh -c '<pidfile kill script>'` — NOT pkill.
+    const killCall = spawner.calls.find(c => c.args.some(a => a.includes('kill -TERM')));
+    expect(killCall).toBeDefined();
+    expect(killCall?.args[0]).toBe('exec');
+    expect(killCall?.args).toContain('cid-123');
+    expect(spawner.calls.some(c => c.args.includes('pkill'))).toBe(false);
+    const script = killCall?.args.at(-1) ?? '';
+    // Reads a per-invocation pidfile and signals the group (children) + the pid.
+    expect(script).toMatch(/cat \/tmp\/archon-claude-[0-9a-f-]+\.pid/);
+    expect(script).toContain('kill -TERM -"$pid"');
+    expect(script).toContain('kill -TERM "$pid"');
     // Local docker-exec child was killed too.
     const mainChild = spawner.children[0] as ChildProcess & { killSignals: string[] };
     expect(mainChild.killSignals).toContain('SIGTERM');
@@ -117,12 +130,12 @@ describe('buildContainerSpawn — SpawnedProcess contract', () => {
     expect(exitCode).toBe(0);
   });
 
-  test('force-kills in-container when the forwarded abort signal fires', () => {
+  test('force-kills in-container (SIGKILL) when the forwarded abort signal fires', () => {
     const controller = new AbortController();
     const spawner = recordingSpawner();
     buildContainerSpawn(CTX, spawner)(makeSpawnOptions({ signal: controller.signal }));
     controller.abort();
-    const pkillCall = spawner.calls.find(c => c.args.includes('pkill'));
-    expect(pkillCall?.args).toContain('-KILL');
+    const killCall = spawner.calls.find(c => c.args.some(a => a.includes('kill -KILL')));
+    expect(killCall).toBeDefined();
   });
 });

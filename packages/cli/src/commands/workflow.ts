@@ -20,7 +20,12 @@ import {
   type TierName,
   type RawTiersConfig,
 } from '@archon/workflows/model-validation';
-import { configureIsolation, getIsolationProvider, resolveFolderBackend } from '@archon/isolation';
+import {
+  configureIsolation,
+  getIsolationProvider,
+  resolveFolderBackend,
+  classifyIsolationError,
+} from '@archon/isolation';
 import type {
   ExecutionContext,
   IIsolationBackend,
@@ -148,17 +153,39 @@ const DEFAULT_RUNNER_IMAGE = 'archon-runner:latest';
 /**
  * Resolve the container backend config from the merged `container` config,
  * applying Phase B defaults (bridge network, 4 GiB memory, 512 pids).
+ *
+ * `container.*` comes from hand-parsed YAML (not Zod), so the values are
+ * untrusted at runtime despite their static types — validate them here. In
+ * particular `network` must be `bridge`/`none`: a stray `host` would otherwise
+ * flow straight to `docker run --network host` and drop the network isolation.
  */
 function resolveContainerBackendConfig(
-  cfg:
-    | { image?: string; network?: 'bridge' | 'none'; memoryMb?: number; pidsLimit?: number }
-    | undefined
+  cfg: { image?: string; network?: string; memoryMb?: number; pidsLimit?: number } | undefined
 ): ContainerBackendConfig {
+  const network = cfg?.network;
+  if (network !== undefined && network !== 'bridge' && network !== 'none') {
+    throw new Error(
+      `Invalid container.network '${network}' in .archon/config.yaml — must be ` +
+        "'bridge' or 'none'. Host networking is not allowed for container isolation."
+    );
+  }
+  const memoryMb = cfg?.memoryMb;
+  if (memoryMb !== undefined && (!Number.isFinite(memoryMb) || memoryMb <= 0)) {
+    throw new Error(
+      `Invalid container.memoryMb '${String(memoryMb)}' — must be a positive number of MiB.`
+    );
+  }
+  const pidsLimit = cfg?.pidsLimit;
+  if (pidsLimit !== undefined && (!Number.isFinite(pidsLimit) || pidsLimit <= 0)) {
+    throw new Error(
+      `Invalid container.pidsLimit '${String(pidsLimit)}' — must be a positive integer.`
+    );
+  }
   return {
     image: cfg?.image?.trim() || DEFAULT_RUNNER_IMAGE,
-    network: cfg?.network ?? 'bridge',
-    memoryMb: cfg?.memoryMb ?? 4096,
-    pidsLimit: cfg?.pidsLimit ?? 512,
+    network: network ?? 'bridge',
+    memoryMb: memoryMb ?? 4096,
+    pidsLimit: pidsLimit ?? 512,
   };
 }
 
@@ -1149,7 +1176,16 @@ export async function workflowRunCommand(
         { cwd: codebase.default_cwd, image: containerConfig.image },
         'workflow.running_in_container'
       );
-      const prepared = await backend.prepare({ codebase: folderCodebase });
+      let prepared;
+      try {
+        prepared = await backend.prepare({ codebase: folderCodebase });
+      } catch (prepErr) {
+        // Map docker/daemon/image failures to an actionable message (daemon down,
+        // runner image missing, docker-group permission — see errors.ts).
+        const err = prepErr as Error;
+        getLog().error({ err, codebaseId: codebase.id }, 'workflow.container_prepare_failed');
+        throw new Error(classifyIsolationError(err));
+      }
       // The container mounts the overlay at the SAME absolute path (same-absolute-
       // path invariant), so prepared.cwd is the folder root. Consume it explicitly
       // rather than assuming workingCwd — the container backend returns a
@@ -1450,8 +1486,10 @@ export async function workflowRunCommand(
     }
   }
 
-  // Execute workflow with workingCwd (may be worktree path)
-  let result: Awaited<ReturnType<typeof executeWorkflow>>;
+  // Execute workflow with workingCwd (may be worktree path). `undefined` until
+  // assigned so the finally-block teardown can tell "threw before a result" from
+  // a real terminal/paused result.
+  let result: Awaited<ReturnType<typeof executeWorkflow>> | undefined;
   try {
     const opts = prepared
       ? {
@@ -1481,57 +1519,78 @@ export async function workflowRunCommand(
     );
   } finally {
     unsubscribe?.();
-  }
 
-  // Container teardown (Phase B): destroy the container + overlay after a
-  // TERMINAL run (completed or failed). A PAUSED run keeps its container so a
-  // future resume can reattach (No-Autonomous-Lifecycle-Mutation) — container
-  // resume + the approval-gated write-back of the overlay diff land in Phase C,
-  // so for now a container run's changes are NOT applied to the live root.
-  if (containerBackend && containerEnvId) {
-    const isPaused = result.success && 'paused' in result && result.paused;
-    if (isPaused) {
-      console.log(
-        '\nRun paused — container left running for resume (container resume lands in Phase C).'
-      );
-    } else {
-      try {
-        await containerBackend.destroy(containerEnvId);
-        // Persist a container_destroyed event (console + `workflow get --verbose`)
-        // and emit for any live subscriber. The emitter fire is after unsubscribe,
-        // so the DB row is the durable channel for CLI runs.
-        const runId = result.workflowRunId;
-        if (runId) {
-          getWorkflowEventEmitter().emit({
-            type: 'container_lifecycle',
-            runId,
-            phase: 'destroyed',
-          });
-          await deps.store
-            .createWorkflowEvent({
-              workflow_run_id: runId,
-              event_type: 'container_destroyed',
-              step_name: 'container',
-              data: {},
-            })
-            .catch((eventErr: Error) => {
-              getLog().warn(
-                { err: eventErr, runId },
-                'workflow.container_destroyed_event_persist_failed'
-              );
-            });
-        }
+    // Container teardown (Phase B) — in `finally` so a throw from executeWorkflow
+    // BEFORE its own try/catch (malformed config, env resolvers, unknown provider)
+    // can't orphan a privileged container+volume. Destroy after a TERMINAL run
+    // (completed/failed) AND after a pre-result throw (result === undefined); a
+    // PAUSED run keeps its container so a future resume can reattach
+    // (No-Autonomous-Lifecycle-Mutation). Container resume + the approval-gated
+    // write-back of the overlay diff land in Phase C, so a Phase-B container run's
+    // changes are NOT applied to the live root.
+    if (containerBackend && containerEnvId) {
+      const isPaused = result?.success === true && 'paused' in result && result.paused;
+      if (isPaused) {
         console.log(
-          'Container and overlay volume removed. (Phase B: overlay changes were NOT applied ' +
-            'to the live root — approval-gated write-back lands in Phase C.)'
+          '\nRun paused — container left running for resume (container resume lands in Phase C).'
         );
-      } catch (destroyErr) {
-        getLog().warn(
-          { err: destroyErr as Error, envId: containerEnvId },
-          'workflow.container_destroy_failed'
-        );
+      } else {
+        try {
+          await containerBackend.destroy(containerEnvId);
+          // Persist a container_destroyed event (console + `workflow get --verbose`)
+          // and emit for any live subscriber. The emitter fire is after unsubscribe,
+          // so the DB row is the durable channel for CLI runs. No runId on the
+          // pre-result throw path — skip the event, still destroy.
+          const runId = result?.workflowRunId;
+          if (runId) {
+            getWorkflowEventEmitter().emit({
+              type: 'container_lifecycle',
+              runId,
+              phase: 'destroyed',
+            });
+            await deps.store
+              .createWorkflowEvent({
+                workflow_run_id: runId,
+                event_type: 'container_destroyed',
+                step_name: 'container',
+                data: {},
+              })
+              .catch((eventErr: Error) => {
+                getLog().warn(
+                  { err: eventErr, runId },
+                  'workflow.container_destroyed_event_persist_failed'
+                );
+              });
+          }
+          console.log(
+            'Container and overlay volume removed. (Phase B: overlay changes were NOT applied ' +
+              'to the live root — approval-gated write-back lands in Phase C.)'
+          );
+        } catch (destroyErr) {
+          // destroy() throws only on a GENUINE docker failure (not idempotent
+          // not-found). Surface it LOUD (console.error, not a --quiet log) so the
+          // operator cleans up the privileged container manually.
+          console.error(
+            `\nWARNING: failed to remove the isolation container/volume: ${
+              (destroyErr as Error).message
+            }\n` +
+              'Remove it manually: docker ps -a --filter label=diy.archon.managed=true ' +
+              '(then `docker rm -f <name>` and `docker volume rm <name>-upper`).'
+          );
+          getLog().error(
+            { err: destroyErr as Error, envId: containerEnvId },
+            'workflow.container_destroy_failed'
+          );
+        }
       }
     }
+  }
+
+  if (!result) {
+    // executeWorkflow threw and it was re-thrown out of the try; this line is
+    // unreachable in practice (the throw propagates), but it satisfies the
+    // narrowing for the terminal-result checks below.
+    throw new Error('Workflow did not produce a result.');
   }
 
   // Check result and exit appropriately
